@@ -1268,16 +1268,15 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto shapePerCTA =
         triton::gpu::getShapePerCTA(encoding, tensorDescTy.getShape());
 
-    SmallVector<int64_t> warpBases;
-    if (auto warpBasesAttr = op.getWarpBasesAttr())
-      warpBases.assign(warpBasesAttr.asArrayRef().begin(),
-                       warpBasesAttr.asArrayRef().end());
+    std::optional<uint32_t> warpUsedHint;
+    if (auto hintAttr = op.getWarpUsedHintAttr())
+      warpUsedHint = static_cast<uint32_t>(hintAttr.getInt());
 
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, dstPtrs, op.getPred(), multicastMask,
         elementType, barrierPtr, /*isLoad=*/true, sharedLayout, encoding, ctaId,
-        warpBases);
+        warpUsedHint);
 
     rewriter.eraseOp(op);
     return success();

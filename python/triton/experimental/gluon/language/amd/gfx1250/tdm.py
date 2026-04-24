@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "async_load", "async_wait", "make_tensor_descriptor", "tensor_descriptor", "tensor_descriptor_type", "prefetch",
-    "async_scatter"
+    "async_scatter", "warp_prefix"
 ]
 
 
@@ -143,30 +143,32 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
     return tensor_descriptor(handle, shape, strides, type)
 
 
-def _validate_warp_bases(warp_bases, block_shape, num_warps):
-    """Validate warp_bases for partial TDM copy and return the flattened array.
+def warp_prefix(k: int) -> int:
+    """Return a canonical prefix bitmask ``(1 << k) - 1`` for the first ``k`` warps.
 
-    Delegates the structural checks (axis alignment, power-of-two entries,
-    valid tiling along each dim) to the MLIR verifier via a C++ binding so
-    Python-side errors match what the IR verifier would report.  Encoding-
-    specific constraints (e.g. the partitioned shared encoding rule) are
-    only enforced later by the MLIR op verifier.
+    Convenience helper for the common ``warp_used_hint`` pattern where the
+    first ``k`` warps participate in a TDM copy and the rest issue no-ops.
     """
-    ndim = len(block_shape)
-    for i, basis in enumerate(warp_bases):
-        assert len(basis) == ndim, \
-            f"warp_bases[{i}] must have {ndim} elements, got {len(basis)}"
-    flat = [int(v) for basis in warp_bases for v in basis]
+    k = int(_unwrap_if_constexpr(k))
+    assert k >= 1, f"warp_prefix(k): k must be >= 1, got {k}"
+    return (1 << k) - 1
+
+
+def _validate_warp_used_hint(warp_used_hint, num_warps):
+    """Validate a warp_used_hint value against num_warps.
+
+    Delegates to the MLIR verifier via a C++ binding so Python-side errors
+    match what the IR verifier would report.
+    """
     try:
-        _gluon_ir.validate_tdm_warp_bases(flat, int(num_warps), [int(s) for s in block_shape])
+        _gluon_ir.validate_tdm_warp_used_hint(int(warp_used_hint), int(num_warps))
     except ValueError as e:
         raise AssertionError(str(e)) from e
-    return flat
 
 
 @builtin
 def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], dest: shared_memory_descriptor,
-               pred=1, mbarrier: shared_memory_descriptor = None, warp_bases=None, _semantic=None) -> None:
+               pred=1, mbarrier: shared_memory_descriptor = None, warp_used_hint=None, _semantic=None) -> None:
     """Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.
 
     Args:
@@ -175,9 +177,11 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
         pred (int, optional): Predicate to enable or disable the load. Defaults to 1.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
-        warp_bases (List[List[int]], optional): Per-bit warp-to-offset mapping for partial TDM copy.
-            Each entry maps one bit of warpId to an element offset in the tensor coordinate space.
-            A zero basis means that bit contributes no offset (duplicate warp, gets pred=0).
+        warp_used_hint (int, optional): Performance-hint bitmask for partial TDM copy.
+            Bit ``n`` indicates that warp ``n`` participates in issuing the TDM.  Only
+            canonical prefix values ``(1 << K) - 1`` (K a power of two, 1 <= K <= num_warps)
+            are currently accepted.  See :func:`warp_prefix`.  Absent ⇔ all warps
+            participate (default).  Does not change the data written to ``dest``.
     """
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
     pred = _semantic.to_tensor(pred)
@@ -185,16 +189,14 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
 
-    warp_bases = _unwrap_if_constexpr(warp_bases)
-    flat_warp_bases = []
-    if warp_bases is not None:
-        warp_bases = [_unwrap_if_constexpr(b) for b in warp_bases]
-        warp_bases = [[_unwrap_if_constexpr(v) for v in b] for b in warp_bases]
+    warp_used_hint = _unwrap_if_constexpr(warp_used_hint)
+    if warp_used_hint is not None:
+        warp_used_hint = int(warp_used_hint)
         num_warps = _semantic.builder.options.num_warps
-        flat_warp_bases = _validate_warp_bases(warp_bases, list(src.block_shape), num_warps)
+        _validate_warp_used_hint(warp_used_hint, num_warps)
 
     _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, offset_handles, dest.handle, pred_handle,
-                                                            mbarrier_handle, flat_warp_bases)
+                                                            mbarrier_handle, warp_used_hint)
 
 
 @builtin

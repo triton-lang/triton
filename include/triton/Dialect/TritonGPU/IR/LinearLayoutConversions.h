@@ -167,21 +167,22 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 // Create a LinearLayout for TDM (Tensor DMA) block shapes.  Returns a
 // (message, warp, block) -> (dim0, dim1, ...) layout.
 //
-// TDM operates at warp granularity.  The "warp" sublayout describes which
-// tensor-coordinate offset each bit of warpId contributes; the "message"
-// sublayout covers each warp's portion of the block (blockShape /
-// warpsPerCTA) for surjectivity; the "block" sublayout comes from
-// `cgaLayout`.
+// TDM operates at warp granularity.  The "warp" sublayout is an identity
+// over `warpsPerCTA`, padded with all-zero bases up to `log2(numWarps)`
+// so the layout always covers the full module-level warp id.  The
+// "message" sublayout covers each warp's portion of the block
+// (blockShape / warpsPerCTA) for surjectivity; the "block" sublayout
+// comes from `cgaLayout`.
 //
-// When `warpBases` is empty the warp sublayout is an identity over
-// `warpsPerCTA` (the default greedy distribution).  Otherwise `warpBases`
-// is a flattened row-major array of shape (log2(numWarps), ndim) used
-// directly as the warp sublayout -- enabling stride subsets and
-// redundant (free) warp bits exposed via getFreeVariableMasks().
+// When the active warp count is less than the module's num_warps
+// (partial TDM copy), the caller passes a smaller `warpsPerCTA` whose
+// product equals K < numWarps.  The padded all-zero rows expose the
+// redundant high bits of warpId as free variables via
+// getFreeVariableMasks("warp"), enabling pred-off no-op TDMs on the
+// inactive warps.
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
-                                const LinearLayout &cgaLayout,
-                                ArrayRef<int64_t> warpBases = {});
+                                const LinearLayout &cgaLayout, int numWarps);
 
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

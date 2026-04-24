@@ -751,29 +751,26 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     The operation can also take an optional 64bit LDS barrier address, in which case
     it sends an "LDS atomic arrive" to signal its completion.
 
-    `warp_bases` is an optional attribute for partial TDM copy.  It
-    directly defines the `"warp"` sublayout of the TDM LinearLayout:
-    each row maps one bit of warpId to an element offset in tensor
-    coordinates.  A `[0, ..., 0]` basis means that bit of warpId
-    contributes no offset, so that warp is a redundant duplicate;
-    `getFreeVariableMasks()["warp"]` identifies those bits and the
-    lowering masks them with `(warpId & freeMask) == 0` so duplicate
-    warps issue a no-op TDM copy.  The attribute is stored as a
-    flattened row-major array of shape `(log2(num_warps), ndim)`.
+    `warp_used_hint` is an optional performance-hint attribute for
+    partial TDM copy.  It is an i32 bitmask where bit `n` (LSB = warp 0)
+    indicates that warp `n` participates in issuing the TDM instruction;
+    bits above `num_warps - 1` must be zero.  Semantics are unchanged by
+    the hint (same data ends up in shared memory whether the hint is set
+    or not) -- only the emission strategy changes: the lowering uses
+    `K = popcount(hint)` warps to cover the block and marks the remaining
+    warps as pred-off no-ops.  Absent ⇔ all warps participate.
 
-    Structural constraints (enforced by the verifier, and equivalent
-    to "warp_bases describes a valid LinearLayout that tiles
-    block_shape with identical rectangular per-warp tiles"):
-    each row has at most one non-zero dim; along each dim the
-    non-zero entries must be `m_d, 2*m_d, 4*m_d, ...` in some order,
-    where `m_d = block_shape[d] / 2^k_d` and `k_d` is the number of
-    non-zero entries along dim `d` (so `2^k_d` divides `block_shape[d]`).
+    v1 restriction: the hint must be a canonical prefix
+    `(1 << K) - 1` with `K` a power of two and `1 <= K <= num_warps`
+    (enforced by the verifier).  Non-prefix patterns are deferred; they
+    require extra care to avoid piece-mapping conflicts and to interact
+    safely with PartitionedSharedEncoding.
 
-    Additionally, with a PartitionedSharedEncoding the verifier requires
-    warpsPerCTA[partitionDim] (= 2^k along that dim) to be at least
-    numLogicalPieces so the copy fits in a single TDM instruction; the
-    multi-instruction slicing path does not support warp_bases because
-    the bases are stated in full-block coordinates.
+    With a PartitionedSharedEncoding the verifier additionally requires
+    that the `K`-warp distribution's `warpsPerCTA[partitionDim]` be at
+    least `numLogicalPieces`, so the copy fits in a single TDM
+    instruction; the multi-instruction slicing path does not support a
+    non-default warp count.
   }];
 
   let arguments = (ins
@@ -782,7 +779,7 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
     I32:$pred,
     Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier,
-    OptionalAttr<DenseI64ArrayAttr>:$warp_bases
+    OptionalAttr<I32Attr>:$warp_used_hint
   );
 
   let results = (outs TTG_AsyncToken:$token);
@@ -791,11 +788,11 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred), [{
       return build($_builder, $_state, desc, indices, result, pred,
                    /*barrier=*/static_cast<mlir::Value>(nullptr),
-                   /*warp_bases=*/DenseI64ArrayAttr());
+                   /*warp_used_hint=*/IntegerAttr());
     }]>,
     OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred, "Value":$barrier), [{
       return build($_builder, $_state, desc, indices, result, pred, barrier,
-                   /*warp_bases=*/DenseI64ArrayAttr());
+                   /*warp_used_hint=*/IntegerAttr());
     }]>
   ];
 
@@ -805,17 +802,16 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
   }];
 
   let extraClassDeclaration = [{
-    // Validate the structural invariants of a warp_bases attribute against
-    // the given num_warps and block_shape (axis alignment, power-of-two
-    // entries, valid tiling along each dim).  Returns std::nullopt on
-    // success, or an error message string describing the first failure.
+    // Validate a `warp_used_hint` value against the given num_warps.
+    // Checks v1 restrictions: canonical prefix `(1 << K) - 1`, K a
+    // power of two, 1 <= K <= num_warps.  Returns std::nullopt on
+    // success, or an error message string describing the failure.
     // Shared between the op verifier and the Python front-end so both
-    // paths enforce the same structural invariants; encoding-specific
-    // rules (e.g. the PartitionedSharedEncoding constraint) live in
-    // verify() since they need access to the op's result type.
-    static ::std::optional<::std::string> validateWarpBases(
-        ::llvm::ArrayRef<int64_t> warpBases, int64_t numWarps,
-        ::llvm::ArrayRef<int64_t> blockShape);
+    // paths enforce the same invariants; encoding-specific rules (the
+    // PartitionedSharedEncoding constraint) live in verify() since they
+    // need access to the op's result type.
+    static ::std::optional<::std::string> validateWarpUsedHint(
+        uint32_t warpUsedHint, int64_t numWarps);
   }];
 
   let hasVerifier = 1;

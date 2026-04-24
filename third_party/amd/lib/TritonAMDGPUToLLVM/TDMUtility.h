@@ -44,13 +44,12 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // For partitioned shared memory, dstPtrs contains multiple base pointers and
 // the correct one is selected based on sharedLayout's partition dimension.
 //
-// warpBases: optional flattened (log2(numWarps), ndim) array.  When non-empty,
-// the TDM LinearLayout's "warp" sublayout is driven directly by these bases,
-// the tile dimensions in the descriptor are re-encoded to match the resulting
-// per-warp tile (blockShape / warpsPerCTA), and predication is masked by
-// `(warpId & freeMask) == 0` where freeMask is the free-variable mask for the
-// "warp" input dim reported by the LinearLayout.  When empty, behaviour is
-// unchanged from the default greedy distribution (all warps active).
+// hintedWarps: when true, `warpsPerCTA` was derived from a user-supplied
+// `warp_used_hint` (K < numWarps active warps).  Predication is masked by
+// `(warpId & freeMask) == 0`, where freeMask is the free-variable mask of
+// the "warp" input dim reported by the LinearLayout; with the verifier's
+// canonical-prefix rule this evaluates to `warpId < K`, so warps K..
+// numWarps-1 issue a no-op TDM.  When false, all warps participate.
 void fillTDMDescriptor(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
@@ -61,7 +60,7 @@ void fillTDMDescriptor(
     SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
     Value multicastMask, Value barrierPtr,
     const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
-    ArrayRef<unsigned> warpsPerCTA, ArrayRef<int64_t> warpBases = {});
+    ArrayRef<unsigned> warpsPerCTA, int numWarps, bool hintedWarps = false);
 
 // Fill TDM descriptor for gather/scatter operations (2D only).
 // Gather reads from non-contiguous rows in global memory to LDS.
@@ -85,21 +84,22 @@ void fillTDMDescriptorForGatherScatter(
 //
 // Supports 1D-5D tensors.  When the encoding is a PartitionedSharedEncoding,
 // the warp distribution is adjusted so each wave's tile fits within a single
-// LDS partition.  Without `warpBases`, if the warps cannot cover all logical
-// pieces in one instruction the op is automatically split into multiple
-// sequential TDM instructions.  With `warpBases`, the verifier requires
-// warpsPerCTA[partitionDim] >= numLogicalPieces, so a single instruction
-// always suffices (multi-instruction slicing is not supported in that path
-// because warpBases are stated in full-block coordinates).
+// LDS partition.  Without `warpUsedHint`, if the warps cannot cover all
+// logical pieces in one instruction the op is automatically split into
+// multiple sequential TDM instructions.  With `warpUsedHint`, the verifier
+// requires the resulting warpsPerCTA[partitionDim] >= numLogicalPieces, so
+// a single instruction always suffices (multi-instruction slicing is not
+// supported in that path).
 //
 // - offset: starting position in global memory for each dimension
 // - dstPtrs: base pointers to LDS (multiple for partitioned encoding)
 // - sharedLayout: linear layout for the full allocation shape (pre-CGA-split)
 // - encoding: shared memory encoding (used for partition constraints when
 //   splitting into multiple TDM instructions)
-// - warpBases: flattened row-major array of shape (log2(numWarps), ndim).
-//   Empty means all warps active (default greedy distribution).
-//   Zero-basis entries produce duplicate warps that get pred=0.
+// - warpUsedHint: when present, an i32 bitmask whose popcount K (1 <= K <=
+//   numWarps, power of two, canonical prefix) replaces numWarps for the
+//   purpose of deriving warpsPerCTA.  Redundant high-warpId bits get
+//   pred=0 (hardware no-op) via the layout's free-variable mask.
 void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const LLVMTypeConverter *typeConverter,
                       ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
@@ -109,7 +109,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value barrierPtr, bool isLoad,
                       const triton::LinearLayout &sharedLayout,
                       Attribute encoding, Value ctaId,
-                      ArrayRef<int64_t> warpBases = {});
+                      std::optional<uint32_t> warpUsedHint = std::nullopt);
 
 // Returns (warpsPerCTA, numTDMInstructions) for a given shared encoding.
 // For PartitionedSharedEncodingAttr, computes a partition-aligned warp

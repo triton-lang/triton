@@ -497,10 +497,10 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
 }
 
 // Fill TDM descriptor for regular load/store operations (1D-5D tensors).
-// When warpBases is non-empty, the "warp" sublayout of the TDM LinearLayout
-// is driven directly by those user-provided bases, and predication is
-// derived from the layout's free-variable masks (any redundant bit of
-// warpId gets pred=0, producing a hardware no-op).
+// When `hintedWarps` is true, `warpsPerCTA` was derived from a user-supplied
+// `warp_used_hint` (K < numWarps), the per-warp tile dimensions in the
+// descriptor are re-encoded accordingly, and predication is masked by the
+// "warp" input dim's free-variable mask so redundant warps become no-ops.
 void fillTDMDescriptor(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
@@ -511,8 +511,7 @@ void fillTDMDescriptor(
     SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
     Value multicastMask, Value barrierPtr,
     const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
-    ArrayRef<unsigned> warpsPerCTA, ArrayRef<int64_t> warpBases) {
-  bool hasWarpBases = !warpBases.empty();
+    ArrayRef<unsigned> warpsPerCTA, int numWarps, bool hintedWarps) {
   size_t numDims = offset.size();
   assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors.");
   assert(!dstPtrs.empty() && "dstPtrs cannot be empty");
@@ -535,11 +534,12 @@ void fillTDMDescriptor(
               : std::nullopt,
           numDims);
 
-  // When partial TDM copy is active (warp_bases supplied), the per-warp
-  // block shape may differ from what createTDMDescriptor encoded (which
-  // assumed the default greedy distribution over all warps).  Re-encode
-  // the per-warp tile dimensions from the warpsPerCTA derived here.
-  if (hasWarpBases) {
+  // When partial TDM copy is active (warp_used_hint supplied), the
+  // per-warp block shape may differ from what createTDMDescriptor encoded
+  // (which assumed the default greedy distribution over all warps).
+  // Re-encode the per-warp tile dimensions from the warpsPerCTA derived
+  // here.
+  if (hintedWarps) {
     Value v16 = b.i32_val(16);
     for (size_t i = 0; i < numDims; ++i)
       decodedBlockShape[i] =
@@ -589,7 +589,7 @@ void fillTDMDescriptor(
                        .getLinearLayout();
 
   auto tdmLayout = triton::gpu::getTDMLinearLayout(shapePerCTA, warpsPerCTA,
-                                                   cgaLayout, warpBases);
+                                                   cgaLayout, numWarps);
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
@@ -690,10 +690,13 @@ void fillTDMDescriptor(
 
   // Combine user predicate with layout predicate for partial TDM copy.
   // `tdmLayout.getFreeVariableMasks()[kWarp]` reports every bit of warpId
-  // that does not contribute any offset (i.e. warps that are redundant
-  // duplicates under the chosen warp_bases).  Warps where any such bit is
-  // set get pred=0 so the TDM instruction they issue is a hardware no-op.
-  if (hasWarpBases) {
+  // that does not contribute any offset -- i.e. warps that are redundant
+  // duplicates under a smaller warpsPerCTA derived from warp_used_hint.
+  // Warps where any such bit is set get pred=0 so the TDM instruction
+  // they issue is a hardware no-op.  With the verifier's canonical-prefix
+  // rule these bits are exactly the high bits of warpId above K-1, so
+  // this is equivalent to masking warps >= K.
+  if (hintedWarps) {
     auto freeMasks = tdmLayout.getFreeVariableMasks();
     int32_t warpFreeMask = freeMasks.lookup(kWarp);
     if (warpFreeMask != 0) {
@@ -968,7 +971,7 @@ emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                  ArrayRef<Value> instrDstPtrs, Value pred, Value multicastMask,
                  Value barrier, const triton::LinearLayout &instrSharedLayout,
                  Value ctaId, bool isLoad, ArrayRef<unsigned> warpsPerCTA,
-                 ArrayRef<int64_t> warpBases = {}) {
+                 int numWarps, bool hintedWarps = false) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
   Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
@@ -979,11 +982,12 @@ emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
     auto group2Vec = SmallVector<Value>(desc.begin() + 12, desc.begin() + 16);
     auto group3Vec = SmallVector<Value>(desc.begin() + 16, desc.end());
 
-    fillTDMDescriptor(
-        rewriter, loc, typeConverter, elementType, effectiveBlockShape,
-        padInterval, padAmount, group0Vec, group1Vec, std::ref(group2Vec),
-        std::ref(group3Vec), globalOffset, instrDstPtrs, pred, multicastMask,
-        barrier, instrSharedLayout, ctaId, !isLoad, warpsPerCTA, warpBases);
+    fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
+                      effectiveBlockShape, padInterval, padAmount, group0Vec,
+                      group1Vec, std::ref(group2Vec), std::ref(group3Vec),
+                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
+                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA, numWarps,
+                      hintedWarps);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -999,11 +1003,12 @@ emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
     auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
     auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
 
-    fillTDMDescriptor(
-        rewriter, loc, typeConverter, elementType, effectiveBlockShape,
-        padInterval, padAmount, group0Vec, group1Vec, std::nullopt,
-        std::nullopt, globalOffset, instrDstPtrs, pred, multicastMask, barrier,
-        instrSharedLayout, ctaId, !isLoad, warpsPerCTA, warpBases);
+    fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
+                      effectiveBlockShape, padInterval, padAmount, group0Vec,
+                      group1Vec, std::nullopt, std::nullopt, globalOffset,
+                      instrDstPtrs, pred, multicastMask, barrier,
+                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA, numWarps,
+                      hintedWarps);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -1036,43 +1041,31 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value barrierPtr, bool isLoad,
                       const triton::LinearLayout &sharedLayout,
                       Attribute encoding, Value ctaId,
-                      ArrayRef<int64_t> warpBases) {
+                      std::optional<uint32_t> warpUsedHint) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   size_t numDims = blockShape.size();
   assert(numDims <= 5);
 
   auto partitionedEnc = dyn_cast<PartitionedSharedEncodingAttr>(encoding);
 
-  // Compute the warp distribution.  When warp_bases is provided, derive
-  // warpsPerCTA directly from the per-dim span of the user-specified bases
-  // (each non-zero basis row along dim d doubles warpsPerCTA[d]).  This
-  // supports stride subsets and non-greedy distributions that the default
-  // `distributeTDMWarpsAlignToPartition` would not produce.  When
-  // warp_bases is absent, fall back to the greedy partition-aligned
-  // distribution over all warps.
+  // When warp_used_hint is present, derive the distribution from the
+  // active-warp count K instead of numWarps.  The verifier guarantees the
+  // hint is a canonical prefix with K a power of two, and, for partitioned
+  // encodings, that warpsPerCTA[partitionDim] >= numLogicalPieces so the
+  // copy fits in a single instruction.  Multi-instruction slicing is not
+  // supported in the hinted path.
+  int effectiveWarps = numWarps;
+  bool hintedWarps = warpUsedHint.has_value();
+  if (hintedWarps)
+    effectiveWarps = llvm::popcount(*warpUsedHint);
+
   SmallVector<unsigned> warpsPerCTA;
   unsigned numTDMInstructions = 1;
-  if (!warpBases.empty()) {
-    int numBits = warpBases.size() / numDims;
-    warpsPerCTA.assign(numDims, 1);
-    for (int bit = 0; bit < numBits; ++bit) {
-      for (size_t d = 0; d < numDims; ++d) {
-        if (warpBases[bit * numDims + d] != 0) {
-          warpsPerCTA[d] *= 2;
-          break; // verifier ensures at most one non-zero entry per row
-        }
-      }
-    }
-    // The verifier guarantees warpsPerCTA[partitionDim] >= numLogicalPieces
-    // when warp_bases is combined with a partitioned encoding, so the copy
-    // always fits in a single TDM instruction (numTDMInstructions stays 1).
-    // Multi-instruction slicing is not supported for warp_bases because the
-    // bases are stated in full-block coordinates and would land outside
-    // each slice's extent along partitionDim.
-  } else {
-    std::tie(warpsPerCTA, numTDMInstructions) =
-        distributeTDMWarpsAlignToPartition(blockShape, numWarps, encoding);
-  }
+  std::tie(warpsPerCTA, numTDMInstructions) =
+      distributeTDMWarpsAlignToPartition(blockShape, effectiveWarps, encoding);
+  assert((!hintedWarps || numTDMInstructions == 1) &&
+         "verifier should guarantee single-instruction emission for the "
+         "hinted path");
 
   // Fast path: single instruction covers the entire block.
   if (numTDMInstructions == 1) {
@@ -1080,7 +1073,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                      to_vector(blockShape), padInterval, padAmount,
                      to_vector(offset), dstPtrs, pred, multicastMask,
                      barrierPtr, sharedLayout, ctaId, isLoad, warpsPerCTA,
-                     warpBases);
+                     numWarps, hintedWarps);
     return;
   }
 
@@ -1144,7 +1137,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
     emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
                      effectiveBlockShape, padInterval, padAmount, globalOffset,
                      instrDstPtrs, pred, multicastMask, barrier, sliceLayout,
-                     ctaId, isLoad, warpsPerCTA, warpBases);
+                     ctaId, isLoad, warpsPerCTA, numWarps, hintedWarps);
   }
 }
 

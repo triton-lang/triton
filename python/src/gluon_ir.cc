@@ -315,14 +315,13 @@ template <typename CondT> static void check(CondT &&cond, const char *msg) {
 void init_gluon_ir(py::module &&m) {
   using ret = py::return_value_policy;
 
-  // Validate a flattened warp_bases attribute against numWarps and
-  // block_shape.  Raises ValueError with the same message the MLIR verifier
-  // would produce, so the Python front-end and the IR verifier stay in sync.
-  m.def("validate_tdm_warp_bases",
-        [](std::vector<int64_t> warpBases, int64_t numWarps,
-           std::vector<int64_t> blockShape) {
-          auto err = ttag::AsyncTDMCopyGlobalToLocalOp::validateWarpBases(
-              warpBases, numWarps, blockShape);
+  // Validate a `warp_used_hint` attribute against numWarps.  Raises
+  // ValueError with the same message the MLIR verifier would produce, so
+  // the Python front-end and the IR verifier stay in sync.
+  m.def("validate_tdm_warp_used_hint",
+        [](uint32_t warpUsedHint, int64_t numWarps) {
+          auto err = ttag::AsyncTDMCopyGlobalToLocalOp::validateWarpUsedHint(
+              warpUsedHint, numWarps);
           if (err)
             throw std::invalid_argument(*err);
         });
@@ -1036,13 +1035,13 @@ void init_gluon_ir(py::module &&m) {
       .def("create_async_tdm_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
               Value result, Value pred, Value barrier,
-              std::vector<int64_t> warpBases) {
-             auto warpBasesAttr =
-                 warpBases.empty()
-                     ? DenseI64ArrayAttr()
-                     : DenseI64ArrayAttr::get(self.getContext(), warpBases);
+              std::optional<uint32_t> warpUsedHint) {
+             IntegerAttr hintAttr;
+             if (warpUsedHint.has_value())
+               hintAttr = self.getBuilder().getI32IntegerAttr(
+                   static_cast<int32_t>(*warpUsedHint));
              self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(
-                 descPtr, indices, result, pred, barrier, warpBasesAttr);
+                 descPtr, indices, result, pred, barrier, hintAttr);
            })
       .def("create_async_tdm_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,

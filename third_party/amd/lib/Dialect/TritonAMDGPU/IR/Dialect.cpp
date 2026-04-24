@@ -657,140 +657,77 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
     }
   }
 
-  if (auto warpBasesAttr = getWarpBasesAttr()) {
+  if (auto warpUsedHintAttr = getWarpUsedHintAttr()) {
     int numWarps = gpu::lookupNumWarps(*this);
-    auto bases = warpBasesAttr.asArrayRef();
-    if (auto err = validateWarpBases(bases, numWarps, blockShape))
+    uint32_t hint = static_cast<uint32_t>(warpUsedHintAttr.getInt());
+    if (auto err = validateWarpUsedHint(hint, numWarps))
       return emitOpError(*err);
 
-    // Partitioned encoding constraint: the lowering slices the block along
-    // `partitionDim` into `numLogicalPieces / warpsAlongPart` TDM
-    // instructions, but warp_bases are stated in full-block coordinates.
-    // Multi-instruction slicing would push warp offsets past each slice's
-    // extent, so require warpsPerCTA[partitionDim] (derived from bases) to
-    // be >= numLogicalPieces, i.e. the copy fits in a single instruction.
+    // Partitioned encoding constraint: with fewer active warps the
+    // per-warp distribution may not cover all logical pieces along
+    // partitionDim in a single instruction.  Multi-instruction slicing
+    // is not supported in the hinted path.
+    //
+    // The lowering derives warpsAlongPartition = gcd(K, numLogicalPieces)
+    // and falls back to multi-instruction when that is < numLogicalPieces.
+    // For K a power of two this simplifies to: require K to be a multiple
+    // of numLogicalPieces (equivalently K >= numLogicalPieces when both are
+    // powers of two).
     if (partitionedEnc) {
       unsigned partitionDim = partitionedEnc.getPartitionDim();
       unsigned numLogicalPieces = partitionedEnc.getNumLogicalPieces();
-      int numDims = blockShape.size();
-      int numBits = bases.size() / numDims;
-      unsigned warpsAlongPart = 1;
-      for (int bit = 0; bit < numBits; ++bit)
-        if (bases[bit * numDims + partitionDim] != 0)
-          warpsAlongPart *= 2;
-      if (warpsAlongPart < numLogicalPieces)
+      unsigned K = llvm::popcount(hint);
+      if (numLogicalPieces == 0 || K % numLogicalPieces != 0)
         return emitOpError(
-                   "warp_bases with a partitioned shared encoding must place "
-                   "enough warps along partitionDim to cover all logical "
-                   "pieces in a single TDM instruction (got warpsPerCTA[")
-               << partitionDim << "] = " << warpsAlongPart
-               << " non-zero bases, need >= " << numLogicalPieces << ")";
+                   "warp_used_hint with a partitioned shared encoding must "
+                   "select K active warps such that numLogicalPieces divides "
+                   "K so the copy fits in a single TDM instruction (got K = ")
+               << K << ", numLogicalPieces = " << numLogicalPieces
+               << ", partitionDim = " << partitionDim << ")";
     }
   }
 
   return success();
 }
 
-std::optional<std::string> AsyncTDMCopyGlobalToLocalOp::validateWarpBases(
-    ArrayRef<int64_t> bases, int64_t numWarps, ArrayRef<int64_t> blockShape) {
-  int numDims = blockShape.size();
-
+std::optional<std::string>
+AsyncTDMCopyGlobalToLocalOp::validateWarpUsedHint(uint32_t hint,
+                                                  int64_t numWarps) {
   if (!llvm::isPowerOf2_64(numWarps))
     return llvm::formatv("num_warps must be a power of two when using "
-                         "warp_bases, got {0}",
+                         "warp_used_hint, got {0}",
                          numWarps)
         .str();
 
-  int numBits = llvm::Log2_64(numWarps);
-  if (static_cast<int64_t>(bases.size()) !=
-      static_cast<int64_t>(numBits) * numDims)
-    return llvm::formatv("warp_bases must have log2(num_warps) * ndim = {0} "
-                         "elements, got {1}",
-                         numBits * numDims, bases.size())
+  if (hint == 0)
+    return std::string("warp_used_hint must have at least one bit set");
+
+  // v1 restriction: canonical prefix only, i.e. hint == (1 << K) - 1.
+  // Equivalent to: (hint & (hint + 1)) == 0.
+  if ((hint & (hint + 1)) != 0)
+    return llvm::formatv(
+               "warp_used_hint must be a canonical prefix (1 << K) - 1 "
+               "for some K, got 0x{0:x}; non-prefix patterns are not "
+               "supported yet",
+               hint)
         .str();
 
-  // Structural LinearLayout check: the bases describe the "warp" sublayout
-  // of the TDM LinearLayout, which must tile block_shape with identical
-  // rectangular per-warp tiles.
-  //
-  // Per-bit constraint: at most one non-zero dim (axis-aligned), and a
-  // non-zero value must be a power of two strictly less than block_shape[d].
-  SmallVector<int> countPerDim(numDims, 0);
-  for (int bit = 0; bit < numBits; ++bit) {
-    int nonZeroDim = -1;
-    for (int d = 0; d < numDims; ++d) {
-      int64_t v = bases[bit * numDims + d];
-      if (v == 0)
-        continue;
-      if (nonZeroDim != -1)
-        return llvm::formatv(
-                   "warp_bases row {0} has non-zero entries in multiple dims "
-                   "({1} and {2}); each bit of warpId may address at most one "
-                   "dimension",
-                   bit, nonZeroDim, d)
-            .str();
-      if (v <= 0 || !llvm::isPowerOf2_64(v))
-        return llvm::formatv("warp_bases[{0}][{1}] = {2} must be a positive "
-                             "power of two",
-                             bit, d, v)
-            .str();
-      if (v >= blockShape[d])
-        return llvm::formatv("warp_bases[{0}][{1}] = {2} must be < "
-                             "block_shape[{1}] = {3}",
-                             bit, d, v, blockShape[d])
-            .str();
-      nonZeroDim = d;
-    }
-    if (nonZeroDim >= 0)
-      countPerDim[nonZeroDim]++;
-  }
+  unsigned K = llvm::popcount(hint);
+  if (!llvm::isPowerOf2_32(K))
+    return llvm::formatv("popcount(warp_used_hint) = {0} must be a power "
+                         "of two",
+                         K)
+        .str();
 
-  // Per-dim constraint: the non-zero bases along dim d must be exactly
-  // {m_d, 2*m_d, 4*m_d, ..., 2^(k-1)*m_d} in some order, where
-  // m_d = block_shape[d] / 2^k and k = countPerDim[d].  This is equivalent
-  // to requiring each warp covers a non-overlapping tile of the block.
-  for (int d = 0; d < numDims; ++d) {
-    int k = countPerDim[d];
-    int64_t span = int64_t{1} << k;
-    if (blockShape[d] % span != 0)
-      return llvm::formatv("warp_bases has {0} non-zero entries along dim {1}, "
-                           "but 2^{0} = {2} does not divide block_shape[{1}] = "
-                           "{3}",
-                           k, d, span, blockShape[d])
-          .str();
-    if (k == 0)
-      continue;
-    int64_t m = blockShape[d] / span;
-    // Collect non-zero basis values along this dim and verify they match
-    // {m, 2m, 4m, ...} as a set (order-independent).
-    int64_t expectedMask = 0;
-    int64_t seenMask = 0;
-    for (int j = 0; j < k; ++j)
-      expectedMask |= (m << j);
-    for (int bit = 0; bit < numBits; ++bit) {
-      int64_t v = bases[bit * numDims + d];
-      if (v == 0)
-        continue;
-      if (v % m != 0)
-        return llvm::formatv("warp_bases[{0}][{1}] = {2} is not a multiple of "
-                             "m_d = block_shape[{1}] / 2^{3} = {4}",
-                             bit, d, v, k, m)
-            .str();
-      if ((seenMask & v) != 0)
-        return llvm::formatv("warp_bases has duplicate basis {0} along dim {1}",
-                             v, d)
-            .str();
-      if ((expectedMask & v) == 0)
-        return llvm::formatv("warp_bases[{0}][{1}] = {2} is outside the "
-                             "expected set for dim {1} (m_d = {3}, 2^{4} "
-                             "entries)",
-                             bit, d, v, m, k)
-            .str();
-      seenMask |= v;
-    }
-    assert(seenMask == expectedMask && "coverage should be exact");
-  }
+  if (static_cast<int64_t>(K) > numWarps)
+    return llvm::formatv("warp_used_hint selects K = {0} active warps but "
+                         "num_warps = {1}",
+                         K, numWarps)
+        .str();
 
+  // All high bits above num_warps - 1 must be zero.  Since the attribute
+  // is u32 and we've already rejected non-prefix patterns, this is
+  // equivalent to K <= numWarps (checked above).
   return std::nullopt;
 }
 

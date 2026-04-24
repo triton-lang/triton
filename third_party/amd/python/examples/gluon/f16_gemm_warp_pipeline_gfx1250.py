@@ -107,17 +107,17 @@ def gemm_tdm_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 
 @gluon.jit
 def issue_loads_specialized(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BLOCK_K: ttgl.constexpr,
-                            NUM_BUFFERS: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr, TDM_WARP_BASES: ttgl.constexpr,
-                            pred=1):
+                            NUM_BUFFERS: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr,
+                            TDM_WARP_USED_HINT: ttgl.constexpr, pred=1):
     pred_i32 = pred.to(ttgl.int32) if hasattr(pred, 'to') else pred
     ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_am, producer * BLOCK_K], a_buffer.index(producer % NUM_BUFFERS),
-                                    pred=pred_i32, warp_bases=TDM_WARP_BASES)
+                                    pred=pred_i32, warp_used_hint=TDM_WARP_USED_HINT)
     if not TRANSPOSE_B:
         ttgl.amd.gfx1250.tdm.async_load(b_desc, [producer * BLOCK_K, off_bn], b_buffer.index(producer % NUM_BUFFERS),
-                                        pred=pred_i32, warp_bases=TDM_WARP_BASES)
+                                        pred=pred_i32, warp_used_hint=TDM_WARP_USED_HINT)
     else:
         ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_bn, producer * BLOCK_K], b_buffer.index(producer % NUM_BUFFERS),
-                                        pred=pred_i32, warp_bases=TDM_WARP_BASES)
+                                        pred=pred_i32, warp_used_hint=TDM_WARP_USED_HINT)
     producer += 1
     return producer
 
@@ -133,7 +133,7 @@ def gemm_tdm_specialized_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
                                                          NUM_BUFFERS: ttgl.constexpr,  #
                                                          TRANSPOSE_B: ttgl.constexpr,  #
                                                          WARP_BASES: ttgl.constexpr,  #
-                                                         TDM_WARP_BASES: ttgl.constexpr):
+                                                         TDM_WARP_USED_HINT: ttgl.constexpr):
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
@@ -165,7 +165,7 @@ def gemm_tdm_specialized_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 
     for _ in ttgl.static_range(2):
         producer = issue_loads_specialized(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
-                                           TRANSPOSE_B, TDM_WARP_BASES)
+                                           TRANSPOSE_B, TDM_WARP_USED_HINT)
 
     ttgl.amd.gfx1250.tdm.async_wait(1 * 2)
     for _ in range(0, ttgl.cdiv(K, BLOCK_K) - (NUM_BUFFERS - 1)):
@@ -173,7 +173,7 @@ def gemm_tdm_specialized_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
             consumer, a, b = lds_load(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
                                       TRANSPOSE_B)
             producer = issue_loads_specialized(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
-                                               TRANSPOSE_B, TDM_WARP_BASES)
+                                               TRANSPOSE_B, TDM_WARP_USED_HINT)
         with ttgl.amd.warp_pipeline_stage("stage1", priority=0):
             accumulator = issue_wmma_compute(a, b, accumulator)
         ttgl.amd.gfx1250.tdm.async_wait(2)
@@ -195,38 +195,14 @@ def gemm_tdm_specialized_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 # ---------------------------------------------------------------------------
 
 
-def _compute_tdm_warp_bases(block_shape, num_warps, active_warps):
-    """Compute warp_bases for partial TDM copy with the given active warp count.
+def _tdm_warp_prefix(active_warps):
+    """Return a canonical prefix bitmask for ``active_warps`` participating warps.
 
-    Returns a tuple of tuples suitable for passing as a constexpr.
+    Convenience wrapper matching :func:`ttgl.amd.gfx1250.tdm.warp_prefix` but
+    usable in pure-Python kernel launch code.
     """
-    import math
-    assert active_warps < num_warps
-
-    ndim = len(block_shape)
-    num_bits = int(math.log2(num_warps))
-
-    warps_per_dim = [1] * ndim
-    remaining = active_warps
-    for d in range(ndim):
-        while remaining > 1 and warps_per_dim[d] * 2 <= block_shape[d]:
-            warps_per_dim[d] *= 2
-            remaining //= 2
-    if remaining > 1:
-        warps_per_dim[-1] *= remaining
-
-    bases = []
-    for d in range(ndim):
-        per_warp_tile = block_shape[d] // warps_per_dim[d]
-        for k in range(int(math.log2(warps_per_dim[d]))):
-            basis = [0] * ndim
-            basis[d] = per_warp_tile * (1 << k)
-            bases.append(tuple(basis))
-
-    while len(bases) < num_bits:
-        bases.append(tuple([0] * ndim))
-
-    return tuple(bases)
+    assert active_warps >= 1
+    return (1 << active_warps) - 1
 
 
 # ---------------------------------------------------------------------------
@@ -314,8 +290,8 @@ def test_runtime_gemm_tdm_specialized_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_B
     num_warps = 8
     WARP_BASES = [(0, 1), (1, 0), (2, 0)]
 
-    # 4-warp partial TDM copy: warps 4-7 duplicate 0-3 (pred=0, hardware no-op)
-    tdm_warp_bases = _compute_tdm_warp_bases([BLOCK_M, BLOCK_K], num_warps, 4)
+    # 4-warp partial TDM copy: warps 4-7 are no-ops (pred=0 in descriptor)
+    tdm_warp_used_hint = _tdm_warp_prefix(4)
 
     warp_bases = tuple(WARP_BASES)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
@@ -327,7 +303,7 @@ def test_runtime_gemm_tdm_specialized_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_B
         stride_cm, stride_cn,  #
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
         NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B, WARP_BASES=warp_bases,  #
-        TDM_WARP_BASES=tdm_warp_bases,  #
+        TDM_WARP_USED_HINT=tdm_warp_used_hint,  #
         num_warps=num_warps, waves_per_eu=num_warps // 4)
     static_profile(kernel)
 
