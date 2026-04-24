@@ -489,23 +489,10 @@ LogicalResult Fp4ToFpOp::verifyFp4ToFp(mlir::Operation *op,
 void Fp4ToFpOp::build(OpBuilder &builder, OperationState &state,
                       TypedValue<RankedTensorType> src, Type elemType,
                       int32_t axis) {
-  auto srcTy = src.getType();
-  auto shape = llvm::to_vector(srcTy.getShape());
-  auto rank = srcTy.getRank();
-  assert(0 <= axis && axis < rank);
-  shape[axis] *= 2;
-
-  Attribute inEnc = srcTy.getEncoding();
-  Attribute outEnc;
-  auto result =
-      inEnc.getDialect()
-          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
-          ->inferFp4ToFpOpEncoding(shape, axis, inEnc, outEnc,
-                                   /*fwdInference=*/true, state.location);
-  assert(succeeded(result));
-
-  auto resultTy = RankedTensorType::get(shape, elemType, outEnc);
-  build(builder, state, resultTy, src, axis);
+  auto resultTy =
+      inferFp4ToFpResultType(src.getType(), elemType, axis, state.location);
+  assert(succeeded(resultTy));
+  build(builder, state, *resultTy, src, axis);
 }
 
 OpFoldResult MemDescTransOp::fold(FoldAdaptor adaptor) {

@@ -14,9 +14,9 @@ from ._layouts import (SharedLayout, DistributedLayout, BlockedLayout, DotOperan
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
-    constexpr,
     base_value,
     base_type,
+    constexpr,
     dtype,
     block_type,  # TODO: block type with layout info
     pointer_type,
@@ -116,6 +116,7 @@ atomic_xchg = builtin(tl_core.atomic_xchg)
 atomic_xor = builtin(tl_core.atomic_xor)
 broadcast = builtin(tl_core.broadcast)
 cast = builtin(tl_core.cast)
+clamp = builtin(tl_core.clamp)
 device_assert = builtin(tl_core.device_assert)
 device_print = builtin(tl_core.device_print)
 expand_dims = builtin(tl_core.expand_dims)

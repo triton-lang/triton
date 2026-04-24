@@ -315,6 +315,19 @@ static void instrumentAsyncTMAStore(Operation *op, Value descValue,
                                          access.second, /*isStore=*/true);
 }
 
+static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op) {
+  OpBuilder builder(op);
+  auto desc = getDescriptorInfo(op.getDesc(), builder);
+
+  auto offsets = castToI64(builder, op.getLoc(), op.getCoord());
+  auto access = createTiledAccess(builder, op.getLoc(), desc,
+                                  op.getSrc().getType().getShape(), offsets,
+                                  std::nullopt);
+  ExperimentalGSanAtomicTensorAccessOp::create(
+      builder, op.getLoc(), access.first, access.second, MemSemantic::RELAXED,
+      MemSyncScope::GPU);
+}
+
 static void instrumentAsyncTMAGather(ttng::AsyncTMAGatherOp op) {
   OpBuilder builder(op);
   auto desc = getDescriptorInfo(op.getDesc(), builder);
@@ -427,12 +440,8 @@ public:
                                     op.getSrc().getType().getShape(),
                                     op.getCoord());
           })
-          .Case([&](ttng::AsyncTMAReduceOp op) {
-            // FIXME: This is just plain wrong. TMA reduce is atomic.
-            instrumentAsyncTMAStore(op, op.getDesc(),
-                                    op.getSrc().getType().getShape(),
-                                    op.getCoord());
-          })
+          .Case(
+              [&](ttng::AsyncTMAReduceOp op) { instrumentAsyncTMAReduce(op); })
           .Case([&](ttng::AsyncTMAScatterOp op) {
             instrumentAsyncTMAScatter(op);
           })

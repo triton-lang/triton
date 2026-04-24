@@ -8,7 +8,7 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
-from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, mbarrier, tma
+from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, clc, mbarrier, tma
 from triton._internal_testing import is_cuda, run_in_process
 
 
@@ -183,7 +183,7 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
+        tma.async_load(input_desc, [0, 0], bar, smem)
         mbarrier.wait(bar, 0, pred=(not FAILURE), deps=[smem])
         val = smem.load(blocked_layout)
         mbarrier.wait(bar, 0, pred=FAILURE, deps=[smem])
@@ -231,7 +231,7 @@ def test_async_tma_multicast_kernel(FAILURE, device, run_wrapper, monkeypatch, n
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem, multicast=True)
+        tma.async_load(input_desc, [0, 0], bar, smem, multicast=True)
         mbarrier.wait(bar, 0, pred=(not FAILURE), deps=[smem])
         val = smem.load(blocked_layout)
         mbarrier.wait(bar, 0, pred=FAILURE, deps=[smem])
@@ -248,6 +248,44 @@ def test_async_tma_multicast_kernel(FAILURE, device, run_wrapper, monkeypatch, n
                                            cga_layout=multicast_cga_layout(num_ctas, 2))
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK.value, XBLOCK.value], shared_layout)
     kernel[(1, )](input_desc, output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell")
+@pytest.mark.parametrize("FAILURE", [True, False])
+def test_clc_result_visibility(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
+    if run_wrapper:
+        result = run_in_process(test_clc_result_visibility, (FAILURE, device, False, monkeypatch, num_ctas))
+        if FAILURE:
+            assert_expected_cuda_failure(result.exc)
+            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(out, FAILURE: ttgl.constexpr):
+        cga_layout: ttgl.constexpr = multicast_cga_layout(ttgl.num_ctas(), 1)
+        layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=cga_layout)
+        clc_result = ttgl.allocate_shared_memory(ttgl.int64, [2], layout)
+        clc_bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(clc_bar, count=1)
+
+        clc.try_cancel(clc_result, clc_bar)
+        mbarrier.expect(clc_bar, 16)
+        mbarrier.wait(clc_bar, 0, pred=(not FAILURE))
+        response = clc.load_result(clc_result)
+        mbarrier.wait(clc_bar, 0, pred=FAILURE)
+        mbarrier.invalidate(clc_bar)
+
+        ttgl.store(out + ttgl.program_id(0), response.is_canceled())
+
+    output = torch.empty((1, ), device=device, dtype=torch.bool)
+    kernel[(1, )](output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
@@ -275,7 +313,7 @@ def test_async_tma_multicast_kernel_reuse(device, run_wrapper, monkeypatch, num_
         for phase in ttgl.static_range(2):
             mbarrier.expect(bar, input_desc.nbytes_per_cta)
             ttgl.barrier(cluster=True)
-            tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem, multicast=True)
+            tma.async_load(input_desc, [0, 0], bar, smem, multicast=True)
             mbarrier.wait(bar, phase % 2, deps=[smem])
             ttgl.barrier(cluster=True)
         val = smem.load(blocked_layout)
@@ -319,7 +357,7 @@ def test_async_tma_multicast_kernel_local_store_race(device, run_wrapper, monkey
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem, multicast=True)
+        tma.async_load(input_desc, [0, 0], bar, smem, multicast=True)
         ttgl.barrier(cluster=True)
         smem.store(ttgl.full([XBLOCK, XBLOCK], 1, ttgl.float16, blocked_layout))
         mbarrier.wait(bar, 0, deps=[smem])
@@ -367,8 +405,8 @@ def test_async_tma_kernel_2bufs_1bar(FAILURE, device, run_wrapper, monkeypatch, 
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc, [0, 0], bar, b_smem)
+        tma.async_load(a_desc, [0, 0], bar, a_smem)
+        tma.async_load(b_desc, [0, 0], bar, b_smem)
         mbarrier.wait(bar, 0, pred=(not FAILURE), deps=[a_smem, b_smem])
         val = a_smem.load(blocked_layout)
         val = val + b_smem.load(blocked_layout)
@@ -415,7 +453,7 @@ def test_async_tma_expect_bytes_mismatch(EXPECT_DELTA, device, run_wrapper, monk
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, input_desc.nbytes_per_cta + EXPECT_DELTA)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
+        tma.async_load(input_desc, [0, 0], bar, smem)
         mbarrier.wait(bar, 0, deps=[smem])
         val = smem.load(blocked_layout)
         mbarrier.invalidate(bar)
@@ -461,8 +499,8 @@ def test_tma_interleave_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ct
         mbarrier.init(bar.index(1), count=1)
         mbarrier.expect(bar.index(0), input_desc.nbytes_per_cta)
         mbarrier.expect(bar.index(1), input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
+        tma.async_load(input_desc, [0, 0], bar.index(0), smem.index(0))
+        tma.async_load(input_desc, [0, 0], bar.index(1), smem.index(1))
 
         mbarrier.wait(bar.index(0), 0, deps=[smem.index(0)])
         if not FAILURE:
@@ -519,9 +557,9 @@ def test_tma_wait_tracks_only_waited_barrier(FAILURE, device, run_wrapper, monke
         mbarrier.init(bar.index(1), count=1)
 
         mbarrier.expect(bar.index(0), input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
+        tma.async_load(input_desc, [0, 0], bar.index(0), smem.index(0))
         mbarrier.expect(bar.index(1), input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
+        tma.async_load(input_desc, [0, 0], bar.index(1), smem.index(1))
 
         mbarrier.wait(bar.index(1), 0)
 
@@ -704,7 +742,7 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
 
         if MEM_ACCESS_KIND == "tma_cp":
             mbarrier.expect(tma_bar, input_desc.nbytes_per_cta)
-            tma.async_copy_global_to_shared(input_desc, [0, 0], tma_bar, smemA)
+            tma.async_load(input_desc, [0, 0], tma_bar, smemA)
             mbarrier.wait(tma_bar, 0)
             mbarrier.invalidate(tma_bar)
         elif MEM_ACCESS_KIND == "local_store":
@@ -1014,18 +1052,18 @@ def test_multibuffered_loop(FAILURE, device, run_wrapper, monkeypatch, num_ctas)
 
         # ins_id = 0
         mbarrier.expect(barLoadA.index(ins_id), a_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
+        tma.async_load(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
 
         mbarrier.expect(barLoadB.index(ins_id), b_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
+        tma.async_load(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
         ins_id = inc_mod(ins_id, num_buffers)
 
         # ins_id = 1
         mbarrier.expect(barLoadA.index(ins_id), a_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
+        tma.async_load(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
 
         mbarrier.expect(barLoadB.index(ins_id), b_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
+        tma.async_load(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
         ins_id = inc_mod(ins_id, num_buffers)
 
         mbarrier.wait(barLoadA.index(ext_id), phase)
@@ -1040,10 +1078,10 @@ def test_multibuffered_loop(FAILURE, device, run_wrapper, monkeypatch, num_ctas)
         for i in range(ub):
             if i < ub - 2:
                 mbarrier.expect(barLoadA.index(ins_id), a_desc.nbytes_per_cta)
-                tma.async_copy_global_to_shared(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
+                tma.async_load(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
 
                 mbarrier.expect(barLoadB.index(ins_id), b_desc.nbytes_per_cta)
-                tma.async_copy_global_to_shared(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
+                tma.async_load(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
                 ins_id = inc_mod(ins_id, num_buffers)
 
             if i < ub - 1:
@@ -1131,8 +1169,8 @@ def test_tma_tcgen05_mma_multicast_loop(FAILURE, device, run_wrapper, monkeypatc
         for k in range(num_k_tiles):
             offs_k = k * XBLOCK
             mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
-            tma.async_copy_global_to_shared(a_desc, [0, offs_k], tma_bar, smemA, multicast=True)
-            tma.async_copy_global_to_shared(b_desc, [offs_k, 0], tma_bar, smemB, multicast=True)
+            tma.async_load(a_desc, [0, offs_k], tma_bar, smemA, multicast=True)
+            tma.async_load(b_desc, [offs_k, 0], tma_bar, smemB, multicast=True)
             if not FAILURE:
                 mbarrier.wait(tma_bar, phase_tma, deps=[smemA, smemB])
             blackwell.tcgen05_mma(smemA, smemB, acc, use_acc=k != 0, multicast=True, mbarriers=[mma_bar])
@@ -1201,10 +1239,10 @@ def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper, monkeypatch, num
 
         # ins_id = 0
         mbarrier.expect(barLoadA.index(ins_id), a_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
+        tma.async_load(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
 
         mbarrier.expect(barLoadB.index(ins_id), b_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
+        tma.async_load(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
         ins_id = inc_mod(ins_id, num_buffers)
 
         # ins_id = 1
@@ -1212,10 +1250,10 @@ def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper, monkeypatch, num
         for i in range(ub):
             if i < ub - 1:
                 mbarrier.expect(barLoadA.index(ins_id), a_desc.nbytes_per_cta)
-                tma.async_copy_global_to_shared(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
+                tma.async_load(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
 
                 mbarrier.expect(barLoadB.index(ins_id), b_desc.nbytes_per_cta)
-                tma.async_copy_global_to_shared(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
+                tma.async_load(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
                 ins_id = inc_mod(ins_id, num_buffers)
 
             mbarrier.wait(barLoadA.index(ext_id), phase)
@@ -2120,13 +2158,13 @@ def test_deadlock_exempt_when_tma_signals(device, run_wrapper, monkeypatch, num_
     @gluon.jit
     def ws_default(input_desc, smem, bar):
         mbarrier.expect(bar.index(0), input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
+        tma.async_load(input_desc, [0, 0], bar.index(0), smem.index(0))
         mbarrier.wait(bar.index(0), phase=0)
 
     @gluon.jit
     def ws_1(input_desc, smem, bar):
         mbarrier.expect(bar.index(1), input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
+        tma.async_load(input_desc, [0, 0], bar.index(1), smem.index(1))
         mbarrier.wait(bar.index(1), phase=0)
 
     @gluon.jit

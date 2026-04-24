@@ -34,7 +34,9 @@ namespace mlir {
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-static std::pair<Operation *, Operation *>
+namespace {
+
+std::pair<Operation *, Operation *>
 createAsyncCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *c,
                 Operation *op, SmallVector<AsyncTaskId> &asyncTasksPC,
                 Value bufferIdx, Value bufferIdxExtract) {
@@ -92,7 +94,7 @@ createAsyncCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *c,
 
 // Create a local copy for a channel that is populated by the producer and
 // accessed by the consumer.
-static std::pair<Operation *, Operation *>
+std::pair<Operation *, Operation *>
 createLocalCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
                 Value srcBufferIdx, Value dstBufferIdx) {
   Operation *srcOp = channel->getSrcOp();
@@ -143,7 +145,7 @@ createLocalCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
   return {copy, sharedLoad};
 }
 
-static int getTMALoadSize(tt::DescriptorLoadOp &tmaLoad) {
+int getTMALoadSize(tt::DescriptorLoadOp &tmaLoad) {
   auto tensorTy = cast<RankedTensorType>(tmaLoad->getResult(0).getType());
   int loadSize = product(tensorTy.getShape());
   return loadSize * tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
@@ -175,6 +177,8 @@ Value getBufferForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
   return builder.createWithAsyncTaskIds<ttg::MemDescIndexOp>(
       buffer.getLoc(), subviewTy, buffer, bufferIdx);
 }
+
+} // namespace
 
 Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
                             SmallVector<tt::DescriptorLoadOp> &tmaLoads,

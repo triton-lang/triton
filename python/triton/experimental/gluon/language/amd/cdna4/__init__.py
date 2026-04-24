@@ -1,16 +1,16 @@
 from triton.runtime.jit import constexpr_function
 from triton._C.libtriton.gluon_ir import get_amd_mfma_scale_layout as _get_mfma_scale_layout
 
-from ..._core import builtin
+from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
-from .._ops import _mma_scaled
-from ..cdna3 import _buffer_atomic_rmw_impl
+from .._ops import _mma_scaled, _scaled_upcast
+from ..cdna3 import _buffer_atomic_rmw_impl, _convert_e8m0_scale_to_bf16
 from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
 
-__all__ = [*__cdna3_all, "async_copy", "mfma_scaled", "get_mfma_scale_layout"]
+__all__ = [*__cdna3_all, "async_copy", "mfma_scaled", "scaled_upcast", "get_mfma_scale_layout"]
 
 
 @builtin
@@ -47,6 +47,26 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
 
     return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_mfma_scale_layout, _semantic)
+
+
+@builtin
+def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
+    """
+    Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the
+    CDNA4 scaled-upcast op.
+
+    The scale tensor must use raw E8M0 payload in `int8` or `uint8`, and must
+    already have the expanded output shape and scaled-upcast result layout.
+    For fp4 inputs, that is the canonical unpacked layout implied by `src`
+    and `axis`. `elem_type` must be `fp16` or `bf16`. CDNA4 converts those
+    bytes to the internal `bf16` scale form expected by the AMD op.
+    """
+    axis = _unwrap_if_constexpr(axis)
+    elem_type = _unwrap_if_constexpr(elem_type)
+    assert scale.dtype in (int8, uint8), \
+        f"Expected scale to use raw E8M0 payload in int8/uint8 but got {scale.dtype}"
+    scale = _convert_e8m0_scale_to_bf16(scale, _semantic=_semantic)
+    return _scaled_upcast(src, scale, elem_type, axis, _semantic)
 
 
 def _get_mfma_scale_layout_impl(*args, **kwargs):

@@ -391,6 +391,15 @@ def _host_tma_scatter_kernel(desc, x_offsets_ptr, y_offset, src_ptr, src_stride_
     desc.scatter(src, x_offsets, y_offset)
 
 
+@triton.jit
+def _host_tma_reduce_add_kernel(desc, src_ptr, src_stride_0, src_stride_1, BLOCK_X: tl.constexpr):
+    BLOCK_Y: tl.constexpr = desc.block_shape[1]
+    indices_x = tl.arange(0, BLOCK_X)[:, None] * src_stride_0
+    indices_y = tl.arange(0, BLOCK_Y)[None, :] * src_stride_1
+    src = tl.load(src_ptr + indices_x + indices_y)
+    desc.atomic_add([0, 0], src)
+
+
 def _shadow_cell_state(cell) -> tuple[int, object, tuple[object, ...]]:
     return (cell.num_reads, cell.write_clock, tuple(cell.read_clocks))
 
@@ -586,3 +595,19 @@ def test_host_tma_scatter_updates_shadow(with_gsan):
     shadow1 = _shadow_cells_for_tensor(target_storage)
     _assert_shadow_mask(shadow0, shadow1, changed_mask, access_kind="write")
     assert target_storage[m_size, y_offset].item() == 0
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
+def test_host_tma_reduce_updates_atomic_shadow(with_gsan):
+    block_x = 1
+    block_y = 16
+    target = torch.zeros((block_x, block_y), dtype=torch.int32, device="cuda")
+    src = torch.arange(1, block_y + 1, dtype=torch.int32, device="cuda").reshape(block_x, block_y)
+    target_desc = TensorDescriptor.from_tensor(target, [block_x, block_y])
+
+    compiled = _host_tma_reduce_add_kernel[(1, )](target_desc, src, src.stride(0), src.stride(1), BLOCK_X=block_x)
+    assert "ttng.async_tma_reduce" in compiled.asm["ttgir"]
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(target, src)
+    _assert_atomic_rmw_shadow(target[0, 0].data_ptr(), AtomicScope.GPU, is_release=False)

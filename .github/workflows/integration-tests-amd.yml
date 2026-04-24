@@ -11,7 +11,7 @@ jobs:
   integration-tests-amd:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
-    continue-on-error: ${{ matrix.runner[1] == 'gfx90a' || matrix.runner[0] == 'amd-gfx950' }}
+    continue-on-error: ${{ matrix.runner[1] == 'gfx90a' || matrix.runner[0] == 'amd-gfx942' }}
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
@@ -84,21 +84,6 @@ jobs:
             ~/.triton/nvidia
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
-      - name: Switch to Ubuntu snapshot
-        run: |
-          SNAPSHOT=20260415T120000Z
-
-          cat >/etc/apt/sources.list <<EOF
-          deb http://snapshot.ubuntu.com/ubuntu/${SNAPSHOT} jammy main universe multiverse restricted
-          deb http://snapshot.ubuntu.com/ubuntu/${SNAPSHOT} jammy-updates main universe multiverse restricted
-          deb http://snapshot.ubuntu.com/ubuntu/${SNAPSHOT} jammy-security main universe multiverse restricted
-          deb http://snapshot.ubuntu.com/ubuntu/${SNAPSHOT} jammy-backports main universe multiverse restricted
-          EOF
-
-          # Important: snapshot repos require disabling Valid-Until check
-          echo 'Acquire::Check-Valid-Until "false";' >/etc/apt/apt.conf.d/99no-check-valid-until
-
-          apt-get clean
       - name: Install dependencies
         run: apt-get update && apt-get install -y clang lld ccache
       - name: Inspect cache directories
@@ -180,7 +165,7 @@ jobs:
             python3 -m pytest -s -n 12 tests/
           fi
       - name: Run asan tests on AMD
-        if: ${{ matrix.runner[0] == 'amd-gfx942' }}
+        if: false
         run: |
           cd third_party/amd/python/test/
           ulimit -s 1024

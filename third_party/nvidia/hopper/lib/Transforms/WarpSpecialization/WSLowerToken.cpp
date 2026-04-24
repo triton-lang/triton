@@ -25,9 +25,11 @@ namespace mlir {
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
+namespace {
+
 // Lower to use GetCanonicalWarpIdOp.
 // In Hopper, each task is a warpgroup consisting of 4 warps.
-static const int THREADS_PER_TASK = 128;
+const int THREADS_PER_TASK = 128;
 
 Value getMBarrierPhaseBit(OpBuilder &builder, Operation *op,
                           bool emptyBarrier) {
@@ -299,6 +301,8 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
     parentOp->dump();
   });
 }
+
+} // namespace
 
 void doTokenLowering(triton::FuncOp &funcOp, unsigned numConsumerGroups) {
   ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
