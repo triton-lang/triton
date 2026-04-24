@@ -60,8 +60,8 @@ struct KernelEvent {
         isGraphLinked(isGraphLinked),
         startTimeNs(
             std::get<uint64_t>(metric->getValue(KernelMetric::StartTime))),
-        endTimeNs(std::get<uint64_t>(
-            metric->getValue(KernelMetric::EndTime))) {}
+        endTimeNs(std::get<uint64_t>(metric->getValue(KernelMetric::EndTime))) {
+  }
 
   uint64_t getStartTimeNs() const;
   uint64_t getEndTimeNs() const;
