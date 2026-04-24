@@ -101,10 +101,8 @@ void dumpKernelEvents(
     for (const auto &event : events) {
       auto *kernelMetric = event.kernelMetric;
       auto *flexibleMetrics = event.flexibleMetrics;
-      uint64_t startTimeNs =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
-      uint64_t endTimeNs =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime));
+      uint64_t startTimeNs = event.getStartTimeNs();
+      uint64_t endTimeNs = event.getEndTimeNs();
       bool isMetricKernel = static_cast<bool>(std::get<uint64_t>(
           kernelMetric->getValue(KernelMetric::IsMetricKernel)));
       double ts = static_cast<double>(startTimeNs - minTimeStamp) / 1000;
@@ -225,8 +223,7 @@ void dumpCpuToGpuFlowEvents(
       }
 
       const auto *launchEvent = launchEventIt->second;
-      const auto kernelStartTimeNs = std::get<uint64_t>(
-          event.kernelMetric->getValue(KernelMetric::StartTime));
+      const auto kernelStartTimeNs = event.getStartTimeNs();
 
       json startElement;
       startElement["name"] = "launch->kernel";

@@ -48,6 +48,8 @@ struct KernelEvent {
   std::vector<Context> contexts;
   size_t launchEventId{};
   bool isGraphLinked{};
+  uint64_t startTimeNs{};
+  uint64_t endTimeNs{};
 
   KernelEvent(size_t eventId, const KernelMetric *metric,
               const DataEntry::FlexibleMetricMap *metrics,
@@ -55,7 +57,11 @@ struct KernelEvent {
               bool isGraphLinked)
       : eventId(eventId), kernelMetric(metric), flexibleMetrics(metrics),
         contexts(std::move(contexts)), launchEventId(launchId),
-        isGraphLinked(isGraphLinked) {}
+        isGraphLinked(isGraphLinked),
+        startTimeNs(
+            std::get<uint64_t>(metric->getValue(KernelMetric::StartTime))),
+        endTimeNs(std::get<uint64_t>(
+            metric->getValue(KernelMetric::EndTime))) {}
 
   uint64_t getStartTimeNs() const;
   uint64_t getEndTimeNs() const;

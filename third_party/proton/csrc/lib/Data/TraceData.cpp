@@ -68,10 +68,8 @@ void reconstructGraphScopeEvents(
         graphContexts.pop_back();
       }
 
-      const auto startTimeNs = std::get<uint64_t>(
-          kernelEvent.kernelMetric->getValue(KernelMetric::StartTime));
-      const auto endTimeNs = std::get<uint64_t>(
-          kernelEvent.kernelMetric->getValue(KernelMetric::EndTime));
+      const auto startTimeNs = kernelEvent.getStartTimeNs();
+      const auto endTimeNs = kernelEvent.getEndTimeNs();
       if (openScopes.empty()) {
         for (const auto &context : graphContexts) {
           openScopes.push_back({context, startTimeNs});
@@ -505,7 +503,20 @@ void TraceData::withTraceData(size_t phase, CycleHandler &&onCycleTrace,
     for (auto &[_, streamKernelEvents] : traceDump.kernelEvents) {
       std::stable_sort(streamKernelEvents.begin(), streamKernelEvents.end(),
                        trace_data_dump::KernelEvent::compare);
+      std::map<std::pair<uint64_t, uint64_t>, uint64_t>
+          gpuStreamToPreviousEndTimeNs;
       for (auto &kernelEvent : streamKernelEvents) {
+        const auto gpuStream =
+            std::make_pair(kernelEvent.getDeviceId(), kernelEvent.getStreamId());
+        if (auto prevEndIt = gpuStreamToPreviousEndTimeNs.find(gpuStream);
+            prevEndIt != gpuStreamToPreviousEndTimeNs.end() &&
+            kernelEvent.startTimeNs <= prevEndIt->second) {
+          kernelEvent.startTimeNs = prevEndIt->second + 1;
+          kernelEvent.endTimeNs =
+              std::max(kernelEvent.endTimeNs, kernelEvent.startTimeNs + 1);
+        }
+        gpuStreamToPreviousEndTimeNs[gpuStream] = kernelEvent.endTimeNs;
+
         if (auto targetIt =
                 launchEventIdToTargetEventId.find(kernelEvent.launchEventId);
             targetIt != launchEventIdToTargetEventId.end()) {
