@@ -166,6 +166,8 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
     outputBlockInfoMap[block] = inputBlockInfo;
 
     for (VirtualBlock &successor : successors) {
+      // Across a backedge, invalidate each carried slice's buffer index:
+      // we cannot evaluate index disjointness over loop iterations.
       if (isBackedgeSuccessor(terminator, successor.first))
         joinFromBackedge(inputBlockInfoMap[successor],
                          outputBlockInfoMap[block]);
