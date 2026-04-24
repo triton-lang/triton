@@ -123,13 +123,10 @@ std::pair<SmallVector<unsigned>, unsigned>
 distributeTDMWarpsAlignToPartition(ArrayRef<int64_t> blockShape, int numWarps,
                                    Attribute encoding);
 
-// Calculate the number of TDM gather/scatter instructions needed.
-// - numIndices: number of row indices
-// - use32BitIndices: true for 32-bit indices (max 8 rows/instr), false for
-//   16-bit (max 16 rows/instr)
-// Returns: the number of TDM instructions that will be emitted
-size_t getTDMGatherScatterInstrinsicCount(size_t numIndices,
-                                          bool use32BitIndices);
+// Calculate the number of TDM gather/scatter instructions needed using the
+// same LinearLayout analysis as emitTDMGatherScatter: broadcasts are removed
+// and contiguity is considered when batching indices per instruction.
+size_t getTDMGatherScatterInstrinsicCount(RankedTensorType indicesType);
 
 // Emit a TDM gather or scatter operation for non-contiguous row access.
 // Gather: reads from non-contiguous global rows into LDS

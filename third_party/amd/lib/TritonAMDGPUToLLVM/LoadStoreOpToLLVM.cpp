@@ -1016,9 +1016,6 @@ struct AsyncCopyGlobalToLocalOpConversion
       if (targetInfo.requiresAliasInfoForAsyncOps())
         AMD::addAsyncCopyAliasScope(asyncLoadOp);
     } else if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
-      if (cacheMod != triton::CacheModifier::NONE) {
-        emitRemark(loc) << "cache modifiers not yet implemented on gfx1250";
-      }
       switch (vecBits) {
       case 32:
         if (multicastMask)
@@ -1157,10 +1154,6 @@ struct AsyncCopyLocalToGlobalOpConversion
     int32_t cacheModifiers =
         mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
             cacheMod, /*isLoad=*/false, targetInfo);
-
-    if (cacheMod != triton::CacheModifier::NONE) {
-      emitRemark(loc) << "cache modifiers not yet implemented on gfx1250";
-    }
 
     auto emitStore = [&](int bits, Value dst, Value shmem) {
       std::string intrinsic =

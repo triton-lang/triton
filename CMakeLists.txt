@@ -440,6 +440,23 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 
+  if(NOT TRITON_EXT_ENABLED)
+    # When extensions are disabled, only export the Python entrypoint.
+    set(TRITON_EXPORT_SYMBOLS_FILE "${CMAKE_CURRENT_BINARY_DIR}/triton.exports")
+    if(APPLE)
+      set(TRITON_EXPORT_SYMBOLS_FILE_CONTENT "_PyInit_libtriton\n")
+      target_link_options(triton PRIVATE
+        "LINKER:-exported_symbols_list,${TRITON_EXPORT_SYMBOLS_FILE}")
+    elseif(UNIX)
+      set(TRITON_EXPORT_SYMBOLS_FILE_CONTENT
+        "{\n  global:\n    PyInit_libtriton;\n  local:\n    *;\n};\n")
+      target_link_options(triton PRIVATE
+        "LINKER:--version-script,${TRITON_EXPORT_SYMBOLS_FILE}")
+    endif()
+    file(GENERATE OUTPUT "${TRITON_EXPORT_SYMBOLS_FILE}"
+      CONTENT "${TRITON_EXPORT_SYMBOLS_FILE_CONTENT}")
+  endif()
+
   install(TARGETS triton
     COMPONENT libraries
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -460,11 +477,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
     COPYONLY)
 
   # Build plugins when building libtriton since they depend on libtriton.
-  add_subdirectory(examples/plugins)
-endif()
-
-if (UNIX AND NOT APPLE AND NOT TRITON_EXT_ENABLED)
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
+  if(TRITON_EXT_ENABLED)
+    add_subdirectory(examples/plugins)
+  endif()
 endif()
 
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)

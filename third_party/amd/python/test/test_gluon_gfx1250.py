@@ -4377,3 +4377,67 @@ def test_runtime_tdm_gather_partial_column_block(N, num_warps, index_dtype):
             ref_out[dst_row] = inp[src_row]
 
     torch.testing.assert_close(out_result, ref_out)
+
+
+@gluon.jit
+def buffer_load_store_roundtrip_kernel(a_ptr, b_ptr, BLOCK: ttgl.constexpr, loadCM: ttgl.constexpr,
+                                       storeCM: ttgl.constexpr):
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([8], [32], [1], [0])
+    pid = ttgl.program_id(axis=0)
+    offs = pid * BLOCK + ttgl.arange(0, BLOCK, layout=BLOCKED_LAYOUT)
+    data = ttgl.amd.gfx1250.buffer_load(ptr=a_ptr, offsets=offs, cache=loadCM)
+    ttgl.amd.gfx1250.buffer_store(stored_value=data, ptr=b_ptr, offsets=offs, cache=storeCM)
+
+
+@gluon.jit
+def async_load_store_roundtrip_kernel(a_ptr, b_ptr, BLOCK: ttgl.constexpr, loadCM: ttgl.constexpr,
+                                      storeCM: ttgl.constexpr):
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([8], [32], [1], [0])
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK // 2, 8]], [BLOCK], [0])
+    pid = ttgl.program_id(axis=0)
+    offs = pid * BLOCK + ttgl.arange(0, BLOCK, layout=BLOCKED_LAYOUT)
+    buffer = ttgl.allocate_shared_memory(ttgl.float16, shape=[BLOCK], layout=SHARED_LAYOUT)
+    ttgl.amd.gfx1250.async_copy.global_to_shared(buffer, a_ptr + offs, cache_modifier=loadCM)
+    ttgl.amd.gfx1250.async_copy.shared_to_global(b_ptr + offs, buffer, cache_modifier=storeCM)
+
+
+@pytest.mark.parametrize("loadCM, storeCM", [(".ca", ".wb"), (".cg", ".cg"), (".cs", ".cs"), (".cv", ".wt")])
+@pytest.mark.parametrize("test_kernel", [buffer_load_store_roundtrip_kernel, async_load_store_roundtrip_kernel])
+def test_cache_modifier(loadCM, storeCM, test_kernel):
+    BLOCK = 256
+    N = 256
+
+    src = torch.rand((N, ), dtype=torch.float16).cuda()
+    dst = torch.empty((N, ), dtype=torch.float16).cuda()
+    pgm = test_kernel[(triton.cdiv(N, BLOCK), )](src, dst, BLOCK, loadCM, storeCM, num_warps=1)
+
+    torch.testing.assert_close(dst, src)
+
+    amdgcn = pgm.asm["amdgcn"]
+
+    load_found = False
+    store_found = False
+    for line in amdgcn.split("\n"):
+        if "buffer_load_b128" in line or "global_load_async_to_lds_b128" in line:
+            load_found = True
+            if loadCM == ".ca":
+                assert "scope" not in line and "th" not in line
+            if loadCM == ".cg":
+                assert "scope:SCOPE_DEV" in line and "th" not in line
+            if loadCM == ".cs":
+                assert "scope" not in line and "th:TH_LOAD_NT" in line
+            if loadCM == ".cv":
+                assert "scope:SCOPE_SYS" in line and "th:TH_LOAD_BYPASS" in line
+        if "buffer_store_b128" in line or "global_store_async_from_lds_b128" in line:
+            store_found = True
+            if storeCM == ".wb":
+                assert "scope" not in line and "th" not in line
+            if storeCM == ".cg":
+                assert "scope:SCOPE_DEV" in line and "th" not in line
+            if storeCM == "cs":
+                assert "scope" not in line and "th:TH_LOAD_NT" in line
+            if storeCM == ".wt":
+                assert "scope:SCOPE_SYS" in line and "th:TH_STORE_BYPASS" in line
+
+    assert load_found
+    assert store_found

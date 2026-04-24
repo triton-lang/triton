@@ -210,8 +210,8 @@ py::object layoutToGluon(Attribute layout) {
   } else if (auto sliced = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
     return layouts.SliceLayout(sliced.getDim(),
                                layoutToGluon(sliced.getParent()));
-  } else if (auto linear = dyn_cast<ttg::LinearEncodingAttr>(layout)) {
-    const auto &ll = linear.getLinearLayout();
+  } else if (auto linearEnc = dyn_cast<ttg::LinearEncodingTrait>(layout)) {
+    const auto &ll = linearEnc.getLinearLayout();
     auto ctx = layout.getContext();
     auto kReg = mlir::StringAttr::get(ctx, "register");
     auto kLane = mlir::StringAttr::get(ctx, "lane");
@@ -393,7 +393,9 @@ void init_gluon_ir(py::module &&m) {
                                          {kBlock, blockBases}},
                                         outDims,
                                         /*requiresSurjective=*/true);
-             return ttg::LinearEncodingAttr::get(ctx, std::move(ll));
+             if (ttg::isPermutationMatrixLayout(ll))
+               return ttg::LinearEncodingAttr::get(ctx, std::move(ll));
+             return ttg::GenericLinearEncodingAttr::get(ctx, std::move(ll));
            })
       .def("to_linear_layout",
            [](GluonOpBuilder &self, Attribute layout,
