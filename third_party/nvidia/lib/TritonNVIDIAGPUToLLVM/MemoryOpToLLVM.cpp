@@ -74,17 +74,20 @@ FailureOr<Value> emitSharedAtomicAdd(ConversionPatternRewriter &rewriter,
     return failure();
   }
 
-  PTXBuilder ptxBuilder;
-  auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
-  auto *valOpr = ptxBuilder.newOperand(value, tyId);
   if (!returnOld) {
+    PTXBuilder ptxBuilder;
+    auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
+    auto *valOpr = ptxBuilder.newOperand(value, tyId);
     auto &red = *ptxBuilder.create("red");
     red.shared().o(addOp).o(suffix);
     red(ptrOpr, valOpr).maybePredicate(pred, "b");
     return ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
   }
 
+  PTXBuilder ptxBuilder;
   auto *dstOpr = ptxBuilder.newOperand("=" + tyId, /*init=*/true);
+  auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
+  auto *valOpr = ptxBuilder.newOperand(value, tyId);
   auto &atom = *ptxBuilder.create("atom");
   atom.shared().o(addOp).o(suffix);
   atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred, "b");
