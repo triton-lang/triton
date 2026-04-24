@@ -1003,12 +1003,11 @@ emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
     auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
     auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
 
-    fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      effectiveBlockShape, padInterval, padAmount, group0Vec,
-                      group1Vec, std::nullopt, std::nullopt, globalOffset,
-                      instrDstPtrs, pred, multicastMask, barrier,
-                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA, numWarps,
-                      hintedWarps);
+    fillTDMDescriptor(
+        rewriter, loc, typeConverter, elementType, effectiveBlockShape,
+        padInterval, padAmount, group0Vec, group1Vec, std::nullopt,
+        std::nullopt, globalOffset, instrDstPtrs, pred, multicastMask, barrier,
+        instrSharedLayout, ctaId, !isLoad, warpsPerCTA, numWarps, hintedWarps);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
