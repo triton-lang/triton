@@ -772,6 +772,8 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
         &RocprofSDKProfiler::RocprofSDKProfilerPimpl::markerCallback, nullptr);
   }
 
+  // Flush the buffer when it reaches 87.5% capacity, leaving headroom for
+  // in-flight records while the callback drains the buffer.
   size_t watermark = BufferSize - (BufferSize / 8);
   rocprofiler::createBuffer<true>(
       state->profilingContext, BufferSize, watermark,
@@ -840,10 +842,6 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
   if (!state.profilingStarted) {
     rocprofiler::startContext<true>(state.profilingContext);
     state.profilingStarted = true;
-  } else {
-    // Context kept alive across sessions — drain stale dispatch records
-    // that may have accumulated between the previous doStop() and now.
-    rocprofiler::flushBuffer<true>(state.kernelBuffer);
   }
   bool nvtx = getBoolEnv("TRITON_ENABLE_NVTX", true);
   state.nvtxEnabled.store(nvtx, std::memory_order_relaxed);
@@ -882,11 +880,8 @@ RocprofSDKProfiler::RocprofSDKProfiler() {
   // Construction of this singleton is triggered at libproton.so load time
   // via the __attribute__((constructor)) hook below, so force_configure
   // lands before any user code touches the HIP/HSA runtimes.
-  {
-    std::lock_guard<std::mutex> lock(state.mutex);
-    if (!state.configured) {
-      rocprofiler::forceConfigure<true>(&protonConfigure);
-    }
+  if (!state.configured) {
+    rocprofiler::forceConfigure<true>(&protonConfigure);
   }
 }
 

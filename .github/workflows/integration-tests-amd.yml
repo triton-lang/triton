@@ -9,16 +9,37 @@ on:
 
 jobs:
   integration-tests-amd:
-    name: integration-tests-amd (${{ matrix.config.name }})
-    runs-on: ${{ matrix.config.runs_on }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
-    continue-on-error: ${{ matrix.config.name == 'gfx90a' || matrix.config.name == 'gfx950' }}
+    continue-on-error: ${{ matrix.runner[1] == 'gfx90a' || matrix.runner[0] == 'amd-gfx950' }}
     strategy:
       matrix:
-        config: ${{ fromJson(inputs.matrix) }}
-      fail-fast: false
+        runner: ${{ fromJson(inputs.matrix) }}
+        include:
+          - image: rocm/pytorch:rocm7.0_ubuntu22.04_py3.10_pytorch_release_2.8.0
+            runner: ["self-hosted", "gfx90a"]
+            # Cache save/restore is on the host machine at directory /home/runner/.triton, while in the docker
+            # container expect it at /github/home/.triton. So map here to make sure visible in docker.
+            options: >-
+              --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+              --volume /home/runner/.triton:/github/home/.triton
+          - image: rocm/pytorch-private:rocm7.0_ubuntu22.04_py3.10_pytorch_2.8.0_asan
+            runner: ["amd-gfx942"]
+            # We add --env-file to pull in HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES definition for GPU isolation.
+            options: >-
+              --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+              --env-file /etc/podinfo/gha-gpu-isolation-settings
+              --volume /home/runner/.triton:/github/home/.triton
+          - image: rocm/pytorch:rocm7.0_ubuntu22.04_py3.10_pytorch_release_2.8.0
+            runner: ["amd-gfx950"]
+            # We add --env-file to pull in HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES definition for GPU isolation.
+            options: >-
+              --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+              --env-file /etc/podinfo/gha-gpu-isolation-settings
+              --volume /home/runner/.triton:/github/home/.triton
+              --volume /triton-data:/triton-data
     env:
-      RUNNER_TYPE: ${{ matrix.config.name }}
+      RUNNER_TYPE: ${{ matrix.runner[1] }}
       TRITON_BUILD_WITH_CCACHE: "true"
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
       TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
@@ -28,8 +49,8 @@ jobs:
       CCACHE_COMPRESS: "true"
       PIP_BREAK_SYSTEM_PACKAGES: 1
     container:
-      image: ${{ matrix.config.image }}
-      options: ${{ matrix.config.options }}
+      image: ${{ matrix.image }}
+      options: ${{ matrix.options }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -64,20 +85,7 @@ jobs:
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
       - name: Install dependencies
-        run: |
-          # `apt-get update` can transiently fail on Ubuntu security mirrors
-          # (e.g. dep11 components mid-sync). Those files are cosmetic
-          # AppStream metadata and unrelated to the packages we need, so retry
-          # a few times and then continue even if update still reports errors;
-          # `apt-get install` will use whatever indexes are cached.
-          for i in 1 2 3; do
-            apt-get -o Acquire::Retries=5 update && break
-            echo "apt-get update attempt $i failed, retrying in 10s..."
-            sleep 10
-          done
-          apt-get install -y clang lld ccache
-          # Fail loudly if any required tool is still missing.
-          command -v clang && command -v lld && command -v ccache
+        run: apt-get update && apt-get install -y clang lld ccache
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -96,7 +104,7 @@ jobs:
           pip uninstall -y triton pytorch-triton-rocm
 
           ccache --zero-stats
-          if [ "${{ matrix.config.name }}" = "gfx950" ] || [ "${{ matrix.config.name }}" = "gfx950-rocm712" ]; then
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
             pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
             pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
           fi
@@ -108,7 +116,6 @@ jobs:
       - name: Run C++ unittests
         run: make test-cpp
       - name: Run Python tests on AMD
-        if: ${{ matrix.config.name != 'gfx950-rocm712' }}
         run: |
           INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/instrumentation"
           if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
@@ -141,24 +148,24 @@ jobs:
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_tensor_atomic_cas with buffer ops disabled on gfx950 and gfx942
-          if [ "${{ matrix.config.name }}" = "gfx950" ] || [ "${{ matrix.config.name }}" = "gfx942" ]; then
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
             AMDGCN_USE_BUFFER_OPS=0 pytest --capture=tee-sys -rfs -n 12 language/test_core.py::test_tensor_atomic_cas
           fi
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          if [ "${{ matrix.config.name }}" = "gfx950" ]; then
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py -k "not test_line_info_ir_source"
           else
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
           fi
 
           # Run tests under triton/python/triton_kernels/tests/ on gfx950 and gfx942
-          if [ "${{ matrix.config.name }}" = "gfx950" ] || [ "${{ matrix.config.name }}" = "gfx942" ]; then
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
             cd ../../triton_kernels/
             python3 -m pytest -s -n 12 tests/
           fi
       - name: Run asan tests on AMD
-        if: ${{ matrix.config.name == 'gfx942' }}
+        if: ${{ matrix.runner[0] == 'amd-gfx942' }}
         run: |
           cd third_party/amd/python/test/
           ulimit -s 1024
@@ -175,42 +182,14 @@ jobs:
           LD_PRELOAD=$CLANG_ASAN_LIB:$HIP_ASAN_LIB python3 -m pytest -s test_address_sanitizer.py
           mv $TORCH_PATH/libamdhip64_bck.so $TORCH_PATH/libamdhip64.so
       - name: Run regression tests
-        if: ${{ matrix.config.name != 'gfx950-rocm712' }}
         run: |
           make test-regression
       - name: Run microbenchmark tests
-        if: ${{ matrix.config.name != 'gfx950-rocm712' }}
         run: |
           python3 python/test/microbenchmark/launch_overhead.py
       - name: Run Proton tests
         run: |
           unset HIP_VISIBLE_DEVICES
-          unset ROCR_VISIBLE_DEVICES
-          # The ROCm 7.12 preview ships HIP / rocprofiler-sdk inside the ROCm
-          # SDK Python wheel (under site-packages/_rocm_sdk_core/lib) instead
-          # of /opt/rocm/lib, so Proton's dlopen() can't find libamdhip64.so
-          # or librocprofiler-sdk.so without extending LD_LIBRARY_PATH. That
-          # wheel also ships only versioned sonames (e.g. libamdhip64.so.7)
-          # and omits the unversioned dev symlinks, so dlopen("libfoo.so")
-          # fails even when the dir is on the search path; we create the
-          # missing symlinks below. See
-          # https://rocm.docs.amd.com/en/7.12.0-preview/rocm-for-ai/vllm.html
-          if [ "${{ matrix.config.name }}" = "gfx950-rocm712" ]; then
-            ROCM_SDK_LIB="$(python3 -c 'import _rocm_sdk_core, os; print(os.path.join(os.path.dirname(_rocm_sdk_core.__file__), "lib"))')"
-            echo "ROCM_SDK_LIB=$ROCM_SDK_LIB"
-            for base in libamdhip64 libhsa-runtime64 librocprofiler-sdk \
-                        libroctx64 librocprofiler-sdk-roctx libamd_comgr \
-                        libroctracer64; do
-              if [ ! -e "$ROCM_SDK_LIB/${base}.so" ]; then
-                versioned="$(ls "$ROCM_SDK_LIB"/${base}.so.* 2>/dev/null | sort -V | head -1 || true)"
-                if [ -n "$versioned" ]; then
-                  ln -sf "$(basename "$versioned")" "$ROCM_SDK_LIB/${base}.so"
-                  echo "linked $ROCM_SDK_LIB/${base}.so -> $(basename "$versioned")"
-                fi
-              fi
-            done
-            export LD_LIBRARY_PATH="$ROCM_SDK_LIB:$LD_LIBRARY_PATH"
-          fi
           make test-proton
       - name: Inspect cache directories
         run: |
@@ -222,6 +201,139 @@ jobs:
       - name: Clean up caches
         # Always cleanup the worker, even if builds or tests failed given that these directories are
         # mapped from the host and we write files as the root user in the docker.
+        if: always()
+        run: |
+          rm -rf ~/.triton/cache
+          rm -rf ~/.ccache
+
+  # Standalone job for the ROCm 7.12 preview (vLLM) image on gfx950. We keep
+  # this separate from the matrix above because both configurations run on the
+  # same `amd-gfx950` hardware but need different container images/options, and
+  # the matrix key in runner-preparation.yml is the runner-label tuple which
+  # cannot distinguish two entries that share the same tuple. Everything here
+  # is intentionally self-contained so that this job (and the upstream
+  # rocprofiler-sdk late-attach validation it provides) can be added or
+  # removed without touching the shared ROCm 7.0 job above.
+  integration-tests-amd-rocm712:
+    name: integration-tests-amd (gfx950-rocm712)
+    runs-on: ["amd-gfx950"]
+    timeout-minutes: 45
+    env:
+      RUNNER_TYPE: gfx950-rocm712
+      TRITON_BUILD_WITH_CCACHE: "true"
+      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+      TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+      TRITON_DISABLE_LINE_INFO: 1
+      PROTON_SKIP_PC_SAMPLING_TEST: 1
+      PYTHON: "python3"
+      CCACHE_COMPRESS: "true"
+      PIP_BREAK_SYSTEM_PACKAGES: 1
+    container:
+      image: rocm/vllm:rocm7.12.0_gfx950-dcgpu_ubuntu24.04_py3.12_pytorch_2.9.1_vllm_0.16.0
+      options: >-
+        --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+        --env-file /etc/podinfo/gha-gpu-isolation-settings
+        --volume /home/runner/.triton:/github/home/.triton
+        --volume /triton-data:/triton-data
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: 'true'
+      - name: Compute cache keys
+        id: cache-key
+        run: |
+          llvm_file="cmake/llvm-hash.txt"
+          nvidia_file="cmake/nvidia-toolchain-version.json"
+          json_file="cmake/json-version.txt"
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+            echo "Error: Required dependency files are missing."
+            exit 1
+          fi
+          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
+        shell: bash
+      - name: Cache build dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
+      - name: Install dependencies
+        run: |
+          # `apt-get update` can transiently fail on Ubuntu security mirrors
+          # (e.g. dep11 components mid-sync). Retry a few times then continue;
+          # `apt-get install` uses whatever indexes are cached.
+          for i in 1 2 3; do
+            apt-get -o Acquire::Retries=5 update && break
+            echo "apt-get update attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          apt-get install -y clang lld ccache
+          command -v clang && command -v lld && command -v ccache
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
+      - name: Update compiler to Clang
+        run: |
+          export CC=/usr/bin/clang
+          export CXX=/usr/bin/clang++
+      - name: Install Triton
+        run: |
+          echo "PATH is '$PATH'"
+          pip uninstall -y triton pytorch-triton-rocm
+          ccache --zero-stats
+          pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
+          pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
+          make dev-install
+      - name: Print ccache stats
+        run: ccache --print-stats
+      - name: Run lit tests
+        run: make test-lit
+      - name: Run C++ unittests
+        run: make test-cpp
+      - name: Run Proton tests
+        run: |
+          unset HIP_VISIBLE_DEVICES
+          unset ROCR_VISIBLE_DEVICES
+          # The ROCm 7.12 preview ships HIP / rocprofiler-sdk inside the ROCm
+          # SDK Python wheel (under site-packages/_rocm_sdk_core/lib) rather
+          # than /opt/rocm/lib, so Proton's dlopen() cannot find libamdhip64.so
+          # or librocprofiler-sdk.so without extending LD_LIBRARY_PATH. That
+          # wheel also ships only versioned sonames (e.g. libamdhip64.so.7)
+          # and omits the unversioned dev symlinks, so dlopen("libfoo.so")
+          # fails even when the dir is on the search path; we create the
+          # missing symlinks below. See
+          # https://rocm.docs.amd.com/en/7.12.0-preview/rocm-for-ai/vllm.html
+          ROCM_SDK_LIB="$(python3 -c 'import _rocm_sdk_core, os; print(os.path.join(os.path.dirname(_rocm_sdk_core.__file__), "lib"))')"
+          echo "ROCM_SDK_LIB=$ROCM_SDK_LIB"
+          for base in libamdhip64 libhsa-runtime64 librocprofiler-sdk \
+                      librocprofiler-sdk-attach librocprofiler-sdk-rocattach \
+                      librocprofiler-sdk-rocpd libroctx64 \
+                      librocprofiler-sdk-roctx libamd_comgr libroctracer64; do
+            if [ ! -e "$ROCM_SDK_LIB/${base}.so" ]; then
+              versioned="$(ls "$ROCM_SDK_LIB"/${base}.so.* 2>/dev/null | sort -V | head -1 || true)"
+              if [ -n "$versioned" ]; then
+                ln -sf "$(basename "$versioned")" "$ROCM_SDK_LIB/${base}.so"
+                echo "linked $ROCM_SDK_LIB/${base}.so -> $(basename "$versioned")"
+              fi
+            fi
+          done
+          export LD_LIBRARY_PATH="$ROCM_SDK_LIB:$LD_LIBRARY_PATH"
+          make test-proton
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
+      - name: Clean up caches
         if: always()
         run: |
           rm -rf ~/.triton/cache
