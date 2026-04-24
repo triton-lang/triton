@@ -95,7 +95,7 @@ struct GraphScopeEvent {
 
 struct TraceDump {
   uint64_t minTimeStamp = std::numeric_limits<uint64_t>::max();
-  std::map</*stream_id=*/size_t, std::vector<KernelEvent>> kernelEvents;
+  std::map</*stream_id=*/size_t, std::set<KernelEvent>> kernelEvents;
   std::map</*thread_id=*/size_t, std::vector<CpuScopeEvent>> cpuScopeEvents;
   std::map</*stream_id=*/size_t, std::vector<GraphScopeEvent>> graphScopeEvents;
   std::vector<CycleEvent> cycleEvents;
