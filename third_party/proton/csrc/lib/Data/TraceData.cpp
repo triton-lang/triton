@@ -28,7 +28,7 @@ uint64_t getCurrentCpuTimestampNs() {
 }
 
 void reconstructGraphScopeEvents(
-    const std::map<size_t, std::set<trace_data_dump::KernelEvent>>
+    const std::map<size_t, std::vector<trace_data_dump::KernelEvent>>
         &kernelEvents,
     std::map<size_t, std::vector<trace_data_dump::GraphScopeEvent>>
         &graphScopeEvents) {
@@ -438,10 +438,15 @@ void TraceData::withTraceData(size_t phase, CycleHandler &&onCycleTrace,
                     launchEventIdToTargetEventId.end()) {
               launchEventIdToTargetEventId.emplace(launchEventId, eventId);
             }
-            traceDump.kernelEvents[streamId].emplace(
-                trace_data_dump::KernelEvent(eventId, kernelMetric,
-                                             flexibleMetrics, contexts,
-                                             launchEventId, isGraphLinked));
+            trace_data_dump::KernelEvent kernelEvent(
+                eventId, kernelMetric, flexibleMetrics, contexts, launchEventId,
+                isGraphLinked);
+            auto &streamKernelEvents = traceDump.kernelEvents[streamId];
+            streamKernelEvents.insert(
+                std::lower_bound(streamKernelEvents.begin(),
+                                 streamKernelEvents.end(), kernelEvent,
+                                 trace_data_dump::KernelEvent::compare),
+                std::move(kernelEvent));
             traceDump.minTimeStamp =
                 std::min(traceDump.minTimeStamp, startTimeNs);
           }

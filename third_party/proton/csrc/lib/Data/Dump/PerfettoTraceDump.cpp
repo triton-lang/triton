@@ -476,10 +476,10 @@ void appendGraphTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
 
 void appendKernelTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
                               PerfettoInternedNames &internedNames) {
-  for (const auto &[streamId, streamKernelEvents] : traceDump.kernelEvents) {
-    const auto trackUuid =
-        getPerfettoLaneTrackUuid(details::getGpuLaneId(streamId));
+  for (const auto &[_, streamKernelEvents] : traceDump.kernelEvents) {
     for (const auto &event : streamKernelEvents) {
+      const auto trackUuid = getPerfettoLaneTrackUuid(
+          details::getGpuLaneId(event.getDeviceId(), event.getStreamId()));
       PerfettoInternedNames newInternedNames;
       const bool incrementalStateCleared = internedNames.empty();
       std::vector<PerfettoAnnotation> annotations;
@@ -524,12 +524,17 @@ void dumpPerfettoTraceData(const TraceDump &traceDump, std::ostream &os) {
                                  kPerfettoGraphTrackOrderBase +
                                      static_cast<int32_t>(streamId)});
   }
-  for (const auto &[streamId, _] : traceDump.kernelEvents) {
-    const auto laneId = details::getGpuLaneId(streamId);
-    tracks.emplace(getPerfettoLaneTrackUuid(laneId),
-                   PerfettoTrack{"GPU Stream " + std::to_string(streamId),
-                                 kPerfettoGpuTrackOrderBase +
-                                     static_cast<int32_t>(streamId)});
+  for (const auto &[_, streamKernelEvents] : traceDump.kernelEvents) {
+    for (const auto &event : streamKernelEvents) {
+      const auto deviceId = event.getDeviceId();
+      const auto streamId = event.getStreamId();
+      const auto laneId = details::getGpuLaneId(deviceId, streamId);
+      tracks.emplace(
+          getPerfettoLaneTrackUuid(laneId),
+          PerfettoTrack{"GPU Device " + std::to_string(deviceId) +
+                            " Stream " + std::to_string(streamId),
+                        static_cast<int32_t>(laneId)});
+    }
   }
 
   PerfettoInternedNames internedNames;

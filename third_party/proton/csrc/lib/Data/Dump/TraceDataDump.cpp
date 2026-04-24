@@ -2,6 +2,7 @@
 #include "Profiler/Graph.h"
 
 #include <algorithm>
+#include <functional>
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
@@ -130,10 +131,24 @@ bool KernelEvent::compare(const KernelEvent &a, const KernelEvent &b) {
   if (a.getEndTimeNs() != b.getEndTimeNs()) {
     return a.getEndTimeNs() < b.getEndTimeNs();
   }
+  if (a.getDeviceId() != b.getDeviceId()) {
+    return a.getDeviceId() < b.getDeviceId();
+  }
+  if (a.getStreamId() != b.getStreamId()) {
+    return a.getStreamId() < b.getStreamId();
+  }
   if (a.getIsMetricKernel() != b.getIsMetricKernel()) {
     return a.getIsMetricKernel() < b.getIsMetricKernel();
   }
-  return a.getName() < b.getName();
+  const auto aName = a.getName();
+  const auto bName = b.getName();
+  if (aName != bName) {
+    return aName < bName;
+  }
+  if (a.eventId != b.eventId) {
+    return a.eventId < b.eventId;
+  }
+  return std::less<const KernelMetric *>{}(a.kernelMetric, b.kernelMetric);
 }
 
 } // namespace proton::trace_data_dump
