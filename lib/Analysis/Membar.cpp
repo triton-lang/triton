@@ -139,7 +139,7 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
     // Make a copy of the inputblockInfo but not update
     auto inputBlockInfo = inputBlockInfoMap[block];
     SmallVector<VirtualBlock> successors;
-    SmallVector<bool> isBackedges;
+    Operation *terminator = nullptr;
     Block::iterator startIt =
         block.second.isValid() ? std::next(block.second) : block.first->begin();
     for (Operation &op : llvm::make_range(startIt, block.first->end())) {
@@ -149,7 +149,8 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
       update(&op, &inputBlockInfo, funcBlockInfoMap, builder);
       if (op.hasTrait<OpTrait::IsTerminator>() ||
           isa<RegionBranchOpInterface>(op)) {
-        visitTerminator(&op, successors, isBackedges);
+        visitTerminator(&op, successors);
+        terminator = &op;
         break;
       }
     }
@@ -164,8 +165,8 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
     // so overwrite the output state entirely.
     outputBlockInfoMap[block] = inputBlockInfo;
 
-    for (auto [successor, isBackedge] : llvm::zip(successors, isBackedges)) {
-      if (isBackedge)
+    for (VirtualBlock &successor : successors) {
+      if (isBackedgeSuccessor(terminator, successor.first))
         joinFromBackedge(inputBlockInfoMap[successor],
                          outputBlockInfoMap[block]);
       else
@@ -199,71 +200,47 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
 }
 
 void MembarOrFenceAnalysis::visitTerminator(
-    Operation *op, SmallVector<VirtualBlock> &successors,
-    SmallVector<bool> &isBackedges) {
-  auto addSuccessor = [&](Block *block, Block::iterator it,
-                          bool isBackedge = false) {
-    successors.emplace_back(block, it);
-    isBackedges.push_back(isBackedge);
-  };
-
-  // Plain CFG branch (cf.br, cf.cond_br, ...). Triton's membar runs
-  // before any scf-to-cf lowering, so loops are not yet expressed as
-  // cf.br cycles; treat all CFG edges as forward.
+    Operation *op, SmallVector<VirtualBlock> &successors) {
   if (isa<BranchOpInterface>(op)) {
+    // Collect the block successors of the branch.
     for (Block *successor : op->getSuccessors())
-      addSuccessor(successor, Block::iterator());
+      successors.emplace_back(successor, Block::iterator());
     return;
   }
 
-  // A region-branching op (e.g. scf.for, scf.if) encountered mid-block.
-  // Its successors are the entry blocks of its region successors, or the
-  // op's own continuation (region.isParent()). Both kinds of edge come
-  // from the parent region and are forward.
   if (auto br = dyn_cast<RegionBranchOpInterface>(op)) {
+    // The successors of an operation with regions can be queried via an
+    // interface. The operation branches to the entry blocks of its region
+    // successors. It can also branch to after itself.
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
     for (RegionSuccessor &region : regions) {
       if (region.isParent()) {
-        addSuccessor(br->getBlock(), br->getIterator());
+        successors.emplace_back(br->getBlock(), br->getIterator());
       } else {
         Block &block = region.getSuccessor()->front();
-        addSuccessor(&block, Block::iterator());
+        successors.emplace_back(&block, Block::iterator());
       }
     }
     return;
   }
 
-  // Terminator of a region inside a region-branching op (e.g. scf.yield).
-  // Successors are the first block of another region (re-entering a
-  // loop body / condition region) or the parent op's continuation block.
-  //
-  // Backedge detection is unavoidable here: forward vs. backward edges
-  // need different join semantics, since SSA values carried across a
-  // backedge denote a different runtime integer on the next iteration
-  // (see joinFromBackedge in BufferIndexAnalysis.h). A successor region
-  // with number <= the terminator's region number denotes re-entry into
-  // an earlier region, covering scf.for yield -> body (same region) and
-  // scf.while after -> before (successor 0 <= terminator 1).
-  //
   // FIXME: `ReturnLike` adds `RegionBranchTerminatorOpInterface` for some
   // reason. Check that the parent is actually a `RegionBranchOpInterface`.
   auto br = dyn_cast<RegionBranchTerminatorOpInterface>(op);
   if (br && isa<RegionBranchOpInterface>(br->getParentOp())) {
+    // Check the successors of a region branch terminator. It can branch to
+    // another region of its parent operation or to after the parent op.
     SmallVector<Attribute> operands(br->getNumOperands());
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(operands, regions);
-    unsigned termRegionNo = br->getParentRegion()->getRegionNumber();
-
-    for (const RegionSuccessor &region : regions) {
+    for (RegionSuccessor &region : regions) {
       if (region.isParent()) {
         Operation *parent = br->getParentOp();
-        addSuccessor(parent->getBlock(), parent->getIterator());
+        successors.emplace_back(parent->getBlock(), parent->getIterator());
       } else {
         Block &block = region.getSuccessor()->front();
-        bool isBackedge =
-            region.getSuccessor()->getRegionNumber() <= termRegionNo;
-        addSuccessor(&block, Block::iterator(), isBackedge);
+        successors.emplace_back(&block, Block::iterator());
       }
     }
     return;

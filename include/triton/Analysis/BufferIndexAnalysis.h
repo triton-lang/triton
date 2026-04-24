@@ -5,6 +5,8 @@
 
 namespace mlir {
 
+class Block;
+class Operation;
 struct BlockInfo;
 
 /// Returns true only if `a` and `b` provably denote different buffer slots
@@ -17,6 +19,12 @@ bool areIndicesProvablyDifferent(Value a, Value b);
 /// or a null Value if one cannot be recovered. Walks through
 /// MemDescViewTrait producers to the underlying MemDescIndexOp.
 Value extractBufferIndex(Value value);
+
+/// Returns true if `successor` is the entry block of a CFG edge from
+/// `terminator` that re-enters an earlier region (e.g. scf.for yield ->
+/// body, scf.while after -> before). Used by membar to dispatch
+/// joinFromBackedge instead of BlockInfo::join.
+bool isBackedgeSuccessor(Operation *terminator, Block *successor);
 
 /// Like BlockInfo::join, but for slices propagated across a CFG backedge:
 /// each incoming slice has its bufferIndex cleared before being merged

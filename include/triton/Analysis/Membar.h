@@ -112,8 +112,13 @@ struct BlockInfo {
 
   /// Unions two BlockInfo objects.
   BlockInfo &join(const BlockInfo &other) {
-    joinSlices(syncReadSlices, other.syncReadSlices);
-    joinSlices(syncWriteSlices, other.syncWriteSlices);
+    for (auto &slice : other.syncReadSlices)
+      syncReadSlices[slice.first].insert(slice.second.begin(),
+                                         slice.second.end());
+
+    for (auto &slice : other.syncWriteSlices)
+      syncWriteSlices[slice.first].insert(slice.second.begin(),
+                                          slice.second.end());
     return *this;
   }
 
@@ -172,11 +177,6 @@ struct BlockInfo {
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
 
 private:
-  static void joinSlices(SliceMapT &lhs, const SliceMapT &rhs) {
-    for (const auto &[slice, ops] : rhs)
-      lhs[slice].insert(ops.begin(), ops.end());
-  }
-
   bool isIntersected(const SliceMapT &lhsSlices, const SliceMapT &rhsSlices,
                      bool lhsIsRead, bool rhsIsRead, MembarFilterFn filter,
                      MembarSliceFilterFn sliceFilter,
@@ -266,19 +266,9 @@ protected:
   void resolve(FunctionOpInterface funcOp, FuncBlockInfoMapT *funcBlockInfoMap,
                OpBuilder *builder);
 
-  /// Collects the successors of the terminator and, for each one, whether
-  /// the edge is a loop backedge (e.g. scf.for yield back to the body
-  /// region, scf.while after-region yield back to before). `successors`
-  /// and `isBackedges` are filled in lockstep. Dispatches on the op's
-  /// control-flow interface (`BranchOpInterface`,
-  /// `RegionBranchOpInterface`, or `RegionBranchTerminatorOpInterface`).
-  /// Backedges are classified only for region-branch terminators, where a
-  /// successor with a region number <= the terminator's region number
-  /// denotes a re-entry into an earlier region (scf.for yield -> body,
-  /// scf.while after -> before).
+  /// Collects the successors of the terminator
   void visitTerminator(Operation *operation,
-                       SmallVector<VirtualBlock> &successors,
-                       SmallVector<bool> &isBackedges);
+                       SmallVector<VirtualBlock> &successors);
 
   /// Updates the BlockInfo operation based on the operation.
   virtual void update(Operation *operation, BlockInfo *blockInfo,

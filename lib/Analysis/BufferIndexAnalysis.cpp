@@ -5,6 +5,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 
 namespace mlir {
 namespace {
@@ -218,6 +219,25 @@ Value extractBufferIndex(Value value) {
     v = def->getOperand(0);
   }
   return Value();
+}
+
+bool isBackedgeSuccessor(Operation *terminator, Block *successor) {
+  // Only the terminator of a region inside a region-branching op can
+  // produce backedges (e.g. scf.yield, scf.condition). Plain CFG branches
+  // and region-branch ops encountered mid-block always hand off forward.
+  auto br = dyn_cast<RegionBranchTerminatorOpInterface>(terminator);
+  if (!br || !isa<RegionBranchOpInterface>(br->getParentOp()))
+    return false;
+  // The "continue past the parent op" successor is in the parent op's
+  // containing region; that's a forward edge, not a backedge.
+  Region *succRegion = successor->getParent();
+  if (succRegion == br->getParentOp()->getParentRegion())
+    return false;
+  // A successor region with number <= the terminator's region number
+  // denotes re-entry into an earlier region: scf.for yield -> body
+  // (same region), scf.while after -> before (successor 0 <= terminator 1).
+  return succRegion->getRegionNumber() <=
+         br->getParentRegion()->getRegionNumber();
 }
 
 void joinFromBackedge(BlockInfo &dest, const BlockInfo &src) {
