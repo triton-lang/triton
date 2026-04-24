@@ -447,6 +447,10 @@ void appendGraphTrackPackets(ProtoWriter &trace, const TraceDump &traceDump,
   for (const auto &[streamId, graphEvents] : traceDump.graphScopeEvents) {
     const auto trackUuid =
         getPerfettoLaneTrackUuid(details::getGraphLaneId(streamId));
+    // In perfetto, slices on the same track cannot overlap, but graph events on
+    // the same stream can overlap due to nested graph launches. To work around
+    // this, we stagger the start and end timestamps of graph events based on
+    // their depth
     const auto maxDepth =
         std::max_element(
             graphEvents.begin(), graphEvents.end(),
