@@ -540,15 +540,9 @@ void dumpPerfettoTraceData(const TraceDump &traceDump, std::ostream &os) {
 
   ProtoWriter trace;
   {
-    ProtoWriter process;
-    process.writeInt32(/*ProcessDescriptor.pid=*/1,
-                       static_cast<int32_t>(details::kTraceProcessId));
-    process.writeString(/*ProcessDescriptor.process_name=*/6, "Trace");
-
     ProtoWriter track;
     track.writeUInt64(/*TrackDescriptor.uuid=*/1, kPerfettoProcessTrackUuid);
     track.writeString(/*TrackDescriptor.name=*/2, "Trace");
-    track.writeMessage(/*TrackDescriptor.process=*/3, process);
     track.writeUInt32(/*TrackDescriptor.child_ordering=*/11,
                       kPerfettoChildTracksOrderingExplicit);
     appendTrackDescriptorPacket(trace, track);
