@@ -503,6 +503,8 @@ void TraceData::withTraceData(size_t phase, CycleHandler &&onCycleTrace,
       }
     }
     for (auto &[_, streamKernelEvents] : traceDump.kernelEvents) {
+      std::stable_sort(streamKernelEvents.begin(), streamKernelEvents.end(),
+                       trace_data_dump::KernelEvent::compare);
       for (auto &kernelEvent : streamKernelEvents) {
         if (auto targetIt =
                 launchEventIdToTargetEventId.find(kernelEvent.launchEventId);
