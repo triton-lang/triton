@@ -210,33 +210,41 @@ class MXFPGEMMProgramBase:
         pass
 
     @gluon.jit
-    def issue_loads(self, load_idx, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, pred=1):
+    def issue_loads(self, load_idx, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, pred=1, phase=None):
         cfg = self.cfg
         BLOCK_K_PACKED_A: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A
         BLOCK_K_PACKED_B: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_B
 
+        # When phase is provided, derive the buffer slot from it so that loads
+        # and local_loads share the same SSA base value for index expressions,
+        # enabling membar to prove buffer-slot disjointness.
+        if phase is not None:
+            slot = phase % cfg.NUM_BUFFERS
+        else:
+            slot = load_idx % cfg.NUM_BUFFERS
+
         gl.amd.gfx1250.tdm.async_load(self.a_desc,  #
                                       [0, load_idx * BLOCK_K_PACKED_A],  #
-                                      a_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
+                                      a_buffer.index(slot),  #
                                       pred=pred)
         if cfg.TRANSPOSE_B:
             gl.amd.gfx1250.tdm.async_load(self.b_desc,  #
                                           [0, load_idx * BLOCK_K_PACKED_B],  #
-                                          b_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
+                                          b_buffer.index(slot),  #
                                           pred=pred)
         else:
             gl.amd.gfx1250.tdm.async_load(self.b_desc,  #
                                           [load_idx * BLOCK_K_PACKED_B, 0],  #
-                                          b_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
+                                          b_buffer.index(slot),  #
                                           pred=pred)
         if cfg.WITH_A_SCALE:
             gl.amd.gfx1250.tdm.async_load(self.a_scale_desc,  #
                                           [0, load_idx * cfg.BLOCK_K_SCALE_PRESHUFFLED],  #
-                                          a_scale_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
+                                          a_scale_buffer.index(slot),  #
                                           pred=pred)
         gl.amd.gfx1250.tdm.async_load(self.b_scale_desc,  #
                                       [0, load_idx * cfg.BLOCK_K_SCALE_PRESHUFFLED],  #
-                                      b_scale_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
+                                      b_scale_buffer.index(slot),  #
                                       pred=pred)
 
         return load_idx + 1
@@ -361,7 +369,7 @@ class MXFPGEMMPipelinedProgram:
             pred = i - epilogue_lb
             pred = (pred >> 31) & 1
             load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer,
-                                        self.b_scale_buffer, pred=pred)
+                                        self.b_scale_buffer, pred=pred, phase=wmma_idx + cfg.NUM_BUFFERS - 1)
 
             gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1) * self.cfg.NUM_LOADS_IN_BATCH)
 
@@ -393,7 +401,7 @@ class MXFPGEMMPipelinedProgram:
                                                                 self.a_scale_buffer, self.b_scale_buffer)
                 wmma_idx += 1
                 load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer,
-                                            self.b_scale_buffer)
+                                            self.b_scale_buffer, phase=wmma_idx + cfg.NUM_BUFFERS - 2)
 
             gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2) * self.cfg.NUM_LOADS_IN_BATCH)
             with gl.amd.warp_pipeline_stage("wmma", priority=0):
@@ -550,7 +558,7 @@ class MXFPGEMMSliceKProgram:
 
             # iter i + 2
             load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer,
-                                        self.b_scale_buffer)
+                                        self.b_scale_buffer, phase=wmma_idx + cfg.NUM_BUFFERS - 2)
 
             # iter i
             accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
@@ -612,7 +620,7 @@ class MXFPGEMMSliceKProgram:
             gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 3) * self.cfg.NUM_LOADS_IN_BATCH)
             with gl.amd.warp_pipeline_stage("tdm+wmma+lds1", priority=0):
                 load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer,
-                                            self.b_scale_buffer)
+                                            self.b_scale_buffer, phase=wmma_idx + cfg.NUM_BUFFERS - 1)
                 accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B,
                                                          accumulator)
                 a1, b1, scale_a1, scale_b1 = self.issue_subtile_local_loads(wmma_idx, 1, self.a_buffer, self.b_buffer,
