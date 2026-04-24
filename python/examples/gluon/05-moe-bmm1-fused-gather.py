@@ -420,29 +420,19 @@ def mma_partition(p: PartitionArgs):
             x_buf = p.x_bufs.index(x_idx)
             mbarrier.wait(x_ready_bar, x_phase)
 
-            if p.INLINE_MMA_INPUT_RELEASE:
-                blackwell.tcgen05_mma_scaled(
-                    w_buf.reshape((p.BLOCK_N, p.BLOCK_K // 2)),
-                    x_buf.permute((1, 0)),
-                    acc_buf,
-                    p.w_scale_tmem,
-                    p.x_scale_tmem,
-                    a_type="e2m1",
-                    b_type="e4m3",
-                    use_acc=use_acc,
-                    mbarriers=[x_empty_bar, w_empty_bar],
-                )
-            else:
-                blackwell.tcgen05_mma_scaled(
-                    w_buf.reshape((p.BLOCK_N, p.BLOCK_K // 2)),
-                    x_buf.permute((1, 0)),
-                    acc_buf,
-                    p.w_scale_tmem,
-                    p.x_scale_tmem,
-                    a_type="e2m1",
-                    b_type="e4m3",
-                    use_acc=use_acc,
-                )
+            mma_release_bars = [x_empty_bar, w_empty_bar] if p.INLINE_MMA_INPUT_RELEASE else None
+            blackwell.tcgen05_mma_scaled(
+                w_buf.reshape((p.BLOCK_N, p.BLOCK_K // 2)),
+                x_buf.permute((1, 0)),
+                acc_buf,
+                p.w_scale_tmem,
+                p.x_scale_tmem,
+                a_type="e2m1",
+                b_type="e4m3",
+                use_acc=use_acc,
+                mbarriers=mma_release_bars,
+            )
+            if not p.INLINE_MMA_INPUT_RELEASE:
                 blackwell.tcgen05_commit(x_empty_bar)
                 blackwell.tcgen05_commit(w_empty_bar)
 
@@ -1159,11 +1149,11 @@ def _select_ported_high128_config(slice_size: int) -> KernelConfig | None:
 
 def _select_ported_best_batch_config(slice_size: int) -> KernelConfig | None:
     for selector in (
-        _select_ported_tiny16_config,
-        _select_ported_low32_config,
-        _select_ported_slice28_config,
-        _select_ported_mid64_config,
-        _select_ported_high128_config,
+            _select_ported_tiny16_config,
+            _select_ported_low32_config,
+            _select_ported_slice28_config,
+            _select_ported_mid64_config,
+            _select_ported_high128_config,
     ):
         p = selector(slice_size)
         if p is not None:
