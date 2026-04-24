@@ -334,7 +334,10 @@ class TritonSemantic(Generic[TensorTy]):
         if not input_scalar_ty.is_floating() or not other_scalar_ty.is_floating():
             raise TypeError("both operands of fdiv must have floating scalar type")
         input, other = self.binary_op_type_checking_impl(input, other, False, False, False, True)
-        ret = self.builder.create_fdiv(input.handle, other.handle)
+        if ieee_rounding:
+            ret = self.builder.create_precise_divf(input.handle, other.handle)
+        else:
+            ret = self.builder.create_fdiv(input.handle, other.handle)
         return self.tensor(ret, input.type)
 
     def mod(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
@@ -919,6 +922,8 @@ class TritonSemantic(Generic[TensorTy]):
                 cache = ir.CACHE_MODIFIER.CA
             elif cache_modifier == ".cg":
                 cache = ir.CACHE_MODIFIER.CG
+            elif cache_modifier == ".cs":
+                cache = ir.CACHE_MODIFIER.CS
             elif cache_modifier == ".cv":
                 cache = ir.CACHE_MODIFIER.CV
             else:
@@ -1178,6 +1183,7 @@ class TritonSemantic(Generic[TensorTy]):
         if mask is None:
             ptr, val = self.broadcast_tensors(ptr, val)
         else:
+            mask = self.to_tensor(mask)
             ptr, val, mask = self.broadcast_tensors(ptr, val, mask)
         if ptr_shape != ptr.shape:
             raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
@@ -1266,6 +1272,8 @@ class TritonSemantic(Generic[TensorTy]):
                 mask_ty = ptr.type.with_element_ty(tl.int1)
                 mask_ir = self.builder.create_splat(mask_ty.to_ir(self.builder), mask_ir)
             mask = self.tensor(mask_ir, mask_ty)
+        elif not mask.type.scalar.is_bool():
+            raise ValueError("Mask must have boolean scalar type")
         return ptr, val, mask
 
     def _signbit(self, x: TensorTy) -> TensorTy:

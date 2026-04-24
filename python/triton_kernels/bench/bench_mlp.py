@@ -116,7 +116,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
         n_expts_act=n_expts_act,
         n_expts_tot=n_expts_tot,
         dtype=x_dtype,
-        device=torch.cuda.current_device(),
+        device=torch.device(dev),
     )
 
     # -- init prameters --
@@ -137,10 +137,10 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     if w_dtype == FP4:
         num_warps = 4 if batch <= 512 else 8
         value_layout = layout.make_default_matmul_mxfp4_w_layout(
-            mx_axis=1,
+            mx_axis=-2,
             allow_blackwell_value_shuffle=shuffle_mx4,
         )
-        scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=num_warps)
+        scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=-2, num_warps=num_warps)
         opt1 = {
             "value_layout": value_layout,
             "scale_layout": scale_layout,
@@ -187,7 +187,8 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
         fc2_constraints["num_stages"] = num_stages_fc2
 
     fpath = Path(f"profile_{rank}")
-    # warmup
+    # Compile and warm up outside the profiler so subsequent profiled launches
+    # retain launch metadata needed by roofline.parse_profile.
     run_mlp(x_dp_local_bf16, x_dp_local_fp8,  #
             wg_global, bg_global, pcg,  #
             w1_ep_local, b1_ep_local, pc1, act1,  #

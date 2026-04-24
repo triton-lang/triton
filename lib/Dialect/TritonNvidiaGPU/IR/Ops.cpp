@@ -50,7 +50,7 @@ namespace nvidia_gpu {
 // -- WarpGroupDotOp --
 LogicalResult WarpGroupDotOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    DictionaryAttr attributes, PropertyRef properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the accumulator
   auto accTy = cast<RankedTensorType>(operands[2].getType());
@@ -157,7 +157,7 @@ bool WarpGroupDotOp::verifyDims() {
 // -- WarpGroupDotWaitOp --
 LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    DictionaryAttr attributes, PropertyRef properties, RegionRange regions,
     SmallVectorImpl<Type> &inferredReturnTypes) {
   for (Value operand : operands)
     inferredReturnTypes.push_back(operand.getType());
@@ -394,6 +394,55 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
   return verifyTMAEncoding(op, desc.getType(), srcEnc);
 }
 
+static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
+                                                   ShapedType blockType,
+                                                   MemDescType memDescType,
+                                                   ShapedType indicesType) {
+  if (blockType.getRank() != 2)
+    return op->emitOpError("descriptor block must be a 2D tensor, but got ")
+           << blockType;
+  if (blockType.getShape()[0] != 1)
+    return op->emitOpError("descriptor block must have exactly 1 row, but got ")
+           << blockType;
+  if (failed(verifyGatherScatterResultType(op, memDescType, indicesType)))
+    return failure();
+
+  if (memDescType.getShape()[1] != blockType.getShape()[1])
+    return op->emitOpError("result tensor number of columns must match block (")
+           << blockType.getShape()[1] << "), but got " << memDescType;
+  if (memDescType.getElementType() != blockType.getElementType())
+    return op->emitOpError("result tensor element type must match block (")
+           << blockType.getElementType() << "), but got " << memDescType;
+
+  ArrayRef<int64_t> allocShape = memDescType.getAllocShape();
+  if (allocShape.size() < 2 ||
+      memDescType.getShape() != allocShape.take_back(2))
+    return op->emitOpError("memdesc shape must match alloc shape");
+
+  auto xOffsetsType = cast<RankedTensorType>(indicesType);
+  if (xOffsetsType.getEncoding()) {
+    auto xCoordsLayout = triton::gpu::toLinearLayout(xOffsetsType);
+    auto kLane = StringAttr::get(op->getContext(), "lane");
+    if (getContigPerThread(xOffsetsType).front() < 4)
+      return op->emitOpError(
+          "x offsets must have at least 4 contiguous elements per thread");
+    unsigned threadsPerWarp = xCoordsLayout.getInDimSize(kLane);
+    if (xCoordsLayout.getFreeVariableMasks()[kLane] != (threadsPerWarp - 1))
+      return op->emitOpError("x offsets must be broadcasted across each warp");
+    auto kBlock = StringAttr::get(op->getContext(), "block");
+    auto kDim0 = StringAttr::get(op->getContext(), "dim0");
+    auto rowsCGA = getCGALayout(memDescType.getEncoding())
+                       .getLinearLayout()
+                       .sublayout({kBlock}, {kDim0});
+    auto xOffsetsCGA =
+        getCGALayout(xOffsetsType.getEncoding()).getLinearLayout();
+    if (rowsCGA != xOffsetsCGA)
+      return op->emitOpError(
+          "x offsets must have the same row CGA layout as the memdesc");
+  }
+  return success();
+}
+
 // Helper to determine if the descriptor type is for im2col mode
 static bool isIm2ColDescriptor(Type descType) {
   return isa<TensorDescIm2ColType>(descType);
@@ -546,9 +595,12 @@ LogicalResult AsyncTMAGatherOp::verify() {
   // `tile::gather4` does not support fp4_padded operands.
   if (isFp4Padded(getResult().getType().getEncoding()))
     return emitOpError("does not support fp4_padded operands");
-  return verifyGatherScatterOp(*this,
-                               getDesc().getType().getSignlessBlockType(),
-                               resultType, getXOffsets().getType());
+  if (getMulticast() && !hasCGABroadcast(resultType))
+    return emitOpError(
+        "multicast requires the shared layout to broadcast across CTAs");
+  return verifyAsyncTMAGatherScatterOp(
+      *this, getDesc().getType().getSignlessBlockType(), resultType,
+      getXOffsets().getType());
 }
 
 Value AsyncTMAGatherOp::getPredicateOperand() { return getPred(); }
@@ -566,9 +618,9 @@ LogicalResult AsyncTMAScatterOp::verify() {
   auto srcType = getSrc().getType();
   if (failed(verifyAsyncTMAStoreOp(*this, getDesc(), srcType)))
     return failure();
-  return verifyGatherScatterOp(*this,
-                               getDesc().getType().getSignlessBlockType(),
-                               srcType, getXOffsets().getType());
+  return verifyAsyncTMAGatherScatterOp(
+      *this, getDesc().getType().getSignlessBlockType(), srcType,
+      getXOffsets().getType());
 }
 
 // -- TCGen5MMAOp --
@@ -1291,7 +1343,8 @@ LogicalResult TMEMLoadOp::verify() {
     // kReg bases along N then cross-warp/block reduction becomes needed.
     auto kReg = StringAttr::get(regTy.getContext(), "register");
     int dimM = 0, dimN = 1;
-    auto regDims = toLinearEncoding(regTy).basesPerDim(kReg);
+    auto regDims =
+        toLinearEncoding(regTy).basesPerDim(kReg, /*skipBroadcast=*/true);
     if (regDims[dimN] != toLinearLayout(regTy).getOutDimSizes().begin()[dimN] ||
         regDims[dimM] != 1) {
       return emitOpError("tmem_load reduction with N dimension sharded across "

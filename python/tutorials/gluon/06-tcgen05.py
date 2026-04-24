@@ -1,5 +1,5 @@
 """
-The 5th Generation TensorCore^TM
+The 5th Generation TensorCore{sup}`TM`
 ================================
 
 This tutorial covers the APIs for interacting with Tensor Cores on Blackwell
@@ -76,6 +76,7 @@ if __name__ == "__main__" and not is_blackwell():
 #     block=(blockM, blockN),
 #     unpacked=True,
 # )
+# ```
 #
 # The tensor is divided into (blockM, blockN) blocks, where blockM must be 64
 # or 128. blockN must be a power of 2 between [1, 256]. For dtypes smaller than
@@ -158,9 +159,9 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
 
     mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + c_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)
-    tma.async_copy_global_to_shared(b_desc, [0, 0], bar, b_smem)
-    tma.async_copy_global_to_shared(c_desc, [0, 0], bar, c_smem)
+    tma.async_load(a_desc, [0, 0], bar, a_smem)
+    tma.async_load(b_desc, [0, 0], bar, b_smem)
+    tma.async_load(c_desc, [0, 0], bar, c_smem)
     mbarrier.wait(bar, phase=0)
 
     # Re-using an mbarrier for TMAs and tcgen05_mma can lead to undefined
@@ -323,8 +324,8 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc, TRANSPOSE_B: gl.constexpr, num
     use_acc = False
     for k in range(0, K, BLOCK_K):
         mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar, b_smem)
+        tma.async_load(a_desc, [off_m, k], tma_bar, a_smem)
+        tma.async_load(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar, b_smem)
         mbarrier.wait(tma_bar, phase=phase)
 
         # We can transpose B by creating a transposed view over tile of B in
@@ -515,24 +516,24 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     load_index, load_phase, load_counter = get_and_increment(load_counter)
     load_ub_bar = load_ub_bars.index(load_index)
     mbarrier.expect(load_ub_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
-    tma.async_copy_global_to_shared(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
+    tma.async_load(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
+    tma.async_load(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
     # V1
     load_v_bar = load_v_bars.index(load_index)
     mbarrier.expect(load_v_bar, a_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
+    tma.async_load(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
     k += BLOCK_K
 
     # U2, B2
     load_index, load_phase, load_counter = get_and_increment(load_counter)
     load_ub_bar = load_ub_bars.index(load_index)
     mbarrier.expect(load_ub_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
-    tma.async_copy_global_to_shared(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
+    tma.async_load(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
+    tma.async_load(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
     # V2
     load_v_bar = load_v_bars.index(load_index)
     mbarrier.expect(load_v_bar, a_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
+    tma.async_load(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
     k += BLOCK_K
 
     for _ in range(gl.cdiv(K, BLOCK_K) - 2):
@@ -553,14 +554,14 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
         mbarrier.wait(mma_ub_bars.index(mma_index), mma_phase)
         load_ub_bar = load_ub_bars.index(load_index)
         mbarrier.expect(load_ub_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
+        tma.async_load(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
 
         # wait VBi, B(i+2), V(i+2)
         mbarrier.wait(mma_vb_bars.index(mma_index), mma_phase)
-        tma.async_copy_global_to_shared(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
+        tma.async_load(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
         load_v_bar = load_v_bars.index(load_index)
         mbarrier.expect(load_v_bar, a_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
+        tma.async_load(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
         k += BLOCK_K
 
     mma_index, mma_phase, mma_counter = get_and_increment(mma_counter)

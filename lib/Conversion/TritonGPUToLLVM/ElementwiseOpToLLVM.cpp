@@ -18,6 +18,10 @@ Type getElementType(Value value) {
   return type;
 }
 
+} // namespace mlir::triton::gpu
+
+namespace {
+
 int getNumElementsPerThreads(Type type,
                              const LLVMTypeConverter *typeConverter) {
   int numElemsPerThread = 1;
@@ -30,9 +34,6 @@ int getNumElementsPerThreads(Type type,
   return numElemsPerThread;
 }
 
-} // namespace mlir::triton::gpu
-
-namespace {
 struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
   using ConvertOpToLLVMPattern<AddPtrOp>::ConvertOpToLLVMPattern;
 

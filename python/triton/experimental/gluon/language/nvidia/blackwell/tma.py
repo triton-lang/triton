@@ -9,6 +9,9 @@ from triton.experimental.gluon.language.nvidia.hopper.tma import (
     async_atomic_xor,
     async_copy_global_to_shared,
     async_copy_shared_to_global,
+    async_load,
+    async_load_im2col,
+    async_store,
     store_wait,
     tensor_descriptor,
     tensor_descriptor_type,
@@ -27,6 +30,9 @@ __all__ = [
     "async_atomic_xor",
     "async_copy_global_to_shared",
     "async_copy_shared_to_global",
+    "async_load",
+    "async_load_im2col",
+    "async_store",
     "store_wait",
     "tensor_descriptor",
     "tensor_descriptor_type",
@@ -35,7 +41,7 @@ __all__ = [
 
 
 @builtin
-def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, _semantic=None):
+def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, multicast=False, _semantic=None):
     """
     Asynchronously gather elements from global memory to shared memory using TMA.
 
@@ -46,14 +52,16 @@ def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, _
         barrier (shared_memory_descriptor): Barrier that will be signaled when the operation is complete.
         result (tensor_memory_descriptor): Result shared memory, must have NVMMASharedLayout.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        multicast (bool): Enable multicast.
     """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, (y_offset, ), "async_gather", "y_offset", _semantic=_semantic)
 
     pred = _semantic.to_tensor(pred)
     y_offset = _semantic.to_tensor(y_offset)
+    multicast = ttgl._unwrap_if_constexpr(multicast)
     _semantic.builder.create_async_tma_gather(tensor_desc.handle, x_offsets.handle, y_offset.handle, barrier.handle,
-                                              result.handle, pred.handle)
+                                              result.handle, pred.handle, multicast)
 
 
 def _emit_scatter_nonnegative_check(x_offsets, y_offset, _semantic=None):

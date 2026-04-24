@@ -122,8 +122,10 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
             convertArrayType(context, arrayTy, fileAttr, dl, line);
         types.push_back(tyAttr);
       } else {
-        // Here assume remaining inTys are only scalar types
-        assert(inTy.isIntOrFloat() && "Expected scalar types");
+        // Remaining types are scalar (int/float) or vector types
+        // (e.g., from external function declarations for GPU builtins).
+        assert((inTy.isIntOrFloat() || isa<mlir::VectorType>(inTy)) &&
+               "Expected scalar or vector types");
         LLVM::DITypeAttr tyAttr = convertType(context, inTy);
         types.push_back(tyAttr);
       }

@@ -115,8 +115,6 @@ jobs:
     - name: Configure, Build, Test, and Install LLVM (Ubuntu, CentOS, and macOS)
       if: matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'almalinux' || matrix.config.target-os == 'macos'
       run: >
-        python3 -m pip install -r llvm-project/mlir/python/requirements.txt
-
         cmake -GNinja -Bllvm-project/build
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
@@ -141,8 +139,6 @@ jobs:
     - name: Configure, Build, Test, and Install LLVM (Windows)
       if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'windows')
       run: >
-        python3 -m pip install -r llvm-project/mlir/python/requirements.txt
-
         cmake -GNinja -Bllvm-project/build
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl

@@ -4,7 +4,6 @@
 #include <numeric>
 #include <utility>
 
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/OperationSupport.h"
@@ -72,14 +71,68 @@ LinearEncodingAttr toLinearEncoding(RankedTensorType type) {
       type.getShape(), type.getEncoding());
 }
 
+bool hasPowerOfTwoBases(const LinearLayout &ll) {
+  LinearLayout flattened = ll.flattenIns().flattenOuts();
+  auto inDim = *flattened.getInDimNames().begin();
+  LinearLayout withoutBroadcast = flattened.removeZeroBasesAlongDim(inDim);
+  return llvm::all_of(
+      withoutBroadcast.getBases().lookup(inDim),
+      [](const auto &basis) { return llvm::isPowerOf2_32(basis.front()); });
+}
+
+bool isPermutationMatrixLayout(const LinearLayout &ll) {
+  if (!hasPowerOfTwoBases(ll))
+    return false;
+  LinearLayout flattened = ll.flattenIns().flattenOuts();
+  auto inDim = *flattened.getInDimNames().begin();
+  return flattened.removeZeroBasesAlongDim(inDim).isInvertible();
+}
+
+bool isGenericLinearEncoding(Attribute attr) {
+  if (isa<GenericLinearEncodingAttr>(attr))
+    return true;
+
+  // Unwrap wrapper encodings to find the root layout.
+  if (auto dotOp = dyn_cast<DotOperandEncodingAttr>(attr))
+    return isGenericLinearEncoding(dotOp.getParent());
+  if (auto slice = dyn_cast<SliceEncodingAttr>(attr))
+    return isGenericLinearEncoding(slice.getParent());
+  if (auto wmma = dyn_cast<AMDWmmaEncodingAttr>(attr))
+    return !isPermutationMatrixLayout(wmma.getCtaLayout());
+
+  return false;
+}
+
+Attribute inferEncodingFromLinearLayout(MLIRContext *ctx, LinearLayout ll,
+                                        Attribute srcEnc) {
+  if (isGenericLinearEncoding(srcEnc)) {
+    assert(!isPermutationMatrixLayout(ll) &&
+           "Expected non-permutation layout from this source encoding");
+    return GenericLinearEncodingAttr::get(ctx, std::move(ll));
+  }
+  return LinearEncodingAttr::get(ctx, std::move(ll));
+}
+
+GenericLinearEncodingAttr
+toGenericLinearEncoding(DistributedEncodingTrait layout,
+                        ArrayRef<int64_t> shape) {
+  auto ll = toLinearLayout(shape, layout);
+  return GenericLinearEncodingAttr::get(layout.getContext(), std::move(ll));
+}
+
+GenericLinearEncodingAttr toGenericLinearEncoding(RankedTensorType type) {
+  return toGenericLinearEncoding(
+      cast<DistributedEncodingTrait>(type.getEncoding()), type.getShape());
+}
+
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
-  return toLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
+  return toGenericLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
       .getTotalElemsPerThread(shape);
 }
 
 SmallVector<unsigned> getElemsPerThread(Attribute layout,
                                         ArrayRef<int64_t> shape) {
-  return toLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
+  return toGenericLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
       .getElemsPerThread(shape);
 }
 
@@ -98,9 +151,32 @@ unsigned getTotalElemsPerThread(Type type) {
                                 tensorType.getShape());
 }
 
+FailureOr<RankedTensorType>
+inferFp4ToFpResultType(RankedTensorType srcType, Type elemType, int32_t axis,
+                       std::optional<Location> loc) {
+  auto rank = srcType.getRank();
+  if (!(0 <= axis && axis < rank))
+    return failure();
+
+  auto shape = llvm::to_vector(srcType.getShape());
+  shape[axis] *= 2;
+
+  Attribute inEnc = srcType.getEncoding();
+  Attribute outEnc;
+  auto result =
+      inEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+          ->inferFp4ToFpOpEncoding(shape, axis, inEnc, outEnc,
+                                   /*fwdInference=*/true, loc);
+  if (failed(result))
+    return failure();
+
+  return RankedTensorType::get(shape, elemType, outEnc);
+}
+
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout,
                                         ArrayRef<int64_t> shape) {
-  return toLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
+  return toGenericLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
       .getThreadsPerWarp();
 }
 
@@ -111,7 +187,7 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout,
 }
 
 SmallVector<unsigned> getContigPerThread(RankedTensorType type) {
-  return toLinearEncoding(type).getContigPerThread();
+  return toGenericLinearEncoding(type).getContigPerThread();
 }
 
 bool isExpensiveView(ArrayRef<int64_t> srcShape, Attribute srcEncoding,
@@ -215,12 +291,12 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
 
 SmallVector<unsigned> getOrder(DistributedEncodingTrait layout,
                                ArrayRef<int64_t> shape) {
-  return toLinearEncoding(layout, shape).getOrder();
+  return toGenericLinearEncoding(layout, shape).getOrder();
 }
 
 SmallVector<unsigned> getOrderForMemory(DistributedEncodingTrait layout,
                                         ArrayRef<int64_t> shape) {
-  auto linear = toLinearEncoding(layout, shape);
+  auto linear = toGenericLinearEncoding(layout, shape);
   auto order = linear.getOrder();
   auto threadOrder = linear.getThreadOrder();
   if (order == threadOrder) {
@@ -240,7 +316,7 @@ SmallVector<unsigned> getOrderForMemory(DistributedEncodingTrait layout,
 
 SmallVector<unsigned> getThreadOrder(DistributedEncodingTrait layout,
                                      ArrayRef<int64_t> shape) {
-  return toLinearEncoding(layout, shape).getThreadOrder();
+  return toGenericLinearEncoding(layout, shape).getThreadOrder();
 }
 
 SmallVector<unsigned> getWarpOrder(DistributedEncodingTrait layout,
@@ -281,8 +357,8 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   // A generic linear encoding may not have a CGA layout
   // as having a CGA layout implies being of the form cta_layout * cga_layout
   auto kBlock = StringAttr::get(layout.getContext(), "block");
-  if (auto linearLayout = dyn_cast<LinearEncodingAttr>(layout)) {
-    return linearLayout.basesPerDim(kBlock, /*skipBroadcast=*/false);
+  if (auto linearEnc = dyn_cast<LinearEncodingTrait>(layout)) {
+    return linearEnc.basesPerDim(kBlock, /*skipBroadcast=*/false);
   } else if (auto sharedLinearLayout =
                  dyn_cast<SharedLinearEncodingAttr>(layout)) {
     return sharedLinearLayout.basesPerDim(kBlock, /*skipBroadcast=*/false);
@@ -302,14 +378,14 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   // A generic linear encoding may not have a CGA layout
   // as having a CGA layout implies being of the form cta_layout * cga_layout
   auto kBlock = StringAttr::get(layout.getContext(), "block");
-  if (auto linearLayout = dyn_cast<LinearEncodingAttr>(layout)) {
-    return linearLayout.basesPerDim(kBlock);
+  if (auto linearEnc = dyn_cast<LinearEncodingTrait>(layout)) {
+    return linearEnc.basesPerDim(kBlock, /*skipBroadcast=*/true);
   } else if (auto sharedLinearLayout =
                  dyn_cast<SharedLinearEncodingAttr>(layout)) {
     return sharedLinearLayout.basesPerDim(kBlock);
   } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
     if (auto slicedLinear = getSlicedLinearEncoding(sliceLayout))
-      return slicedLinear.basesPerDim(kBlock);
+      return slicedLinear.basesPerDim(kBlock, /*skipBroadcast=*/true);
     return cast<LayoutEncodingTrait>(sliceLayout)
         .getCGALayout()
         .getCTASplitNum();
@@ -321,8 +397,8 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
 
 SmallVector<unsigned> getCTAOrder(Attribute layout) {
   auto kBlock = StringAttr::get(layout.getContext(), "block");
-  if (auto linearLayout = dyn_cast<LinearEncodingAttr>(layout)) {
-    return linearLayout.orderPerDim(kBlock, linearLayout.getOrder());
+  if (auto linearEnc = dyn_cast<LinearEncodingTrait>(layout)) {
+    return linearEnc.orderPerDim(kBlock, linearEnc.getOrder());
   } else if (auto sharedLinearLayout =
                  dyn_cast<SharedLinearEncodingAttr>(layout)) {
     return sharedLinearLayout.orderPerDim(kBlock,
@@ -385,9 +461,9 @@ unsigned getNumCTAs(Attribute layout) {
   return product<unsigned>(getCTAsPerCGA(layout));
 }
 
-SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,
-                                      StringAttr dimName,
-                                      ArrayRef<unsigned> defaultOrder) {
+static SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,
+                                             StringAttr dimName,
+                                             ArrayRef<unsigned> defaultOrder) {
   assert(ll.getBases().contains(dimName));
   const auto &bases = ll.getBases().find(dimName)->second;
   llvm::SetVector<unsigned> order;
@@ -443,27 +519,6 @@ verifyLayoutOrder(function_ref<InFlightDiagnostic()> emitError,
   return success();
 }
 
-static LogicalResult
-verifyDistributedLinearLayout(function_ref<InFlightDiagnostic()> emitError,
-                              const LinearLayout &linearLayout,
-                              StringRef subject) {
-  LinearLayout flattened = linearLayout.flattenIns().flattenOuts();
-  auto inDim = *flattened.getInDimNames().begin();
-  LinearLayout withoutBroadcast = flattened.removeZeroBasesAlongDim(inDim);
-  if (!llvm::all_of(withoutBroadcast.getBases().lookup(inDim),
-                    [](const auto &basis) {
-                      return llvm::isPowerOf2_32(basis.front());
-                    })) {
-    return emitError() << "After removing the zero bases " << subject
-                       << " must be a permutation matrix";
-  }
-  if (!withoutBroadcast.isInvertible()) {
-    return emitError() << "After removing the zero bases " << subject
-                       << " must be a permutation matrix";
-  }
-  return success();
-}
-
 LogicalResult
 CGAEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                         LinearLayout linearLayout) {
@@ -486,8 +541,11 @@ CGAEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                        << outDimNames << "].";
   }
 
-  return verifyDistributedLinearLayout(emitError, linearLayout,
-                                       "the CGA encoding");
+  if (!isPermutationMatrixLayout(linearLayout)) {
+    return emitError() << "After removing broadcast bases the CGA encoding "
+                          "must be a permutation matrix";
+  }
+  return success();
 }
 
 CGAEncodingAttr CGAEncodingAttr::get1CTALayout(MLIRContext *ctx, int rank) {
@@ -604,9 +662,9 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
   return encoding;
 }
 
-LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
-                            LinearLayout &outLl, bool fwdInference, int axis,
-                            std::optional<Location> loc) {
+static LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
+                                   LinearLayout &outLl, bool fwdInference,
+                                   int axis, std::optional<Location> loc) {
   auto kRegister = StringAttr::get(ctx, "register");
   auto outDims = llvm::to_vector(inLl.getOutDimNames());
   if (fwdInference) {
@@ -647,8 +705,10 @@ LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
 } // namespace triton
 } // namespace mlir
 
-static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
-                                       unsigned &value, StringRef desc) {
+namespace {
+
+LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
+                                unsigned &value, StringRef desc) {
   auto intAttr = mlir::dyn_cast<IntegerAttr>(attr);
   if (!intAttr) {
     parser.emitError(parser.getNameLoc(), "expected an integer type in ")
@@ -679,8 +739,8 @@ static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
   return success();
 }
 
-static LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr,
-                                        bool &value, StringRef desc) {
+LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr, bool &value,
+                                 StringRef desc) {
   auto boolAttr = mlir::dyn_cast<BoolAttr>(attr);
   if (!boolAttr) {
     parser.emitError(parser.getNameLoc(), "expected a bool type in ") << desc;
@@ -691,10 +751,8 @@ static LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr,
 }
 
 // parse an array of integers
-static LogicalResult parseIntArrayAttr(AsmParser &parser,
-                                       const NamedAttribute &attr,
-                                       SmallVector<unsigned> &res,
-                                       StringRef desc) {
+LogicalResult parseIntArrayAttr(AsmParser &parser, const NamedAttribute &attr,
+                                SmallVector<unsigned> &res, StringRef desc) {
   auto arrayAttr = mlir::dyn_cast<ArrayAttr>(attr.getValue());
   if (!arrayAttr) {
     parser.emitError(parser.getNameLoc(), "expected an array for ") << desc;
@@ -709,13 +767,13 @@ static LogicalResult parseIntArrayAttr(AsmParser &parser,
   return success();
 };
 
-static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
-                               unsigned &value, StringRef desc) {
+LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
+                        unsigned &value, StringRef desc) {
   return parseIntAttrValue(parser, attr.getValue(), value, desc);
 };
 
-static LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
-                               bool &value, StringRef desc) {
+LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
+                        bool &value, StringRef desc) {
   return parseBoolAttrValue(parser, attr.getValue(), value, desc);
 };
 
@@ -798,6 +856,8 @@ std::optional<LinearLayout> parseLinearLayout(const DictionaryAttr &dict,
   // Create LinearLayout
   return LinearLayout(std::move(bases), std::move(outDimNames));
 }
+
+} // namespace
 
 // We don't use the default implementation as it's a bit too verbose
 // This prints in the following format that is shape agnostic, in the sense
@@ -991,10 +1051,9 @@ void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "}>";
 }
 
-// FIXME Can we take the LinearLayout by const&?
-LogicalResult
-LinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
-                           LinearLayout linearLayout) {
+static LogicalResult
+verifyDistributedLinearLayoutDims(function_ref<InFlightDiagnostic()> emitError,
+                                  const LinearLayout &linearLayout) {
   // Example of LinearEncodingAttr
   // <{register = [[0, 1], [8, 0], [0, 8], [64, 0]],
   //   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
@@ -1023,7 +1082,23 @@ LinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     }
   }
 
-  return verifyDistributedLinearLayout(emitError, linearLayout, "the layout");
+  return success();
+}
+
+// FIXME Can we take the LinearLayout by const&?
+LogicalResult
+LinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                           LinearLayout linearLayout) {
+  if (failed(verifyDistributedLinearLayoutDims(emitError, linearLayout)))
+    return failure();
+
+  if (!isPermutationMatrixLayout(linearLayout)) {
+    return emitError()
+           << "LinearEncodingAttr requires a permutation matrix layout "
+              "after removing broadcast bases";
+  }
+
+  return success();
 }
 
 // If we only had BlockedEncodingAttr, we could simply return ArrayRefs here.
@@ -1064,6 +1139,15 @@ Attribute LinearEncodingAttr::parse(AsmParser &parser, Type type) {
                                                std::move(*maybeLL));
 }
 
+SmallVector<unsigned> LinearEncodingAttr::getWarpsPerCTA() const {
+  return basesPerDim(StringAttr::get(getContext(), "warp"),
+                     /*skipBroadcast=*/true);
+}
+
+SmallVector<unsigned> LinearEncodingAttr::getWarpOrder() const {
+  return orderPerDim(StringAttr::get(getContext(), "warp"), getOrder());
+}
+
 static SmallVector<unsigned>
 basesPerDimImpl(const LinearLayout::BasesT &namedBases, StringAttr dimName,
                 size_t rank, bool skipBroadcast) {
@@ -1093,15 +1177,9 @@ basesPerDimImpl(const LinearLayout::BasesT &namedBases, StringAttr dimName,
   return ret;
 }
 
-SmallVector<unsigned>
-LinearEncodingAttr::basesPerDim(StringAttr dimName, bool skipBroadcast) const {
-  const auto &ll = getLinearLayout();
-  auto rank = ll.getNumOutDims();
-  return basesPerDimImpl(ll.getBases(), dimName, rank, skipBroadcast);
-}
-
-CGAEncodingAttr linearToCGAEncodingAttr(const LinearLayout &ll,
-                                        ArrayRef<unsigned> cgaLogicalShape) {
+static CGAEncodingAttr
+linearToCGAEncodingAttr(const LinearLayout &ll,
+                        ArrayRef<unsigned> cgaLogicalShape) {
   // Compute the shapePerCTA
   auto shape = ll.getOutDims();
   for (int i = 0; i < shape.size(); ++i) {
@@ -1126,56 +1204,76 @@ CGAEncodingAttr linearToCGAEncodingAttr(const LinearLayout &ll,
   return CGAEncodingAttr::get(ctx, std::move(cgaLayout));
 }
 
+//===----------------------------------------------------------------------===//
+// LinearEncodingTrait shared implementations
+//===----------------------------------------------------------------------===//
+
+SmallVector<unsigned> LinearEncodingTrait::basesPerDim(const LinearLayout &ll,
+                                                       StringAttr dimName,
+                                                       bool skipBroadcast) {
+  auto dimLayout =
+      ll.sublayout({dimName}, llvm::to_vector(ll.getOutDimNames()));
+  if (!hasPowerOfTwoBases(dimLayout))
+    llvm_unreachable("basesPerDim cannot decompose swizzled bases into "
+                     "per-dimension counts.");
+  auto rank = ll.getNumOutDims();
+  return basesPerDimImpl(ll.getBases(), dimName, rank, skipBroadcast);
+}
+
 SmallVector<unsigned>
-LinearEncodingAttr::orderPerDim(StringAttr dimName,
-                                ArrayRef<unsigned> defaultOrder) const {
-  return orderPerDimImpl(getLinearLayout(), dimName, defaultOrder);
+LinearEncodingTrait::orderPerDim(const LinearLayout &ll, StringAttr dimName,
+                                 ArrayRef<unsigned> defaultOrder) {
+  auto dimLayout =
+      ll.sublayout({dimName}, llvm::to_vector(ll.getOutDimNames()));
+  if (!hasPowerOfTwoBases(dimLayout))
+    llvm_unreachable(
+        "orderPerDim cannot determine dimension order for swizzled bases.");
+  return orderPerDimImpl(ll, dimName, defaultOrder);
 }
 
-// [Note. Divergence of methods wrt. legacy layouts]
-// For smaller shapes where the CTATile is larger than the output
-// tensor, some methods return different values than the legacy layouts. I think
-// this is benign tho. An example: what is the vector of `warpsPerCTA` if
-// all the warps hold the same data? I think it should be [1, 1], even if we
-// have 4 warps. But perhaps for this we have to add some masking in some
-// places... We'll see
-SmallVector<unsigned> LinearEncodingAttr::getRepOrder() const {
-  // This is not correct, but:
-  // - It happens to agree in most places with the legacy layout
-  // - getRepOrder does not make sense for LinearEncodingAttr as it already has
-  //   the same shape as the tensor that uses it
-  return getOrder();
+// Extracts the MLIRContext from a LinearLayout by peeking at one of its
+// (StringAttr) input-dimension names. LinearLayouts constructed for distributed
+// encodings always have at least one input dimension.
+static MLIRContext *getContextFromLL(const LinearLayout &ll) {
+  assert(!ll.getBases().empty() &&
+         "LinearLayout must have at least one input dim to extract context");
+  return (*ll.getInDimNames().begin()).getContext();
 }
 
-CGAEncodingAttr LinearEncodingAttr::getCGALayout() const {
-  auto splitNum = basesPerDim(StringAttr::get(getContext(), "block"));
-  return linearToCGAEncodingAttr(getLinearLayout(), splitNum);
-}
-SmallVector<unsigned> LinearEncodingAttr::getWarpsPerCTA() const {
-  return basesPerDim(StringAttr::get(getContext(), "warp"));
-}
-SmallVector<unsigned> LinearEncodingAttr::getWarpOrder() const {
-  return orderPerDim(StringAttr::get(getContext(), "warp"), getOrder());
-}
-SmallVector<unsigned> LinearEncodingAttr::getThreadsPerWarp() const {
-  return basesPerDim(StringAttr::get(getContext(), "lane"));
-}
-SmallVector<unsigned> LinearEncodingAttr::getThreadOrder() const {
-  return orderPerDim(StringAttr::get(getContext(), "lane"), getOrder());
+SmallVector<unsigned>
+LinearEncodingTrait::getContig(const LinearLayout &ll, const char *inDim,
+                               SmallVector<unsigned> lowerContig,
+                               ArrayRef<unsigned> order) {
+  auto *ctx = getContextFromLL(ll);
+  const auto &bases = ll.getBases().find(StringAttr::get(ctx, inDim))->second;
+  auto rank = order.size();
+
+  SmallVector<unsigned> contig(lowerContig);
+  auto basisIt = bases.begin();
+  for (unsigned dim : order) {
+    std::vector<int32_t> basis(rank, 0);
+    basis[dim] = contig[dim];
+
+    while (basisIt != bases.end() && *basisIt == basis) {
+      contig[dim] *= 2;
+      basis[dim] *= 2;
+      ++basisIt;
+    }
+  }
+  return contig;
 }
 
-SmallVector<unsigned> LinearEncodingAttr::getSizePerThread() const {
-  auto rank = getOrder().size();
-  const auto &ll = getLinearLayout();
-  auto ctx = getContext();
-  auto kRegister = StringAttr::get(ctx, "register");
-  auto splitNum = getCGALayout().getCTASplitNum();
+SmallVector<unsigned>
+LinearEncodingTrait::getSizePerThread(const LinearLayout &ll,
+                                      ArrayRef<unsigned> cgaSplitNum) {
+  auto rank = ll.getNumOutDims();
+  auto kRegister = StringAttr::get(getContextFromLL(ll), "register");
 
   // We canonicalize on the spot, as if we use CGAs the regs are not in
   // canonical form The order is [reg, lane, warp, rep, block], so we first
   // remove the blocks
   llvm::SmallVector<unsigned> ctaShape;
-  for (auto [shape, cgaNum] : llvm::zip(ll.getOutDimSizes(), splitNum)) {
+  for (auto [shape, cgaNum] : llvm::zip(ll.getOutDimSizes(), cgaSplitNum)) {
     ctaShape.push_back(shape / cgaNum);
   }
   LinearLayout::BasesT bases = ll.getBases();
@@ -1202,81 +1300,120 @@ SmallVector<unsigned> LinearEncodingAttr::getSizePerThread() const {
   return basesPerDimImpl(bases, kRegister, rank);
 }
 
-SmallVector<unsigned> LinearEncodingAttr::getOrder() const {
-  auto rank = getLinearLayout().getNumOutDims();
-  SmallVector<unsigned> order(rank);
-  // Choose [rank-1, rank-2, ... 0] as the default order in case
-  // there are dims that do not move in the register
-  // This order is as good as any really
-  std::iota(order.rbegin(), order.rend(), 0);
-
-  return orderPerDim(StringAttr::get(getContext(), "register"), order);
+CGAEncodingAttr LinearEncodingTrait::getCGALayout(const LinearLayout &ll) {
+  auto splitNum =
+      basesPerDim(ll, StringAttr::get(getContextFromLL(ll), "block"),
+                  /*skipBroadcast=*/true);
+  return linearToCGAEncodingAttr(ll, splitNum);
 }
 
-LinearLayout LinearEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  auto ll = getLinearLayout();
+LinearLayout LinearEncodingTrait::toLinearLayout(const LinearLayout &ll,
+                                                 ArrayRef<unsigned> repOrder,
+                                                 ArrayRef<int64_t> shape) {
+  auto result = ll;
   auto canonicalDims = llvm::to_vector(ll.getOutDimNames());
   llvm::SmallDenseMap<StringAttr, int64_t> namedShape;
   llvm::SmallVector<StringAttr> permutedDims;
-  for (auto dim : getRepOrder()) {
+  for (auto dim : repOrder) {
     permutedDims.push_back(canonicalDims[dim]);
     namedShape[canonicalDims[dim]] = shape[dim];
   }
-  ll = ll.transposeOuts(permutedDims);
-  ll = ensureLayoutNotSmallerThan(ll, namedShape);
-  ll = ensureLayoutNotLargerThan(ll, namedShape, /*broadcastRegisters=*/false);
-  ll = ll.transposeOuts(canonicalDims);
-  return ll;
+  result = result.transposeOuts(permutedDims);
+  result = ensureLayoutNotSmallerThan(result, namedShape);
+  result = ensureLayoutNotLargerThan(result, namedShape,
+                                     /*broadcastRegisters=*/false);
+  result = result.transposeOuts(canonicalDims);
+  return result;
 }
 
 SmallVector<unsigned>
-LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
+LinearEncodingTrait::getElemsPerThread(const LinearLayout &ll,
+                                       ArrayRef<unsigned> repOrder,
+                                       ArrayRef<int64_t> shape) {
   // When broadcasting the layout the shape changes, otherwise the shape is
   // the same as the shape of the tensor
   // We can either have BroadcastOp with SameOperandsAndResultEncoding, or keep
   // the invariant that the shape of the LL is that of the tensor
   // We choose the former for BC
-  auto scaledLayout = get(getContext(), toLinearLayout(shape));
-  auto kRegister = StringAttr::get(getContext(), "register");
-  return scaledLayout.basesPerDim(kRegister, /*skipBroadcast=*/false);
-}
-
-SmallVector<unsigned>
-LinearEncodingAttr::getContig(const char *inDim,
-                              SmallVector<unsigned int> lowerContig) const {
-  const auto &ll = getLinearLayout();
-  const auto &bases =
-      ll.getBases().find(StringAttr::get(getContext(), inDim))->second;
-  auto order = getOrder();
-  auto rank = order.size();
-
-  SmallVector<unsigned> contig(lowerContig);
-  auto basisIt = bases.begin();
-  for (unsigned dim : order) {
-    std::vector<int32_t> basis(rank, 0);
-    basis[dim] = contig[dim];
-
-    while (basisIt != bases.end() && *basisIt == basis) {
-      contig[dim] *= 2;
-      basis[dim] *= 2;
-      ++basisIt;
-    }
-  }
-  return contig;
-}
-
-SmallVector<unsigned> LinearEncodingAttr::getContigPerThread() const {
-  SmallVector<unsigned> contig(getOrder().size(), 1);
-  return getContig("register", contig);
-}
-
-SmallVector<unsigned> LinearEncodingAttr::getContigPerWarp() const {
-  return getContig("lane", getContigPerThread());
+  auto scaledLL = toLinearLayout(ll, repOrder, shape);
+  auto kRegister = StringAttr::get(getContextFromLL(ll), "register");
+  return basesPerDimImpl(scaledLL.getBases(), kRegister,
+                         scaledLL.getNumOutDims(), /*skipBroadcast=*/false);
 }
 
 unsigned
-LinearEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape) const {
-  return product(getElemsPerThread(shape));
+LinearEncodingTrait::getTotalElemsPerThread(const LinearLayout &ll,
+                                            ArrayRef<unsigned> repOrder,
+                                            ArrayRef<int64_t> shape) {
+  return product(getElemsPerThread(ll, repOrder, shape));
+}
+
+CGAEncodingAttr LinearEncodingAttr::getCGALayout() const {
+  return LinearEncodingTrait::getCGALayout(getLinearLayout());
+}
+
+//===----------------------------------------------------------------------===//
+// Generic Linear Encoding
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+GenericLinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                                  LinearLayout linearLayout) {
+  if (failed(verifyDistributedLinearLayoutDims(emitError, linearLayout)))
+    return failure();
+
+  // Register, lane, and block bases must be non-swizzled (at most one non-zero
+  // per basis). Only warp bases may be swizzled.
+  auto nonZero = [](auto val) { return val != 0; };
+  auto ctx = (*linearLayout.getInDimNames().begin()).getContext();
+  for (StringRef dimName : {"register", "lane", "block"}) {
+    auto key = StringAttr::get(ctx, dimName);
+    const auto &dimBases = linearLayout.getBases().find(key)->second;
+    if (!llvm::all_of(dimBases, [&](const auto &basis) {
+          return std::count_if(basis.begin(), basis.end(), nonZero) <= 1;
+        })) {
+      return emitError() << "In a generic linear layout, register, lane, and "
+                            "block bases must move in at most one dimension. "
+                            "Swizzled bases found in '"
+                         << dimName << "'.";
+    }
+  }
+
+  if (!linearLayout.isSurjective())
+    return emitError() << "Generic linear layout must be surjective, i.e. "
+                          "all output values must be covered by some input.";
+
+  return success();
+}
+
+void GenericLinearEncodingAttr::print(mlir::AsmPrinter &printer) const {
+  printer << "<{";
+  printLinearLayout(printer, getLinearLayout());
+  printer << "}>";
+}
+
+Attribute GenericLinearEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+
+  DictionaryAttr dict;
+  if (parser.parseAttribute(dict).failed())
+    return {};
+
+  if (parser.parseGreater().failed())
+    return {};
+
+  std::vector<std::string> inDimNames = {"register", "lane", "warp", "block"};
+  auto maybeLL = parseLinearLayout(dict, parser, inDimNames);
+  if (!maybeLL.has_value())
+    return {};
+
+  return parser.getChecked<GenericLinearEncodingAttr>(parser.getContext(),
+                                                      std::move(*maybeLL));
+}
+
+CGAEncodingAttr GenericLinearEncodingAttr::getCGALayout() const {
+  return LinearEncodingTrait::getCGALayout(getLinearLayout());
 }
 
 //===----------------------------------------------------------------------===//
@@ -1577,7 +1714,8 @@ AMDWmmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
     return emitError() << "invalid WMMA v2 instruction shape";
 
   auto validShapesV3 = std::vector<llvm::SmallVector<unsigned>>{
-      {16, 16, 4}, {16, 16, 32}, {16, 16, 64}, {16, 16, 128}};
+      {16, 16, 4},   {16, 16, 32}, {16, 16, 64},
+      {16, 16, 128}, {32, 16, 64}, {32, 16, 128}};
   if (version == 3 && !llvm::is_contained(validShapesV3, shape))
     return emitError() << "invalid WMMA v3 instruction shape";
 
@@ -1657,7 +1795,7 @@ template SmallVector<int64_t>
 SliceEncodingAttr::paddedShape<int64_t>(ArrayRef<int64_t> shape) const;
 
 template <typename SpecificEncoding>
-Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
+static Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};
   // Parse the data as a dictionary
@@ -2625,10 +2763,10 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
     tileSize.push_back(1);
   }
   // warpSizeK * (warpRepK * VecBitWidth)
-  auto tileBitWidthK = bitwidth == 64 ? (2 * 256) : (4 * 64);
+  auto tileBitWidthK = bitwidth == 64 ? (1 * 256) : (4 * 64);
   if (opIdx == 0) {
     // m x k
-    tileSize.push_back(16);
+    tileSize.push_back(bitwidth == 64 ? 8 : 16);
     tileSize.push_back(tileBitWidthK / bitwidth);
   } else {
     // k x n
@@ -2758,6 +2896,10 @@ public:
       return AliasResult::FinalAlias;
     } else if (auto linearAttr = mlir::dyn_cast<LinearEncodingAttr>(attr)) {
       os << "linear";
+      return AliasResult::FinalAlias;
+    } else if (auto genericLinearAttr =
+                   mlir::dyn_cast<GenericLinearEncodingAttr>(attr)) {
+      os << "generic_linear";
       return AliasResult::FinalAlias;
     } /* else if (auto sliceAttr = dyn_cast<SliceEncodingAttr>(attr)) {
       os << "slice";
@@ -2898,7 +3040,8 @@ struct TritonGPUInferLayoutInterface
       return failure();
     auto transposedLl = transposeLinearLayout(ll, order);
     if (isa<DistributedEncodingTrait>(operandEncoding)) {
-      resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));
+      resultEncoding = inferEncodingFromLinearLayout(
+          ctx, std::move(transposedLl), operandEncoding);
     } else if (padded) {
       resultEncoding = PaddedSharedEncodingAttr::get(ctx, padded.getIntervals(),
                                                      padded.getPaddings(),
@@ -3340,7 +3483,8 @@ struct TritonGPUInferLayoutInterface
     LinearLayout ll =
         inferReshapeLinearLayout(cast<TensorOrMemDesc>(srcTy), dstShape);
 
-    dstEnc = LinearEncodingAttr::get(srcEnc.getContext(), std::move(ll));
+    dstEnc = inferEncodingFromLinearLayout(srcEnc.getContext(), std::move(ll),
+                                           srcEnc);
     return success();
   }
 
@@ -3405,7 +3549,7 @@ struct TritonGPUInferLayoutInterface
         tryJoinOnAxis(ctx, ll, newLl, /*fwdInference=*/true, axis, loc);
 
     assert(result.succeeded());
-    dstEnc = LinearEncodingAttr::get(ctx, std::move(newLl));
+    dstEnc = inferEncodingFromLinearLayout(ctx, std::move(newLl), srcEnc);
     return success();
   }
 
@@ -3460,7 +3604,7 @@ struct TritonGPUInferLayoutInterface
     SmallVector<int64_t> dstShape(shape.begin(), shape.end());
     dstShape.pop_back();
     newLl = newLl.reshapeOuts(standardOutDimPairs(ctx, dstShape));
-    dstEnc = LinearEncodingAttr::get(ctx, std::move(newLl));
+    dstEnc = inferEncodingFromLinearLayout(ctx, std::move(newLl), srcEnc);
     return success();
   }
 
@@ -3523,7 +3667,7 @@ struct TritonGPUInferLayoutInterface
     auto result = tryJoinOnAxis(ctx, ll, newLl, fwdInference, axis, loc);
     if (!result.succeeded())
       return result;
-    outEnc = LinearEncodingAttr::get(ctx, std::move(newLl));
+    outEnc = inferEncodingFromLinearLayout(ctx, std::move(newLl), inEnc);
     return success();
   }
 };
@@ -3582,6 +3726,21 @@ struct TritonGPUVerifyTensorLayoutInterface
     return success();
   }
 
+  // Ops that have been explicitly vetted to handle encodings with swizzled
+  // warp bases or non-injective layouts (GenericLinearEncodingAttr,
+  // AMDWmmaEncoding with swizzled warps, etc.).  All other ops reject them so
+  // that unvetted code paths fail early rather than silently producing wrong
+  // results.
+  static bool isOpVettedForGenericEncoding(Operation *op) {
+    if (op->hasTrait<OpTrait::Elementwise>())
+      return true;
+    if (isView(op))
+      return true;
+    return isa<triton::MakeRangeOp, triton::SplatOp, triton::BroadcastOp,
+               triton::LoadOp, triton::StoreOp, triton::JoinOp, triton::SplitOp,
+               triton::gpu::ConvertLayoutOp, triton::gpu::Fp4ToFpOp>(op);
+  }
+
   LogicalResult verifyTensorLayout(
       Attribute layout, RankedTensorType rankedTy, Operation *op,
       function_ref<InFlightDiagnostic()> makeErr) const override {
@@ -3593,6 +3752,12 @@ struct TritonGPUVerifyTensorLayoutInterface
     if (!distr)
       return makeErr()
              << "Non-distributed layout is not allowed in tensor type.";
+
+    if (isGenericLinearEncoding(layout) && !isOpVettedForGenericEncoding(op)) {
+      return makeErr() << "Encoding not compatible with LinearEncodingAttr "
+                       << "(e.g., swizzled warp bases or non-injective layout) "
+                       << "is not supported on " << op->getName() << ".";
+    }
     if (llvm::any_of(rankedTy.getShape(),
                      [](int64_t i) { return !llvm::isPowerOf2_64(i); })) {
       return makeErr() << "Layout has shape " << rankedTy.getShape()
@@ -4051,135 +4216,6 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
            << " which is expected only on `module` or `tt.func` ops";
   }
 
-  // Verify that all ops in a tt.warp_specialize op have partition ids
-  if (attr.getName() == "tt.warp_specialize") {
-    if (!isa<scf::ForOp>(op)) {
-      return op->emitOpError("has unexpected attribute ")
-             << attr.getName() << " which is expected only on `scf.for` ops";
-    }
-    Operation *failedOp = nullptr;
-    op->walk([&](Operation *childOp) {
-      if (!childOp->hasAttr(kPartitionAttrName)) {
-        failedOp = childOp;
-        WalkResult::interrupt();
-      }
-    });
-    if (failedOp) {
-      return failedOp->emitOpError("does not have expected attribute ")
-             << kPartitionAttrName
-             << " which is expected on all child ops of an op with "
-                "attribute `tt.warp_specialize`";
-    }
-  }
-
-  // Verify that partition id lists are non-empty, sorted and have no duplicates
-  auto verifyPartitionIds =
-      [&](const ArrayRef<int> &partitionIds) -> LogicalResult {
-    SetVector<int> idSet;
-    for (auto id : partitionIds) {
-      if (idSet.contains(id))
-        return op->emitOpError("has duplicated partition ids in attribute ")
-               << attr.getName();
-      idSet.insert(id);
-    }
-    if (idSet.empty())
-      return op->emitOpError("has no partition ids in attribute ")
-             << attr.getName();
-    auto ids = idSet.takeVector();
-    SmallVector<int> sortedIds(ids.begin(), ids.end());
-    std::sort(sortedIds.begin(), sortedIds.end());
-    if (ids != sortedIds)
-      return op->emitOpError("partition ids not in sorted order in attribute ")
-             << attr.getName();
-    return success();
-  };
-
-  if (attr.getName() == kPartitionAttrName) {
-    auto result = verifyPartitionIds(
-        cast<DenseI32ArrayAttr>(attr.getValue()).asArrayRef());
-    if (failed(result))
-      return result;
-  }
-  if (attr.getName() == kPartitionOutputsAttrName) {
-    auto arrayAttr = cast<ArrayAttr>(attr.getValue());
-    for (auto idx = 0; idx < arrayAttr.size(); idx++) {
-      auto result = verifyPartitionIds(
-          cast<DenseI32ArrayAttr>(arrayAttr[idx]).asArrayRef());
-      if (failed(result))
-        return result;
-    }
-  }
-
-  // Verify that op partitions include partitions of all child ops
-  if (attr.getName() == kPartitionAttrName && op->getNumRegions() != 0) {
-    SetVector<int> expectedIds;
-    for (auto &region : op->getRegions()) {
-      for (auto &block : region.getBlocks()) {
-        for (auto &childOp : block.getOperations()) {
-          if (isa<scf::YieldOp, ub::PoisonOp>(childOp)) {
-            // yield ops and ub.poison do not need partition ids
-            continue;
-          }
-          if (!childOp.hasAttr(kPartitionAttrName))
-            return childOp.emitOpError("does not have expected attribute ")
-                   << kPartitionAttrName
-                   << " which is expected for ops whose parent has partitions";
-          auto ids = getPartitionIds(&childOp);
-          expectedIds.insert(ids.begin(), ids.end());
-        }
-      }
-    }
-    auto partitionIds = getPartitionIds(op);
-    for (auto id : expectedIds) {
-      if (!partitionIds.contains(id)) {
-        return op->emitOpError("partition ids in attr ")
-               << attr.getName()
-               << " does not contain partition ids of all child ops";
-      }
-    }
-  }
-
-  if (attr.getName() == kPartitionOutputsAttrName) {
-    if (!isa<scf::ForOp, scf::IfOp, triton::ReduceOp>(op))
-      return op->emitOpError("has unexpected attribute ") << attr.getName();
-
-    // Verify that number of output partitions matches number of For/If results
-    size_t numResults = 0;
-    if (isa<scf::ForOp>(op)) {
-      numResults = cast<scf::ForOp>(op).getResults().size();
-    } else if (isa<scf::IfOp>(op)) {
-      numResults = cast<scf::IfOp>(op).getResults().size();
-    } else {
-      numResults = cast<triton::ReduceOp>(op).getResults().size();
-    }
-
-    if (cast<ArrayAttr>(attr.getValue()).size() != numResults) {
-      return op->emitOpError("does not have expected number of output "
-                             "partition sets in attr ")
-             << attr.getName() << "; should match number of results";
-    }
-
-    // Verify that union of op output partitions is a subset of op partitions
-    if (!op->hasAttr(kPartitionAttrName))
-      return op->emitOpError("does not have expected attribute ")
-             << kPartitionAttrName << " which is expected for ops with attr "
-             << kPartitionOutputsAttrName;
-    auto partitionIds = getPartitionIds(op);
-
-    SetVector<int> outputPartitionIdsUnion;
-    for (auto outputPartitionIds : getPartitionOutputs(op)) {
-      outputPartitionIdsUnion.insert(outputPartitionIds.begin(),
-                                     outputPartitionIds.end());
-    }
-    if (!std::all_of(outputPartitionIdsUnion.begin(),
-                     outputPartitionIdsUnion.end(),
-                     [&](int id) { return partitionIds.contains(id); })) {
-      return op->emitOpError("partition ids in attr ")
-             << kPartitionAttrName
-             << " must be the union of all partition ids in " << attr.getName();
-    }
-  }
-
   return success();
 }
 
@@ -4412,57 +4448,6 @@ SmallVector<int64_t> triton::gpu::getTMABlockShape(
   return *getTMABlockShape(shapePerCTA, elementBitWidth, swizzleBytes,
                            fp4Padded, isTransposed, packedSize, emitFatalError,
                            mode);
-}
-
-SetVector<int> triton::gpu::getPartitionIds(Operation *op) {
-  auto attrs = op->getAttr(kPartitionAttrName);
-  SmallVector<int> partitionIds;
-  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
-    partitionIds.push_back(id);
-  }
-  std::sort(partitionIds.begin(), partitionIds.end());
-  return SetVector<int>(partitionIds.begin(), partitionIds.end());
-}
-
-SmallVector<SetVector<int>, 4> triton::gpu::getPartitionOutputs(Operation *op) {
-  SmallVector<SetVector<int>, 4> partitionOutputsIds;
-  if (op->getNumResults() == 0) {
-    return partitionOutputsIds;
-  }
-  assert(op->hasAttr(kPartitionOutputsAttrName));
-  auto arrayAttr = cast<ArrayAttr>(op->getAttr(kPartitionOutputsAttrName));
-  for (auto attr : arrayAttr) {
-    auto ids = cast<DenseI32ArrayAttr>(attr).asArrayRef();
-    partitionOutputsIds.push_back(SetVector<int>(ids.begin(), ids.end()));
-  }
-  return partitionOutputsIds;
-}
-
-SetVector<int> triton::gpu::getPartitionIds(OpOperand *use) {
-  auto owner = use->getOwner();
-  if (isa<scf::YieldOp>(owner)) {
-    return getPartitionOutputs(owner->getParentOp())[use->getOperandNumber()];
-  } else if (scf::ForOp forOp = dyn_cast<scf::ForOp>(owner)) {
-    int idx = use->getOperandNumber() - forOp.getNumControlOperands();
-    return idx >= 0 ? getPartitionOutputs(owner)[idx] : getPartitionIds(forOp);
-  } else {
-    return getPartitionIds(owner);
-  }
-}
-
-bool triton::gpu::hasPartition(Operation *op) {
-  return op && op->hasAttr(kPartitionAttrName);
-}
-
-bool triton::gpu::hasWarpSpecializeTag(Operation *op) {
-  return op && op->hasAttr(kWarpSpecializeTagAttrName);
-}
-
-std::optional<int> triton::gpu::getWarpSpecializeTag(Operation *op) {
-  if (hasWarpSpecializeTag(op)) {
-    return cast<IntegerAttr>(op->getAttr(kWarpSpecializeTagAttrName)).getInt();
-  }
-  return std::nullopt;
 }
 
 PaddedSharedEncodingAttr triton::gpu::getPaddedEncoding(Attribute encoding) {

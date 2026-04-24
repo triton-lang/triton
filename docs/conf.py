@@ -23,20 +23,208 @@
 # -- General configuration ------------------------------------------------
 
 import os
-import platform
+import re
 import shutil
 import sys
 import sysconfig
+from collections import defaultdict
+from itertools import count
 from pathlib import Path
 
 import sphinx_rtd_theme
+from myst_sphinx_gallery import GalleryConfig
 from sphinx_gallery.sorting import FileNameSortKey
+
+GLUON_TUTORIALS_SRC = Path("../python/tutorials/gluon")
+GLUON_TUTORIALS_GENERATED = Path("_generated/gluon-tutorials")
+GLUON_TUTORIALS_GALLERY = Path("getting-started/tutorials/gluon")
+GLUON_EXAMPLES_SRC = Path("../python/examples/gluon")
+GLUON_EXAMPLES_GENERATED = Path("_generated/gluon-examples")
+GLUON_EXAMPLES_GALLERY = Path("getting-started/examples/gluon")
+
+GLUON_MYST_GALLERIES = [
+    {
+        "src": GLUON_TUTORIALS_SRC,
+        "generated": GLUON_TUTORIALS_GENERATED,
+        "gallery": GLUON_TUTORIALS_GALLERY,
+        "title": "Gluon Tutorials",
+        "header_ref": "example_gluon_tutorials_header",
+        "description": """\
+These tutorials can be found in ``python/tutorials/gluon``.
+""",
+        "ignore": {"__init__.py", "conftest.py"},
+    },
+    {
+        "src": GLUON_EXAMPLES_SRC,
+        "generated": GLUON_EXAMPLES_GENERATED,
+        "gallery": GLUON_EXAMPLES_GALLERY,
+        "title": "Gluon Examples",
+        "header_ref": "example_gluon_examples_header",
+        "description": """\
+These examples can be found in ``python/examples/gluon``.
+""",
+        "ignore": {"__init__.py", "conftest.py", "02-conv-common.py"},
+    },
+]
 
 
 def process_sig(app, what, name, obj, options, signature, return_annotation):
     if signature and '_builder' in signature:
         signature = signature.split('_builder')[0] + ")"
     return (signature, return_annotation)
+
+
+def is_gluon_docstring(app, name, obj):
+    env = getattr(app, "env", None)
+    temp_data = getattr(env, "temp_data", {}) if env is not None else {}
+    docname = temp_data.get("docname") or getattr(env, "docname", "") or ""
+    module = getattr(obj, "__module__", "")
+    return (docname.startswith("gluon/") or name.startswith("triton.experimental.gluon")
+            or module.startswith("triton.experimental.gluon"))
+
+
+def process_gluon_docstring(app, what, name, obj, options, lines):
+    if not is_gluon_docstring(app, name, obj):
+        return
+
+    from sphinx.ext.napoleon.docstring import GoogleDocstring
+
+    result_lines = GoogleDocstring(lines, app.config, app, what, name, obj, options).lines()
+    lines[:] = result_lines.copy()
+
+
+def setup_gluon_napoleon(app):
+    from sphinx.ext.napoleon import Config as NapoleonConfig
+
+    for name, default, rebuild, types in NapoleonConfig._config_values:
+        app.add_config_value(name, default, rebuild, types=types)
+    app.connect("autodoc-process-docstring", process_gluon_docstring)
+
+
+def sphinx_gallery_blocks_to_markdown(blocks, gallery_conf, target_dir):
+    from sphinx_gallery.notebook import rst2md
+
+    parts = []
+    heading_level_counter = count(start=1)
+    heading_levels = defaultdict(lambda: next(heading_level_counter))
+
+    for label, content, _ in blocks:
+        content = content.rstrip()
+        if not content:
+            continue
+        if label == "code":
+            parts.append(f"```python\n{content}\n```")
+        else:
+            fences = []
+
+            def stash_fence(match):
+                fences.append(match.group(0))
+                return f"\nGLUON_MARKDOWN_FENCE_{len(fences) - 1}\n"
+
+            # Sphinx-Gallery's notebook converter treats text as reST. Protect
+            # native Markdown fences first so output snippets can contain
+            # reST-looking lines without being rewritten as headings.
+            protected = re.sub(r"```.*?```", stash_fence, content, flags=re.DOTALL)
+            protected = re.sub(r"(?m)^%%\s*$\n?", "", protected)
+            markdown = rst2md(protected + "\n", gallery_conf, target_dir, heading_levels)
+            for i, fence in enumerate(fences):
+                markdown = markdown.replace(f"GLUON_MARKDOWN_FENCE_{i}", fence)
+            parts.append(markdown.rstrip())
+    return "\n\n".join(part for part in parts if part) + "\n"
+
+
+def title_from_filename(path):
+    words = re.sub(r"^\d+-", "", path.stem).replace("_", "-").split("-")
+
+    def format_word(word):
+        lower = word.lower()
+        if lower in {"cta", "bmm", "moe", "tma"}:
+            return lower.upper()
+        if lower == "tcgen05":
+            return "TCGen05"
+        cta_match = re.match(r"^(\d+)cta$", lower)
+        if cta_match:
+            return f"{cta_match.group(1)}CTA"
+        return word.capitalize()
+
+    return " ".join(format_word(word) for word in words if word)
+
+
+def python_source_to_markdown(source_path, gallery_conf, target_dir, source_label):
+    from sphinx_gallery.py_source_parser import split_code_and_text_blocks
+    from sphinx.errors import ExtensionError
+
+    try:
+        _, blocks = split_code_and_text_blocks(source_path)
+    except ExtensionError as exc:
+        if "Could not find docstring" not in str(exc):
+            raise
+        source = source_path.read_text(encoding="utf-8")
+        fence = "`" * (max((len(match.group(0)) for match in re.finditer(r"`{3,}", source)), default=2) + 1)
+        title = title_from_filename(source_path)
+        return f"""\
+# {title}
+
+This example can be found at ``{source_label}/{source_path.name}``.
+
+{fence}python
+{source.rstrip()}
+{fence}
+"""
+
+    return sphinx_gallery_blocks_to_markdown(blocks, gallery_conf, target_dir)
+
+
+def generate_gluon_myst_galleries(app):
+    gallery_conf = app.config.sphinx_gallery_conf.copy()
+
+    for gallery in GLUON_MYST_GALLERIES:
+        src_dir = (Path(app.srcdir) / gallery["src"]).resolve()
+        generated_dir = Path(app.srcdir) / gallery["generated"]
+        gallery_dir = Path(app.srcdir) / gallery["gallery"]
+
+        shutil.rmtree(generated_dir, ignore_errors=True)
+        shutil.rmtree(gallery_dir, ignore_errors=True)
+        generated_dir.mkdir(parents=True)
+        gallery_dir.mkdir(parents=True)
+
+        title = gallery["title"]
+        (generated_dir / "GALLERY_HEADER.rst").write_text(
+            f"{title}\n{'=' * len(title)}\n\n{gallery['description']}",
+            encoding="utf-8",
+        )
+
+        for source_path in sorted(src_dir.glob("*.py")):
+            if source_path.name in gallery["ignore"]:
+                continue
+            source_label = gallery["src"].as_posix().removeprefix("../")
+            markdown = python_source_to_markdown(
+                source_path,
+                gallery_conf,
+                str(generated_dir),
+                source_label,
+            )
+            (generated_dir / source_path.with_suffix(".md").name).write_text(markdown, encoding="utf-8")
+
+
+def fix_gluon_myst_gallery_paths(app):
+    for gallery in GLUON_MYST_GALLERIES:
+        gallery_dir = gallery["gallery"]
+        index = Path(app.srcdir) / gallery_dir / "index.rst"
+        if not index.exists():
+            continue
+
+        text = index.read_text(encoding="utf-8")
+        old = f":img-top: /{gallery_dir.stem}/"
+        new = f":img-top: /{gallery_dir.as_posix()}/"
+        text = text.replace(old, new)
+        text = re.sub(
+            rf"(?m)^\.\. _example_{re.escape(gallery_dir.stem)}_header:$",
+            f".. _{gallery['header_ref']}:",
+            text,
+            count=1,
+        )
+        index.write_text(text, encoding="utf-8")
 
 
 def get_cmake_dir():
@@ -73,7 +261,7 @@ def setup_generated_mlir_docs():
 
     rst_string = f"""
 Triton MLIR Dialects and Ops
-=====================
+============================
 
 .. toctree::
    :maxdepth: 1
@@ -98,6 +286,9 @@ def setup(app):
     import sphinx
 
     app.connect("autodoc-process-signature", process_sig)
+    setup_gluon_napoleon(app)
+    app.connect("builder-inited", generate_gluon_myst_galleries, priority=100)
+    app.connect("builder-inited", fix_gluon_myst_gallery_paths, priority=700)
     max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
     print(f"Installing Triton Python package using {max_jobs} threads")
     subprocess.run("pip install -e ../", shell=True, env=os.environ.copy())
@@ -115,15 +306,30 @@ def setup(app):
 
         return wrapped
 
-    old_documenter = sphinx.ext.autosummary.get_documenter
+    autosummary = sphinx.ext.autosummary
 
-    def documenter(app, obj, parent):
-        import triton
-        if isinstance(obj, triton.runtime.JITFunction):
-            obj = obj.fn
-        return old_documenter(app, obj, parent)
+    # Sphinx 9 dropped the public autosummary.get_documenter helper in favor
+    # of the private _get_documenter entrypoint with a different signature.
+    if hasattr(autosummary, "get_documenter"):
+        old_documenter = autosummary.get_documenter
 
-    sphinx.ext.autosummary.get_documenter = documenter
+        def documenter(app, obj, parent):
+            import triton
+            if isinstance(obj, triton.runtime.JITFunction):
+                obj = obj.fn
+            return old_documenter(app, obj, parent)
+
+        autosummary.get_documenter = documenter
+    else:
+        old_documenter = autosummary._get_documenter
+
+        def documenter(obj, parent):
+            import triton
+            if isinstance(obj, triton.runtime.JITFunction):
+                obj = obj.fn
+            return old_documenter(obj, parent)
+
+        autosummary._get_documenter = documenter
     sphinx.util.inspect.unwrap_all = forward_jit_fn(sphinx.util.inspect.unwrap_all)
     sphinx.util.inspect.signature = forward_jit_fn(sphinx.util.inspect.signature)
     sphinx.util.inspect.object_description = forward_jit_fn(sphinx.util.inspect.object_description)
@@ -137,12 +343,13 @@ extensions = [
     'sphinx.ext.intersphinx',
     'sphinx.ext.autosummary',
     'sphinx.ext.coverage',
-    'sphinx.ext.napoleon',
     'sphinx_multiversion',
     'sphinx.ext.autosectionlabel',
     'myst_parser',
+    'myst_sphinx_gallery',
 ]
 autosummary_generate = True
+autosummary_ignore_module_all = False
 
 # versioning config
 smv_tag_whitelist = r'^(v3.7.0)$'
@@ -159,15 +366,20 @@ sphinx_gallery_conf = {
     'examples_dirs': '../python/tutorials/',
     'gallery_dirs': 'getting-started/tutorials',
     'filename_pattern': '',
-    'ignore_pattern': r'(__init__\.py|11.*.py)',
+    'ignore_pattern': r'(__init__\.py|conftest\.py|11-programmatic-dependent-launch\.py)',
     'within_subsection_order': FileNameSortKey,
     'reference_url': {
         'sphinx_gallery': None,
     },
-    # Examples don't work on non-Linux platforms, because they actually run
-    # Triton.  But it's nice to be able to run the rest of the docs build.
-    'abort_on_example_error': platform.system() == 'Linux',
+    'abort_on_example_error': False,
 }
+
+myst_sphinx_gallery_config = GalleryConfig(
+    examples_dirs=[gallery["generated"] for gallery in GLUON_MYST_GALLERIES],
+    gallery_dirs=[gallery["gallery"] for gallery in GLUON_MYST_GALLERIES],
+    root_dir=Path(__file__).parent,
+    base_gallery=True,
+)
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -180,8 +392,10 @@ html_sidebars = {
 # The suffix(es) of source filenames.
 # You can specify multiple suffix as a list of string:
 #
-# source_suffix = ['.rst', '.md']
-source_suffix = '.rst'
+source_suffix = {
+    '.rst': 'restructuredtext',
+    '.md': 'markdown',
+}
 
 # The master toctree document.
 master_doc = 'index'
@@ -210,7 +424,7 @@ language = 'en'
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This patterns also effect to html_static_path and html_extra_path
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+exclude_patterns = ['_build', '_generated', 'Thumbs.db', '.DS_Store']
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'
@@ -225,7 +439,6 @@ todo_include_todos = False
 #
 
 html_theme = 'sphinx_rtd_theme'
-html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the

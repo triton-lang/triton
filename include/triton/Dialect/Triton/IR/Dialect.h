@@ -26,6 +26,7 @@ namespace triton {
 
 struct GlobalMemory : public SideEffects::Resource::Base<GlobalMemory> {
   StringRef getName() const final { return "<GlobalMemory>"; }
+  SideEffects::Resource *getParent() const override { return nullptr; }
 };
 
 class DialectInferLayoutInterface
@@ -116,6 +117,9 @@ public:
 };
 
 // Descriptor gather and scatter have restrictions on the tile sizes.
+LogicalResult verifyGatherScatterResultType(Operation *op,
+                                            ShapedType resultType,
+                                            ShapedType indicesType);
 LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
                                     ShapedType resultType,
                                     ShapedType indicesType);
