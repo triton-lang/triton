@@ -529,11 +529,10 @@ void dumpPerfettoTraceData(const TraceDump &traceDump, std::ostream &os) {
       const auto deviceId = event.getDeviceId();
       const auto streamId = event.getStreamId();
       const auto laneId = details::getGpuLaneId(deviceId, streamId);
-      tracks.emplace(
-          getPerfettoLaneTrackUuid(laneId),
-          PerfettoTrack{"GPU Device " + std::to_string(deviceId) +
-                            " Stream " + std::to_string(streamId),
-                        static_cast<int32_t>(laneId)});
+      tracks.emplace(getPerfettoLaneTrackUuid(laneId),
+                     PerfettoTrack{"GPU Device " + std::to_string(deviceId) +
+                                       " Stream " + std::to_string(streamId),
+                                   static_cast<int32_t>(laneId)});
     }
   }
 
