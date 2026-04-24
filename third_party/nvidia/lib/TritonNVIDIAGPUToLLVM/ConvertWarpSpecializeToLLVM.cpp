@@ -22,6 +22,9 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
+static constexpr const char kDisableSetMaxRegisterAttr[] =
+    "tti.disable_setmaxregister";
+
 //===----------------------------------------------------------------------===//
 // Utilities
 //===----------------------------------------------------------------------===//
@@ -138,15 +141,19 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     return mlir::emitError(module.getLoc(),
                            "module missing 'ttg.total-num-warps' attribute");
   }
-  unsigned totalNumThreads = totalNumWarpsAttr.getInt() * threadsPerWarp;
 
   // Determine how many registers the worker warps can surrender before they
   // begin execution.
   auto maxnreg = func->getParentOfType<ModuleOp>()->getAttrOfType<IntegerAttr>(
       AttrMaxRegistersName);
+  // Disable dynamic register allocation if requested
+  bool emitDynamicRegRealloc = llvm::none_of(wsOps, [](WarpSpecializeOp ws) {
+    return ws->hasAttr(kDisableSetMaxRegisterAttr);
+  });
+
   int lowRegs = -1;
   int defRegs = -1;
-  if (maxnreg) {
+  if (emitDynamicRegRealloc && maxnreg) {
     int numWorkerWarps = totalNumWarpsAttr.getInt() - defaultNumWarps;
     int startRegs = maxnreg.getInt();
 
@@ -195,7 +202,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     oldArg.replaceAllUsesWith(arg);
   entry->eraseArguments([](auto) { return true; });
   b.setInsertionPointToStart(entry);
-  if (maxnreg)
+  if (emitDynamicRegRealloc && maxnreg)
     createRegRealloc(b, maxnreg.getInt(), defRegs);
 
   WarpSpecializeCallbacks callbacks;
@@ -208,6 +215,9 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   callbacks.reallocRegisters = [&](TritonLLVMIRRewriter &b, WarpSpecializeOp ws,
                                    RegisterReallocPhase phase,
                                    unsigned regionNumber) {
+    if (!emitDynamicRegRealloc)
+      return;
+
     if (phase == RegisterReallocPhase::SwitchLoopStart) {
       if (maxnreg)
         createRegRealloc(b, maxnreg.getInt(), lowRegs);

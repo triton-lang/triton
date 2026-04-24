@@ -101,6 +101,8 @@ public:
   bool supportBitwidth16Elementwise() const override;
   bool supportBitwidth32Elementwise() const override;
 
+  unsigned getReductionTreeArity(Operation *combinerOp) const override;
+
   // Returns true if the target supports per lane addresses into LDS for
   // direct-to-lds loads. Some architectures (e.g. GFX9) do not support
   // scattering and instead have to write warp coalesced into LDS
@@ -114,6 +116,10 @@ public:
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
   bool supportsDirectFromLdsStoreBitWidth(int bitWidth) const;
   bool supportsBufferLoadToLocal() const;
+
+  // Whether this target uses asyncmark/wait_asyncmark intrinsics for
+  // async memory ops synchronization instead of waitcnt-based intrinsics waits.
+  bool useAsyncMarks() const;
 
   bool supportsMultiCTALaunch() const;
   bool supportsTDM() const;

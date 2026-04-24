@@ -201,16 +201,29 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
   Value zero = b.i32_val(0);
   for (int i = 0; i < nCol; i++) {
     if ((explicitCols >> i) & 1) {
-      Value bit = b.and_(x, b.i32_val(1 << i));
-      Value bit_is_zero = b.icmp_eq(bit, zero);
       int32_t basis = matrix[i];
       if (basis == 0)
         continue;
-      auto select = b.select(bit_is_zero, zero, b.i32_val(basis));
-      if ((rowsUnique & basis) == basis) {
-        ors.push_back(select);
+      Value term;
+      Value bit = b.and_(x, b.i32_val(1 << i));
+      uint32_t basisBits = basis;
+      if (llvm::isPowerOf2_32(basisBits)) {
+        unsigned row = llvm::countr_zero(basisBits);
+        unsigned col = i;
+        if (row == col)
+          term = bit;
+        else if (row > col)
+          term = b.shl(bit, b.i32_val(row - col));
+        else
+          term = b.lshr(bit, b.i32_val(col - row));
       } else {
-        xors.push_back(select);
+        Value bit_is_zero = b.icmp_eq(bit, zero);
+        term = b.select(bit_is_zero, zero, b.i32_val(basis));
+      }
+      if ((rowsUnique & basis) == basis) {
+        ors.push_back(term);
+      } else {
+        xors.push_back(term);
       }
     }
   }
@@ -431,7 +444,7 @@ Value getLaneId(OpBuilder &rewriter, Location loc) {
 }
 
 // Helper function: applies linear layout vectorized over register indices
-SmallVector<SmallVector<std::pair<StringAttr, Value>>>
+static SmallVector<SmallVector<std::pair<StringAttr, Value>>>
 applyLinearLayoutVec(Location loc, RewriterBase &rewriter,
                      const LinearLayout &layout,
                      ArrayRef<std::pair<StringAttr, Value>> indices,
@@ -603,20 +616,6 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                    warpId, rewriter, targetInfo, maybeMaxVecElems, emitLdSt);
 }
 
-// Build a vector containing multiple base pointers for dynamic indexing.
-static Value buildBasePtrVector(Location loc, RewriterBase &rewriter,
-                                ArrayRef<Value> smemBases) {
-  assert(smemBases.size() > 1 && "Need multiple bases to build a vector");
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto ptrTy = smemBases[0].getType();
-  auto vecTy = VectorType::get({static_cast<int64_t>(smemBases.size())}, ptrTy);
-  Value basesVec = b.undef(vecTy);
-  for (size_t i = 0; i < smemBases.size(); ++i) {
-    basesVec = b.insert_element(basesVec, smemBases[i], b.i32_val(i));
-  }
-  return basesVec;
-}
-
 SmallVector<Value>
 lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           ArrayRef<Value> valsArray, // Input for store, output for load
@@ -633,7 +632,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   auto vals = to_vector(valsArray);
   bool isStore = !vals.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto smemPtrTy = ptr_ty(ctx, 3);
+  auto smemPtrTy = ptr_ty(ctx, targetInfo.getSharedAddressSpace());
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
@@ -656,7 +655,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   Value basesVec;
   if (isPartitioned) {
     partitionLayout = cvt.sublayout(inDimNames, {kPartition});
-    basesVec = buildBasePtrVector(loc, rewriter, smemBases);
+    basesVec = LLVM::buildBasePtrVector(loc, rewriter, smemBases);
   }
 
   // Strip kPartition output for vectorization analysis.
@@ -682,8 +681,8 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
                     {kWarp, reps.getBases().lookup(kWarp)},
                     {kBlock, reps.getBases().lookup(kBlock)}},
                    reps.getOutDims(), false);
-  auto [nAdditive, permStrides] =
-      actionAdditiveStrides(reps, addrLayout, maskSpanAffineOffset);
+  auto [nAdditive, permStrides] = actionAdditiveStrides(
+      reps, addrLayout, maskSpanAffineOffset, elemsPerVec);
   reps = permStrides.apply(reps);
 
   if (isPartitioned) {
@@ -1272,6 +1271,20 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
           /*offsets=*/{elems.begin() + numBases, elems.end()}};
 }
 
+// Build a vector containing multiple base pointers for dynamic indexing.
+Value buildBasePtrVector(Location loc, RewriterBase &rewriter,
+                         ArrayRef<Value> smemBases) {
+  assert(smemBases.size() > 1 && "Need multiple bases to build a vector");
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto ptrTy = smemBases[0].getType();
+  auto vecTy = VectorType::get({static_cast<int64_t>(smemBases.size())}, ptrTy);
+  Value basesVec = b.undef(vecTy);
+  for (size_t i = 0; i < smemBases.size(); ++i) {
+    basesVec = b.insert_element(basesVec, smemBases[i], b.i32_val(i));
+  }
+  return basesVec;
+}
+
 Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp) {
   // See NOTE: [Additional Function Arguments]
   if (!isKernel(funcOp)) {
@@ -1428,6 +1441,8 @@ SmallVector<Value> getSharedMemoryBases(Location loc, RewriterBase &rewriter,
   return bases;
 }
 
+namespace {
+
 // Extract the bits of `a` that are set in `mask`
 Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -1496,6 +1511,8 @@ Value pdep_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
   return result;
 }
 
+} // namespace
+
 std::tuple<SmallVector<Value>, Value>
 delinearize(RewriterBase &rewriter, Location loc,
             triton::gpu::DistributedEncodingTrait layout,
@@ -1516,7 +1533,7 @@ delinearize(RewriterBase &rewriter, Location loc,
   auto linearLayout = triton::gpu::LinearEncodingAttr::get(
       rewriter.getContext(), std::move(ll));
   auto orderDim = linearLayout.orderPerDim(dimName, linearLayout.getOrder());
-  auto shapeDim = linearLayout.basesPerDim(dimName);
+  auto shapeDim = linearLayout.basesPerDim(dimName, /*skipBroadcast=*/true);
   auto multiDim = delinearize(rewriter, loc, linear, shapeDim, orderDim);
 
   return std::make_tuple(std::move(multiDim), isRepresentative);
@@ -1614,7 +1631,7 @@ Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 triton::gpu::LinearEncodingAttr encoding, StringAttr dimName) {
   auto orderDim = encoding.orderPerDim(dimName, encoding.getOrder());
-  auto shapeDim = encoding.basesPerDim(dimName);
+  auto shapeDim = encoding.basesPerDim(dimName, /*skipBroadcast=*/true);
   auto linear = linearize(rewriter, loc, multiDim, shapeDim, orderDim);
   auto ll = encoding.getLinearLayout();
   int32_t freeVarMask = ll.getFreeVariableMasks().lookup(dimName);

@@ -10,6 +10,7 @@ TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
 LLVM_BUILD_PATH ?= "$(ROOT_DIR)/.llvm-project/build"
 NUM_PROCS ?= 8
+TRITON_KERNELS_PATH := $(ROOT_DIR)/python/triton_kernels$(if $(PYTHONPATH),:$(PYTHONPATH))
 
 # Incremental builds
 
@@ -40,17 +41,17 @@ test-unit: all
 	$(PYTEST) python/tutorials/06-fused-attention.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
-	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libTritonPluginsTestLib.so \
+	TRITON_PLUGIN_PATHS=python/triton/plugins/libTritonPluginsTestLib.so \
 		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
-	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
+	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
 		$(PYTEST) -vvv python/test/unit/plugins/test_dialect_plugin.py
-	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
+	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
 		$(PYTEST) -s -vvv python/test/unit/plugins/custom_ops.py
 
 .PHONY: test-gluon
 test-gluon: all
 	$(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
-	$(PYTEST) -n 2 python/examples/gluon/
+	PYTHONPATH="$(TRITON_KERNELS_PATH)" $(PYTEST) -n 2 python/examples/gluon/
 
 .PHONY: test-gsan
 test-gsan: all

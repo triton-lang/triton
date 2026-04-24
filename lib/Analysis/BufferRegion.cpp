@@ -1,5 +1,6 @@
 #include "triton/Analysis/BufferRegion.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -60,31 +61,11 @@ unsigned getNumBuffers(ttg::MemDescIndexOp memdescIndexOp) {
 }
 
 llvm::DenseSet<Value> getBarrierOperands(Operation *op) {
-  if (auto initBarrierOp = dyn_cast<ttng::InitBarrierOp>(op)) {
-    return {initBarrierOp.getOperand()};
+  if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op)) {
+    auto barriers = barrierOp.getBarriers();
+    return llvm::DenseSet<Value>(barriers.begin(), barriers.end());
   }
-  if (auto waitBarrierOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
-    return {waitBarrierOp.getAlloc()};
-  }
-  if (auto arriveBarrierOp = dyn_cast<ttng::ArriveBarrierOp>(op)) {
-    return {arriveBarrierOp.getAlloc()};
-  }
-  if (auto barrierExpectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
-    return {barrierExpectOp.getAlloc()};
-  }
-  if (auto invalBarrierOp = dyn_cast<ttng::InvalBarrierOp>(op)) {
-    return {invalBarrierOp.getAlloc()};
-  }
-  if (auto asyncOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-    return {asyncOp.getBarrier()};
-  }
-  if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
-    return {gatherOp.getBarrier()};
-  }
-  if (auto mmaV5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-    return llvm::DenseSet<Value>(mmaV5Op.getCompletionBarriers().begin(),
-                                 mmaV5Op.getCompletionBarriers().end());
-  }
+
   return llvm::DenseSet<Value>{};
 }
 
@@ -287,6 +268,16 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     }
     return success();
   }
+  if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
+    if (isa<ttg::MemDescType>(selectOp.getType())) {
+      regionInfo =
+          RegionInfo::join(operands[1]->getValue(), operands[2]->getValue());
+      for (auto *r : results) {
+        propagateIfChanged(r, r->join(regionInfo));
+      }
+      return success();
+    }
+  }
   // "Passthrough" ops that don't modify the buffer regions.
   if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp,
           ttg::MemDescReinterpretOp>(op)) {
@@ -331,11 +322,11 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
 
 bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
   if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttng::TMEMLoadOp,
-          ttng::TMEMStoreOp, ttg::AsyncCopyGlobalToLocalOp,
-          ttng::AsyncTMACopyGlobalToLocalOp, ttng::AsyncTMACopyLocalToGlobalOp,
-          ttng::AsyncTMAGatherOp, ttng::AsyncTMAScatterOp, ttng::InitBarrierOp,
-          ttng::BarrierExpectOp, ttng::InvalBarrierOp, ttng::WaitBarrierOp,
-          ttng::ArriveBarrierOp>(op)) {
+          ttng::TMEMStoreOp, ttng::TMEMCopyOp, ttg::AsyncCopyGlobalToLocalOp,
+          ttng::TMAOpInterface, ttng::CLCLoadResultOp>(op)) {
+    return true;
+  }
+  if (isa<ttg::MBarrierOpInterface>(op)) {
     return true;
   }
   // Allocations with operands write to the memory.

@@ -1214,7 +1214,7 @@ tt.func @loop_memindex_subslice(%arg0: tensor<2x128x128xf16>) {
 
 module attributes {ttg.target = "cuda:90", "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: warp_dot_multi_read
-  tt.func @warp_dot_multi_read(%arg0: !tt.tensordesc<tensor<1x256x128xf8E5M2, #shared1>>, %arg1: tensor<128x128x!tt.ptr<f8E5M2>>, %arg2: i32, %arg3: i1, %arg4: tensor<128x256xf32, #mma>, %arg5: tensor<128x128xi1>) {
+  tt.func @warp_dot_multi_read(%arg0: !tt.tensordesc<1x256x128xf8E5M2, #shared1>, %arg1: tensor<128x128x!tt.ptr<f8E5M2>>, %arg2: i32, %arg3: i1, %arg4: tensor<128x256xf32, #mma>, %arg5: tensor<128x128xi1>) {
 
     %a_tile = ttg.local_alloc : () -> !ttg.memdesc<128x128xf8E5M2, #shared1, #smem, mutable>
     %b_tile = ttg.local_alloc : () -> !ttg.memdesc<256x128xf8E5M2, #shared1, #smem, mutable>
@@ -1228,7 +1228,7 @@ module attributes {ttg.target = "cuda:90", "ttg.num-warps" = 8 : i32} {
     // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.async_copy_global_to_local
     ttg.async_copy_global_to_local %arg1, %a_tile mask %arg5 {contiguity = 16 : i32} : tensor<128x128x!tt.ptr<f8E5M2>> -> <128x128xf8E5M2, #shared1, #smem, mutable>
-    ttng.async_tma_copy_global_to_local %arg0[%arg2, %arg2, %arg2] %b_tile, %barrier, %arg3 : !tt.tensordesc<tensor<1x256x128xf8E5M2, #shared1>>, !ttg.memdesc<1xi64, #shared2, #smem, mutable> -> !ttg.memdesc<256x128xf8E5M2, #shared1, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %arg0[%arg2, %arg2, %arg2] %b_tile, %barrier, %arg3 : !tt.tensordesc<1x256x128xf8E5M2, #shared1>, !ttg.memdesc<1xi64, #shared2, #smem, mutable> -> !ttg.memdesc<256x128xf8E5M2, #shared1, #smem, mutable>
     tt.return
   }
 }

@@ -18,6 +18,10 @@ Type getElementType(Value value) {
   return type;
 }
 
+} // namespace mlir::triton::gpu
+
+namespace {
+
 int getNumElementsPerThreads(Type type,
                              const LLVMTypeConverter *typeConverter) {
   int numElemsPerThread = 1;
@@ -30,9 +34,6 @@ int getNumElementsPerThreads(Type type,
   return numElemsPerThread;
 }
 
-} // namespace mlir::triton::gpu
-
-namespace {
 struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
   using ConvertOpToLLVMPattern<AddPtrOp>::ConvertOpToLLVMPattern;
 
@@ -337,7 +338,6 @@ struct ElementwiseInlineAsmOpConversion
     // Layout is unpackedOperands[operand][elem].
     SmallVector<SmallVector<Value>> unpackedOperands;
     for (auto operand : adaptor.getOperands()) {
-      auto argTy = op->getOperand(0).getType();
       auto subOperands = unpackLLElements(loc, operand, rewriter);
       unpackedOperands.push_back(subOperands);
     }

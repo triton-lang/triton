@@ -49,7 +49,6 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
           // See
           // https://github.com/google/jax/blob/main/jaxlib/mosaic/gpu/passes.cc
-          mlir::BlockArgument arg = llvmFuncOp.getArgument(i);
           const auto byteType =
               mlir::IntegerType::get(llvmFuncOp.getContext(), 8);
           const auto arrayType = mlir::LLVM::LLVMArrayType::get(
