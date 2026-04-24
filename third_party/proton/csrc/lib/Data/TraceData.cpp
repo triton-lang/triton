@@ -507,8 +507,9 @@ void TraceData::withTraceData(size_t phase, CycleHandler &&onCycleTrace,
       uint64_t previousEndTimeNs = 0;
       for (auto &kernelEvent : streamKernelEvents) {
         // Ensure the kernel events are non-overlapping and sorted by start
-        // time. This is required by Sometimes if we use the
-        // instrumentation-based measurement where timing can be inaccurate
+        // time. This is required if we use the
+        // instrumentation-based measurement where timing can have minor issues
+        // for very short kernels.
         if (hasPreviousKernel && kernelEvent.startTimeNs <= previousEndTimeNs) {
           kernelEvent.startTimeNs = previousEndTimeNs + 1;
           kernelEvent.endTimeNs =
