@@ -2572,49 +2572,109 @@ def shared_atomic_scatter_add_kernel(
     ttgl.store(final_ptr + offsets_2d, final)
 
 
-@pytest.mark.parametrize("torch_dtype,gluon_dtype,use_full_rhs", [
-    (torch.int32, ttgl.int32, False),
-    pytest.param(torch.int32, ttgl.int32, True, id="int32_full_rhs"),
-    (torch.float16, ttgl.float16, False),
-    (torch.float32, ttgl.float32, False),
+@gluon.jit
+def shared_masked_atomic_scatter_add_kernel(
+    values_ptr,
+    indices_ptr,
+    mask_ptr,
+    old_ptr,
+    final_ptr,
+    N: ttgl.constexpr,
+    M: ttgl.constexpr,
+    axis: ttgl.constexpr,
+    dtype: ttgl.constexpr,
+    use_full_rhs: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    indices_x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
+    indices_y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
+    offsets_2d = indices_x[:, None] * M + indices_y[None, :]
+    indices = ttgl.load(indices_ptr + offsets_2d)
+    mask = ttgl.load(mask_ptr + offsets_2d)
+    if use_full_rhs:
+        values = ttgl.full([N, M], 1, dtype, layout_2d)
+    else:
+        values = ttgl.load(values_ptr + offsets_2d)
+
+    smem = ttgl.allocate_shared_memory(dtype, [N, M], layout=shared_layout)
+    smem.store(ttgl.zeros([N, M], dtype, layout=layout_2d))
+
+    old = smem.atomic_scatter_add(values, indices, axis=axis, mask=mask)
+    final = smem.load(layout=layout_2d)
+
+    ttgl.store(old_ptr + offsets_2d, old)
+    ttgl.store(final_ptr + offsets_2d, final)
+
+
+@pytest.mark.parametrize("use_mask,torch_dtype,gluon_dtype,use_full_rhs", [
+    pytest.param(False, torch.int32, ttgl.int32, False, id="unmasked_int32"),
+    pytest.param(False, torch.int32, ttgl.int32, True, id="unmasked_int32_full_rhs"),
+    pytest.param(False, torch.float16, ttgl.float16, False, id="unmasked_float16"),
+    pytest.param(False, torch.float32, ttgl.float32, False, id="unmasked_float32"),
+    pytest.param(True, torch.int32, ttgl.int32, False, id="masked_int32"),
+    pytest.param(True, torch.int32, ttgl.int32, True, id="masked_int32_full_rhs"),
+    pytest.param(True, torch.float32, ttgl.float32, False, id="masked_float32"),
 ])
 @pytest.mark.parametrize("N,M,axis", [
     (16, 32, 1),
     (32, 16, 0),
 ])
-def test_shared_atomic_scatter_add_dtypes(torch_dtype, gluon_dtype, use_full_rhs, N, M, axis):
+def test_shared_atomic_scatter_add(use_mask, torch_dtype, gluon_dtype, use_full_rhs, N, M, axis):
+    if use_mask and (is_hip_cdna() or is_hip_rdna()):
+        pytest.skip("Masked shared atomic_scatter_add is not supported on AMD")
+
     device = torch.device("cuda")
 
     if use_full_rhs:
         values = torch.ones((N, M), dtype=torch_dtype, device=device)
     else:
         values = (torch.arange(N * M, dtype=torch.int32, device=device).reshape(N, M) % 7 + 1).to(torch_dtype)
-    torch.manual_seed(17)
+    torch.manual_seed(23 if use_mask else 17)
     upper = M if axis == 1 else N
     indices = torch.randint(0, upper, (N, M), dtype=torch.int32, device=device)
     old = torch.empty((N, M), dtype=torch_dtype, device=device)
     final = torch.empty_like(old)
     expected = torch.zeros((N, M), dtype=torch_dtype, device=device)
-    expected.scatter_add_(axis, indices.long(), values)
 
     layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
                                    warps_per_cta=[1, 1], order=[1, 0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
-    shared_atomic_scatter_add_kernel[(1, )](
-        values,
-        indices,
-        old,
-        final,
-        N=N,
-        M=M,
-        axis=axis,
-        dtype=gluon_dtype,
-        use_full_rhs=use_full_rhs,
-        layout_2d=layout_2d,
-        shared_layout=shared_layout,
-        num_warps=1,
-    )
+    if use_mask:
+        mask = (torch.arange(N * M, device=device).reshape(N, M) % 3) != 0
+        expected.scatter_add_(axis, indices.long(), torch.where(mask, values, torch.zeros_like(values)))
+        shared_masked_atomic_scatter_add_kernel[(1, )](
+            values,
+            indices,
+            mask,
+            old,
+            final,
+            N=N,
+            M=M,
+            axis=axis,
+            dtype=gluon_dtype,
+            use_full_rhs=use_full_rhs,
+            layout_2d=layout_2d,
+            shared_layout=shared_layout,
+            num_warps=1,
+        )
+    else:
+        expected.scatter_add_(axis, indices.long(), values)
+        shared_atomic_scatter_add_kernel[(1, )](
+            values,
+            indices,
+            old,
+            final,
+            N=N,
+            M=M,
+            axis=axis,
+            dtype=gluon_dtype,
+            use_full_rhs=use_full_rhs,
+            layout_2d=layout_2d,
+            shared_layout=shared_layout,
+            num_warps=1,
+        )
 
     torch.testing.assert_close(final, expected, atol=0, rtol=0)
 

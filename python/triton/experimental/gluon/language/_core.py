@@ -364,10 +364,7 @@ class shared_memory_descriptor(base_value):
 
         Note:
             This operation currently uses relaxed memory semantics. Users are responsible
-            for inserting membar/barrier synchronization themselves. Stronger semantic
-            knobs are omitted for now because making semantics consistent across all
-            ``num_warps`` may require the manual barrier currently inserted by mbarrier
-            arrive lowering, and membar alone may not insert that barrier.
+            for inserting mbarrier synchronization themselves.
         """
         values = _unwrap_if_constexpr(values)
         indices = _unwrap_if_constexpr(indices)
