@@ -914,42 +914,7 @@ class KernelConfig:
         return (self.BLOCK_M // self.SWIGLU_SUBTILE_FACTOR) * (self.BLOCK_N // reduction_n)
 
 
-def _select_base_config(slice_size: int) -> KernelConfig:
-    if slice_size <= 14:
-        block_m = 16
-    elif slice_size <= 32:
-        block_m = 32
-    elif slice_size <= 64:
-        block_m = 64
-    else:
-        block_m = 128
-
-    if slice_size <= 64:
-        x_num_bufs, w_num_bufs = {
-            16: (10, 5),
-            32: (5, 5),
-            64: (4, 4),
-        }[block_m]
-        return KernelConfig(
-            BLOCK_M=block_m,
-            BLOCK_N=128,
-            X_NUM_BUFS=x_num_bufs,
-            W_NUM_BUFS=w_num_bufs,
-            SWIGLU_SUBTILE_FACTOR=min(8, block_m // 8),
-            OCCUPANCY=2,
-            MAXNREG=64,
-            LOAD_ACTIVATION_REGS=48,
-            LOAD_WEIGHT_REGS=32,
-            MMA_REGS=32,
-        )
-
-    return KernelConfig(
-        BLOCK_M=block_m,
-        SWIGLU_SUBTILE_FACTOR=min(8, block_m // 8),
-    )
-
-
-def _select_ported_tiny16_config(slice_size: int) -> KernelConfig | None:
+def _select_tiny16_config(slice_size: int) -> KernelConfig | None:
     if slice_size not in (4, 5, 6, 7, 8, 10, 12, 14):
         return None
 
@@ -982,7 +947,7 @@ def _select_ported_tiny16_config(slice_size: int) -> KernelConfig | None:
     return p
 
 
-def _select_ported_low32_config(slice_size: int) -> KernelConfig | None:
+def _select_low32_config(slice_size: int) -> KernelConfig | None:
     if slice_size not in (16, 20, 24, 32):
         return None
 
@@ -1015,7 +980,7 @@ def _select_ported_low32_config(slice_size: int) -> KernelConfig | None:
     return p
 
 
-def _select_ported_slice28_config(slice_size: int) -> KernelConfig | None:
+def _select_slice28_config(slice_size: int) -> KernelConfig | None:
     if slice_size != 28:
         return None
 
@@ -1043,7 +1008,7 @@ def _select_ported_slice28_config(slice_size: int) -> KernelConfig | None:
     )
 
 
-def _select_ported_mid64_config(slice_size: int) -> KernelConfig | None:
+def _select_mid64_config(slice_size: int) -> KernelConfig | None:
     if not 36 <= slice_size <= 72:
         return None
 
@@ -1084,7 +1049,7 @@ def _select_ported_mid64_config(slice_size: int) -> KernelConfig | None:
     return None
 
 
-def _select_ported_high128_config(slice_size: int) -> KernelConfig | None:
+def _select_high128_config(slice_size: int) -> KernelConfig | None:
     if slice_size < 80:
         return None
 
@@ -1147,13 +1112,13 @@ def _select_ported_high128_config(slice_size: int) -> KernelConfig | None:
     return None
 
 
-def _select_ported_best_batch_config(slice_size: int) -> KernelConfig | None:
+def _select_best_batch_config(slice_size: int) -> KernelConfig | None:
     for selector in (
-            _select_ported_tiny16_config,
-            _select_ported_low32_config,
-            _select_ported_slice28_config,
-            _select_ported_mid64_config,
-            _select_ported_high128_config,
+            _select_tiny16_config,
+            _select_low32_config,
+            _select_slice28_config,
+            _select_mid64_config,
+            _select_high128_config,
     ):
         p = selector(slice_size)
         if p is not None:
@@ -1161,12 +1126,51 @@ def _select_ported_best_batch_config(slice_size: int) -> KernelConfig | None:
     return None
 
 
-def select_kernel_config(slice_size: int) -> KernelConfig:
-    p = _select_ported_best_batch_config(slice_size)
-    if p is not None:
-        return p
-
-    p = _select_base_config(slice_size)
+def _select_default_config(slice_size: int) -> KernelConfig:
+    if slice_size <= 14:
+        p = KernelConfig(
+            BLOCK_M=16,
+            BLOCK_N=128,
+            X_NUM_BUFS=10,
+            W_NUM_BUFS=5,
+            SWIGLU_SUBTILE_FACTOR=2,
+            OCCUPANCY=2,
+            MAXNREG=64,
+            LOAD_ACTIVATION_REGS=48,
+            LOAD_WEIGHT_REGS=32,
+            MMA_REGS=32,
+        )
+    elif slice_size <= 32:
+        p = KernelConfig(
+            BLOCK_M=32,
+            BLOCK_N=128,
+            X_NUM_BUFS=5,
+            W_NUM_BUFS=5,
+            SWIGLU_SUBTILE_FACTOR=4,
+            OCCUPANCY=2,
+            MAXNREG=64,
+            LOAD_ACTIVATION_REGS=48,
+            LOAD_WEIGHT_REGS=32,
+            MMA_REGS=32,
+        )
+    elif slice_size <= 64:
+        p = KernelConfig(
+            BLOCK_M=64,
+            BLOCK_N=128,
+            X_NUM_BUFS=4,
+            W_NUM_BUFS=4,
+            SWIGLU_SUBTILE_FACTOR=8,
+            OCCUPANCY=2,
+            MAXNREG=64,
+            LOAD_ACTIVATION_REGS=48,
+            LOAD_WEIGHT_REGS=32,
+            MMA_REGS=32,
+        )
+    else:
+        p = KernelConfig(
+            BLOCK_M=128,
+            SWIGLU_SUBTILE_FACTOR=8,
+        )
 
     if p.BLOCK_M == 32 and p.BLOCK_N == 128 and slice_size in (16, 20, 24, 32):
         p = replace(
@@ -1219,6 +1223,13 @@ def select_kernel_config(slice_size: int) -> KernelConfig:
     if slice_size < 416:
         return replace(p, BAND_N=18)
     return replace(p, BAND_N=26)
+
+
+def select_kernel_config(slice_size: int) -> KernelConfig:
+    p = _select_best_batch_config(slice_size)
+    if p is not None:
+        return p
+    return _select_default_config(slice_size)
 
 
 def matmul(
