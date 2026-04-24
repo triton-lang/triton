@@ -240,16 +240,17 @@ bool isBackedgeSuccessor(Operation *terminator, Block *successor) {
          br->getParentRegion()->getRegionNumber();
 }
 
-void joinFromBackedge(BlockInfo &dest, const BlockInfo &src) {
-  auto mergeMap = [](BlockInfo::SliceMapT &lhs,
-                     const BlockInfo::SliceMapT &rhs) {
-    for (const auto &[slice, ops] : rhs) {
+void invalidateBufferIndices(BlockInfo &info) {
+  auto rebuild = [](BlockInfo::SliceMapT &m) {
+    BlockInfo::SliceMapT rebuilt;
+    for (const auto &[slice, ops] : m) {
       AllocationSlice key = withInvalidatedBufferIndex(slice);
-      lhs[key].insert(ops.begin(), ops.end());
+      rebuilt[key].insert(ops.begin(), ops.end());
     }
+    m = std::move(rebuilt);
   };
-  mergeMap(dest.syncReadSlices, src.syncReadSlices);
-  mergeMap(dest.syncWriteSlices, src.syncWriteSlices);
+  rebuild(info.syncReadSlices);
+  rebuild(info.syncWriteSlices);
 }
 
 } // namespace mlir

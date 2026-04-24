@@ -46,14 +46,15 @@ withInvalidatedBufferIndex(const AllocationSlice &slice) {
 
 /// Returns true if `successor` is the entry block of a CFG edge from
 /// `terminator` that re-enters an earlier region (e.g. scf.for yield ->
-/// body, scf.while after -> before). Used by membar to dispatch
-/// joinFromBackedge instead of BlockInfo::join.
+/// body, scf.while after -> before). Used by membar as a post-join hook
+/// to invalidate buffer indices at loop-carried merges.
 bool isBackedgeSuccessor(Operation *terminator, Block *successor);
 
-/// Like BlockInfo::join, but for slices propagated across a CFG backedge:
-/// each incoming slice has its buffer index cleared (see
-/// withInvalidatedBufferIndex) before being merged into `dest`.
-void joinFromBackedge(BlockInfo &dest, const BlockInfo &src);
+/// Clears the buffer index of every slice in `info`, rebuilding both
+/// slice maps. Intended as a post-join step at loop-carried merges: we
+/// cannot evaluate index disjointness over loop iterations, so any
+/// index attached to a slice reaching a loop header is unreliable.
+void invalidateBufferIndices(BlockInfo &info);
 
 } // namespace mlir
 
