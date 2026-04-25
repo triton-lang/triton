@@ -312,13 +312,13 @@ public:
 
     auto llvmElemTy =
         getTypeConverter()->convertType(memDescTy.getElementType());
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        loc, adaptor.getDst(), llvmElemTy, rewriter);
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
+                                                         llvmElemTy, rewriter);
     SmallVector<Value> idxValues =
         unpackLLElements(loc, adaptor.getIndices(), rewriter);
     SmallVector<SmallVector<Value>> srcIndices =
-        emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(),
-                    valuesTy, /*withCTAOffset=*/true);
+        emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(), valuesTy,
+                    /*withCTAOffset=*/true);
     SmallVector<Value> values =
         unpackLLElements(loc, adaptor.getValues(), rewriter);
     SmallVector<Value> maskValues;
@@ -327,8 +327,8 @@ public:
     LinearLayout regLayout = toLinearLayout(valuesTy);
     auto freeVarMasks = regLayout.getFreeVariableMasks();
     auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
-    Value threadPred = emitRedundantThreadPredicate(
-        freeVarMasks, rewriter, loc, targetInfo);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     if (!removeBroadcast.isIdentity()) {
       values = removeBroadcast.apply(values);
       idxValues = removeBroadcast.apply(idxValues);
@@ -351,8 +351,8 @@ public:
           emitSharedInc(rewriter, loc, ptr, /*returnOld=*/false, pred);
           continue;
         }
-        if (failed(emitSharedAtomicAdd(rewriter, loc, llvmElemTy, ptr,
-                                       value, /*returnOld=*/false, pred)))
+        if (failed(emitSharedAtomicAdd(rewriter, loc, llvmElemTy, ptr, value,
+                                       /*returnOld=*/false, pred)))
           return failure();
       }
       rewriter.eraseOp(op);
@@ -370,8 +370,8 @@ public:
                                         /*returnOld=*/true, pred));
         continue;
       }
-      auto old = emitSharedAtomicAdd(rewriter, loc, llvmElemTy, ptr,
-                                     value, /*returnOld=*/true, pred);
+      auto old = emitSharedAtomicAdd(rewriter, loc, llvmElemTy, ptr, value,
+                                     /*returnOld=*/true, pred);
       if (failed(old))
         return failure();
       results.push_back(*old);
@@ -379,9 +379,8 @@ public:
 
     if (!removeBroadcast.isIdentity())
       results = broadcastAs(results, regLayout);
-    finalizeTensorAtomicResults(op, valuesTy, rewriter, results,
-                                llvmElemTy, b, threadPred, targetInfo,
-                                getTypeConverter());
+    finalizeTensorAtomicResults(op, valuesTy, rewriter, results, llvmElemTy, b,
+                                threadPred, targetInfo, getTypeConverter());
     return success();
   }
 

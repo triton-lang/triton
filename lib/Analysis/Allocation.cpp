@@ -122,9 +122,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto elems = getNumScratchElements(smemShape);
     if (elems == 0)
       return 0;
-    auto elemTy =
-        cast<RankedTensorType>(atomicScatter.getValues().getType())
-            .getElementType();
+    auto elemTy = cast<RankedTensorType>(atomicScatter.getValues().getType())
+                      .getElementType();
     return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
   }
   if (isa<AtomicRMWOp, AtomicCASOp, tti::ExperimentalGSanAtomicRMWOp,
