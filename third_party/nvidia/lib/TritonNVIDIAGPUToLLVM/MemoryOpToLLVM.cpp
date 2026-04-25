@@ -301,6 +301,8 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::LocalAtomicScatterAddOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
     auto memDescTy = cast<MemDescType>(op.getDst().getType());
     if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
@@ -311,19 +313,22 @@ public:
     auto llvmElemTy =
         getTypeConverter()->convertType(memDescTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
+        loc, adaptor.getDst(), llvmElemTy, rewriter);
     SmallVector<Value> idxValues =
-        unpackLLElements(op.getLoc(), adaptor.getIndices(), rewriter);
+        unpackLLElements(loc, adaptor.getIndices(), rewriter);
     SmallVector<SmallVector<Value>> srcIndices =
-        emitIndices(op.getLoc(), rewriter, targetInfo, valuesTy.getEncoding(),
+        emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(),
                     valuesTy, /*withCTAOffset=*/true);
     SmallVector<Value> values =
-        unpackLLElements(op.getLoc(), adaptor.getValues(), rewriter);
+        unpackLLElements(loc, adaptor.getValues(), rewriter);
     SmallVector<Value> maskValues;
     if (op.getMask())
-      maskValues = unpackLLElements(op.getLoc(), adaptor.getMask(), rewriter);
+      maskValues = unpackLLElements(loc, adaptor.getMask(), rewriter);
     LinearLayout regLayout = toLinearLayout(valuesTy);
+    auto freeVarMasks = regLayout.getFreeVariableMasks();
     auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
+    Value threadPred = emitRedundantThreadPredicate(
+        freeVarMasks, rewriter, loc, targetInfo);
     if (!removeBroadcast.isIdentity()) {
       values = removeBroadcast.apply(values);
       idxValues = removeBroadcast.apply(idxValues);
@@ -332,23 +337,21 @@ public:
         maskValues = removeBroadcast.apply(maskValues);
     }
     SmallVector<Value> ptrs =
-        computeLocalPtrs(op.getLoc(), memDescTy, smemObj, llvmElemTy, idxValues,
+        computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
                          srcIndices, op.getAxis(), rewriter);
     bool isI32Inc = valuesTy.getElementType().isInteger(32) &&
                     isConstI32OneTensor(op.getValues());
 
-    if (maskValues.empty() && !isI32Inc)
-      return failure();
-
     if (op.getResult().use_empty()) {
       for (auto [i, ptrAndValue] : llvm::enumerate(llvm::zip(ptrs, values))) {
         auto [ptr, value] = ptrAndValue;
-        Value pred = maskValues.empty() ? Value() : maskValues[i];
+        Value pred = maybeAnd(rewriter, loc, threadPred,
+                              maskValues.empty() ? Value() : maskValues[i]);
         if (isI32Inc) {
-          emitSharedInc(rewriter, op.getLoc(), ptr, /*returnOld=*/false, pred);
+          emitSharedInc(rewriter, loc, ptr, /*returnOld=*/false, pred);
           continue;
         }
-        if (failed(emitSharedAtomicAdd(rewriter, op.getLoc(), llvmElemTy, ptr,
+        if (failed(emitSharedAtomicAdd(rewriter, loc, llvmElemTy, ptr,
                                        value, /*returnOld=*/false, pred)))
           return failure();
       }
@@ -360,13 +363,14 @@ public:
     results.reserve(ptrs.size());
     for (auto [i, ptrAndValue] : llvm::enumerate(llvm::zip(ptrs, values))) {
       auto [ptr, value] = ptrAndValue;
-      Value pred = maskValues.empty() ? Value() : maskValues[i];
+      Value pred = maybeAnd(rewriter, loc, threadPred,
+                            maskValues.empty() ? Value() : maskValues[i]);
       if (isI32Inc) {
-        results.push_back(emitSharedInc(rewriter, op.getLoc(), ptr,
+        results.push_back(emitSharedInc(rewriter, loc, ptr,
                                         /*returnOld=*/true, pred));
         continue;
       }
-      auto old = emitSharedAtomicAdd(rewriter, op.getLoc(), llvmElemTy, ptr,
+      auto old = emitSharedAtomicAdd(rewriter, loc, llvmElemTy, ptr,
                                      value, /*returnOld=*/true, pred);
       if (failed(old))
         return failure();
@@ -375,9 +379,9 @@ public:
 
     if (!removeBroadcast.isIdentity())
       results = broadcastAs(results, regLayout);
-    Value result = packLLElements(op.getLoc(), getTypeConverter(), results,
-                                  rewriter, op.getType());
-    rewriter.replaceOp(op, result);
+    finalizeTensorAtomicResults(op, valuesTy, rewriter, results,
+                                llvmElemTy, b, threadPred, targetInfo,
+                                getTypeConverter());
     return success();
   }
 

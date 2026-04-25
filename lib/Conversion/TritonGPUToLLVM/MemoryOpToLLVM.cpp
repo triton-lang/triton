@@ -424,6 +424,14 @@ public:
         emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(), valuesTy,
                     /*withCTAOffset=*/true);
     LinearLayout regLayout = toLinearLayout(valuesTy);
+    auto freeVarMasks = regLayout.getFreeVariableMasks();
+    if (freeVarMasks.lookup(str_attr("lane")) != 0 ||
+        freeVarMasks.lookup(str_attr("warp")) != 0 ||
+        freeVarMasks.lookup(str_attr("block")) != 0) {
+      return rewriter.notifyMatchFailure(
+          op, "broadcasted lane/warp/block values require backend-specific "
+              "local_atomic_scatter_add lowering");
+    }
     auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
     if (!removeBroadcast.isIdentity()) {
       values = removeBroadcast.apply(values);
