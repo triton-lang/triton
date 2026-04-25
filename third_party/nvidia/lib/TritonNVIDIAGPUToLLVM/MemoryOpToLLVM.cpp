@@ -30,6 +30,32 @@ bool isConstI32OneTensor(Value value) {
                       [](const APInt &value) { return value.isOne(); });
 }
 
+SmallVector<SmallVector<Value>>
+applyRegActionToCoords(const ColumnAction &action,
+                       ArrayRef<SmallVector<Value>> coords) {
+  if (action.isIdentity() || coords.empty())
+    return to_vector(coords);
+
+  unsigned rank = coords.front().size();
+  SmallVector<SmallVector<Value>> dimCoords(rank);
+  for (auto coord : coords) {
+    assert(coord.size() == rank && "expected all coordinates to have rank");
+    for (unsigned dim = 0; dim < rank; ++dim)
+      dimCoords[dim].push_back(coord[dim]);
+  }
+
+  for (auto &dimCoord : dimCoords)
+    dimCoord = action.apply(dimCoord);
+
+  SmallVector<SmallVector<Value>> ret(dimCoords.front().size(),
+                                      SmallVector<Value>(rank));
+  for (unsigned dim = 0; dim < rank; ++dim) {
+    for (auto [i, value] : llvm::enumerate(dimCoords[dim]))
+      ret[i][dim] = value;
+  }
+  return ret;
+}
+
 Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
                     Value ptr, bool returnOld, Value pred = Value()) {
   PTXBuilder ptxBuilder;
@@ -291,14 +317,23 @@ public:
     SmallVector<SmallVector<Value>> srcIndices =
         emitIndices(op.getLoc(), rewriter, targetInfo, valuesTy.getEncoding(),
                     valuesTy, /*withCTAOffset=*/true);
-    SmallVector<Value> ptrs =
-        computeLocalPtrs(op.getLoc(), memDescTy, smemObj, llvmElemTy, idxValues,
-                         srcIndices, op.getAxis(), rewriter);
     SmallVector<Value> values =
         unpackLLElements(op.getLoc(), adaptor.getValues(), rewriter);
     SmallVector<Value> maskValues;
     if (op.getMask())
       maskValues = unpackLLElements(op.getLoc(), adaptor.getMask(), rewriter);
+    LinearLayout regLayout = toLinearLayout(valuesTy);
+    auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
+    if (!removeBroadcast.isIdentity()) {
+      values = removeBroadcast.apply(values);
+      idxValues = removeBroadcast.apply(idxValues);
+      srcIndices = applyRegActionToCoords(removeBroadcast, srcIndices);
+      if (!maskValues.empty())
+        maskValues = removeBroadcast.apply(maskValues);
+    }
+    SmallVector<Value> ptrs =
+        computeLocalPtrs(op.getLoc(), memDescTy, smemObj, llvmElemTy, idxValues,
+                         srcIndices, op.getAxis(), rewriter);
     bool isI32Inc = valuesTy.getElementType().isInteger(32) &&
                     isConstI32OneTensor(op.getValues());
 
@@ -338,6 +373,8 @@ public:
       results.push_back(*old);
     }
 
+    if (!removeBroadcast.isIdentity())
+      results = broadcastAs(results, regLayout);
     Value result = packLLElements(op.getLoc(), getTypeConverter(), results,
                                   rewriter, op.getType());
     rewriter.replaceOp(op, result);

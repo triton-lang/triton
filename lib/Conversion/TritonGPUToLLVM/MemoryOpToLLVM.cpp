@@ -6,12 +6,39 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 
 namespace {
 
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
+
+SmallVector<SmallVector<Value>>
+applyRegActionToCoords(const ColumnAction &action,
+                       ArrayRef<SmallVector<Value>> coords) {
+  if (action.isIdentity() || coords.empty())
+    return to_vector(coords);
+
+  unsigned rank = coords.front().size();
+  SmallVector<SmallVector<Value>> dimCoords(rank);
+  for (auto coord : coords) {
+    assert(coord.size() == rank && "expected all coordinates to have rank");
+    for (unsigned dim = 0; dim < rank; ++dim)
+      dimCoords[dim].push_back(coord[dim]);
+  }
+
+  for (auto &dimCoord : dimCoords)
+    dimCoord = action.apply(dimCoord);
+
+  SmallVector<SmallVector<Value>> ret(dimCoords.front().size(),
+                                      SmallVector<Value>(rank));
+  for (unsigned dim = 0; dim < rank; ++dim) {
+    for (auto [i, value] : llvm::enumerate(dimCoords[dim]))
+      ret[i][dim] = value;
+  }
+  return ret;
+}
 
 // Helper for LocalGather/ScatterOpConversion.
 // For gather: storeVals is empty, returns loaded values.
@@ -396,6 +423,13 @@ public:
     SmallVector<SmallVector<Value>> srcIndices =
         emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(), valuesTy,
                     /*withCTAOffset=*/true);
+    LinearLayout regLayout = toLinearLayout(valuesTy);
+    auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
+    if (!removeBroadcast.isIdentity()) {
+      values = removeBroadcast.apply(values);
+      idxValues = removeBroadcast.apply(idxValues);
+      srcIndices = applyRegActionToCoords(removeBroadcast, srcIndices);
+    }
 
     LLVM::AtomicBinOp atomicBinOp = isa<FloatType>(llvmElemTy)
                                         ? LLVM::AtomicBinOp::fadd
@@ -416,6 +450,8 @@ public:
                             .getResult());
     }
 
+    if (!removeBroadcast.isIdentity())
+      results = broadcastAs(results, regLayout);
     Value result =
         packLLElements(loc, typeConverter, results, rewriter, op.getType());
     rewriter.replaceOp(op, result);

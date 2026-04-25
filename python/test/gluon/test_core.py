@@ -2638,7 +2638,7 @@ def test_shared_atomic_scatter_add(use_mask, torch_dtype, gluon_dtype, use_full_
     expected = torch.zeros((N, M), dtype=torch_dtype, device=device)
 
     layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
-                                   warps_per_cta=[1, 1], order=[1, 0])
+                                   warps_per_cta=[4, 1], order=[1, 0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
     if use_mask:
@@ -2657,7 +2657,7 @@ def test_shared_atomic_scatter_add(use_mask, torch_dtype, gluon_dtype, use_full_
             use_full_rhs=use_full_rhs,
             layout_2d=layout_2d,
             shared_layout=shared_layout,
-            num_warps=1,
+            num_warps=4,
         )
     else:
         expected.scatter_add_(axis, indices.long(), values)
@@ -2673,7 +2673,7 @@ def test_shared_atomic_scatter_add(use_mask, torch_dtype, gluon_dtype, use_full_
             use_full_rhs=use_full_rhs,
             layout_2d=layout_2d,
             shared_layout=shared_layout,
-            num_warps=1,
+            num_warps=4,
         )
 
     torch.testing.assert_close(final, expected, atol=0, rtol=0)
