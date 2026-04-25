@@ -425,9 +425,10 @@ public:
                     /*withCTAOffset=*/true);
     LinearLayout regLayout = toLinearLayout(valuesTy);
     auto freeVarMasks = regLayout.getFreeVariableMasks();
-    if (freeVarMasks.lookup(str_attr("lane")) != 0 ||
-        freeVarMasks.lookup(str_attr("warp")) != 0 ||
-        freeVarMasks.lookup(str_attr("block")) != 0) {
+    auto *ctx = rewriter.getContext();
+    if (freeVarMasks.lookup(StringAttr::get(ctx, "lane")) != 0 ||
+        freeVarMasks.lookup(StringAttr::get(ctx, "warp")) != 0 ||
+        freeVarMasks.lookup(StringAttr::get(ctx, "block")) != 0) {
       return rewriter.notifyMatchFailure(
           op, "broadcasted lane/warp/block values require backend-specific "
               "local_atomic_scatter_add lowering");
