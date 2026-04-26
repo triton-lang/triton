@@ -129,10 +129,15 @@ def tuples_to_specialize():
 
 
 def tensors_to_specialize():
+    dtypes = [torch.float64, torch.float32, torch.float16, torch.bfloat16, torch.int32, torch.int64]
+    # float8_e8m0fnu (E8M0 exponent-only) is the native MXFP4/MXFP8 scale dtype on AMD. It must
+    # canonicalize to u8 so JIT specialization doesn't raise a KeyError (issue #10008).
+    if hasattr(torch, "float8_e8m0fnu"):
+        dtypes.append(torch.float8_e8m0fnu)
     return [
         torch.empty(shape, dtype=dtype, device="cpu")
         for shape in [(1, ), (1, 1), (16, ), (16, 16), (128, ), (128, 128)]
-        for dtype in [torch.float64, torch.float32, torch.float16, torch.bfloat16, torch.int32, torch.int64]
+        for dtype in dtypes
     ]
 
 
@@ -144,13 +149,17 @@ def tensordescriptors_to_specialize():
     ]
 
 
+_gluon_supported_dtypes = {torch.float64, torch.float32, torch.float16, torch.bfloat16, torch.int32, torch.int64}
+
+
 def gluon_tensordescriptors_to_specialize():
     return [
         GluonTensorDescriptor.from_tensor(
             tensor,
             block_shape=tensor.shape,
             layout=NVMMASharedLayout(0, tensor.dtype.itemsize * 8, len(tensor.shape)),
-        ) for tensor in tensors_to_specialize() if tensor.shape[-1] % 16 == 0 and tensor.dtype.itemsize <= 4
+        ) for tensor in tensors_to_specialize()
+        if tensor.shape[-1] % 16 == 0 and tensor.dtype in _gluon_supported_dtypes
     ]
 
 
