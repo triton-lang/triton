@@ -478,3 +478,51 @@ def test_prune_all_configs(device):
         assert e is not None and str(
             e
         ) == "Autotuner error: No valid autotuner configs after pruning. `early_config_prune` should return at least one config."
+
+
+def test_autotune_key_annotation(device):
+    N = 1024
+    src = torch.randn(N, device=device)
+    dst = torch.empty(N, device=device)
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
+
+    @triton.autotune(configs=configs, key=[], do_bench=do_bench)
+    @triton.jit
+    def _kernel(dst, src, N: tl.autotune_key, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    _kernel[grid](dst, src, N=N)
+    assert len(_kernel.cache) == 1
+    # Changing N should trigger re-autotuning since N is marked as autotune_key
+    _kernel[grid](dst, src, N=N // 2)
+    assert len(_kernel.cache) == 2
+
+
+def test_autotune_key_annotation_merged_with_param(device):
+    N = 1024
+    M = 512
+    src = torch.randn(N, device=device)
+    dst = torch.empty(N, device=device)
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
+
+    @triton.autotune(configs=configs, key=['M'], do_bench=do_bench)
+    @triton.jit
+    def _kernel(dst, src, M, N: tl.autotune_key, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    _kernel[grid](dst, src, M=M, N=N)
+    assert len(_kernel.cache) == 1
+    # Change M (param-based key); should trigger re-autotuning
+    _kernel[grid](dst, src, M=M // 2, N=N)
+    assert len(_kernel.cache) == 2
+    # Change N (annotation-based key); should also trigger re-autotuning
+    _kernel[grid](dst, src, M=M // 2, N=N // 2)
+    assert len(_kernel.cache) == 3

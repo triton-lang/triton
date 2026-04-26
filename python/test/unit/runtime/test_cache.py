@@ -57,6 +57,20 @@ def kernel_nospec(X, i, BLOCK: tl.constexpr):
     tl.store(X, i)
 
 
+@triton.jit
+def kernel_nospec_ann(X, i: tl.do_not_specialize, BLOCK: tl.constexpr):
+    i = i + 1
+    i = function_1(i)
+    tl.store(X, i)
+
+
+@triton.jit(do_not_specialize=["i"])
+def kernel_nospec_typed(X, i: tl.int32, BLOCK: tl.constexpr):
+    i = i + 1
+    i = function_1(i)
+    tl.store(X, i)
+
+
 @triton.jit(do_not_specialize_on_alignment=["i"])
 def kernel_nospec_on_alignment(X, i, BLOCK: tl.constexpr):
     i = i + 1
@@ -206,7 +220,7 @@ def test_reuse(device, fresh_triton_cache):
     assert counter == 1
 
 
-@pytest.mark.parametrize('mode', ['enable', 'disable', 'disable_on_alignment'])
+@pytest.mark.parametrize('mode', ['enable', 'disable', 'disable_annotation', 'disable_typed', 'disable_on_alignment'])
 def test_specialize(mode, device, fresh_triton_cache):
     counter = 0
 
@@ -216,8 +230,20 @@ def test_specialize(mode, device, fresh_triton_cache):
 
     triton.knobs.runtime.jit_cache_hook = inc_counter
     x = torch.empty(1, dtype=torch.int32, device=device)
-    function = {'enable': kernel, 'disable': kernel_nospec, 'disable_on_alignment': kernel_nospec_on_alignment}[mode]
-    target = {'enable': 3, 'disable': 1, 'disable_on_alignment': 2}[mode]
+    function = {
+        'enable': kernel,
+        'disable': kernel_nospec,
+        'disable_annotation': kernel_nospec_ann,
+        'disable_typed': kernel_nospec_typed,
+        'disable_on_alignment': kernel_nospec_on_alignment,
+    }[mode]
+    target = {
+        'enable': 3,
+        'disable': 1,
+        'disable_annotation': 1,
+        'disable_typed': 1,
+        'disable_on_alignment': 2,
+    }[mode]
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1, )](x, i, BLOCK=512)
     assert counter == target

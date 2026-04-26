@@ -275,6 +275,12 @@ class DependenciesFinder(ast.NodeVisitor):
 # -----------------------------------------------------------------------------
 
 
+def _has_annotation_marker(annotation, marker_cls):
+    if annotation is inspect.Parameter.empty:
+        return False
+    return annotation is marker_cls
+
+
 def _normalize_ty(ty) -> str:
     import triton.language.core as core
     if isinstance(ty, str):
@@ -341,6 +347,11 @@ class KernelParam:
         if self.is_constexpr:
             return False
         return "const" in self.annotation or self.annotation.startswith("*k")
+
+    @cached_property
+    def is_autotune_key(self):
+        from ..language.core import autotune_key
+        return _has_annotation_marker(self._param.annotation, autotune_key)
 
     @property
     def default(self):
@@ -797,9 +808,11 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # Register for simple deserialization of JITFunction constants
         _triton_jit_function_registry[f"{self.module}:{self.fn.__qualname__}"] = self
 
+        from ..language.core import do_not_specialize as dns_marker
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
-            dns = i in do_not_specialize or param.name in do_not_specialize
+            dns = (i in do_not_specialize or param.name in do_not_specialize
+                   or _has_annotation_marker(param.annotation, dns_marker))
             dns_oa = i in do_not_specialize_on_alignment or param.name in do_not_specialize_on_alignment
             self.params.append(KernelParam(i, param, dns, dns_oa))
 
