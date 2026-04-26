@@ -80,6 +80,28 @@ static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
   return info;
 }
 
+// Pre-existing barrier/wait ops that may legally appear at cluster
+// boundaries (between stages or before/after a pipeline).  Mirrors
+// isPipelineIgnorable in WarpPipeliner.cpp plus the ROCDL-lowered forms that
+// can appear after intermediate passes.
+static bool isWarpPipelineIgnorableBarrier(Operation *op) {
+  return isa<ROCDL::BarrierOp, gpu::BarrierOp, triton::gpu::AsyncWaitOp,
+             triton::amdgpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait,
+             triton::amdgpu::AsyncTDMIntrinsicWait>(op);
+}
+
+// True if `exec` is a stage created by the warp-pipeline frontend.
+static bool isPipelineStage(scf::ExecuteRegionOp exec) {
+  return exec && exec->hasAttr("triton.warp_pipeline.stage");
+}
+
+// dyn_cast<scf::ExecuteRegionOp> + warp_pipeline.stage marker check.
+// Returns null when `op` is not a pipeline stage.
+static scf::ExecuteRegionOp getPipelineStage(Operation *op) {
+  auto exec = dyn_cast_or_null<scf::ExecuteRegionOp>(op);
+  return isPipelineStage(exec) ? exec : nullptr;
+}
+
 // Pairwise LDS-dependency analysis between pipeline clusters.
 //
 // `circular` selects the index topology used by the analysis:
@@ -281,15 +303,13 @@ private:
     for (auto &op : *forOp.getBody()) {
       if (auto exeOp = dyn_cast<scf::ExecuteRegionOp>(op)) {
         // Fail conversion with executeRegion from unkown source.
-        if (exeOp->getAttr("triton.warp_pipeline.stage") == nullptr)
+        if (!isPipelineStage(exeOp))
           return failure();
         exeOp.setNoInline(false);
         clusterOps.push_back(&op);
         clusterBlocks.push_back(&exeOp->getRegion(0).front());
         bars.push_back(false);
-      } else if (isa<ROCDL::BarrierOp, gpu::BarrierOp, triton::gpu::AsyncWaitOp,
-                     triton::amdgpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait,
-                     triton::amdgpu::AsyncTDMIntrinsicWait>(op)) {
+      } else if (isWarpPipelineIgnorableBarrier(&op)) {
         int currCluster = clusterBlocks.size();
         // Reject if multiple barriers appear without an intervening cluster.
         // This is functionally valid but may cause unpredictable timing. Users
@@ -390,7 +410,7 @@ public:
       return rewriter.notifyMatchFailure(exec, "explicit no_inline");
 
     // Only inline the stages created by the warp-pipeline frontend.
-    if (!exec->getAttr("triton.warp_pipeline.stage"))
+    if (!isPipelineStage(exec))
       return rewriter.notifyMatchFailure(exec, "not a warp-pipeline stage");
 
     // Make sure this pattern is applied after transforming pipelined forOp
@@ -476,9 +496,7 @@ static void emitPipelinedFlat(SmallVector<scf::ExecuteRegionOp> &clusterOps,
     Operation *existingBarrier = nullptr;
     for (Operation *op = clusterOps[i - 1]->getNextNode();
          op && op != clusterOps[i].getOperation(); op = op->getNextNode()) {
-      if (isa<ROCDL::BarrierOp, gpu::BarrierOp, triton::gpu::AsyncWaitOp,
-              triton::amdgpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait,
-              triton::amdgpu::AsyncTDMIntrinsicWait>(op)) {
+      if (isWarpPipelineIgnorableBarrier(op)) {
         existingBarrier = op;
         break;
       }
@@ -508,12 +526,6 @@ static void emitPipelinedFlat(SmallVector<scf::ExecuteRegionOp> &clusterOps,
 static void processUnrolledPipelineRegions(ModuleOp m,
                                            ModuleAllocation &moduleAllocation,
                                            int threadsPerPipelineGroup) {
-  auto isIgnorable = [](Operation *op) {
-    return isa<ROCDL::BarrierOp, gpu::BarrierOp, triton::gpu::AsyncWaitOp,
-               triton::amdgpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait,
-               triton::amdgpu::AsyncTDMIntrinsicWait>(op);
-  };
-
   m.walk([&](triton::FuncOp funcOp) {
     Allocation *allocation = moduleAllocation.getFuncData(funcOp);
     if (!allocation)
@@ -526,14 +538,13 @@ static void processUnrolledPipelineRegions(ModuleOp m,
       SmallVector<scf::ExecuteRegionOp> current;
 
       for (auto &op : block) {
-        if (auto exec = dyn_cast<scf::ExecuteRegionOp>(&op)) {
-          if (exec->hasAttr("triton.warp_pipeline.stage") &&
-              !isa<scf::ForOp>(exec->getParentOp())) {
+        if (auto exec = getPipelineStage(&op)) {
+          if (!isa<scf::ForOp>(exec->getParentOp())) {
             current.push_back(exec);
             continue;
           }
         }
-        if (isIgnorable(&op))
+        if (isWarpPipelineIgnorableBarrier(&op))
           continue;
         if (!current.empty()) {
           sequences.push_back(std::move(current));
@@ -593,9 +604,7 @@ static bool collectLoopClusters(scf::ForOp forOp,
   if (!yieldOp)
     return false;
   for (auto &op : *forOp.getBody()) {
-    if (auto exec = dyn_cast<scf::ExecuteRegionOp>(op)) {
-      if (!exec->hasAttr("triton.warp_pipeline.stage"))
-        continue;
+    if (auto exec = getPipelineStage(&op)) {
       blocks.push_back(&exec->getRegion(0).front());
       bars.push_back(false);
     }
@@ -630,14 +639,13 @@ static bool collectLoopClusters(scf::ForOp forOp,
 static bool collectFlatClusters(scf::ExecuteRegionOp firstExec,
                                 SmallVectorImpl<Block *> &blocks,
                                 SmallVectorImpl<bool> &bars) {
-  if (!firstExec->hasAttr("triton.warp_pipeline.stage"))
+  if (!isPipelineStage(firstExec))
     return false;
   blocks.push_back(&firstExec->getRegion(0).front());
   bars.push_back(false);
 
   for (Operation *op = firstExec->getNextNode(); op; op = op->getNextNode()) {
-    if (auto exec = dyn_cast<scf::ExecuteRegionOp>(op);
-        exec && exec->hasAttr("triton.warp_pipeline.stage")) {
+    if (auto exec = getPipelineStage(op)) {
       blocks.push_back(&exec->getRegion(0).front());
       bars.push_back(hasLocalBarrierBefore(op));
       continue;
@@ -790,9 +798,8 @@ static void eliminateRedundantCondBarriers(ModuleOp m,
         Operation *next = preLoopCB->getNextNode();
         if (next && isa<ROCDL::SetPrioOp>(next))
           next = next->getNextNode();
-        bool nextIsPipeline = isa_and_nonnull<scf::ForOp>(next) ||
-                              (isa_and_nonnull<scf::ExecuteRegionOp>(next) &&
-                               next->hasAttr("triton.warp_pipeline.stage"));
+        bool nextIsPipeline =
+            isa_and_nonnull<scf::ForOp>(next) || getPipelineStage(next);
         if (!nextIsPipeline)
           continue;
 
