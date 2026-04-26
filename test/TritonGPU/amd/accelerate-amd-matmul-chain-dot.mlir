@@ -1,7 +1,7 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx942 matrix-instruction-size=16" | FileCheck %s --check-prefixes MFMA16,CHECK
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx942 matrix-instruction-size=32" | FileCheck %s --check-prefixes MFMA32,CHECK
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx950 matrix-instruction-size=32" | FileCheck %s --check-prefixes CHECK-GFX950
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx950 matrix-instruction-size=16" | FileCheck %s --check-prefixes CHECK-GFX950
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="gfx-arch=gfx942 matrix-instruction-size=16" | FileCheck %s --check-prefixes MFMA16,CHECK
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="gfx-arch=gfx942 matrix-instruction-size=32" | FileCheck %s --check-prefixes MFMA32,CHECK
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="gfx-arch=gfx950 matrix-instruction-size=32" | FileCheck %s --check-prefixes CHECK-GFX950
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="gfx-arch=gfx950 matrix-instruction-size=16" | FileCheck %s --check-prefixes CHECK-GFX950
 
 // Check the warpsPerCTA parameter of #mma layout of the two dot's.
 // The 1st dot always has warpsPerCTA = [4, 1].
