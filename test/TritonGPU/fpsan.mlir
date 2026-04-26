@@ -1,5 +1,6 @@
 // RUN: split-file %s %t
 // RUN: triton-opt %t/success.mlir -split-input-file -tritoninstrument-fp-sanitizer | FileCheck %t/success.mlir
+// RUN: not triton-opt %t/unsupported.mlir -tritoninstrument-fp-sanitizer 2>&1 | FileCheck %t/unsupported.mlir --check-prefix=FPSANERR
 
 //--- success.mlir
 
@@ -18,6 +19,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %b = tt.splat %cst : f16 -> tensor<16x16xf16, #dot_operand_b>
     %out = tt.dot %a, %b, %zero : tensor<16x16xf16, #dot_operand_a> * tensor<16x16xf16, #dot_operand_b> -> tensor<16x16xf32, #blocked>
     tt.return %out : tensor<16x16xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 32, 1], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @rank3_dot_emulation
+  tt.func public @rank3_dot_emulation() -> tensor<2x16x16xf32, #blocked> {
+    // CHECK: scf.for
+    // CHECK: scf.for
+    // CHECK-NOT: tt.dot
+    // CHECK-NOT: ttg.convert_layout
+    %one = arith.constant 1.000000e+00 : f16
+    %zero = arith.constant dense<0.000000e+00> : tensor<2x16x16xf32, #blocked>
+    %a = tt.splat %one : f16 -> tensor<2x16x16xf16, #dot_operand_a>
+    %b = tt.splat %one : f16 -> tensor<2x16x16xf16, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<2x16x16xf16, #dot_operand_a> * tensor<2x16x16xf16, #dot_operand_b> -> tensor<2x16x16xf32, #blocked>
+    tt.return %out : tensor<2x16x16xf32, #blocked>
   }
 }
 
@@ -258,4 +280,14 @@ tt.func public @extern_mixed(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf
   // CHECK-NOT: tt.extern_elementwise
   %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_ldexpf"} : (tensor<4xf32>, tensor<4xi32>) -> tensor<4xf32>
   tt.return %0 : tensor<4xf32>
+}
+
+//--- unsupported.mlir
+
+module {
+  tt.func public @dot_no_encoding(%a: tensor<16x16xf32>, %b: tensor<16x16xf32>, %c: tensor<16x16xf32>) -> tensor<16x16xf32> {
+    // FPSANERR: error: 'tt.dot' op unsupported by fpsan
+    %out = tt.dot %a, %b, %c : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+    tt.return %out : tensor<16x16xf32>
+  }
 }
