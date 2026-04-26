@@ -214,6 +214,8 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
 // annotations producing border markers.  The grouping logic mirrors
 // createPipeline but without a loop wrapper.
 static LogicalResult createFlatPipeline(OpBuilder &b, Block &block) {
+  // 1. Find all border markers in this block.  Need at least two to form
+  //    a pipeline (one per stage boundary).
   SmallVector<Operation *> allBorders;
   for (auto &op : block)
     if (isPipelineBorder(&op))
@@ -226,9 +228,10 @@ static LogicalResult createFlatPipeline(OpBuilder &b, Block &block) {
   Operation *firstBorder = allBorders.front();
   Operation *lastBorder = allBorders.back();
 
-  // Walk backwards from the first border to find the start of the first
-  // stage.  Stop at control-flow boundaries (scf.for, cond_barrier) or
-  // ignorable ops that logically belong to a previous pipeline.
+  // 2. Locate the start of the first stage.  Unlike createPipeline, the flat
+  //    sequence has no loop body to anchor against, so walk backwards from
+  //    the first border, stopping at control-flow boundaries (scf.for,
+  //    cond_barrier) or ignorable ops belonging to a previous pipeline.
   Operation *regionStart = firstBorder;
   for (Operation *op = firstBorder->getPrevNode(); op; op = op->getPrevNode()) {
     if (isa<scf::ForOp>(op) || isa<tt::amdgpu::CondBarrierOp>(op))
@@ -238,6 +241,9 @@ static LogicalResult createFlatPipeline(OpBuilder &b, Block &block) {
     regionStart = op;
   }
 
+  // 3. Sweep forward from regionStart, splitting ops into clusters at each
+  //    border.  Mirrors createPipeline's main loop, but bounded by lastBorder
+  //    instead of scf.yield.
   SmallVector<Operation *> cluster;
   SmallVector<std::pair<StringAttr, int>> clusterMarkers;
   SmallVector<SmallVector<Operation *>> clusters;
@@ -268,6 +274,8 @@ static LogicalResult createFlatPipeline(OpBuilder &b, Block &block) {
     cluster.push_back(op);
   }
 
+  // 4. Materialize each cluster as an execute_region.  Bail out if fewer than
+  //    two real clusters survived (e.g., dummies-only).
   if (clusters.size() < 2)
     return failure();
 
