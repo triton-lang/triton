@@ -25,6 +25,46 @@ namespace mlir {
 #define GEN_PASS_DEF_TRITONAMDGPUWARPPIPELINE
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
+// Ops that may appear between pipeline stages but never inside one.  Pre-
+// existing memory-fence/wait ops at cluster boundaries are tolerated so that
+// prefetch patterns continue to work; encountering one mid-cluster is treated
+// as a pattern mismatch by the callers.
+static bool isPipelineIgnorable(Operation *op) {
+  return isa<ttg::AsyncWaitOp, gpu::BarrierOp, triton::gpu::BarrierOp,
+             tt::amdgpu::AsyncTDMWait>(op);
+}
+
+// True if `op` carries the cluster-end marker emitted by the frontend.
+static bool isPipelineBorder(Operation *op) {
+  return op->hasAttr("triton.warp_pipeline.border");
+}
+
+// Read (cluster-name, priority) from a border marker op.  Priority defaults
+// to -1 when the marker doesn't carry the optional priority attribute.
+static std::pair<StringAttr, int> readBorderMarker(Operation *op) {
+  StringAttr clusterStr =
+      op->getAttrOfType<StringAttr>("triton.warp_pipeline.border");
+  int priority = -1;
+  if (auto intAttr =
+          op->getAttrOfType<IntegerAttr>("triton.warp_pipeline.priority"))
+    priority = intAttr.getInt();
+  return {clusterStr, priority};
+}
+
+// If `cluster` is empty, materialize a dummy SchedBarrier so the cluster is
+// non-empty.  This lets users deliberately request a pipeline bubble by
+// emitting two consecutive border markers with no body between them.
+static void addDummyOpIfEmptyCluster(OpBuilder &b, Location loc,
+                                     Operation *insertBefore,
+                                     SmallVectorImpl<Operation *> &cluster) {
+  if (!cluster.empty())
+    return;
+  b.setInsertionPoint(insertBefore);
+  auto dummyOp = ROCDL::SchedBarrier::create(b, loc, 0);
+  dummyOp->setAttr("triton.warp_pipeline.empty_cluster", b.getUnitAttr());
+  cluster.push_back(dummyOp);
+}
+
 // Create a scf.execute_region op representing a pipeline cluster.
 static void createClusterOp(OpBuilder &b, Location loc,
                             SmallVector<Operation *> &ops,
@@ -118,43 +158,18 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
   SmallVector<SmallVector<Operation *>> clusters;
   auto ctx = forOp.getContext();
 
-  // ops cannot be located within a cluster
-  // barrier/wait still require border op
-  auto isIgnorable = [](Operation *op) {
-    return isa<ttg::AsyncWaitOp, gpu::BarrierOp, triton::gpu::BarrierOp,
-               tt::amdgpu::AsyncTDMWait>(op);
-  };
-
-  auto isBorder = [](Operation *op) {
-    return op->hasAttr("triton.warp_pipeline.border");
-  };
-
   // One pass over the body; collect clusters split by explicit borders.
   for (Operation &opRef : llvm::make_early_inc_range(blk)) {
     Operation *op = &opRef;
-    if (isBorder(op)) { // Wrap-up one cluster at a border.
-      StringAttr clusterStr =
-          op->getAttrOfType<StringAttr>("triton.warp_pipeline.border");
-      int priority = -1;
-      if (auto intAttr =
-              op->getAttrOfType<IntegerAttr>("triton.warp_pipeline.priority")) {
-        priority = intAttr.getInt();
-      }
-      clusterMarkers.push_back({clusterStr, priority});
-      if (cluster.empty()) {
-        // This allows user to deliberately insert a pipeline bubble with a
-        // cluster only contains a dummy operation.
-        b.setInsertionPoint(op);
-        auto dummyOp = ROCDL::SchedBarrier::create(b, loc, 0);
-        dummyOp->setAttr("triton.warp_pipeline.empty_cluster", b.getUnitAttr());
-        cluster.push_back(dummyOp);
-      }
+    if (isPipelineBorder(op)) { // Wrap-up one cluster at a border.
+      clusterMarkers.push_back(readBorderMarker(op));
+      addDummyOpIfEmptyCluster(b, loc, op, cluster);
       clusters.push_back(std::move(cluster));
       cluster.clear();
       op->erase(); // remove the marker
       continue;
     }
-    if (isIgnorable(op)) {
+    if (isPipelineIgnorable(op)) {
       // Ignorable ops may appear before or after a stage, but not inside it.
       // If encountered while building an execute_region, reject warp-pipeline.
       if (!cluster.empty())
@@ -199,17 +214,9 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
 // annotations producing border markers.  The grouping logic mirrors
 // createPipeline but without a loop wrapper.
 static LogicalResult createFlatPipeline(OpBuilder &b, Block &block) {
-  auto isIgnorable = [](Operation *op) {
-    return isa<ttg::AsyncWaitOp, gpu::BarrierOp, triton::gpu::BarrierOp,
-               tt::amdgpu::AsyncTDMWait>(op);
-  };
-  auto isBorder = [](Operation *op) {
-    return op->hasAttr("triton.warp_pipeline.border");
-  };
-
   SmallVector<Operation *> allBorders;
   for (auto &op : block)
-    if (isBorder(&op))
+    if (isPipelineBorder(&op))
       allBorders.push_back(&op);
 
   if (allBorders.size() < 2)
@@ -226,7 +233,7 @@ static LogicalResult createFlatPipeline(OpBuilder &b, Block &block) {
   for (Operation *op = firstBorder->getPrevNode(); op; op = op->getPrevNode()) {
     if (isa<scf::ForOp>(op) || isa<tt::amdgpu::CondBarrierOp>(op))
       break;
-    if (isIgnorable(op))
+    if (isPipelineIgnorable(op))
       break;
     regionStart = op;
   }
@@ -239,21 +246,9 @@ static LogicalResult createFlatPipeline(OpBuilder &b, Block &block) {
     Operation *op = &*it;
     ++it;
 
-    if (isBorder(op)) {
-      StringAttr clusterStr =
-          op->getAttrOfType<StringAttr>("triton.warp_pipeline.border");
-      int priority = -1;
-      if (auto intAttr =
-              op->getAttrOfType<IntegerAttr>("triton.warp_pipeline.priority"))
-        priority = intAttr.getInt();
-      clusterMarkers.push_back({clusterStr, priority});
-
-      if (cluster.empty()) {
-        b.setInsertionPoint(op);
-        auto dummyOp = ROCDL::SchedBarrier::create(b, loc, 0);
-        dummyOp->setAttr("triton.warp_pipeline.empty_cluster", b.getUnitAttr());
-        cluster.push_back(dummyOp);
-      }
+    if (isPipelineBorder(op)) {
+      clusterMarkers.push_back(readBorderMarker(op));
+      addDummyOpIfEmptyCluster(b, loc, op, cluster);
       clusters.push_back(std::move(cluster));
       cluster.clear();
 
@@ -264,7 +259,7 @@ static LogicalResult createFlatPipeline(OpBuilder &b, Block &block) {
       continue;
     }
 
-    if (isIgnorable(op)) {
+    if (isPipelineIgnorable(op)) {
       if (!cluster.empty())
         return failure();
       continue;
