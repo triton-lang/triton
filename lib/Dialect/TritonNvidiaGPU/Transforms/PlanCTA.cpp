@@ -561,9 +561,7 @@ void CTAPlanner::eliminateAdjacentCasts(CastOp cast0, CastOp cast1) {
 
 bool CTAPlanner::isLoadStoreOp(Operation *op) const {
   return llvm::isa<triton::LoadOp, triton::StoreOp, triton::AtomicRMWOp,
-                   triton::AtomicCASOp, triton::DescriptorLoadOp,
-                   triton::DescriptorStoreLikeOpInterface,
-                   triton::DescriptorGatherOp>(op);
+                   triton::AtomicCASOp, triton::DescriptorOpInterface>(op);
 }
 
 bool CTAPlanner::processLoadStore(Operation *op, Attribute layout) {

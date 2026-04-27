@@ -67,7 +67,6 @@ public:
 
   LogicalResult matchAndRewrite(DescriptorLoadOp op,
                                 PatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
     auto createLoad = [&](Value desc, Value barrierAlloc, Value alloc,
                           Value pred) {
       triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(

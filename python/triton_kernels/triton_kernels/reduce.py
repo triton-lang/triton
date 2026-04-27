@@ -206,14 +206,16 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
     valid_y_s1 = offs_y_s1 < Y_S1
     valid_y_smx1 = offs_y_smx1 < tl.cdiv(Y_S1, 1 if Y_MX_BLOCK_SIZE is None else Y_MX_BLOCK_SIZE)
     is_out_fp4: tl.constexpr = YMx is not None and Y_VALUE_PACK_FACTOR == 2
-    y = float_to_flex(y, YFlexExpected, YFlexActual, YFlexChecksum, None, Y, Y_FLEX_SATURATE_INF)
-    # TODO (phil): keeping for backward compatibility, but will remove !
-    if YMx is None and POSTPROCESS_FN2 is not None:
-        y = POSTPROCESS_FN2(y, *postprocess_fn2_args, target_dtype=Y.dtype.element_ty)
     if YMx is not None:
+        y = float_to_flex(y, YFlexExpected, None, None, None, Y, False)
         y, y_scale = POSTPROCESS_MX_FN(y, valid_y_s1[None, :], *postprocess_mx_fn_args)
         y_mx_ptrs = YMx + offs_s0[:, None] * stride_ymx0 + offs_y_smx1[None, :] * stride_ymx1
         tl.store(y_mx_ptrs, y_scale, mask=valid_s0[:, None] & valid_y_smx1[None, :])
+    else:
+        y = float_to_flex(y, YFlexExpected, YFlexActual, YFlexChecksum, None, Y, Y_FLEX_SATURATE_INF)
+        # TODO (phil): keeping for backward compatibility, but will remove !
+        if POSTPROCESS_FN2 is not None:
+            y = POSTPROCESS_FN2(y, *postprocess_fn2_args, target_dtype=Y.dtype.element_ty)
     if is_out_fp4:
         offs_y_s1 = pid_s1 * (BLOCK_Y_S1 // 2) + tl.arange(0, BLOCK_Y_S1 // 2)
         valid_y_s1 = offs_y_s1 < tl.cdiv(Y_S1, 2)

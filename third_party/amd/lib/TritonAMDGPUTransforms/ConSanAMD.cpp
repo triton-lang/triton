@@ -52,8 +52,14 @@ public:
   }
 
   std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const override {
-    // AMD amdgpu::AsyncWaitOp replaces ttg::AsyncWaitOp after
-    // UpdateAsyncWaitCount. Read the preserved commit-group count.
+    // On asyncmark targets (CDNA3/CDNA4), ttg::AsyncWaitOp is kept as-is
+    // by UpdateAsyncWaitCount — read the commit group count directly.
+    if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
+      return WaitOpInfo{tti::CommitKind::AsyncCp, (int)asyncWaitOp.getNum(),
+                        /*transferWrites=*/true, /*transferReads=*/false};
+    }
+    // On non-asyncmark targets, amdgpu::AsyncWaitOp replaces ttg::AsyncWaitOp
+    // after UpdateAsyncWaitCount. Read the preserved commit-group count.
     if (auto asyncWaitOp = dyn_cast<ttag::AsyncWaitOp>(op)) {
       if (auto attr = asyncWaitOp->getAttrOfType<IntegerAttr>(
               "ttg.num_commit_groups")) {

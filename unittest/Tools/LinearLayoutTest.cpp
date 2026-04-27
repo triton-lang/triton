@@ -843,7 +843,6 @@ TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEM) {
 TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEMSwizzled) {
   int M = 16;
   int KPadded8b = 128;
-  int numFp4Elems = M * KPadded8b;
   int KPacked8b = KPadded8b / 2;
   int elemBitWidth = 8;
   int tileWidthBytes = 128;
@@ -1160,6 +1159,44 @@ TEST_F(LinearLayoutTest, ColumnActionApplyValues) {
 
   expected = std::vector<intptr_t>{1, 5, 3, 7};
   EXPECT_EQ(result, expected);
+}
+
+// The purpose of this test is to make sure the conversion of block dimension
+// is identity, and this decision should be immune to block-sublayout's out-dim
+// sizes.
+TEST_F(LinearLayoutTest, invertAndCompose1) {
+  auto regLayout = LinearLayout(
+      {{S("offset"),
+        {{0, 1}, {0, 2}, {0, 4}, /*gap*/ {0, 16}, {32, 0}, {64, 0}, {128, 0}}},
+
+       {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}}},
+       {S("warp"), {{0, 0}, {16, 0}}},
+
+       {S("block"), {{0, 0}}}},
+      {S("dim0"), S("dim1")});
+
+  auto sharedLayout = LinearLayout({{S("offset"),
+                                     {{0, 1},
+                                      {0, 2},
+                                      {0, 4},
+                                      {0, 8},
+                                      {0, 16},
+                                      {0, 32},
+                                      {0, 64},
+                                      {1, 0},
+                                      {2, 0},
+                                      {4, 0},
+                                      {8, 0},
+                                      {16, 0},
+                                      {32, 0},
+                                      {64, 0},
+                                      {128, 0}}},
+                                    {S("block"), {{0, 0}}}},
+                                   {S("dim0"), S("dim1")});
+
+  auto cvt = regLayout.invertAndCompose(sharedLayout);
+
+  EXPECT_TRUE(cvt.isTrivialOver(S("block")));
 }
 
 } // anonymous namespace

@@ -142,7 +142,6 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
       llvm::dyn_cast_or_null<gpu::NVMMASharedEncodingAttr>(encoding);
   bool fp4Padded = mmaEncoding && mmaEncoding.getFp4Padded();
 
-  int paddingScale = fp4Padded ? 2 : 1;
   auto shapePerCTA = gpu::getShapePerCTA(encoding, op.getType().getShape());
   // MakeTensorDescOp creates tiled descriptors (not im2col)
   auto blockShape = getTMABlockShape(encoding, shapePerCTA,
@@ -158,7 +157,6 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
   for (int k = shapePerCTA.size() - 2; k >= 0; --k)
     boxDim.push_back(mkI32Constant(blockShape[k]));
 
-  unsigned swizzleBytes = mmaEncoding ? mmaEncoding.getSwizzlingByteWidth() : 0;
   if (!mmaEncoding) {
     auto swizzledEnc =
         dyn_cast_if_present<gpu::SwizzledSharedEncodingAttr>(encoding);

@@ -37,11 +37,9 @@ def _make_batched_blackwell_mxfp4_weight(device, batch_size, k, n):
     return weight_val, weight_scale
 
 
-def _shuffle_blackwell_mxfp4_weight(weight, block_k, block_n):
-    shuffled_layout = BlackwellMX4ValueShuffledLayout(block_k=block_k, block_n=block_n)
-    transformation = shuffled_layout.make_transformation(weight.shape, is_fp4=True)
-    shuffled_data = transformation.swizzle_data(weight.storage.data)
-    return Tensor(Storage(shuffled_data, shuffled_layout), dtype=weight.dtype, shape=weight.shape)
+def _shuffle_blackwell_mxfp4_weight(weight):
+    shuffled_layout = BlackwellMX4ValueShuffledLayout()
+    return convert_layout(weight, shuffled_layout)
 
 
 @pytest.mark.parametrize("n, expected", [(64, 128), (200, 256)])
@@ -70,7 +68,7 @@ def test_matmul_blackwell_scale_small_n(device):
         out_dtype=a.dtype,
     )
     tri_y = matmul(a, b, None, precision_config=precision_config)
-    ref_y = matmul_torch(a, b, None, precision_config=precision_config)
+    ref_y = matmul_torch(a.to(torch.bfloat16), b, None, precision_config=precision_config)
     assert_close(ref_y, tri_y, maxtol=3e-2, rmstol=None)
 
 
@@ -82,30 +80,25 @@ def test_matmul_blackwell_shuffled_mxfp4_weight(device):
 
     torch.manual_seed(0)
     batch_size, m, n, k = 2, 128, 128, 128
-    block_k, block_n = 128, 128
-    a = torch.randn((batch_size, m, k), device=device, dtype=torch.bfloat16)
+    a = torch.randn((batch_size, m, k), device=device, dtype=torch.bfloat16).to(torch.float8_e5m2)
     b, b_scale = _make_batched_blackwell_mxfp4_weight(device, batch_size, k, n)
-    b_shuffled = _shuffle_blackwell_mxfp4_weight(b, block_k, block_n)
+    b_shuffled = _shuffle_blackwell_mxfp4_weight(b)
 
     # Sanity-check the host-side packing; this is the layout consumed by the
     # W_SHUFFLED TMA load path in _p_matmul.
-    transformation = b_shuffled.storage.layout.make_transformation(b.shape, is_fp4=True)
-    assert torch.equal(b.storage.data, transformation.unswizzle_data(b_shuffled.storage.data))
+    assert torch.equal(b.storage.data, convert_layout(b_shuffled, b.storage.layout).storage.data)
 
     precision_config = PrecisionConfig(
         b_mx_scale=b_scale,
         b_microblock_size=MXFP_BLOCK_SIZE.value,
-        out_dtype=a.dtype,
+        out_dtype=torch.bfloat16,
     )
     constraints = {
         "is_persistent": True,
         "block_m": 128,
-        "block_n": block_n,
-        "block_k": block_k,
-        "disable_mx4_block_swap": True,
     }
     with scoped_opt_flags_constraints(constraints):
         tri_y = matmul(a, b_shuffled, None, precision_config=precision_config)
 
-    ref_y = matmul_torch(a, b, None, precision_config=precision_config)
+    ref_y = matmul_torch(a.to(torch.bfloat16), b, None, precision_config=precision_config)
     assert_close(ref_y, tri_y, maxtol=3e-2, rmstol=None)

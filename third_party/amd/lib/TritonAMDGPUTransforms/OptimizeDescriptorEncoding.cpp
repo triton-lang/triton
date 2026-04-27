@@ -59,9 +59,7 @@ getSharedEncIfAllUsersAreDotEncPadded(
         return std::nullopt;
 
       auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
-      auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
       auto order = getOrderForMemory(srcTy);
-      unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
       // TODO rework this when shared -> dotOperand conversions support

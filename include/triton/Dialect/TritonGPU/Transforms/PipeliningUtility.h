@@ -2,6 +2,7 @@
 #define TRITON_TRITONGPU_TRANSFORMS_PIPELINER_PIPELINING_UTILITY_H_
 
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <optional>
 #include <utility>
@@ -123,7 +124,9 @@ Value createAlloc(Operation *insertBefore, RankedTensorType ty, Location loc,
                   gpu::SharedEncodingTrait sharedEnc, unsigned distance);
 
 // Determine if the operation is a TMA load.
-bool isTMALoad(Operation *op);
+inline bool isTMALoad(Operation *op) {
+  return isa<DescriptorLoadLikeOpInterface>(op);
+}
 
 // Determine if the operation can be lowered to an async load.
 bool canBeAsyncLoad(Operation *op);

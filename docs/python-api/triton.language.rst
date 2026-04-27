@@ -64,7 +64,7 @@ Linear Algebra Ops
 
 
 Memory/Pointer Ops
-----------
+------------------
 
 .. autosummary::
     :toctree: generated

@@ -405,10 +405,6 @@ Value mlir::triton::createAlloc(Operation *insertBefore, RankedTensorType ty,
   return alloc;
 }
 
-bool mlir::triton::isTMALoad(Operation *op) {
-  return isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op);
-}
-
 bool mlir::triton::canBeAsyncLoad(Operation *op) {
   if (mlir::triton::isTMALoad(op)) {
     return true;
@@ -518,18 +514,9 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
   auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
   auto cgaLayout = ttg::getCGALayout(ty.getEncoding());
   auto order = ttg::getOrder(ty);
-  if (isTMALoad(op)) {
+  if (auto load = dyn_cast<tt::DescriptorLoadLikeOpInterface>(op)) {
     // TMA encoding is set on the descriptor type
-    TypedValue<tt::TensorDescType> desc;
-    if (auto load = dyn_cast<tt::DescriptorLoadOp>(op)) {
-      desc = load.getDesc();
-    } else if (auto gather = dyn_cast<tt::DescriptorGatherOp>(op)) {
-      desc = gather.getDesc();
-    } else {
-      op->emitError() << "unrecognized tma load type";
-      llvm::report_fatal_error("unrecognized tma load type");
-    }
-    return ttng::getEncodingFromDescriptor(op, ty, desc);
+    return ttng::getEncodingFromDescriptor(op, ty, load.getDesc());
   }
 
   if (localAllocEnc)

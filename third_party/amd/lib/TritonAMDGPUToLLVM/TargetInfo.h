@@ -117,6 +117,10 @@ public:
   bool supportsDirectFromLdsStoreBitWidth(int bitWidth) const;
   bool supportsBufferLoadToLocal() const;
 
+  // Whether this target uses asyncmark/wait_asyncmark intrinsics for
+  // async memory ops synchronization instead of waitcnt-based intrinsics waits.
+  bool useAsyncMarks() const;
+
   bool supportsMultiCTALaunch() const;
   bool supportsTDM() const;
   bool supportsClusterLoadBitWidth(int biwWidth) const;

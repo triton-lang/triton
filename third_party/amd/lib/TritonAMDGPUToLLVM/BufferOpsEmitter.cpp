@@ -122,7 +122,7 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   return data;
 }
 
-ROCDL::RawPtrBufferLoadLdsOp
+ROCDL::RawPtrBufferLoadAsyncLdsOp
 BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
                              Value offset, Value dst, Value pred,
                              triton::CacheModifier cm) {
@@ -131,7 +131,11 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
                  commonArgs);
   Type bufferType = getBufferOpType(type, false);
-  return ROCDL::RawPtrBufferLoadLdsOp::create(
+
+  // buffer_load_to_lds is only supported on gfx942/gfx950 which always use
+  // asyncmark. Emit the async intrinsic so LLVM's SIInsertWaitcnts tracks
+  // these operations via asyncmark/wait_asyncmark.
+  return ROCDL::RawPtrBufferLoadAsyncLdsOp::create(
       rewriter, loc, TypeRange{},
       ValueRange{
           commonArgs[0], // Buffer descriptor
@@ -141,8 +145,7 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
           b.i32_val(0),  // LDS offset
           commonArgs[2], // Instruction offset
           commonArgs[3], // AUX
-      },
-      ArrayRef<NamedAttribute>());
+      });
 }
 
 Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,

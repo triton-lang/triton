@@ -24,6 +24,11 @@ static int __builtin_ctzll(unsigned long long x) {
 
 #endif
 
+using namespace mlir;
+using namespace mlir::triton;
+
+namespace {
+
 void printBasis(const llvm::SmallVector<int32_t> &basis,
                 const std::string &name) {
   llvm::errs() << name << ": ";
@@ -31,11 +36,6 @@ void printBasis(const llvm::SmallVector<int32_t> &basis,
     llvm::errs() << b << " ";
   llvm::errs() << "\n";
 }
-
-using namespace mlir;
-using namespace mlir::triton;
-
-namespace {
 
 // Goes from bases of the form [[1], [2], [4], [8]] to [1, 2, 4, 8]
 SmallVector<int32_t> flatten(const LinearLayout &ll, StringAttr dim) {
@@ -216,9 +216,6 @@ SmallVector<int32_t> complementBasis(ArrayRef<int32_t> basis, int32_t dim) {
 
   return comp;
 }
-} // namespace
-
-namespace mlir::triton::gpu {
 
 SmallVector<int32_t> intersectionBasis(ArrayRef<int32_t> b1,
                                        ArrayRef<int32_t> b2, int32_t dim) {
@@ -245,12 +242,15 @@ SmallVector<int32_t> intersectionBasis(ArrayRef<int32_t> b1,
   }
 }
 
+} // namespace
+
+namespace mlir::triton::gpu {
+
 std::pair<int, int> bankConflicts(ArrayRef<int32_t> tileSrc,
                                   ArrayRef<int32_t> tileDst,
                                   const LinearLayout &smem) {
   auto *ctx = smem.getOutDimNames().begin()->getContext();
   auto smemFlat = smem.flattenOuts();
-  auto inDim = *smem.getInDimNames().begin();
   // Look at the intersection between the segment bases and the tile bases
   // We don't need to intersect with the bases that covert the bank (as in
   // the first 32 / bitwidth bases) because if we hit any of those broadcasting
@@ -345,7 +345,7 @@ int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
       .first;
 }
 
-std::optional<SmallVector<int32_t>>
+static std::optional<SmallVector<int32_t>>
 optimalSwizzlingTile(const LinearLayout &a, const LinearLayout &b,
                      int32_t nRegA, int32_t nRegB, const LocalMemOpTile &tileA,
                      const LocalMemOpTile &tileB) {

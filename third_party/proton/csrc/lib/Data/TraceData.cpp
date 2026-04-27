@@ -19,7 +19,18 @@ namespace proton {
 
 namespace {
 inline constexpr size_t kMaxActiveEventStackCacheObjects = 10;
+
+thread_local std::unordered_map<const TraceData *, std::vector<size_t>>
+    traceDataToActiveEventStack;
+
+uint64_t getCurrentCpuTimestampNs() {
+  using Clock = std::chrono::system_clock;
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             Clock::now().time_since_epoch())
+      .count();
 }
+
+} // namespace
 
 class TraceData::Trace {
 public:
@@ -151,16 +162,6 @@ private:
   // tree node id -> trace context
   std::map<size_t, TraceContext> traceContextMap;
 };
-
-thread_local std::unordered_map<const TraceData *, std::vector<size_t>>
-    traceDataToActiveEventStack;
-
-uint64_t getCurrentCpuTimestampNs() {
-  using Clock = std::chrono::system_clock;
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(
-             Clock::now().time_since_epoch())
-      .count();
-}
 
 void TraceData::enterScope(const Scope &scope) {
   // enterOp and addMetric maybe called from different threads

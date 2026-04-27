@@ -113,6 +113,7 @@ def compute_num_stages(
     epilogue_effective_itemsize,
     has_y_acc_in,
     mx_block_size=None,
+    epilogue_reduction_n=1,
     *,
     epilogue_subtile,
     occupancy_target,
@@ -140,6 +141,10 @@ def compute_num_stages(
             # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
             stage_size += block_k * block_n * weight_size
 
+    if precision_config.a_mx_scale is not None:
+        scale_block_size = mx_block_size or int(MXFP_BLOCK_SIZE)
+        stage_size += block_m * (block_k // scale_block_size)
+
     if precision_config.b_mx_scale is not None:
         # mx scales
         scale_block_size = mx_block_size or int(MXFP_BLOCK_SIZE)
@@ -154,22 +159,19 @@ def compute_num_stages(
         else:
             acc_size = out_itemsize
         if target_info.cuda_capability_geq(10, 0) and epilogue_subtile is not None:
-            acc_block_n = block_n // epilogue_subtile
+            acc_block_n = block_n // epilogue_subtile // epilogue_reduction_n
         else:
-            acc_block_n = block_n
+            acc_block_n = block_n // epilogue_reduction_n
         # pipelined TMA store local to global, or
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
         epilogue_smem = int((block_m + 4) * acc_block_n * acc_size)
         if compute_swap_xw(precision_config, block_m, is_persistent):
-            # SWAP_XW Blackwell kernels stage the full transposed TMEM
-            # accumulator tile through fp32 smem before converting/storing it.
-            # If the output is narrower, the final TMA-store tile is a separate
-            # smem allocation.
-            acc_smem = block_m * block_n * (FP32.bitwidth // 8)
-            if out_itemsize < (FP32.bitwidth // 8):
-                acc_smem += int(block_m * acc_block_n * out_itemsize)
-            epilogue_smem = max(epilogue_smem, acc_smem)
+            # The fp32 accumulator stays in TMEM for the Blackwell SWAP_XW
+            # persistent path. Fused reductions such as swiglu still need smem
+            # for the unreduced output tile before the narrower TMA-store tile.
+            if epilogue_reduction_n > 1:
+                epilogue_smem += int(block_m * block_n * out_itemsize)
         smem_capacity -= epilogue_smem
         if x_transpose:
             smem_capacity -= block_m * block_k * (max(8, lhs_dtype.bitwidth) // 8)
@@ -178,6 +180,10 @@ def compute_num_stages(
     # that is not fully captured by the simple stage_size model above.
     if is_persistent and (lhs_dtype == FP32 or rhs_dtype == FP32):
         smem_capacity -= 32 * 1024
+    if is_persistent and not has_native_mxfp and epilogue_reduction_n > 1:
+        # Hopper fused reductions materialize an additional reduced-N output
+        # tile in smem.
+        smem_capacity -= int(block_m * acc_block_n * out_itemsize)
     smem_capacity = max(smem_capacity, 0)
     max_stages = 5 if rhs_dtype == FP4 else 4  # maybe 5 everywhere; just haven't tested
     num_stages = min(smem_capacity // int(stage_size), max_stages)

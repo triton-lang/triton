@@ -335,7 +335,16 @@ def matmul(a, b, bias,
         assert a_microblock_size == b_microblock_size, (
             f"Microscaled operands must share a block size. Got {a_microblock_size} and {b_microblock_size}"
         )
-    mx_block_size = b_microblock_size or a_microblock_size or int(MXFP_BLOCK_SIZE)
+    mx_block_size = (
+        a_microblock_size or b_microblock_size or precision_config.c_microblock_size or int(MXFP_BLOCK_SIZE)
+    )
+    assert all(
+        size is None or size == mx_block_size
+        for size in (a_microblock_size, b_microblock_size, precision_config.c_microblock_size)
+    ), (
+        "Microscaled operands/output must share a block size. "
+        f"Got a={a_microblock_size}, b={b_microblock_size}, c={precision_config.c_microblock_size}"
+    )
     if precision_config.c_mx_scale is not None and precision_config.c_microblock_size is None:
         precision_config.c_microblock_size = mx_block_size
     precision_config.c_value_pack_factor = 2 if precision_config.c_mx_scale is not None and epilogue.specs.name in (
@@ -401,6 +410,8 @@ def matmul(a, b, bias,
         block_k = block_k,
         mx_block_size = mx_block_size,
         x_uses_tma_when_persistent = a_uses_tma_when_persistent,
+        rhs_layout=b.storage.layout,
+        epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
     if b_is_shuffled:
         if b.dtype.bitwidth != 4:
@@ -586,7 +597,7 @@ def matmul(a, b, bias,
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    c_tensor_or_tma, c.storage.data, *out_matmul.stride(),
-                   *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
+                   *((out_matmul_flex.expected_scale, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
                    *out_matmul_scale_strides[-4:],
                    a_tensor_or_tma, a.storage.data, *a_strides, a_transpose,
                    flex.lhs_data.scale,
@@ -701,7 +712,7 @@ def apply_precision(x_tri, w_tri, precision_config):
 
     if precision_config.a_mx_scale is not None:
         a_scale = precision_config.a_mx_scale
-        mx_axis = x_tri.storage.data.ndim -1
+        mx_axis = x_tri.ndim - 1
         canonical_layout = layout.StridedLayout(major_dim=mx_axis)
         x_tri = convert_layout(x_tri, canonical_layout)
         x_tri_scale = convert_layout(a_scale, canonical_layout)
@@ -711,7 +722,7 @@ def apply_precision(x_tri, w_tri, precision_config):
 
     if precision_config.b_mx_scale is not None:
         b_scale = precision_config.b_mx_scale
-        mx_axis = w_tri.storage.data.ndim - 2
+        mx_axis = w_tri.ndim - 2
         canonical_layout = layout.StridedLayout(major_dim=mx_axis)
         w_tri = convert_layout(w_tri, canonical_layout)
         w_tri_scale = convert_layout(b_scale, canonical_layout)
