@@ -15,10 +15,13 @@ namespace mlir::triton::AMD {
 constexpr int kMaxShmemVecBitLength = 128;
 
 unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
-                                        RankedTensorType dstTy, int numBanks) {
+                                        RankedTensorType dstTy, int numBanks,
+                                        TargetInfoBase &targetInfo) {
   if (!cvtNeedsSharedMemory(srcTy, dstTy))
     return 0;
-  unsigned elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy, numBanks);
+  auto [dstTiles, srcTiles] = targetInfo.getSharedLdStTiles();
+  unsigned elems =
+      getNumScratchElemsSwizzledCvt(srcTy, dstTy, numBanks, srcTiles, dstTiles);
   return elems * getBitwidth(srcTy) / 8;
 }
 
@@ -42,14 +45,20 @@ static unsigned getBufferAtomicScratchSizeInBytes(Operation *op) {
   return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
 }
 
-unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op) {
+unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
+                                            TargetInfoBase &targetInfo) {
+
+  if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
+    auto [dstTiles, srcTiles] = targetInfo.getSharedLdStTiles();
+    return ReduceOpHelper(reduceOp).getScratchSizeInBytes(srcTiles, dstTiles);
+  }
 
   if (auto cvtLayout = dyn_cast<mlir::triton::gpu::ConvertLayoutOp>(op)) {
     auto srcTy = cvtLayout.getSrc().getType();
     auto dstTy = cvtLayout.getType();
     int numBanks = mlir::triton::gpu::TritonGPUDialect::getNumBanks(
         op->getParentOfType<ModuleOp>());
-    return getConvertLayoutScratchInBytes(srcTy, dstTy, numBanks);
+    return getConvertLayoutScratchInBytes(srcTy, dstTy, numBanks, targetInfo);
   }
 
   if (auto ws = dyn_cast<mlir::triton::gpu::WarpSpecializeOp>(op)) {

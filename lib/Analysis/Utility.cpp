@@ -105,7 +105,9 @@ bool ReduceOpHelper::isAssociative() {
   return !hasNoAssociativeOp;
 }
 
-unsigned ReduceOpHelper::getScratchSizeInBytes() {
+unsigned ReduceOpHelper::getScratchSizeInBytes(
+    ArrayRef<triton::gpu::LocalMemOpTile> srcTiles,
+    ArrayRef<triton::gpu::LocalMemOpTile> dstTiles) {
   auto kLane = StringAttr::get(op.getContext(), "lane");
 
   auto isReduced = [axis = axis](const LinearLayout &layout) {
@@ -126,7 +128,7 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
     int bytes = 0;
     for (auto inputTy : op.getInputTypes()) {
       auto nelem = getNumScratchElemsSwizzledCvt(
-          regLl, tmpLl, getBitwidth(inputTy), numBanks);
+          regLl, tmpLl, getBitwidth(inputTy), numBanks, srcTiles, dstTiles);
       bytes += nelem * (getBitwidth(inputTy) / 8);
     }
     bytesRegToTmp = std::max<unsigned>(bytesRegToTmp, bytes);

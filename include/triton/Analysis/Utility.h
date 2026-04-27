@@ -7,6 +7,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LinearLayout.h"
 
 namespace mlir {
@@ -69,7 +70,9 @@ public:
 
   bool isAssociative();
 
-  unsigned getScratchSizeInBytes();
+  unsigned
+  getScratchSizeInBytes(ArrayRef<triton::gpu::LocalMemOpTile> srcTiles = {},
+                        ArrayRef<triton::gpu::LocalMemOpTile> dstTiles = {});
 
   InThreadVectorizeOpKind
   getInThreadVectorizeOpKind(unsigned axisPack,

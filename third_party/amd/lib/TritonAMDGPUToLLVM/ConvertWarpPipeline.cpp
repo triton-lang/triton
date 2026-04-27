@@ -20,6 +20,7 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include "Analysis/AMDGPUAllocation.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
@@ -360,8 +361,11 @@ public:
 
     mlir::triton::AMD::TargetInfo targetInfo(arch.getValue());
     size_t partitionSize = targetInfo.getSharedMemoryPartitionSize();
-    ModuleAllocation moduleAllocation(
-        m, triton::defaultAllocationAnalysisScratchSizeFn, partitionSize);
+    auto allocationFn = [&targetInfo](Operation *op) -> unsigned {
+      return mlir::triton::AMD::AMDAllocationAnalysisScratchSizeFn(op,
+                                                                   targetInfo);
+    };
+    ModuleAllocation moduleAllocation(m, allocationFn, partitionSize);
 
     if (targetInfo.getISAFamily() == mlir::triton::AMD::ISAFamily::Unknown) {
       m.emitError("unsupported target: '") << arch.getValue() << "'";

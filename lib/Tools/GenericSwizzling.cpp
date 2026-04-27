@@ -277,9 +277,7 @@ SmallVector<int32_t> getLaneTile(ArrayRef<int32_t> lane,
         assert(idx < lane.size() && "idx should be < lane.size()");
         ret.push_back(lane[idx]);
       }
-      if (llvm::all_of(ret, [](int32_t v) { return v != 0; })) {
-        return ret;
-      }
+      return ret;
     }
   }
   return to_vector(lane.drop_back(log2Phase));
