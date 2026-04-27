@@ -19,6 +19,27 @@ import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
 
 
+def find_frame(node, name: str):
+    queue = [node]
+    while queue:
+        current = queue.pop(0)
+        if current["frame"]["name"] == name:
+            return current
+        queue.extend(current["children"])
+    return None
+
+
+def find_frame_path(node, name_substr: str):
+    queue = [(node, [node])]
+    while queue:
+        current, path = queue.pop(0)
+        if name_substr in current["frame"]["name"]:
+            return path
+        for child in current["children"]:
+            queue.append((child, [*path, child]))
+    return None
+
+
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_torch.hatchet"
@@ -641,9 +662,62 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str, device: str):
         parent_frame = queue.pop(0)
         for child in parent_frame["children"]:
             if "reduce" in child["frame"]["name"]:
-                assert parent_frame["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME
+                assert parent_frame["frame"]["name"].startswith(COMPUTE_METADATA_SCOPE_NAME)
                 return
             queue.append(child)
+
+
+def test_hook_launch_metadata_nested_triton_context(tmp_path: pathlib.Path, device: str):
+
+    @triton.jit
+    def metadata_side_kernel(x, scratch):
+        tl.store(scratch, tl.load(x))
+
+    @triton.jit
+    def metadata_scoped_side_kernel(x, scratch):
+        tl.store(scratch, tl.load(x) + 1.0)
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        metadata_side_kernel[(1, )](args["x"], args["scratch"], num_warps=1)
+        with proton.scope("metadata_child_scope"):
+            metadata_scoped_side_kernel[(1, )](args["x"], args["scratch"], num_warps=1)
+        return {"name": "foo_test", "flops": 1.0}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, scratch, y):
+        tl.store(y, tl.load(x) + tl.load(scratch))
+
+    x = torch.tensor([2], device=device, dtype=torch.float32)
+    scratch = torch.zeros_like(x)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_hook_nested_triton_metadata.hatchet"
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
+    with proton.scope("test0"):
+        foo[(1, )](x, scratch, y, num_warps=1)
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    foo_frame = find_frame(data[0], "foo_test")
+    assert foo_frame is not None
+    assert foo_frame["metrics"]["flops"] == 1.0
+
+    metadata_path = find_frame_path(data[0], "metadata_side_kernel")
+    assert metadata_path is not None
+    metadata_path_names = [node["frame"]["name"] for node in metadata_path]
+    assert metadata_path_names[-2].startswith(COMPUTE_METADATA_SCOPE_NAME)
+
+    scoped_metadata_path = find_frame_path(data[0], "metadata_scoped_side_kernel")
+    assert scoped_metadata_path is not None
+    scoped_metadata_path_names = [node["frame"]["name"] for node in scoped_metadata_path]
+    metadata_scope_idx = next(
+        i
+        for i, name in enumerate(scoped_metadata_path_names)
+        if name.startswith(COMPUTE_METADATA_SCOPE_NAME)
+    )
+    child_scope_idx = scoped_metadata_path_names.index("metadata_child_scope")
+    assert metadata_scope_idx < child_scope_idx < len(scoped_metadata_path_names) - 1
 
 
 def test_hook_with_third_party(tmp_path: pathlib.Path, device: str):

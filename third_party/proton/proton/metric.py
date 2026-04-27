@@ -4,7 +4,12 @@ import triton.runtime.driver as driver
 import triton.language as tl
 import triton
 from triton import MockTensor
-from .state import exit_state, enter_state, COMPUTE_METADATA_SCOPE_NAME
+from .state import (
+    current_metadata_state_name,
+    enter_state,
+    exit_state,
+    is_metadata_scope_active,
+)
 
 
 @triton.jit
@@ -97,24 +102,32 @@ def transform_tensor_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], d
     for key, value in metrics.items():
         if hasattr(value, "data_ptr"):  # tensor
             if value.device.type == "cpu":
-                scalar_metrics[key] = value
+                scalar_metrics[key] = float(value) if key.startswith("flops") else value
             else:  # device tensor
-                enter_state(COMPUTE_METADATA_SCOPE_NAME)
-                # implicit casting to double or int64 tensors
-                if value.is_floating_point():
-                    value = value.double()
-                    if value.numel() > 1:
-                        metric_index = libproton.metric_type_vector_double_index
+                entered_state = False
+                try:
+                    if not is_metadata_scope_active():
+                        enter_state(current_metadata_state_name())
+                        entered_state = True
+                    # Keep metric descriptors type-stable across kernels. FLOP metrics
+                    # are always represented as doubles, even when computed by integer
+                    # counter kernels.
+                    if key.startswith("flops") or value.is_floating_point():
+                        value = value.double()
+                        if value.numel() > 1:
+                            metric_index = libproton.metric_type_vector_double_index
+                        else:
+                            metric_index = libproton.metric_type_double_index
                     else:
-                        metric_index = libproton.metric_type_double_index
-                else:
-                    value = value.long()
-                    if value.numel() > 1:
-                        metric_index = libproton.metric_type_vector_int64_index
-                    else:
-                        metric_index = libproton.metric_type_int64_index
-                exit_state()
+                        value = value.long()
+                        if value.numel() > 1:
+                            metric_index = libproton.metric_type_vector_int64_index
+                        else:
+                            metric_index = libproton.metric_type_int64_index
+                finally:
+                    if entered_state:
+                        exit_state()
                 tensor_metrics[key] = _TensorMetric(value, metric_index)
         else:
-            scalar_metrics[key] = value
+            scalar_metrics[key] = float(value) if key.startswith("flops") else value
     return scalar_metrics, tensor_metrics

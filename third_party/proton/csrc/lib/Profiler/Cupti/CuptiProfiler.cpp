@@ -479,7 +479,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       const auto &name = threadState.scopeStack.back().name;
       if (name.empty())
         nodeState.status.setMissingName();
-      if (threadState.isMetricKernelLaunching) {
+      const bool isMetricKernelNode =
+          threadState.isMetricKernelLaunching &&
+          !threadState.metricKernelNumWordsQueue.empty();
+      if (isMetricKernelNode) {
         nodeState.status.setMetricNode();
         auto metricKernelNumWords =
             threadState.metricKernelNumWordsQueue.front();
@@ -490,7 +493,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       }
       for (auto *data : profiler.dataSet) {
         auto contexts = data->getContexts();
-        if (threadState.isMetricKernelLaunching) {
+        if (isMetricKernelNode) {
           if (threadState.isApiExternOp) { // API extern ops
             contexts.push_back(std::string(GraphState::metricTag));
           } else { // Triton ops

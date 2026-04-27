@@ -41,7 +41,7 @@ def remove_frames(database: json):
     def remove_frame_helper(node):
         if "frame" not in node:
             return node
-        if node["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME:
+        if node["frame"]["name"].startswith(COMPUTE_METADATA_SCOPE_NAME):
             return None
         if len(node["metrics"]) == 0 and len(node["children"]) == 0:
             return None
