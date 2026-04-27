@@ -1752,9 +1752,9 @@ struct TritonAMDGPUAccelerateMatmulPass
     case ISAFamily::RDNA4:
       ttg::populateDecomposeScaledBlockedPatterns(mfmaPatterns,
                                                   /*benefit=*/3);
-      mfmaPatterns.add<::BlockedToWMMA>(
-          context, getWmmaVersion(gfxArch), matrixInstructionSize,
-          /*benefit=*/2);
+      mfmaPatterns.add<::BlockedToWMMA>(context, getWmmaVersion(gfxArch),
+                                        matrixInstructionSize,
+                                        /*benefit=*/2);
       break;
     default:
       break;
