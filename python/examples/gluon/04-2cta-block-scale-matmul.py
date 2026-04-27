@@ -17,7 +17,6 @@ import triton
 import triton.experimental.gluon as gluon
 import triton.experimental.gluon.language as gl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
-from triton.language.core import _aggregate as aggregate
 
 from triton._C.libtriton import nvidia
 
@@ -298,12 +297,11 @@ def issue_loads(producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale
     mbarrier.expect(
         bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta + a_scale_desc.nbytes_per_cta + b_scale_desc.nbytes_per_cta,
         pred)
-    tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], bar, b_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar,
-                                    a_scale_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar,
-                                    b_scale_bufs.index(index), pred, multicast=multicast_b_scale)
+    tma.async_load(a_desc, [off_m, off_k_a], bar, a_bufs.index(index), pred)
+    tma.async_load(b_desc, [off_n, off_k_b], bar, b_bufs.index(index), pred)
+    tma.async_load(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_bufs.index(index), pred)
+    tma.async_load(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_bufs.index(index), pred,
+                   multicast=multicast_b_scale)
     return producer.next(pred)
 
 
@@ -317,7 +315,7 @@ def issue_mma(consumer, c_bars, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs, prod
     return consumer.next(pred), producer.next(pred)
 
 
-@aggregate
+@gluon.aggregate
 class Counter:
     index: gl.tensor
     phase: gl.tensor
@@ -337,7 +335,7 @@ class Counter:
         return Counter(index, phase, self.num_barriers)
 
 
-@aggregate
+@gluon.aggregate
 class ClcTileSchedulerConsumer:
     has_work: gl.tensor
     tile_id: gl.tensor
@@ -444,7 +442,7 @@ class ClcTileSchedulerConsumer:
 # ---------------------------------------------------------------------------
 
 
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     a_desc: tma.tensor_descriptor
     b_desc: tma.tensor_descriptor

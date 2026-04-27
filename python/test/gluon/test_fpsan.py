@@ -8,7 +8,8 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton import language as tl
-from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250, is_interpreter
+from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250, is_hopper, is_interpreter
+from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
@@ -1249,6 +1250,19 @@ def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = No
     return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
 
 
+def _bmm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = None) -> np.ndarray:
+    assert a_i32.ndim == 3
+    assert b_i32.ndim == 3
+    assert c_i32 is None or c_i32.ndim == 3
+    assert a_i32.shape[0] == b_i32.shape[0]
+    assert c_i32 is None or a_i32.shape[0] == c_i32.shape[0]
+    out = np.empty((a_i32.shape[0], a_i32.shape[1], b_i32.shape[2]), dtype=np.int32)
+    for batch in range(a_i32.shape[0]):
+        c_batch = c_i32[batch] if c_i32 is not None else None
+        out[batch] = _mm_payload_u32(a_i32[batch], b_i32[batch], c_batch)
+    return out
+
+
 def _unpack_element(data: np.ndarray, row: int, col: int, pack: int, pack_axis: int = 1) -> np.uint64:
     if pack_axis == 1:
         raw = np.uint64(data[row, col // pack])
@@ -1443,7 +1457,123 @@ def test_dot_fma(device, fresh_knobs):
     cw = triton.TensorWrapper(c, dtype=torch.float32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
-    kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+    compiled = kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+    ttgir = compiled.asm["ttgir"]
+    assert "ttng.tc_gen5_mma" not in ttgir
+    assert "ttng.warp_group_dot" not in ttgir
+
+    _assert_payload_equal(out, exp_bits)
+
+
+def test_dot_fma_batched(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    BATCH_SIZE = 2
+    B = 16
+    BATCH = gl.constexpr(BATCH_SIZE)
+    BLOCK = gl.constexpr(B)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, THREADS_PER_WARP: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([1, 1, 1], [1, THREADS_PER_WARP, 1], [1, 4, 1], [2, 1, 0])
+        lhs_layout: gl.constexpr = gl.DotOperandLayout(parent=layout, operand_index=0, k_width=0)
+        rhs_layout: gl.constexpr = gl.DotOperandLayout(parent=layout, operand_index=1, k_width=0)
+
+        offs_batch = gl.arange(0, BATCH, layout=gl.SliceLayout(1, parent=gl.SliceLayout(2, layout)))[:, None, None]
+        offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, parent=gl.SliceLayout(2, layout)))[None, :, None]
+        offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, parent=gl.SliceLayout(1, layout)))[None, None, :]
+        offs_k_a = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, parent=gl.SliceLayout(1, layout)))[None, None, :]
+        offs_k_b = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, parent=gl.SliceLayout(2, layout)))[None, :, None]
+
+        a_offs = offs_batch * BLOCK * BLOCK + offs_m * BLOCK + offs_k_a
+        b_offs = offs_batch * BLOCK * BLOCK + offs_k_b * BLOCK + offs_n
+        out_offs = offs_batch * BLOCK * BLOCK + offs_m * BLOCK + offs_n
+
+        a = gl.convert_layout(gl.load(a_ptr + a_offs), lhs_layout)
+        b = gl.convert_layout(gl.load(b_ptr + b_offs), rhs_layout)
+        c = gl.load(c_ptr + out_offs)
+        out = gl.dot_fma(a, b, c)
+        gl.store(out_ptr + out_offs, out)
+
+    rs = np.random.RandomState(1)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(BATCH_SIZE, B, B), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(BATCH_SIZE, B, B), dtype=np.int32)
+    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(BATCH_SIZE, B, B), dtype=np.int32)
+    exp_bits = _bmm_payload_u32(a_bits, b_bits, c_bits)
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
+    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
+    out = torch.empty((BATCH_SIZE, B, B), device="cuda", dtype=torch.int32)
+
+    aw = triton.TensorWrapper(a, dtype=torch.float32)
+    bw = triton.TensorWrapper(b, dtype=torch.float32)
+    cw = triton.TensorWrapper(c, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    compiled = kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+    ttgir = compiled.asm["ttgir"]
+    assert "ttng.tc_gen5_mma" not in ttgir
+    assert "ttng.warp_group_dot" not in ttgir
+
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+@pytest.mark.parametrize(("use_acc", "is_async"), [(False, False), (True, False), (True, True)])
+def test_warpgroup_mma(device, use_acc, is_async, fresh_knobs):
+    _require_cuda_backend(device)
+
+    B = 64
+    BLOCK = gl.constexpr(B)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, USE_ACC: gl.constexpr, IS_ASYNC: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
+        acc_layout: gl.constexpr = gl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1],
+                                                             instr_shape=[16, 32, 16])
+
+        offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
+        offs_k_row = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_k_col = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
+
+        a_tile = gl.load(a_ptr + offs_m * BLOCK + offs_k_col)
+        b_tile = gl.load(b_ptr + offs_k_row * BLOCK + offs_n)
+        c_tile = gl.load(c_ptr + offs_m * BLOCK + offs_n)
+
+        smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], gl.float32)
+        smem_a = gl.allocate_shared_memory(gl.float32, [BLOCK, BLOCK], smem_layout, a_tile)
+        smem_b = gl.allocate_shared_memory(gl.float32, [BLOCK, BLOCK], smem_layout, b_tile)
+
+        acc = gl.convert_layout(c_tile, acc_layout)
+        acc = hopper.warpgroup_mma(smem_a, smem_b, acc, use_acc=USE_ACC, precision="tf32", is_async=IS_ASYNC)
+        if IS_ASYNC:
+            acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
+        out = gl.convert_layout(acc, layout)
+        gl.store(out_ptr + offs_m * BLOCK + offs_n, out)
+
+    rs = np.random.RandomState(0)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits if use_acc else None)
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
+    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
+    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+
+    aw = triton.TensorWrapper(a, dtype=torch.float32)
+    bw = triton.TensorWrapper(b, dtype=torch.float32)
+    cw = triton.TensorWrapper(c, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    kernel[(1, )](aw, bw, cw, outw, USE_ACC=use_acc, IS_ASYNC=is_async)
 
     _assert_payload_equal(out, exp_bits)
 
