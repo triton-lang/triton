@@ -14,32 +14,6 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
-SmallVector<SmallVector<Value>>
-applyRegActionToCoords(const ColumnAction &action,
-                       ArrayRef<SmallVector<Value>> coords) {
-  if (action.isIdentity() || coords.empty())
-    return to_vector(coords);
-
-  unsigned rank = coords.front().size();
-  SmallVector<SmallVector<Value>> dimCoords(rank);
-  for (auto coord : coords) {
-    assert(coord.size() == rank && "expected all coordinates to have rank");
-    for (unsigned dim = 0; dim < rank; ++dim)
-      dimCoords[dim].push_back(coord[dim]);
-  }
-
-  for (auto &dimCoord : dimCoords)
-    dimCoord = action.apply(dimCoord);
-
-  SmallVector<SmallVector<Value>> ret(dimCoords.front().size(),
-                                      SmallVector<Value>(rank));
-  for (unsigned dim = 0; dim < rank; ++dim) {
-    for (auto [i, value] : llvm::enumerate(dimCoords[dim]))
-      ret[i][dim] = value;
-  }
-  return ret;
-}
-
 // Helper for LocalGather/ScatterOpConversion.
 // For gather: storeVals is empty, returns loaded values.
 // For scatter: storeVals contains values to store, returns empty.
@@ -386,90 +360,6 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
-struct LocalAtomicScatterAddOpConversion
-    : public ConvertOpToLLVMPattern<LocalAtomicScatterAddOp> {
-public:
-  LocalAtomicScatterAddOpConversion(LLVMTypeConverter &typeConverter,
-                                    const TargetInfoBase &targetInfo,
-                                    PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
-  }
-
-  LogicalResult
-  matchAndRewrite(LocalAtomicScatterAddOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto memDescTy = cast<MemDescType>(op.getDst().getType());
-    if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
-            memDescTy.getEncoding())) {
-      return rewriter.notifyMatchFailure(
-          op, "PartitionedSharedEncoding not yet supported in lowering");
-    }
-    if (op.getMask()) {
-      return rewriter.notifyMatchFailure(
-          op, "masked local_atomic_scatter_add requires backend-specific "
-              "lowering; it is not supported on AMD GPUs");
-    }
-    auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
-    auto typeConverter = getTypeConverter();
-    auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
-                                                         llvmElemTy, rewriter);
-
-    SmallVector<Value> values =
-        unpackLLElements(loc, adaptor.getValues(), rewriter);
-    SmallVector<Value> idxValues =
-        unpackLLElements(loc, adaptor.getIndices(), rewriter);
-    SmallVector<SmallVector<Value>> srcIndices =
-        emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(), valuesTy,
-                    /*withCTAOffset=*/true);
-    LinearLayout regLayout = toLinearLayout(valuesTy);
-    auto freeVarMasks = regLayout.getFreeVariableMasks();
-    auto *ctx = rewriter.getContext();
-    if (freeVarMasks.lookup(StringAttr::get(ctx, "lane")) != 0 ||
-        freeVarMasks.lookup(StringAttr::get(ctx, "warp")) != 0 ||
-        freeVarMasks.lookup(StringAttr::get(ctx, "block")) != 0) {
-      return rewriter.notifyMatchFailure(
-          op, "broadcasted lane/warp/block values require backend-specific "
-              "local_atomic_scatter_add lowering");
-    }
-    auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
-    if (!removeBroadcast.isIdentity()) {
-      values = removeBroadcast.apply(values);
-      idxValues = removeBroadcast.apply(idxValues);
-      srcIndices = applyRegActionToCoords(removeBroadcast, srcIndices);
-    }
-
-    LLVM::AtomicBinOp atomicBinOp = isa<FloatType>(llvmElemTy)
-                                        ? LLVM::AtomicBinOp::fadd
-                                        : LLVM::AtomicBinOp::add;
-    auto ordering = getMemoryOrdering(MemSemantic::RELAXED);
-    if (!ordering.has_value()) {
-      return rewriter.notifyMatchFailure(op, "unsupported memory semantic");
-    }
-    SmallVector<Value> ptrs =
-        computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
-                         srcIndices, op.getAxis(), rewriter);
-    SmallVector<Value> results;
-    results.reserve(ptrs.size());
-
-    for (auto [ptr, value] : llvm::zip(ptrs, values)) {
-      results.push_back(LLVM::AtomicRMWOp::create(rewriter, loc, atomicBinOp,
-                                                  ptr, value, *ordering)
-                            .getResult());
-    }
-
-    if (!removeBroadcast.isIdentity())
-      results = broadcastAs(results, regLayout);
-    Value result =
-        packLLElements(loc, typeConverter, results, rewriter, op.getType());
-    rewriter.replaceOp(op, result);
-    return success();
-  }
-
-private:
-  const TargetInfoBase &targetInfo;
-};
 } // namespace
 
 void mlir::triton::populateMemoryOpToLLVMPatterns(
@@ -482,8 +372,6 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalScatterOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<LocalAtomicScatterAddOpConversion>(typeConverter, targetInfo,
-                                                  benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<BarrierOpConversion>(typeConverter, benefit);
 }

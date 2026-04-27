@@ -2621,8 +2621,8 @@ def shared_masked_atomic_scatter_add_kernel(
     (32, 16, 0),
 ])
 def test_shared_atomic_scatter_add(use_mask, torch_dtype, gluon_dtype, use_full_rhs, N, M, axis):
-    if use_mask and (is_hip_cdna() or is_hip_rdna()):
-        pytest.skip("Masked shared atomic_scatter_add is not supported on AMD")
+    if is_hip_cdna() or is_hip_rdna():
+        pytest.skip("Shared atomic_scatter_add is not supported on AMD")
 
     device = torch.device("cuda")
 
