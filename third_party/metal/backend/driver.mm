@@ -158,10 +158,21 @@ void launchKernel(const std::tuple<int, int, int> &grid, int kernelId,
     if (ty[0] == '*') {
       at::Tensor t = THPVariable_Unpack(arg.ptr());
       ka.buffer = at::native::mps::getMTLBufferStorage(t);
+      kernelArgs.push_back(std::move(ka));
+
+      // inject one implicit stride arg with all dims packed
+      KernelArg sa;
+      sa.bytes.resize(t.dim() * sizeof(int64_t));
+      for (int d = 0; d < t.dim(); d++) {
+        int64_t stride = t.stride(d);
+        std::memcpy(sa.bytes.data() + d * sizeof(int64_t), &stride,
+                    sizeof(int64_t));
+      }
+      kernelArgs.push_back(std::move(sa));
     } else {
       ka.bytes = scalarToBytes(ty, arg);
+      kernelArgs.push_back(std::move(ka));
     }
-    kernelArgs.push_back(std::move(ka));
   }
 
   auto [gx, gy, gz] = grid;
