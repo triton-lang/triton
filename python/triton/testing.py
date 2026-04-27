@@ -4,6 +4,8 @@ import os
 import statistics
 import subprocess
 import sys
+import tempfile
+import uuid
 from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
@@ -55,6 +57,43 @@ def _summarize_statistics(times, quantiles, return_mode):
         return statistics.mean(times)
     elif return_mode == "median":
         return statistics.median(times)
+
+
+@contextmanager
+def _proton_bench_session():
+    import triton.profiler as proton
+
+    with tempfile.TemporaryDirectory(prefix=f"triton-bench-proton-{uuid.uuid4().hex}") as tmpdir:
+        session = proton.start(os.path.join(tmpdir, "profile"), context="shadow", data="tree")
+        try:
+            yield proton, session
+        finally:
+            if session is not None:
+                proton.finalize(session)
+
+
+def _collect_proton_scope_times(database, prefix):
+    scope_times = []
+
+    def kernel_time_ms(node):
+        children = node.get("children", [])
+        if len(children) == 0:
+            return node.get("metrics", {}).get("time (ns)", 0) / 1e6
+        return sum(kernel_time_ms(child) for child in children)
+
+    def visit(node):
+        name = node.get("frame", {}).get("name", "")
+        if name.startswith(prefix):
+            time_ms = kernel_time_ms(node)
+            if time_ms > 0:
+                scope_times.append((name, time_ms))
+            return
+        for child in node.get("children", []):
+            visit(child)
+
+    for node in database:
+        visit(node)
+    return [time for _, time in sorted(scope_times)]
 
 
 def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
@@ -124,6 +163,83 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         return _summarize_statistics(ret, quantiles, return_mode)
 
 
+def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
+    """
+    Benchmark the runtime of kernels invoked by the provided function using the Proton profiler and CUDA graphs.
+
+    This function is similar to `do_bench_cudagraph` that avoid CPU overhead by replaying a CUDA graph with multiple iterations of the provided function, 
+    but it uses the Proton profiler to measure the runtime of each kernel in the graph instead of using CUDA events to measure the total runtime of the graph.
+    This allows us to get more fine-grained measurements of the kernel runtimes and to exclude cache flushes from the measurement.
+    Note that this function has several constraints compared to `do_bench_cudagraph`:
+    - It does not measure GPU operations other than kernels (e.g., memory copies, synchronization, etc.).
+    - It supports only NVIDIA and AMD GPUs.
+
+    :param fn: Function to benchmark
+    :type fn: Callable
+    :param rep: Repetition time (in ms)
+    :type rep: int
+    :param grad_to_none: Reset the gradient of the provided tensor to None
+    :type grad_to_none: torch.tensor, optional
+    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
+    :type return_mode: str
+    """
+    import torch
+
+    assert return_mode in ["min", "max", "mean", "median", "all"]
+
+    with torch.cuda.stream(torch.cuda.Stream()):
+        fn()
+        if grad_to_none is not None:
+            for x in grad_to_none:
+                x.detach_()
+                x.requires_grad_(True)
+                x.grad = None
+
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        start_event.record()
+        for _ in range(5):
+            fn()
+        end_event.record()
+        torch.cuda.synchronize()
+        estimate_ms = start_event.elapsed_time(end_event) / 5
+        n_repeat = 1000 if estimate_ms == 0 else max(1, int(rep / estimate_ms))
+
+        with _proton_bench_session() as (proton, session):
+            if session is None:
+                raise RuntimeError(
+                    "Proton profiler session could not be created. Make sure you are running on a supported GPU and "
+                    "that the Proton profiler is properly installed.")
+            cache = runtime.driver.active.get_empty_cache_for_benchmark()
+            g = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(g):
+                for _ in range(n_repeat):
+                    if grad_to_none is not None:
+                        for x in grad_to_none:
+                            x.grad = None
+                    proton.deactivate(session)
+                    runtime.driver.active.clear_cache(cache)
+                    proton.activate(session)
+                    fn()
+            torch.cuda.synchronize()
+            proton.deactivate(session)
+            scope_prefix = f"proton.{uuid.uuid4().hex}."
+            n_retries = 10
+            try:
+                for i in range(n_retries):
+                    with proton.scope(f"{scope_prefix}{i:08d}"):
+                        g.replay()
+                torch.cuda.synchronize()
+            finally:
+                proton.deactivate(session, flushing=True)
+
+            times = [t / n_repeat for t in _collect_proton_scope_times(proton.data.get(session), scope_prefix)]
+            if len(times) != n_retries:
+                raise RuntimeError(f"Expected {n_retries} Proton timing scopes, got {len(times)}")
+
+        return _summarize_statistics(times, quantiles, return_mode)
+
+
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
@@ -187,6 +303,86 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     # Record clocks
     di.synchronize()
     times = [s.elapsed_time(e) for s, e in zip(start_event, end_event)]
+    return _summarize_statistics(times, quantiles, return_mode)
+
+
+def do_bench_proton(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
+    """
+    Benchmark the runtime of kernels invoked by the provided function using the Proton profiler.
+
+    The measured runtime is generally more accurate than `do_bench` for short kernels that are affected by CPU overhead.
+    Note that this function has several constraints compared to `do_bench`:
+    - It does not measure GPU operations other than kernels (e.g., memory copies, synchronization, etc.).
+    - It supports only AMD and NVIDIA GPUs.
+
+    :param fn: Function to benchmark.
+    :type fn: Callable
+    :param warmup: Warmup time (in ms).
+    :type warmup: int
+    :param rep: Repetition time (in ms).
+    :type rep: int
+    :param grad_to_none: Reset the gradient of the provided tensor(s) to `None`.
+    :type grad_to_none: torch.Tensor, optional
+    :param quantiles: Performance percentiles to return in addition to the median.
+    :type quantiles: list[float], optional
+    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
+    :type return_mode: str
+    """
+    assert return_mode in ["min", "max", "mean", "median", "all"]
+
+    di = runtime.driver.active.get_device_interface()
+
+    fn()
+    di.synchronize()
+
+    cache = runtime.driver.active.get_empty_cache_for_benchmark()
+
+    start_event = di.Event(enable_timing=True)
+    end_event = di.Event(enable_timing=True)
+    start_event.record()
+    for _ in range(5):
+        runtime.driver.active.clear_cache(cache)
+        fn()
+    end_event.record()
+    di.synchronize()
+    estimate_ms = start_event.elapsed_time(end_event) / 5
+
+    if estimate_ms == 0:
+        n_warmup = 1000
+        n_repeat = 1000
+    else:
+        n_warmup = max(1, int(warmup / estimate_ms))
+        n_repeat = max(1, int(rep / estimate_ms))
+
+    for _ in range(n_warmup):
+        fn()
+    di.synchronize()
+
+    scope_prefix = f"proton.{uuid.uuid4().hex}."
+    with _proton_bench_session() as (proton, session):
+        if session is None:
+            raise RuntimeError(
+                "Proton profiler session could not be created. Make sure you are running on a supported GPU and "
+                "that the Proton profiler is properly installed.")
+        proton.deactivate(session)
+        try:
+            for i in range(n_repeat):
+                if grad_to_none is not None:
+                    for x in grad_to_none:
+                        x.grad = None
+                proton.deactivate(session)
+                runtime.driver.active.clear_cache(cache)
+                proton.activate(session)
+                with proton.scope(f"{scope_prefix}{i:08d}"):
+                    fn()
+            di.synchronize()
+        finally:
+            proton.deactivate(session, flushing=True)
+
+        times = _collect_proton_scope_times(proton.data.get(session), scope_prefix)
+        if len(times) != n_repeat:
+            raise RuntimeError(f"Expected {n_repeat} Proton timing scopes, got {len(times)}")
+
     return _summarize_statistics(times, quantiles, return_mode)
 
 
