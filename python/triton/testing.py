@@ -217,13 +217,10 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
                     if grad_to_none is not None:
                         for x in grad_to_none:
                             x.grad = None
-                    proton.deactivate(session)
                     runtime.driver.active.clear_cache(cache)
-                    proton.activate(session)
                     with proton.scope(f"{scope_prefix}{i}"):
                         fn()
             torch.cuda.synchronize()
-            proton.deactivate(session)
             scope_prefix = f"proton.{uuid.uuid4().hex}."
             n_retries = 10
             try:
@@ -362,15 +359,12 @@ def do_bench_proton(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, r
             raise RuntimeError(
                 "Proton profiler session could not be created. Make sure you are running on a supported GPU and "
                 "that the Proton profiler is properly installed.")
-        proton.deactivate(session)
         try:
             for i in range(n_repeat):
                 if grad_to_none is not None:
                     for x in grad_to_none:
                         x.grad = None
-                proton.deactivate(session)
                 runtime.driver.active.clear_cache(cache)
-                proton.activate(session)
                 with proton.scope(f"{scope_prefix}{i:08d}"):
                     fn()
             di.synchronize()
