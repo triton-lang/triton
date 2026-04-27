@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -convert-warp-pipeline="arch=gfx950" -verify-diagnostics
+// RUN: triton-opt %s -split-input-file -convert-warp-pipeline="gfx-arch=gfx950" -verify-diagnostics
 
 // validatePipelinedForBody runs upfront, before any IR mutation, so a
 // malformed `pipelined_for` body fails the pass with no partial conversion.
