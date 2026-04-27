@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --allocate-amdgpu-shared-memory --convert-triton-amdgpu-to-llvm="arch=gfx1250" | FileCheck %s
+// RUN: triton-opt %s --allocate-amdgpu-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx1250" | FileCheck %s
 
 // A barrier must be inserted between a convert_layout and a buffer_atomic_rmw
 // when they share the same LDS scratch region.

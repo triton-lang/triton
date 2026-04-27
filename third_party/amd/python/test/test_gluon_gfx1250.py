@@ -139,6 +139,78 @@ def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
     assert re.search(wmma_pattern, amdgcn)
 
 
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+def test_runtime_scaled_upcast_fp4():
+
+    @gluon.jit
+    def scaled_upcast_fp4_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr):
+        packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0])
+        unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
+
+        offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, packed_layout))
+        offs_k_packed = ttgl.arange(0, BLOCK_K // 2, layout=ttgl.SliceLayout(0, packed_layout))
+        x_offsets = offs_m[:, None] * (BLOCK_K // 2) + offs_k_packed[None, :]
+        x = ttgl.load(x_ptr + x_offsets)
+
+        offs_scale_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, unpacked_layout))
+        offs_scale_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, unpacked_layout))
+        scale_offsets = offs_scale_m[:, None] * BLOCK_K + offs_scale_k[None, :]
+        scale = ttgl.load(scale_ptr + scale_offsets)
+
+        y = ttgl.amd.gfx1250.scaled_upcast(x, scale, ttgl.bfloat16, axis=1)
+        ttgl.store(y_ptr + scale_offsets, y)
+
+    BLOCK_M = 16
+    BLOCK_K = 64
+    SCALE_FACTOR = 32
+    torch.manual_seed(42)
+
+    x, x_ref = create_mxfp_operand(0, BLOCK_M, BLOCK_K, "e2m1")
+    scale, scale_ref = create_mxfp_scale(0, BLOCK_M, BLOCK_K, "e8m0", SCALE_FACTOR)
+    scale = scale.repeat_interleave(SCALE_FACTOR, dim=1).contiguous()
+    y = torch.empty((BLOCK_M, BLOCK_K), dtype=torch.bfloat16, device="cuda")
+
+    pgm = scaled_upcast_fp4_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, num_warps=4)
+
+    assert "v_cvt_scale_pk8_bf16_fp4" in pgm.asm["amdgcn"]
+    y_ref = (x_ref * scale_ref).to(torch.bfloat16)
+    torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+def test_runtime_scaled_upcast_fp8():
+
+    @gluon.jit
+    def scaled_upcast_fp8_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
+
+        offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout))
+        offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, layout))
+        offsets = offs_m[:, None] * BLOCK_K + offs_k[None, :]
+        x = ttgl.load(x_ptr + offsets)
+        scale = ttgl.load(scale_ptr + offsets)
+
+        y = ttgl.amd.gfx1250.scaled_upcast(x, scale, ttgl.bfloat16)
+        ttgl.store(y_ptr + offsets, y)
+
+    BLOCK_M = 16
+    BLOCK_K = 64
+    SCALE_FACTOR = 32
+    torch.manual_seed(42)
+
+    x, x_ref = create_mxfp_operand(0, BLOCK_M, BLOCK_K, "e4m3")
+    x = x.view(torch.float8_e4m3fn)
+    scale, scale_ref = create_mxfp_scale(0, BLOCK_M, BLOCK_K, "e8m0", SCALE_FACTOR)
+    scale = scale.repeat_interleave(SCALE_FACTOR, dim=1).contiguous()
+    y = torch.empty((BLOCK_M, BLOCK_K), dtype=torch.bfloat16, device="cuda")
+
+    pgm = scaled_upcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, num_warps=4)
+
+    assert "v_cvt_scale_pk8_bf16_fp8" in pgm.asm["amdgcn"]
+    y_ref = (x_ref * scale_ref).to(torch.bfloat16)
+    torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
+
+
 @pytest.mark.parametrize("a_dtype,b_dtype,k_dim", get_test_gemm_variants())
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", get_test_gemm_block_mnk())
 @pytest.mark.parametrize("M,N,K", get_test_gemm_shapes())
@@ -4305,3 +4377,67 @@ def test_runtime_tdm_gather_partial_column_block(N, num_warps, index_dtype):
             ref_out[dst_row] = inp[src_row]
 
     torch.testing.assert_close(out_result, ref_out)
+
+
+@gluon.jit
+def buffer_load_store_roundtrip_kernel(a_ptr, b_ptr, BLOCK: ttgl.constexpr, loadCM: ttgl.constexpr,
+                                       storeCM: ttgl.constexpr):
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([8], [32], [1], [0])
+    pid = ttgl.program_id(axis=0)
+    offs = pid * BLOCK + ttgl.arange(0, BLOCK, layout=BLOCKED_LAYOUT)
+    data = ttgl.amd.gfx1250.buffer_load(ptr=a_ptr, offsets=offs, cache=loadCM)
+    ttgl.amd.gfx1250.buffer_store(stored_value=data, ptr=b_ptr, offsets=offs, cache=storeCM)
+
+
+@gluon.jit
+def async_load_store_roundtrip_kernel(a_ptr, b_ptr, BLOCK: ttgl.constexpr, loadCM: ttgl.constexpr,
+                                      storeCM: ttgl.constexpr):
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([8], [32], [1], [0])
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[BLOCK // 2, 8]], [BLOCK], [0])
+    pid = ttgl.program_id(axis=0)
+    offs = pid * BLOCK + ttgl.arange(0, BLOCK, layout=BLOCKED_LAYOUT)
+    buffer = ttgl.allocate_shared_memory(ttgl.float16, shape=[BLOCK], layout=SHARED_LAYOUT)
+    ttgl.amd.gfx1250.async_copy.global_to_shared(buffer, a_ptr + offs, cache_modifier=loadCM)
+    ttgl.amd.gfx1250.async_copy.shared_to_global(b_ptr + offs, buffer, cache_modifier=storeCM)
+
+
+@pytest.mark.parametrize("loadCM, storeCM", [(".ca", ".wb"), (".cg", ".cg"), (".cs", ".cs"), (".cv", ".wt")])
+@pytest.mark.parametrize("test_kernel", [buffer_load_store_roundtrip_kernel, async_load_store_roundtrip_kernel])
+def test_cache_modifier(loadCM, storeCM, test_kernel):
+    BLOCK = 256
+    N = 256
+
+    src = torch.rand((N, ), dtype=torch.float16).cuda()
+    dst = torch.empty((N, ), dtype=torch.float16).cuda()
+    pgm = test_kernel[(triton.cdiv(N, BLOCK), )](src, dst, BLOCK, loadCM, storeCM, num_warps=1)
+
+    torch.testing.assert_close(dst, src)
+
+    amdgcn = pgm.asm["amdgcn"]
+
+    load_found = False
+    store_found = False
+    for line in amdgcn.split("\n"):
+        if "buffer_load_b128" in line or "global_load_async_to_lds_b128" in line:
+            load_found = True
+            if loadCM == ".ca":
+                assert "scope" not in line and "th" not in line
+            if loadCM == ".cg":
+                assert "scope:SCOPE_DEV" in line and "th" not in line
+            if loadCM == ".cs":
+                assert "scope" not in line and "th:TH_LOAD_NT" in line
+            if loadCM == ".cv":
+                assert "scope:SCOPE_SYS" in line and "th:TH_LOAD_BYPASS" in line
+        if "buffer_store_b128" in line or "global_store_async_from_lds_b128" in line:
+            store_found = True
+            if storeCM == ".wb":
+                assert "scope" not in line and "th" not in line
+            if storeCM == ".cg":
+                assert "scope:SCOPE_DEV" in line and "th" not in line
+            if storeCM == "cs":
+                assert "scope" not in line and "th:TH_LOAD_NT" in line
+            if storeCM == ".wt":
+                assert "scope:SCOPE_SYS" in line and "th:TH_STORE_BYPASS" in line
+
+    assert load_found
+    assert store_found

@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -split-input-file -mlir-print-local-scope -allow-unregistered-dialect -convert-warp-specialize-to-llvm -canonicalize=region-simplify=disabled | FileCheck %s --check-prefixes=COMMON,CHECK
-// RUN: triton-opt %s -split-input-file -mlir-print-local-scope -allow-unregistered-dialect -triton-amdgpu-convert-warp-specialize-to-llvm=arch=gfx1250 -canonicalize=region-simplify=disabled | FileCheck %s --check-prefixes=COMMON,AMD
+// RUN: triton-opt %s -split-input-file -mlir-print-local-scope -allow-unregistered-dialect -triton-amdgpu-convert-warp-specialize-to-llvm=gfx-arch=gfx1250 -canonicalize=region-simplify=disabled | FileCheck %s --check-prefixes=COMMON,AMD
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 11 : i32} {
 

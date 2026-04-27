@@ -1,7 +1,7 @@
 #include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/CodeGen/MIRParser/MIRParser.h"

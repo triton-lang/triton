@@ -2422,7 +2422,7 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :param mask: if `mask[idx]` is false, do not load the data at address `pointer[idx]`
         (must be `None` with block pointers)
     :type mask: Block of `triton.int1`, optional
-    :param other: if `mask[idx]` is false, return `other[idx]`
+    :param other: if `mask[idx]` is false, return `other[idx]`. If `other` is `None`, the masked-out value is undefined.
     :type other: Block, optional
     :param boundary_check: tuple of integers, indicating the dimensions which should do the boundary check
     :type boundary_check: tuple of ints, optional
