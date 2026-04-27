@@ -98,6 +98,7 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
 
     if precision is None:
         precision = _semantic.builder.options.default_dot_input_precision
+    precision = _core._unwrap_if_constexpr(precision)
 
     precision = _semantic._str_to_dot_input_precision(precision)
 

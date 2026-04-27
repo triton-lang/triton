@@ -7,7 +7,7 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
-#include "triton/Tools/Sys/Dump.hpp"
+#include "triton/Tools/Sys/Dump.h"
 
 #define DEBUG_TYPE "nvgpu-warp-specialization"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")

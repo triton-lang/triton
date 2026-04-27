@@ -187,13 +187,14 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         // the shared memory order to follow the thread order, while preserving
         // the fastest dimension from the memory order if it's contiguous > 1 to
         // keep vectorization.
-        auto llEnc =
-            triton::gpu::toLinearEncoding(cast<RankedTensorType>(srcTy));
-        auto threadOrder = llEnc.getThreadOrder();
+        auto srcTensorTy = cast<RankedTensorType>(srcTy);
+        auto regOrder = triton::gpu::getOrder(srcTensorTy);
+        auto threadOrder = triton::gpu::getThreadOrder(srcTensorTy);
 
         SetVector<unsigned> orderSet;
 
-        auto regContig = llEnc.getContigPerThread()[order[0]];
+        auto regContig =
+            triton::gpu::getContigPerThread(srcTensorTy)[regOrder[0]];
         unsigned elemBitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
         unsigned finalRegContig =
             fitToValidDirectToLdsVecSize(regContig, elemBitWidth, targetInfo);

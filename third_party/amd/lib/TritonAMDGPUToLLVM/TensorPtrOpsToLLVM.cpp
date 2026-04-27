@@ -119,10 +119,16 @@ struct MakeTensorDescOpConversion
         rewriter, loc, getTypeConverter(), elementType, shapePerCTA, numWarps,
         padInterval, padAmount, tensorShape, tensorStride, basePtr, sharedEnc);
 
+    // `getAllGroups()` returns 2 (2D) or 4 (3D-5D) vector Values; scalarize
+    // them into 12 or 20 i32 scalars to match the flat MLIR struct type
+    // returned by `convertTensorDescType` (which matches the host-side
+    // TDMDescriptor ABI).
     SmallVector<Value> groups = tdmDesc.getAllGroups();
+    SmallVector<Value> scalars =
+        mlir::LLVM::AMD::scalarizeTDMDescriptor(rewriter, loc, groups);
 
-    auto desc =
-        packLLElements(loc, getTypeConverter(), groups, rewriter, tensorDescTy);
+    auto desc = packLLElements(loc, getTypeConverter(), scalars, rewriter,
+                               tensorDescTy);
 
     rewriter.replaceOp(op, desc);
     return success();

@@ -195,7 +195,7 @@ public:
     if (intAttr || boolAttr) {
       int64_t value{};
       if (intAttr)
-        value = intAttr.getValue().getZExtValue();
+        value = intAttr.getValue().getSExtValue();
       else
         value = boolAttr.getValue() ? 1 : 0;
       return AxisInfo(/*contiguity=*/{1},
@@ -206,7 +206,7 @@ public:
     // TODO: generalize to dense attr
     auto splatAttr = dyn_cast<SplatElementsAttr>(op.getValue());
     if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
-      int64_t value = splatAttr.template getSplatValue<APInt>().getZExtValue();
+      int64_t value = splatAttr.template getSplatValue<APInt>().getSExtValue();
       TensorType ty = cast<TensorType>(splatAttr.getType());
       return AxisInfo(
           /*contiguity=*/AxisInfo::DimVectorT(ty.getRank(), 1),
@@ -1378,11 +1378,10 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
   // the analysis to one dimension. We should determine contiguity on the
   // flattenOuts() layout
   auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
-  auto linAttr = gpu::toLinearEncoding(tensorTy);
-  auto order = linAttr.getOrder();
+  auto order = gpu::getOrder(tensorTy);
   unsigned align = getAlignment(offsetsValue, elementBitWidth);
 
-  auto uniqueContigPerThread = linAttr.getContigPerThread();
+  auto uniqueContigPerThread = gpu::getContigPerThread(tensorTy);
   assert(order[0] < uniqueContigPerThread.size() &&
          "Unexpected uniqueContigPerThread size");
   unsigned contiguity = uniqueContigPerThread[order[0]];
@@ -1411,8 +1410,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
   auto *axisInfo = getAxisInfo(offsetsValue);
   if (!axisInfo)
     return 1;
-  auto linAttr = gpu::toLinearEncoding(tensorTy);
-  auto order = linAttr.getOrder();
+  auto order = gpu::getOrder(tensorTy);
 
   auto divisibility = axisInfo->getDivisibility(order[0]);
   auto elemNumBytes = std::max<unsigned>(elementBitWidth / 8, 1);
@@ -1443,8 +1441,7 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto *axisInfo = getAxisInfo(mask);
   if (!axisInfo)
     return 1;
-  auto linAttr = gpu::toLinearEncoding(tensorTy);
-  auto maskOrder = linAttr.getOrder();
+  auto maskOrder = gpu::getOrder(tensorTy);
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
                                         << alignment);

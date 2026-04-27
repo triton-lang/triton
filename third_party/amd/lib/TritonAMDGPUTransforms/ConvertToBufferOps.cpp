@@ -636,7 +636,7 @@ struct TritonAMDGPUConvertToBufferOpsPass
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     ModuleOp mod = getOperation();
-    triton::AMD::TargetInfo targetInfo(archGenerationName);
+    triton::AMD::TargetInfo targetInfo(gfxArch);
 
     // Collect assumptions in the function
     DenseMap<Value, SetVector<Operation *>> assumptions =
