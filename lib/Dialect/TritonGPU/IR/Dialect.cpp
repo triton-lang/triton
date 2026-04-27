@@ -4273,12 +4273,11 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
 // - pixelsPerColumn (otherDim): max 1024, no splitting (single TMA message)
 // Doc:
 // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html
-static FailureOr<SmallVector<int64_t>>
-getTMABlockShapeIm2ColImpl(
+static FailureOr<SmallVector<int64_t>> getTMABlockShapeIm2ColImpl(
     ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
     bool fp4Padded, bool isTransposed, bool packedSize,
-    function_ref<FailureOr<SmallVector<int64_t>>(
-        function_ref<void(raw_ostream &)>)>
+    function_ref<
+        FailureOr<SmallVector<int64_t>>(function_ref<void(raw_ostream &)>)>
         emitError) {
   assert(shapePerCTA.size() == 2 && "im2col mode requires a 2D block shape");
 
@@ -4331,9 +4330,8 @@ getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
                        int swizzleBytes, bool fp4Padded, bool isTransposed,
                        bool packedSize,
                        function_ref<InFlightDiagnostic()> emitError) {
-  auto emitDiagnostic =
-      [&](function_ref<void(raw_ostream &)> buildMessage)
-          -> FailureOr<SmallVector<int64_t>> {
+  auto emitDiagnostic = [&](function_ref<void(raw_ostream &)> buildMessage)
+      -> FailureOr<SmallVector<int64_t>> {
     auto diag = emitError();
     SmallString<128> msg;
     llvm::raw_svector_ostream os(msg);
@@ -4347,12 +4345,11 @@ getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
 }
 
 // Tiled mode block shape calculation.
-static FailureOr<SmallVector<int64_t>>
-getTMABlockShapeTiledImpl(
+static FailureOr<SmallVector<int64_t>> getTMABlockShapeTiledImpl(
     ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
     bool fp4Padded, bool isTransposed, bool packedSize,
-    function_ref<FailureOr<SmallVector<int64_t>>(
-        function_ref<void(raw_ostream &)>)>
+    function_ref<
+        FailureOr<SmallVector<int64_t>>(function_ref<void(raw_ostream &)>)>
         emitError) {
   SmallVector<int64_t> blockShape(shapePerCTA);
 
@@ -4388,9 +4385,8 @@ getTMABlockShapeTiled(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
                       int swizzleBytes, bool fp4Padded, bool isTransposed,
                       bool packedSize,
                       function_ref<InFlightDiagnostic()> emitError) {
-  auto emitDiagnostic =
-      [&](function_ref<void(raw_ostream &)> buildMessage)
-          -> FailureOr<SmallVector<int64_t>> {
+  auto emitDiagnostic = [&](function_ref<void(raw_ostream &)> buildMessage)
+      -> FailureOr<SmallVector<int64_t>> {
     auto diag = emitError();
     SmallString<128> msg;
     llvm::raw_svector_ostream os(msg);
@@ -4420,10 +4416,8 @@ FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
 FailureOr<SmallVector<int64_t>> triton::gpu::tryGetTMABlockShape(
     ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
     bool fp4Padded, bool isTransposed, bool packedSize, TMAMode mode) {
-  auto ignoreError =
-      [&](function_ref<void(raw_ostream &)>) -> FailureOr<SmallVector<int64_t>> {
-    return failure();
-  };
+  auto ignoreError = [&](function_ref<void(raw_ostream &)>)
+      -> FailureOr<SmallVector<int64_t>> { return failure(); };
   if (mode == TMAMode::Im2Col) {
     return getTMABlockShapeIm2ColImpl(shapePerCTA, elementBitWidth,
                                       swizzleBytes, fp4Padded, isTransposed,

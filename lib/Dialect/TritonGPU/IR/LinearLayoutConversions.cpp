@@ -193,11 +193,9 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
   return LinearLayout({{S("offset"), bases2D}}, outDimNames);
 }
 
-static FailureOr<LinearLayout>
-buildNvmmaSharedLinearLayout(ArrayRef<int64_t> shape,
-                             NVMMASharedEncodingAttr shared,
-                             ArrayRef<int64_t> tmaShape, bool disableSwizzle,
-                             bool emitErrors) {
+static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
+    ArrayRef<int64_t> shape, NVMMASharedEncodingAttr shared,
+    ArrayRef<int64_t> tmaShape, bool disableSwizzle, bool emitErrors) {
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   auto shapePerCTA = getShapePerCTA(shared, shape);
@@ -283,9 +281,9 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
   auto shapePerCTA = getShapePerCTA(shared, shape);
   auto tmaShape = triton::nvidia_gpu::getTMABlockShape(
       shared, shapePerCTA, /*packedSize=*/true, mode);
-  auto layout = buildNvmmaSharedLinearLayout(shape, shared, tmaShape,
-                                             disableSwizzle,
-                                             /*emitErrors=*/true);
+  auto layout =
+      buildNvmmaSharedLinearLayout(shape, shared, tmaShape, disableSwizzle,
+                                   /*emitErrors=*/true);
   if (failed(layout))
     llvm::report_fatal_error("Illegal shared layout");
   return *layout;
@@ -301,8 +299,7 @@ tryNvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
       shared.getFp4Padded(), shared.getTransposed(), /*packedSize=*/true, mode);
   if (failed(tmaShape))
     return failure();
-  return buildNvmmaSharedLinearLayout(shape, shared, *tmaShape,
-                                      disableSwizzle,
+  return buildNvmmaSharedLinearLayout(shape, shared, *tmaShape, disableSwizzle,
                                       /*emitErrors=*/false);
 }
 
