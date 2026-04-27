@@ -374,6 +374,17 @@ class compilation_knobs(base_knobs):
 class autotuning_knobs(base_knobs):
     cache: env_bool = env_bool("TRITON_CACHE_AUTOTUNING")
     print: env_bool = env_bool("TRITON_PRINT_AUTOTUNING")
+    # Number of threads for parallel kernel compilation during autotuning.
+    # 0 = auto (min(4, cpu_count//2)), 1 = sequential (original code path).
+    compile_workers: env_int = env_int("TRITON_AUTOTUNING_COMPILE_WORKERS", 1)
+    # When True and compile_workers > 1, benchmarking runs between compilations:
+    # as each config finishes compiling, it is benchmarked (sequentially) while
+    # remaining configs continue compiling in background threads. When False,
+    # all configs are compiled first, then benchmarked sequentially. The overlap
+    # option exists because background compilation activity could theoretically
+    # affect benchmark accuracy on unified-memory systems — though in practice
+    # any other background work on the system would have the same effect.
+    overlap_bench: env_bool = env_bool("TRITON_AUTOTUNING_OVERLAP_BENCH", True)
 
 
 class LaunchHook(Protocol):
