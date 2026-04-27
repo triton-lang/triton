@@ -727,7 +727,13 @@ void LayoutRematerialization::rewriteSlice(
       Operation *parentOp = blockArg.getOwner()->getParentOp();
       if (auto loopOp = cast<LoopLikeOpInterface>(parentOp)) {
         opsToRewrite.insert(loopOp.getOperation());
+        // Precondition (enforced by all callers, e.g. hoistConvertDotOperand):
+        // any block argument reaching this point must be a loop-carried
+        // iter_arg with a tied yield operand. Induction variables, scf.while
+        // after-region args, and other untied block args have no tied yield
+        // and would crash the dereference below.
         OpOperand *operand = loopOp.getTiedLoopYieldedValue(blockArg);
+        assert(operand && "rewriteSlice expects a loop-tied iter_arg");
         auto yieldOp = blockArg.getOwner()->getTerminator();
         yieldOperandsMap[yieldOp].push_back(operand->getOperandNumber());
         opsToRewrite.insert(yieldOp);
@@ -1234,11 +1240,21 @@ bool LayoutRematerialization::hoistConvertDotOperand(
     return false;
 
   // We hoist over any operation that can be done without data movement between
-  // threads We do views and elementwise pure ops for now
+  // threads. We treat scf.if results as transparent so that the dot-operand
+  // layout requirement can flow backwards through region-branching control
+  // flow (e.g. block-sparse matmul where one branch loads a tile and the other
+  // yields a constant or a loop-carried tile).
+  //
+  // Note: hoistConvertIntoConditionals below uses scf.if as a stop boundary
+  // and analyses each branch independently (one branch may be remat-able while
+  // the other is not). The dot-operand path here treats scf.if as transparent
+  // because both branches must end up in the same dot-operand layout before
+  // tt.dot consumes the merged result -- branch-asymmetric remat is not an
+  // option here.
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, UpcastFpOpInterface>(
-               op) ||
+           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, UpcastFpOpInterface,
+               scf::IfOp>(op) ||
            isView(op);
   };
   // Stop the slice as soon as we find an operation that cannot be done without
@@ -1260,24 +1276,37 @@ bool LayoutRematerialization::hoistConvertDotOperand(
   SetVector<Value> innerSlice;
   for (Value v : slice) {
     if (!v.getDefiningOp()) {
-      LLVM_DEBUG(
-          { DBGS() << "  Block arguments not supported. Got " << v << "\n"; });
-      return false;
+      // Only loop-carried iter args of a ``LoopLikeOpInterface`` are
+      // transparent for the purpose of hoisting the dot-operand convert: the
+      // tied yield/init operands are already in the slice, so
+      // ``rewriteSlice`` will rebuild the loop with the new layout. Other
+      // block arguments (induction variables, function arguments,
+      // ``scf.while`` after-region args, etc.) have no tied yield operand and
+      // would crash ``rewriteSlice``.
+      auto blockArg = cast<BlockArgument>(v);
+      auto loopOp = dyn_cast_or_null<LoopLikeOpInterface>(
+          blockArg.getOwner()->getParentOp());
+      if (!loopOp || !loopOp.getTiedLoopYieldedValue(blockArg)) {
+        LDBG("  Block arguments not supported. Got " << v);
+        return false;
+      }
+      innerSlice.insert(v);
+      continue;
     }
 
     // We expect the leaves of the slice to be Load, descriptor load-like ops,
-    // or arith::Constant. This could be generalised if necessary.
+    // or arith::Constant. ``scf.if`` results and other no-data-movement ops
+    // are kept as transparent inner nodes so the slice can span region-
+    // branching control flow.
     if (!isa<LoadOp, DescriptorLoadLikeOpInterface>(v.getDefiningOp())) {
       auto op = v.getDefiningOp();
       if (isa<arith::ConstantOp>(op) || noDataMovement(op)) {
         innerSlice.insert(v);
         continue;
       } else {
-        LLVM_DEBUG({
-          DBGS() << "  Leaves must be Load, descriptor load-like ops, or "
-                    "Constant. Got "
-                 << v << "\n";
-        });
+        LDBG("  Leaves must be Load, descriptor load-like ops, or "
+             "Constant. Got "
+             << v);
         return false;
       }
     }
@@ -1397,6 +1426,13 @@ bool LayoutRematerialization::hoistConvertIntoConditionals(
     ConvertLayoutOp convertOp) {
   // Take the backward slice of tensor dependencies rooted at the conversion,
   // stopping at conditionals. This subslice is used to initialize the analysis.
+  //
+  // Note: we use scf.if as a stop boundary here because this path analyses and
+  // rematerialises each branch independently (one branch can be remat-able
+  // while the other terminates the hoist). Contrast with
+  // hoistConvertDotOperand above, which treats scf.if as transparent because
+  // the dot-operand layout has to be unified across both branches before
+  // tt.dot consumes the result.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
   DenseMap<std::pair<Value, Attribute>, Value> existingRemats;

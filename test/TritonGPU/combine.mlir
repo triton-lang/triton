@@ -3498,14 +3498,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // We currently don't propagate through block arguments on hoistDotOperand
-  // that being said, https://github.com/triton-lang/triton/pull/5350
-  // allowed to lift DotOperand(opIdx=1), which might be alright
+  // hoistConvertDotOperand treats LoopLikeOp iter_args as transparent so the
+  // dot-operand layout requirement flows backwards through loop-carried
+  // values. Both the constant initializer and the iter_arg should land in the
+  // dot-operand layout, eliminating the in-loop convert_layout.
 
-  // CHECK: tt.func @do_not_propagate_through_block_arguments()
-  // CHECK: %[[THROUGH_FOR_OP:.*]] = arith.constant dense<1.000000e+00> : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
-  // CHECK: scf.for {{.*}} iter_args(%{{.*}} = %[[THROUGH_FOR_OP]],
-  tt.func @do_not_propagate_through_block_arguments() -> tensor<32x128xf32, #mma> {
+  // CHECK: tt.func @propagate_through_block_arguments()
+  // CHECK-DAG: %[[INIT:.*]] = arith.constant dense<1.000000e+00> : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+  // CHECK: scf.for {{.*}} iter_args(%{{.*}} = {{.*}}, %[[ARG:.*]] = %[[INIT]]) -> ({{.*}}, tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>)
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: arith.addf %[[ARG]], %{{.*}} : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+  // CHECK: tt.dot
+  tt.func @propagate_through_block_arguments() -> tensor<32x128xf32, #mma> {
     %cst = arith.constant dense<1.000000e+00> : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
     %cst_0 = arith.constant dense<1.000000e+00> : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
     %cst_1 = arith.constant dense<0.000000e+00> : tensor<32x128xf32, #mma>
@@ -3520,6 +3524,356 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       scf.yield %0, %3 : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, tensor<32x128xf32, #mma>
     }
     tt.return %loop#1 : tensor<32x128xf32, #mma>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // hoistConvertDotOperand treats scf.if results as transparent so the
+  // dot-operand layout requirement flows backwards through region-branching
+  // control flow (e.g. block-sparse matmul where one branch loads a tile and
+  // the other yields a constant). After the pass, the convert_layout sinks
+  // into the load branch and the constant branch directly produces the
+  // dot-operand layout.
+
+  // CHECK-LABEL: tt.func @propagate_through_scf_if
+  // CHECK-DAG: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+  // CHECK: scf.if {{.*}} -> (tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>)
+  // CHECK:   tt.load
+  // CHECK:   ttg.convert_layout %{{.*}} : tensor<32x128xf32, #blocked> -> tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+  // CHECK:   scf.yield {{.*}} : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+  // CHECK: } else {
+  // CHECK:   scf.yield %[[ZERO]] : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+  // CHECK: tt.dot
+  // CHECK-NOT: ttg.convert_layout %{{.*}} : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+  tt.func @propagate_through_scf_if(%pb: tensor<32x128x!tt.ptr<f32>, #blocked>,
+                                    %cond: i1) -> tensor<32x128xf32, #mma> {
+    %cst_a = arith.constant dense<1.000000e+00> : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x128xf32, #mma>
+    %cst_zero = arith.constant dense<0.000000e+00> : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %b = scf.if %cond -> (tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) {
+      %loaded = tt.load %pb : tensor<32x128x!tt.ptr<f32>, #blocked>
+      %cvt = ttg.convert_layout %loaded : tensor<32x128xf32, #blocked> -> tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+      scf.yield %cvt : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    } else {
+      scf.yield %cst_zero : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    }
+    %b_dot = ttg.convert_layout %b : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+    %res = tt.dot %cst_a, %b_dot, %cst_acc, inputPrecision = tf32 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x128xf32, #mma>
+    tt.return %res : tensor<32x128xf32, #mma>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Block-sparse matmul style: the inner loop selects between a freshly
+  // loaded tile and a previously cached one via scf.if, then feeds the
+  // result into tt.dot. The dot-operand layout must propagate backwards
+  // through both the scf.for iter_arg and the scf.if results.
+
+  // CHECK-LABEL: tt.func @propagate_through_scf_if_in_for
+  // CHECK: scf.for {{.*}} iter_args({{.*}}, %{{.*}} = %{{.*}}) -> ({{.*}}, tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>)
+  // CHECK: scf.if {{.*}} -> (tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>)
+  // CHECK:   tt.load
+  // CHECK:   ttg.convert_layout
+  // CHECK: tt.dot
+  // CHECK-NOT: ttg.convert_layout %{{.*}} : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+  tt.func @propagate_through_scf_if_in_for(%pb: tensor<32x128x!tt.ptr<f32>, #blocked>,
+                                           %cond: i1) -> tensor<32x128xf32, #mma> {
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %cst_a = arith.constant dense<1.000000e+00> : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x128xf32, #mma>
+    %cst_init = arith.constant dense<0.000000e+00> : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %loop:2 = scf.for %i = %c0_i32 to %c128_i32 step %c32_i32 iter_args(%acc = %cst_acc, %prev_b = %cst_init) -> (tensor<32x128xf32, #mma>, tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) : i32 {
+      %b = scf.if %cond -> (tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) {
+        %loaded = tt.load %pb : tensor<32x128x!tt.ptr<f32>, #blocked>
+        %cvt = ttg.convert_layout %loaded : tensor<32x128xf32, #blocked> -> tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+        scf.yield %cvt : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+      } else {
+        scf.yield %prev_b : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+      }
+      %b_dot = ttg.convert_layout %b : tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+      %dot = tt.dot %cst_a, %b_dot, %acc, inputPrecision = tf32 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x128xf32, #mma>
+      scf.yield %dot, %b : tensor<32x128xf32, #mma>, tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    }
+    tt.return %loop#0 : tensor<32x128xf32, #mma>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Negative test: the convert source is a function argument -- a non-tied
+  // block argument whose parent op is tt.func, not a LoopLikeOpInterface.
+  // getConvertBackwardSlice cannot propagate the dot-operand encoding
+  // backwards through a func-arg, so the convert must remain in place and
+  // the surrounding IR is left untouched.
+
+  // CHECK-LABEL: tt.func @no_propagate_through_func_arg
+  // CHECK-SAME: %[[ARG:.*]]: tensor<32x128xf32, #blocked>
+  // CHECK: ttg.convert_layout %[[ARG]] : tensor<32x128xf32, #blocked> -> tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+  // CHECK: tt.dot
+  tt.func @no_propagate_through_func_arg(%b_arg: tensor<32x128xf32, #blocked>) -> tensor<32x128xf32, #mma> {
+    %cst_a = arith.constant dense<1.000000e+00> : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x128xf32, #mma>
+    %b_dot = ttg.convert_layout %b_arg : tensor<32x128xf32, #blocked> -> tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+    %res = tt.dot %cst_a, %b_dot, %cst_acc, inputPrecision = tf32 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x128xf32, #mma>
+    tt.return %res : tensor<32x128xf32, #mma>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Negative test: the convert source IS the after-region block argument
+  // of an scf.while, i.e. a non-tied block operand. scf.while is a
+  // LoopLikeOpInterface, but its after-region block args have no tied
+  // yield value (they come from scf.condition, not from scf.yield). The
+  // BlockArgument filter in hoistConvertDotOperand rejects this case
+  // (getTiedLoopYieldedValue returns nullptr); getConvertBackwardSlice
+  // also lacks scf.while support today and bails before the filter
+  // fires. Either way, the convert must remain in place inside the
+  // after-region and the block argument keeps the blocked layout.
+
+  // CHECK-LABEL: tt.func @no_propagate_through_scf_while_arg
+  // CHECK: scf.while
+  // CHECK: } do {
+  // CHECK: ^bb0(%[[ARG_AFTER:.*]]: tensor<32x128xf32, #blocked>):
+  // CHECK:   ttg.convert_layout %[[ARG_AFTER]] : tensor<32x128xf32, #blocked> -> tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+  // CHECK:   tt.dot
+  // CHECK:   tt.store
+  // CHECK:   scf.yield %[[ARG_AFTER]] : tensor<32x128xf32, #blocked>
+  tt.func @no_propagate_through_scf_while_arg(%pout: tensor<32x128x!tt.ptr<f32>, #mma>, %cond: i1) {
+    %cst_init = arith.constant dense<0.000000e+00> : tensor<32x128xf32, #blocked>
+    %cst_a = arith.constant dense<1.000000e+00> : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x128xf32, #mma>
+    scf.while (%a = %cst_init) : (tensor<32x128xf32, #blocked>) -> tensor<32x128xf32, #blocked> {
+      scf.condition(%cond) %a : tensor<32x128xf32, #blocked>
+    } do {
+    ^bb0(%a_after: tensor<32x128xf32, #blocked>):
+      %b_dot = ttg.convert_layout %a_after : tensor<32x128xf32, #blocked> -> tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+      %dot = tt.dot %cst_a, %b_dot, %cst_acc, inputPrecision = tf32 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x128xf32, #mma>
+      tt.store %pout, %dot : tensor<32x128x!tt.ptr<f32>, #mma>
+      scf.yield %a_after : tensor<32x128xf32, #blocked>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // A genuinely loop-carrying iter_arg (%a doubles each iteration via
+  // arith.addf so it cannot be canonicalized into a loop-invariant) is
+  // consumed at TWO conflicting dot-operand layouts (opIdx = 0 AND
+  // opIdx = 1) of the same tt.dot. Each convert is hoisted via its own
+  // slice, and rewriteSlice resolves the conflict by *duplicating* the
+  // iter_arg: the loop ends up with one iter_arg carrying the opIdx=0
+  // encoding and another carrying opIdx=1, each with its own arith.addf
+  // evolving in dot-operand layout. Verifies that conflicting requirements
+  // across iter_arg uses do not crash and produce correct IR.
+
+  // CHECK-LABEL: tt.func @iter_arg_conflicting_dot_op_layouts
+  // CHECK-DAG: %[[ACC_INIT:.*]] = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
+  // CHECK-DAG: %[[INIT0:.*]] = arith.constant dense<1.000000e+00> : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+  // CHECK-DAG: %[[INIT1:.*]] = arith.constant dense<1.000000e+00> : tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+  // CHECK: scf.for
+  // CHECK-SAME: iter_args(%[[ACC:.*]] = %[[ACC_INIT]], %[[A:.*]] = %[[INIT0]], %[[B:.*]] = %[[INIT1]])
+  // CHECK-SAME: -> (tensor<32x32xf32, #mma>, tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>, tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>)
+  // CHECK: tt.dot %[[A]], %[[B]], %[[ACC]]
+  // CHECK: arith.addf %[[A]], %[[A]] : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+  // CHECK: arith.addf %[[B]], %[[B]] : tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+  // CHECK-NOT: ttg.convert_layout
+  tt.func @iter_arg_conflicting_dot_op_layouts() -> tensor<32x32xf32, #mma> {
+    %cst = arith.constant dense<1.000000e+00> : tensor<32x32xf32, #blocked>
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %loop:2 = scf.for %i = %c0_i32 to %c128_i32 step %c32_i32 iter_args(%acc = %cst_acc, %a = %cst) -> (tensor<32x32xf32, #mma>, tensor<32x32xf32, #blocked>) : i32 {
+      %a_dot0 = ttg.convert_layout %a : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %a_dot1 = ttg.convert_layout %a : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+      %dot = tt.dot %a_dot0, %a_dot1, %acc, inputPrecision = tf32 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf32, #mma>
+      %a_next = arith.addf %a, %a : tensor<32x32xf32, #blocked>
+      scf.yield %dot, %a_next : tensor<32x32xf32, #mma>, tensor<32x32xf32, #blocked>
+    }
+    tt.return %loop#0 : tensor<32x32xf32, #mma>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // The same loop-carried iter_arg is consumed inside the loop at one
+  // dot-operand layout (opIdx=0) AND its tied loop result is consumed
+  // outside the loop at a different layout (opIdx=1). The two converts
+  // sit at different scopes and thus do not race in a single slice:
+  //   * the in-loop convert hoists by *duplicating* the iter_arg so the
+  //     dot_op<opIdx=0> slot lives alongside the original #blocked iter
+  //     arg (rather than replacing it),
+  //   * the out-of-loop convert is rooted at an scf.for OpResult, which
+  //     getConvertBackwardSlice rejects (no propagation through loop
+  //     results today), so it stays in place and continues to consume
+  //     the surviving #blocked tied result.
+  // The original iter_arg therefore must NOT be DCE'd: the in-body
+  // arith.addf is duplicated into a #blocked branch (used by the outside
+  // convert via the loop result) and a dot_op<opIdx=0> branch (used by
+  // the in-body tt.dot).
+
+  // CHECK-LABEL: tt.func @iter_arg_and_loop_result_conflict
+  // CHECK-DAG: %[[INIT_BLOCKED:.*]] = arith.constant dense<1.000000e+00> : tensor<32x32xf32, #blocked>
+  // CHECK-DAG: %[[INIT_DOT0:.*]] = arith.constant dense<1.000000e+00> : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+  // CHECK: %[[LOOP:.*]]:3 = scf.for
+  // CHECK-SAME: iter_args(%[[ACC:.*]] = %{{.*}}, %[[A_BLOCKED:.*]] = %[[INIT_BLOCKED]], %[[A_DOT0:.*]] = %[[INIT_DOT0]])
+  // CHECK-SAME: -> (tensor<32x32xf32, #mma>, tensor<32x32xf32, #blocked>, tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>)
+  // CHECK: tt.dot %[[A_DOT0]], %{{.*}}, %[[ACC]]
+  // CHECK-DAG: arith.addf %[[A_DOT0]], %[[A_DOT0]] : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+  // CHECK-DAG: arith.addf %[[A_BLOCKED]], %[[A_BLOCKED]] : tensor<32x32xf32, #blocked>
+  // CHECK: %[[CVT:.*]] = ttg.convert_layout %[[LOOP]]#1 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+  // CHECK: tt.dot %{{.*}}, %[[CVT]], %[[LOOP]]#0
+  tt.func @iter_arg_and_loop_result_conflict() -> tensor<32x32xf32, #mma> {
+    %cst_init = arith.constant dense<1.000000e+00> : tensor<32x32xf32, #blocked>
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
+    %cst_b_in = arith.constant dense<2.000000e+00> : tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+    %cst_a_out = arith.constant dense<3.000000e+00> : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %loop:2 = scf.for %i = %c0_i32 to %c128_i32 step %c32_i32 iter_args(%acc = %cst_acc, %a = %cst_init) -> (tensor<32x32xf32, #mma>, tensor<32x32xf32, #blocked>) : i32 {
+      %a_dot0 = ttg.convert_layout %a : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %dot = tt.dot %a_dot0, %cst_b_in, %acc, inputPrecision = tf32 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf32, #mma>
+      %a_next = arith.addf %a, %a : tensor<32x32xf32, #blocked>
+      scf.yield %dot, %a_next : tensor<32x32xf32, #mma>, tensor<32x32xf32, #blocked>
+    }
+    %loop_b_out = ttg.convert_layout %loop#1 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+    %dot_out = tt.dot %cst_a_out, %loop_b_out, %loop#0, inputPrecision = tf32 : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf32, #mma>
+    tt.return %dot_out : tensor<32x32xf32, #mma>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Both branches of the scf.if yield the result of an inner scf.for. The
+  // dot-operand backward slice descends through the scf.if (transparent) into
+  // each yield, but getConvertBackwardSlice rejects scf.for OpResults today
+  // (Utility.cpp: "Skip propagating through for op/while op/ws op results
+  // for now"), so the slice computation fails and hoistConvertDotOperand
+  // bails. The convert stays in place between the if and the dot, the if
+  // result keeps the #blocked encoding, and both inner loops are unchanged.
+  // hoistConvertIntoConditionals also cannot hoist asymmetrically because
+  // BOTH branches contain an scf.for and its subslices fail symmetrically.
+
+  // CHECK-LABEL: tt.func @no_hoist_when_scf_for_inside_both_scf_if_branches
+  // CHECK: scf.for
+  // CHECK: %[[R:.*]] = scf.if %{{.*}} -> (tensor<32x32xf16, #blocked>) {
+  // CHECK:   scf.for {{.*}} -> (tensor<32x32xf16, #blocked>)
+  // CHECK:   scf.yield %{{.*}} : tensor<32x32xf16, #blocked>
+  // CHECK: } else {
+  // CHECK:   scf.for {{.*}} -> (tensor<32x32xf16, #blocked>)
+  // CHECK:   scf.yield %{{.*}} : tensor<32x32xf16, #blocked>
+  // CHECK: }
+  // CHECK: %[[CVT:.*]] = ttg.convert_layout %[[R]] : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+  // CHECK: tt.dot %[[CVT]],
+  tt.func @no_hoist_when_scf_for_inside_both_scf_if_branches(%cond: i1) -> tensor<32x32xf32, #mma> {
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
+    %cst_b = arith.constant dense<2.000000e+00> : tensor<32x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+    %cst_init_a = arith.constant dense<1.000000e+00> : tensor<32x32xf16, #blocked>
+    %cst_init_b = arith.constant dense<2.000000e+00> : tensor<32x32xf16, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %loop = scf.for %i = %c0_i32 to %c128_i32 step %c32_i32 iter_args(%acc = %cst_acc) -> tensor<32x32xf32, #mma> : i32 {
+      %r = scf.if %cond -> tensor<32x32xf16, #blocked> {
+        %inner_a = scf.for %j = %c0_i32 to %c128_i32 step %c32_i32 iter_args(%a = %cst_init_a) -> tensor<32x32xf16, #blocked> : i32 {
+          %a_next = arith.addf %a, %a : tensor<32x32xf16, #blocked>
+          scf.yield %a_next : tensor<32x32xf16, #blocked>
+        }
+        scf.yield %inner_a : tensor<32x32xf16, #blocked>
+      } else {
+        %inner_b = scf.for %j = %c0_i32 to %c128_i32 step %c32_i32 iter_args(%b = %cst_init_b) -> tensor<32x32xf16, #blocked> : i32 {
+          %b_next = arith.addf %b, %b : tensor<32x32xf16, #blocked>
+          scf.yield %b_next : tensor<32x32xf16, #blocked>
+        }
+        scf.yield %inner_b : tensor<32x32xf16, #blocked>
+      }
+      %r_dot = ttg.convert_layout %r : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %dot = tt.dot %r_dot, %cst_b, %acc : tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf32, #mma>
+      scf.yield %dot : tensor<32x32xf32, #mma>
+    }
+    tt.return %loop : tensor<32x32xf32, #mma>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // An scf.if without an else region can only be used for side effects (the
+  // SCF verifier requires an else region whenever the if has results), so it
+  // produces no SSA value and never appears in a backward slice. Adding
+  // scf::IfOp to the noDataMovement allow-list therefore cannot expose
+  // else-less if ops to the slice traversal -- the dot-operand hoist behaves
+  // as if the no-else if were absent.
+  //
+  // Setup: a side-effecting scf.if-without-else stores the iter_arg %a in
+  // #blocked, while the loop body also feeds %a into a tt.dot at
+  // dot_op<opIdx=0>. The slice descent for the convert traverses the
+  // iter_arg (init/yield are tensor SSA), never the no-else if. As in the
+  // iter_arg + loop-result conflict case, rewriteSlice duplicates the
+  // iter_arg into a #blocked slot (kept for the store) and a fresh
+  // dot_op<opIdx=0> slot (consumed by tt.dot). The no-else if is preserved
+  // unchanged and continues to consume the surviving #blocked iter_arg.
+
+  // CHECK-LABEL: tt.func @scf_if_no_else_does_not_interfere
+  // CHECK-DAG: %[[INIT_BLOCKED:.*]] = arith.constant dense<1.000000e+00> : tensor<32x32xf16, #blocked>
+  // CHECK-DAG: %[[INIT_DOT:.*]] = arith.constant dense<1.000000e+00> : tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+  // CHECK: %[[LOOP:.*]]:3 = scf.for
+  // CHECK-SAME: iter_args(%[[ACC:.*]] = %{{.*}}, %[[A_BLOCKED:.*]] = %[[INIT_BLOCKED]], %[[A_DOT:.*]] = %[[INIT_DOT]])
+  // CHECK-SAME: -> (tensor<32x32xf32, #mma>, tensor<32x32xf16, #blocked>, tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>)
+  // CHECK: scf.if %{{.*}} {
+  // CHECK-NEXT: tt.store %{{.*}}, %[[A_BLOCKED]]
+  // CHECK-NEXT: }
+  // CHECK: tt.dot %[[A_DOT]], %{{.*}}, %[[ACC]]
+  // CHECK-DAG: arith.addf %[[A_DOT]], %[[A_DOT]] : tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+  // CHECK-DAG: arith.addf %[[A_BLOCKED]], %[[A_BLOCKED]] : tensor<32x32xf16, #blocked>
+  // CHECK-NOT: ttg.convert_layout
+  tt.func @scf_if_no_else_does_not_interfere(%cond: i1, %store_ptr: tensor<32x32x!tt.ptr<f16>, #blocked>) -> tensor<32x32xf32, #mma> {
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
+    %cst_b = arith.constant dense<2.000000e+00> : tensor<32x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
+    %cst_init = arith.constant dense<1.000000e+00> : tensor<32x32xf16, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %loop:2 = scf.for %i = %c0_i32 to %c128_i32 step %c32_i32 iter_args(%acc = %cst_acc, %a = %cst_init) -> (tensor<32x32xf32, #mma>, tensor<32x32xf16, #blocked>) : i32 {
+      scf.if %cond {
+        tt.store %store_ptr, %a : tensor<32x32x!tt.ptr<f16>, #blocked>
+      }
+      %a_dot = ttg.convert_layout %a : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %dot = tt.dot %a_dot, %cst_b, %acc : tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf32, #mma>
+      %a_next = arith.addf %a, %a : tensor<32x32xf16, #blocked>
+      scf.yield %dot, %a_next : tensor<32x32xf32, #mma>, tensor<32x32xf16, #blocked>
+    }
+    tt.return %loop#0 : tensor<32x32xf32, #mma>
   }
 }
 

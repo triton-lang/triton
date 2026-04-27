@@ -655,17 +655,128 @@ def test_block_sparse_matmul_pipeline(num_stages, device):
     assert "scf.if" in ttgir
     assert any(op in ttgir for op in ("tt.dot", "ttng.warp_group_dot", "ttng.tc_gen5_mma"))
 
-    # When pipelining is requested, every shared-memory allocation should be
-    # hoisted to function scope (multi-buffer) just like the analogous dense
-    # matmul: a per-iteration ``ttg.local_alloc %x`` (i.e. the with-operand
-    # form) means the conditional B-tile load was not propagated through the
-    # ``scf.if`` and stayed synchronous in the loop body. This currently
-    # fails because the dot-operand layout requirement does not propagate
-    # backward through region-branching control flow; the follow-up that
-    # extends the propagation (cf. tritongpu-remove-layout-conversions
-    # handling of region-branch results) will flip this assertion green.
-    if num_stages > 1:
-        in_loop_allocs = re.findall(r"ttg\.local_alloc %\w+", ttgir)
-        assert len(in_loop_allocs) == 0, (
-            f"expected B-tile to be multi-buffered after pipelining, found "
-            f"{len(in_loop_allocs)} per-iteration ttg.local_alloc op(s)")
+    # The dot-operand layout requirement must propagate backward through the
+    # region-branching control flow:
+    #   * the ``scf.if`` result type itself should carry the dot-operand
+    #     layout (rather than the load's blocked layout),
+    #   * the ``else`` branch's zero tile should be folded into a constant of
+    #     dot-operand layout, and
+    #   * no in-loop ``convert_layout`` from blocked to dot-operand should
+    #     remain (the convert is sunk next to the load inside the ``then``
+    #     branch and absorbed into the shared-memory pipeline).
+    # This exercises the ``hoistConvertDotOperand`` traversal through
+    # ``scf.if`` results and ``scf.for`` iter_args added to
+    # ``tritongpu-remove-layout-conversions``.
+    assert re.search(r"scf\.if[^{]*->\s*\(tensor<[^>]*dot_op", ttgir), (
+        "scf.if result should carry the dot-operand layout after propagation")
+    assert re.search(r"arith\.constant[^\n]*dot_op<\{opIdx = 1", ttgir), (
+        "zero-tile constant should be in dot-operand layout after propagation")
+    blocked_to_dot_in_loop = re.search(
+        r"scf\.for[\s\S]*?ttg\.convert_layout[^\n]*#blocked[^\n]*->\s*[^\n]*dot_op[\s\S]*?scf\.yield",
+        ttgir)
+    assert blocked_to_dot_in_loop is None, (
+        "no in-loop blocked->dot_op convert_layout should remain after "
+        "propagating the dot-operand layout through scf.if")
+
+
+@pytest.mark.parametrize("num_stages", [1, 2, 3])
+def test_running_sum_matmul_pipeline(num_stages, device):
+    """
+    Matmul where the B operand at iteration k is the running sum of all B
+    tiles processed so far. The running sum is a loop-carried iter_arg of
+    ``scf.for`` that feeds directly into ``tl.dot`` (via an ``arith.addf``
+    with the freshly loaded tile). For the dot-operand layout requirement
+    to reach both the zero initializer and the load, it has to flow
+    backwards through the iter_arg of the loop. This exercises the
+    loop-carried iter_arg path of ``hoistConvertDotOperand`` added to
+    ``tritongpu-remove-layout-conversions`` (the ``scf.if``-free
+    counterpart of ``test_block_sparse_matmul_pipeline``).
+    """
+    check_capabilities()
+
+    @triton.jit
+    def running_sum_matmul_kernel(  #
+            A_ptr, B_ptr, C_ptr,  #
+            M, N, K,  #
+            stride_am, stride_ak,  #
+            stride_bk, stride_bn,  #
+            stride_cm, stride_cn,  #
+            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+            NUM_STAGES: tl.constexpr):
+        pid_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+        offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        offs_k = tl.arange(0, BLOCK_K)
+        a_ptrs = A_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
+        b_ptrs = B_ptr + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
+        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+        b_running = tl.zeros((BLOCK_K, BLOCK_N), dtype=tl.float16)
+        for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
+            a = tl.load(a_ptrs)
+            b = tl.load(b_ptrs)
+            b_running = b_running + b
+            acc = tl.dot(a, b_running, acc)
+            a_ptrs += BLOCK_K * stride_ak
+            b_ptrs += BLOCK_K * stride_bk
+        c_ptrs = C_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
+        tl.store(c_ptrs, acc.to(tl.float16))
+
+    torch.manual_seed(0)
+    M, N, K = 128, 128, 128
+    BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
+    num_k_blocks = K // BLOCK_K
+    a = torch.randn(M, K, device=device, dtype=torch.float16) * 0.1
+    b = torch.randn(K, N, device=device, dtype=torch.float16) * 0.1
+
+    # Reference: running sum of B tiles along K, multiplied by the
+    # corresponding A slice.
+    ref = torch.zeros(M, N, device=device, dtype=torch.float32)
+    b_running = torch.zeros(BLOCK_K, N, device=device, dtype=torch.float32)
+    for k_blk in range(num_k_blocks):
+        b_tile = b[k_blk * BLOCK_K:(k_blk + 1) * BLOCK_K, :].float()
+        b_running = b_running + b_tile
+        a_tile = a[:, k_blk * BLOCK_K:(k_blk + 1) * BLOCK_K].float()
+        ref += a_tile @ b_running
+    ref = ref.to(torch.float16)
+
+    c = torch.empty((M, N), device=device, dtype=torch.float16)
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    handler = running_sum_matmul_kernel[grid](
+        a, b, c,  #
+        M, N, K,  #
+        a.stride(0), a.stride(1),  #
+        b.stride(0), b.stride(1),  #
+        c.stride(0), c.stride(1),  #
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
+        NUM_STAGES=num_stages)
+    torch.testing.assert_close(c, ref, atol=1e-1, rtol=1e-1)
+
+    # Verify backward layout propagation through the loop-carried iter_arg:
+    #   * the zero-tile constant initializer should be in the dot-operand
+    #     layout (the convert was hoisted above the loop and absorbed),
+    #   * the ``scf.for`` should carry an iter_arg in the dot-operand
+    #     layout (proves the loop signature was rewritten), and
+    #   * the in-loop ``arith.addf`` between the iter_arg and the freshly
+    #     loaded tile should operate directly on dot-operand tensors.
+    # The shape of the running-sum tile (BLOCK_K x BLOCK_N) is woven into
+    # the regexes so the assertions stay specific to *this* tensor and do
+    # not silently match unrelated dot-operand tensors in the IR.
+    ttgir = handler.asm["ttgir"]
+    assert any(op in ttgir for op in ("tt.dot", "ttng.warp_group_dot", "ttng.tc_gen5_mma"))
+    running_sum_tile = rf"{BLOCK_K}x{BLOCK_N}xf16"
+    dot_op_b = rf"#ttg\.dot_op<\{{opIdx = 1"
+    assert re.search(
+        rf"arith\.constant[^\n]*<{running_sum_tile},\s*{dot_op_b}",
+        ttgir), (
+        "running-sum zero initializer should be in dot-operand layout "
+        "after propagation through the iter_arg")
+    assert re.search(
+        rf"scf\.for[^{{]*?->\s*\([^)]*?tensor<{running_sum_tile},\s*{dot_op_b}",
+        ttgir), (
+        "scf.for should carry the running-sum iter_arg in dot-operand layout")
+    assert re.search(
+        rf"arith\.addf[^\n]*tensor<{running_sum_tile},\s*{dot_op_b}",
+        ttgir), (
+        "in-loop arith.addf on the running sum should be in dot-operand "
+        "layout (the convert_layout sunk to the load side)")
