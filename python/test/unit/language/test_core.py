@@ -4346,24 +4346,68 @@ def test_load_cache_modifier(cache, device):
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
 
     if is_hip():
-        # TODO: support testing for remaining architectures
-        if not is_hip_cdna3() and not is_hip_cdna4():
-            return
         amdgcn = pgm.asm['amdgcn']
-        cg_cache_modifier_str = 'nt'
-        cs_cache_modifier_str = 'sc0 nt'
-        cv_cache_modifier_str = 'sc0 sc1'
         buffer_load_line = [line for line in amdgcn.splitlines() if "buffer_load" in line]
         global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
-        load_line = global_load_line[0] if global_load_line else buffer_load_line[0]
-        if cache == '' or cache == '.ca':
-            assert cg_cache_modifier_str not in load_line
-        if cache == '.cg':
-            assert cg_cache_modifier_str in load_line
-        if cache == ".cs":
-            assert cs_cache_modifier_str in load_line
-        if cache == '.cv':
-            assert cv_cache_modifier_str in load_line
+        compiled_cache_modifiers = "invalid"
+        expected_cache_modifiers = {}
+        if is_hip_cdna() or is_hip_cdna2():
+            # cache modifiers are not properly supported on CDNA1 and CDNA2, just check that kernel runs
+            return
+        if buffer_load_line:
+            # ", [0-9a-z]" matches last operand, which is expected to be constant
+            # (offen)? matches an optional flag, the rest is expected to be cache related flags
+            m = re.match(".*, [0-9a-z]* (offen)? *(.*)$", buffer_load_line[0])
+            compiled_cache_modifiers = m.group(2)
+            if is_hip_cdna():
+                expected_cache_modifiers = {"": "", \
+                                            ".ca": "", \
+                                            ".cg": "sc0 nt", \
+                                            ".cs": "sc0 nt", \
+                                            ".cv": "sc0 sc1"}
+            elif is_hip_rdna3():
+                expected_cache_modifiers = {"": "", \
+                                            ".ca": "", \
+                                            ".cg": "glc", \
+                                            ".cs": "glc slc dlc", \
+                                            ".cv": "glc slc dlc"}
+            elif is_hip_rdna4() or is_hip_gfx1250():
+                expected_cache_modifiers = {"": "", \
+                                            ".ca": "", \
+                                            ".cg": "scope:SCOPE_DEV", \
+                                            ".cs": "th:TH_LOAD_NT", \
+                                            ".cv": "th:TH_LOAD_BYPASS scope:SCOPE_SYS"}
+        else:
+            assert global_load_line
+            # .*, [0-9a-z\[\]:]* matches last operand
+            # (scale_offset)? optional flag, the reset is expected to be cache flags
+            m = re.match(".*, [0-9a-z\\[\\]:]*( scale_offset)? *(.*)$", global_load_line[0])
+            compiled_cache_modifiers = m.group(2)
+
+            if is_hip_cdna():
+                expected_cache_modifiers = {"": "", \
+                                            ".ca": "", \
+                                            ".cg": "nt", \
+                                            ".cs": "nt", \
+                                            ".cv": "sc0 sc1"}
+            elif is_hip_rdna3():
+                expected_cache_modifiers = {"": "", \
+                                            ".ca": "", \
+                                            ".cg": "slc dlc", \
+                                            ".cs": "slc dlc", \
+                                            ".cv": "glc dlc"}
+            elif is_hip_rdna4() or is_hip_gfx1250():
+                expected_cache_modifiers = {"": "", \
+                                            ".ca": "", \
+                                            ".cg": "th:TH_LOAD_NT", \
+                                            ".cs": "th:TH_LOAD_NT", \
+                                            ".cv": "th:TH_LOAD_NT scope:SCOPE_SYS"}
+        for cache_mod in expected_cache_modifiers:
+            if cache_mod == cache:
+                assert compiled_cache_modifiers == expected_cache_modifiers[cache_mod]
+            else:
+                assert compiled_cache_modifiers != expected_cache_modifiers[cache_mod] or expected_cache_modifiers[
+                    cache_mod] == expected_cache_modifiers[cache]
 
     if is_cuda():
         ptx = pgm.asm['ptx']
@@ -4473,24 +4517,72 @@ def test_store_cache_modifier(cache, device):
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
 
     if is_hip():
-        # TODO: support testing for remaining architectures
-        if not is_hip_cdna3() and not is_hip_cdna4():
-            return
         amdgcn = pgm.asm['amdgcn']
-        cs_cache_modifier_str = 'nt'
-        wt_cache_modifier_str = 'sc0 sc1'
+
         buffer_store_line = [line for line in amdgcn.splitlines() if "buffer_store" in line]
         global_store_line = [line for line in amdgcn.splitlines() if "global_store" in line]
-        store_line = global_store_line[0] if global_store_line else buffer_store_line[0]
-        if cache == '' or cache == '.wb' or cache == '.cg':
-            assert cs_cache_modifier_str not in store_line
-            assert wt_cache_modifier_str not in store_line
-        if cache == '.cs':
-            assert cs_cache_modifier_str in store_line
-            assert wt_cache_modifier_str not in store_line
-        if cache == '.wt':
-            assert cs_cache_modifier_str not in store_line
-            assert wt_cache_modifier_str in store_line
+        compiled_cache_modifiers = "invalid"
+        expected_cache_modifiers = {}
+        if is_hip_cdna() or is_hip_cdna2():
+            # cache modifiers are not properly supported on CDNA1 and CDNA2, just check that kernel runs
+            return
+        if buffer_store_line:
+            # ", [0-9a-z]" matches last operand, which is expected to be constant
+            # (offen)? matches an optional flag, the rest is expected to be cache related flags
+            m = re.match(".*, [0-9a-z]* (offen)? *(.*)$", buffer_store_line[0])
+            compiled_cache_modifiers = m.group(2)
+            if is_hip_cdna():
+                expected_cache_modifiers = {"": "", \
+                                            ".wb": "", \
+                                            ".cg": "", \
+                                            ".cs": "sc0 nt", \
+                                            ".wt": "sc0 sc1"}
+            elif is_hip_rdna3():
+                expected_cache_modifiers = {"": "", \
+                                            ".wb": "", \
+                                            ".cg": "", \
+                                            ".cs": "glc slc dlc", \
+                                            ".wt": "glc slc dlc"}
+            elif is_hip_rdna4() or is_hip_gfx1250():
+                expected_cache_modifiers = {"": "", \
+                                            ".wb": "", \
+                                            ".cg": "scope:SCOPE_DEV", \
+                                            ".cs": "th:TH_STORE_NT"}
+                if is_hip_rdna4():
+                    expected_cache_modifiers[".wt"] = "scope:SCOPE_SYS"
+                elif is_hip_gfx1250():
+                    expected_cache_modifiers[".wt"] = "th:TH_STORE_BYPASS scope:SCOPE_SYS"
+        else:
+            assert global_store_line
+            # .*, [0-9a-z\[\]:]* matches last operand
+            # (scale_offset)? optional flag, the reset is expected to be cache flags
+            m = re.match(".*, [0-9a-z\\[\\]:]*( scale_offset)? *(.*)$", global_store_line[0])
+            compiled_cache_modifiers = m.group(2)
+
+            if is_hip_cdna():
+                expected_cache_modifiers = {"": "", \
+                                            ".wb": "", \
+                                            ".cg": "", \
+                                            ".cs": "nt", \
+                                            ".wt": "sc0 sc1"}
+            elif is_hip_rdna3():
+                expected_cache_modifiers = {"": "", \
+                                            ".wb": "", \
+                                            ".cg": "", \
+                                            ".cs": "glc slc dlc", \
+                                            ".wt": "dlc"}
+            elif is_hip_rdna4() or is_hip_gfx1250():
+                expected_cache_modifiers = {"": "", \
+                                            ".wb": "", \
+                                            ".cg": "", \
+                                            ".cs": "th:TH_STORE_NT", \
+                                            ".wt": "th:TH_STORE_NT scope:SCOPE_SYS"}
+        for cache_mod in expected_cache_modifiers:
+            if cache_mod == cache:
+                assert compiled_cache_modifiers == expected_cache_modifiers[cache_mod]
+            else:
+                assert compiled_cache_modifiers != expected_cache_modifiers[cache_mod] or expected_cache_modifiers[
+                    cache_mod] == expected_cache_modifiers[cache]
 
     if is_cuda():
         ptx = pgm.asm['ptx']

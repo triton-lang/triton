@@ -268,31 +268,40 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
 }
 std::pair<int64_t, ColumnAction>
 actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
-                      uint64_t maskSpanOffsets) {
+                      uint64_t maskSpanOffsets, int64_t regsPerInst) {
   // General idea:
-  // We wan to swap an xor into an addition when computing the register offsets.
-  // We can do this if the output bits of this register are disjoint from those
-  // from lanes/warps/blocks or any affine offset (i.e., markSpanOffsets).
-
-  // Note this function assumes that if any registers are used in the addrLayout
-  // of the layout (as in ldmatrix/stmatrix) they will be the first non-zero
-  // registers within `layout`
+  // We want to swap an xor into an addition when computing the register
+  // offsets. We can do this if the output bits of this register are disjoint
+  // from those from lanes/warps/blocks or any affine offset (i.e.,
+  // maskSpanOffsets).
+  //
+  // Additionally, the lowering only ever evaluates register offsets at indices
+  // that are multiples of `regsPerInst` (the inner-loop stride, matching one
+  // vectorised instruction). The first `log2(regsPerInst)` register bases are
+  // therefore never selected by any computed index and are trivially additive,
+  // independent of their basis value. We force them into the "additive" group
+  // unconditionally so that the returned `nAdditive` is always at least
+  // `regsPerInst`. In particular, callers do not need to pre-zero those bases
+  // for the invariant to hold.
   assert(layout.getNumInDims() != 0);
+  assert(llvm::isPowerOf2_64(regsPerInst) &&
+         "regsPerInst must be a power of two");
   auto kReg = *layout.getInDimNames().begin();
   assert(kReg.str() == "register");
+  const size_t regBasisPerVec = llvm::Log2_64(regsPerInst);
   uint32_t bits = maskSpanOffsets;
-  llvm::SetVector<uint32_t> tileBases;
   auto addrNamedBases = addrLayout.flattenOuts().getBases();
   for (auto bases : llvm::make_second_range(addrNamedBases)) {
     for (auto basis : bases) {
       bits |= basis[0];
-      tileBases.insert(basis[0]);
     }
   }
   SmallVector<size_t> front, back;
   auto layoutNamedBases = layout.flattenOuts().getBases();
+  assert(layoutNamedBases.lookup(kReg).size() >= regBasisPerVec &&
+         "layout must have at least log2(regsPerInst) register bases");
   for (auto [idx, basis] : llvm::enumerate(layoutNamedBases.lookup(kReg))) {
-    if ((basis[0] & bits) == 0 || tileBases.contains(basis[0])) {
+    if (idx < regBasisPerVec || (basis[0] & bits) == 0) {
       front.push_back(idx);
     } else {
       back.push_back(idx);

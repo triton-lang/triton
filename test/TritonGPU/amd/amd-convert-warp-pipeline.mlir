@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file -convert-warp-pipeline="arch=gfx1250" | FileCheck %s --check-prefixes CHECK,WAVE32
-// RUN: triton-opt %s -split-input-file -convert-warp-pipeline="arch=gfx950" | FileCheck %s --check-prefixes CHECK,WAVE64
+// RUN: triton-opt %s -split-input-file -convert-warp-pipeline="gfx-arch=gfx1250" | FileCheck %s --check-prefixes CHECK,WAVE32
+// RUN: triton-opt %s -split-input-file -convert-warp-pipeline="gfx-arch=gfx950" | FileCheck %s --check-prefixes CHECK,WAVE64
 
 // ---- 2-stage pipeline (basic) ----
 //

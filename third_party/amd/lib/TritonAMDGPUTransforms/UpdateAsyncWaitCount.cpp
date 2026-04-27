@@ -420,7 +420,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
   using Base::Base;
 
   void runOnOperation() override {
-    tt::AMD::TargetInfo targetInfo(archGenerationName);
+    tt::AMD::TargetInfo targetInfo(gfxArch);
     if (!isCDNA(targetInfo.getISAFamily()) &&
         targetInfo.getISAFamily() != tt::AMD::ISAFamily::GFX1250) {
       return;
@@ -488,15 +488,10 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
                   smemTy.getShape(), numWarps, smemTy.getEncoding());
           return numInstr;
         } else if (isa<AsyncTDMScatterOp, AsyncTDMGatherOp>(op)) {
-          // For scatter and gather we need to get the count of TDM intrinsics
-          // based on the row indices tensor type
           auto rowIndicesType =
               cast<RankedTensorType>(op->getOperandTypes()[1]);
-          bool use32BitIndices =
-              rowIndicesType.getElementType().getIntOrFloatBitWidth() == 32;
-          size_t numIndices = rowIndicesType.getNumElements();
           return mlir::LLVM::AMD::getTDMGatherScatterInstrinsicCount(
-              numIndices, use32BitIndices);
+              rowIndicesType);
         } else {
           return 0;
         }
