@@ -111,7 +111,7 @@ static void createClusterOp(OpBuilder &b, Location loc,
 
 // Ops that may appear before or after a stage but not inside one.
 // Barrier/wait still require an explicit border op to split clusters.
-static bool isIgnorableOp(Operation *op) {
+static bool canSitBetweenStages(Operation *op) {
   return isa<ttg::AsyncWaitOp, gpu::BarrierOp, triton::gpu::BarrierOp,
              tt::amdgpu::AsyncTDMWait>(op);
 }
@@ -143,10 +143,11 @@ static void sinkPureScalarsPastIgnorables(Block &blk) {
       continue;
     }
     // Non-scalar op: try to sink pending past an ignorable run, then reset.
-    if (isIgnorableOp(op) && !pending.empty()) {
+    if (canSitBetweenStages(op) && !pending.empty()) {
       // Extend `anchor` to the last ignorable in the consecutive run.
       Operation *anchor = op;
-      while (anchor->getNextNode() && isIgnorableOp(anchor->getNextNode()))
+      while (anchor->getNextNode() &&
+             canSitBetweenStages(anchor->getNextNode()))
         anchor = anchor->getNextNode();
       // Abort the sink if any ignorable in [op..anchor] consumes a pending
       // scalar -- moving its producer past it would break SSA.
@@ -212,7 +213,7 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
       op->erase(); // remove the marker
       continue;
     }
-    if (isIgnorableOp(op)) {
+    if (canSitBetweenStages(op)) {
       // Ignorable ops may appear before or after a stage, but not inside it.
       // If encountered while building an execute_region, reject warp-pipeline.
       if (!cluster.empty())
