@@ -475,7 +475,7 @@ def test_unused_result():
     assert expected_err_msg == obtained_err_msg
 
 
-@tl.core._aggregate
+@triton.aggregate
 class Square:
     x: tl.tensor
 
@@ -562,3 +562,23 @@ def test_dot_scaled_shape_verification(fresh_triton_cache):
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
 
     assert str(e.value.__cause__) == "Operands must have the same scale factor; (lhs: 16 vs rhs: 32)"
+
+
+def test_err_nested_function_def():
+
+    @triton.jit
+    def kernel(ptr, n, BLOCK: tl.constexpr):
+
+        def combine(a, b):
+            return a + b
+
+        offs = tl.arange(0, BLOCK)
+        tl.store(ptr + offs, tl.load(ptr + offs))
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(
+            triton.compiler.ASTSource(fn=kernel, signature={"ptr": "*fp32", "n": "i32"}, constexprs={"BLOCK": 128}))
+
+    err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+    assert "StopIteration" not in err_msg, "nested def should not leak StopIteration"
+    assert "nested function" in err_msg, "error should mention nested function"

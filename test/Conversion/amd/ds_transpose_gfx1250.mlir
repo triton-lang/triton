@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --convert-triton-amdgpu-to-llvm=arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s
+// RUN: triton-opt %s --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s
 
 #mma_b16 = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}> // b16
 #mma_b8 = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 64]}> // b8
@@ -11,6 +11,12 @@
 #padding = #ttg.padded_shared<[512:+16] {order = [0, 1], shape = [128, 64]}>
 #padding_vec1 = #ttg.padded_shared<[1:+4] {order = [0, 1], shape = [128, 64]}>
 #smem = #ttg.shared_memory
+
+// Partitioned shared: inner padded tiles.
+#inner_ps_dim0 = #ttg.padded_shared<[512:+16] {order = [0, 1], shape = [64, 64]}>
+#partitioned_dim0 = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner_ps_dim0}>
+#inner_ps_dim1 = #ttg.padded_shared<[512:+16] {order = [0, 1], shape = [128, 32]}>
+#partitioned_dim1 = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 1, partitionLayout = #inner_ps_dim1}>
 
 #linear_ds_tr_tile_out = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
 #linear_ds_tr_tile_invalid = #ttg.linear<{register = [[0, 1], [0, 2], [0, 8], [0, 4]], lane = [[1, 0], [4, 0], [2, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
@@ -116,6 +122,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @ds_transpose_padding_interval_too_small(%arg0: !ttg.memdesc<128x64xf16, #padding_vec1, #smem, mutable>, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     // CHECK-NOT: ds.load.tr16.b128
     %1 = ttg.local_load %arg0 : !ttg.memdesc<128x64xf16, #padding_vec1, #smem, mutable> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
+
+    %ptr1 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
+    tt.store %ptr1, %1 : tensor<128x64x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
+    tt.return
+  }
+
+  // WMMA dot path from partitioned shared (partitionDim = 0): multiple LDS bases + ds transpose loads.
+  // CHECK-LABEL: partitioned_shared_ds_transpose_dot_op0_dim0
+  tt.func @partitioned_shared_ds_transpose_dot_op0_dim0(%arg0: !ttg.memdesc<128x64xf16, #partitioned_dim0, #smem, mutable>, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK: vector<2x!llvm.ptr<3>>
+    // CHECK: llvm.insertelement %{{.*}}, %{{.*}}[%{{.*}} : i32] : vector<2x!llvm.ptr<3>>
+    // CHECK: llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2x!llvm.ptr<3>>
+    // CHECK-COUNT-16: llvm.call_intrinsic "llvm.amdgcn.ds.load.tr16.b128"(%{{.*}}) : (!llvm.ptr<3>) -> vector<8xf16>
+    // CHECK-NOT: ds.load.tr16.b128
+    %1 = ttg.local_load %arg0 : !ttg.memdesc<128x64xf16, #partitioned_dim0, #smem, mutable> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
+
+    %ptr1 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
+    tt.store %ptr1, %1 : tensor<128x64x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
+    tt.return
+  }
+
+  // Same tile shape with partitionDim = 1 (column partitions).
+  // CHECK-LABEL: partitioned_shared_ds_transpose_dot_op0_dim1
+  tt.func @partitioned_shared_ds_transpose_dot_op0_dim1(%arg0: !ttg.memdesc<128x64xf16, #partitioned_dim1, #smem, mutable>, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK: vector<2x!llvm.ptr<3>>
+    // CHECK: llvm.insertelement %{{.*}}, %{{.*}}[%{{.*}} : i32] : vector<2x!llvm.ptr<3>>
+    // CHECK: llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2x!llvm.ptr<3>>
+    // CHECK-COUNT-16: llvm.call_intrinsic "llvm.amdgcn.ds.load.tr16.b128"(%{{.*}}) : (!llvm.ptr<3>) -> vector<8xf16>
+    // CHECK-NOT: ds.load.tr16.b128
+    %1 = ttg.local_load %arg0 : !ttg.memdesc<128x64xf16, #partitioned_dim1, #smem, mutable> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
 
     %ptr1 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
     tt.store %ptr1, %1 : tensor<128x64x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>

@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --convert-triton-amdgpu-to-llvm=arch=gfx942 --mlir-print-debuginfo --mlir-pretty-debuginfo| FileCheck %s
+// RUN: triton-opt %s --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --mlir-print-debuginfo --mlir-pretty-debuginfo| FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 4], instrShape = [16, 16, 16], isTransposed = false}>

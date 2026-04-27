@@ -183,10 +183,10 @@ struct TritonAMDGPUConvertWarpSpecializeToLLVM
     : public mlir::triton::impl::TritonAMDGPUConvertWarpSpecializeToLLVMBase<
           TritonAMDGPUConvertWarpSpecializeToLLVM> {
 
-  TritonAMDGPUConvertWarpSpecializeToLLVM(StringRef arch)
+  TritonAMDGPUConvertWarpSpecializeToLLVM(StringRef gfxArch)
       : TritonAMDGPUConvertWarpSpecializeToLLVMBase<
             TritonAMDGPUConvertWarpSpecializeToLLVM>() {
-    this->arch = arch;
+    this->gfxArch = gfxArch;
   }
 
   void runOnOperation() override {
@@ -203,7 +203,7 @@ struct TritonAMDGPUConvertWarpSpecializeToLLVM
       return;
 
     // Use the arch parameter if provided, otherwise get from module
-    std::string archStr = this->arch;
+    std::string archStr = this->gfxArch;
     if (archStr.empty()) {
       auto arch = getAMDArch(mod);
       if (!arch.has_value()) {
@@ -253,8 +253,8 @@ struct TritonAMDGPUConvertWarpSpecializeToLLVM
 namespace mlir::triton::AMD {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createTritonAMDGPUConvertWarpSpecializeToLLVMPass(StringRef arch) {
-  return std::make_unique<TritonAMDGPUConvertWarpSpecializeToLLVM>(arch);
+createTritonAMDGPUConvertWarpSpecializeToLLVMPass(StringRef gfxArch) {
+  return std::make_unique<TritonAMDGPUConvertWarpSpecializeToLLVM>(gfxArch);
 }
 
 } // namespace mlir::triton::AMD

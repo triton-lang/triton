@@ -13,7 +13,9 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace mlir::triton::gpu {
 
-static SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
+namespace {
+
+SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
   SmallVector<int64_t> result(rank, 1);
   assert(shape.size() <= rank);
   auto rankDiff = rank - shape.size();
@@ -57,6 +59,8 @@ CGAEncodingAttr updateCGALayoutForShape(CGAEncodingAttr cgaLayout,
   ll = LinearLayout(ll.getBases(), dimSizes, false);
   return CGAEncodingAttr::get(ctx, std::move(ll));
 }
+
+} // namespace
 
 SharedEncodingTrait updateEncodingForShape(Operation *op,
                                            SharedEncodingTrait encoding,
@@ -121,9 +125,9 @@ SharedEncodingTrait updateEncodingForShape(Operation *op,
 
 // Build shared encoding for a tensor descriptor by applying callback to adjust
 // for block shape of the descriptor
-TensorDescType getTensorDescTypeWithEncoding(Operation *op,
-                                             RankedTensorType existingTy,
-                                             Attribute encoding) {
+static TensorDescType getTensorDescTypeWithEncoding(Operation *op,
+                                                    RankedTensorType existingTy,
+                                                    Attribute encoding) {
   auto sharedEnc = cast<SharedEncodingTrait>(encoding);
   encoding = updateEncodingForShape(op, sharedEnc, existingTy);
   return TensorDescType::get(existingTy.getShape(), existingTy.getElementType(),
@@ -289,25 +293,15 @@ std::optional<UseInfo>
 AssignDescriptorMemoryLayouts::getUseInfo(Operation *op) {
   UseInfo info;
   info.use = op;
-  if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
+  if (auto load = dyn_cast<DescriptorLoadLikeOpInterface>(op)) {
     info.descriptor = load.getDesc();
     info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
+    auto resultTy = cast<RankedTensorType>(op->getResult(0).getType());
     auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
-                                               : load.getType().getEncoding();
+                                               : resultTy.getEncoding();
     info.cgaLayout = getCGALayout(encoding);
-    auto shape = load.getResult().getType().getShape();
-    auto rank = load.getDesc().getType().getShape().size();
-    info.shape = expandToRank(shape, rank);
-    return info;
-  }
-  if (auto gather = dyn_cast<DescriptorGatherOp>(op)) {
-    info.descriptor = gather.getDesc();
-    info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
-    auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
-                                               : gather.getType().getEncoding();
-    info.cgaLayout = getCGALayout(encoding);
-    auto shape = gather.getResult().getType().getShape();
-    auto rank = gather.getDesc().getType().getShape().size();
+    auto shape = resultTy.getShape();
+    auto rank = info.descriptor.getType().getShape().size();
     info.shape = expandToRank(shape, rank);
     return info;
   }

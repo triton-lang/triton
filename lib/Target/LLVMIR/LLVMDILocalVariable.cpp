@@ -172,8 +172,10 @@ struct LLVMDILocalVariablePass
             convertArrayType(context, arrayTy, fileAttr, dl, line);
         types.push_back(tyAttr);
       } else {
-        // Here assume remaining inTys are only scalar types
-        assert(inTy.isIntOrFloat() && "Expected scalar types");
+        // Remaining types are scalar (int/float) or vector types
+        // (e.g., from external function declarations for GPU builtins).
+        assert((inTy.isIntOrFloat() || isa<mlir::VectorType>(inTy)) &&
+               "Expected scalar or vector types");
         LLVM::DITypeAttr tyAttr = convertType(context, inTy);
         types.push_back(tyAttr);
       }
@@ -277,7 +279,10 @@ struct LLVMDILocalVariablePass
       if (isa<LLVM::LLVMFuncOp>(op)) {
         auto funcOp = cast<LLVM::LLVMFuncOp>(op);
         diSubprogramAttr = getDISubprogramAttr(funcOp);
-        diSubprogramAttr = fuseFuncArgVariables(funcOp, diSubprogramAttr);
+        // External declarations (e.g., runtime builtins like vprintf) have no
+        // body, so we cannot insert debug value intrinsics into them.
+        if (!funcOp.isExternal())
+          diSubprogramAttr = fuseFuncArgVariables(funcOp, diSubprogramAttr);
       } else {
         fuseDILocalVariable(op);
       }

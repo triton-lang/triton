@@ -1,8 +1,8 @@
 // RUN: split-file %s %t
 // RUN: cat %t/common.mlir %t/mfma0.mlir > %t/run-mfma0.mlir
-// RUN: triton-opt %t/run-mfma0.mlir -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx942 matrix-instruction-size=0" --verify-diagnostics | FileCheck %t/run-mfma0.mlir --check-prefixes=MFMA0,CHECK
+// RUN: triton-opt %t/run-mfma0.mlir -split-input-file --tritonamdgpu-accelerate-matmul="gfx-arch=gfx942 matrix-instruction-size=0" --verify-diagnostics | FileCheck %t/run-mfma0.mlir --check-prefixes=MFMA0,CHECK
 // RUN: cat %t/common.mlir %t/mfma16.mlir > %t/run-mfma16.mlir
-// RUN: triton-opt %t/run-mfma16.mlir -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx942 matrix-instruction-size=16" --verify-diagnostics | FileCheck %t/run-mfma16.mlir --check-prefixes=MFMA16,CHECK
+// RUN: triton-opt %t/run-mfma16.mlir -split-input-file --tritonamdgpu-accelerate-matmul="gfx-arch=gfx942 matrix-instruction-size=16" --verify-diagnostics | FileCheck %t/run-mfma16.mlir --check-prefixes=MFMA16,CHECK
 
 //--- common.mlir
 

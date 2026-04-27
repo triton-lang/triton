@@ -6,6 +6,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <array>
 
@@ -22,8 +23,11 @@ constexpr int numMemTypes = getMaxEnumValForMemType() + 1;
 constexpr int NUM_THREADS = 16;
 constexpr int TMA_THREAD_OFFSET = NUM_THREADS;
 constexpr int TC_THREAD_OFFSET = TMA_THREAD_OFFSET + NUM_THREADS;
-constexpr int TOTAL_NUM_THREADS = TC_THREAD_OFFSET + NUM_THREADS;
-constexpr int THREADS_BITMASK_SIZE = llvm::NextPowerOf2(TOTAL_NUM_THREADS);
+constexpr int CLC_THREAD_OFFSET = TC_THREAD_OFFSET + NUM_THREADS;
+constexpr int TOTAL_NUM_THREADS = CLC_THREAD_OFFSET + NUM_THREADS;
+static_assert(TOTAL_NUM_THREADS <= 64,
+              "ConSan thread bitsets are stored in i64 masks");
+const int THREADS_BITMASK_SIZE = llvm::PowerOf2Ceil(TOTAL_NUM_THREADS);
 
 namespace CommitKind {
 enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };

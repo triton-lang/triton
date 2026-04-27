@@ -12,7 +12,6 @@ import torch
 import math
 
 from triton import cdiv
-from triton.language.core import _aggregate as aggregate
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
@@ -110,7 +109,7 @@ def get_wmma_layout(shape, num_warps, packed=False, preshuffled=False, warp_axis
     return ttgl.amd.AMDWMMALayout(3, True, warp_bases, reg_bases, instr_shape, rank=rank)
 
 
-@aggregate
+@gluon.aggregate
 class MemoryBlock:
     """
     MemoryBlock groups variables to describe a block of 2D/3D tensor in global memory.
@@ -155,7 +154,7 @@ class MemoryBlock:
         return MemoryBlock(base, offs, mask, block_shape)
 
 
-@aggregate
+@gluon.aggregate
 class MemoryUnit:
     """
     MemoryUnit wraps a global-memory tensor descriptor and its corresponding shared-memory slots.
@@ -192,7 +191,7 @@ class MemoryUnit:
         return MemoryUnit(smem, desc)
 
 
-@aggregate
+@gluon.aggregate
 class KVMemory:
     k_mem: MemoryUnit
     v_mem: MemoryUnit
@@ -355,7 +354,7 @@ class KVMemory:
         return buffer
 
 
-@aggregate
+@gluon.aggregate
 class KVScaleMemory:
     k_mem: MemoryUnit
     v_mem: MemoryUnit
@@ -510,7 +509,7 @@ class KVScaleMemory:
         return buffer
 
 
-@aggregate
+@gluon.aggregate
 class AttentionConfigBase:
     Q_TYPE: ttgl.constexpr  # the data type for Q, either 'e5m2' or 'e4m3'
     P_TYPE: ttgl.constexpr  # the data type for P; we always assume P_TYPE == Q_TYPE
@@ -552,7 +551,7 @@ class AttentionConfigBase:
 
 
 @composition
-@aggregate
+@gluon.aggregate
 class GlobalScaledAttentionConfig:
     base: AttentionConfigBase
 
@@ -616,7 +615,7 @@ class GlobalScaledAttentionConfig:
         self.CONVERT_LAYOUT_TRIVIAL = ttgl.constexpr(True if P_K_WIDTH == 8 else False)
 
 
-@aggregate
+@gluon.aggregate
 class GlobalScaledAttentionProgram:
     cfg: GlobalScaledAttentionConfig
 
@@ -1407,7 +1406,7 @@ class GlobalScaledAttentionProgram:
 
 
 @composition
-@aggregate
+@gluon.aggregate
 class BlockScaledAttentionConfig:
     base: AttentionConfigBase
 
@@ -1496,7 +1495,7 @@ class BlockScaledAttentionConfig:
         self.P_SCALING = ttgl.constexpr(P_SCALING)
 
 
-@aggregate
+@gluon.aggregate
 class BlockScaledAttentionProgram:
     cfg: BlockScaledAttentionConfig
 

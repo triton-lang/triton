@@ -2,7 +2,7 @@ from __future__ import annotations
 from triton.compiler.compiler import ASTSource
 from triton.backends.compiler import Language
 from triton.runtime.jit import JITFunction, constexpr_function
-from typing import TypeVar, Optional, Callable, Iterable, Union
+from typing import TypeVar, Optional, Callable, Iterable, Union, overload
 from triton._C.libtriton import ir
 
 T = TypeVar("T")
@@ -51,6 +51,25 @@ class GluonJITFunction(JITFunction[T]):
 
     def is_gluon(self):
         return True
+
+
+@overload
+def jit(fn: T) -> GluonJITFunction[T]:
+    ...
+
+
+@overload
+def jit(
+    *,
+    version=None,
+    repr: Optional[Callable] = None,
+    launch_metadata: Optional[Callable] = None,
+    do_not_specialize: Optional[Iterable[int | str]] = None,
+    do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
+    debug: Optional[bool] = None,
+    noinline: Optional[bool] = None,
+) -> Callable[[T], GluonJITFunction[T]]:
+    ...
 
 
 def jit(

@@ -8,20 +8,17 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Signals.h"
 
-namespace {
-
-template <typename T> std::string stringifyLLVMType(const T &t) {
+template <typename T> static std::string stringifyLLVMType(const T &t) {
   std::string str;
   llvm::raw_string_ostream ros(str);
   ros << t;
   return str;
 }
-} // namespace
 
 namespace mlir {
 // gtest printer for mlir::Attribute.  This must live in namespace mlir in order
 // for it to be found via ADL.
-void PrintTo(const Attribute &attr, std::ostream *os) {
+static void PrintTo(const Attribute &attr, std::ostream *os) {
   *os << stringifyLLVMType(attr);
 }
 } // namespace mlir
@@ -139,7 +136,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
         ctx, [&](Diagnostic &diag) { diags.push_back("  - " + diag.str()); });
     result = inferLayout->inferReshapeOpEncoding(
         srcTy.getShape(), srcTy.getEncoding(), dstTy.getShape(), inferredEnc,
-        UnknownLoc::get(ctx));
+        /*allowReorder=*/false, UnknownLoc::get(ctx));
   }
 
   // We expect the reshape to succeed as long as the inputs have the same
@@ -164,7 +161,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
     Attribute inferredSrcEnc;
     auto result = inferLayout->inferReshapeOpEncoding(
         dstTy.getShape(), inferredEnc, srcTy.getShape(), inferredSrcEnc,
-        UnknownLoc::get(ctx));
+        /*allowReorder=*/false, UnknownLoc::get(ctx));
     EXPECT_TRUE(succeeded(result))
         << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
         << " " << stringifyLLVMType(inferredEnc) << " -> "
@@ -439,7 +436,8 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       }
       Attribute reshapedEnc;
       result = inferLayout->inferReshapeOpEncoding(
-          transShape, transEnc, newShape, reshapedEnc, std::nullopt);
+          transShape, transEnc, newShape, reshapedEnc,
+          /*allowReorder=*/false, std::nullopt);
       assert(succeeded(result));
       // The layouts should be structurally the same
       // but reshapeEnc will likely be a LinearEncodingAttr

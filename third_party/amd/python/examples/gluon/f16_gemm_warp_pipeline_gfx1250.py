@@ -99,12 +99,101 @@ def gemm_tdm_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
 
 
+# ---------------------------------------------------------------------------
+# KernelB variant: loads+TDM in stage0, dot-only in stage1 (num_buffers>=3).
+#
+# Schedule (num_buffers=4):
+#          w0      w1               w2             w3
+# g0 g1 g2 / l0 g3 / d0    / l1 g4 / d1    / l2 g5 / d2    / l3
+# g0 g1 g2         / l0 g3 / d0    / l1 g4 / d1    / l2 g5 / d2    /
+#          w0              w1              w2              w3
+#
+# The write index is derived from `phase` (the read counter) so that the write
+# and the read share the same SSA base, letting the membar dynamic-index
+# disjointness analysis prove the two slots never overlap within an iteration.
+# ---------------------------------------------------------------------------
+
+
+@gluon.jit
+def gemm_tdm_pipelined_warp_pipelined_kernelB(a_ptr, b_ptr, c_ptr,  #
+                                              M, N, K,  #
+                                              stride_am, stride_ak,  #
+                                              stride_bk, stride_bn,  #
+                                              stride_cm, stride_cn,  #
+                                              BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                              BLOCK_K: ttgl.constexpr,  #
+                                              NUM_BUFFERS: ttgl.constexpr,  #
+                                              TRANSPOSE_B: ttgl.constexpr,  #
+                                              WARP_BASES: ttgl.constexpr,  #
+                                              PRIO_SWAP: ttgl.constexpr = False):
+    a_dtype: ttgl.constexpr = a_ptr.type.element_ty
+    b_dtype: ttgl.constexpr = b_ptr.type.element_ty
+    ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
+    ttgl.static_assert(b_dtype.is_fp16() or b_dtype.is_bf16(), "Only fp16/bf16 supported for B")
+    ttgl.static_assert(NUM_BUFFERS >= 3, "kernelB requires NUM_BUFFERS >= 3")
+
+    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, WARP_BASES, [], [16, 16, 32])
+
+    shared_layouts: ttgl.constexpr = create_shared_layouts(BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
+    SHARED_LAYOUT_A: ttgl.constexpr = shared_layouts[0]
+    SHARED_LAYOUT_B: ttgl.constexpr = shared_layouts[1]
+    OPERAND_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(0, WMMA_LAYOUT, 8)
+    OPERAND_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(1, WMMA_LAYOUT, 8)
+
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    a_desc, b_desc = create_tensor_descriptors(a_ptr, b_ptr, pid_m * BLOCK_M * stride_am, pid_n * BLOCK_N * stride_bn,
+                                               stride_am, stride_ak, stride_bn, stride_bk, SHARED_LAYOUT_A,
+                                               SHARED_LAYOUT_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
+    a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape, layout=a_desc.layout)
+    b_buffer = ttgl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape, layout=b_desc.layout)
+
+    phase = 0
+    accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=WMMA_LAYOUT)
+
+    producer = 0
+    for _ in ttgl.static_range(NUM_BUFFERS - 1):
+        producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B)
+
+    ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 3) * 2)
+    _p0: ttgl.constexpr = 1 if PRIO_SWAP else 0
+    _p1: ttgl.constexpr = 0 if PRIO_SWAP else 1
+
+    for _ in range(0, ttgl.cdiv(K, BLOCK_K) - (NUM_BUFFERS - 1)):
+        with ttgl.amd.warp_pipeline_stage("stage0", priority=_p0):
+            write_phase = phase + (NUM_BUFFERS - 1)
+            phase, a, b = lds_load(phase, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
+                                   TRANSPOSE_B)
+            issue_loads(write_phase, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B)
+        ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 3) * 2)
+        with ttgl.amd.warp_pipeline_stage("stage1", priority=_p1):
+            accumulator = issue_wmma_compute(a, b, accumulator)
+
+    for i in ttgl.static_range(NUM_BUFFERS - 1):
+        with ttgl.amd.warp_pipeline_stage("stage0", priority=_p0):
+            phase, a, b = lds_load(phase, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
+                                   TRANSPOSE_B)
+        ttgl.amd.gfx1250.tdm.async_wait(0)
+        with ttgl.amd.warp_pipeline_stage("stage1", priority=_p1):
+            accumulator = issue_wmma_compute(a, b, accumulator)
+
+    offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
+    offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
+    offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
+
+
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(256, 256, 64)])
 @pytest.mark.parametrize("NUM_BUFFERS", [3])
 @pytest.mark.parametrize("TRANSPOSE_B", [True])
 @pytest.mark.parametrize("M,N,K", [(2048, 2048, 2048)])
 @pytest.mark.parametrize("DUMP", [False])
-def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP):
+@pytest.mark.parametrize("USE_KERNEL_B", [False])
+def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP, USE_KERNEL_B):
     if triton.cdiv(K, BLOCK_K) < NUM_BUFFERS:
         pytest.skip("Skip tests where K/BLOCK_K < NUM_BUFFERS")
 
@@ -129,7 +218,9 @@ def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
 
     warp_bases = tuple(WARP_BASES)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    kernel = gemm_tdm_pipelined_warp_pipelined_kernel[grid](
+    kernel_fn = (gemm_tdm_pipelined_warp_pipelined_kernelB
+                 if USE_KERNEL_B else gemm_tdm_pipelined_warp_pipelined_kernel)
+    kernel = kernel_fn[grid](
         a_device, b_device, c_device,  #
         M, N, K,  #
         stride_am, stride_ak,  #
@@ -160,6 +251,7 @@ if __name__ == "__main__":
     parser.add_argument("-K", type=int, default=1024, help='problem K size')
     parser.add_argument("--num-buffers", type=int, choices=[2, 3, 4], default=3, help='num shared memory buffers')
     parser.add_argument("--dump", action="store_true", help="Print out result/golden tensors")
+    parser.add_argument("--kernelB", action="store_true", help="Use the kernelB variant")
     args = parser.parse_args()
 
     M, N, K = args.M, args.N, args.K
@@ -168,6 +260,9 @@ if __name__ == "__main__":
     NUM_WARPS = 8
     TRANSPOSE_B = True
     DUMP = args.dump
-    print(f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {TRANSPOSE_B=}, {NUM_WARPS=}, {NUM_BUFFERS=}")
+    USE_KERNEL_B = args.kernelB
+    print(
+        f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {TRANSPOSE_B=}, {NUM_WARPS=}, {NUM_BUFFERS=}, {USE_KERNEL_B=}"
+    )
 
-    test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP)
+    test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP, USE_KERNEL_B)

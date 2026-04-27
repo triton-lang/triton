@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-update-async-wait-count=arch-generation-name=gfx1250 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-update-async-wait-count=gfx-arch=gfx1250 | FileCheck %s
 
 // The number in SSA symbolic names represents the number of generated async load operation at assembly level a ttg.async_copy_global_to_local will generate, which is counted by this pass.
 // For example `ttg.async_copy_global_to_local %ptr2Inst, %memDesc2Inst ..` will generate two global_load_async_to_lds_b128 assembly instruction
@@ -569,35 +569,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
+#idx_i32_parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#idx_i16_parent = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tdm_gather_scatter_multiple_instructions
   tt.func public @tdm_gather_scatter_multiple_instructions(
     %memDesc: !ttg.memdesc<256x128xf16, #shared, #smem, mutable>,
     %tensorDesc: !tt.tensordesc<64x128xf16>,
-    %row_indices_i32: tensor<64xi32>,
-    %row_indices_i16: tensor<256xi16>,
+    %row_indices_i32: tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_i32_parent}>>,
+    %row_indices_i16: tensor<256xi16, #ttg.slice<{dim = 0, parent = #idx_i16_parent}>>,
     %pred: i32
   ) {
     %c0_i32 = arith.constant 0 : i32
 
-    // Gather with 64xi32 indices: 64/8 = 8 instructions
-    amdg.async_tdm_gather %tensorDesc[%row_indices_i32, %c0_i32] to %memDesc, pred = %pred : tensor<64xi32>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
-    // Scatter with 64xi32 indices: 64/8 = 8 instructions
-    amdg.async_tdm_scatter %tensorDesc[%row_indices_i32, %c0_i32] from %memDesc : tensor<64xi32>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
-    // Gather with 128xi16 indices: 256/16 = 16 instructions
-    amdg.async_tdm_gather %tensorDesc[%row_indices_i16, %c0_i32] to %memDesc, pred = %pred : tensor<256xi16>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
-    // Scatter with 128xi16 indices: 256/16 = 16 instructions
-    amdg.async_tdm_scatter %tensorDesc[%row_indices_i16, %c0_i32] from %memDesc : tensor<256xi16>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    // Gather with i32 indices: sizePerThread=16, 4 warps, maxPerInstr=8 => 2 instructions
+    amdg.async_tdm_gather %tensorDesc[%row_indices_i32, %c0_i32] to %memDesc, pred = %pred : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_i32_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    // Scatter with i32 indices: 2 instructions
+    amdg.async_tdm_scatter %tensorDesc[%row_indices_i32, %c0_i32] from %memDesc : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_i32_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    // Gather with i16 indices: sizePerThread=64, 4 warps, maxPerInstr=16 => 4 instructions
+    amdg.async_tdm_gather %tensorDesc[%row_indices_i16, %c0_i32] to %memDesc, pred = %pred : tensor<256xi16, #ttg.slice<{dim = 0, parent = #idx_i16_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    // Scatter with i16 indices: 4 instructions
+    amdg.async_tdm_scatter %tensorDesc[%row_indices_i16, %c0_i32] from %memDesc : tensor<256xi16, #ttg.slice<{dim = 0, parent = #idx_i16_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
 
+    // i32 ops emit 2 instructions each, i16 ops emit 4 each => total 12 instructions
     // CHECK: amdg.async_tdm_intrinsic_wait {count = 0
     amdg.async_tdm_wait {num = 0 : i32}
-    // CHECK: amdg.async_tdm_intrinsic_wait {count = 16
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 4
     amdg.async_tdm_wait {num = 1 : i32}
-    // CHECK: amdg.async_tdm_intrinsic_wait {count = 32
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 8
     amdg.async_tdm_wait {num = 2 : i32}
-    // CHECK: amdg.async_tdm_intrinsic_wait {count = 40
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 10
     amdg.async_tdm_wait {num = 3 : i32}
-    // CHECK: amdg.async_tdm_intrinsic_wait {count = 48
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 12
     amdg.async_tdm_wait {num = 4 : i32}
 
     tt.return

@@ -1,6 +1,6 @@
-// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx1100 --convert-builtin-func-to-llvm | FileCheck %s
-// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx1200 --convert-builtin-func-to-llvm | FileCheck %s
-// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=GFX1250
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1100 --convert-builtin-func-to-llvm | FileCheck %s
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1200 --convert-builtin-func-to-llvm | FileCheck %s
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=GFX1250
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -244,7 +244,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
     // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<16xbf16>
     // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<16xbf16>
-    // GFX1250: wmma.f32.16x16x32.bf16{{.*}} : (i1, vector<16xbf16>, i1, vector<16xbf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    // GFX1250: wmma.f32.16x16x32.bf16{{.*}} : (vector<16xbf16>, vector<16xbf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
     %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma3, kWidth = 8}>> * tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma3, kWidth = 8}>> -> tensor<16x16xf32, #mma3>
 
     %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma3>
@@ -258,7 +258,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
     // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<16xbf16>
     // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<16xbf16>
-    // GFX1250: wmma.f32.16x16x32.bf16{{.*}} : (i1, vector<16xbf16>, i1, vector<16xbf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    // GFX1250: wmma.f32.16x16x32.bf16{{.*}} : (vector<16xbf16>, vector<16xbf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
     %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma3_transposed, kWidth = 8}>> * tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma3_transposed, kWidth = 8}>> -> tensor<16x16xf32, #mma3_transposed>
 
     %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma3_transposed>
