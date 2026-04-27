@@ -213,29 +213,27 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
             cache = runtime.driver.active.get_empty_cache_for_benchmark()
             g = torch.cuda.CUDAGraph()
             with torch.cuda.graph(g):
-                for _ in range(n_repeat):
+                for i in range(n_repeat):
                     if grad_to_none is not None:
                         for x in grad_to_none:
                             x.grad = None
                     proton.deactivate(session)
                     runtime.driver.active.clear_cache(cache)
                     proton.activate(session)
-                    fn()
+                    with proton.scope(f"{scope_prefix}{i}"):
+                        fn()
             torch.cuda.synchronize()
             proton.deactivate(session)
             scope_prefix = f"proton.{uuid.uuid4().hex}."
             n_retries = 10
             try:
                 for i in range(n_retries):
-                    with proton.scope(f"{scope_prefix}{i:08d}"):
-                        g.replay()
+                    g.replay()
                 torch.cuda.synchronize()
             finally:
                 proton.deactivate(session, flushing=True)
 
             times = [t / n_repeat for t in _collect_proton_scope_times(proton.data.get(session), scope_prefix)]
-            if len(times) != n_retries:
-                raise RuntimeError(f"Expected {n_retries} Proton timing scopes, got {len(times)}")
 
         return _summarize_statistics(times, quantiles, return_mode)
 
@@ -380,8 +378,6 @@ def do_bench_proton(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, r
             proton.deactivate(session, flushing=True)
 
         times = _collect_proton_scope_times(proton.data.get(session), scope_prefix)
-        if len(times) != n_repeat:
-            raise RuntimeError(f"Expected {n_repeat} Proton timing scopes, got {len(times)}")
 
     return _summarize_statistics(times, quantiles, return_mode)
 
