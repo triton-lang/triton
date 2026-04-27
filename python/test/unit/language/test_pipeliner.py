@@ -1,5 +1,7 @@
 # End-to-end tests to check the correctness of the pipeliner
 
+import re
+
 import pytest
 import torch
 import triton
@@ -575,3 +577,95 @@ def test_conditional_store_pipeline(num_stages, device):
     # Expected output: [1, 2, 3, 4, ..., N]
     expected = torch.arange(1, N + 1, dtype=torch.int32, device=device)
     assert torch.equal(output, expected)
+
+
+@pytest.mark.parametrize("num_stages", [1, 2, 3])
+def test_block_sparse_matmul_pipeline(num_stages, device):
+    """
+    Block-sparse matmul where each K-block of B is either loaded (non-zero) or
+    substituted with a zero tile. The runtime ``if`` lowers to an ``scf.if``
+    whose result is the B operand of ``tl.dot``, so the dot-operand layout
+    requirement has to propagate backward through the ``scf.if`` branches and
+    the conditional load has to be scheduled into the prefetch stage. This
+    exercises layout propagation through region-branching control flow on top
+    of the regular software-pipelined matmul.
+    """
+    check_capabilities()
+
+    @triton.jit
+    def block_sparse_matmul_kernel(  #
+            A_ptr, B_ptr, C_ptr, Sparsity_ptr,  #
+            M, N, K,  #
+            stride_am, stride_ak,  #
+            stride_bk, stride_bn,  #
+            stride_cm, stride_cn,  #
+            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+            NUM_STAGES: tl.constexpr):
+        pid_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+        offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        offs_k = tl.arange(0, BLOCK_K)
+        a_ptrs = A_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
+        b_ptrs = B_ptr + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
+        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+        zero_tile = tl.zeros((BLOCK_K, BLOCK_N), dtype=tl.float16)
+        for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
+            nnz = tl.load(Sparsity_ptr + k)
+            a = tl.load(a_ptrs)
+            if nnz != 0:
+                b = tl.load(b_ptrs)
+            else:
+                b = zero_tile
+            acc = tl.dot(a, b, acc)
+            a_ptrs += BLOCK_K * stride_ak
+            b_ptrs += BLOCK_K * stride_bk
+        c_ptrs = C_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
+        tl.store(c_ptrs, acc.to(tl.float16))
+
+    torch.manual_seed(0)
+    M, N, K = 256, 256, 256
+    BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 32
+    num_k_blocks = K // BLOCK_K
+    a = torch.randn(M, K, device=device, dtype=torch.float16)
+    b = torch.randn(K, N, device=device, dtype=torch.float16)
+    sparsity = (torch.rand(num_k_blocks, device=device) > 0.3).to(torch.int8)
+
+    # Reference: zero out the rows of B for blocks marked absent and matmul.
+    b_ref = b.clone()
+    for k_blk in range(num_k_blocks):
+        if sparsity[k_blk].item() == 0:
+            b_ref[k_blk * BLOCK_K:(k_blk + 1) * BLOCK_K] = 0
+    ref = (a.float() @ b_ref.float()).to(torch.float16)
+
+    c = torch.empty((M, N), device=device, dtype=torch.float16)
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    handler = block_sparse_matmul_kernel[grid](
+        a, b_ref, c, sparsity,  #
+        M, N, K,  #
+        a.stride(0), a.stride(1),  #
+        b_ref.stride(0), b_ref.stride(1),  #
+        c.stride(0), c.stride(1),  #
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
+        NUM_STAGES=num_stages)
+    torch.testing.assert_close(c, ref, atol=1e-1, rtol=1e-1)
+
+    # The runtime ``if`` lowers to an ``scf.if`` whose result feeds the dot.
+    ttgir = handler.asm["ttgir"]
+    assert "scf.if" in ttgir
+    assert any(op in ttgir for op in ("tt.dot", "ttng.warp_group_dot", "ttng.tc_gen5_mma"))
+
+    # When pipelining is requested, every shared-memory allocation should be
+    # hoisted to function scope (multi-buffer) just like the analogous dense
+    # matmul: a per-iteration ``ttg.local_alloc %x`` (i.e. the with-operand
+    # form) means the conditional B-tile load was not propagated through the
+    # ``scf.if`` and stayed synchronous in the loop body. This currently
+    # fails because the dot-operand layout requirement does not propagate
+    # backward through region-branching control flow; the follow-up that
+    # extends the propagation (cf. tritongpu-remove-layout-conversions
+    # handling of region-branch results) will flip this assertion green.
+    if num_stages > 1:
+        in_loop_allocs = re.findall(r"ttg\.local_alloc %\w+", ttgir)
+        assert len(in_loop_allocs) == 0, (
+            f"expected B-tile to be multi-buffered after pipelining, found "
+            f"{len(in_loop_allocs)} per-iteration ttg.local_alloc op(s)")
