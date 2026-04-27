@@ -171,7 +171,7 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
     This allows us to get more fine-grained measurements of the kernel runtimes and to exclude cache flushes from the measurement.
     Note that this function has several constraints compared to `do_bench_cudagraph`:
     - It does not measure GPU operations other than kernels (e.g., memory copies, synchronization, etc.).
-    - It supports only NVIDIA and AMD GPUs.
+    - It supports only the NVIDIA GPU. AMD GPU is a TODO.
 
     :param fn: Function to benchmark
     :type fn: Callable
@@ -182,9 +182,14 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
     """
-    import torch
-
     assert return_mode in ["min", "max", "mean", "median", "all"]
+
+    target = runtime.driver.active.get_current_target()
+    if target.backend != "cuda":
+        raise RuntimeError("do_bench_cudagraph_proton requires the NVIDIA backend because Proton does not reliably "
+                           "attribute CUDA graph replay launches to scopes on HIP.")
+
+    import torch
 
     with torch.cuda.stream(torch.cuda.Stream()):
         fn()
