@@ -219,7 +219,7 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
                         for x in grad_to_none:
                             x.grad = None
                     runtime.driver.active.clear_cache(cache)
-                    with proton.scope(f"{scope_prefix}{i}"):
+                    with proton.scope(f"{scope_prefix}{i:08d}"):
                         fn()
             torch.cuda.synchronize()
             n_retries = 10
@@ -230,7 +230,7 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
             finally:
                 proton.deactivate(session, flushing=True)
 
-            times = [t / n_repeat for t in _collect_proton_scope_times(proton.data.get(session), scope_prefix)]
+            times = [t / n_retries for t in _collect_proton_scope_times(proton.data.get(session), scope_prefix)]
 
         return _summarize_statistics(times, quantiles, return_mode)
 
