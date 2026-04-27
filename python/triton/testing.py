@@ -212,6 +212,7 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
                     "that the Proton profiler is properly installed.")
             cache = runtime.driver.active.get_empty_cache_for_benchmark()
             g = torch.cuda.CUDAGraph()
+            scope_prefix = f"proton.{uuid.uuid4().hex}."
             with torch.cuda.graph(g):
                 for i in range(n_repeat):
                     if grad_to_none is not None:
@@ -221,7 +222,6 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
                     with proton.scope(f"{scope_prefix}{i}"):
                         fn()
             torch.cuda.synchronize()
-            scope_prefix = f"proton.{uuid.uuid4().hex}."
             n_retries = 10
             try:
                 for i in range(n_retries):
