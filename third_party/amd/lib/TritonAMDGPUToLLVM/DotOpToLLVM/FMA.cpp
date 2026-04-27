@@ -33,8 +33,8 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
     if ((aElemTy.isF16() || aElemTy.isBF16()) && dElemTy.isF32()) {
       chosenOp.vectorSize = 2;
       chosenOp.outElemTy = f32_ty;
-      chosenOp.intrinsicName = aElemTy.isF16() ? "llvm.amdgcn.fdot2"
-                                               : "llvm.amdgcn.fdot2.f32.bf16";
+      chosenOp.intrinsicName =
+          aElemTy.isF16() ? "llvm.amdgcn.fdot2" : "llvm.amdgcn.fdot2.f32.bf16";
       chosenOp.additionalArgs = {b.false_val()};
       return chosenOp;
     }
