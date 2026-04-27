@@ -28,7 +28,7 @@ namespace mlir {
 // Ops that may appear between pipeline stages but never inside one.  Pre-
 // existing memory-fence/wait ops at cluster boundaries are tolerated so that
 // prefetch patterns continue to work; encountering one mid-cluster is treated
-// as a pattern mismatch by the callers.
+// as malformed input by the callers.
 static bool isPipelineIgnorable(Operation *op) {
   return isa<ttg::AsyncWaitOp, gpu::BarrierOp, triton::gpu::BarrierOp,
              tt::amdgpu::AsyncTDMWait>(op);
@@ -38,6 +38,33 @@ static bool isPipelineIgnorable(Operation *op) {
 static bool isPipelineBorder(Operation *op) {
   return op->hasAttr("triton.warp_pipeline.border");
 }
+
+// True if `op` is a structured loop (scf.for / scf.while).  Loops are
+// disallowed inside a pipeline stage for several reasons:
+//   1. No useful effect: a non-pipelined loop runs to completion within a
+//      single warp's phase while the other warp waits at the cluster
+//      boundary; the pipeline cannot interleave anything across iterations.
+//      Iteration-level pipelining is expressed by the loop-pipeline form
+//      (scf.for containing warp_pipeline_stage blocks).
+//   2. A cluster is meant to be a straight-line scheduling unit so the
+//      backend can interleave its ops with the other warp's stage; a loop
+//      is an opaque control-flow region the scheduler cannot see across.
+//   3. Our cross-cluster memory-effect analysis is a flat scan over the
+//      cluster body; loop bodies aren't visible through MemoryEffectOpInterface
+//      and loop-carried LDS hazards have nowhere to be barriered (cluster
+//      barriers are boundary-only).
+// As a side effect this also serves as the "no nested warp pipelines" check,
+// since a warp-pipelined scf.for is still an scf.for.
+static bool isLoopOp(Operation *op) {
+  return isa<scf::ForOp, scf::WhileOp>(op);
+}
+
+// Outcome of attempting to build a pipeline from a region.
+//   NotApplicable: no border markers were present (the region opted out).
+//   Created:       a pipeline was successfully materialized.
+//   Malformed:     border markers were present but the pipeline could not be
+//                  built; an error has been emitted at the offending op.
+enum class PipelineResult { NotApplicable, Created, Malformed };
 
 // Read (cluster-name, priority) from a border marker op.  Priority defaults
 // to -1 when the marker doesn't carry the optional priority attribute.
@@ -148,11 +175,19 @@ static void createClusterOp(OpBuilder &b, Location loc,
   return;
 }
 
-// Turns a partitioned region into the warp-pipelined clusters
-static LogicalResult createPipeline(OpBuilder &b, Location loc,
-                                    scf::ForOp forOp) {
-  // Collect ops in the loop body
+// Turns a partitioned region into the warp-pipelined clusters.  Returns
+// NotApplicable when the loop has no border markers (user opted out), Created
+// on success, or Malformed when border markers are present but the loop body
+// cannot be split into a valid pipeline (an error is emitted in that case).
+static PipelineResult createPipeline(OpBuilder &b, Location loc,
+                                     scf::ForOp forOp) {
   Block &blk = *forOp.getBody();
+
+  // Opt-in gate: if the loop body has no borders, the user did not request
+  // warp-pipelining for this loop and we must leave it untouched.
+  if (llvm::none_of(blk, [](Operation &op) { return isPipelineBorder(&op); }))
+    return PipelineResult::NotApplicable;
+
   SmallVector<Operation *> cluster;
   SmallVector<std::pair<StringAttr, int>> clusterMarkers;
   SmallVector<SmallVector<Operation *>> clusters;
@@ -170,11 +205,22 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
       continue;
     }
     if (isPipelineIgnorable(op)) {
-      // Ignorable ops may appear before or after a stage, but not inside it.
-      // If encountered while building an execute_region, reject warp-pipeline.
-      if (!cluster.empty())
-        return failure();
+      // Ignorable ops (barrier / async_wait family) belong between stages,
+      // never inside one.  Encountering one while a cluster is being built
+      // means the user inserted it inside a warp_pipeline_stage region.
+      if (!cluster.empty()) {
+        op->emitError("barrier or wait op cannot appear inside a "
+                      "warp_pipeline_stage region");
+        return PipelineResult::Malformed;
+      }
       continue;
+    }
+    if (isLoopOp(op)) {
+      // Loops are not permitted inside a stage; see isLoopOp for rationale.
+      op->emitError("loop op cannot appear inside a warp_pipeline_stage "
+                    "region; to pipeline loop iterations, place "
+                    "warp_pipeline_stage blocks inside the loop body");
+      return PipelineResult::Malformed;
     }
     if (isa<scf::YieldOp>(op)) // End of the loop
       break;
@@ -188,9 +234,14 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
     clusterMarkers.push_back({clusterStr, -1});
   }
 
-  // no pipeline clusters detected if 1 or 0 chunk found
-  if (clusters.size() < 2)
-    return failure();
+  // We only reach here when at least one border existed; a single cluster
+  // means the borders are degenerate (e.g. a lone trailing border with no
+  // operations after it).  Treat as malformed user input.
+  if (clusters.size() < 2) {
+    forOp->emitError(
+        "warp_pipeline_stage borders did not produce at least two stages");
+    return PipelineResult::Malformed;
+  }
 
   // Materialize each cluster as an execute_region.
   int totalStages = clusters.size();
@@ -205,7 +256,7 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
   forOp->setAttr("triton.warp_pipeline.pipelined_for", b.getUnitAttr());
 
   LDBG("[warp-pipeline] total_stages=" << totalStages << "\n");
-  return success();
+  return PipelineResult::Created;
 }
 
 // Create a pipelined region from flat (non-loop) border markers in a block.
@@ -213,16 +264,30 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
 // (e.g. via static_range) but the body still has warp_pipeline_stage
 // annotations producing border markers.  The grouping logic mirrors
 // createPipeline but without a loop wrapper.
-static LogicalResult createFlatPipeline(OpBuilder &b, Block &block) {
-  // 1. Find all border markers in this block.  Need at least two to form
-  //    a pipeline (one per stage boundary).
+//
+// Returns NotApplicable when the block has no border markers, Created when
+// a flat pipeline was materialized, or Malformed when borders are present
+// but a valid pipeline could not be built (an error is emitted in that case).
+static PipelineResult createFlatPipeline(OpBuilder &b, Block &block) {
+  // 1. Find all border markers in this block.
   SmallVector<Operation *> allBorders;
   for (auto &op : block)
     if (isPipelineBorder(&op))
       allBorders.push_back(&op);
 
-  if (allBorders.size() < 2)
-    return failure();
+  // No borders at all means the block did not opt into flat pipelining.
+  if (allBorders.empty())
+    return PipelineResult::NotApplicable;
+
+  // A single border cannot form a 2-stage pipeline; treat as malformed input
+  // since the user did opt in (the lone border would otherwise leak through
+  // unprocessed).
+  if (allBorders.size() < 2) {
+    allBorders.front()->emitError(
+        "warp_pipeline_stage requires at least two borders to form a flat "
+        "pipeline");
+    return PipelineResult::Malformed;
+  }
 
   Location loc = allBorders.front()->getLoc();
   Operation *firstBorder = allBorders.front();
@@ -230,13 +295,20 @@ static LogicalResult createFlatPipeline(OpBuilder &b, Block &block) {
 
   // 2. Locate the start of the first stage.  Unlike createPipeline, the flat
   //    sequence has no loop body to anchor against, so walk backwards from
-  //    the first border, stopping at control-flow boundaries (scf.for,
-  //    cond_barrier) or ignorable ops belonging to a previous pipeline.
+  //    the first border, stopping at things that must not be folded into
+  //    stage 0:
+  //      - a structured loop (scf.for / scf.while) -- see isLoopOp for
+  //        rationale; this also covers already-warp-pipelined loops, so the
+  //        "no nesting" rule falls out for free
+  //      - a phase-control op (defensive; not produced before this pass)
+  //      - an inter-stage barrier from a previous pipeline
+  //    Other structured control flow (scf.if, etc.) is absorbed into stage 0
+  //    since execution falls through it linearly at this stage of the
+  //    pipeline.
   Operation *regionStart = firstBorder;
   for (Operation *op = firstBorder->getPrevNode(); op; op = op->getPrevNode()) {
-    if (isa<scf::ForOp>(op) || isa<tt::amdgpu::CondBarrierOp>(op))
-      break;
-    if (isPipelineIgnorable(op))
+    if (isLoopOp(op) || isa<tt::amdgpu::CondBarrierOp>(op) ||
+        isPipelineIgnorable(op))
       break;
     regionStart = op;
   }
@@ -266,18 +338,36 @@ static LogicalResult createFlatPipeline(OpBuilder &b, Block &block) {
     }
 
     if (isPipelineIgnorable(op)) {
-      if (!cluster.empty())
-        return failure();
+      // Same rule as createPipeline: barriers/waits cannot live inside a
+      // stage.
+      if (!cluster.empty()) {
+        op->emitError("barrier or wait op cannot appear inside a "
+                      "warp_pipeline_stage region");
+        return PipelineResult::Malformed;
+      }
       continue;
+    }
+
+    if (isLoopOp(op)) {
+      // Same rule as createPipeline: loops cannot live inside a stage.
+      op->emitError("loop op cannot appear inside a warp_pipeline_stage "
+                    "region; to pipeline loop iterations, place "
+                    "warp_pipeline_stage blocks inside the loop body");
+      return PipelineResult::Malformed;
     }
 
     cluster.push_back(op);
   }
 
-  // 4. Materialize each cluster as an execute_region.  Bail out if fewer than
-  //    two real clusters survived (e.g., dummies-only).
-  if (clusters.size() < 2)
-    return failure();
+  // 4. Materialize each cluster as an execute_region.  With at least two
+  //    borders the sweep should always produce >= 2 clusters; treat anything
+  //    less as a defensive malformed case.  Note: the borders themselves
+  //    were erased during the sweep, so we attach the diagnostic to `loc`.
+  if (clusters.size() < 2) {
+    mlir::emitError(
+        loc, "warp_pipeline_stage borders did not produce at least two stages");
+    return PipelineResult::Malformed;
+  }
 
   for (auto &&[stageOps, marker] : llvm::zip(clusters, clusterMarkers)) {
     if (stageOps.empty())
@@ -286,7 +376,7 @@ static LogicalResult createFlatPipeline(OpBuilder &b, Block &block) {
   }
 
   LDBG("[warp-pipeline] flat pipeline with " << clusters.size() << " stages");
-  return success();
+  return PipelineResult::Created;
 }
 
 struct TritonAMDGPUWarpPipelinePass
@@ -296,19 +386,39 @@ struct TritonAMDGPUWarpPipelinePass
   void runOnOperation() override {
     ModuleOp m = getOperation();
     OpBuilder builder(m);
+    bool malformed = false;
     for (auto funcOp : m.getOps<tt::FuncOp>()) {
       funcOp.walk([&](scf::ForOp forOp) {
         Location loc = forOp.getLoc();
-        if (createPipeline(builder, loc, forOp).failed())
-          LDBG("Failed warp-pipelining");
+        switch (createPipeline(builder, loc, forOp)) {
+        case PipelineResult::NotApplicable:
+          LDBG("scf.for has no warp_pipeline_stage borders; skipping");
+          break;
+        case PipelineResult::Created:
+          break;
+        case PipelineResult::Malformed:
+          malformed = true;
+          break;
+        }
       });
 
-      // Process remaining border markers in flat (non-loop) code.
+      // Process remaining border markers in flat (non-loop) code.  Only the
+      // function's top-level blocks are visited; borders inside nested
+      // non-loop regions (e.g. scf.if bodies) are not handled here.
       for (Block &block : funcOp.getBody()) {
-        if (createFlatPipeline(builder, block).failed())
-          LDBG("No flat warp-pipeline in block");
+        switch (createFlatPipeline(builder, block)) {
+        case PipelineResult::NotApplicable:
+          break;
+        case PipelineResult::Created:
+          break;
+        case PipelineResult::Malformed:
+          malformed = true;
+          break;
+        }
       }
     }
+    if (malformed)
+      signalPassFailure();
   }
 };
 

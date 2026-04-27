@@ -52,31 +52,33 @@ namespace mlir::triton {
 
 namespace {
 
-// construct a virtual block from each pipeline cluster
-// block contains its buffer R/W information.
+// Construct a virtual block describing a pipeline cluster's buffer R/W set.
+// Walks recursively so that LDS effects inside nested non-loop regions
+// (scf.if / tt.reduce / tt.scan / etc.) are accounted for.  Loops (scf.for /
+// scf.while) cannot legally appear inside a cluster, so this walk never has
+// to reason about iteration-multiplied effects.
 static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
-  BlockInfo info; // running fact for this block
-  for (Operation &opRef : *block) {
-    Operation *op = &opRef;
-    if (auto mei = dyn_cast<MemoryEffectOpInterface>(op)) {
-      SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effs;
-      mei.getEffects(effs);
-      for (auto &eff : effs) {
-        if (Value v = eff.getValue()) {
-          for (auto bufId : allocation->getAllBufferIdsWithAliases(v)) {
-            if (bufId == Allocation::InvalidBufferId)
-              continue;
-            auto interval = allocation->getAllocatedInterval(bufId);
-            auto slice = AllocationSlice(v, interval, bufId);
-            if (isa<MemoryEffects::Write>(eff.getEffect()))
-              info.syncWriteSlices[slice].insert(op);
-            else if (isa<MemoryEffects::Read>(eff.getEffect()))
-              info.syncReadSlices[slice].insert(op);
-          }
-        }
+  BlockInfo info;
+  block->walk([&](MemoryEffectOpInterface mei) {
+    Operation *op = mei.getOperation();
+    SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effs;
+    mei.getEffects(effs);
+    for (auto &eff : effs) {
+      Value v = eff.getValue();
+      if (!v)
+        continue;
+      for (auto bufId : allocation->getAllBufferIdsWithAliases(v)) {
+        if (bufId == Allocation::InvalidBufferId)
+          continue;
+        auto interval = allocation->getAllocatedInterval(bufId);
+        auto slice = AllocationSlice(v, interval, bufId);
+        if (isa<MemoryEffects::Write>(eff.getEffect()))
+          info.syncWriteSlices[slice].insert(op);
+        else if (isa<MemoryEffects::Read>(eff.getEffect()))
+          info.syncReadSlices[slice].insert(op);
       }
     }
-  }
+  });
   return info;
 }
 
@@ -100,6 +102,43 @@ static bool isPipelineStage(scf::ExecuteRegionOp exec) {
 static scf::ExecuteRegionOp getPipelineStage(Operation *op) {
   auto exec = dyn_cast_or_null<scf::ExecuteRegionOp>(op);
   return isPipelineStage(exec) ? exec : nullptr;
+}
+
+// Validate the body of a `pipelined_for` loop.  After WarpPipeliner the body
+// must consist of: a sequence of pipeline-stage execute_regions, optional
+// pre-existing barrier/wait ops between (or before/after) those stages, and
+// a terminator scf.yield -- nothing else.  Emits an error and returns
+// failure on any deviation.  Side-effect free: leaves the IR untouched so
+// callers can fail fast before mutating anything.
+static LogicalResult validatePipelinedForBody(scf::ForOp forOp) {
+  std::map<int, Operation *> existingBarrierMap;
+  int numClusters = 0;
+  bool seenYield = false;
+  for (auto &op : *forOp.getBody()) {
+    if (auto exeOp = dyn_cast<scf::ExecuteRegionOp>(op)) {
+      if (!isPipelineStage(exeOp))
+        return op.emitError(
+            "non-warp-pipeline scf.execute_region inside pipelined_for body");
+      ++numClusters;
+    } else if (isWarpPipelineIgnorableBarrier(&op)) {
+      if (existingBarrierMap.count(numClusters))
+        return op.emitError("multiple pre-existing barriers between pipeline "
+                            "stages; insert a dummy stage instead");
+      existingBarrierMap[numClusters] = &op;
+    } else if (isa<scf::YieldOp>(op)) {
+      seenYield = true;
+    } else {
+      return op.emitError("unexpected op inside pipelined_for body; only "
+                          "warp-pipeline stages and barrier/wait ops are "
+                          "allowed");
+    }
+  }
+  if (!seenYield)
+    return forOp.emitError("pipelined_for body has no scf.yield terminator");
+  if (existingBarrierMap.count(0) && existingBarrierMap.count(numClusters))
+    return forOp.emitError("pipelined_for body has both top-of-loop and "
+                           "bottom-of-loop pre-existing barriers");
+  return success();
 }
 
 // Pairwise LDS-dependency analysis between pipeline clusters.
@@ -218,6 +257,21 @@ static void emitClusterPriority(OpBuilder &r, Location loc,
   }
 }
 
+// Wrap a pre-existing barrier op (e.g. async_wait) with sched_barriers so the
+// backend scheduler cannot move ops across it, and emit the cluster's
+// priority just before the barrier.  Used in place of inserting a fresh
+// cluster barrier when one already exists at the cluster boundary.
+static void wrapExistingBarrier(OpBuilder &b, Location loc,
+                                Operation *clusterOp,
+                                Operation *existingBarrier,
+                                bool anyHasPriority) {
+  b.setInsertionPoint(existingBarrier);
+  emitClusterPriority(b, loc, clusterOp, anyHasPriority);
+  ROCDL::SchedBarrier::create(b, loc, 0);
+  b.setInsertionPointAfter(existingBarrier);
+  ROCDL::SchedBarrier::create(b, loc, 0);
+}
+
 // Emit pre-barrier, thread-ID partitioning, and phase-shift cond_barrier.
 // Returns warpLow (for reconverge) and warpHigh (consumed by phase shift).
 static std::pair<Value, Value>
@@ -264,25 +318,25 @@ public:
     // Only handle loops that the frontend marked with pipelined_for.
     if (!forOp->getAttr("triton.warp_pipeline.pipelined_for"))
       return rewriter.notifyMatchFailure(forOp, "no pipelined_for");
-    forOp->removeAttr("triton.warp_pipeline.pipelined_for");
 
-    // Look up allocation info as in original pass.
+    // Look up allocation info as in original pass.  Bail out *before* we
+    // mutate the IR so a soft match-failure cannot leave a half-converted
+    // loop behind (no marker, no barriers).
     auto func = forOp->getParentOfType<mlir::triton::FuncOp>();
     Allocation *allocation = moduleAllocation.getFuncData(func);
     if (!allocation)
       return rewriter.notifyMatchFailure(forOp, "no Allocation for function");
 
-    if (failed(emitPipelinedFor(rewriter, forOp.getLoc(), forOp, allocation,
-                                threadsPerPipelineGroup)))
-      return failure();
-
+    forOp->removeAttr("triton.warp_pipeline.pipelined_for");
+    emitPipelinedFor(rewriter, forOp.getLoc(), forOp, allocation,
+                     threadsPerPipelineGroup);
     return success();
   }
 
 private:
-  LogicalResult emitPipelinedFor(PatternRewriter &b, Location loc,
-                                 scf::ForOp forOp, Allocation *allocation,
-                                 int threadsPerPipelineGroup) const {
+  void emitPipelinedFor(PatternRewriter &b, Location loc, scf::ForOp forOp,
+                        Allocation *allocation,
+                        int threadsPerPipelineGroup) const {
     // 1. Pre-barrier, thread partitioning, and phase shift.
     b.setInsertionPoint(forOp);
     auto [warpLow, warpHigh] =
@@ -300,30 +354,18 @@ private:
     std::map<int, Operation *> existingBarrierMap;
     Operation *terminatorOp = nullptr;
 
+    // Body shape was already validated by validatePipelinedForBody before
+    // the pattern ran, so we trust the structure here.
     for (auto &op : *forOp.getBody()) {
       if (auto exeOp = dyn_cast<scf::ExecuteRegionOp>(op)) {
-        // Fail conversion with executeRegion from unkown source.
-        if (!isPipelineStage(exeOp))
-          return failure();
         exeOp.setNoInline(false);
         clusterOps.push_back(&op);
         clusterBlocks.push_back(&exeOp->getRegion(0).front());
         bars.push_back(false);
       } else if (isWarpPipelineIgnorableBarrier(&op)) {
-        int currCluster = clusterBlocks.size();
-        // Reject if multiple barriers appear without an intervening cluster.
-        // This is functionally valid but may cause unpredictable timing. Users
-        // should insert a dummy cluster explicitly if a pipeline bubble is
-        // required.
-        // Also only allow ops which waits local memory,
-        // e.g., s_barrier is NOT allowed.
-        if (existingBarrierMap.find(currCluster) != existingBarrierMap.end())
-          return failure();
-        existingBarrierMap[currCluster] = &op;
-      } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
+        existingBarrierMap[clusterBlocks.size()] = &op;
+      } else if (isa<scf::YieldOp>(op)) {
         terminatorOp = &op;
-      } else { // Fail conversion if any other op found outside of the cluster.
-        return failure();
       }
     }
 
@@ -343,8 +385,10 @@ private:
     auto topBar = existingBarrierMap.find(0);
     auto bottomBar = existingBarrierMap.find(numClusters);
     if (bottomBar != existingBarrierMap.end()) {
-      if (topBar != existingBarrierMap.end())
-        return failure(); // Unreachable
+      // validatePipelinedForBody guarantees we cannot have both top and
+      // bottom barriers, so rotating bottom -> 0 is unambiguous.
+      assert(topBar == existingBarrierMap.end() &&
+             "validatePipelinedForBody should have rejected this");
       existingBarrierMap[0] = bottomBar->second;
       existingBarrierMap.erase(bottomBar);
     }
@@ -367,12 +411,8 @@ private:
     for (int i = 0; i < numClusters; i++) {
       if (auto exBar = existingBarrierMap.find(i);
           exBar != existingBarrierMap.end()) {
-        auto exBarOp = exBar->second;
-        b.setInsertionPoint(exBarOp);
-        emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
-        ROCDL::SchedBarrier::create(b, loc, 0);
-        b.setInsertionPointAfter(exBarOp);
-        ROCDL::SchedBarrier::create(b, loc, 0);
+        wrapExistingBarrier(b, loc, clusterOps[i], exBar->second,
+                            anyHasPriority);
       } else {
         b.setInsertionPoint(clusterOps[i]);
         // The first one wraps back to the last of the loop
@@ -391,7 +431,6 @@ private:
     // 5. Post-loop priority reset and reconverge.
     b.setInsertionPointAfter(forOp);
     emitPipelinePostlude(b, loc, anyHasPriority, warpLow);
-    return success();
   }
 
   ModuleAllocation &moduleAllocation;
@@ -503,11 +542,8 @@ static void emitPipelinedFlat(SmallVector<scf::ExecuteRegionOp> &clusterOps,
     }
 
     if (existingBarrier) {
-      b.setInsertionPoint(existingBarrier);
-      emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
-      ROCDL::SchedBarrier::create(b, loc, 0);
-      b.setInsertionPointAfter(existingBarrier);
-      ROCDL::SchedBarrier::create(b, loc, 0);
+      wrapExistingBarrier(b, loc, clusterOps[i], existingBarrier,
+                          anyHasPriority);
     } else {
       b.setInsertionPoint(clusterOps[i]);
       emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
@@ -531,6 +567,10 @@ static void processUnrolledPipelineRegions(ModuleOp m,
     if (!allocation)
       return;
 
+    // NOTE: We only iterate the function's top-level blocks; flat-pipeline
+    // execute_regions inside nested non-loop regions (e.g. scf.if bodies)
+    // are not collected.  WarpPipeliner's flat-pipeline frontend has the
+    // same scope, so the two stay in sync.
     for (Block &block : funcOp.getBody()) {
       // Collect contiguous sequences of flat warp-pipeline execute_regions,
       // splitting at any non-ignorable, non-pipeline op.
@@ -539,10 +579,8 @@ static void processUnrolledPipelineRegions(ModuleOp m,
 
       for (auto &op : block) {
         if (auto exec = getPipelineStage(&op)) {
-          if (!isa<scf::ForOp>(exec->getParentOp())) {
-            current.push_back(exec);
-            continue;
-          }
+          current.push_back(exec);
+          continue;
         }
         if (isWarpPipelineIgnorableBarrier(&op))
           continue;
@@ -675,21 +713,40 @@ static bool collectNextPipelineClusters(Operation *startOp,
   return false;
 }
 
-// Check whether merging two pipelines creates a cross-pipeline LDS dependency
-// at the boundary.  Concatenates the cluster infos and barrier flags from both
-// pipelines and runs analyzePipelineDependencies in linear mode on the merged
-// sequence.
+// Check whether merging two pipelines is safe to do without inserting a
+// barrier at the boundary.  Enumerates *only* cross-pipeline pairs
+// (a_i, b_j) and verifies each intersected pair already has a LOCAL barrier
+// on its path in the merged schedule.
 //
-// Note on concurrency vs memory ordering: with a one-stage phase offset the
-// only cross-warp concurrent pair at the boundary is (a_{K-1}, b_0); all
-// other pairs execute sequentially within the same warp.  However, within a
-// warp LDS write→read ordering still requires a LOCAL barrier (ds_wait)
-// between producer and consumer, so the merged analysis must check every
-// (a_i, b_j) pair, not just the concurrent one.  The single-distance sweep
-// inside analyzePipelineDependencies covers both cases uniformly.
+// Why not reuse analyzePipelineDependencies on the merged sequence?
+//   The merged linear analysis would also visit intra-A and intra-B pairs,
+//   and may try to flip an internal slot (e.g. between a_0 and a_1) when
+//   A's IR has only a non-LOCAL pre-existing barrier (such as
+//   amdg.async_tdm_wait).  Such slots are A's own responsibility — A
+//   already accepted that wait as sufficient for intra-warp ordering — and
+//   re-flipping them is a false positive that prevents elimination on
+//   otherwise safe kernels.  Restricting the sweep to cross-pipeline pairs
+//   sidesteps the ambiguity entirely.
 //
-// Returns true if the boundary position stays dependency-free after analysis
-// (i.e. safe to eliminate).
+// Cross-warp concurrency vs intra-warp ordering:
+//   With a one-stage phase offset the only truly concurrent cross-warp
+//   pair at the boundary is (a_{K-1}, b_0).  All other (a_i, b_j) pairs
+//   execute sequentially within a single warp.  Both kinds, however,
+//   require a LOCAL barrier on AMD: the concurrent pair needs cross-warp
+//   sync, and the sequential pair needs ds_wait to order async ds_read /
+//   ds_write within a warp (pre-existing async_tdm_wait does *not*
+//   guarantee ds completion ordering in general).  So the coverage check
+//   uses LOCAL-only mergedBars uniformly across all pairs.
+//
+// Layout of mergedBars (linear, LOCAL-only):
+//   i < K      A's internal LOCAL barriers (loopBars[i]).
+//   i == K     boundary seed; set to loopBars[0] because A's wrap-around
+//              physically sits at the bottom of A's loop body and, when
+//              LOCAL, is the most recent LDS sync the merged schedule
+//              inherits as it crosses into B.
+//   i > K      B's internal LOCAL barriers (nextBars[i - K]).  nextBars[0]
+//              is skipped (flat B has no slot before b_0; loop B's
+//              wrap-around lives inside B's body, irrelevant here).
 static bool isCrossPipelineSafe(ArrayRef<Block *> loopBlocks,
                                 ArrayRef<bool> loopBars,
                                 ArrayRef<Block *> nextBlocks,
@@ -704,31 +761,38 @@ static bool isCrossPipelineSafe(ArrayRef<Block *> loopBlocks,
   for (auto *b : nextBlocks)
     mergedInfo.push_back(buildBlockInfoFromBlock(b, allocation));
 
-  // Merged layout: [a_0..a_{K-1}, b_0..b_{M-1}]
-  // mergedBars[i] = LOCAL barrier immediately before cluster i.
-  //   i < K     : A's internal barriers (loopBars[i]).  loopBars[0]
-  //               corresponds to A's wrap-around inside the loop body and is
-  //               never consulted in linear mode (analyzePipelineDependencies
-  //               only reads bars[idx] for idx > src ≥ 0).
-  //   i == K    : boundary — initialized false; this is what we decide.
-  //   i > K     : B's internal barriers (nextBars[i - K]).  nextBars[0] is
-  //               skipped: for flat B it is always false, for loop B it is
-  //               B's own wrap-around (inside B's loop body) which is
-  //               covered by B's own circular analysis.
   SmallVector<bool> mergedBars;
   mergedBars.reserve(K + M);
   for (bool b : loopBars)
     mergedBars.push_back(b);
-  mergedBars.push_back(false); // boundary
+  mergedBars.push_back(loopBars[0]); // boundary, seeded by A's wrap-around
   for (int i = 1; i < M; i++)
     mergedBars.push_back(nextBars[i]);
 
-  analyzePipelineDependencies(mergedInfo, mergedBars, allocation,
-                              /*circular=*/false);
-
-  if (mergedBars[K]) {
-    LDBG("cross-pipeline LDS dependency at boundary");
+  // True if any slot in (src, stop] is LOCAL.  Linear topology, no wrap.
+  auto isCovered = [&](int src, int stop) {
+    for (int i = src + 1; i <= stop; i++)
+      if (mergedBars[i])
+        return true;
     return false;
+  };
+
+  // Sweep cross-pipeline pairs only.  Placement choice mirrors
+  // analyzePipelineDependencies (dist == 1 → dst, dist > 1 → dst - 1).
+  for (int i = 0; i < K; i++) {
+    for (int j = 0; j < M; j++) {
+      int src = i, dst = K + j;
+      int dist = dst - src;
+      int barrierLoc = (dist == 1) ? dst : dst - 1;
+      if (isCovered(src, barrierLoc))
+        continue;
+      if (!mergedInfo[src].isIntersected(
+              mergedInfo[dst], mlir::triton::AMD::membarFilter, allocation))
+        continue;
+      LDBG("cross-pipeline LDS dep (a_"
+           << i << ", b_" << j << ") uncovered at slot " << barrierLoc);
+      return false;
+    }
   }
   return true;
 }
@@ -788,8 +852,10 @@ static void eliminateRedundantCondBarriers(ModuleOp m,
         Operation *prev = postLoopCB->getPrevNode();
         if (prev && isa<ROCDL::SetPrioOp>(prev))
           prev = prev->getPrevNode();
-        if (!isa_and_nonnull<scf::ForOp>(prev))
+        if (!isa_and_nonnull<scf::ForOp>(prev)) {
+          LDBG("post-loop cond_barrier not preceded by scf.for; skipping");
           continue;
+        }
         auto prevFor = cast<scf::ForOp>(prev);
 
         // The pre-loop cond_barrier must be followed by a warp-pipelined
@@ -800,26 +866,36 @@ static void eliminateRedundantCondBarriers(ModuleOp m,
           next = next->getNextNode();
         bool nextIsPipeline =
             isa_and_nonnull<scf::ForOp>(next) || getPipelineStage(next);
-        if (!nextIsPipeline)
+        if (!nextIsPipeline) {
+          LDBG("pre-loop cond_barrier not followed by a warp-pipeline; "
+               "skipping");
           continue;
+        }
 
         // The post-loop cond_barrier must be immediately followed by the
         // prelude's ttg.barrier local — this proves no operations were
         // inserted between the two pipelines.
         auto preBarrier =
             dyn_cast_or_null<triton::gpu::BarrierOp>(postLoopCB->getNextNode());
-        if (!preBarrier || !preBarrier.hasLocal())
+        if (!preBarrier || !preBarrier.hasLocal()) {
+          LDBG("post-loop cond_barrier not immediately followed by prelude "
+               "ttg.barrier local; skipping");
           continue;
+        }
 
         // Cross-pipeline LDS dependency analysis.  When the phase carries
         // over, stages from different pipelines execute concurrently at the
         // boundary.  We must verify that no uncovered LDS conflict exists.
         SmallVector<Block *> loopBlocks, nextBlocks;
         SmallVector<bool> loopBars, nextBars;
-        if (!collectLoopClusters(prevFor, loopBlocks, loopBars))
+        if (!collectLoopClusters(prevFor, loopBlocks, loopBars)) {
+          LDBG("could not collect prior loop's clusters; skipping");
           continue;
-        if (!collectNextPipelineClusters(next, nextBlocks, nextBars))
+        }
+        if (!collectNextPipelineClusters(next, nextBlocks, nextBars)) {
+          LDBG("could not collect next pipeline's clusters; skipping");
           continue;
+        }
         if (!isCrossPipelineSafe(loopBlocks, loopBars, nextBlocks, nextBars,
                                  allocation)) {
           LDBG("cross-pipeline LDS dependency at boundary — keeping barriers");
@@ -865,6 +941,20 @@ public:
     // these warps into two groups (one warp per SIMD) that execute different
     // stages at different times.
     int threadsPerPipelineGroup = targetInfo.getWarpSize() * 4;
+
+    // Up-front structural validation: catch malformed pipelined_for bodies
+    // before any rewrite mutates the IR.  Errors are emitted at the
+    // offending op; we bail out hard rather than producing half-converted
+    // IR.
+    bool malformed = false;
+    m.walk([&](scf::ForOp forOp) {
+      if (!forOp->getAttr("triton.warp_pipeline.pipelined_for"))
+        return;
+      if (failed(validatePipelinedForBody(forOp)))
+        malformed = true;
+    });
+    if (malformed)
+      return signalPassFailure();
 
     RewritePatternSet patternFor(&getContext());
     RewritePatternSet patternInline(&getContext());

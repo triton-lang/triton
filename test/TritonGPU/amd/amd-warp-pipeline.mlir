@@ -145,18 +145,25 @@ tt.func public @triple_buf_two_stages(%arg0: i32, %arg1: i32, %arg2: i32, %arg3:
 
 // -- Flat (unrolled) pipeline: borders outside scf.for ----
 //
-// Simulates a static_range epilogue that was unrolled at the Python level.
-// The border markers sit in the function body, not inside a loop.
+// Simulates a static_range epilogue that was unrolled at the Python level
+// following a regular pipelined main loop.  The flat backward walk must stop
+// at the prior scf.for (loops are disallowed inside a stage) so the main
+// loop is not absorbed into stage 0.
 
 tt.func @flat_pipeline_example(%n: index) {
   %c0  = arith.constant 0 : index
   %c1  = arith.constant 1 : index
 
+  // Pipelined main loop: gets the pipelined_for attribute and acts as a
+  // hard boundary for the flat epilogue's backward walk.
   scf.for %i = %c0 to %n step %c1 {
+    %x = arith.addi %i, %c1 : index
+    rocdl.sched.barrier 0 {triton.warp_pipeline.border = "load"}
+    %y = arith.muli %x, %c1 : index
     scf.yield
   }
 
-  // Stage 0 (ops before the first border)
+  // Stage 0 (ops before the first epilogue border)
   %a  = arith.addi %c0, %c1 : index
   %a2 = arith.muli %a, %c1 : index
 
@@ -172,8 +179,14 @@ tt.func @flat_pipeline_example(%n: index) {
 }
 
 // CHECK-LABEL: tt.func @flat_pipeline_example(
+// Pipelined main loop forms its own warp pipeline (one execute_region per
+// stage, then the pipelined_for attribute on the loop).
 // CHECK: scf.for
-// Flat execute_regions created from the borders:
+// CHECK:   scf.execute_region
+// CHECK:   scf.execute_region
+// CHECK: triton.warp_pipeline.pipelined_for
+// Flat epilogue execute_regions created from the borders.  Crucially, they
+// must NOT absorb the pipelined main loop above.
 // CHECK: scf.execute_region
 // CHECK:   arith.addi
 // CHECK:   arith.muli
