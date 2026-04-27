@@ -166,8 +166,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
 def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
     """
     Benchmark the runtime of kernels invoked by the provided function using the Proton profiler and CUDA graphs.
-
-    This function is similar to `do_bench_cudagraph` that avoid CPU overhead by replaying a CUDA graph with multiple iterations of the provided function,
+    This function is similar to `do_bench_cudagraph` that avoids CPU overhead by replaying a CUDA graph with multiple iterations of the provided function,
     but it uses the Proton profiler to measure the runtime of each kernel in the graph instead of using CUDA events to measure the total runtime of the graph.
     This allows us to get more fine-grained measurements of the kernel runtimes and to exclude cache flushes from the measurement.
     Note that this function has several constraints compared to `do_bench_cudagraph`:
