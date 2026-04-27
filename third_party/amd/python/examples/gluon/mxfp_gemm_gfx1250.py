@@ -14,6 +14,16 @@ except ImportError:
     from gfx1250_utils import static_profile, composition
 
 
+@gluon.jit
+def swiglu_epilogue(acc):
+    """SwiGLU: split (M, 2N) into interleaved gate/up pairs and return swish(gate) * up."""
+    BLOCK_M: gl.constexpr = acc.shape[0]
+    BLOCK_N: gl.constexpr = acc.shape[1] // 2
+    gate, up = gl.split(gl.reshape(acc, (BLOCK_M, BLOCK_N, 2)))
+    # swish(x) = x * sigmoid(x); sigmoid(x) = 1 / (1 + exp(-x))
+    return gate * (1.0 / (1.0 + gl.exp(-gate))) * up
+
+
 @gluon.constexpr_function
 def get_scale_blocked_layout(num_warps: gl.constexpr):
     return gl.BlockedLayout([1, 8], [1, 32], [num_warps // 2, 2], [1, 0])
@@ -81,9 +91,13 @@ class MXFPGEMMConfig:
     SCALE_BLOCK: gl.constexpr
     ASYNC_COPY_SCALE: gl.constexpr
 
+    # Fused activation epilogue. For SwiGLU, BLOCK_N/N refer to
+    # the packed (doubled) compute-path width. The store reduces it by 2.
+    ACTIVATION: gl.constexpr
+
     @gluon.constexpr_function
     def __init__(self, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B, SCALE_BLOCK, NUM_BUFFERS, TRANSPOSE_B, WITH_A_SCALE,
-                 SCALE_PRESHUFFLE, NUM_WARPS, ASYNC_COPY_SCALE=False, NUM_SUBTILES=(1, 1, 1)):
+                 SCALE_PRESHUFFLE, NUM_WARPS, ASYNC_COPY_SCALE=False, NUM_SUBTILES=(1, 1, 1), ACTIVATION=""):
         self.BLOCK_M = gl.constexpr(BLOCK_M)
         self.BLOCK_N = gl.constexpr(BLOCK_N)
         self.BLOCK_K = gl.constexpr(BLOCK_K)
@@ -100,6 +114,10 @@ class MXFPGEMMConfig:
         self.NUM_WARPS = gl.constexpr(NUM_WARPS)
         self.ASYNC_COPY_SCALE = gl.constexpr(ASYNC_COPY_SCALE)
         self.NUM_SUBTILES = gl.constexpr(NUM_SUBTILES)
+        self.ACTIVATION = gl.constexpr(ACTIVATION)
+        if ACTIVATION == "swiglu":
+            assert (BLOCK_N // NUM_SUBTILES[1]) % 2 == 0, \
+            "SwiGLU requires (BLOCK_N // NUM_SUBTILES[1]) % 2 == 0"
 
         NUM_SUBTILES_M = self.NUM_SUBTILES[0]
         NUM_SUBTILES_N = self.NUM_SUBTILES[1]
@@ -285,6 +303,16 @@ class MXFPGEMMProgramBase:
         return a, b, scale_a, scale_b
 
 
+@gluon.jit
+def apply_activation_and_store(cfg, accumulator, c_ptr, c_offs, c_mask):
+    """Apply the activation epilogue (if any) and store the result to C."""
+    if cfg.ACTIVATION == "swiglu":
+        output = gl.convert_layout(swiglu_epilogue(accumulator), cfg.acc_layout)
+    else:
+        output = accumulator
+    gl.amd.gfx1250.buffer_store(output, c_ptr, c_offs, mask=c_mask)
+
+
 @composition
 @gluon.aggregate
 class MXFPGEMMPipelinedProgram:
@@ -378,7 +406,7 @@ class MXFPGEMMPipelinedProgram:
             wmma_idx += 1
             accumulator = gl.amd.gfx1250.wmma_scaled(a, scale_a, cfg.DTYPE_A, b, scale_b, cfg.DTYPE_B, accumulator)
 
-        gl.amd.gfx1250.buffer_store(accumulator, self.c_ptr, self.c_offs, mask=self.c_mask)
+        apply_activation_and_store(self.cfg, accumulator, self.c_ptr, self.c_offs, self.c_mask)
 
     @gluon.jit
     def warp_pipeline(self, K):
@@ -415,7 +443,7 @@ class MXFPGEMMPipelinedProgram:
             wmma_idx += 1
             accumulator = gl.amd.gfx1250.wmma_scaled(a, scale_a, cfg.DTYPE_A, b, scale_b, cfg.DTYPE_B, accumulator)
 
-        gl.amd.gfx1250.buffer_store(accumulator, self.c_ptr, self.c_offs, mask=self.c_mask)
+        apply_activation_and_store(self.cfg, accumulator, self.c_ptr, self.c_offs, self.c_mask)
 
 
 @composition
@@ -593,7 +621,7 @@ class MXFPGEMMSliceKProgram:
 
         accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
 
-        gl.amd.gfx1250.buffer_store(accumulator, self.c_ptr, self.c_offs, mask=self.c_mask)
+        apply_activation_and_store(self.cfg, accumulator, self.c_ptr, self.c_offs, self.c_mask)
 
     @gluon.jit
     def warp_pipeline(self, K):
@@ -641,7 +669,7 @@ class MXFPGEMMSliceKProgram:
             accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
             wmma_idx += 1
 
-        gl.amd.gfx1250.buffer_store(accumulator, self.c_ptr, self.c_offs, mask=self.c_mask)
+        apply_activation_and_store(self.cfg, accumulator, self.c_ptr, self.c_offs, self.c_mask)
 
 
 @gluon.aggregate
@@ -874,7 +902,7 @@ class MXFPGEMMSliceNKProgram:
         accumulator = accumulator.permute(0, 2, 1).reshape((cfg.BLOCK_M, cfg.BLOCK_N))
         accumulator = gl.convert_layout(accumulator, cfg.acc_layout, assert_trivial=True)
 
-        gl.amd.gfx1250.buffer_store(accumulator, self.c_ptr, self.c_offs, mask=self.c_mask)
+        apply_activation_and_store(self.cfg, accumulator, self.c_ptr, self.c_offs, self.c_mask)
 
 
 @gluon.jit
@@ -940,7 +968,7 @@ def mxgemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, 
                                 BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr, GROUP_SIZE_M: gl.constexpr,
                                 TRANSPOSE_B: gl.constexpr, NUM_BUFFERS: gl.constexpr, SCALE_PRESHUFFLE: gl.constexpr,
                                 ASYNC_COPY_SCALE: gl.constexpr, WITH_A_SCALE: gl.constexpr, SCHEDULE: gl.constexpr,
-                                NUM_WARPS: gl.constexpr, PINGPONG: gl.constexpr):
+                                NUM_WARPS: gl.constexpr, PINGPONG: gl.constexpr, ACTIVATION: gl.constexpr = ""):
 
     if PINGPONG:
         gl.static_assert(NUM_WARPS == 8 and (SCHEDULE == 'baseline' or SCHEDULE == 'sliceK'))
@@ -953,8 +981,14 @@ def mxgemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, 
         gl.static_assert(SCHEDULE == 'baseline')
         NUM_SUBTILES: gl.constexpr = (1, 1, 1)
 
-    cfg = MXFPGEMMConfig(BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B, SCALE_BLOCK, NUM_BUFFERS, TRANSPOSE_B,
-                         WITH_A_SCALE, SCALE_PRESHUFFLE, NUM_WARPS, ASYNC_COPY_SCALE, NUM_SUBTILES)
+    # For SwiGLU the compute pipeline runs on the packed (2x) N, only the store
+    # path uses the reduced output width.
+    ACTIVATION_REDUCTION_N: gl.constexpr = 2 if ACTIVATION == "swiglu" else 1
+    BLOCK_N_PACKED: gl.constexpr = BLOCK_N * ACTIVATION_REDUCTION_N
+    N_PACKED = N * ACTIVATION_REDUCTION_N
+
+    cfg = MXFPGEMMConfig(BLOCK_M, BLOCK_N_PACKED, BLOCK_K, DTYPE_A, DTYPE_B, SCALE_BLOCK, NUM_BUFFERS, TRANSPOSE_B,
+                         WITH_A_SCALE, SCALE_PRESHUFFLE, NUM_WARPS, ASYNC_COPY_SCALE, NUM_SUBTILES, ACTIVATION)
 
     pid = gl.program_id(axis=0)
     num_pid_m = gl.cdiv(M, BLOCK_M)
@@ -967,13 +1001,13 @@ def mxgemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, 
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     a_offs = pid_m * BLOCK_M * stride_am
-    b_offs = pid_n * BLOCK_N * stride_bn
+    b_offs = pid_n * BLOCK_N_PACKED * stride_bn
     a_scale_offs = pid_m * cfg.BLOCK_M_PRESHUFFLED * stride_scale
     b_scale_offs = pid_n * cfg.BLOCK_N_PRESHUFFLED * stride_scale
     a_desc, b_desc, a_scale_desc, b_scale_desc = create_tensor_descriptor(cfg, a_ptr, a_offs, b_ptr, b_offs, a_scale,
-                                                                          a_scale_offs, b_scale, b_scale_offs, M, N, K,
-                                                                          stride_am, stride_ak, stride_bk, stride_bn,
-                                                                          stride_scale)
+                                                                          a_scale_offs, b_scale, b_scale_offs, M,
+                                                                          N_PACKED, K, stride_am, stride_ak, stride_bk,
+                                                                          stride_bn, stride_scale)
 
     offs_cm = pid_m * BLOCK_M + gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, cfg.acc_layout))
     offs_cn = pid_n * BLOCK_N + gl.arange(0, BLOCK_N, layout=gl.SliceLayout(0, cfg.acc_layout))
@@ -1031,6 +1065,32 @@ def pack_scale(x):
     x = x.view(num_chunk_m, 4, preshuffle_factor // 4, num_chunk_k, SCALE_KWIDTH)
     x = x.permute(0, 3, 2, 1, 4).contiguous()
     return x.view(NON_K // preshuffle_factor, K_SCALE * preshuffle_factor)
+
+
+def interleave_b_columns(w_gate, w_up, DTYPE_B):
+    """Column-interleave two (K, N) B weights into a (K, 2*N) [gate, up, ...] tensor."""
+    if DTYPE_B == 'float4':
+        K, N = w_gate.data.shape
+        interleaved = torch.stack([w_gate.data, w_up.data], dim=-1).reshape(K, 2 * N).contiguous()
+        combined = MXFP4Tensor(size=(K, 2 * N))
+        combined.data = interleaved
+        return combined
+    K, N = w_gate.shape
+    u_gate = w_gate.view(torch.uint8)
+    u_up = w_up.view(torch.uint8)
+    interleaved = torch.stack([u_gate, u_up], dim=-1).reshape(K, 2 * N).contiguous()
+    return interleaved.view(w_gate.dtype)
+
+
+def interleave_b_scale_rows(s_gate, s_up):
+    """Interleave two (N, K_scale) scale tensors along N into (2*N, K_scale)."""
+    data_gate = s_gate.data
+    data_up = s_up.data
+    N, K_scale = data_gate.shape
+    interleaved = torch.stack([data_gate, data_up], dim=1).reshape(2 * N, K_scale).contiguous()
+    combined = MXScaleTensor(size=(2 * N, K_scale))
+    combined.data = interleaved
+    return combined
 
 
 @pytest.mark.parametrize(
@@ -1149,14 +1209,24 @@ def test_runtime_mxgemm_tdm_8warps_pipeline(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, 
 @pytest.mark.parametrize("SCHEDULE", ['sliceNK', 'sliceK', 'baseline'])
 @pytest.mark.parametrize("ASYNC_COPY_SCALE", [True, False])
 @pytest.mark.parametrize("GROUP_SIZE_M", [8])
+@pytest.mark.parametrize("ACTIVATION", ['', 'swiglu'])
 def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, NUM_BUFFERS,
-                                      SCALE_PRESHUFFLE, WITH_A_SCALE, SCHEDULE, ASYNC_COPY_SCALE, GROUP_SIZE_M):
+                                      SCALE_PRESHUFFLE, WITH_A_SCALE, SCHEDULE, ASYNC_COPY_SCALE, GROUP_SIZE_M,
+                                      ACTIVATION):
+    """
+    Pipelined mxfp GEMM with optional fused SwiGLU epilogue.
+
+    When ACTIVATION == "swiglu", B is (K, 2N) with interleaved [gate, up] columns and
+    the output is (M, N) = swish(gate) * up.
+    """
     SCALE_BLOCK = 32
     numWarps = 4
     numCtas = 1
+    IS_SWIGLU = ACTIVATION == "swiglu"
+    EFFECTIVE_BLOCK_N = BLOCK_N * 2 if IS_SWIGLU else BLOCK_N
 
     if SCALE_PRESHUFFLE:
-        if BLOCK_M < 128 or BLOCK_N < 128 or (SCHEDULE != "baseline" and BLOCK_K < 256):
+        if BLOCK_M < 128 or EFFECTIVE_BLOCK_N < 128 or (SCHEDULE != "baseline" and BLOCK_K < 256):
             pytest.skip("Skipping block sizes too small for preshuffling")
 
     if not WITH_A_SCALE and DTYPE_A == "float4":
@@ -1169,7 +1239,7 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
         pytest.skip("Large block size with 4 buffers will exceed lds limit")
 
     if SCHEDULE == 'sliceNK':
-        if BLOCK_K < 256 or BLOCK_N < 256:
+        if BLOCK_K < 256 or EFFECTIVE_BLOCK_N < 256:
             pytest.skip('BLOCK_K and BLOCK_N are too small for sliceNK schedule')
         if M < 256:
             pytest.skip('Skip small problem size to reduce test cases')
@@ -1183,19 +1253,35 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
     if ASYNC_COPY_SCALE and (M < BLOCK_M or N < BLOCK_N or K < BLOCK_K):
         pytest.skip('NYI: Skipping small problem sizes for async copy scale')
 
+    if IS_SWIGLU and BLOCK_M >= 256 and BLOCK_N >= 256:
+        pytest.skip("SwiGLU uses 2N-packed B, large block size will exceed lds limit")
+
     torch.manual_seed(0)
 
     a = init_data(DTYPE_A, M, K)
-    b = init_data(DTYPE_B, K, N)
     a_scale_size = (M, (K + SCALE_BLOCK - 1) // SCALE_BLOCK)
     b_scale_size = (N, (K + SCALE_BLOCK - 1) // SCALE_BLOCK)
     if WITH_A_SCALE:
         a_scale = MXScaleTensor(size=a_scale_size).random(low=1.0, high=32.0)
     else:
         a_scale = None
-    b_scale = MXScaleTensor(size=b_scale_size).random(low=1.0, high=32.0)
 
-    c_ref = torch_gemm_mxfp(a, b, a_scale, b_scale, SCALE_BLOCK, M, N, K)
+    if IS_SWIGLU:
+        w_gate = init_data(DTYPE_B, K, N)
+        w_up = init_data(DTYPE_B, K, N)
+        b_scale_gate = MXScaleTensor(size=b_scale_size).random(low=1.0, high=32.0)
+        b_scale_up = MXScaleTensor(size=b_scale_size).random(low=1.0, high=32.0)
+
+        gate_ref = torch_gemm_mxfp(a, w_gate, a_scale, b_scale_gate, SCALE_BLOCK, M, N, K)
+        up_ref = torch_gemm_mxfp(a, w_up, a_scale, b_scale_up, SCALE_BLOCK, M, N, K)
+        c_ref = gate_ref * torch.sigmoid(gate_ref) * up_ref
+
+        b = interleave_b_columns(w_gate, w_up, DTYPE_B)
+        b_scale = interleave_b_scale_rows(b_scale_gate, b_scale_up)
+    else:
+        b = init_data(DTYPE_B, K, N)
+        b_scale = MXScaleTensor(size=b_scale_size).random(low=1.0, high=32.0)
+        c_ref = torch_gemm_mxfp(a, b, a_scale, b_scale, SCALE_BLOCK, M, N, K)
 
     if WITH_A_SCALE:
         a_scale = a_scale.data
@@ -1241,13 +1327,18 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
                                           dtype_converter[DTYPE_B], SCALE_BLOCK, BLOCK_M, BLOCK_N, BLOCK_K,
                                           GROUP_SIZE_M, TRANSPOSE_B, NUM_BUFFERS, SCALE_PRESHUFFLE, ASYNC_COPY_SCALE,
                                           WITH_A_SCALE, SCHEDULE, NUM_WARPS=numWarps, PINGPONG=False,
-                                          num_warps=numWarps, num_ctas=numCtas, waves_per_eu=numWarps // 4)
+                                          ACTIVATION=ACTIVATION, num_warps=numWarps, num_ctas=numCtas,
+                                          waves_per_eu=numWarps // 4)
     static_profile(k)
 
     if TRANSPOSE_B:
         assert 'ds_load_u8' not in k.asm['amdgcn']
 
-    torch.testing.assert_close(c_d.cpu(), c_ref.cpu(), rtol=1e-5, atol=1e-8)
+    # Relaxed tolerance for SwiGLU because of sigmoid/exp in the epilogue.
+    if IS_SWIGLU:
+        torch.testing.assert_close(c_d.cpu(), c_ref.cpu(), rtol=1e-2, atol=1e-2)
+    else:
+        torch.testing.assert_close(c_d.cpu(), c_ref.cpu(), rtol=1e-5, atol=1e-8)
     print('✅Pass')
 
 
@@ -1273,6 +1364,8 @@ if __name__ == '__main__':
     parser.add_argument('--dtype_a', type=str, default='float8_e4m3', choices=supported_dtypes)
     parser.add_argument('--dtype_b', type=str, default='float8_e4m3', choices=supported_dtypes)
     parser.add_argument('--pingpong', action='store_true')
+    parser.add_argument('--activation', type=str, default='', choices=['', 'swiglu'],
+                        help='Optional fused activation epilogue')
 
     args = parser.parse_args()
 
@@ -1303,4 +1396,5 @@ if __name__ == '__main__':
                                           WITH_A_SCALE=args.with_a_scale,  #
                                           SCHEDULE=args.schedule,  #
                                           ASYNC_COPY_SCALE=args.async_copy_scale,  #
-                                          GROUP_SIZE_M=args.group_size_m)
+                                          GROUP_SIZE_M=args.group_size_m,  #
+                                          ACTIVATION=args.activation)
