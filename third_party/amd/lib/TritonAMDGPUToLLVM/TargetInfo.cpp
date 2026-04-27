@@ -907,24 +907,21 @@ bool TargetInfo::supportDppBroadcast() const {
   return false;
 }
 
-std::pair<SmallVector<mlir::triton::gpu::LocalMemOpTile>,
-          SmallVector<mlir::triton::gpu::LocalMemOpTile>>
-TargetInfo::getSharedLdStTiles() const {
+std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>
+TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
   switch (getISAFamily()) {
   case ISAFamily::CDNA3:
   case ISAFamily::RDNA1:
   case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
-    return {/* load */ {/* b32  */ {},
-                        /* b64  */ {},
-                        /* b128 */ {{}, {0, 1, 4}}},
-            /* store */ {}};
+    if (vecBitwidth == 128)
+      return {/*load tile*/ {{}, {0, 1, 4}}, /*store tile*/ {}};
+    break;
   case ISAFamily::CDNA4:
   case ISAFamily::GFX1250:
-    return {/* load */ {/* b32  */ {},
-                        /* b64  */ {},
-                        /* b128 */ {{}, {0, 1, 3, 4}}},
-            /* store */ {}};
+    if (vecBitwidth == 128)
+      return {/*load tile*/ {{}, {0, 1, 3, 4}}, /*store tile*/ {}};
+    break;
   default:
     break;
   }

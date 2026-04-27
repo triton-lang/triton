@@ -20,15 +20,16 @@ using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
-unsigned getNumScratchElemsSwizzledCvt(
-    const LinearLayout &srcLayout, const LinearLayout &dstLayout, int bitwidth,
-    int numBanks, ArrayRef<triton::gpu::LocalMemOpTile> srcTiles = {},
-    ArrayRef<triton::gpu::LocalMemOpTile> dstTiles = {});
+unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
+                                       const LinearLayout &dstLayout,
+                                       int bitwidth, int numBanks,
+                                       gpu::LocalMemOpTile srcTile = {},
+                                       gpu::LocalMemOpTile dstTile = {});
 
-unsigned getNumScratchElemsSwizzledCvt(
-    RankedTensorType srcTy, RankedTensorType dstTy, int numBanks,
-    ArrayRef<triton::gpu::LocalMemOpTile> srcTiles = {},
-    ArrayRef<triton::gpu::LocalMemOpTile> dstTiles = {});
+unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
+                                       RankedTensorType dstTy, int numBanks,
+                                       gpu::LocalMemOpTile srcTile = {},
+                                       gpu::LocalMemOpTile dstTile = {});
 
 } // namespace triton
 

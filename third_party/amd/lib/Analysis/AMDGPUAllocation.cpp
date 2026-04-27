@@ -19,9 +19,13 @@ unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
                                         TargetInfoBase &targetInfo) {
   if (!cvtNeedsSharedMemory(srcTy, dstTy))
     return 0;
-  auto [dstTiles, srcTiles] = targetInfo.getSharedLdStTiles();
+  auto srcLayout = gpu::toLinearLayout(srcTy);
+  auto dstLayout = gpu::toLinearLayout(dstTy);
+  auto vecBitwidth =
+      triton::gpu::getLdStVecBitwidth(srcLayout, dstLayout, getBitwidth(srcTy));
+  auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
   unsigned elems =
-      getNumScratchElemsSwizzledCvt(srcTy, dstTy, numBanks, srcTiles, dstTiles);
+      getNumScratchElemsSwizzledCvt(srcTy, dstTy, numBanks, srcTile, dstTile);
   return elems * getBitwidth(srcTy) / 8;
 }
 
@@ -49,8 +53,10 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
                                             TargetInfoBase &targetInfo) {
 
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
-    auto [dstTiles, srcTiles] = targetInfo.getSharedLdStTiles();
-    return ReduceOpHelper(reduceOp).getScratchSizeInBytes(srcTiles, dstTiles);
+    auto getTiles = [&targetInfo](int32_t vecBitwidth) {
+      return targetInfo.getSharedLdStTiles(vecBitwidth);
+    };
+    return ReduceOpHelper(reduceOp).getScratchSizeInBytes(getTiles);
   }
 
   if (auto cvtLayout = dyn_cast<mlir::triton::gpu::ConvertLayoutOp>(op)) {

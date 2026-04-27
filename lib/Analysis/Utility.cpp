@@ -106,8 +106,8 @@ bool ReduceOpHelper::isAssociative() {
 }
 
 unsigned ReduceOpHelper::getScratchSizeInBytes(
-    ArrayRef<triton::gpu::LocalMemOpTile> srcTiles,
-    ArrayRef<triton::gpu::LocalMemOpTile> dstTiles) {
+    std::function<std::pair<LocalMemOpTile, LocalMemOpTile>(int32_t)>
+        getTiles) {
   auto kLane = StringAttr::get(op.getContext(), "lane");
 
   auto isReduced = [axis = axis](const LinearLayout &layout) {
@@ -127,8 +127,12 @@ unsigned ReduceOpHelper::getScratchSizeInBytes(
     // BaseOffsets in the lowering.
     int bytes = 0;
     for (auto inputTy : op.getInputTypes()) {
+      auto vecBitwidth = getLdStVecBitwidth(regLl, tmpLl, getBitwidth(inputTy));
+      auto [dstTile, srcTile] =
+          getTiles ? getTiles(vecBitwidth)
+                   : std::pair<LocalMemOpTile, LocalMemOpTile>{};
       auto nelem = getNumScratchElemsSwizzledCvt(
-          regLl, tmpLl, getBitwidth(inputTy), numBanks, srcTiles, dstTiles);
+          regLl, tmpLl, getBitwidth(inputTy), numBanks, srcTile, dstTile);
       bytes += nelem * (getBitwidth(inputTy) / 8);
     }
     bytesRegToTmp = std::max<unsigned>(bytesRegToTmp, bytes);

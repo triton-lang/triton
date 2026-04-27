@@ -724,9 +724,17 @@ void init_gluon_ir(py::module &&m) {
                                                 bitwidth);
              int numBanks = ttg::TritonGPUDialect::getNumBanks(mod);
              tt::AMD::TargetInfo targetInfo(arch->str());
-             auto [dstTiles, _] = targetInfo.getSharedLdStTiles();
+             auto vecBitwidth = std::max<int32_t>(
+                 32, smemLayout.getInDimSize(StringAttr::get(
+                         smemLayout.getInDimNames().begin()->getContext(),
+                         "vector")) *
+                         bitwidth);
+             auto [dstTile, srcTile] =
+                 targetInfo.getSharedLdStTiles(vecBitwidth);
+             (void)srcTile;
+             assert(srcTile.empty() && "srcTile should be empty");
              return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
-                                              numBanks, dstTiles);
+                                              numBanks, dstTile);
            })
       .def("create_local_dealloc",
            [](GluonOpBuilder &self, Value memDesc) -> Operation * {

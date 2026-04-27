@@ -476,14 +476,16 @@ private:
     int64_t offset = 0;
     int numBanks = triton::gpu::TritonGPUDialect::getNumBanks(
         op->getParentOfType<ModuleOp>());
-    auto [dstTiles, srcTiles] = targetInfo.getSharedLdStTiles();
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       unsigned idx = indices[i];
       offsets[idx] = offset;
       auto inputTy = op.getInputTypes()[idx];
+      auto vecBitwidth = triton::gpu::getLdStVecBitwidth(srcLayout, dstLayout,
+                                                         getBitwidth(inputTy));
+      auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
       auto bytes = getNumScratchElemsSwizzledCvt(srcLayout, dstLayout,
                                                  getBitwidth(inputTy), numBanks,
-                                                 srcTiles, dstTiles) *
+                                                 srcTile, dstTile) *
                    (getBitwidth(inputTy) / 8);
       offset += bytes;
     }

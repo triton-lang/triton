@@ -265,30 +265,40 @@ std::pair<int, int> bankConflicts(ArrayRef<int32_t> tileSrc,
   return {read - 1, write - 1};
 }
 
+SmallVector<int32_t> LocalMemOpTile::getLaneAddr(ArrayRef<int32_t> lane) const {
+  SmallVector<int32_t> ret;
+  ret.reserve(laneAddr.size());
+  for (int32_t idx : laneAddr) {
+    assert(idx < lane.size() && "idx should be < lane.size()");
+    ret.push_back(lane[idx]);
+  }
+  return ret;
+}
+
+SmallVector<int32_t>
+LocalMemOpTile::getLaneContig(ArrayRef<int32_t> lane) const {
+  SmallVector<int32_t> ret;
+  ret.reserve(laneContig.size());
+  for (int32_t idx : laneContig) {
+    assert(idx < lane.size() && "idx should be < lane.size()");
+    ret.push_back(lane[idx]);
+  }
+  return ret;
+}
+
 SmallVector<int32_t> getLaneTile(ArrayRef<int32_t> lane,
-                                 ArrayRef<LocalMemOpTile> tiles,
-                                 int32_t log2Vec, int32_t log2Phase) {
-  if (!tiles.empty()) {
-    assert(log2Vec < tiles.size() && "tiles.size() should be >= log2Vec");
-    const auto tile = tiles[log2Vec].laneAddr;
-    if (!tile.empty()) {
-      SmallVector<int32_t> ret;
-      for (int32_t idx : tile) {
-        assert(idx < lane.size() && "idx should be < lane.size()");
-        ret.push_back(lane[idx]);
-      }
-      return ret;
-    }
+                                 const LocalMemOpTile &tile,
+                                 int32_t log2Phase) {
+  if (!tile.laneAddr.empty()) {
+    return tile.getLaneAddr(lane);
   }
   return to_vector(lane.drop_back(log2Phase));
 }
 
-std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
-                                      const LinearLayout &dst,
-                                      const LinearLayout &smem,
-                                      int32_t bitwidth, int32_t numBanks,
-                                      ArrayRef<LocalMemOpTile> srcTiles,
-                                      ArrayRef<LocalMemOpTile> dstTiles) {
+std::pair<int, int>
+bankConflictsLdSt(const LinearLayout &src, const LinearLayout &dst,
+                  const LinearLayout &smem, int32_t bitwidth, int32_t numBanks,
+                  LocalMemOpTile srcTile, LocalMemOpTile dstTile) {
   auto srcFlat = src.flattenOuts();
   auto dstFlat = dst.flattenOuts();
   auto *ctx = smem.getOutDimNames().begin()->getContext();
@@ -300,14 +310,14 @@ std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
       llvm::Log2_32(std::max(smem.getInDimSize(kVec) * bitwidth / 32, 1));
   auto log2Bank = llvm::Log2_32(numBanks);
   auto log2Phase = std::max<int32_t>(0, log2Vec + srcLane.size() - log2Bank);
-  auto srcTile = getLaneTile(srcLane, srcTiles, log2Vec, log2Phase);
-  auto dstTile = getLaneTile(dstLane, dstTiles, log2Vec, log2Phase);
-  return bankConflicts(srcTile, dstTile, smem);
+  auto srcLaneTile = getLaneTile(srcLane, srcTile, log2Phase);
+  auto dstLaneTile = getLaneTile(dstLane, dstTile, log2Phase);
+  return bankConflicts(srcLaneTile, dstLaneTile, smem);
 }
 
 int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
                          int32_t bitwidth, int32_t numBanks,
-                         ArrayRef<LocalMemOpTile> laneTiles) {
+                         LocalMemOpTile laneTile) {
   auto *ctx = smem.getInDimNames().begin()->getContext();
   auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
 
@@ -331,19 +341,20 @@ int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
   };
   auto smemReshaped = smem.reshapeIns(newInDims);
   return bankConflictsLdSt(regNoBroadcast, regNoBroadcast, smemReshaped,
-                           bitwidth, numBanks, laneTiles, laneTiles)
+                           bitwidth, numBanks, laneTile, laneTile)
       .first;
 }
 
-std::optional<SmallVector<int32_t>> optimalSwizzlingTile(
-    const LinearLayout &a, const LinearLayout &b, int32_t nRegA, int32_t nRegB,
-    ArrayRef<int32_t> laneIdTileA, ArrayRef<int32_t> laneIdTileB) {
+std::optional<SmallVector<int32_t>>
+optimalSwizzlingTile(const LinearLayout &a, const LinearLayout &b,
+                     int32_t nRegA, int32_t nRegB, const LocalMemOpTile &tileA,
+                     const LocalMemOpTile &tileB) {
   // For now se just implement the .v4 variants for all the instructions
   // We could generalise this in the future
-  assert(nRegA + laneIdTileA.size() == nRegB + laneIdTileB.size());
+  assert(nRegA + tileA.laneContig.size() == nRegB + tileB.laneContig.size());
   // normalise nRegA >= nRegB
   if (nRegA < nRegB) {
-    return optimalSwizzlingTile(b, a, nRegB, nRegA, laneIdTileB, laneIdTileA);
+    return optimalSwizzlingTile(b, a, nRegB, nRegA, tileB, tileA);
   }
   assert(nRegA >= nRegB);
 
@@ -381,15 +392,8 @@ std::optional<SmallVector<int32_t>> optimalSwizzlingTile(
   }
   vbasis.resize(nRegB);
 
-  auto index = [](ArrayRef<int32_t> lane, ArrayRef<int32_t> laneIdTile) {
-    SmallVector<int32_t> ret;
-    for (auto id : laneIdTile) {
-      ret.push_back(lane[id]);
-    }
-    return ret;
-  };
-  auto laneTileA = index(laneA, laneIdTileA);
-  auto laneTileB = index(laneB, laneIdTileB);
+  auto laneTileA = tileA.getLaneContig(laneA);
+  auto laneTileB = tileB.getLaneContig(laneB);
 
   // We need the tiles to be contiguous
   auto isZero = [](int32_t b) { return b == 0; };
@@ -398,13 +402,14 @@ std::optional<SmallVector<int32_t>> optimalSwizzlingTile(
   }
   // The first lanes must map to registers in A
   for (int i = 0; i < nRegA - nRegB; ++i) {
-    if (cvt.getBasis(kLane, laneIdTileB[i], kReg) == 0) {
+    if (cvt.getBasis(kLane, tileB.laneContig[i], kReg) == 0) {
       return std::nullopt;
     }
   }
   // The rest of the lanes must map to each other
   for (auto [idxA, idxB] :
-       llvm::zip(laneIdTileA, laneIdTileB.take_back(laneIdTileA.size()))) {
+       llvm::zip(tileA.laneContig, ArrayRef<int32_t>(tileB.laneContig)
+                                       .take_back(tileA.laneContig.size()))) {
     if (cvt.getBasis(kLane, idxB, kLane) != (1 << idxA)) {
       return std::nullopt;
     }
@@ -488,11 +493,25 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
 
   return basis1D.reshapeOuts(outDims);
 }
+int32_t getLdStVecBitwidth(const LinearLayout &src, const LinearLayout &dst,
+                           int32_t bitwidth) {
+  auto *ctx = src.getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto srcFlat = src.flattenOuts();
+  auto dstFlat = dst.flattenOuts();
+  auto regSrc = flatten(srcFlat, kReg);
+  auto regDst = flatten(dstFlat, kReg);
+  auto dim = src.getTotalOutDimSizeLog2();
+  SmallVector<int32_t> vbasis = intersectionBasis(regSrc, regDst, dim);
+  auto maxVecBases = llvm::Log2_32(128 / bitwidth);
+  int32_t vecBases = std::min<int32_t>(vbasis.size(), maxVecBases);
+  return std::max<int32_t>(32, (1 << vecBases) * bitwidth);
+}
+
 LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
                                   const LinearLayout &dst, int32_t bitwidth,
-                                  int32_t numBanks,
-                                  ArrayRef<LocalMemOpTile> srcTiles,
-                                  ArrayRef<LocalMemOpTile> dstTiles) {
+                                  int32_t numBanks, LocalMemOpTile srcTile,
+                                  LocalMemOpTile dstTile) {
   auto *ctx = src.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
@@ -588,10 +607,11 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
       std::max<int32_t>(1, ((1 << vbasis.size()) * bitwidth) / 32));
   auto log2Bank = llvm::Log2_32(numBanks);
   auto log2Phase = std::max<int32_t>(0, log2Vec + laneSrc.size() - log2Bank);
-  auto tileSrc = getLaneTile(laneSrc, srcTiles, log2Vec, log2Phase);
-  auto tileDst = getLaneTile(laneDst, dstTiles, log2Vec, log2Phase);
-  auto smem = optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc,
-                               tileDst, blockSrc, src.getOutDims(), numBanks);
+  auto tileSrcTile = getLaneTile(laneSrc, srcTile, log2Phase);
+  auto tileDstTile = getLaneTile(laneDst, dstTile, log2Phase);
+  auto smem =
+      optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrcTile,
+                       tileDstTile, blockSrc, src.getOutDims(), numBanks);
 
   // We might be able to vectorise a bit more the load or the store
   // This may happen when there is broadcasting
@@ -661,9 +681,8 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
     auto logRegSrc = totalBases - instrSrc.laneContig.size();
     for (const auto &[idxDst, instrDst] : llvm::enumerate(dstTiles)) {
       auto logRegDst = totalBases - instrDst.laneContig.size();
-      auto maybeTile =
-          optimalSwizzlingTile(srcFlat, dstFlat, logRegSrc, logRegDst,
-                               instrSrc.laneContig, instrDst.laneContig);
+      auto maybeTile = optimalSwizzlingTile(srcFlat, dstFlat, logRegSrc,
+                                            logRegDst, instrSrc, instrDst);
       if (maybeTile.has_value()) {
         instr.push_back({{idxSrc, idxDst}, std::move(*maybeTile)});
       }
@@ -690,9 +709,8 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
     if (regNeeded > 0) {
       return std::nullopt;
     }
-    for (auto i : instr.laneAddr) {
-      tile.push_back(lane[i]);
-    }
+    auto laneBases = instr.getLaneAddr(lane);
+    tile.append(laneBases.begin(), laneBases.end());
     return tile;
   };
 

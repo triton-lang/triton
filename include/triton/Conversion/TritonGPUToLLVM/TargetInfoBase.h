@@ -128,9 +128,8 @@ public:
 
   // Returns bases of lanes {LoadBases, StoreBases} that are active in a
   // single hardware cycle for shared memory loads and stores.
-  virtual std::pair<SmallVector<gpu::LocalMemOpTile>,
-                    SmallVector<gpu::LocalMemOpTile>>
-  getSharedLdStTiles() const {
+  virtual std::pair<gpu::LocalMemOpTile, gpu::LocalMemOpTile>
+  getSharedLdStTiles(int32_t vecBitwidth) const {
     return {{}, {}};
   }
 

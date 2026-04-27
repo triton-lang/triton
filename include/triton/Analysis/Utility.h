@@ -70,9 +70,10 @@ public:
 
   bool isAssociative();
 
-  unsigned
-  getScratchSizeInBytes(ArrayRef<triton::gpu::LocalMemOpTile> srcTiles = {},
-                        ArrayRef<triton::gpu::LocalMemOpTile> dstTiles = {});
+  unsigned getScratchSizeInBytes(
+      std::function<std::pair<triton::gpu::LocalMemOpTile,
+                              triton::gpu::LocalMemOpTile>(int32_t)>
+          getTiles = nullptr);
 
   InThreadVectorizeOpKind
   getInThreadVectorizeOpKind(unsigned axisPack,

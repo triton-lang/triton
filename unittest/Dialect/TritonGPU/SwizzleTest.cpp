@@ -120,11 +120,11 @@ protected:
 
   int computeConflicts(ArrayRef<int64_t> shape, Attribute regAttr,
                        Attribute sharedAttr, int bitwidth, int numBanks = 32,
-                       ArrayRef<LocalMemOpTile> laneTiles = {}) {
+                       LocalMemOpTile laneTile = {}) {
     auto regLL = toLL(shape, regAttr);
     auto sharedLL = toLL(shape, sharedAttr);
     return mlir::triton::gpu::bankConflictsMemDesc(regLL, sharedLL, bitwidth,
-                                                   numBanks, laneTiles);
+                                                   numBanks, laneTile);
   }
 
   int bruteforceBankConflictsPerWavefront(ArrayRef<int64_t> shape,
@@ -194,9 +194,11 @@ protected:
     return wavefronts / minWavefronts - 1;
   }
 
-  int bruteforceBankConflictsPerWavefront64(
-      ArrayRef<int64_t> shape, Attribute regAttr, Attribute sharedAttr,
-      int bitwidth, int numBanks, ArrayRef<LocalMemOpTile> laneTiles) {
+  int bruteforceBankConflictsPerWavefront64(ArrayRef<int64_t> shape,
+                                            Attribute regAttr,
+                                            Attribute sharedAttr, int bitwidth,
+                                            int numBanks,
+                                            LocalMemOpTile laneTile) {
     // Compute the bank conflicts per wavefront
     // In other words, we compute how many extra memory accesses (bank
     // conflicts) are needed for a given wavefront.
@@ -238,10 +240,10 @@ protected:
           int phaseIdx;
           int maskedLaneIdx;
           if (vectorisation == 4) {
-            int half = (laneIdx < 32) ? 0 : 1;
-            int b2 = (laneIdx >> 2) & 1;
-            int b3 = (laneIdx >> 3) & 1;
-            int b4 = (laneIdx >> 4) & 1;
+            int t2 = (laneIdx >> 2) & 1;
+            int t3 = (laneIdx >> 3) & 1;
+            int t4 = (laneIdx >> 4) & 1;
+            int t5 = (laneIdx >> 5) & 1;
             if (numBanks == 32) {
               // Group threads into 8 phases of 8 threads each.
               // Logic: 'half' (bit 5) selects even/odd phase indices.
@@ -251,8 +253,11 @@ protected:
               // Phase 2: T4-7,   T16-19 | Phase 3: T36-39, T48-51
               // Phase 4: T8-11,  T28-31 | Phase 5: T40-43, T60-63
               // Phase 6: T12-15, T24-27 | Phase 7: T44-47, T56-59
-              int basePhase = (b3 << 2) | ((b2 ^ b4) << 1);
-              phaseIdx = half + basePhase;
+              // phaseIdx is a linear layout on the laneIdx:
+              // phase[0] = t[5]
+              // phase[1] = t[2] ^ t[4]
+              // phase[2] = t[3]
+              phaseIdx = (t5 << 0) | ((t2 ^ t4) << 1) | (t3 << 2);
             } else {
               // Group threads into 4 phases of 16 threads each.
               // Logic: 'half' (bit 5) selects Phase 0/1 or 2/3.
@@ -262,11 +267,13 @@ protected:
               // Phase 1: T32-35, T44-47, T52-55, T56-59
               // Phase 2: T4-7,   T8-11,  T16-19, T28-31
               // Phase 3: T36-39, T40-43, T48-51, T60-63
-              int basePhase = (b2 ^ b3 ^ b4) << 1;
-              phaseIdx = half + basePhase;
+              // phaseIdx is a linear layout on the laneIdx:
+              // phase[0] = t[5]
+              // phase[1] = t[2] ^ t[3] ^ t[4]
+              phaseIdx = (t5 << 0) | ((t2 ^ t3 ^ t4) << 1);
             }
             maskedLaneIdx = 0;
-            for (int shift : laneTiles[vectorisation / 2].laneAddr)
+            for (int shift : laneTile.laneAddr)
               maskedLaneIdx |= laneIdx & (1 << shift);
           } else {
             phaseIdx = laneIdx / threadsPerPhase;
@@ -419,11 +426,11 @@ TEST_F(SwizzleTest, Test64x128F16BlockedLinear32Bank) {
       {{S("dim0"), 64}, {S("dim1"), 128}},
       /*requireSurjective=*/true);
   auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/16, /*numBanks*/ 32,
-                                   /*srcTiles*/ {},
-                                   /*dstTiles*/ {{}, {}, {{}, {0, 1, 4}}});
+                                   /*srcTile*/ {},
+                                   /*dstTile*/ {{}, {0, 1, 4}});
   auto [r, w] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/16,
-                                  /*numBanks*/ 32, /*srcTiles*/ {},
-                                  /*dstTiles*/ {{}, {}, {{}, {0, 1, 4}}});
+                                  /*numBanks*/ 32, /*srcTile*/ {},
+                                  /*dstTile*/ {{}, {0, 1, 4}});
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
 }
@@ -445,11 +452,11 @@ TEST_F(SwizzleTest, Test64x128F16BlockedMfma64Bank) {
       {{S("dim0"), 64}, {S("dim1"), 128}},
       /*requireSurjective=*/true);
   auto smem = optimalSwizzlingLdSt(blocked, mma, /*bitwidth=*/16,
-                                   /*numBanks*/ 64, /*dstTiles*/ {},
-                                   /*srcTiles*/ {{}, {}, {{}, {0, 1, 3, 4}}});
+                                   /*numBanks*/ 64, /*srcTile*/ {},
+                                   /*dstTile*/ {{}, {0, 1, 3, 4}});
   auto [r, w] = bankConflictsLdSt(blocked, mma, smem, /*bitwidth=*/16,
-                                  /*numBanks*/ 64, /*dstTiles*/ {},
-                                  /*srcTiles*/ {{}, {}, {{}, {0, 1, 3, 4}}});
+                                  /*numBanks*/ 64, /*srcTile*/ {},
+                                  /*dstTile*/ {{}, {0, 1, 3, 4}});
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
 }
@@ -563,18 +570,18 @@ TEST_F(BankConflictTest, bankConflictsWavefront64) {
     SmallVector<int64_t, 3> shape;
     int bitwidth;
     int numBanks;
-    SmallVector<LocalMemOpTile> laneTiles;
+    LocalMemOpTile laneTile;
   };
 
   SmallVector<Case, 6> cases = {
       {blocked({1, 8}, {4, 16}, {4, 1}, {1, 0}),
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
-           &ctx, 4, 1, 16, {1, 0},
+           &ctx, 8, 1, 16, {1, 0},
            mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 2)),
        {128, 128},
        16,
        32,
-       {{}, {}, {{}, {0, 1, 4}}}},
+       /*vec=4*/ {{}, {0, 1, 4}}},
       {blocked({1, 8}, {4, 16}, {4, 1}, {1, 0}),
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 8, 1, 16, {1, 0},
@@ -582,7 +589,7 @@ TEST_F(BankConflictTest, bankConflictsWavefront64) {
        {128, 128},
        16,
        64,
-       {{}, {}, {{}, {0, 1, 3, 4}}}},
+       /*vec=4*/ {{}, {0, 1, 3, 4}}},
       {dotAV3,
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 4, 1, 16, {1, 0},
@@ -590,7 +597,7 @@ TEST_F(BankConflictTest, bankConflictsWavefront64) {
        {128, 128},
        16,
        32,
-       {{}, {}, {{}, {0, 1, 4}}}},
+       /*vec=2*/ {{}, {}}},
       {dotAV4,
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 8, 1, 16, {1, 0},
@@ -598,29 +605,28 @@ TEST_F(BankConflictTest, bankConflictsWavefront64) {
        {128, 128},
        16,
        64,
-       {{}, {}, {{}, {0, 1, 3, 4}}}},
+       /*vec=4*/ {{}, {0, 1, 3, 4}}},
       {dotBV3,
        AMDRotatingShared(/*vec=*/4, /*perPhase=*/1, /*maxPhase=*/16,
                          /*order=*/{0, 1}),
        {64, 128},
        16,
        32,
-       {{}, {}, {{}, {0, 1, 4}}}},
+       /*vec=2*/ {{}, {}}},
       {dotBV4,
        AMDRotatingShared(/*vec=*/4, /*perPhase=*/2, /*maxPhase=*/8,
                          /*order=*/{0, 1}),
        {64, 128},
        16,
        64,
-       {{}, {}, {{}, {0, 1, 3, 4}}}},
+       /*vec=2*/ {{}, {}}},
   };
 
   for (const auto &c : cases) {
     EXPECT_EQ(computeConflicts(c.shape, c.reg, c.shared, c.bitwidth, c.numBanks,
-                               c.laneTiles),
-              bruteforceBankConflictsPerWavefront64(c.shape, c.reg, c.shared,
-                                                    c.bitwidth, c.numBanks,
-                                                    c.laneTiles))
+                               c.laneTile),
+              bruteforceBankConflictsPerWavefront64(
+                  c.shape, c.reg, c.shared, c.bitwidth, c.numBanks, c.laneTile))
         << toLL(c.shape, c.reg).invertAndCompose(toLL(c.shape, c.shared))
         << "\nbitwidth=" << c.bitwidth << "\n"
         << "numBanks=" << c.numBanks << "\n"
