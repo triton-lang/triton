@@ -1,3 +1,4 @@
+#include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -123,7 +124,8 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    auto isaFamily = triton::AMD::deduceISAFamily(gfxArch);
+    AMD::TargetInfo targetInfo(gfxArch);
+    auto isaFamily = targetInfo.getISAFamily();
     patterns
         .add<AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp8Op>,
              AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp4Op>>(

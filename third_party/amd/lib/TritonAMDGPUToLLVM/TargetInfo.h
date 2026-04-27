@@ -4,12 +4,14 @@
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "llvm/TargetParser/TargetParser.h"
+#include <optional>
 #include <string>
 
 namespace mlir::triton::AMD {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  explicit TargetInfo(std::string arch) : arch(std::move(arch)) {}
+  explicit TargetInfo(std::optional<StringRef> arch)
+      : arch(arch.value_or("").str()) {}
 
   llvm::AMDGPU::IsaVersion getIsaVersion() const;
 

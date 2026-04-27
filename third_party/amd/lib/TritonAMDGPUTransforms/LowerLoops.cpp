@@ -406,8 +406,8 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     Value alloc = triton::createAlloc(forOp, ty, op->getLoc(),
                                       info.sharedEncoding, numBuffers);
     assert(alloc && "Failed to create alloc for the async load.");
-    auto arch = getAMDArch(op->getParentOfType<ModuleOp>());
-    triton::AMD::TargetInfo targetInfo(arch ? arch->str() : "");
+    triton::AMD::TargetInfo targetInfo(
+        getAMDArch(op->getParentOfType<ModuleOp>()));
 
     // Replace the old load with multi-buffered loads
     if (descLoadOp) {
@@ -853,8 +853,8 @@ static void lowerLoop(scf::ForOp forOp,
   llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =
       getIndirectLevel(axisInfoAnalysis, forOp, numStages);
 
-  auto arch = getAMDArch(forOp->getParentOfType<ModuleOp>());
-  triton::AMD::TargetInfo targetInfo(arch ? arch->str() : "");
+  triton::AMD::TargetInfo targetInfo(
+      getAMDArch(forOp->getParentOfType<ModuleOp>()));
 
   bool hasTDMLoad = false;
   LoadToInfoMap loadToInfo;

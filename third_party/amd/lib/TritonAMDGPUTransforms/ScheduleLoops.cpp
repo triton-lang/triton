@@ -89,10 +89,9 @@ namespace mlir {
 llvm::MapVector<Operation *, std::pair<int, Operation *>>
 getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                  scf::ForOp &forOp, int numStages) {
-  auto arch = getAMDArch(forOp->getParentOfType<ModuleOp>());
-  triton::AMD::ISAFamily isaFamily = triton::AMD::ISAFamily::Unknown;
-  if (arch)
-    isaFamily = triton::AMD::deduceISAFamily(*arch);
+  triton::AMD::TargetInfo targetInfo(
+      getAMDArch(forOp->getParentOfType<ModuleOp>()));
+  triton::AMD::ISAFamily isaFamily = targetInfo.getISAFamily();
 
   bool filterSmallVectors = isaFamily != triton::AMD::ISAFamily::CDNA4 &&
                             !isRDNA(isaFamily) &&

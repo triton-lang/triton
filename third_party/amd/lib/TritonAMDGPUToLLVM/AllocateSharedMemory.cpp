@@ -24,11 +24,8 @@ struct AllocateAMDGPUSharedMemory
     ModuleOp mod = getOperation();
 
     // Get partition size from target info
-    size_t partitionSize = 0;
-    if (auto arch = getAMDArch(mod)) {
-      AMD::TargetInfo targetInfo(arch->str());
-      partitionSize = targetInfo.getSharedMemoryPartitionSize();
-    }
+    AMD::TargetInfo targetInfo(getAMDArch(mod));
+    size_t partitionSize = targetInfo.getSharedMemoryPartitionSize();
 
     ModuleAllocation allocation(mod, AMDAllocationAnalysisScratchSizeFn,
                                 partitionSize);

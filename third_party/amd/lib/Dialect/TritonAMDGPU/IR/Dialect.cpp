@@ -504,8 +504,8 @@ LogicalResult BufferLoadToLocalOp::verify() {
   if (!mod)
     return success();
 
-  auto arch = mlir::getAMDArch(mod);
-  if (!arch || AMD::TargetInfo(arch->str()).supportsBufferLoadToLocal())
+  AMD::TargetInfo targetInfo(mlir::getAMDArch(mod));
+  if (targetInfo.getArch().empty() || targetInfo.supportsBufferLoadToLocal())
     return success();
   return emitError() << "BufferLoadToLocal unsupported on target architecture";
 }

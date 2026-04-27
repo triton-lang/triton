@@ -42,23 +42,6 @@ ISAFamily deduceISAFamily(llvm::StringRef arch) {
   return ISAFamily::Unknown;
 }
 
-bool supportsVDot(llvm::StringRef arch) {
-  switch (deduceISAFamily(arch)) {
-  case AMD::ISAFamily::GCN5_1:
-  case AMD::ISAFamily::CDNA1:
-  case AMD::ISAFamily::CDNA2:
-  case AMD::ISAFamily::CDNA3:
-  case AMD::ISAFamily::CDNA4:
-  case AMD::ISAFamily::RDNA2:
-  case AMD::ISAFamily::RDNA3:
-  case AMD::ISAFamily::RDNA4:
-    return true;
-  default:
-    break;
-  }
-  return false;
-}
-
 bool isCDNA(ISAFamily isaFamily) {
   switch (isaFamily) {
   case ISAFamily::CDNA1:
