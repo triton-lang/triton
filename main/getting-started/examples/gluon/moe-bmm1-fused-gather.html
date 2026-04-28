@@ -375,6 +375,8 @@
     <span class="n">X_GATHER_MULTICAST</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
     <span class="n">W_SCALE_MULTICAST</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
     <span class="n">FORCE_EPILOGUE_WARPS_N1</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
+    <span class="n">REUSE_GATHER_INDICES</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
+    <span class="n">INLINE_MMA_INPUT_RELEASE</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span>
 
     <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">apply_block_schedule</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">block_id</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">gl</span><span class="o">.</span><span class="n">tensor</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">tensor</span><span class="p">]:</span>
@@ -386,6 +388,35 @@
             <span class="n">block_schedule</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">x_block_schedule</span><span class="p">,</span>
             <span class="n">BAND_N</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">BAND_N</span><span class="p">,</span>
         <span class="p">)</span>
+
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">issue_activation_tile</span><span class="p">(</span>
+    <span class="n">p</span><span class="p">:</span> <span class="n">PartitionArgs</span><span class="p">,</span>
+    <span class="n">idx</span><span class="p">,</span>
+    <span class="n">phase</span><span class="p">,</span>
+    <span class="n">issued</span><span class="p">,</span>
+    <span class="n">offs_x_m</span><span class="p">,</span>
+    <span class="n">off_k_x</span><span class="p">,</span>
+    <span class="n">tile_x_bytes</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+<span class="p">):</span>
+    <span class="n">empty_bar</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">x_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+    <span class="n">ready_bar</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">x_ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+    <span class="n">x_buf</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">x_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">empty_bar</span><span class="p">,</span> <span class="n">phase</span><span class="p">,</span> <span class="n">pred</span><span class="o">=</span><span class="n">issued</span> <span class="o">&gt;=</span> <span class="n">p</span><span class="o">.</span><span class="n">x_num_bufs</span><span class="p">)</span>
+    <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">ready_bar</span><span class="p">,</span> <span class="n">tile_x_bytes</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">async_gather</span><span class="p">(</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">x_desc</span><span class="p">,</span>
+        <span class="n">offs_x_m</span><span class="p">,</span>
+        <span class="n">off_k_x</span><span class="p">,</span>
+        <span class="n">ready_bar</span><span class="p">,</span>
+        <span class="n">x_buf</span><span class="p">,</span>
+        <span class="n">multicast</span><span class="o">=</span><span class="n">p</span><span class="o">.</span><span class="n">USE_2CTA</span> <span class="ow">and</span> <span class="n">p</span><span class="o">.</span><span class="n">X_GATHER_MULTICAST</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">idx</span><span class="p">,</span> <span class="n">phase</span> <span class="o">=</span> <span class="n">advance</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span> <span class="n">phase</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">x_num_bufs</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">idx</span><span class="p">,</span> <span class="n">phase</span><span class="p">,</span> <span class="n">issued</span> <span class="o">+</span> <span class="mi">1</span>
 
 
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
@@ -401,38 +432,43 @@
     <span class="n">phase</span> <span class="o">=</span> <span class="mi">1</span>
     <span class="n">issued</span> <span class="o">=</span> <span class="mi">0</span>
 
+    <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">REUSE_GATHER_INDICES</span><span class="p">:</span>
+        <span class="n">cached_pid_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">full</span><span class="p">((),</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">gl</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+        <span class="n">cached_slice_idx</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">full</span><span class="p">((),</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">gl</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+        <span class="n">cached_shape_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">full</span><span class="p">((),</span> <span class="mi">0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">gl</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+        <span class="n">cached_offs_x_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="n">p</span><span class="o">.</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="p">),</span> <span class="n">p</span><span class="o">.</span><span class="n">x_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">gl</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">offs_layout</span><span class="p">)</span>
+
     <span class="k">for</span> <span class="n">block_id</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">p</span><span class="o">.</span><span class="n">num_blocks</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">NUM_SMS</span><span class="p">):</span>
         <span class="n">pid_m</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">slice_idx</span><span class="p">,</span> <span class="n">slice_offset</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">apply_block_schedule</span><span class="p">(</span><span class="n">block_id</span><span class="p">)</span>
         <span class="n">off_m</span> <span class="o">=</span> <span class="n">pid_m</span> <span class="o">*</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_M</span>
-        <span class="n">shape_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">x_slice_sizes</span> <span class="o">+</span> <span class="n">slice_idx</span><span class="p">)</span>
         <span class="n">offs_m</span> <span class="o">=</span> <span class="n">off_m</span> <span class="o">+</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">offs_layout</span><span class="p">)</span>
-        <span class="n">mask_m</span> <span class="o">=</span> <span class="n">offs_m</span> <span class="o">&lt;</span> <span class="n">shape_m</span>
-        <span class="n">offs_x_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
-            <span class="n">p</span><span class="o">.</span><span class="n">gather_indx_ptr</span> <span class="o">+</span> <span class="n">slice_offset</span> <span class="o">+</span> <span class="n">offs_m</span><span class="p">,</span>
-            <span class="n">mask</span><span class="o">=</span><span class="n">mask_m</span><span class="p">,</span>
-            <span class="n">other</span><span class="o">=</span><span class="n">p</span><span class="o">.</span><span class="n">x_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
-        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">REUSE_GATHER_INDICES</span><span class="p">:</span>
+            <span class="n">reuse_gather</span> <span class="o">=</span> <span class="p">(</span><span class="n">pid_m</span> <span class="o">==</span> <span class="n">cached_pid_m</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">slice_idx</span> <span class="o">==</span> <span class="n">cached_slice_idx</span><span class="p">)</span>
+            <span class="n">load_gather</span> <span class="o">=</span> <span class="o">~</span><span class="n">reuse_gather</span>
+            <span class="n">shape_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">x_slice_sizes</span> <span class="o">+</span> <span class="n">slice_idx</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">load_gather</span><span class="p">,</span> <span class="n">other</span><span class="o">=</span><span class="n">cached_shape_m</span><span class="p">)</span>
+            <span class="n">mask_m</span> <span class="o">=</span> <span class="p">(</span><span class="n">offs_m</span> <span class="o">&lt;</span> <span class="n">shape_m</span><span class="p">)</span> <span class="o">&amp;</span> <span class="n">load_gather</span>
+            <span class="n">offs_x_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
+                <span class="n">p</span><span class="o">.</span><span class="n">gather_indx_ptr</span> <span class="o">+</span> <span class="n">slice_offset</span> <span class="o">+</span> <span class="n">offs_m</span><span class="p">,</span>
+                <span class="n">mask</span><span class="o">=</span><span class="n">mask_m</span><span class="p">,</span>
+                <span class="n">other</span><span class="o">=</span><span class="n">cached_offs_x_m</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">cached_pid_m</span> <span class="o">=</span> <span class="n">pid_m</span>
+            <span class="n">cached_slice_idx</span> <span class="o">=</span> <span class="n">slice_idx</span>
+            <span class="n">cached_shape_m</span> <span class="o">=</span> <span class="n">shape_m</span>
+            <span class="n">cached_offs_x_m</span> <span class="o">=</span> <span class="n">offs_x_m</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">shape_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">x_slice_sizes</span> <span class="o">+</span> <span class="n">slice_idx</span><span class="p">)</span>
+            <span class="n">mask_m</span> <span class="o">=</span> <span class="n">offs_m</span> <span class="o">&lt;</span> <span class="n">shape_m</span>
+            <span class="n">offs_x_m</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
+                <span class="n">p</span><span class="o">.</span><span class="n">gather_indx_ptr</span> <span class="o">+</span> <span class="n">slice_offset</span> <span class="o">+</span> <span class="n">offs_m</span><span class="p">,</span>
+                <span class="n">mask</span><span class="o">=</span><span class="n">mask_m</span><span class="p">,</span>
+                <span class="n">other</span><span class="o">=</span><span class="n">p</span><span class="o">.</span><span class="n">x_desc</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+            <span class="p">)</span>
 
         <span class="k">for</span> <span class="n">ki</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">K_TILES</span><span class="p">):</span>
             <span class="n">off_k_x</span> <span class="o">=</span> <span class="n">ki</span> <span class="o">*</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_K</span>
-
-            <span class="n">empty_bar</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">x_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
-            <span class="n">ready_bar</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">x_ready_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
-            <span class="n">x_buf</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">x_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
-
-            <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">empty_bar</span><span class="p">,</span> <span class="n">phase</span><span class="p">,</span> <span class="n">pred</span><span class="o">=</span><span class="n">issued</span> <span class="o">&gt;=</span> <span class="n">p</span><span class="o">.</span><span class="n">x_num_bufs</span><span class="p">)</span>
-            <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">ready_bar</span><span class="p">,</span> <span class="n">tile_x_bytes</span><span class="p">)</span>
-            <span class="n">tma</span><span class="o">.</span><span class="n">async_gather</span><span class="p">(</span>
-                <span class="n">p</span><span class="o">.</span><span class="n">x_desc</span><span class="p">,</span>
-                <span class="n">offs_x_m</span><span class="p">,</span>
-                <span class="n">off_k_x</span><span class="p">,</span>
-                <span class="n">ready_bar</span><span class="p">,</span>
-                <span class="n">x_buf</span><span class="p">,</span>
-                <span class="n">multicast</span><span class="o">=</span><span class="n">p</span><span class="o">.</span><span class="n">USE_2CTA</span> <span class="ow">and</span> <span class="n">p</span><span class="o">.</span><span class="n">X_GATHER_MULTICAST</span><span class="p">,</span>
-            <span class="p">)</span>
-
-            <span class="n">idx</span><span class="p">,</span> <span class="n">phase</span> <span class="o">=</span> <span class="n">advance</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span> <span class="n">phase</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">x_num_bufs</span><span class="p">)</span>
-            <span class="n">issued</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="n">idx</span><span class="p">,</span> <span class="n">phase</span><span class="p">,</span> <span class="n">issued</span> <span class="o">=</span> <span class="n">issue_activation_tile</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">idx</span><span class="p">,</span> <span class="n">phase</span><span class="p">,</span> <span class="n">issued</span><span class="p">,</span> <span class="n">offs_x_m</span><span class="p">,</span> <span class="n">off_k_x</span><span class="p">,</span> <span class="n">tile_x_bytes</span><span class="p">)</span>
 
 
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
@@ -505,6 +541,7 @@
             <span class="n">x_buf</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">x_bufs</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">x_idx</span><span class="p">)</span>
             <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">x_ready_bar</span><span class="p">,</span> <span class="n">x_phase</span><span class="p">)</span>
 
+            <span class="n">mma_release_bars</span> <span class="o">=</span> <span class="p">[</span><span class="n">x_empty_bar</span><span class="p">,</span> <span class="n">w_empty_bar</span><span class="p">]</span> <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">INLINE_MMA_INPUT_RELEASE</span> <span class="k">else</span> <span class="kc">None</span>
             <span class="n">blackwell</span><span class="o">.</span><span class="n">tcgen05_mma_scaled</span><span class="p">(</span>
                 <span class="n">w_buf</span><span class="o">.</span><span class="n">reshape</span><span class="p">((</span><span class="n">p</span><span class="o">.</span><span class="n">BLOCK_N</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_K</span> <span class="o">//</span> <span class="mi">2</span><span class="p">)),</span>
                 <span class="n">x_buf</span><span class="o">.</span><span class="n">permute</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">)),</span>
@@ -514,9 +551,11 @@
                 <span class="n">a_type</span><span class="o">=</span><span class="s2">&quot;e2m1&quot;</span><span class="p">,</span>
                 <span class="n">b_type</span><span class="o">=</span><span class="s2">&quot;e4m3&quot;</span><span class="p">,</span>
                 <span class="n">use_acc</span><span class="o">=</span><span class="n">use_acc</span><span class="p">,</span>
+                <span class="n">mbarriers</span><span class="o">=</span><span class="n">mma_release_bars</span><span class="p">,</span>
             <span class="p">)</span>
-            <span class="n">blackwell</span><span class="o">.</span><span class="n">tcgen05_commit</span><span class="p">(</span><span class="n">x_empty_bar</span><span class="p">)</span>
-            <span class="n">blackwell</span><span class="o">.</span><span class="n">tcgen05_commit</span><span class="p">(</span><span class="n">w_empty_bar</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">p</span><span class="o">.</span><span class="n">INLINE_MMA_INPUT_RELEASE</span><span class="p">:</span>
+                <span class="n">blackwell</span><span class="o">.</span><span class="n">tcgen05_commit</span><span class="p">(</span><span class="n">x_empty_bar</span><span class="p">)</span>
+                <span class="n">blackwell</span><span class="o">.</span><span class="n">tcgen05_commit</span><span class="p">(</span><span class="n">w_empty_bar</span><span class="p">)</span>
 
             <span class="n">x_idx</span><span class="p">,</span> <span class="n">x_phase</span> <span class="o">=</span> <span class="n">advance</span><span class="p">(</span><span class="n">x_idx</span><span class="p">,</span> <span class="n">x_phase</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">x_num_bufs</span><span class="p">)</span>
             <span class="n">w_idx</span><span class="p">,</span> <span class="n">w_phase</span> <span class="o">=</span> <span class="n">advance</span><span class="p">(</span><span class="n">w_idx</span><span class="p">,</span> <span class="n">w_phase</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">w_num_bufs</span><span class="p">)</span>
@@ -745,6 +784,8 @@
     <span class="n">X_GATHER_MULTICAST</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
     <span class="n">W_SCALE_MULTICAST</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
     <span class="n">FORCE_EPILOGUE_WARPS_N1</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="n">REUSE_GATHER_INDICES</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="n">INLINE_MMA_INPUT_RELEASE</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
     <span class="n">SCALE_SIZE_OUTER</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
     <span class="n">SCALE_SIZE_INNER</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
     <span class="n">MXFP_BLOCK_SIZE</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
@@ -868,6 +909,8 @@
         <span class="n">X_GATHER_MULTICAST</span><span class="o">=</span><span class="n">X_GATHER_MULTICAST</span><span class="p">,</span>
         <span class="n">W_SCALE_MULTICAST</span><span class="o">=</span><span class="n">W_SCALE_MULTICAST</span><span class="p">,</span>
         <span class="n">FORCE_EPILOGUE_WARPS_N1</span><span class="o">=</span><span class="n">FORCE_EPILOGUE_WARPS_N1</span><span class="p">,</span>
+        <span class="n">REUSE_GATHER_INDICES</span><span class="o">=</span><span class="n">REUSE_GATHER_INDICES</span><span class="p">,</span>
+        <span class="n">INLINE_MMA_INPUT_RELEASE</span><span class="o">=</span><span class="n">INLINE_MMA_INPUT_RELEASE</span><span class="p">,</span>
     <span class="p">)</span>
 
     <span class="n">gl</span><span class="o">.</span><span class="n">warp_specialize</span><span class="p">(</span>
@@ -966,6 +1009,8 @@
     <span class="n">X_GATHER_MULTICAST</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">W_SCALE_MULTICAST</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">FORCE_EPILOGUE_WARPS_N1</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">REUSE_GATHER_INDICES</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">INLINE_MMA_INPUT_RELEASE</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
 
     <span class="n">LOAD_ACTIVATION_REGS</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">112</span>
     <span class="n">LOAD_WEIGHT_REGS</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">48</span>
@@ -990,95 +1035,187 @@
         <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">BLOCK_M</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">SWIGLU_SUBTILE_FACTOR</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">BLOCK_N</span> <span class="o">//</span> <span class="n">reduction_n</span><span class="p">)</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_select_base_config</span><span class="p">(</span><span class="n">slice_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KernelConfig</span><span class="p">:</span>
-    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">&lt;=</span> <span class="mi">14</span><span class="p">:</span>
-        <span class="n">block_m</span> <span class="o">=</span> <span class="mi">16</span>
-    <span class="k">elif</span> <span class="n">slice_size</span> <span class="o">&lt;=</span> <span class="mi">32</span><span class="p">:</span>
-        <span class="n">block_m</span> <span class="o">=</span> <span class="mi">32</span>
-    <span class="k">elif</span> <span class="n">slice_size</span> <span class="o">&lt;=</span> <span class="mi">64</span><span class="p">:</span>
-        <span class="n">block_m</span> <span class="o">=</span> <span class="mi">64</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="n">block_m</span> <span class="o">=</span> <span class="mi">128</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_select_tiny16_config</span><span class="p">(</span><span class="n">slice_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KernelConfig</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="mi">14</span><span class="p">):</span>
+        <span class="k">return</span> <span class="kc">None</span>
 
-    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">&lt;=</span> <span class="mi">64</span><span class="p">:</span>
-        <span class="n">x_num_bufs</span><span class="p">,</span> <span class="n">w_num_bufs</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="mi">16</span><span class="p">:</span> <span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
-            <span class="mi">32</span><span class="p">:</span> <span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
-            <span class="mi">64</span><span class="p">:</span> <span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>
-        <span class="p">}[</span><span class="n">block_m</span><span class="p">]</span>
-        <span class="k">return</span> <span class="n">KernelConfig</span><span class="p">(</span>
-            <span class="n">BLOCK_M</span><span class="o">=</span><span class="n">block_m</span><span class="p">,</span>
-            <span class="n">BLOCK_N</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span>
-            <span class="n">X_NUM_BUFS</span><span class="o">=</span><span class="n">x_num_bufs</span><span class="p">,</span>
-            <span class="n">W_NUM_BUFS</span><span class="o">=</span><span class="n">w_num_bufs</span><span class="p">,</span>
-            <span class="n">SWIGLU_SUBTILE_FACTOR</span><span class="o">=</span><span class="nb">min</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="n">block_m</span> <span class="o">//</span> <span class="mi">8</span><span class="p">),</span>
-            <span class="n">OCCUPANCY</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
-            <span class="n">MAXNREG</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>
-            <span class="n">LOAD_ACTIVATION_REGS</span><span class="o">=</span><span class="mi">48</span><span class="p">,</span>
-            <span class="n">LOAD_WEIGHT_REGS</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
-            <span class="n">MMA_REGS</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
-        <span class="p">)</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="n">KernelConfig</span><span class="p">(</span>
+        <span class="n">BLOCK_M</span><span class="o">=</span><span class="mi">16</span><span class="p">,</span>
+        <span class="n">NUM_CTAS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="n">BLOCK_N</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span>
+        <span class="n">X_NUM_BUFS</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+        <span class="n">W_NUM_BUFS</span><span class="o">=</span><span class="mi">6</span><span class="p">,</span>
+        <span class="n">ACC_NUM_BUFS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="n">NUM_WARPS</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+        <span class="n">LOAD_ACTIVATION_WARPS</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">SWIGLU_SUBTILE_FACTOR</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">BAND_N</span><span class="o">=</span><span class="mi">26</span><span class="p">,</span>
+        <span class="n">FORCE_EPILOGUE_WARPS_N1</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="n">LOAD_ACTIVATION_REGS</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span>
+        <span class="n">LOAD_WEIGHT_REGS</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
+        <span class="n">MMA_REGS</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
+        <span class="n">MAXNREG</span><span class="o">=</span><span class="mi">52</span><span class="p">,</span>
+        <span class="n">OCCUPANCY</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">4</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">ACC_NUM_BUFS</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">12</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">p</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_select_low32_config</span><span class="p">(</span><span class="n">slice_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KernelConfig</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">24</span><span class="p">,</span> <span class="mi">32</span><span class="p">):</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="n">p</span> <span class="o">=</span> <span class="n">KernelConfig</span><span class="p">(</span>
+        <span class="n">BLOCK_M</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
+        <span class="n">NUM_CTAS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="n">BLOCK_N</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span>
+        <span class="n">W_NUM_BUFS</span><span class="o">=</span><span class="mi">6</span><span class="p">,</span>
+        <span class="n">ACC_NUM_BUFS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="n">NUM_WARPS</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+        <span class="n">LOAD_ACTIVATION_WARPS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="n">SWIGLU_SUBTILE_FACTOR</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">BAND_N</span><span class="o">=</span><span class="mi">26</span><span class="p">,</span>
+        <span class="n">X_GATHER_MULTICAST</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="n">W_SCALE_MULTICAST</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="n">FORCE_EPILOGUE_WARPS_N1</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="n">LOAD_ACTIVATION_REGS</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span>
+        <span class="n">LOAD_WEIGHT_REGS</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
+        <span class="n">MMA_REGS</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
+        <span class="n">MAXNREG</span><span class="o">=</span><span class="mi">48</span><span class="p">,</span>
+        <span class="n">OCCUPANCY</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">16</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">32</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">24</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">ACC_NUM_BUFS</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">28</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">p</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_select_slice28_config</span><span class="p">(</span><span class="n">slice_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KernelConfig</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">!=</span> <span class="mi">28</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
 
     <span class="k">return</span> <span class="n">KernelConfig</span><span class="p">(</span>
-        <span class="n">BLOCK_M</span><span class="o">=</span><span class="n">block_m</span><span class="p">,</span>
-        <span class="n">SWIGLU_SUBTILE_FACTOR</span><span class="o">=</span><span class="nb">min</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="n">block_m</span> <span class="o">//</span> <span class="mi">8</span><span class="p">),</span>
+        <span class="n">BLOCK_M</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
+        <span class="n">NUM_CTAS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="n">BLOCK_N</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span>
+        <span class="n">W_NUM_BUFS</span><span class="o">=</span><span class="mi">6</span><span class="p">,</span>
+        <span class="n">ACC_NUM_BUFS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="n">NUM_WARPS</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+        <span class="n">LOAD_ACTIVATION_WARPS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="n">SWIGLU_SUBTILE_FACTOR</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">BAND_N</span><span class="o">=</span><span class="mi">28</span><span class="p">,</span>
+        <span class="n">LOAD_ACTIVATION_REGS</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
+        <span class="n">LOAD_WEIGHT_REGS</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
+        <span class="n">MMA_REGS</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
+        <span class="n">MAXNREG</span><span class="o">=</span><span class="mi">48</span><span class="p">,</span>
+        <span class="n">OCCUPANCY</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
     <span class="p">)</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">select_kernel_config</span><span class="p">(</span><span class="n">slice_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KernelConfig</span><span class="p">:</span>
-    <span class="n">p</span> <span class="o">=</span> <span class="n">_select_base_config</span><span class="p">(</span><span class="n">slice_size</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_select_mid64_config</span><span class="p">(</span><span class="n">slice_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KernelConfig</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="mi">36</span> <span class="o">&lt;=</span> <span class="n">slice_size</span> <span class="o">&lt;=</span> <span class="mi">72</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
 
-    <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_M</span> <span class="o">==</span> <span class="mi">32</span> <span class="ow">and</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_N</span> <span class="o">==</span> <span class="mi">128</span> <span class="ow">and</span> <span class="n">slice_size</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">24</span><span class="p">,</span> <span class="mi">32</span><span class="p">):</span>
-        <span class="n">p</span> <span class="o">=</span> <span class="n">replace</span><span class="p">(</span>
-            <span class="n">p</span><span class="p">,</span>
-            <span class="n">BLOCK_N</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span>
-            <span class="n">NUM_CTAS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
-            <span class="n">NUM_WARPS</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
-            <span class="n">W_NUM_BUFS</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
-            <span class="n">SWIGLU_SUBTILE_FACTOR</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
-            <span class="n">LOAD_ACTIVATION_WARPS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
-            <span class="n">LOAD_WEIGHT_WARPS</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
-            <span class="n">MMA_WARPS</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
-            <span class="n">LOAD_ACTIVATION_REGS</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span>
-            <span class="n">LOAD_WEIGHT_REGS</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
-            <span class="n">MMA_REGS</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
-            <span class="n">MAXNREG</span><span class="o">=</span><span class="mi">52</span><span class="p">,</span>
-            <span class="n">BAND_N</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
-            <span class="n">FORCE_EPILOGUE_WARPS_N1</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">16</span><span class="p">:</span>
-            <span class="n">p</span> <span class="o">=</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">X_NUM_BUFS</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
-        <span class="k">elif</span> <span class="n">slice_size</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">24</span><span class="p">):</span>
-            <span class="n">p</span> <span class="o">=</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">X_NUM_BUFS</span><span class="o">=</span><span class="mi">6</span><span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">p</span> <span class="o">=</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">X_NUM_BUFS</span><span class="o">=</span><span class="mi">6</span><span class="p">,</span> <span class="n">X_GATHER_MULTICAST</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">W_SCALE_MULTICAST</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-    <span class="k">elif</span> <span class="mi">36</span> <span class="o">&lt;=</span> <span class="n">slice_size</span> <span class="o">&lt;=</span> <span class="mi">72</span><span class="p">:</span>
-        <span class="n">p</span> <span class="o">=</span> <span class="n">replace</span><span class="p">(</span>
-            <span class="n">p</span><span class="p">,</span>
-            <span class="n">BLOCK_M</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>
-            <span class="n">BLOCK_N</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span>
-            <span class="n">NUM_CTAS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
-            <span class="n">OCCUPANCY</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
-            <span class="n">X_NUM_BUFS</span><span class="o">=</span><span class="mi">6</span><span class="p">,</span>
-            <span class="n">W_NUM_BUFS</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
-            <span class="n">SWIGLU_SUBTILE_FACTOR</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
-            <span class="n">LOAD_ACTIVATION_REGS</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>
-            <span class="n">LOAD_WEIGHT_REGS</span><span class="o">=</span><span class="mi">48</span><span class="p">,</span>
-            <span class="n">MMA_REGS</span><span class="o">=</span><span class="mi">48</span><span class="p">,</span>
-            <span class="n">MAXNREG</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>
-        <span class="p">)</span>
-    <span class="k">elif</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_M</span> <span class="o">==</span> <span class="mi">128</span> <span class="ow">and</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_N</span> <span class="o">==</span> <span class="mi">256</span> <span class="ow">and</span> <span class="n">slice_size</span> <span class="o">&gt;=</span> <span class="mi">80</span><span class="p">:</span>
-        <span class="n">p</span> <span class="o">=</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span> <span class="n">NUM_CTAS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">W_NUM_BUFS</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="n">KernelConfig</span><span class="p">(</span>
+        <span class="n">BLOCK_M</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>
+        <span class="n">NUM_CTAS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="n">BLOCK_N</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span>
+        <span class="n">W_NUM_BUFS</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+        <span class="n">SWIGLU_SUBTILE_FACTOR</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="n">BAND_N</span><span class="o">=</span><span class="mi">24</span><span class="p">,</span>
+        <span class="n">FORCE_EPILOGUE_WARPS_N1</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="n">LOAD_ACTIVATION_REGS</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>
+        <span class="n">MAXNREG</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>
+        <span class="n">OCCUPANCY</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">36</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">ACC_NUM_BUFS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">REUSE_GATHER_INDICES</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">INLINE_MMA_INPUT_RELEASE</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">40</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">22</span><span class="p">,</span> <span class="n">MAXNREG</span><span class="o">=</span><span class="mi">56</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">48</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">MAXNREG</span><span class="o">=</span><span class="mi">56</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">56</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">LOAD_ACTIVATION_REGS</span><span class="o">=</span><span class="mi">72</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">64</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">X_GATHER_MULTICAST</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">W_SCALE_MULTICAST</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">REUSE_GATHER_INDICES</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">72</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">p</span>
+    <span class="k">return</span> <span class="kc">None</span>
 
-    <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_M</span> <span class="o">==</span> <span class="mi">32</span> <span class="ow">and</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_N</span> <span class="o">==</span> <span class="mi">256</span> <span class="ow">and</span> <span class="n">p</span><span class="o">.</span><span class="n">NUM_CTAS</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span> <span class="n">slice_size</span> <span class="o">&lt;=</span> <span class="mi">32</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">32</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_M</span> <span class="o">==</span> <span class="mi">64</span> <span class="ow">and</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_N</span> <span class="o">==</span> <span class="mi">256</span> <span class="ow">and</span> <span class="n">p</span><span class="o">.</span><span class="n">NUM_CTAS</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span> <span class="mi">36</span> <span class="o">&lt;=</span> <span class="n">slice_size</span> <span class="o">&lt;=</span> <span class="mi">72</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">26</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">&lt;</span> <span class="mi">32</span><span class="p">:</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_select_high128_config</span><span class="p">(</span><span class="n">slice_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KernelConfig</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">&lt;</span> <span class="mi">80</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="n">p</span> <span class="o">=</span> <span class="n">KernelConfig</span><span class="p">(</span>
+        <span class="n">BLOCK_N</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span>
+        <span class="n">NUM_CTAS</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="n">X_NUM_BUFS</span><span class="o">=</span><span class="mi">6</span><span class="p">,</span>
+        <span class="n">W_NUM_BUFS</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+        <span class="n">BAND_N</span><span class="o">=</span><span class="mi">18</span><span class="p">,</span>
+        <span class="n">FORCE_EPILOGUE_WARPS_N1</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">96</span><span class="p">,</span> <span class="mi">544</span><span class="p">,</span> <span class="mi">576</span><span class="p">,</span> <span class="mi">608</span><span class="p">,</span> <span class="mi">640</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">p</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">112</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">704</span><span class="p">,</span> <span class="mi">768</span><span class="p">,</span> <span class="mi">800</span><span class="p">,</span> <span class="mi">864</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">192</span><span class="p">,</span> <span class="mi">672</span><span class="p">,</span> <span class="mi">928</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">24</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">288</span><span class="p">,</span> <span class="mi">320</span><span class="p">,</span> <span class="mi">352</span><span class="p">,</span> <span class="mi">480</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">X_NUM_BUFS</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">26</span><span class="p">,</span> <span class="n">LOAD_ACTIVATION_REGS</span><span class="o">=</span><span class="mi">104</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">160</span><span class="p">,</span> <span class="mi">512</span><span class="p">,</span> <span class="mi">992</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">X_NUM_BUFS</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">80</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">X_NUM_BUFS</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">24</span><span class="p">,</span> <span class="n">LOAD_ACTIVATION_REGS</span><span class="o">=</span><span class="mi">104</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">224</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">X_NUM_BUFS</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">24</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">384</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">LOAD_ACTIVATION_REGS</span><span class="o">=</span><span class="mi">104</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">416</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">REUSE_GATHER_INDICES</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">448</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">22</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">&lt;</span> <span class="mi">416</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">18</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">26</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">736</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">LOAD_ACTIVATION_REGS</span><span class="o">=</span><span class="mi">104</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">832</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">p</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">896</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span>
+            <span class="n">p</span><span class="p">,</span>
+            <span class="n">BAND_N</span><span class="o">=</span><span class="mi">24</span><span class="p">,</span>
+            <span class="n">FORCE_EPILOGUE_WARPS_N1</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+            <span class="n">W_SCALE_MULTICAST</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+            <span class="n">REUSE_GATHER_INDICES</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+            <span class="n">INLINE_MMA_INPUT_RELEASE</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="k">if</span> <span class="n">slice_size</span> <span class="o">==</span> <span class="mi">960</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">replace</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">BAND_N</span><span class="o">=</span><span class="mi">24</span><span class="p">,</span> <span class="n">LOAD_ACTIVATION_REGS</span><span class="o">=</span><span class="mi">104</span><span class="p">)</span>
+    <span class="k">return</span> <span class="kc">None</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_select_best_batch_config</span><span class="p">(</span><span class="n">slice_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KernelConfig</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">selector</span> <span class="ow">in</span> <span class="p">(</span>
+            <span class="n">_select_tiny16_config</span><span class="p">,</span>
+            <span class="n">_select_low32_config</span><span class="p">,</span>
+            <span class="n">_select_slice28_config</span><span class="p">,</span>
+            <span class="n">_select_mid64_config</span><span class="p">,</span>
+            <span class="n">_select_high128_config</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="n">p</span> <span class="o">=</span> <span class="n">selector</span><span class="p">(</span><span class="n">slice_size</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">p</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">p</span>
+    <span class="k">return</span> <span class="kc">None</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">select_kernel_config</span><span class="p">(</span><span class="n">slice_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KernelConfig</span><span class="p">:</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="n">_select_best_batch_config</span><span class="p">(</span><span class="n">slice_size</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">p</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">p</span>
+    <span class="k">return</span> <span class="n">KernelConfig</span><span class="p">()</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">matmul</span><span class="p">(</span>
@@ -1209,6 +1346,8 @@
         <span class="n">X_GATHER_MULTICAST</span><span class="o">=</span><span class="n">p</span><span class="o">.</span><span class="n">X_GATHER_MULTICAST</span><span class="p">,</span>
         <span class="n">W_SCALE_MULTICAST</span><span class="o">=</span><span class="n">p</span><span class="o">.</span><span class="n">W_SCALE_MULTICAST</span><span class="p">,</span>
         <span class="n">FORCE_EPILOGUE_WARPS_N1</span><span class="o">=</span><span class="n">p</span><span class="o">.</span><span class="n">FORCE_EPILOGUE_WARPS_N1</span><span class="p">,</span>
+        <span class="n">REUSE_GATHER_INDICES</span><span class="o">=</span><span class="n">p</span><span class="o">.</span><span class="n">REUSE_GATHER_INDICES</span><span class="p">,</span>
+        <span class="n">INLINE_MMA_INPUT_RELEASE</span><span class="o">=</span><span class="n">p</span><span class="o">.</span><span class="n">INLINE_MMA_INPUT_RELEASE</span><span class="p">,</span>
         <span class="c1">#</span>
         <span class="n">SCALE_SIZE_OUTER</span><span class="o">=</span><span class="n">p</span><span class="o">.</span><span class="n">SCALE_SIZE_OUTER</span><span class="p">,</span>
         <span class="n">SCALE_SIZE_INNER</span><span class="o">=</span><span class="n">p</span><span class="o">.</span><span class="n">SCALE_SIZE_INNER</span><span class="p">,</span>
