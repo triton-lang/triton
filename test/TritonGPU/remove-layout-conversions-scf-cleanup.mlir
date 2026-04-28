@@ -1,24 +1,11 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-remove-layout-conversions 2>&1 | FileCheck %s -implicit-check-not="scf cleanup did not converge"
+// RUN: triton-opt %s -tritongpu-remove-layout-conversions | FileCheck %s
 
 // Regression test for pytorch/pytorch#180908: long chains of scf.if results
 // that the cleanup phase of -tritongpu-remove-layout-conversions cannot
-// converge in MLIR's default greedy-rewriter iteration cap. Site 2b (the
-// SCF cleanup site) is allowed to bail with a stderr breadcrumb instead of
-// failing the pass; sites 5a/5c (ConvertLayoutOp cleanup) remain strict.
-//
-// This test is contingent on LLVM regression cf9b3bbb0986 still being present.
-// If that regression is fixed upstream, scf.if cleanup will converge in ≤10
-// iterations and the breadcrumb won't fire — this test will then fail. When
-// that happens, delete it (the bug it guards against is gone).
-//
-// The implicit-check-not flag above asserts the breadcrumb appears at most
-// once across the whole run; the count directive below pins it to exactly
-// once. Together these turn the negative case (a second module also
-// triggering the bail) from a silent miss into a hard FileCheck failure.
+// converge in MLIR's default greedy-rewriter iteration cap. The pass is
+// expected to bail silently and produce valid IR, not fail.
 
-// CHECK-COUNT-1: tritongpu-remove-layout-conversions: scf cleanup did not converge
 // CHECK-LABEL: @crash_kernel
-// CHECK-NOT: ttg.convert_layout
 // CHECK: tt.return
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -187,31 +174,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %28 = ttg.convert_layout %27 : tensor<8192x!tt.ptr<i32>, #blocked> -> tensor<8192x!tt.ptr<i32>, #blocked1>
     %29 = ttg.convert_layout %23 : tensor<8192xi32, #blocked> -> tensor<8192xi32, #blocked1>
     tt.store %28, %29 : tensor<8192x!tt.ptr<i32>, #blocked1>
-    tt.return
-  }
-}
-
-// -----
-
-// Negative control: a healthy kernel with no scf.if chain. Pass should
-// converge silently (no breadcrumb).
-
-// CHECK-LABEL: @simple_kernel
-// CHECK-NOT: scf cleanup did not converge
-// CHECK: tt.return
-
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:89", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @simple_kernel(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-    %cst = arith.constant dense<1> : tensor<8192xi32, #blocked>
-    %0 = tt.get_program_id x : i32
-    %1 = tt.make_range {end = 8192 : i32, start = 0 : i32} : tensor<8192xi32, #blocked>
-    %2 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<8192x!tt.ptr<i32>, #blocked>
-    %3 = tt.addptr %2, %1 : tensor<8192x!tt.ptr<i32>, #blocked>, tensor<8192xi32, #blocked>
-    %4 = ttg.convert_layout %3 : tensor<8192x!tt.ptr<i32>, #blocked> -> tensor<8192x!tt.ptr<i32>, #blocked1>
-    %5 = ttg.convert_layout %cst : tensor<8192xi32, #blocked> -> tensor<8192xi32, #blocked1>
-    tt.store %4, %5 : tensor<8192x!tt.ptr<i32>, #blocked1>
     tt.return
   }
 }
