@@ -904,15 +904,16 @@ def test_hook_launch_metadata_nested_triton_context_cudagraph(tmp_path: pathlib.
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports CUDA graph resource callbacks")
 def test_hook_launch_metadata_cudagraph_metric_queue_guard(tmp_path: pathlib.Path, device: str):
-    """Explain the CuptiProfiler.cpp metric-queue guard.
+    """Reproduce the combined launch.py and CuptiProfiler.cpp failure.
 
-    During CUDA graph capture, tensor launch metadata makes add_metrics launch a
-    Proton metric kernel while CuptiProfiler::ThreadState::isMetricKernelLaunching
-    is true. CUPTI graph-node callbacks for metadata-side kernels may be delivered
-    in the same window. The C++ callback must therefore treat a node as a metric
-    node only when metricKernelNumWordsQueue is non-empty; otherwise metadata
-    nodes can consume an empty queue, crash, or appear as <metric> kernels.
+    Without the launch.py metadata scope changes, the helper kernels below are
+    grouped under generic __proton_launch_metadata instead of the owning kernel's
+    __proton_launch_metadata:<owner> scope. Without the CuptiProfiler.cpp queue
+    guard, metadata-side graph nodes can consume an empty metric queue, crash,
+    or appear as <metric> kernels.
     """
+    owner_name = "foo_metric_queue_guard"
+    owner_metadata_scope = f"{COMPUTE_METADATA_SCOPE_NAME}:{owner_name}"
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -927,9 +928,9 @@ def test_hook_launch_metadata_cudagraph_metric_queue_guard(tmp_path: pathlib.Pat
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         metadata_before_metric_kernel[(1, )](args["x"], args["scratch"], num_warps=1)
         metadata_after_metric_kernel[(1, )](args["scratch"], args["scratch2"], num_warps=1)
-        return {"name": "foo_metric_queue_guard", "flops": args["scratch2"].sum()}
+        return {"name": owner_name, "flops": args["scratch2"].sum()}
 
-    @triton.jit(launch_metadata=metadata_fn)
+    @triton.jit(repr=lambda _: owner_name, launch_metadata=metadata_fn)
     def foo(x, scratch, scratch2, y):
         tl.store(y, tl.load(x) + tl.load(scratch2))
 
@@ -975,6 +976,14 @@ def test_hook_launch_metadata_cudagraph_metric_queue_guard(tmp_path: pathlib.Pat
         "metadata_after_metric_kernel",
     }.issubset(metadata_kernel_names)
     assert all(event["name"] != "<metric>" for event in metadata_kernel_events)
+
+    # These assertions are the launch.py side of the repro. Without the owner
+    # metadata scope, the call stacks contain only generic
+    # __proton_launch_metadata and the helper kernels cannot be tied back to foo.
+    for event in metadata_kernel_events:
+        call_stack = event["args"]["call_stack"]
+        assert owner_metadata_scope in call_stack
+        assert COMPUTE_METADATA_SCOPE_NAME not in call_stack
 
 
 def test_hook_with_third_party(tmp_path: pathlib.Path, device: str):
