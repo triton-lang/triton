@@ -1594,15 +1594,36 @@ public:
     // the pattern rewriter below.
     runDeadIterArgElimination(m);
 
-    // 5. Apply clean up patterns to remove dead convert and dead code generated
-    // by the previous transformations.
-    RewritePatternSet cleanUpPatterns2(context);
-    scf::ForOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
-    scf::IfOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
-    ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
-    if (applyPatternsGreedily(m, std::move(cleanUpPatterns2)).failed()) {
+    // 5. Final cleanup. Split into 3 sequential calls to work around an
+    // scf cleanup convergence issue (see pytorch/pytorch#180908): 5a and 5c
+    // run ConvertLayoutOp canonicalizations strictly (5c re-runs to catch
+    // simplifications unblocked by 5b, e.g. a ConvertLayoutOp folding once
+    // its scf.if consumer's result becomes dead), 5b runs scf
+    // canonicalizations and warns instead of failing on non-convergence.
+
+    // 5a. ConvertLayoutOp — strict.
+    RewritePatternSet convertCleanup1(context);
+    ConvertLayoutOp::getCanonicalizationPatterns(convertCleanup1, context);
+    if (applyPatternsGreedily(m, std::move(convertCleanup1)).failed()) {
       signalPassFailure();
     }
+
+    // 5b. SCF — lenient.
+    RewritePatternSet scfCleanup(context);
+    scf::ForOp::getCanonicalizationPatterns(scfCleanup, context);
+    scf::IfOp::getCanonicalizationPatterns(scfCleanup, context);
+    if (applyPatternsGreedily(m, std::move(scfCleanup)).failed()) {
+      llvm::errs() << "tritongpu-remove-layout-conversions: scf cleanup did "
+                      "not converge; continuing with partially-cleaned IR\n";
+    }
+
+    // 5c. ConvertLayoutOp re-run — strict.
+    RewritePatternSet convertCleanup2(context);
+    ConvertLayoutOp::getCanonicalizationPatterns(convertCleanup2, context);
+    if (applyPatternsGreedily(m, std::move(convertCleanup2)).failed()) {
+      signalPassFailure();
+    }
+
     LLVM_DEBUG({
       DBGS() << "Module after final cleanups:\n";
       m.dump();
