@@ -668,6 +668,14 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str, device: str):
 
 
 def test_hook_launch_metadata_nested_triton_context(tmp_path: pathlib.Path, device: str):
+    """Keep metadata-side Triton launches under the metadata scope.
+
+    This is the small eager-mode reproducer for recursive LaunchHook behavior:
+    launch_metadata launches helper kernels and enters a user Proton scope. The
+    helper kernels must stay under __proton_launch_metadata:<owner>, and the
+    user scope must remain below that metadata parent instead of becoming a
+    separate profiled launch.
+    """
 
     @triton.jit
     def metadata_side_kernel(x, scratch):

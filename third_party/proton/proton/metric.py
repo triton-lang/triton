@@ -109,6 +109,7 @@ def transform_tensor_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], d
                     if not is_metadata_scope_active():
                         enter_state(current_metadata_state_name())
                         entered_state = True
+                    # Keep Proton's state balanced if a dtype conversion raises.
                     # Keep metric descriptors type-stable across kernels. FLOP metrics
                     # are always represented as doubles, even when computed by integer
                     # counter kernels.
