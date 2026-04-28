@@ -13,8 +13,8 @@ import pathlib
 import threading
 
 import triton.language as tl
-from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
+from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
 
@@ -38,6 +38,18 @@ def find_frame_path(node, name_substr: str):
         for child in current["children"]:
             queue.append((child, [*path, child]))
     return None
+
+
+def find_frame_paths(node, name_substr: str):
+    paths = []
+    queue = [(node, [node])]
+    while queue:
+        current, path = queue.pop(0)
+        if name_substr in current["frame"]["name"]:
+            paths.append(path)
+        for child in current["children"]:
+            queue.append((child, [*path, child]))
+    return paths
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -891,6 +903,15 @@ def test_hook_launch_metadata_nested_triton_context_cudagraph(tmp_path: pathlib.
     foo_frame = find_frame(data[0], "foo_graph_test")
     assert foo_frame is not None
     assert "flops" in foo_frame["metrics"]
+    replay_foo_paths = [
+        path for path in find_frame_paths(data[0], "foo_graph_test")
+        if "replay" in [node["frame"]["name"]
+                        for node in path] and "<captured_at>" in [node["frame"]["name"] for node in path]
+    ]
+    assert len(replay_foo_paths) == 1
+    replay_foo_frame = replay_foo_paths[0][-1]
+    assert "flops" in replay_foo_frame["metrics"]
+    assert replay_foo_frame["metrics"]["time (ns)"] > 0
 
     scoped_metadata_path = find_frame_path(data[0], "metadata_scoped_side_kernel")
     assert scoped_metadata_path is not None
@@ -899,6 +920,109 @@ def test_hook_launch_metadata_nested_triton_context_cudagraph(tmp_path: pathlib.
                               if name.startswith(COMPUTE_METADATA_SCOPE_NAME))
     child_scope_idx = scoped_metadata_path_names.index("metadata_child_scope")
     assert metadata_scope_idx < child_scope_idx < len(scoped_metadata_path_names) - 1
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports CUDA graph resource callbacks")
+def test_hook_launch_metadata_cudagraph_metric_copy_under_metadata_scope(tmp_path: pathlib.Path, device: str):
+    """Keep graph metric-copy kernels under the owner launch metadata scope.
+
+    Tensor launch metadata makes add_metrics launch a Proton metric-copy kernel
+    during CUDA graph capture. That <metric> node should be grouped under the
+    same __proton_launch_metadata:<owner> scope as the metadata kernels whose
+    values it copies, while the copied flops remain attached to the owner kernel
+    sibling. Metadata helper kernels can still have child Proton scopes; moving
+    <metric> under the metadata owner must not flatten those child scopes.
+    """
+    owner_name = "foo_metric_scope"
+    owner_metadata_scope = f"{COMPUTE_METADATA_SCOPE_NAME}:{owner_name}"
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    @triton.jit
+    def metadata_before_metric_kernel(x, scratch):
+        tl.store(scratch, tl.load(x) + 1.0)
+
+    @triton.jit
+    def metadata_after_metric_kernel(scratch, scratch2):
+        tl.store(scratch2, tl.load(scratch) + 2.0)
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        metadata_before_metric_kernel[(1, )](args["x"], args["scratch"], num_warps=1)
+        with proton.scope("metadata_child_scope"):
+            metadata_after_metric_kernel[(1, )](args["scratch"], args["scratch2"], num_warps=1)
+        return {"name": owner_name, "flops": args["scratch2"].sum()}
+
+    @triton.jit(repr=lambda _: owner_name, launch_metadata=metadata_fn)
+    def foo(x, scratch, scratch2, y):
+        tl.store(y, tl.load(x) + tl.load(scratch2))
+
+    x = torch.tensor([2], device=device, dtype=torch.float32)
+    scratch = torch.zeros_like(x)
+    scratch2 = torch.zeros_like(x)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_hook_metadata_metric_scope.chrome_trace"
+    session = proton.start(str(temp_file.with_suffix("")), data="trace", context="shadow", hook="triton")
+    try:
+        foo[(1, )](x, scratch, scratch2, y, num_warps=1)
+        torch.cuda.synchronize()
+
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            foo[(1, )](x, scratch, scratch2, y, num_warps=1)
+
+        with proton.scope("replay"):
+            graph.replay()
+        torch.cuda.synchronize()
+    finally:
+        proton.finalize(session)
+
+    with temp_file.open() as f:
+        trace_events = json.load(f)["traceEvents"]
+
+    replay_kernel_events = [
+        event for event in trace_events
+        if event.get("cat") == "kernel" and event.get("args", {}).get("call_stack", [])[:2] == ["ROOT", "replay"]
+    ]
+    metric_kernel_events = [event for event in replay_kernel_events if event["name"] == "<metric>"]
+    owner_kernel_events = [event for event in replay_kernel_events if event["name"] == owner_name]
+    metadata_kernel_events = [
+        event for event in replay_kernel_events if any(
+            name.startswith(COMPUTE_METADATA_SCOPE_NAME) for name in event.get("args", {}).get("call_stack", []))
+    ]
+    metadata_kernel_events_by_name = {event["name"]: event for event in metadata_kernel_events}
+    expected_metadata_parent = [
+        "ROOT",
+        "replay",
+        "<captured_at>",
+        owner_metadata_scope,
+    ]
+
+    assert len(metric_kernel_events) == 1
+    assert metric_kernel_events[0]["args"]["call_stack"] == [
+        *expected_metadata_parent,
+        "<metric>",
+    ]
+    assert {
+        "metadata_before_metric_kernel",
+        "metadata_after_metric_kernel",
+    }.issubset(metadata_kernel_events_by_name)
+    assert metadata_kernel_events_by_name["metadata_before_metric_kernel"]["args"]["call_stack"] == [
+        *expected_metadata_parent,
+        "metadata_before_metric_kernel",
+    ]
+    assert metadata_kernel_events_by_name["metadata_after_metric_kernel"]["args"]["call_stack"] == [
+        *expected_metadata_parent,
+        "metadata_child_scope",
+        "metadata_after_metric_kernel",
+    ]
+    assert len(owner_kernel_events) == 1
+    assert owner_kernel_events[0]["args"]["call_stack"] == [
+        "ROOT",
+        "replay",
+        "<captured_at>",
+        owner_name,
+    ]
+    assert "flops" in owner_kernel_events[0]["args"].get("metrics", {})
 
 
 def test_hook_with_third_party(tmp_path: pathlib.Path, device: str):

@@ -124,11 +124,26 @@ class LaunchHook(Hook):
             if metadata_scope_id is not None:
                 exit_metadata_scope(metadata_scope_id, metadata_scope_name)
 
-        enabled.set(True)
         op_name.set(kernel_name)
         id.set(libproton.record_scope())
-        libproton.enter_op(id.get(), lazy_metadata["name"])
-        libproton.add_metrics(id.get(), scalar_metrics, tensor_metrics)
+        metadata_scope_id = None
+        op_entered = False
+        try:
+            libproton.enter_op(id.get(), lazy_metadata["name"])
+            op_entered = True
+            # Keep metric-copy kernels launched by add_metrics grouped with the
+            # launch metadata work that produced their values.
+            metadata_scope_id = enter_metadata_scope(metadata_scope_name)
+            libproton.add_metrics(id.get(), scalar_metrics, tensor_metrics)
+        except Exception:
+            if op_entered:
+                libproton.exit_op(id.get(), op_name.get())
+            raise
+        finally:
+            if metadata_scope_id is not None:
+                exit_metadata_scope(metadata_scope_id, metadata_scope_name)
+
+        enabled.set(True)
 
     def exit(self, metadata: LazyDict) -> None:
         if not enabled.get():

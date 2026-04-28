@@ -54,6 +54,11 @@ struct GraphState {
     // created at capture time and won't change for the same node id. This is
     // used to link the graph node to the captured call path in Data.
     std::map<Data *, size_t> dataToEntryId;
+    // For metric-copy nodes grouped under launch metadata, flexible launch
+    // metrics still belong to the owner kernel's <metric> child, not to the
+    // metadata node that runs the copy kernel. TreeData promotes linked
+    // flexible metrics from <metric> children onto the owner kernel frame.
+    std::map<Data *, size_t> dataToFlexibleMetricEntryId;
     // Whether the node has missing name or is a metric node, which is
     // determined at capture time and won't change for the same node id.
     NodeStatus status{};
