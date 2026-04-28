@@ -4384,14 +4384,6 @@ FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
                                fp4Padded, isTransposed, packedSize, emitError);
 }
 
-FailureOr<SmallVector<int64_t>> triton::gpu::tryGetTMABlockShape(
-    ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
-    bool fp4Padded, bool isTransposed, bool packedSize, TMAMode mode) {
-  return getTMABlockShape(shapePerCTA, elementBitWidth, swizzleBytes, fp4Padded,
-                          isTransposed, packedSize,
-                          /*emitError=*/nullptr, mode);
-}
-
 SmallVector<int64_t> triton::gpu::getTMABlockShape(
     ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
     bool fp4Padded, bool isTransposed, bool packedSize, TMAMode mode) {
