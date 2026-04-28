@@ -721,6 +721,14 @@ def test_hook_launch_metadata_nested_triton_context(tmp_path: pathlib.Path, devi
 
 
 def test_hook_launch_metadata_work_grouped_by_owner_matmul(tmp_path: pathlib.Path, monkeypatch, device: str):
+    """Check the eager before/after profile shape for owner-scoped metadata.
+
+    metadata_fn launches Triton helper kernels and returns tensor metrics. The
+    monkeypatched transform hook launches one more marker kernel to stand in for
+    GPU work from transform_tensor_metrics, such as dtype casts. All of those
+    kernels should be grouped under __proton_launch_metadata:<owner>, while the
+    real matmul frame owns the flops/bytes metrics.
+    """
     owner_name = "owner_matmul_test"
     owner_metadata_scope = f"{COMPUTE_METADATA_SCOPE_NAME}:{owner_name}"
 
@@ -831,6 +839,12 @@ def test_hook_launch_metadata_work_grouped_by_owner_matmul(tmp_path: pathlib.Pat
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
 def test_hook_launch_metadata_nested_triton_context_cudagraph(tmp_path: pathlib.Path, device: str):
+    """Exercise CUDA graph capture with metadata-side kernels and tensor metrics.
+
+    This covers the graph-specific failure mode: launch_metadata launches Triton
+    kernels and also returns a tensor metric, so Proton must not confuse extra
+    metadata graph nodes with metric-kernel graph nodes during capture/replay.
+    """
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
