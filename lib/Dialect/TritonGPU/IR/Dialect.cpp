@@ -4284,10 +4284,10 @@ emitTMABlockShapeError(function_ref<InFlightDiagnostic()> emitError,
 // Doc:
 // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html
 static FailureOr<SmallVector<int64_t>>
-getTMABlockShapeIm2ColImpl(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
-                           int swizzleBytes, bool fp4Padded, bool isTransposed,
-                           bool packedSize,
-                           function_ref<InFlightDiagnostic()> emitError) {
+getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
+                       int swizzleBytes, bool fp4Padded, bool isTransposed,
+                       bool packedSize,
+                       function_ref<InFlightDiagnostic()> emitError) {
   assert(shapePerCTA.size() == 2 && "im2col mode requires a 2D block shape");
 
   SmallVector<int64_t> blockShape(shapePerCTA);
@@ -4337,10 +4337,10 @@ getTMABlockShapeIm2ColImpl(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
 
 // Tiled mode block shape calculation.
 static FailureOr<SmallVector<int64_t>>
-getTMABlockShapeTiledImpl(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
-                          int swizzleBytes, bool fp4Padded, bool isTransposed,
-                          bool packedSize,
-                          function_ref<InFlightDiagnostic()> emitError) {
+getTMABlockShapeTiled(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
+                      int swizzleBytes, bool fp4Padded, bool isTransposed,
+                      bool packedSize,
+                      function_ref<InFlightDiagnostic()> emitError) {
   SmallVector<int64_t> blockShape(shapePerCTA);
 
   int contigDim = isTransposed ? 0 : blockShape.size() - 1;
@@ -4376,14 +4376,13 @@ FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
     bool fp4Padded, bool isTransposed, bool packedSize,
     function_ref<InFlightDiagnostic()> emitError, TMAMode mode) {
   if (mode == TMAMode::Im2Col) {
-    return getTMABlockShapeIm2ColImpl(shapePerCTA, elementBitWidth,
-                                      swizzleBytes, fp4Padded, isTransposed,
-                                      packedSize, emitError);
+    return getTMABlockShapeIm2Col(shapePerCTA, elementBitWidth, swizzleBytes,
+                                  fp4Padded, isTransposed, packedSize,
+                                  emitError);
   }
   // Tiled mode
-  return getTMABlockShapeTiledImpl(shapePerCTA, elementBitWidth, swizzleBytes,
-                                   fp4Padded, isTransposed, packedSize,
-                                   emitError);
+  return getTMABlockShapeTiled(shapePerCTA, elementBitWidth, swizzleBytes,
+                               fp4Padded, isTransposed, packedSize, emitError);
 }
 
 FailureOr<SmallVector<int64_t>> triton::gpu::tryGetTMABlockShape(
