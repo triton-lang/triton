@@ -6,6 +6,7 @@
 #include "Driver/GPU/CuptiApi.h"
 #include "Driver/GPU/NvtxApi.h"
 #include "Profiler/Cupti/CuptiPCSampling.h"
+#include "Profiler/Cupti/MetricKernelQueue.h"
 #include "Profiler/Graph.h"
 #include "Runtime/CudaRuntime.h"
 #include "Utility/Env.h"
@@ -491,14 +492,12 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       // Metadata-side graph nodes can arrive in the same callback window after
       // the real metric-copy queue entries were consumed, so the queue entry is
       // what identifies an actual metric-copy node.
-      const bool isMetricKernelNode =
-          threadState.isMetricKernelLaunching &&
-          !threadState.metricKernelNumWordsQueue.empty();
+      size_t metricKernelNumWords = 0;
+      const bool isMetricKernelNode = detail::popMetricKernelNumWordsIfQueued(
+          threadState.isMetricKernelLaunching,
+          threadState.metricKernelNumWordsQueue, metricKernelNumWords);
       if (isMetricKernelNode) {
         nodeState.status.setMetricNode();
-        auto metricKernelNumWords =
-            threadState.metricKernelNumWordsQueue.front();
-        threadState.metricKernelNumWordsQueue.pop_front();
         graphState.metricNodeIdToNumWords.insert_or_assign(
             nodeId, metricKernelNumWords);
         graphState.numMetricWords += metricKernelNumWords;
