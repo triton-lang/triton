@@ -543,8 +543,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         markGraphStateUncaptured(graphState);
         return;
       }
-      graphState.nodeIdToState[nodeId] =
-          originalNodeIt->second;
+      graphState.nodeIdToState[nodeId] = originalNodeIt->second;
       auto &nodeState = graphState.nodeIdToState[nodeId];
       nodeState.nodeId = nodeId;
       for (const auto &[data, entryId] : nodeState.dataToEntryId) {

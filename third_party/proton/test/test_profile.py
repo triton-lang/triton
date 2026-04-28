@@ -719,11 +719,8 @@ def test_hook_launch_metadata_nested_triton_context(tmp_path: pathlib.Path, devi
     scoped_metadata_path = find_frame_path(data[0], "metadata_scoped_side_kernel")
     assert scoped_metadata_path is not None
     scoped_metadata_path_names = [node["frame"]["name"] for node in scoped_metadata_path]
-    metadata_scope_idx = next(
-        i
-        for i, name in enumerate(scoped_metadata_path_names)
-        if name.startswith(COMPUTE_METADATA_SCOPE_NAME)
-    )
+    metadata_scope_idx = next(i for i, name in enumerate(scoped_metadata_path_names)
+                              if name.startswith(COMPUTE_METADATA_SCOPE_NAME))
     child_scope_idx = scoped_metadata_path_names.index("metadata_child_scope")
     assert metadata_scope_idx < child_scope_idx < len(scoped_metadata_path_names) - 1
 
@@ -824,9 +821,9 @@ def test_hook_launch_metadata_work_grouped_by_owner_matmul(tmp_path: pathlib.Pat
     assert find_frame(data[0], COMPUTE_METADATA_SCOPE_NAME) is None
 
     for kernel_name in [
-        "matmul_metadata_counter_kernel",
-        "matmul_metadata_scoped_kernel",
-        "matmul_metadata_transform_marker_kernel",
+            "matmul_metadata_counter_kernel",
+            "matmul_metadata_scoped_kernel",
+            "matmul_metadata_transform_marker_kernel",
     ]:
         path = find_frame_path(data[0], kernel_name)
         assert path is not None
@@ -834,15 +831,9 @@ def test_hook_launch_metadata_work_grouped_by_owner_matmul(tmp_path: pathlib.Pat
         assert owner_metadata_scope in path_names
         assert path_names.index(owner_metadata_scope) < len(path_names) - 1
 
-    scoped_path_names = [
-        node["frame"]["name"]
-        for node in find_frame_path(data[0], "matmul_metadata_scoped_kernel")
-    ]
-    assert (
-        scoped_path_names.index(owner_metadata_scope)
-        < scoped_path_names.index("matmul_metadata_child_scope")
-        < len(scoped_path_names) - 1
-    )
+    scoped_path_names = [node["frame"]["name"] for node in find_frame_path(data[0], "matmul_metadata_scoped_kernel")]
+    assert (scoped_path_names.index(owner_metadata_scope) < scoped_path_names.index("matmul_metadata_child_scope") <
+            len(scoped_path_names) - 1)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
@@ -905,11 +896,8 @@ def test_hook_launch_metadata_nested_triton_context_cudagraph(tmp_path: pathlib.
     scoped_metadata_path = find_frame_path(data[0], "metadata_scoped_side_kernel")
     assert scoped_metadata_path is not None
     scoped_metadata_path_names = [node["frame"]["name"] for node in scoped_metadata_path]
-    metadata_scope_idx = next(
-        i
-        for i, name in enumerate(scoped_metadata_path_names)
-        if name.startswith(COMPUTE_METADATA_SCOPE_NAME)
-    )
+    metadata_scope_idx = next(i for i, name in enumerate(scoped_metadata_path_names)
+                              if name.startswith(COMPUTE_METADATA_SCOPE_NAME))
     child_scope_idx = scoped_metadata_path_names.index("metadata_child_scope")
     assert metadata_scope_idx < child_scope_idx < len(scoped_metadata_path_names) - 1
 
@@ -974,8 +962,8 @@ def test_hook_launch_metadata_cudagraph_metric_queue_guard(tmp_path: pathlib.Pat
     ]
     metric_kernel_events = [event for event in replay_kernel_events if event["name"] == "<metric>"]
     metadata_kernel_events = [
-        event for event in replay_kernel_events
-        if any(name.startswith(COMPUTE_METADATA_SCOPE_NAME) for name in event.get("args", {}).get("call_stack", []))
+        event for event in replay_kernel_events if any(
+            name.startswith(COMPUTE_METADATA_SCOPE_NAME) for name in event.get("args", {}).get("call_stack", []))
     ]
     metadata_kernel_names = {event["name"] for event in metadata_kernel_events}
 

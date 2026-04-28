@@ -108,23 +108,13 @@ def is_metadata_state_active() -> bool:
     if is_metadata_scope_active():
         return True
     state_name = libproton.get_state()
-    return bool(
-        state_name
-        and (
-            state_name == COMPUTE_METADATA_SCOPE_NAME
-            or state_name.startswith(COMPUTE_METADATA_SCOPE_PREFIX)
-        )
-    )
+    return bool(state_name
+                and (state_name == COMPUTE_METADATA_SCOPE_NAME or state_name.startswith(COMPUTE_METADATA_SCOPE_PREFIX)))
 
 
 def current_metadata_state_name() -> str:
     state_name = libproton.get_state()
-    if (
-        state_name
-        and (
-            state_name == COMPUTE_METADATA_SCOPE_NAME
-            or state_name.startswith(COMPUTE_METADATA_SCOPE_PREFIX)
-        )
-    ):
+    if (state_name
+            and (state_name == COMPUTE_METADATA_SCOPE_NAME or state_name.startswith(COMPUTE_METADATA_SCOPE_PREFIX))):
         return state_name
     return COMPUTE_METADATA_SCOPE_NAME
