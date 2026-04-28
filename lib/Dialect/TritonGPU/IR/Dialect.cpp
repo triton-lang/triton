@@ -4344,11 +4344,6 @@ getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
                        bool packedSize,
                        function_ref<InFlightDiagnostic()> emitError) {
   assert(shapePerCTA.size() == 2 && "im2col mode requires a 2D block shape");
-  auto fail = [&](const Twine &message) {
-    if (emitError)
-      emitError() << message;
-    return failure();
-  };
 
   SmallVector<int64_t> blockShape(shapePerCTA);
   int contigDim = isTransposed ? 0 : blockShape.size() - 1;
@@ -4365,10 +4360,13 @@ getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   // H, W). Supporting pixelsPerColumn > 1024 would require computing offsets
   // that depend on input tensor shape and padding, which is non-trivial.
   if (blockShape[otherDim] > otherDimMax) {
-    return fail(Twine("im2col mode: pixelsPerColumn dimension ") +
-                Twine(blockShape[otherDim]) +
-                " exceeds the maximum supported value of " +
-                Twine(otherDimMax));
+    if (emitError) {
+      emitError() << Twine("im2col mode: pixelsPerColumn dimension ") +
+                         Twine(blockShape[otherDim]) +
+                         " exceeds the maximum supported value of " +
+                         Twine(otherDimMax);
+    }
+    return failure();
   }
 
   // Clamp the contiguous dimension (channelsPerPixel) to max 256
@@ -4378,12 +4376,16 @@ getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   if (swizzleBytes != 0) {
     auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
     if (blockShape[contigDim] < contigDimSize) {
-      return fail(
-          Twine("im2col mode: block shape along the contiguous "
-                "dimension ") +
-          Twine(contigDim) + " is too small for the swizzle byte size " +
-          Twine(swizzleBytes) + ", got " + Twine(blockShape[contigDim]) +
-          " but expected at least " + Twine(contigDimSize));
+      if (emitError) {
+        emitError() << Twine("im2col mode: block shape along the contiguous "
+                             "dimension ") +
+                           Twine(contigDim) +
+                           " is too small for the swizzle byte size " +
+                           Twine(swizzleBytes) + ", got " +
+                           Twine(blockShape[contigDim]) +
+                           " but expected at least " + Twine(contigDimSize);
+      }
+      return failure();
     }
     blockShape[contigDim] = contigDimSize;
   }
