@@ -47,8 +47,9 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
   auto order = ttg::getOrder(sharedLinear, shape);
   auto sharedLinearLayout = ttg::toLinearLayout(shape, sharedLinear);
   auto isEquivalent = [&](ttg::NVMMASharedEncodingAttr candidate) {
-    auto candidateLayout = ttg::tryNvmmaSharedToLinearLayout(
-        shape, candidate, ttg::TMAMode::Tiled);
+    auto candidateLayout = ttg::nvmmaSharedToLinearLayout(
+        shape, candidate, ttg::TMAMode::Tiled, /*disableSwizzle=*/false,
+        /*emitErrors=*/false);
     return succeeded(candidateLayout) && *candidateLayout == sharedLinearLayout;
   };
 
