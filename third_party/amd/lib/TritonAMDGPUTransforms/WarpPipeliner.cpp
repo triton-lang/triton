@@ -10,6 +10,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -175,6 +176,63 @@ static void createClusterOp(OpBuilder &b, Location loc,
   return;
 }
 
+// Sink pure-scalar ops past adjacent ignorable ops so they join the next
+// cluster. After loop unrolling, scalar IV-remap ops (arith.addi/muli) land
+// between borders and the ignorable that starts the next iteration (FA
+// pattern); without this, WarpPipeliner sees scalars as an incomplete
+// cluster when it hits the ignorable and bails out. Single forward pass,
+// O(N).
+//
+// `pending` only accumulates pure scalars and is cleared at any other op,
+// so it forms a closed SSA DAG: any use of a pending scalar by the trailing
+// ignorable run must be a direct operand, so the dependency check is a
+// simple operand scan.
+static void sinkPureScalarsPastIgnorables(Block &blk) {
+  // Accumulates a run of consecutive pure scalars that might be sunk.
+  SmallVector<Operation *> pending;
+  auto consumesPending = [&](Operation *user) {
+    return llvm::any_of(user->getOperands(), [&](Value v) {
+      return llvm::is_contained(pending, v.getDefiningOp());
+    });
+  };
+  for (Operation *op = &blk.front(); op;) {
+    Operation *next = op->getNextNode();
+    if (triton::isPureScalarOp(op)) {
+      pending.push_back(op);
+      op = next;
+      continue;
+    }
+    // Non-scalar op: try to sink pending past an ignorable run, then reset.
+    if (isPipelineIgnorable(op) && !pending.empty()) {
+      // Extend `anchor` to the last ignorable in the consecutive run.
+      Operation *anchor = op;
+      while (anchor->getNextNode() &&
+             isPipelineIgnorable(anchor->getNextNode()))
+        anchor = anchor->getNextNode();
+      // Abort the sink if any ignorable in [op..anchor] consumes a pending
+      // scalar -- moving its producer past it would break SSA.
+      bool conflict = false;
+      for (Operation *ign = op; !conflict; ign = ign->getNextNode()) {
+        conflict = consumesPending(ign);
+        if (ign == anchor)
+          break;
+      }
+      if (!conflict) {
+        // Skip past the moved scalars on the next iteration.
+        next = anchor->getNextNode();
+        // Reverse iteration + moveAfter(anchor) preserves source order:
+        // each earlier-inserted scalar is pushed right by later inserts.
+        for (Operation *s : llvm::reverse(pending))
+          s->moveAfter(anchor);
+      }
+    }
+    // Pending is always cleared at a non-scalar op: the run is broken,
+    // either by a successful sink or by an op that anchors them in place.
+    pending.clear();
+    op = next;
+  }
+}
+
 // Turns a partitioned region into the warp-pipelined clusters.  Returns
 // NotApplicable when the loop has no border markers (user opted out), Created
 // on success, or Malformed when border markers are present but the loop body
@@ -192,6 +250,8 @@ static PipelineResult createPipeline(OpBuilder &b, Location loc,
   SmallVector<std::pair<StringAttr, int>> clusterMarkers;
   SmallVector<SmallVector<Operation *>> clusters;
   auto ctx = forOp.getContext();
+
+  sinkPureScalarsPastIgnorables(blk);
 
   // One pass over the body; collect clusters split by explicit borders.
   for (Operation &opRef : llvm::make_early_inc_range(blk)) {
