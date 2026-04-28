@@ -6,8 +6,11 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -17,51 +20,77 @@ namespace ttg = mlir::triton::gpu;
 
 namespace {
 using namespace mlir;
-std::optional<std::pair<Value, unsigned>> findTTDotInputBasePtr(Value v) {
+Value findTTDotTileBasePtr(Value v) {
   // trace back through convert layout
   auto convertLayoutOp = v.getDefiningOp<ttg::ConvertLayoutOp>();
   if (!convertLayoutOp)
-    return std::nullopt;
+    return {};
   auto convertLayoutInput = convertLayoutOp.getOperand();
   auto loadOp = convertLayoutInput.getDefiningOp<tt::LoadOp>();
   if (!loadOp)
-    return std::nullopt;
+    return {};
 
   auto loadPtr = loadOp.getOperand(0);
-  Value forOpInitArg;
+  if (!isa<RankedTensorType>(loadPtr.getType()))
+    return {};
+  return loadPtr;
+}
 
-  if (auto blockArg = dyn_cast<BlockArgument>(loadPtr)) {
-    // assume for now that block argument is part of a for loop
-    if (auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
-      forOpInitArg = forOp.getInitArgs()[blockArg.getArgNumber() -
-                                         forOp.getNumInductionVars()];
-    } else {
-      return std::nullopt;
+Value findTTDotStoreBasePtr(tt::DotOp dotOp) {
+  auto accumulator = dotOp.getResult();
+  auto accUsers = accumulator.getUsers();
+  scf::YieldOp yieldOp;
+  for (auto user : accUsers) {
+    yieldOp = dyn_cast<scf::YieldOp>(user);
+    if (!yieldOp)
+      return {};
+  }
+
+  auto forOp = dotOp->getParentOfType<scf::ForOp>();
+  if (!forOp)
+    return {};
+
+  Value forOpResult;
+  for (auto [yieldOpIdx, operand] : llvm::enumerate(yieldOp->getOperands())) {
+    if (operand == accumulator) {
+      forOpResult = forOp.getResult(yieldOpIdx);
     }
   }
 
-  if (!forOpInitArg)
-    return std::nullopt;
+  if (!forOpResult)
+    return {};
 
-  auto ptr = forOpInitArg;
-
-  // backtrack along addptr chain
-  while (ptr.getDefiningOp<tt::AddPtrOp>()) {
-    auto addPtrOp = ptr.getDefiningOp<tt::AddPtrOp>();
-    ptr = addPtrOp->getOperand(0);
+  Operation *dotResultOp = forOp.getOperation();
+  auto dotResult = forOpResult;
+  while (!isa<tt::StoreOp>(*dotResultOp)) {
+    auto dotResultUsers = dotResult.getUsers();
+    Operation *nextOp = nullptr;
+    for (auto dotResultUser : dotResultUsers) {
+      nextOp = dotResultUser;
+      break;
+    }
+    if (!nextOp)
+      return {};
+    dotResultOp = nextOp;
+    if (!isa<tt::StoreOp>(*dotResultOp)) {
+      if (dotResultOp->getNumResults() > 0)
+        dotResult = dotResultOp->getResult(0);
+      else
+        return {};
+    }
   }
 
-  auto splatOp = ptr.getDefiningOp<tt::SplatOp>();
-  if (!splatOp)
-    return std::nullopt;
-  auto basePtr = splatOp.getOperand();
+  auto storeOp = dyn_cast<tt::StoreOp>(dotResultOp);
+  if (!storeOp)
+    return {};
 
-  if (auto kernelBlockArg = dyn_cast<BlockArgument>(basePtr)) {
-    return std::make_pair(basePtr, kernelBlockArg.getArgNumber());
-  }
+  auto cBasePtr = storeOp.getOperand(0);
+  if (!isa<RankedTensorType>(cBasePtr.getType()))
+    return {};
 
-  return std::nullopt;
+  return cBasePtr;
 }
+
 } // namespace
 
 namespace mlir {
@@ -143,32 +172,30 @@ struct TritonMetalGPUAllocateSmemForSimdgroupMatmulPass
       dotOp->setAttr("metal.dot_idx",
                      IntegerAttr::get(mlir::IntegerType::get(ctx, 32), dotIdx));
 
-      // try to find which arg idx the input tensors of tt.dot correspond to
-      // TODO handle the case where tensor does not come from args
-      auto aResult = findTTDotInputBasePtr(dotOp.getOperand(0));
-      auto bResult = findTTDotInputBasePtr(dotOp.getOperand(1));
-      if (!aResult || !bResult) {
-        signalPassFailure();
-        return;
-      }
-      auto aBasePair = *aResult;
-      auto bBasePair = *bResult;
-      auto aBasePtr = aBasePair.first;
-      auto aPtrIdx = aBasePair.second;
-      auto bBasePtr = bBasePair.first;
-      auto bPtrIdx = bBasePair.second;
-
-      // the tt.dot inputs come from tt.load, which loads tensor values into
-      // thread registers based on tensor encoding instead of that, want to use
-      // air.simdgroup_async_copy, which uses DMA to load into threadgroup
-      // memory
-
       // dealloc right after the dot op to bound liveness tightly
       builder.setInsertionPointAfter(dotOp);
       ttg::LocalDeallocOp::create(builder, loc, aAlloc->getResult(0));
       ttg::LocalDeallocOp::create(builder, loc, bAlloc->getResult(0));
 
       dotIdx++;
+
+      // try to find base ptr for the tile args of tt.dot
+      // TODO handle the case where tensor does not come from tt.load
+      auto aTilePtr = findTTDotTileBasePtr(dotOp.getOperand(0));
+      auto bTilePtr = findTTDotTileBasePtr(dotOp.getOperand(1));
+
+      if (!aTilePtr || !bTilePtr)
+        return signalPassFailure();
+
+      // try to find base ptr for where output tile is stored
+      auto cTilePtr = findTTDotStoreBasePtr(dotOp);
+
+      // tt.dot inputs come from tt.load, which loads tensor values into
+      // thread registers based on tensor encoding.
+      // Instead, use air.simdgroup_async_copy to take advantage
+      // of DMA.
+      // Need to trace back from tt.dot inputs to the load ops and replace them
+      // with
     });
   }
 };
