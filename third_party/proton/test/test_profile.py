@@ -720,6 +720,178 @@ def test_hook_launch_metadata_nested_triton_context(tmp_path: pathlib.Path, devi
     assert metadata_scope_idx < child_scope_idx < len(scoped_metadata_path_names) - 1
 
 
+def test_hook_launch_metadata_work_grouped_by_owner_matmul(tmp_path: pathlib.Path, monkeypatch, device: str):
+    owner_name = "owner_matmul_test"
+    owner_metadata_scope = f"{COMPUTE_METADATA_SCOPE_NAME}:{owner_name}"
+
+    @triton.jit
+    def matmul_metadata_counter_kernel(a, metadata_flops, metadata_bytes, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        flops = tl.sum(tl.load(a + offs).to(tl.float32), axis=0)
+        tl.store(metadata_flops, flops)
+        tl.store(metadata_bytes, BLOCK * BLOCK * 4)
+
+    @triton.jit
+    def matmul_metadata_scoped_kernel(metadata_flops):
+        tl.store(metadata_flops, tl.load(metadata_flops) + 1.0)
+
+    @triton.jit
+    def matmul_metadata_transform_marker_kernel(metadata_flops, transform_scratch):
+        tl.store(transform_scratch, tl.load(metadata_flops) + 2.0)
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        matmul_metadata_counter_kernel[(1, )](
+            args["a"],
+            args["metadata_flops"],
+            args["metadata_bytes"],
+            BLOCK=args["BLOCK"],
+            num_warps=1,
+        )
+        with proton.scope("matmul_metadata_child_scope"):
+            matmul_metadata_scoped_kernel[(1, )](args["metadata_flops"], num_warps=1)
+        return {
+            "name": owner_name,
+            "flops": args["metadata_flops"],
+            "bytes": args["metadata_bytes"],
+        }
+
+    @triton.jit(repr=lambda _: owner_name, launch_metadata=metadata_fn)
+    def owner_matmul_kernel(a, b, c, metadata_flops, metadata_bytes, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        a_tile = tl.load(a + offs[:, None] * BLOCK + offs[None, :])
+        b_tile = tl.load(b + offs[:, None] * BLOCK + offs[None, :])
+        acc = tl.dot(a_tile, b_tile)
+        tl.store(c + offs[:, None] * BLOCK + offs[None, :], acc)
+
+    transform_scratch = torch.empty((1, ), device=device, dtype=torch.float32)
+    original_transform_tensor_metrics = proton_launch.transform_tensor_metrics
+
+    def transform_tensor_metrics_with_marker(metrics):
+        matmul_metadata_transform_marker_kernel[(1, )](
+            metrics["flops"],
+            transform_scratch,
+            num_warps=1,
+        )
+        return original_transform_tensor_metrics(metrics)
+
+    monkeypatch.setattr(proton_launch, "transform_tensor_metrics", transform_tensor_metrics_with_marker)
+
+    block = 16
+    a = torch.randn((block, block), device=device, dtype=torch.float16)
+    b = torch.randn((block, block), device=device, dtype=torch.float16)
+    c = torch.empty((block, block), device=device, dtype=torch.float32)
+    metadata_flops = torch.empty((1, ), device=device, dtype=torch.float32)
+    metadata_bytes = torch.empty((1, ), device=device, dtype=torch.int32)
+    temp_file = tmp_path / "test_hook_metadata_owner_matmul.hatchet"
+
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
+    with proton.scope("test0"):
+        owner_matmul_kernel[(1, )](
+            a,
+            b,
+            c,
+            metadata_flops,
+            metadata_bytes,
+            BLOCK=block,
+            num_warps=4,
+        )
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    owner_frame = find_frame(data[0], owner_name)
+    assert owner_frame is not None
+    assert "flops" in owner_frame["metrics"]
+    assert "bytes" in owner_frame["metrics"]
+    assert find_frame(data[0], owner_metadata_scope) is not None
+    assert find_frame(data[0], COMPUTE_METADATA_SCOPE_NAME) is None
+
+    for kernel_name in [
+        "matmul_metadata_counter_kernel",
+        "matmul_metadata_scoped_kernel",
+        "matmul_metadata_transform_marker_kernel",
+    ]:
+        path = find_frame_path(data[0], kernel_name)
+        assert path is not None
+        path_names = [node["frame"]["name"] for node in path]
+        assert owner_metadata_scope in path_names
+        assert path_names.index(owner_metadata_scope) < len(path_names) - 1
+
+    scoped_path_names = [
+        node["frame"]["name"]
+        for node in find_frame_path(data[0], "matmul_metadata_scoped_kernel")
+    ]
+    assert (
+        scoped_path_names.index(owner_metadata_scope)
+        < scoped_path_names.index("matmul_metadata_child_scope")
+        < len(scoped_path_names) - 1
+    )
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+def test_hook_launch_metadata_nested_triton_context_cudagraph(tmp_path: pathlib.Path, device: str):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    @triton.jit
+    def metadata_side_kernel(x, scratch):
+        tl.store(scratch, tl.load(x))
+
+    @triton.jit
+    def metadata_scoped_side_kernel(x, scratch):
+        tl.store(scratch, tl.load(x) + 1.0)
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        metadata_side_kernel[(1, )](args["x"], args["scratch"], num_warps=1)
+        with proton.scope("metadata_child_scope"):
+            metadata_scoped_side_kernel[(1, )](args["x"], args["scratch"], num_warps=1)
+        # Tensor launch metadata forces Proton to enqueue metric kernels while
+        # the CUDA graph is being captured.
+        return {"name": "foo_graph_test", "flops": args["scratch"].sum()}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, scratch, y):
+        tl.store(y, tl.load(x) + tl.load(scratch))
+
+    x = torch.tensor([2], device=device, dtype=torch.float32)
+    scratch = torch.zeros_like(x)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_hook_nested_triton_metadata_cudagraph.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
+    try:
+        foo[(1, )](x, scratch, y, num_warps=1)
+        torch.cuda.synchronize()
+
+        g = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(g):
+            foo[(1, )](x, scratch, y, num_warps=1)
+
+        with proton.scope("replay"):
+            g.replay()
+        torch.cuda.synchronize()
+    finally:
+        proton.finalize(session)
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    foo_frame = find_frame(data[0], "foo_graph_test")
+    assert foo_frame is not None
+    assert "flops" in foo_frame["metrics"]
+
+    scoped_metadata_path = find_frame_path(data[0], "metadata_scoped_side_kernel")
+    assert scoped_metadata_path is not None
+    scoped_metadata_path_names = [node["frame"]["name"] for node in scoped_metadata_path]
+    metadata_scope_idx = next(
+        i
+        for i, name in enumerate(scoped_metadata_path_names)
+        if name.startswith(COMPUTE_METADATA_SCOPE_NAME)
+    )
+    child_scope_idx = scoped_metadata_path_names.index("metadata_child_scope")
+    assert metadata_scope_idx < child_scope_idx < len(scoped_metadata_path_names) - 1
+
+
 def test_hook_with_third_party(tmp_path: pathlib.Path, device: str):
     third_party_hook_invoked = False
 
