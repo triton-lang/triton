@@ -232,12 +232,11 @@ AMD hooks additionally cover:
   commit counts.
 - Ordered TDM commit kinds, using the self-column exclusion described above.
 
-## Current Limitations
+## Implementation Notes
 
 - ConSan models one logical thread per warp-specialization partition, not every
   hardware lane. Target hooks compensate for known ordered same-partition
   commit flows where possible.
-- Commit-count synchronization is only implemented for shared-memory buffers.
 - Global-memory race checking is handled by the separate global sanitizer, not
   by ConSan.
 - The pass expects exactly one public entry point in the module.
