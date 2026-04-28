@@ -667,16 +667,14 @@ def test_block_sparse_matmul_pipeline(num_stages, device):
     # This exercises the ``hoistConvertDotOperand`` traversal through
     # ``scf.if`` results and ``scf.for`` iter_args added to
     # ``tritongpu-remove-layout-conversions``.
-    assert re.search(r"scf\.if[^{]*->\s*\(tensor<[^>]*dot_op", ttgir), (
-        "scf.if result should carry the dot-operand layout after propagation")
-    assert re.search(r"arith\.constant[^\n]*dot_op<\{opIdx = 1", ttgir), (
-        "zero-tile constant should be in dot-operand layout after propagation")
+    assert re.search(r"scf\.if[^{]*->\s*\(tensor<[^>]*dot_op",
+                     ttgir), ("scf.if result should carry the dot-operand layout after propagation")
+    assert re.search(r"arith\.constant[^\n]*dot_op<\{opIdx = 1",
+                     ttgir), ("zero-tile constant should be in dot-operand layout after propagation")
     blocked_to_dot_in_loop = re.search(
-        r"scf\.for[\s\S]*?ttg\.convert_layout[^\n]*#blocked[^\n]*->\s*[^\n]*dot_op[\s\S]*?scf\.yield",
-        ttgir)
-    assert blocked_to_dot_in_loop is None, (
-        "no in-loop blocked->dot_op convert_layout should remain after "
-        "propagating the dot-operand layout through scf.if")
+        r"scf\.for[\s\S]*?ttg\.convert_layout[^\n]*#blocked[^\n]*->\s*[^\n]*dot_op[\s\S]*?scf\.yield", ttgir)
+    assert blocked_to_dot_in_loop is None, ("no in-loop blocked->dot_op convert_layout should remain after "
+                                            "propagating the dot-operand layout through scf.if")
 
 
 @pytest.mark.parametrize("num_stages", [1, 2, 3])
@@ -765,18 +763,12 @@ def test_running_sum_matmul_pipeline(num_stages, device):
     ttgir = handler.asm["ttgir"]
     assert any(op in ttgir for op in ("tt.dot", "ttng.warp_group_dot", "ttng.tc_gen5_mma"))
     running_sum_tile = rf"{BLOCK_K}x{BLOCK_N}xf16"
-    dot_op_b = rf"#ttg\.dot_op<\{{opIdx = 1"
-    assert re.search(
-        rf"arith\.constant[^\n]*<{running_sum_tile},\s*{dot_op_b}",
-        ttgir), (
-        "running-sum zero initializer should be in dot-operand layout "
-        "after propagation through the iter_arg")
-    assert re.search(
-        rf"scf\.for[^{{]*?->\s*\([^)]*?tensor<{running_sum_tile},\s*{dot_op_b}",
-        ttgir), (
-        "scf.for should carry the running-sum iter_arg in dot-operand layout")
-    assert re.search(
-        rf"arith\.addf[^\n]*tensor<{running_sum_tile},\s*{dot_op_b}",
-        ttgir), (
-        "in-loop arith.addf on the running sum should be in dot-operand "
-        "layout (the convert_layout sunk to the load side)")
+    dot_op_b = r"#ttg\.dot_op<\{opIdx = 1"
+    assert re.search(rf"arith\.constant[^\n]*<{running_sum_tile},\s*{dot_op_b}",
+                     ttgir), ("running-sum zero initializer should be in dot-operand layout "
+                              "after propagation through the iter_arg")
+    assert re.search(rf"scf\.for[^{{]*?->\s*\([^)]*?tensor<{running_sum_tile},\s*{dot_op_b}",
+                     ttgir), ("scf.for should carry the running-sum iter_arg in dot-operand layout")
+    assert re.search(rf"arith\.addf[^\n]*tensor<{running_sum_tile},\s*{dot_op_b}",
+                     ttgir), ("in-loop arith.addf on the running sum should be in dot-operand "
+                              "layout (the convert_layout sunk to the load side)")
