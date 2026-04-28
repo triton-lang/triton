@@ -906,6 +906,12 @@ def test_hook_launch_metadata_nested_triton_context_cudagraph(tmp_path: pathlib.
 def test_hook_launch_metadata_cudagraph_metric_queue_guard(tmp_path: pathlib.Path, device: str):
     """Reproduce the combined launch.py and CuptiProfiler.cpp failure.
 
+    This mirrors the zen-bench attention path: ProtonProfiler disables
+    launch_metadata syncs, so attention launch_metadata computes flops/bytes by
+    launching device-side helper kernels and returns tensor metrics. The helper
+    kernels in this test are the small stand-ins for zen's attention metadata
+    counter kernels.
+
     Without the launch.py metadata scope changes, the helper kernels below are
     grouped under generic __proton_launch_metadata instead of the owning kernel's
     __proton_launch_metadata:<owner> scope. Without the CuptiProfiler.cpp queue
