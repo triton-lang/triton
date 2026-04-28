@@ -474,8 +474,7 @@ private:
     });
     SmallVector<int64_t> offsets(op.getNumOperands());
     int64_t offset = 0;
-    int numBanks = triton::gpu::TritonGPUDialect::getNumBanks(
-        op->getParentOfType<ModuleOp>());
+    int numBanks = targetInfo.getSharedMemoryBanks();
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       unsigned idx = indices[i];
       offsets[idx] = offset;

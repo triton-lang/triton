@@ -27,6 +27,7 @@ struct AllocateAMDGPUSharedMemory
 
     std::string archGenerationName = this->arch;
     AMD::TargetInfo targetInfo(archGenerationName);
+    // Get partition size from target info
     size_t partitionSize = targetInfo.getSharedMemoryPartitionSize();
 
     auto allocationFn = [&targetInfo](Operation *op) {

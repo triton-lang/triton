@@ -9,7 +9,7 @@
 namespace mlir::triton::AMD {
 
 unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
-                                        RankedTensorType dstTy, int numBanks,
+                                        RankedTensorType dstTy,
                                         TargetInfoBase &targetInfo);
 
 unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,

@@ -727,8 +727,8 @@ void init_gluon_ir(py::module &&m) {
              if (!arch.has_value())
                return ttg::bankConflictsMemDesc(regLayout, smemLayout,
                                                 bitwidth);
-             int numBanks = ttg::TritonGPUDialect::getNumBanks(mod);
              tt::AMD::TargetInfo targetInfo(arch->str());
+             int numBanks = targetInfo.getSharedMemoryBanks();
              auto vecBitwidth = std::max<int32_t>(
                  32, smemLayout.getInDimSize(StringAttr::get(
                          smemLayout.getInDimNames().begin()->getContext(),
@@ -737,7 +737,8 @@ void init_gluon_ir(py::module &&m) {
              auto [dstTile, srcTile] =
                  targetInfo.getSharedLdStTiles(vecBitwidth);
              (void)srcTile;
-             assert(srcTile.empty() && "srcTile should be empty");
+             assert(srcTile.laneAddr.empty() &&
+                    "srcTile.laneAddr should be empty");
              return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
                                               numBanks, dstTile);
            })

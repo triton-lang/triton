@@ -22,12 +22,13 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,
-                                       int bitwidth, int numBanks,
+                                       int bitwidth, int numBanks = 32,
                                        gpu::LocalMemOpTile srcTile = {},
                                        gpu::LocalMemOpTile dstTile = {});
 
 unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
-                                       RankedTensorType dstTy, int numBanks,
+                                       RankedTensorType dstTy,
+                                       int numBanks = 32,
                                        gpu::LocalMemOpTile srcTile = {},
                                        gpu::LocalMemOpTile dstTile = {});
 

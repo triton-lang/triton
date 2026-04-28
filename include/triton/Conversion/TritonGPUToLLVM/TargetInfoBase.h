@@ -96,6 +96,8 @@ public:
                           StringRef message, StringRef file, StringRef func,
                           int line) const = 0;
 
+  virtual int getSharedMemoryBanks() const { return 32; }
+
   virtual int getSharedAddressSpace() const = 0;
 
   virtual int getAddressSpace(Attribute addressSpace) const = 0;

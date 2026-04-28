@@ -12,10 +12,11 @@
 namespace mlir::triton::AMD {
 
 unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
-                                        RankedTensorType dstTy, int numBanks,
+                                        RankedTensorType dstTy,
                                         TargetInfoBase &targetInfo) {
   if (!cvtNeedsSharedMemory(srcTy, dstTy))
     return 0;
+  int numBanks = targetInfo.getSharedMemoryBanks();
   auto srcLayout = gpu::toLinearLayout(srcTy);
   auto dstLayout = gpu::toLinearLayout(dstTy);
   auto vecBitwidth =
@@ -46,22 +47,53 @@ static unsigned getBufferAtomicScratchSizeInBytes(Operation *op) {
   return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
 }
 
+static unsigned getReduceScratchInBytes(ReduceOp op,
+                                        TargetInfoBase &targetInfo) {
+  auto srcTy = cast<RankedTensorType>(op.getOperands()[0].getType());
+  auto axis = op.getAxis();
+  auto kLane = StringAttr::get(op.getContext(), "lane");
+  int numBanks = targetInfo.getSharedMemoryBanks();
+
+  auto isReduced = [axis = axis](const LinearLayout &layout) {
+    return layout.getOutDimSizes().begin()[axis] == 1;
+  };
+  auto regLl = ReduceOpHelper::reducedRegLaneLayout(srcTy, axis);
+
+  // All the inputs have the same layout so, since we order them from largest
+  // bitsize to smallest, and the first one is aligned, by induction, they are
+  // all aligned, so we don't need to align the byte numbers returned here.
+  unsigned bytesRegToTmp = 0;
+  while (!isReduced(regLl)) {
+    auto tmpLl = ReduceOpHelper::getInterLayout(regLl, axis);
+    // We take the maximum of the elements and multiply by the total bitwidth.
+    // We do this as otherwise it's quite tricky to find the correct
+    // BaseOffsets in the lowering.
+    int bytes = 0;
+    for (auto inputTy : op.getInputTypes()) {
+      auto vecBitwidth =
+          triton::gpu::getLdStVecBitwidth(regLl, tmpLl, getBitwidth(inputTy));
+      auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
+      auto nelem = getNumScratchElemsSwizzledCvt(
+          regLl, tmpLl, getBitwidth(inputTy), numBanks, srcTile, dstTile);
+      bytes += nelem * (getBitwidth(inputTy) / 8);
+    }
+    bytesRegToTmp = std::max<unsigned>(bytesRegToTmp, bytes);
+    regLl = ReduceOpHelper::zeroBasesAlongDimAndReorder(tmpLl, axis, kLane);
+  }
+  return bytesRegToTmp;
+}
+
 unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
                                             TargetInfoBase &targetInfo) {
 
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
-    auto getTiles = [&targetInfo](int32_t vecBitwidth) {
-      return targetInfo.getSharedLdStTiles(vecBitwidth);
-    };
-    return ReduceOpHelper(reduceOp).getScratchSizeInBytes(getTiles);
+    return getReduceScratchInBytes(reduceOp, targetInfo);
   }
 
   if (auto cvtLayout = dyn_cast<mlir::triton::gpu::ConvertLayoutOp>(op)) {
     auto srcTy = cvtLayout.getSrc().getType();
     auto dstTy = cvtLayout.getType();
-    int numBanks = mlir::triton::gpu::TritonGPUDialect::getNumBanks(
-        op->getParentOfType<ModuleOp>());
-    return getConvertLayoutScratchInBytes(srcTy, dstTy, numBanks, targetInfo);
+    return getConvertLayoutScratchInBytes(srcTy, dstTy, targetInfo);
   }
 
   if (auto ws = dyn_cast<mlir::triton::gpu::WarpSpecializeOp>(op)) {

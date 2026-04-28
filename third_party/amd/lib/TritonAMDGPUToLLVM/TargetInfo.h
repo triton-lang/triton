@@ -22,6 +22,8 @@ public:
 
   int getSharedMemorySize() const;
 
+  int getSharedMemoryBanks() const override;
+
   size_t getSharedMemoryPartitionSize() const override;
 
   bool supportMaximumMinimum() const override;

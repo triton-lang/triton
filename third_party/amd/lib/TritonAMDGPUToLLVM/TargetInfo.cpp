@@ -155,6 +155,16 @@ int TargetInfo::getSharedMemorySize() const {
   }
 }
 
+int TargetInfo::getSharedMemoryBanks() const {
+  switch (getISAFamily()) {
+  case ISAFamily::GFX1250:
+  case ISAFamily::CDNA4:
+    return 64;
+  default:
+    return 32;
+  }
+}
+
 size_t TargetInfo::getSharedMemoryPartitionSize() const {
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:

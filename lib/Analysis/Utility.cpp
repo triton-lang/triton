@@ -105,16 +105,13 @@ bool ReduceOpHelper::isAssociative() {
   return !hasNoAssociativeOp;
 }
 
-unsigned ReduceOpHelper::getScratchSizeInBytes(
-    std::function<std::pair<LocalMemOpTile, LocalMemOpTile>(int32_t)>
-        getTiles) {
+unsigned ReduceOpHelper::getScratchSizeInBytes() {
   auto kLane = StringAttr::get(op.getContext(), "lane");
 
   auto isReduced = [axis = axis](const LinearLayout &layout) {
     return layout.getOutDimSizes().begin()[axis] == 1;
   };
   auto regLl = reducedRegLaneLayout(srcTy, axis);
-  int numBanks = TritonGPUDialect::getNumBanks(op->getParentOfType<ModuleOp>());
 
   // All the inputs have the same layout so, since we order them from largest
   // bitsize to smallest, and the first one is aligned, by induction, they are
@@ -127,12 +124,8 @@ unsigned ReduceOpHelper::getScratchSizeInBytes(
     // BaseOffsets in the lowering.
     int bytes = 0;
     for (auto inputTy : op.getInputTypes()) {
-      auto vecBitwidth = getLdStVecBitwidth(regLl, tmpLl, getBitwidth(inputTy));
-      auto [dstTile, srcTile] =
-          getTiles ? getTiles(vecBitwidth)
-                   : std::pair<LocalMemOpTile, LocalMemOpTile>{};
-      auto nelem = getNumScratchElemsSwizzledCvt(
-          regLl, tmpLl, getBitwidth(inputTy), numBanks, srcTile, dstTile);
+      auto nelem =
+          getNumScratchElemsSwizzledCvt(regLl, tmpLl, getBitwidth(inputTy));
       bytes += nelem * (getBitwidth(inputTy) / 8);
     }
     bytesRegToTmp = std::max<unsigned>(bytesRegToTmp, bytes);

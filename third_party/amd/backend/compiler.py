@@ -92,8 +92,6 @@ class HIPOptions:
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)
-        num_banks = 64 if self.arch in ['gfx950', 'gfx1250'] else 32
-        object.__setattr__(self, 'num_banks', num_banks)
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
             "num_warps must be a power of 2"
 
@@ -240,7 +238,7 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, f"hip:{options.arch}", options.num_warps, options.warp_size,
-                                           options.num_ctas, options.num_banks)
+                                           options.num_ctas)
         pm.run(mod, 'make_ttgir_early')
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()

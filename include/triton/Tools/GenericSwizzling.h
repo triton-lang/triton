@@ -28,9 +28,6 @@ struct LocalMemOpTile {
   llvm::SmallVector<int32_t> laneAddr;
 
   llvm::SmallVector<int32_t> getLaneAddr(llvm::ArrayRef<int32_t> lane) const;
-  llvm::SmallVector<int32_t> getLaneContig(llvm::ArrayRef<int32_t> lane) const;
-
-  bool empty() const { return laneContig.empty() && laneAddr.empty(); }
 };
 
 // Given a set of possible instructions given by
@@ -40,8 +37,7 @@ struct LocalMemOpTile {
 std::pair<LinearLayout, std::pair<int32_t, int32_t>>
 optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
                  llvm::ArrayRef<LocalMemOpTile> srcTiles,
-                 llvm::ArrayRef<LocalMemOpTile> dstTiles, int32_t bitwidth,
-                 int32_t numBanks = 32);
+                 llvm::ArrayRef<LocalMemOpTile> dstTiles, int32_t bitwidth);
 
 int32_t getLdStVecBitwidth(const LinearLayout &src, const LinearLayout &dst,
                            int32_t bitwidth);

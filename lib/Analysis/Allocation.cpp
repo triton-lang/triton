@@ -118,10 +118,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto dstTy = cvtLayout.getType();
     if (!cvtNeedsSharedMemory(srcTy, dstTy))
       return 0;
-    int numBanks =
-        gpu::TritonGPUDialect::getNumBanks(op->getParentOfType<ModuleOp>());
     // The generic pass uses swizzling
-    auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy, numBanks);
+    auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
     return elems * getBitwidth(srcTy) / 8;
   }
   if (isa<AtomicRMWOp, AtomicCASOp, tti::ExperimentalGSanAtomicRMWOp,
