@@ -1213,9 +1213,8 @@ tt.func @loop_memindex_subslice(%arg0: tensor<2x128x128xf16>) {
 // Cross-iteration hazard: within one iteration the read index (phase % 3)
 // and the write index ((phase + 2) % 3) are provably disjoint under the
 // buffer-index analysis, so no intra-iteration barrier is needed. Across
-// the scf.for backedge, however, slices get tagged loop-carried, which
-// disables the SSA-identity shortcut and forces a conservative barrier
-// before the read.
+// the scf.for backedge, carried slices cannot be compared to the current
+// iteration by dynamic index, so a conservative barrier is required.
 tt.func @disjoint_remsi_loop_carried(%cst: tensor<128x128xf16>,
                                      %lb: i32, %ub: i32, %step: i32) {
   %c0_i32 = arith.constant 0 : i32
@@ -1320,7 +1319,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 
 // CHECK-LABEL: disjoint_remsi
-// Write at (phase + 2) % 3, read at phase % 3 — provably disjoint within
+// Write at (phase + 2) % 3, read at phase % 3: provably disjoint within
 // an iteration; no barrier required.
 tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
   %c2_i32 = arith.constant 2 : i32
@@ -1370,12 +1369,10 @@ tt.func @disjoint_remsi_through_memdesc_trans(%cst: tensor<128x128xf16>,
 
 // CHECK-LABEL: disjoint_select_cmpi_iter_arg
 // Pipeliner-style (base + 1) % N via select/cmpi where `base` is an
-// scf.for iter_arg with a compile-time init in [-1, N) and the yield
-// operand is exactly the matched select. Within an iteration the write
-// at (phase + 1) % 3 and read at phase % 3 are disjoint, so no
-// intra-iteration barrier is required. A cross-iteration barrier is
-// still emitted ahead of the write because loop-carried slices alias
-// conservatively.
+// scf.for iter_arg with a compile-time init c satisfying -1 <= c < N
+// and the yield operand is exactly the matched select. Within an iteration
+// the write at (phase + 1) % 3 and read at phase % 3 are disjoint. Across
+// the backedge, carried slices are compared conservatively.
 tt.func @disjoint_select_cmpi_iter_arg(%cst: tensor<128x128xf16>,
                                        %lb: i32, %ub: i32, %step: i32) {
   %c0_i32 = arith.constant 0 : i32
@@ -1406,7 +1403,7 @@ tt.func @disjoint_select_cmpi_iter_arg(%cst: tensor<128x128xf16>,
 }
 
 // CHECK-LABEL: must_barrier_select_cmpi_unbounded_base
-// The select/cmpi idiom only equals (base + 1) % N when base ∈ [-1, N).
+// The select/cmpi idiom only equals (base + 1) % N when -1 <= base < N.
 // Here the base is a plain function argument with no provable bound,
 // so the matcher must reject the pattern and a barrier is required.
 tt.func @must_barrier_select_cmpi_unbounded_base(%cst: tensor<128x128xf16>, %phase: i32) {
@@ -1435,7 +1432,7 @@ tt.func @must_barrier_select_cmpi_unbounded_base(%cst: tensor<128x128xf16>, %pha
 // The select/cmpi matcher only accepts C == 1. For C >= 2 the wrap arm
 // returns 0 instead of (base + C) - N, so matching it as (base + C) % N
 // would be unsound (e.g. phase=2, N=3, C=2: wrap gives 0, but 4 % 3 = 1).
-// The matcher must reject this and leave the index opaque.
+// The matcher must reject this pattern, so aliasing is assumed.
 tt.func @must_barrier_select_cmpi_large_c(%cst: tensor<128x128xf16>, %phase: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c2_i32 = arith.constant 2 : i32
@@ -1459,8 +1456,8 @@ tt.func @must_barrier_select_cmpi_large_c(%cst: tensor<128x128xf16>, %phase: i32
 }
 
 // CHECK-LABEL: disjoint_constant_indices
-// Constant slot indices are decomposed to (base=nullptr, offset=C).
-// Different constants are provably disjoint without needing a modulus.
+// Different constant slot indices are provably disjoint without needing a
+// modulus.
 tt.func @disjoint_constant_indices(%cst: tensor<128x128xf16>) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
@@ -1541,9 +1538,9 @@ tt.func @must_barrier_mismatched_moduli(%cst: tensor<128x128xf16>, %phase: i32) 
 }
 
 // CHECK-LABEL: must_barrier_zero_modulus_remsi
-// remsi with a non-positive constant modulus must not be stripped: the
-// guard rejects the pattern, leaving the index opaque so disjointness
-// cannot be proven against the disjoint-looking write at offset 1.
+// remsi with a non-positive constant modulus must not be interpreted as a
+// modular index, so disjointness cannot be proven against the write at
+// offset 1.
 tt.func @must_barrier_zero_modulus_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
@@ -1553,7 +1550,7 @@ tt.func @must_barrier_zero_modulus_remsi(%cst: tensor<128x128xf16>, %phase: i32)
   %w_sum = arith.addi %phase, %c1_i32 : i32
   %w_idx = arith.remsi %w_sum, %c3_i32 : i32
   %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-  // Read at phase % 0 — non-positive modulus, pattern must be rejected.
+  // Read at phase % 0: non-positive modulus, pattern must be rejected.
   %r_idx = arith.remsi %phase, %c0_i32 : i32
   %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
 
@@ -1566,9 +1563,8 @@ tt.func @must_barrier_zero_modulus_remsi(%cst: tensor<128x128xf16>, %phase: i32)
 }
 
 // CHECK-LABEL: must_barrier_dynamic_modulus
-// remsi with a non-constant (runtime) modulus must not be stripped: with
-// no known modulus the wrapped expression is opaque and aliasing must
-// be assumed.
+// remsi with a non-constant (runtime) modulus must not be interpreted as a
+// known modular index, so aliasing must be assumed.
 tt.func @must_barrier_dynamic_modulus(%cst: tensor<128x128xf16>, %phase: i32, %mod: i32) {
   %c1_i32 = arith.constant 1 : i32
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
@@ -1588,17 +1584,17 @@ tt.func @must_barrier_dynamic_modulus(%cst: tensor<128x128xf16>, %phase: i32, %m
 }
 
 // CHECK-LABEL: must_barrier_nested_modulus
-// Nested moduli ((phase + C) % M) % N are not representable as a single
-// (base, offset, mod) triple. The recursive analyzer must detect the
-// inner modulus and fall back to opaque rather than overwriting it.
+// Nested moduli ((phase + C) % M) % N are not represented as a single
+// modular index expression. The analysis must reject the nested form rather
+// than overwrite the inner modulus.
 tt.func @must_barrier_nested_modulus(%cst: tensor<128x128xf16>, %phase: i32) {
   %c2_i32 = arith.constant 2 : i32
   %c3_i32 = arith.constant 3 : i32
   %c5_i32 = arith.constant 5 : i32
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
 
-  // Write at ((phase + 2) % 5) % 3 — naive composition would yield
-  // {base=phase, off=2, mod=3} and falsely prove disjoint vs read.
+  // Write at ((phase + 2) % 5) % 3. Treating this as (phase + 2) % 3
+  // would falsely prove disjointness against the read below.
   %w_sum = arith.addi %phase, %c2_i32 : i32
   %w_inner = arith.remsi %w_sum, %c5_i32 : i32
   %w_idx = arith.remsi %w_inner, %c3_i32 : i32
@@ -1616,8 +1612,8 @@ tt.func @must_barrier_nested_modulus(%cst: tensor<128x128xf16>, %phase: i32) {
 
 // CHECK-LABEL: must_barrier_nonzero_wrap_arm
 // The select/cmpi modular-wrap pattern requires the wrap arm to be 0.
-// A non-zero wrap value yields (base + C) - N + K, which is not
-// representable by (base, offset, mod) and must be rejected.
+// A non-zero wrap value is outside the recognized pattern, so aliasing must be
+// assumed.
 tt.func @must_barrier_nonzero_wrap_arm(%cst: tensor<128x128xf16>, %phase: i32) {
   %c1_i32 = arith.constant 1 : i32
   %c2_i32 = arith.constant 2 : i32

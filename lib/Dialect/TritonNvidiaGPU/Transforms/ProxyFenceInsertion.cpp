@@ -98,8 +98,8 @@ public:
 private:
   /// Updates the BlockInfo operation based on the operation.
   virtual void update(Operation *operation, BlockInfo *blockInfo,
-                      FuncBlockInfoMapT *funcBlockInfoMap,
-                      OpBuilder *builder) override;
+                      FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder,
+                      BufferIndexAnalysis *bufferIndexAnalysis) override;
 
   void insertFence(Operation *operation, OpBuilder *builder);
 };
@@ -111,7 +111,8 @@ void ProxyFenceAnalysis::insertFence(Operation *op, OpBuilder *builder) {
 
 void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
                                 FuncBlockInfoMapT *funcBlockInfoMap,
-                                OpBuilder *builder) {
+                                OpBuilder *builder,
+                                BufferIndexAnalysis * /*bufferIndexAnalysis*/) {
   if (isa<triton::nvidia_gpu::FenceAsyncSharedOp>(op)) {
     // If the current op is a fence, we clear previous reads and writes
     blockInfo->sync();

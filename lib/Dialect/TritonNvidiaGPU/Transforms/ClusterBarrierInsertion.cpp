@@ -323,12 +323,13 @@ public:
 
 private:
   void update(Operation *op, BlockInfo *blockInfo,
-              FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder) override;
+              FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder,
+              BufferIndexAnalysis *bufferIndexAnalysis) override;
 };
 
-void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
-                                    FuncBlockInfoMapT *funcBlockInfoMap,
-                                    OpBuilder *builder) {
+void ClusterBarrierAnalysis::update(
+    Operation *op, BlockInfo *blockInfo, FuncBlockInfoMapT *funcBlockInfoMap,
+    OpBuilder *builder, BufferIndexAnalysis * /*bufferIndexAnalysis*/) {
   if (isa<ttng::ClusterBarrierOp, ttng::ClusterWaitOp>(op)) {
     blockInfo->sync();
     return;

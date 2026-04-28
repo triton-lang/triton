@@ -3,58 +3,84 @@
 
 #include "triton/Analysis/Membar.h"
 
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
+#include <memory>
+#include <vector>
 
 namespace mlir {
 
 class Block;
 class Operation;
+struct BufferIndexExpr;
 
-/// Returns true only if `a` and `b` provably denote different buffer slots
-/// within a single execution of the enclosing region. Used by the membar
-/// analysis to skip barriers between multi-buffered shared-memory accesses
-/// whose dynamic slot indices are different.
-bool areIndicesProvablyDifferent(Value a, Value b);
+/// Extends membar's slice disjointness check for multi-buffered shared-memory
+/// allocations selected by `ttg.memdesc_index`.
+///
+/// The analysis is intentionally narrow. It decomposes the dynamic slot index
+/// into `base + constantOffset`, optionally under a positive constant modulus,
+/// and proves two accesses disjoint only when the expressions have the same
+/// base and different offsets modulo the same modulus.
+///
+/// Recognized index shapes:
+///   1. integer constants,
+///   2. `arith.addi` with one constant operand,
+///   3. `arith.remsi` with a positive constant modulus,
+///   4. the pipeliner's select/cmpi one-step wrap:
+///        select(cmpi sge(base + 1, N), 0, base + 1)
+///        select(cmpi slt(base + 1, N), base + 1, 0)
+///      only when -1 <= base < N is proven.
+///
+/// This is a per-function analysis: it owns dominance information for bounded
+/// index proofs and interns expressions whose pointers are stored on
+/// `AllocationSlice`. In scf form it checks the `scf.for` iter_arg init/yield
+/// pair; in cf form it checks incoming block-argument operands and uses
+/// dominance to distinguish loop backedges from non-backedge initial values.
+///
+/// Unknown arithmetic, dynamic or non-positive moduli, nested moduli, different
+/// SSA bases, and loop-carried slices whose index was invalidated all fail the
+/// disjointness proof and fall back to normal membar aliasing.
+///
+/// The class owns and interns the analyzed expressions attached to
+/// `AllocationSlice`; callers must not keep those payloads beyond the lifetime
+/// of this analysis.
+class BufferIndexAnalysis {
+public:
+  explicit BufferIndexAnalysis(FunctionOpInterface funcOp);
+  ~BufferIndexAnalysis();
 
-/// Returns the dynamic slot index of a multi-buffered shared-memory access,
-/// or a null Value if one cannot be recovered. Walks through
-/// MemDescViewTrait producers to the underlying MemDescIndexOp.
-Value extractBufferIndex(Value value);
+  /// Builds an `AllocationSlice` for `value` and attaches a buffer-index
+  /// expression to it. Callers in membar should use this rather than the raw
+  /// `AllocationSlice` constructor so index expressions are attached
+  /// consistently.
+  AllocationSlice makeSlice(Value value, Interval<size_t> allocationInterval,
+                            Allocation::BufferId bufferId);
 
-/// Buffer-index payload stored in AllocationSlice::extensionKey.
+  /// Returns true if `successor` is reached by a loop backedge from
+  /// `terminator`. Region-form loops are handled structurally; cf-form loops
+  /// use the standard dominance rule.
+  bool isBackedgeSuccessor(Operation *terminator, Block *successor) const;
 
-inline Value getBufferIndex(const AllocationSlice &slice) {
-  return Value::getFromOpaquePointer(slice.extensionKey);
-}
+  /// Clears the buffer index of every slice in `info`, rebuilding both maps.
+  /// Used at loop backedges where the same SSA value can denote a value from a
+  /// different dynamic iteration, and before storing function summaries where
+  /// per-function SSA index identity is no longer meaningful.
+  void invalidateBufferIndices(BlockInfo &info) const;
 
-inline void setBufferIndex(AllocationSlice &slice, Value value) {
-  slice.extensionKey = value.getAsOpaquePointer();
-}
+private:
+  void attachBufferIndex(AllocationSlice &slice, Value value);
+  const BufferIndexExpr *intern(BufferIndexExpr expr);
 
-/// Returns a copy of `slice` with its buffer index cleared. Used when
-/// propagating BlockInfo across a CFG backedge: the underlying SSA
-/// value denotes a different runtime integer on the carried side vs.
-/// the next iteration, so the analysis must not compare the two. A
-/// null index fails areIndicesProvablyDifferent and falls back to
-/// conservative aliasing.
-inline AllocationSlice
-withInvalidatedBufferIndex(const AllocationSlice &slice) {
-  AllocationSlice copy = slice;
-  copy.extensionKey = nullptr;
-  return copy;
-}
+  DominanceInfo dominanceInfo;
+  std::vector<std::unique_ptr<BufferIndexExpr>> expressions;
+};
 
-/// Returns true if `successor` is the entry block of a CFG edge from
-/// `terminator` that re-enters an earlier region (e.g. scf.for yield ->
-/// body, scf.while after -> before). Used by membar as a post-join hook
-/// to invalidate buffer indices at loop-carried merges.
-bool isBackedgeSuccessor(Operation *terminator, Block *successor);
-
-/// Clears the buffer index of every slice in `info`, rebuilding both
-/// slice maps. Intended as a post-join step at loop-carried merges: we
-/// cannot evaluate index disjointness over loop iterations, so any
-/// index attached to a slice reaching a loop header is unreliable.
-void invalidateBufferIndices(BlockInfo &info);
+/// Returns true only if the buffer-index expressions attached to `a` and `b`
+/// provably denote different buffer slots in the same dynamic iteration.
+/// Stateless; accesses only the payload pointers.
+bool areBufferIndicesProvablyDifferent(const AllocationSlice &a,
+                                       const AllocationSlice &b);
 
 } // namespace mlir
 
