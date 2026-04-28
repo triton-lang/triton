@@ -196,6 +196,8 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
     ArrayRef<int64_t> shape, NVMMASharedEncodingAttr shared,
     ArrayRef<int64_t> tmaShape, bool disableSwizzle, bool emitErrors) {
+  if (!llvm::all_of(tmaShape, llvm::isPowerOf2_64))
+    return failure();
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   auto shapePerCTA = getShapePerCTA(shared, shape);
@@ -256,8 +258,9 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
                 maybeTransposedTmaShape.begin() + 1,
                 maybeTransposedTmaShape.end());
   }
-  if (!llvm::all_of(maybeTransposedTmaShape, llvm::isPowerOf2_64) ||
-      layout.getTotalOutDimSize() != product(maybeTransposedTmaShape))
+  // This condition can fail if a layout is speculatively constructed for
+  // equivalence checking.
+  if (layout.getTotalOutDimSize() != product(maybeTransposedTmaShape))
     return failure();
   auto reshapedLayout = reshapeLayout(ctx, layout, maybeTransposedTmaShape);
 
