@@ -281,30 +281,37 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        NVMMASharedEncodingAttr shared,
                                        TMAMode mode, bool disableSwizzle) {
-  auto shapePerCTA = getShapePerCTA(shared, shape);
-  auto tmaShape = triton::nvidia_gpu::getTMABlockShape(
-      shared, shapePerCTA, /*packedSize=*/true, mode);
-  auto layout =
-      buildNvmmaSharedLinearLayout(shape, shared, tmaShape, disableSwizzle,
-                                   /*emitErrors=*/true);
+  auto layout = nvmmaSharedToLinearLayout(shape, shared, mode, disableSwizzle,
+                                          /*emitErrors=*/true);
   if (failed(layout))
     llvm::report_fatal_error("Illegal shared layout");
   return *layout;
 }
 
 FailureOr<LinearLayout>
-tryNvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
-                             NVMMASharedEncodingAttr shared, TMAMode mode,
-                             bool disableSwizzle) {
+nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
+                          NVMMASharedEncodingAttr shared, TMAMode mode,
+                          bool disableSwizzle, bool emitErrors) {
   auto shapePerCTA = getShapePerCTA(shared, shape);
-  auto tmaShape = getTMABlockShape(
-      shapePerCTA, shared.getElementBitWidth(), shared.getSwizzlingByteWidth(),
-      shared.getFp4Padded(), shared.getTransposed(), /*packedSize=*/true,
-      /*emitError=*/nullptr, mode);
-  if (failed(tmaShape))
-    return failure();
-  return buildNvmmaSharedLinearLayout(shape, shared, *tmaShape, disableSwizzle,
-                                      /*emitErrors=*/false);
+  SmallVector<int64_t> tmaShape;
+  if (emitErrors) {
+    tmaShape =
+        getTMABlockShape(shapePerCTA, shared.getElementBitWidth(),
+                         shared.getSwizzlingByteWidth(), shared.getFp4Padded(),
+                         shared.getTransposed(), /*packedSize=*/true, mode);
+  } else {
+    auto maybeTmaShape =
+        getTMABlockShape(shapePerCTA, shared.getElementBitWidth(),
+                         shared.getSwizzlingByteWidth(), shared.getFp4Padded(),
+                         shared.getTransposed(), /*packedSize=*/true,
+                         /*emitError=*/nullptr, mode);
+    if (failed(maybeTmaShape))
+      return failure();
+    tmaShape = *maybeTmaShape;
+  }
+
+  return buildNvmmaSharedLinearLayout(shape, shared, tmaShape, disableSwizzle,
+                                      emitErrors);
 }
 
 /// Function to generate lane and warp layout for dot operands.
