@@ -787,7 +787,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
       cupti::activityEnableHWTrace<true>(/*enable=*/0);
   }
   profiler.periodicFlushingEnabled = false;
-  profiler.periodicFlushingFormat.clear();
+  profiler.periodicFlushingFormat = OutputFormat::Hatchet;
   // We have to clear the correlation maps before unsubscribing because CUPTI
   // will reset correlation ID after unsubscribing
   profiler.correlation.clear();

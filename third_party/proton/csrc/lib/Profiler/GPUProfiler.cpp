@@ -65,89 +65,85 @@ computeFlushRangesAndPeekPhases(
 struct PeriodicFlushStats {
   uint64_t totalToJsonUs{0};
   uint64_t totalToMsgPackUs{0};
+  uint64_t totalToPerfettoTraceUs{0};
   uint64_t totalJsonWriteUs{0};
   uint64_t totalMsgPackWriteUs{0};
+  uint64_t totalPerfettoTraceWriteUs{0};
   uint64_t clearUs{0};
   size_t toJsonCalls{0};
   size_t toMsgPackCalls{0};
+  size_t toPerfettoTraceCalls{0};
   size_t jsonWriteCalls{0};
   size_t msgPackWriteCalls{0};
+  size_t perfettoTraceWriteCalls{0};
 };
 
-void periodicFlushDataPhases(Data &data,
-                             const std::string &periodicFlushingFormat,
+void periodicFlushDataPhases(Data &data, OutputFormat periodicFlushingFormat,
                              size_t minPhaseToFlush, size_t maxPhaseToFlush,
                              const bool timingEnabled,
                              PeriodicFlushStats &stats) {
   using Clock = std::chrono::steady_clock;
   const auto &path = data.getPath();
+  const auto periodicFlushingFormatString =
+      outputFormatToString(periodicFlushingFormat);
 
   for (auto startPhase = minPhaseToFlush; startPhase <= maxPhaseToFlush;
        startPhase++) {
     auto pathWithPhase = path + ".part_" + std::to_string(startPhase) + "." +
-                         periodicFlushingFormat;
+                         periodicFlushingFormatString;
 
-    if (periodicFlushingFormat == "hatchet" ||
-        periodicFlushingFormat == "chrome_trace") {
-      std::string jsonStr;
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        jsonStr = data.toJsonString(startPhase);
-        const auto t1 = Clock::now();
-        stats.totalToJsonUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
+    Data::SerializedData serialized;
+    if (timingEnabled) {
+      const auto t0 = Clock::now();
+      serialized = data.serialize(periodicFlushingFormat, startPhase);
+      const auto t1 = Clock::now();
+      const auto serializeUs =
+          std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+              .count();
+      if (periodicFlushingFormat == OutputFormat::Hatchet ||
+          periodicFlushingFormat == OutputFormat::ChromeTrace) {
+        stats.totalToJsonUs += serializeUs;
         ++stats.toJsonCalls;
-      } else {
-        jsonStr = data.toJsonString(startPhase);
-      }
-
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
-        ofs << jsonStr;
-        ofs.flush();
-        const auto t1 = Clock::now();
-        stats.totalJsonWriteUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        ++stats.jsonWriteCalls;
-      } else {
-        std::ofstream ofs(pathWithPhase, std::ios::out | std::ios::trunc);
-        ofs << jsonStr;
-      }
-    } else if (periodicFlushingFormat == "hatchet_msgpack") {
-      std::vector<uint8_t> msgPack;
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        msgPack = data.toMsgPack(startPhase);
-        const auto t1 = Clock::now();
-        stats.totalToMsgPackUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
+      } else if (periodicFlushingFormat == OutputFormat::PerfettoTrace) {
+        stats.totalToPerfettoTraceUs += serializeUs;
+        ++stats.toPerfettoTraceCalls;
+      } else if (periodicFlushingFormat == OutputFormat::HatchetMsgPack) {
+        stats.totalToMsgPackUs += serializeUs;
         ++stats.toMsgPackCalls;
-      } else {
-        msgPack = data.toMsgPack(startPhase);
       }
+    } else {
+      serialized = data.serialize(periodicFlushingFormat, startPhase);
+    }
 
-      if (timingEnabled) {
-        const auto t0 = Clock::now();
-        std::ofstream ofs(pathWithPhase,
-                          std::ios::out | std::ios::binary | std::ios::trunc);
-        ofs.write(reinterpret_cast<const char *>(msgPack.data()),
-                  msgPack.size());
-        ofs.flush();
-        const auto t1 = Clock::now();
-        stats.totalMsgPackWriteUs +=
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
+    auto fileMode = std::ios::out | std::ios::trunc;
+    if (serialized.binary) {
+      fileMode |= std::ios::binary;
+    }
+    if (timingEnabled) {
+      const auto t0 = Clock::now();
+      std::ofstream ofs(pathWithPhase, fileMode);
+      ofs.write(reinterpret_cast<const char *>(serialized.bytes.data()),
+                serialized.bytes.size());
+      ofs.flush();
+      const auto t1 = Clock::now();
+      const auto writeUs =
+          std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
+              .count();
+      if (periodicFlushingFormat == OutputFormat::Hatchet ||
+          periodicFlushingFormat == OutputFormat::ChromeTrace) {
+        stats.totalJsonWriteUs += writeUs;
+        ++stats.jsonWriteCalls;
+      } else if (periodicFlushingFormat == OutputFormat::PerfettoTrace) {
+        stats.totalPerfettoTraceWriteUs += writeUs;
+        ++stats.perfettoTraceWriteCalls;
+      } else if (periodicFlushingFormat == OutputFormat::HatchetMsgPack) {
+        stats.totalMsgPackWriteUs += writeUs;
         ++stats.msgPackWriteCalls;
-      } else {
-        std::ofstream ofs(pathWithPhase,
-                          std::ios::out | std::ios::binary | std::ios::trunc);
-        ofs.write(reinterpret_cast<const char *>(msgPack.data()),
-                  msgPack.size());
       }
+    } else {
+      std::ofstream ofs(pathWithPhase, fileMode);
+      ofs.write(reinterpret_cast<const char *>(serialized.bytes.data()),
+                serialized.bytes.size());
     }
   }
 }
@@ -171,12 +167,12 @@ void periodicClearDataPhases(Data &data, size_t maxPhaseToFlush,
 } // namespace
 
 void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
-                             std::string &periodicFlushingFormat,
+                             OutputFormat &periodicFlushingFormat,
                              const std::vector<std::string> &modeAndOptions,
                              const char *profilerName) {
   periodicFlushingEnabled = true;
   if (modeAndOptions.size() < 2) {
-    periodicFlushingFormat = "hatchet";
+    periodicFlushingFormat = OutputFormat::Hatchet;
     return;
   }
 
@@ -188,14 +184,14 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
       throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
                                   ": unsupported option key: " + key);
     }
-    if (value != "hatchet_msgpack" && value != "chrome_trace" &&
-        value != "hatchet") {
+    try {
+      periodicFlushingFormat = parseOutputFormat(value);
+    } catch (const std::runtime_error &) {
       throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
                                   ": unsupported format: " + value);
     }
-    periodicFlushingFormat = value;
   } else {
-    periodicFlushingFormat = "hatchet";
+    periodicFlushingFormat = OutputFormat::Hatchet;
   }
 }
 
@@ -211,7 +207,7 @@ void updateDataPhases(std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
 }
 
 void flushDataPhasesImpl(
-    const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
+    const bool periodicFlushEnabled, OutputFormat periodicFlushingFormat,
     std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
@@ -262,18 +258,31 @@ void flushDataPhasesImpl(
                             maxPhaseToFlush, timingEnabled, stats);
     periodicClearDataPhases(*data, maxPhaseToFlush, timingEnabled, stats);
     if (timingEnabled) {
+      const auto periodicFlushingFormatString =
+          outputFormatToString(periodicFlushingFormat);
       std::cerr << "[PROTON] periodicFlush timing: path=" << data->getPath()
-                << " format=" << periodicFlushingFormat << " phases=["
-                << minPhaseToFlush << "," << maxPhaseToFlush
-                << "] toJsonString_us=" << stats.totalToJsonUs
-                << " toJsonString_calls=" << stats.toJsonCalls
-                << " toMsgPack_us=" << stats.totalToMsgPackUs
-                << " toMsgPack_calls=" << stats.toMsgPackCalls
-                << " json_write_us=" << stats.totalJsonWriteUs
-                << " json_write_calls=" << stats.jsonWriteCalls
-                << " msgpack_write_us=" << stats.totalMsgPackWriteUs
-                << " msgpack_write_calls=" << stats.msgPackWriteCalls
-                << " clear_us=" << stats.clearUs << std::endl;
+                << " format=" << periodicFlushingFormatString << " phases=["
+                << minPhaseToFlush << "," << maxPhaseToFlush << "]";
+      if (periodicFlushingFormat == OutputFormat::Hatchet ||
+          periodicFlushingFormat == OutputFormat::ChromeTrace) {
+        std::cerr << " toJsonString_us=" << stats.totalToJsonUs
+                  << " toJsonString_calls=" << stats.toJsonCalls
+                  << " json_write_us=" << stats.totalJsonWriteUs
+                  << " json_write_calls=" << stats.jsonWriteCalls;
+      } else if (periodicFlushingFormat == OutputFormat::HatchetMsgPack) {
+        std::cerr << " toMsgPack_us=" << stats.totalToMsgPackUs
+                  << " toMsgPack_calls=" << stats.toMsgPackCalls
+                  << " msgpack_write_us=" << stats.totalMsgPackWriteUs
+                  << " msgpack_write_calls=" << stats.msgPackWriteCalls;
+      } else if (periodicFlushingFormat == OutputFormat::PerfettoTrace) {
+        std::cerr << " toPerfettoTrace_us=" << stats.totalToPerfettoTraceUs
+                  << " toPerfettoTrace_calls=" << stats.toPerfettoTraceCalls
+                  << " perfetto_trace_write_us="
+                  << stats.totalPerfettoTraceWriteUs
+                  << " perfetto_trace_write_calls="
+                  << stats.perfettoTraceWriteCalls;
+      }
+      std::cerr << " clear_us=" << stats.clearUs << std::endl;
     }
   }
 }

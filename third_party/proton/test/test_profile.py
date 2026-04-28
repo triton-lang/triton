@@ -12,11 +12,101 @@ from typing import NamedTuple
 import pathlib
 import threading
 
+from perfetto_trace_parser import parse_perfetto_trace
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
+
+
+def _normalize_metric_value(value):
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _normalize_trace_event(name, category, track_name, call_stack=None, args=None, **extra):
+    args = args or {}
+    metrics = {}
+    if isinstance(args.get("metrics"), dict):
+        metrics.update({key: _normalize_metric_value(value) for key, value in args["metrics"].items()})
+    metrics.update({
+        key.removeprefix("debug.").removeprefix("metric."): _normalize_metric_value(value)
+        for key, value in args.items()
+        if key.startswith("metric.") or key.startswith("debug.metric.")
+    })
+    if not metrics and category == "metric":
+        metric_name, metric_value = name[name.rfind("<") + 1:-1].split(", ", 1)
+        metrics[metric_name] = _normalize_metric_value(metric_value)
+    return {
+        "name": name,
+        "category": category,
+        "track_name": track_name,
+        "call_stack": call_stack,
+        "args": args,
+        "metrics": metrics,
+        **extra,
+    }
+
+
+def _chrome_trace_to_python(path: pathlib.Path | str):
+    with open(path, "r", encoding="utf-8") as f:
+        raw_events = json.load(f)["traceEvents"]
+
+    thread_names = {
+        event["tid"]: event["args"]["name"]
+        for event in raw_events
+        if event.get("ph") == "M" and event.get("name") == "thread_name"
+    }
+    track_events = []
+    for event in raw_events:
+        args = event.get("args", {})
+        track_id = event.get("tid")
+        track_events.append(
+            _normalize_trace_event(
+                event["name"],
+                event.get("cat"),
+                thread_names.get(track_id, track_id),
+                args.get("call_stack"),
+                args,
+                id=event.get("id"),
+                phase=event.get("ph"),
+                bp=event.get("bp"),
+                timestamp=event.get("ts"),
+                track_id=track_id,
+            ))
+
+    return {"track_events": track_events}
+
+
+def _trace_to_python(path: pathlib.Path | str, output_format: str):
+    if output_format == "chrome_trace":
+        return _chrome_trace_to_python(path)
+    if output_format == "perfetto_trace":
+        return parse_perfetto_trace(path, _normalize_trace_event)
+    raise ValueError(f"Unsupported trace output format: {output_format}")
+
+
+def _assert_trace_file(path: pathlib.Path | str, output_format: str, expected_event_name: str | None = None,
+                       expected_call_stack: list[str] | None = None):
+    trace = _trace_to_python(path, output_format)
+    assert trace["track_events"]
+    if expected_event_name is None:
+        return
+
+    matched_event = None
+    for event in trace["track_events"]:
+        if event["name"] != expected_event_name:
+            continue
+        if expected_call_stack is not None and event["call_stack"] != expected_call_stack:
+            continue
+        matched_event = event
+        break
+    assert matched_event is not None
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -924,8 +1014,9 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
     assert int(bar_frame1["metrics"]["count"]) == bar_iters
 
 
-def test_trace(tmp_path: pathlib.Path, device: str):
-    temp_file = tmp_path / "test_trace.chrome_trace"
+@pytest.mark.parametrize("output_format", ["chrome_trace", "perfetto_trace"])
+def test_trace(tmp_path: pathlib.Path, output_format: str, device: str):
+    temp_file = tmp_path / f"test_trace.{output_format}"
     proton.start(str(temp_file.with_suffix("")), data="trace")
 
     @triton.jit
@@ -940,17 +1031,14 @@ def test_trace(tmp_path: pathlib.Path, device: str):
     with proton.scope("test"):
         foo[(1, )](x, y, x.size()[0], num_warps=4)
 
-    proton.finalize()
+    proton.finalize(output_format=output_format)
 
-    with temp_file.open() as f:
-        data = json.load(f)
-        trace_events = data["traceEvents"]
-        assert trace_events[-1]["name"] == "foo"
-        assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
+    _assert_trace_file(temp_file, output_format, expected_event_name="foo", expected_call_stack=["ROOT", "test", "foo"])
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
-def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str):
+@pytest.mark.parametrize("output_format", ["chrome_trace", "perfetto_trace"])
+def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, output_format: str, device: str):
 
     @triton.jit
     def foo(x, y, size: tl.constexpr):
@@ -959,7 +1047,7 @@ def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str
 
     x = torch.ones((1024, ), device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
-    temp_file = tmp_path / "test_trace_flexible_metrics_scope_ranges.chrome_trace"
+    temp_file = tmp_path / f"test_trace_flexible_metrics_scope_ranges.{output_format}"
     proton.start(str(temp_file.with_suffix("")), data="trace")
 
     with proton.scope("scope_3", metrics={"m3": 3.0}):
@@ -974,17 +1062,15 @@ def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str
             with proton.scope("scope_7"):
                 foo[(1, )](x, y, x.size()[0], num_warps=4)
 
-    proton.finalize()
-    with temp_file.open() as f:
-        trace_events = json.load(f)["traceEvents"]
-    kernel_events = [event for event in trace_events if event.get("cat") == "kernel" and event["name"] == "foo"]
-    metric_events = [event for event in trace_events if event.get("cat") == "metric"]
-    scope_events = [event for event in trace_events if event.get("cat") == "scope"]
-    flow_events = [event for event in trace_events if event.get("cat") == "flow"]
+    proton.finalize(output_format=output_format)
+    trace_events = _trace_to_python(temp_file, output_format)["track_events"]
+    kernel_events = [event for event in trace_events if event["category"] == "kernel" and event["name"] == "foo"]
+    metric_events = [event for event in trace_events if event["category"] == "metric"]
+    scope_events = [event for event in trace_events if event["category"] == "scope"]
 
-    assert (len(kernel_events), len(metric_events), len(scope_events), len(flow_events)) == (4, 3, 4, 8)
+    assert (len(kernel_events), len(metric_events), len(scope_events)) == (4, 3, 4)
 
-    assert {tuple(event["args"]["call_stack"])
+    assert {tuple(event["call_stack"])
             for event in kernel_events} == {
                 ("ROOT", "scope_3", "scope_2", "scope_1", "foo"),
                 ("ROOT", "scope_3", "scope_2", "scope_4", "foo"),
@@ -992,17 +1078,17 @@ def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str
                 ("ROOT", "scope_3", "scope_6", "scope_7", "foo"),
             }
 
-    metric_by_name = {next(iter(event["args"]["metrics"])): event for event in metric_events}
+    metric_by_name = {next(iter(event["metrics"])): event for event in metric_events}
     assert {
-        name: (event["name"], tuple(event["args"]["call_stack"]), event["args"]["metrics"])
+        name: (event["name"], tuple(event["call_stack"]), event["metrics"])
         for name, event in metric_by_name.items()
     } == {
-        "m1": ("scope_1: <m1, 1.000000>", ("ROOT", "scope_3", "scope_2", "scope_1"), {"m1": "1.000000"}),
-        "m2": ("scope_2: <m2, 2.000000>", ("ROOT", "scope_3", "scope_2"), {"m2": "2.000000"}),
-        "m3": ("scope_3: <m3, 3.000000>", ("ROOT", "scope_3"), {"m3": "3.000000"}),
+        "m1": ("scope_1: <m1, 1.000000>", ("ROOT", "scope_3", "scope_2", "scope_1"), {"m1": 1.0}),
+        "m2": ("scope_2: <m2, 2.000000>", ("ROOT", "scope_3", "scope_2"), {"m2": 2.0}),
+        "m3": ("scope_3: <m3, 3.000000>", ("ROOT", "scope_3"), {"m3": 3.0}),
     }
 
-    assert {tuple(event["args"]["call_stack"])
+    assert {tuple(event["call_stack"])
             for event in scope_events} == {
                 ("ROOT", "scope_3", "scope_2", "scope_4"),
                 ("ROOT", "scope_3", "scope_2", "scope_5"),
@@ -1010,39 +1096,42 @@ def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str
                 ("ROOT", "scope_3", "scope_6", "scope_7"),
             }
 
-    gpu_tid = kernel_events[0]["tid"]
-    cpu_tid = metric_by_name["m1"]["tid"]
-    flow_starts = {event["id"]: event for event in flow_events if event["ph"] == "s"}
-    flow_finishes = {event["id"]: event for event in flow_events if event["ph"] == "f"}
+    flow_events = [event for event in trace_events if event["category"] == "flow"]
+    assert len(flow_events) == 8
+    gpu_tid = kernel_events[0]["track_id"]
+    cpu_tid = metric_by_name["m1"]["track_id"]
+    flow_starts = {event["id"]: event for event in flow_events if event["phase"] == "s"}
+    flow_finishes = {event["id"]: event for event in flow_events if event["phase"] == "f"}
     assert set(flow_starts) == set(flow_finishes)
     assert len(flow_starts) == 4
-    assert all(event["name"] == "launch->kernel" and event["bp"] == "e" and event["tid"] == cpu_tid
+    assert all(event["name"] == "launch->kernel" and event["bp"] == "e" and event["track_id"] == cpu_tid
                for event in flow_starts.values())
-    assert all(event["name"] == "launch->kernel" and event["bp"] == "e" and event["tid"] == gpu_tid
+    assert all(event["name"] == "launch->kernel" and event["bp"] == "e" and event["track_id"] == gpu_tid
                for event in flow_finishes.values())
 
 
-def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):
-    temp_file = tmp_path / "test_trace_flexible_metrics_no_kernel_anchor.chrome_trace"
+@pytest.mark.parametrize("output_format", ["chrome_trace", "perfetto_trace"])
+def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path, output_format: str):
+    temp_file = tmp_path / f"test_trace_flexible_metrics_no_kernel_anchor.{output_format}"
     proton.start(str(temp_file.with_suffix("")), data="trace")
 
     with proton.scope("metric_only", metrics={"foo": 1.0}):
         pass
 
-    proton.finalize()
-    with temp_file.open() as f:
-        trace_events = json.load(f)["traceEvents"]
+    proton.finalize(output_format=output_format)
+    trace_events = _trace_to_python(temp_file, output_format)["track_events"]
     assert len(trace_events) == 1
     assert (
-        trace_events[0]["cat"],
+        trace_events[0]["category"],
         trace_events[0]["name"],
-        trace_events[0]["args"]["call_stack"],
-        trace_events[0]["args"]["metrics"],
-    ) == ("metric", "metric_only: <foo, 1.000000>", ["ROOT", "metric_only"], {"foo": "1.000000"})
+        trace_events[0]["call_stack"],
+        trace_events[0]["metrics"],
+    ) == ("metric", "metric_only: <foo, 1.000000>", ["ROOT", "metric_only"], {"foo": 1.0})
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph trace reconstruction")
-def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str):
+@pytest.mark.parametrize("output_format", ["chrome_trace", "perfetto_trace"])
+def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, output_format: str, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -1066,7 +1155,7 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str)
                 foo[(1, )](x, y, x.numel(), num_warps=4)
             foo[(1, )](x, y, x.numel(), num_warps=4)
 
-    temp_file = tmp_path / "test_trace_cudagraph_graph_scope_ranges.chrome_trace"
+    temp_file = tmp_path / f"test_trace_cudagraph_graph_scope_ranges.{output_format}"
     proton.start(str(temp_file.with_suffix("")), data="trace", context="shadow")
 
     # warmup
@@ -1079,62 +1168,61 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str)
     with proton.scope("test0"):
         g.replay()
 
-    proton.finalize()
-    with temp_file.open() as f:
-        trace_events = json.load(f)["traceEvents"]
+    proton.finalize(output_format=output_format)
+    trace_events = _trace_to_python(temp_file, output_format)["track_events"]
 
-    thread_name_events = [
-        event for event in trace_events if event.get("ph") == "M" and event.get("name") == "thread_name"
+    graph_scope_events = [
+        event for event in trace_events
+        if event["category"] == "scope" and str(event["track_name"]).startswith("Graph: Stream ")
     ]
-    graph_tids = [event["tid"] for event in thread_name_events if event["args"]["name"].startswith("Graph: Stream ")]
-    assert len(graph_tids) == 1
-    graph_tid = graph_tids[0]
-
-    graph_scope_events = [event for event in trace_events if event.get("cat") == "scope" and event["tid"] == graph_tid]
     assert {"<captured_at>", "a", "b", "c"}.issubset({event["name"] for event in graph_scope_events})
-    assert not any(event.get("cat") == "metric" and event["tid"] == graph_tid for event in trace_events)
+    assert not any(event["category"] == "metric" and str(event["track_name"]).startswith("Graph: Stream ")
+                   for event in trace_events)
 
     replay_kernel_events = [
-        event for event in trace_events
-        if event.get("cat") == "kernel" and event.get("args", {}).get("call_stack", [])[:2] == ["ROOT", "test0"]
+        event for event in trace_events if event["category"] == "kernel" and event["call_stack"] is not None
+        and event["call_stack"][:2] == ["ROOT", "test0"]
     ]
     foo_events = [event for event in replay_kernel_events if event["name"] == "foo"]
     metric_kernel_events = [event for event in replay_kernel_events if event["name"] == "<metric>"]
     metadata_kernel_events = [
-        event for event in replay_kernel_events
-        if COMPUTE_METADATA_SCOPE_NAME in event.get("args", {}).get("call_stack", [])
+        event for event in replay_kernel_events if COMPUTE_METADATA_SCOPE_NAME in event["call_stack"]
     ]
 
     assert len(foo_events) == 3
-    assert {tuple(event["args"]["call_stack"])
+    assert {tuple(event["call_stack"])
             for event in foo_events} == {
                 ("ROOT", "test0", "<captured_at>", "a", "b", "c", "foo"),
                 ("ROOT", "test0", "<captured_at>", "a", "b", "foo"),
                 ("ROOT", "test0", "<captured_at>", "a", "foo"),
             }
     assert len(metric_kernel_events) == 1
-    assert metric_kernel_events[0]["args"]["call_stack"] == [
-        "ROOT", "test0", "<captured_at>", "a", "b", "c", "<metric>"
-    ]
+    assert metric_kernel_events[0]["call_stack"] == ["ROOT", "test0", "<captured_at>", "a", "b", "c", "<metric>"]
     assert all(event["name"] not in {"foo", "<metric>"} for event in metadata_kernel_events)
 
-    test0_scope = next(
-        event for event in trace_events
-        if event.get("cat") == "scope" and event.get("args", {}).get("call_stack", []) == ["ROOT", "test0"])
-    replay_gpu_tid = foo_events[0]["tid"]
-    first_replay_kernel = min(replay_kernel_events, key=lambda event: event["ts"])
-    flow_finish = next(event for event in trace_events
-                       if event.get("cat") == "flow" and event["ph"] == "f" and event["name"] == "launch->kernel"
-                       and event["tid"] == replay_gpu_tid and event["ts"] == first_replay_kernel["ts"])
-    flow_start = next(event for event in trace_events
-                      if event.get("cat") == "flow" and event["ph"] == "s" and event["id"] == flow_finish["id"])
-    assert flow_start["tid"] == test0_scope["tid"]
-    assert test0_scope["ts"] == flow_start["ts"] <= flow_finish["ts"]
+    test0_scope = next(event for event in trace_events
+                       if event["category"] == "scope" and event["call_stack"] == ["ROOT", "test0"])
+    replay_kernel_points = {(event["track_id"], event["timestamp"]) for event in replay_kernel_events}
+    flow_events = [event for event in trace_events if event["category"] == "flow" and event["name"] == "launch->kernel"]
+    flow_starts = [
+        event for event in flow_events if event["phase"] == "s" and event["track_id"] == test0_scope["track_id"]
+        and event["timestamp"] == test0_scope["timestamp"]
+    ]
+    flow_finishes = [
+        event for event in flow_events
+        if event["phase"] == "f" and (event["track_id"], event["timestamp"]) in replay_kernel_points
+    ]
+    assert any(start["id"] == finish["id"] and start["timestamp"] <= finish["timestamp"]
+               for start in flow_starts
+               for finish in flow_finishes)
 
 
-@pytest.mark.parametrize("profile_kind,suffix", [("tree", ".hatchet"), ("trace", ".chrome_trace")],
-                         ids=["tree", "trace"])
-def test_multi_stream(profile_kind: str, suffix: str, tmp_path: pathlib.Path, device: str):
+@pytest.mark.parametrize("profile_kind,output_format,suffix", [
+    ("tree", None, ".hatchet"),
+    ("trace", "chrome_trace", ".chrome_trace"),
+    ("trace", "perfetto_trace", ".perfetto_trace"),
+], ids=["tree", "trace_chrome", "trace_perfetto"])
+def test_multi_stream(profile_kind: str, output_format: str | None, suffix: str, tmp_path: pathlib.Path, device: str):
 
     @triton.jit
     def foo(x, y, size: tl.constexpr):
@@ -1161,20 +1249,20 @@ def test_multi_stream(profile_kind: str, suffix: str, tmp_path: pathlib.Path, de
 
     for stream in streams:
         stream.synchronize()
-    proton.finalize()
-
-    with temp_file.open() as f:
-        data = json.load(f)
+    finalize_kwargs = {"output_format": output_format} if output_format is not None else {}
+    proton.finalize(**finalize_kwargs)
 
     if profile_kind == "trace":
-        assert "traceEvents" in data
-        kernel_events = [event for event in data["traceEvents"] if event["name"] == "foo"]
+        trace_events = _trace_to_python(temp_file, output_format)["track_events"]
+        kernel_events = [event for event in trace_events if event["category"] == "kernel" and event["name"] == "foo"]
         assert len(kernel_events) == len(scope_names)
-        assert len({event["tid"] for event in kernel_events}) == len(scope_names)
+        assert len({event["track_name"] for event in kernel_events}) == len(scope_names)
         for scope_name in scope_names:
-            matching_events = [event for event in kernel_events if scope_name in event["args"]["call_stack"]]
+            matching_events = [event for event in kernel_events if scope_name in event["call_stack"]]
             assert len(matching_events) == 1
     else:
+        with temp_file.open() as f:
+            data = json.load(f)
         root = data[0]
         scope_0 = next(child for child in root["children"] if child["frame"]["name"] == "stream_scope_0")
         scope_1 = next(child for child in root["children"] if child["frame"]["name"] == "stream_scope_1")
@@ -1549,11 +1637,13 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
-@pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
+@pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet", "perfetto_trace"])
 def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
     fresh_knobs.proton.profile_buffer_size = buffer_size
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
-    session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
+    data_kind = "trace" if data_format == "perfetto_trace" else "tree"
+    session = proton.start(str(temp_file.with_suffix("")), data=data_kind,
+                           mode=f"periodic_flushing:format={data_format}")
 
     for i in range(10000):
         if i != 0 and i % 1000 == 0:
@@ -1570,6 +1660,9 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
     assert len(hatchet_files) == 10
     num_scopes = 0
     for hatchet_file in hatchet_files:
+        if data_format == "perfetto_trace":
+            _assert_trace_file(hatchet_file, data_format)
+            continue
         if data_format == "hatchet_msgpack":
             with open(hatchet_file, "rb") as f:
                 data = msgpack.load(f, raw=False, strict_map_key=False)
@@ -1581,17 +1674,19 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
         assert data[0]["children"][0]["frame"]["name"].startswith("test_")
         assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
         num_scopes += len(data[0]["children"])
-    assert num_scopes == 10000
+    if data_format != "perfetto_trace":
+        assert num_scopes == 10000
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
-@pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
+@pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet", "perfetto_trace"])
 def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
     fresh_knobs.proton.profile_buffer_size = buffer_size
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
-    session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}",
-                           hook="triton")
+    data_kind = "trace" if data_format == "perfetto_trace" else "tree"
+    session = proton.start(str(temp_file.with_suffix("")), data=data_kind,
+                           mode=f"periodic_flushing:format={data_format}", hook="triton")
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]
@@ -1630,6 +1725,9 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
     hatchet_files = glob.glob(str(tmp_path / f"*.{data_format}"))
     assert len(hatchet_files) == 10
     for hatchet_file in hatchet_files:
+        if data_format == "perfetto_trace":
+            _assert_trace_file(hatchet_file, data_format)
+            continue
         if data_format == "hatchet_msgpack":
             with open(hatchet_file, "rb") as f:
                 data = msgpack.load(f, raw=False, strict_map_key=False)

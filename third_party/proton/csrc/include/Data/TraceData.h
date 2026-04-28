@@ -2,6 +2,7 @@
 #define PROTON_DATA_TRACE_DATA_H_
 
 #include "Data.h"
+#include <iosfwd>
 #include <memory>
 #include <thread>
 #include <unordered_map>
@@ -12,10 +13,6 @@ class TraceData : public Data {
 public:
   TraceData(const std::string &path, ContextSource *contextSource = nullptr);
   virtual ~TraceData();
-
-  std::string toJsonString(size_t phase) const override;
-
-  std::vector<uint8_t> toMsgPack(size_t phase) const override;
 
   DataEntry addOp(size_t phase, size_t eventId,
                   const std::vector<Context> &contexts) override;
@@ -33,15 +30,22 @@ protected:
   void exitScope(const Scope &scope) override final;
 
 private:
+  template <typename CycleHandler, typename KernelHandler>
+  void withTraceData(size_t phase, CycleHandler &&onCycleTrace,
+                     KernelHandler &&onTraceData) const;
+
   // Data
-  void doDump(std::ostream &os, OutputFormat outputFormat,
-              size_t phase) const override;
+  SerializedData doSerialize(OutputFormat outputFormat,
+                             size_t phase) const override;
 
   OutputFormat getDefaultOutputFormat() const override {
     return OutputFormat::ChromeTrace;
   }
 
+  std::string toJsonString(size_t phase) const;
+  std::vector<uint8_t> toPerfettoTrace(size_t phase) const;
   void dumpChromeTrace(std::ostream &os, size_t phase) const;
+  void dumpPerfettoTrace(std::ostream &os, size_t phase) const;
   size_t getCurrentThreadTraceId();
 
   PhaseStore<Trace> tracePhases;

@@ -335,7 +335,7 @@ std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId,
     throw std::runtime_error(
         "Only TreeData is supported for getData() for now");
   }
-  return treeData->toMsgPack(phase);
+  return treeData->serialize(OutputFormat::HatchetMsgPack, phase).bytes;
 }
 
 std::string SessionManager::getData(size_t sessionId, size_t phase) {
@@ -346,7 +346,8 @@ std::string SessionManager::getData(size_t sessionId, size_t phase) {
     throw std::runtime_error(
         "Only TreeData is supported for getData() for now");
   }
-  return treeData->toJsonString(phase);
+  auto serialized = treeData->serialize(OutputFormat::Hatchet, phase);
+  return std::string(serialized.bytes.begin(), serialized.bytes.end());
 }
 
 void SessionManager::clearData(size_t sessionId, size_t phase,

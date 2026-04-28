@@ -216,7 +216,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--data-format",
         default="hatchet_msgpack",
-        choices=["hatchet", "hatchet_msgpack", "chrome_trace"],
+        choices=["hatchet", "hatchet_msgpack", "chrome_trace", "perfetto_trace"],
         help="Periodic flushing output format.",
     )
     parser.add_argument(

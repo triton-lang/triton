@@ -137,6 +137,12 @@ Data::PhaseInfo Data::getPhaseInfo() const {
                    completeUpToPhase};
 }
 
+Data::SerializedData Data::serialize(OutputFormat outputFormat,
+                                     size_t phase) const {
+  std::shared_lock<std::shared_mutex> lock(mutex);
+  return doSerialize(outputFormat, phase);
+}
+
 void Data::dump(const std::string &outputFormat) {
   std::shared_lock<std::shared_mutex> lock(mutex);
 
@@ -145,6 +151,7 @@ void Data::dump(const std::string &outputFormat) {
                                       : parseOutputFormat(outputFormat);
 
   for (auto phase : activePhases) {
+    auto serialized = doSerialize(outputFormatEnum, phase);
     std::unique_ptr<std::ostream> out;
     if (path.empty() || path == "-") {
       out.reset(new std::ostream(std::cout.rdbuf())); // Redirecting to cout
@@ -155,13 +162,14 @@ void Data::dump(const std::string &outputFormat) {
       const auto filePath =
           path + suffix + "." + outputFormatToString(outputFormatEnum);
       const auto fileMode =
-          (outputFormatEnum == OutputFormat::HatchetMsgPack)
+          serialized.binary
               ? (std::ios::out | std::ios::binary | std::ios::trunc)
               : (std::ios::out | std::ios::trunc);
       out.reset(
           new std::ofstream(filePath, fileMode)); // Opening a file for output
     }
-    doDump(*out, outputFormatEnum, phase);
+    out->write(reinterpret_cast<const char *>(serialized.bytes.data()),
+               static_cast<std::streamsize>(serialized.bytes.size()));
   }
 }
 
@@ -172,6 +180,8 @@ OutputFormat parseOutputFormat(const std::string &outputFormat) {
     return OutputFormat::HatchetMsgPack;
   } else if (toLower(outputFormat) == "chrome_trace") {
     return OutputFormat::ChromeTrace;
+  } else if (toLower(outputFormat) == "perfetto_trace") {
+    return OutputFormat::PerfettoTrace;
   } else {
     throw std::runtime_error("Unknown output format: " + outputFormat);
   }
@@ -184,6 +194,8 @@ const std::string outputFormatToString(OutputFormat outputFormat) {
     return "hatchet_msgpack";
   } else if (outputFormat == OutputFormat::ChromeTrace) {
     return "chrome_trace";
+  } else if (outputFormat == OutputFormat::PerfettoTrace) {
+    return "perfetto_trace";
   }
   throw std::runtime_error("Unknown output format: " +
                            std::to_string(static_cast<int>(outputFormat)));

@@ -20,10 +20,6 @@ public:
 
   TreeData(const std::string &path) : TreeData(path, nullptr) {}
 
-  std::string toJsonString(size_t phase) const override;
-
-  std::vector<uint8_t> toMsgPack(size_t phase) const override;
-
   DataEntry addOp(size_t phase, size_t contextId,
                   const std::vector<Context> &contexts) override;
 
@@ -48,15 +44,15 @@ private:
                                            TreeData::Tree *virtualTree) const;
 
   // Data
-  void doDump(std::ostream &os, OutputFormat outputFormat,
-              size_t phase) const override;
+  SerializedData doSerialize(OutputFormat outputFormat,
+                             size_t phase) const override;
 
   OutputFormat getDefaultOutputFormat() const override {
     return OutputFormat::Hatchet;
   }
 
-  void dumpHatchet(std::ostream &os, size_t phase) const;
-  void dumpHatchetMsgPack(std::ostream &os, size_t phase) const;
+  std::string toJsonString(size_t phase) const;
+  std::vector<uint8_t> toMsgPack(size_t phase) const;
 
   PhaseStore<Tree> treePhases;
   // ScopeId -> ContextId

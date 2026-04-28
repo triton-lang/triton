@@ -11,7 +11,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <ostream>
 #include <set>
 #include <shared_mutex>
 #include <stdexcept>
@@ -22,7 +21,13 @@
 
 namespace proton {
 
-enum class OutputFormat { Hatchet, HatchetMsgPack, ChromeTrace, Count };
+enum class OutputFormat {
+  Hatchet,
+  HatchetMsgPack,
+  ChromeTrace,
+  PerfettoTrace,
+  Count
+};
 
 class Data;
 
@@ -151,16 +156,17 @@ public:
   addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) = 0;
 
-  /// To Json
-  virtual std::string toJsonString(size_t phase) const = 0;
+  struct SerializedData {
+    std::vector<uint8_t> bytes;
+    bool binary{false};
+  };
 
-  /// To MsgPack
-  virtual std::vector<uint8_t> toMsgPack(size_t phase) const = 0;
+  SerializedData serialize(OutputFormat outputFormat, size_t phase) const;
 
 protected:
   /// The actual implementations
-  virtual void doDump(std::ostream &os, OutputFormat outputFormat,
-                      size_t phase) const = 0;
+  virtual SerializedData doSerialize(OutputFormat outputFormat,
+                                     size_t phase) const = 0;
   virtual OutputFormat getDefaultOutputFormat() const = 0;
 
   void initPhaseStore(PhaseStoreBase &store);
