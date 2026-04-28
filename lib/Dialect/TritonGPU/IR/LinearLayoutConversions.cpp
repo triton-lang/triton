@@ -297,9 +297,10 @@ tryNvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                              NVMMASharedEncodingAttr shared, TMAMode mode,
                              bool disableSwizzle) {
   auto shapePerCTA = getShapePerCTA(shared, shape);
-  auto tmaShape = tryGetTMABlockShape(
+  auto tmaShape = getTMABlockShape(
       shapePerCTA, shared.getElementBitWidth(), shared.getSwizzlingByteWidth(),
-      shared.getFp4Padded(), shared.getTransposed(), /*packedSize=*/true, mode);
+      shared.getFp4Padded(), shared.getTransposed(), /*packedSize=*/true,
+      /*emitError=*/nullptr, mode);
   if (failed(tmaShape))
     return failure();
   return buildNvmmaSharedLinearLayout(shape, shared, *tmaShape, disableSwizzle,
