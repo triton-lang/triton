@@ -142,7 +142,7 @@ On a barrier wait, ConSan:
 1. Acquires the ConSan lock.
 2. Verifies the barrier is initialized.
 3. Sets the current base thread's waiting flag and phase.
-4. Checks whether all active base threads are waiting on matching barrier
+4. [Deadlock] Checks whether all active base threads are waiting on matching barrier
    phases.
 5. Releases the lock and lets the real wait execute.
 6. Re-acquires the lock after the wait.
