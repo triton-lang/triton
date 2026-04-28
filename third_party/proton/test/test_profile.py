@@ -906,6 +906,81 @@ def test_hook_launch_metadata_nested_triton_context_cudagraph(tmp_path: pathlib.
     assert metadata_scope_idx < child_scope_idx < len(scoped_metadata_path_names) - 1
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports CUDA graph resource callbacks")
+def test_hook_launch_metadata_cudagraph_metric_queue_guard(tmp_path: pathlib.Path, device: str):
+    """Explain the CuptiProfiler.cpp metric-queue guard.
+
+    During CUDA graph capture, tensor launch metadata makes add_metrics launch a
+    Proton metric kernel while CuptiProfiler::ThreadState::isMetricKernelLaunching
+    is true. CUPTI graph-node callbacks for metadata-side kernels may be delivered
+    in the same window. The C++ callback must therefore treat a node as a metric
+    node only when metricKernelNumWordsQueue is non-empty; otherwise metadata
+    nodes can consume an empty queue, crash, or appear as <metric> kernels.
+    """
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    @triton.jit
+    def metadata_before_metric_kernel(x, scratch):
+        tl.store(scratch, tl.load(x) + 1.0)
+
+    @triton.jit
+    def metadata_after_metric_kernel(scratch, scratch2):
+        tl.store(scratch2, tl.load(scratch) + 2.0)
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        metadata_before_metric_kernel[(1, )](args["x"], args["scratch"], num_warps=1)
+        metadata_after_metric_kernel[(1, )](args["scratch"], args["scratch2"], num_warps=1)
+        return {"name": "foo_metric_queue_guard", "flops": args["scratch2"].sum()}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, scratch, scratch2, y):
+        tl.store(y, tl.load(x) + tl.load(scratch2))
+
+    x = torch.tensor([2], device=device, dtype=torch.float32)
+    scratch = torch.zeros_like(x)
+    scratch2 = torch.zeros_like(x)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_hook_metadata_metric_queue_guard.chrome_trace"
+    session = proton.start(str(temp_file.with_suffix("")), data="trace", context="shadow", hook="triton")
+    try:
+        foo[(1, )](x, scratch, scratch2, y, num_warps=1)
+        torch.cuda.synchronize()
+
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            foo[(1, )](x, scratch, scratch2, y, num_warps=1)
+
+        with proton.scope("replay"):
+            graph.replay()
+        torch.cuda.synchronize()
+    finally:
+        proton.finalize(session)
+
+    with temp_file.open() as f:
+        trace_events = json.load(f)["traceEvents"]
+
+    replay_kernel_events = [
+        event for event in trace_events
+        if event.get("cat") == "kernel" and event.get("args", {}).get("call_stack", [])[:2] == ["ROOT", "replay"]
+    ]
+    metric_kernel_events = [event for event in replay_kernel_events if event["name"] == "<metric>"]
+    metadata_kernel_events = [
+        event for event in replay_kernel_events
+        if any(name.startswith(COMPUTE_METADATA_SCOPE_NAME) for name in event.get("args", {}).get("call_stack", []))
+    ]
+    metadata_kernel_names = {event["name"] for event in metadata_kernel_events}
+
+    # Only Proton's actual metric-copy kernel should be marked as <metric>.
+    # The metadata kernels are the graph nodes that make the queue guard necessary.
+    assert len(metric_kernel_events) == 1
+    assert {
+        "metadata_before_metric_kernel",
+        "metadata_after_metric_kernel",
+    }.issubset(metadata_kernel_names)
+    assert all(event["name"] != "<metric>" for event in metadata_kernel_events)
+
+
 def test_hook_with_third_party(tmp_path: pathlib.Path, device: str):
     third_party_hook_invoked = False
 
