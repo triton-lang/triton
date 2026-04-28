@@ -7,10 +7,10 @@
 #include "Runtime/HipRuntime.h"
 #include "Utility/Env.h"
 
+#include "Driver/GPU/RoctxTypes.h"
 #include "hip/amd_detail/hip_runtime_prof.h"
 #include "roctracer/roctracer_ext.h"
 #include "roctracer/roctracer_hip.h"
-#include "roctracer/roctracer_roctx.h"
 
 #include <algorithm>
 #include <iostream>
