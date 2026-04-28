@@ -108,8 +108,7 @@ def test_matmul_launch_metadata_nosync_matches_old_formula(case):
     assert actual["name"].startswith(_Kernel.name)
     assert actual[f"flops{nbits}"].dtype == torch.float64
     assert actual["bytes"].dtype == torch.int64
-    torch.testing.assert_close(
-        direct_actual[f"flops{nbits}"].cpu(), expected[f"flops{nbits}"].cpu(), rtol=0, atol=0)
+    torch.testing.assert_close(direct_actual[f"flops{nbits}"].cpu(), expected[f"flops{nbits}"].cpu(), rtol=0, atol=0)
     torch.testing.assert_close(direct_actual["bytes"].cpu(), expected["bytes"].to(torch.int64).cpu(), rtol=0, atol=0)
     torch.testing.assert_close(actual[f"flops{nbits}"].cpu(), expected[f"flops{nbits}"].cpu(), rtol=0, atol=0)
     torch.testing.assert_close(actual["bytes"].cpu(), expected["bytes"].to(torch.int64).cpu(), rtol=0, atol=0)

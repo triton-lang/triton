@@ -97,10 +97,11 @@ def _run_case(args, mode, device):
     case = _make_case(args, mode, device)
     metadata_args, M, N, K, X, Y, W, slice_sizes, nbits, batch_size = case
 
-    old_fn = lambda: _old_flops_and_bytes_from_slices(
-        metadata_args, M, N, K, X, Y, W, slice_sizes, nbits, batch_size)
-    new_fn = lambda: _matmul_flops_and_bytes_from_slices(
-        metadata_args, M, N, K, X, Y, W, slice_sizes, nbits, batch_size)
+    def old_fn():
+        return _old_flops_and_bytes_from_slices(metadata_args, M, N, K, X, Y, W, slice_sizes, nbits, batch_size)
+
+    def new_fn():
+        return _matmul_flops_and_bytes_from_slices(metadata_args, M, N, K, X, Y, W, slice_sizes, nbits, batch_size)
 
     old = old_fn()
     new = new_fn()
@@ -140,7 +141,9 @@ def main():
     torch.manual_seed(0)
 
     modes = ("ragged_m", "ragged_k") if args.mode == "both" else (args.mode, )
-    print("mode,n_slices,max_slice_size,active_fraction,old_gpu_us,new_gpu_us,gpu_speedup,old_wall_us,new_wall_us,wall_speedup")
+    print(
+        "mode,n_slices,max_slice_size,active_fraction,old_gpu_us,new_gpu_us,gpu_speedup,old_wall_us,new_wall_us,wall_speedup"
+    )
     for mode in modes:
         _run_case(args, mode, device)
 

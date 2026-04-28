@@ -193,11 +193,8 @@ def _matmul_flops_and_bytes_from_slices_kernel(
     n_active_slices = tl.sum(tl.where(slice_sizes > 0, 1, 0), axis=0).to(tl.int64)
 
     flops = STATIC_FLOPS + n_tokens.to(tl.float64) * FLOPS_PER_TOKEN
-    total_bytes = (
-        STATIC_BYTES
-        + n_tokens * (X_BYTES_PER_TOKEN + Y_BYTES_PER_TOKEN + W_BYTES_PER_TOKEN)
-        + n_active_slices * W_BYTES_PER_ACTIVE_SLICE
-    )
+    total_bytes = (STATIC_BYTES + n_tokens * (X_BYTES_PER_TOKEN + Y_BYTES_PER_TOKEN + W_BYTES_PER_TOKEN) +
+                   n_active_slices * W_BYTES_PER_ACTIVE_SLICE)
     tl.store(Flops, flops)
     tl.store(Bytes, total_bytes)
 
@@ -305,20 +302,18 @@ def matmul_launch_metadata(grid, kernel, args):
         ret["name"] += f" ep/{ep_subtile}"
 
     if slice_sizes is not None and not allow_sync:
-        ret.update(
-            _matmul_flops_and_bytes_from_slices(
-                args,
-                M,
-                N,
-                K,
-                X,
-                Y,
-                W,
-                slice_sizes,
-                nbits,
-                batch_size,
-            )
-        )
+        ret.update(_matmul_flops_and_bytes_from_slices(
+            args,
+            M,
+            N,
+            K,
+            X,
+            Y,
+            W,
+            slice_sizes,
+            nbits,
+            batch_size,
+        ))
         return ret
 
     if slice_sizes is not None and n_tokens is None:
