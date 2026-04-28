@@ -113,7 +113,6 @@ static scf::ExecuteRegionOp getPipelineStage(Operation *op) {
 static LogicalResult validatePipelinedForBody(scf::ForOp forOp) {
   std::map<int, Operation *> existingBarrierMap;
   int numClusters = 0;
-  bool seenYield = false;
   for (auto &op : *forOp.getBody()) {
     if (auto exeOp = dyn_cast<scf::ExecuteRegionOp>(op)) {
       if (!isPipelineStage(exeOp))
@@ -126,15 +125,16 @@ static LogicalResult validatePipelinedForBody(scf::ForOp forOp) {
                             "stages; insert a dummy stage instead");
       existingBarrierMap[numClusters] = &op;
     } else if (isa<scf::YieldOp>(op)) {
-      seenYield = true;
+      continue;
     } else {
       return op.emitError("unexpected op inside pipelined_for body; only "
                           "warp-pipeline stages and barrier/wait ops are "
                           "allowed");
     }
   }
-  if (!seenYield)
-    return forOp.emitError("pipelined_for body has no scf.yield terminator");
+  if (numClusters < 2)
+    return forOp.emitError(
+        "pipelined_for body must contain at least two pipeline stages");
   if (existingBarrierMap.count(0) && existingBarrierMap.count(numClusters))
     return forOp.emitError("pipelined_for body has both top-of-loop and "
                            "bottom-of-loop pre-existing barriers");
@@ -342,20 +342,14 @@ private:
     auto [warpLow, warpHigh] =
         emitPipelinePrelude(b, loc, threadsPerPipelineGroup);
 
-    // 2. Collect existing barrier information.
-    // Scanning the loop body and classifying each consecutive block of
-    // operations into a pipeline cluster (one cluster per execute_region).
-    // While doing this, we also detect any pre-existing barriers located
-    // between clusters.  These barriers may come from prefetch patterns, and
-    // must be preserved, but only at valid cluster boundaries.
+    // 2. Walk the (already-validated) body once to collect clusters and any
+    // pre-existing inter-cluster barriers (e.g. from prefetch patterns).
     SmallVector<Block *> clusterBlocks;
     SmallVector<Operation *> clusterOps;
     SmallVector<bool> bars;
     std::map<int, Operation *> existingBarrierMap;
     Operation *terminatorOp = nullptr;
 
-    // Body shape was already validated by validatePipelinedForBody before
-    // the pattern ran, so we trust the structure here.
     for (auto &op : *forOp.getBody()) {
       if (auto exeOp = dyn_cast<scf::ExecuteRegionOp>(op)) {
         exeOp.setNoInline(false);
@@ -384,10 +378,11 @@ private:
     // but sometimes required by memory prefetching pattern.
     auto topBar = existingBarrierMap.find(0);
     auto bottomBar = existingBarrierMap.find(numClusters);
+    bool hasTopBarrier = topBar != existingBarrierMap.end();
     if (bottomBar != existingBarrierMap.end()) {
       // validatePipelinedForBody guarantees we cannot have both top and
       // bottom barriers, so rotating bottom -> 0 is unambiguous.
-      assert(topBar == existingBarrierMap.end() &&
+      assert(!hasTopBarrier &&
              "validatePipelinedForBody should have rejected this");
       existingBarrierMap[0] = bottomBar->second;
       existingBarrierMap.erase(bottomBar);
@@ -409,17 +404,26 @@ private:
     //    the first cluster barrier must be inserted just before the loop’s
     //    terminator, forming the wrap-around dependency.
     for (int i = 0; i < numClusters; i++) {
+      if (i == 0 && !hasTopBarrier) {
+        // Prime the first iteration's priority.  The loop-carried cluster-0
+        // barrier sits at the bottom of the loop body, so it only controls
+        // the next iteration.
+        b.setInsertionPoint(forOp);
+        emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
+      }
+
       if (auto exBar = existingBarrierMap.find(i);
           exBar != existingBarrierMap.end()) {
+        // FIXME: If bars[i] is true, wrapping a non-LOCAL pre-existing
+        // barrier is not enough to satisfy LDS ordering.  For now we rely on
+        // the producer to place such barriers only where no local fence is
+        // needed.
         wrapExistingBarrier(b, loc, clusterOps[i], exBar->second,
                             anyHasPriority);
       } else {
         b.setInsertionPoint(clusterOps[i]);
         // The first one wraps back to the last of the loop
-        if (i == 0 && topBar == existingBarrierMap.end()) {
-          // Extra setprio needed before the loop for the first cluster
-          b.setInsertionPoint(forOp);
-          emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
+        if (i == 0 && !hasTopBarrier) {
           // inserts just before yield (=End of the loop).
           b.setInsertionPoint(terminatorOp);
         }
@@ -542,6 +546,9 @@ static void emitPipelinedFlat(SmallVector<scf::ExecuteRegionOp> &clusterOps,
     }
 
     if (existingBarrier) {
+      // FIXME: If bars[i] is true, wrapping a non-LOCAL pre-existing barrier
+      // is not enough to satisfy LDS ordering.  For now we rely on the
+      // producer to place such barriers only where no local fence is needed.
       wrapExistingBarrier(b, loc, clusterOps[i], existingBarrier,
                           anyHasPriority);
     } else {
@@ -605,12 +612,12 @@ static void processUnrolledPipelineRegions(ModuleOp m,
 // Return true if `op` is intra-pipeline glue between two clusters — the
 // sequence emitted by emitClusterBarrier/emitClusterPriority and any
 // pre-existing barrier op that emitPipelinedFlat wraps with sched_barriers.
+// Defined in terms of isWarpPipelineIgnorableBarrier so the two sets stay in
+// sync; the extra cases below are the ones we emit ourselves.
 static bool isIntraPipelineGlue(Operation *op) {
-  return isa<ROCDL::SchedBarrier, ROCDL::SetPrioOp, ROCDL::SBarrierOp,
-             ROCDL::BarrierOp, gpu::BarrierOp, triton::gpu::BarrierOp,
-             triton::gpu::AsyncWaitOp, triton::amdgpu::AsyncWaitOp,
-             triton::amdgpu::AsyncTDMWait,
-             triton::amdgpu::AsyncTDMIntrinsicWait>(op);
+  return isWarpPipelineIgnorableBarrier(op) ||
+         isa<ROCDL::SchedBarrier, ROCDL::SetPrioOp, ROCDL::SBarrierOp,
+             triton::gpu::BarrierOp>(op);
 }
 
 // Walk backward from `exec` past `sched_barrier` / `s_setprio` and check
@@ -754,6 +761,8 @@ static bool isCrossPipelineSafe(ArrayRef<Block *> loopBlocks,
                                 Allocation *allocation) {
   int K = loopBlocks.size();
   int M = nextBlocks.size();
+  assert(!loopBars.empty() &&
+         "expected at least one cluster in the prior loop");
 
   SmallVector<BlockInfo> mergedInfo;
   for (auto *b : loopBlocks)
@@ -817,6 +826,9 @@ static bool isCrossPipelineSafe(ArrayRef<Block *> loopBlocks,
 //
 // The "next pipeline" can be either another scf.for or a flat (unrolled)
 // pipeline represented as a sequence of scf.execute_region ops.
+// TODO: This could be generalized to flat-to-loop / flat-to-flat boundaries,
+// but those cases cannot reuse a prior loop's wrap-around barrier as the
+// boundary seed and are not expected to matter for common codegen.
 //
 // Before:                              After:
 //   scf.for { loop 1 }                  scf.for { loop 1 }
@@ -963,7 +975,7 @@ public:
     patternInline.add<InlineWarpPipelineExecuteRegionPattern>(&getContext());
 
     if (failed(applyPatternsGreedily(m, std::move(patternFor))))
-      signalPassFailure();
+      return signalPassFailure();
 
     // Flat (unrolled) pipeline regions are still wrapped in execute_regions
     // with no_inline=true from WarpPipeliner.  Process them before inlining.
@@ -976,7 +988,7 @@ public:
     eliminateRedundantCondBarriers(m, moduleAllocation);
 
     if (failed(applyPatternsGreedily(m, std::move(patternInline))))
-      signalPassFailure();
+      return signalPassFailure();
   }
 };
 
