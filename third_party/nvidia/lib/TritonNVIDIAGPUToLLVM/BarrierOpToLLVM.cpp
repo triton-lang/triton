@@ -187,12 +187,7 @@ struct InvalBarrierOpConversion
 
 struct BarrierExpectConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::BarrierExpectOp> {
-  const NVIDIA::TargetInfo *targetInfo;
-  BarrierExpectConversion(LLVMTypeConverter &typeConverter,
-                          PatternBenefit benefit,
-                          NVIDIA::TargetInfo &targetInfo)
-      : ConvertOpToLLVMPattern(typeConverter, benefit),
-        targetInfo(&targetInfo) {}
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::BarrierExpectOp op, OpAdaptor adaptor,
@@ -207,7 +202,10 @@ struct BarrierExpectConversion
     // the current partition first.
     ttg::BarrierOp::create(rewriter, loc, ttg::AddrSpace::Local);
 
-    Value pred = getElectWarp0OrThread0(*targetInfo, b);
+    // The partition-relative thread ID lowers the same or marginally better
+    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
+    Value id = getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(id, b.i32_val(0));
     pred = b.and_(pred, adaptor.getPred());
     bool crossCluster = LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
     Value leaderBarrierPtr = LLVM::NVIDIA::getLeaderAddress(
@@ -320,12 +318,7 @@ struct WaitBarrierOpConversion
 
 struct ArriveBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ArriveBarrierOp> {
-  const NVIDIA::TargetInfo *targetInfo;
-  ArriveBarrierOpConversion(LLVMTypeConverter &typeConverter,
-                            PatternBenefit benefit,
-                            NVIDIA::TargetInfo &targetInfo)
-      : ConvertOpToLLVMPattern(typeConverter, benefit),
-        targetInfo(&targetInfo) {}
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
@@ -342,7 +335,10 @@ struct ArriveBarrierOpConversion
     // accesses which doesn't have a MemBar equivalent :/
     ttg::BarrierOp::create(rewriter, loc, ttg::AddrSpace::Local);
 
-    Value pred = getElectWarp0OrThread0(*targetInfo, b);
+    // The partition-relative thread ID lowers the same or marginally better
+    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
+    Value id = getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(id, b.i32_val(0));
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
 
@@ -555,8 +551,8 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
   patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(
       typeConverter, benefit, targetInfo);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
-  patterns.add<BarrierExpectConversion>(typeConverter, benefit, targetInfo);
-  patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit, targetInfo);
+  patterns.add<BarrierExpectConversion>(typeConverter, benefit);
+  patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
   patterns.add<CLCTryCancelOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<CLCLoadResultOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<CLCIsCanceledOpConversion>(typeConverter, benefit, targetInfo);
