@@ -600,6 +600,11 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
+SmallVector<SmallVector<Value>>
+emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+            const LinearLayout &layout, RankedTensorType type,
+            bool withCTAOffset);
+
 // Compute per-element shared-memory pointers for a local atomic/ldst update by
 // replacing `coords[*][axis]` with `idxValues[*]` and mapping the resulting
 // logical coordinates back to shared-memory offsets.

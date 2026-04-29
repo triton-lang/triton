@@ -30,32 +30,6 @@ bool isConstI32OneTensor(Value value) {
                       [](const APInt &value) { return value.isOne(); });
 }
 
-SmallVector<SmallVector<Value>>
-applyRegActionToCoords(const ColumnAction &action,
-                       ArrayRef<SmallVector<Value>> coords) {
-  if (action.isIdentity() || coords.empty())
-    return to_vector(coords);
-
-  unsigned rank = coords.front().size();
-  SmallVector<SmallVector<Value>> dimCoords(rank);
-  for (auto coord : coords) {
-    assert(coord.size() == rank && "expected all coordinates to have rank");
-    for (unsigned dim = 0; dim < rank; ++dim)
-      dimCoords[dim].push_back(coord[dim]);
-  }
-
-  for (auto &dimCoord : dimCoords)
-    dimCoord = action.apply(dimCoord);
-
-  SmallVector<SmallVector<Value>> ret(dimCoords.front().size(),
-                                      SmallVector<Value>(rank));
-  for (unsigned dim = 0; dim < rank; ++dim) {
-    for (auto [i, value] : llvm::enumerate(dimCoords[dim]))
-      ret[i][dim] = value;
-  }
-  return ret;
-}
-
 struct LocalAtomicScatterAddInfo {
   RankedTensorType valuesTy;
   Type llvmElemTy;
@@ -85,9 +59,6 @@ prepareLocalAtomicScatterAdd(triton::gpu::LocalAtomicScatterAddOp op, Value dst,
   auto smemObj =
       LLVM::getSharedMemoryObjectFromStruct(loc, dst, llvmElemTy, rewriter);
   SmallVector<Value> idxValues = unpackLLElements(loc, indices, rewriter);
-  SmallVector<SmallVector<Value>> srcIndices =
-      emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(), valuesTy,
-                  /*withCTAOffset=*/true);
   SmallVector<Value> values = unpackLLElements(loc, inputValues, rewriter);
   SmallVector<Value> maskValues;
   if (mask)
@@ -98,13 +69,17 @@ prepareLocalAtomicScatterAdd(triton::gpu::LocalAtomicScatterAddOp op, Value dst,
   auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
   Value threadPred =
       emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+  LinearLayout activeRegLayout = regLayout;
   if (!removeBroadcast.isIdentity()) {
+    activeRegLayout = removeBroadcast.apply(regLayout);
     values = removeBroadcast.apply(values);
     idxValues = removeBroadcast.apply(idxValues);
-    srcIndices = applyRegActionToCoords(removeBroadcast, srcIndices);
     if (!maskValues.empty())
       maskValues = removeBroadcast.apply(maskValues);
   }
+  SmallVector<SmallVector<Value>> srcIndices =
+      emitIndices(loc, rewriter, targetInfo, activeRegLayout, valuesTy,
+                  /*withCTAOffset=*/true);
 
   SmallVector<Value> ptrs =
       computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
