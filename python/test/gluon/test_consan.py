@@ -1733,6 +1733,8 @@ def test_ws_load_ordering(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0], cga_layout=cga_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, [3, block_x], smem_layout)
+        for i in ttgl.static_range(3):
+            smem.index(i).store(ttgl.zeros([block_x], ttgl.float16, blocked_layout))
         bar = mbarrier.allocate_mbarrier(batch=3)
         for i in range(3):
             mbarrier.init(bar.index(i), count=1)
@@ -1977,6 +1979,8 @@ def test_ws_async_copy_commits(FAILURE, device, run_wrapper, monkeypatch, num_ct
         smem = ttgl.allocate_shared_memory(ttgl.float16, [4, block_x], smem_layout)
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[block_x], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0], cga_layout=cga_layout)
+        for i in ttgl.static_range(4):
+            smem.index(i).store(ttgl.zeros([block_x], ttgl.float16, blocked_layout))
         ttgl.warp_specialize([
             (ws_prog, (input, smem, FAILURE, blocked_layout, 0)),
             (ws_prog, (input, smem, FAILURE, blocked_layout, 2)),
