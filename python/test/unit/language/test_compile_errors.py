@@ -392,40 +392,6 @@ def test_fp8_support(fresh_triton_cache, dtype):
             raise assertion_err from e.value
 
 
-@pytest.mark.parametrize("dtype", [tl.float8e5, tl.int8, tl.float16])
-def test_min_dot_size(dtype):
-    error_msg = "Input shapes should have "
-    if is_cuda():
-        if dtype.primitive_bitwidth == 8:
-            error_msg += "M >= 1, N >= 1 and K >= 32"
-        else:
-            error_msg = "M >= 1, N >= 1 and K >= 16"
-    elif is_hip():
-        # hip supports arbitrary sizes
-        error_msg = None
-    else:
-        pytest.skip("Test only supported on CUDA and HIP")
-
-    @triton.jit
-    def dot_kernel(dtype: tl.constexpr):
-        SIZE: tl.constexpr = 8
-        a = tl.full((SIZE, SIZE), 0.0, dtype)
-        b = tl.full((SIZE, SIZE), 0.0, dtype)
-        tl.dot(a, b)
-
-    if error_msg is None:
-        triton.compile(
-            triton.compiler.ASTSource(fn=dot_kernel, signature={"dtype": "constexpr"}, constexprs={"dtype": dtype}))
-    else:
-        with pytest.raises(CompilationError) as e:
-            triton.compile(
-                triton.compiler.ASTSource(fn=dot_kernel, signature={"dtype": "constexpr"}, constexprs={"dtype": dtype}))
-        try:
-            assert (error_msg in str(e.value.__cause__))
-        except AssertionError as assertion_err:
-            raise assertion_err from e.value
-
-
 def test_max_num_imprecise_acc_limit():
 
     @triton.jit

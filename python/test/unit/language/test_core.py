@@ -3580,6 +3580,52 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         assert re.search(pattern, ptx, flags=re.DOTALL)
 
 
+@pytest.mark.parametrize("M, N, K, in_dtype", [
+    (1, 1, 4, "float16"),
+    (1, 1, 4, "int8"),
+    (1, 2, 4, "float8e5"),
+])
+def test_dot_cuda_small_k(M, N, K, in_dtype, device):
+    if not is_cuda():
+        pytest.skip("small K dot regression test is CUDA-only")
+
+    @triton.jit
+    def kernel(X, Y, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+               OUT_DTYPE: tl.constexpr):
+        off_m = tl.arange(0, BLOCK_M)
+        off_n = tl.arange(0, BLOCK_N)
+        off_k = tl.arange(0, BLOCK_K)
+        x = tl.load(X + off_m[:, None] * BLOCK_K + off_k[None, :])
+        y = tl.load(Y + off_k[:, None] * BLOCK_N + off_n[None, :])
+        z = tl.dot(x, y, input_precision="ieee", out_dtype=OUT_DTYPE)
+        tl.store(Z + off_m[:, None] * BLOCK_N + off_n[None, :], z)
+
+    rs = RandomState(17)
+    x = numpy_random((M, K), dtype_str=in_dtype, rs=rs)
+    y = numpy_random((K, N), dtype_str=in_dtype, rs=rs)
+    x_tri = to_triton(x, device=device, dst_type=in_dtype)
+    y_tri = to_triton(y, device=device, dst_type=in_dtype)
+
+    if in_dtype == "int8":
+        z = np.empty((M, N), dtype=np.int32)
+        z_ref = np.matmul(x.astype(np.int32), y.astype(np.int32))
+        out_ty = tl.int8
+    elif in_dtype == "float8e5":
+        z = np.empty((M, N), dtype=np.float32)
+        x_ref = convert_fp8_to_fp32(x, device, in_dtype)
+        y_ref = convert_fp8_to_fp32(y, device, in_dtype)
+        z_ref = to_numpy(torch.matmul(x_ref, y_ref))
+        out_ty = tl.float32
+    else:
+        z = np.empty((M, N), dtype=np.float32)
+        z_ref = np.matmul(x, y)
+        out_ty = tl.float32
+
+    z_tri = to_triton(z, device=device)
+    kernel[(1, )](x_tri, y_tri, z_tri, BLOCK_M=M, BLOCK_N=N, BLOCK_K=K, OUT_DTYPE=out_ty, num_warps=1)
+    np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
+
+
 @pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
                          [(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, 4, mma, kpack)
                           for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
