@@ -58,4 +58,33 @@ def SimdgroupAsyncCopy : TT_MetalGPU_Op<"simdgroup_async_copy"> {
   }];
 }
 
+def SimdgroupStore : TT_MetalGPU_Op<"simdgroup_store", [
+  TypesMatchWith<"value type matches ptr type", "ptr", "value",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+  let summary = "store simdgroup tensor in global memory";
+  let description = [{
+    This op represents an store instruction of a simdgroup tensor in global memory.
+  }];
+
+  let arguments = (ins
+    Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>]>:$ptr,
+    TT_Type:$value,
+    Optional<TT_BoolLike>:$mask
+  );
+
+  let builders = [
+    // A tensor of pointers or a pointer to a scalar
+    OpBuilder<(ins "Value":$ptr, "Value":$value)>
+  ];
+  
+  let assemblyFormat = [{
+    $ptr `,` $value (`,` $mask^)?
+    attr-dict `:` type($ptr)
+  }];
+}
+
 #endif // TRITON_METALGPU_OPS
