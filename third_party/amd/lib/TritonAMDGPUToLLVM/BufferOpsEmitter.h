@@ -91,10 +91,12 @@ struct BufferEmitter {
                  CacheModifier cm);
 
 private:
-  // Fill common buffer operation arguments.
+  // Fill common buffer operation arguments. `allowSoffsetSplit=false`
+  // forces `soffset = 0` for call sites that must preserve the previous
+  // operand shape.
   void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems, Value pred,
                       CacheModifier cm, bool isBufferLoad,
-                      SmallVector<Value> &args);
+                      SmallVector<Value> &args, bool allowSoffsetSplit = true);
 
   // Fill buffer atomics arguments
   void fillCommonArgsAtomics(Type type, Value rsrcDesc, Value vOffsetElems,

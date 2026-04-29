@@ -40,6 +40,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 #blocked0 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+    // CHECK-LABEL: buffer_load_mask_soffset_oob
+    tt.func @buffer_load_mask_soffset_oob(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %base_offset : i32, %N : i32) {
+        %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked0>
+        %base = tt.splat %base_offset : i32 -> tensor<128xi32, #blocked0>
+        %offset = arith.addi %base, %range : tensor<128xi32, #blocked0>
+        %n = tt.splat %N: i32 -> tensor<128xi32, #blocked0>
+        %mask = arith.cmpi slt, %range, %n: tensor<128xi32, #blocked0>
+        // CHECK: %[[soffset:.*]] = llvm.mul
+        // CHECK: %[[false_offset:.*]] = llvm.sub {{.*}}, %[[soffset]] : i32
+        // CHECK: %[[masked_offset:.*]] = llvm.select {{.*}}, {{.*}}, %[[false_offset]] : i1, i32
+        // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[masked_offset]], %[[soffset]]
+        %ret = amdg.buffer_load %arg0[%offset], %mask : tensor<128xf32, #blocked0>
+        tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     // CHECK-LABEL: buffer_load_mask_other
     tt.func @buffer_load_mask_other(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offset : tensor<128xi32, #blocked0> {tt.divisibility=16:i32}, %N : i32 {tt.divisibility = 16 : i32}) {
         %c256_i32 = arith.constant 256 : i32

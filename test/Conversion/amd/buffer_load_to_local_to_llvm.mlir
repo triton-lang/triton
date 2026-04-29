@@ -186,12 +186,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   tt.func public @buffer_load_to_local_cache_mods(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg2: !ttg.memdesc<64xf32, #shared, #smem, mutable>) {
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
-    // The first constant 0 skips the LDS offset which is also 0
+    // The first constant 0 is the soffset slot (now wired to the split
+    // scalar; constant 0 here when no uniform leaf is present). The
+    // third constant 0 is the imm offset slot (always literal 0).
     // COMMON: %[[VOFFSET:.*]] = llvm.select
-    // COMMON-NEXT: %[[IMM0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // COMMON-NEXT: %[[SOFFSET:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COMMON-NEXT: %[[aux_ca:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // COMMON-NEXT: %[[IMM1:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // COMMON-NEXT: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, %[[VOFFSET]], %[[IMM1]], %[[IMM0]], %[[aux_ca]]
+    // COMMON-NEXT: %[[IMM:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // COMMON-NEXT: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, %[[VOFFSET]], %[[SOFFSET]], %[[IMM]], %[[aux_ca]]
     %1 = amdg.buffer_load_to_local %arg0[%0] cacheModifier = ca into %arg2: <f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
     // COMMON: llvm.getelementptr
     // COMMON: %[[aux_cg:.*]] = llvm.mlir.constant(3 : i32) : i32

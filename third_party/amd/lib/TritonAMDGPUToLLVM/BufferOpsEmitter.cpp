@@ -6,6 +6,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include "BufferOpsEmitter.h"
+#include "OffsetUniformitySplit.h"
 
 using namespace triton::AMD;
 
@@ -128,23 +129,37 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
                              triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> commonArgs;
+  // The async-LDS intrinsic only marks ArgIndex 2/5/6 as `immarg`; the
+  // SGPR `soffset` slot (ArgIndex 4) accepts a runtime SGPR. Allow the
+  // wave-uniform splitter to lift a scalar contribution into that slot.
+  // gemm.rocmasm uses exactly this pattern
+  // (`buffer_load_dwordx4 v245, s[20:23], s3 offen lds`).
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
-                 commonArgs);
+                 commonArgs, /*allowSoffsetSplit=*/true);
   Type bufferType = getBufferOpType(type, false);
 
   // buffer_load_to_lds is only supported on gfx942/gfx950 which always use
   // asyncmark. Emit the async intrinsic so LLVM's SIInsertWaitcnts tracks
   // these operations via asyncmark/wait_asyncmark.
+  //
+  // Intrinsic operand layout (int_amdgcn_raw_ptr_buffer_load_async_lds):
+  //   ArgIndex 0: rsrc                       (SGPR)
+  //   ArgIndex 1: ldsPtr                     (LDS ptr)
+  //   ArgIndex 2: byteWidth                  (immarg)
+  //   ArgIndex 3: voffset                    (per-lane VGPR)
+  //   ArgIndex 4: soffset                    (uniform SGPR or imm)
+  //   ArgIndex 5: imm offset                 (immarg, must be constant)
+  //   ArgIndex 6: aux/cachepolicy            (immarg)
   return ROCDL::RawPtrBufferLoadAsyncLdsOp::create(
       rewriter, loc, TypeRange{},
       ValueRange{
-          commonArgs[0], // Buffer descriptor
-          dst,           // LDS base ptr
-          byteWidth,     // Instr size
-          commonArgs[1], // Buffer offset
-          b.i32_val(0),  // LDS offset
-          commonArgs[2], // Instruction offset
-          commonArgs[3], // AUX
+          commonArgs[0], // ArgIndex 0: rsrc
+          dst,           // ArgIndex 1: LDS base ptr
+          byteWidth,     // ArgIndex 2: data byte size (immarg)
+          commonArgs[1], // ArgIndex 3: voffset (per-lane VGPR)
+          commonArgs[2], // ArgIndex 4: soffset (split scalar or 0)
+          b.i32_val(0),  // ArgIndex 5: imm offset (immarg, always 0 here)
+          commonArgs[3], // ArgIndex 6: aux (immarg)
       });
 }
 
@@ -260,22 +275,45 @@ Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
 void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
                                    Value vOffsetElems, Value pred,
                                    triton::CacheModifier cm, bool isBufferLoad,
-                                   SmallVector<Value> &args) {
+                                   SmallVector<Value> &args,
+                                   bool allowSoffsetSplit) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // 1. Create the (masked) offset
   Type elementType = getElementTypeOrSelf(type);
   const int valueElemNBits = std::max(8u, elementType.getIntOrFloatBitWidth());
   const int elementByteWidth = valueElemNBits / 8;
-  // Please note: the index passed is not in bytes, but in number of elements
-  // In order to pass the index to the buffer operation, we need to convert in
-  // bytes (i.e., we need to multiply by `elementByteWidth`)
+  // The supplied index is in elements, not bytes; convert by multiplying by
+  // `elementByteWidth` before feeding the buffer intrinsic.
   Value vOffsetOutOfBunds = b.int_val(
       32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
-  Value vOffsetBytes = b.mul(b.int_val(32, elementByteWidth), vOffsetElems);
-  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBunds);
 
-  // 2. Set the sgprOffset to 0
-  Value sgprOffset = b.int_val(32, 0);
+  // 2. Try to lift the wave-uniform sub-tree of the element offset into the
+  // buffer-load `soffset` slot. The intrinsic computes
+  // `addr = base + voffset + soffset` per-lane, so a uniform offset that
+  // would otherwise consume per-lane VGPR adds can travel through one SGPR.
+  // The split happens on the element-count offset before the byte-width
+  // multiply so the produced byte-level adds stay flat (`mul` distributes
+  // over the partitioned leaves).
+  Value vOffsetBytes;
+  Value sgprOffset;
+  bool useSplit = false;
+  if (isBufferLoad && allowSoffsetSplit) {
+    auto split = splitUniformAdditive(vOffsetElems, rewriter, loc);
+    if (split.first) {
+      sgprOffset = b.mul(b.int_val(32, elementByteWidth), split.first);
+      vOffsetBytes = b.mul(b.int_val(32, elementByteWidth), split.second);
+      useSplit = true;
+    }
+  }
+  if (!useSplit)
+    vOffsetBytes = b.mul(b.int_val(32, elementByteWidth), vOffsetElems);
+
+  // Default soffset is zero for unsplit offsets. Masked lanes compensate for
+  // nonzero soffset below so voffset + soffset still reaches the OOB sentinel.
+  if (!useSplit)
+    sgprOffset = b.int_val(32, 0);
+  Value falseOffsetBytes = b.sub(vOffsetOutOfBunds, sgprOffset);
+  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, falseOffsetBytes);
 
   // 3. Create the cache modifiers word
   int32_t aux =
