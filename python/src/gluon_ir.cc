@@ -715,8 +715,7 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Value memDesc, Value values, Value indices,
               std::optional<Value> mask, int32_t axis) -> Value {
              return self.create<ttg::LocalAtomicScatterAddOp>(
-                 values.getType(), memDesc, values, indices,
-                 mask.value_or(Value()), axis);
+                 memDesc, values, indices, mask.value_or(Value()), axis);
            })
       .def("get_shared_bank_conflicts",
            [](GluonOpBuilder &self, Attribute regLayoutAttr,
