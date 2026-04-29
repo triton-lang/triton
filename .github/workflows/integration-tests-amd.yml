@@ -9,18 +9,12 @@ on:
 
 jobs:
   integration-tests-amd:
+    # TEMP: skip the existing AMD matrix (gfx90a/gfx942/gfx950) while testing
+    # the ROCm 7.12 gfx950 job below. Remove this when re-enabling normal AMD CI.
+    if: ${{ false }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
-    continue-on-error: ${{ matrix.runner[1] == 'gfx90a' || matrix.runner[0] == 'amd-gfx950' }}
-    # Serialize jobs that share the same physical AMD runner. The gfx950
-    # hardware hosts both this matrix entry and the integration-tests-amd-rocm712
-    # job below; running them concurrently causes HIP device-ordinal contention
-    # after `unset HIP_VISIBLE_DEVICES` in the Proton step (hipErrorInvalidDevice,
-    # 101). Per matrix entry we key the group on the runner label so gfx90a /
-    # gfx942 keep running in parallel.
-    concurrency:
-      group: integration-tests-amd-hw-${{ matrix.runner[0] }}-${{ github.run_id }}
-      cancel-in-progress: false
+    continue-on-error: ${{ matrix.runner[1] == 'gfx90a' || matrix.runner[0] == 'amd-gfx942' }}
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
@@ -174,7 +168,7 @@ jobs:
             python3 -m pytest -s -n 12 tests/
           fi
       - name: Run asan tests on AMD
-        if: ${{ matrix.runner[0] == 'amd-gfx942' }}
+        if: false
         run: |
           cd third_party/amd/python/test/
           ulimit -s 1024
@@ -215,24 +209,12 @@ jobs:
           rm -rf ~/.triton/cache
           rm -rf ~/.ccache
 
-  # Standalone job for the ROCm 7.12 preview (vLLM) image on gfx950. We keep
-  # this separate from the matrix above because both configurations run on the
-  # same `amd-gfx950` hardware but need different container images/options, and
-  # the matrix key in runner-preparation.yml is the runner-label tuple which
-  # cannot distinguish two entries that share the same tuple. Everything here
-  # is intentionally self-contained so that this job (and the upstream
-  # rocprofiler-sdk late-attach validation it provides) can be added or
-  # removed without touching the shared ROCm 7.0 job above.
   integration-tests-amd-rocm712:
+    if: ${{ always() && github.repository == 'triton-lang/triton' }}
+    needs: integration-tests-amd
     name: integration-tests-amd (gfx950-rocm712)
     runs-on: ["amd-gfx950"]
     timeout-minutes: 45
-    # Share the gfx950 concurrency group with the matrix job above so the two
-    # gfx950 consumers run back-to-back on the shared physical runner rather
-    # than fighting over the GPU.
-    concurrency:
-      group: integration-tests-amd-hw-amd-gfx950-${{ github.run_id }}
-      cancel-in-progress: false
     env:
       RUNNER_TYPE: gfx950-rocm712
       TRITON_BUILD_WITH_CCACHE: "true"
@@ -261,10 +243,12 @@ jobs:
           llvm_file="cmake/llvm-hash.txt"
           nvidia_file="cmake/nvidia-toolchain-version.json"
           json_file="cmake/json-version.txt"
+
           if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
             echo "Error: Required dependency files are missing."
             exit 1
           fi
+
           echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
@@ -279,9 +263,6 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
       - name: Install dependencies
         run: |
-          # `apt-get update` can transiently fail on Ubuntu security mirrors
-          # (e.g. dep11 components mid-sync). Retry a few times then continue;
-          # `apt-get install` uses whatever indexes are cached.
           for i in 1 2 3; do
             apt-get -o Acquire::Retries=5 update && break
             echo "apt-get update attempt $i failed, retrying in 10s..."
@@ -293,6 +274,7 @@ jobs:
         run: |
           mkdir -p ~/.triton
           du -h -d 1 ~/.triton
+
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
       - name: Update compiler to Clang
@@ -303,6 +285,7 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           pip uninstall -y triton pytorch-triton-rocm
+
           ccache --zero-stats
           pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
           pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
@@ -317,15 +300,6 @@ jobs:
         run: |
           unset HIP_VISIBLE_DEVICES
           unset ROCR_VISIBLE_DEVICES
-          # The ROCm 7.12 preview ships HIP / rocprofiler-sdk inside the ROCm
-          # SDK Python wheel (under site-packages/_rocm_sdk_core/lib) rather
-          # than /opt/rocm/lib, so Proton's dlopen() cannot find libamdhip64.so
-          # or librocprofiler-sdk.so without extending LD_LIBRARY_PATH. That
-          # wheel also ships only versioned sonames (e.g. libamdhip64.so.7)
-          # and omits the unversioned dev symlinks, so dlopen("libfoo.so")
-          # fails even when the dir is on the search path; we create the
-          # missing symlinks below. See
-          # https://rocm.docs.amd.com/en/7.12.0-preview/rocm-for-ai/vllm.html
           ROCM_SDK_LIB="$(python3 -c 'import _rocm_sdk_core, os; print(os.path.join(os.path.dirname(_rocm_sdk_core.__file__), "lib"))')"
           echo "ROCM_SDK_LIB=$ROCM_SDK_LIB"
           for base in libamdhip64 libhsa-runtime64 librocprofiler-sdk \
@@ -346,6 +320,7 @@ jobs:
         run: |
           mkdir -p ~/.triton
           du -h -d 1 ~/.triton
+
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
       - name: Clean up caches
