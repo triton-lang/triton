@@ -26,8 +26,8 @@ def SimdgroupMMAOp : TT_MetalGPU_Op<"simdgroup_mma", [Pure]> {
   }];
 
   let arguments = (ins
-    Arg<TT_Ptr, "Shared memory pointer", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$a_ptr,
-    Arg<TT_Ptr, "Shared memory pointer", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$b_ptr,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$a,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$b,
     TT_FpIntTensor:$c,
     I32:$strideA,
     I32:$strideB
@@ -36,7 +36,7 @@ def SimdgroupMMAOp : TT_MetalGPU_Op<"simdgroup_mma", [Pure]> {
   let results = (outs TT_FpIntTensor:$d);
   
   let assemblyFormat = [{
-    $a_ptr `,` $b_ptr `,` $c `,` $strideA `,` $strideB
+    $a `,` $b `,` $c `,` $strideA `,` $strideB
     attr-dict `:` functional-type(operands, $d)
   }];
 }
@@ -58,13 +58,7 @@ def SimdgroupAsyncCopyOp : TT_MetalGPU_Op<"simdgroup_async_copy"> {
   }];
 }
 
-def SimdgroupStoreOp : TT_MetalGPU_Op<"simdgroup_store", [
-  TypesMatchWith<"value type matches ptr type", "ptr", "value",
-                 "getPointeeType($_self)">,
-  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
-                 "getI1SameShape(getPointeeType($_self))",
-                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
-]> {
+def SimdgroupStoreOp : TT_MetalGPU_Op<"simdgroup_store"> {
   let summary = "store simdgroup tensor in global memory";
   let description = [{
     This op represents an store instruction of a simdgroup tensor in global memory.
@@ -73,17 +67,18 @@ def SimdgroupStoreOp : TT_MetalGPU_Op<"simdgroup_store", [
   let arguments = (ins
     Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>]>:$ptr,
     TT_Type:$value,
+    I32:$stride,
     Optional<TT_BoolLike>:$mask
   );
 
   let builders = [
     // A tensor of pointers or a pointer to a scalar
-    OpBuilder<(ins "Value":$ptr, "Value":$value)>
+    OpBuilder<(ins "Value":$ptr, "Value":$value, "Value":$stride)>
   ];
   
   let assemblyFormat = [{
-    $ptr `,` $value (`,` $mask^)?
-    attr-dict `:` type($ptr)
+    $ptr `,` $value `,` $stride (`,` $mask^)?
+    attr-dict `:` type($ptr) `,` type($value) `,` type($mask)
   }];
 }
 

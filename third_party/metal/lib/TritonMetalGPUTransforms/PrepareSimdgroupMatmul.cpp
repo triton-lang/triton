@@ -14,13 +14,14 @@
 #include "triton/Tools/LinearLayout.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/LogicalResult.h"
+#include <optional>
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttmetalgpu = mlir::triton::metalgpu;
 
 #undef DEBUG_TYPE
-#define DEBUG_TYPE "tritonmetal-allocate-smem-for-simdgroup-matmul"
+#define DEBUG_TYPE "tritonmetal-prepare-simdgroup-matmul"
 
 namespace mlir {
 namespace {
@@ -67,7 +68,7 @@ std::optional<unsigned> findTTDotInputArg(tt::LoadOp loadOp) {
   return ptrArg.getArgNumber();
 }
 
-Value findTTDotStoreBasePtr(tt::DotOp dotOp) {
+std::pair<Value, tt::StoreOp> findTTStoreTilePtr(tt::DotOp dotOp) {
   auto accumulator = dotOp.getResult();
   auto accUsers = accumulator.getUsers();
   scf::YieldOp yieldOp;
@@ -119,7 +120,39 @@ Value findTTDotStoreBasePtr(tt::DotOp dotOp) {
   if (!isa<RankedTensorType>(cBasePtr.getType()))
     return {};
 
-  return cBasePtr;
+  return std::make_pair(cBasePtr, storeOp);
+}
+
+std::optional<unsigned> findTTDotOutputArg(tt::StoreOp storeOp) {
+  auto storeOpPtrs = storeOp.getOperand(0);
+
+  // backtrack through addptr ops until reach convert layout op
+  Value cur = storeOpPtrs;
+  while (auto addptr = cur.getDefiningOp<tt::AddPtrOp>())
+    cur = addptr.getPtr();
+
+  auto convertLayoutOp = cur.getDefiningOp<ttg::ConvertLayoutOp>();
+  if (!convertLayoutOp)
+    return std::nullopt;
+
+  auto broadcastOp =
+      convertLayoutOp.getOperand().getDefiningOp<tt::BroadcastOp>();
+  if (!broadcastOp)
+    return std::nullopt;
+
+  cur = broadcastOp.getOperand();
+  while (auto addptr = cur.getDefiningOp<tt::AddPtrOp>())
+    cur = addptr.getPtr();
+
+  auto splatOp = cur.getDefiningOp<tt::SplatOp>();
+  if (!splatOp)
+    return std::nullopt;
+
+  auto ptrArg = dyn_cast<BlockArgument>(splatOp.getSrc());
+  if (!ptrArg)
+    return std::nullopt;
+
+  return ptrArg.getArgNumber();
 }
 
 struct DotOpToSimdgroupMMA : public OpRewritePattern<tt::DotOp> {
@@ -255,16 +288,32 @@ struct DotOpToSimdgroupMMA : public OpRewritePattern<tt::DotOp> {
         rewriter, loc, retType, aAlloc.getResult(), bAlloc.getResult(),
         dotOp.getC(), aStrideI32, bStrideI32);
 
-    // try to find base ptr for where output tile is stored
-    auto cTilePtr = findTTDotStoreBasePtr(dotOp);
+    // try to find tile ptr for where output is stored
+    auto cBasePtrResult = findTTStoreTilePtr(dotOp);
+    auto cTilePtr = cBasePtrResult.first;
+    auto cStoreOp = cBasePtrResult.second;
+    auto cArgIdx = findTTDotOutputArg(cStoreOp);
+    if (!cArgIdx)
+      return rewriter.notifyMatchFailure(
+          dotOp, "Unable to find output tensor arg idx");
 
-    // tt.dot inputs come from tt.load, which loads tensor values into
-    // thread registers based on tensor encoding.
-    // Instead, use air.simdgroup_async_copy to take advantage
-    // of DMA.
-    // Need to trace back from tt.dot inputs to the load ops and replace them
-    // with
+    // get output tensor stride
+    Value cStridePtr = funcOp.getArgument(*cArgIdx + 1);
 
+    rewriter.setInsertionPointAfter(cStoreOp);
+    Value cStrideI64 =
+        tt::LoadOp::create(rewriter, loc, i64Ty, cStridePtr, /*mask=*/Value{},
+                           /*other=*/Value{}, /*cache=*/tt::CacheModifier::NONE,
+                           /*evict=*/tt::EvictionPolicy::NORMAL,
+                           /*isVolatile=*/false);
+    Value cStrideI32 =
+        arith::TruncIOp::create(rewriter, loc, i32Ty, cStrideI64);
+    // use val the original tt.store stores (forOp result, possibly
+    // through truncf), which is defined outside the loop
+    ttmetalgpu::SimdgroupStoreOp::create(rewriter, loc, cTilePtr,
+                                         cStoreOp.getValue(), cStrideI32);
+
+    rewriter.eraseOp(cStoreOp);
     rewriter.replaceOp(dotOp, mmaResult);
 
     return llvm::success();
@@ -273,19 +322,18 @@ struct DotOpToSimdgroupMMA : public OpRewritePattern<tt::DotOp> {
 
 } // namespace
 
-#define GEN_PASS_DEF_TRITONMETALGPUALLOCATESMEMFORSIMDGROUPMATMUL
+#define GEN_PASS_DEF_TRITONMETALGPUPREPARESIMDGROUPMATMUL
 #include "TritonMetalGPUTransforms/Passes.h.inc"
 
-class TritonMetalGPUAllocateSmemForSimdgroupMatmulPass
-    : public impl::TritonMetalGPUAllocateSmemForSimdgroupMatmulBase<
-          TritonMetalGPUAllocateSmemForSimdgroupMatmulPass> {
+class TritonMetalGPUPrepareSimdgroupMatmulPass
+    : public impl::TritonMetalGPUPrepareSimdgroupMatmulBase<
+          TritonMetalGPUPrepareSimdgroupMatmulPass> {
 public:
-  using impl::TritonMetalGPUAllocateSmemForSimdgroupMatmulBase<
-      TritonMetalGPUAllocateSmemForSimdgroupMatmulPass>::
-      TritonMetalGPUAllocateSmemForSimdgroupMatmulBase;
+  using impl::TritonMetalGPUPrepareSimdgroupMatmulBase<
+      TritonMetalGPUPrepareSimdgroupMatmulPass>::
+      TritonMetalGPUPrepareSimdgroupMatmulBase;
 
   void runOnOperation() override {
-    llvm::errs() << "Running pass" << "\n";
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
@@ -294,7 +342,6 @@ public:
     patterns.add<DotOpToSimdgroupMMA>(context);
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
-      llvm::errs() << "Pass failed" << "\n";
       return signalPassFailure();
     }
   }

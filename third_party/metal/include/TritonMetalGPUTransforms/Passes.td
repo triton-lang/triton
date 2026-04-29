@@ -15,8 +15,8 @@ def TritonMetalGPUInjectTensorStrideArgs : Pass<"inject-tensor-stride-args", "ml
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
-def TritonMetalGPUAllocateSmemForSimdgroupMatmul : Pass<"allocate-smem-for-simdgroup-matmul", "mlir::ModuleOp"> {
-  let summary = "allocate shared memory for simdgroup matmul";
+def TritonMetalGPUPrepareSimdgroupMatmul : Pass<"prepare-simdgroup-matmul", "mlir::ModuleOp"> {
+  let summary = "prepare simdgroup matmul";
   let dependentDialects = ["mlir::triton::TritonDialect",
                            "mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::metalgpu::TritonMetalGPUDialect"];
