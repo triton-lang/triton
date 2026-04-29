@@ -905,8 +905,16 @@ def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
                                                                cga_layout=cga_layout_a)
         smem_layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
                                                                cga_layout=cga_layout_b)
-        smemA = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], smem_layout_a)
-        smemB = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, block_n], smem_layout_b)
+        smem_a_init_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                warps_per_cta=[4, 1], order=[0, 1],
+                                                                cga_layout=smem_layout_a.cga_layout)
+        smem_b_init_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                warps_per_cta=[4, 1], order=[0, 1],
+                                                                cga_layout=smem_layout_b.cga_layout)
+        smemA = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], smem_layout_a,
+                                            value=ttgl.zeros([block_m, XBLOCK], ttgl.float16, smem_a_init_layout))
+        smemB = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, block_n], smem_layout_b,
+                                            value=ttgl.zeros([XBLOCK, block_n], ttgl.float16, smem_b_init_layout))
 
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[0, 1], cga_layout=cga_layout_a)
@@ -952,8 +960,16 @@ def test_warpgroup_mma2(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
                                                                cga_layout=cga_layout_a)
         smem_layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
                                                                cga_layout=cga_layout_b)
-        smemA = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], smem_layout_a)
-        smemB = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, block_n], smem_layout_b)
+        smem_a_init_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                warps_per_cta=[4, 1], order=[0, 1],
+                                                                cga_layout=smem_layout_a.cga_layout)
+        smem_b_init_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                warps_per_cta=[4, 1], order=[0, 1],
+                                                                cga_layout=smem_layout_b.cga_layout)
+        smemA = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], smem_layout_a,
+                                            value=ttgl.zeros([block_m, XBLOCK], ttgl.float16, smem_a_init_layout))
+        smemB = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, block_n], smem_layout_b,
+                                            value=ttgl.zeros([XBLOCK, block_n], ttgl.float16, smem_b_init_layout))
 
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[0, 1], cga_layout=cga_layout_a)
@@ -2079,10 +2095,19 @@ def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper, monkeypatch, num
                                                                cga_layout=cga_layout_b)
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[0, 1], cga_layout=cga_layout_a)
+        smem_a_init_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                warps_per_cta=[4, 1], order=[0, 1],
+                                                                cga_layout=smem_layout_a.cga_layout)
+        smem_b_init_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                warps_per_cta=[4, 1], order=[0, 1],
+                                                                cga_layout=smem_layout_b.cga_layout)
         mma_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1],
                                                                  instr_shape=[16, 32, 16], cga_layout=cga_layout_c)
         smemA = ttgl.allocate_shared_memory(ttgl.float16, [2, block_m, XBLOCK], smem_layout_a)
         smemB = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK, block_n], smem_layout_b)
+        for i in ttgl.static_range(2):
+            smemA.index(i).store(ttgl.zeros([block_m, XBLOCK], ttgl.float16, smem_a_init_layout))
+            smemB.index(i).store(ttgl.zeros([XBLOCK, block_n], ttgl.float16, smem_b_init_layout))
         bar = mbarrier.allocate_mbarrier(batch=1)
         mbarrier.init(bar.index(0), count=1)
         ttgl.warp_specialize([
