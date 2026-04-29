@@ -37,9 +37,10 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (!allocationInterval.intersects(other.allocationInterval))
     return false;
 
-  // Whole-slot disjointness via buffer-index matching. A null index
-  // (never matched, or invalidated across a backedge) fails the check.
-  if (areBufferIndicesProvablyDifferent(*this, other))
+  // For slices of the same allocation, compare dynamic buffer indices to prove
+  // that different slots do not overlap.
+  if (bufferId == other.bufferId && bufferId != Allocation::InvalidBufferId &&
+      areBufferIndicesProvablyDifferent(*this, other))
     return false;
 
   // If access types are unknown, assume intersection
