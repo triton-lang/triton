@@ -134,6 +134,17 @@ public:
            /*count=*/1, MemEffectsOpInfo::BarrierTrackingMode::Frontier,
            /*txCount=*/static_cast<int>(expectOp.getSize())});
     }
+    if (auto arriveOp = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      int count = 0;
+      if (arriveOp.getNoIncrement()) {
+        auto mod = op->getParentOfType<ModuleOp>();
+        count = ttg::lookupNumWarps(op) *
+                ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+      }
+      info->barriers.push_back({arriveOp.getBarrier(), nullptr, count});
+    }
     if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
