@@ -25,19 +25,35 @@ def SimdgroupMMAOp : TT_MetalGPU_Op<"simdgroup_mma", [Pure]> {
   }];
 
   let arguments = (ins
-    Arg<TT_Ptr, "Global memory pointer", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$a_ptr,
-    Arg<TT_Ptr, "Global memory pointer", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$b_ptr,
-    Arg<TT_Ptr, "Global memory pointer", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$c_ptr,
-    Arg<TT_Ptr, "Global memory pointer", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$d_ptr,
+    Arg<TT_Ptr, "Shared memory pointer", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$a_ptr,
+    Arg<TT_Ptr, "Shared memory pointer", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$b_ptr,
+    TT_FpIntTensor:$c,
     I32:$strideA,
-    I32:$strideB,
-    I32:$strideC,
-    I32:$strideD
+    I32:$strideB
+  );
+
+  let results = (outs TT_FpIntTensor:$d);
+  
+  let assemblyFormat = [{
+    $a_ptr `,` $b_ptr `,` $c `,` $strideA `,` $strideB
+    attr-dict `:` functional-type(operands, $d)
+  }];
+}
+
+def SimdgroupAsyncCopy : TT_MetalGPU_Op<"simdgroup_async_copy"> {
+  let summary = "async copy from global memory to threadgroup memory";
+  let description = [{
+    This op represents an async copy instruction from global memory to threadgroup memory of the input block.
+  }];
+
+  let arguments = (ins
+    Arg<TT_Ptr, "Global memory pointer", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$base_ptr,
+    I32:$stride,
+    Arg<TT_Ptr, "Shared memory pointer", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$dest_ptr
   );
   
   let assemblyFormat = [{
-    $a_ptr `,` $b_ptr `,` $c_ptr `,` $d_ptr `,`
-    $strideA `,` $strideB `,` $strideC `,` $strideD
+    $base_ptr `,` $stride `,` $dest_ptr
     attr-dict `:` type(operands)
   }];
 }
