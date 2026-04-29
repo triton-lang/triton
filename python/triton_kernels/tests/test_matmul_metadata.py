@@ -112,3 +112,34 @@ def test_matmul_launch_metadata_nosync_matches_old_formula(case):
     torch.testing.assert_close(direct_actual["bytes"].cpu(), expected["bytes"].to(torch.int64).cpu(), rtol=0, atol=0)
     torch.testing.assert_close(actual[f"flops{nbits}"].cpu(), expected[f"flops{nbits}"].cpu(), rtol=0, atol=0)
     torch.testing.assert_close(actual["bytes"].cpu(), expected["bytes"].to(torch.int64).cpu(), rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_matmul_flops_and_bytes_from_slices_handles_large_slice_count():
+    device = torch.device("cuda")
+    slice_sizes = torch.arange(1501, dtype=torch.int32, device=device) % 17
+    n_tokens = int(slice_sizes.cpu().sum())
+    nbits = 16
+    M, N, K = None, 16, 8
+    batch_size = 2
+    X = torch.empty((n_tokens, K), dtype=torch.float16, device=device)
+    Y = torch.empty((n_tokens, N), dtype=torch.float16, device=device)
+    W = torch.empty((slice_sizes.numel(), K, N), dtype=torch.float16, device=device)
+    args = _metadata_args(
+        ragged_dimension="M",
+        M=M,
+        N=N,
+        K=K,
+        X=X,
+        Y=Y,
+        W=W,
+        slice_sizes=slice_sizes,
+        batch_size=batch_size,
+    )
+
+    expected = _old_flops_and_bytes(args, M, N, K, X, Y, W, slice_sizes, nbits, batch_size)
+    actual = _matmul_flops_and_bytes_from_slices(args, M, N, K, X, Y, W, slice_sizes, nbits, batch_size)
+    torch.cuda.synchronize(device)
+
+    torch.testing.assert_close(actual[f"flops{nbits}"].cpu(), expected[f"flops{nbits}"].cpu(), rtol=0, atol=0)
+    torch.testing.assert_close(actual["bytes"].cpu(), expected["bytes"].to(torch.int64).cpu(), rtol=0, atol=0)
