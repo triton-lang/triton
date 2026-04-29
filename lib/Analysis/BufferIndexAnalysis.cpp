@@ -76,8 +76,6 @@ bool isCFBlockArgProvablyBounded(BlockArgument blockArg, int64_t modulus,
       return false;
 
     auto operands = branch.getSuccessorOperands(predIt.getSuccessorIndex());
-    if (argIdx >= operands.size())
-      return false;
     Value incoming = operands[argIdx];
 
     if (incoming == selectOp.getResult())
