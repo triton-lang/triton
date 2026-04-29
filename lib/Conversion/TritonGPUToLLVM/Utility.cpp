@@ -721,7 +721,18 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   // It's fine that we don't compute the offset in bytes as affineOffset
   // will be folded into a constant
   auto affineOffsetI8 = b.mul(affineOffset, b.i32_val(bitwidth / 8));
-  regBaseI8 = b.xor_(regBaseI8, affineOffsetI8);
+  bool hasPadding = !paddingShifts.empty();
+  Value paddedAffineOffsetI8 = b.i32_val(0);
+  if (hasPadding && maskSpanAffineOffset != 0) {
+    // `maskSpanAffineOffset != 0` indicates the affine offsets come from
+    // MemDescSubsliceOp, whose verifier guarantees that the affine offsets are
+    // bitwise disjoint from other offset contributors. Padding can thus be
+    // applied separately. This helps LLVM reuse base pointers.
+    paddedAffineOffsetI8 =
+        applyPadding(loc, rewriter, affineOffsetI8, paddingShifts);
+  } else {
+    regBaseI8 = b.xor_(regBaseI8, affineOffsetI8);
+  }
 
   SmallVector<Value> outVals;
   auto vecTy = vec_ty(llvmElemTy, elemsPerVec);
@@ -730,11 +741,15 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
         reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
     auto regIdxI8 = idxAndBlock[0].second * (bitwidth / 8);
     Value offset = b.xor_(regBaseI8, b.i32_val(regIdxI8));
+    if (hasPadding) {
+      offset = applyPadding(loc, rewriter, offset, paddingShifts);
+      if (maskSpanAffineOffset != 0)
+        offset = b.add(offset, paddedAffineOffsetI8);
+    }
     Value ctaOffset = b.i32_val(0);
     if (useBlockId) {
       ctaOffset = b.xor_(targetCtaId, b.i32_val(idxAndBlock[1].second));
     }
-    offset = applyPadding(loc, rewriter, offset, paddingShifts);
     for (int j = 0; j < nAdditive; j += elemsPerVec) {
       // all these constants will go as immediate values to LDS/STS
       auto idxAndBlockAdd =
@@ -1153,14 +1168,10 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
   if (allocShape == shape) {
     return 0;
   }
-  if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
-    // Mask is used in fusion of constant part of memory operation address as
-    // immediate operand. Padded layout has additional address computations
-    // between main offset computation and actual memory access, which breaks
-    // constant fusing. Full mask disables this optimization.
-    return ~uint64_t(0);
-  }
-  auto totalLl = triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
+  auto totalLl =
+      triton::gpu::isPaddedEncoding(srcTy.getEncoding())
+          ? triton::gpu::paddedLinearLayout(allocShape, srcTy.getEncoding())
+          : triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
   auto dimNames = standardOutDimNames(ctx, shape.size());
   // Map from dimNames to offset, block
   auto invLl = totalLl.invert();

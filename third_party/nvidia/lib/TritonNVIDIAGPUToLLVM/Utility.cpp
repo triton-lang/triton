@@ -150,7 +150,7 @@ Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
   return b.shl(b.i32_val(encoding.pattern), base);
 }
 
-static uint32_t getCGABroadcastMask(mlir::triton::gpu::MemDescType barrierTy) {
+uint32_t getCGABroadcastMask(mlir::triton::gpu::MemDescType barrierTy) {
   auto kBlock = StringAttr::get(barrierTy.getContext(), "block");
   return toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
 }
