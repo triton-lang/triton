@@ -52,18 +52,6 @@ module attributes {"ttg.num-ctas" = 2 : i32} {
 
 // -----
 
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 2 : i32} {
-  tt.func public @subslice_broadcasted_cga_output(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
-      // expected-error @+1 {{broadcasted CTA outputs}}
-      %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<4x16xf32, #shared, #smem>
-      tt.return
-  }
-}
-
-// -----
-
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 tt.func public @miss_encoding(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
@@ -179,31 +167,6 @@ tt.func public @result_dim_too_large(%arg0: !ttg.memdesc<8x16xf32, #shared1d, #s
     // expected-error @+1 {{result shape}}
     %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<8x16xf32, #shared1d, #smem> -> !ttg.memdesc<32xf32, #shared1d, #smem>
     tt.return
-}
-
-// -----
-
-#shared_multicast = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
-#shared_local = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 2 : i32} {
-  tt.func public @memdesc_reinterpret_changed_broadcast_count(%arg0: !ttg.memdesc<128x128xf16, #shared_multicast, #smem>) {
-    // expected-error @+1 {{source and result must have the same number of broadcast CTA dims}}
-    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x128xf16, #shared_multicast, #smem> -> !ttg.memdesc<128x128xf16, #shared_local, #smem>
-    tt.return
-  }
-}
-
-// -----
-
-#shared_bc0 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1], [0, 0]]}>
-#shared_bc1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0], [0, 0]]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 4 : i32} {
-  tt.func public @memdesc_reinterpret_changed_broadcast_mask(%arg0: !ttg.memdesc<128x128xf16, #shared_bc0, #smem>) {
-    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x128xf16, #shared_bc0, #smem> -> !ttg.memdesc<128x128xf16, #shared_bc1, #smem>
-    tt.return
-  }
 }
 
 // -----

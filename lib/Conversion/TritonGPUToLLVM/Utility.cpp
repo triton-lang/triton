@@ -1210,11 +1210,16 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
     logicalOffsets.push_back({dim, offset});
   }
 
-  // We don't allow for non-trivial block dimensions in the shared memory layout
-  // We have in practice that offsetAndBlock[1].second is zero, but we cannot
-  // know assert that without constant propagation so we just discard it :)
+  // In the case of multi-ctas, block-basis could be non-trivial.
+  // FIXME: Block-basis is not supposed to impact the calculation of subslice's
+  // offset relative to its enclosing shared memory buffer.
+  auto basesClone = ll.getBases();
+  basesClone.erase(str_attr("block"));
+  auto noBlkLL = LinearLayout(basesClone, llvm::to_vector(ll.getOutDimNames()));
+  auto noBlkLLInv = noBlkLL.invert();
+
   auto offset =
-      applyLinearLayout(loc, rewriter, ll.invert(), logicalOffsets)[0].second;
+      applyLinearLayout(loc, rewriter, noBlkLLInv, logicalOffsets)[0].second;
   return offset;
 }
 

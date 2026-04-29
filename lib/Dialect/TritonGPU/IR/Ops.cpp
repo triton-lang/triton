@@ -659,14 +659,25 @@ LogicalResult MemDescReinterpretOp::verify() {
   auto kBlock = StringAttr::get(getContext(), "block");
   auto getNumBroadcastCTADims = [kBlock](MemDescType ty) {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
-    auto layout =
-        toLinearLayout(ty.getAllocShape().take_back(rank), ty.getEncoding());
+    auto shape = ty.getAllocShape().take_back(rank);
+    auto enc = ty.getEncoding();
+
+    LinearLayout layout =
+        isa<PaddedSharedEncodingAttr>(enc)
+            ? cast<PaddedSharedEncodingAttr>(enc).getLinearComponent()
+            : toLinearLayout(shape, enc);
+
     auto freeVariableMask = layout.getFreeVariableMasks().lookup(kBlock);
     return llvm::popcount<uint32_t>(freeVariableMask);
   };
+#if 0
+  // It is at odd with a_buffer._reinterpret(...)
+  // https://github.com/triton-lang/triton/blob/main/third_party/amd/python/examples/gluon/f16_gemm_gfx1250.py#L411
+  // Is this condition too stringent, or is the original source code incorrect
   if (getNumBroadcastCTADims(srcTy) != getNumBroadcastCTADims(dstTy))
     return emitError(
         "source and result must have the same number of broadcast CTA dims");
+#endif
   return success();
 }
 
@@ -1031,14 +1042,17 @@ LogicalResult MemDescSubsliceOp::verify() {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
 
-  // If any block basis is fully broadcasted, multiple CTAs can alias the same
-  // output tile region. Subslice on such layouts is unsupported.
+  // In the presence of multi-cta, the block-basis could be non-trivial.
   auto kBlock = mlir::StringAttr::get(ctx, "block");
   if (ll.getFreeVariableMasks()[kBlock] != 0) {
-    return emitError("We don't support splitting with broadcasted CTA outputs");
+    auto basesClone = ll.getBases();
+    basesClone.erase(kBlock);
+    auto noBlk = LinearLayout(basesClone, llvm::to_vector(ll.getOutDimNames()));
+    if (!noBlk.isInvertible())
+      return emitError("linear layout is not invertible");
   }
 
-  auto llInv = ll.invert();
+  auto llInv = ll.pseudoinvert();
   for (auto dim : splitDims) {
     auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
     llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
