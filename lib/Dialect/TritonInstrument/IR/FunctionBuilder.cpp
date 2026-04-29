@@ -731,6 +731,7 @@ void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
         Value effectiveWaiting = arith::SelectOp::create(
             fb, phaseIsOne, waitingPhase1, waitingPhase0);
         Value waitingOr = reduce<arith::OrIOp>(fb, effectiveWaiting, 1);
+        waitingOr = reduce<arith::OrIOp>(fb, waitingOr, 0);
         auto waitingOrType = cast<RankedTensorType>(waitingOr.getType());
         Value activeMaskTensor =
             triton::SplatOp::create(fb, waitingOrType, expandedActiveMaskVal);
@@ -738,12 +739,6 @@ void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
             arith::AndIOp::create(fb, waitingOr, activeMaskTensor);
         Value eqPerCTA = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
                                                waitingMasked, activeMaskTensor);
-        auto eqType = cast<RankedTensorType>(eqPerCTA.getType());
-        Value ctaMask = createCurrentCTARelationMask(fb, eqType, /*lhsDim=*/0,
-                                                     /*rhsDim=*/1);
-        Value vTruePerCTA =
-            tti::createConstIntTensor(fb, fb.getLoc(), 1, eqType);
-        eqPerCTA = arith::SelectOp::create(fb, ctaMask, eqPerCTA, vTruePerCTA);
         Value eq = reduceAll<arith::AndIOp>(fb, eqPerCTA);
 
         Value vTrue = arith::ConstantOp::create(
