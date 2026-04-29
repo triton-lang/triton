@@ -81,12 +81,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[BASE:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<3>, i32)>
     // CHECK-NEXT: llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<3>, i32)>
     // CHECK-NEXT: nvvm.barrier0
-    // CHECK-NEXT: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
-    // CHECK-NEXT: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
-    // CHECK-NEXT: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
-    // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
-    // CHECK-NEXT: [[IS_ZERO:%.*]] = llvm.icmp "eq" [[RTID]], [[C0]]
-    // CHECK-NEXT: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], 2;", "b,r" [[IS_ZERO]], [[BASE]]
+    // CHECK: [[ELECT:%.*]] = nvvm.elect.sync
+    // CHECK: [[PRED:%.*]] = llvm.and {{.*}}, [[ELECT]]
+    // CHECK: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], 2;", "b,r" [[PRED]], [[BASE]]
     ttng.arrive_barrier %alloc, 2 : !ttg.memdesc<1xi64, #shared0, #smem>
     tt.return
   }
@@ -96,13 +93,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[BASE:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<3>, i32)>
     // CHECK-NEXT: llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<3>, i32)>
     // CHECK-NEXT: nvvm.barrier0
-    // CHECK-NEXT: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
-    // CHECK-NEXT: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
-    // CHECK-NEXT: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
-    // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
-    // CHECK-NEXT: [[IS_ZERO:%.*]] = llvm.icmp "eq" [[RTID]], [[C0]]
-    // CHECK-NEXT: [[PRED:%.*]] = llvm.and [[IS_ZERO]], %arg1
-    // CHECK-NEXT: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], 2;", "b,r" [[PRED]], [[BASE]]
+    // CHECK: [[ELECT:%.*]] = nvvm.elect.sync
+    // CHECK: [[WARP0:%.*]] = llvm.and {{.*}}, [[ELECT]]
+    // CHECK: [[PRED:%.*]] = llvm.and [[WARP0]], %arg1
+    // CHECK: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], 2;", "b,r" [[PRED]], [[BASE]]
     ttng.arrive_barrier %alloc, 2, %pred : !ttg.memdesc<1xi64, #shared0, #smem>
     tt.return
   }
@@ -116,7 +110,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: arrive_barrier_cluster_broadcast
   tt.func @arrive_barrier_cluster_broadcast(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>) {
     // CHECK: nvvm.barrier0
-    // CHECK: nvg.cluster_id
+    // CHECK-NOT: nvg.cluster_id
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.and
     // CHECK: llvm.inttoptr
@@ -371,12 +365,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: expect_barrier_cluster_broadcast
   // CHECK: nvvm.barrier0
-  // CHECK: nvg.cluster_id
+  // CHECK-NOT: nvg.cluster_id
   // CHECK: llvm.ptrtoint
   // CHECK: llvm.and
   // CHECK: llvm.inttoptr
-  // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], 32768;
-  // CHECK: @$0 mbarrier.arrive.shared::cluster.b64 _, [$1], 1;
+  // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.b64 _, [$1], 16384;
+  // CHECK-NOT: mbarrier.arrive.shared::cluster.b64
   tt.func @expect_barrier_cluster_broadcast(%barrier: !ttg.memdesc<1xi64, #shared0, #smem, mutable>, %pred: i1) {
     ttng.barrier_expect %barrier, 16384, %pred : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     tt.return
