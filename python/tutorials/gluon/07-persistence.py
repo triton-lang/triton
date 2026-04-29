@@ -33,7 +33,6 @@ from functools import partial
 from typing import Union
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton.language.core import _aggregate as aggregate
 
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.hopper import (
@@ -85,13 +84,13 @@ def get_flops(ms, M, N, K):
 # of tensor core operations so that our persistent matmul can be used on both
 # Hopper and Blackwell.
 #
-# We can use @aggregate to define a class that contains the state of the
+# We can use @gluon.aggregate to define a class that contains the state of the
 # matmul. We will define the API of our MMA wrapper to be like WGMMA's, because
 # is the more restrictive of the two.
 
 
 # MMA wrapper for WGMMA, which maps directly to the WGMMA functions.
-@aggregate
+@gluon.aggregate
 class WGMMA:
     acc: Union[warpgroup_mma_accumulator, gl.tensor]
     use_acc: gl.tensor
@@ -123,7 +122,7 @@ class WGMMA:
 # MMA wrapper for tcgen05. In order to implement `wait_num_outstanding`, we
 # need to allocate barriers and keep track of how many MMAs have been issued.
 # State will be tracked with an accumulator.
-@aggregate
+@gluon.aggregate
 class MMAv5:
     use_acc: gl.tensor
     acc_tmem: tensor_memory_descriptor
@@ -300,6 +299,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
     print()
 
 # %%
+# ```text
 # BLOCK_K num_buffers num_warps Blackwell  Hopper
 #     128           2         4    735.96
 #     128           2         8    697.97  489.26
@@ -307,6 +307,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
 #      64           3         8    973.94  673.67
 #      64           4         4   1175.70
 #      64           4         8   1072.83  669.16
+# ```
 #
 # Blackwell performance lines up with what we have seen in previous tutorials,
 # but on Hopper we see some wins. On Hopper, performance plateaus at 3 buffers,
@@ -322,7 +323,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
 # scheduling strategy, starting with a basic row-major tile scheduler.
 
 
-@aggregate
+@gluon.aggregate
 class PersistentTileScheduler:
     pid_start: gl.tensor
     pid_end: gl.tensor
@@ -453,6 +454,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
     print()
 
 # %%
+# ```text
 # BLOCK_K num_buffers num_warps  Blackwell  Hopper
 #     128           2         4     712.25
 #     128           2         8     686.64  502.84
@@ -460,6 +462,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
 #      64           3         8     938.81  661.11
 #      64           4         4    1142.26
 #      64           4         8    1071.46  658.84
+# ```
 #
 # The Hopper kernel sees a modest improvement, but the Blackwell kernel
 # performance is slightly lower. Let's capture a profile of the kernels on
@@ -497,7 +500,7 @@ def GroupedPersistentTileScheduler(GROUP_SIZE_M):
     GROUP_SIZE_M = gl.constexpr(GROUP_SIZE_M)
 
     # Like C++ templates!
-    @aggregate
+    @gluon.aggregate
     class GroupedPersistentTileSchedulerImpl:
         start_pid: gl.tensor
         num_pid_m: gl.tensor
@@ -551,12 +554,14 @@ if __name__ == "__main__" and not profiling_with_ncu:
     print()
 
 # %%
+# ```text
 # GROUP_SIZE_M Blackwell  Hopper
 #            1   1025.11  649.09
 #            2   1050.43  651.32
 #            4   1032.71  655.51
 #            6   1057.27  652.39
 #            8   1179.94  648.42
+# ```
 #
 # At GROUP_SIZE_M=8, we recover performance on Blackwell. In fact, under ncu we
 # see the L2 hit rate increases to 70%, which suggests there are other ways to
@@ -761,6 +766,7 @@ if __name__ == "__main__":
         print(f"{K:>5} {r0:>17.2f} {r1:>13.2f} {r2:>11.2f} {r3:>9.2f}")
 
 # %%
+# ```text
 # Blackwell results:
 #
 #     K     nonpersistent    persistent   pipelined    cublas
@@ -770,7 +776,9 @@ if __name__ == "__main__":
 #  4096           1164.05       1120.92     1143.47   1563.98
 #  8192           1160.93       1074.97     1185.40   1491.84
 # 16384           1185.62       1096.34     1296.93   1548.42
+# ```
 #
+# ```text
 # Hopper results:
 #
 #     K     nonpersistent    persistent   pipelined    cublas
@@ -780,6 +788,7 @@ if __name__ == "__main__":
 #  4096            609.36        630.10      640.48    646.30
 #  8192            629.44        646.22      661.57    661.11
 # 16384            653.79        660.29      670.00    665.49
+# ```
 #
 # Persistent matmul, when pipelined, gains more performance relative to
 # nonpersistent at lower K, as we would expect. Load balancing can be

@@ -4,8 +4,7 @@ import torch
 import triton
 import pytest
 import itertools
-
-from triton.language.core import _aggregate as aggregate
+from dataclasses import dataclass, fields
 
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
@@ -42,7 +41,7 @@ def get_mma_instr_shape(shape, element_ty):
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate
+@gluon.aggregate
 class BarrierCounter:
     index: gl.tensor
     phase: gl.tensor
@@ -62,7 +61,7 @@ class BarrierCounter:
 
 def Channel(T, alloc_fn):
 
-    @aggregate
+    @gluon.aggregate
     class ChannelType:
         mem: T
         ready_bars: gl.shared_memory_descriptor
@@ -122,7 +121,7 @@ def Channel(T, alloc_fn):
                 mbarrier.invalidate(self.ready_bars.index(i))
                 mbarrier.invalidate(self.empty_bars.index(i))
 
-    @aggregate
+    @gluon.aggregate
     class Producer:
         channel: ChannelType
         counter: BarrierCounter
@@ -133,7 +132,7 @@ def Channel(T, alloc_fn):
             next = Producer(self.channel, self.counter.increment())
             return mem, ready_bar, next
 
-    @aggregate
+    @gluon.aggregate
     class Consumer:
         channel: ChannelType
         counter: BarrierCounter
@@ -171,7 +170,7 @@ def issue_async_tma_load(smem, bar, desc, offset):
 # ===-----------------------------------------------------------------------===#
 
 
-@aggregate
+@gluon.aggregate
 class AttentionConfig:
     qk_scale: gl.tensor
     Z: gl.tensor
@@ -210,8 +209,8 @@ class AttentionConfig:
     use_exp2_turnstile: gl.constexpr
 
     @gluon.constexpr_function
-    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE, dtype,
-                 num_warps):
+    def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE,
+                 SPLIT_EXP_FACTOR, dtype, num_warps, NUM_KV_BUFFERS, USE_EXP2_TURNSTILE):
         self.qk_scale = qk_scale
         self.Z = Z
         self.H = H
@@ -226,7 +225,7 @@ class AttentionConfig:
         self.num_warps = gl.constexpr(num_warps)
 
         self.SPLIT_D_FACTOR = gl.constexpr(2)
-        self.SPLIT_EXP_FACTOR = gl.constexpr(256 // HEAD_DIM)
+        self.SPLIT_EXP_FACTOR = gl.constexpr(SPLIT_EXP_FACTOR)
         self.SPLIT_QK_LOAD_FACTOR = gl.constexpr(2 if STAGE == 1 else 1)
         self.SPLIT_M = gl.constexpr(self.BLOCK_M // 2)
         self.SPLIT_D = gl.constexpr(self.HEAD_DIM // self.SPLIT_D_FACTOR)
@@ -258,13 +257,8 @@ class AttentionConfig:
         self.o_splitn_layout = gl.constexpr(o_splitn_tmem_ty.get_reg_layout(num_warps=self.num_warps))
         self.alpha_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [self.num_warps, 1], [0, 1]))
 
-        is_fp16 = self.dtype.value in [gl.float16, gl.bfloat16]
-        if is_fp16:
-            self.num_kv_buffers = gl.constexpr(3 if HEAD_DIM == 128 else 6)
-        else:
-            self.num_kv_buffers = gl.constexpr(4 if HEAD_DIM == 128 else 8)
-
-        self.use_exp2_turnstile = gl.constexpr(HEAD_DIM == 64)
+        self.num_kv_buffers = gl.constexpr(NUM_KV_BUFFERS)
+        self.use_exp2_turnstile = gl.constexpr(USE_EXP2_TURNSTILE)
 
     @gluon.jit
     def get_program(self, pid_m, pid_n):
@@ -279,7 +273,7 @@ class AttentionConfig:
         return AttentionProgram(self, start_m, off_hz, offset_y, qo_offset_y)
 
 
-@aggregate
+@gluon.aggregate
 class ProgramScheduler:
     config: AttentionConfig
     start_pid: gl.tensor
@@ -306,7 +300,7 @@ class ProgramScheduler:
         return self.config.get_program(pid_m, pid_n)
 
 
-@aggregate
+@gluon.aggregate
 class AttentionProgram:
     config: AttentionConfig
     start_m: gl.tensor
@@ -824,15 +818,17 @@ def attention_repr(specialization):
     return name
 
 
-@gluon.jit(do_not_specialize=["Z"], repr=attention_repr)
+@gluon.jit(do_not_specialize=["Z", "H", "N_CTX"], repr=attention_repr)
 def attention_kernel(  #
         sm_scale, M, Z, H, N_CTX, desc_q, desc_k, desc_v, desc_o,  #
         BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, HEAD_DIM: gl.constexpr,  #
-        GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr, STAGE: gl.constexpr, dtype: gl.constexpr,  #
-        num_warps: gl.constexpr, use_tmem_red: gl.constexpr):
+        GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr, STAGE: gl.constexpr, SPLIT_EXP_FACTOR: gl.constexpr,  #
+        dtype: gl.constexpr, num_warps: gl.constexpr, use_tmem_red: gl.constexpr, NUM_KV_BUFFERS: gl.constexpr,
+        USE_EXP2_TURNSTILE: gl.constexpr):
     qk_scale = sm_scale * 1.44269504
-    config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE,  #
-                             dtype, num_warps)
+    config = AttentionConfig(qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE,
+                             SPLIT_EXP_FACTOR,  #
+                             dtype, num_warps, NUM_KV_BUFFERS, USE_EXP2_TURNSTILE)
 
     q_chnl = get_desc_channel(desc_q, num_buffers=2)
     kv_chnl = get_desc_channel(desc_k, num_buffers=config.num_kv_buffers)
@@ -871,6 +867,140 @@ def attention_kernel(  #
 # ===-----------------------------------------------------------------------===#
 
 
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+def is_blackwell():
+    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
+
+
+def is_blackwell_ultra():
+    return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
+
+
+@dataclass(frozen=True, slots=True)
+class KernelConfig:
+    BLOCK_M: int = 256
+    BLOCK_N: int = 128
+    GROUP_SIZE_N: int | None = None
+    SPLIT_EXP_FACTOR: int | None = None
+    NUM_WARPS: int = 4
+    MAXNREG: int = 128
+    OCCUPANCY: int = 1
+    USE_TMEM_RED: bool = False
+    NUM_KV_BUFFERS: int | None = None
+    USE_EXP2_TURNSTILE: bool | None = None
+
+
+def _default_split_exp_factor(head_dim: int) -> int:
+    return max(1, 256 // head_dim)
+
+
+def _default_num_kv_buffers(head_dim: int, dtype: torch.dtype) -> int:
+    is_fp16 = dtype in [torch.float16, torch.bfloat16]
+    if is_fp16:
+        return 3 if head_dim == 128 else 6
+    return 4 if head_dim == 128 else 8
+
+
+def select_kernel_config(
+    head_dim: int,
+    n_ctx: int,
+    dtype: torch.dtype,
+    causal: bool,
+    use_tmem_red: bool,
+    override: KernelConfig | None = None,
+) -> KernelConfig:
+    is_fp8 = dtype == torch.float8_e5m2
+    is_bf16 = dtype == torch.bfloat16
+    is_bwu = is_blackwell_ultra()
+
+    block_m = 256
+    block_n = 128
+    group_size_n = 1
+    split_exp_factor = _default_split_exp_factor(head_dim)
+    num_warps = 4
+    maxnreg = 128
+    occupancy = 1
+    use_selected_tmem_red = (use_tmem_red or (is_bwu and not causal)) and not causal
+    num_kv_buffers = _default_num_kv_buffers(head_dim, dtype)
+    use_exp2_turnstile = head_dim == 64
+
+    if causal:
+        group_size_n = 8 if head_dim == 64 or n_ctx <= 2048 else 4
+
+    if head_dim == 128:
+        split_exp_factor = 4
+        if not causal and is_bf16 and n_ctx <= 2048:
+            group_size_n = 4
+    elif not causal and head_dim == 64 and use_selected_tmem_red:
+        split_exp_factor = 1
+        if n_ctx <= 1024:
+            num_kv_buffers = 2
+        elif n_ctx >= 8192:
+            maxnreg = 112
+    elif causal and head_dim == 64:
+        num_kv_buffers = 2
+        if n_ctx <= 1024:
+            split_exp_factor = 2
+        else:
+            use_exp2_turnstile = False
+
+    if is_fp8:
+        if causal and head_dim == 64:
+            group_size_n = 8 if n_ctx <= 2048 else 4
+            split_exp_factor = 4 if n_ctx <= 2048 else 2
+            maxnreg = 112 if n_ctx >= 4096 else 128
+            use_selected_tmem_red = False
+            num_kv_buffers = 2
+            use_exp2_turnstile = n_ctx <= 1024
+        elif causal and head_dim == 128:
+            group_size_n = 8 if n_ctx <= 2048 else 4
+            split_exp_factor = 2 if n_ctx <= 2048 else 8
+            maxnreg = 128
+            use_selected_tmem_red = False
+            num_kv_buffers = 4
+            use_exp2_turnstile = False
+        elif not causal and head_dim == 64:
+            group_size_n = 1
+            split_exp_factor = 2
+            maxnreg = 128
+            use_selected_tmem_red = is_bwu
+            num_kv_buffers = 2 if n_ctx <= 1024 else 8
+            use_exp2_turnstile = True
+        elif not causal and head_dim == 128:
+            group_size_n = 1
+            split_exp_factor = 4 if n_ctx <= 2048 else 8
+            maxnreg = 128
+            use_selected_tmem_red = is_bwu
+            num_kv_buffers = 4
+            use_exp2_turnstile = False
+        else:
+            group_size_n = 4 if causal else 1
+            split_exp_factor = _default_split_exp_factor(head_dim)
+            use_selected_tmem_red = use_tmem_red and not causal
+
+    config = KernelConfig(
+        BLOCK_M=block_m,
+        BLOCK_N=block_n,
+        GROUP_SIZE_N=group_size_n,
+        SPLIT_EXP_FACTOR=split_exp_factor,
+        NUM_WARPS=num_warps,
+        MAXNREG=maxnreg,
+        OCCUPANCY=occupancy,
+        USE_TMEM_RED=use_selected_tmem_red,
+        NUM_KV_BUFFERS=num_kv_buffers,
+        USE_EXP2_TURNSTILE=use_exp2_turnstile,
+    )
+    if override is None:
+        return config
+
+    values = {field.name: getattr(override, field.name) for field in fields(KernelConfig)}
+    values = {name: getattr(config, name) if value is None else value for name, value in values.items()}
+    return KernelConfig(**values)
+
+
 def torch_dtype_to_triton(dtype):
     if dtype == torch.float8_e5m2:
         return gl.float8e5
@@ -882,25 +1012,32 @@ def make_tensor_desc(x, shape, strides, block_shape):
     return TensorDescriptor(x, shape=shape, strides=strides, block_shape=block_shape, layout=layout)
 
 
-def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
+def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red=False, p: KernelConfig | None = None):
+    if isinstance(o, bool) and M is None and use_tmem_red is False:
+        use_tmem_red = o
+        o = None
+
     HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
     HEAD_DIM_V = v.shape[-1]
     assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
     assert HEAD_DIM_K in {16, 32, 64, 128, 256}
 
     stage = 3 if causal else 1
+    p = select_kernel_config(HEAD_DIM_K, q.shape[2], q.dtype, causal, use_tmem_red, override=p)
 
-    o = torch.empty_like(q)
-    M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+    if o is None:
+        o = torch.empty_like(q)
+    if M is None:
+        M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
     y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
     # The kernel will split BLOCK_M into two subtiles.
-    BLOCK_M = 256
-    BLOCK_N = 128
+    BLOCK_M = p.BLOCK_M
+    BLOCK_N = p.BLOCK_N
     SPLIT_M = BLOCK_M // 2
-    GROUP_SIZE_N = 4 if causal else 1
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    GROUP_SIZE_N = p.GROUP_SIZE_N
+    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count * p.OCCUPANCY
 
     desc_q = make_tensor_desc(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[SPLIT_M, HEAD_DIM_K])
     desc_v = make_tensor_desc(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[BLOCK_N, HEAD_DIM_K])
@@ -915,8 +1052,9 @@ def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
         sm_scale, M, q.shape[0], q.shape[1], q.shape[2],  #
         desc_q, desc_k, desc_v, desc_o,  #
         BLOCK_M, BLOCK_N, HEAD_DIM_K, GROUP_SIZE_N, NUM_SMS,  #
-        stage, torch_dtype_to_triton(q.dtype),  #
-        num_warps=4, maxnreg=128, use_tmem_red=use_tmem_red)
+        SPLIT_EXP_FACTOR=p.SPLIT_EXP_FACTOR, STAGE=stage, dtype=torch_dtype_to_triton(q.dtype),  #
+        num_warps=p.NUM_WARPS, maxnreg=p.MAXNREG, use_tmem_red=p.USE_TMEM_RED, NUM_KV_BUFFERS=p.NUM_KV_BUFFERS,
+        USE_EXP2_TURNSTILE=p.USE_EXP2_TURNSTILE)
 
     return o, M
 
@@ -926,25 +1064,13 @@ def attention_forward(q, k, v, causal, sm_scale, use_tmem_red):
 # ===-----------------------------------------------------------------------===#
 
 
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_blackwell():
-    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
-
-
-def is_blackwell_ultra():
-    return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
-
-
-@pytest.mark.parametrize("Z", [4])
-@pytest.mark.parametrize("H", [48])
-@pytest.mark.parametrize("N_CTX", [1024])
-@pytest.mark.parametrize("HEAD_DIM", [128])
-@pytest.mark.parametrize("causal", [True])
-@pytest.mark.parametrize("dtype", [torch.bfloat16])
-@pytest.mark.parametrize("use_tmem_red", [False])
+@pytest.mark.parametrize("Z", [1, 4])
+@pytest.mark.parametrize("H", [32])
+@pytest.mark.parametrize("N_CTX", [1024, 2048, 4096, 8192])
+@pytest.mark.parametrize("HEAD_DIM", [64, 128])
+@pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("use_tmem_red", [False, True] if is_blackwell_ultra() else [False])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, profile=False):
     device = "cuda"
@@ -965,7 +1091,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, profile=False):
 
     ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
 
-    tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red)
+    tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red=use_tmem_red)
     torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
 
 
@@ -1022,15 +1148,18 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, use_tmem_red, provider):
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).requires_grad_()).to(dtype)
     sm_scale = 1.3
 
+    o = torch.empty_like(q)
+    M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+
     with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.CUDNN_ATTENTION]):
         if provider == "triton":
-            fn = lambda: attention_forward(q, k, v, causal, sm_scale, use_tmem_red)
+            fn = lambda: attention_forward(q, k, v, causal, sm_scale, o, M, use_tmem_red=use_tmem_red)
         elif provider == "cudnn":
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
-        ms = triton.testing.do_bench(fn)
+        ms = triton.testing.do_bench_cudagraph(fn)
         flops_per_matmul = 2.0 * Z * H * N_CTX * N_CTX * HEAD_DIM
         total_flops = 2 * flops_per_matmul
         if causal:

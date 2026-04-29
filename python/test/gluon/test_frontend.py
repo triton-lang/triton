@@ -441,7 +441,7 @@ def warp_specialize_worker1(a, b, e: ttgl.constexpr):
     pass
 
 
-@tl.core._aggregate
+@gluon.aggregate
 class Pair:
     first: tl.tensor
     second: tl.tensor
@@ -1450,6 +1450,18 @@ def test_split_join():
     c, d = ttgl.split(res)
     ttgl.static_assert(c.type.layout == ttgl.SliceLayout(1, expect_layout))
     ttgl.static_assert(d.type.layout == ttgl.SliceLayout(1, expect_layout))
+
+
+@filecheck_test
+@gluon.jit
+def test_split_auto_layout():
+    # CHECK-LABEL: test_split_auto_layout
+    # CHECK: %[[X:.+]] = arith.constant dense<1> : tensor<128x2xi32, #gluon.auto_encoding>
+    # CHECK: %[[LHS:.+]], %[[RHS:.+]] = tt.split %[[X]] : tensor<128x2xi32, #gluon.auto_encoding> -> tensor<128xi32, #gluon.auto_encoding>
+    x = ttgl.full([128, 2], 1, ttgl.int32, layout=ttgl.AutoLayout())
+    lhs, rhs = ttgl.split(x)
+    ttgl.static_assert(lhs.type.layout == ttgl.AutoLayout())
+    ttgl.static_assert(rhs.type.layout == ttgl.AutoLayout())
 
 
 @filecheck_test
@@ -2854,6 +2866,144 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
   }
 }
 """)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4], ids=["cdna3", "cdna4"])
+def test_amd_scaled_upcast_fp4_cdna(target):
+    scaled_upcast = _get_amd_scaled_upcast(target)
+
+    @gluon.jit
+    def kernel():
+        packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [8, 8], [1, 1], [1, 0])
+        unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [1, 1], [1, 0])
+        src = ttgl.full([16, 32], 0x11, ttgl.uint8, packed_layout)
+        scale = ttgl.full([16, 64], 0x02, ttgl.uint8, unpacked_layout)
+        scaled_upcast(src, scale, ttgl.bfloat16, axis=1)
+
+    module = run_parser(kernel, *make_args(num_warps=1), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %c17_i8 = arith.constant 17 : i8
+    %cst = arith.constant dense<17> : tensor<16x32xi8, #blocked>
+    %c2_i8 = arith.constant 2 : i8
+    %cst_0 = arith.constant dense<2> : tensor<16x64xi8, #blocked1>
+    %0 = arith.extui %cst_0 : tensor<16x64xi8, #blocked1> to tensor<16x64xi16, #blocked1>
+    %c7_i32 = arith.constant 7 : i32
+    %1 = arith.trunci %c7_i32 : i32 to i16
+    %2 = tt.splat %1 : i16 -> tensor<16x64xi16, #blocked1>
+    %3 = arith.shli %0, %2 : tensor<16x64xi16, #blocked1>
+    %4 = tt.bitcast %3 : tensor<16x64xi16, #blocked1> -> tensor<16x64xbf16, #blocked1>
+    %5 = amdg.scaled_upcast_fp4 %cst scale %4 {axis = 1 : i32} : tensor<16x32xi8, #blocked>, tensor<16x64xbf16, #blocked1> -> tensor<16x64xbf16, #blocked1>
+    tt.return
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4], ids=["cdna3", "cdna4"])
+def test_amd_scaled_upcast_fp8_cdna(target):
+    scaled_upcast = _get_amd_scaled_upcast(target)
+
+    @gluon.jit
+    def kernel():
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [1, 1], [1, 0])
+        src = ttgl.full([16, 64], 1.0, ttgl.float8e4nv, layout)
+        scale = ttgl.full([16, 64], 0x02, ttgl.uint8, layout)
+        scaled_upcast(src, scale, ttgl.bfloat16)
+
+    module = run_parser(kernel, *make_args(num_warps=1), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f32
+    %0 = arith.truncf %cst : f32 to f8E4M3FN
+    %1 = tt.splat %0 : f8E4M3FN -> tensor<16x64xf8E4M3FN, #blocked>
+    %c2_i8 = arith.constant 2 : i8
+    %cst_0 = arith.constant dense<2> : tensor<16x64xi8, #blocked>
+    %2 = arith.extui %cst_0 : tensor<16x64xi8, #blocked> to tensor<16x64xi16, #blocked>
+    %c7_i32 = arith.constant 7 : i32
+    %3 = arith.trunci %c7_i32 : i32 to i16
+    %4 = tt.splat %3 : i16 -> tensor<16x64xi16, #blocked>
+    %5 = arith.shli %2, %4 : tensor<16x64xi16, #blocked>
+    %6 = tt.bitcast %5 : tensor<16x64xi16, #blocked> -> tensor<16x64xbf16, #blocked>
+    %7 = amdg.scaled_upcast_fp8 %1 scale %6 : tensor<16x64xf8E4M3FN, #blocked>, tensor<16x64xbf16, #blocked> -> tensor<16x64xbf16, #blocked>
+    tt.return
+  }
+}
+""")
+
+
+def _get_amd_scaled_upcast(target):
+    if target == HIP_TARGET_CDNA3:
+        return ttgl.amd.cdna3.scaled_upcast
+    if target == HIP_TARGET_CDNA4:
+        return ttgl.amd.cdna4.scaled_upcast
+    return ttgl.amd.gfx1250.scaled_upcast
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_GFX1250])
+def test_amd_scaled_upcast_requires_e8m0_scale(target):
+    scaled_upcast = _get_amd_scaled_upcast(target)
+
+    @gluon.jit
+    def kernel():
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
+        src = ttgl.full([16, 64], 1.0, ttgl.float8e4nv, layout)
+        scale = ttgl.full([16, 64], 1.0, ttgl.float8e4nv, layout)
+        scaled_upcast(src, scale, ttgl.bfloat16)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, target=target)
+
+    err = str(e.value.__cause__ or e.value)
+    assert "Expected scale to use raw E8M0 payload in int8/uint8" in err
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_GFX1250])
+def test_amd_scaled_upcast_requires_fp16_or_bf16_result_type(target):
+    scaled_upcast = _get_amd_scaled_upcast(target)
+
+    @gluon.jit
+    def kernel():
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
+        src = ttgl.full([16, 64], 1.0, ttgl.float8e4nv, layout)
+        scale = ttgl.full([16, 64], 0x02, ttgl.uint8, layout)
+        scaled_upcast(src, scale, ttgl.float32)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, target=target)
+
+    err = str(e.value.__cause__ or e.value)
+    assert "Expected elem_type to be fp16 or bf16" in err
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_GFX1250])
+def test_amd_scaled_upcast_fp8_requires_matching_layout(target):
+    scaled_upcast = _get_amd_scaled_upcast(target)
+    if target in (HIP_TARGET_CDNA3, HIP_TARGET_CDNA4):
+        src_layout = ttgl.BlockedLayout([1, 8], [8, 8], [1, 1], [1, 0])
+        scale_layout = ttgl.BlockedLayout([1, 8], [4, 16], [1, 1], [1, 0])
+    else:
+        src_layout = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
+        scale_layout = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+
+    @gluon.jit
+    def kernel():
+        src = ttgl.full([16, 64], 1.0, ttgl.float8e4nv, src_layout)
+        scale = ttgl.full([16, 64], 0x02, ttgl.uint8, scale_layout)
+        scaled_upcast(src, scale, ttgl.bfloat16)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, target=target)
+
+    err = str(e.value.__cause__ or e.value)
+    assert "Expected scale layout for fp8 scaled_upcast" in err
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])

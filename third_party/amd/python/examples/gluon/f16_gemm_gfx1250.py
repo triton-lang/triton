@@ -4,7 +4,6 @@ import torch
 import triton
 import math
 from triton.experimental import gluon
-from triton.language.core import _aggregate as aggregate
 import triton.experimental.gluon.language as ttgl
 from triton._C.libtriton.gluon_ir import make_cga_layout
 
@@ -633,7 +632,7 @@ def test_runtime_gemm_tdm_pipelined_single_warp_per_simd_schedule(BLOCK_M, BLOCK
 
 
 # Helper class for passing arguments around partitions.
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     a_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
     b_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
@@ -664,7 +663,7 @@ class PartitionArgs:
 
 
 # Helper class for passing arguments around persistent warp-specialization partitions.
-@aggregate
+@gluon.aggregate
 class PersistentPartitionArgs:
     a_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
     b_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
@@ -706,7 +705,7 @@ class PersistentPartitionArgs:
 
 
 # Helper class for passing arguments around persistent warp-specialization partitions (subtiled variant).
-@aggregate
+@gluon.aggregate
 class PersistentPartitionSubtiledArgs:
     a_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
     b_desc: ttgl.amd.gfx1250.tdm.tensor_descriptor
@@ -757,7 +756,7 @@ class PersistentPartitionSubtiledArgs:
         self.QUADRANT_N = ttgl.constexpr(QUADRANT_N)
 
 
-@aggregate
+@gluon.aggregate
 class PhaseCounter:
     """Tracks iteration count and computes phase."""
     iteration: ttgl.tensor

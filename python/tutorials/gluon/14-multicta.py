@@ -81,7 +81,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 )
 from triton.experimental.gluon.language.nvidia.hopper import mbarrier, tma
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
-from triton.language.core import _aggregate as aggregate
 
 # Re-use baseline tutorials for comparisons.
 t8 = importlib.import_module("08-warp-specialization")
@@ -224,6 +223,7 @@ benchmark_multicta_softmax_f32()
 
 # %%
 # Softmax benchmark results
+# ```text
 # Benchmarking multicta_softmax
 # ============================
 #   shape         CTAs  warps  time (ms)  bandwidth (GB/s)
@@ -238,6 +238,7 @@ benchmark_multicta_softmax_f32()
 #  32768 x 65536      4      4      2.836           6057.26
 #  16384 x 131072     8      4      3.142           5468.66
 #   8192 x 262144    16      4      3.627           4736.15
+# ```
 #
 # We see that here using multiCTA we are able to get very good performance across the board.
 #
@@ -680,7 +681,7 @@ def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width
     return major, minor
 
 
-@aggregate
+@gluon.aggregate
 class ClcTileSchedulerConsumer:
     has_work: gl.tensor
     tile_id: gl.tensor
@@ -776,7 +777,7 @@ class ClcTileSchedulerConsumer:
         )
 
 
-@aggregate
+@gluon.aggregate
 class MatmulPartitionArgs:
     a_desc: tma.tensor_descriptor
     b_desc: tma.tensor_descriptor

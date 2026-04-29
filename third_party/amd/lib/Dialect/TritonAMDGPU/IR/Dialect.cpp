@@ -70,6 +70,8 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 
 namespace mlir::triton::amdgpu {
 
+namespace {
+
 std::string getStringFromCoords(mlir::triton::AMD::ElemLocationKey coords) {
   std::string result;
   llvm::raw_string_ostream os(result);
@@ -81,8 +83,7 @@ std::string getStringFromCoords(mlir::triton::AMD::ElemLocationKey coords) {
 }
 
 // Helper function to verify TDM block dimensions
-static LogicalResult verifyTDMBlockSize(Operation *op,
-                                        ArrayRef<int64_t> blockShape) {
+LogicalResult verifyTDMBlockSize(Operation *op, ArrayRef<int64_t> blockShape) {
   constexpr int64_t maxBlockSize = std::numeric_limits<uint16_t>::max();
   for (size_t i = 0; i < blockShape.size(); ++i) {
     if (blockShape[i] > maxBlockSize) {
@@ -93,6 +94,8 @@ static LogicalResult verifyTDMBlockSize(Operation *op,
   }
   return success();
 }
+
+} // namespace
 
 LogicalResult ExtractSliceOp::verify() {
   // Basic type/rank checks.
@@ -316,39 +319,27 @@ LogicalResult ScaledUpcastFp4Op::verify() {
   RankedTensorType inputTy = getInput().getType();
   RankedTensorType outputTy = getOutput().getType();
   RankedTensorType scaleTy = getScale().getType();
-  auto axis = getAxis();
+  auto scaleEnc = scaleTy.getEncoding();
+  auto outputEnc = outputTy.getEncoding();
 
   if (outputTy.getShape() != scaleTy.getShape())
     return emitError() << "scale and output should have the same shape";
 
-  // Reuse Fp4ToFpOp's verifier to check types of input and output
-  auto rank = inputTy.getRank();
+  if (bool(scaleEnc) != bool(outputEnc))
+    return emitError()
+           << "scale and output must both have an encoding, or neither";
 
-  if (rank != outputTy.getRank())
-    return emitError() << "source rank " << rank << " != result rank "
-                       << outputTy.getRank();
+  if (scaleEnc && !mlir::triton::gpu::areLayoutsEquivalent(
+                      outputTy.getShape(),
+                      cast<mlir::triton::gpu::LayoutEncodingTrait>(scaleEnc),
+                      cast<mlir::triton::gpu::LayoutEncodingTrait>(outputEnc)))
+    return emitError() << "scale and output encodings are not compatible:\n"
+                       << mlir::triton::gpu::toLinearLayout(outputTy).toString()
+                       << "\n"
+                       << mlir::triton::gpu::toLinearLayout(scaleTy).toString();
 
-  auto srcShape = inputTy.getShape();
-  auto resShape = outputTy.getShape();
-
-  if (!(0 <= axis && axis < rank))
-    return emitError() << "axis " << axis << " out of range for rank " << rank;
-
-  for (int i = 0; i < rank; ++i) {
-    if (i == axis) {
-      if (resShape[i] != srcShape[i] * 2)
-        return emitError() << "axis " << axis
-                           << " dimension must be 2x source dimension (src="
-                           << srcShape[i] << ", dst=" << resShape[i] << ")";
-    } else {
-      if (resShape[i] != srcShape[i])
-        return emitError() << "dimension " << i
-                           << " mismatch (src=" << srcShape[i]
-                           << ", dst=" << resShape[i] << ", axis=" << axis
-                           << ")";
-    }
-  }
-  return success();
+  return mlir::triton::gpu::Fp4ToFpOp::verifyFp4ToFp(*this, inputTy, outputTy,
+                                                     getAxis());
 }
 
 Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,
@@ -357,7 +348,7 @@ Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,
   if (opIdx == 1)
     return srcEnc;
   Attribute dstEnc;
-  auto shape = getInput().getType().getShape();
+  auto shape = getOutput().getType().getShape();
 
   auto iface =
       srcEnc.getDialect()
@@ -377,7 +368,7 @@ Attribute ScaledUpcastFp4Op::inferSrcEncoding(unsigned opIdx,
   if (opIdx == 1)
     return dstEnc;
   Attribute srcEnc;
-  auto shape = getInput().getType().getShape();
+  auto shape = getOutput().getType().getShape();
 
   auto iface =
       dstEnc.getDialect()
@@ -576,8 +567,8 @@ LogicalResult LocalLoadPackedTransposedOp::verify() {
 
 // This pattern removes a concatOp if it has a single input operand.
 // This scenario can potentially happen as a result of ops refinement.
-mlir::LogicalResult foldConcatOpFromSingleSource(amdgpu::ConcatOp op,
-                                                 PatternRewriter &rewriter) {
+static mlir::LogicalResult
+foldConcatOpFromSingleSource(amdgpu::ConcatOp op, PatternRewriter &rewriter) {
   auto sources = op.getSources();
   if (sources.size() == 1) {
     auto source = sources.front();

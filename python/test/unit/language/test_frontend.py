@@ -26,7 +26,7 @@ def anchor(v):
     pass
 
 
-@tl.core._aggregate
+@triton.aggregate
 class Pair:
     first: tl.tensor
     second: tl.tensor
@@ -115,7 +115,7 @@ def test_jit_method():
     anchor(b)
 
 
-@tl.core._aggregate
+@triton.aggregate
 class TypeWithJitGetItem:
     value: tl.tensor
 
@@ -138,7 +138,7 @@ def test_jit_getitem():
     # CHECK: tt.return [[ARG0]]
 
 
-@tl.core._aggregate
+@triton.aggregate
 class TypeWithBuiltinInitializer:
     value: tl.tensor
 
@@ -158,7 +158,7 @@ def test_aggregate_initializers():
 
 def test_aggregate_auto_init_assigns_members():
 
-    @tl.core._aggregate
+    @triton.aggregate
     class State:
         x: tl.constexpr
         y: tl.constexpr
@@ -176,7 +176,7 @@ def test_aggregate_auto_init_with_tuples():
         x: tl.constexpr
         y: tl.constexpr
 
-    @tl.core._aggregate
+    @triton.aggregate
     class State:
         shape: tl.tuple
         strides: tl.tuple
@@ -197,7 +197,7 @@ def test_aggregate_auto_init_with_tuples():
 
 def test_aggregate_auto_init_respects_user_defined_init():
 
-    @tl.core._aggregate
+    @triton.aggregate
     class State:
         x: tl.constexpr
 
@@ -262,7 +262,7 @@ def test_call_in_loop():
         acc = accumulate(acc, i)
 
 
-@tl.core._aggregate
+@triton.aggregate
 class FunctionParent:
 
     @triton.jit
@@ -285,7 +285,7 @@ def test_function_name_mangling():
     FunctionParent.function_with_name()
 
 
-@tl.core._aggregate
+@triton.aggregate
 class AggregateWithConstexpr:
     a: tl.tensor
     b: tl.constexpr
@@ -318,7 +318,7 @@ def test_aggregate_with_constexpr():
     # CHECK: arith.addi %arg0, %cst : tensor<4xi32>
 
 
-@tl.core._aggregate
+@triton.aggregate
 class AggregateWithTuple:
     a: tl.tuple
 
@@ -403,7 +403,7 @@ def test_constexpr_getitem():
 @triton.constexpr_function
 def Box(T):
 
-    @tl.core._aggregate
+    @triton.aggregate
     class BoxImpl:
         value: T
 
@@ -509,7 +509,23 @@ def test_tuple_constexpr():
     run_parser(foo, args=(test, ))
 
 
-@tl.core._aggregate
+@triton.jit
+def tuple_arg_identity(xs):
+    return xs
+
+
+def test_jit_call_tuple_of_tensors_plus_tuple_of_int():
+
+    @triton.jit
+    def kernel():
+        x0 = tl.program_id(0)
+        x1 = tl.program_id(1)
+        tuple_arg_identity((x0, x1)[:-1] + (1, ))
+
+    run_parser(kernel)
+
+
+@triton.aggregate
 class AggregateWithConstexprFunction:
     val: tl.constexpr
     val_squared: tl.constexpr

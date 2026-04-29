@@ -12,13 +12,22 @@
 #include "../../backend/include/TDMCommon.h"
 
 namespace mlir::LLVM::AMD {
+
 namespace {
 
+Value vecGet(TritonLLVMOpBuilder &b, Value vec, int idx) {
+  return b.extract_element(vec, b.i32_val(idx));
+}
+
+Value vecSet(TritonLLVMOpBuilder &b, Value vec, int idx, Value val) {
+  return b.insert_element(vec, val, b.i32_val(idx));
+}
+
 // Helper to decode a value spanning two 32-bit words
-static Value decode48BitValue(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
-                              ArrayRef<Value> group, int startIdx) {
-  Value low = b.lshr(group[startIdx], b.i32_val(16));
-  Value high = b.shl(group[startIdx + 1], b.i32_val(16));
+Value decode48BitValue(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
+                       Value group, int startIdx) {
+  Value low = b.lshr(vecGet(b, group, startIdx), b.i32_val(16));
+  Value high = b.shl(vecGet(b, group, startIdx + 1), b.i32_val(16));
   return b.or_(low, high);
 }
 
@@ -103,6 +112,61 @@ std::pair<SmallVector<unsigned>, unsigned> distributeTDMWarpsAlignToPartition(
   return {warps, numTDMInstructions};
 }
 
+// Shared layout analysis for TDM gather/scatter, used by both
+// getTDMGatherScatterInstrinsicCount (wait-count pass) and
+// emitTDMGatherScatter (lowering) so the instruction-count logic
+// cannot get out of sync.
+//
+// Uses the LinearLayout of the index tensor to determine:
+// 1. Which registers are broadcasted — remove duplicates
+// 2. Which warps are redundant (freeVarMasks)
+// 3. The effective number of indices per warp and max indices per instruction
+// This analysis is direction-agnostic: the index layout determines which warp
+// owns which rows in LDS, regardless of whether data flows to LDS (gather) or
+// from LDS (scatter).
+struct GatherScatterLayoutAnalysis {
+  triton::LinearLayout indexLL; // post-broadcast-removal
+  ColumnAction removeBcastAction;
+  size_t maxIndicesPerInstr;
+  size_t effectiveRegCount;
+  size_t numInstructions;
+  llvm::MapVector<StringAttr, int32_t> freeVarMasks; // from original layout
+};
+
+GatherScatterLayoutAnalysis
+analyzeGatherScatterLayout(RankedTensorType indicesType) {
+  assert(indicesType.getEncoding());
+
+  bool use32BitIndices =
+      indicesType.getElementType().getIntOrFloatBitWidth() == 32;
+  size_t maxIndicesPerInstr = use32BitIndices ? 8 : 16;
+
+  auto indexLL = triton::gpu::toLinearLayout(indicesType);
+  assert(indexLL.getNumOutDims() == 1 &&
+         "Gather/scatter index layout must have exactly one output dimension");
+  auto freeVarMasks = indexLL.getFreeVariableMasks();
+
+  // Remove broadcasted (duplicated) register entries so indexLL has a compact
+  // register dimension containing only unique index values.
+  auto removeBcastAction = actionRemoveBroadcastedRegs(indexLL);
+  if (!removeBcastAction.isIdentity())
+    indexLL = removeBcastAction.apply(indexLL);
+
+  size_t contigIndiceCount = indexLL.getNumConsecutiveInOut();
+  maxIndicesPerInstr = std::min(maxIndicesPerInstr, contigIndiceCount);
+
+  auto kRegister = StringAttr::get(indicesType.getContext(), "register");
+  size_t effectiveRegCount = indexLL.getInDimSize(kRegister);
+  size_t numInstructions =
+      effectiveRegCount == 0
+          ? 0
+          : llvm::divideCeil(effectiveRegCount, maxIndicesPerInstr);
+
+  return {std::move(indexLL), std::move(removeBcastAction),
+          maxIndicesPerInstr, effectiveRegCount,
+          numInstructions,    std::move(freeVarMasks)};
+}
+
 } // namespace
 
 std::pair<SmallVector<unsigned>, unsigned>
@@ -116,31 +180,62 @@ distributeTDMWarpsAlignToPartition(ArrayRef<int64_t> blockShape, int numWarps,
 
 SmallVector<Value> TDMDescriptor::getAllGroups() const {
   SmallVector<Value> result;
-  llvm::append_range(result, group0);
-  llvm::append_range(result, group1);
-  if (group2.has_value()) {
-    llvm::append_range(result, group2.value());
-  }
-  if (group3.has_value()) {
-    llvm::append_range(result, group3.value());
-  }
+  result.push_back(group0);
+  result.push_back(group1);
+  if (group2.has_value())
+    result.push_back(group2.value());
+  if (group3.has_value())
+    result.push_back(group3.value());
   return result;
+}
+
+SmallVector<Value> unpackTDMDescriptor(RewriterBase &rewriter, Location loc,
+                                       Value descStruct) {
+  auto scalars = unpackLLElements(loc, descStruct, rewriter);
+  assert((scalars.size() == 12 || scalars.size() == 20) &&
+         "TDM descriptor must be 12 (2D) or 20 (3D-5D) i32 scalars");
+  SmallVector<Value> groups;
+  groups.push_back(packLLVector(
+      loc, SmallVector<Value>(scalars.begin(), scalars.begin() + 4), rewriter));
+  groups.push_back(packLLVector(
+      loc, SmallVector<Value>(scalars.begin() + 4, scalars.begin() + 12),
+      rewriter));
+  if (scalars.size() == 20) {
+    groups.push_back(packLLVector(
+        loc, SmallVector<Value>(scalars.begin() + 12, scalars.begin() + 16),
+        rewriter));
+    groups.push_back(packLLVector(
+        loc, SmallVector<Value>(scalars.begin() + 16, scalars.begin() + 20),
+        rewriter));
+  }
+  return groups;
+}
+
+SmallVector<Value> scalarizeTDMDescriptor(RewriterBase &rewriter, Location loc,
+                                          ArrayRef<Value> vectors) {
+  assert((vectors.size() == 2 || vectors.size() == 4) &&
+         "TDM descriptor must be 2 (2D) or 4 (3D-5D) vector groups");
+  SmallVector<Value> scalars;
+  for (Value vec : vectors) {
+    auto unpacked = unpackLLVector(loc, vec, rewriter);
+    scalars.append(unpacked.begin(), unpacked.end());
+  }
+  return scalars;
 }
 
 // Decode a full TDM descriptor from all 4 group vectors for 3D-5D tensors
 // Returns (base, tensorShape[], tensorStride[], blockShape[])
 std::tuple<Value, SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
-decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc,
-                        ArrayRef<Value> group0, ArrayRef<Value> group1,
-                        std::optional<ArrayRef<Value>> group2,
-                        std::optional<ArrayRef<Value>> group3, size_t numDims) {
+decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc, Value group0,
+                        Value group1, std::optional<Value> group2,
+                        std::optional<Value> group3, size_t numDims) {
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type globalPtrTy = ptr_ty(ctx, 1);
 
   // Decode base address from group0
-  Value globalAddrLow = group0[2];
-  Value globalAddrHigh = b.and_(group0[3], b.i32_val(0x7FFFFFFF));
+  Value globalAddrLow = vecGet(b, group0, 2);
+  Value globalAddrHigh = b.and_(vecGet(b, group0, 3), b.i32_val(0x7FFFFFFF));
   globalAddrLow = b.zext(i64_ty, globalAddrLow);
   globalAddrHigh = b.shl(b.zext(i64_ty, globalAddrHigh), b.i64_val(32));
   Value globalAddr = b.or_(globalAddrLow, globalAddrHigh);
@@ -158,14 +253,14 @@ decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc,
 
     // Strides are loaded in opposite order of shapes
     // tensor_dim0_stride from group1[5]
-    tensorStride[numDims - 2] = group1[5];
+    tensorStride[numDims - 2] = vecGet(b, group1, 5);
 
     // tensor_dim1_stride is encoded in group1[6] (48-bit value across group1[6]
     // and group1[7])
     if (numDims >= 3) {
-      Value stride1Low =
-          b.and_(b.lshr(group1[6], b.i32_val(16)), b.i32_val(0xFFFF));
-      Value stride1High = b.and_(group1[7], b.i32_val(0xFFFF));
+      Value stride1Low = b.and_(b.lshr(vecGet(b, group1, 6), b.i32_val(16)),
+                                b.i32_val(0xFFFF));
+      Value stride1High = b.and_(vecGet(b, group1, 7), b.i32_val(0xFFFF));
       tensorStride[numDims - 3] =
           b.or_(stride1Low, b.shl(stride1High, b.i32_val(16)));
     }
@@ -173,12 +268,12 @@ decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc,
 
   // tensor_dim2_stride from group2[2]
   if (numDims >= 4) {
-    tensorStride[numDims - 4] = group2.value()[2];
+    tensorStride[numDims - 4] = vecGet(b, group2.value(), 2);
   }
 
   // tensor_dim3_stride from group3[0]
   if (numDims == 5) {
-    tensorStride[numDims - 5] = group3.value()[0];
+    tensorStride[numDims - 5] = vecGet(b, group3.value(), 0);
   }
 
   // The innermost dimension always has stride 1
@@ -186,35 +281,36 @@ decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc,
 
   // Block shapes from group1
   blockShape[numDims - 1] =
-      b.and_(b.lshr(group1[3], b.i32_val(16)), b.i32_val(0xFFFF));
+      b.and_(b.lshr(vecGet(b, group1, 3), b.i32_val(16)), b.i32_val(0xFFFF));
   if (numDims >= 2) {
-    blockShape[numDims - 2] = b.and_(group1[4], b.i32_val(0xFFFF));
+    blockShape[numDims - 2] = b.and_(vecGet(b, group1, 4), b.i32_val(0xFFFF));
   }
 
   // 3rd dimension from group2 if present
   if (numDims >= 3) {
-    tensorShape[numDims - 3] = group2.value()[0];
+    tensorShape[numDims - 3] = vecGet(b, group2.value(), 0);
     blockShape[numDims - 3] =
-        b.and_(b.lshr(group1[4], b.i32_val(16)), b.i32_val(0xFFFF));
+        b.and_(b.lshr(vecGet(b, group1, 4), b.i32_val(16)), b.i32_val(0xFFFF));
   }
 
   // 4th dimension from group2/group3 if present
   if (numDims >= 4) {
-    tensorShape[numDims - 4] = group2.value()[1];
-    blockShape[numDims - 4] =
-        b.and_(b.lshr(group2.value()[3], b.i32_val(16)), b.i32_val(0xFFFF));
+    tensorShape[numDims - 4] = vecGet(b, group2.value(), 1);
+    blockShape[numDims - 4] = b.and_(
+        b.lshr(vecGet(b, group2.value(), 3), b.i32_val(16)), b.i32_val(0xFFFF));
   }
 
   // 5th dimension from group3 if present
   if (numDims == 5) {
     // tensor_dim4 is encoded across group3[1] and group3[2]
-    Value tensorDim4Low =
-        b.and_(b.lshr(group3.value()[1], b.i32_val(16)), b.i32_val(0xFFFF));
-    Value tensorDim4High = b.and_(group3.value()[2], b.i32_val(0xFFFF));
+    Value tensorDim4Low = b.and_(
+        b.lshr(vecGet(b, group3.value(), 1), b.i32_val(16)), b.i32_val(0xFFFF));
+    Value tensorDim4High =
+        b.and_(vecGet(b, group3.value(), 2), b.i32_val(0xFFFF));
     tensorShape[0] = b.or_(tensorDim4Low, b.shl(tensorDim4High, b.i32_val(16)));
 
-    blockShape[0] =
-        b.and_(b.lshr(group3.value()[2], b.i32_val(16)), b.i32_val(0xFFFF));
+    blockShape[0] = b.and_(b.lshr(vecGet(b, group3.value(), 2), b.i32_val(16)),
+                           b.i32_val(0xFFFF));
   }
 
   return {srcPtr, tensorShape, tensorStride, blockShape};
@@ -274,11 +370,14 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   // [120:64]:  global address
   // [127:126]: type - currently always set to 0x2
   // NOTE: Currently only scatter is implemented; gather (load) is TODO.
-  SmallVector<Value> group0(4, b.i32_val(0));
+  auto v4i32Ty = VectorType::get(4, i32_ty);
+  auto v8i32Ty = VectorType::get(8, i32_ty);
+  Value group0 = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
   Value globalAddr = b.ptrtoint(i64_ty, srcPtr);
-  group0[2] = b.trunc(i32_ty, globalAddr);
-  group0[3] = b.trunc(i32_ty, b.lshr(globalAddr, v32));
-  group0[3] = b.or_(group0[3], b.i32_val(1 << 31));
+  group0 = vecSet(b, group0, 2, b.trunc(i32_ty, globalAddr));
+  Value g0_3 = b.trunc(i32_ty, b.lshr(globalAddr, v32));
+  g0_3 = b.or_(g0_3, b.i32_val(1 << 31));
+  group0 = vecSet(b, group0, 3, g0_3);
 
   /* group1 bit-field definition:
 
@@ -322,44 +421,53 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
      7       0           32        tensor_dim1_stride(high-16-bit)
      ================================================================
   */
-  SmallVector<Value> group1(8, b.i32_val(0));
+  Value group1 = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
   int32_t dataSize = log2(elementSizeInBytes);
   unsigned dwordSize = 32;
-  auto padIntervalInDwords = padInterval * elementBitWidth / dwordSize;
+  auto padIntervalBits = padInterval * elementBitWidth;
+  assert(padIntervalBits % dwordSize == 0 &&
+         "padInterval must be a multiple of dwordSize(32bit)");
+  auto padIntervalInDwords = padIntervalBits / dwordSize;
   auto padAmountInDwords = padAmount * elementBitWidth / dwordSize;
-  group1[0] = b.or_(group1[0], b.i32_val(dataSize << 16));
+  Value g1_0 = b.i32_val(dataSize << 16);
   if (padIntervalInDwords > 0 && padAmountInDwords > 0) {
     assert(llvm::isPowerOf2_32(padIntervalInDwords));
-    int32_t log2PadInterval = log2(padIntervalInDwords);
-    group1[0] = b.or_(group1[0], b.i32_val(1 << 20));
-    group1[0] = b.or_(group1[0], b.i32_val((log2PadInterval - 1) << 22));
-    group1[0] = b.or_(group1[0], b.i32_val((padAmountInDwords - 1) << 25));
+    int32_t log2PadIntervalDwords = log2(padIntervalInDwords);
+    assert(log2PadIntervalDwords <= 8 && "padInterval too large");
+    g1_0 = b.or_(g1_0, b.i32_val(1 << 20));
+    g1_0 = b.or_(g1_0, b.i32_val((log2PadIntervalDwords - 1) << 22));
+    g1_0 = b.or_(g1_0, b.i32_val((padAmountInDwords - 1) << 25));
   }
+  group1 = vecSet(b, group1, 0, g1_0);
   // Encode 32-bit tensor shapes
-  group1[1] = b.shl(tensorShape[numDims - 1], v16);
-  group1[2] = b.lshr(tensorShape[numDims - 1], v16);
+  group1 = vecSet(b, group1, 1, b.shl(tensorShape[numDims - 1], v16));
+  Value g1_2 = b.lshr(tensorShape[numDims - 1], v16);
 
+  Value g1_3 = b.i32_val(0);
   if (numDims >= 2) {
-    group1[2] = b.or_(group1[2], b.shl(tensorShape[numDims - 2], v16));
-    group1[3] = b.lshr(tensorShape[numDims - 2], v16);
+    g1_2 = b.or_(g1_2, b.shl(tensorShape[numDims - 2], v16));
+    g1_3 = b.lshr(tensorShape[numDims - 2], v16);
   }
+  group1 = vecSet(b, group1, 2, g1_2);
 
   // Block shapes
-  group1[3] = b.or_(group1[3], b.i32_val(blockShape[numDims - 1] << 16));
+  g1_3 = b.or_(g1_3, b.i32_val(blockShape[numDims - 1] << 16));
+  group1 = vecSet(b, group1, 3, g1_3);
   if (numDims >= 2) {
-    group1[4] = b.i32_val(blockShape[numDims - 2] & 0xFFFF);
-  }
-  // tile_dim2 (upper 16 bits of group1[4])
-  if (numDims >= 3) {
-    group1[4] = b.or_(group1[4], b.i32_val(blockShape[numDims - 3] << 16));
+    Value g1_4 = b.i32_val(blockShape[numDims - 2] & 0xFFFF);
+    // tile_dim2 (upper 16 bits of group1[4])
+    if (numDims >= 3) {
+      g1_4 = b.or_(g1_4, b.i32_val(blockShape[numDims - 3] << 16));
+    }
+    group1 = vecSet(b, group1, 4, g1_4);
   }
 
   // Handle strides
   if (numDims >= 2) {
-    group1[5] = tensorStride[numDims - 2];
+    group1 = vecSet(b, group1, 5, tensorStride[numDims - 2]);
     if (numDims >= 3) {
-      group1[6] = b.or_(group1[6], b.shl(tensorStride[numDims - 3], v16));
-      group1[7] = b.lshr(tensorStride[numDims - 3], v16);
+      group1 = vecSet(b, group1, 6, b.shl(tensorStride[numDims - 3], v16));
+      group1 = vecSet(b, group1, 7, b.lshr(tensorStride[numDims - 3], v16));
     }
   }
 
@@ -412,23 +520,23 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
           3    0         32        row_index_3
     ================================================================
   */
-  SmallVector<Value> group2(4, b.i32_val(0));
+  Value group2 = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
   if (numDims >= 3) {
     // tensor_dim2 (3rd dimension from the end)
-    group2[0] = tensorShape[numDims - 3];
+    group2 = vecSet(b, group2, 0, tensorShape[numDims - 3]);
 
     // tensor_dim3 (4th dimension from the end)
     if (numDims >= 4) {
-      group2[1] = tensorShape[numDims - 4];
+      group2 = vecSet(b, group2, 1, tensorShape[numDims - 4]);
       // tensor_dim2_stride (48 bits: lower 32 bits in group2[2], upper 16 bits
       // in group2[3])
-      group2[2] = tensorStride[numDims - 4];
+      group2 = vecSet(b, group2, 2, tensorStride[numDims - 4]);
     }
 
     // tile_dim3 (upper 16 bits of group2[3])
     if (numDims >= 4) {
-      group2[3] =
-          b.or_(group2[3], b.shl(b.i32_val(blockShape[numDims - 4]), v16));
+      group2 =
+          vecSet(b, group2, 3, b.shl(b.i32_val(blockShape[numDims - 4]), v16));
     }
   }
 
@@ -471,43 +579,34 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
           3    0         32        row_index_7
     ================================================================
   */
-  SmallVector<Value> group3(4, b.i32_val(0));
-  if (numDims >= 4) {
-
-    // tensor_dim4 (5th dimension from the end) (32 bits starting at bit 48:
-    // upper 16 bits of group3[1] and lower 16 bits of group3[2])
-    if (numDims == 5) {
-      // Lower 16 bits go into upper 16 bits of group3[1]
-      group3[1] = b.or_(group3[1], b.shl(tensorShape[numDims - 5], v16));
-      // Upper 16 bits go into lower 16 bits of group3[2]
-      group3[2] = b.or_(group3[2], b.lshr(tensorShape[numDims - 5], v16));
-    }
-
-    // tile_dim4 (16 bits starting at bit 80: upper 16 bits of group3[2])
-    if (numDims == 5) {
-      // tensor_dim3_stride (4th dimension from the end) (48 bits split across
-      // group3[0] and lower 16 bits of group3[1])
-      group3[0] = tensorStride[numDims - 5];
-      group3[2] =
-          b.or_(group3[2], b.shl(b.i32_val(blockShape[numDims - 5]), v16));
-    }
+  Value group3 = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
+  if (numDims == 5) {
+    // tensor_dim3_stride (4th dimension from the end) — 48 bits split across
+    // group3[0] and the lower 16 bits of group3[1].
+    group3 = vecSet(b, group3, 0, tensorStride[numDims - 5]);
+    // tensor_dim4 (5th dim) — upper 16 of group3[1] and lower 16 of group3[2].
+    group3 = vecSet(b, group3, 1, b.shl(tensorShape[numDims - 5], v16));
+    // Compose group3[2] = tensor_dim4_hi16 | (tile_dim4 << 16) in one write.
+    Value g3_2 = b.or_(b.lshr(tensorShape[numDims - 5], v16),
+                       b.shl(b.i32_val(blockShape[numDims - 5]), v16));
+    group3 = vecSet(b, group3, 2, g3_2);
   }
 
   return TDMDescriptor{group0, group1, group2, group3};
 }
 
 // Fill TDM descriptor for regular load/store operations (1D-5D tensors)
-void fillTDMDescriptor(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> shapePerCTA, int numWarps, unsigned padInterval,
-    unsigned padAmount, SmallVector<Value> &group0, SmallVector<Value> &group1,
-    std::optional<std::reference_wrapper<SmallVector<Value>>> group2,
-    std::optional<std::reference_wrapper<SmallVector<Value>>> group3,
-    SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
-    Value multicastMask, Value barrierPtr,
-    const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
-    ArrayRef<unsigned> warpsPerCTA) {
+void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
+                       const LLVMTypeConverter *typeConverter, Type elementType,
+                       SmallVector<int64_t> shapePerCTA, int numWarps,
+                       unsigned padInterval, unsigned padAmount, Value &group0,
+                       Value &group1,
+                       std::optional<std::reference_wrapper<Value>> group2,
+                       std::optional<std::reference_wrapper<Value>> group3,
+                       SmallVector<Value> offset, ArrayRef<Value> dstPtrs,
+                       Value pred, Value multicastMask, Value barrierPtr,
+                       const triton::LinearLayout &sharedLayout, Value ctaId,
+                       bool isStore, ArrayRef<unsigned> warpsPerCTA) {
   size_t numDims = offset.size();
   assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors.");
   assert(!dstPtrs.empty() && "dstPtrs cannot be empty");
@@ -522,12 +621,10 @@ void fillTDMDescriptor(
   auto [srcPtr, tensorShape, tensorStride, decodedBlockShape] =
       decodeTDMDescriptorFull(
           rewriter, loc, group0, group1,
-          group2.has_value()
-              ? std::optional<ArrayRef<Value>>(group2.value().get())
-              : std::nullopt,
-          group3.has_value()
-              ? std::optional<ArrayRef<Value>>(group3.value().get())
-              : std::nullopt,
+          group2.has_value() ? std::optional<Value>(group2.value().get())
+                             : std::nullopt,
+          group3.has_value() ? std::optional<Value>(group3.value().get())
+                             : std::nullopt,
           numDims);
 
   auto kMessage = str_attr("message");
@@ -640,63 +737,68 @@ void fillTDMDescriptor(
   // Update group0 with addresses
   Value globalAddr = b.ptrtoint(i64_ty, srcPtr);
   Value ldsAddr = b.ptrtoint(i32_ty, dstPtr);
-  group0[0] = pred;
-  group0[1] = ldsAddr;
-  group0[2] = b.trunc(i32_ty, globalAddr);
-  group0[3] = b.and_(group0[3], b.i32_val(1 << 31));
-  group0[3] =
-      b.or_(group0[3], b.trunc(i32_ty, b.lshr(globalAddr, b.i64_val(32))));
+  group0 = vecSet(b, group0, 0, pred);
+  group0 = vecSet(b, group0, 1, ldsAddr);
+  group0 = vecSet(b, group0, 2, b.trunc(i32_ty, globalAddr));
+  Value g0_3 = b.and_(vecGet(b, group0, 3), b.i32_val(1 << 31));
+  g0_3 = b.or_(g0_3, b.trunc(i32_ty, b.lshr(globalAddr, b.i64_val(32))));
+  group0 = vecSet(b, group0, 3, g0_3);
 
   // Update group1 with tensor shapes
+  Value g1_0 = vecGet(b, group1, 0);
   if (multicastMask)
-    group1[0] = b.or_(group1[0], multicastMask);
-  group1[1] = b.shl(tensorShape[numDims - 1], b.i32_val(16));
-  group1[2] = b.lshr(tensorShape[numDims - 1], b.i32_val(16));
+    g1_0 = b.or_(g1_0, multicastMask);
+  group1 = vecSet(b, group1, 1, b.shl(tensorShape[numDims - 1], b.i32_val(16)));
+  Value g1_2 = b.lshr(tensorShape[numDims - 1], b.i32_val(16));
+  Value g1_3 = vecGet(b, group1, 3);
 
   if (numDims >= 2) {
-    group1[2] =
-        b.or_(group1[2], b.shl(tensorShape[numDims - 2], b.i32_val(16)));
-    group1[3] = b.and_(group1[3], b.i32_val(0xFFFF << 16));
-    group1[3] =
-        b.or_(group1[3], b.lshr(tensorShape[numDims - 2], b.i32_val(16)));
+    g1_2 = b.or_(g1_2, b.shl(tensorShape[numDims - 2], b.i32_val(16)));
+    g1_3 = b.and_(g1_3, b.i32_val(0xFFFF << 16));
+    g1_3 = b.or_(g1_3, b.lshr(tensorShape[numDims - 2], b.i32_val(16)));
   }
+  group1 = vecSet(b, group1, 2, g1_2);
 
   // Configure barrier
+  Value g1_1 = vecGet(b, group1, 1);
   if (barrierPtr) {
-    group1[0] = b.or_(group1[0], b.shl(b.i32_val(1), b.i32_val(18)));
-    group1[1] = b.or_(
-        group1[1], b.and_(b.lshr(b.ptrtoint(i32_ty, barrierPtr), b.i32_val(3)),
-                          b.i32_val(0x00FFFF)));
+    g1_0 = b.or_(g1_0, b.shl(b.i32_val(1), b.i32_val(18)));
+    g1_1 =
+        b.or_(g1_1, b.and_(b.lshr(b.ptrtoint(i32_ty, barrierPtr), b.i32_val(3)),
+                           b.i32_val(0x00FFFF)));
   } else {
-    group1[0] = b.and_(group1[0], b.i32_val(0xFFFBFFFF));
+    g1_0 = b.and_(g1_0, b.i32_val(0xFFFBFFFF));
   }
+  group1 = vecSet(b, group1, 0, g1_0);
+  group1 = vecSet(b, group1, 1, g1_1);
 
   if (adjustedBlockShape) {
     // Re-encode the adjusted tile_dim0 (block shape) into upper 16 bits of
     // group1[3]. This is the same for 1D-5D tensors.
-    group1[3] = b.and_(group1[3], b.i32_val(0xFFFF));
-    group1[3] =
-        b.or_(group1[3], b.shl(decodedBlockShape[numDims - 1], b.i32_val(16)));
+    g1_3 = b.and_(g1_3, b.i32_val(0xFFFF));
+    g1_3 = b.or_(g1_3, b.shl(decodedBlockShape[numDims - 1], b.i32_val(16)));
   }
+  group1 = vecSet(b, group1, 3, g1_3);
 
   // Update group2/group3 for higher dimensions
   if (numDims >= 3) {
-    group2.value().get()[0] = tensorShape[numDims - 3];
+    Value &g2 = group2.value().get();
+    g2 = vecSet(b, g2, 0, tensorShape[numDims - 3]);
   }
 
   if (numDims >= 4) {
-    group2.value().get()[1] = tensorShape[numDims - 4];
+    Value &g2 = group2.value().get();
+    g2 = vecSet(b, g2, 1, tensorShape[numDims - 4]);
   }
 
   if (numDims == 5) {
-    group3.value().get()[1] =
-        b.and_(group3.value().get()[1], b.i32_val(0xFFFF));
-    group3.value().get()[1] =
-        b.or_(group3.value().get()[1], b.shl(tensorShape[0], b.i32_val(16)));
-    group3.value().get()[2] =
-        b.and_(group3.value().get()[2], b.i32_val(0xFFFF << 16));
-    group3.value().get()[2] =
-        b.or_(group3.value().get()[2], b.lshr(tensorShape[0], b.i32_val(16)));
+    Value &g3 = group3.value().get();
+    Value g3_1 = b.and_(vecGet(b, g3, 1), b.i32_val(0xFFFF));
+    g3_1 = b.or_(g3_1, b.shl(tensorShape[0], b.i32_val(16)));
+    g3 = vecSet(b, g3, 1, g3_1);
+    Value g3_2 = b.and_(vecGet(b, g3, 2), b.i32_val(0xFFFF << 16));
+    g3_2 = b.or_(g3_2, b.lshr(tensorShape[0], b.i32_val(16)));
+    g3 = vecSet(b, g3, 2, g3_2);
   }
 }
 
@@ -707,10 +809,9 @@ void fillTDMDescriptorForGatherScatter(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
     SmallVector<int64_t> blockShape, unsigned padInterval, unsigned padAmount,
-    SmallVector<Value> &group0, SmallVector<Value> &group1,
-    SmallVector<Value> &group2, SmallVector<Value> &group3, Value ldsRowOffset,
-    Value globalColOffset, Value ldsPtr, Value pred, Value barrierPtr,
-    const triton::LinearLayout &cgaLayout, Value ctaId,
+    Value &group0, Value &group1, Value &group2, Value &group3,
+    Value ldsRowOffset, Value globalColOffset, Value ldsPtr, Value pred,
+    Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId,
     ArrayRef<Value> rowIndices, bool use32BitIndices, bool isGather) {
   assert(!rowIndices.empty() && "Gather/scatter requires row indices.");
 
@@ -722,7 +823,9 @@ void fillTDMDescriptorForGatherScatter(
 
   // Decode descriptor to get tensor info
   auto [globalPtr, tensorShape, tensorStride, decodedBlockShape] =
-      decodeTDMDescriptorFull(rewriter, loc, group0, group1, group2, group3,
+      decodeTDMDescriptorFull(rewriter, loc, group0, group1,
+                              std::optional<Value>(group2),
+                              std::optional<Value>(group3),
                               /*numDims=*/2);
 
   // Apply CTA column offset to the base pointer.
@@ -775,37 +878,44 @@ void fillTDMDescriptorForGatherScatter(
     predWithGatherScatter = b.or_(predWithGatherScatter, b.i32_val(1 << 30));
   }
 
-  group0[0] = predWithGatherScatter;
-  group0[1] = ldsAddr;
-  group0[2] = b.trunc(i32_ty, globalAddr);
+  group0 = vecSet(b, group0, 0, predWithGatherScatter);
+  group0 = vecSet(b, group0, 1, ldsAddr);
+  group0 = vecSet(b, group0, 2, b.trunc(i32_ty, globalAddr));
 
   // group0[3]: preserve type bits, set global_addr upper 25 bits
   Value globalAddrHigh = b.trunc(i32_ty, b.lshr(globalAddr, b.i64_val(32)));
   globalAddrHigh = b.and_(globalAddrHigh, b.i32_val(0x01FFFFFF));
-  Value typeBits = b.and_(group0[3], b.i32_val(0xC0000000));
-  group0[3] = b.or_(typeBits, globalAddrHigh);
+  Value typeBits = b.and_(vecGet(b, group0, 3), b.i32_val(0xC0000000));
+  group0 = vecSet(b, group0, 3, b.or_(typeBits, globalAddrHigh));
 
   // Update group1 with adjusted tensor shapes for proper OOB handling
-  group1[1] = b.shl(tensorShape[1], b.i32_val(16));
-  group1[2] = b.lshr(tensorShape[1], b.i32_val(16));
-  group1[2] = b.or_(group1[2], b.shl(tensorShape[0], b.i32_val(16)));
-  group1[3] = b.and_(group1[3], b.i32_val(0xFFFF << 16));
-  group1[3] = b.or_(group1[3], b.lshr(tensorShape[0], b.i32_val(16)));
+  group1 = vecSet(b, group1, 1, b.shl(tensorShape[1], b.i32_val(16)));
+  Value g1_2 = b.lshr(tensorShape[1], b.i32_val(16));
+  g1_2 = b.or_(g1_2, b.shl(tensorShape[0], b.i32_val(16)));
+  group1 = vecSet(b, group1, 2, g1_2);
+  Value g1_3 = b.and_(vecGet(b, group1, 3), b.i32_val(0xFFFF << 16));
+  g1_3 = b.or_(g1_3, b.lshr(tensorShape[0], b.i32_val(16)));
+  group1 = vecSet(b, group1, 3, g1_3);
 
   // Configure barrier
+  Value g1_0 = vecGet(b, group1, 0);
+  Value g1_1 = vecGet(b, group1, 1);
   if (barrierPtr) {
-    group1[0] = b.or_(group1[0], b.shl(b.i32_val(1), b.i32_val(18)));
-    group1[1] = b.or_(
-        group1[1], b.and_(b.lshr(b.ptrtoint(i32_ty, barrierPtr), b.i32_val(3)),
-                          b.i32_val(0x00FFFF)));
+    g1_0 = b.or_(g1_0, b.shl(b.i32_val(1), b.i32_val(18)));
+    g1_1 =
+        b.or_(g1_1, b.and_(b.lshr(b.ptrtoint(i32_ty, barrierPtr), b.i32_val(3)),
+                           b.i32_val(0x00FFFF)));
   } else {
-    group1[0] = b.and_(group1[0], b.i32_val(0xFFFBFFFF));
+    g1_0 = b.and_(g1_0, b.i32_val(0xFFFBFFFF));
   }
+  group1 = vecSet(b, group1, 0, g1_0);
+  group1 = vecSet(b, group1, 1, g1_1);
 
   // Set tile_dim1 (number of valid indices) in lower 16 bits of group1[4]
   size_t numIndices = rowIndices.size();
-  group1[4] = b.and_(group1[4], b.i32_val(0xFFFF0000));
-  group1[4] = b.or_(group1[4], b.i32_val(numIndices & 0xFFFF));
+  Value g1_4 = b.and_(vecGet(b, group1, 4), b.i32_val(0xFFFF0000));
+  g1_4 = b.or_(g1_4, b.i32_val(numIndices & 0xFFFF));
+  group1 = vecSet(b, group1, 4, g1_4);
 
   // Fix tile_dim0 for gather/scatter: createTDMDescriptor divides the column
   // dimension across warps for regular load/store, but gather and scatter use
@@ -818,23 +928,24 @@ void fillTDMDescriptorForGatherScatter(
     if (!isGather && padInterval > 0 && padAmount > 0)
       tileDim0 += padAmount;
 
-    group1[3] = b.and_(group1[3], b.i32_val(0xFFFF));
-    group1[3] = b.or_(group1[3], b.i32_val(tileDim0 << 16));
+    Value g1_3_gs = b.and_(vecGet(b, group1, 3), b.i32_val(0xFFFF));
+    g1_3_gs = b.or_(g1_3_gs, b.i32_val(tileDim0 << 16));
+    group1 = vecSet(b, group1, 3, g1_3_gs);
   }
 
   // Fill group2 and group3 with row indices
   if (use32BitIndices) {
     // 32-bit indices: 4 in group2, 4 in group3
     for (size_t i = 0; i < 4 && i < numIndices; ++i) {
-      group2[i] = rowIndices[i];
+      group2 = vecSet(b, group2, i, rowIndices[i]);
     }
     for (size_t i = 4; i < 8 && i < numIndices; ++i) {
-      group3[i - 4] = rowIndices[i];
+      group3 = vecSet(b, group3, i - 4, rowIndices[i]);
     }
   } else {
     // 16-bit indices: pack 2 per dword
     // Indices are i16, so zero-extend to i32 before packing
-    auto packIndices = [&](MutableArrayRef<Value> group, size_t baseIdx) {
+    auto packIndices = [&](Value &group, size_t baseIdx) {
       for (size_t i = 0; i < 4; ++i) {
         Value dword = b.i32_val(0);
         size_t idx0 = baseIdx + i * 2;
@@ -850,13 +961,15 @@ void fillTDMDescriptorForGatherScatter(
           dword = b.or_(
               dword, b.shl(b.and_(idx1_i32, b.i32_val(0xFFFF)), b.i32_val(16)));
         }
-        group[i] = dword;
+        group = vecSet(b, group, i, dword);
       }
     };
     packIndices(group2, 0);
     packIndices(group3, 8);
   }
 }
+
+namespace {
 
 // Compute how many elements each partition buffer advances between consecutive
 // TDM instruction slices, accounting for padding if present.
@@ -865,7 +978,7 @@ void fillTDMDescriptorForGatherScatter(
 // instructions, each instruction writes a "slice" of data into each partition
 // buffer.  We need to know the padded size of that slice so the next
 // instruction can offset its LDS pointer correctly.
-static int64_t computePerPartitionSliceStride(
+int64_t computePerPartitionSliceStride(
     ArrayRef<int64_t> blockShape, unsigned partitionDim,
     int64_t sliceExtentPerPartition, unsigned numPartitions,
     triton::gpu::PartitionedSharedEncodingAttr partitionedEnc) {
@@ -896,37 +1009,33 @@ static int64_t computePerPartitionSliceStride(
 
 // Emit a single TDM intrinsic (load or store) for the given block shape.
 // This handles both the 2D (d2 intrinsic) and >2D (full intrinsic) cases.
-static void
-emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
-                 const LLVMTypeConverter *typeConverter, ArrayRef<Value> desc,
-                 size_t numDims, Type elementType,
-                 SmallVector<int64_t> effectiveBlockShape, int numWarps,
-                 unsigned padInterval, unsigned padAmount,
-                 SmallVector<Value> globalOffset, ArrayRef<Value> instrDstPtrs,
-                 Value pred, Value multicastMask, Value barrier,
-                 const triton::LinearLayout &instrSharedLayout, Value ctaId,
-                 bool isLoad, ArrayRef<unsigned> warpsPerCTA) {
+void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
+                      const LLVMTypeConverter *typeConverter,
+                      ArrayRef<Value> desc, size_t numDims, Type elementType,
+                      SmallVector<int64_t> effectiveBlockShape, int numWarps,
+                      unsigned padInterval, unsigned padAmount,
+                      SmallVector<Value> globalOffset,
+                      ArrayRef<Value> instrDstPtrs, Value pred,
+                      Value multicastMask, Value barrier,
+                      const triton::LinearLayout &instrSharedLayout,
+                      Value ctaId, bool isLoad,
+                      ArrayRef<unsigned> warpsPerCTA) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
   Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
 
   if (numDims > 2) {
-    auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
-    auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.begin() + 12);
-    auto group2Vec = SmallVector<Value>(desc.begin() + 12, desc.begin() + 16);
-    auto group3Vec = SmallVector<Value>(desc.begin() + 16, desc.end());
+    Value group0 = desc[0];
+    Value group1 = desc[1];
+    Value group2 = desc[2];
+    Value group3 = desc[3];
 
     fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
                       effectiveBlockShape, numWarps, padInterval, padAmount,
-                      group0Vec, group1Vec, std::ref(group2Vec),
-                      std::ref(group3Vec), globalOffset, instrDstPtrs, pred,
-                      multicastMask, barrier, instrSharedLayout, ctaId, !isLoad,
-                      warpsPerCTA);
-
-    auto group0 = packLLVector(loc, group0Vec, rewriter);
-    auto group1 = packLLVector(loc, group1Vec, rewriter);
-    auto group2 = packLLVector(loc, group2Vec, rewriter);
-    auto group3 = packLLVector(loc, group3Vec, rewriter);
+                      group0, group1, std::ref(group2), std::ref(group3),
+                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
+                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA);
 
     const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
                                        : "llvm.amdgcn.tensor.store.from.lds";
@@ -934,18 +1043,15 @@ emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
         rewriter, loc, intrinsicName, {},
         {group0, group1, group2, group3, group4Zero, b.i32_val(0)});
   } else {
-    auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
-    auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
+    Value group0 = desc[0];
+    Value group1 = desc[1];
 
     fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
                       effectiveBlockShape, numWarps, padInterval, padAmount,
-                      group0Vec, group1Vec, std::nullopt, std::nullopt,
-                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
+                      group0, group1, std::nullopt, std::nullopt, globalOffset,
+                      instrDstPtrs, pred, multicastMask, barrier,
                       instrSharedLayout, ctaId, !isLoad, warpsPerCTA);
 
-    auto group0 = packLLVector(loc, group0Vec, rewriter);
-    auto group1 = packLLVector(loc, group1Vec, rewriter);
-    auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
     Value group2Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
     Value group3Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
 
@@ -956,6 +1062,8 @@ emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
         {group0, group1, group2Zero, group3Zero, group4Zero, b.i32_val(0)});
   }
 }
+
+} // namespace
 
 // Emit TDM load/store, potentially split into multiple instructions for
 // partitioned shared memory.
@@ -1057,16 +1165,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
   }
 }
 
-// Emit a TDM gather or scatter operation for non-contiguous row access.
-size_t getTDMGatherScatterInstrinsicCount(size_t numIndices,
-                                          bool use32BitIndices) {
-  if (numIndices == 0)
-    return 0;
-
-  // Determine max indices per instruction based on index size
-  size_t maxIndicesPerInstr = use32BitIndices ? 8 : 16;
-
-  return llvm::divideCeil(numIndices, maxIndicesPerInstr);
+size_t getTDMGatherScatterInstrinsicCount(RankedTensorType indicesType) {
+  return analyzeGatherScatterLayout(indicesType).numInstructions;
 }
 
 void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
@@ -1086,32 +1186,19 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
 
   bool use32BitIndices =
       indicesType.getElementType().getIntOrFloatBitWidth() == 32;
-  size_t maxIndicesPerInstr = use32BitIndices ? 8 : 16;
 
-  // Use LinearLayout to determine:
-  // 1. Which registers are broadcasted — remove duplicates
-  // 2. Which warps are redundant — zero the pred to make instruction a no-op
-  // 3. Per-batch LDS row offset — via applyLinearLayout per batch
-  // This analysis is direction-agnostic: the index layout determines which warp
-  // owns which rows in LDS, regardless of whether data flows to LDS (gather) or
-  // from LDS (scatter).
-  auto indexLL = triton::gpu::toLinearLayout(indicesType);
-  assert(indexLL.getNumOutDims() == 1 &&
-         "Gather/scatter index layout must have exactly one output dimension");
-  auto freeVarMasks = indexLL.getFreeVariableMasks();
+  auto analysis = analyzeGatherScatterLayout(indicesType);
+  auto &indexLL = analysis.indexLL;
+  size_t maxIndicesPerInstr = analysis.maxIndicesPerInstr;
 
   auto kRegister = rewriter.getStringAttr("register");
   auto kLane = rewriter.getStringAttr("lane");
   auto kWarp = rewriter.getStringAttr("warp");
 
-  // Remove broadcasted (duplicated) register entries. After this, indexLL
-  // has a compact register dimension and effectiveRowIndices contains only
-  // unique index values.
+  // Apply broadcast removal to the actual row indices.
   SmallVector<Value> effectiveRowIndices(rowIndices.begin(), rowIndices.end());
-  auto removeBcast = actionRemoveBroadcastedRegs(indexLL);
-  if (!removeBcast.isIdentity()) {
-    indexLL = removeBcast.apply(indexLL);
-    effectiveRowIndices = removeBcast.apply(
+  if (!analysis.removeBcastAction.isIdentity()) {
+    effectiveRowIndices = analysis.removeBcastAction.apply(
         SmallVector<Value>(rowIndices.begin(), rowIndices.end()));
   }
 
@@ -1119,7 +1206,7 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
 
   // If any warp bits are free, those warps hold redundant copies.
   // Zero the pred so the instruction becomes a no-op.
-  int32_t warpFreeMask = freeVarMasks.lookup(kWarp);
+  int32_t warpFreeMask = analysis.freeVarMasks.lookup(kWarp);
   if (warpFreeMask != 0) {
     Value isActive =
         b.icmp_eq(b.and_(warpId, b.i32_val(warpFreeMask)), b.i32_val(0));
@@ -1135,9 +1222,6 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     pred = b.select(inRange, pred, b.i32_val(0));
   }
 
-  size_t contigIndiceCount = indexLL.getNumConsecutiveInOut();
-  maxIndicesPerInstr = std::min(maxIndicesPerInstr, contigIndiceCount);
-
   // Precompute LDS row offset for each instruction batch via
   // applyLinearLayout with the actual register index and warp ID.
   SmallVector<Value> batchLdsOffsets;
@@ -1151,20 +1235,22 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                                       {kBlock, b.i32_val(0)}});
     batchLdsOffsets.push_back(offsets[0].second);
   }
+  assert(batchLdsOffsets.size() == analysis.numInstructions);
 
   size_t numIndicesPerWarp = effectiveRowIndices.size();
-  size_t numInstructions = batchLdsOffsets.size();
 
-  // Get the descriptor groups (gather/scatter uses 2D format: 12 dwords)
-  auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
-  auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
+  // Get the descriptor groups (gather/scatter uses 2D format — desc has 2
+  // vector entries: group0 = <4 x i32>, group1 = <8 x i32>)
+  Value group0In = desc[0];
+  Value group1In = desc[1];
 
   // For TDM gather/scatter, we need group2 and group3 for indices
-  SmallVector<Value> group2Vec(4, b.i32_val(0));
-  SmallVector<Value> group3Vec(4, b.i32_val(0));
+  auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
+  Value group2Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
+  Value group3Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
 
   // Issue multiple TDM instructions if needed
-  for (size_t instrIdx = 0; instrIdx < numInstructions; ++instrIdx) {
+  for (size_t instrIdx = 0; instrIdx < analysis.numInstructions; ++instrIdx) {
     size_t startIdx = instrIdx * maxIndicesPerInstr;
     size_t endIdx = std::min(startIdx + maxIndicesPerInstr, numIndicesPerWarp);
 
@@ -1173,10 +1259,10 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                                     effectiveRowIndices.begin() + endIdx);
 
     // Make copies of the descriptor groups for this iteration
-    auto g0 = group0Vec;
-    auto g1 = group1Vec;
-    auto g2 = group2Vec;
-    auto g3 = group3Vec;
+    Value g0 = group0In;
+    Value g1 = group1In;
+    Value g2 = group2Zero;
+    Value g3 = group3Zero;
 
     Value ldsRowOffset = batchLdsOffsets[instrIdx];
 
@@ -1186,20 +1272,13 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
         pred, barrierPtr, cgaLayout, ctaId, batchIndices, use32BitIndices,
         isGather);
 
-    // Pack and emit the instruction
-    auto group0 = packLLVector(loc, g0, rewriter);
-    auto group1 = packLLVector(loc, g1, rewriter);
-    auto group2 = packLLVector(loc, g2, rewriter);
-    auto group3 = packLLVector(loc, g3, rewriter);
-
     auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
     Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
 
     const char *intrinsicName = isGather ? "llvm.amdgcn.tensor.load.to.lds"
                                          : "llvm.amdgcn.tensor.store.from.lds";
-    LLVM::createLLVMIntrinsicCallOp(
-        rewriter, loc, intrinsicName, {},
-        {group0, group1, group2, group3, group4Zero, b.i32_val(0)});
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {},
+                                    {g0, g1, g2, g3, group4Zero, b.i32_val(0)});
   }
 }
 
@@ -1224,25 +1303,19 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
   int numDims = blockShape.size();
   Type globalPtrTy = ptr_ty(loc.getContext(), 1);
 
-  // Decode TDM descriptor to get the base pointer, shape, and strides
-  auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
-  auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.begin() + 12);
-  std::optional<SmallVector<Value>> group2Vec;
-  std::optional<SmallVector<Value>> group3Vec;
+  // Decode TDM descriptor to get the base pointer, shape, and strides.
+  // desc now has 2 (2D) or 4 (3D-5D) vector entries.
+  Value group0 = desc[0];
+  Value group1 = desc[1];
+  std::optional<Value> group2;
+  std::optional<Value> group3;
   if (numDims > 2) {
-    group2Vec = SmallVector<Value>(desc.begin() + 12, desc.begin() + 16);
-    group3Vec = SmallVector<Value>(desc.begin() + 16, desc.end());
+    group2 = desc[2];
+    group3 = desc[3];
   }
   auto [basePtr, tensorShape, tensorStride, decodedBlockShape] =
-      mlir::LLVM::AMD::decodeTDMDescriptorFull(
-          rewriter, loc, group0Vec, group1Vec,
-          group2Vec.has_value()
-              ? std::optional<ArrayRef<Value>>(group2Vec.value())
-              : std::nullopt,
-          group3Vec.has_value()
-              ? std::optional<ArrayRef<Value>>(group3Vec.value())
-              : std::nullopt,
-          numDims);
+      mlir::LLVM::AMD::decodeTDMDescriptorFull(rewriter, loc, group0, group1,
+                                               group2, group3, numDims);
 
   auto dot64 = [&](ArrayRef<Value> indices, ArrayRef<Value> strides) {
     Value ret = b.i64_val(0);
