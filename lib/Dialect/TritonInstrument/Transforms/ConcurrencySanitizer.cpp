@@ -11,28 +11,6 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/ErrorHandling.h"
 
-// clang-format off
-// Concurrency Sanitizer data structures:
-// ConSan keeps auxilary data requied for tracking memory accesses in tensors.
-// These tensors are stored as a distributed tensor or in global scratch memory.
-// C = CTAs, B = buffers, K = mbarriers, T = logical ConSan thread bit slots,
-// P = max number of warp-specialize partitions tracked by ConSan (16 for now).
-//
-// Name                   | Storage | Rank/Type          | Description
-// -----------------------|---------|--------------------|------------
-// buffers                | tensor  | <C x B x i64>      | Base pointers of all (sub)buffers
-// barriers               | tensor  | <C x K x i64>      | Pointers to all individual mbarriers
-// barrierStates          | scratch | <C x K x i64>      | Packed barrier phase (bit 0), arrival counts (bits[1..20] init, [21..40] current), and signed tx-count (bits[41..61]); zero means invalid/uninitialized
-// barrierWriteRecipients | scratch | <C x K x i32>      | CTA bitsets of EffectWrites rows published by each barrier
-// waiting                | scratch | <C x K x i32>      | Two bits per thread: waiting flag bit (LSB), stored phase bit (bit 1)
-// writeVisibility        | scratch | <C x B x i64>      | Per-buffer thread-visibility bitmask (bit i => thread i visible)
-// readVisibility         | scratch | <C x B x T x i64>  | Per-buffer, per-thread visibility lanes (row-updated; values are bitmasks)
-// writeTracking          | scratch | <C x B x K x i8>   | Map buffers -> barriers that track writes
-// readTracking           | scratch | <C x B x K x i64>  | Map buffers -> barriers that track reads
-// outstandingCommits
-//   (async/wgmma)        | scratch | <C x B x P x i8>   | Number of outstanding commits per buffer/base partition-thread (2D replaces prior 1D)
-// clang-format on
-
 namespace mlir {
 namespace triton {
 namespace instrument {

@@ -75,8 +75,8 @@ public:
 struct ConvertTritonAMDGPUToLLVM
     : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
           ConvertTritonAMDGPUToLLVM> {
-  explicit ConvertTritonAMDGPUToLLVM(StringRef targetArch, bool ftz) {
-    this->arch = targetArch.str();
+  explicit ConvertTritonAMDGPUToLLVM(StringRef gfxArch, bool ftz) {
+    this->gfxArch = gfxArch.str();
     this->ftz = ftz;
   }
 
@@ -90,9 +90,9 @@ struct ConvertTritonAMDGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
-    AMD::TargetInfo targetInfo(this->arch.getValue());
+    AMD::TargetInfo targetInfo(this->gfxArch.getValue());
     if (targetInfo.getISAFamily() == AMD::ISAFamily::Unknown) {
-      mod.emitError("unsupported target: '") << this->arch.getValue() << "'";
+      mod.emitError("unsupported target: '") << this->gfxArch.getValue() << "'";
       return signalPassFailure();
     }
 
@@ -228,10 +228,10 @@ struct ConvertTritonAMDGPUToLLVM
                                                      patterns, commonBenefit);
 
     FailureOr<mlir::amdgpu::Chipset> maybeChipset =
-        mlir::amdgpu::Chipset::parse(this->arch);
+        mlir::amdgpu::Chipset::parse(this->gfxArch);
     if (failed(maybeChipset)) {
       emitError(UnknownLoc::get(&getContext()),
-                "Invalid AMDGPU chipset name: " + this->arch);
+                "Invalid AMDGPU chipset name: " + this->gfxArch);
       return signalPassFailure();
     }
     // Native lowering patterns
@@ -283,8 +283,8 @@ private:
 namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz) {
-  return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch, ftz);
+createConvertTritonAMDGPUToLLVMPass(StringRef gfxArch, bool ftz) {
+  return std::make_unique<ConvertTritonAMDGPUToLLVM>(gfxArch, ftz);
 }
 
 } // namespace mlir::triton
