@@ -46,9 +46,9 @@ def _old_flops_and_bytes_from_slices(args, M, N, K, X, Y, W, slice_sizes, nbits,
 
 def _make_slice_sizes(n_slices, max_slice_size, active_fraction, device):
     n_active = max(1, min(n_slices, round(n_slices * active_fraction)))
-    slice_sizes = torch.zeros((n_slices,), dtype=torch.int32, device=device)
+    slice_sizes = torch.zeros((n_slices, ), dtype=torch.int32, device=device)
     active = torch.randperm(n_slices, device=device)[:n_active]
-    slice_sizes[active] = torch.randint(1, max_slice_size + 1, (n_active,), dtype=torch.int32, device=device)
+    slice_sizes[active] = torch.randint(1, max_slice_size + 1, (n_active, ), dtype=torch.int32, device=device)
     return slice_sizes
 
 
@@ -140,7 +140,7 @@ def main():
     device = torch.device("cuda", args.device)
     torch.manual_seed(0)
 
-    modes = ("ragged_m", "ragged_k") if args.mode == "both" else (args.mode,)
+    modes = ("ragged_m", "ragged_k") if args.mode == "both" else (args.mode, )
     print(
         "mode,n_slices,max_slice_size,active_fraction,old_gpu_us,new_gpu_us,gpu_speedup,old_wall_us,new_wall_us,wall_speedup"
     )

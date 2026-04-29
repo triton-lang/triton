@@ -54,9 +54,8 @@ def swizzle2d(pid, grid_m, grid_n, GROUP_M: tl.constexpr):
 
 
 @triton.jit
-def compute_pids(
-    block_id, grid_m, grid_n, num_blocks, XCD_SWIZZLE: tl.constexpr, GROUP_M: tl.constexpr, SPLIT_K: tl.constexpr
-):
+def compute_pids(block_id, grid_m, grid_n, num_blocks, XCD_SWIZZLE: tl.constexpr, GROUP_M: tl.constexpr,
+                 SPLIT_K: tl.constexpr):
     pid_zmnk = block_id
     if XCD_SWIZZLE != 1:
         pid_zmnk = xcd_swizzle(pid_zmnk, num_blocks, XCD_SWIZZLE)
@@ -197,11 +196,8 @@ def _matmul_flops_and_bytes_from_slices_kernel(
         n_active_slices += tl.sum(tl.where(slice_sizes > 0, 1, 0), axis=0).to(tl.int64)
 
     flops = STATIC_FLOPS + n_tokens.to(tl.float64) * FLOPS_PER_TOKEN
-    total_bytes = (
-        STATIC_BYTES
-        + n_tokens * (X_BYTES_PER_TOKEN + Y_BYTES_PER_TOKEN + W_BYTES_PER_TOKEN)
-        + n_active_slices * W_BYTES_PER_ACTIVE_SLICE
-    )
+    total_bytes = (STATIC_BYTES + n_tokens * (X_BYTES_PER_TOKEN + Y_BYTES_PER_TOKEN + W_BYTES_PER_TOKEN) +
+                   n_active_slices * W_BYTES_PER_ACTIVE_SLICE)
     tl.store(Flops, flops)
     tl.store(Bytes, total_bytes)
 
@@ -254,7 +250,7 @@ def _matmul_flops_and_bytes_from_slices(
     flops = torch.empty((), dtype=torch.float64, device=slice_sizes.device)
     total_bytes = torch.empty((), dtype=torch.int64, device=slice_sizes.device)
     block_size = min(triton.next_power_of_2(slice_sizes.numel()), 1024)
-    _matmul_flops_and_bytes_from_slices_kernel[(1,)](
+    _matmul_flops_and_bytes_from_slices_kernel[(1, )](
         slice_sizes,
         flops,
         total_bytes,
@@ -303,27 +299,24 @@ def matmul_launch_metadata(grid, kernel, args):
     if batch_size > 1:
         batch_repr = repr("B", args["batch_size"]) + ", "
     ret["name"] = (
-        f"{kernel.name} [{batch_repr}{repr('M', M)}, {repr('N', N)}, {repr('K', K_repr)}] stg{kernel.num_stages}"
-    )
+        f"{kernel.name} [{batch_repr}{repr('M', M)}, {repr('N', N)}, {repr('K', K_repr)}] stg{kernel.num_stages}")
     ep_subtile = args["EPILOGUE_SUBTILE"]
     if ep_subtile is not None and ep_subtile > 1:
         ret["name"] += f" ep/{ep_subtile}"
 
     if slice_sizes is not None and not allow_sync:
-        ret.update(
-            _matmul_flops_and_bytes_from_slices(
-                args,
-                M,
-                N,
-                K,
-                X,
-                Y,
-                W,
-                slice_sizes,
-                nbits,
-                batch_size,
-            )
-        )
+        ret.update(_matmul_flops_and_bytes_from_slices(
+            args,
+            M,
+            N,
+            K,
+            X,
+            Y,
+            W,
+            slice_sizes,
+            nbits,
+            batch_size,
+        ))
         return ret
 
     if slice_sizes is not None and n_tokens is None:
@@ -357,6 +350,5 @@ def matmul_launch_metadata(grid, kernel, args):
 
 @triton.jit
 def threadfence_system():
-    tl.inline_asm_elementwise(
-        "mov.u32 $0, 0x0; fence.sc.sys;", args=(), dtype=(tl.int32,), is_pure=False, pack=1, constraints="=r"
-    )
+    tl.inline_asm_elementwise("mov.u32 $0, 0x0; fence.sc.sys;", args=(), dtype=(tl.int32, ), is_pure=False, pack=1,
+                              constraints="=r")
