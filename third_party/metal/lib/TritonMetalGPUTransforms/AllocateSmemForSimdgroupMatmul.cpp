@@ -1,5 +1,6 @@
 #include "Dialect/TritonMetalGPU/IR/Dialect.h"
 #include "TritonMetalGPUTransforms/Passes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -38,7 +39,7 @@ std::pair<Value, tt::LoadOp> findTTDotTileBasePtr(Value v) {
   return std::make_pair(loadPtr, loadOp);
 }
 
-std::optional<unsigned> findTTDotInputArgIdx(tt::LoadOp loadOp) {
+std::optional<unsigned> findTTDotInputArg(tt::LoadOp loadOp) {
   auto blockArg = dyn_cast<BlockArgument>(loadOp.getPtr());
   if (!blockArg)
     return std::nullopt;
@@ -210,23 +211,52 @@ struct TritonMetalGPUAllocateSmemForSimdgroupMatmulPass
 
       // try to find base ptr for the tile args of tt.dot
       // TODO handle the case where tensor does not come from tt.load
-      auto [aTilePtr, aLoadOp] = findTTDotTileBasePtr(dotOp.getOperand(0));
-      auto aArgIdx = findTTDotInputArgIdx(aLoadOp);
-      auto [bTilePtr, bLoadOp] = findTTDotTileBasePtr(dotOp.getOperand(1));
-      auto bArgIdx = findTTDotInputArgIdx(bLoadOp);
+      auto aBasePtrResult = findTTDotTileBasePtr(dotOp.getOperand(0));
+      auto aTilePtr = aBasePtrResult.first;
+      auto aLoadOp = aBasePtrResult.second;
+      auto aArgIdx = findTTDotInputArg(aLoadOp);
+      auto bBasePtrResult = findTTDotTileBasePtr(dotOp.getOperand(1));
+      auto bTilePtr = bBasePtrResult.first;
+      auto bLoadOp = bBasePtrResult.second;
+      auto bArgIdx = findTTDotInputArg(bLoadOp);
 
       if (!aTilePtr || !bTilePtr)
         return signalPassFailure();
       if (!aArgIdx || !bArgIdx)
         return signalPassFailure();
 
-      // Insert async copies after the allocs (SSA dominance) and before dotOp.
+      // stride ptr is arg right after the data ptr
+      // InjectTensorStrideArgs puts stride at dataArgIdx + 1
+      auto funcOp = dotOp->getParentOfType<tt::FuncOp>();
+      Value aStridePtr = funcOp.getArgument(*aArgIdx + 1);
+      Value bStridePtr = funcOp.getArgument(*bArgIdx + 1);
+
+      // load stride[0] then truncate to i32 for SimdgroupAsyncCopyOp
+      auto i64Ty = builder.getI64Type();
+      auto i32Ty = builder.getI32Type();
+
+      // insert async copies after the allocs
       builder.setInsertionPointAfter(aAlloc);
+      Value aStrideI64 = tt::LoadOp::create(
+          builder, loc, i64Ty, aStridePtr, /*mask=*/Value{},
+          /*other=*/Value{}, /*cache=*/tt::CacheModifier::NONE,
+          /*evict=*/tt::EvictionPolicy::NORMAL,
+          /*isVolatile=*/false);
+      Value aStrideI32 =
+          arith::TruncIOp::create(builder, loc, i32Ty, aStrideI64);
       ttmetalgpu::SimdgroupAsyncCopyOp::create(builder, loc, aTilePtr,
-                                               aAlloc.getResult());
+                                               aStrideI32, aAlloc.getResult());
+
       builder.setInsertionPointAfter(bAlloc);
+      Value bStrideI64 = tt::LoadOp::create(
+          builder, loc, i64Ty, bStridePtr, /*mask=*/Value{},
+          /*other=*/Value{}, /*cache=*/tt::CacheModifier::NONE,
+          /*evict=*/tt::EvictionPolicy::NORMAL,
+          /*isVolatile=*/false);
+      Value bStrideI32 =
+          arith::TruncIOp::create(builder, loc, i32Ty, bStrideI64);
       ttmetalgpu::SimdgroupAsyncCopyOp::create(builder, loc, bTilePtr,
-                                               bAlloc.getResult());
+                                               bStrideI32, bAlloc.getResult());
 
       // try to find base ptr for where output tile is stored
       auto cTilePtr = findTTDotStoreBasePtr(dotOp);

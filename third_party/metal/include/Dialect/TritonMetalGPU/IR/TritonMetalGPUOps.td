@@ -49,11 +49,12 @@ def SimdgroupAsyncCopyOp : TT_MetalGPU_Op<"simdgroup_async_copy"> {
 
   let arguments = (ins
     Arg<TT_PtrTensor, "Global memory pointer tensor", [MemRead<GlobalMemory>]>:$src,
+    I32:$stride,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst
   );
 
   let assemblyFormat = [{
-    $src `,` $dst attr-dict `:` type($src) `->` qualified(type($dst))
+    $src `,` $stride `,` $dst attr-dict `:` type($src) `->` qualified(type($dst))
   }];
 }
 
