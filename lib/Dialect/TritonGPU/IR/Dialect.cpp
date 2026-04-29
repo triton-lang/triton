@@ -3031,6 +3031,36 @@ struct TritonGPUInferLayoutInterface
           applyPermutation(invOrderUnsigned, enc.getOrder()), cgaLayout);
       return success();
     }
+
+    if (auto enc = dyn_cast<PartitionedSharedEncodingAttr>(operandEncoding)) {
+      // Recurse on the inner partition layout using the shape of a single
+      // logical piece (partitionDim is divided by numLogicalPieces, all other
+      // dimensions are unchanged). Rank, divisibility, and partitionDim bounds
+      // are invariants of a valid PartitionedSharedEncodingAttr enforced by
+      // its verifier. The recursive call will checkRank against the inner
+      // partitionLayout.
+      unsigned partitionDim = enc.getPartitionDim();
+      SmallVector<int64_t> partitionShape(shape.begin(), shape.end());
+      partitionShape[partitionDim] /= enc.getNumLogicalPieces();
+
+      Attribute innerResultEncoding;
+      if (failed(inferTransOpEncoding(enc.getPartitionLayout(), partitionShape,
+                                      order, innerResultEncoding, loc)))
+        return failure();
+
+      auto innerShared = dyn_cast<SharedEncodingTrait>(innerResultEncoding);
+      if (!innerShared) {
+        return emitOptionalError(loc, "transposed partition layout is not a "
+                                      "SharedEncodingTrait");
+      }
+
+      // After the permutation, the old partitionDim axis lives at the position
+      // j where order[j] == partitionDim, i.e. invOrder[partitionDim].
+      resultEncoding = PartitionedSharedEncodingAttr::get(
+          ctx, enc.getNumPartitions(), enc.getNumGroups(),
+          invOrder[partitionDim], innerShared);
+      return success();
+    }
     // Generic case
     auto padded = dyn_cast<PaddedSharedEncodingAttr>(operandEncoding);
 
@@ -3738,8 +3768,10 @@ struct TritonGPUVerifyTensorLayoutInterface
       return true;
     return isa<triton::MakeRangeOp, triton::SplatOp, triton::BroadcastOp,
                triton::LoadOp, triton::StoreOp, triton::JoinOp, triton::SplitOp,
-               triton::gpu::ConvertLayoutOp, triton::gpu::Fp4ToFpOp,
-               triton::gpu::LocalLoadOp, triton::gpu::LocalStoreOp>(op);
+               triton::DotOp, triton::DotScaledOp, triton::CallOp,
+               triton::ReturnOp, triton::FuncOp, triton::gpu::ConvertLayoutOp,
+               triton::gpu::Fp4ToFpOp, triton::gpu::LocalLoadOp,
+               triton::gpu::LocalStoreOp>(op);
   }
 
   LogicalResult verifyTensorLayout(

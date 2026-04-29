@@ -5,7 +5,7 @@ from ..._core import builtin, int8, uint8, int32, float8e4nv, tensor, _unwrap_if
 from .._ops import _wmma, _verify_wmma, _mma_scaled, _scaled_upcast
 from .._layouts import AMDWMMALayout
 from ..cdna3 import buffer_load, buffer_store
-from ._layouts import PartitionedSharedLayout
+from ._layouts import PartitionedSharedLayout, make_partitioned_dot_layouts
 from . import tdm
 from . import async_copy
 from . import mbarrier
@@ -13,7 +13,7 @@ from . import cluster
 
 __all__ = [
     "async_copy", "tdm", "mbarrier", "cluster", "wmma", "wmma_scaled", "scaled_upcast", "buffer_load", "buffer_store",
-    "get_wmma_scale_layout", "PartitionedSharedLayout"
+    "get_wmma_scale_layout", "PartitionedSharedLayout", "make_partitioned_dot_layouts"
 ]
 
 

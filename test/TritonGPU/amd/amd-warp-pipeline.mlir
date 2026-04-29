@@ -143,6 +143,64 @@ tt.func public @triple_buf_two_stages(%arg0: i32, %arg1: i32, %arg2: i32, %arg3:
   tt.return
 }
 
+// -- Post-unroll IV remap is sunk past ignorable ops (FA-kernel pattern) ----
+// The FA kernel body begins with async_wait.  After MLIR loop unrolling, IV
+// remap ops (arith.addi/muli) land between the last border of iter N and the
+// async_wait at the start of iter N+1, which would otherwise poison cluster
+// building.  The sink pre-pass moves scalar ops past adjacent ignorable ops so
+// they join the next cluster naturally.
+tt.func @unroll_iv_remap_sunk_past_async_wait(%n: index, %ptr: !tt.ptr<f32>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %v0 = arith.constant 0.0 : f32
+
+  scf.for %i = %c0 to %n step %c2 {
+    // iter 0: async_wait FIRST, then stage1 / stage2 bodies.
+    ttg.async_wait {num = 0 : i32}
+    tt.store %ptr, %v0 : !tt.ptr<f32>
+    rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage1"}
+    tt.store %ptr, %v0 : !tt.ptr<f32>
+    rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage2"}
+
+    // IV remap injected by unroller; sits between iter-0 last border and
+    // iter-1 async_wait -- the poisonous spot.
+    %i_1 = arith.addi %i, %c1 : index
+
+    // iter 1: async_wait FIRST, then stage1 (uses %i_1) / stage2.
+    ttg.async_wait {num = 0 : i32}
+    %off = arith.muli %i_1, %c1 : index
+    tt.store %ptr, %v0 : !tt.ptr<f32>
+    rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage1"}
+    tt.store %ptr, %v0 : !tt.ptr<f32>
+    rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage2"}
+
+    scf.yield
+  }
+  tt.return
+}
+
+// CHECK-LABEL: tt.func @unroll_iv_remap_sunk_past_async_wait(
+// CHECK: scf.for
+// iter 0: async_wait, stage1 region, stage2 region.
+// CHECK:   ttg.async_wait
+// CHECK:   scf.execute_region
+// CHECK:     tt.store
+// CHECK:   scf.execute_region
+// CHECK:     tt.store
+// iter 1 starts with async_wait; IV remap was sunk past it into iter-1 stage1.
+// CHECK:   ttg.async_wait
+// CHECK:   scf.execute_region {{.*}} {
+// CHECK-NEXT: arith.addi
+// CHECK-NEXT: arith.muli
+// CHECK:     tt.store
+// CHECK:   scf.execute_region
+// CHECK:     tt.store
+// CHECK: triton.warp_pipeline.pipelined_for
+// No free arith ops or leftover sched.barrier markers in the loop body.
+// CHECK-NOT: rocdl.sched.barrier
+// CHECK: tt.return
+
 // -- Negative: no border → no structuring ----
 tt.func @no_split_example(%n: index) {
   %c0  = arith.constant 0 : index

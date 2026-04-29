@@ -110,8 +110,15 @@ struct ValueType {
       : value(value.first), type(value.second) {}
 };
 
-// Map from IR region to ConSan auxiliary data. Auxiliary data is a value
-// and an optional type, for values that are stored in the scratch memory.
+// Map from IR region to ConSan auxiliary data.
+//
+// Aux data is created in the entry function and then either rematerialized or
+// captured into warp-specialize partition regions. Each map member below is
+// keyed by the IR region that owns the value visible at an instrumentation
+// insertion point. For scratch-backed state, ValueType::value is the scratch
+// pointer and ValueType::type is the logical tensor type loaded from/stored to
+// that pointer. For tensor descriptors and constants, ValueType::value is the
+// tensor itself and ValueType::type is its type.
 struct AuxDataMap {
   struct RegionToValueMap {
     DenseMap<Region *, ValueType> values;
@@ -131,21 +138,81 @@ struct AuxDataMap {
     Region *getEnclosingParitionOrFunctionRegion(Operation *op);
   };
 
-  // Please see TritonInstrumentOps.td for more information on the auxiliary
-  // data structures.
+  // Shape notation:
+  //   C = CTAs in the cluster.
+  //   B = tracked buffers for one memory type, power-of-two padded.
+  //   K = tracked mbarriers, power-of-two padded.
+  //   T = logical ConSan thread bit slots, padded to 64.
+  //   P = base-thread commit columns, currently 16.
+  //
+  // Storage notation:
+  //   tensor  = distributed tensor value.
+  //   scratch = pointer to shared-cluster global scratch memory.
+
+  // tensor, <C x B x i64>
+  // Per-memory-type packed buffer descriptors. Each i64 stores the 32-bit base
+  // offset and 32-bit length of one shared-memory or tensor-memory region.
   RegionToValueMap buffers[numMemTypes];
+
+  // tensor, <C x K x i64>
+  // Packed descriptors for tracked mbarrier allocations. Barriers are shared
+  // memory descriptors.
   RegionToValueMap barriers;
+
+  // scratch, <C x K x i64>
+  // Packed barrier lifecycle state. Zero means invalid/uninitialized. Bit 0 is
+  // phase, bits [1..20] are the initial arrival count, bits [21..40] are the
+  // current arrival count, and bits [41..61] hold a signed tx-count.
   RegionToValueMap barrierStates;
+
+  // scratch, <C x K x i32>
+  // Per-barrier CTA bitsets of write-recipient rows reached by outstanding
+  // EffectWrites operations such as TMA and CLC. Used when a later wait
+  // transfers tracked writes.
   RegionToValueMap barrierWriteRecipients;
 
+  // scratch, <C x B x i64>
+  // Per-memory-type write frontier. Bit i means logical ConSan thread i can see
+  // the latest write to the buffer row.
   RegionToValueMap writeVisibility[numMemTypes];
+
+  // scratch, <C x B x K x i8>
+  // Per-memory-type buffer/barrier map for writes that a barrier tracks.
   RegionToValueMap writeTracking[numMemTypes];
+
+  // scratch, <C x B x T x i64>
+  // Per-memory-type read frontier. For each buffer and logical thread lane, the
+  // i64 value is a bitmask of reads visible to that lane's thread.
   RegionToValueMap readVisibility[numMemTypes];
+
+  // scratch, <C x B x K x i64>
+  // Per-memory-type buffer/barrier map for read visibility masks that a barrier
+  // tracks.
   RegionToValueMap readTracking[numMemTypes];
+
+  // scratch, <C x B x P x i8>
+  // Per-commit-kind outstanding commit counters for shared-memory buffers.
+  // Entries are 0 for none, -1 for staged but uncommitted, and positive for a
+  // committed access with an outstanding-group distance.
   RegionToValueMap commits[CommitKind::NumCommitKinds];
+
+  // tensor, <C x B x B x i1>
+  // Optional per-memory-type alias matrix. Created only when BufferRegion
+  // analysis finds cross-buffer aliasing; checks expand selected buffer rows
+  // through this matrix.
   RegionToValueMap aliasMatrices[numMemTypes];
+
+  // scratch pointer, i32
+  // Shared-cluster lock used to serialize ConSan instrumentation updates.
   RegionToValueMap lock;
+
+  // scratch, <C x K x i32>
+  // Deadlock-detection bitfield. Each base thread uses two bits: waiting flag
+  // and stored phase.
   RegionToValueMap waiting;
+
+  // True when a memory type has cross-buffer aliasing and therefore requires
+  // aliasMatrices to make visibility and commit checks conservative.
   std::array<bool, numMemTypes> hasNonTrivialAliasing{};
 
   void populateAndPassToWarpSpecialize(ModuleOp module,
