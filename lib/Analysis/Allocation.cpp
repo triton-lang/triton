@@ -117,7 +117,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
     return elems * getBitwidth(srcTy) / 8;
   }
-  if (isa<LocalAtomicScatterAddOp, AtomicRMWOp, AtomicCASOp,
+  if (isa<gpu::LocalAtomicScatterAddOp, AtomicRMWOp, AtomicCASOp,
           tti::ExperimentalGSanAtomicRMWOp, tti::ExperimentalGSanAtomicCASOp>(
           op)) {
     auto value = op->getOperand(0);
