@@ -6,6 +6,7 @@ include "triton/Dialect/Triton/IR/TritonDialect.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 
 include "TritonMetalGPUDialect.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 
 
@@ -40,25 +41,23 @@ def SimdgroupMMAOp : TT_MetalGPU_Op<"simdgroup_mma", [Pure]> {
   }];
 }
 
-def SimdgroupAsyncCopy : TT_MetalGPU_Op<"simdgroup_async_copy"> {
+def SimdgroupAsyncCopyOp : TT_MetalGPU_Op<"simdgroup_async_copy"> {
   let summary = "async copy from global memory to threadgroup memory";
   let description = [{
     This op represents an async copy instruction from global memory to threadgroup memory of the input block.
   }];
 
   let arguments = (ins
-    Arg<TT_Ptr, "Global memory pointer", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$base_ptr,
-    I32:$stride,
-    Arg<TT_Ptr, "Shared memory pointer", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$dest_ptr
+    Arg<TT_PtrTensor, "Global memory pointer tensor", [MemRead<GlobalMemory>]>:$src,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst
   );
-  
+
   let assemblyFormat = [{
-    $base_ptr `,` $stride `,` $dest_ptr
-    attr-dict `:` type(operands)
+    $src `,` $dst attr-dict `:` type($src) `->` qualified(type($dst))
   }];
 }
 
-def SimdgroupStore : TT_MetalGPU_Op<"simdgroup_store", [
+def SimdgroupStoreOp : TT_MetalGPU_Op<"simdgroup_store", [
   TypesMatchWith<"value type matches ptr type", "ptr", "value",
                  "getPointeeType($_self)">,
   TypesMatchWith<"mask type matches ptr type", "ptr", "mask",

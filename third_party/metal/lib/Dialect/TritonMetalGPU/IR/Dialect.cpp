@@ -18,7 +18,7 @@ void mlir::triton::metalgpu::TritonMetalGPUDialect::initialize() {
 #define GET_OP_CLASSES
 #include "Dialect/TritonMetalGPU/IR/Ops.cpp.inc"
 
-void SimdgroupStore::build(OpBuilder &builder, OperationState &state,
+void SimdgroupStoreOp::build(OpBuilder &builder, OperationState &state,
                            Value ptr, Value value) {
-  return SimdgroupStore::build(builder, state, ptr, value, /*mask=*/{});
+  return SimdgroupStoreOp::build(builder, state, ptr, value, /*mask=*/{});
 }
