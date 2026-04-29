@@ -390,11 +390,11 @@ def test_clc_result_visibility(FAILURE, device, run_wrapper, monkeypatch, num_ct
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell")
-def test_clc_double_try_cancel_result_conflict(device, run_wrapper, monkeypatch):
+def test_clc_double_try_cancel_result_overwrite(device, run_wrapper, monkeypatch):
     if run_wrapper:
-        result = run_in_process(test_clc_double_try_cancel_result_conflict, (device, False, monkeypatch))
-        assert_expected_cuda_failure(result.exc)
-        assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        result = run_in_process(test_clc_double_try_cancel_result_overwrite, (device, False, monkeypatch))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
         return
 
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
