@@ -2219,12 +2219,22 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
           fb, arith::CmpIPredicate::eq, bufferHasVisibility, bufferThreadBit);
       Value result;
       if (!allowNoWrite) {
-        Value one = tti::createConstIntTensor(
+        Value rowOne = tti::createConstIntTensor(
             fb, fb.getLoc(), 1, cast<RankedTensorType>(buffersEqBuf.getType()));
-        Value unmatchedRows = arith::XOrIOp::create(fb, buffersEqBuf, one);
-        Value rowInitialized = arith::XOrIOp::create(fb, noOneIsWriting, one);
+        Value rowInitialized =
+            arith::XOrIOp::create(fb, noOneIsWriting, rowOne);
+        Value initializedRows =
+            arith::AndIOp::create(fb, rowInitialized, buffersEqBuf);
+        // Alias rows are alternatives within a CTA, but every selected CTA must
+        // have at least one initialized row.
+        Value initializedCTAs =
+            reduceLastDim<arith::OrIOp>(fb, initializedRows);
+        Value selectedCTAs = reduceLastDim<arith::OrIOp>(fb, buffersEqBuf);
+        Value ctaOne = tti::createConstIntTensor(
+            fb, fb.getLoc(), 1, cast<RankedTensorType>(selectedCTAs.getType()));
+        Value unmatchedCTAs = arith::XOrIOp::create(fb, selectedCTAs, ctaOne);
         Value initializedOrUnmatched =
-            arith::OrIOp::create(fb, rowInitialized, unmatchedRows);
+            arith::OrIOp::create(fb, initializedCTAs, unmatchedCTAs);
         result = reduceAll<arith::AndIOp>(fb, initializedOrUnmatched);
       } else {
         Value writeVisible =
