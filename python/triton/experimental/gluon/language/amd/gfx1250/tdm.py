@@ -2,7 +2,6 @@ from __future__ import annotations
 from typing import List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 
-import triton._C.libtriton.gluon_ir as _gluon_ir
 import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._layouts import PaddedSharedLayout, SwizzledSharedLayout
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
@@ -14,7 +13,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "async_load", "async_wait", "make_tensor_descriptor", "tensor_descriptor", "tensor_descriptor_type", "prefetch",
-    "async_scatter", "warp_prefix"
+    "async_scatter", "warp_prefix", "warp_shifted_prefix", "warp_strided"
 ]
 
 
@@ -148,22 +147,49 @@ def warp_prefix(k: int) -> int:
 
     Convenience helper for the common ``warp_used_hint`` pattern where the
     first ``k`` warps participate in a TDM copy and the rest issue no-ops.
+    The basis bits are ``{0, 1, ..., log2(k) - 1}``, ``i0 = 0``.
     """
     k = int(_unwrap_if_constexpr(k))
     assert k >= 1, f"warp_prefix(k): k must be >= 1, got {k}"
     return (1 << k) - 1
 
 
-def _validate_warp_used_hint(warp_used_hint, num_warps):
-    """Validate a warp_used_hint value against num_warps.
+def warp_shifted_prefix(k: int, shift: int) -> int:
+    """Return a shifted-prefix bitmask ``((1 << k) - 1) << shift``.
 
-    Delegates to the MLIR verifier via a C++ binding so Python-side errors
-    match what the IR verifier would report.
+    Selects ``k`` consecutive warps starting at warp ``shift``. ``shift`` must
+    be a multiple of ``k`` so the active set is an axis-aligned coset
+    (basis = ``{0, ..., log2(k) - 1}``, ``i0 = shift``); other shifts are
+    rejected by the verifier.
     """
-    try:
-        _gluon_ir.validate_tdm_warp_used_hint(int(warp_used_hint), int(num_warps))
-    except ValueError as e:
-        raise AssertionError(str(e)) from e
+    k = int(_unwrap_if_constexpr(k))
+    shift = int(_unwrap_if_constexpr(shift))
+    assert k >= 1, f"warp_shifted_prefix: k must be >= 1, got {k}"
+    assert shift >= 0, f"warp_shifted_prefix: shift must be >= 0, got {shift}"
+    assert (k & (k - 1)) == 0, f"warp_shifted_prefix: k must be a power of two, got {k}"
+    assert shift % k == 0, (f"warp_shifted_prefix: shift ({shift}) must be a multiple of k ({k}) "
+                            "so the result is an axis-aligned coset")
+    return ((1 << k) - 1) << shift
+
+
+def warp_strided(k: int, stride_log2: int) -> int:
+    """Return a strided bitmask of ``k`` warps spaced by ``2 ** stride_log2``.
+
+    The active warps are at positions ``{0, 1<<s, 2<<s, ..., (k-1)<<s}`` where
+    ``s = stride_log2``. ``i0 = 0``; basis bits are
+    ``{stride_log2, stride_log2 + 1, ..., stride_log2 + log2(k) - 1}``.
+    The caller can shift the result with ``<<`` to move ``i0``, e.g.
+    ``warp_strided(4, 1) << 1 == 0xAA``.
+    """
+    k = int(_unwrap_if_constexpr(k))
+    s = int(_unwrap_if_constexpr(stride_log2))
+    assert k >= 1, f"warp_strided: k must be >= 1, got {k}"
+    assert s >= 0, f"warp_strided: stride_log2 must be >= 0, got {s}"
+    assert (k & (k - 1)) == 0, f"warp_strided: k must be a power of two, got {k}"
+    hint = 0
+    for i in range(k):
+        hint |= 1 << (i << s)
+    return hint
 
 
 @builtin
@@ -177,11 +203,25 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
         pred (int, optional): Predicate to enable or disable the load. Defaults to 1.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
-        warp_used_hint (int, optional): Performance-hint bitmask for partial TDM copy.
-            Bit ``n`` indicates that warp ``n`` participates in issuing the TDM.  Only
-            canonical prefix values ``(1 << K) - 1`` (K a power of two, 1 <= K <= num_warps)
-            are currently accepted.  See :func:`warp_prefix`.  Absent ⇔ all warps
-            participate (default).  Does not change the data written to ``dest``.
+        warp_used_hint (int, optional): Performance hint selecting which warps issue
+            the TDM copy. Bit ``n`` set means warp ``n`` participates; cleared bits
+            cause that warp's TDM to be predicated to a hardware no-op. Has no effect
+            on the data written to ``dest`` -- it only changes how the work is
+            distributed across warps. Currently restricted to *axis-aligned cosets*:
+            the active warp set must be ``{ i0 ^ x : x is any subset of basis bits }``
+            for some ``i0`` and a basis of single-bit positions, with
+            ``K = popcount(hint)`` a power of two and ``1 <= K <= num_warps``.
+            See :func:`warp_prefix`, :func:`warp_shifted_prefix`,
+            :func:`warp_strided` for constructors that always produce legal hints.
+            The MLIR verifier enforces these rules. Absent ⇔ all warps
+            participate (default).
+
+            Adjacent ``async_load`` ops with pairwise-disjoint hints whose union is
+            also a legal hint, identical destination shared encoding, and identical
+            block shape are *implicitly* fused into a single TDM intrinsic during
+            lowering (no IR-visible artifact). When relying on this, size
+            ``async_wait`` counts in terms of the post-merge intrinsic count
+            (one merged op contributes one outstanding TDM, not N).
     """
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
     pred = _semantic.to_tensor(pred)
@@ -192,8 +232,6 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
     warp_used_hint = _unwrap_if_constexpr(warp_used_hint)
     if warp_used_hint is not None:
         warp_used_hint = int(warp_used_hint)
-        num_warps = _semantic.builder.options.num_warps
-        _validate_warp_used_hint(warp_used_hint, num_warps)
 
     _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, offset_handles, dest.handle, pred_handle,
                                                             mbarrier_handle, warp_used_hint)

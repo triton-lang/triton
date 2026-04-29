@@ -1,17 +1,65 @@
 #include "TDMUtility.h"
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/Support/Debug.h"
 #include <numeric>
 #include <optional>
 
 // Include shared C-compatible TDM utilities
 #include "../../backend/include/TDMCommon.h"
 
+// Override the inherited DEBUG_TYPE from Utility.h so LLVM_DEBUG output for
+// the TDM merge analysis is selectable via `-debug-only=tdm-merge`.
+#undef DEBUG_TYPE
+#define DEBUG_TYPE "tdm-merge"
+
 namespace mlir::LLVM::AMD {
+
+WarpHintInfo extractWarpHintInfo(uint32_t hint, int numWarps) {
+  assert(hint != 0 && "hint must be non-zero (verifier checked)");
+  assert(llvm::isPowerOf2_64(numWarps) && "numWarps must be a power of two");
+
+  WarpHintInfo info;
+  info.K = static_cast<unsigned>(llvm::popcount(hint));
+  assert(llvm::isPowerOf2_32(info.K) && "popcount(hint) must be a power of two");
+  // `hint` bit positions are warp INDICES.  i0 is the smallest active
+  // warp index (an integer in [0, numWarps)), NOT the bitmask form
+  // `hint & -hint` -- the lowering XORs runtime warpId values with this
+  // i0 (integer XOR), which only matches the verifier-side coset math
+  // when both sides agree on warp-index arithmetic.
+  info.i0 = llvm::countr_zero(hint);
+
+  // For each active warp w, compute the basis vector (w XOR i0) as an
+  // integer; the OR of these is `support` -- a bitmask whose set bits
+  // are the basis bit POSITIONS within the warp index.  The verifier
+  // (axis-aligned coset rule) guarantees popcount(support) == log2(K).
+  uint32_t support = 0;
+  for (uint32_t mask = hint; mask != 0; mask &= mask - 1) {
+    unsigned w = llvm::countr_zero(mask);
+    support |= static_cast<uint32_t>(w ^ info.i0);
+  }
+  for (uint32_t s = support; s != 0; s &= s - 1) {
+    uint32_t bit = s & static_cast<uint32_t>(-static_cast<int32_t>(s));
+    info.basisBits.push_back(static_cast<int32_t>(llvm::Log2_32(bit)));
+  }
+  assert(info.basisBits.size() == llvm::Log2_32(info.K) &&
+         "axis-aligned hint must have log2(K) single-bit basis vectors");
+
+  // freeMask covers the warp-index bits that are NOT basis bits and lie
+  // within the live numWarps range.  An active warp test is
+  // `((warpId XOR i0) & freeMask) == 0` (integer arithmetic).
+  uint32_t numWarpsMask =
+      (numWarps >= 32) ? ~0u : ((1u << numWarps) - 1);
+  info.freeMask = ~support & numWarpsMask;
+  return info;
+}
+
 namespace {
 
 // Helper to decode a value spanning two 32-bit words
@@ -222,18 +270,14 @@ decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc,
 
 TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
                                   const LLVMTypeConverter *typeConverter,
-                                  Type elementType,
-                                  SmallVector<int64_t> blockShape, int numWarps,
+                                  Type elementType, size_t numDims,
                                   unsigned padInterval, unsigned padAmount,
                                   SmallVector<Value> tensorShape,
-                                  SmallVector<Value> tensorStride, Value srcPtr,
-                                  Attribute sharedEncoding) {
-  size_t numDims = tensorShape.size();
-  assert(numDims >= 1 && numDims <= 5 && tensorStride.size() == numDims &&
+                                  SmallVector<Value> tensorStride,
+                                  Value srcPtr) {
+  assert(numDims >= 1 && numDims <= 5 && tensorShape.size() == numDims &&
+         tensorStride.size() == numDims &&
          "TDM only supported for 1D-5D tensors.");
-  assert(blockShape.size() == tensorStride.size() &&
-         blockShape.size() == numDims &&
-         "Block/tensor/stride dim count must all be equal.");
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   // Define common values for better readability
@@ -248,23 +292,9 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
     tensorStride[i] = b.trunc(i32_ty, tensorStride[i]);
   }
 
-  // Compute per-warp tile dimensions for the TDM descriptor.
-  // With partitioned layouts, the warp distribution is adjusted so each warp's
-  // chunk stays within a single partition piece.  When multi-instr is needed,
-  // the effective extent along partitionDim is the slice extent
-  // (warps * pieceSize), not the full block extent.
-  {
-    auto [warpsPerCTA, numInstr] = distributeTDMWarpsAlignToPartition(
-        blockShape, numWarps, sharedEncoding);
-    if (auto partitionedEnc =
-            dyn_cast<PartitionedSharedEncodingAttr>(sharedEncoding);
-        partitionedEnc && numInstr > 1)
-      blockShape[partitionedEnc.getPartitionDim()] /= numInstr;
-
-    for (size_t i = 0; i < numDims; ++i) {
-      blockShape[i] = llvm::divideCeil(blockShape[i], warpsPerCTA[i]);
-    }
-  }
+  // Per-instruction fields (tile_dim*) are intentionally not written here;
+  // they are encoded later by fillTDMDescriptor / fillTDMDescriptorForGather
+  // Scatter, which know the warp distribution for the specific copy op.
 
   // group0 (128 bits / 4 dwords) effective bit encoding:
   // [1:0]:     pred (to be filled later)
@@ -344,15 +374,8 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
     group1[3] = b.lshr(tensorShape[numDims - 2], v16);
   }
 
-  // Block shapes
-  group1[3] = b.or_(group1[3], b.i32_val(blockShape[numDims - 1] << 16));
-  if (numDims >= 2) {
-    group1[4] = b.i32_val(blockShape[numDims - 2] & 0xFFFF);
-  }
-  // tile_dim2 (upper 16 bits of group1[4])
-  if (numDims >= 3) {
-    group1[4] = b.or_(group1[4], b.i32_val(blockShape[numDims - 3] << 16));
-  }
+  // tile_dim0/1/2 (group1[3] high 16 bits, group1[4]) are filled in by the
+  // per-op descriptor filler from the actual warp distribution.
 
   // Handle strides
   if (numDims >= 2) {
@@ -425,11 +448,8 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
       group2[2] = tensorStride[numDims - 4];
     }
 
-    // tile_dim3 (upper 16 bits of group2[3])
-    if (numDims >= 4) {
-      group2[3] =
-          b.or_(group2[3], b.shl(b.i32_val(blockShape[numDims - 4]), v16));
-    }
+    // tile_dim3 (upper 16 bits of group2[3]) is filled in later by the
+    // per-op descriptor filler.
   }
 
   /* group3 bit-field definition
@@ -483,13 +503,11 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
       group3[2] = b.or_(group3[2], b.lshr(tensorShape[numDims - 5], v16));
     }
 
-    // tile_dim4 (16 bits starting at bit 80: upper 16 bits of group3[2])
+    // tensor_dim3_stride (4th dimension from the end) (48 bits split across
+    // group3[0] and lower 16 bits of group3[1]).  tile_dim4 (upper 16 bits of
+    // group3[2]) is filled in later by the per-op descriptor filler.
     if (numDims == 5) {
-      // tensor_dim3_stride (4th dimension from the end) (48 bits split across
-      // group3[0] and lower 16 bits of group3[1])
       group3[0] = tensorStride[numDims - 5];
-      group3[2] =
-          b.or_(group3[2], b.shl(b.i32_val(blockShape[numDims - 5]), v16));
     }
   }
 
@@ -497,10 +515,12 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
 }
 
 // Fill TDM descriptor for regular load/store operations (1D-5D tensors).
-// When `hintedWarps` is true, `warpsPerCTA` was derived from a user-supplied
-// `warp_used_hint` (K < numWarps), the per-warp tile dimensions in the
-// descriptor are re-encoded accordingly, and predication is masked by the
-// "warp" input dim's free-variable mask so redundant warps become no-ops.
+// Computes the per-warp tile shape from `shapePerCTA / warpsPerCTA` and
+// encodes the tile_dim* fields into the descriptor; createTDMDescriptor
+// only sets per-tensor fields, so this is the sole owner of tile dimensions.
+// When the layout's "warp" input dim has free variable bits (i.e. a
+// `warp_used_hint` shrunk warpsPerCTA below numWarps), those redundant
+// warps get pred=0 so their TDM instruction is a hardware no-op.
 void fillTDMDescriptor(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
@@ -511,10 +531,13 @@ void fillTDMDescriptor(
     SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
     Value multicastMask, Value barrierPtr,
     const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
-    ArrayRef<unsigned> warpsPerCTA, int numWarps, bool hintedWarps) {
+    ArrayRef<unsigned> warpsPerCTA, int numWarps,
+    const std::optional<WarpHintInfo> &warpHint) {
   size_t numDims = offset.size();
   assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors.");
   assert(!dstPtrs.empty() && "dstPtrs cannot be empty");
+  assert(warpsPerCTA.size() == numDims &&
+         "warpsPerCTA must have one entry per tensor dim");
 
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -522,8 +545,10 @@ void fillTDMDescriptor(
   Type globalPtrTy = ptr_ty(ctx, 1);
   Type sharedPtrTy = ptr_ty(ctx, 3);
 
-  // Decode the full TDM descriptor to get all values
-  auto [srcPtr, tensorShape, tensorStride, decodedBlockShape] =
+  // Decode the per-tensor fields of the descriptor (base ptr, shape, stride).
+  // Tile dimensions are owned by this filler and computed below from
+  // shapePerCTA / warpsPerCTA, so we ignore the decoder's blockShape.
+  auto [srcPtr, tensorShape, tensorStride, _decodedBlockShape] =
       decodeTDMDescriptorFull(
           rewriter, loc, group0, group1,
           group2.has_value()
@@ -534,48 +559,13 @@ void fillTDMDescriptor(
               : std::nullopt,
           numDims);
 
-  // When partial TDM copy is active (warp_used_hint supplied), the
-  // per-warp block shape may differ from what createTDMDescriptor encoded
-  // (which assumed the default greedy distribution over all warps).
-  // Re-encode the per-warp tile dimensions from the warpsPerCTA derived
-  // here.
-  if (hintedWarps) {
-    Value v16 = b.i32_val(16);
-    for (size_t i = 0; i < numDims; ++i)
-      decodedBlockShape[i] =
-          b.i32_val(shapePerCTA[i] / static_cast<int64_t>(warpsPerCTA[i]));
-
-    // Re-encode into descriptor groups (same bit-field layout as
-    // createTDMDescriptor).
-    // tile_dim0 (innermost): upper 16 bits of group1[3]
-    group1[3] = b.and_(group1[3], b.i32_val(0xFFFF));
-    group1[3] = b.or_(group1[3], b.shl(decodedBlockShape[numDims - 1], v16));
-    if (numDims >= 2) {
-      // tile_dim1: lower 16 bits of group1[4]
-      group1[4] = b.and_(group1[4], b.i32_val(0xFFFF0000));
-      group1[4] = b.or_(
-          group1[4], b.and_(decodedBlockShape[numDims - 2], b.i32_val(0xFFFF)));
-    }
-    if (numDims >= 3) {
-      // tile_dim2: upper 16 bits of group1[4]
-      group1[4] = b.and_(group1[4], b.i32_val(0x0000FFFF));
-      group1[4] = b.or_(group1[4], b.shl(decodedBlockShape[numDims - 3], v16));
-    }
-    if (numDims >= 4 && group2.has_value()) {
-      // tile_dim3: upper 16 bits of group2[3]
-      group2.value().get()[3] =
-          b.and_(group2.value().get()[3], b.i32_val(0x0000FFFF));
-      group2.value().get()[3] = b.or_(
-          group2.value().get()[3], b.shl(decodedBlockShape[numDims - 4], v16));
-    }
-    if (numDims == 5 && group3.has_value()) {
-      // tile_dim4: upper 16 bits of group3[2]
-      group3.value().get()[2] =
-          b.and_(group3.value().get()[2], b.i32_val(0x0000FFFF));
-      group3.value().get()[2] = b.or_(
-          group3.value().get()[2], b.shl(decodedBlockShape[numDims - 5], v16));
-    }
-  }
+  // Per-warp tile shape: how many elements each active warp writes/reads in
+  // one TDM instruction.  When warpsPerCTA was derived from a smaller K than
+  // numWarps (warp_used_hint), each active warp covers a proportionally
+  // larger tile so the total CTA coverage stays the same.
+  SmallVector<int64_t> tileShape(numDims);
+  for (size_t i = 0; i < numDims; ++i)
+    tileShape[i] = shapePerCTA[i] / static_cast<int64_t>(warpsPerCTA[i]);
 
   auto kMessage = str_attr("message");
   auto kWarp = str_attr("warp");
@@ -588,14 +578,30 @@ void fillTDMDescriptor(
                        .getCGALayout()
                        .getLinearLayout();
 
-  auto tdmLayout = triton::gpu::getTDMLinearLayout(shapePerCTA, warpsPerCTA,
-                                                   cgaLayout, numWarps);
+  // For an axis-aligned `warp_used_hint`, place the K identity rows of
+  // the warp sublayout at `warpHint->basisBits`; otherwise the layout
+  // uses the lowest log2(K) bits (canonical-prefix placement).
+  SmallVector<int32_t, 5> warpBasisBits;
+  if (warpHint)
+    warpBasisBits.assign(warpHint->basisBits.begin(),
+                         warpHint->basisBits.end());
+
+  auto tdmLayout = triton::gpu::getTDMLinearLayout(
+      shapePerCTA, warpsPerCTA, cgaLayout, numWarps, warpBasisBits);
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
+  // Anchor warpId at i0 = 0 of the active coset.  For canonical-prefix
+  // hints (i0 == 0) and for the no-hint case this is a no-op.  For
+  // shifted/strided hints this aligns the i-th active warp onto the
+  // i-th identity row of the warp sublayout.
+  Value warpIdShifted = warpId;
+  if (warpHint && warpHint->i0 != 0)
+    warpIdShifted = b.xor_(warpId, b.i32_val(warpHint->i0));
+
   auto warpOffset = applyLinearLayout(
       loc, rewriter, tdmLayout,
-      {{kMessage, b.i32_val(0)}, {kWarp, warpId}, {kBlock, ctaId}});
+      {{kMessage, b.i32_val(0)}, {kWarp, warpIdShifted}, {kBlock, ctaId}});
 
   // Extract per-dimension offsets and update input offsets
   SmallVector<Value> globalOffset(numDims);
@@ -614,7 +620,7 @@ void fillTDMDescriptor(
   auto tdmToShared = tdmLayout.invertAndCompose(sharedLayout);
   auto sharedOffsets = applyLinearLayout(
       loc, rewriter, tdmToShared,
-      {{kMessage, b.i32_val(0)}, {kWarp, warpId}, {kBlock, ctaId}});
+      {{kMessage, b.i32_val(0)}, {kWarp, warpIdShifted}, {kBlock, ctaId}});
 
   // Extract the offset and partition index from the result
   Value dstOffset = b.i32_val(0);
@@ -669,39 +675,36 @@ void fillTDMDescriptor(
   // This leverages HW OOB checking to skip padding elements while
   // preserving the original tensor shape if smaller. Note that the pre
   // conditions are checked in the verifier already
-  bool adjustedBlockShape = false;
+  int64_t encodedTileDim0 = tileShape[numDims - 1];
   if (isStore && padInterval > 0 && padAmount > 0) {
-    adjustedBlockShape = true;
-    Value originalTileDim0 = decodedBlockShape[numDims - 1];
-
-    // Adjust block shape (tile dimension) to include padding
-    decodedBlockShape[numDims - 1] =
-        b.add(originalTileDim0, b.i32_val(padAmount));
+    int64_t originalTileDim0 = tileShape[numDims - 1];
+    encodedTileDim0 = originalTileDim0 + padAmount;
 
     // Adjust tensor dimension to be min(tensor_dim0, original_tile_dim0)
-    Value cmp = b.icmp_ult(tensorShape[numDims - 1], originalTileDim0);
-    tensorShape[numDims - 1] =
-        b.select(cmp, tensorShape[numDims - 1], originalTileDim0);
+    Value origTileVal = b.i32_val(originalTileDim0);
+    Value cmp = b.icmp_ult(tensorShape[numDims - 1], origTileVal);
+    tensorShape[numDims - 1] = b.select(cmp, tensorShape[numDims - 1],
+                                        origTileVal);
   }
 
   // Update group0 with addresses
   Value globalAddr = b.ptrtoint(i64_ty, srcPtr);
   Value ldsAddr = b.ptrtoint(i32_ty, dstPtr);
 
-  // Combine user predicate with layout predicate for partial TDM copy.
-  // `tdmLayout.getFreeVariableMasks()[kWarp]` reports every bit of warpId
-  // that does not contribute any offset -- i.e. warps that are redundant
-  // duplicates under a smaller warpsPerCTA derived from warp_used_hint.
-  // Warps where any such bit is set get pred=0 so the TDM instruction
-  // they issue is a hardware no-op.  With the verifier's canonical-prefix
-  // rule these bits are exactly the high bits of warpId above K-1, so
-  // this is equivalent to masking warps >= K.
-  if (hintedWarps) {
+  // Predicate off redundant warps reported by the layout's free-variable
+  // mask.  Bits of warpId where the warp sublayout has an all-zero row
+  // are "free" — toggling them must not change the participating piece.
+  // For axis-aligned `warp_used_hint`, those are exactly the bits NOT
+  // in `warpHint->basisBits`, AND'd with `((1 << numWarps) - 1)`; the
+  // active-warp test is `((warpId ^ i0) & freeMask) == 0`.  Without a
+  // hint, the free bits are the high bits above log2(K), `i0 == 0`,
+  // and the test reduces to `(warpId & freeMask) == 0`.
+  {
     auto freeMasks = tdmLayout.getFreeVariableMasks();
     int32_t warpFreeMask = freeMasks.lookup(kWarp);
     if (warpFreeMask != 0) {
-      Value isActive =
-          b.icmp_eq(b.and_(warpId, b.i32_val(warpFreeMask)), b.i32_val(0));
+      Value isActive = b.icmp_eq(
+          b.and_(warpIdShifted, b.i32_val(warpFreeMask)), b.i32_val(0));
       Value layoutPred = b.select(isActive, b.i32_val(1), b.i32_val(0));
       pred = b.and_(pred, layoutPred);
     }
@@ -722,9 +725,7 @@ void fillTDMDescriptor(
   if (numDims >= 2) {
     group1[2] =
         b.or_(group1[2], b.shl(tensorShape[numDims - 2], b.i32_val(16)));
-    group1[3] = b.and_(group1[3], b.i32_val(0xFFFF << 16));
-    group1[3] =
-        b.or_(group1[3], b.lshr(tensorShape[numDims - 2], b.i32_val(16)));
+    group1[3] = b.lshr(tensorShape[numDims - 2], b.i32_val(16));
   }
 
   // Configure barrier
@@ -737,13 +738,23 @@ void fillTDMDescriptor(
     group1[0] = b.and_(group1[0], b.i32_val(0xFFFBFFFF));
   }
 
-  if (adjustedBlockShape) {
-    // Re-encode the adjusted tile_dim0 (block shape) into upper 16 bits of
-    // group1[3]. This is the same for 1D-5D tensors.
-    group1[3] = b.and_(group1[3], b.i32_val(0xFFFF));
-    group1[3] =
-        b.or_(group1[3], b.shl(decodedBlockShape[numDims - 1], b.i32_val(16)));
-  }
+  // Encode per-warp tile dimensions.  Bit-field layout matches the chart in
+  // createTDMDescriptor: tile_dim0 in group1[3]<31:16>, tile_dim1 in
+  // group1[4]<15:0>, tile_dim2 in group1[4]<31:16>, tile_dim3 in
+  // group2[3]<31:16>, tile_dim4 in group3[2]<31:16>.  The lower halves of
+  // group1[3], group2[3], and group3[2] are tensor-shape bits already set
+  // above (or left as zero by createTDMDescriptor when unused).
+  group1[3] = b.or_(group1[3], b.i32_val(encodedTileDim0 << 16));
+  if (numDims >= 2)
+    group1[4] = b.i32_val(tileShape[numDims - 2] & 0xFFFF);
+  if (numDims >= 3)
+    group1[4] = b.or_(group1[4], b.i32_val(tileShape[numDims - 3] << 16));
+  if (numDims >= 4 && group2.has_value())
+    group2.value().get()[3] = b.or_(group2.value().get()[3],
+                                    b.i32_val(tileShape[numDims - 4] << 16));
+  if (numDims == 5 && group3.has_value())
+    group3.value().get()[2] = b.or_(group3.value().get()[2],
+                                    b.i32_val(tileShape[numDims - 5] << 16));
 
   // Update group2/group3 for higher dimensions
   if (numDims >= 3) {
@@ -873,9 +884,10 @@ void fillTDMDescriptorForGatherScatter(
   group1[4] = b.and_(group1[4], b.i32_val(0xFFFF0000));
   group1[4] = b.or_(group1[4], b.i32_val(numIndices & 0xFFFF));
 
-  // Fix tile_dim0 for gather/scatter: createTDMDescriptor divides the column
-  // dimension across warps for regular load/store, but gather and scatter use
-  // row indices and need the full undivided column width.
+  // Encode tile_dim0 for gather/scatter as the full undivided column width:
+  // gather/scatter is row-indexed across all warps, so each TDM instruction
+  // covers the full row.  createTDMDescriptor leaves the upper 16 bits of
+  // group1[3] zero, so a plain OR is sufficient.
   if (blockShape.size() >= 2) {
     int64_t tileDim0 = blockShape.back();
 
@@ -884,7 +896,6 @@ void fillTDMDescriptorForGatherScatter(
     if (!isGather && padInterval > 0 && padAmount > 0)
       tileDim0 += padAmount;
 
-    group1[3] = b.and_(group1[3], b.i32_val(0xFFFF));
     group1[3] = b.or_(group1[3], b.i32_val(tileDim0 << 16));
   }
 
@@ -971,7 +982,8 @@ emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                  ArrayRef<Value> instrDstPtrs, Value pred, Value multicastMask,
                  Value barrier, const triton::LinearLayout &instrSharedLayout,
                  Value ctaId, bool isLoad, ArrayRef<unsigned> warpsPerCTA,
-                 int numWarps, bool hintedWarps = false) {
+                 int numWarps,
+                 const std::optional<WarpHintInfo> &warpHint = std::nullopt) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
   Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
@@ -987,7 +999,7 @@ emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                       group1Vec, std::ref(group2Vec), std::ref(group3Vec),
                       globalOffset, instrDstPtrs, pred, multicastMask, barrier,
                       instrSharedLayout, ctaId, !isLoad, warpsPerCTA, numWarps,
-                      hintedWarps);
+                      warpHint);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -1003,11 +1015,12 @@ emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
     auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
     auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
 
-    fillTDMDescriptor(
-        rewriter, loc, typeConverter, elementType, effectiveBlockShape,
-        padInterval, padAmount, group0Vec, group1Vec, std::nullopt,
-        std::nullopt, globalOffset, instrDstPtrs, pred, multicastMask, barrier,
-        instrSharedLayout, ctaId, !isLoad, warpsPerCTA, numWarps, hintedWarps);
+    fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
+                      effectiveBlockShape, padInterval, padAmount, group0Vec,
+                      group1Vec, std::nullopt, std::nullopt, globalOffset,
+                      instrDstPtrs, pred, multicastMask, barrier,
+                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA, numWarps,
+                      warpHint);
 
     auto group0 = packLLVector(loc, group0Vec, rewriter);
     auto group1 = packLLVector(loc, group1Vec, rewriter);
@@ -1048,21 +1061,26 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
   auto partitionedEnc = dyn_cast<PartitionedSharedEncodingAttr>(encoding);
 
   // When warp_used_hint is present, derive the distribution from the
-  // active-warp count K instead of numWarps.  The verifier guarantees the
-  // hint is a canonical prefix with K a power of two, and, for partitioned
-  // encodings, that warpsPerCTA[partitionDim] >= numLogicalPieces so the
-  // copy fits in a single instruction.  Multi-instruction slicing is not
-  // supported in the hinted path.
+  // active-warp count K instead of numWarps.  The verifier guarantees
+  // the hint is an axis-aligned coset with K a power of two, and for
+  // partitioned encodings that warpsPerCTA[partitionDim] >=
+  // numLogicalPieces so the copy fits in a single instruction.
+  // Multi-instruction slicing is not supported in the hinted path.
+  // Inactive warps are turned into hardware no-ops via
+  // fillTDMDescriptor's free-variable-mask predication, anchored at i0
+  // by an XOR before the active-warp test.
+  std::optional<WarpHintInfo> warpHint;
   int effectiveWarps = numWarps;
-  bool hintedWarps = warpUsedHint.has_value();
-  if (hintedWarps)
-    effectiveWarps = llvm::popcount(*warpUsedHint);
+  if (warpUsedHint) {
+    warpHint = extractWarpHintInfo(*warpUsedHint, numWarps);
+    effectiveWarps = static_cast<int>(warpHint->K);
+  }
 
   SmallVector<unsigned> warpsPerCTA;
   unsigned numTDMInstructions = 1;
   std::tie(warpsPerCTA, numTDMInstructions) =
       distributeTDMWarpsAlignToPartition(blockShape, effectiveWarps, encoding);
-  assert((!hintedWarps || numTDMInstructions == 1) &&
+  assert((!warpUsedHint || numTDMInstructions == 1) &&
          "verifier should guarantee single-instruction emission for the "
          "hinted path");
 
@@ -1072,7 +1090,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                      to_vector(blockShape), padInterval, padAmount,
                      to_vector(offset), dstPtrs, pred, multicastMask,
                      barrierPtr, sharedLayout, ctaId, isLoad, warpsPerCTA,
-                     numWarps, hintedWarps);
+                     numWarps, warpHint);
     return;
   }
 
@@ -1136,7 +1154,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
     emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
                      effectiveBlockShape, padInterval, padAmount, globalOffset,
                      instrDstPtrs, pred, multicastMask, barrier, sliceLayout,
-                     ctaId, isLoad, warpsPerCTA, numWarps, hintedWarps);
+                     ctaId, isLoad, warpsPerCTA, numWarps);
   }
 }
 
@@ -1283,6 +1301,380 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, intrinsicName, {},
         {group0, group1, group2, group3, group4Zero, b.i32_val(0)});
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Implicit op-merging: analysis + merged emit.
+
+namespace {
+
+// Mirror of AsyncTDMCopyGlobalToLocalOp's verifier axis-aligned-coset
+// rule, used to validate the *union* of member hints during merge
+// analysis (the verifier checks each member individually, but not the
+// union).  Returns true iff `hint` is a verifier-legal hint for the
+// given `numWarps`.
+//
+// Math is over warp INDICES (integers), not over the i32 hint bitmask --
+// see Dialect.cpp::validateWarpUsedHint for the rationale; both must
+// stay in sync so the merge analysis admits exactly what the verifier
+// admits.
+bool isAxisAlignedCoset(uint32_t hint, int numWarps) {
+  if (hint == 0)
+    return false;
+  unsigned K = static_cast<unsigned>(llvm::popcount(hint));
+  if (!llvm::isPowerOf2_32(K) || static_cast<int>(K) > numWarps)
+    return false;
+  uint64_t numWarpsMask = (numWarps >= 32) ? ~0u : ((1u << numWarps) - 1);
+  if ((hint & ~static_cast<uint32_t>(numWarpsMask)) != 0)
+    return false;
+  unsigned i0 = llvm::countr_zero(hint);
+  uint32_t support = 0;
+  for (uint32_t mask = hint; mask != 0; mask &= mask - 1) {
+    unsigned w = llvm::countr_zero(mask);
+    support |= static_cast<uint32_t>(w ^ i0);
+  }
+  if (static_cast<unsigned>(llvm::popcount(support)) != llvm::Log2_32(K))
+    return false;
+  uint32_t subset = 0;
+  do {
+    unsigned warpIdx = static_cast<unsigned>(subset) ^ i0;
+    if (((hint >> warpIdx) & 1u) == 0)
+      return false;
+    subset = (subset - support) & support;
+  } while (subset != 0);
+  return true;
+}
+
+using TDMCopyGlobalToLocalOp = triton::amdgpu::AsyncTDMCopyGlobalToLocalOp;
+
+// Two TDM copies pass the v1 mergeability filter iff they have the same
+// destination MemDescType (same shared-memory encoding + same
+// shapePerCTA, enforced via MLIR's structural attribute equality) AND
+// distinct SSA destination values.  The "distinct value" rule is a
+// conservative stand-in for full non-overlap analysis and is sufficient
+// for the GEMM use case where each operand has its own shared buffer.
+//
+// The same-encoding requirement is intentionally strict for v1: the
+// merged-form lowering only emits per-wave `select` chains for the
+// `tile_dim*` and per-buffer addresses.  Relaxing it (mixed encodings,
+// mixed pad bits, mixed partition arity, mixed shapePerCTA) would
+// require additional `s_cselect_b32` chains for `dstPtrs` arity,
+// `group1[0]` pad bits, and the LDS-offset computation, but no IR or
+// attribute changes.
+bool canMergeWith(TDMCopyGlobalToLocalOp first,
+                  TDMCopyGlobalToLocalOp candidate) {
+  if (first.getResult().getType() != candidate.getResult().getType())
+    return false;
+  if (first.getResult() == candidate.getResult())
+    return false;
+  return true;
+}
+
+void emitMergeGroup(MutableArrayRef<Operation *> run, int numWarps,
+                    DenseMap<Operation *, TDMMergeGroupInfo> &result) {
+  // Greedy pack: from the front of `run`, find the longest power-of-two
+  // prefix whose member hints (a) stay pairwise disjoint, (b) all match
+  // canMergeWith with the first member, and (c) the running union stays
+  // a verifier-legal axis-aligned coset.
+  while (run.size() >= 2) {
+    auto firstOp = cast<TDMCopyGlobalToLocalOp>(run.front());
+    uint32_t unionHint =
+        static_cast<uint32_t>(firstOp.getWarpUsedHintAttr().getInt());
+    size_t n = 1;
+    for (size_t i = 1; i < run.size(); ++i) {
+      auto op = cast<TDMCopyGlobalToLocalOp>(run[i]);
+      auto hint = static_cast<uint32_t>(op.getWarpUsedHintAttr().getInt());
+      if (unionHint & hint)
+        break;
+      if (!canMergeWith(firstOp, op))
+        break;
+      uint32_t newUnion = unionHint | hint;
+      if (!isAxisAlignedCoset(newUnion, numWarps))
+        break;
+      unionHint = newUnion;
+      n = i + 1;
+    }
+    // Round n down to the largest power of two.
+    size_t p2 = 1;
+    while (p2 * 2 <= n)
+      p2 *= 2;
+    if (p2 >= 2) {
+      uint32_t finalUnion = 0;
+      for (size_t i = 0; i < p2; ++i) {
+        auto op = cast<TDMCopyGlobalToLocalOp>(run[i]);
+        finalUnion |=
+            static_cast<uint32_t>(op.getWarpUsedHintAttr().getInt());
+      }
+      TDMMergeGroupInfo info;
+      info.members.assign(run.begin(), run.begin() + p2);
+      info.unionHint = finalUnion;
+      info.unionInfo = extractWarpHintInfo(finalUnion, numWarps);
+      LLVM_DEBUG({
+        llvm::dbgs() << "[tdm-merge] group of " << p2 << " ops, unionHint=0x"
+                     << llvm::Twine::utohexstr(finalUnion) << "\n";
+        for (auto *op : info.members)
+          llvm::dbgs() << "  " << *op << "\n";
+      });
+      for (auto *op : info.members)
+        result[op] = info;
+      run = run.drop_front(p2);
+    } else {
+      run = run.drop_front(1);
+    }
+  }
+}
+
+} // namespace
+
+llvm::DenseMap<Operation *, TDMMergeGroupInfo>
+computeTDMMergeGroups(ModuleOp mod) {
+  llvm::DenseMap<Operation *, TDMMergeGroupInfo> result;
+
+  // Walk every block in the module that contains at least one TDM
+  // copy.  Within each such block we scan ops in program order,
+  // accumulating a running list of "candidate" TDM copies that satisfy
+  // the v1 mergeability filter (hint set, no mbarrier, pairwise
+  // compatible).  Pure (memory-effect-free) ops between candidates are
+  // allowed to thread through; any side-effecting op (or an
+  // unhinted/mbarrier'd TDM copy) closes the current run.
+  //
+  // We deliberately avoid calling `lookupNumWarps` on blocks that hold
+  // no TDM op: that helper fatal-errors when the surrounding module has
+  // no `ttg.num-warps`, and many empty / non-TritonGPU modules in lit
+  // tests fall into that category.
+  llvm::SmallSetVector<Block *, 8> blocks;
+  mod->walk([&](TDMCopyGlobalToLocalOp tdm) {
+    blocks.insert(tdm->getBlock());
+  });
+  for (Block *block : blocks) {
+    int numWarps = triton::gpu::lookupNumWarps(block->getParentOp());
+    SmallVector<Operation *> candidates;
+    auto flush = [&]() {
+      if (candidates.size() >= 2)
+        emitMergeGroup(candidates, numWarps, result);
+      candidates.clear();
+    };
+
+    for (Operation &op : *block) {
+      if (auto tdm = dyn_cast<TDMCopyGlobalToLocalOp>(&op)) {
+        // Ops with mbarrier are not eligible.  A hint must be present:
+        // no hint means there is nothing to merge with.
+        if (tdm.getWarpUsedHintAttr() && !tdm.getBarrier()) {
+          candidates.push_back(&op);
+          continue;
+        }
+        // A hint-less or mbarrier-carrying TDM copy still has memory
+        // side effects, so it breaks the run for the candidates that
+        // came before.
+        flush();
+        continue;
+      }
+      // Pure ops (arith/index math producing offsets, etc.) thread
+      // through.  Any side-effecting op breaks the run; this includes
+      // async_wait, barrier, and mbarrier ops.
+      if (isMemoryEffectFree(&op))
+        continue;
+      flush();
+    }
+    flush();
+  }
+
+  return result;
+}
+
+void emitTDMLoadStoreMerged(
+    RewriterBase &rewriter, Location loc,
+    const LLVMTypeConverter *typeConverter,
+    ArrayRef<SmallVector<Value>> descPerMember,
+    ArrayRef<int64_t> blockShape, int numWarps, unsigned padInterval,
+    unsigned padAmount,
+    ArrayRef<SmallVector<Value>> offsetPerMember,
+    ArrayRef<SmallVector<Value>> dstPtrsPerMember,
+    ArrayRef<Value> predPerMember, Value multicastMask, Type elementType,
+    ArrayRef<Value> barrierPtrPerMember, bool isLoad,
+    const triton::LinearLayout &sharedLayout, Attribute encoding,
+    Value ctaId, ArrayRef<uint32_t> hintPerMember,
+    const TDMMergeGroupInfo &groupInfo) {
+  size_t N = groupInfo.members.size();
+  assert(N >= 2 && llvm::isPowerOf2_64(N) && "merge group size invariant");
+  assert(descPerMember.size() == N && offsetPerMember.size() == N &&
+         dstPtrsPerMember.size() == N && predPerMember.size() == N &&
+         barrierPtrPerMember.size() == N && hintPerMember.size() == N);
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  size_t numDims = blockShape.size();
+  assert(numDims >= 1 && numDims <= 5);
+
+  // Each member's descriptor is computed for that member's own K_i =
+  // K_union / N warps; the merged emission then `s_cselect_b32`s
+  // between member descriptors per wave.  Picking warpsPerCTA from
+  // K_member (not K_union) keeps `tileShape = blockShape /
+  // warpsPerCTA` consistent with each member's `basisBits` (whose
+  // popcount is log2(K_member)).  Mergeability requires the same K
+  // across members, so K_member is uniform.
+  assert(groupInfo.unionInfo.K % N == 0 &&
+         "K_union must be divisible by group size");
+  unsigned kMember = groupInfo.unionInfo.K / static_cast<unsigned>(N);
+  SmallVector<unsigned> warpsPerCTA;
+  unsigned numTDMInstructions = 1;
+  std::tie(warpsPerCTA, numTDMInstructions) =
+      distributeTDMWarpsAlignToPartition(
+          blockShape, static_cast<int>(kMember), encoding);
+  assert(numTDMInstructions == 1 &&
+         "verifier guarantees single-instruction emission for hinted ops");
+
+  // Compute the per-wave member selector index from the union basis.
+  // The union's basis bits are the bit positions in `unionInfo.basisBits`;
+  // the *member-specific* sub-basis for a single member of size K_i =
+  // K/N occupies log2(K_i) of those bits, leaving log2(N) bits as
+  // "selector bits" — exactly the bits where the i0_i offsets differ
+  // from i0_union.  We extract those bits from (warpId ^ i0_union) and
+  // pack them into a single 0..N-1 index, with the bit ordering matching
+  // the order in which members appear in `groupInfo.members`.
+  auto [_laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  Value warpIdShifted = warpId;
+  if (groupInfo.unionInfo.i0 != 0)
+    warpIdShifted = b.xor_(warpId, b.i32_val(groupInfo.unionInfo.i0));
+
+  // Identify selector bits: union basis bits that are NOT in the first
+  // member's basis.  Because every member has the same K_i and the
+  // union is axis-aligned, the first member's basisBits are a subset of
+  // the union's basisBits; the remaining union bits are the selector.
+  auto firstInfo =
+      extractWarpHintInfo(hintPerMember[0], numWarps);
+  llvm::SmallDenseSet<int32_t> firstBasis(firstInfo.basisBits.begin(),
+                                          firstInfo.basisBits.end());
+  SmallVector<int32_t, 5> selectorBits;
+  for (int32_t bit : groupInfo.unionInfo.basisBits)
+    if (!firstBasis.count(bit))
+      selectorBits.push_back(bit);
+  assert(selectorBits.size() == llvm::Log2_32(static_cast<unsigned>(N)) &&
+         "selector bits must enumerate the log2(N) per-wave choices");
+
+  // Map from raw selector value (binary expansion over selectorBits) to
+  // the matching member index, by looking at how each member's i0
+  // projects onto the selector bits.
+  SmallVector<unsigned> selValToMember(N, ~0u);
+  for (size_t i = 0; i < N; ++i) {
+    auto info = extractWarpHintInfo(hintPerMember[i], numWarps);
+    uint32_t delta = info.i0 ^ groupInfo.unionInfo.i0;
+    unsigned selVal = 0;
+    for (size_t bi = 0; bi < selectorBits.size(); ++bi) {
+      if ((delta >> selectorBits[bi]) & 1u)
+        selVal |= 1u << bi;
+    }
+    assert(selVal < N && selValToMember[selVal] == ~0u &&
+           "members must map injectively onto selector values");
+    selValToMember[selVal] = static_cast<unsigned>(i);
+  }
+
+  // Build per-member packed descriptor slot vectors by running
+  // fillTDMDescriptor once per member with the member's own hint and
+  // operands, then `select` slot-by-slot keyed on the selector index.
+  SmallVector<SmallVector<Value>> g0PerMember(N);
+  SmallVector<SmallVector<Value>> g1PerMember(N);
+  SmallVector<SmallVector<Value>> g2PerMember(N);
+  SmallVector<SmallVector<Value>> g3PerMember(N);
+  for (size_t i = 0; i < N; ++i) {
+    ArrayRef<Value> di = descPerMember[i];
+    SmallVector<Value> g0(di.begin(), di.begin() + 4);
+    SmallVector<Value> g1(di.begin() + 4,
+                          numDims > 2 ? di.begin() + 12 : di.end());
+    SmallVector<Value> g2;
+    SmallVector<Value> g3;
+    if (numDims > 2) {
+      g2.assign(di.begin() + 12, di.begin() + 16);
+      g3.assign(di.begin() + 16, di.end());
+    }
+    auto warpHint = extractWarpHintInfo(hintPerMember[i], numWarps);
+    fillTDMDescriptor(
+        rewriter, loc, typeConverter, elementType,
+        SmallVector<int64_t>(blockShape.begin(), blockShape.end()),
+        padInterval, padAmount, g0, g1,
+        numDims > 2 ? std::optional<std::reference_wrapper<SmallVector<Value>>>(
+                          std::ref(g2))
+                    : std::nullopt,
+        numDims > 2 ? std::optional<std::reference_wrapper<SmallVector<Value>>>(
+                          std::ref(g3))
+                    : std::nullopt,
+        SmallVector<Value>(offsetPerMember[i].begin(),
+                           offsetPerMember[i].end()),
+        dstPtrsPerMember[i], predPerMember[i], multicastMask,
+        barrierPtrPerMember[i], sharedLayout, ctaId, /*isStore=*/!isLoad,
+        warpsPerCTA, numWarps, warpHint);
+    g0PerMember[i] = std::move(g0);
+    g1PerMember[i] = std::move(g1);
+    g2PerMember[i] = std::move(g2);
+    g3PerMember[i] = std::move(g3);
+  }
+
+  // Per-wave `select` chain over selector value.  The selector value is
+  // a packed integer in [0, N); we materialize it once and then chain
+  // `icmp eq` + `select` per slot.  The compiler lowers these to
+  // s_cmp_eq + s_cselect_b32 because the selector is uniform across the
+  // wave.
+  Value selectorVal = b.i32_val(0);
+  for (size_t bi = 0; bi < selectorBits.size(); ++bi) {
+    Value bit = b.and_(b.lshr(warpIdShifted, b.i32_val(selectorBits[bi])),
+                       b.i32_val(1));
+    selectorVal = b.or_(selectorVal, b.shl(bit, b.i32_val(bi)));
+  }
+
+  auto selectSlot = [&](ArrayRef<SmallVector<Value>> perMember,
+                        size_t slotIdx) -> Value {
+    // Start from the last member's slot and chain `select(sel == m,
+    // perMember[m], acc)` walking backwards.  Iterating from N-1 down
+    // produces a right-leaning chain that the compiler turns into N-1
+    // s_cselect_b32 ops.
+    Value acc = perMember[selValToMember[N - 1]][slotIdx];
+    for (size_t s = N - 1; s-- > 0;) {
+      Value cmp = b.icmp_eq(selectorVal, b.i32_val(s));
+      Value cand = perMember[selValToMember[s]][slotIdx];
+      acc = b.select(cmp, cand, acc);
+    }
+    return acc;
+  };
+
+  SmallVector<Value> g0Merged(g0PerMember[0].size());
+  for (size_t k = 0; k < g0Merged.size(); ++k)
+    g0Merged[k] = selectSlot(g0PerMember, k);
+  SmallVector<Value> g1Merged(g1PerMember[0].size());
+  for (size_t k = 0; k < g1Merged.size(); ++k)
+    g1Merged[k] = selectSlot(g1PerMember, k);
+  SmallVector<Value> g2Merged;
+  SmallVector<Value> g3Merged;
+  if (numDims > 2) {
+    g2Merged.resize(g2PerMember[0].size());
+    for (size_t k = 0; k < g2Merged.size(); ++k)
+      g2Merged[k] = selectSlot(g2PerMember, k);
+    g3Merged.resize(g3PerMember[0].size());
+    for (size_t k = 0; k < g3Merged.size(); ++k)
+      g3Merged[k] = selectSlot(g3PerMember, k);
+  }
+
+  auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
+  auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
+  Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
+  const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
+                                     : "llvm.amdgcn.tensor.store.from.lds";
+
+  if (numDims > 2) {
+    auto group0 = packLLVector(loc, g0Merged, rewriter);
+    auto group1 = packLLVector(loc, g1Merged, rewriter);
+    auto group2 = packLLVector(loc, g2Merged, rewriter);
+    auto group3 = packLLVector(loc, g3Merged, rewriter);
+    LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, intrinsicName, {},
+        {group0, group1, group2, group3, group4Zero, b.i32_val(0)});
+  } else {
+    auto group0 = packLLVector(loc, g0Merged, rewriter);
+    auto group1 = packLLVector(loc, g1Merged, rewriter);
+    Value group2Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
+    Value group3Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
+    LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, intrinsicName, {},
+        {group0, group1, group2Zero, group3Zero, group4Zero, b.i32_val(0)});
   }
 }
 

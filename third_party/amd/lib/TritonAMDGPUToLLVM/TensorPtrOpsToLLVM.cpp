@@ -104,7 +104,6 @@ struct MakeTensorDescOpConversion
     Type elementType =
         getTypeConverter()->convertType(tensorDescTy.getElementType());
     SmallVector<int64_t> blockShape = to_vector(tensorDescTy.getShape());
-    int numWarps = lookupNumWarps(op);
     auto shapePerCTA = triton::gpu::getShapePerCTA(sharedEnc, blockShape);
 
     if (failed(validateStridesAndSharedOrder(op, sharedEnc, shapePerCTA,
@@ -114,10 +113,11 @@ struct MakeTensorDescOpConversion
     auto sharedOrder = triton::gpu::getOrder(
         cast<triton::gpu::SharedEncodingTrait>(sharedEnc), shapePerCTA);
     bool isRowMajor = sharedOrder[0] == (sharedOrder.size() - 1);
-    // Create TDM descriptor for 2D-5D tensors
+    // Create TDM descriptor for 2D-5D tensors.  Per-instruction fields
+    // (pred, lds addr, tile_dim*) are filled in at each TDM op site.
     auto tdmDesc = LLVM::AMD::createTDMDescriptor(
-        rewriter, loc, getTypeConverter(), elementType, shapePerCTA, numWarps,
-        padInterval, padAmount, tensorShape, tensorStride, basePtr, sharedEnc);
+        rewriter, loc, getTypeConverter(), elementType, blockShape.size(),
+        padInterval, padAmount, tensorShape, tensorStride, basePtr);
 
     SmallVector<Value> groups = tdmDesc.getAllGroups();
 

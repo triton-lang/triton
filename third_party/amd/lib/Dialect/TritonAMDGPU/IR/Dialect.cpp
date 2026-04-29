@@ -702,21 +702,11 @@ AsyncTDMCopyGlobalToLocalOp::validateWarpUsedHint(uint32_t hint,
   if (hint == 0)
     return std::string("warp_used_hint must have at least one bit set");
 
-  // v1 restriction: canonical prefix only, i.e. hint == (1 << K) - 1.
-  // Equivalent to: (hint & (hint + 1)) == 0.
-  if ((hint & (hint + 1)) != 0)
-    return llvm::formatv(
-               "warp_used_hint must be a canonical prefix (1 << K) - 1 "
-               "for some K, got 0x{0:x}; non-prefix patterns are not "
-               "supported yet",
-               hint)
-        .str();
-
   unsigned K = llvm::popcount(hint);
   if (!llvm::isPowerOf2_32(K))
     return llvm::formatv("popcount(warp_used_hint) = {0} must be a power "
-                         "of two",
-                         K)
+                         "of two (got hint {1:x})",
+                         K, hint)
         .str();
 
   if (static_cast<int64_t>(K) > numWarps)
@@ -725,9 +715,71 @@ AsyncTDMCopyGlobalToLocalOp::validateWarpUsedHint(uint32_t hint,
                          K, numWarps)
         .str();
 
-  // All high bits above num_warps - 1 must be zero.  Since the attribute
-  // is u32 and we've already rejected non-prefix patterns, this is
-  // equivalent to K <= numWarps (checked above).
+  // Bits above num_warps - 1 must be zero.  Checked AFTER the K bound so
+  // users with K > num_warps get the more specific "K active warps but
+  // num_warps = ..." message even when the hint is also out of range; a
+  // hint that fits within num_warps but sets out-of-range bits will be a
+  // power of two K and still trip this check.
+  uint64_t numWarpsMask = (numWarps >= 32) ? ~0u : ((1u << numWarps) - 1);
+  if ((hint & ~static_cast<uint32_t>(numWarpsMask)) != 0)
+    return llvm::formatv("warp_used_hint = {0:x} sets bits beyond "
+                         "num_warps = {1}",
+                         hint, numWarps)
+        .str();
+
+  // v1 axis-aligned coset check.
+  //
+  // Active set S = { w : w-th bit of hint is 1 }; let i0 be the smallest
+  // active warp INDEX (i.e. countr_zero(hint)).  S is an axis-aligned
+  // coset iff S' = { w XOR i0 : w in S } is an F2-linear subspace whose
+  // basis vectors are single powers of two -- equivalently iff
+  //
+  //   support = OR over w in S of (w XOR i0)   (integer XOR)
+  //
+  // satisfies (a) popcount(support) == log2(K), and (b) every subset of
+  // `support` (interpreted as an integer) appears in S' (closure).
+  //
+  // The math is over warp indices, NOT over the i32 hint bitmask, so we
+  // explicitly convert each set bit's position via countr_zero before
+  // XOR-ing.  Using bitmask XOR here would over-count `support` bits and
+  // reject perfectly legal hints like 0x0F or 0xF0.
+  unsigned i0 = llvm::countr_zero(hint);
+  uint32_t support = 0;
+  for (uint32_t mask = hint; mask != 0; mask &= mask - 1) {
+    unsigned w = llvm::countr_zero(mask);
+    support |= static_cast<uint32_t>(w ^ i0);
+  }
+  unsigned logK = llvm::Log2_32(K);
+  if (static_cast<unsigned>(llvm::popcount(support)) != logK)
+    return llvm::formatv(
+               "warp_used_hint = {0:x} is not an axis-aligned coset: "
+               "after offsetting by i0 = {1}, the spanned basis bit "
+               "positions (mask {2:x}, popcount {3}) do not have popcount "
+               "log2(K) = {4}",
+               hint, i0, support,
+               static_cast<unsigned>(llvm::popcount(support)), logK)
+        .str();
+
+  // Enumerate every subset of `support` (each bit position contributes a
+  // basis warp-index value) and confirm warp `subset XOR i0` is in S.
+  // Iteration count = K = 2^logK; cheap for K <= 32.
+  uint32_t subset = 0;
+  do {
+    unsigned warpIdx = static_cast<unsigned>(subset) ^ i0;
+    if (((hint >> warpIdx) & 1u) == 0)
+      return llvm::formatv(
+                 "warp_used_hint = {0:x} is not an axis-aligned coset: "
+                 "warp {1} (= {2} XOR i0 {3}) is missing from the active "
+                 "set; diagonal/parity patterns are not supported in v1",
+                 hint, warpIdx, subset, i0)
+          .str();
+    // Iterate over subsets of `support` (subset bits are positions in
+    // the warp-index, each contributing 2^pos to the offset).  The
+    // bit-trick `(subset - support) & support` walks all subsets in
+    // canonical order, terminating when subset returns to 0.
+    subset = (subset - support) & support;
+  } while (subset != 0);
+
   return std::nullopt;
 }
 

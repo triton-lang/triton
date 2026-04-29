@@ -301,21 +301,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 
-  // Non-prefix pattern 0x05 (warps 0 and 2) is rejected; v1 allows only
-  // canonical prefixes (1 << K) - 1.
-  tt.func @warp_used_hint_non_prefix(
+  // Diagonal pattern 0x69 (warps 0,3,5,6) is rejected: K=4 is a power of
+  // two but the (warpId XOR i0) basis spans 3 bit positions, not log2(K)
+  // = 2.  Diagonal/parity patterns are not axis-aligned and not
+  // supported in v1.
+  tt.func @warp_used_hint_non_axis_aligned(
     %tensorDesc: !tt.tensordesc<256x64xf16>,
     %memDesc: !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>,
     %pred: i32
   ) {
     %c0 = arith.constant 0 : i32
-    // expected-error @+1 {{must be a canonical prefix}}
-    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_used_hint = 5 : i32} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
+    // expected-error @+1 {{is not an axis-aligned coset}}
+    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_used_hint = 105 : i32} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
     tt.return
   }
 
-  // popcount must be a power of two.  0x07 has K=3 -- rejected even though
-  // it is a canonical-prefix bit pattern for 3 warps.
+  // popcount must be a power of two.  0x07 has K=3 -- rejected even
+  // though warps 0..2 are otherwise contiguous.
   tt.func @warp_used_hint_non_pow2_k(
     %tensorDesc: !tt.tensordesc<256x64xf16>,
     %memDesc: !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>,
@@ -336,6 +338,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %c0 = arith.constant 0 : i32
     // expected-error @+1 {{selects K = 16 active warps but num_warps = 8}}
     %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_used_hint = 65535 : i32} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
+    tt.return
+  }
+
+  // Bits outside [0, num_warps) must be zero.  K=2 is otherwise valid,
+  // but warp index 9 is not in [0, 8).
+  tt.func @warp_used_hint_bits_beyond_num_warps(
+    %tensorDesc: !tt.tensordesc<256x64xf16>,
+    %memDesc: !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>,
+    %pred: i32
+  ) {
+    %c0 = arith.constant 0 : i32
+    // expected-error @+1 {{sets bits beyond num_warps = 8}}
+    %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_used_hint = 513 : i32} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
     tt.return
   }
 }

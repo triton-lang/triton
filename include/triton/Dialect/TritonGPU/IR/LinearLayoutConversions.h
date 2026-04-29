@@ -180,9 +180,18 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 // redundant high bits of warpId as free variables via
 // getFreeVariableMasks("warp"), enabling pred-off no-op TDMs on the
 // inactive warps.
+//
+// `warpBasisBits` (optional) specifies the warpId bit positions where
+// the K identity rows of the warp sublayout should be placed; bits not
+// in this list become free variables.  The list must have exactly
+// log2(prod(warpsPerCTA)) entries, all distinct, and all in
+// [0, log2(numWarps)).  When empty, the default placement is
+// {0, 1, ..., log2K - 1} (canonical prefix), matching the legacy
+// behavior used when `warp_used_hint` is absent or canonical.
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
-                                const LinearLayout &cgaLayout, int numWarps);
+                                const LinearLayout &cgaLayout, int numWarps,
+                                ArrayRef<int32_t> warpBasisBits = {});
 
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

@@ -1197,9 +1197,13 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       public LoadStoreConversionBase {
   AsyncTDMCopyGlobalToLocalOpConversion(
       LLVMTypeConverter &converter, const AMD::TargetInfo &targetInfo,
-      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit)
+      ModuleAxisInfoAnalysis &axisAnalysisPass,
+      const llvm::DenseMap<Operation *, mlir::LLVM::AMD::TDMMergeGroupInfo>
+          *mergeGroups,
+      PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass),
+        mergeGroups(mergeGroups) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::AsyncTDMCopyGlobalToLocalOp op,
@@ -1207,6 +1211,27 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // Implicit merge dispatch.  The merge analysis runs once at the start
+    // of the pass; if this op is a
+    // non-first member of a merge group, the first member emits a fused
+    // intrinsic that already covers our work, so we just erase
+    // ourselves.  If we ARE the first member, we emit the fused
+    // intrinsic on behalf of the whole group below; otherwise we fall
+    // through to the singleton emit path.
+    using MapTy =
+        llvm::DenseMap<Operation *, mlir::LLVM::AMD::TDMMergeGroupInfo>;
+    MapTy::const_iterator mergeIt;
+    bool inMergeGroup = false;
+    if (mergeGroups) {
+      mergeIt = mergeGroups->find(op);
+      inMergeGroup = mergeIt != mergeGroups->end();
+    }
+    if (inMergeGroup &&
+        mergeIt->second.members.front() != op.getOperation()) {
+      rewriter.eraseOp(op);
+      return success();
+    }
 
     auto tensorDescTy = op.getDesc().getType();
     auto encoding = tensorDescTy.getSharedLayout();
@@ -1236,11 +1261,83 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
           sharedLayout);
     }
 
+    int numWarps = triton::gpu::lookupNumWarps(op);
+    auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+    auto shapePerCTA =
+        triton::gpu::getShapePerCTA(encoding, tensorDescTy.getShape());
+
+    if (inMergeGroup) {
+      // Emit a single fused intrinsic for the whole merge group.  We
+      // need each member's lowered descriptor / dst / pred / hint; for
+      // the first member we already have them via `adaptor`, for the
+      // others we fetch via `rewriter.getRemappedValue` against the
+      // member's original SSA operands.  Operand-defining ops
+      // (`make_tensor_descriptor`, `local_alloc`, ...) are processed
+      // before any TDM user by the conversion driver, so their remapped
+      // (LLVM-side) values are guaranteed available here.
+      const auto &group = mergeIt->second;
+      size_t numMembers = group.members.size();
+
+      SmallVector<SmallVector<Value>> descPerMember(numMembers);
+      SmallVector<SmallVector<Value>> offsetPerMember(numMembers);
+      SmallVector<SmallVector<Value>> dstPtrsPerMember(numMembers);
+      SmallVector<Value> predPerMember(numMembers);
+      SmallVector<Value> barrierPerMember(numMembers);
+      SmallVector<uint32_t> hintPerMember(numMembers);
+
+      for (size_t i = 0; i < numMembers; ++i) {
+        auto memberOp =
+            cast<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(group.members[i]);
+        Value descRemapped = i == 0
+                                 ? Value(adaptor.getDesc())
+                                 : rewriter.getRemappedValue(memberOp.getDesc());
+        descPerMember[i] = unpackLLElements(loc, descRemapped, rewriter);
+        SmallVector<Value> indices;
+        if (i == 0) {
+          indices = SmallVector<Value>(adaptor.getIndices().begin(),
+                                       adaptor.getIndices().end());
+        } else {
+          for (Value idx : memberOp.getIndices())
+            indices.push_back(rewriter.getRemappedValue(idx));
+        }
+        offsetPerMember[i] = std::move(indices);
+
+        Value dstRemapped =
+            i == 0 ? Value(adaptor.getResult())
+                   : rewriter.getRemappedValue(memberOp.getResult());
+        auto memberDstMemObj = LLVM::getSharedMemoryObjectFromStruct(
+            loc, dstRemapped, elementType, rewriter);
+        dstPtrsPerMember[i] = llvm::to_vector(memberDstMemObj.getBases());
+
+        predPerMember[i] = i == 0 ? Value(adaptor.getPred())
+                                  : rewriter.getRemappedValue(memberOp.getPred());
+        // Merge analysis rejects members carrying mbarrier, so the
+        // per-member barrier is always null in this path.  We assert the
+        // invariant here as a safety net.
+        assert(!memberOp.getBarrier() &&
+               "merge member unexpectedly carries an mbarrier");
+        barrierPerMember[i] = Value();
+        hintPerMember[i] =
+            static_cast<uint32_t>(memberOp.getWarpUsedHintAttr().getInt());
+      }
+
+      mlir::LLVM::AMD::emitTDMLoadStoreMerged(
+          rewriter, loc, getTypeConverter(), descPerMember, shapePerCTA,
+          numWarps, padInterval, padAmount, offsetPerMember,
+          dstPtrsPerMember, predPerMember, multicastMask, elementType,
+          barrierPerMember, /*isLoad=*/true, sharedLayout, encoding, ctaId,
+          hintPerMember, group);
+
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    // Singleton path: compute per-op lowered values and call the
+    // standard `emitTDMLoadStore`.  These values are the LLVM-side
+    // representation (post-type-conversion) of the op's operands.
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
-
     SmallVector<int64_t> blockShape = llvm::to_vector(tensorDescTy.getShape());
-
     // 2D tensors: 12 dwords (group0: 4, group1: 8)
     // 3D-5D tensors: 20 dwords (group0: 4, group1: 8, group2: 4, group3: 4)
     assert((blockShape.size() <= 2 && desc.size() == 12) ||
@@ -1248,10 +1345,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
 
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), elementType, rewriter);
-    // Get all base pointers (multiple for partitioned encoding)
     SmallVector<Value> dstPtrs = llvm::to_vector(dstMemObj.getBases());
     SmallVector<Value> offset = adaptor.getIndices();
-    int numWarps = triton::gpu::lookupNumWarps(op);
 
     Value barrierPtr = nullptr;
     if (op.getBarrier()) {
@@ -1262,11 +1357,6 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
           rewriter);
       barrierPtr = smemObj.getBase();
     }
-
-    auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
-
-    auto shapePerCTA =
-        triton::gpu::getShapePerCTA(encoding, tensorDescTy.getShape());
 
     std::optional<uint32_t> warpUsedHint;
     if (auto hintAttr = op.getWarpUsedHintAttr())
@@ -1281,6 +1371,10 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+private:
+  const llvm::DenseMap<Operation *, mlir::LLVM::AMD::TDMMergeGroupInfo>
+      *mergeGroups;
 };
 
 struct AsyncTDMCopyLocalToGlobalOpConversion
@@ -2545,20 +2639,25 @@ private:
 } // namespace
 
 namespace mlir::triton::AMD {
-void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                       const TargetInfo &targetInfo,
-                                       RewritePatternSet &patterns,
-                                       ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                       PatternBenefit benefit) {
+void populateLoadStoreOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    const llvm::DenseMap<Operation *, mlir::LLVM::AMD::TDMMergeGroupInfo>
+        &tdmMergeGroups,
+    PatternBenefit benefit) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion, BufferLoadOpConversion,
                BufferLoadToLocalOpConversion, BufferStoreOpConversion,
                BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion,
                AsyncCopyLocalToGlobalOpConversion, BufferAtomicCASOpConversion,
-               AsyncTDMCopyGlobalToLocalOpConversion,
                AsyncTDMCopyLocalToGlobalOpConversion,
                AsyncTDMScatterOpConversion, AsyncTDMGatherOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
+  // The merge-aware TDM global-to-local pattern stores a pointer to the
+  // (caller-owned) merge map; we add it separately so we can pass that
+  // extra argument.
+  patterns.add<AsyncTDMCopyGlobalToLocalOpConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, &tdmMergeGroups, benefit);
   patterns.add<TTGAsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<TDMPrefetchConversion>(typeConverter, targetInfo, benefit);

@@ -3,7 +3,9 @@
 
 #include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/IR/Operation.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/DenseMap.h"
 #include <optional>
 
 using mlir::triton::AMD::TargetInfo;
@@ -11,6 +13,31 @@ using PartitionedSharedEncodingAttr =
     mlir::triton::gpu::PartitionedSharedEncodingAttr;
 
 namespace mlir::LLVM::AMD {
+
+// Decoded form of an axis-aligned `warp_used_hint` bitmask.  Populated
+// by `extractWarpHintInfo` from a verifier-validated hint, so all
+// invariants are assumed to hold.
+struct WarpHintInfo {
+  // Active warp count (popcount(hint), always a power of two).
+  unsigned K = 0;
+  // Anchor offset: lsb(hint).  Active set is { i0 ^ x : x subset of basis
+  // span }.
+  uint32_t i0 = 0;
+  // Bit positions of the basis vectors (each a power of two).  Size =
+  // log2(K), all entries < log2(numWarps), all distinct.
+  SmallVector<int32_t, 5> basisBits;
+  // Mask of the warpId bits that are NOT in the basis span and are
+  // within the live num_warps range.  An active-warp test is
+  // `((warpId ^ i0) & freeMask) == 0`.
+  uint32_t freeMask = 0;
+};
+
+// Decode an axis-aligned `warp_used_hint` (as validated by
+// `AsyncTDMCopyGlobalToLocalOp::validateWarpUsedHint`) for the given
+// `numWarps`.  The returned info is sufficient to drive
+// `getTDMLinearLayout`, `fillTDMDescriptor`, and the per-wave
+// predication / piece mapping in the lowering.
+WarpHintInfo extractWarpHintInfo(uint32_t hint, int numWarps);
 
 // Structure to hold TDM descriptor groups
 struct TDMDescriptor {
@@ -23,44 +50,49 @@ struct TDMDescriptor {
   SmallVector<Value> getAllGroups() const;
 };
 
-// Create a TDM descriptor. This creates a partially filled descriptor, with
-// shared memory address and pred set to zero. User of the descriptor is
-// expected to fill these fields later.
+// Create a TDM descriptor.  This builds the per-tensor portion of the
+// descriptor (base ptr, tensor shape, stride, padding, data size) shared by
+// every TDM op against the same `tensor_descriptor`.  pred, lds address, and
+// the per-instruction `tile_dim*` fields are intentionally not encoded here
+// and are filled in by `fillTDMDescriptor` (or
+// `fillTDMDescriptorForGatherScatter`) at the actual load/store site, where
+// the per-op warp distribution is known.
+//
 // For 1D-2D tensors: returns TDMDescriptor with only group0 and group1
 // For 3D-5D tensors: returns TDMDescriptor with all groups populated
-// When encoding is a PartitionedSharedEncodingAttr, the warp distribution is
-// adjusted so each wave's chunk fits in one LDS partition.
 TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
                                   const LLVMTypeConverter *typeConverter,
-                                  Type elementType,
-                                  SmallVector<int64_t> blockShape, int numWarps,
+                                  Type elementType, size_t numDims,
                                   unsigned padInterval, unsigned padAmount,
                                   SmallVector<Value> tensorShape,
-                                  SmallVector<Value> tensorStride, Value srcPtr,
-                                  Attribute sharedEncoding);
+                                  SmallVector<Value> tensorStride,
+                                  Value srcPtr);
 
 // Update the global memory address with offset, and fill the shared memory
-// address and pred in a given TDM descriptor for regular load/store (1D-5D).
-// For partitioned shared memory, dstPtrs contains multiple base pointers and
-// the correct one is selected based on sharedLayout's partition dimension.
+// address, pred, and per-instruction tile_dim* fields in a given TDM
+// descriptor for regular load/store (1D-5D).  For partitioned shared memory,
+// dstPtrs contains multiple base pointers and the correct one is selected
+// based on sharedLayout's partition dimension.
 //
-// hintedWarps: when true, `warpsPerCTA` was derived from a user-supplied
-// `warp_used_hint` (K < numWarps active warps).  Predication is masked by
-// `(warpId & freeMask) == 0`, where freeMask is the free-variable mask of
-// the "warp" input dim reported by the LinearLayout; with the verifier's
-// canonical-prefix rule this evaluates to `warpId < K`, so warps K..
-// numWarps-1 issue a no-op TDM.  When false, all warps participate.
+// The per-warp tile shape is computed as `shapePerCTA / warpsPerCTA`.
+// When `warpHint` is provided (i.e. the op carried a `warp_used_hint`),
+// the warp sublayout's identity rows are placed at `warpHint->basisBits`
+// and the active-warp test is `((warpId ^ i0) & freeMask) == 0`.  Without
+// a hint the layout uses the canonical-prefix placement (lowest log2K
+// bits) and predicates on `(warpId & freeMask) == 0`, matching the
+// pre-hint behavior.
 void fillTDMDescriptor(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> blockShape, unsigned padInterval, unsigned padAmount,
+    SmallVector<int64_t> shapePerCTA, unsigned padInterval, unsigned padAmount,
     SmallVector<Value> &group0, SmallVector<Value> &group1,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group2,
     std::optional<std::reference_wrapper<SmallVector<Value>>> group3,
     SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
     Value multicastMask, Value barrierPtr,
     const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
-    ArrayRef<unsigned> warpsPerCTA, int numWarps, bool hintedWarps = false);
+    ArrayRef<unsigned> warpsPerCTA, int numWarps,
+    const std::optional<WarpHintInfo> &warpHint = std::nullopt);
 
 // Fill TDM descriptor for gather/scatter operations (2D only).
 // Gather reads from non-contiguous rows in global memory to LDS.
@@ -96,10 +128,11 @@ void fillTDMDescriptorForGatherScatter(
 // - sharedLayout: linear layout for the full allocation shape (pre-CGA-split)
 // - encoding: shared memory encoding (used for partition constraints when
 //   splitting into multiple TDM instructions)
-// - warpUsedHint: when present, an i32 bitmask whose popcount K (1 <= K <=
-//   numWarps, power of two, canonical prefix) replaces numWarps for the
-//   purpose of deriving warpsPerCTA.  Redundant high-warpId bits get
-//   pred=0 (hardware no-op) via the layout's free-variable mask.
+// - warpUsedHint: when present, an i32 bitmask whose active set is an
+//   axis-aligned coset (verifier-checked, see TritonAMDGPUOps.td) with
+//   `K = popcount` warps replacing `numWarps` for the warp distribution.
+//   Inactive warps issue hardware no-ops via the layout's free-variable
+//   mask plus an XOR by `i0`.
 void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const LLVMTypeConverter *typeConverter,
                       ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
@@ -110,6 +143,68 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const triton::LinearLayout &sharedLayout,
                       Attribute encoding, Value ctaId,
                       std::optional<uint32_t> warpUsedHint = std::nullopt);
+
+// ---------------------------------------------------------------------------
+// Implicit op-merging support.
+//
+// The merge analysis runs once at the start of TDM->LLVM conversion and
+// returns a side-table mapping each `amdgpu.async_tdm_copy_global_to_local`
+// op that participates in a merge group to its group descriptor.  The IR
+// is *not* modified.  The conversion pattern then queries this map: the
+// first member emits a single fused intrinsic via `emitTDMLoadStoreMerged`,
+// while non-first members emit no intrinsic and are erased by the rewriter.
+// Singletons (not in the map) lower as today via `emitTDMLoadStore`.
+struct TDMMergeGroupInfo {
+  // Members in program order; size N >= 2, N a power of two.
+  SmallVector<Operation *> members;
+  // Bit-OR of every member's `warp_used_hint`.  Itself a verifier-legal
+  // axis-aligned coset.
+  uint32_t unionHint = 0;
+  // Decoded form of `unionHint` against the module's numWarps.
+  WarpHintInfo unionInfo;
+};
+
+// Walk `mod` and identify all merge groups according to the mergeability
+// rules: axis-aligned closure of every member, pairwise disjoint hints,
+// union legal, N power of two, no `mbarrier` operand, consecutive in
+// program order, non-overlapping destinations, same shared-memory
+// encoding + same shapePerCTA.
+//
+// Returned map is keyed on op pointer; every op in a group maps to the
+// *same* `TDMMergeGroupInfo` instance via shared_ptr-style ownership
+// (here: each entry holds the same value-type info).  Ops not in any
+// group are absent from the map.
+llvm::DenseMap<Operation *, TDMMergeGroupInfo>
+computeTDMMergeGroups(ModuleOp mod);
+
+// Emit a single fused TDM intrinsic for a merge group.  Each member's
+// descriptor is built independently (`fillTDMDescriptor` per member,
+// using the member's own hint, dst, indices, pred), then the resulting
+// per-member packed-descriptor lanes are combined via SGPR-uniform
+// `select` chains keyed on a per-wave selector derived from the union
+// hint.  The intrinsic is emitted at the rewriter's current insertion
+// point (which the caller should set to immediately before the first
+// member).
+//
+// `descPerMember[i]` is the lowered TDM descriptor for member i (the
+// per-tensor part returned by `createTDMDescriptor`); `dstPtrsPerMember[i]`
+// likewise.  All other parameters mirror `emitTDMLoadStore` and must be
+// consistent across the group (mergeability enforces this for
+// shared-memory encoding, padding, and shapePerCTA; the caller provides
+// one shared `sharedLayout`/`encoding` for the group).
+void emitTDMLoadStoreMerged(
+    RewriterBase &rewriter, Location loc,
+    const LLVMTypeConverter *typeConverter,
+    ArrayRef<SmallVector<Value>> descPerMember,
+    ArrayRef<int64_t> blockShape, int numWarps, unsigned padInterval,
+    unsigned padAmount,
+    ArrayRef<SmallVector<Value>> offsetPerMember,
+    ArrayRef<SmallVector<Value>> dstPtrsPerMember,
+    ArrayRef<Value> predPerMember, Value multicastMask, Type elementType,
+    ArrayRef<Value> barrierPtrPerMember, bool isLoad,
+    const triton::LinearLayout &sharedLayout, Attribute encoding,
+    Value ctaId, ArrayRef<uint32_t> hintPerMember,
+    const TDMMergeGroupInfo &groupInfo);
 
 // Returns (warpsPerCTA, numTDMInstructions) for a given shared encoding.
 // For PartitionedSharedEncodingAttr, computes a partition-aligned warp

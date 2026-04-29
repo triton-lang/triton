@@ -760,11 +760,21 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     `K = popcount(hint)` warps to cover the block and marks the remaining
     warps as pred-off no-ops.  Absent ⇔ all warps participate.
 
-    v1 restriction: the hint must be a canonical prefix
-    `(1 << K) - 1` with `K` a power of two and `1 <= K <= num_warps`
-    (enforced by the verifier).  Non-prefix patterns are deferred; they
-    require extra care to avoid piece-mapping conflicts and to interact
-    safely with PartitionedSharedEncoding.
+    v1 restriction: the hint must be an *axis-aligned coset* in
+    warpId space, i.e. there exist log2(K) bit positions
+    `{p_0, ..., p_{log2K - 1}}` and an offset `i0` such that
+    the active set is `{ i0 XOR x : every x with bits subset of
+    {1<<p_0, ..., 1<<p_{log2K-1}} }`.  Equivalently: let
+    `S = { i : (hint >> i) & 1 == 1 }`, `i0 = lsb(hint)`,
+    `support = OR over s in S of (s XOR i0)`; the hint is legal iff
+    `popcount(support) == log2(K)` and `S` enumerates exactly the
+    `i0`-offset of every subset of `support`.  This admits canonical
+    prefixes (`0x0F`), shifted runs (`0xF0`), and stride-by-`2^j`
+    cosets (`0x55`, `0xAA`, `0xCC`).  Diagonal/parity sets like
+    `0x69 = {0,3,5,6}` are rejected for v1 (they are subspace cosets
+    but require a parity-of-AND active test instead of a single
+    AND-and-compare).  Non-coset sets like `0x1B = {0,1,3,4}` are
+    rejected entirely.
 
     With a PartitionedSharedEncoding the verifier additionally requires
     that the `K`-warp distribution's `warpsPerCTA[partitionDim]` be at
@@ -803,11 +813,12 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
 
   let extraClassDeclaration = [{
     // Validate a `warp_used_hint` value against the given num_warps.
-    // Checks v1 restrictions: canonical prefix `(1 << K) - 1`, K a
-    // power of two, 1 <= K <= num_warps.  Returns std::nullopt on
-    // success, or an error message string describing the failure.
-    // Shared between the op verifier and the Python front-end so both
-    // paths enforce the same invariants; encoding-specific rules (the
+    // Checks v1 restrictions: the active set must be an axis-aligned
+    // coset (each basis vector a power of two), K = popcount(hint) is
+    // a power of two with 1 <= K <= num_warps, and no bits are set
+    // beyond num_warps - 1.  Returns std::nullopt on success, or an
+    // error message string describing the failure.  Shared between the
+    // op verifier and any C++ caller; encoding-specific rules (the
     // PartitionedSharedEncoding constraint) live in verify() since they
     // need access to the op's result type.
     static ::std::optional<::std::string> validateWarpUsedHint(

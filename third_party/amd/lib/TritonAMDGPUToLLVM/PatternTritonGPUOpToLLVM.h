@@ -1,10 +1,12 @@
 #ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_PATTERNTRITONGPUOPTOLLVM_H_
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_PATTERNTRITONGPUOPTOLLVM_H_
 
+#include "TDMUtility.h"
 #include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "llvm/ADT/DenseMap.h"
 
 namespace mlir::triton::AMD {
 void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
@@ -31,11 +33,18 @@ void populateElementwiseOpToLLVMPatterns(
 // exception handling, etc.
 void adjustModeRegister(ModuleOp mod, const TargetInfo &targetInfo);
 
-void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                       const TargetInfo &targetInfo,
-                                       RewritePatternSet &patterns,
-                                       ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                       PatternBenefit benefit);
+// `tdmMergeGroups` carries the implicit-merge analysis result built once
+// per pass via `LLVM::AMD::computeTDMMergeGroups(module)`; the
+// AsyncTDMCopyGlobalToLocalOp conversion pattern queries it to decide
+// whether to emit a fused intrinsic.  The map MUST outlive the pattern
+// set; pass an empty map (e.g. a default-constructed reference) to
+// disable merging.
+void populateLoadStoreOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    const llvm::DenseMap<Operation *, mlir::LLVM::AMD::TDMMergeGroupInfo>
+        &tdmMergeGroups,
+    PatternBenefit benefit);
 
 void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
