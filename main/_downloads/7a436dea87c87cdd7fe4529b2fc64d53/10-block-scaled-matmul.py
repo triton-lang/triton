@@ -429,6 +429,9 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference
         b_scale_orig = b_scale_orig.to(torch.float8_e4m3fn)
         a_scale_cublas = a_scale_orig.contiguous().flatten()
         b_scale_cublas = b_scale_orig.contiguous().flatten()
+    else:
+        a_scale_cublas = None
+        b_scale_cublas = None
 
     return a_desc, a_scale_desc, b_desc, b_scale_desc, rep_m, rep_n, rep_k, configs, reference, a, b, a_scale_cublas, b_scale_cublas
 

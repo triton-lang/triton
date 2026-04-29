@@ -365,7 +365,7 @@ Interfaces: `TT_DescriptorLoadLikeOpInterface`, `TT_DescriptorOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
-| `x_offsets` | ranked tensor of 32-bit signless integer values |
+| `x_offsets` | ranked tensor of 16-bit signless integer or 32-bit signless integer values |
 | `y_offset` | 32-bit signless integer |
 
 #### Results:
@@ -485,7 +485,7 @@ Interfaces: `TT_DescriptorOpInterface`, `TT_DescriptorStoreLikeOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
-| `x_offsets` | ranked tensor of 32-bit signless integer values |
+| `x_offsets` | ranked tensor of 16-bit signless integer or 32-bit signless integer values |
 | `y_offset` | 32-bit signless integer |
 | `src` | ranked tensor of floating-point or integer or ptr values |
 

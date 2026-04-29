@@ -549,6 +549,9 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
         <span class="n">b_scale_orig</span> <span class="o">=</span> <span class="n">b_scale_orig</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span><span class="p">)</span>
         <span class="n">a_scale_cublas</span> <span class="o">=</span> <span class="n">a_scale_orig</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
         <span class="n">b_scale_cublas</span> <span class="o">=</span> <span class="n">b_scale_orig</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">a_scale_cublas</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">b_scale_cublas</span> <span class="o">=</span> <span class="kc">None</span>
 
     <span class="k">return</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">a_scale_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">b_scale_desc</span><span class="p">,</span> <span class="n">rep_m</span><span class="p">,</span> <span class="n">rep_n</span><span class="p">,</span> <span class="n">rep_k</span><span class="p">,</span> <span class="n">configs</span><span class="p">,</span> <span class="n">reference</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">a_scale_cublas</span><span class="p">,</span> <span class="n">b_scale_cublas</span>
 
