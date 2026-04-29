@@ -462,7 +462,8 @@ def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
 }
 
 def TTG_LocalAtomicScatterAddOp : TTG_Op<"local_atomic_scatter_add", [
-  TypesMatchWith<"result type matches values type", "result", "values", "$_self">,
+  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+  TypesMatchWith<"result type matches values type", "values", "result", "$_self">,
   OptionalTypesMatchWith<"mask type matches values type",
                  "values", "mask", "getI1SameShape($_self)">
 ]> {
