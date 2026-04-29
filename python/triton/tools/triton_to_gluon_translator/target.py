@@ -21,6 +21,10 @@ class TranslatorTarget(str, Enum):
     GFX1250 = "gfx1250"
     GFX942 = "gfx942"
     GFX950 = "gfx950"
+    GFX1100 = "gfx1100"
+    GFX1150 = "gfx1150"
+    GFX1200 = "gfx1200"
+    GFX1201 = "gfx1201"
 
     @classmethod
     def _missing_(cls, value: object) -> "TranslatorTarget | None":
@@ -37,6 +41,10 @@ class TranslatorTarget(str, Enum):
             TranslatorTarget.GFX942,
             TranslatorTarget.GFX950,
             TranslatorTarget.GFX1250,
+            TranslatorTarget.GFX1100,
+            TranslatorTarget.GFX1150,
+            TranslatorTarget.GFX1200,
+            TranslatorTarget.GFX1201,
         )
 
     @property

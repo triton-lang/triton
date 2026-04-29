@@ -8,6 +8,8 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.amd.gfx1250 import wmma as amd_wmma
 from triton.experimental.gluon.language.amd.gfx1250 import tdm as amd_tdm
 from triton.experimental.gluon.language.amd.cdna3 import mfma as amd_mfma
+from triton.experimental.gluon.language.amd.rdna4 import wmma as amd_wmma_rdna4
+from triton.experimental.gluon.language.amd.rdna3 import wmma as amd_wmma_rdna3
 from triton.language.target_info import current_target
 
 from triton.tools.triton_to_gluon_translator.common_helpers import *  # noqa: F401,F403
@@ -31,9 +33,21 @@ def _is_cdna(target=None):
 
 
 @gluon.constexpr_function
+def _is_rdna(target=None):
+    return target is not None and target.arch in ("gfx1200", "gfx1201", "gfx1100", "gfx1150")
+
+
+@gluon.constexpr_function
 def _cdna_version(target=None):
     """Returns 3 for gfx942, 4 for gfx950."""
     return 4 if target is not None and target.arch == "gfx950" else 3
+
+
+@gluon.constexpr_function
+def _rdna_version(target=None):
+    if target is None:
+        target = current_target()
+    return 4 if target is not None and target.arch.startswith("gfx12") else 3
 
 
 # ---- AMD WMMA layout helpers (gfx1250) ----
@@ -53,14 +67,29 @@ def compute_warp_bases(num_warps):
 
 @gluon.constexpr_function
 def get_wmma_layout(shape, num_warps):
+    target: ttgl.constexpr = current_target()
     warp_bases = compute_warp_bases(num_warps)
-    return ttgl.amd.AMDWMMALayout(3, True, warp_bases, [], [16, 16, 32])
+    is_1250: ttgl.constexpr = _is_gfx1250(target)
+
+    instr_k = 32 if is_1250 else 16
+    version = 3 if is_1250 else (2 if _rdna_version() == 4 else 1)
+    return ttgl.amd.AMDWMMALayout(version, True, warp_bases, [], [16, 16, instr_k])
 
 
 @gluon.constexpr_function
 def get_wmma_k_width(a_ty, b_ty):
     min_bitwidth = min(a_ty.element_ty.primitive_bitwidth, b_ty.element_ty.primitive_bitwidth)
     return max(128 // min_bitwidth, 1)
+
+
+@gluon.constexpr_function
+def get_wmma_op():
+    target: ttgl.constexpr = current_target()
+    if _is_gfx1250(target):
+        return amd_wmma
+    elif _rdna_version(target) == 4:
+        return amd_wmma_rdna4
+    return amd_wmma_rdna3
 
 
 # ---- AMD MFMA layout helpers (cdna3/cdna4) ----
@@ -114,7 +143,7 @@ def tl_dot_wmma(a, b, acc, out_dtype):
     else:
         accumulator = ttgl.zeros([M, N], out_dtype, layout=wmma_layout)
 
-    result = amd_wmma(a, b, accumulator)
+    result = get_wmma_op()(a, b, accumulator)
 
     if acc is not None:
         ret_layout: ttgl.constexpr = acc.type.layout
@@ -168,7 +197,7 @@ def tl_dot(
     out_dtype=ttgl.float32,
 ):
     target: ttgl.constexpr = current_target()
-    if _is_gfx1250(target):
+    if _is_gfx1250(target) or _is_rdna(target):
         return tl_dot_wmma(a, b, acc, out_dtype)
     elif _is_cdna(target):
         return tl_dot_mfma(a, b, acc, out_dtype)
@@ -251,6 +280,16 @@ def tl_obj_load_amd(desc, offsets):
 
 
 @gluon.jit
+def tl_obj_load_amd_rdna(obj, offsets):
+    data = obj.load(offsets)
+    vec: ttgl.constexpr = max(128 // data.type.element_ty.primitive_bitwidth, 1)
+    smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=vec, per_phase=1, max_phase=8, order=[1, 0])
+    smem = ttgl.allocate_shared_memory(data.type.element_ty, list(data.type.shape), smem_layout, data)
+    ret_layout: ttgl.constexpr = default_blocked_layout(list(data.type.shape), ttgl.num_warps())
+    return smem.load(ret_layout)
+
+
+@gluon.jit
 def tl_obj_store_amd(desc, offsets, value):
     smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
     amd_tdm.async_store(desc, offsets, smem)
@@ -273,6 +312,8 @@ def tl_obj_load(obj, offsets):
         return tl_obj_load_amd(obj.desc, offsets)
     elif isinstance(obj, amd_tdm.tensor_descriptor):
         return tl_obj_load_amd(obj, offsets)
+    elif _is_rdna(current_target()):
+        return tl_obj_load_amd_rdna(obj, offsets)
     else:
         return obj.load(offsets)
 
