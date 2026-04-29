@@ -37,6 +37,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"
 
 #define GET_TYPEDEF_CLASSES
