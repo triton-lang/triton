@@ -32,11 +32,10 @@ struct BufferIndexExpr;
 ///        select(cmpi slt(base + 1, N), base + 1, 0)
 ///      only when -1 <= base < N is proven.
 ///
-/// This is a per-function analysis: it owns dominance information for bounded
-/// index proofs and interns expressions whose pointers are stored on
+/// This is a per-function analysis: it owns dominance information for
+/// backedge detection and interns expressions whose pointers are stored on
 /// `AllocationSlice`. In scf form it checks the `scf.for` iter_arg init/yield
-/// pair; in cf form it checks incoming block-argument operands and uses
-/// dominance to distinguish loop backedges from non-backedge initial values.
+/// pair; in cf form it checks incoming block-argument operands directly.
 ///
 /// Unknown arithmetic, dynamic or non-positive moduli, nested moduli, different
 /// SSA bases, and loop-carried slices whose index was invalidated all fail the

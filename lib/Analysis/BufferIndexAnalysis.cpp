@@ -1,5 +1,4 @@
 #include "triton/Analysis/BufferIndexAnalysis.h"
-#include "triton/Analysis/Membar.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -59,47 +58,37 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue,
                                    const DominanceInfo &dominanceInfo);
 
 bool isCFBlockArgProvablyBounded(BlockArgument blockArg, int64_t modulus,
-                                 arith::SelectOp selectOp,
-                                 const DominanceInfo &dominanceInfo) {
-  // For cf-form loops, the loop-carried value is a block argument. Check the
-  // incoming operand for that argument on each predecessor edge.
+                                 arith::SelectOp selectOp) {
+  // For cf-form loops, the loop-carried value is a block argument. Each
+  // incoming value must be either an in-range initial value or the matched
+  // select that advances the counter.
   Block *header = blockArg.getOwner();
   unsigned argIdx = blockArg.getArgNumber();
-  bool sawIncoming = false;
+  // Entry block arguments have no incoming operands to prove the bound.
+  if (header->pred_empty())
+    return false;
 
-  for (Block *pred : header->getPredecessors()) {
+  for (auto predIt = header->pred_begin(), e = header->pred_end(); predIt != e;
+       ++predIt) {
+    Block *pred = *predIt;
     auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
     if (!branch)
       return false;
 
-    bool foundSuccessor = false;
-    for (auto [succIdx, successor] : llvm::enumerate(branch->getSuccessors())) {
-      if (successor != header)
-        continue;
+    auto operands = branch.getSuccessorOperands(predIt.getSuccessorIndex());
+    if (argIdx >= operands.size())
+      return false;
+    Value incoming = operands[argIdx];
 
-      auto operands = branch.getSuccessorOperands(succIdx);
-      if (argIdx >= operands.size())
-        return false;
-      Value incoming = operands[argIdx];
-      bool isBackedge = dominanceInfo.dominates(header, pred);
-      if (isBackedge) {
-        if (incoming != selectOp.getResult())
-          return false;
-      } else {
-        auto c = getConstantIntValue(incoming);
-        if (!c || *c < -1 || *c >= modulus)
-          return false;
-      }
+    if (incoming == selectOp.getResult())
+      continue;
 
-      foundSuccessor = true;
-      sawIncoming = true;
-    }
-
-    if (!foundSuccessor)
+    auto c = getConstantIntValue(incoming);
+    if (!c || *c < -1 || *c >= modulus)
       return false;
   }
 
-  return sawIncoming;
+  return true;
 }
 
 /// Verify that `base` is provably bounded by -1 <= base < N so that
@@ -109,14 +98,12 @@ bool isCFBlockArgProvablyBounded(BlockArgument blockArg, int64_t modulus,
 /// diverge and the match would be unsound.
 ///
 /// Constants are checked directly. For loop-carried counters we prove the
-/// bound inductively: the initial value (scf.for init or non-backedge cf
-/// operand) must satisfy -1 <= init < N, and the value flowing in along the
-/// backedge must be the select itself. Given -1 <= base < N we have
-/// 0 <= base + 1 <= N, and the select maps N to 0 and otherwise returns
-/// base + 1, so the next value satisfies 0 <= next < N.
+/// bound inductively: initial values must satisfy -1 <= init < N, and
+/// recurrent incoming values must be the select itself. Given -1 <= base < N
+/// we have 0 <= base + 1 <= N, and the select maps N to 0 and otherwise
+/// returns base + 1, so the next value satisfies 0 <= next < N.
 bool isBaseProvablyBounded(Value base, int64_t modulus,
-                           arith::SelectOp selectOp,
-                           const DominanceInfo &dominanceInfo) {
+                           arith::SelectOp selectOp) {
   assert(modulus > 0);
 
   if (auto c = getConstantIntValue(base))
@@ -142,8 +129,7 @@ bool isBaseProvablyBounded(Value base, int64_t modulus,
     return yieldOp.getOperand(iterIdx) == selectOp.getResult();
   }
 
-  return isCFBlockArgProvablyBounded(blockArg, modulus, selectOp,
-                                     dominanceInfo);
+  return isCFBlockArgProvablyBounded(blockArg, modulus, selectOp);
 }
 
 /// Match the one-step modular wrap the pipeliner emits on its iter_arg:
@@ -195,7 +181,7 @@ matchModuloPattern(arith::SelectOp selectOp,
     return std::nullopt;
 
   // The (base + 1) % N rewrite is only valid for -1 <= base < N.
-  if (!isBaseProvablyBounded(base, *mod, selectOp, dominanceInfo))
+  if (!isBaseProvablyBounded(base, *mod, selectOp))
     return std::nullopt;
 
   auto baseExpr = analyzeBufferIndex(base, dominanceInfo);
