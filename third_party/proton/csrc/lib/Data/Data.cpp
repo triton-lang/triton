@@ -1,4 +1,5 @@
 #include "Data/Data.h"
+#include "Utility/Errors.h"
 #include "Utility/String.h"
 
 #include <fstream>
@@ -173,7 +174,7 @@ OutputFormat parseOutputFormat(const std::string &outputFormat) {
   } else if (toLower(outputFormat) == "chrome_trace") {
     return OutputFormat::ChromeTrace;
   } else {
-    throw std::runtime_error("Unknown output format: " + outputFormat);
+    throw makeInvalidArgument("Unknown output format: " + outputFormat);
   }
 }
 
@@ -185,8 +186,8 @@ const std::string outputFormatToString(OutputFormat outputFormat) {
   } else if (outputFormat == OutputFormat::ChromeTrace) {
     return "chrome_trace";
   }
-  throw std::runtime_error("Unknown output format: " +
-                           std::to_string(static_cast<int>(outputFormat)));
+  throw makeInvalidArgument("Unknown output format: " +
+                            std::to_string(static_cast<int>(outputFormat)));
 }
 
 } // namespace proton

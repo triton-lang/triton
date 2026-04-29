@@ -1,6 +1,7 @@
 #include "Data/TraceData.h"
 #include "Profiler/Graph.h"
 #include "TraceDataIO/TraceWriter.h"
+#include "Utility/Errors.h"
 #include "Utility/MsgPackWriter.h"
 #include "nlohmann/json.hpp"
 
@@ -122,7 +123,7 @@ public:
     std::vector<Context> contexts;
     auto it = traceContextMap.find(contextId);
     if (it == traceContextMap.end()) {
-      throw std::runtime_error("Context not found");
+      throw makeOutOfRange("Context not found");
     }
     std::reference_wrapper<TraceContext> context = it->second;
     contexts.push_back(context.get());
@@ -146,7 +147,7 @@ public:
   Event &getEvent(size_t eventId) {
     auto it = traceEvents.find(eventId);
     if (it == traceEvents.end()) {
-      throw std::runtime_error("Event not found");
+      throw makeOutOfRange("Event not found");
     }
     return it->second;
   }
@@ -688,7 +689,7 @@ void reconstructGraphScopeEvents(
         }
       }
       if (!seenCaptureTag) {
-        throw std::runtime_error("Invalid graph contexts without capture tag");
+        throw makeLogicError("Invalid graph contexts without capture tag");
       }
       if (!isMetadataKernel) {
         graphContexts
@@ -877,7 +878,7 @@ void dumpCpuToGpuFlowEvents(
       auto launchEventIt =
           launchEventIdToCpuScopeEvent.find(event.launchEventId);
       if (launchEventIt == launchEventIdToCpuScopeEvent.end()) {
-        throw std::runtime_error(
+        throw makeOutOfRange(
             "Cannot find CPU scope event for kernel launch event id: " +
             std::to_string(event.launchEventId));
       }
@@ -1062,7 +1063,7 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
                             /*isGraphLinked=*/true);
         }
         if (hasKernelMetrics && hasCycleMetrics) {
-          throw std::runtime_error("only one active metric type is supported");
+          throw makeLogicError("only one active metric type is supported");
         }
       }
     }
@@ -1111,7 +1112,7 @@ void TraceData::doDump(std::ostream &os, OutputFormat outputFormat,
   if (outputFormat == OutputFormat::ChromeTrace) {
     dumpChromeTrace(os, phase);
   } else {
-    throw std::logic_error("Output format not supported");
+    throw makeInvalidArgument("Output format not supported");
   }
 }
 

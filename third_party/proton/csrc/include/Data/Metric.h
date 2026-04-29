@@ -2,6 +2,7 @@
 #define PROTON_DATA_METRIC_H_
 
 #include "Runtime/Runtime.h"
+#include "Utility/Errors.h"
 #include "Utility/String.h"
 #include "Utility/Traits.h"
 #include <atomic>
@@ -76,7 +77,7 @@ public:
   void updateValue(int valueId, MetricValueType value) {
     // Enforce type consistency: once a valueId has a type, it must not change.
     if (values[valueId].index() != value.index()) {
-      throw std::runtime_error(
+      throw makeInvalidArgument(
           std::string("Metric value type mismatch for valueId ") +
           std::to_string(valueId) + " (" + getValueName(valueId) + ")" +
           ": current=" + getTypeNameForIndex(values[valueId].index()) +
@@ -99,8 +100,8 @@ public:
                                    std::is_arithmetic_v<
                                        typename CurrentType::value_type>) {
                 if (currentValue.size() != otherValue.size()) {
-                  throw std::runtime_error(
-                      std::string("[PROTON] Vector metric size mismatch for "
+                  throw makeInvalidArgument(
+                      std::string("Vector metric size mismatch for "
                                   "valueId ") +
                       std::to_string(valueId) + " (" + getValueName(valueId) +
                       "): current=" + std::to_string(currentValue.size()) +
@@ -110,8 +111,8 @@ public:
                   currentValue[i] += otherValue[i];
                 }
               } else {
-                throw std::runtime_error(
-                    std::string("[PROTON] Metric aggregation not supported for "
+                throw makeLogicError(
+                    std::string("Metric aggregation not supported for "
                                 "valueId ") +
                     std::to_string(valueId) + " (" + getValueName(valueId) +
                     "): type=" + getTypeNameForIndex(values[valueId].index()));
@@ -475,8 +476,8 @@ public:
     std::shared_lock<std::shared_mutex> lock(metricDescriptorMutex);
     auto it = metricDescriptors.find(id);
     if (it == metricDescriptors.end()) {
-      throw std::runtime_error("[PROTON] MetricBuffer: unknown metric id: " +
-                               std::to_string(id));
+      throw makeOutOfRange("MetricBuffer: unknown metric id: " +
+                           std::to_string(id));
     }
     return it->second;
   }

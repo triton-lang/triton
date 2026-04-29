@@ -2,6 +2,7 @@
 
 #include "Data/Data.h"
 #include "Runtime/Runtime.h"
+#include "Utility/Errors.h"
 
 #include <cstring>
 #include <stdexcept>
@@ -81,8 +82,8 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
         break;
       }
       default:
-        throw std::runtime_error("[PROTON] Unsupported metric type index: " +
-                                 std::to_string(metricTypeIndex));
+        throw makeOutOfRange("Unsupported metric type index: " +
+                             std::to_string(metricTypeIndex));
         break;
       }
 

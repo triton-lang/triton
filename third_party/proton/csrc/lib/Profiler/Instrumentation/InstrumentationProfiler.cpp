@@ -3,10 +3,12 @@
 
 #include "Runtime/CudaRuntime.h"
 #include "Runtime/HipRuntime.h"
+#include "Utility/Errors.h"
 #include "Utility/Numeric.h"
 #include "Utility/String.h"
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <stdexcept>
@@ -47,7 +49,7 @@ void InstrumentationProfiler::doStop() {
 void InstrumentationProfiler::doSetMode(
     const std::vector<std::string> &modeAndOptions) {
   if (modeAndOptions.empty()) {
-    throw std::runtime_error("Mode cannot be empty");
+    throw makeInvalidArgument("Mode cannot be empty");
   }
   if (proton::toLower(modeAndOptions[0]) ==
       proton::toLower(DeviceTraits<DeviceType::CUDA>::name)) {
@@ -56,7 +58,7 @@ void InstrumentationProfiler::doSetMode(
              proton::toLower(DeviceTraits<DeviceType::HIP>::name)) {
     runtime = &HipRuntime::instance();
   } else {
-    throw std::runtime_error("Unknown device type: " + modeAndOptions[0]);
+    throw makeInvalidArgument("Unknown device type: " + modeAndOptions[0]);
   }
   for (size_t i = 1; i < modeAndOptions.size(); ++i) {
     auto delimiterPos = modeAndOptions[i].find('=');
@@ -71,6 +73,26 @@ void InstrumentationProfiler::doSetMode(
 }
 namespace {
 
+uint32_t parseUnitId(const std::string &unitId) {
+  auto trimmedId = proton::trim(unitId);
+  size_t parsedEnd = 0;
+  unsigned long id = 0;
+  try {
+    id = std::stoul(trimmedId, &parsedEnd);
+  } catch (const std::invalid_argument &) {
+    throw makeInvalidArgument("Invalid sampling warp id: " + trimmedId);
+  } catch (const std::out_of_range &) {
+    throw makeOutOfRange("Sampling warp id out of range: " + trimmedId);
+  }
+  if (parsedEnd != trimmedId.size()) {
+    throw makeInvalidArgument("Invalid sampling warp id: " + trimmedId);
+  }
+  if (id > std::numeric_limits<uint32_t>::max()) {
+    throw makeOutOfRange("Sampling warp id out of range: " + trimmedId);
+  }
+  return static_cast<uint32_t>(id);
+}
+
 std::vector<uint32_t>
 getUnitIdVector(const std::map<std::string, std::string> &modeOptions,
                 size_t totalUnits) {
@@ -82,8 +104,7 @@ getUnitIdVector(const std::map<std::string, std::string> &modeOptions,
       if (proton::trim(uintId).empty()) {
         continue;
       }
-      uint32_t id = std::stoi(uintId);
-      unitIdVector.push_back(id);
+      unitIdVector.push_back(parseUnitId(uintId));
     }
   }
   if (unitIdVector.empty()) {
@@ -105,7 +126,7 @@ InstrumentationProfiler::getParserConfig(uint64_t functionId,
       functionMetadata.at(functionId).getScratchMemorySize();
   if (!(modeOptions.count("granularity") == 0 ||
         modeOptions.at("granularity") == "GRANULARITY.WARP")) {
-    throw std::runtime_error("Only warp granularity is supported for now");
+    throw makeInvalidArgument("Only warp granularity is supported for now");
   }
   config->totalUnits = functionMetadata.at(functionId).getNumWarps();
   config->numBlocks = bufferSize / config->scratchMemSize;
@@ -114,7 +135,7 @@ InstrumentationProfiler::getParserConfig(uint64_t functionId,
   // Check if the uidVec is valid
   for (auto uid : config->uidVec)
     if (uid >= config->totalUnits) {
-      throw std::runtime_error(
+      throw makeOutOfRange(
           "Invalid sampling warp id: " + std::to_string(uid) + ". We have " +
           std::to_string(config->totalUnits) +
           " warps in total. Please check the proton sampling options.");
@@ -132,7 +153,7 @@ void InstrumentationProfiler::initFunctionMetadata(
     const std::vector<std::pair<size_t, size_t>> &scopeIdParentPairs,
     const std::string &metadataPath) {
   if (functionScopeIdNames.count(functionId)) {
-    throw std::runtime_error(
+    throw makeInvalidArgument(
         "Duplicate function id: " + std::to_string(functionId) +
         " for function " + functionName);
   }
@@ -141,7 +162,7 @@ void InstrumentationProfiler::initFunctionMetadata(
     auto scopeId = pair.first;
     auto scopeName = pair.second;
     if (functionScopeIdNames[functionId].count(scopeId)) {
-      throw std::runtime_error(
+      throw makeInvalidArgument(
           "Duplicate scope id: " + std::to_string(scopeId) + " for function " +
           functionName);
     }
@@ -198,7 +219,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   }
 
   if (size > MAX_HOST_BUFFER_SIZE) {
-    throw std::runtime_error(
+    throw makeLengthError(
         "Buffer size " + std::to_string(size) + " exceeds the limit " +
         std::to_string(MAX_HOST_BUFFER_SIZE) + ", not supported yet in proton");
   } else if (size > DEFAULT_HOST_BUFFER_SIZE) {
@@ -214,7 +235,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   auto circularLayoutConfig =
       std::dynamic_pointer_cast<CircularLayoutParserConfig>(config);
   if (!circularLayoutConfig) {
-    throw std::runtime_error(
+    throw makeLogicError(
         "Only circular layout parser is supported for now");
   }
 
