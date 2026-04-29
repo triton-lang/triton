@@ -1364,8 +1364,8 @@ static Value getScratchPtrImpl(Location loc, RewriterBase &rewriter,
     // currentCTA sets whether to rebase the linearId to the CTA id or
     // just keep the pointer to the whole tensor
     if (currentCTA)
-      linearId = b.add(linearId,
-                       zextToI64(targetInfo.getClusterCTAId(rewriter, loc)));
+      linearId =
+          b.add(linearId, zextToI64(targetInfo.getClusterCTAId(rewriter, loc)));
   }
 
   auto allocSize = allocSizeAttrVal.getValue().getZExtValue();
