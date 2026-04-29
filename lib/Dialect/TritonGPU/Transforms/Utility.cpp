@@ -1081,7 +1081,8 @@ bool isPureUnaryInlineAsm(Operation *op) {
 }
 
 int getNVIDIAComputeCapability(Operation *module) {
-  return ttng::TargetFeatures::fromOperation(module).getComputeCapability();
+  return ttng::TargetFeatures::fromModuleOp(cast<ModuleOp>(module))
+      .getComputeCapability();
 }
 
 std::optional<StringRef> getAMDArch(Operation *module) {

@@ -4,7 +4,6 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/ADT/StringRef.h"
 #include <cassert>
 
 namespace mlir::triton::nvidia_gpu {
@@ -14,37 +13,22 @@ public:
   explicit TargetFeatures(int computeCapability)
       : computeCapability(computeCapability) {}
 
-  static TargetFeatures fromTargetName(StringRef targetName) {
-    assert(targetName.starts_with(kTargetPrefix) &&
-           "expected target attribute to be prefixed with \"cuda:\"");
-
-    int computeCapability;
-    bool parseError =
-        targetName.drop_front(sizeof(kTargetPrefix) - 1)
-            .getAsInteger(10, computeCapability);
-    assert(!parseError &&
-           "invalid compute capability string in target attribute");
-
-    return TargetFeatures(computeCapability);
-  }
-
   static TargetFeatures fromModuleOp(ModuleOp moduleOp) {
-    assert(moduleOp && "expected a module operation");
-
     auto targetAttr =
         moduleOp->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
     assert(targetAttr && "Expected a target attribute on the module operation");
 
-    return fromTargetName(targetAttr.getValue());
-  }
+    StringRef targetName = targetAttr.getValue();
+    assert(targetName.starts_with(kTargetPrefix) &&
+           "expected target attribute to be prefixed with \"cuda:\"");
 
-  static TargetFeatures fromOperation(Operation *op) {
-    assert(op && "expected an operation");
+    int computeCapability;
+    bool parseError = targetName.drop_front(sizeof(kTargetPrefix) - 1)
+                          .getAsInteger(10, computeCapability);
+    assert(!parseError &&
+           "invalid compute capability string in target attribute");
 
-    if (auto moduleOp = dyn_cast<ModuleOp>(op))
-      return fromModuleOp(moduleOp);
-
-    return fromModuleOp(op->getParentOfType<ModuleOp>());
+    return TargetFeatures(computeCapability);
   }
 
   int getComputeCapability() const { return computeCapability; }
