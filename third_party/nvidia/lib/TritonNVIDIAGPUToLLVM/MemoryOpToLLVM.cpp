@@ -372,28 +372,11 @@ public:
 
     bool isI32Inc = info.valuesTy.getElementType().isInteger(32) &&
                     isConstI32OneTensor(op.getValues());
-
-    if (op.getResult().use_empty()) {
-      for (auto [i, ptrAndValue] :
-           llvm::enumerate(llvm::zip(info.ptrs, info.values))) {
-        auto [ptr, value] = ptrAndValue;
-        Value pred =
-            maybeAnd(rewriter, loc, info.threadPred,
-                     info.maskValues.empty() ? Value() : info.maskValues[i]);
-        if (isI32Inc) {
-          emitSharedInc(rewriter, loc, ptr, /*returnOld=*/false, pred);
-          continue;
-        }
-        if (failed(emitSharedAtomicAdd(rewriter, loc, info.llvmElemTy, ptr,
-                                       value, /*returnOld=*/false, pred)))
-          return failure();
-      }
-      rewriter.eraseOp(op);
-      return success();
-    }
+    bool returnOld = !op.getResult().use_empty();
 
     SmallVector<Value> results;
-    results.reserve(info.ptrs.size());
+    if (returnOld)
+      results.reserve(info.ptrs.size());
     for (auto [i, ptrAndValue] :
          llvm::enumerate(llvm::zip(info.ptrs, info.values))) {
       auto [ptr, value] = ptrAndValue;
@@ -401,15 +384,22 @@ public:
           maybeAnd(rewriter, loc, info.threadPred,
                    info.maskValues.empty() ? Value() : info.maskValues[i]);
       if (isI32Inc) {
-        results.push_back(emitSharedInc(rewriter, loc, ptr,
-                                        /*returnOld=*/true, pred));
+        Value result = emitSharedInc(rewriter, loc, ptr, returnOld, pred);
+        if (returnOld)
+          results.push_back(result);
         continue;
       }
       auto old = emitSharedAtomicAdd(rewriter, loc, info.llvmElemTy, ptr, value,
-                                     /*returnOld=*/true, pred);
+                                     returnOld, pred);
       if (failed(old))
         return failure();
-      results.push_back(*old);
+      if (returnOld)
+        results.push_back(*old);
+    }
+
+    if (!returnOld) {
+      rewriter.eraseOp(op);
+      return success();
     }
 
     if (!info.removeBroadcast.isIdentity())

@@ -913,9 +913,12 @@ LogicalResult LocalAtomicScatterAddOp::verify() {
   if (failed(verifySharedMemoryRank(*this, valuesTy, dstTy, "values")))
     return failure();
 
-  // Verify values and indices have the same shape/rank.
+  // Verify values, indices, and mask have the same shape/rank.
   if (valuesTy.getShape() != indicesTy.getShape()) {
     return emitError("values shape must match indices shape");
+  }
+  if (maskTy && valuesTy.getShape() != maskTy.getShape()) {
+    return emitError("values shape must match mask shape");
   }
 
   // Verify axis is valid

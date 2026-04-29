@@ -117,13 +117,15 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
     return elems * getBitwidth(srcTy) / 8;
   }
-  if (auto atomicScatter = dyn_cast<gpu::LocalAtomicScatterAddOp>(op)) {
-    auto smemShape = getRepShapeForAtomic(atomicScatter.getResult());
+  if (isa<gpu::LocalAtomicScatterAddOp, AtomicRMWOp, AtomicCASOp,
+          tti::ExperimentalGSanAtomicRMWOp, tti::ExperimentalGSanAtomicCASOp>(
+          op)) {
+    auto value = op->getOperand(0);
+    auto smemShape = getRepShapeForAtomic(op->getResult(0));
     auto elems = getNumScratchElements(smemShape);
     if (elems == 0)
       return 0;
-    auto elemTy = cast<RankedTensorType>(atomicScatter.getValues().getType())
-                      .getElementType();
+    auto elemTy = getElementTypeOrSelf(getPointeeType(value.getType()));
     return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
   }
   if (isa<AtomicRMWOp, AtomicCASOp, tti::ExperimentalGSanAtomicRMWOp,
