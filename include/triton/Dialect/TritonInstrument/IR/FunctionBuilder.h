@@ -229,6 +229,11 @@ public:
   void createCopyReadVisibilityCall(ImplicitLocOpBuilder &b, int sourceThread,
                                     uint64_t destMask, Value pred,
                                     MemType memType, Operation *insertPoint);
+  // publishClusterVisibility: after a non-relaxed cluster barrier, make
+  // synchronous facts visible to every CTA in the cluster.
+  void createPublishClusterVisibilityCall(ImplicitLocOpBuilder &b, Value pred,
+                                          MemType memType,
+                                          Operation *insertPoint);
   // stageAccessForCommit: mark the buffer as staged (value -1) in the
   // outstanding commit table for this thread.
   void createStageAccessForCommitCall(ImplicitLocOpBuilder &b, Value buf,

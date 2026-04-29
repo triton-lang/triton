@@ -412,6 +412,14 @@ private:
               nullptr, info->commitKind, MemType::SHARED_MEM, op);
         }
       }
+      if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
+        if (!clusterBarrier.getRelaxed()) {
+          b.setInsertionPointAfter(op);
+          for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM})
+            funcBuilder.createPublishClusterVisibilityCall(b, nullptr, memType,
+                                                           op);
+        }
+      }
 
       listener.maybeWrapWithCriticalSection(b, auxData, nullptr);
       b.setListener(nullptr);
