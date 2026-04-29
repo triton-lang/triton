@@ -73,26 +73,6 @@ void InstrumentationProfiler::doSetMode(
 }
 namespace {
 
-uint32_t parseUnitId(const std::string &unitId) {
-  auto trimmedId = proton::trim(unitId);
-  size_t parsedEnd = 0;
-  unsigned long id = 0;
-  try {
-    id = std::stoul(trimmedId, &parsedEnd);
-  } catch (const std::invalid_argument &) {
-    throw makeInvalidArgument("Invalid sampling warp id: " + trimmedId);
-  } catch (const std::out_of_range &) {
-    throw makeOutOfRange("Sampling warp id out of range: " + trimmedId);
-  }
-  if (parsedEnd != trimmedId.size()) {
-    throw makeInvalidArgument("Invalid sampling warp id: " + trimmedId);
-  }
-  if (id > std::numeric_limits<uint32_t>::max()) {
-    throw makeOutOfRange("Sampling warp id out of range: " + trimmedId);
-  }
-  return static_cast<uint32_t>(id);
-}
-
 std::vector<uint32_t>
 getUnitIdVector(const std::map<std::string, std::string> &modeOptions,
                 size_t totalUnits) {
@@ -104,7 +84,8 @@ getUnitIdVector(const std::map<std::string, std::string> &modeOptions,
       if (proton::trim(uintId).empty()) {
         continue;
       }
-      unitIdVector.push_back(parseUnitId(uintId));
+      uint32_t id = std::stoi(uintId);
+      unitIdVector.push_back(id);
     }
   }
   if (unitIdVector.empty()) {
