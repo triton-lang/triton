@@ -17,7 +17,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/SmallSet.h"
 
 namespace mlir {
@@ -1190,6 +1190,11 @@ bool supportMMA(triton::DotOp op, int version) {
     if (!(retShapePerCTA[rank - 2] % 64 == 0 &&
           retShapePerCTA[rank - 1] % 16 == 0))
       return false;
+    if (aElemTy.isF64() || bElemTy.isF64() ||
+        retType.getElementType().isF64()) {
+      // tcgen05.mma doesn't support F64.
+      return false;
+    }
     return true;
   }
   if (version == 3) {

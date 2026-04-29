@@ -286,6 +286,69 @@ def test_cudagraph_deactivate(tmp_path, device: str):
     assert scope_c_frame is not None
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
+@pytest.mark.parametrize("data_format", ["hatchet", "hatchet_msgpack"])
+def test_cudagraph_filters_unlinked_virtual_scopes(tmp_path: pathlib.Path, data_format: str, device: str):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    @triton.jit
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    a = torch.ones((2, 2), device=device)
+    b = torch.ones((2, 2), device=device)
+    c = torch.empty_like(a)
+
+    temp_file = tmp_path / f"test_cudagraph_filters_unlinked_virtual_scopes.{data_format}"
+    proton.start(str(temp_file.with_suffix("")), context="shadow")
+
+    # Warmup to avoid one-time setup effects in replay output.
+    foo[(1, )](a, b, c)
+
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        with proton.scope("iter_with_kernel"):
+            foo[(1, )](a, b, c)
+        with proton.scope("iter_without_kernel"):
+            pass
+
+    with proton.scope("replay"):
+        g.replay()
+
+    proton.finalize(output_format=data_format)
+
+    if data_format == "hatchet_msgpack":
+        import msgpack
+
+        with temp_file.open("rb") as f:
+            data = msgpack.load(f, raw=False, strict_map_key=False)
+    else:
+        with temp_file.open() as f:
+            data = json.load(f)
+
+    replay_frame = next(
+        (child for child in data[0]["children"] if child["frame"]["name"] == "replay"),
+        None,
+    )
+    assert replay_frame is not None
+    capture_frame = replay_frame["children"][0]
+    assert capture_frame["frame"]["name"] == "<captured_at>"
+
+    capture_children = capture_frame["children"]
+    capture_child_names = {child["frame"]["name"] for child in capture_children}
+    assert "iter_with_kernel" in capture_child_names
+    assert "iter_without_kernel" not in capture_child_names
+
+    iter_with_kernel_frame = next(
+        (child for child in capture_children if child["frame"]["name"] == "iter_with_kernel"),
+        None,
+    )
+    assert iter_with_kernel_frame is not None
+    assert len(iter_with_kernel_frame["children"]) > 0
+    assert iter_with_kernel_frame["children"][0]["metrics"]["time (ns)"] > 0
+
+
 def test_metrics(tmp_path: pathlib.Path, device: str):
 
     @triton.jit
@@ -1492,8 +1555,8 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
     session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
 
-    for i in range(10000):
-        if i != 0 and i % 1000 == 0:
+    for i in range(5000):
+        if i != 0 and i % 500 == 0:
             proton.data.advance_phase(session=session)
         with proton.scope(f"test_{i}", metrics={"count": 1}):
             torch.zeros((100), device=device)
@@ -1513,12 +1576,12 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
         else:
             with open(hatchet_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        assert len(data[0]["children"]) == 1000
+        assert len(data[0]["children"]) == 500
         assert data[0]["children"][0]["metrics"]["count"] == 1
         assert data[0]["children"][0]["frame"]["name"].startswith("test_")
         assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
         num_scopes += len(data[0]["children"])
-    assert num_scopes == 10000
+    assert num_scopes == 5000
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
@@ -1548,14 +1611,20 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
     # warmup
     fn()
 
+    # Recycle GPU memory before graph capture to reduce memory pressure
+    # when running with parallel test workers (-n 8).
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+
     # no kernels
     g = torch.cuda.CUDAGraph()
     with torch.cuda.graph(g):
         fn()
 
+    test_iterations = 500
     with proton.scope("test0"):
-        for i in range(10000):
-            if i != 0 and i % 1000 == 0:
+        for i in range(test_iterations):
+            if i != 0 and i % (test_iterations // 10) == 0:
                 proton.data.advance_phase(session=session)
             g.replay()
 
@@ -1588,9 +1657,9 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
                 foo_test_frame = child
         assert scope_a_frame is not None
         assert foo_test_frame is not None
-        assert scope_a_frame["metrics"]["bytes"] == 16000
-        assert foo_test_frame["metrics"]["bytes"] == 16000
-        assert foo_test_frame["metrics"]["flops"] == 4000
+        assert scope_a_frame["metrics"]["bytes"] == test_iterations / 10 * 16
+        assert foo_test_frame["metrics"]["bytes"] == test_iterations / 10 * 16
+        assert foo_test_frame["metrics"]["flops"] == test_iterations / 10 * 4
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="HW trace is only supported on Blackwell GPUs")

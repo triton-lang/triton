@@ -40,9 +40,18 @@ sys.path.insert(0, os.path.dirname(__file__))
 from python.build_helpers import get_base_dir, get_cmake_dir
 
 
-def is_git_repo():
-    """Return True if this file resides in a git repository"""
-    return (Path(__file__).parent / ".git").is_dir()
+def is_git_repo() -> bool:
+    """Return True if this file resides at the root of a git repository."""
+    expected_toplevel = Path(__file__).parent.resolve()
+
+    try:
+        stdout: str = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], cwd=expected_toplevel,
+                                              stderr=subprocess.DEVNULL).strip().decode('utf-8')
+    except subprocess.CalledProcessError:
+        return False
+    actual_toplevel = Path(stdout).resolve()
+
+    return actual_toplevel == expected_toplevel
 
 
 @dataclass

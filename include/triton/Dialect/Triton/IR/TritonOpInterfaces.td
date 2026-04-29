@@ -114,6 +114,14 @@ def TT_DescriptorStoreLikeOpInterface : OpInterface<"DescriptorStoreLikeOpInterf
   ];
 }
 
+def TT_DescriptorLoadLikeOpInterface : OpInterface<"DescriptorLoadLikeOpInterface", [TT_DescriptorOpInterface]> {
+  let description = [{
+    Common marker interface for operations that load from tensor descriptors.
+  }];
+
+  let cppNamespace = "::mlir::triton";
+}
+
 def PredicatedOpInterface : OpInterface<"PredicatedOpInterface"> {
   let description = [{
     Common interface for operations that carry a predicate or mask operand that

@@ -2,18 +2,18 @@ from triton.runtime.jit import constexpr_function
 from triton._C.libtriton.gluon_ir import get_amd_wmma_scale_layout as _get_wmma_scale_layout
 
 from ..._core import builtin, int8, uint8, int32, float8e4nv, tensor, _unwrap_if_constexpr
-from .._ops import _wmma, _verify_wmma, _mma_scaled
+from .._ops import _wmma, _verify_wmma, _mma_scaled, _scaled_upcast
 from .._layouts import AMDWMMALayout
 from ..cdna3 import buffer_load, buffer_store
-from ._layouts import PartitionedSharedLayout
+from ._layouts import PartitionedSharedLayout, make_partitioned_dot_layouts
 from . import tdm
 from . import async_copy
 from . import mbarrier
 from . import cluster
 
 __all__ = [
-    "async_copy", "tdm", "mbarrier", "cluster", "wmma", "wmma_scaled", "buffer_load", "buffer_store",
-    "get_wmma_scale_layout", "PartitionedSharedLayout"
+    "async_copy", "tdm", "mbarrier", "cluster", "wmma", "wmma_scaled", "scaled_upcast", "buffer_load", "buffer_store",
+    "get_wmma_scale_layout", "PartitionedSharedLayout", "make_partitioned_dot_layouts"
 ]
 
 
@@ -67,16 +67,19 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     _verify_wmma(3, a, b, acc)
     if a_format.value == "e2m1":
         wmma_layout = a.type.layout.parent
-        assert isinstance(wmma_layout, AMDWMMALayout) and wmma_layout.instr_shape == [16, 16, 64], \
-            "e2m1 format expects instr_shape to be [16, 16, 64]"
+        assert isinstance(wmma_layout, AMDWMMALayout) and wmma_layout.instr_shape in [[16, 16, 64], [32, 16, 64]], \
+            "e2m1 format expects instr_shape to be [16, 16, 64] or [32, 16, 64]"
     if b_format.value == "e2m1":
         wmma_layout = b.type.layout.parent
-        assert isinstance(wmma_layout, AMDWMMALayout) and wmma_layout.instr_shape == [16, 16, 64], \
-            "e2m1 format expects instr_shape to be [16, 16, 64]"
+        assert isinstance(wmma_layout, AMDWMMALayout) and wmma_layout.instr_shape in [[16, 16, 64], [32, 16, 64]], \
+            "e2m1 format expects instr_shape to be [16, 16, 64] or [32, 16, 64]"
+    acc_shapes = [[16, 16, 128]]
+    if a_format.value == "e2m1" and b_format.value == "e2m1":
+        acc_shapes.append([32, 16, 128])
 
     acc_layout = acc.type.layout
-    assert isinstance(acc_layout, AMDWMMALayout) and acc_layout.instr_shape == [16, 16, 128], \
-    "accumulator tensor's layout must be [16, 16, 128]"
+    assert isinstance(acc_layout, AMDWMMALayout) and acc_layout.instr_shape in acc_shapes, \
+        f"accumulator tensor's layout must be one of {acc_shapes}"
 
     assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
     assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
@@ -100,6 +103,25 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
             f"Unsupported dtype combination: {a_format.value}, {b_format.value}, {a_scale_format}, {b_scale_format}."
 
     return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_wmma_scale_layout, _semantic)
+
+
+@builtin
+def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
+    """
+    Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the
+    GFX1250 scaled-upcast op.
+
+    The scale tensor must use raw E8M0 payload in `int8` or `uint8`, and must
+    already have the expanded output shape and scaled-upcast result layout.
+    For fp4 inputs, that is the canonical unpacked layout implied by `src`
+    and `axis`. `elem_type` must be `fp16` or `bf16`. GFX1250 keeps those
+    bytes in the native `cvt.scale.pk8` payload form.
+    """
+    axis = _unwrap_if_constexpr(axis)
+    elem_type = _unwrap_if_constexpr(elem_type)
+    assert scale.dtype in (int8, uint8), \
+        f"Expected scale to use raw E8M0 payload in int8/uint8 but got {scale.dtype}"
+    return _scaled_upcast(src, scale, elem_type, axis, _semantic)
 
 
 def _get_wmma_scale_layout_impl(*args, **kwargs):

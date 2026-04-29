@@ -1,7 +1,7 @@
 #pragma once
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectRegistry.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include <memory>
 #include <string>
 

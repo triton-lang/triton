@@ -123,7 +123,7 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName);
+    auto isaFamily = triton::AMD::deduceISAFamily(gfxArch);
     patterns
         .add<AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp8Op>,
              AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp4Op>>(
