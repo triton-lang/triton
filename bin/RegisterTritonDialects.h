@@ -112,6 +112,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   // TritonMetalGPUToLLVM passes
   mlir::triton::registerConvertTritonMetalGPUToLLVM();
   // mlir::registerTritonMetalGPUAccelerateMatmul();
+  mlir::registerTritonMetalGPUInjectTensorStrideArgs();
   mlir::registerTritonMetalGPUAllocateSmemForSimdgroupMatmul();
 
   mlir::ub::registerConvertUBToLLVMInterface(registry);

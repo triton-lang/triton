@@ -88,6 +88,7 @@ class MetalBackend(BaseBackend):
         pm.enable_debug()
 
         # metal.passes.ttgpuir.add_accelerate_matmul(pm)
+        metal.passes.ttgpuir.add_inject_tensor_stride_args(pm)
         metal.passes.ttgpuir.add_allocate_smem_for_simdgroup_matmul(pm)
         pm.run(mod, "make_ttgir")
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()

@@ -20,6 +20,9 @@ void init_triton_metal_passes_ttgpuir(py::module &&m) {
   // m.def("add_accelerate_matmul", [](mlir::PassManager &pm) {
   //   pm.addPass(mlir::createTritonMetalGPUAccelerateMatmul());
   // });
+  m.def("add_inject_tensor_stride_args", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::createTritonMetalGPUInjectTensorStrideArgs());
+  });
   m.def("add_allocate_smem_for_simdgroup_matmul", [](mlir::PassManager &pm) {
     pm.addPass(mlir::createTritonMetalGPUAllocateSmemForSimdgroupMatmul());
   });

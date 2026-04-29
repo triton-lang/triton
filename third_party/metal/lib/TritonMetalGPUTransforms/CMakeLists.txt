@@ -1,6 +1,7 @@
 add_triton_library(TritonMetalGPUTransforms
   AccelerateMetalMatmul.cpp
   AllocateSmemForSimdgroupMatmul.cpp
+  InjectTensorStrideArgs.cpp
 
   DEPENDS
   TritonMetalGPUIR

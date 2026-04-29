@@ -10,6 +10,11 @@ include "mlir/Pass/PassBase.td"
 //                            "mlir::triton::gpu::TritonGPUDialect"];
 // }
 
+def TritonMetalGPUInjectTensorStrideArgs : Pass<"inject-tensor-stride-args", "mlir::ModuleOp"> {
+  let summary = "inject implicit stride pointer args after each tensor pointer arg in kernel functions";
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
 def TritonMetalGPUAllocateSmemForSimdgroupMatmul : Pass<"allocate-smem-for-simdgroup-matmul", "mlir::ModuleOp"> {
   let summary = "allocate shared memory for simdgroup matmul";
   let dependentDialects = ["mlir::triton::TritonDialect",
