@@ -33,7 +33,9 @@ public:
 
   int getComputeCapability() const { return computeCapability; }
 
-  bool supportClusterOps() const { return computeCapability >= 90; }
+  bool supportClusterOps() const {
+    return computeCapability >= 90 && computeCapability / 10 != 12;
+  }
 
   bool supportMaximumMinimum() const { return computeCapability >= 80; }
 

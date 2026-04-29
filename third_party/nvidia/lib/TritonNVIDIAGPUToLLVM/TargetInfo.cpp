@@ -493,9 +493,8 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     return false;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   bool useNanQualifier = false;
-  if (auto kind =
-          matchReduxKind(op, targetFeatures.getComputeCapability(),
-                         useNanQualifier)) {
+  if (auto kind = matchReduxKind(op, targetFeatures.getComputeCapability(),
+                                 useNanQualifier)) {
     assert(acc.size() == 1);
     Value mask = b.i32_val(0xFFFFFFFF);
     // Even though we currently don't use redux for partitioned reduction
