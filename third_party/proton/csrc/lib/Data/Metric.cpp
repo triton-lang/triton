@@ -48,15 +48,14 @@ MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
       auto &descriptor = metricDescriptors.at(nameIt->second);
       if (descriptor.typeIndex != typeIndex) {
         throw makeInvalidArgument(
-            "MetricBuffer: type mismatch for metric " + name + ": current=" +
-            getTypeNameForIndex(descriptor.typeIndex) +
+            "MetricBuffer: type mismatch for metric " + name +
+            ": current=" + getTypeNameForIndex(descriptor.typeIndex) +
             ", new=" + getTypeNameForIndex(typeIndex));
       }
       if (descriptor.size != size) {
         throw makeInvalidArgument(
             "MetricBuffer: size mismatch for metric " + name + ": current=" +
-            std::to_string(descriptor.size) +
-            ", new=" + std::to_string(size));
+            std::to_string(descriptor.size) + ", new=" + std::to_string(size));
       }
       return descriptor;
     }
@@ -70,14 +69,15 @@ MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
     auto &descriptor = metricDescriptors.at(nameIt->second);
     if (descriptor.typeIndex != typeIndex) {
       throw makeInvalidArgument(
-          "MetricBuffer: type mismatch for metric " + name + ": current=" +
-          getTypeNameForIndex(descriptor.typeIndex) +
+          "MetricBuffer: type mismatch for metric " + name +
+          ": current=" + getTypeNameForIndex(descriptor.typeIndex) +
           ", new=" + getTypeNameForIndex(typeIndex));
     }
     if (descriptor.size != size) {
-      throw makeInvalidArgument(
-          "MetricBuffer: size mismatch for metric " + name + ": current=" +
-          std::to_string(descriptor.size) + ", new=" + std::to_string(size));
+      throw makeInvalidArgument("MetricBuffer: size mismatch for metric " +
+                                name +
+                                ": current=" + std::to_string(descriptor.size) +
+                                ", new=" + std::to_string(size));
     }
     return descriptor;
   }

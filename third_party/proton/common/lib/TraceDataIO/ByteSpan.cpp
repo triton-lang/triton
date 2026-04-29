@@ -6,8 +6,7 @@ using namespace proton;
 ByteSpan::ByteSpan(const uint8_t *data, size_t size)
     : dataPtr(data), dataSize(size), pos(0) {
   if (data == nullptr && size > 0) {
-    throw makeInvalidArgument(
-        "Data pointer cannot be null for non-zero size");
+    throw makeInvalidArgument("Data pointer cannot be null for non-zero size");
   }
 }
 

@@ -186,9 +186,8 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
     const std::string key = modeAndOptions[1].substr(0, delimiterPos);
     const std::string value = modeAndOptions[1].substr(delimiterPos + 1);
     if (key != "format") {
-      throw makeInvalidArgument(profilerName +
-                                std::string(": unsupported option key: ") +
-                                key);
+      throw makeInvalidArgument(
+          profilerName + std::string(": unsupported option key: ") + key);
     }
     if (value != "hatchet_msgpack" && value != "chrome_trace" &&
         value != "hatchet") {

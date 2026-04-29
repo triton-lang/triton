@@ -235,8 +235,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   auto circularLayoutConfig =
       std::dynamic_pointer_cast<CircularLayoutParserConfig>(config);
   if (!circularLayoutConfig) {
-    throw makeLogicError(
-        "Only circular layout parser is supported for now");
+    throw makeLogicError("Only circular layout parser is supported for now");
   }
 
   int64_t timeShiftCost = 0;

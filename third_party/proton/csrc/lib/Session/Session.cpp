@@ -81,9 +81,8 @@ Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
   for (auto &[id, session] : sessions) {
     if (session->getProfiler() == profiler &&
         session->getProfiler()->getMode() != modeAndOptions) {
-      throw makeInvalidArgument(
-          "Cannot add a session with the same profiler "
-          "but a different mode than existing sessions");
+      throw makeInvalidArgument("Cannot add a session with the same profiler "
+                                "but a different mode than existing sessions");
     }
   }
   return profiler->setMode(modeAndOptions);

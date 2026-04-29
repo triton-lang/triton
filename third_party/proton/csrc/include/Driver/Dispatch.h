@@ -120,9 +120,8 @@ public:
 
   static void check(typename ExternLib::RetType ret, const char *functionName) {
     if (ret != ExternLib::success) {
-      throw makeRuntimeError("Failed to execute " +
-                             std::string(functionName) + " with error " +
-                             std::to_string(ret));
+      throw makeRuntimeError("Failed to execute " + std::string(functionName) +
+                             " with error " + std::to_string(ret));
     }
   }
 
