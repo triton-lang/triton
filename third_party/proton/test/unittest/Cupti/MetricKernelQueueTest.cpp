@@ -47,22 +47,38 @@ TEST(MetricKernelQueueTest, MatchesMetricGraphNodesOnlyWithQueuedEntries) {
   }
 
   {
-    SCOPED_TRACE("extra callback after receive queue is consumed is ignored");
-    const bool isMetricKernelLaunching = true;
+    SCOPED_TRACE("extra callback delivered before receive returns is ignored");
+    bool isMetricKernelLaunching = true;
     std::deque<size_t> metricKernelNumWordsQueue{2};
-    size_t metricKernelNumWords = 0;
+    size_t firstCallbackNumWords = 0;
+    size_t secondCallbackNumWords = 123;
+    bool firstCallbackIsMetricNode = false;
+    bool secondCallbackIsMetricNode = true;
 
-    EXPECT_TRUE(popMetricKernelNumWordsIfQueued(isMetricKernelLaunching,
-                                                metricKernelNumWordsQueue,
-                                                metricKernelNumWords));
-    EXPECT_EQ(metricKernelNumWords, 2);
-    EXPECT_TRUE(metricKernelNumWordsQueue.empty());
+    auto onGraphNodeCreated = [&](size_t &metricKernelNumWords) {
+      return popMetricKernelNumWordsIfQueued(isMetricKernelLaunching,
+                                             metricKernelNumWordsQueue,
+                                             metricKernelNumWords);
+    };
 
-    metricKernelNumWords = 123;
-    EXPECT_FALSE(popMetricKernelNumWordsIfQueued(isMetricKernelLaunching,
-                                                 metricKernelNumWordsQueue,
-                                                 metricKernelNumWords));
+    auto receive = [&]() {
+      // First callback: receive() launches the Proton metric-copy kernel, and
+      // CUDA graph capture reports the matching GRAPHNODE_CREATED callback.
+      firstCallbackIsMetricNode = onGraphNodeCreated(firstCallbackNumWords);
+
+      // Second callback: still under receive(), before the caller can reset
+      // isMetricKernelLaunching, CUPTI reports another GRAPHNODE_CREATED
+      // callback. There is no queued metric-copy entry left for this node.
+      secondCallbackIsMetricNode = onGraphNodeCreated(secondCallbackNumWords);
+    };
+
+    receive();
+    isMetricKernelLaunching = false;
+
+    EXPECT_TRUE(firstCallbackIsMetricNode);
+    EXPECT_EQ(firstCallbackNumWords, 2);
+    EXPECT_FALSE(secondCallbackIsMetricNode);
+    EXPECT_EQ(secondCallbackNumWords, 123);
     EXPECT_TRUE(metricKernelNumWordsQueue.empty());
-    EXPECT_EQ(metricKernelNumWords, 123);
   }
 }
