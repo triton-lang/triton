@@ -18,7 +18,6 @@ def _ensure_rocm_lib_env():
 
 
 _ensure_rocm_lib_env()
-del _ensure_rocm_lib_env
 
 from .scope import scope, cpu_timed_scope, enter_scope, exit_scope
 from .state import state, enter_state, exit_state, metadata_state

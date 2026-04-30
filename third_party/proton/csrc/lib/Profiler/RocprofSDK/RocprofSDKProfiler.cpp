@@ -609,10 +609,6 @@ int roctxTracerCallback(uint32_t /*domain*/, uint32_t operationId, void *data) {
 
 void registerRoctxCallback(bool enable) {
   void *roctxLib = dlopen("libroctx64.so", RTLD_NOLOAD | RTLD_NOW);
-  for (int v = 9; v >= 1 && !roctxLib; --v) {
-    auto versioned = std::string("libroctx64.so.") + std::to_string(v);
-    roctxLib = dlopen(versioned.c_str(), RTLD_NOLOAD | RTLD_NOW);
-  }
   if (!roctxLib)
     return;
   auto *fn = reinterpret_cast<RoctxRegisterTracerCallbackFn>(

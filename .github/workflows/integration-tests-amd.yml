@@ -214,9 +214,8 @@ jobs:
     needs: integration-tests-amd
     name: integration-tests-amd (gfx950-rocm712)
     runs-on: ["amd-gfx950"]
-    timeout-minutes: 45
+    timeout-minutes: 8
     env:
-      RUNNER_TYPE: gfx950-rocm712
       TRITON_BUILD_WITH_CCACHE: "true"
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
       TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
