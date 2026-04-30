@@ -2,7 +2,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include <optional>
@@ -54,8 +53,7 @@ std::optional<int64_t> getConstantIntValue(Value v) {
   return std::nullopt;
 }
 
-BufferIndexExpr analyzeBufferIndex(Value indexValue,
-                                   const DominanceInfo &dominanceInfo);
+BufferIndexExpr analyzeBufferIndex(Value indexValue);
 
 bool isCFBlockArgProvablyBounded(BlockArgument blockArg, int64_t modulus,
                                  arith::SelectOp selectOp) {
@@ -95,11 +93,11 @@ bool isCFBlockArgProvablyBounded(BlockArgument blockArg, int64_t modulus,
 /// rather than (base + 1) - N; outside that range the two expressions
 /// diverge and the match would be unsound.
 ///
-/// Constants are checked directly. For loop-carried counters we prove the
-/// bound inductively: initial values must satisfy -1 <= init < N, and
-/// recurrent incoming values must be the select itself. Given -1 <= base < N
-/// we have 0 <= base + 1 <= N, and the select maps N to 0 and otherwise
-/// returns base + 1, so the next value satisfies 0 <= next < N.
+/// Constants are checked directly. For cf-form loop-carried counters we prove
+/// the bound inductively: incoming values to the loop-header block argument
+/// must each be either an in-range constant or the matched select itself.
+/// Given -1 <= base < N we have 0 <= base + 1 <= N, and the select maps N to 0
+/// and otherwise returns base + 1, so the next value satisfies 0 <= next < N.
 bool isBaseProvablyBounded(Value base, int64_t modulus,
                            arith::SelectOp selectOp) {
   assert(modulus > 0);
@@ -111,22 +109,6 @@ bool isBaseProvablyBounded(Value base, int64_t modulus,
   if (!blockArg)
     return false;
 
-  auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp());
-  if (forOp && blockArg.getOwner() == forOp.getBody()) {
-    // Argument 0 is the induction variable; iter_args start at 1.
-    unsigned argIdx = blockArg.getArgNumber();
-    if (argIdx == 0)
-      return false;
-    unsigned iterIdx = argIdx - 1;
-
-    auto initC = getConstantIntValue(forOp.getInitArgs()[iterIdx]);
-    if (!initC || *initC < -1 || *initC >= modulus)
-      return false;
-
-    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-    return yieldOp.getOperand(iterIdx) == selectOp.getResult();
-  }
-
   return isCFBlockArgProvablyBounded(blockArg, modulus, selectOp);
 }
 
@@ -137,9 +119,7 @@ bool isBaseProvablyBounded(Value base, int64_t modulus,
 /// the wrap arm would need to be (base + 1) - N, not 0, so accepting the
 /// match unconditionally would be unsound. We require C == 1 and verify
 /// the range assumption via isBaseProvablyBounded.
-std::optional<BufferIndexExpr>
-matchModuloPattern(arith::SelectOp selectOp,
-                   const DominanceInfo &dominanceInfo) {
+std::optional<BufferIndexExpr> matchModuloPattern(arith::SelectOp selectOp) {
   auto cmp = selectOp.getCondition().getDefiningOp<arith::CmpIOp>();
   if (!cmp)
     return std::nullopt;
@@ -182,7 +162,7 @@ matchModuloPattern(arith::SelectOp selectOp,
   if (!isBaseProvablyBounded(base, *mod, selectOp))
     return std::nullopt;
 
-  auto baseExpr = analyzeBufferIndex(base, dominanceInfo);
+  auto baseExpr = analyzeBufferIndex(base);
   // Nested moduli ((x mod M) + 1) mod N don't reduce to (x + 1) mod N in
   // general; keep the full select as the expression root.
   if (baseExpr.modulus)
@@ -194,15 +174,14 @@ matchModuloPattern(arith::SelectOp selectOp,
 
 // Slot indices are assumed not to overflow signed integer arithmetic; use a
 // wider index type if the pipeline counter can reach the integer range.
-BufferIndexExpr analyzeBufferIndex(Value indexValue,
-                                   const DominanceInfo &dominanceInfo) {
+BufferIndexExpr analyzeBufferIndex(Value indexValue) {
   if (auto c = getConstantIntValue(indexValue))
     return BufferIndexExpr{nullptr, *c};
 
   if (auto addOp = indexValue.getDefiningOp<arith::AddIOp>()) {
     auto composeWithConstant = [&](Value nonConst,
                                    int64_t constant) -> BufferIndexExpr {
-      auto baseExpr = analyzeBufferIndex(nonConst, dominanceInfo);
+      auto baseExpr = analyzeBufferIndex(nonConst);
       // (x mod N) + C is not represented as (base, offset, mod); keep the
       // full addi as the expression root.
       if (baseExpr.modulus)
@@ -216,14 +195,14 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue,
   }
 
   if (auto selectOp = indexValue.getDefiningOp<arith::SelectOp>())
-    if (auto result = matchModuloPattern(selectOp, dominanceInfo))
+    if (auto result = matchModuloPattern(selectOp))
       return *result;
 
   // arith.remsi(x, N): strip the remainder and record N as the modulus.
   // N must be a positive compile-time constant.
   if (auto remOp = indexValue.getDefiningOp<arith::RemSIOp>()) {
     if (auto mod = getConstantIntValue(remOp.getRhs()); mod && *mod > 0) {
-      auto result = analyzeBufferIndex(remOp.getLhs(), dominanceInfo);
+      auto result = analyzeBufferIndex(remOp.getLhs());
       // Nested modulus: keep the full remsi as the expression root.
       if (result.modulus)
         return BufferIndexExpr{indexValue, 0};
@@ -298,23 +277,11 @@ void BufferIndexAnalysis::attachBufferIndex(AllocationSlice &slice,
   Value index = extractBufferIndex(value);
   if (!index)
     return;
-  slice.bufferIndexExpr = intern(analyzeBufferIndex(index, dominanceInfo));
+  slice.bufferIndexExpr = intern(analyzeBufferIndex(index));
 }
 
 bool BufferIndexAnalysis::isBackedgeSuccessor(Operation *terminator,
                                               Block *successor) const {
-  auto br = dyn_cast<RegionBranchTerminatorOpInterface>(terminator);
-  if (br && isa<RegionBranchOpInterface>(br->getParentOp())) {
-    Region *succRegion = successor->getParent();
-    if (succRegion == br->getParentOp()->getParentRegion())
-      return false;
-    // A successor region whose number is <= the terminator's region number
-    // denotes re-entry into the same or an earlier region: scf.for yield ->
-    // body (same region), scf.while after -> before.
-    return succRegion->getRegionNumber() <=
-           br->getParentRegion()->getRegionNumber();
-  }
-
   if (isa<BranchOpInterface>(terminator))
     return dominanceInfo.dominates(successor, terminator->getBlock());
   return false;

@@ -384,8 +384,7 @@ tt.func @disjoint_select_cmpi_iter_arg_cf(%cst: tensor<128x128xf16, #AL>, %ub: i
 }
 
 // CHECK-LABEL: disjoint_remsi_loop_carried_cf
-// Same next-iteration hazard as the generic loop-carried test, but after
-// scf-to-cf lowering:
+// Next-iteration hazard after scf-to-cf lowering:
 //   read_i  = phase_i % 3
 //   write_i = (phase_i + 1) % 3
 //   phase_{i+1} = phase_i + 1
@@ -419,9 +418,9 @@ tt.func @disjoint_remsi_loop_carried_cf(%cst: tensor<128x128xf16, #AL>, %ub: i32
 }
 
 // CHECK-LABEL: must_barrier_remsi_loop_carried_future_disjoint_cf
-// Same future-precision case as the generic test, but after scf-to-cf
-// lowering. The current analysis invalidates dynamic indices across the cf
-// backedge, so it still requires a conservative barrier before the read.
+// Future-precision case after scf-to-cf lowering. The current analysis
+// invalidates dynamic indices across the cf backedge, so it still requires a
+// conservative barrier before the read.
 tt.func @must_barrier_remsi_loop_carried_future_disjoint_cf(%cst: tensor<128x128xf16, #AL>, %ub: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32

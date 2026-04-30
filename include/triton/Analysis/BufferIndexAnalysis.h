@@ -32,13 +32,14 @@ struct BufferIndexExpr;
 ///        select(cmpi slt(base + 1, N), base + 1, 0)
 ///      only when -1 <= base < N is proven.
 ///
-/// This is a per-function analysis: it owns dominance information for
-/// backedge detection and interns expressions whose pointers are stored on
-/// `AllocationSlice`. In scf form it checks the `scf.for` iter_arg init/yield
-/// pair; in cf form it checks incoming block-argument operands directly.
+/// This is a per-function analysis. It owns dominance information used to
+/// detect cf-form loop backedges and interns the analyzed expressions whose
+/// pointers are stored on `AllocationSlice`. The select/cmpi recurrence base
+/// must be provably in `[-1, N)`, which is checked from the loop-header block
+/// argument's incoming operands.
 ///
 /// Unknown arithmetic, dynamic or non-positive moduli, nested moduli, different
-/// SSA bases, and loop-carried slices whose index was invalidated all fail the
+/// SSA bases, and slices carried across cf-form backedges all fail the
 /// disjointness proof and fall back to normal membar aliasing.
 ///
 /// The class owns and interns the analyzed expressions attached to
@@ -56,9 +57,8 @@ public:
   AllocationSlice makeSlice(Value value, Interval<size_t> allocationInterval,
                             Allocation::BufferId bufferId);
 
-  /// Returns true if `successor` is reached by a loop backedge from
-  /// `terminator`. Region-form loops are handled structurally; cf-form loops
-  /// use the standard dominance rule.
+  /// Returns true if `successor` is reached by a cf-form loop backedge from
+  /// `terminator`, using the standard dominance rule.
   bool isBackedgeSuccessor(Operation *terminator, Block *successor) const;
 
   /// Clears the buffer index of every slice in `info`, rebuilding both maps.
