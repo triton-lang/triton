@@ -82,7 +82,8 @@ def TTG_TensorMemoryEncodingAttr
     "unsigned":$blockN,
     "unsigned":$colStride,
     TTNG_CGALayoutRankTwoParam:$CGALayout,
-    DefaultValuedParameter<"bool", "false">:$twoCTAs
+    DefaultValuedParameter<"bool", "false">:$twoCTAs,
+    DefaultValuedParameter<"bool", "false">:$fp4Padded
   );
   let genVerifyDecl = 1;
   let assemblyFormat = "`<` struct(params) `>`";

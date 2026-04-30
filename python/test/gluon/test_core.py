@@ -2247,6 +2247,179 @@ def test_tcgen05_mma_scaled_minimal():
     assert "ttng.tc_gen5_mma_scaled" in ttgir
 
 
+@pytest.mark.parametrize("a_format, a_torch_dtype", [
+    ("e4m3", torch.float8_e4m3fn),
+    ("e5m2", torch.float8_e5m2),
+])
+@pytest.mark.parametrize("b_format, b_torch_dtype", [
+    ("e4m3", torch.float8_e4m3fn),
+    ("e5m2", torch.float8_e5m2),
+])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tcgen05_mma_scaled_fp8_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_dtype):
+    M = 128
+    N = 128
+    K = 128
+    threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
+
+    @gluon.jit
+    def kernel(out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, a, b, a_scale, b_scale,
+               A_FORMAT: ttgl.constexpr, B_FORMAT: ttgl.constexpr):
+        store_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [threads_per_warp, 1],
+                                                          [ttgl.num_warps(), 1], [1, 0])
+
+        a_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, K], col_stride=1)
+        a_tmem = allocate_tensor_memory(a.dtype.element_ty, [M, K], a_tmem_layout)
+        a_reg_layout: ttgl.constexpr = a_tmem.get_reg_layout()
+        a_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, a_reg_layout))[:, None]
+        a_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, a_reg_layout))[None, :]
+        a_tmem.store(ttgl.load(a + a_offs_m * K + a_offs_k))
+
+        b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, transposed=False,
+                                                          element_bitwidth=8, rank=2)
+        b_reg_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [ttgl.num_warps(), 1], [1, 0])
+        b_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(1, b_reg_layout))[:, None]
+        b_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, b_reg_layout))[None, :]
+        b_smem = ttgl.allocate_shared_memory(b.dtype.element_ty, [K, N], b_layout,
+                                             ttgl.load(b + b_offs_k * N + b_offs_n))
+
+        acc_layout: ttgl.constexpr = TensorMemoryLayout([M, N], col_stride=1)
+        acc_tmem = allocate_tensor_memory(ttgl.float32, [M, N], acc_layout)
+        acc_reg_layout: ttgl.constexpr = acc_tmem.get_reg_layout()
+        acc_tmem.store(ttgl.zeros([M, N], ttgl.float32, layout=acc_reg_layout))
+
+        scale_layout: ttgl.constexpr = TensorMemoryScalesLayout()
+        a_scale_tmem = allocate_tensor_memory(a_scale.dtype.element_ty, [M, K // 32], scale_layout)
+        b_scale_tmem = allocate_tensor_memory(b_scale.dtype.element_ty, [N, K // 32], scale_layout)
+        scale_layout_m: ttgl.constexpr = a_scale_tmem.get_reg_layout()
+        scale_layout_n: ttgl.constexpr = b_scale_tmem.get_reg_layout()
+        scale_offs_k_m = ttgl.arange(0, K // 32, layout=ttgl.SliceLayout(0, scale_layout_m))[None, :]
+        scale_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, scale_layout_m))[:, None]
+        scale_offs_k_n = ttgl.arange(0, K // 32, layout=ttgl.SliceLayout(0, scale_layout_n))[None, :]
+        scale_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, scale_layout_n))[:, None]
+        a_scale_tmem.store(ttgl.load(a_scale + scale_offs_m * (K // 32) + scale_offs_k_m))
+        b_scale_tmem.store(ttgl.load(b_scale + scale_offs_n * (K // 32) + scale_offs_k_n))
+
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+        tcgen05_mma_scaled(a_tmem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT, B_FORMAT,
+                           use_acc=False, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0)
+
+        out = acc_tmem.load()
+        offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, store_layout))[:, None]
+        offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, store_layout))[None, :]
+        ttgl.store(out_ptr + offs_m * N + offs_n, ttgl.convert_layout(out, store_layout))
+
+    out = torch.empty((M, N), dtype=torch.float32, device="cuda")
+    a = torch.randint(20, 40, (M, K), dtype=torch.uint8, device="cuda").view(a_torch_dtype)
+    b = torch.randint(20, 40, (K, N), dtype=torch.uint8, device="cuda").view(b_torch_dtype)
+    a_scale = torch.randint(64, 130, (M, K // 32), dtype=torch.uint8, device="cuda")
+    b_scale = torch.randint(64, 130, (N, K // 32), dtype=torch.uint8, device="cuda")
+    compiled = kernel[(1, )](out, M, N, K, a, b, a_scale, b_scale, a_format, b_format)
+
+    a_ref = a.to(torch.float32) * fp8e8m0_to_float32(a_scale).repeat_interleave(32, dim=1)
+    b_ref = b.to(torch.float32) * fp8e8m0_to_float32(b_scale).repeat_interleave(32, dim=1).T.contiguous()
+    torch.testing.assert_close(out, torch.matmul(a_ref, b_ref), atol=1e-6, rtol=1e-6)
+    assert "ttng.tc_gen5_mma_scaled" in compiled.asm["ttgir"]
+    assert "#ttng.tensor_memory" in compiled.asm["ttgir"]
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tcgen05_mma_scaled_dense_fp4_lhs_tmem():
+    M = 128
+    N = 128
+    K = 256
+    threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
+
+    @gluon.jit
+    def kernel(out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, a, b, a_scale, b_scale):
+        store_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [threads_per_warp, 1],
+                                                          [ttgl.num_warps(), 1], [1, 0])
+
+        a_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, K // 2], col_stride=1)
+        a_tmem = allocate_tensor_memory(ttgl.uint8, [M, K // 2], a_tmem_layout)
+        a_reg_layout: ttgl.constexpr = a_tmem.get_reg_layout()
+        a_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, a_reg_layout))[:, None]
+        a_offs_k = ttgl.arange(0, K // 2, layout=ttgl.SliceLayout(0, a_reg_layout))[None, :]
+        a_tmem.store(ttgl.load(a + a_offs_m * (K // 2) + a_offs_k))
+
+        b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([N, K // 2], ttgl.uint8)
+        b_reg_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [ttgl.num_warps(), 1], [1, 0])
+        b_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, b_reg_layout))[:, None]
+        b_offs_k = ttgl.arange(0, K // 2, layout=ttgl.SliceLayout(0, b_reg_layout))[None, :]
+        b_smem = ttgl.allocate_shared_memory(ttgl.uint8, [N, K // 2], b_layout,
+                                             ttgl.load(b + b_offs_n * (K // 2) + b_offs_k))
+
+        acc_layout: ttgl.constexpr = TensorMemoryLayout([M, N], col_stride=1)
+        acc_tmem = allocate_tensor_memory(ttgl.float32, [M, N], acc_layout)
+        acc_reg_layout: ttgl.constexpr = acc_tmem.get_reg_layout()
+        acc_tmem.store(ttgl.zeros([M, N], ttgl.float32, layout=acc_reg_layout))
+
+        scale_layout: ttgl.constexpr = TensorMemoryScalesLayout()
+        a_scale_tmem = allocate_tensor_memory(ttgl.uint8, [M, K // 32], scale_layout)
+        b_scale_tmem = allocate_tensor_memory(ttgl.uint8, [N, K // 32], scale_layout)
+        scale_layout_m: ttgl.constexpr = a_scale_tmem.get_reg_layout()
+        scale_layout_n: ttgl.constexpr = b_scale_tmem.get_reg_layout()
+        scale_offs_k_m = ttgl.arange(0, K // 32, layout=ttgl.SliceLayout(0, scale_layout_m))[None, :]
+        scale_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, scale_layout_m))[:, None]
+        scale_offs_k_n = ttgl.arange(0, K // 32, layout=ttgl.SliceLayout(0, scale_layout_n))[None, :]
+        scale_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, scale_layout_n))[:, None]
+        a_scale_tmem.store(ttgl.load(a_scale + scale_offs_m * (K // 32) + scale_offs_k_m))
+        b_scale_tmem.store(ttgl.load(b_scale + scale_offs_n * (K // 32) + scale_offs_k_n))
+
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+        tcgen05_mma_scaled(a_tmem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, "e2m1", "e2m1",
+                           use_acc=False, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0, deps=[b_smem])
+
+        out = acc_tmem.load()
+        offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, store_layout))[:, None]
+        offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, store_layout))[None, :]
+        ttgl.store(out_ptr + offs_m * N + offs_n, ttgl.convert_layout(out, store_layout))
+
+    torch.manual_seed(0)
+    a_scale = torch.full((M, K // 32), 127, dtype=torch.uint8, device="cuda")
+    b_scale = torch.full((N, K // 32), 127, dtype=torch.uint8, device="cuda")
+    out = torch.empty((M, N), dtype=torch.float32, device="cuda")
+
+    a_mx = MXFP4Tensor(size=(M, K), device="cuda").random()
+    b_mx = MXFP4Tensor(size=(N, K), device="cuda").random()
+    a = a_mx.to_packed_tensor(dim=1)
+    b = b_mx.to_packed_tensor(dim=1)
+    a_ref = a_mx.to(torch.float32)
+    b_ref = b_mx.to(torch.float32)
+
+    kernel[(1, )](out, M, N, K, a, b, a_scale, b_scale)
+    ref = a_ref @ b_ref.T
+    torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_fp4_padded_store_load_roundtrip():
+    M = 128
+    K_PACKED = 64
+    threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
+
+    @gluon.jit
+    def kernel(inp, out, M: ttgl.constexpr, K_PACKED: ttgl.constexpr):
+        layout: ttgl.constexpr = TensorMemoryLayout([M, K_PACKED], col_stride=1, fp4_padded=True)
+        tmem = allocate_tensor_memory(ttgl.uint8, [M, K_PACKED], layout)
+        reg_layout: ttgl.constexpr = tmem.get_reg_layout()
+        offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, reg_layout))[:, None]
+        offs_k = ttgl.arange(0, K_PACKED, layout=ttgl.SliceLayout(0, reg_layout))[None, :]
+        values = ttgl.load(inp + offs_m * K_PACKED + offs_k)
+        tmem.store(values)
+        loaded = tmem.load(reg_layout)
+        ttgl.store(out + offs_m * K_PACKED + offs_k, loaded)
+
+    inp = torch.randint(0, 16, (M, K_PACKED), dtype=torch.uint8, device="cuda")
+    out = torch.empty_like(inp)
+    kernel[(1, )](inp, out, M, K_PACKED)
+    torch.testing.assert_close(out, inp, atol=0, rtol=0)
+
+
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
 def test_coalesced_layout():
 

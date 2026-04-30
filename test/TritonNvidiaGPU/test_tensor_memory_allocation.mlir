@@ -271,7 +271,7 @@ tt.func @mma_lhs_tmem(
 
 // CHECK-LABEL: @mma_scaled_lhs_tmem
 tt.func @mma_scaled_lhs_tmem(
-  %b: !ttg.memdesc<64x64xf16, #shared1, #ttg.shared_memory>,
+  %b: !ttg.memdesc<64x64xf8E5M2, #shared1, #ttg.shared_memory>,
   %scale_a: !ttg.memdesc<128x8xf8E4M3FN, #tmem_scales, #ttng.tensor_memory>,
   %scale_b: !ttg.memdesc<256x8xf8E4M3FN, #tmem_scales, #ttng.tensor_memory>,
   %useAcc: i1,
@@ -281,11 +281,11 @@ tt.func @mma_scaled_lhs_tmem(
 ) {
   // CHECK-COUNT-2: ttng.tmem_alloc {{.*}} tensor_memory_row_offset = 0 : i32
   // CHECK-NOT: tensor_memory_row_offset
-  %a = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xf16, #tmem_f16, #ttng.tensor_memory, mutable>
+  %a = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xf8E5M2, #tmem_f16, #ttng.tensor_memory, mutable>
   %c = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xf32, #tmem_f32, #ttng.tensor_memory, mutable>
-  ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e2m1 rhs = e2m1, %barrier[%barrierPred] {is_async} :
-    !ttg.memdesc<128x64xf16, #tmem_f16, #ttng.tensor_memory, mutable>,
-    !ttg.memdesc<64x64xf16, #shared1, #ttg.shared_memory>,
+  ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e5m2 rhs = e5m2, %barrier[%barrierPred] {is_async} :
+    !ttg.memdesc<128x64xf8E5M2, #tmem_f16, #ttng.tensor_memory, mutable>,
+    !ttg.memdesc<64x64xf8E5M2, #shared1, #ttg.shared_memory>,
     !ttg.memdesc<128x64xf32, #tmem_f32, #ttng.tensor_memory, mutable>,
     !ttg.memdesc<128x8xf8E4M3FN, #tmem_scales, #ttng.tensor_memory>,
     !ttg.memdesc<256x8xf8E4M3FN, #tmem_scales, #ttng.tensor_memory>,

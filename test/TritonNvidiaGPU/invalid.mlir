@@ -1,5 +1,78 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+// expected-error @+1 {{fp4Padded tensor memory layout requires colStride 1 but got 2}}
+#bad_fp4_padded_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 2, fp4Padded = true>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  tt.func public @bad_fp4_padded_tmem_attr() {
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_fp4_dense = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#tmem_fp4_padded = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, fp4Padded = true>
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  tt.func public @dense_fp4_tmem_lhs_mixed_rhs_invalid(
+      %a: !ttg.memdesc<128x64xi8, #tmem_fp4_dense, #ttng.tensor_memory>,
+      %b: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %useAcc: i1,
+      %pred: i1) {
+    // expected-error @+1 {{mixed fp4 tensor memory LHS with fp8 RHS requires fp4_padded = true}}
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e2m1 rhs = e5m2 :
+       !ttg.memdesc<128x64xi8, #tmem_fp4_dense, #ttng.tensor_memory>,
+       !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>
+    tt.return
+  }
+
+  tt.func public @fp4_padded_tmem_lhs_fp8_storage_invalid(
+      %a: !ttg.memdesc<128x64xf8E5M2, #tmem_fp4_padded, #ttng.tensor_memory>,
+      %b: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %useAcc: i1,
+      %pred: i1) {
+    // expected-error @+1 {{fp4_padded tensor memory LHS requires i8 or u8 storage}}
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e2m1 rhs = e5m2 :
+       !ttg.memdesc<128x64xf8E5M2, #tmem_fp4_padded, #ttng.tensor_memory>,
+       !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>
+    tt.return
+  }
+
+  tt.func public @scaled_tmem_lhs_fp16_storage_invalid(
+      %a: !ttg.memdesc<128x64xf16, #tmem, #ttng.tensor_memory>,
+      %b: !ttg.memdesc<64x128xf16, #shared, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %useAcc: i1,
+      %pred: i1) {
+    // expected-error @+1 {{unsupported tensor memory LHS storage type for scaled MMA}}
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = fp16 rhs = fp16 :
+       !ttg.memdesc<128x64xf16, #tmem, #ttng.tensor_memory>,
+       !ttg.memdesc<64x128xf16, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>
+    tt.return
+  }
+}
+
+// -----
+
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @alloc_tensor_memory() {
