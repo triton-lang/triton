@@ -1461,14 +1461,27 @@ void emitTDMLoadStoreMerged(
     ArrayRef<SmallVector<Value>> offsetPerMember,
     ArrayRef<SmallVector<Value>> dstPtrsPerMember,
     ArrayRef<Value> predPerMember, Value multicastMask, Type elementType,
-    ArrayRef<Value> barrierPtrPerMember, bool isLoad,
-    const triton::LinearLayout &sharedLayout, Attribute encoding, Value ctaId,
-    ArrayRef<uint32_t> hintPerMember, const TDMMergeGroupInfo &groupInfo) {
+    bool isLoad, const triton::LinearLayout &sharedLayout, Attribute encoding,
+    Value ctaId, const TDMMergeGroupInfo &groupInfo) {
   size_t N = groupInfo.members.size();
   assert(N >= 2 && llvm::isPowerOf2_64(N) && "merge group size invariant");
   assert(descPerMember.size() == N && offsetPerMember.size() == N &&
-         dstPtrsPerMember.size() == N && predPerMember.size() == N &&
-         barrierPtrPerMember.size() == N && hintPerMember.size() == N);
+         dstPtrsPerMember.size() == N && predPerMember.size() == N);
+
+  // Pull each member's hint straight from the op attribute; the merge
+  // analysis guarantees every member carries a verifier-legal hint and
+  // no member carries an mbarrier.  Asserting both here keeps the
+  // analysis-vs-emit contract local and lets us drop the parallel
+  // hint/barrier ArrayRef parameters.
+  SmallVector<uint32_t, 4> hintPerMember(N);
+  for (size_t i = 0; i < N; ++i) {
+    auto memberOp =
+        cast<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(groupInfo.members[i]);
+    auto hintAttr = memberOp.getWarpUsedHintAttr();
+    assert(hintAttr && "merge member must carry a warp_used_hint");
+    assert(!memberOp.getBarrier() && "merge member must not carry an mbarrier");
+    hintPerMember[i] = static_cast<uint32_t>(hintAttr.getInt());
+  }
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   size_t numDims = blockShape.size();
@@ -1571,7 +1584,7 @@ void emitTDMLoadStoreMerged(
         SmallVector<Value>(offsetPerMember[i].begin(),
                            offsetPerMember[i].end()),
         dstPtrsPerMember[i], predPerMember[i], multicastMask,
-        barrierPtrPerMember[i], sharedLayout, ctaId, /*isStore=*/!isLoad,
+        /*barrierPtr=*/Value(), sharedLayout, ctaId, /*isStore=*/!isLoad,
         warpsPerCTA, numWarps, infoPerMember[i]);
     g0PerMember[i] = std::move(g0);
     g1PerMember[i] = std::move(g1);
@@ -1591,6 +1604,14 @@ void emitTDMLoadStoreMerged(
     selectorVal = b.or_(selectorVal, b.shl(bit, b.i32_val(bi)));
   }
 
+  // Pre-materialize `selectorVal == s` for every selector value so the
+  // per-slot `select` chain reuses N-1 cmp values across all 12 (2D)
+  // or 20 (3D-5D) descriptor slots, instead of rebuilding them
+  // O(num_slots) times and relying on downstream CSE to fold.
+  SmallVector<Value, 4> selectorEq(N);
+  for (size_t s = 0; s + 1 < N; ++s)
+    selectorEq[s] = b.icmp_eq(selectorVal, b.i32_val(s));
+
   auto selectSlot = [&](ArrayRef<SmallVector<Value>> perMember,
                         size_t slotIdx) -> Value {
     // Start from the last member's slot and chain `select(sel == m,
@@ -1598,11 +1619,8 @@ void emitTDMLoadStoreMerged(
     // produces a right-leaning chain that the compiler turns into N-1
     // s_cselect_b32 ops.
     Value acc = perMember[selValToMember[N - 1]][slotIdx];
-    for (size_t s = N - 1; s-- > 0;) {
-      Value cmp = b.icmp_eq(selectorVal, b.i32_val(s));
-      Value cand = perMember[selValToMember[s]][slotIdx];
-      acc = b.select(cmp, cand, acc);
-    }
+    for (size_t s = N - 1; s-- > 0;)
+      acc = b.select(selectorEq[s], perMember[selValToMember[s]][slotIdx], acc);
     return acc;
   };
 

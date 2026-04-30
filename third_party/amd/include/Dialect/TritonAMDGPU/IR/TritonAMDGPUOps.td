@@ -769,6 +769,15 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     Front-ends that accept a Python-side `0` should map it to "no
     attribute" before emitting the op.
 
+    Interaction with implicit op-merging (TDM->LLVM lowering): adjacent
+    hinted copies whose hints satisfy the disjoint/equal-K/axis-aligned-
+    union rules can be fused into a single hardware intrinsic.  An op
+    that *carries an mbarrier operand* is **always** lowered as a
+    singleton — the merge analysis filters it out and uses it as a
+    flush boundary for any in-flight candidate run.  See
+    `TDMUtility.h::computeTDMMergeGroups` for the full mergeability
+    contract.
+
     v1 restriction: the hint must be an *axis-aligned coset* in
     warpId space, i.e. there exist log2(K) bit positions
     `{p_0, ..., p_{log2K - 1}}` and an offset `i0` such that

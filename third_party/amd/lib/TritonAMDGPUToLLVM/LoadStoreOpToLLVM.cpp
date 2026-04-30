@@ -1252,10 +1252,14 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         triton::gpu::getShapePerCTA(encoding, tensorDescTy.getShape());
 
     if (inMergeGroup) {
-      // Emit a single fused intrinsic for the whole merge group.  We need
-      // each member's lowered descriptor / dst / pred / hint.  For the
-      // member currently being rewritten we use `adaptor`; for the others
-      // we fetch the remapped LLVM-side values from the conversion driver.
+      // Emit a single fused intrinsic for the whole merge group.  We
+      // need each member's lowered descriptor / dst / pred.  For the
+      // member currently being rewritten we use `adaptor`; for the
+      // others we fetch the remapped LLVM-side values from the
+      // conversion driver.  Per-member `warp_used_hint` is read inside
+      // `emitTDMLoadStoreMerged` directly off `group.members[i]`, and
+      // mergeability guarantees no member carries an mbarrier so we
+      // pass no per-member barrier array at all.
       const auto &group = mergeIt->second;
       size_t numMembers = group.members.size();
 
@@ -1263,8 +1267,6 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       SmallVector<SmallVector<Value>> offsetPerMember(numMembers);
       SmallVector<SmallVector<Value>> dstPtrsPerMember(numMembers);
       SmallVector<Value> predPerMember(numMembers);
-      SmallVector<Value> barrierPerMember(numMembers);
-      SmallVector<uint32_t> hintPerMember(numMembers);
 
       for (size_t i = 0; i < numMembers; ++i) {
         auto memberOp =
@@ -1294,21 +1296,13 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         predPerMember[i] = isCurrentMember
                                ? Value(adaptor.getPred())
                                : rewriter.getRemappedValue(memberOp.getPred());
-        // Merge analysis rejects members carrying mbarrier, so the
-        // per-member barrier is always null in this path.  We assert the
-        // invariant here as a safety net.
-        assert(!memberOp.getBarrier() &&
-               "merge member unexpectedly carries an mbarrier");
-        barrierPerMember[i] = Value();
-        hintPerMember[i] =
-            static_cast<uint32_t>(memberOp.getWarpUsedHintAttr().getInt());
       }
 
       mlir::LLVM::AMD::emitTDMLoadStoreMerged(
           rewriter, loc, getTypeConverter(), descPerMember, shapePerCTA,
           numWarps, padInterval, padAmount, offsetPerMember, dstPtrsPerMember,
-          predPerMember, multicastMask, elementType, barrierPerMember,
-          /*isLoad=*/true, sharedLayout, encoding, ctaId, hintPerMember, group);
+          predPerMember, multicastMask, elementType,
+          /*isLoad=*/true, sharedLayout, encoding, ctaId, group);
 
       for (size_t i = numMembers; i-- > 0;)
         rewriter.eraseOp(group.members[i]);

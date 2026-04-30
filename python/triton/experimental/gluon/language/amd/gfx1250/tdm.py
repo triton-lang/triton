@@ -222,7 +222,10 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
             block shape are *implicitly* fused into a single TDM intrinsic during
             lowering (no IR-visible artifact). When relying on this, size
             ``async_wait`` counts in terms of the post-merge intrinsic count
-            (one merged op contributes one outstanding TDM, not N).
+            (one merged op contributes one outstanding TDM, not N). Passing a
+            non-``None`` ``mbarrier`` opts the call out of merging: such loads
+            are always lowered as a singleton intrinsic and act as a flush
+            boundary for any in-flight merge candidate run.
     """
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
     pred = _semantic.to_tensor(pred)

@@ -150,6 +150,32 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 // first visited member emits a single fused intrinsic via
 // `emitTDMLoadStoreMerged` and erases the whole group.  Singletons (not in
 // the map) lower as today via `emitTDMLoadStore`.
+//
+// Mergeability rules (v1) — every clause is required:
+//   1. Each candidate member carries a verifier-legal `warp_used_hint`
+//      (an axis-aligned coset).  An op without a hint is *not* a
+//      candidate; it also acts as a side-effecting boundary that
+//      flushes any in-flight candidate run.
+//   2. *No member carries an `mbarrier` operand.*  An mbarrier-carrying
+//      TDM copy implies a hardware barrier semantic that the merged
+//      lowering does not encode; such ops are excluded from candidates
+//      and act as a flush boundary just like rule 1.
+//   3. Every member has the same active-warp count `K = popcount(hint)`,
+//      the per-member hints are pairwise disjoint, and their union is
+//      itself a verifier-legal axis-aligned coset.
+//   4. Group size `N` is a power of two with `N >= 2`.
+//   5. Members are consecutive in the same basic block, modulo
+//      memory-effect-free ops (arith/index math) which thread through.
+//      Any side-effecting non-TDM op (async_wait, barrier, memref ops,
+//      ...) flushes the run.
+//   6. Every member's *result* `MemDescType` is structurally equal
+//      (same shared-memory encoding, same shapePerCTA) and the SSA
+//      destination values are pairwise distinct.
+//
+// Front-ends that need a hardware barrier alongside a hinted partial
+// copy must therefore separate the two: one mbarrier-carrying TDM copy
+// (lowered as a singleton) bracketing a run of hint-only copies that
+// can fuse.
 struct TDMMergeGroupInfo {
   // Members in program order; size N >= 2, N a power of two.
   SmallVector<Operation *> members;
@@ -160,11 +186,8 @@ struct TDMMergeGroupInfo {
   WarpHintInfo unionInfo;
 };
 
-// Walk `mod` and identify all merge groups according to the mergeability
-// rules: axis-aligned closure of every member, pairwise disjoint hints,
-// equal active-warp count per member, union legal, N power of two, no
-// `mbarrier` operand, consecutive in program order, non-overlapping
-// destinations, same shared-memory encoding + same shapePerCTA.
+// Walk `mod` and identify all merge groups according to the rules
+// documented above.
 //
 // Returned map is keyed on op pointer; every op in a group maps to the
 // *same* `TDMMergeGroupInfo` instance via shared_ptr-style ownership
@@ -187,7 +210,11 @@ computeTDMMergeGroups(ModuleOp mod);
 // likewise.  All other parameters mirror `emitTDMLoadStore` and must be
 // consistent across the group (mergeability enforces this for
 // shared-memory encoding, padding, and shapePerCTA; the caller provides
-// one shared `sharedLayout`/`encoding` for the group).
+// one shared `sharedLayout`/`encoding` for the group).  Per-member
+// `warp_used_hint` values are read directly from `groupInfo.members`,
+// and per-member barrier pointers are *not* a parameter: mergeability
+// guarantees no member carries an mbarrier, so each `fillTDMDescriptor`
+// is invoked with a null barrier.
 void emitTDMLoadStoreMerged(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter,
@@ -196,9 +223,8 @@ void emitTDMLoadStoreMerged(
     ArrayRef<SmallVector<Value>> offsetPerMember,
     ArrayRef<SmallVector<Value>> dstPtrsPerMember,
     ArrayRef<Value> predPerMember, Value multicastMask, Type elementType,
-    ArrayRef<Value> barrierPtrPerMember, bool isLoad,
-    const triton::LinearLayout &sharedLayout, Attribute encoding, Value ctaId,
-    ArrayRef<uint32_t> hintPerMember, const TDMMergeGroupInfo &groupInfo);
+    bool isLoad, const triton::LinearLayout &sharedLayout, Attribute encoding,
+    Value ctaId, const TDMMergeGroupInfo &groupInfo);
 
 // Returns (warpsPerCTA, numTDMInstructions) for a given shared encoding.
 // For PartitionedSharedEncodingAttr, computes a partition-aligned warp
