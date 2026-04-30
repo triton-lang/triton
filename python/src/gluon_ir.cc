@@ -1047,15 +1047,16 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_tdm_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
-              Value result, Value pred, Value barrier) {
+              Value result, Value pred, Value barrier,
+              tt::CacheModifier cacheModifier) {
              self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(
-                 descPtr, indices, result, pred, barrier);
+                 descPtr, indices, result, pred, barrier, cacheModifier);
            })
       .def("create_async_tdm_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
-              Value src, Value barrier) {
-             self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
-                                                            src, barrier);
+              Value src, Value barrier, tt::CacheModifier cacheModifier) {
+             self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(
+                 descPtr, indices, src, barrier, cacheModifier);
            })
       .def("create_async_tdm_scatter",
            [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,

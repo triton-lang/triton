@@ -1021,12 +1021,12 @@ LogicalResult MemDescSubsliceOp::verify() {
 
   auto ctx = getContext();
   LinearLayout ll;
-  if (auto paddedEncoding = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
+  if (auto paddedEncoding = triton::gpu::getPaddedEncoding(srcEnc)) {
     if (paddedEncoding.getRank() < srcTy.getRank()) {
       return emitError("SubSlice of low rank PaddedSharedEncoding from higher "
                        "rank tensors is not supported yet");
     }
-    ll = paddedEncoding.getLinearComponent();
+    ll = triton::gpu::paddedLinearLayout(srcTy);
   } else {
     ll = triton::gpu::toLinearLayout(srcTy);
   }

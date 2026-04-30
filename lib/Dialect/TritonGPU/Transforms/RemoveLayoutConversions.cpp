@@ -1596,13 +1596,20 @@ public:
 
     // 5. Apply clean up patterns to remove dead convert and dead code generated
     // by the previous transformations.
-    RewritePatternSet cleanUpPatterns2(context);
-    scf::ForOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
-    scf::IfOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
-    ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
-    if (applyPatternsGreedily(m, std::move(cleanUpPatterns2)).failed()) {
+    // scf canonicalization is best effort and doesn't need to converge
+    RewritePatternSet convertCleanup(context);
+    ConvertLayoutOp::getCanonicalizationPatterns(convertCleanup, context);
+    if (applyPatternsGreedily(m, std::move(convertCleanup)).failed()) {
       signalPassFailure();
     }
+
+    RewritePatternSet scfCleanup(context);
+    scf::ForOp::getCanonicalizationPatterns(scfCleanup, context);
+    scf::IfOp::getCanonicalizationPatterns(scfCleanup, context);
+    if (applyPatternsGreedily(m, std::move(scfCleanup)).failed()) {
+      LLVM_DEBUG(DBGS() << "scf cleanup did not converge\n");
+    }
+
     LLVM_DEBUG({
       DBGS() << "Module after final cleanups:\n";
       m.dump();

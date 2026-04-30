@@ -3,8 +3,6 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
-#include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -12,7 +10,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
-#include <memory>
+#include <algorithm>
+#include <cassert>
 
 namespace mlir::triton::gpu {
 
@@ -107,7 +106,10 @@ public:
       return failure();
 
     MemDescType allocType = allocOp.getType();
-    auto allocEncoding = cast<NVMMASharedEncodingAttr>(allocType.getEncoding());
+    auto allocEncoding =
+        dyn_cast<NVMMASharedEncodingAttr>(allocType.getEncoding());
+    if (!allocEncoding)
+      return failure();
     RankedTensorType srcTy = trans.getSrc().getType();
 
     Dialect &dialect = allocEncoding.getDialect();
@@ -172,6 +174,120 @@ public:
                                          reshapeOp.getSrc());
     rewriter.replaceOpWithNewOp<MemDescReshapeOp>(allocOp, allocOp.getType(),
                                                   newAlloc);
+    return success();
+  }
+};
+
+// Rewrite
+//   tt.reshape / tt.trans -> local_alloc -> [memdesc views] -> mma
+// into
+//   local_alloc -> memdesc reshape / trans -> [memdesc views] -> mma
+//
+// The MMA operand layout is determined by the sink memdesc already feeding the
+// dot-like op. This pattern back-propagates that layout through the tensor
+// reshape/transpose chain, hoists local_alloc to the base tensor feeding that
+// view chain, and replays those tensor views as memdesc reshape/transpose
+// ops so the original local_alloc type is preserved.
+class RewriteMmaOperandViewsToMemDescForDotOp
+    : public OpInterfaceRewritePattern<triton::DotOpInterface> {
+public:
+  using OpInterfaceRewritePattern<
+      triton::DotOpInterface>::OpInterfaceRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::DotOpInterface dotOp,
+                                PatternRewriter &rewriter) const override {
+    if (!isa<triton::nvidia_gpu::TCGen5MMAOp,
+             triton::nvidia_gpu::TCGen5MMAScaledOp,
+             triton::nvidia_gpu::WarpGroupDotOp>(dotOp))
+      return failure();
+
+    bool changed = false;
+
+    if (rewriteOperand(dotOp.getA(), rewriter).succeeded())
+      changed = true;
+
+    if (rewriteOperand(dotOp.getB(), rewriter).succeeded())
+      changed = true;
+
+    return success(changed);
+  }
+
+private:
+  LogicalResult rewriteOperand(Value operand, PatternRewriter &rewriter) const {
+    auto operandTy = dyn_cast<MemDescType>(operand.getType());
+    if (!operandTy)
+      return failure();
+
+    // Restrict this rewrite to an operand which already uses a shared-linear
+    // encoding. Backward propagation through tensor reshape/trans is not
+    // encoding-stable for NVMMAShared.
+    if (!isa<SharedLinearEncodingAttr>(operandTy.getEncoding()))
+      return failure();
+
+    Value beforeTrailing = operand;
+    while (auto view = beforeTrailing.getDefiningOp()) {
+      if (auto reshape = dyn_cast<MemDescReshapeOp>(view)) {
+        beforeTrailing = reshape.getSrc();
+        continue;
+      }
+      if (auto trans = dyn_cast<MemDescTransOp>(view)) {
+        beforeTrailing = trans.getSrc();
+        continue;
+      }
+      break;
+    }
+
+    auto localAlloc = beforeTrailing.getDefiningOp<LocalAllocOp>();
+    if (!localAlloc || !localAlloc.getSrc())
+      return failure();
+
+    Value baseTensor = localAlloc.getSrc();
+    SmallVector<Operation *> tensorReplaySteps;
+    MemDescType baseMemTy = localAlloc.getType();
+    while (auto view = baseTensor.getDefiningOp()) {
+      if (auto reshape = dyn_cast<triton::ReshapeOp>(view)) {
+        MemDescType srcTy;
+        auto inferred = MemDescReshapeOp::inferReturnTypes(
+            getContext(), reshape.getLoc(), baseMemTy,
+            reshape.getSrc().getType().getShape(), srcTy);
+        assert(succeeded(inferred) && "backward memdesc reshape inference "
+                                      "must succeed");
+        (void)inferred;
+        baseMemTy = srcTy;
+      } else if (auto trans = dyn_cast<triton::TransOp>(view)) {
+        Attribute srcEnc = inferSrcEncoding(view, baseMemTy.getEncoding());
+        if (!srcEnc)
+          return failure();
+        baseMemTy = MemDescType::get(
+            trans.getSrc().getType().getShape(), baseMemTy.getElementType(),
+            srcEnc, baseMemTy.getMemorySpace(), baseMemTy.getMutableMemory());
+      } else {
+        break;
+      }
+      tensorReplaySteps.push_back(view);
+      baseTensor = view->getOperand(0);
+    }
+    if (tensorReplaySteps.empty())
+      return failure();
+
+    std::reverse(tensorReplaySteps.begin(), tensorReplaySteps.end());
+
+    PatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(localAlloc);
+
+    Value rewritten = LocalAllocOp::create(rewriter, localAlloc.getLoc(),
+                                           baseMemTy, baseTensor);
+    for (Operation *op : tensorReplaySteps) {
+      if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
+        rewritten = MemDescReshapeOp::create(rewriter, op->getLoc(), rewritten,
+                                             reshape.getType().getShape());
+      } else {
+        auto trans = cast<triton::TransOp>(op);
+        rewritten = MemDescTransOp::create(rewriter, op->getLoc(), rewritten,
+                                           trans.getOrder());
+      }
+    }
+    rewriter.replaceOp(localAlloc, rewritten);
     return success();
   }
 };
@@ -337,6 +453,7 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<SwizzleShmemConvert>(context);
     patterns.add<FuseTransMMAV3Plus, ReshapeMemDesc>(context);
+    patterns.add<RewriteMmaOperandViewsToMemDescForDotOp>(context);
     patterns.add<UseShmemForScales>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))

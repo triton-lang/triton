@@ -2,13 +2,14 @@
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFONVIDIA_H
 
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 
 namespace mlir::triton::NVIDIA {
 
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
   TargetInfo(int computeCapability, int ptxVersion)
-      : computeCapability(computeCapability), ptxVersion(ptxVersion) {}
+      : targetFeatures(computeCapability), ptxVersion(ptxVersion) {}
 
   bool supportMaximumMinimum() const override;
 
@@ -30,16 +31,20 @@ public:
                     std::optional<Value> ctaId, Type elemTy, Value pred,
                     Operation *localLoadOp = nullptr) const override;
 
-  bool supportLdMatrix() const override { return computeCapability >= 75; }
-  bool supportStMatrix() const override { return computeCapability >= 90; }
-  bool supportLdStMatrixB8() const override { return computeCapability >= 100; }
+  bool supportLdMatrix() const override {
+    return targetFeatures.supportLdMatrix();
+  }
+  bool supportStMatrix() const override {
+    return targetFeatures.supportStMatrix();
+  }
+  bool supportLdStMatrixB8() const override {
+    return targetFeatures.supportLdStMatrixB8();
+  }
   bool supportBitwidth16Elementwise() const override {
-    // Hopper (sm90) and newer.
-    return computeCapability >= 90;
+    return targetFeatures.supportBitwidth16Elementwise();
   }
   bool supportBitwidth32Elementwise() const override {
-    // Blackwell (sm100) and newer.
-    return computeCapability >= 100;
+    return targetFeatures.supportBitwidth32Elementwise();
   }
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
@@ -81,12 +86,14 @@ public:
   bool supportVectorizedAtomics() const override;
 
   int getPtxVersion() const { return ptxVersion; }
-  int getComputeCapability() const { return computeCapability; }
+  int getComputeCapability() const {
+    return targetFeatures.getComputeCapability();
+  }
 
   bool isCuda() const override { return true; }
 
 private:
-  int computeCapability;
+  triton::nvidia_gpu::TargetFeatures targetFeatures;
   int ptxVersion;
 };
 

@@ -1717,14 +1717,56 @@ def test_gather_layouts(axis, src_layout, index_layout, src_shape, idx_shape, de
 
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
                          [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
-def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
+@pytest.mark.parametrize("shared_layout_cfg", [
+    pytest.param(("swizzled", None, None, None), id="swizzled"),
+    pytest.param(("partitioned-swizzled", 0, 2, 1), id="partitioned-swizzled-dim0-p2-g1"),
+    pytest.param(("partitioned-swizzled", 0, 2, 2), id="partitioned-swizzled-dim0-p2-g2"),
+    pytest.param(("partitioned-swizzled", 0, 4, 1), id="partitioned-swizzled-dim0-p4-g1"),
+    pytest.param(("partitioned-swizzled", 1, 2, 1), id="partitioned-swizzled-dim1-p2-g1"),
+    pytest.param(("partitioned-swizzled", 1, 2, 2), id="partitioned-swizzled-dim1-p2-g2"),
+    pytest.param(("partitioned-swizzled", 1, 4, 1), id="partitioned-swizzled-dim1-p4-g1"),
+    pytest.param(("partitioned-padded", 0, 2, 1), id="partitioned-padded-dim0-p2-g1"),
+    pytest.param(("partitioned-padded", 0, 2, 2), id="partitioned-padded-dim0-p2-g2"),
+    pytest.param(("partitioned-padded", 0, 4, 1), id="partitioned-padded-dim0-p4-g1"),
+    pytest.param(("partitioned-padded", 1, 2, 1), id="partitioned-padded-dim1-p2-g1"),
+    pytest.param(("partitioned-padded", 1, 2, 2), id="partitioned-padded-dim1-p2-g2"),
+    pytest.param(("partitioned-padded", 1, 4, 1), id="partitioned-padded-dim1-p4-g1"),
+])
+def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, shared_layout_cfg, device):
     if M % M_tile_size != 0 or N % N_tile_size != 0:
         pytest.skip(f"Shape size ({M}, {N}) must be divisible by tile size ({M_tile_size}, {N_tile_size})")
+
+    layout_type, partition_dim, num_partitions, num_groups = shared_layout_cfg
+    if layout_type == "swizzled":
+        shared_layout = ttgl.SwizzledSharedLayout(vec=8, per_phase=1, max_phase=8, order=[1, 0])
+    else:
+        assert layout_type in ("partitioned-swizzled", "partitioned-padded")
+        if not is_hip():
+            pytest.skip("PartitionedSharedLayout is supported only on AMD backend")
+        if layout_type == "partitioned-swizzled":
+            inner_layout = ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=8, order=[1, 0])
+        else:
+            pad_interval, pad_amount = 16, 4
+            # Skip cases that would not fit in LDS on the current architecture.
+            elem_size = 2  # float16
+            padded_bytes = ((M * N * (pad_interval + pad_amount)) // pad_interval) * elem_size
+            if padded_bytes >= get_hip_lds_size():
+                pytest.skip(f"Partitioned-padded allocation ({padded_bytes} B) exceeds LDS ({get_hip_lds_size()} B)")
+            inner_layout = ttgl.PaddedSharedLayout.with_identity_for(
+                interval_padding_pairs=[[pad_interval, pad_amount]],
+                shape=[M, N],
+                order=[1, 0],
+            )
+        shared_layout = PartitionedSharedLayout(
+            num_partitions=num_partitions,
+            num_groups=num_groups,
+            partition_dim=partition_dim,
+            partition_layout=inner_layout,
+        )
 
     num_rows_per_warp = THREADS_PER_WARP // 4
     blocked_layout = ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[num_rows_per_warp, 4],
                                         warps_per_cta=[4, 1], order=[1, 0])
-    shared_layout = ttgl.SwizzledSharedLayout(vec=8, per_phase=1, max_phase=8, order=[1, 0])
 
     @gluon.jit
     def kernel(

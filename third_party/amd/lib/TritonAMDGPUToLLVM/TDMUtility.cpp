@@ -1018,8 +1018,8 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                       ArrayRef<Value> instrDstPtrs, Value pred,
                       Value multicastMask, Value barrier,
                       const triton::LinearLayout &instrSharedLayout,
-                      Value ctaId, bool isLoad,
-                      ArrayRef<unsigned> warpsPerCTA) {
+                      Value ctaId, bool isLoad, ArrayRef<unsigned> warpsPerCTA,
+                      int32_t auxBits) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
@@ -1041,7 +1041,7 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                                        : "llvm.amdgcn.tensor.store.from.lds";
     LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, intrinsicName, {},
-        {group0, group1, group2, group3, group4Zero, b.i32_val(0)});
+        {group0, group1, group2, group3, group4Zero, b.i32_val(auxBits)});
   } else {
     Value group0 = desc[0];
     Value group1 = desc[1];
@@ -1057,9 +1057,9 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
 
     const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
                                        : "llvm.amdgcn.tensor.store.from.lds";
-    LLVM::createLLVMIntrinsicCallOp(
-        rewriter, loc, intrinsicName, {},
-        {group0, group1, group2Zero, group3Zero, group4Zero, b.i32_val(0)});
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {},
+                                    {group0, group1, group2Zero, group3Zero,
+                                     group4Zero, b.i32_val(auxBits)});
   }
 }
 
@@ -1081,7 +1081,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value pred, Value multicastMask, Type elementType,
                       Value barrierPtr, bool isLoad,
                       const triton::LinearLayout &sharedLayout,
-                      Attribute encoding, Value ctaId) {
+                      Attribute encoding, Value ctaId, int32_t auxBits) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   size_t numDims = blockShape.size();
   assert(numDims <= 5);
@@ -1097,7 +1097,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
     emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
                      to_vector(blockShape), numWarps, padInterval, padAmount,
                      to_vector(offset), dstPtrs, pred, multicastMask,
-                     barrierPtr, sharedLayout, ctaId, isLoad, warpsPerCTA);
+                     barrierPtr, sharedLayout, ctaId, isLoad, warpsPerCTA,
+                     auxBits);
     return;
   }
 
@@ -1161,7 +1162,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
     emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
                      effectiveBlockShape, numWarps, padInterval, padAmount,
                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
-                     sliceLayout, ctaId, isLoad, warpsPerCTA);
+                     sliceLayout, ctaId, isLoad, warpsPerCTA, auxBits);
   }
 }
 
