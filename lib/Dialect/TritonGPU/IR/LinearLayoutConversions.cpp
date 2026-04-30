@@ -193,16 +193,15 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
   return LinearLayout({{S("offset"), bases2D}}, outDimNames);
 }
 
-LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
-                                       NVMMASharedEncodingAttr shared,
-                                       TMAMode mode, bool disableSwizzle) {
+static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
+    ArrayRef<int64_t> shape, NVMMASharedEncodingAttr shared,
+    ArrayRef<int64_t> tmaShape, bool disableSwizzle, bool emitErrors) {
+  if (!llvm::all_of(tmaShape, llvm::isPowerOf2_64))
+    return failure();
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   auto shapePerCTA = getShapePerCTA(shared, shape);
   auto kOffset = S("offset");
-  auto tmaShape =
-      triton::nvidia_gpu::getTMABlockShape(shared, shapePerCTA,
-                                           /*packedSize=*/true, mode);
   if (shared.getSwizzlingByteWidth() == 0) {
     auto outDimNames = standardOutDimNames(ctx, rank);
     LinearLayout layout = LinearLayout::identity1D(tmaShape[rank - 1], kOffset,
@@ -234,12 +233,14 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
   int packingFactor = shared.getFp4Padded() ? 2 : 1;
   if (collapsedTmaShape[1] * packingFactor < tileCols ||
       collapsedTmaShape[0] < tileRows) {
-    llvm::errs() << "Illegal shared layout; expected collapsed shapePerCTA to "
-                    "be at least ["
-                 << tileRows << ", " << (tileCols / packingFactor)
-                 << "], collapsedTmaShape: [" << collapsedTmaShape[0] << ", "
-                 << collapsedTmaShape[1] << "]\n";
-    llvm::report_fatal_error("Illegal shared layout");
+    if (emitErrors) {
+      llvm::errs() << "Illegal shared layout; expected collapsed shapePerCTA "
+                      "to be at least ["
+                   << tileRows << ", " << (tileCols / packingFactor)
+                   << "], collapsedTmaShape: [" << collapsedTmaShape[0] << ", "
+                   << collapsedTmaShape[1] << "]\n";
+    }
+    return failure();
   }
 
   // Distribute the remaining rows and cols.
@@ -247,7 +248,8 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
       ensureLayoutNotSmallerThan(tileLayout, outDimNames, collapsedTmaShape);
 
   // Reshape the layout to the N-D pre-transposed shape per CTA.
-  SmallVector<int64_t> maybeTransposedTmaShape = tmaShape;
+  SmallVector<int64_t> maybeTransposedTmaShape(tmaShape.begin(),
+                                               tmaShape.end());
   if (shared.getTransposed()) {
     // Move the outer dim to the inner position.
     // TODO: we should move back to using `order` instead of transposed to make
@@ -256,6 +258,10 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                 maybeTransposedTmaShape.begin() + 1,
                 maybeTransposedTmaShape.end());
   }
+  // This condition can fail if a layout is speculatively constructed for
+  // equivalence checking.
+  if (layout.getTotalOutDimSize() != product(maybeTransposedTmaShape))
+    return failure();
   auto reshapedLayout = reshapeLayout(ctx, layout, maybeTransposedTmaShape);
 
   if (shared.getTransposed()) {
@@ -270,6 +276,42 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
       reshapedLayout, standardOutDimNames(ctx, shapePerCTA.size()),
       shapePerCTA);
   return combineCtaCgaWithShape(reshapedLayout, shared.getCGALayout(), shape);
+}
+
+LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
+                                       NVMMASharedEncodingAttr shared,
+                                       TMAMode mode, bool disableSwizzle) {
+  auto layout = nvmmaSharedToLinearLayout(shape, shared, mode, disableSwizzle,
+                                          /*emitErrors=*/true);
+  if (failed(layout))
+    llvm::report_fatal_error("Illegal shared layout");
+  return *layout;
+}
+
+FailureOr<LinearLayout>
+nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
+                          NVMMASharedEncodingAttr shared, TMAMode mode,
+                          bool disableSwizzle, bool emitErrors) {
+  auto shapePerCTA = getShapePerCTA(shared, shape);
+  SmallVector<int64_t> tmaShape;
+  if (emitErrors) {
+    tmaShape =
+        getTMABlockShape(shapePerCTA, shared.getElementBitWidth(),
+                         shared.getSwizzlingByteWidth(), shared.getFp4Padded(),
+                         shared.getTransposed(), /*packedSize=*/true, mode);
+  } else {
+    auto maybeTmaShape =
+        getTMABlockShape(shapePerCTA, shared.getElementBitWidth(),
+                         shared.getSwizzlingByteWidth(), shared.getFp4Padded(),
+                         shared.getTransposed(), /*packedSize=*/true,
+                         /*emitError=*/nullptr, mode);
+    if (failed(maybeTmaShape))
+      return failure();
+    tmaShape = *maybeTmaShape;
+  }
+
+  return buildNvmmaSharedLinearLayout(shape, shared, tmaShape, disableSwizzle,
+                                      emitErrors);
 }
 
 /// Function to generate lane and warp layout for dot operands.

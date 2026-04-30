@@ -461,6 +461,44 @@ def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
   let hasVerifier = 1;
 }
 
+def TTG_LocalAtomicScatterAddOp : TTG_Op<"local_atomic_scatter_add", [
+  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+  TypesMatchWith<"result type matches values type", "values", "result", "$_self">,
+  OptionalTypesMatchWith<"mask type matches values type",
+                 "values", "mask", "getI1SameShape($_self)">
+]> {
+  let summary = "Atomically scatter-add elements into shared memory along a specified axis";
+
+  let description = [{
+    Atomically scatter-adds elements to a shared memory descriptor using an indices tensor
+    along a single specified axis. The values tensor has the same shape as the
+    indices tensor and the result returns the previous values observed at each
+    updated location.
+
+    For each input position I, the operation atomically updates dst where the
+    coordinate at the axis is replaced by indices[I]:
+      dst[I[0], ..., indices[I], ..., I[n]] += values[I]
+
+    If mask is present, the update is performed only for positions where
+    mask[I] is true. Masked-off positions do not update shared memory and return
+    an undefined old value.
+  }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$dst,
+    TT_Tensor:$values,
+    TT_IntTensor:$indices,
+    Optional<I1Tensor>:$mask,
+    I32Attr:$axis
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $dst `[` $indices `]` `,` $values (`,` $mask^)? attr-dict `:`
+    functional-type(operands, results)
+  }];
+  let hasVerifier = 1;
+}
+
 def TTG_PredicateStageOp: TTG_Op<"predicate_stage",
                                 [Pure, AllTypesMatch<["iv", "ub", "step"]>]> {
   let summary = "pipeliner stage predicate";

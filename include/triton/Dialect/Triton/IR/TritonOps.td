@@ -1306,7 +1306,7 @@ def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorLoadLikeOpI
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
-    RankedTensorOf<[I32]>:$x_offsets,
+    RankedTensorOf<[I16, I32]>:$x_offsets,
     I32:$y_offset
   );
   let results = (outs TT_Tensor:$result);
@@ -1332,7 +1332,7 @@ def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [TT_DescriptorStoreLike
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
-    RankedTensorOf<[I32]>:$x_offsets,
+    RankedTensorOf<[I16, I32]>:$x_offsets,
     I32:$y_offset,
     TT_Tensor:$src
   );

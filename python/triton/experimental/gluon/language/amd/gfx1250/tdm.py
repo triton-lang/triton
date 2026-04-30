@@ -194,7 +194,8 @@ def warp_strided(k: int, stride_log2: int) -> int:
 
 @builtin
 def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], dest: shared_memory_descriptor,
-               pred=1, mbarrier: shared_memory_descriptor = None, warp_used_hint=None, _semantic=None) -> None:
+               pred=1, mbarrier: shared_memory_descriptor = None, warp_used_hint=None, cache_modifier="",
+               _semantic=None) -> None:
     """Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.
 
     Args:
@@ -219,31 +220,36 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
 
             Adjacent ``async_load`` ops with pairwise-disjoint hints whose union is
             also a legal hint, identical destination shared encoding, and identical
-            block shape are *implicitly* fused into a single TDM intrinsic during
-            lowering (no IR-visible artifact). When relying on this, size
-            ``async_wait`` counts in terms of the post-merge intrinsic count
-            (one merged op contributes one outstanding TDM, not N). Passing a
-            non-``None`` ``mbarrier`` opts the call out of merging: such loads
-            are always lowered as a singleton intrinsic and act as a flush
-            boundary for any in-flight merge candidate run.
+            block shape, and the same ``cache_modifier`` are *implicitly* fused
+            into a single TDM intrinsic during lowering (no IR-visible artifact).
+            When relying on this, size ``async_wait`` counts in terms of the
+            post-merge intrinsic count (one merged op contributes one
+            outstanding TDM, not N). Passing a non-``None`` ``mbarrier`` opts
+            the call out of merging: such loads are always lowered as a
+            singleton intrinsic and act as a flush boundary for any in-flight
+            merge candidate run.
+        cache_modifier (str, optional): Cache behavior modifier for the TDM
+            load. Merged loads require all members to use the same cache
+            modifier because the merged intrinsic has one cache-control field.
     """
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
     pred = _semantic.to_tensor(pred)
     pred_handle = pred.handle
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
+    cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
 
     warp_used_hint = _unwrap_if_constexpr(warp_used_hint)
     if warp_used_hint is not None:
         warp_used_hint = int(warp_used_hint)
 
     _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, offset_handles, dest.handle, pred_handle,
-                                                            mbarrier_handle, warp_used_hint)
+                                                            mbarrier_handle, cache_modifier, warp_used_hint)
 
 
 @builtin
 def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], src: shared_memory_descriptor,
-                mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+                mbarrier: shared_memory_descriptor = None, cache_modifier="", _semantic=None) -> None:
     """Store a block of tensor specified in tensor descriptor from shared memory to global memory asynchronously.
 
     Args:
@@ -255,7 +261,9 @@ def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.ten
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
-    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, offset_handles, src.handle, mbarrier_handle)
+    cache_modifier = _semantic._str_to_store_cache_modifier(cache_modifier)
+    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, offset_handles, src.handle, mbarrier_handle,
+                                                            cache_modifier)
 
 
 @builtin

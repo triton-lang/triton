@@ -722,6 +722,12 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttg::LocalScatterOp>(memDesc, values, indices,
                                               axisAttr);
            })
+      .def("create_local_atomic_scatter_add",
+           [](GluonOpBuilder &self, Value memDesc, Value values, Value indices,
+              std::optional<Value> mask, int32_t axis) -> Value {
+             return self.create<ttg::LocalAtomicScatterAddOp>(
+                 memDesc, values, indices, mask.value_or(Value()), axis);
+           })
       .def("get_shared_bank_conflicts",
            [](GluonOpBuilder &self, Attribute regLayoutAttr,
               Attribute sharedLayoutAttr, std::vector<int64_t> &shape,
@@ -1059,19 +1065,21 @@ void init_gluon_ir(py::module &&m) {
       .def("create_async_tdm_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
               Value result, Value pred, Value barrier,
+              tt::CacheModifier cacheModifier,
               std::optional<uint32_t> warpUsedHint) {
              IntegerAttr hintAttr;
              if (warpUsedHint.has_value())
                hintAttr = self.getBuilder().getI32IntegerAttr(
                    static_cast<int32_t>(*warpUsedHint));
              self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(
-                 descPtr, indices, result, pred, barrier, hintAttr);
+                 descPtr, indices, result, pred, barrier, cacheModifier,
+                 hintAttr);
            })
       .def("create_async_tdm_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
-              Value src, Value barrier) {
-             self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
-                                                            src, barrier);
+              Value src, Value barrier, tt::CacheModifier cacheModifier) {
+             self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(
+                 descPtr, indices, src, barrier, cacheModifier);
            })
       .def("create_async_tdm_scatter",
            [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,

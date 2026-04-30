@@ -90,18 +90,18 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // layout's free-variable-mask predication.  Without a hint the layout uses
 // the canonical-prefix placement (lowest log2K bits), matching the
 // pre-hint behavior.
-void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
-                       const LLVMTypeConverter *typeConverter, Type elementType,
-                       SmallVector<int64_t> blockShape, int numWarps,
-                       unsigned padInterval, unsigned padAmount, Value &group0,
-                       Value &group1,
-                       std::optional<std::reference_wrapper<Value>> group2,
-                       std::optional<std::reference_wrapper<Value>> group3,
-                       SmallVector<Value> offset, ArrayRef<Value> dstPtrs,
-                       Value pred, Value multicastMask, Value barrierPtr,
-                       const triton::LinearLayout &sharedLayout, Value ctaId,
-                       bool isStore, ArrayRef<unsigned> warpsPerCTA,
-                       const std::optional<WarpHintInfo> &warpHint = std::nullopt);
+void fillTDMDescriptor(
+    RewriterBase &rewriter, Location loc,
+    const LLVMTypeConverter *typeConverter, Type elementType,
+    SmallVector<int64_t> blockShape, int numWarps, unsigned padInterval,
+    unsigned padAmount, Value &group0, Value &group1,
+    std::optional<std::reference_wrapper<Value>> group2,
+    std::optional<std::reference_wrapper<Value>> group3,
+    SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
+    Value multicastMask, Value barrierPtr,
+    const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
+    ArrayRef<unsigned> warpsPerCTA,
+    const std::optional<WarpHintInfo> &warpHint = std::nullopt);
 
 // Fill TDM descriptor for gather/scatter operations (2D only).
 // Gather reads from non-contiguous rows in global memory to LDS.
@@ -149,7 +149,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value pred, Value multicastMask, Type elementType,
                       Value barrierPtr, bool isLoad,
                       const triton::LinearLayout &sharedLayout,
-                      Attribute encoding, Value ctaId,
+                      Attribute encoding, Value ctaId, int32_t auxBits,
                       std::optional<uint32_t> warpUsedHint = std::nullopt);
 
 // ---------------------------------------------------------------------------
@@ -183,6 +183,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 //   6. Every member's *result* `MemDescType` is structurally equal
 //      (same shared-memory encoding, same shapePerCTA) and the SSA
 //      destination values are pairwise distinct.
+//   7. Every member carries the same `cache` modifier.  Differing cache
+//      modifiers flush the run.
 //
 // Front-ends that need a hardware barrier alongside a hinted partial
 // copy must therefore separate the two: one mbarrier-carrying TDM copy
@@ -221,22 +223,24 @@ computeTDMMergeGroups(ModuleOp mod);
 // per-tensor part returned by `createTDMDescriptor`); `dstPtrsPerMember[i]`
 // likewise.  All other parameters mirror `emitTDMLoadStore` and must be
 // consistent across the group (mergeability enforces this for
-// shared-memory encoding, padding, and shapePerCTA; the caller provides
-// one shared `sharedLayout`/`encoding` for the group).  Per-member
-// `warp_used_hint` values are read directly from `groupInfo.members`,
-// and per-member barrier pointers are *not* a parameter: mergeability
-// guarantees no member carries an mbarrier, so each `fillTDMDescriptor`
-// is invoked with a null barrier.
-void emitTDMLoadStoreMerged(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter,
-    ArrayRef<SmallVector<Value>> descPerMember, ArrayRef<int64_t> blockShape,
-    int numWarps, unsigned padInterval, unsigned padAmount,
-    ArrayRef<SmallVector<Value>> offsetPerMember,
-    ArrayRef<SmallVector<Value>> dstPtrsPerMember,
-    ArrayRef<Value> predPerMember, Value multicastMask, Type elementType,
-    bool isLoad, const triton::LinearLayout &sharedLayout, Attribute encoding,
-    Value ctaId, const TDMMergeGroupInfo &groupInfo);
+// shared-memory encoding, padding, shapePerCTA, and cache modifier; the
+// caller provides one shared `sharedLayout`/`encoding`/`auxBits` for the
+// group).  Per-member `warp_used_hint` values are read directly from
+// `groupInfo.members`, and per-member barrier pointers are *not* a
+// parameter: mergeability guarantees no member carries an mbarrier, so
+// each `fillTDMDescriptor` is invoked with a null barrier.
+void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
+                            const LLVMTypeConverter *typeConverter,
+                            ArrayRef<SmallVector<Value>> descPerMember,
+                            ArrayRef<int64_t> blockShape, int numWarps,
+                            unsigned padInterval, unsigned padAmount,
+                            ArrayRef<SmallVector<Value>> offsetPerMember,
+                            ArrayRef<SmallVector<Value>> dstPtrsPerMember,
+                            ArrayRef<Value> predPerMember, Value multicastMask,
+                            Type elementType, bool isLoad,
+                            const triton::LinearLayout &sharedLayout,
+                            Attribute encoding, Value ctaId, int32_t auxBits,
+                            const TDMMergeGroupInfo &groupInfo);
 
 // Returns (warpsPerCTA, numTDMInstructions) for a given shared encoding.
 // For PartitionedSharedEncodingAttr, computes a partition-aligned warp

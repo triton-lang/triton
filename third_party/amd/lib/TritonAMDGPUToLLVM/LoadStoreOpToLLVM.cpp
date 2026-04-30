@@ -1268,8 +1268,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         Value descRemapped =
             isCurrentMember ? Value(adaptor.getDesc())
                             : rewriter.getRemappedValue(memberOp.getDesc());
-        descPerMember[i] = mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc,
-                                                                descRemapped);
+        descPerMember[i] =
+            mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, descRemapped);
         SmallVector<Value> indices;
         if (isCurrentMember) {
           indices = SmallVector<Value>(adaptor.getIndices().begin(),
@@ -1292,11 +1292,16 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
                                : rewriter.getRemappedValue(memberOp.getPred());
       }
 
+      // The merge analysis enforces that all members carry the same
+      // cache modifier (rule 7), so taking auxBits from the current op
+      // is sufficient for the whole group.
+      auto mergedAuxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
+          op.getCache(), /*isLoad*/ true, targetInfo);
       mlir::LLVM::AMD::emitTDMLoadStoreMerged(
           rewriter, loc, getTypeConverter(), descPerMember, shapePerCTA,
           numWarps, padInterval, padAmount, offsetPerMember, dstPtrsPerMember,
           predPerMember, multicastMask, elementType,
-          /*isLoad=*/true, sharedLayout, encoding, ctaId, group);
+          /*isLoad=*/true, sharedLayout, encoding, ctaId, mergedAuxBits, group);
 
       for (size_t i = numMembers; i-- > 0;)
         rewriter.eraseOp(group.members[i]);
@@ -1335,11 +1340,15 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     if (auto hintAttr = op.getWarpUsedHintAttr())
       warpUsedHint = static_cast<uint32_t>(hintAttr.getInt());
 
+    auto cacheMod = op.getCache();
+    auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
+        cacheMod, /*isLoad*/ true, targetInfo);
+
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, dstPtrs, op.getPred(), multicastMask,
         elementType, barrierPtr, /*isLoad=*/true, sharedLayout, encoding, ctaId,
-        warpUsedHint);
+        auxBits, warpUsedHint);
 
     rewriter.eraseOp(op);
     return success();
@@ -1416,12 +1425,16 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
 
     auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
 
+    auto cacheMod = op.getCache();
+    auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
+        cacheMod, /*isLoad*/ false, targetInfo);
+
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, srcPtrs, pred,
         /*multicastMask=*/{}, elementType, barrierPtr,
-        /*isLoad=*/false, sharedLayout, encoding, ctaId);
+        /*isLoad=*/false, sharedLayout, encoding, ctaId, auxBits);
 
     rewriter.eraseOp(op);
     return success();

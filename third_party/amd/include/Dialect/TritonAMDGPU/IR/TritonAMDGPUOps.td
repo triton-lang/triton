@@ -817,6 +817,7 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
     I32:$pred,
     Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier,
+    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     OptionalAttr<I32Attr>:$warp_used_hint
   );
 
@@ -826,10 +827,12 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred), [{
       return build($_builder, $_state, desc, indices, result, pred,
                    /*barrier=*/static_cast<mlir::Value>(nullptr),
+                   /*cache=*/triton::CacheModifier::NONE,
                    /*warp_used_hint=*/IntegerAttr());
     }]>,
     OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred, "Value":$barrier), [{
       return build($_builder, $_state, desc, indices, result, pred, barrier,
+                   /*cache=*/triton::CacheModifier::NONE,
                    /*warp_used_hint=*/IntegerAttr());
     }]>
   ];
@@ -878,7 +881,8 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global",
     Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
     Variadic<I32>:$indices,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
-    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
+    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier,
+    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache
   );
 
   let assemblyFormat = [{

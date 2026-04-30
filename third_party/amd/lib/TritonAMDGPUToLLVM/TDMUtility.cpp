@@ -600,8 +600,7 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
     group3 = vecSet(b, group3, 1, b.shl(tensorShape[numDims - 5], v16));
     // Lower 16 of group3[2] is the high half of tensor_dim4; upper 16
     // (tile_dim4) is filled later by the per-op descriptor filler.
-    group3 =
-        vecSet(b, group3, 2, b.lshr(tensorShape[numDims - 5], v16));
+    group3 = vecSet(b, group3, 2, b.lshr(tensorShape[numDims - 5], v16));
   }
 
   return TDMDescriptor{group0, group1, group2, group3};
@@ -1110,7 +1109,7 @@ void emitTDMIntrinsic(
     SmallVector<Value> globalOffset, ArrayRef<Value> instrDstPtrs, Value pred,
     Value multicastMask, Value barrier,
     const triton::LinearLayout &instrSharedLayout, Value ctaId, bool isLoad,
-    ArrayRef<unsigned> warpsPerCTA,
+    ArrayRef<unsigned> warpsPerCTA, int32_t auxBits,
     const std::optional<WarpHintInfo> &warpHint = std::nullopt) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
@@ -1127,14 +1126,13 @@ void emitTDMIntrinsic(
                       effectiveBlockShape, numWarps, padInterval, padAmount,
                       group0, group1, std::ref(group2), std::ref(group3),
                       globalOffset, instrDstPtrs, pred, multicastMask, barrier,
-                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA,
-                      warpHint);
+                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA, warpHint);
 
     const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
                                        : "llvm.amdgcn.tensor.store.from.lds";
     LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, intrinsicName, {},
-        {group0, group1, group2, group3, group4Zero, b.i32_val(0)});
+        {group0, group1, group2, group3, group4Zero, b.i32_val(auxBits)});
   } else {
     Value group0 = desc[0];
     Value group1 = desc[1];
@@ -1143,17 +1141,16 @@ void emitTDMIntrinsic(
                       effectiveBlockShape, numWarps, padInterval, padAmount,
                       group0, group1, std::nullopt, std::nullopt, globalOffset,
                       instrDstPtrs, pred, multicastMask, barrier,
-                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA,
-                      warpHint);
+                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA, warpHint);
 
     Value group2Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
     Value group3Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
 
     const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
                                        : "llvm.amdgcn.tensor.store.from.lds";
-    LLVM::createLLVMIntrinsicCallOp(
-        rewriter, loc, intrinsicName, {},
-        {group0, group1, group2Zero, group3Zero, group4Zero, b.i32_val(0)});
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {},
+                                    {group0, group1, group2Zero, group3Zero,
+                                     group4Zero, b.i32_val(auxBits)});
   }
 }
 
@@ -1175,7 +1172,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value pred, Value multicastMask, Type elementType,
                       Value barrierPtr, bool isLoad,
                       const triton::LinearLayout &sharedLayout,
-                      Attribute encoding, Value ctaId,
+                      Attribute encoding, Value ctaId, int32_t auxBits,
                       std::optional<uint32_t> warpUsedHint) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   size_t numDims = blockShape.size();
@@ -1213,7 +1210,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                      to_vector(blockShape), numWarps, padInterval, padAmount,
                      to_vector(offset), dstPtrs, pred, multicastMask,
                      barrierPtr, sharedLayout, ctaId, isLoad, warpsPerCTA,
-                     warpHint);
+                     auxBits, warpHint);
     return;
   }
 
@@ -1277,7 +1274,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
     emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
                      effectiveBlockShape, numWarps, padInterval, padAmount,
                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
-                     sliceLayout, ctaId, isLoad, warpsPerCTA);
+                     sliceLayout, ctaId, isLoad, warpsPerCTA, auxBits);
   }
 }
 
@@ -1436,6 +1433,11 @@ bool canMergeWith(TDMCopyGlobalToLocalOp first,
     return false;
   if (first.getResult() == candidate.getResult())
     return false;
+  // v1 merging emits a single `tensor.load.to.lds` intrinsic with a
+  // single `auxBits` immediate, so all members must share the same
+  // cache modifier.
+  if (first.getCache() != candidate.getCache())
+    return false;
   return true;
 }
 
@@ -1570,16 +1572,18 @@ computeTDMMergeGroups(ModuleOp mod) {
   return result;
 }
 
-void emitTDMLoadStoreMerged(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter,
-    ArrayRef<SmallVector<Value>> descPerMember, ArrayRef<int64_t> blockShape,
-    int numWarps, unsigned padInterval, unsigned padAmount,
-    ArrayRef<SmallVector<Value>> offsetPerMember,
-    ArrayRef<SmallVector<Value>> dstPtrsPerMember,
-    ArrayRef<Value> predPerMember, Value multicastMask, Type elementType,
-    bool isLoad, const triton::LinearLayout &sharedLayout, Attribute encoding,
-    Value ctaId, const TDMMergeGroupInfo &groupInfo) {
+void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
+                            const LLVMTypeConverter *typeConverter,
+                            ArrayRef<SmallVector<Value>> descPerMember,
+                            ArrayRef<int64_t> blockShape, int numWarps,
+                            unsigned padInterval, unsigned padAmount,
+                            ArrayRef<SmallVector<Value>> offsetPerMember,
+                            ArrayRef<SmallVector<Value>> dstPtrsPerMember,
+                            ArrayRef<Value> predPerMember, Value multicastMask,
+                            Type elementType, bool isLoad,
+                            const triton::LinearLayout &sharedLayout,
+                            Attribute encoding, Value ctaId, int32_t auxBits,
+                            const TDMMergeGroupInfo &groupInfo) {
   size_t N = groupInfo.members.size();
   assert(N >= 2 && llvm::isPowerOf2_64(N) && "merge group size invariant");
   assert(descPerMember.size() == N && offsetPerMember.size() == N &&
@@ -1697,12 +1701,10 @@ void emitTDMLoadStoreMerged(
         rewriter, loc, typeConverter, elementType,
         SmallVector<int64_t>(blockShape.begin(), blockShape.end()), numWarps,
         padInterval, padAmount, g0, g1,
-        numDims > 2
-            ? std::optional<std::reference_wrapper<Value>>(std::ref(g2))
-            : std::nullopt,
-        numDims > 2
-            ? std::optional<std::reference_wrapper<Value>>(std::ref(g3))
-            : std::nullopt,
+        numDims > 2 ? std::optional<std::reference_wrapper<Value>>(std::ref(g2))
+                    : std::nullopt,
+        numDims > 2 ? std::optional<std::reference_wrapper<Value>>(std::ref(g3))
+                    : std::nullopt,
         SmallVector<Value>(offsetPerMember[i].begin(),
                            offsetPerMember[i].end()),
         dstPtrsPerMember[i], predPerMember[i], multicastMask,
@@ -1763,7 +1765,7 @@ void emitTDMLoadStoreMerged(
                                      : "llvm.amdgcn.tensor.store.from.lds";
   LLVM::createLLVMIntrinsicCallOp(
       rewriter, loc, intrinsicName, {},
-      {group0, group1, group2, group3, group4Zero, b.i32_val(0)});
+      {group0, group1, group2, group3, group4Zero, b.i32_val(auxBits)});
 }
 
 SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
