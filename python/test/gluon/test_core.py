@@ -2572,104 +2572,88 @@ def shared_atomic_scatter_add_kernel(
     axis: ttgl.constexpr,
     dtype: ttgl.constexpr,
     use_mask: ttgl.constexpr,
-    use_full_rhs: ttgl.constexpr,
-    use_1d: ttgl.constexpr,
+    use_constant_values: ttgl.constexpr,
+    RHS_N: ttgl.constexpr,
+    RHS_M: ttgl.constexpr,
     layout_2d: ttgl.constexpr,
-    layout_1d: ttgl.constexpr,
+    layout_rhs: ttgl.constexpr,
     shared_layout: ttgl.constexpr,
 ):
     indices_x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
     indices_y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
     offsets_2d = indices_x[:, None] * M + indices_y[None, :]
+    rhs_x = ttgl.arange(0, RHS_N, layout=ttgl.SliceLayout(dim=1, parent=layout_rhs))
+    rhs_y = ttgl.arange(0, RHS_M, layout=ttgl.SliceLayout(dim=0, parent=layout_rhs))
+    offsets_rhs = rhs_x[:, None] * RHS_M + rhs_y[None, :]
 
     smem = ttgl.allocate_shared_memory(dtype, [N, M], layout=shared_layout)
     smem.store(ttgl.zeros([N, M], dtype, layout=layout_2d))
 
-    if use_1d:
-        offsets_1d = ttgl.arange(0, N * M, layout=layout_1d)
-        indices = ttgl.load(indices_ptr + offsets_1d)
-        if use_full_rhs:
-            # To test a special case where the hardware can optimize the atomic add
-            # e.g., on NVIDIA GPUs, we can use atom.inc
-            values = ttgl.full([N * M], 1, dtype, layout_1d)
-        else:
-            values = ttgl.load(values_ptr + offsets_1d)
-
-        smem_1d = smem.reshape([N * M])
-        if use_mask:
-            mask = ttgl.load(mask_ptr + offsets_1d)
-            old = smem_1d.atomic_scatter_add(values, indices, axis=0, mask=mask)
-        else:
-            old = smem_1d.atomic_scatter_add(values, indices, axis=0)
-        ttgl.store(old_ptr + offsets_1d, old)
+    indices = ttgl.load(indices_ptr + offsets_rhs)
+    if use_constant_values:
+        # Cover the all-ones RHS path; int32 can lower to atom.inc on NVIDIA.
+        values = ttgl.full([RHS_N, RHS_M], 1, dtype, layout_rhs)
     else:
-        indices = ttgl.load(indices_ptr + offsets_2d)
-        if use_full_rhs:
-            # To test a special case where the hardware can optimize the atomic add
-            # e.g., on NVIDIA GPUs, we can use atom.inc
-            values = ttgl.full([N, M], 1, dtype, layout_2d)
-        else:
-            values = ttgl.load(values_ptr + offsets_2d)
+        values = ttgl.load(values_ptr + offsets_rhs)
 
-        if use_mask:
-            mask = ttgl.load(mask_ptr + offsets_2d)
-            old = smem.atomic_scatter_add(values, indices, axis=axis, mask=mask)
-        else:
-            old = smem.atomic_scatter_add(values, indices, axis=axis)
-        ttgl.store(old_ptr + offsets_2d, old)
+    if use_mask:
+        mask = ttgl.load(mask_ptr + offsets_rhs)
+        old = smem.atomic_scatter_add(values, indices, axis=axis, mask=mask)
+    else:
+        old = smem.atomic_scatter_add(values, indices, axis=axis)
+    ttgl.store(old_ptr + offsets_rhs, old)
     final = smem.load(layout=layout_2d)
 
     ttgl.store(final_ptr + offsets_2d, final)
 
 
-@pytest.mark.parametrize("use_mask,torch_dtype,gluon_dtype,use_full_rhs", [
-    pytest.param(False, torch.int32, ttgl.int32, False, id="unmasked_int32"),
-    pytest.param(False, torch.int32, ttgl.int32, True, id="unmasked_int32_full_rhs"),
-    pytest.param(False, torch.float16, ttgl.float16, False, id="unmasked_float16"),
-    pytest.param(False, torch.float32, ttgl.float32, False, id="unmasked_float32"),
-    pytest.param(True, torch.int32, ttgl.int32, False, id="masked_int32"),
-    pytest.param(True, torch.int32, ttgl.int32, True, id="masked_int32_full_rhs"),
-    pytest.param(True, torch.float32, ttgl.float32, False, id="masked_float32"),
+@pytest.mark.parametrize("use_mask,torch_dtype,gluon_dtype", [
+    pytest.param(False, torch.int32, ttgl.int32, id="unmasked_int32"),
+    pytest.param(False, torch.float16, ttgl.float16, id="unmasked_float16"),
+    pytest.param(False, torch.float32, ttgl.float32, id="unmasked_float32"),
+    pytest.param(True, torch.int32, ttgl.int32, id="masked_int32"),
+    pytest.param(True, torch.float32, ttgl.float32, id="masked_float32"),
 ])
-@pytest.mark.parametrize("N,M,axis,use_1d", [
-    (16, 32, 1, False),
-    (32, 16, 0, False),
-    (16, 32, 0, True),
+@pytest.mark.parametrize("use_constant_values", [
+    pytest.param(False, id="loaded_values"),
+    pytest.param(True, id="constant_values"),
 ])
-def test_shared_atomic_scatter_add(use_mask, torch_dtype, gluon_dtype, use_full_rhs, N, M, axis, use_1d):
+@pytest.mark.parametrize("N,M,axis,rhs_shape", [
+    pytest.param(16, 32, 1, (16, 2), id="axis1_rhs_cols"),
+    pytest.param(32, 16, 0, (2, 16), id="axis0_rhs_rows"),
+])
+def test_shared_atomic_scatter_add(use_mask, torch_dtype, gluon_dtype, use_constant_values, N, M, axis, rhs_shape):
     if is_hip_cdna() or is_hip_rdna():
         pytest.skip("Shared atomic_scatter_add is not supported on AMD")
 
     device = torch.device("cuda")
-    shape = (N * M, ) if use_1d else (N, M)
+    rhs_n, rhs_m = rhs_shape
 
-    if use_full_rhs:
-        values = torch.ones(shape, dtype=torch_dtype, device=device)
+    if use_constant_values:
+        values = torch.ones(rhs_shape, dtype=torch_dtype, device=device)
     else:
-        values = (torch.arange(N * M, dtype=torch.int32, device=device).reshape(shape) % 7 + 1).to(torch_dtype)
+        values = torch.arange(rhs_n * rhs_m, dtype=torch.int32, device=device).reshape(rhs_shape)
+        values = (values % 7 + 1).to(torch_dtype)
     torch.manual_seed(23 if use_mask else 17)
-    upper = N * M if use_1d else M if axis == 1 else N
-    indices = torch.randint(0, upper, shape, dtype=torch.int32, device=device)
-    old = torch.empty(shape, dtype=torch_dtype, device=device)
+    upper = M if axis == 1 else N
+    indices = torch.randint(0, upper, rhs_shape, dtype=torch.int32, device=device)
+    old = torch.empty(rhs_shape, dtype=torch_dtype, device=device)
     final = torch.empty((N, M), dtype=torch_dtype, device=device)
     expected = torch.zeros((N, M), dtype=torch_dtype, device=device)
 
     layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
                                    warps_per_cta=[4, 1], order=[1, 0])
-    layout_1d = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
-                                   order=[0])
+    layout_rhs = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                    warps_per_cta=[4, 1], order=[1, 0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
     if use_mask:
-        mask = (torch.arange(N * M, device=device).reshape(shape) % 3) != 0
+        mask = (torch.arange(rhs_n * rhs_m, device=device).reshape(rhs_shape) % 3) != 0
         rhs = torch.where(mask, values, torch.zeros_like(values))
     else:
-        mask = torch.empty(shape, dtype=torch.bool, device=device)
+        mask = torch.empty(rhs_shape, dtype=torch.bool, device=device)
         rhs = values
-    if use_1d:
-        expected.reshape(-1).scatter_add_(0, indices.long(), rhs)
-    else:
-        expected.scatter_add_(axis, indices.long(), rhs)
+    expected.scatter_add_(axis, indices.long(), rhs)
 
     shared_atomic_scatter_add_kernel[(1, )](
         values,
@@ -2682,10 +2666,11 @@ def test_shared_atomic_scatter_add(use_mask, torch_dtype, gluon_dtype, use_full_
         axis=axis,
         dtype=gluon_dtype,
         use_mask=use_mask,
-        use_full_rhs=use_full_rhs,
-        use_1d=use_1d,
+        use_constant_values=use_constant_values,
+        RHS_N=rhs_n,
+        RHS_M=rhs_m,
         layout_2d=layout_2d,
-        layout_1d=layout_1d,
+        layout_rhs=layout_rhs,
         shared_layout=shared_layout,
         num_warps=4,
     )
