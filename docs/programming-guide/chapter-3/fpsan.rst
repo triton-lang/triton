@@ -26,7 +26,7 @@ At a high level, FpSan:
 Enabling FpSan
 ------------
 
-Enable FpSan before the kernel is first compiled.
+Enable FpSan before the compile or run you want to instrument.
 
 From Python:
 
@@ -46,8 +46,6 @@ From the shell:
 
 Notes:
 
-- Triton kernels are compiled lazily, so the instrumentation mode must be set
-  before the first compilation of the kernel variant you care about.
 - FpSan is a compiler feature, so it does not apply in interpreter mode.
 - On AMD, the backend currently enables FpSan only for ``gfx942``, ``gfx950``,
   and ``gfx1250``.
@@ -65,7 +63,7 @@ of one kernel, under the same FpSan mode. Typical uses include:
 - checking that accumulator selection, predication, or TMEM pipelines preserve
   the intended payload flow
 
-FpSan results should usually be compared against other FpSan results, not
+FpSan results should only be compared against other FpSan results, not
 against ordinary floating-point outputs.
 
 ------------------
@@ -73,7 +71,7 @@ Payload Model
 ------------------
 
 For each floating-point width ``w``, FpSan defines a bijection between
-floating-point bit-patterns and the ring ``Z / 2^w Z``.
+floating-point bit-patterns and a w-bit integer payload; arithmetic wraps modulo 2^w.
 
 Conceptually:
 
@@ -99,15 +97,14 @@ FpSan preserves exact identities in the payload algebra selected by each
 rewrite. The most important ones are:
 
 - ring identities for add, subtract, multiply, FMA, and dot-like accumulation
-- selected exponential identities for ``exp`` and ``exp2``
-- selected trigonometric addition identities for ``sin`` and ``cos``
+- selected exponential identities for ``exp`` and ``exp2`` (see below for details)
 - payload equality through casts, loads, stores, and copies
 - deterministic op-distinguishing tags for unary functions that do not yet have
   a richer algebraic model
 
 This is what makes FpSan valuable for kernel checks: if two kernels should be
-the same symbolic computation under the preserved laws, they should produce the
-same payloads.
+the same symbolic computation under the preserved properties, they should produce
+the same payloads.
 
 ----------------------------------
 What FpSan Does Not Preserve
@@ -119,12 +116,10 @@ In particular, do not rely on it for:
 
 - real floating-point ordering, rounding, NaN propagation, infinities,
   subnormals, or exceptions
-- the distinction between ``minimumf`` and ``minnumf``, or between
-  ``maximumf`` and ``maxnumf``
 - real transcendental semantics for ``log``, ``sqrt``, ``erf``, ``floor``,
   ``ceil``, ``rsqrt``, and similar tagged unary ops
-- real fp4, fp6, or fp8 numeric decoding in the places where the
-  implementation intentionally uses raw payloads instead
+- expected floating-point bit patterns (i.e. for kernels that bitcast
+  between floats and integers)
 
 When a property matters for your check, the right question is:
 "is this property preserved by the payload rewrite for this specific op
@@ -137,17 +132,15 @@ Common Arithmetic Ops
 Add, Sub, Mul
 =============
 
-Supported ops:
+Supported operations:
 
-- ``arith.addf``
-- ``arith.subf``
-- ``arith.mulf``
+- ``x + y``
+- ``x - y``
+- ``x * y``
 
 Rewrite:
 
-- ``addf -> addi`` on payloads
-- ``subf -> subi`` on payloads
-- ``mulf -> muli`` on payloads
+- add, subtract, or multiply the embedded payloads, then unembed the result
 
 Exact preserved properties:
 
@@ -165,12 +158,11 @@ Important caveat:
 Min and Max
 ===========
 
-Supported ops:
+Supported operations:
 
-- ``arith.minimumf``
-- ``arith.maximumf``
-- ``arith.minnumf``
-- ``arith.maxnumf``
+- ``tl.minimum(x, y)``
+- ``tl.maximum(x, y)``
+- ``min(x, y)`` and ``max(x, y)`` in Triton code
 
 Rewrite:
 
@@ -181,22 +173,18 @@ Exact preserved properties:
 - idempotence: ``min(x, x) = x`` and ``max(x, x) = x``
 - commutativity
 - associativity
-- absorption with respect to the payload order
 
 Important caveats:
 
 - The order is the signed integer order of payloads, not IEEE float order.
-- ``minnum`` and ``minimum``, and ``maxnum`` and ``maximum``, are treated the
-  same.
-- NaN-specific behavior is not modeled.
+- NaN handling, and the exact signed-zero contract, are not modeled.
 
 Division
 ========
 
-Supported ops:
+Supported operation:
 
-- ``arith.divf``
-- ``tt.precise_div``
+- ``x / y``
 
 Rewrite:
 
@@ -222,9 +210,9 @@ Important caveats:
 Remainder
 =========
 
-Supported ops:
+Supported operation:
 
-- ``arith.remf``
+- ``x % y``
 
 Rewrite:
 
@@ -233,7 +221,7 @@ Rewrite:
 
 Exact preserved properties:
 
-- deterministic remainder semantics in payload space
+- same inputs produce the same sanitized remainder payload
 
 Important caveats:
 
@@ -244,9 +232,9 @@ Important caveats:
 FMA
 ===
 
-Supported ops:
+Supported operation:
 
-- ``math.fma``
+- ``tl.fma(a, b, c)``
 
 Rewrite:
 
@@ -268,9 +256,9 @@ Unary Math Ops
 ``exp2``
 ========
 
-Supported op:
+Supported operation:
 
-- ``math.exp2``
+- ``tl.exp2(x)``
 
 Rewrite:
 
@@ -284,9 +272,9 @@ Exact preserved properties:
 ``exp``
 =======
 
-Supported op:
+Supported operation:
 
-- ``math.exp``
+- ``tl.exp(x)``
 
 Rewrite:
 
@@ -294,22 +282,20 @@ Rewrite:
 
 Exact preserved properties:
 
-- ``exp(x + y) = exp(x) * exp(y)``
-- ``exp(x) = exp2(x * 1/log(2))`` in the sanitized algebra
-- ``exp(-x) = 1 / exp(x)``
+- ``exp`` uses the same payload-space construction as ``exp2`` after scaling
+  the input by a fixed internal payload constant
 
 ``sin`` and ``cos``
 ===================
 
-Supported ops:
+Supported operations:
 
-- ``math.sin``
-- ``math.cos``
+- ``tl.sin(x)``
+- ``tl.cos(x)``
 
 Rewrite:
 
-- a payload-space angle-doubling and angle-addition construction based on a
-  fixed ``(cos, sin)`` increment
+- a deterministic payload-space rewrite chosen to preserve the identities below
 
 Exact preserved properties:
 
@@ -327,16 +313,16 @@ Important caveat:
 Tagged Unary Ops
 ================
 
-Supported ops:
+Supported operations:
 
-- ``math.log``
-- ``math.log2``
-- ``math.sqrt``
-- ``math.rsqrt``
-- ``math.erf``
-- ``math.floor``
-- ``math.ceil``
-- ``tt.precise_sqrt``
+- ``tl.log(x)``
+- ``tl.log2(x)``
+- ``tl.sqrt(x)``
+- ``tl.rsqrt(x)``
+- ``tl.erf(x)``
+- ``tl.floor(x)``
+- ``tl.ceil(x)``
+- precise square root variants
 
 Rewrite:
 
@@ -345,7 +331,6 @@ Rewrite:
 
 Exact preserved properties:
 
-- deterministic per-op, per-input behavior
 - payload equality is preserved for the same op: if ``x == y`` in payload
   space, then ``op(x) == op(y)``
 - different supported unary ops get different tags
@@ -354,7 +339,6 @@ Important caveats:
 
 - These rewrites intentionally do not preserve real mathematical identities
   such as ``sqrt(x)^2 = x`` or ``log(x*y) = log(x) + log(y)``.
-- Think of them as precise operation fingerprints, not numeric models.
 
 --------------------------
 Casts and Format Conversions
@@ -363,11 +347,10 @@ Casts and Format Conversions
 Float-to-Float Width Changes
 ============================
 
-Supported ops:
+Supported operations:
 
-- ``arith.extf``
-- ``arith.truncf``
-- ``tt.fp_to_fp``
+- converting a tensor between floating-point types with ``x.to(dtype)``
+- frontend-generated float widening and narrowing conversions
 
 Rewrite:
 
@@ -384,8 +367,8 @@ Important caveat:
 
 - This preserves payload structure, not IEEE conversion semantics.
 
-``ttg.fp4_to_fp``
-=================
+Packed fp4 conversion
+=====================
 
 Rewrite:
 
@@ -409,9 +392,9 @@ Important caveat:
 Pure Extern Elementwise Ops
 ----------------------------
 
-Supported op:
+Supported operation:
 
-- ``tt.extern_elementwise`` when all of the following hold:
+- ``tl.extern_elementwise`` when all of the following hold:
 
   - the op is ``pure``
   - the result type is float-like
@@ -436,150 +419,43 @@ Important caveat:
 
 - This is a structural tag, not a numeric model of the external function.
 
-----------------------
-Dot-Like and MMA Ops
-----------------------
+---------------------------
+Gluon MMA and Tensor Memory
+---------------------------
 
-``tt.dot`` and ``tt.dot_scaled``
-================================
+Supported Gluon operations include:
+
+- ``mma_v2``
+- ``warpgroup_mma`` and ``warpgroup_mma_wait``
+- ``tcgen05_mma`` and ``tcgen05_mma_scaled``
+- ``tcgen05_copy`` and ``tcgen05_commit``
+- ``allocate_tensor_memory``
+- tensor-memory descriptor methods such as ``load``, ``load_min``,
+  ``load_max``, ``store``, ``slice``, ``index``, and ``_reinterpret``
+- AMD ``mfma``, ``mfma_scaled``, ``wmma``, ``wmma_scaled``, and
+  ``scaled_upcast``
 
 Rewrite:
 
-- lower the operation to scratch-memory emulation loops
-- load tiles and slices
-- perform sanitized multiply-add accumulation in payload space
-- store the result tile back through scratch
+- perform multiply-add accumulation in payload space
+- preserve payload bits across tensor-memory loads, stores, copies, and views
+- keep accumulator-selection and predication behavior structurally visible
 
 Exact preserved properties:
 
 - exact matrix-multiply algebra over the payload ring
-- exact agreement with sanitized scalar expansion
-- accumulation with the provided ``C`` input is preserved as payload addition
+- exact agreement with sanitized scalar multiply-add expansion
+- accumulation with the provided accumulator is preserved as payload addition
+- tensor-memory operations preserve payload flow across the pipeline
 
 Important caveats:
 
-- Current ``tt.dot`` support is limited to rank-2 and rank-3 tensors with
-  compatible encodings.
-- Current ``tt.dot_scaled`` support is limited to rank-2 tensors with
-  encodings and K-packing present; M and N packing are not supported.
-- The emulation loop requires the M and N dimensions to tile cleanly with the
-  chosen 8x8 emulation tiles.
-
-Scaled Dot Semantics
-====================
-
-For ``tt.dot_scaled`` and ``ttng.tc_gen5_mma_scaled``, the implementation is
-more specific than plain matmul:
-
-- ``e4m3``, ``e5m2``, ``bf16``, and ``fp16`` operands are mixed according to
-  their storage float format and then cast into the compute payload width
-- ``e2m1`` currently uses unpacked raw payload bits rather than a real fp4
-  numeric decode
-- integer scale tensors are interpreted as exponent-only scale bit-patterns and
-  then converted into compute payloads
-- scales are multiplied into operand payloads before widening to the
-  accumulator width and accumulating
-
-This means FpSan preserves the algebra of the implemented scaled-dot lowering,
-not the exact real-number semantics of the hardware format.
-
-NVIDIA ``ttng.warp_group_dot``
-==============================
-
-Rewrite:
-
-- scratch-based sanitized MMA emulation
-
-Exact preserved properties:
-
-- the same payload matmul laws as ``tt.dot``
-- ``useC = false`` ignores the incoming accumulator
-- ``useC = true`` adds the incoming accumulator payloads
-
-NVIDIA ``ttng.tc_gen5_mma``
-===========================
-
-Rewrite:
-
-- scratch-based sanitized MMA into TMEM-backed scratch state
-- optional barrier arrival after the emulated writeback
-
-Exact preserved properties:
-
-- the same payload matmul laws as ``tt.dot``
-- ``useD = false`` ignores the incoming accumulator tile
-- ``useD = true`` adds the incoming accumulator tile
-- ``pred = false`` leaves the accumulator tile unchanged
-
-NVIDIA ``ttng.tc_gen5_mma_scaled``
-==================================
-
-Rewrite:
-
-- the same TMEM-backed MMA emulation, but with the scaled-dot operand handling
-  described above
-
-Exact preserved properties:
-
-- the scaled payload-matmul algebra implemented by the sanitizer
-- the same ``useD`` and ``pred`` behavior as ``ttng.tc_gen5_mma``
-
---------------------------------
-Tensor Memory and Structural Ops
---------------------------------
-
-Supported ops:
-
-- ``ttng.tmem_load``
-- ``ttng.tmem_store``
-- ``ttng.tmem_copy``
-- ``ttng.tc_gen5_commit``
-
-Semantics:
-
-- TMEM allocations are shadowed with global scratch storage, optionally seeded
-  from the allocation source value
-- TMEM views such as subslices, indexed views, and reinterprets are resolved as
-  pointer arithmetic into that shadow scratch buffer
-- ``tmem_load``, ``tmem_store``, and ``tmem_copy`` preserve payload bits
-  exactly and use scratch memory to model TMEM-backed values across the
-  rewritten program
-- async dependencies are preserved structurally by returning commit-group
-  tokens when the original op carried a dependency result
-- ``tc_gen5_commit`` is lowered to a barrier arrive; it does not introduce new
-  arithmetic semantics
-- scratch pointers are remapped into warp-specialize partition regions, so TMEM
-  payload flow is preserved across those region boundaries as well
-
-These ops are important because they let the arithmetic rewrites above keep
-working across TMEM-backed pipelines.
-
--------------------
-AMD-Specific Coverage
--------------------
-
-The AMD pass currently adds two decompositions before the common FpSan pass:
-
-- ``amdg.scaled_upcast_fp8``
-- ``amdg.scaled_upcast_fp4``
-
-Both are rewritten into already-supported primitives:
-
-- upcast the low-precision operand
-- convert the scale into a float value
-- multiply
-
-As a result, their effective FpSan semantics are inherited from:
-
-- ``tt.fp_to_fp`` or ``ttg.fp4_to_fp``
-- ``arith.mulf``
-
-For integer scale tensors, the AMD helper constructs exponent-like float
-bit-patterns before the multiply, matching the intent of the hardware scale
-encoding rather than real integer-to-float conversion.
-
-Current backend support is explicitly enabled for AMD ``gfx942``, ``gfx950``,
-and ``gfx1250``.
+- Scaled MMA preserves the sanitizer's payload treatment of low-precision
+  operands and scales, not exact hardware-format numeric decoding.
+- Tensor-memory operations preserve payload dataflow; they do not make FpSan a
+  substitute for race or synchronization checking.
+- Current backend support is explicitly enabled for AMD ``gfx942``, ``gfx950``,
+  and ``gfx1250``.
 
 ------------------------------
 Practical Guidance for Checks
@@ -597,8 +473,7 @@ FpSan is a poor fit when you want to check:
 - IEEE edge cases
 - real transcendental accuracy
 - NaN or infinity behavior
-- exact hardware-format decode semantics for low-precision formats that are
-  intentionally modeled as raw payloads
+- hardware-format decode semantics for low-precision formats
 
 In short, rely on FpSan for structure-preserving kernel validation, and rely on
 ordinary numerical tests for IEEE behavior.
