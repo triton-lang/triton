@@ -467,7 +467,17 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   std::unique_ptr<DotOpMmaMemLoader> aLoader;
   bool transA = false;
+  unsigned aTMemTileK = aOperandShape[1];
   if (aInTmem) {
+    unsigned storageBitwidth = aTensorTy.getElementTypeBitWidth();
+    unsigned logicalBitwidth = op.numBitsPerElementA;
+    if (storageBitwidth > logicalBitwidth &&
+        storageBitwidth % logicalBitwidth == 0) {
+      unsigned logicalPerStorage = storageBitwidth / logicalBitwidth;
+      assert(aTMemTileK % logicalPerStorage == 0 &&
+             "MMAv5 TMEM A K tile must align to packed storage columns");
+      aTMemTileK /= logicalPerStorage;
+    }
     aLoader = std::make_unique<DotOpMmaV5TmemLoader>(
         DotOpMmaV5TmemLoader::build(loc, rewriter, aTensorTy, baseA));
   } else {
@@ -507,8 +517,9 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
       Value useInitAcc = useDFlag;
       MemDescOperand accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
       for (int k = 0; k < numRepK; k++) {
-        MemDescOperand a = aLoader->memLoad(
-            m * aOperandShape[0], k * aOperandShape[1], rewriter, loc);
+        unsigned aTileK = desc.aInTmem ? aTMemTileK : aOperandShape[1];
+        MemDescOperand a =
+            aLoader->memLoad(m * aOperandShape[0], k * aTileK, rewriter, loc);
         Value b = bLoader->smemLoad(k * bOperandShape[0], n * bOperandShape[1],
                                     rewriter, loc);
         op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,

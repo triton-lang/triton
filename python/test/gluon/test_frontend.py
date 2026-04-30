@@ -975,6 +975,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def tmem_fp4_padded_layout_kernel():
+    layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 64], col_stride=1, fp4_padded=True)
+    ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.int8, [128, 64], layout)
+
+
+def test_tmem_fp4_padded_layout_constexpr():
+    expecttest.assert_expected_inline(
+        anonymize_ir(run_parser(tmem_fp4_padded_layout_kernel, target=BLACKWELL_TARGET).str_nodebug()), """\
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, fp4Padded = true>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tmem_fp4_padded_layout_kernel() attributes {noinline = false} {
+    %result = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xi8, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
 def tmem_subslice_reg_layout_kernel():
     layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 256], col_stride=1, cga_layout=((1, 0), (2, 0)))
     tmem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.float32, [2, 512, 256], layout)

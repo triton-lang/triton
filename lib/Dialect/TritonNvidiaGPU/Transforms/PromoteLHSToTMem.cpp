@@ -45,18 +45,17 @@ public:
     auto accTMemEncoding = dyn_cast<TensorMemoryEncodingAttr>(
         tcGen5MMAOp.getD().getType().getEncoding());
     auto cgaLayout = triton::gpu::getCGALayout(srcLayout);
-    // TMem encoding for A operand is the same as for D (Acc), but packed for
-    // bitwidth=16
+    // TMem encoding for A operand is the same as for D (Acc), with colStride 1.
     unsigned elemBitWidth =
         lhs.getType().getElementType().getIntOrFloatBitWidth();
-    // We don't currently support fp8 (not sure if we can)
-    if (elemBitWidth != 16 && elemBitWidth != 32) {
+    if (elemBitWidth != 8 && elemBitWidth != 16 && elemBitWidth != 32) {
       return failure();
     }
     const unsigned colStride = 1;
     auto aTMemEncoding = TensorMemoryEncodingAttr::get(
         context, accTMemEncoding.getBlockM(), lhs.getType().getShape()[1],
-        colStride, cgaLayout, accTMemEncoding.getTwoCTAs());
+        colStride, cgaLayout, accTMemEncoding.getTwoCTAs(),
+        /*fp4Padded=*/false);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     ttg::MemDescType lhsMemDescType = ttg::MemDescType::get(

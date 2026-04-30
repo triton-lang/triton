@@ -1,10 +1,14 @@
 // RUN: triton-opt %s | FileCheck %s
+// CHECK-DAG: #{{.*}} = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, fp4Padded = true>
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #tmem_f16 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 2>
 #tmem_int32 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
+#tmem_lhs = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_lhs_fp4 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#tmem_lhs_fp4_padded = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, fp4Padded = true>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -57,6 +61,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
        !ttg.memdesc<128x128xi8, #shared, #ttg.shared_memory>,
        !ttg.memdesc<128x256xi8, #shared1, #ttg.shared_memory>,
        !ttg.memdesc<128x256xi32, #tmem_int32, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @tcgen5_scaled_tmem_lhs
+  //       CHECK: ttng.tc_gen5_mma_scaled {{.*}} lhs = e5m2 rhs = e5m2
+  //       CHECK: ttng.tc_gen5_mma_scaled {{.*}} lhs = e2m1 rhs = e2m1
+  //       CHECK: ttng.tc_gen5_mma_scaled {{.*}} lhs = e2m1 rhs = e5m2
+  tt.func @tcgen5_scaled_tmem_lhs(
+                  %a_fp8: !ttg.memdesc<128x128xf8E5M2, #tmem_lhs, #ttng.tensor_memory>,
+                  %a_fp4_dense: !ttg.memdesc<128x64xi8, #tmem_lhs_fp4, #ttng.tensor_memory>,
+                  %a_fp4_padded: !ttg.memdesc<128x64xi8, #tmem_lhs_fp4_padded, #ttng.tensor_memory>,
+                  %b_fp8: !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
+                  %b_fp4: !ttg.memdesc<64x256xi8, #shared1, #ttg.shared_memory>,
+                  %c: !ttg.memdesc<128x256xf32, #tmem_int32, #ttng.tensor_memory, mutable>,
+                  %scale_a: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+                  %scale_b: !ttg.memdesc<256x4xi8, #tmem_scales, #ttng.tensor_memory>,
+                  %accUse: i1,
+                  %pred: i1) {
+    ttng.tc_gen5_mma_scaled %a_fp8, %b_fp8, %c, %scale_a, %scale_b, %accUse, %pred lhs = e5m2 rhs = e5m2 :
+       !ttg.memdesc<128x128xf8E5M2, #tmem_lhs, #ttng.tensor_memory>,
+       !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
+       !ttg.memdesc<128x256xf32, #tmem_int32, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+       !ttg.memdesc<256x4xi8, #tmem_scales, #ttng.tensor_memory>
+    ttng.tc_gen5_mma_scaled %a_fp4_dense, %b_fp4, %c, %scale_a, %scale_b, %accUse, %pred lhs = e2m1 rhs = e2m1 :
+       !ttg.memdesc<128x64xi8, #tmem_lhs_fp4, #ttng.tensor_memory>,
+       !ttg.memdesc<64x256xi8, #shared1, #ttg.shared_memory>,
+       !ttg.memdesc<128x256xf32, #tmem_int32, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+       !ttg.memdesc<256x4xi8, #tmem_scales, #ttng.tensor_memory>
+    ttng.tc_gen5_mma_scaled %a_fp4_padded, %b_fp8, %c, %scale_a, %scale_b, %accUse, %pred lhs = e2m1 rhs = e5m2 :
+       !ttg.memdesc<128x64xi8, #tmem_lhs_fp4_padded, #ttng.tensor_memory>,
+       !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
+       !ttg.memdesc<128x256xf32, #tmem_int32, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+       !ttg.memdesc<256x4xi8, #tmem_scales, #ttng.tensor_memory>
     tt.return
   }
 

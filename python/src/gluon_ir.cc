@@ -301,7 +301,7 @@ py::object layoutToGluon(Attribute layout) {
     return layouts.TensorMemoryLayout(
         std::vector<unsigned>{tmem.getBlockM(), tmem.getBlockN()},
         tmem.getColStride(), getCgaLayoutBases(tmem.getCGALayout()),
-        tmem.getTwoCTAs());
+        tmem.getTwoCTAs(), tmem.getFp4Padded());
   }
 
   throw py::value_error("Unhandled encoding encountered");
@@ -560,12 +560,13 @@ void init_gluon_ir(py::module &&m) {
       .def("get_tensor_memory_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &block,
               unsigned colStride, std::vector<std::vector<int32_t>> &cgaBases,
-              bool twoCTAs) -> Attribute {
+              bool twoCTAs, bool fp4Padded) -> Attribute {
              auto ctx = self.getContext();
              check(block.size() == 2, "expected a 2D block");
              auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, /*rank=*/2);
              return self.getChecked<ttng::TensorMemoryEncodingAttr>(
-                 ctx, block[0], block[1], colStride, cgaLayout, twoCTAs);
+                 ctx, block[0], block[1], colStride, cgaLayout, twoCTAs,
+                 fp4Padded);
            })
       .def("get_tensor_memory_scales_layout",
            [](GluonOpBuilder &self,

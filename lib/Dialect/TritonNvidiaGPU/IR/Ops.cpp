@@ -577,6 +577,9 @@ LogicalResult TCGen5MMAOp::verify() {
   if (auto tmem = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
     if (tmem.getColStride() != 1)
       return emitOpError("The col stride of the LHS operand must be 1");
+    if (tmem.getFp4Padded())
+      return emitOpError(
+          "fp4_padded tensor memory LHS is only supported by scaled MMA");
   }
   if (retEnc.getColStride() != 32 / retType.getElementTypeBitWidth())
     return emitOpError("The col stride of the return operand must be 32 / ")
@@ -789,6 +792,42 @@ static Type getScaledMMAOperandType(Type elementType,
   llvm_unreachable("Unsupported type.");
 };
 
+static LogicalResult
+verifyScaledTMemLhs(Operation *op, Type elementType,
+                    TensorMemoryEncodingAttr encoding,
+                    ScaleDotElemType aType, ScaleDotElemType bType) {
+  if (encoding.getColStride() != 1)
+    return op->emitOpError("The col stride of the LHS operand must be 1");
+
+  if (encoding.getFp4Padded()) {
+    if (!elementType.isInteger(8))
+      return op->emitOpError(
+          "fp4_padded tensor memory LHS requires i8 or u8 storage");
+    if (aType != ScaleDotElemType::E2M1)
+      return op->emitOpError(
+          "fp4_padded tensor memory LHS requires lhs = e2m1");
+    return success();
+  }
+
+  if (elementType.isInteger(8)) {
+    if (aType != ScaleDotElemType::E2M1)
+      return op->emitOpError("byte tensor memory LHS requires lhs = e2m1");
+    if (bType == ScaleDotElemType::E4M3 || bType == ScaleDotElemType::E5M2)
+      return op->emitOpError("mixed fp4 tensor memory LHS with fp8 RHS "
+                             "requires fp4_padded = true");
+    return success();
+  }
+
+  if (isa<Float8E4M3FNType, Float8E5M2Type>(elementType)) {
+    if (aType != ScaleDotElemType::E4M3 && aType != ScaleDotElemType::E5M2)
+      return op->emitOpError("float8 tensor memory LHS requires fp8 lhs type");
+    return success();
+  }
+
+  return op->emitOpError("unsupported tensor memory LHS storage type for "
+                         "scaled MMA");
+}
+
 LogicalResult TCGen5MMAScaledOp::verify() {
   Type atype =
       getScaledMMAOperandType(getA().getType().getElementType(), getAType());
@@ -804,6 +843,13 @@ LogicalResult TCGen5MMAScaledOp::verify() {
   }
   if (enc.getBlockM() != 128)
     return emitOpError("only supports instruction shape blockM=128");
+  if (auto aTMemEnc =
+          dyn_cast<TensorMemoryEncodingAttr>(getA().getType().getEncoding())) {
+    if (failed(verifyScaledTMemLhs(getOperation(),
+                                   getA().getType().getElementType(),
+                                   aTMemEnc, getAType(), getBType())))
+      return failure();
+  }
   return success();
 }
 
