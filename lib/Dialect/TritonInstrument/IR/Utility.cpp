@@ -29,7 +29,6 @@ DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
                                               unsigned warps, unsigned numCTAs,
                                               unsigned bitwidth) {
   assert(!shape.empty() && "Expected non-empty shape");
-  auto dims = standardOutDimNames(ctx, shape.size());
   auto kBlock = StringAttr::get(ctx, "block");
   auto kWarp = StringAttr::get(ctx, "warp");
   auto kLane = StringAttr::get(ctx, "lane");
@@ -45,27 +44,17 @@ DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
 
   // Broadcast along blocks and warps. Use the innermost dimension for the
   // lane/register mapping and keep the outer dimensions replicated.
-  auto lastDim = dims.back();
-  auto repOrder = llvm::to_vector(llvm::seq<unsigned>(0, shape.size()));
-  auto trivialShape = SmallVector<unsigned>(shape.size(), 1);
-  auto llReg = LinearLayout::identity1D(1, kRegister, lastDim);
-  auto llLane = LinearLayout::identity1D(32, kLane, lastDim);
-  auto llWarp = LinearLayout::zeros1D(warps, kWarp, lastDim);
-  // ConSan's multi-CTA state is replicated in every CTA. The leading logical
-  // CTA dimension is therefore broadcast across blocks instead of split.
-  auto llBlock = LinearLayout::zeros1D(numCTAs, kBlock, dims.front());
-  LinearLayout ll = identityStandardND(kRegister, trivialShape, repOrder) *
-                    llReg * llLane * llWarp * llBlock;
-  SmallVector<int64_t> layoutShape(shape.size(), 1);
-  layoutShape.back() = ll.getTotalOutDimSize();
-  ll = ll.reshapeOuts(standardOutDimPairs(ctx, layoutShape));
-
-  llvm::SmallDenseMap<StringAttr, int64_t> bounds;
-  for (auto [dim, size] : llvm::zip_equal(dims, shape))
-    bounds.try_emplace(dim, size);
-  ll = ensureLayoutNotLargerThan(ll, bounds);
-  ll = ensureLayoutNotSmallerThan(ll, bounds);
-
+  auto dim = StringAttr::get(ctx, "dim0");
+  int numel = product(shape);
+  auto nlanes = std::min(numel, 32);
+  auto nregs = numel / nlanes;
+  auto ll = LinearLayout::identity1D(1, kRegister, dim) *
+            LinearLayout::identity1D(nlanes, kLane, dim) *
+            LinearLayout::zeros1D(32 / nlanes, kLane, dim) *
+            LinearLayout::zeros1D(warps, kWarp, dim) *
+            LinearLayout::zeros1D(numCTAs, kBlock, dim) *
+            LinearLayout::identity1D(nregs, kRegister, dim);
+  ll = ll.reshapeOuts(standardOutDimPairs(ctx, shape));
   return LinearEncodingAttr::get(ctx, ll);
 }
 
