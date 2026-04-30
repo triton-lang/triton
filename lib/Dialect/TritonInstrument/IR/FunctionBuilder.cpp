@@ -62,15 +62,12 @@ constexpr unsigned bitsPerThread = 2;
 constexpr unsigned flagBit = 0;
 constexpr unsigned phaseBit = 1;
 
-constexpr uint32_t makeInterleavedMask(unsigned bit) {
+uint32_t makeInterleavedMask(unsigned bit, unsigned numBaseThreads) {
   uint32_t mask = 0;
-  for (unsigned i = 0; i < tti::NUM_THREADS; ++i)
+  for (unsigned i = 0; i < numBaseThreads; ++i)
     mask |= 1u << (bitsPerThread * i + bit);
   return mask;
 }
-
-constexpr uint32_t flagMask = makeInterleavedMask(flagBit);
-constexpr uint32_t phaseMask = makeInterleavedMask(phaseBit);
 } // namespace WaitingBits
 
 // Information about the optional assert message and tensor type to check.
@@ -79,9 +76,9 @@ struct AssertInfo {
   Type type;
 };
 
-static uint64_t expandActiveMask(uint64_t activeMask) {
+static uint64_t expandActiveMask(uint64_t activeMask, unsigned numBaseThreads) {
   uint64_t expanded = 0;
-  for (unsigned i = 0; i < tti::NUM_THREADS; ++i) {
+  for (unsigned i = 0; i < numBaseThreads; ++i) {
     if (activeMask & (1ull << i))
       expanded |=
           1ull << (WaitingBits::bitsPerThread * i + WaitingBits::flagBit);
@@ -664,7 +661,12 @@ void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
   if (!pred) {
     pred = arith::ConstantIntOp::create(b, 1, 1);
   }
-  int64_t expandedActiveMask = expandActiveMask(activeMask);
+  int64_t expandedActiveMask =
+      expandActiveMask(activeMask, auxData.threadLayout.numBaseThreads);
+  uint32_t flagMask = WaitingBits::makeInterleavedMask(
+      WaitingBits::flagBit, auxData.threadLayout.numBaseThreads);
+  uint32_t phaseMask = WaitingBits::makeInterleavedMask(
+      WaitingBits::phaseBit, auxData.threadLayout.numBaseThreads);
   Value expandedActiveMaskVal =
       arith::ConstantIntOp::create(b, expandedActiveMask, 32);
   Value waitingVal = auxData.waiting.at(insertPoint).value;
@@ -688,8 +690,8 @@ void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
   createCallToCachedFunction(
       b, "check_all_active_waiting", args, assertInfo,
       {waitingGlobalType, barrierStatesGlobalType},
-      [waitingGlobalType, barrierStatesGlobalType](ImplicitLocOpBuilder &fb,
-                                                   Block *entryBlock) {
+      [waitingGlobalType, barrierStatesGlobalType, flagMask,
+       phaseMask](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value expandedActiveMaskVal = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
 
@@ -702,9 +704,9 @@ void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
             fb, fb.getLoc(), barrierStatesPtr, barrierStatesGlobalType);
 
         Value flagMaskTensor = tti::createConstIntTensor(
-            fb, fb.getLoc(), WaitingBits::flagMask, waitingGlobalType);
+            fb, fb.getLoc(), flagMask, waitingGlobalType);
         Value phaseMaskTensor = tti::createConstIntTensor(
-            fb, fb.getLoc(), WaitingBits::phaseMask, waitingGlobalType);
+            fb, fb.getLoc(), phaseMask, waitingGlobalType);
 
         Value flags = arith::AndIOp::create(fb, waiting, flagMaskTensor);
         Value phases = arith::AndIOp::create(fb, waiting, phaseMaskTensor);
@@ -2495,7 +2497,9 @@ void FunctionBuilder::createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b,
   createCallToCachedFunction(
       b, "copy_write_visibility", args,
       /*assertInfo=*/std::nullopt, {writeVisibilityType, (uint64_t)memType},
-      [writeVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      [writeVisibilityType,
+       totalNumThreads = auxData.threadLayout.totalNumThreads](
+          ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value sourceThread = entryBlock->getArgument(0);
         Value destMaskVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -2510,10 +2514,10 @@ void FunctionBuilder::createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b,
         Value zeroTensor =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, writeVisibilityType);
 
-        uint64_t fullMask = tti::THREADS_BITMASK_SIZE == 64
+        uint64_t fullMask = totalNumThreads == 64
                                 ? std::numeric_limits<uint64_t>::max()
                                 : (std::numeric_limits<uint64_t>::max() >>
-                                   (64 - tti::THREADS_BITMASK_SIZE));
+                                   (64 - totalNumThreads));
         Value fullMaskVal = arith::ConstantIntOp::create(fb, fullMask, 64);
         Value destMaskElem = adjustIntegerWidth(fb, destMaskVal, elemType);
         Value fullMaskElem = adjustIntegerWidth(fb, fullMaskVal, elemType);
@@ -2633,8 +2637,9 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
       b, "publish_cluster_visibility", args,
       /*assertInfo=*/std::nullopt,
       {writeVisibilityType, readVisibilityType, (uint64_t)memType},
-      [writeVisibilityType, readVisibilityType](ImplicitLocOpBuilder &fb,
-                                                Block *entryBlock) {
+      [writeVisibilityType, readVisibilityType,
+       numBaseThreads = auxData.threadLayout.numBaseThreads](
+          ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value pred = entryBlock->getArgument(0);
         Value writeVisibilityPtr = entryBlock->getArgument(1);
         Value readVisibilityPtr = entryBlock->getArgument(2);
@@ -2650,7 +2655,7 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
         // Cluster barriers publish generic-proxy synchronous work. Base-thread
         // visibility distinguishes those facts from async-only TMA/TC/CLC
         // effects, which are published by their own completion path.
-        uint64_t baseThreadMask = (1ULL << tti::NUM_THREADS) - 1;
+        uint64_t baseThreadMask = (1ULL << numBaseThreads) - 1;
         Value baseMask = tti::createConstIntTensor(
             fb, fb.getLoc(), baseThreadMask, writeVisibilityType);
         Value zeroWrites =
@@ -3148,7 +3153,7 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
   }
   ValueType buffers = auxData.buffers[(int)memType].at(insertPoint);
   ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
-  assert(thread < NUM_THREADS &&
+  assert(thread < auxData.threadLayout.numBaseThreads &&
          "Commit-count tracking must operate on base threads");
   Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
   if (!pred)
