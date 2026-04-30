@@ -366,15 +366,12 @@ def write_thirdparty_cmake_vars(output: str, packages: list[str], helper_args: B
 
 
 def download_and_copy(name, src_func, dst_path, override_path, version, url_func, helper_args: BuildHelperArgs):
-    base_dir = get_base_dir()
-    dst_path = os.path.join(base_dir, "third_party", "nvidia", "backend", dst_path)  # final binary path
-    if override_path is not None:
-        if not os.path.exists(override_path):
-            raise RuntimeError(f"Override path does not exist: {override_path}")
-        return
     if helper_args.offline_build:
         return
     cache_path = helper_args.cache_path
+    if override_path is not None:
+        return
+    base_dir = get_base_dir()
     system = platform.system()
     arch = platform.machine()
     # NOTE: This might be wrong for jetson if both grace chips and jetson chips return aarch64
@@ -383,6 +380,7 @@ def download_and_copy(name, src_func, dst_path, override_path, version, url_func
     url = url_func(supported[system], arch, version)
     src_path = src_func(supported[system], arch, version)
     tmp_path = os.path.join(cache_path, "nvidia", name)  # path to cache the download
+    dst_path = os.path.join(base_dir, "third_party", "nvidia", "backend", dst_path)  # final binary path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
     if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
