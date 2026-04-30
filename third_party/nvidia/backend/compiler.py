@@ -514,9 +514,11 @@ class CUDABackend(BaseBackend):
             # Accept more ptxas options if provided
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
-            # Use -Ofc mid to compile ConSan code, if nothing else is specified.
-            if any(mode in knobs.compilation.instrumentation_mode for mode in ["consan", "fpsan"]):
-                ptx_extra_options += ["-Ofc", "mid"]
+            # -Ofc mid miscompiles some large ConSan kernels into invalid global
+            # accesses; -O1 keeps compile time reasonable without that ptxas bug.
+            if (not knobs.nvidia.disable_ptxas_opt
+                    and any(mode in knobs.compilation.instrumentation_mode for mode in ["consan", "fpsan"])):
+                ptx_extra_options += ["--opt-level", "1"]
 
             # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
             reg_alloc = ['--regAllocOptLevel=2']
