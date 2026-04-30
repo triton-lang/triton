@@ -512,7 +512,8 @@ class CUDABackend(BaseBackend):
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
             # Use -Ofc mid to compile ConSan code, if nothing else is specified.
-            if any(mode in knobs.compilation.instrumentation_mode for mode in ["consan", "fpsan"]):
+            if (not knobs.nvidia.disable_ptxas_opt
+                    and any(mode in knobs.compilation.instrumentation_mode for mode in ["consan", "fpsan"])):
                 ptx_extra_options += ["-Ofc", "mid"]
 
             # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
