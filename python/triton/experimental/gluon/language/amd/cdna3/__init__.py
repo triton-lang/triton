@@ -28,6 +28,8 @@ def _verify_buffer_ops(ptr, offsets, mask=None, other=None):
     assert isinstance(offsets.type, ttgl.distributed_type), "expected offsets type to be a distributed_type"
     assert offsets.dtype.is_int32() or offsets.dtype.is_uint32(), "offsets element type must be int32 or uint32"
 
+    mask = _unwrap_if_constexpr(mask)
+    other = _unwrap_if_constexpr(other)
     if other is not None:
         assert mask is not None, "when other is not None, mask should not be None"
 
@@ -120,6 +122,7 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
 
     other = other.handle if other is not None else ir.value()
     mask = mask.handle if mask is not None else ir.value()
+    cache = _unwrap_if_constexpr(cache)
     cache_modifier = _semantic._str_to_load_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
     ret_ty = offsets.type.with_element_ty(ptr.type.scalar.element_ty)
@@ -144,6 +147,7 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
     _verify_buffer_ops(ptr, offsets, mask)
 
     offsets_shape = offsets.shape
+    mask = _unwrap_if_constexpr(mask)
     if mask is None:
         offsets, stored_value = _semantic.broadcast_tensors(offsets, stored_value)
     else:
@@ -152,6 +156,7 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
         raise ValueError(f"Expected `offsets` argument to have shape {offsets.shape} but got {offsets_shape}")
 
     mask = mask.handle if mask is not None else ir.value()
+    cache = _unwrap_if_constexpr(cache)
     cache_modifier = _semantic._str_to_store_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
     _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, mask, cache_modifier)
