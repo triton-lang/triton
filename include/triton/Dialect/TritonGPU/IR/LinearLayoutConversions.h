@@ -168,23 +168,18 @@ std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
                                        bool disableSwizzle);
 
-// Create a LinearLayout for TDM (Tensor DMA) block shapes.  Returns a
-// (message, warp, block) -> (dim0, dim1, ...) layout.
+// Create a TDM (Tensor DMA) LinearLayout: (message, warp, block) ->
+// (dim0, dim1, ...).  TDM is warp-granular.  The "warp" sublayout is an
+// identity over `warpsPerCTA`, zero-padded up to log2(numWarps) so the
+// full module warpId is covered; padded rows expose the redundant bits
+// as free variables (via getFreeVariableMasks("warp")) so partial copies
+// (K < numWarps) can pred-off inactive warps.  "message" covers the
+// per-warp tile (surjectivity); "block" comes from `cgaLayout`.
 //
-// TDM operates at warp granularity.  The "warp" sublayout is an identity
-// over `warpsPerCTA`, padded with all-zero rows up to log2(numWarps) so
-// the full module warpId is covered; "message" covers the per-warp tile
-// for surjectivity; "block" comes from `cgaLayout`.
-//
-// For partial TDM copy (K < numWarps), the caller passes a smaller
-// `warpsPerCTA` (product K).  Padded all-zero rows expose the redundant
-// warpId bits as free variables via getFreeVariableMasks("warp"),
-// enabling pred-off no-ops on inactive warps.
-//
-// `warpBasisBits` (optional) places the K identity rows at specified
-// warpId bit positions; bits not listed become free variables.  Must
-// have log2(prod(warpsPerCTA)) distinct entries in [0, log2(numWarps)).
-// Empty defaults to {0, ..., log2K - 1} (legacy / no-hint behavior).
+// `warpBasisBits` (optional) places the K identity rows at the given
+// warpId bit positions; others become free variables.  Must hold
+// log2(prod(warpsPerCTA)) distinct entries in [0, log2(numWarps)).
+// Empty = {0..log2K-1} (no-hint default).
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
                                 const LinearLayout &cgaLayout, int numWarps,

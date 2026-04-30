@@ -654,11 +654,9 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
     if (auto err = validateWarpUsedHint(hint, numWarps))
       return emitOpError(*err);
 
-    // PartitionedSharedEncoding: hinted path doesn't support multi-
-    // instruction slicing along partitionDim, so K must cover all
-    // logical pieces in one shot.  K is a power of two, so K being a
-    // multiple of numLogicalPieces is equivalent to K >= numLogicalPieces
-    // (which is what the lowering assumes).
+    // PartitionedSharedEncoding: hinted path = single instruction, so
+    // numLogicalPieces must divide K (equivalent to K >= numLogicalPieces
+    // since K is a power of two).
     if (partitionedEnc) {
       unsigned partitionDim = partitionedEnc.getPartitionDim();
       unsigned numLogicalPieces = partitionedEnc.getNumLogicalPieces();
@@ -703,8 +701,8 @@ AsyncTDMCopyGlobalToLocalOp::validateWarpUsedHint(uint32_t hint,
                          K, numWarps)
         .str();
 
-  // Bits above num_warps - 1 must be zero.  Checked after the K bound so
-  // a too-large K reports the more specific "K vs num_warps" message.
+  // Bits above num_warps - 1 must be zero (checked after K so an
+  // oversized K reports the more specific "K vs num_warps" message).
   uint32_t numWarpsMask =
       (numWarps >= 32) ? ~uint32_t{0} : ((uint32_t{1} << numWarps) - 1);
   if ((hint & ~numWarpsMask) != 0)
@@ -713,14 +711,10 @@ AsyncTDMCopyGlobalToLocalOp::validateWarpUsedHint(uint32_t hint,
                          hint, numWarps)
         .str();
 
-  // v1 axis-aligned coset check.  S = active warp indices, i0 = lsb;
-  // S is an axis-aligned coset iff support = OR over w in S of (w XOR
-  // i0) has popcount == log2(K).  (Sufficient by pigeonhole: the K
-  // values (w XOR i0) are distinct subsets of `support`, of which there
-  // are exactly 2^log2K = K.)
-  //
-  // XOR is over warp INDICES, not bitmask positions; we extract each
-  // index via countr_zero before XOR-ing.
+  // v1 axis-aligned coset check: with i0 = lsb(hint),
+  // support = OR_{w in S} (w XOR i0), legal iff popcount(support) == log2(K)
+  // (sufficient by pigeonhole: K values (w ^ i0) are distinct subsets of
+  // `support`, of which there are 2^log2K = K).  XOR is over warp INDICES.
   unsigned i0 = llvm::countr_zero(hint);
   uint32_t support = 0;
   for (uint32_t mask = hint; mask != 0; mask &= mask - 1) {

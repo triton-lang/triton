@@ -1204,8 +1204,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
 
-    // Implicit merge dispatch: whichever member the driver visits first
-    // emits the fused intrinsic for the whole group and erases the rest.
+    // Implicit merge dispatch: first-visited member emits the fused
+    // intrinsic for the whole group and erases the rest.
     auto mergeIt = mergeGroups.find(op);
     bool inMergeGroup = mergeIt != mergeGroups.end();
     auto tensorDescTy = op.getDesc().getType();
@@ -1242,12 +1242,11 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         triton::gpu::getShapePerCTA(encoding, tensorDescTy.getShape());
 
     if (inMergeGroup) {
-      // Emit a fused intrinsic for the group.  Per-member operands are
-      // fetched via `getRemappedValue` (this returns adaptor's values
-      // for the current op).  Insert at the last member so pure ops
-      // between members dominate any operands used by the fused emit.
-      // Per-member hints are read inside `emitTDMLoadStoreMerged`; rule
-      // 2 guarantees no mbarriers, so no barrier array is needed.
+      // Fetch per-member operands via `getRemappedValue` (returns
+      // adaptor's values for the current op) and insert the fused emit
+      // at the last member, so any pure op between members dominates
+      // operands the fused emit uses.  Hints are read inside
+      // `emitTDMLoadStoreMerged`; rule 2 guarantees no mbarriers.
       const auto &group = mergeIt->second;
       size_t numMembers = group.members.size();
 
@@ -1274,8 +1273,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         predPerMember[i] = rewriter.getRemappedValue(memberOp.getPred());
       }
 
-      // Rule 7: all members share the same cache modifier, so reading
-      // auxBits off the current op is sufficient for the group.
+      // Rule 7: members share `cache`, so the current op's auxBits applies
+      // to the whole group.
       auto mergedAuxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
           op.getCache(), /*isLoad*/ true, targetInfo);
       rewriter.setInsertionPoint(group.members.back());
@@ -1290,9 +1289,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       return success();
     }
 
-    // Singleton path: compute per-op lowered values and call the
-    // standard `emitTDMLoadStore`.  These values are the LLVM-side
-    // representation (post-type-conversion) of the op's operands.
+    // Singleton path: lowered (post-type-conversion) operands -> emitTDMLoadStore.
     SmallVector<Value> desc =
         mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, adaptor.getDesc());
 

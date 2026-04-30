@@ -14,52 +14,39 @@ using PartitionedSharedEncodingAttr =
 
 namespace mlir::LLVM::AMD {
 
-// Decoded form of an axis-aligned `warp_used_hint` bitmask.  Populated
-// by `extractWarpHintInfo` from a verifier-validated hint, so all
-// invariants are assumed to hold.
+// Decoded form of a verifier-validated axis-aligned `warp_used_hint`.
+// Active set = { i0 ^ x : x in span(basisBits) }.
 struct WarpHintInfo {
-  // popcount(hint), always a power of two.
-  unsigned K = 0;
-  // Anchor: smallest active warp index.  Active set = { i0 ^ x : x in
-  // span(basisBits) }.
-  uint32_t i0 = 0;
-  // Bit positions of the log2(K) basis vectors; distinct, all in
-  // [0, log2(numWarps)).
-  SmallVector<int32_t, 5> basisBits;
+  unsigned K = 0;            // popcount(hint), power of two
+  uint32_t i0 = 0;           // smallest active warp index
+  SmallVector<int32_t, 5> basisBits; // log2(K) distinct positions in [0, log2(numWarps))
 };
 
-// Decode a verifier-validated axis-aligned `warp_used_hint`.  Drives
-// `getTDMLinearLayout`, `fillTDMDescriptor`, and per-wave predication.
+// Decode a verifier-validated `warp_used_hint`.
 WarpHintInfo extractWarpHintInfo(uint32_t hint, int numWarps);
 
-// Internal vector-grouped representation of a TDM descriptor.
-//   group0: <4 x i32>
-//   group1: <8 x i32>
-//   group2: <4 x i32>  (only for 3D-5D)
-//   group3: <4 x i32>  (only for 3D-5D)
-// The MLIR-visible struct type remains flat {i32 × N} so the in-memory ABI
-// matches the host-side TDMDescriptor struct in third_party/amd/backend/
-// driver.c; the grouping here is a lowering-pass-internal convenience.
+// Internal vector-grouped TDM descriptor (lowering-pass-only; the MLIR-
+// visible struct stays flat {i32 x N} to match the host-side TDMDescriptor
+// in third_party/amd/backend/driver.c).
+//   group0/1: <4 x i32> / <8 x i32> (always)
+//   group2/3: <4 x i32> each (3D-5D only)
 struct TDMDescriptor {
   Value group0;
   Value group1;
   std::optional<Value> group2;
   std::optional<Value> group3;
 
-  // Return the group vectors as a flat list.  For 2D: {group0, group1};
-  // for 3D-5D: {group0, group1, group2, group3}.
+  // Flatten to {g0,g1} (2D) or {g0,g1,g2,g3} (3D-5D).
   SmallVector<Value> getAllGroups() const;
 };
 
-// Unpack the flat `{i32 × 12/20}` descriptor struct that
-// `convertTensorDescType` returns (and that the host-side `TDMDescriptor` in
-// driver.c serializes) into 2 or 4 vector groups suitable for
-// `emitTDMLoadStore` / `emitTDMGatherScatter` / `emitTDMPrefetch`.
+// Unpack the flat {i32 x 12/20} descriptor struct (from convertTensorDescType
+// / host-side TDMDescriptor in driver.c) into 2 or 4 vector groups for
+// emitTDMLoadStore / emitTDMGatherScatter / emitTDMPrefetch.
 SmallVector<Value> unpackTDMDescriptor(RewriterBase &rewriter, Location loc,
                                        Value descStruct);
 
-// Inverse of unpackTDMDescriptor for packing via `packLLElements`.  Flattens
-// 2/4 vector groups back into 12/20 scalars.
+// Inverse of unpackTDMDescriptor: 2/4 vector groups back to 12/20 scalars.
 SmallVector<Value> scalarizeTDMDescriptor(RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> vectors);
 
@@ -76,15 +63,10 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
                                   SmallVector<Value> tensorStride,
                                   Value srcPtr);
 
-// Update the global memory address with offset, and fill the shared memory
-// address and pred in a given TDM descriptor for regular load/store (1D-5D).
-// For partitioned shared memory, dstPtrs contains multiple base pointers and
-// the correct one is selected based on sharedLayout's partition dimension.
-//
-// With `warpHint`, the warp sublayout's K identity rows are placed at
-// `warpHint->basisBits` and `warpId` is XOR-anchored by `warpHint->i0`
-// before the free-variable-mask predication.  Without a hint, basis
-// bits default to {0, ..., log2K - 1} (the pre-hint placement).
+// Fill the dst/pred fields of a TDM descriptor for regular load/store (1D-5D).
+// Partitioned dst: `dstPtrs` holds per-partition bases, picked by partitionDim.
+// With `warpHint`, K identity rows are placed at `warpHint->basisBits` and
+// `warpId` is XOR-anchored by `warpHint->i0`; otherwise basis = {0..log2K-1}.
 void fillTDMDescriptor(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
@@ -115,18 +97,11 @@ void fillTDMDescriptorForGatherScatter(
     Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId,
     ArrayRef<Value> rowIndices, bool use32BitIndices, bool isGather);
 
-// Emit a TDM load or store for regular (non-scatter) contiguous transfers
-// (1D-5D).  For PartitionedSharedEncoding, the warp distribution is aligned
-// to LDS partitions; without a hint the op auto-splits into multiple TDM
-// instructions when warps can't cover all logical pieces.  With a hint the
-// verifier guarantees a single instruction suffices.
-//
-// - offset / dstPtrs: per-dim global offsets / per-partition LDS bases
-// - sharedLayout: linear layout for the full allocation (pre-CGA-split)
-// - encoding: shared encoding, used for partition constraints
-// - warpUsedHint: see TritonAMDGPUOps.td; `K = popcount(hint)` replaces
-//   `numWarps`, inactive warps become no-ops via free-variable masking
-//   plus an XOR by `i0`.
+// Emit a TDM load/store for regular contiguous transfers (1D-5D).
+// PartitionedSharedEncoding aligns warps to LDS partitions; without a hint
+// the op auto-splits into multiple instructions when warps don't cover all
+// pieces, while a hint guarantees single-instruction emission (verifier).
+// `warpUsedHint`: see TritonAMDGPUOps.td.
 void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const LLVMTypeConverter *typeConverter,
                       ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
@@ -141,57 +116,46 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 // ---------------------------------------------------------------------------
 // Implicit op-merging support.
 //
-// The merge analysis runs once at TDM->LLVM conversion entry and returns
-// a side-table from each `async_tdm_copy_global_to_local` op in a group
-// to its group info; the IR itself is unchanged.  The conversion pattern
-// dispatches on this map: the first visited member emits a fused
-// intrinsic via `emitTDMLoadStoreMerged` and erases the whole group;
-// singletons fall back to `emitTDMLoadStore`.
+// `computeTDMMergeGroups` runs once at TDM->LLVM entry and builds a side-
+// table from each merging `async_tdm_copy_global_to_local` op to its group
+// info (IR unchanged).  The conversion pattern dispatches on it: the first
+// visited member emits a fused intrinsic via `emitTDMLoadStoreMerged` and
+// erases the whole group; singletons fall back to `emitTDMLoadStore`.
 //
 // Mergeability rules (v1; all required):
-//   1. Every member carries a verifier-legal `warp_used_hint`.  Hint-less
-//      ops aren't candidates and act as a flush boundary.
-//   2. No member carries an `mbarrier` operand (the fused intrinsic
-//      doesn't encode the barrier semantic).  Mbarrier-carrying ops are
-//      flush boundaries.
-//   3. Members share the same K = popcount(hint), have pairwise-disjoint
-//      hints, and their union is itself an axis-aligned coset.
-//   4. Group size N is a power of two with N >= 2.
-//   5. Members are consecutive in the same block; pure (memory-effect-
-//      free) ops thread through, any side-effecting non-TDM op flushes.
-//   6. Results have structurally equal MemDescType (same encoding +
-//      shapePerCTA) and pairwise-distinct SSA destinations.
-//   7. Members share the same `cache` modifier (single auxBits on the
-//      fused intrinsic).
+//   1. Every member has a verifier-legal `warp_used_hint`; hint-less ops
+//      flush the in-flight batch.
+//   2. No member has an `mbarrier` (fused intrinsic can't encode it);
+//      mbarrier-carrying ops flush.
+//   3. Members share K = popcount(hint), have pairwise-disjoint hints,
+//      and their union is itself an axis-aligned coset.
+//   4. Group size N is a power of two >= 2.
+//   5. Members are consecutive in one block; pure ops thread through,
+//      side-effecting non-TDM ops flush.
+//   6. Results have structurally equal MemDescType and pairwise-distinct
+//      SSA destinations.
+//   7. Members share the same `cache` modifier (one auxBits on the fused
+//      intrinsic).
 //
-// To combine an mbarrier with hinted partial copies, separate them: one
-// mbarrier-carrying singleton bracketing a fusable batch.
+// To pair an mbarrier with hinted partial copies, bracket the fusable
+// batch with an mbarrier-carrying singleton.
 struct TDMMergeGroupInfo {
-  // Members in program order; size N >= 2, N a power of two.
-  SmallVector<Operation *> members;
-  // Bit-OR of every member's `warp_used_hint`.  Itself a verifier-legal
-  // axis-aligned coset.
-  uint32_t unionHint = 0;
-  // Decoded form of `unionHint` against the module's numWarps.
-  WarpHintInfo unionInfo;
+  SmallVector<Operation *> members;  // program order; |members| = N
+  uint32_t unionHint = 0;            // bit-OR of member hints; itself a coset
+  WarpHintInfo unionInfo;            // decoded `unionHint` vs module numWarps
 };
 
-// Walk `mod` and identify all merge groups (rules above).  Every member
-// of a group maps to the same `TDMMergeGroupInfo` value; ops not in any
-// group are absent from the map.
+// Walk `mod` and identify all merge groups; ops not in any group are
+// absent from the result.
 llvm::DenseMap<Operation *, TDMMergeGroupInfo>
 computeTDMMergeGroups(ModuleOp mod);
 
-// Emit a single fused TDM intrinsic for a merge group.  Per-member
-// descriptors are built via `fillTDMDescriptor` (each with its own
-// hint/dst/indices/pred), then combined via SGPR-uniform `select`
-// chains keyed on a per-wave selector derived from the union hint.
-//
-// `descPerMember[i]` / `dstPtrsPerMember[i]` are the lowered descriptor
-// and LDS bases for member i; per-member hints are read off
-// `groupInfo.members[i]`.  The shared `sharedLayout`/`encoding`/
-// `auxBits` come from any member (mergeability makes them uniform), and
-// no per-member barrier is needed (rule 2).
+// Emit one fused TDM intrinsic for a merge group: build per-member
+// descriptors via `fillTDMDescriptor` (each with its own hint/dst/idx/
+// pred), then `select` between them on an SGPR-uniform per-wave selector
+// derived from the union hint.  Shared `sharedLayout`/`encoding`/
+// `auxBits` come from any member (mergeability makes them uniform);
+// no barrier (rule 2).
 void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
                             const LLVMTypeConverter *typeConverter,
                             ArrayRef<SmallVector<Value>> descPerMember,

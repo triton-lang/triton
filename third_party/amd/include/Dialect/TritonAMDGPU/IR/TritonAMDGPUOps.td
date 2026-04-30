@@ -762,38 +762,32 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     it sends an "LDS atomic arrive" to signal its completion.
 
     `warp_used_hint` is an optional i32 bitmask performance hint for
-    partial TDM copy.  Bit `n` (LSB = warp 0) means warp `n` issues the
-    instruction; bits above `num_warps - 1` must be zero.  The hint
-    doesn't change semantics (same data lands in shared memory either
-    way) — only emission: `K = popcount(hint)` warps cover the block,
-    the rest are pred-off no-ops.
+    partial TDM copy: bit `n` (LSB = warp 0) means warp `n` issues the
+    instruction; bits above `num_warps - 1` must be zero.  Same data
+    lands in shared memory either way -- only emission changes:
+    `K = popcount(hint)` warps cover the block, the rest are pred-off.
 
-    "All warps participate" is encoded by the attribute being **absent**.
-    An explicit `warp_used_hint = 0` is rejected by the verifier; the
-    distinction matters for merge analysis (a hint-less op is a flush
-    boundary, while `K = num_warps` is a normal hinted op).  Front-ends
-    that accept a Python-side `0` should map it to "no attribute".
+    "All warps participate" is the attribute being **absent**; an
+    explicit `warp_used_hint = 0` is rejected (a hint-less op is a
+    merge-flush boundary, while `K = num_warps` is a normal hinted op).
+    Front-ends should map a Python-side `0` to "no attribute".
 
     Implicit op-merging (TDM->LLVM lowering): adjacent hinted copies
-    whose hints satisfy disjoint/equal-K/axis-aligned-union rules and
-    that share the same `cache` modifier can be fused into a single
-    hardware intrinsic.  Mismatched `cache` flushes the candidate batch.
-    Ops carrying an mbarrier operand are always lowered as singletons
-    and act as flush boundaries.  Full mergeability contract: see
+    sharing `cache` and satisfying the disjoint/equal-K/axis-aligned-
+    union rules fuse into one intrinsic.  Mismatched `cache` or an
+    `mbarrier` operand flushes the batch.  Full contract:
     `TDMUtility.h::computeTDMMergeGroups`.
 
     v1 restriction: the hint must be an *axis-aligned coset* in warpId
-    space.  Equivalently, with `S = { i : (hint >> i) & 1 == 1 }`,
-    `i0 = lsb(hint)`, `support = OR over s in S of (s XOR i0)`: legal
-    iff `popcount(support) == log2(K)`.  Legal examples: `0x0F`
-    (warps 0..3), `0xF0` (warps 4..7), `0x55` / `0xAA` / `0xCC`
-    (stride-by-`2^j` cosets).  Rejected: diagonal/parity sets like
-    `0x69` (require parity-of-AND tests) and non-coset sets like `0x1B`.
+    space.  With `S = { i : (hint >> i) & 1 == 1 }`, `i0 = lsb(hint)`,
+    `support = OR over s in S of (s XOR i0)`: legal iff
+    `popcount(support) == log2(K)`.  Legal: `0x0F` (warps 0..3), `0xF0`
+    (warps 4..7), `0x55` / `0xAA` / `0xCC` (stride-by-`2^j`).  Rejected:
+    diagonal/parity sets like `0x69`, non-coset like `0x1B`.
 
-    With PartitionedSharedEncoding, the verifier also requires the
-    K-warp distribution to fit `warpsPerCTA[partitionDim] >=
-    numLogicalPieces` (multi-instruction slicing is not supported with
-    a hint).
+    PartitionedSharedEncoding additionally requires
+    `warpsPerCTA[partitionDim] >= numLogicalPieces` (the hinted path
+    doesn't support multi-instruction slicing).
   }];
 
   let arguments = (ins
@@ -833,11 +827,11 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
   }];
 
   let extraClassDeclaration = [{
-    // Validate `warp_used_hint` (axis-aligned coset, K a power of two
-    // with 1 <= K <= num_warps, no bits beyond num_warps - 1).  Returns
-    // std::nullopt on success, else an error string.  Shared with C++
-    // callers; encoding-specific rules (PartitionedSharedEncoding) live
-    // in verify() because they need the result type.
+    // Validate `warp_used_hint` (axis-aligned coset, K a power of two with
+    // 1 <= K <= num_warps, no bits >= num_warps).  Returns nullopt on
+    // success, else an error string.  Encoding-specific rules
+    // (PartitionedSharedEncoding) live in verify() since they need the
+    // result type.
     static ::std::optional<::std::string> validateWarpUsedHint(
         uint32_t warpUsedHint, int64_t numWarps);
   }];
