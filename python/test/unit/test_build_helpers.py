@@ -11,7 +11,7 @@ def _load_build_helpers():
     return module
 
 
-def test_download_and_copy_override_include_materializes_backend_tree(tmp_path, monkeypatch):
+def test_download_and_copy_override_include_does_not_materialize_backend_tree(tmp_path, monkeypatch):
     build_helpers = _load_build_helpers()
     base_dir = tmp_path / "repo"
     include_src = tmp_path / "cuda-include"
@@ -50,5 +50,4 @@ def test_download_and_copy_override_include_materializes_backend_tree(tmp_path, 
     )
 
     backend_include = base_dir / "third_party" / "nvidia" / "backend" / "include"
-    assert (backend_include / "cuda_runtime.h").read_text() == "// header\n"
-    assert (backend_include / "device" / "special.h").read_text() == "// nested\n"
+    assert not backend_include.exists()

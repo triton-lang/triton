@@ -381,7 +381,6 @@ def download_and_copy(name, src_func, dst_path, override_path, version, url_func
     if override_path is not None:
         if not os.path.exists(override_path):
             raise RuntimeError(f"Override path does not exist: {override_path}")
-        _copy_path(override_path, dst_path)
         return
     if helper_args.offline_build:
         return
