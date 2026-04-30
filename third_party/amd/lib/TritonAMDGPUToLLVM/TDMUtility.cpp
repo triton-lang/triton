@@ -1396,10 +1396,11 @@ void emitMergeGroup(MutableArrayRef<Operation *> batch, int numWarps,
   // Greedy pack: from the head of `batch`, find the largest power-of-
   // two `n` such that the first `n` ops have equal-K, pairwise-disjoint
   // hints, all pass `canMergeWith` against the first, and whose union
-  // is an axis-aligned coset.  The axis-aligned check must run at every
-  // power-of-two head, not only the largest: e.g. {0b0001, 0b0010,
-  // 0b0100, 0b1000} has intermediate union 0b0111 (not a coset) but
-  // full union 0b1111 (a coset), and we want the n=4 fusion.
+  // is an axis-aligned coset.  Each power-of-two head must be tested
+  // independently -- a smaller head failing doesn't rule out a larger
+  // one passing.  E.g. for K=1 hints {0b0001, 0b1000, 0b0010, 0b0100},
+  // the n=2 union 0b1001 is not a coset but the n=4 union 0b1111 is,
+  // and we still want the n=4 fusion.
   while (batch.size() >= 2) {
     auto firstOp = cast<TDMCopyGlobalToLocalOp>(batch.front());
     SmallVector<uint32_t, 8> hints;
@@ -1420,9 +1421,8 @@ void emitMergeGroup(MutableArrayRef<Operation *> batch, int numWarps,
       hints.push_back(hint);
     }
     size_t numCandidates = hints.size();
-    // Single forward pass: at every power-of-two head boundary, test
-    // the running union; the largest one to pass wins (see leading
-    // comment for why we can't just test the largest).
+    // Single forward pass: test the running union at every power-of-
+    // two head boundary; the largest passing one wins.
     size_t p2 = 0;
     uint32_t finalUnion = 0;
     uint32_t accUnion = 0;
@@ -1606,12 +1606,12 @@ void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
         rewriter, loc, typeConverter, elementType,
         SmallVector<int64_t>(blockShape.begin(), blockShape.end()), numWarps,
         padInterval, padAmount, fd.group0, fd.group1,
-        fd.group2 ? std::optional<std::reference_wrapper<Value>>(
-                        std::ref(*fd.group2))
-                  : std::nullopt,
-        fd.group3 ? std::optional<std::reference_wrapper<Value>>(
-                        std::ref(*fd.group3))
-                  : std::nullopt,
+        fd.group2
+            ? std::optional<std::reference_wrapper<Value>>(std::ref(*fd.group2))
+            : std::nullopt,
+        fd.group3
+            ? std::optional<std::reference_wrapper<Value>>(std::ref(*fd.group3))
+            : std::nullopt,
         SmallVector<Value>(offsetPerMember[i].begin(),
                            offsetPerMember[i].end()),
         dstPtrsPerMember[i], predPerMember[i], multicastMask,
@@ -1638,8 +1638,8 @@ void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
   auto selectGroup = [&](auto field) -> Value {
     Value acc = field(filledPerMember[selValToMember[N - 1]]);
     for (size_t s = N - 1; s-- > 0;)
-      acc = b.select(selectorEq[s],
-                     field(filledPerMember[selValToMember[s]]), acc);
+      acc = b.select(selectorEq[s], field(filledPerMember[selValToMember[s]]),
+                     acc);
     return acc;
   };
 

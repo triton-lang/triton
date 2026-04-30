@@ -302,8 +302,9 @@ _HINT_PARAMS = [
     (0b00110011, 0b11001100, True, "merge_lo_hi_pairs"),
     # partial coverage: K=2 each, union covers 4 of 8 warps (rest idle).
     (0b00000011, 0b00001100, True, "merge_partial_K4_idle"),
-    # mismatched K (popcount(union)=3): rule 3 forbids merging.
-    (0b00000011, 0b00010000, False, "disjoint_but_union_illegal"),
+    # equal K, disjoint, but union is not a coset (warps {0,3} have
+    # support 0b11 with popcount 2 != log2(2)=1): rule 3 forbids merging.
+    (0b00000001, 0b00001000, False, "disjoint_K1_union_illegal"),
 ]
 
 
