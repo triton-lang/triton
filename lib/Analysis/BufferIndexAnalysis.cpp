@@ -65,7 +65,7 @@ bool isCFBlockArgProvablyBounded(BlockArgument blockArg, int64_t modulus,
   Block *header = blockArg.getOwner();
   unsigned argIdx = blockArg.getArgNumber();
   // Entry block arguments have no incoming operands to prove the bound.
-  if (header->pred_empty())
+  if (header->pred_begin() == header->pred_end())
     return false;
 
   for (auto predIt = header->pred_begin(), e = header->pred_end(); predIt != e;
