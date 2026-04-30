@@ -35,7 +35,6 @@ from triton._internal_testing import is_hip_gfx1250
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
 
-
 # ---------------------------------------------------------------------------
 # Kernel: load two NxN tiles via TDM (with optional hints), add and store.
 # Two adjacent `async_load` ops are emitted to exercise merge-eligible
@@ -130,7 +129,6 @@ def vector_add_tdm_kernel(
 #   - 0x03 + 0x10     (K=2 + K=1, union popcount=3 -> not power of two)
 # ---------------------------------------------------------------------------
 
-
 _HINT_PARAMS = [
     # (HINT_A, HINT_B, expected_merge, id)
     (0, 0, False, "no_hint"),
@@ -138,6 +136,7 @@ _HINT_PARAMS = [
     (0x0F, 0, False, "lo_prefix_a_unhinted_b"),
     (0xF0, 0, False, "hi_prefix_a_unhinted_b"),
     (0x55, 0, False, "strided_a_unhinted_b"),
+    (0x01, 0x02, True, "merge_single_warp_pair"),
     (0x0F, 0xF0, True, "merge_lo_hi_prefix"),
     (0x55, 0xAA, True, "merge_strided"),
     (0x33, 0xCC, True, "merge_lo_hi_pairs"),
@@ -160,7 +159,6 @@ def _hint_id(p):
 # of `tensor_load_to_lds` instructions.  Runs without a GPU (just compiles
 # for gfx1250).
 # ---------------------------------------------------------------------------
-
 
 _COMPILE_BLOCK_SHAPES = [(64, 64), (32, 128)]
 
@@ -213,7 +211,6 @@ def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, expected_merge
 # ---------------------------------------------------------------------------
 # Runtime correctness test on gfx1250 hardware.
 # ---------------------------------------------------------------------------
-
 
 _RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
 

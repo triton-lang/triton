@@ -676,8 +676,10 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
     if (partitionedEnc) {
       unsigned partitionDim = partitionedEnc.getPartitionDim();
       unsigned numLogicalPieces = partitionedEnc.getNumLogicalPieces();
+      assert(numLogicalPieces > 0 &&
+             "PartitionedSharedEncoding must have numLogicalPieces >= 1");
       unsigned K = llvm::popcount(hint);
-      if (numLogicalPieces == 0 || K % numLogicalPieces != 0)
+      if (K % numLogicalPieces != 0)
         return emitOpError(
                    "warp_used_hint with a partitioned shared encoding must "
                    "select K active warps such that numLogicalPieces divides "

@@ -424,3 +424,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// Implicit merge negative case: the running union is legal, but member
+// hints do not all select the same active-warp count K
+// (0x01, 0x02, 0x0C, 0xF0 have K = 1, 1, 2, 4).  The first two K=1 ops
+// may merge, but the unequal-K suffix must not be folded into that group.
+#shared_unequal_k = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem_unequal_k = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_no_merge_unequal_member_k
+  tt.func public @tdm_no_merge_unequal_member_k(
+    %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+    %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+    %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+    %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+  ) {
+    %c_shape = arith.constant 256 : i32
+    %c_stride0 = arith.constant 256 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %c_offset = arith.constant 0 : i32
+    %c_pred = arith.constant 1 : i32
+    %a_desc = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <64x64xf16, #shared_unequal_k>
+    %b_desc = tt.make_tensor_descriptor %arg1, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <64x64xf16, #shared_unequal_k>
+    %c_desc = tt.make_tensor_descriptor %arg2, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <64x64xf16, #shared_unequal_k>
+    %d_desc = tt.make_tensor_descriptor %arg3, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <64x64xf16, #shared_unequal_k>
+    %a_buf = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared_unequal_k, #smem_unequal_k, mutable>
+    %b_buf = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared_unequal_k, #smem_unequal_k, mutable>
+    %c_buf = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared_unequal_k, #smem_unequal_k, mutable>
+    %d_buf = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared_unequal_k, #smem_unequal_k, mutable>
+    // CHECK-COUNT-3: "llvm.amdgcn.tensor.load.to.lds"
+    // CHECK-NOT: "llvm.amdgcn.tensor.load.to.lds"
+    %ta = amdg.async_tdm_copy_global_to_local %a_desc[%c_offset, %c_offset] into %a_buf, pred = %c_pred {warp_used_hint = 1 : i32} : !tt.tensordesc<64x64xf16, #shared_unequal_k> -> !ttg.memdesc<64x64xf16, #shared_unequal_k, #smem_unequal_k, mutable>
+    %tb = amdg.async_tdm_copy_global_to_local %b_desc[%c_offset, %c_offset] into %b_buf, pred = %c_pred {warp_used_hint = 2 : i32} : !tt.tensordesc<64x64xf16, #shared_unequal_k> -> !ttg.memdesc<64x64xf16, #shared_unequal_k, #smem_unequal_k, mutable>
+    %tc = amdg.async_tdm_copy_global_to_local %c_desc[%c_offset, %c_offset] into %c_buf, pred = %c_pred {warp_used_hint = 12 : i32} : !tt.tensordesc<64x64xf16, #shared_unequal_k> -> !ttg.memdesc<64x64xf16, #shared_unequal_k, #smem_unequal_k, mutable>
+    %td = amdg.async_tdm_copy_global_to_local %d_desc[%c_offset, %c_offset] into %d_buf, pred = %c_pred {warp_used_hint = 240 : i32} : !tt.tensordesc<64x64xf16, #shared_unequal_k> -> !ttg.memdesc<64x64xf16, #shared_unequal_k, #smem_unequal_k, mutable>
+    tt.return
+  }
+}

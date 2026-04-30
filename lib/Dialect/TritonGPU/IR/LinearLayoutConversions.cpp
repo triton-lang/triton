@@ -1793,9 +1793,8 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
         numTotalBits, std::vector<int32_t>(numDims, 0));
     SmallVector<bool> bitTaken(numTotalBits, false);
     for (unsigned j = 0; j < numActiveBits; ++j) {
-      unsigned bitPos = warpBasisBits.empty()
-                            ? j
-                            : static_cast<unsigned>(warpBasisBits[j]);
+      unsigned bitPos =
+          warpBasisBits.empty() ? j : static_cast<unsigned>(warpBasisBits[j]);
       assert(bitPos < numTotalBits &&
              "warpBasisBits entry out of range [0, log2(numWarps))");
       assert(!bitTaken[bitPos] && "warpBasisBits has duplicates");

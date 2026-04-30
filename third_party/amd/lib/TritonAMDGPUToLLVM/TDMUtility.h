@@ -26,10 +26,6 @@ struct WarpHintInfo {
   // Bit positions of the basis vectors (each a power of two).  Size =
   // log2(K), all entries < log2(numWarps), all distinct.
   SmallVector<int32_t, 5> basisBits;
-  // Mask of the warpId bits that are NOT in the basis span and are
-  // within the live num_warps range.  An active-warp test is
-  // `((warpId ^ i0) & freeMask) == 0`.
-  uint32_t freeMask = 0;
 };
 
 // Decode an axis-aligned `warp_used_hint` (as validated by
@@ -77,9 +73,9 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // The per-warp tile shape is computed as `shapePerCTA / warpsPerCTA`.
 // When `warpHint` is provided (i.e. the op carried a `warp_used_hint`),
 // the warp sublayout's identity rows are placed at `warpHint->basisBits`
-// and the active-warp test is `((warpId ^ i0) & freeMask) == 0`.  Without
-// a hint the layout uses the canonical-prefix placement (lowest log2K
-// bits) and predicates on `(warpId & freeMask) == 0`, matching the
+// and `warpId` is XOR-anchored by `warpHint->i0` before applying the
+// layout's free-variable-mask predication.  Without a hint the layout uses
+// the canonical-prefix placement (lowest log2K bits), matching the
 // pre-hint behavior.
 void fillTDMDescriptor(
     RewriterBase &rewriter, Location loc,
@@ -151,9 +147,9 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 // returns a side-table mapping each `amdgpu.async_tdm_copy_global_to_local`
 // op that participates in a merge group to its group descriptor.  The IR
 // is *not* modified.  The conversion pattern then queries this map: the
-// first member emits a single fused intrinsic via `emitTDMLoadStoreMerged`,
-// while non-first members emit no intrinsic and are erased by the rewriter.
-// Singletons (not in the map) lower as today via `emitTDMLoadStore`.
+// first visited member emits a single fused intrinsic via
+// `emitTDMLoadStoreMerged` and erases the whole group.  Singletons (not in
+// the map) lower as today via `emitTDMLoadStore`.
 struct TDMMergeGroupInfo {
   // Members in program order; size N >= 2, N a power of two.
   SmallVector<Operation *> members;
@@ -166,9 +162,9 @@ struct TDMMergeGroupInfo {
 
 // Walk `mod` and identify all merge groups according to the mergeability
 // rules: axis-aligned closure of every member, pairwise disjoint hints,
-// union legal, N power of two, no `mbarrier` operand, consecutive in
-// program order, non-overlapping destinations, same shared-memory
-// encoding + same shapePerCTA.
+// equal active-warp count per member, union legal, N power of two, no
+// `mbarrier` operand, consecutive in program order, non-overlapping
+// destinations, same shared-memory encoding + same shapePerCTA.
 //
 // Returned map is keyed on op pointer; every op in a group maps to the
 // *same* `TDMMergeGroupInfo` instance via shared_ptr-style ownership
@@ -195,16 +191,14 @@ computeTDMMergeGroups(ModuleOp mod);
 void emitTDMLoadStoreMerged(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter,
-    ArrayRef<SmallVector<Value>> descPerMember,
-    ArrayRef<int64_t> blockShape, int numWarps, unsigned padInterval,
-    unsigned padAmount,
+    ArrayRef<SmallVector<Value>> descPerMember, ArrayRef<int64_t> blockShape,
+    int numWarps, unsigned padInterval, unsigned padAmount,
     ArrayRef<SmallVector<Value>> offsetPerMember,
     ArrayRef<SmallVector<Value>> dstPtrsPerMember,
     ArrayRef<Value> predPerMember, Value multicastMask, Type elementType,
     ArrayRef<Value> barrierPtrPerMember, bool isLoad,
-    const triton::LinearLayout &sharedLayout, Attribute encoding,
-    Value ctaId, ArrayRef<uint32_t> hintPerMember,
-    const TDMMergeGroupInfo &groupInfo);
+    const triton::LinearLayout &sharedLayout, Attribute encoding, Value ctaId,
+    ArrayRef<uint32_t> hintPerMember, const TDMMergeGroupInfo &groupInfo);
 
 // Returns (warpsPerCTA, numTDMInstructions) for a given shared encoding.
 // For PartitionedSharedEncodingAttr, computes a partition-aligned warp
