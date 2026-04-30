@@ -58,8 +58,12 @@ public:
     Value alloc = LocalAllocOp::create(rewriter, loc, memDescType);
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
 
-    amdgpu::AsyncTDMCopyGlobalToLocalOp::create(rewriter, loc, op.getDesc(),
-                                                op.getIndices(), alloc, pred);
+    // Forward the source descriptor_load's cache modifier so .ca/.cg etc. on
+    // the high-level load reach the TDM intrinsic's aux bits.  Eviction
+    // policy has no TDM equivalent and is dropped by design.
+    amdgpu::AsyncTDMCopyGlobalToLocalOp::create(
+        rewriter, loc, op.getDesc(), op.getIndices(), alloc, pred,
+        /*barrier=*/Value(), op.getCache());
     amdgpu::AsyncTDMWait::create(rewriter, loc, ArrayRef<Value>{}, 0);
     rewriter.replaceOpWithNewOp<LocalLoadOp>(op, op.getType(), alloc);
     return success();

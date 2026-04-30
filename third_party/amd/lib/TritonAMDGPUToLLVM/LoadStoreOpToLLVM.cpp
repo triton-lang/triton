@@ -1204,11 +1204,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
 
-    // Implicit merge dispatch.  The merge analysis runs once at the start
-    // of the pass.  Whichever member the conversion driver visits first
-    // emits the fused intrinsic for the whole group and erases all members.
-    // This avoids relying on the first operation in program order being
-    // rewritten before later group members.
+    // Implicit merge dispatch: whichever member the driver visits first
+    // emits the fused intrinsic for the whole group and erases the rest.
     auto mergeIt = mergeGroups.find(op);
     bool inMergeGroup = mergeIt != mergeGroups.end();
     auto tensorDescTy = op.getDesc().getType();
@@ -1245,14 +1242,11 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         triton::gpu::getShapePerCTA(encoding, tensorDescTy.getShape());
 
     if (inMergeGroup) {
-      // Emit a single fused intrinsic for the whole merge group.  We
-      // need each member's lowered descriptor / dst / pred.  For the
-      // member currently being rewritten we use `adaptor`; for the
-      // others we fetch the remapped LLVM-side values from the
-      // conversion driver.  Per-member `warp_used_hint` is read inside
-      // `emitTDMLoadStoreMerged` directly off `group.members[i]`, and
-      // mergeability guarantees no member carries an mbarrier so we
-      // pass no per-member barrier array at all.
+      // Emit a fused intrinsic for the group.  Per-member operands are
+      // fetched via `getRemappedValue` (this returns adaptor's values
+      // for the current op).  Per-member hints are read inside
+      // `emitTDMLoadStoreMerged`; rule 2 guarantees no mbarriers, so
+      // no per-member barrier array is needed.
       const auto &group = mergeIt->second;
       size_t numMembers = group.members.size();
 
@@ -1264,37 +1258,23 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       for (size_t i = 0; i < numMembers; ++i) {
         auto memberOp =
             cast<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(group.members[i]);
-        bool isCurrentMember = memberOp.getOperation() == op.getOperation();
-        Value descRemapped =
-            isCurrentMember ? Value(adaptor.getDesc())
-                            : rewriter.getRemappedValue(memberOp.getDesc());
-        descPerMember[i] =
-            mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, descRemapped);
+        descPerMember[i] = mlir::LLVM::AMD::unpackTDMDescriptor(
+            rewriter, loc, rewriter.getRemappedValue(memberOp.getDesc()));
         SmallVector<Value> indices;
-        if (isCurrentMember) {
-          indices = SmallVector<Value>(adaptor.getIndices().begin(),
-                                       adaptor.getIndices().end());
-        } else {
-          for (Value idx : memberOp.getIndices())
-            indices.push_back(rewriter.getRemappedValue(idx));
-        }
+        for (Value idx : memberOp.getIndices())
+          indices.push_back(rewriter.getRemappedValue(idx));
         offsetPerMember[i] = std::move(indices);
 
-        Value dstRemapped =
-            isCurrentMember ? Value(adaptor.getResult())
-                            : rewriter.getRemappedValue(memberOp.getResult());
         auto memberDstMemObj = LLVM::getSharedMemoryObjectFromStruct(
-            loc, dstRemapped, elementType, rewriter);
+            loc, rewriter.getRemappedValue(memberOp.getResult()), elementType,
+            rewriter);
         dstPtrsPerMember[i] = llvm::to_vector(memberDstMemObj.getBases());
 
-        predPerMember[i] = isCurrentMember
-                               ? Value(adaptor.getPred())
-                               : rewriter.getRemappedValue(memberOp.getPred());
+        predPerMember[i] = rewriter.getRemappedValue(memberOp.getPred());
       }
 
-      // The merge analysis enforces that all members carry the same
-      // cache modifier (rule 7), so taking auxBits from the current op
-      // is sufficient for the whole group.
+      // Rule 7: all members share the same cache modifier, so reading
+      // auxBits off the current op is sufficient for the group.
       auto mergedAuxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
           op.getCache(), /*isLoad*/ true, targetInfo);
       mlir::LLVM::AMD::emitTDMLoadStoreMerged(
@@ -2639,9 +2619,8 @@ void populateLoadStoreOpToLLVMPatterns(
                AsyncTDMCopyLocalToGlobalOpConversion,
                AsyncTDMScatterOpConversion, AsyncTDMGatherOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
-  // The merge-aware TDM global-to-local pattern stores a reference to the
-  // (caller-owned) merge map; we add it separately so we can pass that
-  // extra argument.
+  // Merge-aware TDM global-to-local takes a reference to the caller-
+  // owned merge map; added separately to forward that extra argument.
   patterns.add<AsyncTDMCopyGlobalToLocalOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, tdmMergeGroups, benefit);
   patterns.add<TTGAsyncWaitOpConversion>(typeConverter, targetInfo, benefit);

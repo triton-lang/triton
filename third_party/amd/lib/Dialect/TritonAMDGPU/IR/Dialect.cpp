@@ -654,16 +654,11 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
     if (auto err = validateWarpUsedHint(hint, numWarps))
       return emitOpError(*err);
 
-    // Partitioned encoding constraint: with fewer active warps the
-    // per-warp distribution may not cover all logical pieces along
-    // partitionDim in a single instruction.  Multi-instruction slicing
-    // is not supported in the hinted path.
-    //
-    // The lowering derives warpsAlongPartition = gcd(K, numLogicalPieces)
-    // and falls back to multi-instruction when that is < numLogicalPieces.
-    // For K a power of two this simplifies to: require K to be a multiple
-    // of numLogicalPieces (equivalently K >= numLogicalPieces when both are
-    // powers of two).
+    // PartitionedSharedEncoding: hinted path doesn't support multi-
+    // instruction slicing along partitionDim, so K must cover all
+    // logical pieces in one shot.  K is a power of two, so K being a
+    // multiple of numLogicalPieces is equivalent to K >= numLogicalPieces
+    // (which is what the lowering assumes).
     if (partitionedEnc) {
       unsigned partitionDim = partitionedEnc.getPartitionDim();
       unsigned numLogicalPieces = partitionedEnc.getNumLogicalPieces();
@@ -708,34 +703,24 @@ AsyncTDMCopyGlobalToLocalOp::validateWarpUsedHint(uint32_t hint,
                          K, numWarps)
         .str();
 
-  // Bits above num_warps - 1 must be zero.  Checked AFTER the K bound so
-  // users with K > num_warps get the more specific "K active warps but
-  // num_warps = ..." message even when the hint is also out of range; a
-  // hint that fits within num_warps but sets out-of-range bits will be a
-  // power of two K and still trip this check.
-  uint64_t numWarpsMask = (numWarps >= 32) ? ~0u : ((1u << numWarps) - 1);
-  if ((hint & ~static_cast<uint32_t>(numWarpsMask)) != 0)
+  // Bits above num_warps - 1 must be zero.  Checked after the K bound so
+  // a too-large K reports the more specific "K vs num_warps" message.
+  uint32_t numWarpsMask =
+      (numWarps >= 32) ? ~uint32_t{0} : ((uint32_t{1} << numWarps) - 1);
+  if ((hint & ~numWarpsMask) != 0)
     return llvm::formatv("warp_used_hint = {0:x} sets bits beyond "
                          "num_warps = {1}",
                          hint, numWarps)
         .str();
 
-  // v1 axis-aligned coset check.
+  // v1 axis-aligned coset check.  S = active warp indices, i0 = lsb;
+  // S is an axis-aligned coset iff support = OR over w in S of (w XOR
+  // i0) has popcount == log2(K).  (Sufficient by pigeonhole: the K
+  // values (w XOR i0) are distinct subsets of `support`, of which there
+  // are exactly 2^log2K = K.)
   //
-  // Active set S = { w : w-th bit of hint is 1 }; let i0 be the smallest
-  // active warp INDEX (i.e. countr_zero(hint)).  S is an axis-aligned
-  // coset iff S' = { w XOR i0 : w in S } is an F2-linear subspace whose
-  // basis vectors are single powers of two -- equivalently iff
-  //
-  //   support = OR over w in S of (w XOR i0)   (integer XOR)
-  //
-  // satisfies (a) popcount(support) == log2(K), and (b) every subset of
-  // `support` (interpreted as an integer) appears in S' (closure).
-  //
-  // The math is over warp indices, NOT over the i32 hint bitmask, so we
-  // explicitly convert each set bit's position via countr_zero before
-  // XOR-ing.  Using bitmask XOR here would over-count `support` bits and
-  // reject perfectly legal hints like 0x0F or 0xF0.
+  // XOR is over warp INDICES, not bitmask positions; we extract each
+  // index via countr_zero before XOR-ing.
   unsigned i0 = llvm::countr_zero(hint);
   uint32_t support = 0;
   for (uint32_t mask = hint; mask != 0; mask &= mask - 1) {
@@ -748,30 +733,11 @@ AsyncTDMCopyGlobalToLocalOp::validateWarpUsedHint(uint32_t hint,
                "warp_used_hint = {0:x} is not an axis-aligned coset: "
                "after offsetting by i0 = {1}, the spanned basis bit "
                "positions (mask {2:x}, popcount {3}) do not have popcount "
-               "log2(K) = {4}",
+               "log2(K) = {4}; diagonal/parity patterns are not supported "
+               "in v1",
                hint, i0, support,
                static_cast<unsigned>(llvm::popcount(support)), logK)
         .str();
-
-  // Enumerate every subset of `support` (each bit position contributes a
-  // basis warp-index value) and confirm warp `subset XOR i0` is in S.
-  // Iteration count = K = 2^logK; cheap for K <= 32.
-  uint32_t subset = 0;
-  do {
-    unsigned warpIdx = static_cast<unsigned>(subset) ^ i0;
-    if (((hint >> warpIdx) & 1u) == 0)
-      return llvm::formatv(
-                 "warp_used_hint = {0:x} is not an axis-aligned coset: "
-                 "warp {1} (= {2} XOR i0 {3}) is missing from the active "
-                 "set; diagonal/parity patterns are not supported in v1",
-                 hint, warpIdx, subset, i0)
-          .str();
-    // Iterate over subsets of `support` (subset bits are positions in
-    // the warp-index, each contributing 2^pos to the offset).  The
-    // bit-trick `(subset - support) & support` walks all subsets in
-    // canonical order, terminating when subset returns to 0.
-    subset = (subset - support) & support;
-  } while (subset != 0);
 
   return std::nullopt;
 }

@@ -172,26 +172,19 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 // (message, warp, block) -> (dim0, dim1, ...) layout.
 //
 // TDM operates at warp granularity.  The "warp" sublayout is an identity
-// over `warpsPerCTA`, padded with all-zero bases up to `log2(numWarps)`
-// so the layout always covers the full module-level warp id.  The
-// "message" sublayout covers each warp's portion of the block
-// (blockShape / warpsPerCTA) for surjectivity; the "block" sublayout
-// comes from `cgaLayout`.
+// over `warpsPerCTA`, padded with all-zero rows up to log2(numWarps) so
+// the full module warpId is covered; "message" covers the per-warp tile
+// for surjectivity; "block" comes from `cgaLayout`.
 //
-// When the active warp count is less than the module's num_warps
-// (partial TDM copy), the caller passes a smaller `warpsPerCTA` whose
-// product equals K < numWarps.  The padded all-zero rows expose the
-// redundant high bits of warpId as free variables via
-// getFreeVariableMasks("warp"), enabling pred-off no-op TDMs on the
-// inactive warps.
+// For partial TDM copy (K < numWarps), the caller passes a smaller
+// `warpsPerCTA` (product K).  Padded all-zero rows expose the redundant
+// warpId bits as free variables via getFreeVariableMasks("warp"),
+// enabling pred-off no-ops on inactive warps.
 //
-// `warpBasisBits` (optional) specifies the warpId bit positions where
-// the K identity rows of the warp sublayout should be placed; bits not
-// in this list become free variables.  The list must have exactly
-// log2(prod(warpsPerCTA)) entries, all distinct, and all in
-// [0, log2(numWarps)).  When empty, the default placement is
-// {0, 1, ..., log2K - 1} (canonical prefix), matching the legacy
-// behavior used when `warp_used_hint` is absent or canonical.
+// `warpBasisBits` (optional) places the K identity rows at specified
+// warpId bit positions; bits not listed become free variables.  Must
+// have log2(prod(warpsPerCTA)) distinct entries in [0, log2(numWarps)).
+// Empty defaults to {0, ..., log2K - 1} (legacy / no-hint behavior).
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
                                 const LinearLayout &cgaLayout, int numWarps,

@@ -318,17 +318,6 @@ template <typename CondT> void check(CondT &&cond, const char *msg) {
 void init_gluon_ir(py::module &&m) {
   using ret = py::return_value_policy;
 
-  // Validate a `warp_used_hint` attribute against numWarps.  Raises
-  // ValueError with the same message the MLIR verifier would produce, so
-  // the Python front-end and the IR verifier stay in sync.
-  m.def("validate_tdm_warp_used_hint",
-        [](uint32_t warpUsedHint, int64_t numWarps) {
-          auto err = ttag::AsyncTDMCopyGlobalToLocalOp::validateWarpUsedHint(
-              warpUsedHint, numWarps);
-          if (err)
-            throw std::invalid_argument(*err);
-        });
-
   py::enum_<ttng::TMEMLoadReduceModifier>(m, "TMEM_LOAD_REDUCE_MODIFIER",
                                           py::module_local())
       .value("MIN", ttng::TMEMLoadReduceModifier::MIN)

@@ -63,8 +63,12 @@ TDMCopyChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
   auto viewLoad = triton::createSingleBufferView(builder, alloc, extractIdx)
                       .getDefiningOp<ttg::MemDescIndexOp>();
 
+  // Forward the source descriptor_load's cache modifier so .ca/.cg etc. on
+  // the high-level load reach the TDM intrinsic's aux bits.  Eviction
+  // policy has no TDM equivalent and is dropped by design.
   auto copyOp = triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(
-      builder, loc, loadOp.getDesc(), loadOp.getIndices(), viewLoad, pred);
+      builder, loc, loadOp.getDesc(), loadOp.getIndices(), viewLoad, pred,
+      /*barrier=*/Value(), loadOp.getCache());
 
   auto commitOp =
       ttg::AsyncCommitGroupOp::create(builder, loc, copyOp->getResult(0));

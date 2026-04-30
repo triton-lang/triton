@@ -761,54 +761,39 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     The operation can also take an optional 64bit LDS barrier address, in which case
     it sends an "LDS atomic arrive" to signal its completion.
 
-    `warp_used_hint` is an optional performance-hint attribute for
-    partial TDM copy.  It is an i32 bitmask where bit `n` (LSB = warp 0)
-    indicates that warp `n` participates in issuing the TDM instruction;
-    bits above `num_warps - 1` must be zero.  Semantics are unchanged by
-    the hint (same data ends up in shared memory whether the hint is set
-    or not) -- only the emission strategy changes: the lowering uses
-    `K = popcount(hint)` warps to cover the block and marks the remaining
-    warps as pred-off no-ops.
+    `warp_used_hint` is an optional i32 bitmask performance hint for
+    partial TDM copy.  Bit `n` (LSB = warp 0) means warp `n` issues the
+    instruction; bits above `num_warps - 1` must be zero.  The hint
+    doesn't change semantics (same data lands in shared memory either
+    way) — only emission: `K = popcount(hint)` warps cover the block,
+    the rest are pred-off no-ops.
 
-    "All warps participate" is encoded by the attribute being **absent**,
-    not by `warp_used_hint = 0`.  An explicit value of `0` is rejected by
-    the verifier ("warp_used_hint must have at least one bit set"); the
-    distinction matters because the merge analysis treats a hint-less op
-    as a side-effecting break in the candidate run, while a `K = num_warps`
-    full-coverage hint (e.g. `0xFF` for 8 warps) is a normal hinted op.
-    Front-ends that accept a Python-side `0` should map it to "no
-    attribute" before emitting the op.
+    "All warps participate" is encoded by the attribute being **absent**.
+    An explicit `warp_used_hint = 0` is rejected by the verifier; the
+    distinction matters for merge analysis (a hint-less op is a flush
+    boundary, while `K = num_warps` is a normal hinted op).  Front-ends
+    that accept a Python-side `0` should map it to "no attribute".
 
-    Interaction with implicit op-merging (TDM->LLVM lowering): adjacent
-    hinted copies whose hints satisfy the disjoint/equal-K/axis-aligned-
-    union rules can be fused into a single hardware intrinsic.  An op
-    that *carries an mbarrier operand* is **always** lowered as a
-    singleton — the merge analysis filters it out and uses it as a
-    flush boundary for any in-flight candidate run.  See
-    `TDMUtility.h::computeTDMMergeGroups` for the full mergeability
-    contract.
+    Implicit op-merging (TDM->LLVM lowering): adjacent hinted copies
+    whose hints satisfy disjoint/equal-K/axis-aligned-union rules and
+    that share the same `cache` modifier can be fused into a single
+    hardware intrinsic.  Mismatched `cache` flushes the candidate batch.
+    Ops carrying an mbarrier operand are always lowered as singletons
+    and act as flush boundaries.  Full mergeability contract: see
+    `TDMUtility.h::computeTDMMergeGroups`.
 
-    v1 restriction: the hint must be an *axis-aligned coset* in
-    warpId space, i.e. there exist log2(K) bit positions
-    `{p_0, ..., p_{log2K - 1}}` and an offset `i0` such that
-    the active set is `{ i0 XOR x : every x with bits subset of
-    {1<<p_0, ..., 1<<p_{log2K-1}} }`.  Equivalently: let
-    `S = { i : (hint >> i) & 1 == 1 }`, `i0 = lsb(hint)`,
-    `support = OR over s in S of (s XOR i0)`; the hint is legal iff
-    `popcount(support) == log2(K)` and `S` enumerates exactly the
-    `i0`-offset of every subset of `support`.  This admits canonical
-    prefixes (`0x0F`), shifted runs (`0xF0`), and stride-by-`2^j`
-    cosets (`0x55`, `0xAA`, `0xCC`).  Diagonal/parity sets like
-    `0x69 = {0,3,5,6}` are rejected for v1 (they are subspace cosets
-    but require a parity-of-AND active test instead of a single
-    AND-and-compare).  Non-coset sets like `0x1B = {0,1,3,4}` are
-    rejected entirely.
+    v1 restriction: the hint must be an *axis-aligned coset* in warpId
+    space.  Equivalently, with `S = { i : (hint >> i) & 1 == 1 }`,
+    `i0 = lsb(hint)`, `support = OR over s in S of (s XOR i0)`: legal
+    iff `popcount(support) == log2(K)`.  Legal examples: `0x0F`
+    (warps 0..3), `0xF0` (warps 4..7), `0x55` / `0xAA` / `0xCC`
+    (stride-by-`2^j` cosets).  Rejected: diagonal/parity sets like
+    `0x69` (require parity-of-AND tests) and non-coset sets like `0x1B`.
 
-    With a PartitionedSharedEncoding the verifier additionally requires
-    that the `K`-warp distribution's `warpsPerCTA[partitionDim]` be at
-    least `numLogicalPieces`, so the copy fits in a single TDM
-    instruction; the multi-instruction slicing path does not support a
-    non-default warp count.
+    With PartitionedSharedEncoding, the verifier also requires the
+    K-warp distribution to fit `warpsPerCTA[partitionDim] >=
+    numLogicalPieces` (multi-instruction slicing is not supported with
+    a hint).
   }];
 
   let arguments = (ins
@@ -834,6 +819,11 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
       return build($_builder, $_state, desc, indices, result, pred, barrier,
                    /*cache=*/triton::CacheModifier::NONE,
                    /*warp_used_hint=*/IntegerAttr());
+    }]>,
+    OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred,
+                   "Value":$barrier, "::mlir::triton::CacheModifier":$cache), [{
+      return build($_builder, $_state, desc, indices, result, pred, barrier, cache,
+                   /*warp_used_hint=*/IntegerAttr());
     }]>
   ];
 
@@ -843,15 +833,11 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
   }];
 
   let extraClassDeclaration = [{
-    // Validate a `warp_used_hint` value against the given num_warps.
-    // Checks v1 restrictions: the active set must be an axis-aligned
-    // coset (each basis vector a power of two), K = popcount(hint) is
-    // a power of two with 1 <= K <= num_warps, and no bits are set
-    // beyond num_warps - 1.  Returns std::nullopt on success, or an
-    // error message string describing the failure.  Shared between the
-    // op verifier and any C++ caller; encoding-specific rules (the
-    // PartitionedSharedEncoding constraint) live in verify() since they
-    // need access to the op's result type.
+    // Validate `warp_used_hint` (axis-aligned coset, K a power of two
+    // with 1 <= K <= num_warps, no bits beyond num_warps - 1).  Returns
+    // std::nullopt on success, else an error string.  Shared with C++
+    // callers; encoding-specific rules (PartitionedSharedEncoding) live
+    // in verify() because they need the result type.
     static ::std::optional<::std::string> validateWarpUsedHint(
         uint32_t warpUsedHint, int64_t numWarps);
   }];

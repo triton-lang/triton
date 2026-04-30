@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "async_load", "async_wait", "make_tensor_descriptor", "tensor_descriptor", "tensor_descriptor_type", "prefetch",
-    "async_scatter", "warp_prefix", "warp_shifted_prefix", "warp_strided"
+    "async_scatter"
 ]
 
 
@@ -142,56 +142,6 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
     return tensor_descriptor(handle, shape, strides, type)
 
 
-def warp_prefix(k: int) -> int:
-    """Return a canonical prefix bitmask ``(1 << k) - 1`` for the first ``k`` warps.
-
-    Convenience helper for the common ``warp_used_hint`` pattern where the
-    first ``k`` warps participate in a TDM copy and the rest issue no-ops.
-    The basis bits are ``{0, 1, ..., log2(k) - 1}``, ``i0 = 0``.
-    """
-    k = int(_unwrap_if_constexpr(k))
-    assert k >= 1, f"warp_prefix(k): k must be >= 1, got {k}"
-    return (1 << k) - 1
-
-
-def warp_shifted_prefix(k: int, shift: int) -> int:
-    """Return a shifted-prefix bitmask ``((1 << k) - 1) << shift``.
-
-    Selects ``k`` consecutive warps starting at warp ``shift``. ``shift`` must
-    be a multiple of ``k`` so the active set is an axis-aligned coset
-    (basis = ``{0, ..., log2(k) - 1}``, ``i0 = shift``); other shifts are
-    rejected by the verifier.
-    """
-    k = int(_unwrap_if_constexpr(k))
-    shift = int(_unwrap_if_constexpr(shift))
-    assert k >= 1, f"warp_shifted_prefix: k must be >= 1, got {k}"
-    assert shift >= 0, f"warp_shifted_prefix: shift must be >= 0, got {shift}"
-    assert (k & (k - 1)) == 0, f"warp_shifted_prefix: k must be a power of two, got {k}"
-    assert shift % k == 0, (f"warp_shifted_prefix: shift ({shift}) must be a multiple of k ({k}) "
-                            "so the result is an axis-aligned coset")
-    return ((1 << k) - 1) << shift
-
-
-def warp_strided(k: int, stride_log2: int) -> int:
-    """Return a strided bitmask of ``k`` warps spaced by ``2 ** stride_log2``.
-
-    The active warps are at positions ``{0, 1<<s, 2<<s, ..., (k-1)<<s}`` where
-    ``s = stride_log2``. ``i0 = 0``; basis bits are
-    ``{stride_log2, stride_log2 + 1, ..., stride_log2 + log2(k) - 1}``.
-    The caller can shift the result with ``<<`` to move ``i0``, e.g.
-    ``warp_strided(4, 1) << 1 == 0xAA``.
-    """
-    k = int(_unwrap_if_constexpr(k))
-    s = int(_unwrap_if_constexpr(stride_log2))
-    assert k >= 1, f"warp_strided: k must be >= 1, got {k}"
-    assert s >= 0, f"warp_strided: stride_log2 must be >= 0, got {s}"
-    assert (k & (k - 1)) == 0, f"warp_strided: k must be a power of two, got {k}"
-    hint = 0
-    for i in range(k):
-        hint |= 1 << (i << s)
-    return hint
-
-
 @builtin
 def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], dest: shared_memory_descriptor,
                pred=1, mbarrier: shared_memory_descriptor = None, warp_used_hint=None, cache_modifier="",
@@ -204,33 +154,27 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
         pred (int, optional): Predicate to enable or disable the load. Defaults to 1.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
-        warp_used_hint (int, optional): Performance hint selecting which warps issue
-            the TDM copy. Bit ``n`` set means warp ``n`` participates; cleared bits
-            cause that warp's TDM to be predicated to a hardware no-op. Has no effect
-            on the data written to ``dest`` -- it only changes how the work is
-            distributed across warps. Currently restricted to *axis-aligned cosets*:
-            the active warp set must be ``{ i0 ^ x : x is any subset of basis bits }``
-            for some ``i0`` and a basis of single-bit positions, with
+        warp_used_hint (int, optional): Performance hint selecting which warps
+            issue the TDM copy.  Bit ``n`` set means warp ``n`` participates; cleared
+            bits make that warp a hardware no-op.  Doesn't affect the data written
+            to ``dest`` -- only the work distribution.  Restricted to *axis-aligned
+            cosets*: the active set is ``{ i0 ^ x : x in span(basis_bits) }`` with
             ``K = popcount(hint)`` a power of two and ``1 <= K <= num_warps``.
-            See :func:`warp_prefix`, :func:`warp_shifted_prefix`,
-            :func:`warp_strided` for constructors that always produce legal hints.
-            The MLIR verifier enforces these rules. Omit the argument or pass
-            ``None`` for no hint (all warps participate); an explicit
-            ``warp_used_hint=0`` is invalid and rejected by the verifier.
+            Pass binary literals directly, e.g. ``0b00001111`` (warps 0..3),
+            ``0b11110000`` (warps 4..7), ``0b01010101`` (every other warp from 0).
+            Omit or pass ``None`` for "all warps participate"; an explicit
+            ``warp_used_hint=0`` is rejected by the verifier.
 
-            Adjacent ``async_load`` ops with pairwise-disjoint hints whose union is
-            also a legal hint, identical destination shared encoding, and identical
+            Adjacent ``async_load`` ops with pairwise-disjoint, equal-K hints
+            (whose union is itself legal), the same destination encoding /
             block shape, and the same ``cache_modifier`` are *implicitly* fused
-            into a single TDM intrinsic during lowering (no IR-visible artifact).
-            When relying on this, size ``async_wait`` counts in terms of the
-            post-merge intrinsic count (one merged op contributes one
-            outstanding TDM, not N). Passing a non-``None`` ``mbarrier`` opts
-            the call out of merging: such loads are always lowered as a
-            singleton intrinsic and act as a flush boundary for any in-flight
-            merge candidate run.
-        cache_modifier (str, optional): Cache behavior modifier for the TDM
-            load. Merged loads require all members to use the same cache
-            modifier because the merged intrinsic has one cache-control field.
+            into a single TDM intrinsic during lowering.  Size ``async_wait``
+            counts on the post-merge intrinsic count (one merged op = one
+            outstanding TDM).  Passing ``mbarrier`` opts out of merging:
+            such loads always lower as singletons and flush any in-flight batch.
+        cache_modifier (str, optional): Cache behavior modifier.  Merged loads
+            must share the same modifier (single cache-control immediate on the
+            fused intrinsic).
     """
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
     pred = _semantic.to_tensor(pred)

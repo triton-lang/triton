@@ -279,21 +279,6 @@ def gemm_tdm_pipelined_warp_pipelined_kernelB(a_ptr, b_ptr, c_ptr,  #
 
 
 # ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
-
-
-def _tdm_warp_prefix(active_warps):
-    """Return a canonical prefix bitmask for ``active_warps`` participating warps.
-
-    Convenience wrapper matching :func:`ttgl.amd.gfx1250.tdm.warp_prefix` but
-    usable in pure-Python kernel launch code.
-    """
-    assert active_warps >= 1
-    return (1 << active_warps) - 1
-
-
-# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
@@ -381,8 +366,8 @@ def test_runtime_gemm_tdm_specialized_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_B
     num_warps = 8
     WARP_BASES = [(0, 1), (1, 0), (2, 0)]
 
-    # 4-warp partial TDM copy: warps 4-7 are no-ops (pred=0 in descriptor)
-    tdm_warp_used_hint = _tdm_warp_prefix(4)
+    # 4-warp partial TDM copy: warps 0-3 issue, warps 4-7 are no-ops.
+    tdm_warp_used_hint = 0b00001111
 
     warp_bases = tuple(WARP_BASES)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
@@ -437,4 +422,5 @@ if __name__ == "__main__":
     if args.four_warp_tdm:
         test_runtime_gemm_tdm_specialized_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP)
     else:
-        test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP, USE_KERNEL_B)
+        test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP,
+                                        USE_KERNEL_B)
