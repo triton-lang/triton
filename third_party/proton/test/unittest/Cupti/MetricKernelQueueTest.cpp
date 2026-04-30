@@ -7,7 +7,7 @@
 using proton::detail::popMetricKernelNumWordsIfQueued;
 
 TEST(MetricKernelQueueTest, MatchesMetricGraphNodesOnlyWithQueuedEntries) {
-  // Simulates the concrete CUDA graph callback sequence seen in zen bench:
+  // Simulates the concrete CUDA graph callback sequence:
   //
   //   isMetricKernelLaunching = true
   //   metricKernelNumWordsQueue = [2]
