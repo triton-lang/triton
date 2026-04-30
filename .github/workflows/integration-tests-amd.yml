@@ -9,9 +9,6 @@ on:
 
 jobs:
   integration-tests-amd:
-    # TEMP: skip the existing AMD matrix (gfx90a/gfx942/gfx950) while testing
-    # the ROCm 7.12 Proton-only job below.
-    if: ${{ false }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     continue-on-error: true
