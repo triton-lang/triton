@@ -2,7 +2,7 @@ from triton.runtime.jit import constexpr_function
 from triton._C.libtriton.gluon_ir import get_amd_wmma_scale_layout as _get_wmma_scale_layout
 
 from ..._core import builtin, int8, uint8, int32, float8e4nv, tensor, _unwrap_if_constexpr
-from .._ops import _wmma, _verify_wmma, _mma_scaled
+from .._ops import _wmma, _verify_wmma, _mma_scaled, _scaled_upcast
 from .._layouts import AMDWMMALayout
 from ..cdna3 import buffer_load, buffer_store
 from ._layouts import PartitionedSharedLayout
@@ -12,7 +12,7 @@ from . import mbarrier
 from . import cluster
 
 __all__ = [
-    "async_copy", "tdm", "mbarrier", "cluster", "wmma", "wmma_scaled", "buffer_load", "buffer_store",
+    "async_copy", "tdm", "mbarrier", "cluster", "wmma", "wmma_scaled", "scaled_upcast", "buffer_load", "buffer_store",
     "get_wmma_scale_layout", "PartitionedSharedLayout"
 ]
 
@@ -103,6 +103,25 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
             f"Unsupported dtype combination: {a_format.value}, {b_format.value}, {a_scale_format}, {b_scale_format}."
 
     return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_wmma_scale_layout, _semantic)
+
+
+@builtin
+def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
+    """
+    Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the
+    GFX1250 scaled-upcast op.
+
+    The scale tensor must use raw E8M0 payload in `int8` or `uint8`, and must
+    already have the expanded output shape and scaled-upcast result layout.
+    For fp4 inputs, that is the canonical unpacked layout implied by `src`
+    and `axis`. `elem_type` must be `fp16` or `bf16`. GFX1250 keeps those
+    bytes in the native `cvt.scale.pk8` payload form.
+    """
+    axis = _unwrap_if_constexpr(axis)
+    elem_type = _unwrap_if_constexpr(elem_type)
+    assert scale.dtype in (int8, uint8), \
+        f"Expected scale to use raw E8M0 payload in int8/uint8 but got {scale.dtype}"
+    return _scaled_upcast(src, scale, elem_type, axis, _semantic)
 
 
 def _get_wmma_scale_layout_impl(*args, **kwargs):

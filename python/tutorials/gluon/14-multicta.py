@@ -223,6 +223,7 @@ benchmark_multicta_softmax_f32()
 
 # %%
 # Softmax benchmark results
+# ```text
 # Benchmarking multicta_softmax
 # ============================
 #   shape         CTAs  warps  time (ms)  bandwidth (GB/s)
@@ -237,6 +238,7 @@ benchmark_multicta_softmax_f32()
 #  32768 x 65536      4      4      2.836           6057.26
 #  16384 x 131072     8      4      3.142           5468.66
 #   8192 x 262144    16      4      3.627           4736.15
+# ```
 #
 # We see that here using multiCTA we are able to get very good performance across the board.
 #

@@ -509,6 +509,22 @@ def test_tuple_constexpr():
     run_parser(foo, args=(test, ))
 
 
+@triton.jit
+def tuple_arg_identity(xs):
+    return xs
+
+
+def test_jit_call_tuple_of_tensors_plus_tuple_of_int():
+
+    @triton.jit
+    def kernel():
+        x0 = tl.program_id(0)
+        x1 = tl.program_id(1)
+        tuple_arg_identity((x0, x1)[:-1] + (1, ))
+
+    run_parser(kernel)
+
+
 @triton.aggregate
 class AggregateWithConstexprFunction:
     val: tl.constexpr

@@ -1,5 +1,5 @@
 """
-The 5th Generation TensorCore^TM
+The 5th Generation TensorCore{sup}`TM`
 ================================
 
 This tutorial covers the APIs for interacting with Tensor Cores on Blackwell
@@ -76,6 +76,7 @@ if __name__ == "__main__" and not is_blackwell():
 #     block=(blockM, blockN),
 #     unpacked=True,
 # )
+# ```
 #
 # The tensor is divided into (blockM, blockN) blocks, where blockM must be 64
 # or 128. blockN must be a power of 2 between [1, 256]. For dtypes smaller than

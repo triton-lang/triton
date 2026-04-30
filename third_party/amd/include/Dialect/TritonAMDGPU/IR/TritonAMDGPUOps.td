@@ -589,7 +589,17 @@ def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, DeclareOpInterf
     RankedTensorOf<[I8]>:$input,
     RankedTensorOf<[BF16, I8]>:$scale,
     I32Attr:$axis);
-  let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16, F32]>]>:$output);
+  let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16]>]>:$output);
+
+  let builders = [
+      OpBuilder<(ins "Value":$input, "Value":$scale, "Type":$elemType, "int32_t":$axis), [{
+        auto inputTy = cast<RankedTensorType>(input.getType());
+        auto resultTy = mlir::triton::gpu::inferFp4ToFpResultType(
+            inputTy, elemType, axis, $_state.location);
+        assert(succeeded(resultTy));
+        build($_builder, $_state, *resultTy, input, scale, axis);
+      }]>
+  ];
 
   let assemblyFormat = [{
     $input `scale` $scale attr-dict
@@ -620,7 +630,7 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
   let arguments = (ins
     RankedTensorOf<[AnyTypeOf<[F8E4M3FN, F8E5M2]>]>:$input,
     RankedTensorOf<[AnyTypeOf<[BF16, I8]>]>:$scale);
-  let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16, F32]>]>:$output);
+  let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16]>]>:$output);
 
   let assemblyFormat = [{
     $input `scale` $scale attr-dict

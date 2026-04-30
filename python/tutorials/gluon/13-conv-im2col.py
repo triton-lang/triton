@@ -77,7 +77,7 @@ if __name__ == "__main__" and not t7.is_hopper_or_newer():
 
 # %%
 # Tutorial Motivation
-# ===================
+# -------------------
 #
 # Before diving into kernels, we first explain the concept of
 # **im2col convolution**: rewriting convolution as GEMM by flattening each
@@ -90,7 +90,7 @@ if __name__ == "__main__" and not t7.is_hopper_or_newer():
 #
 # %%
 # What is a 2D Convolution?
-# =======================
+# -------------------------
 #
 # A 2D convolution slides a small filter (kernel) across an input image and
 # computes a weighted sum at every position. For a single-channel example
@@ -128,7 +128,7 @@ if __name__ == "__main__" and not t7.is_hopper_or_newer():
 #
 # %%
 # The im2col Algorithm
-# ====================
+# --------------------
 #
 # **im2col** (image to column) rearranges the input so that convolution becomes
 # a standard matrix multiplication (GEMM). The idea is:
@@ -229,7 +229,7 @@ if __name__ == "__main__" and not t7.is_hopper_or_newer():
 #
 # %%
 # Shared Kernel for All Examples
-# ==============================
+# ------------------------------
 #
 # All examples use the same kernel structure - only the TensorDescriptor
 # configuration and load coordinates differ.
@@ -303,7 +303,7 @@ def run_tma_im2col(title, pixel_box_lower_corner, pixel_box_upper_corner, coord,
 
 # %%
 # Example 1: Basic Loading (No Padding)
-# =====================================
+# -------------------------------------
 #
 # Load all 16 pixels (4x4 grid) from a [1, 4, 4, 32] tensor.
 # - coord = [0, 0, 0, 0], offsets = [0, 0]
@@ -384,7 +384,7 @@ if __name__ == "__main__":
 
 # %%
 # Example 2: Loading from Padded Region
-# =====================================
+# -------------------------------------
 #
 # With pixel_box_lower_corner=[-1,-1] and pixel_box_upper_corner=[-1,-1],
 # access boundary is H in [-1, 2], W in [-1, 2].
@@ -484,7 +484,7 @@ if __name__ == "__main__":
 
 # %%
 # Example 3: Offset Shifts Access Boundary
-# ========================================
+# ----------------------------------------
 #
 # Same TensorDescriptor as Example 2, but with offsets=[1, 1].
 # This shifts the access boundary from [-1, 2] to [0, 3], covering the original tensor.
@@ -570,7 +570,7 @@ if __name__ == "__main__":
 
 # %%
 # Example 4: Loading Across Multiple Batches
-# ==========================================
+# ------------------------------------------
 #
 # This example shows loading pixels that span across multiple images (batches).
 # Input: [2, 4, 4, 32] - 2 batches of 4x4 images with 32 channels
@@ -700,7 +700,7 @@ if __name__ == "__main__":
 
 # %%
 # Example 5: Multi-Batch with Padded Access Boundary
-# ==================================================
+# --------------------------------------------------
 #
 # This example combines multi-batch loading with padding.
 # With pixel_box_lower_corner=[-1,-1] and pixel_box_upper_corner=[-1,-1],
@@ -851,7 +851,7 @@ if __name__ == "__main__":
 
 # %%
 # Implicit GEMM with TMA im2col
-# ==============================
+# ------------------------------
 #
 # **Explicit im2col** physically constructs the matrix A in memory. This is
 # simple but wastes memory because overlapping patches duplicate input data.
@@ -904,7 +904,7 @@ if __name__ == "__main__":
 #
 # %%
 # Gluon Kernel
-# ============
+# ------------
 #
 # The kernel below implements a single-buffered implicit GEMM convolution.
 # ``store_output_tile`` is factored out as a helper; everything else is
@@ -1034,7 +1034,7 @@ def conv2d_im2col_kernel(
 
 # %%
 # Host-Side Launcher
-# ==================
+# ------------------
 #
 # The host side sets up TMA descriptors and launches the kernel.
 # The critical part is configuring the ``TensorDescriptorIm2Col`` with the
@@ -1147,7 +1147,7 @@ def conv2d_tma_im2col(input_nhwc, weight, stride=1, padding=0, BLOCK_M=64, BLOCK
 
 # %%
 # Testing
-# =======
+# -------
 #
 # We compare our TMA im2col convolution against PyTorch's conv2d.
 
@@ -1177,7 +1177,7 @@ def test_conv2d_tma_im2col(N, H, W, Ci, Co, R, S, stride, padding):
 
 # %%
 # Summary
-# =======
+# -------
 #
 # In this tutorial we learned:
 #
