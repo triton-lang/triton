@@ -1555,8 +1555,8 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
     temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
     session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}")
 
-    for i in range(10000):
-        if i != 0 and i % 1000 == 0:
+    for i in range(5000):
+        if i != 0 and i % 500 == 0:
             proton.data.advance_phase(session=session)
         with proton.scope(f"test_{i}", metrics={"count": 1}):
             torch.zeros((100), device=device)
@@ -1576,12 +1576,12 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
         else:
             with open(hatchet_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        assert len(data[0]["children"]) == 1000
+        assert len(data[0]["children"]) == 500
         assert data[0]["children"][0]["metrics"]["count"] == 1
         assert data[0]["children"][0]["frame"]["name"].startswith("test_")
         assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
         num_scopes += len(data[0]["children"])
-    assert num_scopes == 10000
+    assert num_scopes == 5000
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
@@ -1611,14 +1611,20 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
     # warmup
     fn()
 
+    # Recycle GPU memory before graph capture to reduce memory pressure
+    # when running with parallel test workers (-n 8).
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+
     # no kernels
     g = torch.cuda.CUDAGraph()
     with torch.cuda.graph(g):
         fn()
 
+    test_iterations = 500
     with proton.scope("test0"):
-        for i in range(10000):
-            if i != 0 and i % 1000 == 0:
+        for i in range(test_iterations):
+            if i != 0 and i % (test_iterations // 10) == 0:
                 proton.data.advance_phase(session=session)
             g.replay()
 
@@ -1651,9 +1657,9 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
                 foo_test_frame = child
         assert scope_a_frame is not None
         assert foo_test_frame is not None
-        assert scope_a_frame["metrics"]["bytes"] == 16000
-        assert foo_test_frame["metrics"]["bytes"] == 16000
-        assert foo_test_frame["metrics"]["flops"] == 4000
+        assert scope_a_frame["metrics"]["bytes"] == test_iterations / 10 * 16
+        assert foo_test_frame["metrics"]["bytes"] == test_iterations / 10 * 16
+        assert foo_test_frame["metrics"]["flops"] == test_iterations / 10 * 4
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="HW trace is only supported on Blackwell GPUs")

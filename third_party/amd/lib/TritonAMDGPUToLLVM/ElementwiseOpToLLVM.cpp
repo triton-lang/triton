@@ -991,7 +991,8 @@ Fp32_to_Fp8E4M3FNUZ_SW(Location loc, ConversionPatternRewriter &rewriter,
 }
 
 static ConverterT Fp32_to_Fp8E4M3FNUZ(AMD::ISAFamily isaFamily) {
-  return isCDNA4(isaFamily) ? Fp32_to_Fp8E4M3FNUZ_SW : Fp32_to_Fp8E4M3FNUZ_HW;
+  return isaFamily == AMD::ISAFamily::CDNA3 ? Fp32_to_Fp8E4M3FNUZ_HW
+                                            : Fp32_to_Fp8E4M3FNUZ_SW;
 }
 
 // Nanoo Bf8 -> Fp32 on CDNA3+

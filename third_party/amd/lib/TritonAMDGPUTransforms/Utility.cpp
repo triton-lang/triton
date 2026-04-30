@@ -470,6 +470,28 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
       context, {{padInterval, padAmount}}, order, shape, CGALayout);
 }
 
+ttg::SliceEncodingAttr
+getTDMGatherScatterIndexEncoding(Operation *op, RankedTensorType indicesType) {
+  MLIRContext *ctx = op->getContext();
+  unsigned idxBitWidth = indicesType.getElementType().getIntOrFloatBitWidth();
+  assert((idxBitWidth == 16 || idxBitWidth == 32) &&
+         "TDM gather/scatter indices must be i16 or i32");
+  unsigned maxIndicesPerInstr = 256 / idxBitWidth;
+
+  unsigned numWarps = ttg::lookupNumWarps(op);
+  unsigned threadsPerWarp =
+      ttg::TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+  auto cgaLayout = ttg::CGAEncodingAttr::get1CTALayout(ctx, /*rank=*/2);
+
+  std::array<unsigned, 2> sizePerThread = {1, maxIndicesPerInstr};
+  std::array<unsigned, 2> tPerWarp = {threadsPerWarp, 1};
+  std::array<unsigned, 2> warpsPerCTA = {1, numWarps};
+  std::array<unsigned, 2> order = {0, 1};
+  auto parentEnc = ttg::BlockedEncodingAttr::get(ctx, sizePerThread, tPerWarp,
+                                                 warpsPerCTA, order, cgaLayout);
+  return ttg::SliceEncodingAttr::get(ctx, /*dim=*/0, parentEnc);
+}
+
 ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
                                                    RankedTensorType tensorType,
                                                    Value desc) {
