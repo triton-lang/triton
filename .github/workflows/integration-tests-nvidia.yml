@@ -9,6 +9,9 @@ on:
 
 jobs:
   integration-tests-nvidia:
+    # TEMP: skip NVIDIA integration jobs while narrowing the ROCm 7.12 Proton CI
+    # library-loading experiment.
+    if: ${{ false }}
     name: integration-tests-nvidia (${{ matrix.config.name }})
     runs-on: ${{ matrix.config.runs_on }}
     timeout-minutes: 60

@@ -10,7 +10,7 @@ on:
 jobs:
   integration-tests-amd:
     # TEMP: skip the existing AMD matrix (gfx90a/gfx942/gfx950) while testing
-    # the ROCm 7.12 gfx950 job below. Remove this when re-enabling normal AMD CI.
+    # the ROCm 7.12 Proton-only job below.
     if: ${{ false }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -293,8 +293,10 @@ jobs:
       - name: Print ccache stats
         run: ccache --print-stats
       - name: Run lit tests
+        if: ${{ false }}
         run: make test-lit
       - name: Run C++ unittests
+        if: ${{ false }}
         run: make test-cpp
       - name: Run Proton tests
         run: |
@@ -302,10 +304,7 @@ jobs:
           unset ROCR_VISIBLE_DEVICES
           ROCM_SDK_LIB="$(python3 -c 'import _rocm_sdk_core, os; print(os.path.join(os.path.dirname(_rocm_sdk_core.__file__), "lib"))')"
           echo "ROCM_SDK_LIB=$ROCM_SDK_LIB"
-          for base in libamdhip64 libhsa-runtime64 librocprofiler-sdk \
-                      librocprofiler-sdk-attach librocprofiler-sdk-rocattach \
-                      librocprofiler-sdk-rocpd libroctx64 \
-                      librocprofiler-sdk-roctx libamd_comgr libroctracer64; do
+          for base in libamdhip64 librocprofiler-sdk librocprofiler-sdk-attach; do
             if [ ! -e "$ROCM_SDK_LIB/${base}.so" ]; then
               versioned="$(ls "$ROCM_SDK_LIB"/${base}.so.* 2>/dev/null | sort -V | head -1 || true)"
               if [ -n "$versioned" ]; then

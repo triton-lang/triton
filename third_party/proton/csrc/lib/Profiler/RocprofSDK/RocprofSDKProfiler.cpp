@@ -43,7 +43,6 @@ namespace {
 constexpr size_t BufferSize = 64 * 1024 * 1024;
 constexpr const char *UnknownKernelName = "<unknown>";
 
-// Forward-declare so the runtime state can hold a typed pointer.
 struct RocprofSDKProfilerPimpl;
 
 // ---- SDK runtime state (singleton, outlives any profiler instance) ----
