@@ -2209,14 +2209,11 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
   std::string uninitializedMessage = "Buffer being read before any write.";
   if (!operandName.empty())
     uninitializedMessage += " Operand: " + operandName.str();
-  auto verifyWriteResultType = cast<RankedTensorType>(
-      writeVisibilityType.cloneWith(std::nullopt, b.getI1Type()));
-  AssertInfo assertInfo{message, verifyWriteResultType};
+  AssertInfo assertInfo{message, b.getI1Type()};
   Type aliasMatrixTypeBase;
-  auto buildVerifyWriteBody = [&writeVisibilityType, &aliasMatrixTypeBase,
-                               verifyWriteResultType](bool useAlias,
-                                                      bool allowNoWrite,
-                                                      CTARelationKind kind) {
+  auto buildVerifyWriteBody = [&writeVisibilityType, &aliasMatrixTypeBase](
+                                  bool useAlias, bool allowNoWrite,
+                                  CTARelationKind kind) {
     return [=](ImplicitLocOpBuilder &fb, Block *entryBlock) {
       Value bufOffset = entryBlock->getArgument(0);
       Value lengthVal = entryBlock->getArgument(1);
@@ -2288,8 +2285,6 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
           fb, result.getType(), fb.getIntegerAttr(fb.getI1Type(), 1));
       Value predicatedWriteVisible =
           arith::SelectOp::create(fb, pred, result, vTrue);
-      predicatedWriteVisible = triton::SplatOp::create(
-          fb, verifyWriteResultType, predicatedWriteVisible);
       triton::ReturnOp::create(fb, predicatedWriteVisible);
     };
   };
@@ -2304,8 +2299,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
         threadVal,           buffersVal,    writeVisibilityVal,
         relation.effectCTAs, aliasMatrixVal};
     if (!allowNoWrite) {
-      AssertInfo initializedAssertInfo{uninitializedMessage,
-                                       verifyWriteResultType};
+      AssertInfo initializedAssertInfo{uninitializedMessage, b.getI1Type()};
       createCallToCachedFunction(
           b, "verify_write_initialized", args, initializedAssertInfo,
           {buffersType, writeVisibilityType, aliasMatrixType, (uint64_t)memType,
@@ -2324,8 +2318,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
         bufOffset,          lengthVal,          pred, threadVal, buffersVal,
         writeVisibilityVal, relation.effectCTAs};
     if (!allowNoWrite) {
-      AssertInfo initializedAssertInfo{uninitializedMessage,
-                                       verifyWriteResultType};
+      AssertInfo initializedAssertInfo{uninitializedMessage, b.getI1Type()};
       createCallToCachedFunction(
           b, "verify_write_initialized_noalias", args, initializedAssertInfo,
           {buffersType, writeVisibilityType, (uint64_t)memType,
@@ -2367,13 +2360,10 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
   std::string message = "Buffer being accessed has outstanding reads";
   if (!operandName.empty())
     message += ". Operand: " + operandName.str();
-  auto verifyReadResultType = cast<RankedTensorType>(
-      readVisibilityType.cloneWith(std::nullopt, b.getI1Type()));
-  AssertInfo assertInfo{message, verifyReadResultType};
+  AssertInfo assertInfo{message, b.getI1Type()};
   Type aliasMatrixTypeBase;
-  auto buildVerifyReadBody = [&readVisibilityType, &aliasMatrixTypeBase,
-                              verifyReadResultType](bool useAlias,
-                                                    CTARelationKind kind) {
+  auto buildVerifyReadBody = [&readVisibilityType, &aliasMatrixTypeBase](
+                                 bool useAlias, CTARelationKind kind) {
     return [=](ImplicitLocOpBuilder &fb, Block *entryBlock) {
       Value bufOffset = entryBlock->getArgument(0);
       Value lengthVal = entryBlock->getArgument(1);
@@ -2445,8 +2435,6 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
           fb, hasVisibility.getType(), fb.getIntegerAttr(fb.getI1Type(), 1));
       Value predicatedHasVisibility =
           arith::SelectOp::create(fb, pred, hasVisibility, vTrue);
-      predicatedHasVisibility = triton::SplatOp::create(
-          fb, verifyReadResultType, predicatedHasVisibility);
       triton::ReturnOp::create(fb, predicatedHasVisibility);
     };
   };
@@ -3165,13 +3153,10 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
   std::string message =
       "Accessing buffer with pending access. Pending access type: " +
       pendingAccessType.str();
-  auto checkCommitsResultType = cast<RankedTensorType>(
-      commitsType.cloneWith(std::nullopt, b.getI1Type()));
-  AssertInfo assertInfo{message, checkCommitsResultType};
+  AssertInfo assertInfo{message, b.getI1Type()};
   Type aliasMatrixTypeBase;
 
-  auto buildCheckOutstandingCommitsBody = [&commitsType, &aliasMatrixTypeBase,
-                                           checkCommitsResultType](
+  auto buildCheckOutstandingCommitsBody = [&commitsType, &aliasMatrixTypeBase](
                                               bool useAlias, bool exclSelf,
                                               CTARelationKind kind) {
     return [=](ImplicitLocOpBuilder &fb, Block *entryBlock) {
@@ -3215,8 +3200,6 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
                                     fb.getIntegerAttr(fb.getI1Type(), 1));
       Value predicatedSelectedEqZero =
           arith::SelectOp::create(fb, pred, allSelectedEqZero, vTrue);
-      predicatedSelectedEqZero = triton::SplatOp::create(
-          fb, checkCommitsResultType, predicatedSelectedEqZero);
 
       triton::ReturnOp::create(fb, predicatedSelectedEqZero);
     };
