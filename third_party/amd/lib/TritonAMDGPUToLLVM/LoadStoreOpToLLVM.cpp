@@ -1244,9 +1244,10 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     if (inMergeGroup) {
       // Emit a fused intrinsic for the group.  Per-member operands are
       // fetched via `getRemappedValue` (this returns adaptor's values
-      // for the current op).  Per-member hints are read inside
-      // `emitTDMLoadStoreMerged`; rule 2 guarantees no mbarriers, so
-      // no per-member barrier array is needed.
+      // for the current op).  Insert at the last member so pure ops
+      // between members dominate any operands used by the fused emit.
+      // Per-member hints are read inside `emitTDMLoadStoreMerged`; rule
+      // 2 guarantees no mbarriers, so no barrier array is needed.
       const auto &group = mergeIt->second;
       size_t numMembers = group.members.size();
 
@@ -1277,6 +1278,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       // auxBits off the current op is sufficient for the group.
       auto mergedAuxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
           op.getCache(), /*isLoad*/ true, targetInfo);
+      rewriter.setInsertionPoint(group.members.back());
       mlir::LLVM::AMD::emitTDMLoadStoreMerged(
           rewriter, loc, getTypeConverter(), descPerMember, shapePerCTA,
           numWarps, padInterval, padAmount, offsetPerMember, dstPtrsPerMember,

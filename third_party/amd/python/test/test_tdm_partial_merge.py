@@ -27,7 +27,7 @@ Manual: terminology
     `1 <= K <= num_warps`.
   * **i0** = smallest active warp INDEX (`countr_zero(hint)`).
   * **basis bits** = set bits of `support = OR over s in S of (s XOR i0)`.
-    Each must be a power of two for the hint to be verifier-legal.
+    They are bit positions; the basis vectors are `1 << basis_bit`.
   * **axis-aligned coset** = active set written as `i0 XOR
     span(basis_bits)`.  Equivalent to "passes the verifier".
   * **candidate batch** (merge-only term): consecutive `async_load`s
