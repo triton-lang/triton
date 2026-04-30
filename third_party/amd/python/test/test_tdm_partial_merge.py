@@ -115,33 +115,43 @@ def vector_add_tdm_kernel(
 # ---------------------------------------------------------------------------
 # Hint table.  Each entry is (HINT_A, HINT_B, expected_merge, ID).
 #
+# `K = popcount(hint)` is the number of active warps a hint selects (one
+# bit = one warp); the verifier requires `K` to be a power of two and
+# the active set to be an axis-aligned coset.  See
+# `AsyncTDMCopyGlobalToLocalOp::validateWarpUsedHint` in
+# `third_party/amd/lib/Dialect/TritonAMDGPU/IR/Dialect.cpp` for the full
+# rule.
+#
 # `expected_merge=True` means the pair is mergeable: both hints are
 # non-zero, pairwise disjoint, have a verifier-legal axis-aligned-coset
 # union, share the same shared encoding and shape, carry no mbarrier, and
 # have no intervening side-effecting op.
 #
-# Examples chosen to exercise different basis-bit / i0 placements:
-#   - 0x0F + 0xF0     (canonical prefix + high-half coset, basis {0,1})
-#   - 0x55 + 0xAA     (strided cosets, basis {1,2})
-#   - 0x33 + 0xCC     (lo/hi pair cosets, basis {0,2})
-#   - 0x03 + 0x0C     (K=2 each, union K=4 prefix; 4 warps idle)
+# Examples chosen to exercise different basis-bit / i0 placements
+# (bit i set => warp i is active):
+#   - 0b00001111 + 0b11110000   (canonical prefix + high-half coset, basis {0,1})
+#   - 0b01010101 + 0b10101010   (strided cosets, basis {1,2})
+#   - 0b00110011 + 0b11001100   (lo/hi pair cosets, basis {0,2})
+#   - 0b00000011 + 0b00001100   (K=2 each, union K=4 prefix; 4 warps idle)
 # Negative example:
-#   - 0x03 + 0x10     (K=2 + K=1, union popcount=3 -> not power of two)
+#   - 0b00000011 + 0b00010000   (K=2 + K=1, union popcount=3 -> not power of two)
 # ---------------------------------------------------------------------------
 
 _HINT_PARAMS = [
-    # (HINT_A, HINT_B, expected_merge, id)
-    (0, 0, False, "no_hint"),
-    (0xFF, 0, False, "full_a_unhinted_b"),
-    (0x0F, 0, False, "lo_prefix_a_unhinted_b"),
-    (0xF0, 0, False, "hi_prefix_a_unhinted_b"),
-    (0x55, 0, False, "strided_a_unhinted_b"),
-    (0x01, 0x02, True, "merge_single_warp_pair"),
-    (0x0F, 0xF0, True, "merge_lo_hi_prefix"),
-    (0x55, 0xAA, True, "merge_strided"),
-    (0x33, 0xCC, True, "merge_lo_hi_pairs"),
-    (0x03, 0x0C, True, "merge_partial_K4_idle"),
-    (0x03, 0x10, False, "disjoint_but_union_illegal"),
+    # (HINT_A, HINT_B, expected_merge, id).  The kernel maps HINT == 0 to the
+    # no-kwarg `async_load` (i.e. the `warp_used_hint` attribute is absent on
+    # the op), since the verifier rejects an explicit `warp_used_hint = 0`.
+    (0b00000000, 0b00000000, False, "no_hint"),
+    (0b11111111, 0b00000000, False, "full_a_unhinted_b"),
+    (0b00001111, 0b00000000, False, "lo_prefix_a_unhinted_b"),
+    (0b11110000, 0b00000000, False, "hi_prefix_a_unhinted_b"),
+    (0b01010101, 0b00000000, False, "strided_a_unhinted_b"),
+    (0b00000001, 0b00000010, True, "merge_single_warp_pair"),
+    (0b00001111, 0b11110000, True, "merge_lo_hi_prefix"),
+    (0b01010101, 0b10101010, True, "merge_strided"),
+    (0b00110011, 0b11001100, True, "merge_lo_hi_pairs"),
+    (0b00000011, 0b00001100, True, "merge_partial_K4_idle"),
+    (0b00000011, 0b00010000, False, "disjoint_but_union_illegal"),
 ]
 
 
@@ -202,10 +212,10 @@ def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, expected_merge
     n_tdm = len(re.findall(r"tensor_load_to_lds", amdgcn))
     if expected_merge:
         assert n_tdm == 1, (f"expected fused single tensor_load_to_lds for "
-                            f"HINT_A=0x{HINT_A:x}, HINT_B=0x{HINT_B:x}, got {n_tdm}\n{amdgcn}")
+                            f"HINT_A=0b{HINT_A:08b}, HINT_B=0b{HINT_B:08b}, got {n_tdm}\n{amdgcn}")
     else:
-        assert n_tdm == 2, (f"expected two tensor_load_to_lds for HINT_A=0x{HINT_A:x}, "
-                            f"HINT_B=0x{HINT_B:x}, got {n_tdm}\n{amdgcn}")
+        assert n_tdm == 2, (f"expected two tensor_load_to_lds for HINT_A=0b{HINT_A:08b}, "
+                            f"HINT_B=0b{HINT_B:08b}, got {n_tdm}\n{amdgcn}")
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +278,6 @@ if __name__ == "__main__":
         raise SystemExit("This script requires a gfx1250 device.")
     for p in _HINT_PARAMS:
         ha, hb, em, ident = p
-        print(f"-- {ident}: HINT_A=0x{ha:x}, HINT_B=0x{hb:x}, expected_merge={em}")
+        print(f"-- {ident}: HINT_A=0b{ha:08b}, HINT_B=0b{hb:08b}, expected_merge={em}")
         test_runtime_vector_add_tdm(64, 64, ha, hb, em)
         print("   OK")

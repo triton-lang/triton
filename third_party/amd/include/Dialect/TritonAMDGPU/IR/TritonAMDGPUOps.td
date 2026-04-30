@@ -758,7 +758,16 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     the hint (same data ends up in shared memory whether the hint is set
     or not) -- only the emission strategy changes: the lowering uses
     `K = popcount(hint)` warps to cover the block and marks the remaining
-    warps as pred-off no-ops.  Absent ⇔ all warps participate.
+    warps as pred-off no-ops.
+
+    "All warps participate" is encoded by the attribute being **absent**,
+    not by `warp_used_hint = 0`.  An explicit value of `0` is rejected by
+    the verifier ("warp_used_hint must have at least one bit set"); the
+    distinction matters because the merge analysis treats a hint-less op
+    as a side-effecting break in the candidate run, while a `K = num_warps`
+    full-coverage hint (e.g. `0xFF` for 8 warps) is a normal hinted op.
+    Front-ends that accept a Python-side `0` should map it to "no
+    attribute" before emitting the op.
 
     v1 restriction: the hint must be an *axis-aligned coset* in
     warpId space, i.e. there exist log2(K) bit positions

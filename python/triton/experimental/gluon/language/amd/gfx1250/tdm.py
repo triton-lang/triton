@@ -213,8 +213,9 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
             ``K = popcount(hint)`` a power of two and ``1 <= K <= num_warps``.
             See :func:`warp_prefix`, :func:`warp_shifted_prefix`,
             :func:`warp_strided` for constructors that always produce legal hints.
-            The MLIR verifier enforces these rules. Absent ⇔ all warps
-            participate (default).
+            The MLIR verifier enforces these rules. Omit the argument or pass
+            ``None`` for no hint (all warps participate); an explicit
+            ``warp_used_hint=0`` is invalid and rejected by the verifier.
 
             Adjacent ``async_load`` ops with pairwise-disjoint hints whose union is
             also a legal hint, identical destination shared encoding, and identical
