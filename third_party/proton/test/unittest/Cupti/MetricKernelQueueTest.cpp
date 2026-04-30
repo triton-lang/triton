@@ -7,6 +7,12 @@
 using proton::detail::popMetricKernelNumWordsIfQueued;
 
 TEST(MetricKernelQueueTest, DoesNotPopEmptyQueueWhileMetricKernelLaunching) {
+  // Reproduces the zen bench CUDA graph failure mode: CUPTI can report a
+  // graph-node-created callback while metric-buffer receive still has
+  // isMetricKernelLaunching set, but after all queued metric-copy entries were
+  // consumed. The old CuptiProfiler.cpp path used front()/pop_front()
+  // unconditionally when the flag was true, which segfaulted on this empty
+  // queue.
   std::deque<size_t> metricKernelNumWordsQueue;
   size_t metricKernelNumWords = 123;
 
