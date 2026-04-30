@@ -30,7 +30,7 @@ namespace mlir {
 // existing memory-fence/wait ops at cluster boundaries are tolerated so that
 // prefetch patterns continue to work; encountering one mid-cluster is treated
 // as malformed input by the callers.
-static bool isPipelineIgnorable(Operation *op) {
+static bool canSitBetweenStages(Operation *op) {
   return isa<ttg::AsyncWaitOp, gpu::BarrierOp, triton::gpu::BarrierOp,
              tt::amdgpu::AsyncTDMWait>(op);
 }
@@ -40,22 +40,9 @@ static bool isPipelineBorder(Operation *op) {
   return op->hasAttr("triton.warp_pipeline.border");
 }
 
-// True if `op` is a structured loop (scf.for / scf.while).  Loops are
-// disallowed inside a pipeline stage for several reasons:
-//   1. No useful effect: a non-pipelined loop runs to completion within a
-//      single warp's phase while the other warp waits at the cluster
-//      boundary; the pipeline cannot interleave anything across iterations.
-//      Iteration-level pipelining is expressed by the loop-pipeline form
-//      (scf.for containing warp_pipeline_stage blocks).
-//   2. A cluster is meant to be a straight-line scheduling unit so the
-//      backend can interleave its ops with the other warp's stage; a loop
-//      is an opaque control-flow region the scheduler cannot see across.
-//   3. Our cross-cluster memory-effect analysis is a flat scan over the
-//      cluster body; loop bodies aren't visible through MemoryEffectOpInterface
-//      and loop-carried LDS hazards have nowhere to be barriered (cluster
-//      barriers are boundary-only).
-// As a side effect this also serves as the "no nested warp pipelines" check,
-// since a warp-pipelined scf.for is still an scf.for.
+// True if `op` is a structured loop (scf.for / scf.while).  Pipeline clusters
+// are straight-line scheduling units, so loops remain boundaries instead of
+// being absorbed.  This also rejects nested warp-pipelined scf.for ops.
 static bool isLoopOp(Operation *op) {
   return isa<scf::ForOp, scf::WhileOp>(op);
 }
@@ -176,19 +163,10 @@ static void createClusterOp(OpBuilder &b, Location loc,
   return;
 }
 
-// Sink pure-scalar ops past adjacent ignorable ops so they join the next
-// cluster. After loop unrolling, scalar IV-remap ops (arith.addi/muli) land
-// between borders and the ignorable that starts the next iteration (FA
-// pattern); without this, WarpPipeliner sees scalars as an incomplete
-// cluster when it hits the ignorable and bails out. Single forward pass,
-// O(N).
-//
-// `pending` only accumulates pure scalars and is cleared at any other op,
-// so it forms a closed SSA DAG: any use of a pending scalar by the trailing
-// ignorable run must be a direct operand, so the dependency check is a
-// simple operand scan.
-static void sinkPureScalarsPastIgnorables(Block &blk) {
-  // Accumulates a run of consecutive pure scalars that might be sunk.
+// Move pure scalar IV-remap ops after adjacent inter-stage barriers/waits so
+// they become part of the next stage.  If a barrier/wait uses one of those
+// scalars, leave the run in place to preserve SSA.
+static void sinkPureScalarsIntoNextStage(Block &blk) {
   SmallVector<Operation *> pending;
   auto consumesPending = [&](Operation *user) {
     return llvm::any_of(user->getOperands(), [&](Value v) {
@@ -202,15 +180,11 @@ static void sinkPureScalarsPastIgnorables(Block &blk) {
       op = next;
       continue;
     }
-    // Non-scalar op: try to sink pending past an ignorable run, then reset.
-    if (isPipelineIgnorable(op) && !pending.empty()) {
-      // Extend `anchor` to the last ignorable in the consecutive run.
+    if (canSitBetweenStages(op) && !pending.empty()) {
       Operation *anchor = op;
       while (anchor->getNextNode() &&
-             isPipelineIgnorable(anchor->getNextNode()))
+             canSitBetweenStages(anchor->getNextNode()))
         anchor = anchor->getNextNode();
-      // Abort the sink if any ignorable in [op..anchor] consumes a pending
-      // scalar -- moving its producer past it would break SSA.
       bool conflict = false;
       for (Operation *ign = op; !conflict; ign = ign->getNextNode()) {
         conflict = consumesPending(ign);
@@ -218,7 +192,6 @@ static void sinkPureScalarsPastIgnorables(Block &blk) {
           break;
       }
       if (!conflict) {
-        // Skip past the moved scalars on the next iteration.
         next = anchor->getNextNode();
         // Reverse iteration + moveAfter(anchor) preserves source order:
         // each earlier-inserted scalar is pushed right by later inserts.
@@ -226,8 +199,6 @@ static void sinkPureScalarsPastIgnorables(Block &blk) {
           s->moveAfter(anchor);
       }
     }
-    // Pending is always cleared at a non-scalar op: the run is broken,
-    // either by a successful sink or by an op that anchors them in place.
     pending.clear();
     op = next;
   }
@@ -251,21 +222,21 @@ static PipelineResult createPipeline(OpBuilder &b, Location loc,
   SmallVector<SmallVector<Operation *>> clusters;
   auto ctx = forOp.getContext();
 
-  sinkPureScalarsPastIgnorables(blk);
+  sinkPureScalarsIntoNextStage(blk);
 
   // One pass over the body; collect clusters split by explicit borders.
   for (Operation &opRef : llvm::make_early_inc_range(blk)) {
     Operation *op = &opRef;
-    if (isPipelineBorder(op)) { // Wrap-up one cluster at a border.
+    if (isPipelineBorder(op)) { // Wrap up one cluster at a border.
       clusterMarkers.push_back(readBorderMarker(op));
       addDummyOpIfEmptyCluster(b, loc, op, cluster);
       clusters.push_back(std::move(cluster));
       cluster.clear();
-      op->erase(); // remove the marker
+      op->erase(); // Remove the marker.
       continue;
     }
-    if (isPipelineIgnorable(op)) {
-      // Ignorable ops (barrier / async_wait family) belong between stages,
+    if (canSitBetweenStages(op)) {
+      // Barrier / async_wait family ops belong between stages,
       // never inside one.  Encountering one while a cluster is being built
       // means the user inserted it inside a warp_pipeline_stage region.
       if (!cluster.empty()) {
@@ -282,13 +253,13 @@ static PipelineResult createPipeline(OpBuilder &b, Location loc,
                     "warp_pipeline_stage blocks inside the loop body");
       return PipelineResult::Malformed;
     }
-    if (isa<scf::YieldOp>(op)) // End of the loop
+    if (isa<scf::YieldOp>(op)) // End of the loop.
       break;
 
-    // Keep collecting ops for a cluster.
+    // Keep collecting ops for the current cluster.
     cluster.push_back(op);
   }
-  if (!cluster.empty()) { // create the last cluster if needed.
+  if (!cluster.empty()) { // Create the last cluster if needed.
     clusters.push_back(std::move(cluster));
     auto clusterStr = StringAttr::get(ctx, "last_cluster");
     clusterMarkers.push_back({clusterStr, -1});
@@ -353,22 +324,12 @@ static PipelineResult createFlatPipeline(OpBuilder &b, Block &block) {
   Operation *firstBorder = allBorders.front();
   Operation *lastBorder = allBorders.back();
 
-  // 2. Locate the start of the first stage.  Unlike createPipeline, the flat
-  //    sequence has no loop body to anchor against, so walk backwards from
-  //    the first border, stopping at things that must not be folded into
-  //    stage 0:
-  //      - a structured loop (scf.for / scf.while) -- see isLoopOp for
-  //        rationale; this also covers already-warp-pipelined loops, so the
-  //        "no nesting" rule falls out for free
-  //      - a phase-control op (defensive; not produced before this pass)
-  //      - an inter-stage barrier from a previous pipeline
-  //    Other structured control flow (scf.if, etc.) is absorbed into stage 0
-  //    since execution falls through it linearly at this stage of the
-  //    pipeline.
+  // 2. For flat pipelines, stage 0 may include the ops immediately before the
+  //    first border.  Stop at ops that must stay outside this pipeline.
   Operation *regionStart = firstBorder;
   for (Operation *op = firstBorder->getPrevNode(); op; op = op->getPrevNode()) {
     if (isLoopOp(op) || isa<tt::amdgpu::CondBarrierOp>(op) ||
-        isPipelineIgnorable(op))
+        canSitBetweenStages(op))
       break;
     regionStart = op;
   }
@@ -397,7 +358,7 @@ static PipelineResult createFlatPipeline(OpBuilder &b, Block &block) {
       continue;
     }
 
-    if (isPipelineIgnorable(op)) {
+    if (canSitBetweenStages(op)) {
       // Same rule as createPipeline: barriers/waits cannot live inside a
       // stage.
       if (!cluster.empty()) {
@@ -419,10 +380,7 @@ static PipelineResult createFlatPipeline(OpBuilder &b, Block &block) {
     cluster.push_back(op);
   }
 
-  // 4. Materialize each cluster as an execute_region.  With at least two
-  //    borders the sweep should always produce >= 2 clusters; treat anything
-  //    less as a defensive malformed case.  Note: the borders themselves
-  //    were erased during the sweep, so we attach the diagnostic to `loc`.
+  // 4. The bounded sweep should produce at least two clusters.
   if (clusters.size() < 2) {
     mlir::emitError(
         loc, "warp_pipeline_stage borders did not produce at least two stages");
