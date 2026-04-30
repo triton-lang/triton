@@ -182,3 +182,28 @@ tt.func @split_op(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>) {
   tt.store %2, %res1 : tensor<64x!tt.ptr<f32>>
   tt.return
 }
+
+// -----
+
+// A tt.func that returns a tensor should have its result
+// type converted (encoded) along with its argument types, and a tt.call
+// site should pick up the encoded result type as well.
+
+// CHECK-LABEL: tt.func private @callee
+// CHECK-SAME: (%{{.*}}: tensor<128xi32, #{{.*}}>) -> tensor<128xi32, #{{.*}}>
+tt.func private @callee(%arg0: tensor<128xi32>) -> tensor<128xi32> {
+  %cst = arith.constant dense<1> : tensor<128xi32>
+  %0 = arith.addi %arg0, %cst : tensor<128xi32>
+  // CHECK: tt.return %{{.*}} : tensor<128xi32, #{{.*}}>
+  tt.return %0 : tensor<128xi32>
+}
+
+// CHECK-LABEL: tt.func @caller
+tt.func @caller(%ptr: !tt.ptr<i32>) {
+  %r = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // CHECK: %{{.*}} = tt.call @callee(%{{.*}}) : (tensor<128xi32, #{{.*}}>) -> tensor<128xi32, #{{.*}}>
+  %v = tt.call @callee(%r) : (tensor<128xi32>) -> tensor<128xi32>
+  %ptrs = tt.splat %ptr : !tt.ptr<i32> -> tensor<128x!tt.ptr<i32>>
+  tt.store %ptrs, %v : tensor<128x!tt.ptr<i32>>
+  tt.return
+}
