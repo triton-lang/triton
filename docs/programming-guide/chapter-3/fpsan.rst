@@ -378,7 +378,7 @@ Exact preserved properties:
 
 - ``0``, ``+1``, and ``-1`` remain stable across the conversion
 - sign-extension behavior in the payload domain
-- truncation drops high payload bits exactly
+- truncation drops high payload bits
 
 Important caveat:
 
