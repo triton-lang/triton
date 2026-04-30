@@ -20,14 +20,7 @@ class FunctionBuilder;
 
 constexpr int numMemTypes = getMaxEnumValForMemType() + 1;
 
-constexpr int NUM_THREADS = 16;
-constexpr int TMA_THREAD_OFFSET = NUM_THREADS;
-constexpr int TC_THREAD_OFFSET = TMA_THREAD_OFFSET + NUM_THREADS;
-constexpr int CLC_THREAD_OFFSET = TC_THREAD_OFFSET + NUM_THREADS;
-constexpr int TOTAL_NUM_THREADS = CLC_THREAD_OFFSET + NUM_THREADS;
-static_assert(TOTAL_NUM_THREADS <= 64,
-              "ConSan thread bitsets are stored in i64 masks");
-const int THREADS_BITMASK_SIZE = llvm::PowerOf2Ceil(TOTAL_NUM_THREADS);
+constexpr int MAX_NUM_BASE_THREADS = 16;
 
 namespace CommitKind {
 enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
@@ -120,6 +113,20 @@ struct ValueType {
 // that pointer. For tensor descriptors and constants, ValueType::value is the
 // tensor itself and ValueType::type is its type.
 struct AuxDataMap {
+  struct ThreadLayout {
+    int numBaseThreads = 1;
+    int numBaseThreadSlots = 1;
+    int tmaThreadOffset = -1;
+    int tcThreadOffset = -1;
+    int clcThreadOffset = -1;
+    int totalNumThreads = 1;
+    int numThreadSlots = 1;
+
+    bool hasTMAThreads() const { return tmaThreadOffset >= 0; }
+    bool hasTCThreads() const { return tcThreadOffset >= 0; }
+    bool hasCLCThreads() const { return clcThreadOffset >= 0; }
+  };
+
   struct RegionToValueMap {
     DenseMap<Region *, ValueType> values;
     ValueType at(Region *region) {
@@ -142,8 +149,9 @@ struct AuxDataMap {
   //   C = CTAs in the cluster.
   //   B = tracked buffers for one memory type, power-of-two padded.
   //   K = tracked mbarriers, power-of-two padded.
-  //   T = logical ConSan thread bit slots, padded to 64.
-  //   P = base-thread commit columns, currently 16.
+  //   T = logical ConSan thread bit slots used by this module, power-of-two
+  //       padded for the distributed layout.
+  //   P = base-thread commit columns used by this module, power-of-two padded.
   //
   // Storage notation:
   //   tensor  = distributed tensor value.
@@ -214,6 +222,10 @@ struct AuxDataMap {
   // True when a memory type has cross-buffer aliasing and therefore requires
   // aliasMatrices to make visibility and commit checks conservative.
   std::array<bool, numMemTypes> hasNonTrivialAliasing{};
+
+  // Dense logical-thread numbering for this module. Base threads are always
+  // present; TMA/TC/CLC peer ranges are added only when the module uses them.
+  ThreadLayout threadLayout;
 
   void populateAndPassToWarpSpecialize(ModuleOp module,
                                        FunctionBuilder &funcBuilder,

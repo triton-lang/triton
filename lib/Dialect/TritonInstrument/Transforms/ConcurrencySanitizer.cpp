@@ -87,36 +87,49 @@ std::optional<int> maybeGetPartitionIdx(Operation *op) {
   return std::nullopt;
 }
 
-int getCurrentThread(Operation *op, const ConSanTargetHooks *hooks) {
+int getCurrentThread(Operation *op, const ConSanTargetHooks *hooks,
+                     const AuxDataMap::ThreadLayout &threadLayout) {
   // Default partition is 0, other partitions are idx + 1
   int thread = maybeGetPartitionIdx(op).value_or(-1) + 1;
   if (hooks->isTMAOp(op)) {
-    thread += TMA_THREAD_OFFSET;
+    assert(threadLayout.hasTMAThreads() &&
+           "TMA thread class must exist when instrumenting a TMA op");
+    thread += threadLayout.tmaThreadOffset;
     return thread;
   }
   if (isTensorCoreOp(op)) {
-    thread += TC_THREAD_OFFSET;
+    assert(threadLayout.hasTCThreads() &&
+           "TC thread class must exist when instrumenting a tensor-core op");
+    thread += threadLayout.tcThreadOffset;
     return thread;
   }
   if (hooks->isCLCOp(op)) {
-    thread += CLC_THREAD_OFFSET;
+    assert(threadLayout.hasCLCThreads() &&
+           "CLC thread class must exist when instrumenting a CLC op");
+    thread += threadLayout.clcThreadOffset;
     return thread;
   }
   return thread;
 }
 
-int getBaseThread(int thread) { return thread % NUM_THREADS; }
+int getBaseThread(int thread, const AuxDataMap::ThreadLayout &threadLayout) {
+  return thread % threadLayout.numBaseThreads;
+}
 
 // Peer threads are the equivalent threads in the TMA, TC, CLC and normal
 // thread classes.
 // If a thread is a base thread, return the mask with the peers, otherwise
 // return the mask with the thread itself.
-uint64_t getThreadPeersMask(int thread) {
+uint64_t getThreadPeersMask(int thread,
+                            const AuxDataMap::ThreadLayout &threadLayout) {
   uint64_t mask = 1ULL << thread;
-  if (thread < NUM_THREADS) {
-    mask |= 1ULL << (thread + TMA_THREAD_OFFSET);
-    mask |= 1ULL << (thread + TC_THREAD_OFFSET);
-    mask |= 1ULL << (thread + CLC_THREAD_OFFSET);
+  if (thread < threadLayout.numBaseThreads) {
+    if (threadLayout.hasTMAThreads())
+      mask |= 1ULL << (thread + threadLayout.tmaThreadOffset);
+    if (threadLayout.hasTCThreads())
+      mask |= 1ULL << (thread + threadLayout.tcThreadOffset);
+    if (threadLayout.hasCLCThreads())
+      mask |= 1ULL << (thread + threadLayout.clcThreadOffset);
   }
   return mask;
 }
@@ -291,8 +304,8 @@ private:
       CriticalSectionListener listener;
       b.setListener(&listener);
 
-      int thread = getCurrentThread(op, hooks);
-      int baseThread = getBaseThread(thread);
+      int thread = getCurrentThread(op, hooks, auxData.threadLayout);
+      int baseThread = getBaseThread(thread, auxData.threadLayout);
       b.setLoc(op->getLoc());
       b.setInsertionPoint(op);
       if (isa<ttg::LocalAllocOp, ttng::TMEMAllocOp>(op)) {
@@ -321,7 +334,8 @@ private:
         if (!partitionRegions.empty()) {
           uint64_t destMask = 0;
           for (Region *region : partitionRegions)
-            destMask |= getThreadPeersMask(region->getRegionNumber() + 1);
+            destMask |= getThreadPeersMask(region->getRegionNumber() + 1,
+                                           auxData.threadLayout);
           if (destMask) {
             for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
               funcBuilder.createCopyWriteVisibilityCall(b, thread, destMask,
@@ -359,28 +373,32 @@ private:
       }
       if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
         funcBuilder.createClearOutstandingCommitsTransferWritesCall(
-            b, baseThread, getThreadPeersMask(thread), asyncWaitOp.getNum(),
-            nullptr, CommitKind::AsyncCp, MemType::SHARED_MEM, op);
+            b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
+            asyncWaitOp.getNum(), nullptr, CommitKind::AsyncCp,
+            MemType::SHARED_MEM, op);
       }
       if (auto wgmmaWaitOp = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
         funcBuilder.createClearOutstandingCommitsTransferReadsCall(
-            b, baseThread, getThreadPeersMask(thread),
+            b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
             wgmmaWaitOp.getPendings(), nullptr, CommitKind::Wgmma,
             MemType::SHARED_MEM, op);
       }
       if (auto info = hooks->getWaitOpInfo(op)) {
         if (info->transferWrites && info->transferReads) {
           funcBuilder.createClearOutstandingCommitsTransferBothCall(
-              b, baseThread, getThreadPeersMask(thread), info->pendingCount,
-              nullptr, info->commitKind, MemType::SHARED_MEM, op);
+              b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
+              info->pendingCount, nullptr, info->commitKind,
+              MemType::SHARED_MEM, op);
         } else if (info->transferWrites) {
           funcBuilder.createClearOutstandingCommitsTransferWritesCall(
-              b, baseThread, getThreadPeersMask(thread), info->pendingCount,
-              nullptr, info->commitKind, MemType::SHARED_MEM, op);
+              b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
+              info->pendingCount, nullptr, info->commitKind,
+              MemType::SHARED_MEM, op);
         } else if (info->transferReads) {
           funcBuilder.createClearOutstandingCommitsTransferReadsCall(
-              b, baseThread, getThreadPeersMask(thread), info->pendingCount,
-              nullptr, info->commitKind, MemType::SHARED_MEM, op);
+              b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
+              info->pendingCount, nullptr, info->commitKind,
+              MemType::SHARED_MEM, op);
         }
       }
       if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
@@ -437,9 +455,11 @@ private:
     tti::ExperimentalLockAcquireOp::create(wb, lock, pred);
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       funcBuilder.createTransferVisibleWritesCall(
-          wb, alloc, getThreadPeersMask(thread), pred, memType, op);
+          wb, alloc, getThreadPeersMask(thread, auxData.threadLayout), pred,
+          memType, op);
       funcBuilder.createTransferVisibleReadsCall(
-          wb, alloc, getThreadPeersMask(thread), pred, memType, op);
+          wb, alloc, getThreadPeersMask(thread, auxData.threadLayout), pred,
+          memType, op);
     }
     funcBuilder.createClearWaitingCall(wb, alloc, baseThread, pred, op);
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
@@ -447,7 +467,7 @@ private:
 
   void instrumentMemEffects(ImplicitLocOpBuilder &b, Operation *op, int thread,
                             tti::FunctionBuilder &funcBuilder) {
-    int baseThread = getBaseThread(thread);
+    int baseThread = getBaseThread(thread, auxData.threadLayout);
     std::optional<MemEffectsOpInfo> opInfo = hooks->getMemEffectsOpInfo(op);
     if (!opInfo) {
       return;

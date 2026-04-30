@@ -420,6 +420,48 @@ FuncOp getEntryPoint(ModuleOp module) {
   return publicFuncs.front();
 }
 
+AuxDataMap::ThreadLayout getThreadLayout(ModuleOp module,
+                                         const ConSanTargetHooks *hooks) {
+  AuxDataMap::ThreadLayout layout;
+  bool hasTMA = false;
+  bool hasTC = false;
+  bool hasCLC = false;
+
+  module.walk([&](Operation *op) {
+    if (auto wsOp = dyn_cast<WarpSpecializeOp>(op))
+      layout.numBaseThreads = std::max<int>(
+          layout.numBaseThreads, wsOp.getPartitionRegions().size() + 1);
+    if (auto wsOp = dyn_cast<WarpSpecializePartitionsOp>(op))
+      layout.numBaseThreads = std::max<int>(
+          layout.numBaseThreads, wsOp.getPartitionRegions().size() + 1);
+    hasTMA |= hooks->isTMAOp(op);
+    hasTC |= isa<MMAv5OpInterface, TCGen5CommitOp, TMEMCopyOp>(op);
+    hasCLC |= hooks->isCLCOp(op);
+  });
+
+  assert(layout.numBaseThreads <= MAX_NUM_BASE_THREADS &&
+         "ConSan waiting bitsets assume at most 16 base threads");
+  layout.numBaseThreadSlots = llvm::PowerOf2Ceil(layout.numBaseThreads);
+  int nextThread = layout.numBaseThreads;
+  if (hasTMA) {
+    layout.tmaThreadOffset = nextThread;
+    nextThread += layout.numBaseThreads;
+  }
+  if (hasTC) {
+    layout.tcThreadOffset = nextThread;
+    nextThread += layout.numBaseThreads;
+  }
+  if (hasCLC) {
+    layout.clcThreadOffset = nextThread;
+    nextThread += layout.numBaseThreads;
+  }
+  layout.totalNumThreads = nextThread;
+  layout.numThreadSlots = llvm::PowerOf2Ceil(layout.totalNumThreads);
+  assert(layout.totalNumThreads <= 64 &&
+         "ConSan thread bitsets are stored in i64 masks");
+  return layout;
+}
+
 Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
     Operation *op) {
   Region *region = op->getParentRegion();
@@ -453,6 +495,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
   SmallVector<BufferRegion> barrierRegions;
   getBuffersAndBarriers(module, bufRegions, barrierRegions);
   int numCTAs = lookupNumCTAs(module);
+  threadLayout = getThreadLayout(module, hooks);
   int captureCounter = 0;
 
   FuncOp entryPoint = getEntryPoint(module);
@@ -507,12 +550,10 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
                          writeVisibility[iMemType], captureCounter);
     readVisibility[iMemType].insert(
         entryRegion,
-        {createZeroInitStateTensor(
-             b, {numCTAs, numBufs, numCTAs, THREADS_BITMASK_SIZE, numCTAs}, 64,
-             fb),
-         getIntTensorType(
-             entryRegion,
-             {numCTAs, numBufs, numCTAs, THREADS_BITMASK_SIZE, numCTAs}, 64)});
+        createZeroInitStateTensor(
+            b,
+            {numCTAs, numBufs, numCTAs, threadLayout.numThreadSlots, numCTAs},
+            64, fb));
     passToWarpSpecialize(entryPoint, readVisibility[iMemType].at(entryRegion),
                          readVisibility[iMemType], captureCounter);
   }
@@ -590,14 +631,12 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
     int numBufs = bufRegions[(int)MemType::SHARED_MEM].size();
     if (numBufs == 0)
       return;
-    // NUM_THREADS instead of THREADS_BITMASK_SIZE as commit-count tracking
-    // operates on base threads.
+    // Commit-count tracking operates on base threads.
     commits[commitKind].insert(
         entryRegion,
-        {createZeroInitStateTensor(b, {numCTAs, numBufs, numCTAs, NUM_THREADS},
-                                   8, fb),
-         getIntTensorType(entryRegion, {numCTAs, numBufs, numCTAs, NUM_THREADS},
-                          8)});
+        createZeroInitStateTensor(
+            b, {numCTAs, numBufs, numCTAs, threadLayout.numBaseThreadSlots}, 8,
+            fb));
     passToWarpSpecialize(entryPoint, commits[commitKind].at(entryRegion),
                          commits[commitKind], captureCounter);
   };
