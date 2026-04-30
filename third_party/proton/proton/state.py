@@ -1,11 +1,8 @@
 from triton._C.libproton import proton as libproton
 from .flags import flags
 from functools import wraps
-from contextvars import ContextVar
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
-COMPUTE_METADATA_SCOPE_PREFIX = f"{COMPUTE_METADATA_SCOPE_NAME}:"
-_metadata_scope_stack = ContextVar("proton_metadata_scope_stack", default=())
 
 
 class state:
@@ -36,25 +33,24 @@ class state:
     def __enter__(self):
         if not flags.profiling_on:
             return self
-        enter_state(self.name)
+        libproton.enter_state(self.name)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         if not flags.profiling_on:
             return
-        exit_state()
+        libproton.exit_state()
 
     def __call__(self, func):
 
         @wraps(func)
         def wrapper(*args, **kwargs):
             if flags.profiling_on:
-                enter_state(self.name)
-            try:
-                return func(*args, **kwargs)
-            finally:
-                if flags.profiling_on:
-                    exit_state()
+                libproton.enter_state(self.name)
+            ret = func(*args, **kwargs)
+            if flags.profiling_on:
+                libproton.exit_state()
+            return ret
 
         return wrapper
 
@@ -71,50 +67,3 @@ def enter_state(name: str) -> None:
 
 def exit_state() -> None:
     libproton.exit_state()
-
-
-def is_state_active(name: str) -> bool:
-    return libproton.get_state() == name
-
-
-def metadata_state_name(kernel_name=None) -> str:
-    if not kernel_name:
-        return COMPUTE_METADATA_SCOPE_NAME
-    return f"{COMPUTE_METADATA_SCOPE_PREFIX}{kernel_name}"
-
-
-def enter_metadata_scope(name: str) -> int:
-    stack = _metadata_scope_stack.get()
-    _metadata_scope_stack.set((*stack, name))
-    scope_id = libproton.record_scope()
-    libproton.enter_scope(scope_id, name)
-    return scope_id
-
-
-def exit_metadata_scope(scope_id: int, name: str) -> None:
-    try:
-        libproton.exit_scope(scope_id, name)
-    finally:
-        stack = _metadata_scope_stack.get()
-        if stack:
-            _metadata_scope_stack.set(stack[:-1])
-
-
-def is_metadata_scope_active() -> bool:
-    return bool(_metadata_scope_stack.get())
-
-
-def is_metadata_state_active() -> bool:
-    if is_metadata_scope_active():
-        return True
-    state_name = libproton.get_state()
-    return bool(state_name
-                and (state_name == COMPUTE_METADATA_SCOPE_NAME or state_name.startswith(COMPUTE_METADATA_SCOPE_PREFIX)))
-
-
-def current_metadata_state_name() -> str:
-    state_name = libproton.get_state()
-    if (state_name
-            and (state_name == COMPUTE_METADATA_SCOPE_NAME or state_name.startswith(COMPUTE_METADATA_SCOPE_PREFIX))):
-        return state_name
-    return COMPUTE_METADATA_SCOPE_NAME

@@ -6,7 +6,6 @@
 #include "Driver/GPU/CuptiApi.h"
 #include "Driver/GPU/NvtxApi.h"
 #include "Profiler/Cupti/CuptiPCSampling.h"
-#include "Profiler/Cupti/MetricKernelQueue.h"
 #include "Profiler/Graph.h"
 #include "Runtime/CudaRuntime.h"
 #include "Utility/Env.h"
@@ -34,14 +33,6 @@ thread_local GPUProfiler<CuptiProfiler>::ThreadState
     GPUProfiler<CuptiProfiler>::threadState(CuptiProfiler::instance());
 
 namespace {
-
-void markGraphStateUncaptured(GraphState &graphState) {
-  graphState.dataToEntryIdToNodeStates.clear();
-  graphState.nodeIdToState.clear();
-  graphState.metricNodeIdToNumWords.clear();
-  graphState.numMetricWords = 0;
-  graphState.captureStatusChecked = true;
-}
 
 std::unique_ptr<Metric>
 convertKernelActivityToMetric(CUpti_Activity *activity,
@@ -488,23 +479,18 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       const auto &name = threadState.scopeStack.back().name;
       if (name.empty())
         nodeState.status.setMissingName();
-      // isMetricKernelLaunching covers the whole metric-buffer receive call.
-      // Metadata-side graph nodes can arrive in the same callback window after
-      // the real metric-copy queue entries were consumed, so the queue entry is
-      // what identifies an actual metric-copy node.
-      size_t metricKernelNumWords = 0;
-      const bool isMetricKernelNode = detail::popMetricKernelNumWordsIfQueued(
-          threadState.isMetricKernelLaunching,
-          threadState.metricKernelNumWordsQueue, metricKernelNumWords);
-      if (isMetricKernelNode) {
+      if (threadState.isMetricKernelLaunching) {
         nodeState.status.setMetricNode();
+        auto metricKernelNumWords =
+            threadState.metricKernelNumWordsQueue.front();
+        threadState.metricKernelNumWordsQueue.pop_front();
         graphState.metricNodeIdToNumWords.insert_or_assign(
             nodeId, metricKernelNumWords);
         graphState.numMetricWords += metricKernelNumWords;
       }
       for (auto *data : profiler.dataSet) {
         auto contexts = data->getContexts();
-        if (isMetricKernelNode) {
+        if (threadState.isMetricKernelLaunching) {
           if (threadState.isApiExternOp) { // API extern ops
             contexts.push_back(std::string(GraphState::metricTag));
           } else { // Triton ops
@@ -527,22 +513,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       uint64_t originalNodeId = 0;
       cupti::getGraphId<true>(graphData->originalGraph, &originalGraphId);
       cupti::getGraphNodeId<true>(graphData->originalNode, &originalNodeId);
+      auto &originalGraphState = graphStates[originalGraphId];
       auto &graphState = graphStates[graphId];
-      if (graphState.captureStatusChecked)
-        return;
-      auto originalGraphStateRef = graphStates.find(originalGraphId);
-      if (!originalGraphStateRef.has_value()) {
-        markGraphStateUncaptured(graphState);
-        return;
-      }
-      auto &originalGraphState = originalGraphStateRef->get();
-      auto originalNodeIt =
-          originalGraphState.nodeIdToState.find(originalNodeId);
-      if (originalNodeIt == originalGraphState.nodeIdToState.end()) {
-        markGraphStateUncaptured(graphState);
-        return;
-      }
-      graphState.nodeIdToState[nodeId] = originalNodeIt->second;
+      graphState.nodeIdToState[nodeId] =
+          originalGraphState.nodeIdToState[originalNodeId];
       auto &nodeState = graphState.nodeIdToState[nodeId];
       nodeState.nodeId = nodeId;
       for (const auto &[data, entryId] : nodeState.dataToEntryId) {

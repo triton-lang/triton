@@ -43,8 +43,6 @@ public:
 
   void setState(std::optional<Context> state) { ContextSource::state = state; }
 
-  static std::optional<Context> getState() { return state; }
-
   virtual void clear() { ContextSource::state = std::nullopt; }
 
   virtual size_t getDepth() = 0;

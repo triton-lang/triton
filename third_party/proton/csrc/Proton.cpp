@@ -157,14 +157,6 @@ static void initProton(pybind11::module &&m) {
     SessionManager::instance().setState(state);
   });
 
-  m.def("get_state", []() -> std::optional<std::string> {
-    auto state = ContextSource::getState();
-    if (!state.has_value()) {
-      return std::nullopt;
-    }
-    return state->name;
-  });
-
   m.def("exit_state",
         []() { SessionManager::instance().setState(std::nullopt); });
 
