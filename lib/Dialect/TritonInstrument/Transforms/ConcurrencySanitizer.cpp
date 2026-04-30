@@ -245,34 +245,29 @@ Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op);
 using CTARelation = FunctionBuilder::CTARelation;
 using CTARelationKind = FunctionBuilder::CTARelationKind;
 
-CTARelation getMemEffectCTARelation(ImplicitLocOpBuilder &b, Operation *op,
-                                    const MemEffectsOpInfo::Effects &effect) {
+CTARelation
+getMemEffectCTARelation(ImplicitLocOpBuilder &b, Operation *op,
+                        const MemEffectsOpInfo::Effects & /*effect*/) {
   if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     if (tmaLoad.getMulticast())
       return {getMulticastRecipientCTAs(b, tmaLoad.getResult()),
               CTARelationKind::Blocked};
-    return {currentCTAMask(b), CTARelationKind::Diagonal};
+    return {currentCTAMask(b), CTARelationKind::LeadCTA};
   }
   if (isa<ttng::CLCTryCancelOp>(op))
     return {allCTAsMask(b), CTARelationKind::Blocked};
-  if (auto mmaOp = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-    Value ctas = getRecipientCTAsForBroadcastMasks(
-        b, ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), {}));
-    if (ttng::getModuleTwoCTAs(op) && effect.buf == mmaOp.getB())
-      return {ctas, CTARelationKind::Blocked};
-    return {ctas, CTARelationKind::Diagonal};
-  }
+  if (isa<ttng::MMAv5OpInterface>(op))
+    return {getRecipientCTAsForBroadcastMasks(
+                b, ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), {})),
+            CTARelationKind::LeadCTA};
   if (isa<ttng::TMEMCopyOp>(op))
     return {getRecipientCTAsForBroadcastMasks(
                 b, ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), {})),
-            CTARelationKind::Diagonal};
-  return {currentCTAMask(b), CTARelationKind::Diagonal};
+            CTARelationKind::LeadCTA};
+  return {currentCTAMask(b), CTARelationKind::LeadCTA};
 }
 
 Value getFrontierSourceCTAs(ImplicitLocOpBuilder &b, Operation *op) {
-  if (isTensorCoreOp(op))
-    return getRecipientCTAsForBroadcastMasks(
-        b, getTensorCoreBarrierBroadcastMasks(op));
   return currentCTAMask(b);
 }
 

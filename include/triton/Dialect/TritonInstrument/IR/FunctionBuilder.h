@@ -76,10 +76,10 @@ private:
 
 class FunctionBuilder {
 public:
-  enum class CTARelationKind : uint64_t { Diagonal, Blocked };
+  enum class CTARelationKind : uint64_t { LeadCTA, Blocked };
   struct CTARelation {
-    Value ctas;
-    CTARelationKind kind = CTARelationKind::Diagonal;
+    Value effectCTAs;
+    CTARelationKind kind = CTARelationKind::LeadCTA;
   };
 
   FunctionBuilder(ModuleOp module, AuxDataMap &auxData)

@@ -358,7 +358,8 @@ def test_clc_result_visibility(FAILURE, device, run_wrapper, monkeypatch, num_ct
         result = run_in_process(test_clc_result_visibility, (FAILURE, device, False, monkeypatch, num_ctas))
         if FAILURE:
             assert_expected_cuda_failure(result.exc)
-            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+            assert ("Buffer being accessed has outstanding writes" in result.driver_stderr_output
+                    or "Buffer being read before any write" in result.driver_stderr_output)
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -1400,7 +1401,8 @@ def test_tma_tcgen05_mma_multicast_loop(FAILURE, device, run_wrapper, monkeypatc
         result = run_in_process(test_tma_tcgen05_mma_multicast_loop, (FAILURE, device, False, monkeypatch, num_ctas))
         if FAILURE:
             assert_expected_cuda_failure(result.exc)
-            assert "Buffer being accessed has outstanding" in result.driver_stderr_output
+            assert ("Buffer being accessed has outstanding" in result.driver_stderr_output
+                    or "Buffer being read before any write" in result.driver_stderr_output)
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -1475,7 +1477,7 @@ def test_tma_tcgen05_mma_missing_multicast(device, run_wrapper, monkeypatch, num
     if run_wrapper:
         result = run_in_process(test_tma_tcgen05_mma_missing_multicast, (device, False, monkeypatch, num_ctas))
         assert_expected_cuda_failure(result.exc)
-        assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+        assert "Buffer being accessed has outstanding" in result.driver_stderr_output
         return
 
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")

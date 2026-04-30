@@ -396,16 +396,15 @@ Value createRecipientCTAMask(ImplicitLocOpBuilder &b,
 
 Value createCTARelationMask(ImplicitLocOpBuilder &b,
                             RankedTensorType tensorType, int lhsDim, int rhsDim,
-                            Value ctas, FunctionBuilder::CTARelationKind kind) {
-  Value lhsMask = createCTASetMask(b, tensorType, lhsDim, ctas);
-  Value rhsMask = createCTASetMask(b, tensorType, rhsDim, ctas);
-  Value mask = arith::AndIOp::create(b, lhsMask, rhsMask);
+                            Value effectCTAs,
+                            FunctionBuilder::CTARelationKind kind) {
+  Value lhsMask = createCTASetMask(b, tensorType, lhsDim, effectCTAs);
   if (kind == FunctionBuilder::CTARelationKind::Blocked)
-    return mask;
-  Value equal = arith::CmpIOp::create(b, arith::CmpIPredicate::eq,
-                                      createDimIndices(b, tensorType, lhsDim),
-                                      createDimIndices(b, tensorType, rhsDim));
-  return arith::AndIOp::create(b, mask, equal);
+    return arith::AndIOp::create(
+        b, lhsMask, createCTASetMask(b, tensorType, rhsDim, effectCTAs));
+  Value leadCTAMask =
+      createCTASetMask(b, tensorType, rhsDim, createCurrentCTAMask(b));
+  return arith::AndIOp::create(b, lhsMask, leadCTAMask);
 }
 
 Value createCurrentCTARelationMask(ImplicitLocOpBuilder &b,
@@ -413,14 +412,14 @@ Value createCurrentCTARelationMask(ImplicitLocOpBuilder &b,
                                    int rhsDim) {
   return createCTARelationMask(b, tensorType, lhsDim, rhsDim,
                                createCurrentCTAMask(b),
-                               FunctionBuilder::CTARelationKind::Diagonal);
+                               FunctionBuilder::CTARelationKind::LeadCTA);
 }
 
 Value createRelationMask(ImplicitLocOpBuilder &b, RankedTensorType tensorType,
                          int lhsDim, int rhsDim,
                          FunctionBuilder::CTARelation relation) {
-  return createCTARelationMask(b, tensorType, lhsDim, rhsDim, relation.ctas,
-                               relation.kind);
+  return createCTARelationMask(b, tensorType, lhsDim, rhsDim,
+                               relation.effectCTAs, relation.kind);
 }
 
 Operation *createMaskedStoreScratchMemory(ImplicitLocOpBuilder &b, Location loc,
@@ -1294,9 +1293,9 @@ void FunctionBuilder::createSetWriteVisibilityCall(
       auxData.writeVisibility[(int)memType].at(insertPoint).type);
   Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
   Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {bufOffset,     lengthVal,  pred,
-                             threadMaskVal, buffersVal, writeVisibilityVal,
-                             relation.ctas};
+  SmallVector<Value> args = {bufOffset,          lengthVal,  pred,
+                             threadMaskVal,      buffersVal, writeVisibilityVal,
+                             relation.effectCTAs};
   createCallToCachedFunction(
       b, "set_write_visibility", args,
       /*assertInfo=*/std::nullopt,
@@ -1360,9 +1359,9 @@ void FunctionBuilder::createSetReadVisibilityCall(
       auxData.readVisibility[(int)memType].at(insertPoint).type);
   Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
   Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {bufOffset,     lengthVal,  pred,
-                             threadMaskVal, buffersVal, readVisibilityVal,
-                             relation.ctas};
+  SmallVector<Value> args = {bufOffset,          lengthVal,  pred,
+                             threadMaskVal,      buffersVal, readVisibilityVal,
+                             relation.effectCTAs};
   createCallToCachedFunction(
       b, "set_read_visibility", args,
       /*assertInfo=*/std::nullopt,
@@ -1390,9 +1389,16 @@ void FunctionBuilder::createSetReadVisibilityCall(
         Value relationMask =
             createRelationMask(fb, readVisibilityType, /*lhsDim=*/0,
                                /*rhsDim=*/2, {relationCTAs, relationKind});
-        Value threadCTAMask = createCTARelationMask(
-            fb, readVisibilityType, /*lhsDim=*/2, /*rhsDim=*/4, relationCTAs,
-            CTARelationKind::Diagonal);
+        Value threadCTAMask =
+            createCTASetMask(fb, readVisibilityType, /*dim=*/2, relationCTAs);
+        threadCTAMask = arith::AndIOp::create(
+            fb, threadCTAMask,
+            createCTASetMask(fb, readVisibilityType, /*dim=*/4, relationCTAs));
+        Value sameCTA = arith::CmpIOp::create(
+            fb, arith::CmpIPredicate::eq,
+            createDimIndices(fb, readVisibilityType, /*dim=*/2),
+            createDimIndices(fb, readVisibilityType, /*dim=*/4));
+        threadCTAMask = arith::AndIOp::create(fb, threadCTAMask, sameCTA);
         relationMask = arith::AndIOp::create(fb, relationMask, threadCTAMask);
         buffersEqBuf = arith::AndIOp::create(fb, buffersEqBuf, relationMask);
         auto elemType = cast<IntegerType>(readVisibilityType.getElementType());
@@ -1438,7 +1444,7 @@ void FunctionBuilder::createClearWriteTrackingCall(ImplicitLocOpBuilder &b,
   Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
   Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
   SmallVector<Value> args = {bufOffset,  lengthVal,        pred,
-                             buffersVal, writeTrackingVal, relation.ctas};
+                             buffersVal, writeTrackingVal, relation.effectCTAs};
   createCallToCachedFunction(
       b, "clear_write_tracking", args,
       /*assertInfo=*/std::nullopt,
@@ -1496,8 +1502,9 @@ void FunctionBuilder::createClearReadVisibilityCall(ImplicitLocOpBuilder &b,
       auxData.readVisibility[(int)memType].at(insertPoint).type);
   Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
   Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {bufOffset,  lengthVal,         pred,
-                             buffersVal, readVisibilityVal, relation.ctas};
+  SmallVector<Value> args = {
+      bufOffset,  lengthVal,         pred,
+      buffersVal, readVisibilityVal, relation.effectCTAs};
   createCallToCachedFunction(
       b, "clear_read_visibility", args,
       /*assertInfo=*/std::nullopt,
@@ -1558,7 +1565,7 @@ void FunctionBuilder::createClearReadTrackingCall(ImplicitLocOpBuilder &b,
   Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
   Value lengthVal = arith::ConstantIntOp::create(b, length, 32);
   SmallVector<Value> args = {bufOffset,  lengthVal,       pred,
-                             buffersVal, readTrackingVal, relation.ctas};
+                             buffersVal, readTrackingVal, relation.effectCTAs};
   createCallToCachedFunction(
       b, "clear_read_tracking", args,
       /*assertInfo=*/std::nullopt,
@@ -1806,10 +1813,10 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
   Value mbarLengthVal = arith::ConstantIntOp::create(b, mbarLength, 32);
   Value bufOffset = tti::ExperimentalMemDescToI32Op::create(b, buf);
   Value bufLengthVal = arith::ConstantIntOp::create(b, length, 32);
-  SmallVector<Value> args = {mbarOffset,   mbarLengthVal,    pred,
-                             bufOffset,    bufLengthVal,     barriersVal,
-                             buffersVal,   writeTrackingVal, barrierCTAs,
-                             relation.ctas};
+  SmallVector<Value> args = {mbarOffset,         mbarLengthVal,    pred,
+                             bufOffset,          bufLengthVal,     barriersVal,
+                             buffersVal,         writeTrackingVal, barrierCTAs,
+                             relation.effectCTAs};
   createCallToCachedFunction(
       b, "track_barrier_write_for_buffer", args,
       /*assertInfo=*/std::nullopt,
@@ -2290,9 +2297,10 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
     aliasMatrixTypeBase =
         auxData.aliasMatrices[(int)memType].at(insertPoint).type;
     auto aliasMatrixType = cast<RankedTensorType>(aliasMatrixTypeBase);
-    SmallVector<Value> args = {bufOffset,     lengthVal,     pred,
-                               threadVal,     buffersVal,    writeVisibilityVal,
-                               relation.ctas, aliasMatrixVal};
+    SmallVector<Value> args = {
+        bufOffset,           lengthVal,     pred,
+        threadVal,           buffersVal,    writeVisibilityVal,
+        relation.effectCTAs, aliasMatrixVal};
     if (!allowNoWrite) {
       AssertInfo initializedAssertInfo{uninitializedMessage,
                                        verifyWriteResultType};
@@ -2310,9 +2318,9 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
         buildVerifyWriteBody(/*useAlias=*/true, /*allowNoWrite=*/true,
                              relation.kind));
   } else {
-    SmallVector<Value> args = {bufOffset,    lengthVal,  pred,
-                               threadVal,    buffersVal, writeVisibilityVal,
-                               relation.ctas};
+    SmallVector<Value> args = {
+        bufOffset,          lengthVal,          pred, threadVal, buffersVal,
+        writeVisibilityVal, relation.effectCTAs};
     if (!allowNoWrite) {
       AssertInfo initializedAssertInfo{uninitializedMessage,
                                        verifyWriteResultType};
@@ -2385,25 +2393,51 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
       }
       buffersEqBuf =
           convertAndBroadcast(fb, buffersEqBuf, {1}, readVisibilityType);
+      Value bufferCTAMask =
+          createCTASetMask(fb, readVisibilityType, /*dim=*/0, relationCTAs);
       Value relationMask =
-          createRelationMask(fb, readVisibilityType, /*lhsDim=*/0, /*rhsDim=*/2,
-                             {relationCTAs, kind});
-      buffersEqBuf = arith::AndIOp::create(fb, buffersEqBuf, relationMask);
+          createRelationMask(fb, readVisibilityType, /*lhsDim=*/0,
+                             /*rhsDim=*/2, {relationCTAs, kind});
+      buffersEqBuf = arith::AndIOp::create(fb, buffersEqBuf, bufferCTAMask);
       Value readVisibilityZero =
           tti::createConstIntTensor(fb, fb.getLoc(), 0, readVisibilityType);
       Value bufVisibility = arith::SelectOp::create(
           fb, buffersEqBuf, readVisibility, readVisibilityZero);
-      Value totalVisibility = reduceAll<arith::OrIOp>(fb, bufVisibility);
+      Value totalVisibility = reduce<arith::OrIOp>(fb, bufVisibility,
+                                                   /*axis=*/3);
+      totalVisibility = reduce<arith::OrIOp>(fb, totalVisibility, /*axis=*/2);
       Value threadColumnMask =
           createDimMask(fb, threadVal, readVisibilityType, /*dim=*/3);
-      Value bufThreadVisibility = arith::SelectOp::create(
-          fb, threadColumnMask, bufVisibility, readVisibilityZero);
-      bufThreadVisibility = reduceAll<arith::OrIOp>(fb, bufThreadVisibility);
+      Value accessorVisibility = arith::SelectOp::create(
+          fb, relationMask, bufVisibility, readVisibilityZero);
+      accessorVisibility = arith::SelectOp::create(
+          fb, threadColumnMask, accessorVisibility, readVisibilityZero);
+      accessorVisibility =
+          reduce<arith::OrIOp>(fb, accessorVisibility, /*axis=*/3);
+      auto accessorVisibilityType =
+          cast<RankedTensorType>(accessorVisibility.getType());
+      totalVisibility = convertAndBroadcast(fb, totalVisibility, {0, 1, 3},
+                                            accessorVisibilityType);
       Value threadAndTotalVisibility =
-          arith::AndIOp::create(fb, bufThreadVisibility, totalVisibility);
+          arith::AndIOp::create(fb, accessorVisibility, totalVisibility);
       Value hasVisibility =
           arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
                                 threadAndTotalVisibility, totalVisibility);
+      Value selectedAccessors =
+          arith::AndIOp::create(fb, buffersEqBuf, relationMask);
+      selectedAccessors =
+          reduce<arith::OrIOp>(fb, selectedAccessors, /*axis=*/4);
+      selectedAccessors =
+          reduce<arith::OrIOp>(fb, selectedAccessors, /*axis=*/3);
+      selectedAccessors = convertAndBroadcast(fb, selectedAccessors, {0, 1, 2},
+                                              accessorVisibilityType);
+      Value one = tti::createConstIntTensor(
+          fb, fb.getLoc(), 1,
+          cast<RankedTensorType>(selectedAccessors.getType()));
+      Value unmatchedAccessors =
+          arith::XOrIOp::create(fb, selectedAccessors, one);
+      hasVisibility =
+          arith::OrIOp::create(fb, hasVisibility, unmatchedAccessors);
       hasVisibility = reduceAll<arith::AndIOp>(fb, hasVisibility);
       Value vTrue = arith::ConstantOp::create(
           fb, hasVisibility.getType(), fb.getIntegerAttr(fb.getI1Type(), 1));
@@ -2420,18 +2454,19 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
     aliasMatrixTypeBase =
         auxData.aliasMatrices[(int)memType].at(insertPoint).type;
     auto aliasMatrixType = cast<RankedTensorType>(aliasMatrixTypeBase);
-    SmallVector<Value> args = {bufOffset,     lengthVal,     pred,
-                               threadVal,     buffersVal,    readVisibilityVal,
-                               relation.ctas, aliasMatrixVal};
+    SmallVector<Value> args = {
+        bufOffset,           lengthVal,     pred,
+        threadVal,           buffersVal,    readVisibilityVal,
+        relation.effectCTAs, aliasMatrixVal};
     createCallToCachedFunction(
         b, "verify_read_visibility", args, assertInfo,
         {buffersType, readVisibilityType, aliasMatrixType, (uint64_t)memType,
          (uint64_t)relation.kind},
         buildVerifyReadBody(/*useAlias=*/true, relation.kind));
   } else {
-    SmallVector<Value> args = {bufOffset,    lengthVal,  pred,
-                               threadVal,    buffersVal, readVisibilityVal,
-                               relation.ctas};
+    SmallVector<Value> args = {
+        bufOffset,         lengthVal,          pred, threadVal, buffersVal,
+        readVisibilityVal, relation.effectCTAs};
     createCallToCachedFunction(
         b, "verify_read_visibility_noalias", args, assertInfo,
         {buffersType, readVisibilityType, (uint64_t)memType,
@@ -2635,19 +2670,19 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
                                       newWriteVisibility, writeVisibilityType,
                                       /*currentCTAOnly=*/false);
 
-        Value baseThreadColumns = arith::CmpIOp::create(
-            fb, arith::CmpIPredicate::ult,
-            createDimIndices(fb, readVisibilityType, /*dim=*/3),
-            tti::createConstIntTensor(
-                fb, fb.getLoc(), tti::NUM_THREADS,
-                cast<RankedTensorType>(readVisibilityType.cloneWith(
-                    std::nullopt, fb.getI32Type()))));
+        Value readBaseMask = tti::createConstIntTensor(
+            fb, fb.getLoc(), baseThreadMask, readVisibilityType);
         Value zeroReads =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, readVisibilityType);
-        Value syncReads = arith::SelectOp::create(fb, baseThreadColumns,
-                                                  readVisibility, zeroReads);
+        Value hasBaseRead = arith::CmpIOp::create(
+            fb, arith::CmpIPredicate::ne,
+            arith::AndIOp::create(fb, readVisibility, readBaseMask), zeroReads);
+        Value syncReads =
+            arith::SelectOp::create(fb, hasBaseRead, readVisibility, zeroReads);
         Value readsForCluster = reduce<arith::OrIOp>(fb, syncReads, /*axis=*/4);
-        readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1, 2, 3},
+        readsForCluster = reduce<arith::OrIOp>(fb, readsForCluster,
+                                               /*axis=*/2);
+        readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1, 3},
                                               readVisibilityType);
         Value newReadVisibility =
             arith::OrIOp::create(fb, readVisibility, readsForCluster);
@@ -3185,10 +3220,10 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
     ValueType aliasMatrix = auxData.aliasMatrices[(int)memType].at(insertPoint);
     aliasMatrixTypeBase = aliasMatrix.type;
     auto aliasMatrixType = cast<RankedTensorType>(aliasMatrixTypeBase);
-    SmallVector<Value> args = {bufOffset,     lengthVal,
-                               pred,          threadVal,
-                               buffers.value, outstandingCommits.value,
-                               relation.ctas, aliasMatrix.value};
+    SmallVector<Value> args = {
+        bufOffset,           lengthVal,        pred,
+        threadVal,           buffers.value,    outstandingCommits.value,
+        relation.effectCTAs, aliasMatrix.value};
     std::string funcName = excludeSelf ? "check_outstanding_commits_excl_self"
                                        : "check_outstanding_commits";
     createCallToCachedFunction(
@@ -3198,10 +3233,10 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
         buildCheckOutstandingCommitsBody(/*useAlias=*/true, excludeSelf,
                                          relation.kind));
   } else {
-    SmallVector<Value> args = {bufOffset,     lengthVal,
-                               pred,          threadVal,
-                               buffers.value, outstandingCommits.value,
-                               relation.ctas};
+    SmallVector<Value> args = {
+        bufOffset,          lengthVal,     pred,
+        threadVal,          buffers.value, outstandingCommits.value,
+        relation.effectCTAs};
     std::string funcName = excludeSelf
                                ? "check_outstanding_commits_excl_self_noalias"
                                : "check_outstanding_commits_noalias";
