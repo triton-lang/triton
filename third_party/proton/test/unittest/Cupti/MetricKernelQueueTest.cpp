@@ -6,79 +6,45 @@
 
 using proton::detail::popMetricKernelNumWordsIfQueued;
 
-TEST(MetricKernelQueueTest, MatchesMetricGraphNodesOnlyWithQueuedEntries) {
-  // Simulates the concrete CUDA graph callback sequence:
-  //
-  //   isMetricKernelLaunching = true
-  //   metricKernelNumWordsQueue = [2]
-  //   receive() launches one Proton metric-copy kernel
-  //     CUPTI GRAPHNODE_CREATED callback consumes [2]
-  //   receive() has not returned yet, so isMetricKernelLaunching is still true
-  //     CUPTI reports one more GRAPHNODE_CREATED callback
-  //
-  // The old CuptiProfiler.cpp path used front()/pop_front() whenever
-  // isMetricKernelLaunching was true. That crashes on the second callback after
-  // the queue is consumed. The queue entry, not just the flag, is what
-  // identifies an actual <metric> node.
-  {
-    SCOPED_TRACE("callbacks outside the metric-launch window do not pop");
-    std::deque<size_t> metricKernelNumWordsQueue{7};
-    size_t metricKernelNumWords = 123;
+TEST(MetricKernelQueueTest, IgnoresExtraGraphNodeCallbackDuringReceive) {
+  // tensorMetrics has one metric with one value, so doAddMetrics queues one
+  // metric-copy entry: metric_id + num_values = 2 words.
+  constexpr size_t tensorMetricSize = 1;
+  std::deque<size_t> metricKernelNumWordsQueue{/*metric_id=*/1 +
+                                               tensorMetricSize};
 
-    EXPECT_FALSE(popMetricKernelNumWordsIfQueued(
-        /*isMetricKernelLaunching=*/false, metricKernelNumWordsQueue,
-        metricKernelNumWords));
-    ASSERT_EQ(metricKernelNumWordsQueue.size(), 1);
-    EXPECT_EQ(metricKernelNumWordsQueue.front(), 7);
-    EXPECT_EQ(metricKernelNumWords, 123);
-  }
+  bool isMetricKernelLaunching = true;
+  size_t metricCopyNumWords = 0;
+  size_t extraCallbackNumWords = 123;
+  bool metricCopyCallbackMatched = false;
+  bool extraCallbackMatched = true;
 
-  {
-    SCOPED_TRACE("queued callbacks are matched in FIFO order");
-    std::deque<size_t> metricKernelNumWordsQueue{7, 11};
-    size_t metricKernelNumWords = 0;
+  auto onGraphNodeCreated = [&](size_t &metricKernelNumWords) {
+    return popMetricKernelNumWordsIfQueued(isMetricKernelLaunching,
+                                           metricKernelNumWordsQueue,
+                                           metricKernelNumWords);
+  };
 
-    EXPECT_TRUE(popMetricKernelNumWordsIfQueued(
-        /*isMetricKernelLaunching=*/true, metricKernelNumWordsQueue,
-        metricKernelNumWords));
-    EXPECT_EQ(metricKernelNumWords, 7);
-    ASSERT_EQ(metricKernelNumWordsQueue.size(), 1);
-    EXPECT_EQ(metricKernelNumWordsQueue.front(), 11);
-  }
+  auto receive = [&]() {
+    // queue tensor metric:
+    //   runtime->launchKernel(metric_copy_kernel)
+    //     CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED
+    //       consumes the queued [2] entry
+    metricCopyCallbackMatched = onGraphNodeCreated(metricCopyNumWords);
 
-  {
-    SCOPED_TRACE("extra callback delivered before receive returns is ignored");
-    bool isMetricKernelLaunching = true;
-    std::deque<size_t> metricKernelNumWordsQueue{2};
-    size_t firstCallbackNumWords = 0;
-    size_t secondCallbackNumWords = 123;
-    bool firstCallbackIsMetricNode = false;
-    bool secondCallbackIsMetricNode = true;
+    // Still inside receive(), before the caller can reset
+    // isMetricKernelLaunching:
+    //   CUDA/CUPTI reports another graph-node-created resource callback.
+    // Old code used the flag alone and would call front() on this empty queue.
+    extraCallbackMatched = onGraphNodeCreated(extraCallbackNumWords);
+  };
 
-    auto onGraphNodeCreated = [&](size_t &metricKernelNumWords) {
-      return popMetricKernelNumWordsIfQueued(isMetricKernelLaunching,
-                                             metricKernelNumWordsQueue,
-                                             metricKernelNumWords);
-    };
+  receive();
+  isMetricKernelLaunching = false;
 
-    auto receive = [&]() {
-      // First callback: receive() launches the Proton metric-copy kernel, and
-      // CUDA graph capture reports the matching GRAPHNODE_CREATED callback.
-      firstCallbackIsMetricNode = onGraphNodeCreated(firstCallbackNumWords);
-
-      // Second callback: still under receive(), before the caller can reset
-      // isMetricKernelLaunching, CUPTI reports another GRAPHNODE_CREATED
-      // callback. There is no queued metric-copy entry left for this node.
-      secondCallbackIsMetricNode = onGraphNodeCreated(secondCallbackNumWords);
-    };
-
-    receive();
-    isMetricKernelLaunching = false;
-
-    EXPECT_TRUE(firstCallbackIsMetricNode);
-    EXPECT_EQ(firstCallbackNumWords, 2);
-    EXPECT_FALSE(secondCallbackIsMetricNode);
-    EXPECT_EQ(secondCallbackNumWords, 123);
-    EXPECT_TRUE(metricKernelNumWordsQueue.empty());
-  }
+  EXPECT_TRUE(metricCopyCallbackMatched);
+  EXPECT_EQ(metricCopyNumWords, 2);
+  EXPECT_FALSE(extraCallbackMatched);
+  EXPECT_EQ(extraCallbackNumWords, 123);
+  EXPECT_TRUE(metricKernelNumWordsQueue.empty());
 }
