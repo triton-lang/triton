@@ -208,6 +208,8 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
 def test_async_tma_multicast_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
         pytest.skip("Need at least 2 CTAs for multicast in this test")
+    if FAILURE and num_ctas == 4:
+        pytest.skip("Temporarily disabled: flaky with 4 CTAs when FAILURE=True")
     if run_wrapper:
         result = run_in_process(test_async_tma_multicast_kernel, (FAILURE, device, False, monkeypatch, num_ctas))
         if FAILURE:

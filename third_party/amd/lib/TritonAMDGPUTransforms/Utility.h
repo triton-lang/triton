@@ -43,6 +43,16 @@ triton::gpu::SharedEncodingTrait
 getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
                           Value desc);
 
+// Build the index encoding for TDM gather/scatter.
+//
+// Layout: BlockedLayout([1, M], [threadsPerWarp, 1], [1, numWarps], [0, 1])
+// sliced along dim 0 to produce a 1D encoding. M is the max number of row
+// indices per TDM instruction (256 bits / index element bitwidth). The
+// freeVarMasks mechanism in the LLVM lowering adapts the number of active
+// warps and gathers per warp to the actual problem size.
+triton::gpu::SliceEncodingAttr
+getTDMGatherScatterIndexEncoding(Operation *op, RankedTensorType indicesType);
+
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // and |vecSize| with which dot operand |inputValue| is fed into if possible.
 template <class T>
