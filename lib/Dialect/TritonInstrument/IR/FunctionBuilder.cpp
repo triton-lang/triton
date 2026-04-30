@@ -2233,9 +2233,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
   std::string uninitializedMessage = "Buffer being read before any write.";
   if (!operandName.empty())
     uninitializedMessage += " Operand: " + operandName.str();
-  auto verifyWriteResultType = cast<RankedTensorType>(
-      writeVisibilityType.cloneWith(std::nullopt, b.getI1Type()));
-  AssertInfo assertInfo{message, verifyWriteResultType};
+  AssertInfo assertInfo{message, b.getI1Type()};
   Type aliasMatrixTypeBase;
   auto buildVerifyWriteBody = [&writeVisibilityType, &aliasMatrixTypeBase](
                                   bool useAlias, bool allowNoWrite) {
@@ -2309,8 +2307,6 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
           fb, result.getType(), fb.getIntegerAttr(fb.getI1Type(), 1));
       Value predicatedWriteVisible =
           arith::SelectOp::create(fb, pred, result, vTrue);
-      predicatedWriteVisible = triton::SplatOp::create(
-          fb, verifyWriteResultType, predicatedWriteVisible);
       triton::ReturnOp::create(fb, predicatedWriteVisible);
     };
   };
@@ -2324,8 +2320,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
                                threadVal,  buffersVal,    writeVisibilityVal,
                                effectCTAs, aliasMatrixVal};
     if (!allowNoWrite) {
-      AssertInfo initializedAssertInfo{uninitializedMessage,
-                                       verifyWriteResultType};
+      AssertInfo initializedAssertInfo{uninitializedMessage, b.getI1Type()};
       createCallToCachedFunction(
           b, "verify_write_initialized", args, initializedAssertInfo,
           {buffersType, writeVisibilityType, aliasMatrixType,
@@ -2341,8 +2336,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
                                threadVal, buffersVal, writeVisibilityVal,
                                effectCTAs};
     if (!allowNoWrite) {
-      AssertInfo initializedAssertInfo{uninitializedMessage,
-                                       verifyWriteResultType};
+      AssertInfo initializedAssertInfo{uninitializedMessage, b.getI1Type()};
       createCallToCachedFunction(
           b, "verify_write_initialized_noalias", args, initializedAssertInfo,
           {buffersType, writeVisibilityType, (uint64_t)memType},
@@ -2380,9 +2374,7 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
   std::string message = "Buffer being accessed has outstanding reads";
   if (!operandName.empty())
     message += ". Operand: " + operandName.str();
-  auto verifyReadResultType = cast<RankedTensorType>(
-      readVisibilityType.cloneWith(std::nullopt, b.getI1Type()));
-  AssertInfo assertInfo{message, verifyReadResultType};
+  AssertInfo assertInfo{message, b.getI1Type()};
   Type aliasMatrixTypeBase;
   auto buildVerifyReadBody = [&readVisibilityType,
                               &aliasMatrixTypeBase](bool useAlias) {
@@ -2456,8 +2448,6 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
           fb, hasVisibility.getType(), fb.getIntegerAttr(fb.getI1Type(), 1));
       Value predicatedHasVisibility =
           arith::SelectOp::create(fb, pred, hasVisibility, vTrue);
-      predicatedHasVisibility = triton::SplatOp::create(
-          fb, verifyReadResultType, predicatedHasVisibility);
       triton::ReturnOp::create(fb, predicatedHasVisibility);
     };
   };
@@ -3168,9 +3158,7 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
   std::string message =
       "Accessing buffer with pending access. Pending access type: " +
       pendingAccessType.str();
-  auto checkCommitsResultType = cast<RankedTensorType>(
-      commitsType.cloneWith(std::nullopt, b.getI1Type()));
-  AssertInfo assertInfo{message, checkCommitsResultType};
+  AssertInfo assertInfo{message, b.getI1Type()};
   Type aliasMatrixTypeBase;
 
   auto buildCheckOutstandingCommitsBody = [&commitsType, &aliasMatrixTypeBase](
@@ -3215,8 +3203,6 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
                                     fb.getIntegerAttr(fb.getI1Type(), 1));
       Value predicatedSelectedEqZero =
           arith::SelectOp::create(fb, pred, allSelectedEqZero, vTrue);
-      predicatedSelectedEqZero = triton::SplatOp::create(
-          fb, checkCommitsResultType, predicatedSelectedEqZero);
 
       triton::ReturnOp::create(fb, predicatedSelectedEqZero);
     };
