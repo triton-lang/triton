@@ -13,33 +13,6 @@
 
 namespace mlir::LLVM::AMD {
 
-WarpHintInfo extractWarpHintInfo(uint32_t hint, int numWarps) {
-  assert(hint != 0 && "hint must be non-zero (verifier checked)");
-  assert(llvm::isPowerOf2_64(numWarps) && "numWarps must be a power of two");
-
-  WarpHintInfo info;
-  info.K = static_cast<unsigned>(llvm::popcount(hint));
-  assert(llvm::isPowerOf2_32(info.K) &&
-         "popcount(hint) must be a power of two");
-  // i0 is a warp INDEX (not the bitmask `hint & -hint`): the lowering XORs
-  // it with runtime warpId values, which must agree with verifier arithmetic.
-  info.i0 = llvm::countr_zero(hint);
-
-  // support = OR over active warp indices of (w ^ i0); its set bits are the
-  // basis positions (verifier guarantees popcount(support) == log2(K)).
-  uint32_t support = 0;
-  for (uint32_t mask = hint; mask != 0; mask &= mask - 1) {
-    unsigned w = llvm::countr_zero(mask);
-    support |= static_cast<uint32_t>(w ^ info.i0);
-  }
-  for (uint32_t s = support; s != 0; s &= s - 1)
-    info.basisBits.push_back(static_cast<int32_t>(llvm::countr_zero(s)));
-  assert(info.basisBits.size() == llvm::Log2_32(info.K) &&
-         "axis-aligned hint must have log2(K) single-bit basis vectors");
-
-  return info;
-}
-
 namespace {
 
 Value vecGet(TritonLLVMOpBuilder &b, Value vec, int idx) {
@@ -568,10 +541,11 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
   return {group0, group1, group2, group3};
 }
 
-// Fill a TDM descriptor for regular load/store (1D-5D).  With `warpHint`,
-// the K identity rows go at `warpHint->basisBits` and warpId is XOR-anchored
-// by `warpHint->i0`; tile_dim* are re-encoded against K-based `warpsPerCTA`.
-// Without a hint, basis defaults to {0..log2K-1}.
+// Fill a TDM descriptor for regular load/store (1D-5D).  With `warpUsedHint`
+// (verifier-validated axis-aligned coset), the K identity rows of the warp
+// sublayout go at the basis bit positions of the coset and `warpId` is
+// XOR-anchored by `i0 = lsb(hint)`; tile_dim* are re-encoded against K-based
+// `warpsPerCTA`.  Without a hint, basis defaults to {0..log2K-1}.
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> shapePerCTA, int numWarps,
@@ -581,7 +555,7 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        Value barrierPtr,
                        const triton::LinearLayout &sharedLayout, Value ctaId,
                        bool isStore, ArrayRef<unsigned> warpsPerCTA,
-                       const std::optional<WarpHintInfo> &warpHint) {
+                       std::optional<uint32_t> warpUsedHint) {
   size_t numDims = offset.size();
   assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors.");
   assert(!dstPtrs.empty() && "dstPtrs cannot be empty");
@@ -617,20 +591,29 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        .getCGALayout()
                        .getLinearLayout();
 
-  // With a hint: K identity rows at `warpHint->basisBits`; else {0..log2K-1}.
-  ArrayRef<int32_t> warpBasisBits =
-      warpHint ? ArrayRef<int32_t>(warpHint->basisBits) : ArrayRef<int32_t>{};
+  // Decode the verifier-validated axis-aligned coset on demand.  Verifier
+  // guarantees popcount(support) == log2(K), so we don't re-check.
+  uint32_t i0 = 0;
+  SmallVector<int32_t, 5> basisBits;
+  if (warpUsedHint) {
+    i0 = llvm::countr_zero(*warpUsedHint);
+    uint32_t support = 0;
+    for (uint32_t m = *warpUsedHint; m != 0; m &= m - 1)
+      support |= static_cast<uint32_t>(llvm::countr_zero(m) ^ i0);
+    for (uint32_t s = support; s != 0; s &= s - 1)
+      basisBits.push_back(static_cast<int32_t>(llvm::countr_zero(s)));
+  }
 
   auto tdmLayout = triton::gpu::getTDMLinearLayout(
-      shapePerCTA, warpsPerCTA, cgaLayout, numWarps, warpBasisBits);
+      shapePerCTA, warpsPerCTA, cgaLayout, numWarps, basisBits);
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
   // Anchor warpId at i0 (no-op for i0==0 / no hint) so the i-th active warp
   // aligns with the i-th identity row of the sublayout.
   Value warpIdShifted = warpId;
-  if (warpHint && warpHint->i0 != 0)
-    warpIdShifted = b.xor_(warpId, b.i32_val(warpHint->i0));
+  if (i0 != 0)
+    warpIdShifted = b.xor_(warpId, b.i32_val(i0));
 
   auto warpOffset = applyLinearLayout(
       loc, rewriter, tdmLayout,
@@ -1020,16 +1003,18 @@ int64_t computePerPartitionSliceStride(
 
 // Emit a single TDM intrinsic (load or store) for the given block shape.
 // This handles both the 2D (d2 intrinsic) and >2D (full intrinsic) cases.
-void emitTDMIntrinsic(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter, ArrayRef<Value> desc,
-    size_t numDims, Type elementType, SmallVector<int64_t> effectiveBlockShape,
-    int numWarps, unsigned padInterval, unsigned padAmount,
-    SmallVector<Value> globalOffset, ArrayRef<Value> instrDstPtrs, Value pred,
-    Value multicastMask, Value barrier,
-    const triton::LinearLayout &instrSharedLayout, Value ctaId, bool isLoad,
-    ArrayRef<unsigned> warpsPerCTA, int32_t auxBits,
-    const std::optional<WarpHintInfo> &warpHint = std::nullopt) {
+void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
+                      const LLVMTypeConverter *typeConverter,
+                      ArrayRef<Value> desc, size_t numDims, Type elementType,
+                      SmallVector<int64_t> effectiveBlockShape, int numWarps,
+                      unsigned padInterval, unsigned padAmount,
+                      SmallVector<Value> globalOffset,
+                      ArrayRef<Value> instrDstPtrs, Value pred,
+                      Value multicastMask, Value barrier,
+                      const triton::LinearLayout &instrSharedLayout,
+                      Value ctaId, bool isLoad, ArrayRef<unsigned> warpsPerCTA,
+                      int32_t auxBits,
+                      std::optional<uint32_t> warpUsedHint = std::nullopt) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
@@ -1040,7 +1025,7 @@ void emitTDMIntrinsic(
                     effectiveBlockShape, numWarps, padInterval, padAmount,
                     groups, globalOffset, instrDstPtrs, pred, multicastMask,
                     barrier, instrSharedLayout, ctaId, !isLoad, warpsPerCTA,
-                    warpHint);
+                    warpUsedHint);
 
   // Pad to 4 vector groups (intrinsic always takes 4 group operands).
   while (groups.size() < 4)
@@ -1082,12 +1067,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
   // of numWarps; verifier guarantees single-instruction emission (incl.
   // partitioned encodings).  Inactive warps become HW no-ops via
   // fillTDMDescriptor's free-variable-mask predication (XOR-anchored at i0).
-  std::optional<WarpHintInfo> warpHint;
-  int effectiveWarps = numWarps;
-  if (warpUsedHint) {
-    warpHint = extractWarpHintInfo(*warpUsedHint, numWarps);
-    effectiveWarps = static_cast<int>(warpHint->K);
-  }
+  int effectiveWarps = warpUsedHint ? llvm::popcount(*warpUsedHint) : numWarps;
 
   SmallVector<unsigned> warpsPerCTA;
   unsigned numTDMInstructions = 1;
@@ -1103,7 +1083,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                      to_vector(blockShape), numWarps, padInterval, padAmount,
                      to_vector(offset), dstPtrs, pred, multicastMask,
                      barrierPtr, sharedLayout, ctaId, isLoad, warpsPerCTA,
-                     auxBits, warpHint);
+                     auxBits, warpUsedHint);
     return;
   }
 

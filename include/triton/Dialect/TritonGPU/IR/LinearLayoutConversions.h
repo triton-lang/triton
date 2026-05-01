@@ -176,10 +176,14 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 // (K < numWarps) can pred-off inactive warps.  "message" covers the
 // per-warp tile (surjectivity); "block" comes from `cgaLayout`.
 //
-// `warpBasisBits` (optional) places the K identity rows at the given
-// warpId bit positions; others become free variables.  Must hold
-// log2(prod(warpsPerCTA)) distinct entries in [0, log2(numWarps)).
-// Empty = {0..log2K-1} (no-hint default).
+// `warpBasisBits` picks which warpId bits drive the K active warps; the
+// rest become free (predicated-off) bits.  Size = log2(K) where K =
+// prod(warpsPerCTA), entries distinct in [0, log2(numWarps)).  Empty =
+// use the lowest log2(K) bits (no-hint default).
+// Not the same as the `warp_used_hint` bitmask: the layout is coset-
+// invariant, so the anchor `i0 = lsb(hint)` is XORed in at runtime and
+// not encoded here.  Example, numWarps=8, K=4: basisBits={0,1} matches
+// hints 0b00001111 (i0=0) and 0b11110000 (i0=4) alike.
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
                                 const LinearLayout &cgaLayout, int numWarps,

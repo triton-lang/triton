@@ -13,18 +13,6 @@ using PartitionedSharedEncodingAttr =
 
 namespace mlir::LLVM::AMD {
 
-// Decoded form of a verifier-validated axis-aligned `warp_used_hint`.
-// Active set = { i0 ^ x : x in span(basisBits) }.
-struct WarpHintInfo {
-  unsigned K = 0;  // popcount(hint), power of two
-  uint32_t i0 = 0; // smallest active warp index
-  SmallVector<int32_t, 5>
-      basisBits; // log2(K) distinct positions in [0, log2(numWarps))
-};
-
-// Decode a verifier-validated `warp_used_hint`.
-WarpHintInfo extractWarpHintInfo(uint32_t hint, int numWarps);
-
 // TDM descriptor groups (lowering-pass-only; the MLIR-visible struct stays
 // flat {i32 x N} to match the host-side TDMDescriptor in driver.c):
 //   groups[0]/[1]: <4 x i32> / <8 x i32> (always)
@@ -54,18 +42,20 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // Fill the dst/pred fields of a TDM descriptor for regular load/store (1D-5D).
 // `groups` is 2 (1D-2D) or 4 (3D-5D) vector entries, updated in place.
 // Partitioned dst: `dstPtrs` holds per-partition bases, picked by partitionDim.
-// With `warpHint`, K identity rows are placed at `warpHint->basisBits` and
-// `warpId` is XOR-anchored by `warpHint->i0`; otherwise basis = {0..log2K-1}.
-void fillTDMDescriptor(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> blockShape, int numWarps, unsigned padInterval,
-    unsigned padAmount, MutableArrayRef<Value> groups,
-    SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
-    Value multicastMask, Value barrierPtr,
-    const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
-    ArrayRef<unsigned> warpsPerCTA,
-    const std::optional<WarpHintInfo> &warpHint = std::nullopt);
+// With `warpUsedHint`, the K identity rows of the warp sublayout are placed
+// at the basis bit positions of the (verifier-validated) axis-aligned coset,
+// and `warpId` is XOR-anchored by `i0 = lsb(hint)`; without a hint the basis
+// defaults to the lowest log2(K) bits.
+void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
+                       const LLVMTypeConverter *typeConverter, Type elementType,
+                       SmallVector<int64_t> blockShape, int numWarps,
+                       unsigned padInterval, unsigned padAmount,
+                       MutableArrayRef<Value> groups, SmallVector<Value> offset,
+                       ArrayRef<Value> dstPtrs, Value pred, Value multicastMask,
+                       Value barrierPtr,
+                       const triton::LinearLayout &sharedLayout, Value ctaId,
+                       bool isStore, ArrayRef<unsigned> warpsPerCTA,
+                       std::optional<uint32_t> warpUsedHint = std::nullopt);
 
 // Fill TDM descriptor for gather/scatter operations (2D only).
 // Gather reads from non-contiguous rows in global memory to LDS.
