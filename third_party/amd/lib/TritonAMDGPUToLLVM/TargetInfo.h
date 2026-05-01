@@ -1,22 +1,22 @@
 #ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TARGETINFO_H_
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TARGETINFO_H_
 
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "llvm/TargetParser/TargetParser.h"
 #include <optional>
-#include <string>
 
 namespace mlir::triton::AMD {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  explicit TargetInfo(std::optional<StringRef> arch)
-      : arch(arch.value_or("").str()) {}
+  explicit TargetInfo(std::optional<StringRef> arch) : targetFeatures(arch) {}
 
   llvm::AMDGPU::IsaVersion getIsaVersion() const;
 
-  StringRef getArch() const { return arch; }
-  ISAFamily getISAFamily() const { return deduceISAFamily(arch); }
+  StringRef getArch() const { return targetFeatures.getArch(); }
+  amdgpu::ISAFamily getISAFamily() const {
+    return targetFeatures.getISAFamily();
+  }
 
   llvm::AMDGPU::GPUKind getGPUKind() const;
 
@@ -48,17 +48,8 @@ public:
                     std::optional<Value> ctaId, Type elemTy, Value pred,
                     Operation *localLoadOp = nullptr) const override;
 
-  // Describes the parameters of ds_read_tr for a particular data type
-  struct LDSTransLoadParams {
-    // Number of lanes that cooperate in the instruction
-    unsigned numLanesInShuffleGroup;
-    // Number of bits that each lane reads per issued instruction
-    unsigned instBitWidth;
-    // Number of elements that the instruction needs to be contiguous in LDS
-    unsigned tileSize;
-    // Whether B8 types require double contiguity (for certain architectures)
-    bool needsDoubleB8Contiguity;
-  };
+  // Describes the parameters of ds_read_tr for a particular data type.
+  using LDSTransLoadParams = amdgpu::TargetFeatures::LDSTransLoadParams;
   // Get the ds_read_tr parameters for the instruction that operates on the
   // element granularty specified by bitWidth
   std::optional<LDSTransLoadParams> queryLDSTransLoadParams(int bitWidth) const;
@@ -108,7 +99,7 @@ public:
   // Returns true if the target supports per lane addresses into LDS for
   // direct-to-lds loads. Some architectures (e.g. GFX9) do not support
   // scattering and instead have to write warp coalesced into LDS
-  bool supportsDirectToLDSScattering() const;
+  bool supportsDirectToLdsScatter() const;
 
   // Some architectures (GFX9) require alias information on direct-to-lds loads
   // and loads from LDS so LLVM does not add conservative waits between those
@@ -158,7 +149,7 @@ private:
                   ArrayRef<bool> isSigned, RewriterBase &rewriter,
                   bool useStdErr) const;
 
-  std::string arch;
+  amdgpu::TargetFeatures targetFeatures;
 };
 } // namespace mlir::triton::AMD
 

@@ -3,7 +3,6 @@
 
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -11,23 +10,39 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include <cstdint>
 
 namespace mlir::LLVM::AMD {
+
+// Here is a partial definition of DppCtrl enums. For the complete definition,
+// please check:
+// https://github.com/llvm/llvm-project/blob/8c75290/llvm/lib/Target/AMDGPU/SIDefines.h#L939
+enum class DppCtrl : uint32_t {
+  QUAD_PERM_FIRST = 0,
+  ROW_SHL0 = 0x100,
+  ROW_SHR0 = 0x110,
+  ROW_ROR0 = 0x120,
+  ROW_MIRROR = 0x140,
+  ROW_HALF_MIRROR = 0x141,
+  BCAST15 = 0x142,
+  BCAST31 = 0x143,
+  ROW_XMASK0 = 0x160,
+};
 
 enum class MemoryOp { Load, Store };
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
-                 mlir::triton::AMD::ISAFamily isaFamily =
-                     mlir::triton::AMD::ISAFamily::Unknown);
+                 mlir::triton::amdgpu::ISAFamily isaFamily =
+                     mlir::triton::amdgpu::ISAFamily::Unknown);
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i,
-                mlir::triton::AMD::ISAFamily isaFamily =
-                    mlir::triton::AMD::ISAFamily::Unknown);
+                mlir::triton::amdgpu::ISAFamily isaFamily =
+                    mlir::triton::amdgpu::ISAFamily::Unknown);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i,
-                 mlir::triton::AMD::ISAFamily isaFamily =
-                     mlir::triton::AMD::ISAFamily::Unknown);
+                 mlir::triton::amdgpu::ISAFamily isaFamily =
+                     mlir::triton::amdgpu::ISAFamily::Unknown);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
-                 mlir::triton::AMD::ISAFamily isaFamily =
-                     mlir::triton::AMD::ISAFamily::Unknown);
+                 mlir::triton::amdgpu::ISAFamily isaFamily =
+                     mlir::triton::amdgpu::ISAFamily::Unknown);
 
 Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
               Value selector);
@@ -123,7 +138,7 @@ Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
 // conversion
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                     bool toFp16, Value packedVec,
-                                    mlir::triton::AMD::ISAFamily isaFamily,
+                                    mlir::triton::amdgpu::ISAFamily isaFamily,
                                     Value scale = nullptr);
 
 template <typename ConvertOp>

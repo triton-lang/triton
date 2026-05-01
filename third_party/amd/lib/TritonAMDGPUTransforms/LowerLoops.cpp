@@ -220,7 +220,7 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
       auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
 
       auto order = getOrderForMemory(srcTy);
-      if (useAsyncCopy && !targetInfo.supportsDirectToLDSScattering()) {
+      if (useAsyncCopy && !targetInfo.supportsDirectToLdsScatter()) {
         // For architectures that don't support scattering into LDS we must
         // ensure that each warp writes a contiguous memory chunk. This requires
         // the shared memory order to follow the thread order, while preserving
@@ -360,7 +360,7 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   if (numBuffers <= 1)
     return false;
 
-  using tt::AMD::ISAFamily;
+  using tt::amdgpu::ISAFamily;
   if (sharedEnc && llvm::is_contained(
                        {ISAFamily::CDNA3, ISAFamily::CDNA4, ISAFamily::GFX1250},
                        targetInfo.getISAFamily())) {

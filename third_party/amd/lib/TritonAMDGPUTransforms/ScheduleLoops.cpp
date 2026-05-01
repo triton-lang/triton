@@ -91,11 +91,11 @@ getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                  scf::ForOp &forOp, int numStages) {
   triton::AMD::TargetInfo targetInfo(
       getAMDArch(forOp->getParentOfType<ModuleOp>()));
-  triton::AMD::ISAFamily isaFamily = targetInfo.getISAFamily();
+  triton::amdgpu::ISAFamily isaFamily = targetInfo.getISAFamily();
 
-  bool filterSmallVectors = isaFamily != triton::AMD::ISAFamily::CDNA4 &&
-                            !isRDNA(isaFamily) &&
-                            isaFamily != triton::AMD::ISAFamily::GFX1250;
+  bool filterSmallVectors = isaFamily != triton::amdgpu::ISAFamily::CDNA4 &&
+                            !triton::amdgpu::isRDNA(isaFamily) &&
+                            isaFamily != triton::amdgpu::ISAFamily::GFX1250;
 
   bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
   llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =

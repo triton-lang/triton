@@ -2,7 +2,6 @@
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/PatternMatch.h"
@@ -12,8 +11,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
-using mlir::triton::AMD::DppCtrl;
-using mlir::triton::AMD::ISAFamily;
+using mlir::triton::amdgpu::ISAFamily;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 
 namespace mlir::LLVM::AMD {
@@ -141,13 +139,14 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       return static_cast<DppCtrl>(ctrlBits);
     };
 
-    if (isRDNA(isaFamily) || isaFamily == ISAFamily::GFX1250) {
+    if (triton::amdgpu::isRDNA(isaFamily) || isaFamily == ISAFamily::GFX1250) {
       if (mask < 16)
         return emitDpp(loc, rewriter, val, val,
                        makeDppCtrl(DppCtrl::ROW_XMASK0, mask));
       else if (mask < 32)
         return emitPermlaneX16Xor(loc, rewriter, val, mask & 0xf);
-    } else if ((isCDNA(isaFamily) || isaFamily == ISAFamily::GCN5_1) &&
+    } else if ((triton::amdgpu::isCDNA(isaFamily) ||
+                isaFamily == ISAFamily::GCN5_1) &&
                mask < 16) {
       Value result = val;
       uint32_t highBitsDppBasis = 0;
@@ -659,14 +658,14 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
     triton::CacheModifier cm, bool isLoad,
     const mlir::triton::AMD::TargetInfo &targetInfo) {
   switch (targetInfo.getISAFamily()) {
-  case triton::AMD::ISAFamily::CDNA3:
-  case triton::AMD::ISAFamily::CDNA4:
+  case triton::amdgpu::ISAFamily::CDNA3:
+  case triton::amdgpu::ISAFamily::CDNA4:
     return getCtrlBitsForCacheModifierOn_CDNA3_CDNA4(cm, isLoad);
-  case triton::AMD::ISAFamily::RDNA3:
+  case triton::amdgpu::ISAFamily::RDNA3:
     return getCtrlBitsForCacheModifierOnRDNA3(cm, isLoad);
-  case triton::AMD::ISAFamily::RDNA4:
+  case triton::amdgpu::ISAFamily::RDNA4:
     return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ false);
-  case triton::AMD::ISAFamily::GFX1250:
+  case triton::amdgpu::ISAFamily::GFX1250:
     return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ true);
   default:
     return getDefaultCtrlBitsForCacheModifier(cm);
@@ -798,7 +797,7 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
     // Without scattering support, padding can only be inserted at warp
     // boundaries. This means minInterval must be a multiple of (vectorSize *
     // warpSize) which becomes vectorSize <= minInterval / warpSize.
-    if (!targetInfo.supportsDirectToLDSScattering())
+    if (!targetInfo.supportsDirectToLdsScatter())
       maxAllowedVecSize = paddedEnc.getMinInterval() / targetInfo.getWarpSize();
 
     vectorSize = std::min(vectorSize, maxAllowedVecSize);
@@ -812,7 +811,7 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   }
 
   // Following checks are specific to architectures not supporting scattering
-  if (targetInfo.supportsDirectToLDSScattering())
+  if (targetInfo.supportsDirectToLdsScatter())
     return true;
 
   // Must support the full vector width; splitting would cause strided writes.

@@ -8,6 +8,7 @@
 #include "BufferOpsEmitter.h"
 
 using namespace triton::AMD;
+using mlir::triton::amdgpu::ISAFamily;
 
 namespace {
 

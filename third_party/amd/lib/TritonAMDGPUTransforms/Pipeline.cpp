@@ -1,4 +1,4 @@
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/Passes.h" // IWYU pragma: keep
 #include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -126,16 +126,16 @@ struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
 
     if (useAsyncCopy) {
       auto arch = getAMDArch(moduleOp);
-      auto family =
-          arch ? tt::AMD::deduceISAFamily(*arch) : tt::AMD::ISAFamily::Unknown;
+      auto family = arch ? tt::amdgpu::TargetFeatures(*arch).getISAFamily()
+                         : tt::amdgpu::ISAFamily::Unknown;
       // Only asyncmark targets (CDNA3/CDNA4) need updateWaits here: their
       // lowering reads ttg.async_wait's `num` directly into wait.asyncmark(N),
       // and PR #9883 made UpdateAsyncWaitCount a no-op on those archs, so
       // without this call the pipeliner-authored num=0 would serialize the
       // SWP. Every other family keeps the prior combineRedundantWaitOps-only
       // path: their num is re-derived downstream by UpdateAsyncWaitCount.
-      if (family == tt::AMD::ISAFamily::CDNA3 ||
-          family == tt::AMD::ISAFamily::CDNA4) {
+      if (family == tt::amdgpu::ISAFamily::CDNA3 ||
+          family == tt::amdgpu::ISAFamily::CDNA4) {
         mlir::triton::updateWaits(moduleOp);
       } else {
         llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;

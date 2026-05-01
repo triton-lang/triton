@@ -1,4 +1,3 @@
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -42,12 +41,12 @@ public:
   using OpRewritePattern<OpTy>::OpRewritePattern;
 
   AllocSharedMemForUpcastedScales(MLIRContext *context,
-                                  triton::AMD::ISAFamily isaFamily)
+                                  triton::amdgpu::ISAFamily isaFamily)
       : OpRewritePattern<OpTy>(context), isaFamily(isaFamily) {}
 
   LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
-    if (isaFamily != mlir::triton::AMD::ISAFamily::CDNA4)
+    if (isaFamily != mlir::triton::amdgpu::ISAFamily::CDNA4)
       return rewriter.notifyMatchFailure(op, "NYI: Only supported on CDNA4");
 
     auto forOp = op->template getParentOfType<scf::ForOp>();
@@ -106,7 +105,7 @@ public:
   }
 
 private:
-  triton::AMD::ISAFamily isaFamily;
+  triton::amdgpu::ISAFamily isaFamily;
 };
 } // namespace
 
