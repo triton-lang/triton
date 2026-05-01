@@ -189,7 +189,6 @@ jobs:
           python3 python/test/microbenchmark/launch_overhead.py
       - name: Run Proton tests
         run: |
-          unset HIP_VISIBLE_DEVICES
           make test-proton
       - name: Inspect cache directories
         run: |
