@@ -1639,14 +1639,6 @@ def _aggregate(cls):
     all_annotations, all_defaults = _resolve_aggregate_fields(cls)
 
     init = cls.__dict__.get("__init__", None)
-    post_init = None
-    # Look for __post_init__ in the class or its bases
-    for base in cls.__mro__:
-        if base is object:
-            continue
-        if "__post_init__" in base.__dict__:
-            post_init = base.__dict__["__post_init__"]
-            break
 
     if init is None:
         field_names = builtins.tuple(all_annotations.keys())
@@ -1675,10 +1667,6 @@ def _aggregate(cls):
                 unexpected = next(iter(kwargs))
                 raise TypeError(f"{cls.__name__}.__init__() got an unexpected keyword argument '{unexpected}'")
 
-            # Call __post_init__ if defined
-            if post_init is not None:
-                post_init(self)
-
         init.__triton_builtin__ = True
 
     # Define the wrapped Triton value type.
@@ -1694,6 +1682,9 @@ def _aggregate(cls):
         def __new__(this_cls, *args, _semantic=None, _generator=None, **kwargs):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
+            # Track init phase so __setattr__ accepts writes during __init__
+            # but rejects post-construction mutation.
+            object.__setattr__(instance, "_aggregate_init_complete", False)
             extra_kwargs = {}
             if isinstance(init, JITCallable):
                 # raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
@@ -1710,14 +1701,20 @@ def _aggregate(cls):
                 if not hasattr(instance, name):
                     raise AttributeError(f"constructor for {cls.__name__} did not initialize attribute '{name}'")
 
+            # Lock further attribute assignment after __init__.
+            object.__setattr__(instance, "_aggregate_init_complete", True)
             return instance
 
-        # Only allow setting attributes defined in the class annotations.
+        # Only allow setting annotated attributes during __init__, and
+        # only for attributes defined in the class annotations.
         def __setattr__(self, name, value):
             if name not in all_annotations:
                 raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
             if not isinstance(value, all_annotations[name]):
                 raise TypeError(f"Expected {all_annotations[name]} for attribute '{name}', got {type(value)}")
+            if getattr(self, "_aggregate_init_complete", False):
+                raise AttributeError(f"cannot assign to field '{name}' on immutable aggregate {cls.__name__}; "
+                                     f"use aggregate_replace() to construct a modified copy")
             super().__setattr__(name, value)
 
         def _set_name(self, builder: ir.builder, name: str) -> None:
@@ -1734,12 +1731,10 @@ def _aggregate(cls):
                                    [(name, getattr(self, name).type) for name in all_annotations.keys()])
 
     hash_attrs = [init]
-    if post_init is not None:
-        hash_attrs.append(post_init)
 
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
-            if name in ("__init__", "__post_init__"):
+            if name == "__init__":
                 continue
             # __annotate__ is a Python 3.14+ internal; exclude from hash and
             # don't copy it onto the aggregate value type.
@@ -1785,12 +1780,8 @@ def aggregate_replace(instance, **changes):
         if name not in field_names:
             raise TypeError(f"{type(instance).__name__} has no field '{name}'")
 
-    kwargs = {}
-    for name in field_names:
-        if name in changes:
-            kwargs[name] = changes[name]
-        else:
-            kwargs[name] = getattr(instance, name)
+    kwargs = {name: getattr(instance, name) for name in field_names}
+    kwargs.update(changes)
 
     return type(instance)(**kwargs)
 

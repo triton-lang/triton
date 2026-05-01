@@ -14,6 +14,7 @@ from ._layouts import (SharedLayout, DistributedLayout, BlockedLayout, DotOperan
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
+    aggregate_replace,
     base_value,
     base_type,
     constexpr,
@@ -50,6 +51,7 @@ from triton.language.core import (
 # We define __all__ only to appease the python linter, these are not used in
 # this file but we want to import them anyway so they are importable from here.
 __all__ = [
+    "aggregate_replace",
     "constexpr",
     "pointer_type",
     "void",

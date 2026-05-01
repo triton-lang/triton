@@ -727,11 +727,11 @@ def test_return_promotion():
 def test_aggregate_field_inheritance():
     """Child aggregate inherits parent fields."""
 
-    @tl.core._aggregate
+    @triton.aggregate
     class Base:
         x: tl.constexpr
 
-    @tl.core._aggregate
+    @triton.aggregate
     class Child(Base):
         y: tl.constexpr
 
@@ -745,15 +745,15 @@ def test_aggregate_field_inheritance():
 def test_aggregate_multilevel_inheritance():
     """Multi-level inheritance: grandparent -> parent -> child."""
 
-    @tl.core._aggregate
+    @triton.aggregate
     class GrandParent:
         a: tl.constexpr
 
-    @tl.core._aggregate
+    @triton.aggregate
     class Parent(GrandParent):
         b: tl.constexpr
 
-    @tl.core._aggregate
+    @triton.aggregate
     class Child(Parent):
         c: tl.constexpr
 
@@ -766,7 +766,7 @@ def test_aggregate_multilevel_inheritance():
 def test_aggregate_field_inheritance_with_methods():
     """Inherited methods work with inherited fields."""
 
-    @tl.core._aggregate
+    @triton.aggregate
     class Base:
         x: tl.constexpr
 
@@ -774,7 +774,7 @@ def test_aggregate_field_inheritance_with_methods():
         def get_x(self):
             return self.x
 
-    @tl.core._aggregate
+    @triton.aggregate
     class Child(Base):
         y: tl.constexpr
 
@@ -782,27 +782,10 @@ def test_aggregate_field_inheritance_with_methods():
     assert child.get_x().value == 10
 
 
-def test_aggregate_post_init():
-    """__post_init__ is called after auto-generated init."""
-
-    @tl.core._aggregate
-    class WithPostInit:
-        x: tl.constexpr
-        y: tl.constexpr
-
-        def __post_init__(self):
-            # Compute a derived constexpr field after init
-            self.y = tl.constexpr(self.x.value * 2)
-
-    obj = WithPostInit(5, 0)
-    assert obj.x.value == 5
-    assert obj.y.value == 10  # __post_init__ overwrote y
-
-
 def test_aggregate_default_values():
     """Fields with default values can be omitted from constructor."""
 
-    @tl.core._aggregate
+    @triton.aggregate
     class WithDefaults:
         x: tl.constexpr
         y: tl.constexpr = tl.constexpr(42)
@@ -821,7 +804,7 @@ def test_aggregate_default_values():
 def test_aggregate_replace():
     """aggregate_replace creates a copy with modified fields."""
 
-    @tl.core._aggregate
+    @triton.aggregate
     class State:
         x: tl.constexpr
         y: tl.constexpr
@@ -841,7 +824,7 @@ def test_aggregate_replace():
 def test_aggregate_replace_invalid_field():
     """aggregate_replace raises on unknown field names."""
 
-    @tl.core._aggregate
+    @triton.aggregate
     class State:
         x: tl.constexpr
 
@@ -859,14 +842,143 @@ def test_aggregate_replace_non_aggregate():
 def test_aggregate_inherited_defaults():
     """Child inherits default values from parent fields."""
 
-    @tl.core._aggregate
+    @triton.aggregate
     class Base:
         x: tl.constexpr = tl.constexpr(100)
 
-    @tl.core._aggregate
+    @triton.aggregate
     class Child(Base):
         y: tl.constexpr
 
     child = Child(y=7)
     assert child.x.value == 100
     assert child.y.value == 7
+
+
+def test_aggregate_default_value_auto_wrapped():
+    """A raw-int default (`y: tl.constexpr = 42`) is auto-wrapped to constexpr at init."""
+
+    @triton.aggregate
+    class State:
+        x: tl.constexpr
+        y: tl.constexpr = 42  # raw int default — no tl.constexpr() wrap
+
+    obj = State(10)
+    assert isinstance(obj.y, tl.constexpr)
+    assert obj.y.value == 42
+    # Explicit override still works.
+    obj2 = State(10, 99)
+    assert obj2.y.value == 99
+
+
+def test_aggregate_post_construction_immutable():
+    """Field assignment after construction is rejected (matches dataclasses(frozen=True))."""
+
+    @triton.aggregate
+    class State:
+        x: tl.constexpr
+        y: tl.constexpr
+
+    obj = State(10, 20)
+    with pytest.raises(AttributeError, match="cannot assign to field 'x' on immutable aggregate"):
+        obj.x = tl.constexpr(99)
+    # Original value unchanged.
+    assert obj.x.value == 10
+
+    # aggregate_replace() builds a modified copy without mutating the original.
+    new = tl.aggregate_replace(obj, x=tl.constexpr(77))
+    assert new.x.value == 77
+    assert obj.x.value == 10
+
+
+# ===-----------------------------------------------------------------------===#
+# IR-level checks for inheritance + replace (moved from test_core.py per
+# review feedback — frontend is sufficient since aggregates compile to flat
+# field structures, no GPU runtime needed to verify language semantics).
+# ===-----------------------------------------------------------------------===#
+
+
+@triton.aggregate
+class _AggInhBase:
+    data: tl.tensor
+    BLOCK: tl.constexpr
+
+
+@triton.aggregate
+class _AggInhChild(_AggInhBase):
+    bias: tl.tensor
+
+
+@filecheck_test
+@triton.jit
+def test_aggregate_inheritance_ir():
+    # CHECK-LABEL: test_aggregate_inheritance_ir
+    # CHECK: [[A:%.*]] = tt.make_range {end = 8 : i32, start = 0 : i32}
+    # CHECK: [[B:%.*]] = tt.make_range {end = 16 : i32, start = 8 : i32}
+    a = tl.arange(0, 8)
+    b = tl.arange(8, 16)
+    child = _AggInhChild(a, 8, b)
+    # Inherited base field flows through unchanged.
+    # CHECK: call @{{.*}}anchor{{.*}}([[A]])
+    anchor(child.data)
+    # Child-only field flows through unchanged.
+    # CHECK: call @{{.*}}anchor{{.*}}([[B]])
+    anchor(child.bias)
+
+
+@triton.aggregate
+class _AggMethodBase:
+    val: tl.tensor
+    BLOCK: tl.constexpr
+
+    @triton.jit
+    def doubled(self):
+        return self.val + self.val
+
+
+@triton.aggregate
+class _AggMethodChild(_AggMethodBase):
+    offset: tl.tensor
+
+
+@filecheck_test
+@triton.jit
+def test_aggregate_inherited_method_ir():
+    # CHECK-LABEL: test_aggregate_inherited_method_ir
+    # CHECK: [[V:%.*]] = tt.make_range {end = 8 : i32, start = 0 : i32}
+    # CHECK: [[O:%.*]] = tt.make_range {end = 16 : i32, start = 8 : i32}
+    v = tl.arange(0, 8)
+    o = tl.arange(8, 16)
+    child = _AggMethodChild(v, 8, o)
+    # The inherited method dispatches with mangling that includes the child type
+    # — confirms the method came from the base but operates over child layout.
+    # CHECK: [[D:%.*]] = tt.call @{{.*}}_AggMethodBase.doubled{{.*}}_AggMethodChild{{.*}}([[V]], [[O]])
+    d = child.doubled()
+    # CHECK: call @{{.*}}anchor{{.*}}([[D]])
+    anchor(d)
+    # CHECK: call @{{.*}}anchor{{.*}}([[O]])
+    anchor(child.offset)
+
+
+@triton.aggregate
+class _AggReplaceState:
+    vals: tl.tensor
+    BLOCK: tl.constexpr
+
+
+@filecheck_test
+@triton.jit
+def test_aggregate_replace_ir():
+    # CHECK-LABEL: test_aggregate_replace_ir
+    # CHECK: [[A:%.*]] = tt.make_range {end = 8 : i32, start = 0 : i32}
+    # CHECK: [[B:%.*]] = tt.make_range {end = 16 : i32, start = 8 : i32}
+    a = tl.arange(0, 8)
+    b = tl.arange(8, 16)
+    state = _AggReplaceState(a, 8)
+    state2 = tl.aggregate_replace(state, vals=b)
+    # Replaced field is the new tensor in the new aggregate.
+    # CHECK: call @{{.*}}anchor{{.*}}([[B]])
+    anchor(state2.vals)
+    # Original aggregate still references original tensor.
+    # CHECK: call @{{.*}}anchor{{.*}}([[A]])
+    anchor(state.vals)
