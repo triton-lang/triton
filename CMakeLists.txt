@@ -227,6 +227,7 @@ endif()
 
 # MLIR
 find_package(MLIR REQUIRED CONFIG PATHS ${MLIR_DIR})
+find_package(LLD REQUIRED CONFIG PATHS ${LLD_DIR})
 
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
@@ -306,6 +307,80 @@ if (NOT WIN32 AND NOT APPLE AND NOT BSD)
 endif()
 
 ################################################################################
+# Core Triton library
+################################################################################
+
+set(TRITON_CORE_LIBRARIES
+  # MLIR
+  MLIRNVVMDialect
+  MLIRNVVMToLLVMIRTranslation
+  MLIRGPUToNVVMTransforms
+  MLIRIR
+  MLIRControlFlowToLLVM
+  MLIRPass
+  MLIRTransforms
+  MLIRLLVMDialect
+  MLIRSupport
+  MLIRTargetLLVMIRExport
+  MLIRMathToLLVM
+  MLIRROCDLToLLVMIRTranslation
+  MLIRGPUDialect
+  MLIRSCFToControlFlow
+  MLIRIndexToLLVM
+  MLIRGPUToROCDLTransforms
+  MLIRUBToLLVM
+
+  # LLVM
+  LLVMPasses
+  LLVMLTO
+)
+
+# Add target-specifc LLVM codegen/parsing.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64
+    CMAKE_SYSTEM_PROCESSOR MATCHES "arm64" OR # macOS arm64
+    CMAKE_OSX_ARCHITECTURES MATCHES "arm64")  # also macOS arm64
+  list(APPEND TRITON_CORE_LIBRARIES
+        LLVMAArch64CodeGen
+        LLVMAArch64AsmParser
+    )
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64")
+  list(APPEND TRITON_CORE_LIBRARIES
+        LLVMX86CodeGen
+        LLVMX86AsmParser
+    )
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64le")
+  list(APPEND TRITON_CORE_LIBRARIES
+      LLVMPowerPCAsmParser
+      LLVMPowerPCCodeGen
+    )
+else()
+  message(FATAL_ERROR "LLVM codegen/ASM parser libs: This HW architecture (${CMAKE_SYSTEM_PROCESSOR}) is not configured in cmake lib dependencies.")
+endif()
+
+add_library(tritoncore SHARED)
+if (NOT WIN32)
+  target_link_libraries(tritoncore PRIVATE z)
+endif()
+target_link_options(tritoncore PRIVATE ${LLVM_LDFLAGS})
+
+# Export all symbols from libtritoncore so (a) libtriton and (b) plugins can
+# link against the Triton/LLVM C++ symbols.
+if (NOT MSVC)
+  target_compile_options(tritoncore PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-fvisibility=default>")
+endif()
+
+# Do not propagate libraries that libtritoncore depends on. This ensures
+# dependents do not accidentally link in their own copies of core Triton code
+# and LLVM.
+set_target_properties(tritoncore PROPERTIES INTERFACE_LINK_LIBRARIES "")
+
+install(TARGETS tritoncore
+  COMPONENT libraries
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+################################################################################
 # Python module
 ################################################################################
 
@@ -346,72 +421,34 @@ if(TRITON_BUILD_PYTHON_MODULE)
     endforeach()
   endif()
 
-  get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
-  get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
-  set(TRITON_LIBRARIES
-    ${triton_libs}
-    ${triton_plugins}
-
-    # mlir
-    MLIRNVVMDialect
-    MLIRNVVMToLLVMIRTranslation
-    MLIRGPUToNVVMTransforms
-    MLIRIR
-    MLIRControlFlowToLLVM
-    MLIRPass
-    MLIRTransforms
-    MLIRLLVMDialect
-    MLIRSupport
-    MLIRTargetLLVMIRExport
-    MLIRMathToLLVM
-    MLIRROCDLToLLVMIRTranslation
-    MLIRGPUDialect
-    MLIRSCFToControlFlow
-    MLIRIndexToLLVM
-    MLIRGPUToROCDLTransforms
-    MLIRUBToLLVM
-
-    # LLVM
-    LLVMPasses
-    LLVMNVPTXCodeGen
-    LLVMAMDGPUCodeGen
-    LLVMAMDGPUAsmParser
-
+  set(TRITON_PYTHON_LIBRARIES
     Python3::Module
     pybind11::headers
+
+    LLVMAMDGPUAsmParser
+    LLVMAMDGPUCodeGen
+    LLVMNVPTXCodeGen
+    LLVMMIRParser
+
+    MLIRLLVMToLLVMIRTranslation
+    MLIRBuiltinToLLVMIRTranslation
+    MLIRNVVMToLLVM
+
+    lldCommon
   )
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64
-     CMAKE_SYSTEM_PROCESSOR MATCHES "arm64" OR # macOS arm64
-     CMAKE_OSX_ARCHITECTURES MATCHES "arm64")  # also macOS arm64
-      list(APPEND TRITON_LIBRARIES
-          LLVMAArch64CodeGen
-          LLVMAArch64AsmParser
-      )
-  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64")
-      list(APPEND TRITON_LIBRARIES
-          LLVMX86CodeGen
-          LLVMX86AsmParser
-      )
-  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64le")
-      list(APPEND TRITON_LIBRARIES
-        LLVMPowerPCAsmParser
-        LLVMPowerPCCodeGen
-      )
-  else()
-    message(FATAL_ERROR "LLVM codegen/ASM parser libs: This HW architecture (${CMAKE_SYSTEM_PROCESSOR}) is not configured in cmake lib dependencies.")
+  if(UNIX AND NOT APPLE)
+    list(APPEND TRITON_PYTHON_LIBRARIES lldELF)
   endif()
 
-  # Define triton library
+  # Collect backends.
   string(JOIN "," TRITON_BACKENDS_TUPLE ${TRITON_CODEGEN_BACKENDS})
-
   if (DEFINED TRITON_PLUGIN_NAMES)
     string(JOIN "," TRITON_BACKENDS_TUPLE ${TRITON_BACKENDS_TUPLE} ${TRITON_PLUGIN_NAMES})
   endif()
-
   message(STATUS "Triton backends tuple: ${TRITON_BACKENDS_TUPLE}")
-
   set(TRITON_BACKENDS_TUPLE "(${TRITON_BACKENDS_TUPLE})")
   add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
+
   add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
                   ${PYTHON_SRC_PATH}/ir.cc
                   ${PYTHON_SRC_PATH}/gluon_ir.cc
@@ -422,8 +459,18 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/llvm.cc
                   ${PYTHON_SRC_PATH}/specialize.cc)
 
-  # Link triton with its dependencies
-  target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
+  # Add plugin object code in libtriton without linking plugin targets, which
+  # would otherwise drag transitive libraries into libtriton. These
+  # transitive libraries could conflict with what we bring in libtritoncore.
+  get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
+  foreach(plugin ${triton_plugins})
+    target_sources(triton PRIVATE $<TARGET_OBJECTS:${plugin}>)
+  endforeach()
+
+  # Keep Python-specific code in libtriton and link against C++ core.
+  target_link_libraries(triton PRIVATE
+    tritoncore
+    ${TRITON_PYTHON_LIBRARIES})
 
   # Do not propagate libraries that libtriton depends on. This ensures that
   # targets that link against libtriton do not accidentally link in their own
@@ -435,9 +482,21 @@ if(TRITON_BUILD_PYTHON_MODULE)
     set_target_properties(triton PROPERTIES SUFFIX ".pyd")
     set_target_properties(triton PROPERTIES PREFIX "lib")
   else()
-    target_link_libraries(triton PRIVATE z)
+    # Setup a relative RPATH to resolve libtritoncore using libtriton's
+    # directory.
+    if(APPLE)
+      set(_TRITON_REL_RPATH "@loader_path")
+    else()
+      set(_TRITON_REL_RPATH "$ORIGIN")
+    endif()
+    set_target_properties(triton PROPERTIES
+      BUILD_RPATH_USE_ORIGIN ON
+      BUILD_WITH_INSTALL_RPATH ON
+      BUILD_RPATH "${_TRITON_REL_RPATH}"
+      INSTALL_RPATH "${_TRITON_REL_RPATH}"
+      INSTALL_RPATH_USE_LINK_PATH FALSE)
   endif()
-  target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
+  target_link_options(tritoncore PRIVATE ${LLVM_LDFLAGS})
 
   if(NOT TRITON_EXT_ENABLED)
     # When extensions are disabled, only export the Python entrypoint.
@@ -475,7 +534,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     "${TRITON_WHEEL_DIR}/FileCheck"
     COPYONLY)
 
-  # Build plugins when building libtriton since they depend on libtriton.
+  # Build plugins when building libtriton since they depend on Triton libs.
   if(TRITON_EXT_ENABLED)
     add_subdirectory(examples/plugins)
   endif()
@@ -497,6 +556,27 @@ if(NOT TRITON_BUILD_PYTHON_MODULE)
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
   add_subdirectory(third_party/proton/Dialect)
+endif()
+
+# Link libtritoncore with a whole host of libraries. Some of these are
+# legitimate (`TRITON_CORE_LIBRARIES`), but we also link in all the libraries
+# added throughout the codebase (`TRITON_LIBS` via `add_triton_libraries`); some
+# of these latter libraries are plugin-specific and thus only known when the
+# plugin directories are processed above. In the future, we can split out the
+# plugin-specific libraries and link them only into the Python module,
+# `libtriton` (TODO).
+get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
+if(UNIX AND NOT APPLE)
+  # Self-registering MLIR symbols require whole-archive linking so they are
+  # automatically initialized.
+  target_link_libraries(tritoncore PRIVATE "-Wl,--whole-archive"
+    ${TRITON_CORE_LIBRARIES}
+    ${triton_libs}
+    "-Wl,--no-whole-archive")
+else()
+  target_link_libraries(tritoncore PRIVATE
+    ${TRITON_CORE_LIBRARIES}
+    ${triton_libs})
 endif()
 
 find_package(Threads REQUIRED)
