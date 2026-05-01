@@ -212,17 +212,6 @@ distributeTDMWarpsAlignToPartition(ArrayRef<int64_t> blockShape, int numWarps,
   return {distributeTDMWarps(blockShape, numWarps), 1};
 }
 
-SmallVector<Value> TDMDescriptor::getAllGroups() const {
-  SmallVector<Value> result;
-  result.push_back(group0);
-  result.push_back(group1);
-  if (group2.has_value())
-    result.push_back(group2.value());
-  if (group3.has_value())
-    result.push_back(group3.value());
-  return result;
-}
-
 SmallVector<Value> unpackTDMDescriptor(RewriterBase &rewriter, Location loc,
                                        Value descStruct) {
   auto scalars = unpackLLElements(loc, descStruct, rewriter);
@@ -258,20 +247,20 @@ SmallVector<Value> scalarizeTDMDescriptor(RewriterBase &rewriter, Location loc,
 }
 
 // Decode a full TDM descriptor for 1D-5D tensors.  Returns (base,
-// tensorShape[], tensorStride[]).  Block shape is intentionally NOT decoded:
-// every TDM lowering path rewrites tile_dim* against its own warp
-// distribution, so reading them back here would only generate dead IR.
+// tensorShape[], tensorStride[]).  `groups` is 2 (1D-2D) or 4 (3D-5D) entries.
+// Block shape is intentionally NOT decoded: every TDM lowering path rewrites
+// tile_dim* against its own warp distribution, so reading them back here
+// would only generate dead IR.
 std::tuple<Value, SmallVector<Value>, SmallVector<Value>>
-decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc, Value group0,
-                        Value group1, std::optional<Value> group2,
-                        std::optional<Value> group3, size_t numDims) {
+decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc,
+                        ArrayRef<Value> groups, size_t numDims) {
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type globalPtrTy = ptr_ty(ctx, 1);
 
   // Decode base address from group0
-  Value globalAddrLow = vecGet(b, group0, 2);
-  Value globalAddrHigh = b.and_(vecGet(b, group0, 3), b.i32_val(0x7FFFFFFF));
+  Value globalAddrLow = vecGet(b, groups[0], 2);
+  Value globalAddrHigh = b.and_(vecGet(b, groups[0], 3), b.i32_val(0x7FFFFFFF));
   globalAddrLow = b.zext(i64_ty, globalAddrLow);
   globalAddrHigh = b.shl(b.zext(i64_ty, globalAddrHigh), b.i64_val(32));
   Value globalAddr = b.or_(globalAddrLow, globalAddrHigh);
@@ -281,21 +270,21 @@ decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc, Value group0,
   SmallVector<Value> tensorStride(numDims);
 
   // Decode dimensions from the end (inner dimensions first)
-  tensorShape[numDims - 1] = decode48BitValue(rewriter, b, group1, 1);
+  tensorShape[numDims - 1] = decode48BitValue(rewriter, b, groups[1], 1);
 
   if (numDims >= 2) {
-    tensorShape[numDims - 2] = decode48BitValue(rewriter, b, group1, 2);
+    tensorShape[numDims - 2] = decode48BitValue(rewriter, b, groups[1], 2);
 
     // Strides are loaded in opposite order of shapes
     // tensor_dim0_stride from group1[5]
-    tensorStride[numDims - 2] = vecGet(b, group1, 5);
+    tensorStride[numDims - 2] = vecGet(b, groups[1], 5);
 
     // tensor_dim1_stride is encoded in group1[6] (48-bit value across group1[6]
     // and group1[7])
     if (numDims >= 3) {
-      Value stride1Low = b.and_(b.lshr(vecGet(b, group1, 6), b.i32_val(16)),
+      Value stride1Low = b.and_(b.lshr(vecGet(b, groups[1], 6), b.i32_val(16)),
                                 b.i32_val(0xFFFF));
-      Value stride1High = b.and_(vecGet(b, group1, 7), b.i32_val(0xFFFF));
+      Value stride1High = b.and_(vecGet(b, groups[1], 7), b.i32_val(0xFFFF));
       tensorStride[numDims - 3] =
           b.or_(stride1Low, b.shl(stride1High, b.i32_val(16)));
     }
@@ -303,12 +292,12 @@ decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc, Value group0,
 
   // tensor_dim2_stride from group2[2]
   if (numDims >= 4) {
-    tensorStride[numDims - 4] = vecGet(b, group2.value(), 2);
+    tensorStride[numDims - 4] = vecGet(b, groups[2], 2);
   }
 
   // tensor_dim3_stride from group3[0]
   if (numDims == 5) {
-    tensorStride[numDims - 5] = vecGet(b, group3.value(), 0);
+    tensorStride[numDims - 5] = vecGet(b, groups[3], 0);
   }
 
   // The innermost dimension always has stride 1
@@ -316,34 +305,33 @@ decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc, Value group0,
 
   // 3rd dimension from group2 if present
   if (numDims >= 3) {
-    tensorShape[numDims - 3] = vecGet(b, group2.value(), 0);
+    tensorShape[numDims - 3] = vecGet(b, groups[2], 0);
   }
 
   // 4th dimension from group2/group3 if present
   if (numDims >= 4) {
-    tensorShape[numDims - 4] = vecGet(b, group2.value(), 1);
+    tensorShape[numDims - 4] = vecGet(b, groups[2], 1);
   }
 
   // 5th dimension from group3 if present
   if (numDims == 5) {
     // tensor_dim4 is encoded across group3[1] and group3[2]
     Value tensorDim4Low = b.and_(
-        b.lshr(vecGet(b, group3.value(), 1), b.i32_val(16)), b.i32_val(0xFFFF));
-    Value tensorDim4High =
-        b.and_(vecGet(b, group3.value(), 2), b.i32_val(0xFFFF));
+        b.lshr(vecGet(b, groups[3], 1), b.i32_val(16)), b.i32_val(0xFFFF));
+    Value tensorDim4High = b.and_(vecGet(b, groups[3], 2), b.i32_val(0xFFFF));
     tensorShape[0] = b.or_(tensorDim4Low, b.shl(tensorDim4High, b.i32_val(16)));
   }
 
   return {srcPtr, tensorShape, tensorStride};
 }
 
-TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
-                                  const LLVMTypeConverter *typeConverter,
-                                  Type elementType, size_t numDims,
-                                  unsigned padInterval, unsigned padAmount,
-                                  SmallVector<Value> tensorShape,
-                                  SmallVector<Value> tensorStride,
-                                  Value srcPtr) {
+SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
+                                       const LLVMTypeConverter *typeConverter,
+                                       Type elementType, size_t numDims,
+                                       unsigned padInterval, unsigned padAmount,
+                                       SmallVector<Value> tensorShape,
+                                       SmallVector<Value> tensorStride,
+                                       Value srcPtr) {
   assert(numDims >= 1 && numDims <= 5 && tensorShape.size() == numDims &&
          tensorStride.size() == numDims &&
          "TDM only supported for 1D-5D tensors.");
@@ -468,7 +456,7 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   }
 
   if (numDims <= 2) {
-    return TDMDescriptor{group0, group1, std::nullopt, std::nullopt};
+    return {group0, group1};
   }
 
   /* For 3D-5D tensors, fill group2 and group3
@@ -584,7 +572,7 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
     group3 = vecSet(b, group3, 2, b.lshr(tensorShape[numDims - 5], v16));
   }
 
-  return TDMDescriptor{group0, group1, group2, group3};
+  return {group0, group1, group2, group3};
 }
 
 // Fill a TDM descriptor for regular load/store (1D-5D).  With `warpHint`,
@@ -594,12 +582,10 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> shapePerCTA, int numWarps,
-                       unsigned padInterval, unsigned padAmount, Value &group0,
-                       Value &group1,
-                       std::optional<std::reference_wrapper<Value>> group2,
-                       std::optional<std::reference_wrapper<Value>> group3,
-                       SmallVector<Value> offset, ArrayRef<Value> dstPtrs,
-                       Value pred, Value multicastMask, Value barrierPtr,
+                       unsigned padInterval, unsigned padAmount,
+                       MutableArrayRef<Value> groups, SmallVector<Value> offset,
+                       ArrayRef<Value> dstPtrs, Value pred, Value multicastMask,
+                       Value barrierPtr,
                        const triton::LinearLayout &sharedLayout, Value ctaId,
                        bool isStore, ArrayRef<unsigned> warpsPerCTA,
                        const std::optional<WarpHintInfo> &warpHint) {
@@ -608,6 +594,10 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   assert(!dstPtrs.empty() && "dstPtrs cannot be empty");
   assert(warpsPerCTA.size() == numDims &&
          "warpsPerCTA must have one entry per tensor dim");
+  assert((groups.size() == 2 || groups.size() == 4) &&
+         "groups must hold 2 (1D-2D) or 4 (3D-5D) vector entries");
+  assert((numDims <= 2 ? groups.size() == 2 : groups.size() == 4) &&
+         "groups size must match numDims");
 
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -617,13 +607,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
 
   // Tile dimensions are owned by this filler (computed below from
   // shapePerCTA / warpsPerCTA), so the decoder skips them.
-  auto [srcPtr, tensorShape, tensorStride] = decodeTDMDescriptorFull(
-      rewriter, loc, group0, group1,
-      group2.has_value() ? std::optional<Value>(group2.value().get())
-                         : std::nullopt,
-      group3.has_value() ? std::optional<Value>(group3.value().get())
-                         : std::nullopt,
-      numDims);
+  auto [srcPtr, tensorShape, tensorStride] =
+      decodeTDMDescriptorFull(rewriter, loc, groups, numDims);
 
   // Per-warp tile shape; smaller-K hints scale this up so CTA coverage holds.
   SmallVector<int64_t> tileShape(numDims);
@@ -761,6 +746,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
       pred = b.and_(pred, layoutPred);
     }
   }
+  Value &group0 = groups[0];
+  Value &group1 = groups[1];
   group0 = vecSet(b, group0, 0, pred);
   group0 = vecSet(b, group0, 1, ldsAddr);
   group0 = vecSet(b, group0, 2, b.trunc(i32_ty, globalAddr));
@@ -810,38 +797,29 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
       g1_4 = b.or_(g1_4, b.i32_val(tileShape[numDims - 3] << 16));
     group1 = vecSet(b, group1, 4, g1_4);
   }
-  if (numDims >= 4 && group2.has_value()) {
-    Value &g2 = group2.value().get();
-    Value g2_3 = b.and_(vecGet(b, g2, 3), b.i32_val(0xFFFF));
+  if (numDims >= 4) {
+    Value g2_3 = b.and_(vecGet(b, groups[2], 3), b.i32_val(0xFFFF));
     g2_3 = b.or_(g2_3, b.i32_val(tileShape[numDims - 4] << 16));
-    g2 = vecSet(b, g2, 3, g2_3);
+    groups[2] = vecSet(b, groups[2], 3, g2_3);
   }
-  if (numDims == 5 && group3.has_value()) {
-    Value &g3 = group3.value().get();
-    Value g3_2 = b.and_(vecGet(b, g3, 2), b.i32_val(0xFFFF));
+  if (numDims == 5) {
+    Value g3_2 = b.and_(vecGet(b, groups[3], 2), b.i32_val(0xFFFF));
     g3_2 = b.or_(g3_2, b.i32_val(tileShape[numDims - 5] << 16));
-    g3 = vecSet(b, g3, 2, g3_2);
+    groups[3] = vecSet(b, groups[3], 2, g3_2);
   }
 
   // Update group2/group3 for higher dimensions
-  if (numDims >= 3) {
-    Value &g2 = group2.value().get();
-    g2 = vecSet(b, g2, 0, tensorShape[numDims - 3]);
-  }
-
-  if (numDims >= 4) {
-    Value &g2 = group2.value().get();
-    g2 = vecSet(b, g2, 1, tensorShape[numDims - 4]);
-  }
-
+  if (numDims >= 3)
+    groups[2] = vecSet(b, groups[2], 0, tensorShape[numDims - 3]);
+  if (numDims >= 4)
+    groups[2] = vecSet(b, groups[2], 1, tensorShape[numDims - 4]);
   if (numDims == 5) {
-    Value &g3 = group3.value().get();
-    Value g3_1 = b.and_(vecGet(b, g3, 1), b.i32_val(0xFFFF));
+    Value g3_1 = b.and_(vecGet(b, groups[3], 1), b.i32_val(0xFFFF));
     g3_1 = b.or_(g3_1, b.shl(tensorShape[0], b.i32_val(16)));
-    g3 = vecSet(b, g3, 1, g3_1);
-    Value g3_2 = b.and_(vecGet(b, g3, 2), b.i32_val(0xFFFF << 16));
+    groups[3] = vecSet(b, groups[3], 1, g3_1);
+    Value g3_2 = b.and_(vecGet(b, groups[3], 2), b.i32_val(0xFFFF << 16));
     g3_2 = b.or_(g3_2, b.lshr(tensorShape[0], b.i32_val(16)));
-    g3 = vecSet(b, g3, 2, g3_2);
+    groups[3] = vecSet(b, groups[3], 2, g3_2);
   }
 }
 
@@ -864,11 +842,10 @@ void fillTDMDescriptorForGatherScatter(
   Type globalPtrTy = ptr_ty(ctx, 1);
   Type sharedPtrTy = ptr_ty(ctx, 3);
 
-  // Decode descriptor to get tensor info
-  auto [globalPtr, tensorShape, tensorStride] = decodeTDMDescriptorFull(
-      rewriter, loc, group0, group1, std::optional<Value>(group2),
-      std::optional<Value>(group3),
-      /*numDims=*/2);
+  // Decode descriptor to get tensor info (only group0/1 used for 2D).
+  Value descGroups[2] = {group0, group1};
+  auto [globalPtr, tensorShape, tensorStride] =
+      decodeTDMDescriptorFull(rewriter, loc, descGroups, /*numDims=*/2);
 
   // Apply CTA column offset to the base pointer.
   // Row positions are specified by rowIndices, so only column offset applies.
@@ -1065,44 +1042,23 @@ void emitTDMIntrinsic(
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
-  Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
 
-  if (numDims > 2) {
-    Value group0 = desc[0];
-    Value group1 = desc[1];
-    Value group2 = desc[2];
-    Value group3 = desc[3];
+  SmallVector<Value, 4> groups(desc.begin(),
+                               desc.begin() + (numDims > 2 ? 4 : 2));
+  fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
+                    effectiveBlockShape, numWarps, padInterval, padAmount,
+                    groups, globalOffset, instrDstPtrs, pred, multicastMask,
+                    barrier, instrSharedLayout, ctaId, !isLoad, warpsPerCTA,
+                    warpHint);
 
-    fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      effectiveBlockShape, numWarps, padInterval, padAmount,
-                      group0, group1, std::ref(group2), std::ref(group3),
-                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
-                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA, warpHint);
-
-    const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
-                                       : "llvm.amdgcn.tensor.store.from.lds";
-    LLVM::createLLVMIntrinsicCallOp(
-        rewriter, loc, intrinsicName, {},
-        {group0, group1, group2, group3, group4Zero, b.i32_val(auxBits)});
-  } else {
-    Value group0 = desc[0];
-    Value group1 = desc[1];
-
-    fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      effectiveBlockShape, numWarps, padInterval, padAmount,
-                      group0, group1, std::nullopt, std::nullopt, globalOffset,
-                      instrDstPtrs, pred, multicastMask, barrier,
-                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA, warpHint);
-
-    Value group2Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
-    Value group3Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
-
-    const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
-                                       : "llvm.amdgcn.tensor.store.from.lds";
-    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {},
-                                    {group0, group1, group2Zero, group3Zero,
-                                     group4Zero, b.i32_val(auxBits)});
-  }
+  // Pad to 4 vector groups (intrinsic always takes 4 group operands).
+  while (groups.size() < 4)
+    groups.push_back(LLVM::ZeroOp::create(rewriter, loc, v4i32Ty));
+  groups.push_back(LLVM::ZeroOp::create(rewriter, loc, v8i32Ty)); // group4
+  groups.push_back(b.i32_val(auxBits));
+  const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
+                                     : "llvm.amdgcn.tensor.store.from.lds";
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {}, groups);
 }
 
 } // namespace
@@ -1355,9 +1311,9 @@ bool isAxisAlignedCoset(uint32_t hint, int numWarps) {
 
 using TDMCopyGlobalToLocalOp = triton::amdgpu::AsyncTDMCopyGlobalToLocalOp;
 
-// v1 pairwise filter: same MemDescType (encoding + shapePerCTA), distinct
-// SSA destinations (conservative non-overlap stand-in), same cache modifier
-// (one auxBits on the fused intrinsic).
+// v1 pairwise filter: matching MemDescType, distinct SSA destinations
+// (conservative non-overlap stand-in), matching cache modifier (one auxBits
+// on the fused intrinsic), and equal-K hints (group invariant).
 bool canMergeWith(TDMCopyGlobalToLocalOp first,
                   TDMCopyGlobalToLocalOp candidate) {
   if (first.getResult().getType() != candidate.getResult().getType())
@@ -1366,14 +1322,46 @@ bool canMergeWith(TDMCopyGlobalToLocalOp first,
     return false;
   if (first.getCache() != candidate.getCache())
     return false;
-  return true;
+  unsigned firstK = llvm::popcount(
+      static_cast<uint32_t>(first.getWarpUsedHintAttr().getInt()));
+  unsigned candK = llvm::popcount(
+      static_cast<uint32_t>(candidate.getWarpUsedHintAttr().getInt()));
+  return firstK == candK;
+}
+
+// Decode `selectorBits` and `selValOrder` for a merge group from member hints.
+// `selectorBits` = unionInfo.basisBits \ first member's basisBits; the merge
+// emit packs warpId on these bits to pick a member.  `selValOrder[s]` is the
+// program-order index of the member whose i0-delta projects to s.
+void deriveSelectorOrder(TDMMergeGroupInfo &info, ArrayRef<uint32_t> hints,
+                         int numWarps) {
+  size_t N = hints.size();
+  WarpHintInfo firstInfo = extractWarpHintInfo(hints.front(), numWarps);
+  for (int32_t bit : info.unionInfo.basisBits)
+    if (!llvm::is_contained(firstInfo.basisBits, bit))
+      info.selectorBits.push_back(bit);
+  assert(info.selectorBits.size() == llvm::Log2_32(static_cast<unsigned>(N)) &&
+         "selector bits must enumerate the log2(N) per-wave choices");
+
+  info.selValOrder.assign(N, ~0u);
+  for (size_t i = 0; i < N; ++i) {
+    uint32_t i0_i = static_cast<uint32_t>(llvm::countr_zero(hints[i]));
+    uint32_t delta = i0_i ^ info.unionInfo.i0;
+    unsigned selVal = 0;
+    for (size_t bi = 0; bi < info.selectorBits.size(); ++bi)
+      if ((delta >> info.selectorBits[bi]) & 1u)
+        selVal |= 1u << bi;
+    assert(selVal < N && info.selValOrder[selVal] == ~0u &&
+           "members must map injectively onto selector values");
+    info.selValOrder[selVal] = static_cast<unsigned>(i);
+  }
 }
 
 void emitMergeGroup(MutableArrayRef<Operation *> batch, int numWarps,
                     DenseMap<Operation *, TDMMergeGroupInfo> &result) {
   // Greedy pack: find the largest power-of-two `n` such that the first
-  // `n` ops have equal-K, pairwise-disjoint hints, all pass `canMergeWith`,
-  // and whose union is an axis-aligned coset.  Each power-of-two head is
+  // `n` ops have pairwise-disjoint hints, all pass `canMergeWith`, and
+  // whose union is an axis-aligned coset.  Each power-of-two head is
   // tested independently -- a failing smaller head doesn't rule out a
   // larger passing one (e.g. K=1 hints {0b0001, 0b1000, 0b0010, 0b0100}:
   // n=2 union 0b1001 is non-coset but n=4 union 0b1111 is, fuse at n=4).
@@ -1382,27 +1370,23 @@ void emitMergeGroup(MutableArrayRef<Operation *> batch, int numWarps,
     SmallVector<uint32_t, 8> hints;
     hints.push_back(
         static_cast<uint32_t>(firstOp.getWarpUsedHintAttr().getInt()));
-    unsigned firstK = llvm::popcount(hints.front());
     uint32_t orSoFar = hints.front();
     for (size_t i = 1; i < batch.size(); ++i) {
       auto op = cast<TDMCopyGlobalToLocalOp>(batch[i]);
-      auto hint = static_cast<uint32_t>(op.getWarpUsedHintAttr().getInt());
-      if (llvm::popcount(hint) != firstK)
-        break;
-      if (orSoFar & hint)
-        break;
       if (!canMergeWith(firstOp, op))
+        break;
+      auto hint = static_cast<uint32_t>(op.getWarpUsedHintAttr().getInt());
+      if (orSoFar & hint)
         break;
       orSoFar |= hint;
       hints.push_back(hint);
     }
-    size_t numCandidates = hints.size();
     // Single forward pass: test the running union at every power-of-
     // two head boundary; the largest passing one wins.
     size_t p2 = 0;
     uint32_t finalUnion = 0;
     uint32_t accUnion = 0;
-    for (size_t i = 0; i < numCandidates; ++i) {
+    for (size_t i = 0; i < hints.size(); ++i) {
       accUnion |= hints[i];
       size_t headSize = i + 1;
       if (llvm::isPowerOf2_64(headSize) && headSize >= 2 &&
@@ -1414,8 +1398,9 @@ void emitMergeGroup(MutableArrayRef<Operation *> batch, int numWarps,
     if (p2 >= 2) {
       TDMMergeGroupInfo info;
       info.members.assign(batch.begin(), batch.begin() + p2);
-      info.unionHint = finalUnion;
       info.unionInfo = extractWarpHintInfo(finalUnion, numWarps);
+      deriveSelectorOrder(info, ArrayRef<uint32_t>(hints).take_front(p2),
+                          numWarps);
       LLVM_DEBUG({
         llvm::dbgs() << "[tdm-merge] group of " << p2 << " ops, unionHint=0x"
                      << llvm::Twine::utohexstr(finalUnion) << "\n";
@@ -1488,93 +1473,48 @@ void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
   assert(N >= 2 && llvm::isPowerOf2_64(N) && "merge group size invariant");
   assert(descPerMember.size() == N && offsetPerMember.size() == N &&
          dstPtrsPerMember.size() == N && predPerMember.size() == N);
+  assert(groupInfo.selValOrder.size() == N &&
+         groupInfo.selectorBits.size() == llvm::Log2_32(static_cast<unsigned>(N)) &&
+         "selector metadata size mismatch");
 
-  // Read hints off op attributes; mergeability guarantees presence and no
-  // mbarrier (asserts make the analysis-vs-emit contract checkable).
-  SmallVector<uint32_t, 4> hintPerMember(N);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  size_t numDims = blockShape.size();
+  size_t numGroups = numDims > 2 ? 4 : 2;
+
+  // Decode each member's hint (presence/no-barrier guaranteed by analysis).
+  SmallVector<WarpHintInfo, 4> infoPerMember;
+  infoPerMember.reserve(N);
   for (size_t i = 0; i < N; ++i) {
     auto memberOp =
         cast<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(groupInfo.members[i]);
     auto hintAttr = memberOp.getWarpUsedHintAttr();
     assert(hintAttr && "merge member must carry a warp_used_hint");
     assert(!memberOp.getBarrier() && "merge member must not carry an mbarrier");
-    hintPerMember[i] = static_cast<uint32_t>(hintAttr.getInt());
+    infoPerMember.push_back(
+        extractWarpHintInfo(static_cast<uint32_t>(hintAttr.getInt()), numWarps));
   }
-
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  size_t numDims = blockShape.size();
 
   // Use K_member (uniform across members), not K_union, so each member's
   // tileShape = blockShape / warpsPerCTA matches its own log2(K) basisBits.
-  unsigned kMember = static_cast<unsigned>(llvm::popcount(hintPerMember[0]));
   auto [warpsPerCTA, numTDMInstructions] = distributeTDMWarpsAlignToPartition(
-      blockShape, static_cast<int>(kMember), encoding);
+      blockShape, static_cast<int>(infoPerMember[0].K), encoding);
   assert(numTDMInstructions == 1 &&
          "verifier guarantees single-instruction emission for hinted ops");
   (void)numTDMInstructions;
 
-  SmallVector<WarpHintInfo, 4> infoPerMember;
-  infoPerMember.reserve(N);
-  for (size_t i = 0; i < N; ++i)
-    infoPerMember.push_back(extractWarpHintInfo(hintPerMember[i], numWarps));
-
-  // Selector bits = union basis \ first member's basis (member basisBits
-  // are subsets of the union's by axis-aligned closure).  basisBits is
-  // <= 5 entries, so linear `is_contained` beats a hash lookup.
-  auto [_laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  Value warpIdShifted = warpId;
-  if (groupInfo.unionInfo.i0 != 0)
-    warpIdShifted = b.xor_(warpId, b.i32_val(groupInfo.unionInfo.i0));
-
-  const WarpHintInfo &firstInfo = infoPerMember.front();
-  SmallVector<int32_t, 5> selectorBits;
-  for (int32_t bit : groupInfo.unionInfo.basisBits)
-    if (!llvm::is_contained(firstInfo.basisBits, bit))
-      selectorBits.push_back(bit);
-  assert(selectorBits.size() == llvm::Log2_32(static_cast<unsigned>(N)) &&
-         "selector bits must enumerate the log2(N) per-wave choices");
-
-  // Map each member's i0-delta (projected onto selectorBits) to its index;
-  // mergeability makes the projection injective.
-  SmallVector<unsigned> selValToMember(N, ~0u);
-  for (size_t i = 0; i < N; ++i) {
-    uint32_t delta = infoPerMember[i].i0 ^ groupInfo.unionInfo.i0;
-    unsigned selVal = 0;
-    for (size_t bi = 0; bi < selectorBits.size(); ++bi) {
-      if ((delta >> selectorBits[bi]) & 1u)
-        selVal |= 1u << bi;
-    }
-    assert(selVal < N && selValToMember[selVal] == ~0u &&
-           "members must map injectively onto selector values");
-    selValToMember[selVal] = static_cast<unsigned>(i);
-  }
-
   // Build per-member descriptors with each member's own hint/dst/idx/pred;
-  // selectGroup then vector-`select`s between them (backend lowers to
-  // per-element `s_cselect_b32` under SGPR-uniform selector).
-  SmallVector<TDMDescriptor, 4> filledPerMember(N);
+  // we then `select` between them per-group (backend lowers to per-element
+  // `s_cselect_b32` under SGPR-uniform selector).
+  SmallVector<SmallVector<Value, 4>, 4> filledPerMember(N);
   for (size_t i = 0; i < N; ++i) {
     ArrayRef<Value> di = descPerMember[i];
-    assert((numDims <= 2 ? di.size() == 2 : di.size() == 4) &&
-           "descPerMember must hold 2 (numDims<=2) or 4 (numDims>2) vector "
-           "groups");
-    TDMDescriptor &fd = filledPerMember[i];
-    fd.group0 = di[0];
-    fd.group1 = di[1];
-    if (numDims > 2) {
-      fd.group2 = di[2];
-      fd.group3 = di[3];
-    }
+    assert(di.size() == numGroups &&
+           "descPerMember must hold 2 (numDims<=2) or 4 (numDims>2) groups");
+    filledPerMember[i].assign(di.begin(), di.end());
     fillTDMDescriptor(
         rewriter, loc, typeConverter, elementType,
         SmallVector<int64_t>(blockShape.begin(), blockShape.end()), numWarps,
-        padInterval, padAmount, fd.group0, fd.group1,
-        fd.group2
-            ? std::optional<std::reference_wrapper<Value>>(std::ref(*fd.group2))
-            : std::nullopt,
-        fd.group3
-            ? std::optional<std::reference_wrapper<Value>>(std::ref(*fd.group3))
-            : std::nullopt,
+        padInterval, padAmount, filledPerMember[i],
         SmallVector<Value>(offsetPerMember[i].begin(),
                            offsetPerMember[i].end()),
         dstPtrsPerMember[i], predPerMember[i], multicastMask,
@@ -1582,48 +1522,45 @@ void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
         warpsPerCTA, infoPerMember[i]);
   }
 
-  // Pack selector bits of warpIdShifted into a [0, N) integer.
+  // Anchor warpId on the union i0 and pack selectorBits into a [0, N) selector.
+  auto [_laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  Value warpIdShifted = groupInfo.unionInfo.i0 != 0
+                            ? b.xor_(warpId, b.i32_val(groupInfo.unionInfo.i0))
+                            : warpId;
   Value selectorVal = b.i32_val(0);
-  for (size_t bi = 0; bi < selectorBits.size(); ++bi) {
-    Value bit = b.and_(b.lshr(warpIdShifted, b.i32_val(selectorBits[bi])),
-                       b.i32_val(1));
+  for (size_t bi = 0; bi < groupInfo.selectorBits.size(); ++bi) {
+    Value bit =
+        b.and_(b.lshr(warpIdShifted, b.i32_val(groupInfo.selectorBits[bi])),
+               b.i32_val(1));
     selectorVal = b.or_(selectorVal, b.shl(bit, b.i32_val(bi)));
   }
 
   // Reusable `selectorVal == s` for s in [0, N-1); s = N-1 is the chain's
-  // base case (no compare needed).
+  // base case (no compare needed, hence size N-1).
   SmallVector<Value, 4> selectorEq(N - 1);
   for (size_t s = 0; s + 1 < N; ++s)
     selectorEq[s] = b.icmp_eq(selectorVal, b.i32_val(s));
 
-  // Right-leaning select chain (N-1 `s_cselect_b32` per i32 element);
-  // `field` picks one descriptor group out of a member.
-  auto selectGroup = [&](auto field) -> Value {
-    Value acc = field(filledPerMember[selValToMember[N - 1]]);
+  // Right-leaning select chain per group: g[selValOrder[N-1]], then for
+  // s = N-2..0 select g[selValOrder[s]] when selectorVal == s.
+  SmallVector<Value, 6> args(numGroups);
+  for (size_t g = 0; g < numGroups; ++g) {
+    Value acc = filledPerMember[groupInfo.selValOrder[N - 1]][g];
     for (size_t s = N - 1; s-- > 0;)
-      acc = b.select(selectorEq[s], field(filledPerMember[selValToMember[s]]),
-                     acc);
-    return acc;
-  };
+      acc = b.select(selectorEq[s],
+                     filledPerMember[groupInfo.selValOrder[s]][g], acc);
+    args[g] = acc;
+  }
 
-  Value group0 = selectGroup([](const TDMDescriptor &d) { return d.group0; });
-  Value group1 = selectGroup([](const TDMDescriptor &d) { return d.group1; });
-  Value group2, group3;
   auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
-  if (numDims > 2) {
-    group2 = selectGroup([](const TDMDescriptor &d) { return *d.group2; });
-    group3 = selectGroup([](const TDMDescriptor &d) { return *d.group3; });
-  } else {
-    group2 = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
-    group3 = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
-  }
-  Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
+  while (args.size() < 4)
+    args.push_back(LLVM::ZeroOp::create(rewriter, loc, v4i32Ty));
+  args.push_back(LLVM::ZeroOp::create(rewriter, loc, v8i32Ty)); // group4
+  args.push_back(b.i32_val(auxBits));
   const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
                                      : "llvm.amdgcn.tensor.store.from.lds";
-  LLVM::createLLVMIntrinsicCallOp(
-      rewriter, loc, intrinsicName, {},
-      {group0, group1, group2, group3, group4Zero, b.i32_val(auxBits)});
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {}, args);
 }
 
 SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
@@ -1648,18 +1585,9 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
   Type globalPtrTy = ptr_ty(loc.getContext(), 1);
 
   // Decode TDM descriptor to get the base pointer, shape, and strides.
-  // desc now has 2 (2D) or 4 (3D-5D) vector entries.
-  Value group0 = desc[0];
-  Value group1 = desc[1];
-  std::optional<Value> group2;
-  std::optional<Value> group3;
-  if (numDims > 2) {
-    group2 = desc[2];
-    group3 = desc[3];
-  }
+  // desc has 2 (2D) or 4 (3D-5D) vector entries.
   auto [basePtr, tensorShape, tensorStride] =
-      mlir::LLVM::AMD::decodeTDMDescriptorFull(rewriter, loc, group0, group1,
-                                               group2, group3, numDims);
+      mlir::LLVM::AMD::decodeTDMDescriptorFull(rewriter, loc, desc, numDims);
 
   auto dot64 = [&](ArrayRef<Value> indices, ArrayRef<Value> strides) {
     Value ret = b.i64_val(0);

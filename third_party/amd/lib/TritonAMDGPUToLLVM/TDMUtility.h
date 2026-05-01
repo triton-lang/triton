@@ -25,20 +25,11 @@ struct WarpHintInfo {
 // Decode a verifier-validated `warp_used_hint`.
 WarpHintInfo extractWarpHintInfo(uint32_t hint, int numWarps);
 
-// Internal vector-grouped TDM descriptor (lowering-pass-only; the MLIR-
-// visible struct stays flat {i32 x N} to match the host-side TDMDescriptor
-// in third_party/amd/backend/driver.c).
-//   group0/1: <4 x i32> / <8 x i32> (always)
-//   group2/3: <4 x i32> each (3D-5D only)
-struct TDMDescriptor {
-  Value group0;
-  Value group1;
-  std::optional<Value> group2;
-  std::optional<Value> group3;
-
-  // Flatten to {g0,g1} (2D) or {g0,g1,g2,g3} (3D-5D).
-  SmallVector<Value> getAllGroups() const;
-};
+// TDM descriptor groups (lowering-pass-only; the MLIR-visible struct stays
+// flat {i32 x N} to match the host-side TDMDescriptor in driver.c):
+//   groups[0]/[1]: <4 x i32> / <8 x i32> (always)
+//   groups[2]/[3]: <4 x i32> each (3D-5D only)
+// Size is 2 (1D-2D) or 4 (3D-5D); see unpackTDMDescriptor.
 
 // Unpack the flat {i32 x 12/20} descriptor struct (from convertTensorDescType
 // / host-side TDMDescriptor in driver.c) into 2 or 4 vector groups for
@@ -50,20 +41,18 @@ SmallVector<Value> unpackTDMDescriptor(RewriterBase &rewriter, Location loc,
 SmallVector<Value> scalarizeTDMDescriptor(RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> vectors);
 
-// Create a TDM descriptor. This creates a partially filled descriptor, with
-// shared memory address and pred set to zero. User of the descriptor is
-// expected to fill these fields later.
-// For 1D-2D tensors: returns TDMDescriptor with only group0 and group1
-// For 3D-5D tensors: returns TDMDescriptor with all groups populated
-TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
-                                  const LLVMTypeConverter *typeConverter,
-                                  Type elementType, size_t numDims,
-                                  unsigned padInterval, unsigned padAmount,
-                                  SmallVector<Value> tensorShape,
-                                  SmallVector<Value> tensorStride,
-                                  Value srcPtr);
+// Create a partially filled TDM descriptor (shared address and pred zeroed;
+// caller fills them later).  Returns 2 vector groups for 1D-2D, 4 for 3D-5D.
+SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
+                                       const LLVMTypeConverter *typeConverter,
+                                       Type elementType, size_t numDims,
+                                       unsigned padInterval, unsigned padAmount,
+                                       SmallVector<Value> tensorShape,
+                                       SmallVector<Value> tensorStride,
+                                       Value srcPtr);
 
 // Fill the dst/pred fields of a TDM descriptor for regular load/store (1D-5D).
+// `groups` is 2 (1D-2D) or 4 (3D-5D) vector entries, updated in place.
 // Partitioned dst: `dstPtrs` holds per-partition bases, picked by partitionDim.
 // With `warpHint`, K identity rows are placed at `warpHint->basisBits` and
 // `warpId` is XOR-anchored by `warpHint->i0`; otherwise basis = {0..log2K-1}.
@@ -71,9 +60,7 @@ void fillTDMDescriptor(
     RewriterBase &rewriter, Location loc,
     const LLVMTypeConverter *typeConverter, Type elementType,
     SmallVector<int64_t> blockShape, int numWarps, unsigned padInterval,
-    unsigned padAmount, Value &group0, Value &group1,
-    std::optional<std::reference_wrapper<Value>> group2,
-    std::optional<std::reference_wrapper<Value>> group3,
+    unsigned padAmount, MutableArrayRef<Value> groups,
     SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
     Value multicastMask, Value barrierPtr,
     const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
@@ -140,9 +127,14 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 // To pair an mbarrier with hinted partial copies, bracket the fusable
 // batch with an mbarrier-carrying singleton.
 struct TDMMergeGroupInfo {
-  SmallVector<Operation *> members;  // program order; |members| = N
-  uint32_t unionHint = 0;            // bit-OR of member hints; itself a coset
-  WarpHintInfo unionInfo;            // decoded `unionHint` vs module numWarps
+  SmallVector<Operation *> members;       // program order; |members| = N
+  WarpHintInfo unionInfo;                  // decoded union of member hints
+  // Selector basis = unionInfo.basisBits \ first member's basisBits.  log2(N)
+  // warp-id bit positions, used by emitTDMLoadStoreMerged to pick a member.
+  SmallVector<int32_t, 5> selectorBits;
+  // selValOrder[s] = program-order index in `members` of the member whose
+  // selector projection equals s.  Permutation of [0, N).
+  SmallVector<unsigned, 4> selValOrder;
 };
 
 // Walk `mod` and identify all merge groups; ops not in any group are

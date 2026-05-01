@@ -115,15 +115,12 @@ struct MakeTensorDescOpConversion
     bool isRowMajor = sharedOrder[0] == (sharedOrder.size() - 1);
     // Create TDM descriptor for 2D-5D tensors.  Per-instruction fields
     // (pred, lds addr, tile_dim*) are filled in at each TDM op site.
-    auto tdmDesc = LLVM::AMD::createTDMDescriptor(
+    // Returns 2 (2D) or 4 (3D-5D) vector groups; scalarize into 12 or 20
+    // i32 scalars to match the flat MLIR struct type from
+    // `convertTensorDescType` (matches the host-side TDMDescriptor ABI).
+    SmallVector<Value> groups = LLVM::AMD::createTDMDescriptor(
         rewriter, loc, getTypeConverter(), elementType, blockShape.size(),
         padInterval, padAmount, tensorShape, tensorStride, basePtr);
-
-    // `getAllGroups()` returns 2 (2D) or 4 (3D-5D) vector Values; scalarize
-    // them into 12 or 20 i32 scalars to match the flat MLIR struct type
-    // returned by `convertTensorDescType` (which matches the host-side
-    // TDMDescriptor ABI).
-    SmallVector<Value> groups = tdmDesc.getAllGroups();
     SmallVector<Value> scalars =
         mlir::LLVM::AMD::scalarizeTDMDescriptor(rewriter, loc, groups);
 
