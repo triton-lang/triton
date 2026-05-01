@@ -586,10 +586,10 @@ void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
 }
 
 namespace {
-// Validate `warp_used_hint`: axis-aligned coset, K = popcount(hint) a power
-// of two with 1 <= K <= num_warps, no bits >= num_warps. Returns nullopt on
-// success, else an error string. Encoding-specific rules (e.g.
-// PartitionedSharedEncoding) live in verify() since they need the type.
+// Validate `warp_used_hint` against the axis-aligned hint rule (see
+// TritonAMDGPUOps.td).  Returns nullopt on success, else an error string.
+// Encoding-specific rules (e.g. PartitionedSharedEncoding) live in
+// verify() since they need the result type.
 std::optional<std::string> validateWarpUsedHint(uint32_t hint,
                                                 int64_t numWarps) {
   if (!llvm::isPowerOf2_64(numWarps))
@@ -620,11 +620,11 @@ std::optional<std::string> validateWarpUsedHint(uint32_t hint,
                          K, hint)
         .str();
 
-  // Axis-aligned coset check.  Anchor the active set at i0 = lsb(hint)
-  // and OR the shifted warp indices: `support` is then the bits that
-  // ever vary across the active set.  Legal iff that count equals
-  // log2(K) -- pigeonhole forces the K shifted indices to hit every
-  // subset of `support`, i.e. the active set is a single mask check.
+  // Axis-aligned check.  Anchor at i0 = lsb(hint) and OR the shifted
+  // warp indices: `support` is the bits that vary across the active
+  // set.  Legal iff popcount(support) == log2(K) -- pigeonhole forces
+  // the K shifted indices to hit every subset of `support`, i.e. the
+  // active set is selectable by a single mask check.
   unsigned i0 = llvm::countr_zero(hint);
   uint32_t support = 0;
   for (uint32_t mask = hint; mask != 0; mask &= mask - 1) {
@@ -635,9 +635,9 @@ std::optional<std::string> validateWarpUsedHint(uint32_t hint,
   unsigned spanned = static_cast<unsigned>(llvm::popcount(support));
   if (spanned != logK)
     return llvm::formatv(
-               "warp_used_hint = {0:x} is not an axis-aligned coset: "
+               "warp_used_hint = {0:x} is not axis-aligned: "
                "K = {1} active warps span {2} warpId bit positions, but "
-               "a coset spans log2(K) = {3}",
+               "an axis-aligned hint spans exactly log2(K) = {3}",
                hint, K, spanned, logK)
         .str();
 

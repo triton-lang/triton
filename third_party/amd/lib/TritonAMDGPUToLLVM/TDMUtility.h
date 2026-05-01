@@ -42,10 +42,7 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // Fill the dst/pred fields of a TDM descriptor for regular load/store (1D-5D).
 // `groups` is 2 (1D-2D) or 4 (3D-5D) vector entries, updated in place.
 // Partitioned dst: `dstPtrs` holds per-partition bases, picked by partitionDim.
-// With `warpUsedHint`, the K identity rows of the warp sublayout are placed
-// at the basis bit positions of the (verifier-validated) axis-aligned coset,
-// and `warpId` is XOR-anchored by `i0 = lsb(hint)`; without a hint the basis
-// defaults to the lowest log2(K) bits.
+// `warpUsedHint`: see TritonAMDGPUOps.td for the axis-aligned hint rule.
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> blockShape, int numWarps,

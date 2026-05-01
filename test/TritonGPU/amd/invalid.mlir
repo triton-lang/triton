@@ -310,7 +310,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %pred: i32
   ) {
     %c0 = arith.constant 0 : i32
-    // expected-error @+1 {{is not an axis-aligned coset}}
+    // expected-error @+1 {{is not axis-aligned}}
     %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_used_hint = 105 : i32} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
     tt.return
   }

@@ -156,12 +156,12 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
         warp_used_hint (int, optional): Bitmask selecting which warps issue
             the TDM copy (bit ``n`` => warp ``n``); cleared warps become HW
-            no-ops.  Doesn't affect the data in ``dest``, only work split.
-            Restricted to *axis-aligned cosets*: active set
-            ``{ i0 ^ x : x in span(basis_bits) }`` with ``K = popcount(hint)``
-            a power of two, ``1 <= K <= num_warps``.  Pass binary literals,
-            e.g. ``0b00001111`` (warps 0..3), ``0b11110000`` (warps 4..7),
-            ``0b01010101`` (stride-2 from warp 0).  Omit / ``None`` =
+            no-ops.  Doesn't affect the data in ``dest``, only the work split.
+            Must be axis-aligned (the K = popcount(hint) active warps share
+            fixed values on some warpId bits and vary on the rest); see
+            ``AsyncTDMCopyGlobalToLocalOp`` in ``TritonAMDGPUOps.td`` for
+            the rule.  Examples: ``0b00001111`` (warps 0..3), ``0b11110000``
+            (warps 4..7), ``0b01010101`` (warps 0,2,4,6).  Omit / ``None`` =
             all warps participate; explicit ``0`` is rejected by the verifier.
         cache_modifier (str, optional): Cache behavior.
     """

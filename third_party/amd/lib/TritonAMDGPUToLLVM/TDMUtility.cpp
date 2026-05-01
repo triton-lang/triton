@@ -542,10 +542,9 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
 }
 
 // Fill a TDM descriptor for regular load/store (1D-5D).  With `warpUsedHint`
-// (verifier-validated axis-aligned coset), the K identity rows of the warp
-// sublayout go at the basis bit positions of the coset and `warpId` is
-// XOR-anchored by `i0 = lsb(hint)`; tile_dim* are re-encoded against K-based
-// `warpsPerCTA`.  Without a hint, basis defaults to {0..log2K-1}.
+// (axis-aligned, see TritonAMDGPUOps.td), tile_dim* are re-encoded against
+// K-based `warpsPerCTA` and `warpId` is XOR-anchored by `lsb(hint)`; without
+// a hint, basis defaults to {0..log2K-1}.
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> shapePerCTA, int numWarps,

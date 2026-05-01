@@ -9,19 +9,47 @@ Worked example: `vector_add_tdm_kernel` issues two independent partial
 TDM copies into distinct shared buffers and then sums them.
 
 ================================================================
-Manual: terminology
+The rule: `H` must be axis-aligned
 ================================================================
 
-  * **K** = `popcount(hint)` -- number of active warps.  Power of two,
-    `1 <= K <= num_warps`.
-  * **i0** = smallest active warp INDEX (`countr_zero(hint)`).
-  * **basis bits** = set bits of `support = OR over s in S of (s XOR i0)`.
-    They are bit positions; the basis vectors are `1 << basis_bit`.
-  * **axis-aligned coset** = active set written as `i0 XOR
-    span(basis_bits)`.  Equivalent to "passes the verifier".
+`H` is legal iff its active warps share fixed values on some warpId
+bit positions and vary freely on the others.  Equivalently: pick
+which warpId bits are free, pin the others to fixed values; the
+active warps are exactly those whose warpId matches the pinned bits.
+K = popcount(H) is therefore a power of two (= 2^(number of free
+bits)) with `1 <= K <= num_warps`.
+
+For full details and rationale, see `AsyncTDMCopyGlobalToLocalOp`
+in `third_party/amd/include/Dialect/TritonAMDGPU/IR/TritonAMDGPUOps.td`.
 
 ================================================================
-Manual: when to reach for `warp_used_hint`
+Cookbook: legal 8-warp hints
+================================================================
+
+Bit 7 on the left, bit 0 on the right.
+
+  +-------------+---+--------------------------------------------+
+  | Bitmask     | K | Active warps      (pinned bits)            |
+  +-------------+---+--------------------------------------------+
+  | 0b00001111  | 4 | {0,1,2,3}         (bit 2 = 0)              |
+  | 0b11110000  | 4 | {4,5,6,7}         (bit 2 = 1)              |
+  | 0b01010101  | 4 | {0,2,4,6}         (bit 0 = 0)              |
+  | 0b10101010  | 4 | {1,3,5,7}         (bit 0 = 1)              |
+  | 0b00110011  | 4 | {0,1,4,5}         (bit 1 = 0)              |
+  | 0b00000011  | 2 | {0,1}             (bits 1,2 = 0)           |
+  | 0b00010000  | 1 | {4}               (single warp)            |
+  +-------------+---+--------------------------------------------+
+
+Rejected patterns:
+
+  +-------------+----------------------------------------------------+
+  | 0           | rejected: must select at least one warp; pass None |
+  | 0b00000111  | rejected: K=3 is not a power of two                |
+  | 0b01101001  | rejected: warps {0,3,5,6} are not axis-aligned     |
+  +-------------+----------------------------------------------------+
+
+================================================================
+When to reach for `warp_used_hint`
 ================================================================
 
 Default `async_load(desc, idx, buf)` slices the tile across all
@@ -30,46 +58,14 @@ Default `async_load(desc, idx, buf)` slices the tile across all
   * Free warps for unrelated work when the tile is small.
   * Partition warps by role (producer/consumer pipelines).
 
-`H` is an `i32` bitmask: bit `i` set => warp `i` participates.  Omit
-or pass `None` for "all warps"; an explicit `warp_used_hint=0` is
-rejected by the verifier.
+Omit or pass `None` for "all warps"; an explicit `warp_used_hint=0`
+is rejected by the verifier.
 
 ================================================================
-Manual: constructing a legal hint
+Constructing a hint generically
 ================================================================
 
-The verifier (`validateWarpUsedHint` in `Dialect.cpp`) requires the
-active set `S = { i : bit i of H is 1 }` to be an *axis-aligned coset*:
-
-  - `K = popcount(H)` is a power of two with `1 <= K <= num_warps`.
-  - `S` shifted by its anchor (smallest active index `i0`) is an
-    F_2-linear subspace whose basis vectors are single powers of two.
-
-Pass the hint as a binary-literal `int`.  Cookbook of legal 8-warp
-hints (bit 7 on the left, bit 0 on the right):
-
-  +-------------+---+----+--------------------------------------------+
-  | Bitmask     | K | i0 | Active warps / shape                       |
-  +-------------+---+----+--------------------------------------------+
-  | 0b00001111  | 4 |  0 | warps {0,1,2,3}    -- low 4 warps          |
-  | 0b11110000  | 4 |  4 | warps {4,5,6,7}    -- high 4 warps         |
-  | 0b01010101  | 4 |  0 | warps {0,2,4,6}    -- every other, low i0  |
-  | 0b10101010  | 4 |  1 | warps {1,3,5,7}    -- every other, high i0 |
-  | 0b00110011  | 4 |  0 | warps {0,1,4,5}    -- two K=2 lanes paired |
-  | 0b00000011  | 2 |  0 | warps {0,1}        -- low 2 warps          |
-  | 0b00010000  | 1 |  4 | warps {4}          -- single warp          |
-  +-------------+---+----+--------------------------------------------+
-
-Common rejected patterns (DO NOT pass these):
-
-  +-------------+----------------------------------------------------+
-  | 0           | rejected: must select at least one warp; pass None |
-  | 0b00000111  | rejected: K=3 is not a power of two                |
-  | 0b00010001  | rejected: warps 0 and 4 cannot form a coset alone  |
-  +-------------+----------------------------------------------------+
-
-If you need to write a hint generically (e.g. parameterised on the
-number of active warps `K`), the formulas are:
+If `K` (number of active warps) is parameterised:
 
   * "first K warps":              `(1 << K) - 1`
   * "K warps starting at off":    `((1 << K) - 1) << off`
