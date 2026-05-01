@@ -492,12 +492,10 @@ applyLinearLayoutVec(Location loc, RewriterBase &rewriter,
 // Refactored emitIndices function using applyLinearLayoutVec
 SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-            Attribute layout, RankedTensorType type, bool withCTAOffset) {
+            const LinearLayout &ll, RankedTensorType type, bool withCTAOffset) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
-
-  LinearLayout ll = triton::gpu::toLinearLayout(shape, layout);
 
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
@@ -533,6 +531,105 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   }
 
   return ret;
+}
+
+SmallVector<SmallVector<Value>>
+emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+            Attribute layout, RankedTensorType type, bool withCTAOffset) {
+  LinearLayout ll = triton::gpu::toLinearLayout(type.getShape(), layout);
+  return emitIndices(loc, rewriter, target, ll, type, withCTAOffset);
+}
+
+SmallVector<Value> computeLocalPtrs(Location loc,
+                                    triton::gpu::MemDescType memDescTy,
+                                    SharedMemoryObject smemObj, Type llvmElemTy,
+                                    ArrayRef<Value> idxValues,
+                                    ArrayRef<SmallVector<Value>> coords,
+                                    unsigned axis, RewriterBase &rewriter) {
+  MLIRContext *ctx = memDescTy.getContext();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  // Get the shared memory layout (linear component for padded layouts)
+  auto sharedLayout = triton::gpu::isPaddedEncoding(memDescTy.getEncoding())
+                          ? paddedLinearLayout(memDescTy)
+                          : toLinearLayout(memDescTy);
+  LinearLayout invSharedLayout = sharedLayout.invert();
+
+  // Get layout dimension names for all dims
+  SmallVector<StringAttr> allDims;
+  for (unsigned dim = 0, rank = memDescTy.getRank(); dim < rank; ++dim)
+    allDims.push_back(str_attr("dim" + Twine(dim)));
+
+  auto kOffset = str_attr("offset");
+  // Get the subslice affine offset (non-zero for memdesc subslices)
+  Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
+  auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+
+  SmallVector<Value> ptrs;
+  ptrs.reserve(coords.size());
+
+  for (auto [i, idxVal] : llvm::enumerate(idxValues)) {
+    Value idx = idxVal;
+    unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
+    // Convert index to i32 if needed
+    if (idxWidth > 32) {
+      idx = b.trunc(i32_ty, idx);
+    } else if (idxWidth < 32) {
+      idx = b.zext(i32_ty, idx);
+    }
+
+    // Copy coordinates and replace the axis coordinate with the index value
+    SmallVector<Value> indices(coords[i]);
+    indices[axis] = idx;
+
+    // Apply inverted shared layout to compute offset
+    SmallVector<std::pair<StringAttr, Value>> inputs;
+    for (unsigned dim = 0; dim < indices.size(); ++dim)
+      inputs.push_back({allDims[dim], indices[dim]});
+
+    auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
+
+    // Extract the offset value
+    Value offset = nullptr;
+    for (auto [name, value] : outputs) {
+      if (name == kOffset) {
+        offset = value;
+        break;
+      }
+    }
+    assert(offset && "expected offset output from inverted shared layout");
+
+    // For subslices, the physical offset is computed as:
+    //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
+    //
+    // We use XOR for consistency with lowerLdSt. MemDescSubsliceOp::verify()
+    // enforces:
+    // 1. Subslice offsets must be multiples of the tile size
+    // 2. Subslice offsets must map to power-of-2 physical offsets
+    //
+    // These constraints ensure the bit ranges of L⁻¹(coords) and
+    // L⁻¹(subslice_offset) are disjoint, so XOR and addition are equivalent.
+    offset = b.xor_(offset, affineOffset);
+
+    // Add padding offset for padded layouts (non-linear component)
+    Value ptr;
+    if (triton::gpu::isPaddedEncoding(memDescTy.getEncoding())) {
+      // Convert offset to bytes for padding calculation
+      Value offsetBytes = b.mul(offset, b.i32_val(bitwidth / 8));
+      auto shifts = getPaddedSharedShifts(memDescTy.getEncoding(), bitwidth,
+                                          /*offsetInBytes=*/true);
+      // GEP in bytes: base + offset*elemSize + padOffset
+      Value totalOffset = applyPadding(loc, rewriter, offsetBytes, shifts);
+      ptr = b.gep(smemObj.getBase().getType(), i8_ty, smemObj.getBase(),
+                  totalOffset);
+    } else {
+      ptr = b.gep(smemObj.getBase().getType(), llvmElemTy, smemObj.getBase(),
+                  offset);
+    }
+    ptrs.push_back(ptr);
+  }
+
+  return ptrs;
 }
 
 SmallVector<std::pair<unsigned, unsigned>>

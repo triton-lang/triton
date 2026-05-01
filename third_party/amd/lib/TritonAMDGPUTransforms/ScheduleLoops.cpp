@@ -543,7 +543,7 @@ void pipelineLoop(scf::ForOp forOp, int numStages) {
     loadInfo.distToUse = distance;
     loadInfo.use = use;
 
-    auto useTDM = isa<tt::DescriptorLoadOp>(load);
+    auto useTDM = isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(load);
     if (useTDM) {
       loadToInfo[load] = loadInfo;
       continue;
