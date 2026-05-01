@@ -232,8 +232,6 @@ public:
       auto ptrTy = triton::getPointerType(storageElemTy);
       auto allocOp = createThirdPartyScratchAlloc(rewriter, loc, ptrTy,
                                                   sizeInBytes, alignment);
-      allocOp->setDiscardableAttr("tt.divisibility",
-                                  rewriter.getI64IntegerAttr(alignment));
       Value ptr = allocOp.getResult();
 
       if (Value init = alloc.getSrc()) {
@@ -383,8 +381,6 @@ Value createScratchAndStore(PatternRewriter &rewriter, Location loc, Value val,
   auto ptrTy = triton::getPointerType(storageTy.getElementType());
   auto allocOp = createThirdPartyScratchAlloc(rewriter, loc, ptrTy, sizeInBytes,
                                               alignment);
-  allocOp->setDiscardableAttr("tt.divisibility",
-                              rewriter.getI64IntegerAttr(alignment));
   if (!storeFpSanScratchMemory(rewriter, loc, allocOp.getResult(), val,
                                tensorTy))
     return Value();
@@ -837,8 +833,6 @@ createOperandScratch(PatternRewriter &rewriter, Location loc,
       getScratchStorageElementType(memTy.getElementType()));
   auto allocOp = createThirdPartyScratchAlloc(rewriter, loc, ptrTy, sizeInBytes,
                                               alignment);
-  allocOp->setDiscardableAttr("tt.divisibility",
-                              rewriter.getI64IntegerAttr(alignment));
   Value ptr = allocOp.getResult();
   if (!storeFpSanScratchMemory(rewriter, loc, ptr, fullVal, tensorTy))
     return std::nullopt;
