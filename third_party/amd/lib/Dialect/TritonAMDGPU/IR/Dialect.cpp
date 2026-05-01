@@ -688,27 +688,23 @@ AsyncTDMCopyGlobalToLocalOp::validateWarpUsedHint(uint32_t hint,
   if (hint == 0)
     return std::string("warp_used_hint must have at least one bit set");
 
-  unsigned K = llvm::popcount(hint);
-  if (!llvm::isPowerOf2_32(K))
-    return llvm::formatv("popcount(warp_used_hint) = {0} must be a power "
-                         "of two (got hint {1:x})",
-                         K, hint)
-        .str();
-
-  if (static_cast<int64_t>(K) > numWarps)
-    return llvm::formatv("warp_used_hint selects K = {0} active warps but "
-                         "num_warps = {1}",
-                         K, numWarps)
-        .str();
-
-  // Bits above num_warps - 1 must be zero (checked after K so an
-  // oversized K reports the more specific "K vs num_warps" message).
+  // Bits above num_warps - 1 must be zero (no warp at those positions).
+  // Checked before the K-power-of-two check so out-of-range bits get the
+  // more specific message; afterwards K = popcount(hint) <= numWarps holds
+  // automatically, so no separate "K vs num_warps" check is needed.
   uint32_t numWarpsMask =
       (numWarps >= 32) ? ~uint32_t{0} : ((uint32_t{1} << numWarps) - 1);
   if ((hint & ~numWarpsMask) != 0)
     return llvm::formatv("warp_used_hint = {0:x} sets bits beyond "
                          "num_warps = {1}",
                          hint, numWarps)
+        .str();
+
+  unsigned K = llvm::popcount(hint);
+  if (!llvm::isPowerOf2_32(K))
+    return llvm::formatv("popcount(warp_used_hint) = {0} must be a power "
+                         "of two (got hint {1:x})",
+                         K, hint)
         .str();
 
   // v1 axis-aligned coset check: with i0 = lsb(hint),

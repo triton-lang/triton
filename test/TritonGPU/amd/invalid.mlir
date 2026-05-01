@@ -329,14 +329,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 
-  // K exceeds num_warps (8).  0xFFFF asks for K=16.
+  // hint sets all 16 low bits but num_warps = 8 so bits 8..15 don't
+  // correspond to any warp.  Reported by the bits-beyond check.
   tt.func @warp_used_hint_exceeds_num_warps(
     %tensorDesc: !tt.tensordesc<256x64xf16>,
     %memDesc: !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>,
     %pred: i32
   ) {
     %c0 = arith.constant 0 : i32
-    // expected-error @+1 {{selects K = 16 active warps but num_warps = 8}}
+    // expected-error @+1 {{warp_used_hint = ffff sets bits beyond num_warps = 8}}
     %0 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0, %c0] into %memDesc, pred = %pred {warp_used_hint = 65535 : i32} : !tt.tensordesc<256x64xf16> -> !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>
     tt.return
   }
