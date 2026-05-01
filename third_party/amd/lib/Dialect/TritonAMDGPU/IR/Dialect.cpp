@@ -620,10 +620,11 @@ std::optional<std::string> validateWarpUsedHint(uint32_t hint,
                          K, hint)
         .str();
 
-  // Axis-aligned coset check: with i0 = lsb(hint),
-  // support = OR_{w in S} (w XOR i0), legal iff popcount(support) == log2(K)
-  // (sufficient by pigeonhole: K values (w ^ i0) are distinct subsets of
-  // `support`, of which there are 2^log2K = K).  XOR is over warp INDICES.
+  // Axis-aligned coset check.  Anchor the active set at i0 = lsb(hint)
+  // and OR the shifted warp indices: `support` is then the bits that
+  // ever vary across the active set.  Legal iff that count equals
+  // log2(K) -- pigeonhole forces the K shifted indices to hit every
+  // subset of `support`, i.e. the active set is a single mask check.
   unsigned i0 = llvm::countr_zero(hint);
   uint32_t support = 0;
   for (uint32_t mask = hint; mask != 0; mask &= mask - 1) {
@@ -631,14 +632,13 @@ std::optional<std::string> validateWarpUsedHint(uint32_t hint,
     support |= static_cast<uint32_t>(w ^ i0);
   }
   unsigned logK = llvm::Log2_32(K);
-  if (static_cast<unsigned>(llvm::popcount(support)) != logK)
+  unsigned spanned = static_cast<unsigned>(llvm::popcount(support));
+  if (spanned != logK)
     return llvm::formatv(
                "warp_used_hint = {0:x} is not an axis-aligned coset: "
-               "after offsetting by i0 = {1}, the spanned basis bit "
-               "positions (mask {2:x}, popcount {3}) do not have popcount "
-               "log2(K) = {4}; diagonal/parity patterns are not supported",
-               hint, i0, support,
-               static_cast<unsigned>(llvm::popcount(support)), logK)
+               "K = {1} active warps span {2} warpId bit positions, but "
+               "a coset spans log2(K) = {3}",
+               hint, K, spanned, logK)
         .str();
 
   return std::nullopt;

@@ -596,8 +596,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
-  // Anchor warpId at i0 = lsb(hint) (no-op for i0==0 / no hint) so the i-th
-  // active warp aligns with the i-th identity row of the sublayout.
+  // XOR warpId by i0 = lsb(hint) so the smallest active warp gets tile
+  // offset 0; the rest follow via the warp sublayout.
   Value warpIdShifted = warpId;
   if (warpUsedHint) {
     uint32_t i0 = llvm::countr_zero(*warpUsedHint);
