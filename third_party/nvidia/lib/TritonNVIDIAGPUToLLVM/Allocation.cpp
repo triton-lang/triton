@@ -77,6 +77,15 @@ getNvidiaAllocationAnalysisScratchSizeFn(TargetInfoBase &targetInfo) {
       auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy, targetInfo);
       return elems * getBitwidth(srcTy) / 8;
     }
+    if (auto ws = dyn_cast<triton::gpu::WarpSpecializeOp>(op)) {
+      unsigned captureSize = defaultAllocationAnalysisScratchSizeFn(op);
+      // ConSan adds captures after allocation; reserve space pre-computed by
+      // the common TritonInstrumentPrepareConSanCaptures pass.
+      if (auto extra =
+              ws->getAttrOfType<IntegerAttr>("consan.extra_capture_bytes"))
+        captureSize += extra.getInt();
+      return captureSize;
+    }
     return defaultAllocationAnalysisScratchSizeFn(op);
   };
   return allocation;
