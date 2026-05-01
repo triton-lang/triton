@@ -404,6 +404,8 @@ def _p_matmul(
                     w_scales = tl.reshape(w_scales, *w_scales.shape[1:])
                     num_warps: tl.constexpr = tl.extra.cuda.num_warps()
                     w_scales = unswizzle_mxfp4_scale_hopper(w_scales, mx_axis=1, num_warps=num_warps)
+                    mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
+                    w_scales = tl.where(mask_k_scale[None, :], w_scales, 0)
                 else:
                     w_scales = WMxScale.load([off_w_z, off_k_mx, off_n])
                     w_scales = tl.reshape(w_scales, *w_scales.shape[1:]).T
