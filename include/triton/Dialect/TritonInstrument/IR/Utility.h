@@ -41,8 +41,9 @@ enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
 // writeVisibility + readVisibility per active memory type.
 constexpr int kCapturesPerMemType = 2;
 
-// barrierStates + waiting + barrierWriteRecipients (only when barriers exist).
-constexpr int kBarrierBaseCaptures = 3;
+// barrierStates + waiting + activeMasks + barrierWriteRecipients (only when
+// barriers exist).
+constexpr int kBarrierBaseCaptures = 4;
 
 // writeTracking + readTracking per active memory type (only when barriers
 // exist and the memory type has buffers).
@@ -210,6 +211,12 @@ struct AuxDataMap {
   // Deadlock-detection bitfield. Each base thread uses two bits: waiting flag
   // and stored phase.
   RegionToValueMap waiting;
+
+  // scratch, <C x i32>
+  // Deadlock-detection bitfield. Outside warp specialization this is 1; inside
+  // it, set bits denote base threads that have not yet reached their
+  // terminator.
+  RegionToValueMap activeMasks;
 
   // True when a memory type has cross-buffer aliasing and therefore requires
   // aliasMatrices to make visibility and commit checks conservative.

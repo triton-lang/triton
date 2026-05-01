@@ -89,10 +89,18 @@ public:
   // clearWaiting: clear the waiting flag and stored phase for the base thread.
   void createClearWaitingCall(ImplicitLocOpBuilder &b, Value mbar, int thread,
                               Value pred, Operation *insertPoint);
-  // checkAllActiveWaiting: assert that not all active threads are waiting on
-  // matching barrier phases.
-  void createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b, int activeMask,
-                                       Value pred, Operation *insertPoint);
+  // setActiveMask: reset the live base-thread mask for the next
+  // warp-specialize region.
+  void createSetActiveMaskCall(ImplicitLocOpBuilder &b, int activeMask,
+                               Operation *insertPoint);
+  // retireActiveThread: remove a base thread from the live mask after it
+  // reaches its warp-specialize terminator.
+  void createRetireActiveThreadCall(ImplicitLocOpBuilder &b, int thread,
+                                    Operation *insertPoint);
+  // checkAllActiveWaiting: assert that not all unfinished threads across the
+  // cluster are waiting on matching barrier phases.
+  void createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b, Value pred,
+                                       Operation *insertPoint);
   // verifyBarrierCanInit: ensure the barrier is currently invalidated before
   // initializing it again.
   void createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b, Value mbar,
