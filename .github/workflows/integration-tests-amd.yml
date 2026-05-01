@@ -206,10 +206,10 @@ jobs:
           rm -rf ~/.triton/cache
           rm -rf ~/.ccache
 
-  integration-tests-amd-rocm712:
+  proton-tests-amd-rocm712:
     if: ${{ always() && github.repository == 'triton-lang/triton' }}
     needs: integration-tests-amd
-    name: integration-tests-amd (gfx950-rocm712)
+    name: proton-tests-amd (gfx950-rocm712)
     runs-on: ["amd-gfx950"]
     timeout-minutes: 25
     env:
@@ -288,12 +288,6 @@ jobs:
           make dev-install
       - name: Print ccache stats
         run: ccache --print-stats
-      - name: Run lit tests
-        if: ${{ false }}
-        run: make test-lit
-      - name: Run C++ unittests
-        if: ${{ false }}
-        run: make test-cpp
       - name: Run Proton tests
         run: |
           unset HIP_VISIBLE_DEVICES
