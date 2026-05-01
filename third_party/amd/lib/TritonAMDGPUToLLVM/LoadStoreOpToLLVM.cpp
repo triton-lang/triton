@@ -1242,11 +1242,11 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         triton::gpu::getShapePerCTA(encoding, tensorDescTy.getShape());
 
     if (inMergeGroup) {
-      // Fetch per-member operands via `getRemappedValue` (returns
-      // adaptor's values for the current op) and insert the fused emit
-      // at the last member, so any pure op between members dominates
-      // operands the fused emit uses.  Hints are read inside
-      // `emitTDMLoadStoreMerged`; rule 2 guarantees no mbarriers.
+      // `group.members` is in selector order (members[s] = wave with
+      // selectorVal == s); we collect operands in that same order so
+      // `*PerMember[i]` lines up with the i-th selector slot in the
+      // fused emit.  Hints are read inside `emitTDMLoadStoreMerged`;
+      // rule 2 guarantees no mbarriers.
       const auto &group = mergeIt->second;
       size_t numMembers = group.members.size();
 
@@ -1274,10 +1274,11 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       }
 
       // Rule 7: members share `cache`, so the current op's auxBits applies
-      // to the whole group.
+      // to the whole group.  Anchor at the program-order last member so any
+      // pure ops between members dominate the fused intrinsic.
       auto mergedAuxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
           op.getCache(), /*isLoad*/ true, targetInfo);
-      rewriter.setInsertionPoint(group.members.back());
+      rewriter.setInsertionPoint(group.lastInProgramOrder);
       mlir::LLVM::AMD::emitTDMLoadStoreMerged(
           rewriter, loc, getTypeConverter(), descPerMember, shapePerCTA,
           numWarps, padInterval, padAmount, offsetPerMember, dstPtrsPerMember,
@@ -1289,7 +1290,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       return success();
     }
 
-    // Singleton path: lowered (post-type-conversion) operands -> emitTDMLoadStore.
+    // Singleton path: lowered (post-type-conversion) operands ->
+    // emitTDMLoadStore.
     SmallVector<Value> desc =
         mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, adaptor.getDesc());
 

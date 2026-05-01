@@ -316,8 +316,8 @@ decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc,
   // 5th dimension from group3 if present
   if (numDims == 5) {
     // tensor_dim4 is encoded across group3[1] and group3[2]
-    Value tensorDim4Low = b.and_(
-        b.lshr(vecGet(b, groups[3], 1), b.i32_val(16)), b.i32_val(0xFFFF));
+    Value tensorDim4Low = b.and_(b.lshr(vecGet(b, groups[3], 1), b.i32_val(16)),
+                                 b.i32_val(0xFFFF));
     Value tensorDim4High = b.and_(vecGet(b, groups[3], 2), b.i32_val(0xFFFF));
     tensorShape[0] = b.or_(tensorDim4Low, b.shl(tensorDim4High, b.i32_val(16)));
   }
@@ -1329,13 +1329,16 @@ bool canMergeWith(TDMCopyGlobalToLocalOp first,
   return firstK == candK;
 }
 
-// Decode `selectorBits` and `selValOrder` for a merge group from member hints.
-// `selectorBits` = unionInfo.basisBits \ first member's basisBits; the merge
-// emit packs warpId on these bits to pick a member.  `selValOrder[s]` is the
-// program-order index of the member whose i0-delta projects to s.
+// Compute `selectorBits` and reorder `info.members` into selector order so
+// `members[s]` is the member whose hint projects to selector value s.
+// `selectorBits` = unionInfo.basisBits \ first member's basisBits.
+// `info.members` is initially in program order; `lastInProgramOrder` is
+// captured before the reorder.  `hints[i]` corresponds to the program-order
+// member at info.members[i] on entry.
 void deriveSelectorOrder(TDMMergeGroupInfo &info, ArrayRef<uint32_t> hints,
                          int numWarps) {
   size_t N = hints.size();
+  assert(info.members.size() == N);
   WarpHintInfo firstInfo = extractWarpHintInfo(hints.front(), numWarps);
   for (int32_t bit : info.unionInfo.basisBits)
     if (!llvm::is_contained(firstInfo.basisBits, bit))
@@ -1343,7 +1346,10 @@ void deriveSelectorOrder(TDMMergeGroupInfo &info, ArrayRef<uint32_t> hints,
   assert(info.selectorBits.size() == llvm::Log2_32(static_cast<unsigned>(N)) &&
          "selector bits must enumerate the log2(N) per-wave choices");
 
-  info.selValOrder.assign(N, ~0u);
+  info.lastInProgramOrder = info.members.back();
+
+  // Reorder members: place each program-order member at its selector slot.
+  SmallVector<Operation *> reordered(N, nullptr);
   for (size_t i = 0; i < N; ++i) {
     uint32_t i0_i = static_cast<uint32_t>(llvm::countr_zero(hints[i]));
     uint32_t delta = i0_i ^ info.unionInfo.i0;
@@ -1351,10 +1357,11 @@ void deriveSelectorOrder(TDMMergeGroupInfo &info, ArrayRef<uint32_t> hints,
     for (size_t bi = 0; bi < info.selectorBits.size(); ++bi)
       if ((delta >> info.selectorBits[bi]) & 1u)
         selVal |= 1u << bi;
-    assert(selVal < N && info.selValOrder[selVal] == ~0u &&
+    assert(selVal < N && reordered[selVal] == nullptr &&
            "members must map injectively onto selector values");
-    info.selValOrder[selVal] = static_cast<unsigned>(i);
+    reordered[selVal] = info.members[i];
   }
+  info.members = std::move(reordered);
 }
 
 void emitMergeGroup(MutableArrayRef<Operation *> batch, int numWarps,
@@ -1449,7 +1456,7 @@ computeTDMMergeGroups(ModuleOp mod) {
       }
       if (isMemoryEffectFree(&op))
         continue; // pure op (arith/index math) threads through.
-      flush();   // side-effecting op (async_wait, barrier, ...).
+      flush();    // side-effecting op (async_wait, barrier, ...).
     }
     flush();
   }
@@ -1473,9 +1480,9 @@ void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
   assert(N >= 2 && llvm::isPowerOf2_64(N) && "merge group size invariant");
   assert(descPerMember.size() == N && offsetPerMember.size() == N &&
          dstPtrsPerMember.size() == N && predPerMember.size() == N);
-  assert(groupInfo.selValOrder.size() == N &&
-         groupInfo.selectorBits.size() == llvm::Log2_32(static_cast<unsigned>(N)) &&
-         "selector metadata size mismatch");
+  assert(groupInfo.selectorBits.size() ==
+             llvm::Log2_32(static_cast<unsigned>(N)) &&
+         "selectorBits must enumerate the log2(N) per-wave choices");
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   size_t numDims = blockShape.size();
@@ -1490,8 +1497,8 @@ void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
     auto hintAttr = memberOp.getWarpUsedHintAttr();
     assert(hintAttr && "merge member must carry a warp_used_hint");
     assert(!memberOp.getBarrier() && "merge member must not carry an mbarrier");
-    infoPerMember.push_back(
-        extractWarpHintInfo(static_cast<uint32_t>(hintAttr.getInt()), numWarps));
+    infoPerMember.push_back(extractWarpHintInfo(
+        static_cast<uint32_t>(hintAttr.getInt()), numWarps));
   }
 
   // Use K_member (uniform across members), not K_union, so each member's
@@ -1541,14 +1548,14 @@ void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
   for (size_t s = 0; s + 1 < N; ++s)
     selectorEq[s] = b.icmp_eq(selectorVal, b.i32_val(s));
 
-  // Right-leaning select chain per group: g[selValOrder[N-1]], then for
-  // s = N-2..0 select g[selValOrder[s]] when selectorVal == s.
+  // Right-leaning select chain per group: members are in selector order, so
+  // start with member[N-1], then for s = N-2..0 select member[s] when
+  // selectorVal == s.
   SmallVector<Value, 6> args(numGroups);
   for (size_t g = 0; g < numGroups; ++g) {
-    Value acc = filledPerMember[groupInfo.selValOrder[N - 1]][g];
+    Value acc = filledPerMember[N - 1][g];
     for (size_t s = N - 1; s-- > 0;)
-      acc = b.select(selectorEq[s],
-                     filledPerMember[groupInfo.selValOrder[s]][g], acc);
+      acc = b.select(selectorEq[s], filledPerMember[s][g], acc);
     args[g] = acc;
   }
 

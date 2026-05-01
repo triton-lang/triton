@@ -17,9 +17,10 @@ namespace mlir::LLVM::AMD {
 // Decoded form of a verifier-validated axis-aligned `warp_used_hint`.
 // Active set = { i0 ^ x : x in span(basisBits) }.
 struct WarpHintInfo {
-  unsigned K = 0;            // popcount(hint), power of two
-  uint32_t i0 = 0;           // smallest active warp index
-  SmallVector<int32_t, 5> basisBits; // log2(K) distinct positions in [0, log2(numWarps))
+  unsigned K = 0;  // popcount(hint), power of two
+  uint32_t i0 = 0; // smallest active warp index
+  SmallVector<int32_t, 5>
+      basisBits; // log2(K) distinct positions in [0, log2(numWarps))
 };
 
 // Decode a verifier-validated `warp_used_hint`.
@@ -127,14 +128,17 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 // To pair an mbarrier with hinted partial copies, bracket the fusable
 // batch with an mbarrier-carrying singleton.
 struct TDMMergeGroupInfo {
-  SmallVector<Operation *> members;       // program order; |members| = N
-  WarpHintInfo unionInfo;                  // decoded union of member hints
+  // Members in *selector order*: members[s] is the member whose hint
+  // projects to selector value s on `selectorBits` (i.e. the runtime member
+  // a wave with selectorVal == s would pick).  |members| = N.
+  SmallVector<Operation *> members;
+  // Last member in program order; used to anchor the fused intrinsic's
+  // insertion point so any pure ops between members dominate it.
+  Operation *lastInProgramOrder = nullptr;
+  WarpHintInfo unionInfo; // decoded union of member hints
   // Selector basis = unionInfo.basisBits \ first member's basisBits.  log2(N)
   // warp-id bit positions, used by emitTDMLoadStoreMerged to pick a member.
   SmallVector<int32_t, 5> selectorBits;
-  // selValOrder[s] = program-order index in `members` of the member whose
-  // selector projection equals s.  Permutation of [0, N).
-  SmallVector<unsigned, 4> selValOrder;
 };
 
 // Walk `mod` and identify all merge groups; ops not in any group are
