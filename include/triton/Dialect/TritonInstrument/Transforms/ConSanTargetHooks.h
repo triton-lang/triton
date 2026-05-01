@@ -183,7 +183,8 @@ public:
   getRequiredCommitKinds(ModuleOp module) const = 0;
 };
 
-void runConcurrencySanitizer(ModuleOp module, const ConSanTargetHooks *hooks);
+LogicalResult runConcurrencySanitizer(ModuleOp module,
+                                      const ConSanTargetHooks *hooks);
 
 using ConSanHooksFactory = std::function<std::unique_ptr<ConSanTargetHooks>()>;
 void registerConSanHooks(llvm::StringRef key, ConSanHooksFactory factory);

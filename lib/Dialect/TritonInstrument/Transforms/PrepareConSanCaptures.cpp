@@ -22,9 +22,6 @@ namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 namespace tti = mlir::triton::instrument;
 
-constexpr llvm::StringLiteral kExtraCaptureBytesAttr =
-    "consan.extra_capture_bytes";
-
 bool hasSharedMemoryBuffers(ModuleOp mod) {
   bool result = false;
   mod.walk([&](ttg::LocalAllocOp op) { result |= op.isSharedMemoryAlloc(); });
@@ -106,7 +103,8 @@ public:
 
     auto i32Ty = IntegerType::get(mod.getContext(), 32);
     mod.walk([&](ttg::WarpSpecializeOp ws) {
-      ws->setAttr(kExtraCaptureBytesAttr, IntegerAttr::get(i32Ty, extraBytes));
+      ws->setAttr(tti::kConSanExtraCaptureBytesAttr,
+                  IntegerAttr::get(i32Ty, extraBytes));
     });
   }
 };
