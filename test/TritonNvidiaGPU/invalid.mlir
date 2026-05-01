@@ -1,12 +1,7 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
-// expected-error @+1 {{fp4Padded tensor memory layout requires colStride 1 but got 2}}
+// expected-error @below {{fp4Padded tensor memory layout requires colStride 1 but got 2}}
 #bad_fp4_padded_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 2, fp4Padded = true>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
-  tt.func public @bad_fp4_padded_tmem_attr() {
-    tt.return
-  }
-}
 
 // -----
 
@@ -24,7 +19,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
       %useAcc: i1,
       %pred: i1) {
-    // expected-error @+1 {{mixed fp4 tensor memory LHS with fp8 RHS requires fp4_padded = true}}
+    // expected-error @below {{expected e2m1 LHS operand to be fp4_padded when RHS is float8}}
     ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e2m1 rhs = e5m2 :
        !ttg.memdesc<128x64xi8, #tmem_fp4_dense, #ttng.tensor_memory>,
        !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
@@ -42,7 +37,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
       %useAcc: i1,
       %pred: i1) {
-    // expected-error @+1 {{fp4_padded tensor memory LHS requires i8 or u8 storage}}
+    // expected-error @below {{expected e2m1 LHS operand to have i8 storage}}
     ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e2m1 rhs = e5m2 :
        !ttg.memdesc<128x64xf8E5M2, #tmem_fp4_padded, #ttng.tensor_memory>,
        !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
@@ -60,7 +55,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
       %useAcc: i1,
       %pred: i1) {
-    // expected-error @+1 {{unsupported tensor memory LHS storage type for scaled MMA}}
+    // expected-error @below {{unsupported LHS operand type for scaled MMA}}
     ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = fp16 rhs = fp16 :
        !ttg.memdesc<128x64xf16, #tmem, #ttng.tensor_memory>,
        !ttg.memdesc<64x128xf16, #shared, #ttg.shared_memory>,

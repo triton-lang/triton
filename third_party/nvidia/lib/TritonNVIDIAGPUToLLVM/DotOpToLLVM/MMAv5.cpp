@@ -428,7 +428,7 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   auto aTensorTy = cast<MemDescType>(a.getType());
   auto bTensorTy = cast<MemDescType>(b.getType());
-  bool aInTmem = isa<ttng::TensorMemoryEncodingAttr>(aTensorTy.getEncoding());
+  auto aInTmem = dyn_cast<ttng::TensorMemoryEncodingAttr>(aTensorTy.getEncoding());
 
   Value baseA = loadedA;
   if (!aInTmem) {
@@ -467,17 +467,7 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   std::unique_ptr<DotOpMmaMemLoader> aLoader;
   bool transA = false;
-  unsigned aTMemTileK = aOperandShape[1];
   if (aInTmem) {
-    unsigned storageBitwidth = aTensorTy.getElementTypeBitWidth();
-    unsigned logicalBitwidth = op.numBitsPerElementA;
-    if (storageBitwidth > logicalBitwidth &&
-        storageBitwidth % logicalBitwidth == 0) {
-      unsigned logicalPerStorage = storageBitwidth / logicalBitwidth;
-      assert(aTMemTileK % logicalPerStorage == 0 &&
-             "MMAv5 TMEM A K tile must align to packed storage columns");
-      aTMemTileK /= logicalPerStorage;
-    }
     aLoader = std::make_unique<DotOpMmaV5TmemLoader>(
         DotOpMmaV5TmemLoader::build(loc, rewriter, aTensorTy, baseA));
   } else {
@@ -511,13 +501,15 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   }
 
   DotConversion::InstDesc desc{mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK},
-                               transA,   transB,   aInTmem};
+                               transA,   transB,   (bool)aInTmem};
   for (int m = 0; m < numRepM; m++) {
     for (int n = 0; n < numRepN; n++) {
       Value useInitAcc = useDFlag;
       MemDescOperand accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
       for (int k = 0; k < numRepK; k++) {
-        unsigned aTileK = desc.aInTmem ? aTMemTileK : aOperandShape[1];
+        unsigned aTileK = aOperandShape[1];
+        if (aInTmem && aInTmem.getFp4Padded())
+          aTileK /= 2;
         MemDescOperand a =
             aLoader->memLoad(m * aOperandShape[0], k * aTileK, rewriter, loc);
         Value b = bLoader->smemLoad(k * bOperandShape[0], n * bOperandShape[1],
