@@ -27,9 +27,7 @@ constexpr llvm::StringLiteral kExtraCaptureBytesAttr =
 
 bool hasSharedMemoryBuffers(ModuleOp mod) {
   bool result = false;
-  mod.walk([&](ttg::LocalAllocOp op) {
-    result |= op.isSharedMemoryAlloc();
-  });
+  mod.walk([&](ttg::LocalAllocOp op) { result |= op.isSharedMemoryAlloc(); });
   return result;
 }
 
@@ -40,8 +38,7 @@ bool hasTensorMemoryBuffers(ModuleOp mod) {
       auto memDescType = dyn_cast<ttg::MemDescType>(type);
       if (!memDescType)
         continue;
-      result |=
-          isa<ttng::TensorMemorySpaceAttr>(memDescType.getMemorySpace());
+      result |= isa<ttng::TensorMemorySpaceAttr>(memDescType.getMemorySpace());
     }
   });
   return result;
@@ -96,8 +93,7 @@ public:
 
     auto hooks = createConSanHooks(target);
     if (!hooks) {
-      mod.emitError("no ConSan hooks registered for target '")
-          << target << "'";
+      mod.emitError("no ConSan hooks registered for target '") << target << "'";
       return signalPassFailure();
     }
 
@@ -110,8 +106,7 @@ public:
 
     auto i32Ty = IntegerType::get(mod.getContext(), 32);
     mod.walk([&](ttg::WarpSpecializeOp ws) {
-      ws->setAttr(kExtraCaptureBytesAttr,
-                  IntegerAttr::get(i32Ty, extraBytes));
+      ws->setAttr(kExtraCaptureBytesAttr, IntegerAttr::get(i32Ty, extraBytes));
     });
   }
 };

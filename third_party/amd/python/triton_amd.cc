@@ -68,8 +68,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     mlir::triton::instrument::TritonInstrumentPrepareConSanCapturesOptions
         options;
     options.target = "amd";
-    pm.addPass(mlir::triton::instrument::
-                   createTritonInstrumentPrepareConSanCaptures(options));
+    pm.addPass(
+        mlir::triton::instrument::createTritonInstrumentPrepareConSanCaptures(
+            options));
   });
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      mlir::triton::createAllocateAMDGPUSharedMemory);
