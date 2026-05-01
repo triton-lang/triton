@@ -7,6 +7,7 @@ import torch
 import triton
 import triton.profiler as proton
 import json
+import os
 import pytest
 from typing import NamedTuple
 import pathlib
@@ -1222,7 +1223,8 @@ def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path, d
     if enable_nvtx is not None:
         fresh_knobs.proton.enable_nvtx = enable_nvtx
     temp_file = tmp_path / "test_nvtx_range_push_pop.hatchet"
-    proton.start(str(temp_file.with_suffix("")))
+    backend = "roctracer" if is_hip() and os.environ.get("RUNNER_TYPE") == "gfx90a" else None
+    proton.start(str(temp_file.with_suffix("")), backend=backend)
 
     with proton.scope("proton_scope"):
         torch.cuda.nvtx.range_push("nvtx_range0")
