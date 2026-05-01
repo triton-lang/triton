@@ -363,7 +363,7 @@ public:
     ModuleAllocation moduleAllocation(
         m, triton::defaultAllocationAnalysisScratchSizeFn, partitionSize);
 
-    if (targetInfo.getISAFamily() == mlir::triton::amdgpu::ISAFamily::Unknown) {
+    if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::Unknown) {
       m.emitError("unsupported target: '") << gfxArch.getValue() << "'";
       return signalPassFailure();
     }

@@ -9,6 +9,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 
+using mlir::triton::amdgpu::ISAFamily;
 using ::mlir::triton::gpu::MemDescType;
 
 namespace {
@@ -164,7 +165,7 @@ private:
     const unsigned missingLanes =
         targetInfo.getWarpSize() / tile.getInDimSize(kLane);
     unsigned otherLanes = 1;
-    if (isaFamily == amdgpu::ISAFamily::CDNA4) {
+    if (isaFamily == ISAFamily::CDNA4) {
       otherLanes = (bitWidth == 8) ? 2 : 4;
     } else if (ldsParams.needsDoubleB8Contiguity) {
       otherLanes = 2;
@@ -279,7 +280,7 @@ private:
       auto numElemsI32 = (vTy.getNumElements() * bitWidth / 32);
       auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
       switch (targetInfo.getISAFamily()) {
-      case amdgpu::ISAFamily::GFX1250: {
+      case ISAFamily::GFX1250: {
         if (bitWidth == 16) {
           dsReadTr = LLVM::createLLVMIntrinsicCallOp(
                          rewriter, loc, "llvm.amdgcn.ds.load.tr16.b128", {vTy},
@@ -292,7 +293,7 @@ private:
                          .getResult(0);
         break;
       }
-      case amdgpu::ISAFamily::CDNA4: {
+      case ISAFamily::CDNA4: {
         if (bitWidth == 16) {
           dsReadTr =
               ROCDL::ds_read_tr16_b64::create(rewriter, loc, vTy, vecAddr);
@@ -307,7 +308,7 @@ private:
       }
       // GFX1250 is currently using LLVM intrinsics so it cannot cast it to
       // AliasAnalysisOpInterface
-      if (targetInfo.getISAFamily() != amdgpu::ISAFamily::GFX1250)
+      if (targetInfo.getISAFamily() != ISAFamily::GFX1250)
         AMD::addLocalLoadNoAliasScope(
             op, cast<LLVM::AliasAnalysisOpInterface>(dsReadTr.getDefiningOp()));
       Value vecVal = b.bitcast(dsReadTr, vTy);
@@ -396,7 +397,7 @@ public:
       return failure();
     }
     // FP4 packed along M/N are not supported yet on GFX1250
-    if (targetInfo.getISAFamily() == amdgpu::ISAFamily::GFX1250) {
+    if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
       return failure();
     }
 

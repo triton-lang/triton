@@ -91,7 +91,7 @@ struct ConvertTritonAMDGPUToLLVM
     ModuleOp mod = getOperation();
 
     AMD::TargetInfo targetInfo(this->gfxArch.getValue());
-    if (targetInfo.getISAFamily() == mlir::triton::amdgpu::ISAFamily::Unknown) {
+    if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::Unknown) {
       mod.emitError("unsupported target: '") << this->gfxArch.getValue() << "'";
       return signalPassFailure();
     }

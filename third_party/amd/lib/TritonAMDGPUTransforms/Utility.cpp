@@ -11,6 +11,7 @@
 
 namespace tt = triton;
 namespace ttg = triton::gpu;
+using mlir::triton::amdgpu::ISAFamily;
 
 namespace {
 
@@ -510,14 +511,14 @@ composePaddedLayout(const tt::AMD::TargetInfo &targetInfo, int opIdx,
                     unsigned vecWidth, ttg::TensorOrMemDesc srcTy,
                     ArrayRef<unsigned> sharedOrder,
                     ttg::DotOperandEncodingAttr dotOpEnc, bool useAsyncCopy) {
-  if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::CDNA4) {
+  if (targetInfo.getISAFamily() == ISAFamily::CDNA4) {
     if (!dotOpEnc)
       return {};
     return composePaddedLayoutForAsyncCopyCDNA4(
         dotOpEnc, srcTy, sharedOrder, useAsyncCopy, targetInfo.getWarpSize());
   }
 
-  if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::GFX1250) {
+  if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
     if (!srcTy.getElementType().isIntOrFloat())
       return {};
     return composePaddedLayoutWMMA(opIdx, vecWidth, srcTy, sharedOrder,

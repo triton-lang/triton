@@ -11,7 +11,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
-using mlir::triton::amdgpu::ISAFamily;
+using triton::amdgpu::ISAFamily;
 
 namespace {
 

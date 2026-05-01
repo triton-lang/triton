@@ -13,6 +13,7 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace ttg = triton::gpu;
+using mlir::triton::amdgpu::ISAFamily;
 
 namespace mlir {
 
@@ -246,9 +247,8 @@ public:
 
     mlir::RewritePatternSet patterns(context);
 
-    if (!llvm::is_contained(
-            {amdgpu::ISAFamily::CDNA3, amdgpu::ISAFamily::CDNA4},
-            targetInfo.getISAFamily()))
+    if (!llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                            targetInfo.getISAFamily()))
       return; // This pass is CDNA3 and CDNA4 specific.
 
     // Precompute the contiguity of all AsyncCopy ops based on the src and

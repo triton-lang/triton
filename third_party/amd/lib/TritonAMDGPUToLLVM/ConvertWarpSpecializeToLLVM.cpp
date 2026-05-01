@@ -215,7 +215,7 @@ struct TritonAMDGPUConvertWarpSpecializeToLLVM
     }
 
     AMD::TargetInfo targetInfo(archStr.c_str());
-    if (targetInfo.getISAFamily() != mlir::triton::amdgpu::ISAFamily::GFX1250) {
+    if (targetInfo.getISAFamily() != triton::amdgpu::ISAFamily::GFX1250) {
       mod.emitError("Warp specialization is only supported on gfx1250, got ")
           << archStr;
       return signalPassFailure();

@@ -658,14 +658,14 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
     triton::CacheModifier cm, bool isLoad,
     const mlir::triton::AMD::TargetInfo &targetInfo) {
   switch (targetInfo.getISAFamily()) {
-  case triton::amdgpu::ISAFamily::CDNA3:
-  case triton::amdgpu::ISAFamily::CDNA4:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
     return getCtrlBitsForCacheModifierOn_CDNA3_CDNA4(cm, isLoad);
-  case triton::amdgpu::ISAFamily::RDNA3:
+  case ISAFamily::RDNA3:
     return getCtrlBitsForCacheModifierOnRDNA3(cm, isLoad);
-  case triton::amdgpu::ISAFamily::RDNA4:
+  case ISAFamily::RDNA4:
     return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ false);
-  case triton::amdgpu::ISAFamily::GFX1250:
+  case ISAFamily::GFX1250:
     return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ true);
   default:
     return getDefaultCtrlBitsForCacheModifier(cm);

@@ -40,13 +40,12 @@ class AllocSharedMemForUpcastedScales : public OpRewritePattern<OpTy> {
 public:
   using OpRewritePattern<OpTy>::OpRewritePattern;
 
-  AllocSharedMemForUpcastedScales(MLIRContext *context,
-                                  triton::amdgpu::ISAFamily isaFamily)
+  AllocSharedMemForUpcastedScales(MLIRContext *context, ISAFamily isaFamily)
       : OpRewritePattern<OpTy>(context), isaFamily(isaFamily) {}
 
   LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
-    if (isaFamily != mlir::triton::amdgpu::ISAFamily::CDNA4)
+    if (isaFamily != ISAFamily::CDNA4)
       return rewriter.notifyMatchFailure(op, "NYI: Only supported on CDNA4");
 
     auto forOp = op->template getParentOfType<scf::ForOp>();
@@ -105,7 +104,7 @@ public:
   }
 
 private:
-  triton::amdgpu::ISAFamily isaFamily;
+  ISAFamily isaFamily;
 };
 } // namespace
 
