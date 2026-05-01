@@ -5,7 +5,6 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/Operation.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/ADT/DenseMap.h"
 #include <optional>
 
 using mlir::triton::AMD::TargetInfo;
@@ -100,70 +99,6 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const triton::LinearLayout &sharedLayout,
                       Attribute encoding, Value ctaId, int32_t auxBits,
                       std::optional<uint32_t> warpUsedHint = std::nullopt);
-
-// ---------------------------------------------------------------------------
-// Implicit op-merging support.
-//
-// `computeTDMMergeGroups` runs once at TDM->LLVM entry and builds a side-
-// table from each merging `async_tdm_copy_global_to_local` op to its group
-// info (IR unchanged).  The conversion pattern dispatches on it: the first
-// visited member emits a fused intrinsic via `emitTDMLoadStoreMerged` and
-// erases the whole group; singletons fall back to `emitTDMLoadStore`.
-//
-// Mergeability rules (v1; all required):
-//   1. Every member has a verifier-legal `warp_used_hint`; hint-less ops
-//      flush the in-flight batch.
-//   2. No member has an `mbarrier` (fused intrinsic can't encode it);
-//      mbarrier-carrying ops flush.
-//   3. Members share K = popcount(hint), have pairwise-disjoint hints,
-//      and their union is itself an axis-aligned coset.
-//   4. Group size N is a power of two >= 2.
-//   5. Members are consecutive in one block; pure ops thread through,
-//      side-effecting non-TDM ops flush.
-//   6. Results have structurally equal MemDescType and pairwise-distinct
-//      SSA destinations.
-//   7. Members share the same `cache` modifier (one auxBits on the fused
-//      intrinsic).
-//
-// To pair an mbarrier with hinted partial copies, bracket the fusable
-// batch with an mbarrier-carrying singleton.
-struct TDMMergeGroupInfo {
-  // Members in *selector order*: members[s] is the member whose hint
-  // projects to selector value s on `selectorBits` (i.e. the runtime member
-  // a wave with selectorVal == s would pick).  |members| = N.
-  SmallVector<Operation *> members;
-  // Last member in program order; used to anchor the fused intrinsic's
-  // insertion point so any pure ops between members dominate it.
-  Operation *lastInProgramOrder = nullptr;
-  WarpHintInfo unionInfo; // decoded union of member hints
-  // Selector basis = unionInfo.basisBits \ first member's basisBits.  log2(N)
-  // warp-id bit positions, used by emitTDMLoadStoreMerged to pick a member.
-  SmallVector<int32_t, 5> selectorBits;
-};
-
-// Walk `mod` and identify all merge groups; ops not in any group are
-// absent from the result.
-llvm::DenseMap<Operation *, TDMMergeGroupInfo>
-computeTDMMergeGroups(ModuleOp mod);
-
-// Emit one fused TDM intrinsic for a merge group: build per-member
-// descriptors via `fillTDMDescriptor` (each with its own hint/dst/idx/
-// pred), then `select` between them on an SGPR-uniform per-wave selector
-// derived from the union hint.  Shared `sharedLayout`/`encoding`/
-// `auxBits` come from any member (mergeability makes them uniform);
-// no barrier (rule 2).
-void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
-                            const LLVMTypeConverter *typeConverter,
-                            ArrayRef<SmallVector<Value>> descPerMember,
-                            ArrayRef<int64_t> blockShape, int numWarps,
-                            unsigned padInterval, unsigned padAmount,
-                            ArrayRef<SmallVector<Value>> offsetPerMember,
-                            ArrayRef<SmallVector<Value>> dstPtrsPerMember,
-                            ArrayRef<Value> predPerMember, Value multicastMask,
-                            Type elementType, bool isLoad,
-                            const triton::LinearLayout &sharedLayout,
-                            Attribute encoding, Value ctaId, int32_t auxBits,
-                            const TDMMergeGroupInfo &groupInfo);
 
 // Returns (warpsPerCTA, numTDMInstructions) for a given shared encoding.
 // For PartitionedSharedEncodingAttr, computes a partition-aligned warp

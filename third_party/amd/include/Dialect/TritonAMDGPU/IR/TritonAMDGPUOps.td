@@ -768,15 +768,9 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     `K = popcount(hint)` warps cover the block, the rest are pred-off.
 
     "All warps participate" is the attribute being **absent**; an
-    explicit `warp_used_hint = 0` is rejected (a hint-less op is a
-    merge-flush boundary, while `K = num_warps` is a normal hinted op).
-    Front-ends should map a Python-side `0` to "no attribute".
-
-    Implicit op-merging (TDM->LLVM lowering): adjacent hinted copies
-    sharing `cache` and satisfying the disjoint/equal-K/axis-aligned-
-    union rules fuse into one intrinsic.  Mismatched `cache` or an
-    `mbarrier` operand flushes the batch.  Full contract:
-    `TDMUtility.h::computeTDMMergeGroups`.
+    explicit `warp_used_hint = 0` is rejected (`K = num_warps` is a
+    normal hinted op).  Front-ends should map a Python-side `0` to
+    "no attribute".
 
     v1 restriction: the hint must be an *axis-aligned coset* in warpId
     space.  With `S = { i : (hint >> i) & 1 == 1 }`, `i0 = lsb(hint)`,

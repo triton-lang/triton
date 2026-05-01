@@ -180,14 +180,8 @@ struct ConvertTritonAMDGPUToLLVM
     AMD::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ftz,
                                              axisInfoAnalysis, allocation,
                                              targetInfo, AMDBenefit);
-    // Run the implicit-merge analysis once before populating patterns;
-    // the map is queried by AsyncTDMCopyGlobalToLocalOp conversion to
-    // decide whether to fuse.  Lives on this stack frame, which
-    // encloses pattern application below.
-    auto tdmMergeGroups = mlir::LLVM::AMD::computeTDMMergeGroups(mod);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
-                                           axisInfoAnalysis, tdmMergeGroups,
-                                           AMDBenefit);
+                                           axisInfoAnalysis, AMDBenefit);
     AMD::populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
     AMD::populateBarrierOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
     AMD::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,

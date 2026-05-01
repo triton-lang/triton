@@ -1190,13 +1190,9 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       public LoadStoreConversionBase {
   AsyncTDMCopyGlobalToLocalOpConversion(
       LLVMTypeConverter &converter, const AMD::TargetInfo &targetInfo,
-      ModuleAxisInfoAnalysis &axisAnalysisPass,
-      const llvm::DenseMap<Operation *, mlir::LLVM::AMD::TDMMergeGroupInfo>
-          &mergeGroups,
-      PatternBenefit benefit)
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass),
-        mergeGroups(mergeGroups) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::AsyncTDMCopyGlobalToLocalOp op,
@@ -1204,10 +1200,6 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
 
-    // Implicit merge dispatch: first-visited member emits the fused
-    // intrinsic for the whole group and erases the rest.
-    auto mergeIt = mergeGroups.find(op);
-    bool inMergeGroup = mergeIt != mergeGroups.end();
     auto tensorDescTy = op.getDesc().getType();
     auto encoding = tensorDescTy.getSharedLayout();
     Type elementType =
@@ -1241,57 +1233,6 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto shapePerCTA =
         triton::gpu::getShapePerCTA(encoding, tensorDescTy.getShape());
 
-    if (inMergeGroup) {
-      // `group.members` is in selector order (members[s] = wave with
-      // selectorVal == s); we collect operands in that same order so
-      // `*PerMember[i]` lines up with the i-th selector slot in the
-      // fused emit.  Hints are read inside `emitTDMLoadStoreMerged`;
-      // rule 2 guarantees no mbarriers.
-      const auto &group = mergeIt->second;
-      size_t numMembers = group.members.size();
-
-      SmallVector<SmallVector<Value>> descPerMember(numMembers);
-      SmallVector<SmallVector<Value>> offsetPerMember(numMembers);
-      SmallVector<SmallVector<Value>> dstPtrsPerMember(numMembers);
-      SmallVector<Value> predPerMember(numMembers);
-
-      for (size_t i = 0; i < numMembers; ++i) {
-        auto memberOp =
-            cast<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(group.members[i]);
-        descPerMember[i] = mlir::LLVM::AMD::unpackTDMDescriptor(
-            rewriter, loc, rewriter.getRemappedValue(memberOp.getDesc()));
-        SmallVector<Value> indices;
-        for (Value idx : memberOp.getIndices())
-          indices.push_back(rewriter.getRemappedValue(idx));
-        offsetPerMember[i] = std::move(indices);
-
-        auto memberDstMemObj = LLVM::getSharedMemoryObjectFromStruct(
-            loc, rewriter.getRemappedValue(memberOp.getResult()), elementType,
-            rewriter);
-        dstPtrsPerMember[i] = llvm::to_vector(memberDstMemObj.getBases());
-
-        predPerMember[i] = rewriter.getRemappedValue(memberOp.getPred());
-      }
-
-      // Rule 7: members share `cache`, so the current op's auxBits applies
-      // to the whole group.  Anchor at the program-order last member so any
-      // pure ops between members dominate the fused intrinsic.
-      auto mergedAuxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-          op.getCache(), /*isLoad*/ true, targetInfo);
-      rewriter.setInsertionPoint(group.lastInProgramOrder);
-      mlir::LLVM::AMD::emitTDMLoadStoreMerged(
-          rewriter, loc, getTypeConverter(), descPerMember, shapePerCTA,
-          numWarps, padInterval, padAmount, offsetPerMember, dstPtrsPerMember,
-          predPerMember, multicastMask, elementType,
-          /*isLoad=*/true, sharedLayout, encoding, ctaId, mergedAuxBits, group);
-
-      for (size_t i = numMembers; i-- > 0;)
-        rewriter.eraseOp(group.members[i]);
-      return success();
-    }
-
-    // Singleton path: lowered (post-type-conversion) operands ->
-    // emitTDMLoadStore.
     SmallVector<Value> desc =
         mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, adaptor.getDesc());
 
@@ -1334,10 +1275,6 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     rewriter.eraseOp(op);
     return success();
   }
-
-private:
-  const llvm::DenseMap<Operation *, mlir::LLVM::AMD::TDMMergeGroupInfo>
-      &mergeGroups;
 };
 
 struct AsyncTDMCopyLocalToGlobalOpConversion
@@ -2609,21 +2546,16 @@ namespace mlir::triton::AMD {
 void populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    const llvm::DenseMap<Operation *, mlir::LLVM::AMD::TDMMergeGroupInfo>
-        &tdmMergeGroups,
     PatternBenefit benefit) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion, BufferLoadOpConversion,
                BufferLoadToLocalOpConversion, BufferStoreOpConversion,
                BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion,
                AsyncCopyLocalToGlobalOpConversion, BufferAtomicCASOpConversion,
+               AsyncTDMCopyGlobalToLocalOpConversion,
                AsyncTDMCopyLocalToGlobalOpConversion,
                AsyncTDMScatterOpConversion, AsyncTDMGatherOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
-  // Merge-aware TDM global-to-local takes a reference to the caller-
-  // owned merge map; added separately to forward that extra argument.
-  patterns.add<AsyncTDMCopyGlobalToLocalOpConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, tdmMergeGroups, benefit);
   patterns.add<TTGAsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<TDMPrefetchConversion>(typeConverter, targetInfo, benefit);
