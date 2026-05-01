@@ -1028,40 +1028,31 @@ static Type getScaledMMAOperandType(Type elementType,
   llvm_unreachable("Unsupported type.");
 };
 
-static LogicalResult
-verifyScaledTMemLhs(Operation *op, Type elementType,
-                    TensorMemoryEncodingAttr encoding,
-                    ScaleDotElemType aType, ScaleDotElemType bType) {
-  if (encoding.getColStride() != 1)
-    return op->emitOpError("The col stride of the LHS operand must be 1");
-
-  if (encoding.getFp4Padded()) {
+static LogicalResult verifyScaledLHSOperand(Operation *op, Type elementType,
+                                            TensorMemoryEncodingAttr encoding,
+                                            ScaleDotElemType aType,
+                                            ScaleDotElemType bType) {
+  if (aType == ScaleDotElemType::E2M1) {
     if (!elementType.isInteger(8))
+      return op->emitOpError("expected e2m1 LHS operand to have i8 storage");
+    if (encoding.getFp4Padded() &&
+        !llvm::is_contained({ScaleDotElemType::E4M3, ScaleDotElemType::E5M2},
+                            bType))
+      return op->emitOpError("can only use fp4_padded LHS when RHS is float8");
+    if (llvm::is_contained({ScaleDotElemType::E4M3, ScaleDotElemType::E5M2},
+                           bType) &&
+        !encoding.getFp4Padded())
       return op->emitOpError(
-          "fp4_padded tensor memory LHS requires i8 or u8 storage");
-    if (aType != ScaleDotElemType::E2M1)
-      return op->emitOpError(
-          "fp4_padded tensor memory LHS requires lhs = e2m1");
-    return success();
+          "expected e2m1 LHS operand to be fp4_padded when RHS is float8");
   }
 
-  if (elementType.isInteger(8)) {
-    if (aType != ScaleDotElemType::E2M1)
-      return op->emitOpError("byte tensor memory LHS requires lhs = e2m1");
-    if (bType == ScaleDotElemType::E4M3 || bType == ScaleDotElemType::E5M2)
-      return op->emitOpError("mixed fp4 tensor memory LHS with fp8 RHS "
-                             "requires fp4_padded = true");
-    return success();
-  }
+  if (isa<Float8E4M3FNType, Float8E5M2Type>(elementType) &&
+      !llvm::is_contained({ScaleDotElemType::E4M3, ScaleDotElemType::E5M2},
+                          aType))
+    return op->emitOpError(
+        "expected float8 LHS operand to have e4m3 or e5m2 format");
 
-  if (isa<Float8E4M3FNType, Float8E5M2Type>(elementType)) {
-    if (aType != ScaleDotElemType::E4M3 && aType != ScaleDotElemType::E5M2)
-      return op->emitOpError("float8 tensor memory LHS requires fp8 lhs type");
-    return success();
-  }
-
-  return op->emitOpError("unsupported tensor memory LHS storage type for "
-                         "scaled MMA");
+  return op->emitOpError("unsupported LHS operand type for scaled MMA");
 }
 
 LogicalResult TCGen5MMAScaledOp::verify() {
@@ -1089,11 +1080,11 @@ LogicalResult TCGen5MMAScaledOp::verify() {
   }
   if (enc.getBlockM() != 128)
     return emitOpError("only supports instruction shape blockM=128");
-  if (auto aTMemEnc =
+  if (auto lhsEnc =
           dyn_cast<TensorMemoryEncodingAttr>(getA().getType().getEncoding())) {
-    if (failed(verifyScaledTMemLhs(getOperation(),
-                                   getA().getType().getElementType(),
-                                   aTMemEnc, getAType(), getBType())))
+    if (failed(verifyScaledLHSOperand(getOperation(),
+                                      getA().getType().getElementType(), lhsEnc,
+                                      getAType(), getBType())))
       return failure();
   }
   return success();

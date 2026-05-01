@@ -84,8 +84,9 @@ class TensorMemoryLayout:
         return f"TL{block_str}{stride_str}{cga_layout_str}{two_ctas_str}{fp4_padded_str}TL"
 
     def __hash__(self):
-        return hash((tuple(self.block), self.col_stride, tuple(tuple(b) for b in self.cga_layout), self.two_ctas,
-                     self.fp4_padded))
+        return hash(
+            (tuple(self.block), self.col_stride, tuple(tuple(b)
+                                                       for b in self.cga_layout), self.two_ctas, self.fp4_padded))
 
 
 @dataclass(frozen=True, eq=True)

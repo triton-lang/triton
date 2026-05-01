@@ -2265,8 +2265,7 @@ def test_tcgen05_mma_scaled_fp8_lhs_tmem(a_format, a_torch_dtype, b_format, b_to
     @gluon.jit
     def kernel(out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, a, b, a_scale, b_scale,
                A_FORMAT: ttgl.constexpr, B_FORMAT: ttgl.constexpr):
-        store_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [threads_per_warp, 1],
-                                                          [ttgl.num_warps(), 1], [1, 0])
+        store_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [threads_per_warp, 1], [ttgl.num_warps(), 1], [1, 0])
 
         a_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, K], col_stride=1)
         a_tmem = allocate_tensor_memory(a.dtype.element_ty, [M, K], a_tmem_layout)
@@ -2275,8 +2274,8 @@ def test_tcgen05_mma_scaled_fp8_lhs_tmem(a_format, a_torch_dtype, b_format, b_to
         a_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, a_reg_layout))[None, :]
         a_tmem.store(ttgl.load(a + a_offs_m * K + a_offs_k))
 
-        b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, transposed=False,
-                                                          element_bitwidth=8, rank=2)
+        b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, transposed=False, element_bitwidth=8,
+                                                          rank=2)
         b_reg_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [ttgl.num_warps(), 1], [1, 0])
         b_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(1, b_reg_layout))[:, None]
         b_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, b_reg_layout))[None, :]
@@ -2302,8 +2301,8 @@ def test_tcgen05_mma_scaled_fp8_lhs_tmem(a_format, a_torch_dtype, b_format, b_to
 
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
-        tcgen05_mma_scaled(a_tmem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT, B_FORMAT,
-                           use_acc=False, mbarriers=[bar])
+        tcgen05_mma_scaled(a_tmem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT, B_FORMAT, use_acc=False,
+                           mbarriers=[bar])
         mbarrier.wait(bar, phase=0)
 
         out = acc_tmem.load()
@@ -2334,8 +2333,7 @@ def test_tcgen05_mma_scaled_dense_fp4_lhs_tmem():
 
     @gluon.jit
     def kernel(out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, a, b, a_scale, b_scale):
-        store_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [threads_per_warp, 1],
-                                                          [ttgl.num_warps(), 1], [1, 0])
+        store_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [threads_per_warp, 1], [ttgl.num_warps(), 1], [1, 0])
 
         a_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, K // 2], col_stride=1)
         a_tmem = allocate_tensor_memory(ttgl.uint8, [M, K // 2], a_tmem_layout)
