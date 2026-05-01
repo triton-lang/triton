@@ -13,7 +13,7 @@ import pathlib
 import threading
 
 import triton.language as tl
-from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
+from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
@@ -567,12 +567,13 @@ def test_hook_launch(tmp_path: pathlib.Path, device: str):
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
-    assert len(data[0]["children"]) == 1
-    assert data[0]["children"][0]["frame"]["name"] == "test0"
-    assert data[0]["children"][0]["children"][0]["frame"]["name"] == "foo_test_1ctas_1elems"
-    assert data[0]["children"][0]["children"][0]["metrics"]["flops32"] == 1.0
-    assert data[0]["children"][0]["children"][0]["metrics"]["extra_metric"] == 7.0
-    assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+    test0_frame = find_frame(data[0], "test0")
+    assert test0_frame is not None
+    foo_frame = find_frame(test0_frame, "foo_test_1ctas_1elems")
+    assert foo_frame is not None
+    assert foo_frame["metrics"]["flops32"] == 1.0
+    assert foo_frame["metrics"]["extra_metric"] == 7.0
+    assert foo_frame["metrics"]["time (ns)"] > 0
 
 
 def test_hook_launch_filter(tmp_path: pathlib.Path, device: str):
@@ -930,9 +931,9 @@ def test_hook_with_third_party(tmp_path: pathlib.Path, device: str):
     triton.knobs.runtime.launch_enter_hook.remove(third_party_hook)
     with temp_file.open() as f:
         data = json.load(f)
-    assert len(data[0]["children"]) == 1
-    assert data[0]["children"][0]["frame"]["name"] == "foo_test"
-    assert data[0]["children"][0]["metrics"]["time (ns)"] > 0
+    foo_frame = find_frame(data[0], "foo_test")
+    assert foo_frame is not None
+    assert foo_frame["metrics"]["time (ns)"] > 0
 
 
 def test_hook_multiple_threads(tmp_path: pathlib.Path, device: str):
@@ -986,11 +987,12 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path, device: str):
 
     with temp_file.open() as f:
         data = json.load(f)
-    root = data[0]["children"]
-    assert "foo_test" in root[0]["frame"]["name"] or root[1]["frame"]["name"]
-    assert "bar_test" in root[0]["frame"]["name"] or root[1]["frame"]["name"]
-    assert root[0]["metrics"]["count"] == 100
-    assert root[1]["metrics"]["count"] == 100
+    foo_frame = find_frame(data[0], "foo_test")
+    bar_frame = find_frame(data[0], "bar_test")
+    assert foo_frame is not None
+    assert bar_frame is not None
+    assert foo_frame["metrics"]["count"] == 100
+    assert bar_frame["metrics"]["count"] == 100
 
 
 def test_pcsampling(tmp_path: pathlib.Path, device: str):
@@ -1621,30 +1623,15 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
     with temp_file.open() as f:
         data = json.load(f)
 
-    children = data[0]["children"]
-    # metadata scope + kernels + scope_a + scope_b + test0 + scope_d
-    assert len(children) == 8
-    test0_frame = None
-    for child in children:
-        if child["frame"]["name"] == "test0":
-            test0_frame = child
-            break
+    test0_frame = find_frame(data[0], "test0")
     assert test0_frame is not None
-    capture_at_frame = test0_frame["children"][0]
+    capture_at_frame = find_frame(test0_frame, "<captured_at>")
+    assert capture_at_frame is not None
 
-    foo_test_frame = None
-    scope_a_frame = None
-    scope_b_frame = None
-    scope_d_frame = None
-    for child in capture_at_frame["children"]:
-        if child["frame"]["name"] == "foo_test":
-            foo_test_frame = child
-        if child["frame"]["name"] == "scope_a":
-            scope_a_frame = child
-        if child["frame"]["name"] == "scope_b":
-            scope_b_frame = child
-        if child["frame"]["name"] == "scope_d":
-            scope_d_frame = child
+    foo_test_frame = find_frame(capture_at_frame, "foo_test")
+    scope_a_frame = find_frame(capture_at_frame, "scope_a")
+    scope_b_frame = find_frame(capture_at_frame, "scope_b")
+    scope_d_frame = find_frame(capture_at_frame, "scope_d")
     assert foo_test_frame is not None
     assert foo_test_frame["metrics"]["bytes"] == 160
     assert foo_test_frame["metrics"]["flops"] == 40

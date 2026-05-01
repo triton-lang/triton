@@ -36,7 +36,17 @@ public:
   std::vector<Context> getContexts() {
     auto contexts = getContextsImpl();
     if (state.has_value()) {
-      contexts.push_back(state.value());
+      // Metadata launch scopes are also installed as state; avoid emitting the
+      // same context twice when that scope is already in the context stack.
+      bool isStateInContext = false;
+      for (const auto &context : contexts) {
+        if (context == state.value()) {
+          isStateInContext = true;
+          break;
+        }
+      }
+      if (!isStateInContext)
+        contexts.push_back(state.value());
     }
     return contexts;
   }

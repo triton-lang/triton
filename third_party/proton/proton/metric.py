@@ -8,7 +8,7 @@ from .state import (
     current_metadata_state_name,
     enter_state,
     exit_state,
-    is_metadata_scope_active,
+    is_metadata_state_active,
 )
 
 
@@ -106,7 +106,7 @@ def transform_tensor_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], d
             else:  # device tensor
                 entered_state = False
                 try:
-                    if not is_metadata_scope_active():
+                    if not is_metadata_state_active():
                         enter_state(current_metadata_state_name())
                         entered_state = True
                     # Keep Proton's state balanced if a dtype conversion raises.

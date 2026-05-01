@@ -32,6 +32,16 @@ pytestmark = pytest.mark.skipif(is_hip_cdna2(), reason="old AMD GPUs are not sup
 HAS_WARP_SPECIALIZE = supports_ws() and supports_tma()
 
 
+def find_frame(node, name: str):
+    queue = [node]
+    while queue:
+        current = queue.pop(0)
+        if "frame" in current and current["frame"]["name"] == name:
+            return current
+        queue.extend(current.get("children", []))
+    return None
+
+
 @pytest.mark.parametrize(
     "mode",
     [
@@ -304,8 +314,11 @@ def test_tree(tmp_path: pathlib.Path, hook):
     with open(temp_file, "rb") as f:
         data = json.load(f)
         if hook:
-            assert "add_1024" == data[0]["children"][0]["frame"]["name"]
-        kernel_frame = data[0]["children"][0]["children"][0]
+            owner_frame = find_frame(data[0], "add_1024")
+            assert owner_frame is not None
+            kernel_frame = owner_frame["children"][0]
+        else:
+            kernel_frame = data[0]["children"][0]["children"][0]
         load_ops = kernel_frame["children"][0]
         assert "load_ops" in load_ops["frame"]["name"]
         assert ("load_x" in load_ops["children"][0]["frame"]["name"]

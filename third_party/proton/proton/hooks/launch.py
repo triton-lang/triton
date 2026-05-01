@@ -1,5 +1,4 @@
 from ..state import (
-    COMPUTE_METADATA_SCOPE_NAME,
     enter_metadata_scope,
     exit_metadata_scope,
     is_metadata_state_active,

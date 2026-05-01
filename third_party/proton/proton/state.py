@@ -1,11 +1,9 @@
 from triton._C.libproton import proton as libproton
 from .flags import flags
 from functools import wraps
-from contextvars import ContextVar
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 COMPUTE_METADATA_SCOPE_PREFIX = f"{COMPUTE_METADATA_SCOPE_NAME}:"
-_metadata_scope_stack = ContextVar("proton_metadata_scope_stack", default=())
 
 
 class state:
@@ -84,29 +82,24 @@ def metadata_state_name(kernel_name=None) -> str:
 
 
 def enter_metadata_scope(name: str) -> int:
-    stack = _metadata_scope_stack.get()
-    _metadata_scope_stack.set((*stack, name))
     scope_id = libproton.record_scope()
     libproton.enter_scope(scope_id, name)
+    try:
+        enter_state(name)
+    except Exception:
+        libproton.exit_scope(scope_id, name)
+        raise
     return scope_id
 
 
 def exit_metadata_scope(scope_id: int, name: str) -> None:
     try:
-        libproton.exit_scope(scope_id, name)
+        exit_state()
     finally:
-        stack = _metadata_scope_stack.get()
-        if stack:
-            _metadata_scope_stack.set(stack[:-1])
-
-
-def is_metadata_scope_active() -> bool:
-    return bool(_metadata_scope_stack.get())
+        libproton.exit_scope(scope_id, name)
 
 
 def is_metadata_state_active() -> bool:
-    if is_metadata_scope_active():
-        return True
     state_name = libproton.get_state()
     return bool(state_name
                 and (state_name == COMPUTE_METADATA_SCOPE_NAME or state_name.startswith(COMPUTE_METADATA_SCOPE_PREFIX)))
