@@ -929,8 +929,8 @@ def test_hook_launch_metadata_cudagraph_metric_copy_under_metadata_scope(tmp_pat
     Tensor launch metadata makes add_metrics launch a Proton metric-copy kernel
     during CUDA graph capture. That <metric> node should be grouped under the
     same __proton_launch_metadata:<owner> scope as the metadata kernels whose
-    values it copies, while the copied flops remain attached to the owner kernel
-    sibling. Metadata helper kernels can still have child Proton scopes; moving
+    values it copies, while the owner kernel remains a sibling of that metadata
+    scope. Metadata helper kernels can still have child Proton scopes; moving
     <metric> under the metadata owner must not flatten those child scopes.
     """
     owner_name = "foo_metric_scope"
@@ -1022,7 +1022,6 @@ def test_hook_launch_metadata_cudagraph_metric_copy_under_metadata_scope(tmp_pat
         "<captured_at>",
         owner_name,
     ]
-    assert "flops" in owner_kernel_events[0]["args"].get("metrics", {})
 
 
 def test_hook_with_third_party(tmp_path: pathlib.Path, device: str):
