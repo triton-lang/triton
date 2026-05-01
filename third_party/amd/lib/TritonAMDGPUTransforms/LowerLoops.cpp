@@ -87,12 +87,8 @@ TDMChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
   return createTDMAsync(
       loadOp, alloc, extractIdx,
       [&](OpBuilder &builder, Location loc, Value view, Value pred) {
-        // Forward the source load's cache modifier so .ca/.cg etc. reach the
-        // TDM intrinsic's aux bits.  Eviction policy has no TDM equivalent
-        // and is dropped by design.
         return triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(
-            builder, loc, loadOp.getDesc(), loadOp.getIndices(), view, pred,
-            /*barrier=*/Value(), loadOp.getCache());
+            builder, loc, loadOp.getDesc(), loadOp.getIndices(), view, pred);
       });
 }
 

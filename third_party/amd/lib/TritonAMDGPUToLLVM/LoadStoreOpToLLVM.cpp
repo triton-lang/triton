@@ -1199,6 +1199,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     auto tensorDescTy = op.getDesc().getType();
     auto encoding = tensorDescTy.getSharedLayout();
@@ -1240,6 +1241,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
 
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), elementType, rewriter);
+    // Get all base pointers (multiple for partitioned encoding)
     SmallVector<Value> dstPtrs = llvm::to_vector(dstMemObj.getBases());
     SmallVector<Value> offset = adaptor.getIndices();
     int numWarps = triton::gpu::lookupNumWarps(op);
@@ -1254,13 +1256,14 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       barrierPtr = smemObj.getBase();
     }
 
+    auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+
+    auto shapePerCTA =
+        triton::gpu::getShapePerCTA(encoding, tensorDescTy.getShape());
+
     std::optional<uint32_t> warpUsedHint;
     if (auto hintAttr = op.getWarpUsedHintAttr())
       warpUsedHint = static_cast<uint32_t>(hintAttr.getInt());
-
-    auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
-    auto shapePerCTA =
-        triton::gpu::getShapePerCTA(encoding, tensorDescTy.getShape());
 
     auto cacheMod = op.getCache();
     auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
