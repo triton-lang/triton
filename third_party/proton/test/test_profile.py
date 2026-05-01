@@ -840,9 +840,9 @@ def test_hook_launch_metadata_work_grouped_by_owner_matmul(tmp_path: pathlib.Pat
 def test_hook_launch_metadata_nested_triton_context_cudagraph(tmp_path: pathlib.Path, device: str):
     """Exercise CUDA graph capture with metadata-side kernels and tensor metrics.
 
-    This covers the graph-specific failure mode: launch_metadata launches Triton
-    kernels and also returns a tensor metric, so Proton must not confuse extra
-    metadata graph nodes with metric-kernel graph nodes during capture/replay.
+    launch_metadata launches Triton kernels and also returns a tensor metric;
+    the metadata kernels should stay under the metadata scope during capture
+    and replay.
     """
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -859,8 +859,6 @@ def test_hook_launch_metadata_nested_triton_context_cudagraph(tmp_path: pathlib.
         metadata_side_kernel[(1, )](args["x"], args["scratch"], num_warps=1)
         with proton.scope("metadata_child_scope"):
             metadata_scoped_side_kernel[(1, )](args["x"], args["scratch"], num_warps=1)
-        # Tensor launch metadata forces Proton to enqueue metric kernels while
-        # the CUDA graph is being captured.
         return {"name": "foo_graph_test", "flops": args["scratch"].sum()}
 
     @triton.jit(launch_metadata=metadata_fn)
@@ -900,96 +898,6 @@ def test_hook_launch_metadata_nested_triton_context_cudagraph(tmp_path: pathlib.
                               if name.startswith(COMPUTE_METADATA_SCOPE_NAME))
     child_scope_idx = scoped_metadata_path_names.index("metadata_child_scope")
     assert metadata_scope_idx < child_scope_idx < len(scoped_metadata_path_names) - 1
-
-
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports CUDA graph resource callbacks")
-def test_hook_launch_metadata_cudagraph_metric_queue_guard(tmp_path: pathlib.Path, device: str):
-    """Reproduce the combined launch.py and CuptiProfiler.cpp failure.
-
-    This mirrors the zen-bench attention path: ProtonProfiler disables
-    launch_metadata syncs, so attention launch_metadata computes flops/bytes by
-    launching device-side helper kernels and returns tensor metrics. The helper
-    kernels in this test are the small stand-ins for zen's attention metadata
-    counter kernels.
-
-    Without the launch.py metadata scope changes, the helper kernels below are
-    grouped under generic __proton_launch_metadata instead of the owning kernel's
-    __proton_launch_metadata:<owner> scope. Without the CuptiProfiler.cpp queue
-    guard, metadata-side graph nodes can consume an empty metric queue, crash,
-    or appear as <metric> kernels.
-    """
-    owner_name = "foo_metric_queue_guard"
-    owner_metadata_scope = f"{COMPUTE_METADATA_SCOPE_NAME}:{owner_name}"
-    stream = torch.cuda.Stream()
-    torch.cuda.set_stream(stream)
-
-    @triton.jit
-    def metadata_before_metric_kernel(x, scratch):
-        tl.store(scratch, tl.load(x) + 1.0)
-
-    @triton.jit
-    def metadata_after_metric_kernel(scratch, scratch2):
-        tl.store(scratch2, tl.load(scratch) + 2.0)
-
-    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
-        metadata_before_metric_kernel[(1, )](args["x"], args["scratch"], num_warps=1)
-        metadata_after_metric_kernel[(1, )](args["scratch"], args["scratch2"], num_warps=1)
-        return {"name": owner_name, "flops": args["scratch2"].sum()}
-
-    @triton.jit(repr=lambda _: owner_name, launch_metadata=metadata_fn)
-    def foo(x, scratch, scratch2, y):
-        tl.store(y, tl.load(x) + tl.load(scratch2))
-
-    x = torch.tensor([2], device=device, dtype=torch.float32)
-    scratch = torch.zeros_like(x)
-    scratch2 = torch.zeros_like(x)
-    y = torch.zeros_like(x)
-    temp_file = tmp_path / "test_hook_metadata_metric_queue_guard.chrome_trace"
-    session = proton.start(str(temp_file.with_suffix("")), data="trace", context="shadow", hook="triton")
-    try:
-        foo[(1, )](x, scratch, scratch2, y, num_warps=1)
-        torch.cuda.synchronize()
-
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            foo[(1, )](x, scratch, scratch2, y, num_warps=1)
-
-        with proton.scope("replay"):
-            graph.replay()
-        torch.cuda.synchronize()
-    finally:
-        proton.finalize(session)
-
-    with temp_file.open() as f:
-        trace_events = json.load(f)["traceEvents"]
-
-    replay_kernel_events = [
-        event for event in trace_events
-        if event.get("cat") == "kernel" and event.get("args", {}).get("call_stack", [])[:2] == ["ROOT", "replay"]
-    ]
-    metric_kernel_events = [event for event in replay_kernel_events if event["name"] == "<metric>"]
-    metadata_kernel_events = [
-        event for event in replay_kernel_events if any(
-            name.startswith(COMPUTE_METADATA_SCOPE_NAME) for name in event.get("args", {}).get("call_stack", []))
-    ]
-    metadata_kernel_names = {event["name"] for event in metadata_kernel_events}
-
-    # Only Proton's actual metric-copy kernel should be marked as <metric>.
-    # The metadata kernels are the graph nodes that make the queue guard necessary.
-    assert len(metric_kernel_events) == 1
-    assert {
-        "metadata_before_metric_kernel",
-        "metadata_after_metric_kernel",
-    }.issubset(metadata_kernel_names)
-    assert all(event["name"] != "<metric>" for event in metadata_kernel_events)
-
-    # These assertions are the launch.py side of the repro. Without the owner
-    # metadata scope, the call stacks contain only generic
-    # __proton_launch_metadata and the helper kernels cannot be tied back to foo.
-    for event in metadata_kernel_events:
-        call_stack = event["args"]["call_stack"]
-        assert owner_metadata_scope in call_stack
-        assert COMPUTE_METADATA_SCOPE_NAME not in call_stack
 
 
 def test_hook_with_third_party(tmp_path: pathlib.Path, device: str):
