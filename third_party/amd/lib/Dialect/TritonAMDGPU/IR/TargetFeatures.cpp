@@ -3,10 +3,34 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/TargetParser/TargetParser.h"
 #include <cassert>
 
 namespace mlir::triton::amdgpu {
+
+namespace {
+struct GfxArch {
+  unsigned number;
+  StringRef suffix;
+};
+
+std::optional<GfxArch> parseGfxArch(StringRef arch) {
+  if (!arch.consume_front("gfx"))
+    return std::nullopt;
+
+  unsigned number = 0;
+  bool hasDigits = false;
+  while (!arch.empty() && arch.front() >= '0' && arch.front() <= '9') {
+    hasDigits = true;
+    number = number * 10 + (arch.front() - '0');
+    arch = arch.drop_front();
+  }
+
+  if (!hasDigits)
+    return std::nullopt;
+
+  return GfxArch{number, arch};
+}
+} // namespace
 
 TargetFeatures::TargetFeatures(std::optional<StringRef> arch)
     : TargetFeatures(arch.value_or("")) {}
@@ -28,39 +52,43 @@ TargetFeatures TargetFeatures::fromModuleOp(ModuleOp moduleOp) {
 StringRef TargetFeatures::getArch() const { return arch; }
 
 ISAFamily TargetFeatures::getISAFamily() const {
-  llvm::AMDGPU::GPUKind kind = llvm::AMDGPU::parseArchAMDGCN(arch);
+  std::optional<GfxArch> gfxArch = parseGfxArch(arch);
+  if (!gfxArch)
+    return ISAFamily::Unknown;
+
+  unsigned number = gfxArch->number;
 
   // See https://llvm.org/docs/AMDGPUUsage.html#processors for how to
-  // categorize the following target gfx architectures.
-
-  if (kind == llvm::AMDGPU::GK_GFX1250)
+  // categorize the following target gfx architectures. Parse the gfx number
+  // directly here instead of depending on LLVM's target parser.
+  if (number == 1250)
     return ISAFamily::GFX1250;
 
-  if (kind == llvm::AMDGPU::GK_GFX906)
+  if (number == 906)
     return ISAFamily::GCN5_1;
 
   // CDNA ISA cases.
-  switch (kind) {
-  case llvm::AMDGPU::GK_GFX950:
+  switch (number) {
+  case 950:
     return ISAFamily::CDNA4;
-  case llvm::AMDGPU::GK_GFX942:
+  case 942:
     return ISAFamily::CDNA3;
-  case llvm::AMDGPU::GK_GFX90A:
-    return ISAFamily::CDNA2;
-  case llvm::AMDGPU::GK_GFX908:
+  case 908:
     return ISAFamily::CDNA1;
   default:
     break;
   }
+  if (number == 90 && gfxArch->suffix.starts_with("a"))
+    return ISAFamily::CDNA2;
 
   // RDNA ISA cases.
-  if (kind >= llvm::AMDGPU::GK_GFX1200 && kind <= llvm::AMDGPU::GK_GFX1201)
+  if (number >= 1200 && number <= 1201)
     return ISAFamily::RDNA4;
-  if (kind >= llvm::AMDGPU::GK_GFX1100 && kind <= llvm::AMDGPU::GK_GFX1153)
+  if (number >= 1100 && number <= 1153)
     return ISAFamily::RDNA3;
-  if (kind >= llvm::AMDGPU::GK_GFX1030 && kind <= llvm::AMDGPU::GK_GFX1036)
+  if (number >= 1030 && number <= 1036)
     return ISAFamily::RDNA2;
-  if (kind >= llvm::AMDGPU::GK_GFX1010 && kind <= llvm::AMDGPU::GK_GFX1013)
+  if (number >= 1010 && number <= 1013)
     return ISAFamily::RDNA1;
 
   return ISAFamily::Unknown;
