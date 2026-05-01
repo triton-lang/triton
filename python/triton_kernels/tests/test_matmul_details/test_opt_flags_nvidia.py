@@ -1,5 +1,6 @@
 import pytest
 import torch
+from triton._internal_testing import is_cuda
 
 from triton_kernels.matmul import matmul, matmul_torch, PrecisionConfig
 from triton_kernels.matmul_details.opt_flags import InapplicableConstraint, scoped_opt_flags_constraints
@@ -50,7 +51,7 @@ def _shuffle_blackwell_mxfp4_weight(weight):
     ],
 )
 def test_matmul_hopper_mxfp4_rhs_scale_padding_is_masked(device, constraints):
-    if device != "cuda" or not torch.cuda.is_available():
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
         pytest.skip("requires CUDA")
     if torch.cuda.get_device_capability()[0] != 9:
         pytest.skip("requires Hopper")
