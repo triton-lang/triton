@@ -163,16 +163,7 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
             e.g. ``0b00001111`` (warps 0..3), ``0b11110000`` (warps 4..7),
             ``0b01010101`` (stride-2 from warp 0).  Omit / ``None`` =
             all warps participate; explicit ``0`` is rejected by the verifier.
-
-            Adjacent loads with pairwise-disjoint, equal-K hints (whose
-            union is itself legal), matching destination encoding / block
-            shape, and matching ``cache_modifier`` are implicitly fused into
-            one TDM intrinsic.  Size ``async_wait`` counts on the post-merge
-            count (one merged op = one outstanding TDM).  Passing
-            ``mbarrier`` opts out: such loads stay as singletons and flush
-            any in-flight batch.
-        cache_modifier (str, optional): Cache behavior; merged loads must
-            share it (single auxBits immediate on the fused intrinsic).
+        cache_modifier (str, optional): Cache behavior.
     """
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
     pred = _semantic.to_tensor(pred)
