@@ -176,18 +176,16 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 // (K < numWarps) can pred-off inactive warps.  "message" covers the
 // per-warp tile (surjectivity); "block" comes from `cgaLayout`.
 //
-// `warpBasisBits` picks which warpId bits drive the K active warps; the
-// rest become free (predicated-off) bits.  Size = log2(K) where K =
-// prod(warpsPerCTA), entries distinct in [0, log2(numWarps)).  Empty =
-// use the lowest log2(K) bits (no-hint default).
-// Not the same as the `warp_used_hint` bitmask: the layout is coset-
-// invariant, so the anchor `i0 = lsb(hint)` is XORed in at runtime and
-// not encoded here.  Example, numWarps=8, K=4: basisBits={0,1} matches
-// hints 0b00001111 (i0=0) and 0b11110000 (i0=4) alike.
+// `warpUsedHint` (verifier-validated axis-aligned coset on warpId) picks
+// which warpId bits drive the K active warps; the other bits become free
+// (predicated-off).  The layout is coset-invariant -- the anchor
+// `i0 = lsb(hint)` is XORed into warpId at runtime, not encoded here --
+// so e.g. hints 0b00001111 and 0b11110000 produce the same layout.
+// Empty = no-hint default (lowest log2(K) bits, K = prod(warpsPerCTA)).
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
                                 const LinearLayout &cgaLayout, int numWarps,
-                                ArrayRef<int32_t> warpBasisBits = {});
+                                std::optional<uint32_t> warpUsedHint = {});
 
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

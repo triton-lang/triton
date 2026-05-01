@@ -1792,7 +1792,7 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
                                 const LinearLayout &cgaLayout, int numWarps,
-                                ArrayRef<int32_t> warpBasisBits) {
+                                std::optional<uint32_t> warpUsedHint) {
   int numDims = blockShape.size();
   auto ctx = cgaLayout.getOutDimNames().begin()->getContext();
 
@@ -1816,31 +1816,39 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
 
   // Build the warp sublayout: identity over `warpsPerCTA`, then permuted
   // and padded so the K identity rows sit at the warpId bit positions
-  // selected by the caller (or at the lowest log2K bits when none are
-  // provided).  Bits without an identity row become all-zero rows,
-  // which getFreeVariableMasks reports as free variables — these are
-  // the bits we predicate inactive warps on for partial TDM copy.
+  // picked out of the (verifier-validated axis-aligned coset) hint, or at
+  // the lowest log2K bits when none is provided.  Bits without an identity
+  // row become all-zero rows, which getFreeVariableMasks reports as free
+  // variables — these are the bits we predicate inactive warps on for
+  // partial TDM copy.
   LinearLayout warpLayout = identityStandardND(kWarp, warpsPerCTA, order);
   unsigned numActiveBits = llvm::Log2_32(activeWarps);
   unsigned numTotalBits = llvm::Log2_32(static_cast<unsigned>(numWarps));
-  assert(warpBasisBits.empty() ||
-         warpBasisBits.size() == static_cast<size_t>(numActiveBits));
+  assert(!warpUsedHint ||
+         static_cast<unsigned>(llvm::popcount(*warpUsedHint)) == activeWarps);
 
-  if (numTotalBits != numActiveBits || !warpBasisBits.empty()) {
+  if (numTotalBits != numActiveBits || warpUsedHint) {
+    // Enumerate the basis bit positions of the coset (verifier guarantees
+    // popcount(support) == log2(K)).
+    SmallVector<unsigned, 5> basisBits;
+    if (warpUsedHint) {
+      uint32_t i0 = llvm::countr_zero(*warpUsedHint);
+      uint32_t support = 0;
+      for (uint32_t m = *warpUsedHint; m != 0; m &= m - 1)
+        support |= static_cast<uint32_t>(llvm::countr_zero(m) ^ i0);
+      for (uint32_t s = support; s != 0; s &= s - 1)
+        basisBits.push_back(llvm::countr_zero(s));
+    }
+
     auto bases = warpLayout.getBases();
     auto identityRows = bases[kWarp];
     assert(identityRows.size() == numActiveBits);
 
     SmallVector<std::vector<int32_t>> placedRows(
         numTotalBits, std::vector<int32_t>(numDims, 0));
-    SmallVector<bool> bitTaken(numTotalBits, false);
     for (unsigned j = 0; j < numActiveBits; ++j) {
-      unsigned bitPos =
-          warpBasisBits.empty() ? j : static_cast<unsigned>(warpBasisBits[j]);
-      assert(bitPos < numTotalBits &&
-             "warpBasisBits entry out of range [0, log2(numWarps))");
-      assert(!bitTaken[bitPos] && "warpBasisBits has duplicates");
-      bitTaken[bitPos] = true;
+      unsigned bitPos = warpUsedHint ? basisBits[j] : j;
+      assert(bitPos < numTotalBits);
       placedRows[bitPos] = identityRows[j];
     }
 

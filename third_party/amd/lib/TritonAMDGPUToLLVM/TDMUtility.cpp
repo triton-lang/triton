@@ -591,29 +591,19 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        .getCGALayout()
                        .getLinearLayout();
 
-  // Decode the verifier-validated axis-aligned coset on demand.  Verifier
-  // guarantees popcount(support) == log2(K), so we don't re-check.
-  uint32_t i0 = 0;
-  SmallVector<int32_t, 5> basisBits;
-  if (warpUsedHint) {
-    i0 = llvm::countr_zero(*warpUsedHint);
-    uint32_t support = 0;
-    for (uint32_t m = *warpUsedHint; m != 0; m &= m - 1)
-      support |= static_cast<uint32_t>(llvm::countr_zero(m) ^ i0);
-    for (uint32_t s = support; s != 0; s &= s - 1)
-      basisBits.push_back(static_cast<int32_t>(llvm::countr_zero(s)));
-  }
-
   auto tdmLayout = triton::gpu::getTDMLinearLayout(
-      shapePerCTA, warpsPerCTA, cgaLayout, numWarps, basisBits);
+      shapePerCTA, warpsPerCTA, cgaLayout, numWarps, warpUsedHint);
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
-  // Anchor warpId at i0 (no-op for i0==0 / no hint) so the i-th active warp
-  // aligns with the i-th identity row of the sublayout.
+  // Anchor warpId at i0 = lsb(hint) (no-op for i0==0 / no hint) so the i-th
+  // active warp aligns with the i-th identity row of the sublayout.
   Value warpIdShifted = warpId;
-  if (i0 != 0)
-    warpIdShifted = b.xor_(warpId, b.i32_val(i0));
+  if (warpUsedHint) {
+    uint32_t i0 = llvm::countr_zero(*warpUsedHint);
+    if (i0 != 0)
+      warpIdShifted = b.xor_(warpId, b.i32_val(i0));
+  }
 
   auto warpOffset = applyLinearLayout(
       loc, rewriter, tdmLayout,
