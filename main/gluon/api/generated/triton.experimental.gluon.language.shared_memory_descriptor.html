@@ -154,28 +154,31 @@
 <tr class="row-odd"><td><p><a class="reference internal" href="#triton.experimental.gluon.language.shared_memory_descriptor.__init__" title="triton.experimental.gluon.language.shared_memory_descriptor.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>(self, handle, element_ty, shape, ...)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">gather</span></code>(self, indices, axis[, _semantic])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_scatter_add</span></code>(self, values, indices, axis)</p></td>
+<td><p>Atomically scatter-add elements to shared memory along a specified axis using an indices tensor.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">gather</span></code>(self, indices, axis[, _semantic])</p></td>
 <td><p>Gather elements from shared memory along a specified axis using an indices tensor.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">index</span></code>(self, index[, _semantic])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">index</span></code>(self, index[, _semantic])</p></td>
 <td><p>Create a subview of shared memory by indexing along the first dimension.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">load</span></code>(self, layout[, _semantic])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">load</span></code>(self, layout[, _semantic])</p></td>
 <td><p>Load a tensor from shared memory.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">permute</span></code>(self, order[, _semantic])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">permute</span></code>(self, order[, _semantic])</p></td>
 <td><p>Permute the dimensions of the shared memory descriptor.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">reshape</span></code>(self, shape[, _semantic])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">reshape</span></code>(self, shape[, _semantic])</p></td>
 <td><p>Reshape the shared memory descriptor to a new shape and layout.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scatter</span></code>(self, values, indices, axis[, _semantic])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">scatter</span></code>(self, values, indices, axis[, _semantic])</p></td>
 <td><p>Scatter elements to shared memory along a specified axis using an indices tensor.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">slice</span></code>(self, start, length[, dim, _semantic])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">slice</span></code>(self, start, length[, dim, _semantic])</p></td>
 <td><p>Create a subview of shared memory by slicing along a given dimension.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">store</span></code>(self, value[, _semantic])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">store</span></code>(self, value[, _semantic])</p></td>
 <td><p>Store a tensor into shared memory.</p></td>
 </tr>
 </tbody>

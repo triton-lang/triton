@@ -328,6 +328,58 @@ Interfaces: `MemoryEffectOpInterface`
 
 
 
+### `ttg.local_atomic_scatter_add` (triton::gpu::LocalAtomicScatterAddOp)
+
+_Atomically scatter-add elements into shared memory along a specified axis_
+
+Syntax:
+
+```
+operation ::= `ttg.local_atomic_scatter_add` $dst `[` $indices `]` `,` $values (`,` $mask^)? attr-dict `:`
+              functional-type(operands, results)
+```
+
+Atomically scatter-adds elements to a shared memory descriptor using an indices tensor
+along a single specified axis. The values tensor has the same shape as the
+indices tensor and the result returns the previous values observed at each
+updated location.
+
+For each input position I, the operation atomically updates dst where the
+coordinate at the axis is replaced by indices[I]:
+  dst[I[0], ..., indices[I], ..., I[n]] += values[I]
+
+If mask is present, the update is performed only for positions where
+mask[I] is true. Masked-off positions do not update shared memory and return
+an undefined old value.
+
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `InferTypeOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>axis</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `values` | ranked tensor of floating-point or integer or ptr values |
+| `indices` | ranked tensor of integer values |
+| `mask` | tensor of 1-bit signless integer values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of floating-point or integer or ptr values |
+
+
+
 ### `ttg.local_dealloc` (triton::gpu::LocalDeallocOp)
 
 _Dealloc buffer_
