@@ -776,8 +776,7 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     the others free; the K = `popcount(hint)` active warps are the
     ones whose warpId matches the pinned bits.  Legal: `0x0F` (warps
     0..3), `0xF0` (warps 4..7), `0x55` / `0xAA` / `0xCC` (stride-by-
-    `2^j`).  Rejected: diagonal/parity sets like `0x69`, non-coset
-    like `0x1B`.
+    `2^j`).  Rejected: non axis-aligned patterns like `0x69` or `0x1B`.
 
     The constraint pays off twice at lowering: power-of-two K keeps
     the per-warp tile recalc (`block / K`) integer-clean, and the

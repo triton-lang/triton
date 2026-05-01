@@ -301,10 +301,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 
-  // Diagonal pattern 0x69 (warps 0,3,5,6) is rejected: K=4 is a power of
-  // two but the (warpId XOR i0) basis spans 3 bit positions, not log2(K)
-  // = 2.  Diagonal/parity patterns are not axis-aligned and not
-  // supported in v1.
+  // 0x69 (warps 0,3,5,6) is rejected: K=4 is a power of two but the
+  // active set spans 3 warpId bit positions, not log2(K) = 2 -- a
+  // non axis-aligned pattern is not supported.
   tt.func @warp_used_hint_non_axis_aligned(
     %tensorDesc: !tt.tensordesc<256x64xf16>,
     %memDesc: !ttg.memdesc<256x64xf16, #shared_wb, #smem_wb, mutable>,
