@@ -345,6 +345,28 @@ class shared_memory_descriptor(base_value):
         return _semantic.shared_scatter(self, values, indices, axis)
 
     def _atomic_scatter_rmw(self, op, values, indices, axis, mask, _semantic: GluonSemantic = None) -> tensor:
+        """
+        Atomically scatter-update elements in shared memory along a specified axis using an indices tensor.
+
+        For each input position I, the operation reads from and writes to dst where the coordinate at
+        the scatter axis is replaced by indices[I]:
+          old = dst[I[0], ..., indices[I], ..., I[n]]
+          dst[I[0], ..., indices[I], ..., I[n]] = op(old, values[I])
+
+        Args:
+            op (str): The atomic read-modify-write operation to apply.
+            values (tensor): Tensor with values to combine (same shape as indices).
+            indices (tensor): Tensor specifying which indices to update along the axis.
+            axis (int): The axis along which to update values.
+            mask (tensor, optional): Boolean tensor selecting which elements to update.
+
+        Returns:
+            tensor: Gluon tensor with the values observed before the update.
+
+        Note:
+            This operation currently uses relaxed memory semantics. Users are responsible
+            for inserting mbarrier synchronization themselves.
+        """
         values = _unwrap_if_constexpr(values)
         indices = _unwrap_if_constexpr(indices)
         axis = _unwrap_if_constexpr(axis)
@@ -355,170 +377,37 @@ class shared_memory_descriptor(base_value):
 
     @builtin
     def atomic_scatter_add(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
-        """
-        Atomically scatter-add elements to shared memory along a specified axis using an indices tensor.
-
-        For each input position I, the operation reads the previous value from dst where the
-        coordinate at the scatter axis is replaced by indices[I], adds values[I], then writes
-        the updated result back to shared memory.
-
-        Args:
-            values (tensor): Tensor with values to add (same shape as indices).
-            indices (tensor): Tensor specifying which indices to update along the axis.
-            axis (int): The axis along which to update values.
-            mask (tensor, optional): Boolean tensor selecting which elements to update.
-
-        Returns:
-            tensor: Gluon tensor with the values observed before the update.
-
-        Note:
-            This operation currently uses relaxed memory semantics. Users are responsible
-            for inserting mbarrier synchronization themselves.
-        """
+        """Atomically scatter-add values into this shared-memory descriptor."""
         return self._atomic_scatter_rmw("add", values, indices, axis, mask, _semantic)
 
     @builtin
     def atomic_scatter_max(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
-        """
-        Atomically scatter-max integer elements to shared memory along a specified axis using an indices tensor.
-
-        For each input position I, the operation reads the previous value from dst where the
-        coordinate at the scatter axis is replaced by indices[I], computes max(old, values[I]),
-        then writes the updated result back to shared memory.
-
-        Args:
-            values (tensor): Integer tensor with values to compare (same shape as indices).
-            indices (tensor): Tensor specifying which indices to update along the axis.
-            axis (int): The axis along which to update values.
-            mask (tensor, optional): Boolean tensor selecting which elements to update.
-
-        Returns:
-            tensor: Gluon tensor with the values observed before the update.
-
-        Note:
-            This operation currently uses relaxed memory semantics. Users are responsible
-            for inserting mbarrier synchronization themselves.
-        """
+        """Atomically scatter-max integer values into this shared-memory descriptor."""
         return self._atomic_scatter_rmw("max", values, indices, axis, mask, _semantic)
 
     @builtin
     def atomic_scatter_min(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
-        """
-        Atomically scatter-min integer elements to shared memory along a specified axis using an indices tensor.
-
-        For each input position I, the operation reads the previous value from dst where the
-        coordinate at the scatter axis is replaced by indices[I], computes min(old, values[I]),
-        then writes the updated result back to shared memory.
-
-        Args:
-            values (tensor): Integer tensor with values to compare (same shape as indices).
-            indices (tensor): Tensor specifying which indices to update along the axis.
-            axis (int): The axis along which to update values.
-            mask (tensor, optional): Boolean tensor selecting which elements to update.
-
-        Returns:
-            tensor: Gluon tensor with the values observed before the update.
-
-        Note:
-            This operation currently uses relaxed memory semantics. Users are responsible
-            for inserting mbarrier synchronization themselves.
-        """
+        """Atomically scatter-min integer values into this shared-memory descriptor."""
         return self._atomic_scatter_rmw("min", values, indices, axis, mask, _semantic)
 
     @builtin
     def atomic_scatter_and(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
-        """
-        Atomically scatter-and integer elements to shared memory along a specified axis using an indices tensor.
-
-        For each input position I, the operation reads the previous value from dst where the
-        coordinate at the scatter axis is replaced by indices[I], computes old & values[I],
-        then writes the updated result back to shared memory.
-
-        Args:
-            values (tensor): Integer tensor with values to combine (same shape as indices).
-            indices (tensor): Tensor specifying which indices to update along the axis.
-            axis (int): The axis along which to update values.
-            mask (tensor, optional): Boolean tensor selecting which elements to update.
-
-        Returns:
-            tensor: Gluon tensor with the values observed before the update.
-
-        Note:
-            This operation currently uses relaxed memory semantics. Users are responsible
-            for inserting mbarrier synchronization themselves.
-        """
+        """Atomically scatter-and integer values into this shared-memory descriptor."""
         return self._atomic_scatter_rmw("and", values, indices, axis, mask, _semantic)
 
     @builtin
     def atomic_scatter_or(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
-        """
-        Atomically scatter-or integer elements to shared memory along a specified axis using an indices tensor.
-
-        For each input position I, the operation reads the previous value from dst where the
-        coordinate at the scatter axis is replaced by indices[I], computes old | values[I],
-        then writes the updated result back to shared memory.
-
-        Args:
-            values (tensor): Integer tensor with values to combine (same shape as indices).
-            indices (tensor): Tensor specifying which indices to update along the axis.
-            axis (int): The axis along which to update values.
-            mask (tensor, optional): Boolean tensor selecting which elements to update.
-
-        Returns:
-            tensor: Gluon tensor with the values observed before the update.
-
-        Note:
-            This operation currently uses relaxed memory semantics. Users are responsible
-            for inserting mbarrier synchronization themselves.
-        """
+        """Atomically scatter-or integer values into this shared-memory descriptor."""
         return self._atomic_scatter_rmw("or", values, indices, axis, mask, _semantic)
 
     @builtin
     def atomic_scatter_xor(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
-        """
-        Atomically scatter-xor integer elements to shared memory along a specified axis using an indices tensor.
-
-        For each input position I, the operation reads the previous value from dst where the
-        coordinate at the scatter axis is replaced by indices[I], computes old ^ values[I],
-        then writes the updated result back to shared memory.
-
-        Args:
-            values (tensor): Integer tensor with values to combine (same shape as indices).
-            indices (tensor): Tensor specifying which indices to update along the axis.
-            axis (int): The axis along which to update values.
-            mask (tensor, optional): Boolean tensor selecting which elements to update.
-
-        Returns:
-            tensor: Gluon tensor with the values observed before the update.
-
-        Note:
-            This operation currently uses relaxed memory semantics. Users are responsible
-            for inserting mbarrier synchronization themselves.
-        """
+        """Atomically scatter-xor integer values into this shared-memory descriptor."""
         return self._atomic_scatter_rmw("xor", values, indices, axis, mask, _semantic)
 
     @builtin
     def atomic_scatter_xchg(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
-        """
-        Atomically scatter-exchange elements to shared memory along a specified axis using an indices tensor.
-
-        For each input position I, the operation reads the previous value from dst where the
-        coordinate at the scatter axis is replaced by indices[I], then writes values[I] back
-        to shared memory.
-
-        Args:
-            values (tensor): Tensor with values to exchange (same shape as indices).
-            indices (tensor): Tensor specifying which indices to update along the axis.
-            axis (int): The axis along which to update values.
-            mask (tensor, optional): Boolean tensor selecting which elements to update.
-
-        Returns:
-            tensor: Gluon tensor with the values observed before the update.
-
-        Note:
-            This operation currently uses relaxed memory semantics. Users are responsible
-            for inserting mbarrier synchronization themselves.
-        """
+        """Atomically scatter-exchange values into this shared-memory descriptor."""
         return self._atomic_scatter_rmw("xchg", values, indices, axis, mask, _semantic)
 
     def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
