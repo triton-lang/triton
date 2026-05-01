@@ -49,6 +49,58 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // POST-PIPELINE-LABEL: @do_not_sink_alloc_to_predicated_mma
+  // POST-PIPELINE: %[[ACC_TM:.*]], %[[ALLOC_TOK:.*]] = ttng.tmem_alloc : ()
+  // POST-PIPELINE: scf.for {{.*}} iter_args(%[[TOK:.*]] = %[[ALLOC_TOK]])
+  // POST-PIPELINE-NOT: ttng.tmem_alloc
+  // POST-PIPELINE:   %[[MMA_TOK:.*]] = ttng.tc_gen5_mma {{.*}}, {{.*}}, %[[ACC_TM]][%[[TOK]]]
+  tt.func public @do_not_sink_alloc_to_predicated_mma(%A: !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>,
+                                                      %B: !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>,
+                                                      %pred: i1,
+                                                      %iters: i32) {
+    %false = arith.constant false
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %acc_tm, %alloc_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %res_tok = scf.for %i = %c0_i32 to %iters step %c1_i32 iter_args(%tok = %alloc_tok) -> (!ttg.async.token)  : i32 {
+      %mma_tok = ttng.tc_gen5_mma %A, %B, %acc_tm[%tok], %false, %pred : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      scf.yield %mma_tok : !ttg.async.token
+    }
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // POST-PIPELINE-LABEL: @do_not_sink_alloc_to_predicated_store
+  // POST-PIPELINE: %[[ACC_TM:.*]], %[[ALLOC_TOK:.*]] = ttng.tmem_alloc : ()
+  // POST-PIPELINE: scf.for {{.*}} iter_args(%[[TOK:.*]] = %[[ALLOC_TOK]])
+  // POST-PIPELINE-NOT: ttng.tmem_alloc
+  // POST-PIPELINE:   %[[STORE_TOK:.*]] = ttng.tmem_store {{.*}}, %[[ACC_TM]][%[[TOK]]], %{{.*}}
+  tt.func public @do_not_sink_alloc_to_predicated_store(%src: tensor<128x128xf32, #blocked>,
+                                                        %pred: i1,
+                                                        %iters: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %acc_tm, %alloc_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %res_tok = scf.for %i = %c0_i32 to %iters step %c1_i32 iter_args(%tok = %alloc_tok) -> (!ttg.async.token)  : i32 {
+      %store_tok = ttng.tmem_store %src, %acc_tm[%tok], %pred : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      scf.yield %store_tok : !ttg.async.token
+    }
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // POST-PIPELINE-LABEL: @sink_alloc_to_mma_use_acc_false
   // POST-PIPELINE: scf.for
   // POST-PIPELINE:   %[[ACC_TM:.*]], %[[ALLOC_TOK:.*]] = ttng.tmem_alloc : ()
@@ -57,6 +109,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
                                                   %B: !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>,
                                                   %iters: i32) {
     %false = arith.constant false
+    %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
     // Allocate accumulator outside the loop; it will be sunk next to the MMA
@@ -64,7 +117,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %res_tok = scf.for %i = %c0_i32 to %iters step %c1_i32 iter_args(%tok = %alloc_tok) -> (!ttg.async.token)  : i32 {
       // useAccumulator is false, so the accumulator source is ignored; the pattern
       // should accept this as fully overwriting the allocation and sink the alloc here.
-      %mma_tok = ttng.tc_gen5_mma %A, %B, %acc_tm[%tok], %false, %false : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %mma_tok = ttng.tc_gen5_mma %A, %B, %acc_tm[%tok], %false, %true : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
       scf.yield %mma_tok : !ttg.async.token
     }
     tt.return

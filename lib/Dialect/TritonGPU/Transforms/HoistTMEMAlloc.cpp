@@ -421,11 +421,12 @@ public:
   }
 };
 
-// Helper: return true if the value is a constant false boolean.
-static bool isConstFalse(Value v) {
+// Helper: return true if the value is a constant boolean with the expected
+// value.
+static bool isConstBool(Value v, bool expected) {
   if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
     if (auto attr = dyn_cast<BoolAttr>(cst.getValueAttr()))
-      return !attr.getValue();
+      return attr.getValue() == expected;
   }
   return false;
 }
@@ -443,14 +444,16 @@ static FailureOr<AllocUse> useOverwritesAlloc(ttng::TMEMAllocOp alloc,
   OpOperand &onlyUse = *tokArg.use_begin();
   Operation *useOp = onlyUse.getOwner();
   if (auto store = dyn_cast<ttng::TMEMStoreOp>(useOp)) {
-    if (store.getDst() != alloc.getResult())
+    if (store.getDst() != alloc.getResult() ||
+        !isConstBool(store.getPred(), true))
       return failure();
     return AllocUse{useOp, store.getDepMutable()};
   }
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(useOp)) {
     if (onlyUse.get() == mma.getAccDep() &&
         mma.getAccumulator() == alloc.getResult() &&
-        isConstFalse(mma.useAccumulator()))
+        isConstBool(mma.useAccumulator(), false) &&
+        isConstBool(mma.getPredicate(), true))
       return AllocUse{useOp, mma.getAccDepMutable()};
   }
   return failure();
