@@ -587,10 +587,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   assert(!dstPtrs.empty() && "dstPtrs cannot be empty");
   assert(warpsPerCTA.size() == numDims &&
          "warpsPerCTA must have one entry per tensor dim");
-  assert((groups.size() == 2 || groups.size() == 4) &&
-         "groups must hold 2 (1D-2D) or 4 (3D-5D) vector entries");
   assert((numDims <= 2 ? groups.size() == 2 : groups.size() == 4) &&
-         "groups size must match numDims");
+         "groups must hold 2 (1D-2D) or 4 (3D-5D) vector entries");
 
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);

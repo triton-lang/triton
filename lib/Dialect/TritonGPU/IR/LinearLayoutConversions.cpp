@@ -1846,10 +1846,7 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
 
     bases[kWarp].assign(placedRows.begin(), placedRows.end());
 
-    SmallVector<std::pair<StringAttr, int32_t>> outDimSizes;
-    for (StringAttr outDim : warpLayout.getOutDimNames())
-      outDimSizes.push_back({outDim, warpLayout.getOutDimSize(outDim)});
-    warpLayout = LinearLayout(std::move(bases), outDimSizes,
+    warpLayout = LinearLayout(std::move(bases), warpLayout.getOutDims(),
                               /*requireSurjective=*/false);
   }
 

@@ -767,21 +767,20 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     lands in shared memory either way -- only emission changes:
     `K = popcount(hint)` warps cover the block, the rest are pred-off.
 
-    "All warps participate" is the attribute being **absent**; an
-    explicit `warp_used_hint = 0` is rejected (`K = num_warps` is a
-    normal hinted op).  Front-ends should map a Python-side `0` to
-    "no attribute".
+    For "all warps participate", omit the attribute (preferred) or pass
+    a full bitmask `K = num_warps`; an explicit `warp_used_hint = 0` is
+    rejected.  Front-ends should map a Python-side `0` to "no attribute".
 
-    v1 restriction: the hint must be an *axis-aligned coset* in warpId
+    Restriction: the hint must be an *axis-aligned coset* in warpId
     space.  With `S = { i : (hint >> i) & 1 == 1 }`, `i0 = lsb(hint)`,
     `support = OR over s in S of (s XOR i0)`: legal iff
     `popcount(support) == log2(K)`.  Legal: `0x0F` (warps 0..3), `0xF0`
     (warps 4..7), `0x55` / `0xAA` / `0xCC` (stride-by-`2^j`).  Rejected:
     diagonal/parity sets like `0x69`, non-coset like `0x1B`.
 
-    PartitionedSharedEncoding additionally requires
-    `warpsPerCTA[partitionDim] >= numLogicalPieces` (the hinted path
-    doesn't support multi-instruction slicing).
+    PartitionedSharedEncoding additionally requires `K = popcount(hint)`
+    to be a multiple of `numLogicalPieces` (the hinted path doesn't
+    support multi-instruction slicing).
   }];
 
   let arguments = (ins
@@ -818,16 +817,6 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
   let assemblyFormat = [{
     $desc `[` $indices `]` `into` $result `,` `pred` `=` $pred (`,` `barrier` `=` $barrier^)?
     attr-dict `:` qualified(type($desc)) (`,` qualified(type($barrier))^)? `->` qualified(type($result))
-  }];
-
-  let extraClassDeclaration = [{
-    // Validate `warp_used_hint` (axis-aligned coset, K a power of two with
-    // 1 <= K <= num_warps, no bits >= num_warps).  Returns nullopt on
-    // success, else an error string.  Encoding-specific rules
-    // (PartitionedSharedEncoding) live in verify() since they need the
-    // result type.
-    static ::std::optional<::std::string> validateWarpUsedHint(
-        uint32_t warpUsedHint, int64_t numWarps);
   }];
 
   let hasVerifier = 1;

@@ -585,6 +585,66 @@ void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
   patterns.add(foldConcatOpFromSingleSource);
 }
 
+namespace {
+// Validate `warp_used_hint`: axis-aligned coset, K = popcount(hint) a power
+// of two with 1 <= K <= num_warps, no bits >= num_warps. Returns nullopt on
+// success, else an error string. Encoding-specific rules (e.g.
+// PartitionedSharedEncoding) live in verify() since they need the type.
+std::optional<std::string> validateWarpUsedHint(uint32_t hint,
+                                                int64_t numWarps) {
+  if (!llvm::isPowerOf2_64(numWarps))
+    return llvm::formatv("num_warps must be a power of two when using "
+                         "warp_used_hint, got {0}",
+                         numWarps)
+        .str();
+
+  if (hint == 0)
+    return std::string("warp_used_hint must have at least one bit set");
+
+  // Bits above num_warps - 1 must be zero (no warp at those positions).
+  // Checked before the K-power-of-two check so out-of-range bits get the
+  // more specific message; afterwards K = popcount(hint) <= numWarps holds
+  // automatically, so no separate "K vs num_warps" check is needed.
+  uint32_t numWarpsMask =
+      (numWarps >= 32) ? ~uint32_t{0} : ((uint32_t{1} << numWarps) - 1);
+  if ((hint & ~numWarpsMask) != 0)
+    return llvm::formatv("warp_used_hint = {0:x} sets bits beyond "
+                         "num_warps = {1}",
+                         hint, numWarps)
+        .str();
+
+  unsigned K = llvm::popcount(hint);
+  if (!llvm::isPowerOf2_32(K))
+    return llvm::formatv("popcount(warp_used_hint) = {0} must be a power "
+                         "of two (got hint {1:x})",
+                         K, hint)
+        .str();
+
+  // Axis-aligned coset check: with i0 = lsb(hint),
+  // support = OR_{w in S} (w XOR i0), legal iff popcount(support) == log2(K)
+  // (sufficient by pigeonhole: K values (w ^ i0) are distinct subsets of
+  // `support`, of which there are 2^log2K = K).  XOR is over warp INDICES.
+  unsigned i0 = llvm::countr_zero(hint);
+  uint32_t support = 0;
+  for (uint32_t mask = hint; mask != 0; mask &= mask - 1) {
+    unsigned w = llvm::countr_zero(mask);
+    support |= static_cast<uint32_t>(w ^ i0);
+  }
+  unsigned logK = llvm::Log2_32(K);
+  if (static_cast<unsigned>(llvm::popcount(support)) != logK)
+    return llvm::formatv(
+               "warp_used_hint = {0:x} is not an axis-aligned coset: "
+               "after offsetting by i0 = {1}, the spanned basis bit "
+               "positions (mask {2:x}, popcount {3}) do not have popcount "
+               "log2(K) = {4}; diagonal/parity patterns are not supported",
+               hint, i0, support,
+               static_cast<unsigned>(llvm::popcount(support)), logK)
+        .str();
+
+  return std::nullopt;
+}
+} // namespace
+
 LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   auto tensorDescTy = getDesc().getType();
   auto smemTy = getResult().getType();
@@ -674,62 +734,6 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   }
 
   return success();
-}
-
-std::optional<std::string>
-AsyncTDMCopyGlobalToLocalOp::validateWarpUsedHint(uint32_t hint,
-                                                  int64_t numWarps) {
-  if (!llvm::isPowerOf2_64(numWarps))
-    return llvm::formatv("num_warps must be a power of two when using "
-                         "warp_used_hint, got {0}",
-                         numWarps)
-        .str();
-
-  if (hint == 0)
-    return std::string("warp_used_hint must have at least one bit set");
-
-  // Bits above num_warps - 1 must be zero (no warp at those positions).
-  // Checked before the K-power-of-two check so out-of-range bits get the
-  // more specific message; afterwards K = popcount(hint) <= numWarps holds
-  // automatically, so no separate "K vs num_warps" check is needed.
-  uint32_t numWarpsMask =
-      (numWarps >= 32) ? ~uint32_t{0} : ((uint32_t{1} << numWarps) - 1);
-  if ((hint & ~numWarpsMask) != 0)
-    return llvm::formatv("warp_used_hint = {0:x} sets bits beyond "
-                         "num_warps = {1}",
-                         hint, numWarps)
-        .str();
-
-  unsigned K = llvm::popcount(hint);
-  if (!llvm::isPowerOf2_32(K))
-    return llvm::formatv("popcount(warp_used_hint) = {0} must be a power "
-                         "of two (got hint {1:x})",
-                         K, hint)
-        .str();
-
-  // v1 axis-aligned coset check: with i0 = lsb(hint),
-  // support = OR_{w in S} (w XOR i0), legal iff popcount(support) == log2(K)
-  // (sufficient by pigeonhole: K values (w ^ i0) are distinct subsets of
-  // `support`, of which there are 2^log2K = K).  XOR is over warp INDICES.
-  unsigned i0 = llvm::countr_zero(hint);
-  uint32_t support = 0;
-  for (uint32_t mask = hint; mask != 0; mask &= mask - 1) {
-    unsigned w = llvm::countr_zero(mask);
-    support |= static_cast<uint32_t>(w ^ i0);
-  }
-  unsigned logK = llvm::Log2_32(K);
-  if (static_cast<unsigned>(llvm::popcount(support)) != logK)
-    return llvm::formatv(
-               "warp_used_hint = {0:x} is not an axis-aligned coset: "
-               "after offsetting by i0 = {1}, the spanned basis bit "
-               "positions (mask {2:x}, popcount {3}) do not have popcount "
-               "log2(K) = {4}; diagonal/parity patterns are not supported "
-               "in v1",
-               hint, i0, support,
-               static_cast<unsigned>(llvm::popcount(support)), logK)
-        .str();
-
-  return std::nullopt;
 }
 
 // -- AsyncCopyLocalToGlobalOp --
