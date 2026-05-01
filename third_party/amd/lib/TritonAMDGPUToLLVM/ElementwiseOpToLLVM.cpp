@@ -2103,15 +2103,15 @@ Value EmitDualBF16ElementwiseOp(Location loc,
   return convertFp32ToBf16(loc, rewriter, result, RoundingMode::RTNE);
 }
 
-// Override pattern that packs adjacent f32 elementwise ops into <2 x float>.
+// Override pattern that packs adjacent elementwise ops into vector LLVM ops.
 // The default elementwise patterns remain target-agnostic.
 template <typename SourceOp, typename LLVMOp>
-struct PackedF32ArithOpConversion
-    : ElementwiseOpConversionBase<
-          SourceOp, PackedF32ArithOpConversion<SourceOp, LLVMOp>> {
+struct PackedArithOpConversion
+    : ElementwiseOpConversionBase<SourceOp,
+                                  PackedArithOpConversion<SourceOp, LLVMOp>> {
   using Base =
       ElementwiseOpConversionBase<SourceOp,
-                                  PackedF32ArithOpConversion<SourceOp, LLVMOp>>;
+                                  PackedArithOpConversion<SourceOp, LLVMOp>>;
   using OpAdaptor = typename Base::OpAdaptor;
 
   using Base::Base;
@@ -2120,7 +2120,7 @@ struct PackedF32ArithOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    if (operands.size() < 2 || !elemTy.isF32())
+    if (operands.size() < 2 || !(elemTy.isF32() || elemTy.isBF16()))
       return {};
 
     Value va = packLLVector(loc, {operands[0][0], operands[1][0]}, rewriter);
@@ -2482,7 +2482,7 @@ struct SqrtOpConversion
     // llvm.amdgcn.sqrt.f32 provides direct access to v_sqrt_f32, which provides
     // 1ULP accuracy and flushs denorms.
     Value intrinsicsOutput =
-        ROCDL::ROCDLSqrt::create(rewriter, loc, elemTy, operands[0]);
+        ROCDL::ROCDLSqrt::create(rewriter, loc, elemTy, scaledSrc);
 
     if (!ftz) {
       // In case of non-ftz, we need to calibrate the results by scaling down by
@@ -2583,11 +2583,11 @@ void populateElementwiseOpToLLVMPatterns(
 
   if (targetInfo.getISAFamily() == AMD::ISAFamily::GFX1250) {
     auto gfx1250Benefit = benefit.getBenefit() + 1;
-    patterns.add<PackedF32ArithOpConversion<arith::SubFOp, LLVM::FSubOp>>(
+    patterns.add<PackedArithOpConversion<arith::SubFOp, LLVM::FSubOp>>(
         typeConverter, axisInfoAnalysis, gfx1250Benefit);
-    patterns.add<PackedF32ArithOpConversion<arith::AddFOp, LLVM::FAddOp>>(
+    patterns.add<PackedArithOpConversion<arith::AddFOp, LLVM::FAddOp>>(
         typeConverter, axisInfoAnalysis, gfx1250Benefit);
-    patterns.add<PackedF32ArithOpConversion<arith::MulFOp, LLVM::FMulOp>>(
+    patterns.add<PackedArithOpConversion<arith::MulFOp, LLVM::FMulOp>>(
         typeConverter, axisInfoAnalysis, gfx1250Benefit);
   }
 
