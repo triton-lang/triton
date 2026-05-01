@@ -816,8 +816,8 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
                     builder.getContext(),
                     dim == 0 ? tmem.getBlockM() / 2 : tmem.getBlockM(),
                     dim == 1 ? tmem.getBlockN() / 2 : tmem.getBlockN(),
-                    tmem.getColStride(), tmem.getCGALayout(),
-                    tmem.getTwoCTAs(), tmem.getFp4Padded());
+                    tmem.getColStride(), tmem.getCGALayout(), tmem.getTwoCTAs(),
+                    tmem.getFp4Padded());
             auto newType = MemDescType::get(shape, type.getElementType(),
                                             accEncoding, type.getMemorySpace(),
                                             type.getMutableMemory());

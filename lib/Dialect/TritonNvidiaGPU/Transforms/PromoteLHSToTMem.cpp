@@ -45,10 +45,11 @@ public:
     auto accTMemEncoding = dyn_cast<TensorMemoryEncodingAttr>(
         tcGen5MMAOp.getD().getType().getEncoding());
     auto cgaLayout = triton::gpu::getCGALayout(srcLayout);
-    // TMem encoding for A operand is the same as for D (Acc), with colStride 1.
+    // TMem encoding for A operand is the same as for D (Acc), with colStride 1,
+    // i.e. densely packed in TMEM.
     unsigned elemBitWidth =
         lhs.getType().getElementType().getIntOrFloatBitWidth();
-    if (elemBitWidth != 8 && elemBitWidth != 16 && elemBitWidth != 32) {
+    if (!llvm::is_contained({8, 16, 32}, elemBitWidth)) {
       return failure();
     }
     const unsigned colStride = 1;
