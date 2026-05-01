@@ -808,15 +808,20 @@ static LogicalResult verifyScaledLHSOperand(Operation *op, Type elementType,
         !encoding.getFp4Padded())
       return op->emitOpError(
           "expected e2m1 LHS operand to be fp4_padded when RHS is float8");
+      return success();
   }
 
-  if (isa<Float8E4M3FNType, Float8E5M2Type>(elementType) &&
+  if (isa<Float8E4M3FNType, Float8E5M2Type>(elementType)) {
+    if (
       !llvm::is_contained({ScaleDotElemType::E4M3, ScaleDotElemType::E5M2},
-                          aType))
+                           aType)) {
     return op->emitOpError(
         "expected float8 LHS operand to have e4m3 or e5m2 format");
+    }
+  return success();
+    }
 
-  return op->emitOpError("unsupported LHS operand type for scaled MMA");
+    return op->emitOpError("unsupported LHS operand type for scaled MMA");
 }
 
 LogicalResult TCGen5MMAScaledOp::verify() {
