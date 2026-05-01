@@ -342,7 +342,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttng.tw
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: scf.for
     scf.for %i = %c0 to %c2 step %c1 {
-      // CHECK: arith.constant 8192 : i64
+      // CHECK: arith.constant 4096 : i64
       // CHECK: tt.call @__triton_consan_verify_barrier_arrive
       // CHECK: ttng.barrier_expect
       ttng.barrier_expect %bar, 4096, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>

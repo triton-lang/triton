@@ -171,10 +171,107 @@ def make_matmul_repr(base_name, order):
     return matmul_repr
 
 
+@triton.jit
+def _matmul_flops_and_bytes_from_slices_kernel(
+    SliceSizes,
+    Flops,
+    Bytes,
+    NUM_SLICES: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+    FLOPS_PER_TOKEN: tl.constexpr,
+    STATIC_FLOPS: tl.constexpr,
+    X_BYTES_PER_TOKEN: tl.constexpr,
+    Y_BYTES_PER_TOKEN: tl.constexpr,
+    W_BYTES_PER_TOKEN: tl.constexpr,
+    W_BYTES_PER_ACTIVE_SLICE: tl.constexpr,
+    STATIC_BYTES: tl.constexpr,
+):
+    n_tokens = tl.full((), 0, dtype=tl.int64)
+    n_active_slices = tl.full((), 0, dtype=tl.int64)
+    for start in range(0, NUM_SLICES, BLOCK_SIZE):
+        offs = start + tl.arange(0, BLOCK_SIZE)
+        mask = offs < NUM_SLICES
+        slice_sizes = tl.load(SliceSizes + offs, mask=mask, other=0).to(tl.int64)
+        n_tokens += tl.sum(slice_sizes, axis=0)
+        n_active_slices += tl.sum(tl.where(slice_sizes > 0, 1, 0), axis=0).to(tl.int64)
+
+    flops = STATIC_FLOPS + n_tokens.to(tl.float64) * FLOPS_PER_TOKEN
+    total_bytes = (STATIC_BYTES + n_tokens * (X_BYTES_PER_TOKEN + Y_BYTES_PER_TOKEN + W_BYTES_PER_TOKEN) +
+                   n_active_slices * W_BYTES_PER_ACTIVE_SLICE)
+    tl.store(Flops, flops)
+    tl.store(Bytes, total_bytes)
+
+
+def _matmul_flops_and_bytes_from_slices(
+    args,
+    M,
+    N,
+    K,
+    X,
+    Y,
+    W,
+    slice_sizes,
+    nbits,
+    batch_size,
+):
+    import torch
+
+    ragged_k = args["RAGGED_DIMENSION"] == "K"
+    z = 1 if ragged_k else batch_size
+
+    static_flops = 0.0
+    flops_per_token = 0.0
+    if ragged_k:
+        assert M is not None
+        flops_per_token = 2.0 * M * N * z
+    elif M is None:
+        assert K is not None
+        flops_per_token = 2.0 * N * K * z
+    elif K is None:
+        flops_per_token = 2.0 * M * N * z
+    else:
+        static_flops = 2.0 * M * N * K * z
+
+    static_bytes = 0
+    x_bytes_per_token = 0
+    y_bytes_per_token = 0
+    w_bytes_per_token = 0
+    w_bytes_per_active_slice = 0
+    if ragged_k:
+        x_bytes_per_token = X.shape[-2] * X.element_size()
+        # Here, we're computing dW = X.T@dY, so "W" is actually dY and "Y" is actually dW.
+        static_bytes = Y.numel() * Y.element_size() * (2 if args["OutAcc"] is not None else 1)
+        w_bytes_per_token = W.shape[-1] * W.element_size()
+    else:
+        x_bytes_per_token = X.shape[-1] * X.element_size()
+        y_bytes_per_token = Y.shape[-1] * Y.element_size()
+        w_bytes_per_active_slice = W.numel() * W.element_size() // slice_sizes.numel()
+
+    flops = torch.empty((), dtype=torch.float64, device=slice_sizes.device)
+    total_bytes = torch.empty((), dtype=torch.int64, device=slice_sizes.device)
+    block_size = min(triton.next_power_of_2(slice_sizes.numel()), 1024)
+    _matmul_flops_and_bytes_from_slices_kernel[(1, )](
+        slice_sizes,
+        flops,
+        total_bytes,
+        NUM_SLICES=slice_sizes.numel(),
+        BLOCK_SIZE=block_size,
+        FLOPS_PER_TOKEN=flops_per_token,
+        STATIC_FLOPS=static_flops,
+        X_BYTES_PER_TOKEN=x_bytes_per_token,
+        Y_BYTES_PER_TOKEN=y_bytes_per_token,
+        W_BYTES_PER_TOKEN=w_bytes_per_token,
+        W_BYTES_PER_ACTIVE_SLICE=w_bytes_per_active_slice,
+        STATIC_BYTES=static_bytes,
+    )
+    return {f"flops{nbits}": flops, "bytes": total_bytes}
+
+
 def matmul_launch_metadata(grid, kernel, args):
     from ..proton_opts import launch_metadata_allow_sync
 
     ret = dict()
+    allow_sync = launch_metadata_allow_sync()
     M, N, K = args["M"], args["N"], args["K"]
     Y, X, W = args["YPtr"], args["XPtr"], args["WPtr"]
     expected_slice_sizes = args.get("X_EXPECTED_SLICE_SIZE")
@@ -183,21 +280,18 @@ def matmul_launch_metadata(grid, kernel, args):
     n_rows = "unknown"
     if expected_slice_sizes is not None:
         n_rows = f"{expected_slice_sizes}*"
-    elif slice_sizes is not None and launch_metadata_allow_sync():
+    elif slice_sizes is not None and allow_sync:
         n_rows = int(slice_sizes.float().mean())
 
     n_tokens = None
     if slice_sizes is not None:
-        if launch_metadata_allow_sync():
+        if allow_sync:
             n_tokens = int(slice_sizes.sum())
-        else:
-            n_tokens = slice_sizes.sum()  # n_tokens can stay in gpu
 
     K_repr = K
     if args["RAGGED_DIMENSION"] == "K":
         K = None if n_tokens is None else n_tokens
-        K_repr = K if launch_metadata_allow_sync(
-        ) else None  # make sure K_repr is string compatible as K can be on a GPU tensor
+        K_repr = K if allow_sync else None
 
     repr = lambda s, x: f"{s} = {x}" if x is not None else f"E_{len(slice_sizes)}({s}) = {n_rows}"
     nbits = X.dtype.itemsize * 8
@@ -209,6 +303,21 @@ def matmul_launch_metadata(grid, kernel, args):
     ep_subtile = args["EPILOGUE_SUBTILE"]
     if ep_subtile is not None and ep_subtile > 1:
         ret["name"] += f" ep/{ep_subtile}"
+
+    if slice_sizes is not None and not allow_sync:
+        ret.update(_matmul_flops_and_bytes_from_slices(
+            args,
+            M,
+            N,
+            K,
+            X,
+            Y,
+            W,
+            slice_sizes,
+            nbits,
+            batch_size,
+        ))
+        return ret
 
     if slice_sizes is not None and n_tokens is None:
         return ret  # Don't fill metadata because we can't compute them properly.
