@@ -144,7 +144,7 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
 
 @builtin
 def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], dest: shared_memory_descriptor,
-               pred=1, mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+               pred=1, mbarrier: shared_memory_descriptor = None, cache_modifier="", _semantic=None) -> None:
     """Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.
 
     Args:
@@ -159,13 +159,14 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
     pred_handle = pred.handle
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
+    cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
     _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, offset_handles, dest.handle, pred_handle,
-                                                            mbarrier_handle)
+                                                            mbarrier_handle, cache_modifier)
 
 
 @builtin
 def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], src: shared_memory_descriptor,
-                mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+                mbarrier: shared_memory_descriptor = None, cache_modifier="", _semantic=None) -> None:
     """Store a block of tensor specified in tensor descriptor from shared memory to global memory asynchronously.
 
     Args:
@@ -177,7 +178,9 @@ def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.ten
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
-    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, offset_handles, src.handle, mbarrier_handle)
+    cache_modifier = _semantic._str_to_store_cache_modifier(cache_modifier)
+    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, offset_handles, src.handle, mbarrier_handle,
+                                                            cache_modifier)
 
 
 @builtin
