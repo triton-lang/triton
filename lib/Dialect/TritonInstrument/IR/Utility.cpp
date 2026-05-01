@@ -229,9 +229,11 @@ gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
                              int64_t sizeInBytes, int64_t alignment,
                              bool sharedClusterState) {
-  return gpu::GlobalScratchAllocOp::create(
+  auto alloc = gpu::GlobalScratchAllocOp::create(
       b, loc, ptrType, sizeInBytes, alignment, b.getUnitAttr(),
       sharedClusterState ? b.getUnitAttr() : UnitAttr());
+  alloc->setDiscardableAttr("tt.divisibility", b.getI64IntegerAttr(alignment));
+  return alloc;
 }
 
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
