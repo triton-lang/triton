@@ -216,6 +216,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@filecheck_test
+@gluon.jit
+def test_shared_atomic_scatter_add():
+    # CHECK: [[SMEM:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<8x32xi32
+    # CHECK: [[INDICES:%.*]] = arith.addi
+    # CHECK: [[VALUES:%.*]] = arith.constant dense<1> : tensor<8x32xi32, #blocked>
+    # CHECK: [[MASK:%.*]] = arith.constant dense<true> : tensor<8x32xi1, #blocked>
+    # CHECK: ttg.local_atomic_scatter_add [[SMEM]][[[INDICES]]], [[VALUES]], [[MASK]] {axis = 1 : i32} : (!ttg.memdesc<8x32xi32, #shared, #smem, mutable>, tensor<8x32xi32, #blocked>, tensor<8x32xi32, #blocked>, tensor<8x32xi1, #blocked>) -> tensor<8x32xi32, #blocked>
+    shape: ttgl.constexpr = [8, 32]
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+
+    smem = ttgl.allocate_shared_memory(ttgl.int32, shape, smem_layout)
+    smem.store(ttgl.zeros(shape, ttgl.int32, layout))
+
+    cols = ttgl.arange(0, shape[1], layout=ttgl.SliceLayout(0, layout))[None, :]
+    indices = cols + ttgl.zeros(shape, ttgl.int32, layout)
+    values = ttgl.full(shape, 1, ttgl.int32, layout)
+    mask = ttgl.full(shape, True, ttgl.int1, layout)
+    old = smem.atomic_scatter_add(values, indices, axis=1, mask=mask)  # noqa: F841
+
+
 @gluon.jit
 def tensor_memory_kernel(layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
     XBLOCK: ttgl.constexpr = tmem_layout.block[0]
