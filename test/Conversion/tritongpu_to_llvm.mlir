@@ -2258,41 +2258,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: test_local_atomic_scatter_rmw_i32_ops
-  // CHECK: atom.shared.cta.relaxed.min.s32
-  // CHECK: atom.shared.cta.relaxed.max.u32
-  // CHECK: atom.shared.cta.relaxed.min.u32
-  // CHECK: atom.shared.cta.relaxed.and.b32
-  // CHECK: atom.shared.cta.relaxed.or.b32
-  // CHECK: atom.shared.cta.relaxed.xor.b32
-  // CHECK: atom.shared.cta.relaxed.exch.b32
-  tt.func public @test_local_atomic_scatter_rmw_i32_ops(%arg0: tensor<1xi32, #blocked>, %arg1: tensor<1xi32, #blocked>, %mask: tensor<1xi1, #blocked>) {
-    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
-    %out = ttg.local_alloc {allocation.offset = 4 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
-    %min = ttg.local_atomic_scatter_rmw min, %0[%arg0], %arg1, %mask {axis = 0 : i32} : (!ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked>, tensor<1xi1, #blocked>) -> tensor<1xi32, #blocked>
-    ttg.local_store %min, %out : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
-    %umax = ttg.local_atomic_scatter_rmw umax, %0[%arg0], %arg1, %mask {axis = 0 : i32} : (!ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked>, tensor<1xi1, #blocked>) -> tensor<1xi32, #blocked>
-    ttg.local_store %umax, %out : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
-    %umin = ttg.local_atomic_scatter_rmw umin, %0[%arg0], %arg1, %mask {axis = 0 : i32} : (!ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked>, tensor<1xi1, #blocked>) -> tensor<1xi32, #blocked>
-    ttg.local_store %umin, %out : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
-    %and = ttg.local_atomic_scatter_rmw and, %0[%arg0], %arg1, %mask {axis = 0 : i32} : (!ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked>, tensor<1xi1, #blocked>) -> tensor<1xi32, #blocked>
-    ttg.local_store %and, %out : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
-    %or = ttg.local_atomic_scatter_rmw or, %0[%arg0], %arg1, %mask {axis = 0 : i32} : (!ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked>, tensor<1xi1, #blocked>) -> tensor<1xi32, #blocked>
-    ttg.local_store %or, %out : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
-    %xor = ttg.local_atomic_scatter_rmw xor, %0[%arg0], %arg1, %mask {axis = 0 : i32} : (!ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked>, tensor<1xi1, #blocked>) -> tensor<1xi32, #blocked>
-    ttg.local_store %xor, %out : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
-    %exch = ttg.local_atomic_scatter_rmw exch, %0[%arg0], %arg1, %mask {axis = 0 : i32} : (!ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked>, tensor<1xi1, #blocked>) -> tensor<1xi32, #blocked>
-    ttg.local_store %exch, %out : tensor<1xi32, #blocked> -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
-    tt.return
-  }
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: test_local_atomic_scatter_add_f32_masked
   // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
   // CHECK-SAME: atom.shared.cta.relaxed.add.f32

@@ -2637,10 +2637,7 @@ def shared_atomic_scatter_rmw_kernel(
 
 def _expected_shared_atomic_scatter_rmw(op, init_value, indices, values, mask, axis, shape):
     device = values.device
-    expected = torch.full(shape, init_value, dtype=values.dtype)
-    indices = indices.cpu()
-    values = values.cpu()
-    mask = mask.cpu()
+    expected = torch.full(shape, init_value, dtype=values.dtype, device=device)
     rhs_n, rhs_m = values.shape
 
     def combine(old, val):
@@ -2656,23 +2653,24 @@ def _expected_shared_atomic_scatter_rmw(op, init_value, indices, values, mask, a
             return old | val
         if op == "xor":
             return old ^ val
+        # xchg
         return val
 
     if axis == 1:
-        row_ids = torch.arange(rhs_n)
+        row_ids = torch.arange(rhs_n, device=device)
         for j in range(rhs_m):
             active = mask[:, j]
             rows = row_ids[active]
             cols = indices[active, j].long()
             expected[rows, cols] = combine(expected[rows, cols], values[active, j])
     else:
-        col_ids = torch.arange(rhs_m)
+        col_ids = torch.arange(rhs_m, device=device)
         for i in range(rhs_n):
             active = mask[i, :]
             rows = indices[i, active].long()
             cols = col_ids[active]
             expected[rows, cols] = combine(expected[rows, cols], values[i, active])
-    return expected.to(device)
+    return expected
 
 
 def _shared_atomic_scatter_rmw_cases():
@@ -2756,6 +2754,7 @@ def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_
         values = torch.arange(rhs_n * rhs_m, dtype=torch.int32, device=device).reshape(rhs_shape)
         values = (values % 7 + 1).to(torch_dtype)
     if op == "xchg":
+        # make xchg deterministic with broadcasting
         if axis == 1:
             base_indices = torch.arange(0, rhs_m, dtype=torch.int32, device=device)[None, :]
         else:
