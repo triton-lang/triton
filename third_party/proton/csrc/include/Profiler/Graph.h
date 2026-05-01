@@ -54,6 +54,11 @@ struct GraphState {
     // created at capture time and won't change for the same node id. This is
     // used to link the graph node to the captured call path in Data.
     std::map<Data *, size_t> dataToEntryId;
+    // For metric-copy nodes grouped under launch metadata, flexible launch
+    // metrics still belong to the owner kernel's <metric> child, not to the
+    // metadata node that runs the copy kernel. TreeData promotes linked
+    // flexible metrics from <metric> children onto the owner kernel frame.
+    std::map<Data *, size_t> dataToFlexibleMetricEntryId;
     // Whether the node has missing name or is a metric node, which is
     // determined at capture time and won't change for the same node id.
     NodeStatus status{};
@@ -61,6 +66,10 @@ struct GraphState {
     bool operator<(const NodeState &other) const {
       return nodeId < other.nodeId;
     }
+  };
+  struct MetricNodeInfo {
+    size_t numWords{};
+    uint64_t ordinal{};
   };
   using NodeIdToStateMap = std::map<uint64_t, NodeState>;
   // Precomputed per-Data launch links maintained on graph node
@@ -71,11 +80,19 @@ struct GraphState {
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation.
   NodeIdToStateMap nodeIdToState;
-  // Metric nodes and their per-node metric words, ordered by node id.
-  std::map<uint64_t, size_t> metricNodeIdToNumWords;
+  // Metric nodes and their replay metadata, ordered by node id.
+  std::map<uint64_t, MetricNodeInfo> metricNodeIdToInfo;
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
   bool captureStatusChecked{};
+  // True when this state is for a graph created through GRAPHNODE_CLONED. Its
+  // node ids are suitable for synthesizing graph-exec state if CUPTI reports
+  // the graph/exec relationship separately from node clone callbacks.
+  bool clonedGraph{};
+  // True when graph-exec state was synthesized from cloned graph state. If
+  // later GRAPHNODE_CLONED callbacks provide exact exec-node ids, the
+  // synthesized state should be replaced by cloned state.
+  bool copiedFromSourceGraph{};
   // Total number of uint64 words written by all metric nodes in this graph.
   size_t numMetricWords{};
 };
@@ -84,9 +101,10 @@ struct PendingGraphQueue {
   struct PendingGraph {
     size_t numNodes;
     size_t numWords;
-    // Metric target entries grouped per Data sink and aligned with
-    // graph metric-node order.
-    std::map<Data *, std::vector<DataEntry>> dataToEntries;
+    // Metric target entries keyed by the ordinal written by each metric-copy
+    // kernel. CUDA graphs may replay metric-copy nodes in a different order
+    // than graph node creation, especially when captured work spans streams.
+    std::map<uint64_t, std::map<Data *, DataEntry>> ordinalToEntries;
   };
 
   std::vector<PendingGraph> pendingGraphs;
@@ -105,9 +123,11 @@ struct PendingGraphQueue {
                              void *device)
       : startBufferOffset(startBufferOffset), phase(phase), device(device) {}
 
-  void push(size_t numNodes, size_t numWords,
-            const std::map<Data *, std::vector<DataEntry>> &dataToEntries) {
-    pendingGraphs.emplace_back(PendingGraph{numNodes, numWords, dataToEntries});
+  void push(
+      size_t numNodes, size_t numWords,
+      const std::map<uint64_t, std::map<Data *, DataEntry>> &ordinalToEntries) {
+    pendingGraphs.emplace_back(
+        PendingGraph{numNodes, numWords, ordinalToEntries});
     this->numNodes += numNodes;
     this->numWords += numWords;
   }
@@ -118,9 +138,10 @@ public:
   explicit PendingGraphPool(MetricBuffer *metricBuffer)
       : metricBuffer(metricBuffer), runtime(metricBuffer->getRuntime()) {}
 
-  void push(size_t phase,
-            const std::map<Data *, std::vector<DataEntry>> &dataToEntries,
-            size_t numNodes, size_t numWords);
+  void
+  push(size_t phase,
+       const std::map<uint64_t, std::map<Data *, DataEntry>> &ordinalToEntries,
+       size_t numNodes, size_t numWords);
 
   // No GPU synchronization, No CPU locks
   void peek(size_t phase);

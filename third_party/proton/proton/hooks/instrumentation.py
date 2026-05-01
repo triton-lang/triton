@@ -38,9 +38,11 @@ class CudaAllocator:
 
         # Create the buffer
         import torch
-        enter_state(COMPUTE_METADATA_SCOPE_NAME)
-        buffer = torch.zeros((aligned_size, ), dtype=torch.uint8, device="cuda")
-        exit_state()
+        try:
+            enter_state(COMPUTE_METADATA_SCOPE_NAME)
+            buffer = torch.zeros((aligned_size, ), dtype=torch.uint8, device="cuda")
+        finally:
+            exit_state()
         self.instrumentation_hook.buffer = buffer
         return buffer
 

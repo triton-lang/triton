@@ -13,10 +13,31 @@ import pathlib
 import threading
 
 import triton.language as tl
-from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
+from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
+
+
+def find_frame(node, name: str):
+    queue = [node]
+    while queue:
+        current = queue.pop(0)
+        if current["frame"]["name"] == name:
+            return current
+        queue.extend(current["children"])
+    return None
+
+
+def find_frame_path(node, name_substr: str):
+    queue = [(node, [node])]
+    while queue:
+        current, path = queue.pop(0)
+        if name_substr in current["frame"]["name"]:
+            return path
+        for child in current["children"]:
+            queue.append((child, [*path, child]))
+    return None
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -546,12 +567,13 @@ def test_hook_launch(tmp_path: pathlib.Path, device: str):
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
-    assert len(data[0]["children"]) == 1
-    assert data[0]["children"][0]["frame"]["name"] == "test0"
-    assert data[0]["children"][0]["children"][0]["frame"]["name"] == "foo_test_1ctas_1elems"
-    assert data[0]["children"][0]["children"][0]["metrics"]["flops32"] == 1.0
-    assert data[0]["children"][0]["children"][0]["metrics"]["extra_metric"] == 7.0
-    assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+    test0_frame = find_frame(data[0], "test0")
+    assert test0_frame is not None
+    foo_frame = find_frame(test0_frame, "foo_test_1ctas_1elems")
+    assert foo_frame is not None
+    assert foo_frame["metrics"]["flops32"] == 1.0
+    assert foo_frame["metrics"]["extra_metric"] == 7.0
+    assert foo_frame["metrics"]["time (ns)"] > 0
 
 
 def test_hook_launch_filter(tmp_path: pathlib.Path, device: str):
@@ -641,9 +663,314 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str, device: str):
         parent_frame = queue.pop(0)
         for child in parent_frame["children"]:
             if "reduce" in child["frame"]["name"]:
-                assert parent_frame["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME
+                assert parent_frame["frame"]["name"].startswith(COMPUTE_METADATA_SCOPE_NAME)
                 return
             queue.append(child)
+
+
+def test_hook_launch_metadata_work_grouped_by_owner_matmul(tmp_path: pathlib.Path, monkeypatch, device: str):
+    """Check the eager before/after profile shape for owner-scoped metadata.
+
+    metadata_fn launches Triton helper kernels and returns tensor metrics. The
+    monkeypatched transform hook launches one more marker kernel to stand in for
+    GPU work from transform_tensor_metrics, such as dtype casts. All of those
+    kernels should be grouped under __proton_launch_metadata:<owner>, while the
+    real matmul frame owns the flops/bytes metrics.
+    """
+    owner_name = "owner_matmul_test"
+    owner_metadata_scope = f"{COMPUTE_METADATA_SCOPE_NAME}:{owner_name}"
+
+    @triton.jit
+    def matmul_metadata_counter_kernel(a, metadata_flops, metadata_bytes, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        flops = tl.sum(tl.load(a + offs).to(tl.float32), axis=0)
+        tl.store(metadata_flops, flops)
+        tl.store(metadata_bytes, BLOCK * BLOCK * 4)
+
+    @triton.jit
+    def matmul_metadata_scoped_kernel(metadata_flops):
+        tl.store(metadata_flops, tl.load(metadata_flops) + 1.0)
+
+    @triton.jit
+    def matmul_metadata_transform_marker_kernel(metadata_flops, transform_scratch):
+        tl.store(transform_scratch, tl.load(metadata_flops) + 2.0)
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        matmul_metadata_counter_kernel[(1, )](
+            args["a"],
+            args["metadata_flops"],
+            args["metadata_bytes"],
+            BLOCK=args["BLOCK"],
+            num_warps=1,
+        )
+        with proton.scope("matmul_metadata_child_scope"):
+            matmul_metadata_scoped_kernel[(1, )](args["metadata_flops"], num_warps=1)
+        return {
+            "name": owner_name,
+            "flops": args["metadata_flops"],
+            "bytes": args["metadata_bytes"],
+        }
+
+    @triton.jit(repr=lambda _: owner_name, launch_metadata=metadata_fn)
+    def owner_matmul_kernel(a, b, c, metadata_flops, metadata_bytes, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        a_tile = tl.load(a + offs[:, None] * BLOCK + offs[None, :])
+        b_tile = tl.load(b + offs[:, None] * BLOCK + offs[None, :])
+        acc = tl.dot(a_tile, b_tile)
+        tl.store(c + offs[:, None] * BLOCK + offs[None, :], acc)
+
+    transform_scratch = torch.empty((1, ), device=device, dtype=torch.float32)
+    original_transform_tensor_metrics = proton_launch.transform_tensor_metrics
+
+    def transform_tensor_metrics_with_marker(metrics):
+        matmul_metadata_transform_marker_kernel[(1, )](
+            metrics["flops"],
+            transform_scratch,
+            num_warps=1,
+        )
+        return original_transform_tensor_metrics(metrics)
+
+    monkeypatch.setattr(proton_launch, "transform_tensor_metrics", transform_tensor_metrics_with_marker)
+
+    block = 16
+    a = torch.randn((block, block), device=device, dtype=torch.float16)
+    b = torch.randn((block, block), device=device, dtype=torch.float16)
+    c = torch.empty((block, block), device=device, dtype=torch.float32)
+    metadata_flops = torch.empty((1, ), device=device, dtype=torch.float32)
+    metadata_bytes = torch.empty((1, ), device=device, dtype=torch.int32)
+    temp_file = tmp_path / "test_hook_metadata_owner_matmul.hatchet"
+
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
+    with proton.scope("test0"):
+        owner_matmul_kernel[(1, )](
+            a,
+            b,
+            c,
+            metadata_flops,
+            metadata_bytes,
+            BLOCK=block,
+            num_warps=4,
+        )
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    owner_frame = find_frame(data[0], owner_name)
+    assert owner_frame is not None
+    assert "flops" in owner_frame["metrics"]
+    assert "bytes" in owner_frame["metrics"]
+    assert find_frame(data[0], owner_metadata_scope) is not None
+    assert find_frame(data[0], COMPUTE_METADATA_SCOPE_NAME) is None
+
+    for kernel_name in [
+            "matmul_metadata_counter_kernel",
+            "matmul_metadata_scoped_kernel",
+            "matmul_metadata_transform_marker_kernel",
+    ]:
+        path = find_frame_path(data[0], kernel_name)
+        assert path is not None
+        path_names = [node["frame"]["name"] for node in path]
+        assert owner_metadata_scope in path_names
+        assert path_names.index(owner_metadata_scope) < len(path_names) - 1
+
+    scoped_path_names = [node["frame"]["name"] for node in find_frame_path(data[0], "matmul_metadata_scoped_kernel")]
+    assert (scoped_path_names.index(owner_metadata_scope) < scoped_path_names.index("matmul_metadata_child_scope") <
+            len(scoped_path_names) - 1)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports CUDA graph resource callbacks")
+def test_hook_launch_metadata_cudagraph_metric_copy_under_metadata_scope(tmp_path: pathlib.Path, device: str):
+    """Keep graph metric-copy kernels under the owner launch metadata scope.
+
+    Tensor launch metadata makes add_metrics launch a Proton metric-copy kernel
+    during CUDA graph capture. That <metric> node should be grouped under the
+    same __proton_launch_metadata:<owner> scope as the metadata kernels whose
+    values it copies, while the owner kernel remains a sibling of that metadata
+    scope. Metadata helper kernels can still have child Proton scopes; moving
+    <metric> under the metadata owner must not flatten those child scopes.
+    """
+    owner_name = "foo_metric_scope"
+    owner_metadata_scope = f"{COMPUTE_METADATA_SCOPE_NAME}:{owner_name}"
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    @triton.jit
+    def metadata_before_metric_kernel(x, scratch):
+        tl.store(scratch, tl.load(x) + 1.0)
+
+    @triton.jit
+    def metadata_after_metric_kernel(scratch, scratch2):
+        tl.store(scratch2, tl.load(scratch) + 2.0)
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        metadata_before_metric_kernel[(1, )](args["x"], args["scratch"], num_warps=1)
+        with proton.scope("metadata_child_scope"):
+            metadata_after_metric_kernel[(1, )](args["scratch"], args["scratch2"], num_warps=1)
+        return {"name": owner_name, "flops": args["scratch2"].sum()}
+
+    @triton.jit(repr=lambda _: owner_name, launch_metadata=metadata_fn)
+    def foo(x, scratch, scratch2, y):
+        tl.store(y, tl.load(x) + tl.load(scratch2))
+
+    x = torch.tensor([2], device=device, dtype=torch.float32)
+    scratch = torch.zeros_like(x)
+    scratch2 = torch.zeros_like(x)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_hook_metadata_metric_scope.chrome_trace"
+    session = proton.start(str(temp_file.with_suffix("")), data="trace", context="shadow", hook="triton")
+    try:
+        foo[(1, )](x, scratch, scratch2, y, num_warps=1)
+        torch.cuda.synchronize()
+
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            foo[(1, )](x, scratch, scratch2, y, num_warps=1)
+
+        with proton.scope("replay"):
+            graph.replay()
+        torch.cuda.synchronize()
+    finally:
+        proton.finalize(session)
+
+    with temp_file.open() as f:
+        trace_events = json.load(f)["traceEvents"]
+
+    replay_kernel_events = [
+        event for event in trace_events
+        if event.get("cat") == "kernel" and event.get("args", {}).get("call_stack", [])[:2] == ["ROOT", "replay"]
+    ]
+    metric_kernel_events = [event for event in replay_kernel_events if event["name"] == "<metric>"]
+    owner_kernel_events = [event for event in replay_kernel_events if event["name"] == owner_name]
+    metadata_kernel_events = [
+        event for event in replay_kernel_events if any(
+            name.startswith(COMPUTE_METADATA_SCOPE_NAME) for name in event.get("args", {}).get("call_stack", []))
+    ]
+    metadata_kernel_events_by_name = {event["name"]: event for event in metadata_kernel_events}
+    expected_metadata_parent = [
+        "ROOT",
+        "replay",
+        "<captured_at>",
+        owner_metadata_scope,
+    ]
+
+    assert len(metric_kernel_events) == 1
+    assert metric_kernel_events[0]["args"]["call_stack"] == [
+        *expected_metadata_parent,
+        "<metric>",
+    ]
+    assert {
+        "metadata_before_metric_kernel",
+        "metadata_after_metric_kernel",
+    }.issubset(metadata_kernel_events_by_name)
+    assert metadata_kernel_events_by_name["metadata_before_metric_kernel"]["args"]["call_stack"] == [
+        *expected_metadata_parent,
+        "metadata_before_metric_kernel",
+    ]
+    assert metadata_kernel_events_by_name["metadata_after_metric_kernel"]["args"]["call_stack"] == [
+        *expected_metadata_parent,
+        "metadata_child_scope",
+        "metadata_after_metric_kernel",
+    ]
+    assert len(owner_kernel_events) == 1
+    assert owner_kernel_events[0]["args"]["call_stack"] == [
+        "ROOT",
+        "replay",
+        "<captured_at>",
+        owner_name,
+    ]
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+def test_hook_launch_metadata_cudagraph_metric_records_attach_by_owner(tmp_path: pathlib.Path, device: str):
+    """Exercise graph metric records whose GPU append order can differ from CPU order.
+
+    The slow kernel is launched first during capture, so the old positional
+    pending queue would expect its tensor metric record first. Its metadata runs
+    a long helper kernel before Proton launches the metric-copy kernel. The fast
+    kernel is launched second on an independent stream and can append its metric
+    record first during graph replay. Correctness must therefore come from the
+    per-record owner identity, not from pending queue position.
+    """
+    capture_stream = torch.cuda.Stream()
+    slow_stream = torch.cuda.Stream()
+    fast_stream = torch.cuda.Stream()
+    torch.cuda.set_stream(capture_stream)
+
+    slow_name = "metric_order_slow"
+    fast_name = "metric_order_fast"
+    slow_flops = 111.0
+    fast_flops = 222.0
+
+    @triton.jit
+    def metadata_delay_kernel(scratch, BLOCK: tl.constexpr, ITERS: tl.constexpr):
+        pid = tl.program_id(0)
+        offsets = pid * BLOCK + tl.arange(0, BLOCK)
+        values = offsets.to(tl.float32)
+        for _ in tl.static_range(0, ITERS):
+            values = values * 1.0001 + 1.0
+        tl.store(scratch + offsets, values)
+
+    def slow_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        metadata_delay_kernel[(2048, )](args["delay_scratch"], BLOCK=256, ITERS=64, num_warps=8)
+        return {"name": slow_name, "flops": args["slow_metric"]}
+
+    def fast_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        return {"name": fast_name, "flops": args["fast_metric"]}
+
+    @triton.jit(launch_metadata=slow_metadata_fn)
+    def slow_kernel(x, y, slow_metric, delay_scratch):
+        tl.store(y, tl.load(x) + 1.0)
+
+    @triton.jit(launch_metadata=fast_metadata_fn)
+    def fast_kernel(x, y, fast_metric):
+        tl.store(y, tl.load(x) + 2.0)
+
+    x = torch.tensor([1.0], device=device)
+    y_slow = torch.empty_like(x)
+    y_fast = torch.empty_like(x)
+    slow_metric = torch.tensor([slow_flops], device=device)
+    fast_metric = torch.tensor([fast_flops], device=device)
+    delay_scratch = torch.empty((2048 * 256, ), device=device)
+
+    temp_file = tmp_path / "test_hook_metadata_metric_record_order.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
+    try:
+        # Warm up compilation and allocations before graph capture.
+        slow_kernel[(1, )](x, y_slow, slow_metric, delay_scratch, num_warps=1)
+        fast_kernel[(1, )](x, y_fast, fast_metric, num_warps=1)
+        torch.cuda.synchronize()
+
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph, stream=capture_stream):
+            slow_stream.wait_stream(capture_stream)
+            fast_stream.wait_stream(capture_stream)
+            with torch.cuda.stream(slow_stream):
+                slow_kernel[(1, )](x, y_slow, slow_metric, delay_scratch, num_warps=1)
+            with torch.cuda.stream(fast_stream):
+                fast_kernel[(1, )](x, y_fast, fast_metric, num_warps=1)
+            capture_stream.wait_stream(slow_stream)
+            capture_stream.wait_stream(fast_stream)
+
+        with proton.scope("replay"):
+            graph.replay()
+        torch.cuda.synchronize()
+    finally:
+        proton.finalize(session)
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    replay_frame = find_frame(data[0], "replay")
+    assert replay_frame is not None
+    capture_frame = find_frame(replay_frame, "<captured_at>")
+    assert capture_frame is not None
+    slow_frame = find_frame(capture_frame, slow_name)
+    fast_frame = find_frame(capture_frame, fast_name)
+    assert slow_frame is not None
+    assert fast_frame is not None
+    assert slow_frame["metrics"]["flops"] == slow_flops
+    assert fast_frame["metrics"]["flops"] == fast_flops
 
 
 def test_hook_with_third_party(tmp_path: pathlib.Path, device: str):
@@ -676,9 +1003,9 @@ def test_hook_with_third_party(tmp_path: pathlib.Path, device: str):
     triton.knobs.runtime.launch_enter_hook.remove(third_party_hook)
     with temp_file.open() as f:
         data = json.load(f)
-    assert len(data[0]["children"]) == 1
-    assert data[0]["children"][0]["frame"]["name"] == "foo_test"
-    assert data[0]["children"][0]["metrics"]["time (ns)"] > 0
+    foo_frame = find_frame(data[0], "foo_test")
+    assert foo_frame is not None
+    assert foo_frame["metrics"]["time (ns)"] > 0
 
 
 def test_hook_multiple_threads(tmp_path: pathlib.Path, device: str):
@@ -732,11 +1059,12 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path, device: str):
 
     with temp_file.open() as f:
         data = json.load(f)
-    root = data[0]["children"]
-    assert "foo_test" in root[0]["frame"]["name"] or root[1]["frame"]["name"]
-    assert "bar_test" in root[0]["frame"]["name"] or root[1]["frame"]["name"]
-    assert root[0]["metrics"]["count"] == 100
-    assert root[1]["metrics"]["count"] == 100
+    foo_frame = find_frame(data[0], "foo_test")
+    bar_frame = find_frame(data[0], "bar_test")
+    assert foo_frame is not None
+    assert bar_frame is not None
+    assert foo_frame["metrics"]["count"] == 100
+    assert bar_frame["metrics"]["count"] == 100
 
 
 def test_pcsampling(tmp_path: pathlib.Path, device: str):
@@ -1367,30 +1695,15 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
     with temp_file.open() as f:
         data = json.load(f)
 
-    children = data[0]["children"]
-    # metadata scope + kernels + scope_a + scope_b + test0 + scope_d
-    assert len(children) == 8
-    test0_frame = None
-    for child in children:
-        if child["frame"]["name"] == "test0":
-            test0_frame = child
-            break
+    test0_frame = find_frame(data[0], "test0")
     assert test0_frame is not None
-    capture_at_frame = test0_frame["children"][0]
+    capture_at_frame = find_frame(test0_frame, "<captured_at>")
+    assert capture_at_frame is not None
 
-    foo_test_frame = None
-    scope_a_frame = None
-    scope_b_frame = None
-    scope_d_frame = None
-    for child in capture_at_frame["children"]:
-        if child["frame"]["name"] == "foo_test":
-            foo_test_frame = child
-        if child["frame"]["name"] == "scope_a":
-            scope_a_frame = child
-        if child["frame"]["name"] == "scope_b":
-            scope_b_frame = child
-        if child["frame"]["name"] == "scope_d":
-            scope_d_frame = child
+    foo_test_frame = find_frame(capture_at_frame, "foo_test")
+    scope_a_frame = find_frame(capture_at_frame, "scope_a")
+    scope_b_frame = find_frame(capture_at_frame, "scope_b")
+    scope_d_frame = find_frame(capture_at_frame, "scope_d")
     assert foo_test_frame is not None
     assert foo_test_frame["metrics"]["bytes"] == 160
     assert foo_test_frame["metrics"]["flops"] == 40

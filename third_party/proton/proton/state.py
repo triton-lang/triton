@@ -1,8 +1,12 @@
+from functools import wraps
+import threading
+
 from triton._C.libproton import proton as libproton
 from .flags import flags
-from functools import wraps
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
+COMPUTE_METADATA_SCOPE_PREFIX = f"{COMPUTE_METADATA_SCOPE_NAME}:"
+_thread_state = threading.local()
 
 
 class state:
@@ -33,24 +37,25 @@ class state:
     def __enter__(self):
         if not flags.profiling_on:
             return self
-        libproton.enter_state(self.name)
+        enter_state(self.name)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         if not flags.profiling_on:
             return
-        libproton.exit_state()
+        exit_state()
 
     def __call__(self, func):
 
         @wraps(func)
         def wrapper(*args, **kwargs):
             if flags.profiling_on:
-                libproton.enter_state(self.name)
-            ret = func(*args, **kwargs)
-            if flags.profiling_on:
-                libproton.exit_state()
-            return ret
+                enter_state(self.name)
+            try:
+                return func(*args, **kwargs)
+            finally:
+                if flags.profiling_on:
+                    exit_state()
 
         return wrapper
 
@@ -63,7 +68,43 @@ class metadata_state(state):
 
 def enter_state(name: str) -> None:
     libproton.enter_state(name)
+    _thread_state.name = name
 
 
 def exit_state() -> None:
     libproton.exit_state()
+    _thread_state.name = None
+
+
+def _current_state() -> str | None:
+    return getattr(_thread_state, "name", None)
+
+
+def metadata_state_name(kernel_name=None) -> str:
+    if not kernel_name:
+        return COMPUTE_METADATA_SCOPE_NAME
+    return f"{COMPUTE_METADATA_SCOPE_PREFIX}{kernel_name}"
+
+
+def enter_metadata_scope(name: str) -> int:
+    scope_id = libproton.record_scope()
+    libproton.enter_scope(scope_id, name)
+    try:
+        enter_state(name)
+    except Exception:
+        libproton.exit_scope(scope_id, name)
+        raise
+    return scope_id
+
+
+def exit_metadata_scope(scope_id: int, name: str) -> None:
+    try:
+        exit_state()
+    finally:
+        libproton.exit_scope(scope_id, name)
+
+
+def is_metadata_state_active() -> bool:
+    state_name = _current_state()
+    return bool(state_name
+                and (state_name == COMPUTE_METADATA_SCOPE_NAME or state_name.startswith(COMPUTE_METADATA_SCOPE_PREFIX)))
