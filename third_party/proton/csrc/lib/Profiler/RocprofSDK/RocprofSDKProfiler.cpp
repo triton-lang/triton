@@ -21,6 +21,7 @@
 #include "rocprofiler-sdk/marker/api_id.h"
 #include "rocprofiler-sdk/registration.h"
 
+#include <algorithm>
 #include <atomic>
 #include <dlfcn.h>
 #include <iostream>
@@ -30,6 +31,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace proton {
 
@@ -105,12 +107,20 @@ private:
       return ROCPROFILER_STATUS_ERROR_INVALID_ARGUMENT;
     auto agentList =
         reinterpret_cast<const rocprofiler_agent_t *const *>(agents);
+    std::vector<const rocprofiler_agent_t *> gpuAgents;
     for (size_t i = 0; i < count; ++i) {
       const auto *agent = agentList[i];
       if (agent->type == ROCPROFILER_AGENT_TYPE_GPU) {
-        self->agentToDevice[agent->id.handle] =
-            static_cast<uint32_t>(agent->logical_node_type_id);
+        gpuAgents.push_back(agent);
       }
+    }
+    std::sort(
+        gpuAgents.begin(), gpuAgents.end(),
+        [](const rocprofiler_agent_t *lhs, const rocprofiler_agent_t *rhs) {
+          return lhs->logical_node_type_id < rhs->logical_node_type_id;
+        });
+    for (size_t i = 0; i < gpuAgents.size(); ++i) {
+      self->agentToDevice[gpuAgents[i]->id.handle] = static_cast<uint32_t>(i);
     }
     return ROCPROFILER_STATUS_SUCCESS;
   }

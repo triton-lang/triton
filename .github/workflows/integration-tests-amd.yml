@@ -190,6 +190,9 @@ jobs:
       - name: Run Proton tests
         run: |
           unset HIP_VISIBLE_DEVICES
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+            export PROTON_TEST_BACKEND=roctracer
+          fi
           make test-proton
       - name: Inspect cache directories
         run: |
