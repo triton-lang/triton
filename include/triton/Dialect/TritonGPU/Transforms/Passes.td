@@ -61,7 +61,7 @@ def TritonGPUHoistTMEMAlloc : Pass<"tritongpu-hoist-tmem-alloc", "mlir::ModuleOp
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
   let options = [
-    Option<"hoistOutOfIf", "hoist-out-of-if",
+    Option<"postPipeline", "post-pipeline",
            "bool", /*default*/"false",
            "Hoist TMEM allocations out of if statements">
   ];
