@@ -102,7 +102,7 @@ struct LocalAtomicScatterAddInfo {
 };
 
 FailureOr<LocalAtomicScatterAddInfo>
-prepareLocalAtomicScatterAdd(triton::gpu::LocalAtomicScatterAddOp op, Value dst,
+prepareLocalAtomicScatterAdd(triton::gpu::LocalAtomicScatterRMWOp op, Value dst,
                              Value indices, Value inputValues, Value mask,
                              ConversionPatternRewriter &rewriter,
                              const NVIDIA::TargetInfo &targetInfo,
