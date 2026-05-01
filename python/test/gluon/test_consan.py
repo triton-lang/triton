@@ -1159,12 +1159,13 @@ def test_tma_tcgen05_mma_multicast_loop(FAILURE, device, run_wrapper, monkeypatc
             ttgl.NVMMASharedLayout.get_default_for([XBLOCK, block_n], ttgl.float16,
                                                    cga_layout=mma_cga_layout(ttgl.num_ctas(), 1, True)),
         )
+        acc = blackwell.allocate_tensor_memory(ttgl.float32, [block_m, block_n], acc_layout)
         tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
         mbarrier.init(tma_bar, count=1)
         mma_bar = mbarrier.allocate_mbarrier()
-        mma_bar_count: ttgl.constexpr = blackwell.tcgen05_mma_barrier_count([smemA, smemB], True)
+        mma_bar_count: ttgl.constexpr = blackwell.tcgen05_mma_barrier_count([smemA, smemB], True,
+                                                                            acc.type.layout.two_ctas)
         mbarrier.init(mma_bar, count=mma_bar_count)
-        acc = blackwell.allocate_tensor_memory(ttgl.float32, [block_m, block_n], acc_layout)
 
         phase_tma = 0
         phase_mma = 0
