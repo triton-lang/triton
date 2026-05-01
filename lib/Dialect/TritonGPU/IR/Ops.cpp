@@ -900,6 +900,7 @@ LogicalResult LocalAtomicScatterRMWOp::verify() {
     return emitError("destination must have shared memory encoding");
   }
 
+  // Match Triton's existing atomic add type support.
   if (!valuesEltTy.isIntOrFloat()) {
     return emitError("values must have integer or floating element type");
   }
