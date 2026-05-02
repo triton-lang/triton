@@ -30,7 +30,8 @@ public:
     Value address = tb.ptrtoint(i32_ty, tmemBase);
 
     auto enc = cast<ttng::TensorMemoryEncodingAttr>(memTy.getEncoding());
-    return DotOpMmaV5TmemLoader(ll.pseudoinvert(), address, bitwidth, isFp4 && !enc.getFp4Padded());
+    return DotOpMmaV5TmemLoader(ll.pseudoinvert(), address, bitwidth,
+                                isFp4 && !enc.getFp4Padded());
   }
 
   MemDescOperand tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
@@ -53,8 +54,10 @@ public:
   }
 
 private:
-  DotOpMmaV5TmemLoader(LinearLayout ll, Value address, int bitwidth, bool isDenseFp4)
-      : ll(std::move(ll)), address(address), bitwidth(bitwidth), isDenseFp4(isDenseFp4) {}
+  DotOpMmaV5TmemLoader(LinearLayout ll, Value address, int bitwidth,
+                       bool isDenseFp4)
+      : ll(std::move(ll)), address(address), bitwidth(bitwidth),
+        isDenseFp4(isDenseFp4) {}
 
   LinearLayout ll;
   Value address;
@@ -514,7 +517,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
       Value useInitAcc = useDFlag;
       MemDescOperand accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
       for (int k = 0; k < numRepK; k++) {
-        MemDescOperand a = aLoader->memLoad(m * aOperandShape[0], k * aOperandShape[1], rewriter, loc);
+        MemDescOperand a = aLoader->memLoad(
+            m * aOperandShape[0], k * aOperandShape[1], rewriter, loc);
         Value b = bLoader->smemLoad(k * bOperandShape[0], n * bOperandShape[1],
                                     rewriter, loc);
         op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
