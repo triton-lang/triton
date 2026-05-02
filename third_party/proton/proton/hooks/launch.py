@@ -16,10 +16,6 @@ enabled = ContextVar("enabled", default=False)
 class LaunchHook(Hook):
     # Highest priority
     priority = 100
-    flops_width = [8, 16, 32, 64]
-    # Historical/derived metrics (e.g., used by viewer utilization computations).
-    # Launch metadata can carry *additional* metrics; see _extract_metrics().
-    metrics = [f"flops{width}" for width in flops_width] + ["bytes"] + ["flops"]
 
     # Reserved keys that Triton’s runtime always attaches to launch_metadata.
     # We never treat these as metrics.

@@ -91,30 +91,68 @@ class _TensorMetric(libproton.TensorMetric):
         self._value = value
 
 
+FLOPS_WIDTHS = (8, 16, 32, 64)
+FLOPS_DTYPES = {
+    **{"flops": (float, libproton.metric_type_double_index, libproton.metric_type_vector_double_index)},
+    **{
+        f"flops{width}": (float, libproton.metric_type_double_index, libproton.metric_type_vector_double_index)
+        for width in FLOPS_WIDTHS
+    },
+}
+ROOFLINE_DTYPES = {
+    **FLOPS_DTYPES,
+    "bytes": (int, libproton.metric_type_int64_index, libproton.metric_type_vector_int64_index),
+}
+
+
+def _scalar_or_vector_value(value: Any, convert: type) -> Any:
+    if hasattr(value, "data_ptr"):
+        value = value.tolist() if value.numel() > 1 else value.item()
+    if isinstance(value, (list, tuple)):
+        return [convert(v) for v in value]
+    return convert(value)
+
+
+def _scalar_metric_value(key: str, value: Any) -> Any:
+    # Proton's built-in roofline metrics should have stable dtypes regardless of
+    # whether launch_metadata produced a Python scalar or a device tensor.
+    if key in ROOFLINE_DTYPES:
+        convert, _, _ = ROOFLINE_DTYPES[key]
+        return _scalar_or_vector_value(value, convert)
+    return value
+
+
+def _tensor_metric_value_and_index(key: str, value: Any) -> tuple[Any, int]:
+    if key in ROOFLINE_DTYPES:
+        _, scalar_index, vector_index = ROOFLINE_DTYPES[key]
+        value = value.long() if key == "bytes" else value.double()
+        return value, vector_index if value.numel() > 1 else scalar_index
+
+    # implicit casting to double or int64 tensors
+    if value.is_floating_point():
+        value = value.double()
+        if value.numel() > 1:
+            return value, libproton.metric_type_vector_double_index
+        return value, libproton.metric_type_double_index
+
+    value = value.long()
+    if value.numel() > 1:
+        return value, libproton.metric_type_vector_int64_index
+    return value, libproton.metric_type_int64_index
+
+
 def transform_tensor_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], dict[str, libproton.TensorMetric]]:
     tensor_metrics = {}
     scalar_metrics: dict[str, Any] = {}
     for key, value in metrics.items():
         if hasattr(value, "data_ptr"):  # tensor
             if value.device.type == "cpu":
-                scalar_metrics[key] = value
+                scalar_metrics[key] = _scalar_metric_value(key, value)
             else:  # device tensor
                 enter_state(COMPUTE_METADATA_SCOPE_NAME)
-                # implicit casting to double or int64 tensors
-                if value.is_floating_point():
-                    value = value.double()
-                    if value.numel() > 1:
-                        metric_index = libproton.metric_type_vector_double_index
-                    else:
-                        metric_index = libproton.metric_type_double_index
-                else:
-                    value = value.long()
-                    if value.numel() > 1:
-                        metric_index = libproton.metric_type_vector_int64_index
-                    else:
-                        metric_index = libproton.metric_type_int64_index
+                value, metric_index = _tensor_metric_value_and_index(key, value)
                 exit_state()
                 tensor_metrics[key] = _TensorMetric(value, metric_index)
         else:
-            scalar_metrics[key] = value
+            scalar_metrics[key] = _scalar_metric_value(key, value)
     return scalar_metrics, tensor_metrics
