@@ -4,8 +4,10 @@
 #include "Context/Context.h"
 #include "Data/Data.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -14,7 +16,6 @@
 #include <shared_mutex>
 #include <unordered_map>
 #include <utility>
-#include <vector>
 
 namespace proton {
 
@@ -71,8 +72,12 @@ struct GraphState {
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation.
   NodeIdToStateMap nodeIdToState;
-  // Metric nodes and their per-node metric words, ordered by node id.
-  std::map<uint64_t, size_t> metricNodeIdToNumWords;
+  struct MetricNodeInfo {
+    size_t numWords{};
+    uint64_t ordinal{};
+  };
+  // Metric nodes and their replay metadata, ordered by node id.
+  std::map<uint64_t, MetricNodeInfo> metricNodeIdToInfo;
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
   bool captureStatusChecked{};
@@ -81,35 +86,35 @@ struct GraphState {
 };
 
 struct PendingGraphQueue {
-  struct PendingGraph {
-    size_t numNodes;
-    size_t numWords;
-    // Metric target entries grouped per Data sink and aligned with
-    // graph metric-node order.
-    std::map<Data *, std::vector<DataEntry>> dataToEntries;
-  };
-
-  std::vector<PendingGraph> pendingGraphs;
+  // Metric target entries keyed by the ordinal written by each metric-copy
+  // kernel. The deque handles repeated launches of the same captured graph.
+  std::map<uint64_t, std::deque<std::map<Data *, DataEntry>>>
+      ordinalToEntryQueues;
   // The start buffer offset in the metric buffer for this queue
   size_t startBufferOffset{};
-  // Total number of metric nodes in the pending graphs
-  size_t numNodes{};
   // Total number of uint64 words written by all nodes in this queue
   size_t numWords{};
-  // Device where the pending graphs are recorded
-  void *device{};
-  // Phase
-  size_t phase{};
 
-  explicit PendingGraphQueue(size_t startBufferOffset, size_t phase,
-                             void *device)
-      : startBufferOffset(startBufferOffset), phase(phase), device(device) {}
+  explicit PendingGraphQueue(size_t startBufferOffset)
+      : startBufferOffset(startBufferOffset) {}
 
-  void push(size_t numNodes, size_t numWords,
-            const std::map<Data *, std::vector<DataEntry>> &dataToEntries) {
-    pendingGraphs.emplace_back(PendingGraph{numNodes, numWords, dataToEntries});
-    this->numNodes += numNodes;
+  void push(
+      size_t numWords,
+      const std::map<uint64_t, std::map<Data *, DataEntry>> &ordinalToEntries) {
+    for (const auto &[ordinal, entries] : ordinalToEntries) {
+      ordinalToEntryQueues[ordinal].push_back(entries);
+    }
     this->numWords += numWords;
+  }
+
+  void append(const PendingGraphQueue &other) {
+    startBufferOffset = std::min(startBufferOffset, other.startBufferOffset);
+    for (const auto &[ordinal, entryQueue] : other.ordinalToEntryQueues) {
+      auto &targetQueue = ordinalToEntryQueues[ordinal];
+      targetQueue.insert(targetQueue.end(), entryQueue.begin(),
+                         entryQueue.end());
+    }
+    numWords += other.numWords;
   }
 };
 
@@ -118,9 +123,10 @@ public:
   explicit PendingGraphPool(MetricBuffer *metricBuffer)
       : metricBuffer(metricBuffer), runtime(metricBuffer->getRuntime()) {}
 
-  void push(size_t phase,
-            const std::map<Data *, std::vector<DataEntry>> &dataToEntries,
-            size_t numNodes, size_t numWords);
+  void
+  push(size_t phase,
+       const std::map<uint64_t, std::map<Data *, DataEntry>> &ordinalToEntries,
+       size_t numWords);
 
   // No GPU synchronization, No CPU locks
   void peek(size_t phase);

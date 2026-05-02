@@ -30,11 +30,18 @@ MetricBuffer::~MetricBuffer() {
 void MetricBuffer::receive(
     const std::map<std::string, TensorMetric> &tensorMetrics,
     const std::map<std::string, MetricValueType> &scalarMetrics,
-    const MetricKernelLaunchState &metricKernelLaunchState) {
+    const MetricKernelLaunchState &metricKernelLaunchState,
+    const std::vector<uint64_t> &metricOrdinals) {
+  const size_t numMetrics = tensorMetrics.size() + scalarMetrics.size();
+  if (metricOrdinals.size() != numMetrics) {
+    throw std::runtime_error(
+        "[PROTON] MetricBuffer: metric ordinal count mismatch");
+  }
+  size_t ordinalIndex = 0;
   queueMetrics(tensorMetrics, metricKernelLaunchState.stream,
-               metricKernelLaunchState.tensor);
+               metricKernelLaunchState.tensor, metricOrdinals, ordinalIndex);
   queueMetrics(scalarMetrics, metricKernelLaunchState.stream,
-               metricKernelLaunchState.scalar);
+               metricKernelLaunchState.scalar, metricOrdinals, ordinalIndex);
 }
 
 MetricBuffer::MetricDescriptor
@@ -132,8 +139,8 @@ collectTensorMetrics(Runtime *runtime,
   return tensorMetricsHost;
 }
 
-void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
-                         void *stream,
+void MetricBuffer::queue(uint64_t metricOrdinal, size_t metricId,
+                         TensorMetric tensorMetric, void *stream,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
   uint64_t numWords = capacity / sizeof(uint64_t);
@@ -143,6 +150,7 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&numWords),
+                          reinterpret_cast<void *>(&metricOrdinal),
                           reinterpret_cast<void *>(&metricId),
                           reinterpret_cast<void *>(&tensorMetric.ptr),
                           reinterpret_cast<void *>(&metricValueSize),
@@ -154,8 +162,8 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
                         nullptr);
 }
 
-void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
-                         void *stream,
+void MetricBuffer::queue(uint64_t metricOrdinal, size_t metricId,
+                         MetricValueType scalarMetric, void *stream,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
   uint64_t numWords = capacity / sizeof(uint64_t);
@@ -182,6 +190,7 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&numWords),
+                          reinterpret_cast<void *>(&metricOrdinal),
                           reinterpret_cast<void *>(&metricId),
                           reinterpret_cast<void *>(&metricBits),
                           reinterpret_cast<void *>(&globalScratchPtr),

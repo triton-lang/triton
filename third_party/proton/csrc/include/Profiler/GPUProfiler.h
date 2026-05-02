@@ -123,6 +123,8 @@ protected:
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
     std::deque<size_t> metricKernelNumWordsQueue;
+    std::deque<uint64_t> metricKernelOrdinalQueue;
+    uint64_t nextMetricKernelOrdinal{};
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
@@ -231,18 +233,29 @@ protected:
                  const std::map<std::string, TensorMetric> &tensorMetrics) {
       if (threadState.isStreamCapturing) { // Graph capture mode
         threadState.isMetricKernelLaunching = true;
+        std::vector<uint64_t> metricOrdinals;
+        metricOrdinals.reserve(tensorMetrics.size() + scalarMetrics.size());
+        // The CUDA graph resource callback records the same ordinal that the
+        // metric-copy kernel writes into the metric buffer. Replay can append
+        // records out of graph-node order, so host-side decode matches by this
+        // ordinal instead of by buffer position.
+        auto queueMetricKernel = [&](size_t metricValueWords) {
+          threadState.metricKernelNumWordsQueue.push_back(
+              /*ordinal=*/1 + /*metric_id=*/1 + metricValueWords);
+          auto metricOrdinal = threadState.nextMetricKernelOrdinal++;
+          threadState.metricKernelOrdinalQueue.push_back(metricOrdinal);
+          metricOrdinals.push_back(metricOrdinal);
+        };
         for (const auto &[_, metric] : tensorMetrics) {
-          threadState.metricKernelNumWordsQueue.push_back(
-              /*metric_id=*/1 + metric.size); // metric_id + num_values
+          queueMetricKernel(metric.size);
         }
-        for (const auto &[_, metric] : scalarMetrics) {
-          threadState.metricKernelNumWordsQueue.push_back(
-              /*metric_id=*/1 + 1); // scalar metric has 1 value
+        for (size_t i = 0; i < scalarMetrics.size(); ++i) {
+          queueMetricKernel(/*metricValueWords=*/1);
         }
         // Launch metric kernels
         auto &metricKernelLaunchState = profiler.metricKernelLaunchState;
         profiler.metricBuffer->receive(tensorMetrics, scalarMetrics,
-                                       metricKernelLaunchState);
+                                       metricKernelLaunchState, metricOrdinals);
         threadState.isMetricKernelLaunching = false;
       } else { // Eager mode, directly copy
         // Populate tensor metrics

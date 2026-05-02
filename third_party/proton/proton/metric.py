@@ -8,10 +8,16 @@ from .state import exit_state, enter_state, COMPUTE_METADATA_SCOPE_NAME
 
 
 @triton.jit
-def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_id: tl.uint64, metric_value_ptr,
-                         metric_value_size: tl.uint64):
+def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_ordinal: tl.uint64,
+                         metric_id: tl.uint64, metric_value_ptr, metric_value_size: tl.uint64):
     BLOCK_SIZE: tl.constexpr = 128
-    device_offset = tl.load(device_offset_ptr)
+    record_size = metric_value_size + 2
+    # Reserve the full record atomically so replayed graph streams can append
+    # concurrently. The ordinal lets the host attach this record to its owner
+    # even if replay order differs from graph-node creation order.
+    device_offset = tl.atomic_add(device_offset_ptr, record_size, sem="relaxed") % size
+    tl.store(device_ptr + device_offset, metric_ordinal)
+    device_offset = (device_offset + 1) % size
     tl.store(device_ptr + device_offset, metric_id)
     device_offset = (device_offset + 1) % size
     num_iters = tl.cdiv(metric_value_size, BLOCK_SIZE)
@@ -22,19 +28,19 @@ def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_
         metric_value = tl.load(metric_value_ptr + cur_offsets, mask=mask)
         tl.store(device_ptr + (device_offset + cur_offsets) % size, metric_value, mask=mask)
     tl.debug_barrier()
-    device_offset = (device_offset + metric_value_size) % size
-    tl.store(device_offset_ptr, device_offset)
 
 
 @triton.jit
-def scalar_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_id: tl.uint64, metric_value: tl.uint64):
-    device_offset = tl.load(device_offset_ptr)
+def scalar_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_ordinal: tl.uint64,
+                         metric_id: tl.uint64, metric_value: tl.uint64):
+    # Record layout is {metric_ordinal, metric_id, metric_value}.
+    device_offset = tl.atomic_add(device_offset_ptr, 3, sem="relaxed") % size
+    tl.store(device_ptr + device_offset, metric_ordinal)
+    device_offset = (device_offset + 1) % size
     tl.store(device_ptr + device_offset, metric_id)
     device_offset = (device_offset + 1) % size
     tl.store(device_ptr + device_offset, metric_value)
-    device_offset = (device_offset + 1) % size
     tl.debug_barrier()
-    tl.store(device_offset_ptr, device_offset)
 
 
 def _get_kernel(kernel_fn, *args):
@@ -51,6 +57,7 @@ def _get_kernel(kernel_fn, *args):
 def set_metric_kernels():
     mock_ptr = MockTensor(tl.uint64)
     mock_metric_id = 0
+    mock_metric_ordinal = 0
     mock_size = 1
     mock_metric_value_size = 1
     tensor_metric_kernel_fn, tensor_metric_kernel_num_threads, tensor_metric_kernel_shared = _get_kernel(
@@ -58,6 +65,7 @@ def set_metric_kernels():
         mock_ptr,
         mock_ptr,
         mock_size,
+        mock_metric_ordinal,
         mock_metric_id,
         mock_ptr,
         mock_metric_value_size,
@@ -67,6 +75,7 @@ def set_metric_kernels():
         mock_ptr,
         mock_ptr,
         mock_size,
+        mock_metric_ordinal,
         mock_metric_id,
         mock_metric_id,
     )
