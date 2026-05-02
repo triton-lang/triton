@@ -1,4 +1,5 @@
 import os
+import importlib
 
 import pytest
 
@@ -16,7 +17,7 @@ def device(request):
 def proton_test_backend(monkeypatch):
     backend = os.environ.get("PROTON_TEST_BACKEND")
     if backend:
-        import triton.profiler.profile as profile
+        profile = importlib.import_module("triton.profiler.profile")
 
         monkeypatch.setattr(profile, "_select_backend", lambda: backend)
 
