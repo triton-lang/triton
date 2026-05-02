@@ -1,6 +1,11 @@
 import pytest
 import torch
-from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout, BlackwellActMXScaleLayout, StridedLayout
+from triton_kernels.tensor_details.layout import (
+    BlackwellActMXScaleLayout,
+    BlackwellMX4ValuePackedShuffledLayout,
+    BlackwellMXScaleLayout,
+    StridedLayout,
+)
 from triton_kernels.tensor import make_ragged_tensor_metadata, wrap_torch_tensor, convert_layout
 
 # ------------------------------------------------------------
@@ -75,3 +80,46 @@ def test_act_scale_roundtrip_ragged(slice_sizes, m, k, align_m):
     x_useful_rows = x[ragged_metadata.slice_offs[:-1], :]
     res_useful_rows = res[ragged_metadata.slice_offs[:-1], :]
     torch.testing.assert_close(res_useful_rows, x_useful_rows)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+@pytest.mark.parametrize("shape", [(256, 512), (384, 768), (2, 384, 768)])
+def test_mxfp4_value_packed_shuffled_roundtrip(shape):
+    storage_shape = (*shape[:-1], shape[-1] // 2)
+    x = torch.randint(0, 256, storage_shape, dtype=torch.uint8, device="cuda")
+    layout = BlackwellMX4ValuePackedShuffledLayout()
+    transformation = layout.make_transformation(list(shape), is_fp4=True)
+
+    swizzled = transformation.swizzle_data(x)
+    result = transformation.unswizzle_data(swizzled)
+
+    assert torch.equal(result, x)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_mxfp4_value_packed_shuffled_column_mapping():
+    shape = (256, 512)
+    x = torch.arange(shape[0] * (shape[1] // 2), dtype=torch.int32, device="cuda").to(torch.uint8)
+    x = x.reshape(shape[0], shape[1] // 2)
+    layout = BlackwellMX4ValuePackedShuffledLayout()
+    transformation = layout.make_transformation(list(shape), is_fp4=True)
+
+    swizzled = transformation.swizzle_data(x)
+    physical = transformation._canonical_to_physical(x).reshape(1, shape[0] // 2, shape[1])
+
+    assert tuple(swizzled.shape) == (1, 1, 1, 512, 128)
+    for n_inner in [0, 1, 7, 8, 255, 511]:
+        phase = (n_inner % 8) * 16
+        for k_tile in [0, 1]:
+            for k_byte in [0, 1, 7, 8, 31, 63]:
+                physical_col = 16 * (k_byte // 8) + 8 * k_tile + (k_byte % 8)
+                tma_col = physical_col ^ phase
+                expected = physical[0, k_tile * 64 + k_byte, n_inner]
+                assert swizzled[0, 0, 0, n_inner, tma_col] == expected
+
+
+def test_mxfp4_value_packed_shuffled_block_shape():
+    layout = BlackwellMX4ValuePackedShuffledLayout()
+    assert layout.swizzle_block_shape([1, 256, 512]) == [1, 1, 1, 512, 256]
+    with pytest.raises(ValueError, match="one packed pair"):
+        layout.swizzle_block_shape([1, 128, 512])
