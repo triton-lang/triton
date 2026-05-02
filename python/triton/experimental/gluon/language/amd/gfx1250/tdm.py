@@ -110,6 +110,7 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
     ndim = len(shape)
     assert 1 <= ndim <= 5, f"Expected 1 <= ndim <= 5 but got {ndim} dimensions"
     assert len(strides) == ndim, f"Expected {ndim} strides but got {len(strides)}"
+    block_shape = _unwrap_if_constexpr(block_shape)
     assert len(block_shape) == ndim, f"Expected block_shape to have {ndim} dimensions but got {len(block_shape)}"
     assert isinstance(base.dtype, ttgl.pointer_type), "Expected base to be a pointer"
 
@@ -143,7 +144,7 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
 
 @builtin
 def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], dest: shared_memory_descriptor,
-               pred=1, mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+               pred=1, mbarrier: shared_memory_descriptor = None, cache_modifier="", _semantic=None) -> None:
     """Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.
 
     Args:
@@ -158,13 +159,14 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
     pred_handle = pred.handle
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
+    cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
     _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, offset_handles, dest.handle, pred_handle,
-                                                            mbarrier_handle)
+                                                            mbarrier_handle, cache_modifier)
 
 
 @builtin
 def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], src: shared_memory_descriptor,
-                mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+                mbarrier: shared_memory_descriptor = None, cache_modifier="", _semantic=None) -> None:
     """Store a block of tensor specified in tensor descriptor from shared memory to global memory asynchronously.
 
     Args:
@@ -176,7 +178,9 @@ def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.ten
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
-    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, offset_handles, src.handle, mbarrier_handle)
+    cache_modifier = _semantic._str_to_store_cache_modifier(cache_modifier)
+    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, offset_handles, src.handle, mbarrier_handle,
+                                                            cache_modifier)
 
 
 @builtin
@@ -230,7 +234,7 @@ def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, dst_col
 
 @builtin
 def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, src_col_offset, dst: shared_memory_descriptor,
-                 mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+                 pred=1, mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
     """Gather data from non-contiguous rows in global memory to shared memory asynchronously.
 
     This operation uses TDM gather mode to read data from non-contiguous rows in global memory.
@@ -248,6 +252,7 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, src_col_
         src_col_offset (int or tensor): the starting column offset in the source tensor
                                         for all gathered rows.
         dst (shared_memory_descriptor): the shared memory destination to store gathered data. Must be 2D.
+        pred (int, optional): Predicate to enable or disable the gather. Defaults to 1.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
     ndim = len(desc.block_shape)
@@ -259,11 +264,14 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, src_col_
     # Convert src_col_offset to i32
     src_col_offset_handle = _semantic._convert_to_ir_values([src_col_offset], require_i64=False)[0]
 
+    pred = _semantic.to_tensor(pred)
+    pred_handle = pred.handle
+
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
 
     _semantic.builder.create_async_tdm_gather(desc.handle, src_row_indices.handle, src_col_offset_handle, dst.handle,
-                                              mbarrier_handle)
+                                              pred_handle, mbarrier_handle)
 
 
 @builtin

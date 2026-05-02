@@ -1,5 +1,45 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+// expected-error @+1 {{After removing broadcast bases the CGA encoding must be a permutation matrix}}
+#blocked_bad_cga = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1], CGALayout = [[1, 0], [1, 0]]}>
+module {
+  tt.func public @invalid_cga_layout(%arg0: tensor<1x1xf32, #blocked_bad_cga>) {
+    tt.return
+  }
+}
+
+// -----
+
+// expected-error @+1 {{LinearEncodingAttr requires a permutation matrix layout after removing broadcast bases}}
+#linear_bad_perm = #ttg.linear<{register = [[1], [3]], lane = [], warp = [], block = []}>
+module {
+  tt.func public @invalid_linear_layout(%arg0: tensor<4xi32, #linear_bad_perm>) {
+    tt.return
+  }
+}
+
+// -----
+
+// expected-error @+1 {{LinearEncodingAttr requires a permutation matrix layout after removing broadcast bases}}
+#linear_bad_after_flatten = #ttg.linear<{register = [[1, 1], [1, 0]], lane = [], warp = [], block = []}>
+module {
+  tt.func public @invalid_linear_layout_after_flatten(%arg0: tensor<2x2xi32, #linear_bad_after_flatten>) {
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+module {
+  // expected-error @+1 {{tensor descriptors must not wrap tensor types; use !tt.tensordesc<shape x element-type[, layout]> instead}}
+  tt.func public @nested_tensordesc(%arg0: !tt.tensordesc<tensor<8x16xf32, #shared>>) {
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32} {
@@ -131,6 +171,19 @@ tt.func public @subview_along_swizzling(%arg0: !ttg.memdesc<8x16xf32, #shared, #
 
 // -----
 
+#linear = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [], block = []}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+tt.func public @local_atomic_scatter_add_immutable_dst(%values: tensor<32xi32, #linear>,
+                                                       %indices: tensor<32xi32, #linear>,
+                                                       %dst: !ttg.memdesc<32xi32, #shared, #smem>) attributes {"ttg.num-warps" = 1 : i32} {
+    // expected-error @+1 {{Cannot store into immutable memory}}
+    %0 = ttg.local_atomic_scatter_add %dst[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<32xi32, #shared, #smem>, tensor<32xi32, #linear>, tensor<32xi32, #linear>) -> tensor<32xi32, #linear>
+    tt.return
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #shared1d = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0]}>
 #smem = #ttg.shared_memory
@@ -139,6 +192,31 @@ tt.func public @result_dim_too_large(%arg0: !ttg.memdesc<8x16xf32, #shared1d, #s
     // expected-error @+1 {{result shape}}
     %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<8x16xf32, #shared1d, #smem> -> !ttg.memdesc<32xf32, #shared1d, #smem>
     tt.return
+}
+
+// -----
+
+#shared_multicast = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#shared_local = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32} {
+  tt.func public @memdesc_reinterpret_changed_broadcast_count(%arg0: !ttg.memdesc<128x128xf16, #shared_multicast, #smem>) {
+    // expected-error @+1 {{source and result must have the same number of broadcast CTA dims}}
+    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x128xf16, #shared_multicast, #smem> -> !ttg.memdesc<128x128xf16, #shared_local, #smem>
+    tt.return
+  }
+}
+
+// -----
+
+#shared_bc0 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1], [0, 0]]}>
+#shared_bc1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0], [0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32} {
+  tt.func public @memdesc_reinterpret_changed_broadcast_mask(%arg0: !ttg.memdesc<128x128xf16, #shared_bc0, #smem>) {
+    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x128xf16, #shared_bc0, #smem> -> !ttg.memdesc<128x128xf16, #shared_bc1, #smem>
+    tt.return
+  }
 }
 
 // -----

@@ -149,7 +149,8 @@ LogicalResult inferLayout(
                                   worklist, hashMemo)))
           return failure();
       } else if (isa<scf::YieldOp>(op)) {
-        auto tiedArgs = getTiedArgs(op, use.getOperandNumber());
+        auto parentOp = op->getParentOp();
+        auto tiedArgs = getTiedArgs(parentOp, use.getOperandNumber());
         if (failed(updateEncoding(tiedArgs, info, &func, valueToEncoding,
                                   worklist, hashMemo)))
           return failure();
@@ -202,7 +203,6 @@ LogicalResult inferLayout(
   }
 
   // Transfer propagated encodings into the graph
-  auto ctx = func.getContext();
   for (auto &[val, info] : valueToEncoding) {
     assert(typeCheck(val.getType()));
     auto existingTy = cast<RankedTensorType>(val.getType());

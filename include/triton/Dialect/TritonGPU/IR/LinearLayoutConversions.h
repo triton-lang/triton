@@ -61,6 +61,7 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 // Unlike toLinearLayout, this makes explicit that the resulting linear layout
 // is incomplete — the padding information is not captured in the linear layout.
 LinearLayout paddedLinearLayout(MemDescType type);
+LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding);
 
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.
@@ -71,6 +72,10 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        NVMMASharedEncodingAttr shared,
                                        TMAMode mode,
                                        bool disableSwizzle = false);
+FailureOr<LinearLayout>
+nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
+                          NVMMASharedEncodingAttr shared, TMAMode mode,
+                          bool disableSwizzle, bool emitErrors);
 
 // Given a linear layout where the input dimensions contain a "block" dimension,
 // this method sets the "block" dimension to 0 and removes the corresponding

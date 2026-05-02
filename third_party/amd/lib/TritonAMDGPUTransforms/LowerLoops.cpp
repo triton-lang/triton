@@ -39,41 +39,82 @@ struct AsyncCopyChainOps {
   ttg::LocalLoadOp maybeLocalLoadOp;
 };
 
-struct TDMCopyChainOps {
-  triton::amdgpu::AsyncTDMCopyGlobalToLocalOp copyOp;
+// Common shape for an async TDM chain (copy or gather). The first op (copy or
+// gather) is type-erased because every consumer below only needs Operation *.
+struct TDMChainOps {
+  Operation *tdmOp;
   ttg::AsyncCommitGroupOp commitOp;
   triton::amdgpu::AsyncTDMWait waitOp;
   ttg::LocalLoadOp maybeLocalLoadOp;
 };
 
 using StreamOpVariant =
-    std::variant<StreamCopyChainOps, AsyncCopyChainOps, TDMCopyChainOps>;
+    std::variant<StreamCopyChainOps, AsyncCopyChainOps, TDMChainOps>;
 using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
 
-TDMCopyChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
-                                   Value extractIdx) {
-  OpBuilder builder(loadOp);
-  Location loc = loadOp.getLoc();
+// Shared skeleton for building a TDM chain:
+//   <buffer view> = createSingleBufferView(...)
+//   <tdmOp>       = buildTDMOp(builder, view, pred)   <- caller-supplied
+//   <commitOp>    = ttg::AsyncCommitGroupOp(tdmOp)
+//   <waitOp>      = amdgpu::AsyncTDMWait(commitOp)
+//   replace uses of original load with a local_load after waitOp
+TDMChainOps createTDMAsync(
+    Operation *origLoad, Value alloc, Value extractIdx,
+    function_ref<Operation *(OpBuilder &, Location, Value, Value)> buildTDMOp) {
+  OpBuilder builder(origLoad);
+  Location loc = origLoad->getLoc();
 
   Value pred = arith::ConstantIntOp::create(builder, loc, 1, 32);
 
-  // Extract local subview from shared allocation
   auto viewLoad = triton::createSingleBufferView(builder, alloc, extractIdx)
                       .getDefiningOp<ttg::MemDescIndexOp>();
 
-  auto copyOp = triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(
-      builder, loc, loadOp.getDesc(), loadOp.getIndices(), viewLoad, pred);
+  Operation *tdmOp = buildTDMOp(builder, loc, viewLoad, pred);
 
   auto commitOp =
-      ttg::AsyncCommitGroupOp::create(builder, loc, copyOp->getResult(0));
+      ttg::AsyncCommitGroupOp::create(builder, loc, tdmOp->getResult(0));
   auto waitOp = triton::amdgpu::AsyncTDMWait::create(builder, loc,
                                                      commitOp->getResult(0), 0);
 
   auto maybeSharedLoad = tt::replaceUsesWithLocalLoad(
-      builder, loadOp->getResult(0), viewLoad, waitOp);
+      builder, origLoad->getResult(0), viewLoad, waitOp);
 
-  return {copyOp, commitOp, waitOp, maybeSharedLoad};
+  return {tdmOp, commitOp, waitOp, maybeSharedLoad};
 }
+
+TDMChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
+                               Value extractIdx) {
+  return createTDMAsync(
+      loadOp, alloc, extractIdx,
+      [&](OpBuilder &builder, Location loc, Value view, Value pred) {
+        return triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(
+            builder, loc, loadOp.getDesc(), loadOp.getIndices(), view, pred);
+      });
+}
+
+TDMChainOps createTDMAsyncGather(tt::DescriptorGatherOp gatherOp, Value alloc,
+                                 Value extractIdx) {
+  return createTDMAsync(
+      gatherOp, alloc, extractIdx,
+      [&](OpBuilder &builder, Location loc, Value view, Value pred) {
+        // Convert to the TDM index layout for better gather performance;
+        // insert a layout convert if the indices don't already have it.
+        auto indices = gatherOp.getXOffsets();
+        auto indicesType = cast<RankedTensorType>(indices.getType());
+        auto idxEnc = getTDMGatherScatterIndexEncoding(gatherOp, indicesType);
+        if (indicesType.getEncoding() != idxEnc) {
+          auto newIdxType = RankedTensorType::get(
+              indicesType.getShape(), indicesType.getElementType(), idxEnc);
+          indices =
+              ttg::ConvertLayoutOp::create(builder, loc, newIdxType, indices);
+        }
+        return triton::amdgpu::AsyncTDMGatherOp::create(
+            builder, loc, gatherOp.getDesc(), indices, gatherOp.getYOffset(),
+            view, pred);
+      });
+}
+
+namespace {
 
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                ttg::SharedEncodingTrait sharedEnc,
@@ -135,30 +176,6 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
   return {newLoadOp, viewLoad, storeOp, maybeLocalLoad};
 }
 
-// Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
-// and |vecSize| with which dot operand |inputValue| is fed into if possible.
-template <class T>
-T getDotEncoding(Value inputValue, unsigned *opIdx, unsigned *vecSize,
-                 T *dummy = nullptr) {
-  if (!llvm::hasSingleElement(inputValue.getUses()))
-    return nullptr;
-
-  Operation *user = *inputValue.getUsers().begin();
-  if (user->getNumResults() != 1 ||
-      user->getBlock() != inputValue.getParentBlock())
-    return nullptr;
-
-  if (auto dotOp = dyn_cast<tt::DotOpInterface>(user)) {
-    OpOperand &use = *inputValue.getUses().begin();
-    *opIdx = use.getOperandNumber();
-    auto operandType = cast<RankedTensorType>(inputValue.getType());
-    *vecSize = ttg::toLinearLayout(operandType).getNumConsecutiveInOut();
-    auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
-    return dyn_cast<T>(dotType.getEncoding());
-  }
-  return getDotEncoding<T>(user->getResult(0), opIdx, vecSize);
-}
-
 // Adapted from
 // lib/Dialect/TritonGPU/Transforms/Utility.cpp::getSharedEncIfAllUsersAreDotEnc
 // to support AMDMfmaEncodingAttr.
@@ -207,15 +224,16 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         // For architectures that don't support scattering into LDS we must
         // ensure that each warp writes a contiguous memory chunk. This requires
         // the shared memory order to follow the thread order, while preserving
-        // the fastest dimension from the register order to keep vectorization.
-        auto llEnc =
-            triton::gpu::toLinearEncoding(cast<RankedTensorType>(srcTy));
-        auto regOrder = llEnc.getOrder();
-        auto threadOrder = llEnc.getThreadOrder();
+        // the fastest dimension from the memory order if it's contiguous > 1 to
+        // keep vectorization.
+        auto srcTensorTy = cast<RankedTensorType>(srcTy);
+        auto regOrder = triton::gpu::getOrder(srcTensorTy);
+        auto threadOrder = triton::gpu::getThreadOrder(srcTensorTy);
 
         SetVector<unsigned> orderSet;
 
-        auto regContig = llEnc.getContigPerThread()[regOrder[0]];
+        auto regContig =
+            triton::gpu::getContigPerThread(srcTensorTy)[regOrder[0]];
         unsigned elemBitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
         unsigned finalRegContig =
             fitToValidDirectToLdsVecSize(regContig, elemBitWidth, targetInfo);
@@ -224,7 +242,7 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         if (finalRegContig > 0) {
           // Preserve the fastest reg dim for contig > 1 to keep vectorization.
           if (finalRegContig > 1)
-            orderSet.insert(regOrder[0]);
+            orderSet.insert(order[0]);
           orderSet.insert(threadOrder.begin(), threadOrder.end());
           order = orderSet.takeVector();
         }
@@ -331,87 +349,6 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
   return maxVecSharedEnc;
 }
 
-// Adapted from
-// lib/Dialect/TritonGPU/Transforms/Utility.cpp::getSharedEncIfAllUsersAreDotEnc
-// to support AMDMfmaEncodingAttr.
-// TODO(max): figure out how to refactor to use upstream
-//
-// If all the transitive uses of the given value have are used by a convert to
-// the same dot operand encoding, return true and get the shared encoding that
-// needs to be used to be compatible with users' layouts.
-static std::optional<ttg::PaddedSharedEncodingAttr>
-getSharedEncIfAllUsersAreDotEncPadded(
-    Value loadedValue, const triton::AMD::TargetInfo &targetInfo) {
-  ttg::PaddedSharedEncodingAttr attr;
-  for (Operation *user : loadedValue.getUsers()) {
-    LDBG(" getSharedEncIfAllUsersAreDotEnc current user: " << *user);
-    if (user->getNumResults() != 1)
-      return std::nullopt;
-
-    ttg::PaddedSharedEncodingAttr tempAttr;
-    Value userResult = user->getResult(0);
-    Type userResType = userResult.getType();
-    if (auto memDesc = dyn_cast<ttg::MemDescType>(userResType)) {
-      // First time we find a shared encoding in the chain, save it and try to
-      // use it if it is compatible with the other users.
-      tempAttr = cast<ttg::PaddedSharedEncodingAttr>(memDesc.getEncoding());
-      auto newAttr =
-          getSharedEncIfAllUsersAreDotEncPadded(user->getResult(0), targetInfo);
-
-      if (!newAttr.has_value())
-        return std::nullopt;
-
-      tempAttr = ttg::PaddedSharedEncodingAttr::get(
-          tempAttr.getContext(), newAttr->getIntervals()[0],
-          newAttr->getPaddings()[0], tempAttr.getLinearComponent());
-    } else {
-      if (!(isa<ttg::ConvertLayoutOp>(user) ||
-            user->hasTrait<OpTrait::LocalLoadTrait>()))
-        return std::nullopt;
-
-      auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
-      auto order = getOrderForMemory(srcTy);
-      SmallVector<unsigned> sharedOrder;
-      int rank = order.size();
-      // TODO rework this when shared -> dotOperand conversions support
-      // arbitrary shared memory ordering
-      if (rank == 3) {
-        // Move the batch dimension (dim #0) to be the last so that it will be
-        // the slowest varying dimension.
-        for (unsigned i = 0; i < rank; ++i)
-          if (order[i] != 0)
-            sharedOrder.emplace_back(order[i]);
-        sharedOrder.emplace_back(0);
-      } else {
-        sharedOrder = order;
-      }
-
-      auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
-      if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
-        tempAttr =
-            composePaddedLayout(targetInfo, dotOpEnc.getOpIdx(),
-                                dotOpEnc.getKWidth(), srcTy, sharedOrder);
-      } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
-        // We use linear layout directly for scaled dot fp8 operands. For such
-        // cases, we need to look further down the def-use chain to find the dot
-        // op for the mfma layout to deduce operand index and other information.
-        unsigned opIdx;
-        unsigned vecSize;
-        if (auto dotEnc = getDotEncoding<ttg::AMDWmmaEncodingAttr>(
-                userResult, &opIdx, &vecSize)) {
-          tempAttr =
-              composePaddedLayout(targetInfo, opIdx, vecSize, srcTy, order);
-        }
-      }
-    }
-    // Check that the shared encodings needed by the users are compatible.
-    if (!tempAttr || (attr != nullptr && attr != tempAttr))
-      return std::nullopt;
-    attr = tempAttr;
-  }
-  return attr;
-}
-
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                ttg::SharedEncodingTrait sharedEnc,
                                tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -491,17 +428,15 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
   appendToForOpYield(forOp, {extractIdx});
 
   LoadToStreamOpMap loadToStreamOp;
-  for (auto &[l, info] : loadToInfo) {
+  for (auto &[op, info] : loadToInfo) {
     if (!info.sharedEncoding)
       continue;
 
-    auto loadOp = dyn_cast<tt::LoadOp>(l);
-    auto descLoadOp = dyn_cast<tt::DescriptorLoadOp>(l);
-    if (!loadOp && !descLoadOp)
+    auto loadOp = dyn_cast<tt::LoadOp>(op);
+    auto descLoadOp = dyn_cast<tt::DescriptorLoadOp>(op);
+    auto gatherOp = dyn_cast<tt::DescriptorGatherOp>(op);
+    if (!loadOp && !descLoadOp && !gatherOp)
       continue;
-
-    Operation *op =
-        (loadOp ? loadOp.getOperation() : descLoadOp.getOperation());
 
     // Create an allocation that can hold distance number of loadOp shapes.
     auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
@@ -513,8 +448,11 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
 
     // Replace the old load with multi-buffered loads
     if (descLoadOp) {
-      loadToStreamOp[descLoadOp] =
-          createTDMAsyncCopy(descLoadOp, alloc, extractIdx);
+      loadToStreamOp[op] = createTDMAsyncCopy(descLoadOp, alloc, extractIdx);
+      continue;
+    }
+    if (gatherOp) {
+      loadToStreamOp[op] = createTDMAsyncGather(gatherOp, alloc, extractIdx);
       continue;
     }
 
@@ -534,15 +472,10 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
   return loadToStreamOp;
 }
 
-static void dumpSchedule(tt::CoarseSchedule &schedule, llvm::StringRef msg) {
-  LLVM_DEBUG({
-    llvm::dbgs() << "\n";
-    LDBG(msg);
-    schedule.dump();
-  });
-};
+} // namespace
 
 namespace SingleDotSchedule {
+namespace {
 using namespace mlir::SingleDotSchedule;
 using ClusterMap = DenseMap<tt::CoarseSchedule::ClusterHash, int>;
 
@@ -562,7 +495,6 @@ ClusterMap createClusterMap(tt::CoarseSchedule &schedule) {
 void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
                    Clusters &clusters) {
   for (auto &[op, stageAndCluster] : schedule.opToStageAndCluster) {
-    auto [stage, cluster] = stageAndCluster;
     tt::CoarseSchedule::ClusterHash clusterHash =
         tt::CoarseSchedule::hashCluster(stageAndCluster.second);
     int oldClusterId = clusterMap[clusterHash];
@@ -691,14 +623,14 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   return success();
 }
 
-void scheduleTDMCopy(const TDMCopyChainOps &asyncOps,
-                     tt::DescriptorLoadOp loadOp, tt::CoarseSchedule &schedule,
-                     const Stages &stages, const Clusters &clusters) {
-  auto [copyOp, commitOp, waitOp, maybeLocalLoadOp] = asyncOps;
-  auto [loadStage, loadCluster] = schedule[loadOp];
-  schedule.insert(copyOp, loadStage, loadCluster);
-  // Place ttg.async_commit_group op following AsyncCopyGlobalToLocal so the
-  // later UpdateAsyncWaitCount pass can deduce better waitcnts
+void scheduleTDMOps(Operation *tdmOp, Operation *commitOp, Operation *waitOp,
+                    ttg::LocalLoadOp maybeLocalLoadOp, Operation *origLoadOp,
+                    tt::CoarseSchedule &schedule, const Stages &stages,
+                    const Clusters &clusters) {
+  auto [loadStage, loadCluster] = schedule[origLoadOp];
+  schedule.insert(tdmOp, loadStage, loadCluster);
+  // Place ttg.async_commit_group op in the same stage/cluster as the TDM op so
+  // the later UpdateAsyncWaitCount pass can deduce better waitcnts.
   schedule.insert(commitOp, loadStage, loadCluster);
   // If the LocalLoads are scheduled to a later stage than AsyncCopy we need to
   // place the AsyncCopy prefetches after the AsyncWaits which create a barrier
@@ -762,16 +694,15 @@ void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
                        tt::CoarseSchedule &schedule, const Stages &stages,
                        const Clusters &clusters) {
   for (auto [l, streamOps] : loadToStreamOp) {
-    auto loadOp = dyn_cast<tt::LoadOp>(l);
-    auto descLoadOp = dyn_cast<tt::DescriptorLoadOp>(l);
-    if (!loadOp && !descLoadOp)
-      continue;
-
-    if (auto asyncOps = std::get_if<TDMCopyChainOps>(&streamOps)) {
-      scheduleTDMCopy(*asyncOps, descLoadOp, schedule, stages, clusters);
+    if (auto asyncOps = std::get_if<TDMChainOps>(&streamOps)) {
+      auto [tdmOp, commitOp, waitOp, localLoad] = *asyncOps;
+      scheduleTDMOps(tdmOp, commitOp, waitOp, localLoad, l, schedule, stages,
+                     clusters);
     } else if (auto asyncOps = std::get_if<AsyncCopyChainOps>(&streamOps)) {
+      auto loadOp = cast<tt::LoadOp>(l);
       scheduleAsyncCopy(*asyncOps, loadOp, schedule, stages, clusters);
     } else if (auto sOps = std::get_if<StreamCopyChainOps>(&streamOps)) {
+      auto loadOp = cast<tt::LoadOp>(l);
       scheduleStreamCopy(*sOps, loadOp, schedule, stages, clusters);
     }
   }
@@ -801,26 +732,28 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
                                          useAsyncCopy, axisInfoAnalysis);
 
   scheduleStreamOps(loadToStreamOps, schedule, stages, clusters);
-  dumpSchedule(schedule, "Coarse schedule stream ops:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE, "Coarse schedule stream ops:");
 
   for (auto [l, _] : loadToInfo) {
-    if (isa<tt::DescriptorLoadOp>(l)) {
+    if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(l)) {
       schedule.erase(l);
       l->erase();
     }
   }
 
   scheduleDependencies(forOp, schedule);
-  dumpSchedule(schedule, "Coarse schedule with dependencies:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE, "Coarse schedule with dependencies:");
   ttg::scheduleDistanceOneDependencies(forOp, schedule);
-  dumpSchedule(schedule, "Coarse schedule with dist 1:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE, "Coarse schedule with dist 1:");
   tt::CoarseSchedule::Cluster computeCluster = clusters[SCHED_COMPUTE];
   ttg::scheduleRemainingToLastStage(forOp, schedule, computeCluster);
-  dumpSchedule(schedule, "Final coarse schedule:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE, "Final coarse schedule:");
 }
+} // namespace
 } // namespace SingleDotSchedule
 
 namespace ChainedDotSchedule {
+namespace {
 using namespace mlir::ChainedDotSchedule;
 
 void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
@@ -928,26 +861,27 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   }
 
   scheduleDependencies(forOp, schedule);
-  dumpSchedule(schedule, "Coarse schedule with dependencies:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE, "Coarse schedule with dependencies:");
 
   triton::gpu::scheduleDistanceOneDependencies(forOp, schedule);
-  dumpSchedule(schedule, "Coarse schedule with dist 1:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE, "Coarse schedule with dist 1:");
 
   tt::CoarseSchedule::Cluster lastCluster = clusters.back();
   triton::gpu::scheduleRemainingToLastStage(forOp, schedule, lastCluster);
-  dumpSchedule(schedule, "Final coarse schedule:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE, "Final coarse schedule:");
 }
+} // namespace
 } // namespace ChainedDotSchedule
 
-void lowerLoop(scf::ForOp forOp,
-               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-               bool useAsyncCopy, bool usePingpong) {
+static void lowerLoop(scf::ForOp forOp,
+                      triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                      bool useAsyncCopy, bool usePingpong) {
   tt::CoarseSchedule schedule;
   if (failed(schedule.deSerialize(forOp, /*normalizeClusterId=*/false))) {
     return;
   }
 
-  dumpSchedule(schedule, "[lowerLoops]deserialized schedule:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE, "[lowerLoops]deserialized schedule:");
 
   int numStages = schedule.getNumStages();
 
@@ -969,12 +903,12 @@ void lowerLoop(scf::ForOp forOp,
       load->removeAttr(AttrBypassLDS);
       loadToInfo[load] = {nullptr, distance, use};
     } else {
-      auto useTDM = isa<tt::DescriptorLoadOp>(load);
-      if (useTDM) {
+      if (auto descLoadLike =
+              dyn_cast<tt::DescriptorLoadLikeOpInterface>(load)) {
         hasTDMLoad = true;
-        auto paddedEncoding = getSharedEncIfAllUsersAreDotEncPadded(
-                                  load->getResult(0), targetInfo)
-                                  .value_or(nullptr);
+        auto resultType = cast<RankedTensorType>(load->getResult(0).getType());
+        auto paddedEncoding =
+            getEncodingFromDescriptor(load, resultType, descLoadLike.getDesc());
         LoadInfo ldInfo;
         ldInfo.sharedEncoding = paddedEncoding;
         ldInfo.distToUse = distance;
@@ -1002,7 +936,7 @@ void lowerLoop(scf::ForOp forOp,
                                       hasTDMLoad, waitAtTail);
   }
 
-  dumpSchedule(schedule, "[lowerLoops]updated schedule:");
+  dumpScheduleDebug(schedule, DEBUG_TYPE, "[lowerLoops]updated schedule:");
 
   schedule.serialize(forOp);
 }

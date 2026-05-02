@@ -9,13 +9,14 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout, CoalescedLayout
+from ._layouts import (SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout, CoalescedLayout,
+                       SharedLinearLayout, _get_shape_per_cta)
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
-    constexpr,
     base_value,
     base_type,
+    constexpr,
     dtype,
     block_type,  # TODO: block type with layout info
     pointer_type,
@@ -115,6 +116,7 @@ atomic_xchg = builtin(tl_core.atomic_xchg)
 atomic_xor = builtin(tl_core.atomic_xor)
 broadcast = builtin(tl_core.broadcast)
 cast = builtin(tl_core.cast)
+clamp = builtin(tl_core.clamp)
 device_assert = builtin(tl_core.device_assert)
 device_print = builtin(tl_core.device_print)
 expand_dims = builtin(tl_core.expand_dims)
@@ -207,6 +209,23 @@ class shared_memory_descriptor_type(base_type):
     def __str__(self) -> str:
         return f"shared_memory_descriptor<{self.element_ty}, {self.shape}, {self.layout}, {self.alloc_shape}>"
 
+    @property
+    def nbytes_per_cta(self) -> int:
+        if isinstance(self.layout, SharedLinearLayout):
+            cga_layout = []
+            dim_bases = [0] * len(self.shape)
+            for basis in self.layout.block_bases:
+                cga_basis = [0] * len(self.shape)
+                for dim, value in enumerate(basis):
+                    if value != 0:
+                        cga_basis[dim] = 1 << dim_bases[dim]
+                        dim_bases[dim] += 1
+                cga_layout.append(cga_basis)
+        else:
+            cga_layout = self.layout.cga_layout
+        shape_per_cta = _get_shape_per_cta(self.shape, cga_layout)
+        return math.prod(shape_per_cta) * self.element_ty.primitive_bitwidth // 8
+
     def __eq__(self, other) -> bool:
         return (type(self) is type(other) and self.shape == other.shape and self.layout == other.layout
                 and self.alloc_shape == other.alloc_shape)
@@ -250,6 +269,10 @@ class shared_memory_descriptor(base_value):
     @property
     def numel(self) -> int:
         return math.prod(self.shape)
+
+    @property
+    def nbytes_per_cta(self) -> int:
+        return self.type.nbytes_per_cta
 
     @property
     def layout(self):
@@ -320,6 +343,36 @@ class shared_memory_descriptor(base_value):
         indices = _unwrap_if_constexpr(indices)
         axis = _unwrap_if_constexpr(axis)
         return _semantic.shared_scatter(self, values, indices, axis)
+
+    @builtin
+    def atomic_scatter_add(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        """
+        Atomically scatter-add elements to shared memory along a specified axis using an indices tensor.
+
+        For each input position I, the operation reads the previous value from dst where the
+        coordinate at the scatter axis is replaced by indices[I], adds values[I], then writes
+        the updated result back to shared memory.
+
+        Args:
+            values (tensor): Tensor with values to add (same shape as indices).
+            indices (tensor): Tensor specifying which indices to update along the axis.
+            axis (int): The axis along which to update values.
+            mask (tensor, optional): Boolean tensor selecting which elements to update.
+
+        Returns:
+            tensor: Gluon tensor with the values observed before the update.
+
+        Note:
+            This operation currently uses relaxed memory semantics. Users are responsible
+            for inserting mbarrier synchronization themselves.
+        """
+        values = _unwrap_if_constexpr(values)
+        indices = _unwrap_if_constexpr(indices)
+        axis = _unwrap_if_constexpr(axis)
+        mask = _unwrap_if_constexpr(mask)
+        if mask is not None:
+            mask = _semantic.to_tensor(mask)
+        return _semantic.shared_atomic_scatter_add(self, values, indices, axis, mask)
 
     def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """

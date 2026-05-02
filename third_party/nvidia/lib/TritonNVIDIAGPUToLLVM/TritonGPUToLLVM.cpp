@@ -11,12 +11,17 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Gluon/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
 
@@ -83,6 +88,10 @@ struct ConvertTritonGPUToLLVM
       : ConvertTritonGPUToLLVMBase({computeCapability}) {}
   ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion)
       : ConvertTritonGPUToLLVMBase({computeCapability, ptxVersion}) {}
+  ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion,
+                         bool enableConcurrencySanitizer)
+      : ConvertTritonGPUToLLVMBase(
+            {computeCapability, ptxVersion, enableConcurrencySanitizer}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -100,6 +109,22 @@ struct ConvertTritonGPUToLLVM
       return signalPassFailure();
     ModuleMembarAnalysis membarPass(&allocation, canSkipBarSync);
     membarPass.run();
+    if (enableConcurrencySanitizer) {
+      auto hooks = mlir::triton::instrument::createConSanHooks("nvidia");
+      assert(hooks && "no ConSan hooks registered for nvidia");
+      mlir::triton::instrument::runConcurrencySanitizer(mod, hooks.get());
+      mlir::PassManager cleanupPm(context);
+      cleanupPm.addPass(mlir::triton::gluon::createGluonCanonicalize());
+      cleanupPm.addPass(mlir::createCSEPass());
+      if (failed(cleanupPm.run(mod)))
+        return signalPassFailure();
+    }
+    bool hasGlobalScratchAlloc = false;
+    mod.walk([&](triton::gpu::GlobalScratchAllocOp) {
+      hasGlobalScratchAlloc = true;
+    });
+    if (hasGlobalScratchAlloc)
+      mlir::triton::gpu::runGlobalScratchMemoryAllocation(mod);
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
@@ -180,8 +205,10 @@ struct ConvertTritonGPUToLLVM
                                                            patterns, benefit);
     mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
                                                         benefit);
-    mlir::triton::populateInstrumentationToLLVMPatterns(typeConverter,
-                                                        patterns);
+    mlir::triton::populateInstrumentationToLLVMPatterns(typeConverter, patterns,
+                                                        targetInfo);
+    mlir::triton::populateGSanToLLVMPatterns(typeConverter, patterns,
+                                             axisInfoAnalysis, targetInfo);
 
     TritonLLVMConversionTarget convTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
@@ -253,6 +280,13 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability,
                                                   ptxVersion);
 }
 
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertTritonGPUToLLVMPass(int32_t computeCapability, int32_t ptxVersion,
+                                 bool enableConcurrencySanitizer) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, ptxVersion,
+                                                  enableConcurrencySanitizer);
+}
+
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
                             bool /*beforeIsRead*/, bool /*afterIsRead*/,
                             Allocation *allocation) {
@@ -265,7 +299,7 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
     return true;
 
   // wait_barrier will never run ahead of the load it's waiting on
-  if (isa<ttng::AsyncTMACopyGlobalToLocalOp, ttng::AsyncTMAGatherOp>(before) &&
+  if (isa<ttng::TMALoadLikeOpInterface>(before) &&
       isa<ttng::WaitBarrierOp>(after))
     return true;
 

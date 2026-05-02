@@ -12,6 +12,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/MathExtras.h"
 
 // Provide custom directive handlers for declarative assemblyFormat.
 // They must be visible before including the generated op classes.
@@ -68,6 +69,16 @@ bool isConvertTrivial(ConvertLayoutOp op) {
 }
 
 } // namespace
+
+Value AsyncCopyGlobalToLocalOp::getPredicateOperand() { return getMask(); }
+
+void AsyncCopyGlobalToLocalOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+
+Type AsyncCopyGlobalToLocalOp::getPredicateOperandTypeLike() {
+  return getSrc().getType();
+}
 
 //===----------------------------------------------------------------------===//
 // Canonicalizer
@@ -345,7 +356,7 @@ struct CanonicalizeConvertFromConvert
 
     // cvt(cat) -> cat
     if (auto cat = dyn_cast<CatOp>(arg)) {
-      if (isExpensiveCat(cat, op.getType().getEncoding()))
+      if (!isLegalCatEncoding(cat, op.getType().getEncoding()))
         return failure();
 
       rewriter.replaceOpWithNewOp<CatOp>(op, op->getResult(0).getType(),
@@ -452,7 +463,6 @@ LogicalResult Fp4ToFpOp::verifyFp4ToFp(mlir::Operation *op,
   auto srcLl = toLinearLayout(srcTy);
   auto resLl = toLinearLayout(resTy);
   auto *ctx = srcTy.getContext();
-  auto regDim = StringAttr::get(ctx, "register");
   auto outDims = standardOutDimNames(ctx, rank);
 
   // We use backward inference here as it is striclty more general
@@ -480,23 +490,10 @@ LogicalResult Fp4ToFpOp::verifyFp4ToFp(mlir::Operation *op,
 void Fp4ToFpOp::build(OpBuilder &builder, OperationState &state,
                       TypedValue<RankedTensorType> src, Type elemType,
                       int32_t axis) {
-  auto srcTy = src.getType();
-  auto shape = llvm::to_vector(srcTy.getShape());
-  auto rank = srcTy.getRank();
-  assert(0 <= axis && axis < rank);
-  shape[axis] *= 2;
-
-  Attribute inEnc = srcTy.getEncoding();
-  Attribute outEnc;
-  auto result =
-      inEnc.getDialect()
-          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
-          ->inferFp4ToFpOpEncoding(shape, axis, inEnc, outEnc,
-                                   /*fwdInference=*/true, state.location);
-  assert(succeeded(result));
-
-  auto resultTy = RankedTensorType::get(shape, elemType, outEnc);
-  build(builder, state, resultTy, src, axis);
+  auto resultTy =
+      inferFp4ToFpResultType(src.getType(), elemType, axis, state.location);
+  assert(succeeded(resultTy));
+  build(builder, state, *resultTy, src, axis);
 }
 
 OpFoldResult MemDescTransOp::fold(FoldAdaptor adaptor) {
@@ -654,6 +651,23 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
   if (getType() == getSrc().getType())
     return getSrc();
   return {};
+}
+
+LogicalResult MemDescReinterpretOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getResult().getType();
+  auto kBlock = StringAttr::get(getContext(), "block");
+  auto getNumBroadcastCTADims = [kBlock](MemDescType ty) {
+    auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
+    auto layout =
+        toLinearLayout(ty.getAllocShape().take_back(rank), ty.getEncoding());
+    auto freeVariableMask = layout.getFreeVariableMasks().lookup(kBlock);
+    return llvm::popcount<uint32_t>(freeVariableMask);
+  };
+  if (getNumBroadcastCTADims(srcTy) != getNumBroadcastCTADims(dstTy))
+    return emitError(
+        "source and result must have the same number of broadcast CTA dims");
+  return success();
 }
 
 // LocalAllocOp
@@ -868,6 +882,65 @@ LogicalResult LocalScatterOp::verify() {
   return success();
 }
 
+// LocalAtomicScatterAddOp
+LogicalResult LocalAtomicScatterAddOp::verify() {
+  auto dstTy = getDst().getType();
+  auto valuesTy = cast<RankedTensorType>(getValues().getType());
+  auto indicesTy = cast<RankedTensorType>(getIndices().getType());
+  auto maskTy = getMask() ? cast<RankedTensorType>(getMask().getType())
+                          : RankedTensorType();
+  Type valuesEltTy = valuesTy.getElementType();
+  unsigned axis = getAxis();
+
+  if (!dstTy.getMutableMemory())
+    return emitOpError("Cannot store into immutable memory");
+
+  // Local atomic scatter add only supports shared-memory memdescs.
+  if (!isa<SharedEncodingTrait>(dstTy.getEncoding())) {
+    return emitError("destination must have shared memory encoding");
+  }
+
+  // Match Triton's existing atomic add type support.
+  if (!valuesEltTy.isIntOrFloat()) {
+    return emitError("values must have integer or floating element type");
+  }
+
+  // Verify indices tensor has integer element type
+  if (!indicesTy.getElementType().isInteger()) {
+    return emitError("indices must have integer element type");
+  }
+
+  if (failed(verifySharedMemoryRank(*this, valuesTy, dstTy, "values")))
+    return failure();
+
+  // Verify values, indices, and mask have the same shape/rank.
+  if (valuesTy.getShape() != indicesTy.getShape()) {
+    return emitError("values shape must match indices shape");
+  }
+  if (maskTy && valuesTy.getShape() != maskTy.getShape()) {
+    return emitError("values shape must match mask shape");
+  }
+
+  // Verify axis is valid
+  if (axis >= dstTy.getRank()) {
+    return emitError("axis ")
+           << axis << " is out of bounds for destination rank "
+           << dstTy.getRank();
+  }
+
+  // Verify values, indices, and result have the same layout
+  if (valuesTy.getEncoding() != indicesTy.getEncoding()) {
+    return emitError("values must have the same layout as indices");
+  }
+  if (maskTy && valuesTy.getEncoding() != maskTy.getEncoding()) {
+    return emitError("values must have the same layout as mask");
+  }
+  if (dstTy.getElementType() != valuesEltTy) {
+    return emitError("values element type must match destination element type");
+  }
+  return success();
+}
+
 // AsyncCopyGlobalToLocalOp
 LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   if (!getResult().getType().getMutableMemory())
@@ -1007,12 +1080,12 @@ LogicalResult MemDescSubsliceOp::verify() {
 
   auto ctx = getContext();
   LinearLayout ll;
-  if (auto paddedEncoding = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
+  if (auto paddedEncoding = triton::gpu::getPaddedEncoding(srcEnc)) {
     if (paddedEncoding.getRank() < srcTy.getRank()) {
       return emitError("SubSlice of low rank PaddedSharedEncoding from higher "
                        "rank tensors is not supported yet");
     }
-    ll = paddedEncoding.getLinearComponent();
+    ll = triton::gpu::paddedLinearLayout(srcTy);
   } else {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
@@ -1192,7 +1265,7 @@ void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
                              unsigned partitionNumRegions) {
   build(builder, state, resultTypes, partitionNumWarps, {}, {}, {});
   OpBuilder::InsertionGuard guard(builder);
-  Block *container = builder.createBlock(state.regions.back().get());
+  builder.createBlock(state.regions.back().get());
   WarpSpecializePartitionsOp::create(builder, state.location,
                                      /*explicitCaptures=*/ValueRange(),
                                      partitionNumRegions);
@@ -1221,7 +1294,6 @@ ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {
   while (succeeded(p.parseOptionalKeyword(
       ("partition" + Twine(partitionNumWarps.size()).str())))) {
     partitionArgs.clear();
-    SMLoc regionLoc = p.getCurrentLocation();
     if (p.parseArgumentList(partitionArgs, AsmParser::Delimiter::Paren,
                             /*allowType=*/true) ||
         p.parseKeyword("num_warps") || p.parseLParen() ||

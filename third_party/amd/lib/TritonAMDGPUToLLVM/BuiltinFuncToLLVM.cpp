@@ -74,7 +74,6 @@ private:
     StringRef calleeName = callOp.getCallee().value();
 
     auto operands = callOp.getOperands();
-    auto result = callOp.getResult();
 
     LLVM::LLVMFunctionType calleeType = callOp.getCalleeFunctionType();
     Type returnType = calleeType.getReturnType();
@@ -194,8 +193,8 @@ private:
 struct ConvertBuiltinFuncToLLVM
     : public triton::impl::ConvertBuiltinFuncToLLVMBase<
           ConvertBuiltinFuncToLLVM> {
-  ConvertBuiltinFuncToLLVM(StringRef targetArch, bool ftz) {
-    this->arch = targetArch.str();
+  ConvertBuiltinFuncToLLVM(StringRef gfxArch, bool ftz) {
+    this->gfxArch = gfxArch.str();
     this->ftz = ftz;
   }
 
@@ -206,7 +205,7 @@ struct ConvertBuiltinFuncToLLVM
     GreedyRewriteConfig config;
     config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Aggressive);
 
-    AMD::TargetInfo targetInfo(this->arch.getValue());
+    AMD::TargetInfo targetInfo(this->gfxArch.getValue());
     RewritePatternSet patterns(context);
     patterns.add<CallOpConversion>(context, targetInfo, this->ftz);
 
@@ -221,8 +220,8 @@ struct ConvertBuiltinFuncToLLVM
 namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertBuiltinFuncToLLVMPass(StringRef targetArch, bool ftz) {
-  return std::make_unique<ConvertBuiltinFuncToLLVM>(targetArch, ftz);
+createConvertBuiltinFuncToLLVMPass(StringRef gfxArch, bool ftz) {
+  return std::make_unique<ConvertBuiltinFuncToLLVM>(gfxArch, ftz);
 }
 
 } // namespace mlir::triton

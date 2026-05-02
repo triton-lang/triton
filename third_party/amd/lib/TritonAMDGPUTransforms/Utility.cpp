@@ -3,6 +3,8 @@
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
 #include "triton/Tools/LayoutUtils.h"
 
 #include <limits>
@@ -10,7 +12,8 @@
 namespace tt = triton;
 namespace ttg = triton::gpu;
 
-namespace deduceMin {
+namespace {
+
 int deduceMinCountInBlock(Block &block,
                           const std::function<int(Operation *)> &countFunc);
 
@@ -57,17 +60,15 @@ int deduceMinCountInBlock(Block &block,
     return 0;
   return deduceMinCountBetweeOps(&block.front(), &block.back(), countFunc);
 }
-} // namespace deduceMin
 
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
                              const std::function<int(Operation *)> &countFunc,
                              int pathSum, int foundMin) {
-  using namespace deduceMin;
   // If the value is not defined in the same region as the consumer we need to
   // peel the parent region of consumer until we arrive at value's region
   while (consumerOp->getParentRegion() != defValue.getParentRegion()) {
-    pathSum += deduceMin::deduceMinCountBetweeOps(
-        &consumerOp->getBlock()->front(), consumerOp, countFunc);
+    pathSum += deduceMinCountBetweeOps(&consumerOp->getBlock()->front(),
+                                       consumerOp, countFunc);
     consumerOp = consumerOp->getParentOp();
   }
 
@@ -112,6 +113,8 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
   // Unsupported value, return 0 conservatively.
   return 0;
 }
+
+} // namespace
 
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
                              llvm::function_ref<int(Operation *)> countFunc) {
@@ -442,13 +445,64 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
       padAmount = std::min(vecWidth, padAmount);
   }
 
-  if (padAmount == 0)
+  if (padAmount == 0 || padAmount >= static_cast<unsigned>(innerDimLength))
     return {};
 
-  unsigned padInterval = innerDimLength;
+  // When innerDimLength doesn't span all LDS banks, widen the padding
+  // interval to the bank-wrap boundary so padding is inserted every N
+  // rows instead of every row, at the point where the bank pattern
+  // would repeat.
+  constexpr unsigned ldsNumBanks = 64;
+  constexpr unsigned ldsBankWidthInBytes = 4;
+  unsigned elemBytes = typeWidthInBit / 8;
+  unsigned bankWrapInterval = ldsNumBanks * ldsBankWidthInBytes / elemBytes;
+  unsigned padInterval =
+      std::max(static_cast<unsigned>(innerDimLength), bankWrapInterval);
+
+  // TDM only supports a maximum pad interval of 256 * 32bit.
+  // TODO: this will produce conflicts for very large INNER_DIMS (>1024bytes),
+  // we could scale the pad amount if this becomes an issue.
+  unsigned maxPadIntervalElems = 256u * 32u / typeWidthInBit;
+  padInterval = std::min(padInterval, maxPadIntervalElems);
+
   auto *context = srcTy.getContext();
   return triton::gpu::PaddedSharedEncodingAttr::get(
       context, {{padInterval, padAmount}}, order, shape, CGALayout);
+}
+
+ttg::SliceEncodingAttr
+getTDMGatherScatterIndexEncoding(Operation *op, RankedTensorType indicesType) {
+  MLIRContext *ctx = op->getContext();
+  unsigned idxBitWidth = indicesType.getElementType().getIntOrFloatBitWidth();
+  assert((idxBitWidth == 16 || idxBitWidth == 32) &&
+         "TDM gather/scatter indices must be i16 or i32");
+  unsigned maxIndicesPerInstr = 256 / idxBitWidth;
+
+  unsigned numWarps = ttg::lookupNumWarps(op);
+  unsigned threadsPerWarp =
+      ttg::TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+  auto cgaLayout = ttg::CGAEncodingAttr::get1CTALayout(ctx, /*rank=*/2);
+
+  std::array<unsigned, 2> sizePerThread = {1, maxIndicesPerInstr};
+  std::array<unsigned, 2> tPerWarp = {threadsPerWarp, 1};
+  std::array<unsigned, 2> warpsPerCTA = {1, numWarps};
+  std::array<unsigned, 2> order = {0, 1};
+  auto parentEnc = ttg::BlockedEncodingAttr::get(ctx, sizePerThread, tPerWarp,
+                                                 warpsPerCTA, order, cgaLayout);
+  return ttg::SliceEncodingAttr::get(ctx, /*dim=*/0, parentEnc);
+}
+
+ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
+                                                   RankedTensorType tensorType,
+                                                   Value desc) {
+  auto descTy = cast<tt::TensorDescType>(desc.getType());
+  auto sharedLayout = descTy.getSharedLayout();
+  if (!sharedLayout) {
+    emitError(op->getLoc()) << "Missing encoding on the tensor descriptor";
+    return {};
+  }
+  auto encoding = cast<ttg::SharedEncodingTrait>(sharedLayout);
+  return ttg::updateEncodingForShape(op, encoding, tensorType);
 }
 
 ttg::PaddedSharedEncodingAttr

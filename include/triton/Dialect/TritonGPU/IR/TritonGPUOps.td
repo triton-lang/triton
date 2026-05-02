@@ -89,6 +89,7 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
 
 def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
   OptionalTypesMatchWith<"infer mask type from src type",
                  "src", "mask", "getI1SameShape($_self)">,
   OptionalTypesMatchWith<"infer other type from src type",
@@ -350,6 +351,7 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
   }];
 
   let hasFolder = 1;
+  let hasVerifier = 1;
 }
 
 def TTG_LocalLoadOp : TTG_Op<"local_load", [LocalLoadTrait]> {
@@ -459,6 +461,44 @@ def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
   let hasVerifier = 1;
 }
 
+def TTG_LocalAtomicScatterAddOp : TTG_Op<"local_atomic_scatter_add", [
+  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+  TypesMatchWith<"result type matches values type", "values", "result", "$_self">,
+  OptionalTypesMatchWith<"mask type matches values type",
+                 "values", "mask", "getI1SameShape($_self)">
+]> {
+  let summary = "Atomically scatter-add elements into shared memory along a specified axis";
+
+  let description = [{
+    Atomically scatter-adds elements to a shared memory descriptor using an indices tensor
+    along a single specified axis. The values tensor has the same shape as the
+    indices tensor and the result returns the previous values observed at each
+    updated location.
+
+    For each input position I, the operation atomically updates dst where the
+    coordinate at the axis is replaced by indices[I]:
+      dst[I[0], ..., indices[I], ..., I[n]] += values[I]
+
+    If mask is present, the update is performed only for positions where
+    mask[I] is true. Masked-off positions do not update shared memory and return
+    an undefined old value.
+  }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$dst,
+    TT_Tensor:$values,
+    TT_IntTensor:$indices,
+    Optional<I1Tensor>:$mask,
+    I32Attr:$axis
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $dst `[` $indices `]` `,` $values (`,` $mask^)? attr-dict `:`
+    functional-type(operands, results)
+  }];
+  let hasVerifier = 1;
+}
+
 def TTG_PredicateStageOp: TTG_Op<"predicate_stage",
                                 [Pure, AllTypesMatch<["iv", "ub", "step"]>]> {
   let summary = "pipeliner stage predicate";
@@ -527,14 +567,28 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc"> {
     This operation allocates a buffer in global memory that is private to the current program.
     A custom third-party allocation can be marked using the optional
     `third_party_allocation` unit attribute.
+    Concurrency sanitizer allocations that hold cluster-wide state can be marked
+    using the optional `shared_cluster_state` unit attribute.
   }];
   let arguments = (
     ins
     I32Attr:$nbytes,
     I32Attr:$alignment,
-    OptionalAttr<UnitAttr>:$third_party_allocation
+    OptionalAttr<UnitAttr>:$third_party_allocation,
+    OptionalAttr<UnitAttr>:$shared_cluster_state
   );
   let results = (outs Arg<TT_Ptr, "", [MemAlloc<GlobalMemory>]>:$result);
+
+  let extraClassDeclaration = [{
+    static GlobalScratchAllocOp create(::mlir::OpBuilder &builder,
+                                       ::mlir::Location location,
+                                       ::mlir::Type result, uint32_t nbytes,
+                                       uint32_t alignment,
+                                       ::mlir::UnitAttr third_party_allocation) {
+      return create(builder, location, result, nbytes, alignment,
+                    third_party_allocation, ::mlir::UnitAttr());
+    }
+  }];
 
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }

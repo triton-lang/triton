@@ -6,11 +6,11 @@
 
 // ============================================================
 // f16 GEMM: 64x64 tile, 4 warps, WMMA v3
-//   opIdx=0 (non-transposed): pad = 128/16 = 8,  interval = K = 32
-//   opIdx=1 (transposed):     pad = 2*128/16 = 16, interval = N = 64
+//   opIdx=0 (non-transposed): pad = 128/16 = 8,  interval = max(32, 128) = 128
+//   opIdx=1 (transposed):     pad = 2*128/16 = 16, interval = max(64, 128) = 128
 // ============================================================
-// CHECK: #shared = #ttg.padded_shared<[32:+8] {order = [1, 0], shape = [64, 32]}>
-// CHECK: #shared1 = #ttg.padded_shared<[64:+16] {order = [1, 0], shape = [32, 64]}>
+// CHECK: #shared = #ttg.padded_shared<[128:+8] {order = [1, 0], shape = [64, 32]}>
+// CHECK: #shared1 = #ttg.padded_shared<[128:+16] {order = [1, 0], shape = [32, 64]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
@@ -43,11 +43,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // ============================================================
 // f8E4M3FN GEMM: 64x64 tile, 4 warps, WMMA v3
-//   opIdx=0 (non-transposed): pad = 128/8 = 16,  interval = K = 64
-//   opIdx=1 (transposed):     pad = 2*64/8 = 16, interval = N = 64
+//   opIdx=0 (non-transposed): pad = 128/8 = 16,  interval = max(64, 256) = 256
+//   opIdx=1 (transposed):     pad = 2*64/8 = 16, interval = max(64, 256) = 256
 //   Both operands have same shape and padding → single shared encoding
 // ============================================================
-// CHECK: #shared = #ttg.padded_shared<[64:+16] {order = [1, 0], shape = [64, 64]}>
+// CHECK: #shared = #ttg.padded_shared<[256:+16] {order = [1, 0], shape = [64, 64]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 64]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {

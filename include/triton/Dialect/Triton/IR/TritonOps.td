@@ -48,6 +48,8 @@ def TT_IntToPtrOp : TT_Op<"int_to_ptr", [Elementwise,
     let results = (outs TT_PtrLike:$result);
 
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+
+    let hasCanonicalizer = 1;
 }
 
 def TT_PtrToIntOp : TT_Op<"ptr_to_int", [Elementwise,
@@ -212,6 +214,7 @@ def TT_LoadOp : TT_Op<"load", [
   SameLoadStoreOperandsAndResultShape,
   SameLoadStoreOperandsAndResultEncoding,
   AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
   DeclareOpInterfaceMethods<InferTypeOpInterface>,
   TypesMatchWith<"result matches ptr type", "ptr", "result", "getPointeeType($_self)">,
@@ -271,6 +274,7 @@ def TT_LoadOp : TT_Op<"load", [
 def TT_StoreOp : TT_Op<"store", [
   SameLoadStoreOperandsShape,
   SameLoadStoreOperandsEncoding,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"value type matches ptr type", "ptr", "value",
                  "getPointeeType($_self)">,
   TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
@@ -284,7 +288,8 @@ def TT_StoreOp : TT_Op<"store", [
       TT_Type:$value,
       Optional<TT_BoolLike>:$mask,
       DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-      DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict
+      DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+      UnitAttr:$ignore_cta
     );
 
     let builders = [
@@ -313,6 +318,7 @@ def TT_StoreOp : TT_Op<"store", [
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"ptr type matches value type", "val", "ptr",
                  "getPointerTypeSameShape($_self)">,
   TypesMatchWith<"mask type matches value type",
@@ -344,6 +350,7 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
       $atomic_rmw_op `,` $sem `,` $scope `,` $ptr `,` $val (`,` $mask^)?  attr-dict `:`
       functional-type(operands, $result)
     }];
+
 }
 
 def TT_AtomicCASOp : TT_Op<"atomic_cas", [
@@ -484,6 +491,8 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
+
+    let hasVerifier = 1;
 }
 
 def TT_JoinOp : TT_Op<"join", [
@@ -999,11 +1008,6 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
     "triton::PaddingOption":$padding)>
   ];
 
-  let extraClassDeclaration = [{
-    ArrayRef<int64_t> getTensorShape() {
-      return getType().getBlockType().getShape();
-    }
-  }];
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and modified from
@@ -1220,7 +1224,7 @@ def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable
 }
 
 
-def TT_DescriptorLoadOp : TT_Op<"descriptor_load", [TT_DescriptorOpInterface]> {
+def TT_DescriptorLoadOp : TT_Op<"descriptor_load", [TT_DescriptorLoadLikeOpInterface]> {
   let summary = "Load from descriptor";
   let description = [{
     This operation will be lowered to Nvidia TMA load operation on targets supporting it.
@@ -1289,7 +1293,7 @@ def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [TT_DescriptorStoreLikeOp
   let hasVerifier = 1;
 }
 
-def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorOpInterface]> {
+def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorLoadLikeOpInterface]> {
   let summary = "gather multiple rows from a descriptor into a single tensor";
   let description = [{
     The `tt.descriptor_gather` op will be lowered to NVIDIA TMA
@@ -1302,7 +1306,7 @@ def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorOpInterface
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
-    RankedTensorOf<[I32]>:$x_offsets,
+    RankedTensorOf<[I16, I32]>:$x_offsets,
     I32:$y_offset
   );
   let results = (outs TT_Tensor:$result);
@@ -1328,7 +1332,7 @@ def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [TT_DescriptorStoreLike
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
-    RankedTensorOf<[I32]>:$x_offsets,
+    RankedTensorOf<[I16, I32]>:$x_offsets,
     I32:$y_offset,
     TT_Tensor:$src
   );

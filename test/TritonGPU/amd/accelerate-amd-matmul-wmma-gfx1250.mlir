@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx1250" | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="gfx-arch=gfx1250" | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -277,11 +277,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %output: tensor<16x16x!tt.ptr<f32>, #blocked>
       ) {
     // CHECK: tt.load %arg1 {amdg.decomposed_dot_scaled_source = true} : tensor<16x2x!tt.ptr<i8>, #blocked1>
-    // CHECK: %[[SCALE:.*]] = tt.reshape {{.*}} : tensor<16x2x32xi8, #blocked3> -> tensor<16x64xi8, #linear>
-    // CHECK: %[[CVT0:.*]] = ttg.convert_layout %[[SCALE]] : tensor<16x64xi8, #linear> -> tensor<16x64xi8, #blocked>
-    // CHECK: %[[UPCASTED:.*]] = amdg.scaled_upcast_fp4 {{.*}} scale %[[CVT0]] {axis = 1 : i32} : tensor<16x32xi8, #blocked>, tensor<16x64xi8, #blocked> -> tensor<16x64xbf16, #blocked>
-    // CHECK: %[[SEL:.*]] = arith.select {{.*}}, %{{.*}}, %[[UPCASTED]] : tensor<16x64xi1, #blocked>, tensor<16x64xbf16, #blocked>
-    // CHECK: %[[CVT1:.*]] = ttg.convert_layout %[[SEL]] : tensor<16x64xbf16, #blocked> -> tensor<16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
+    // CHECK: %[[SCALE:.*]] = tt.reshape {{.*}} : tensor<16x2x32xi8, #[[RESHAPE_LAYOUT:.+]]> -> tensor<16x64xi8, #linear>
+    // CHECK: %[[CVT0:.*]] = ttg.convert_layout %[[SCALE]] : tensor<16x64xi8, #linear> -> tensor<16x64xi8, #[[UPCAST_LAYOUT:.+]]>
+    // CHECK: %[[UPCASTED:.*]] = amdg.scaled_upcast_fp4 {{.+}} scale %[[CVT0]] {axis = 1 : i32} : tensor<16x32xi8, #blocked>, tensor<16x64xi8, #[[UPCAST_LAYOUT]]> -> tensor<16x64xbf16, #[[UPCAST_LAYOUT]]>
+    // CHECK: %[[SEL:.*]] = arith.select {{.*}}, %{{.*}}, %[[UPCASTED]] : tensor<16x64xi1, #[[UPCAST_LAYOUT]]>, tensor<16x64xbf16, #[[UPCAST_LAYOUT]]>
+    // CHECK: %[[CVT1:.*]] = ttg.convert_layout %[[SEL]] : tensor<16x64xbf16, #[[UPCAST_LAYOUT]]> -> tensor<16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
     // CHECK: %[[OPND0:.*]] = ttg.convert_layout %[[CVT1]] : tensor<16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
     // CHECK: tt.dot %[[OPND0]]
     %a = tt.load %arg0 : tensor<16x32x!tt.ptr<i8>, #blocked5>
@@ -309,12 +309,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %arg2: tensor<32x16x!tt.ptr<i8>, #blocked>,
       %output: tensor<16x16x!tt.ptr<f32>, #blocked>
       ) {
-    // CHECK: tt.load %arg1 {amdg.decomposed_dot_scaled_source = true} : tensor<16x2x!tt.ptr<i8>, #blocked1>
-    // CHECK: %[[SCALE:.*]] = tt.reshape {{.*}} : tensor<2x32x16xi8, #blocked5> -> tensor<64x16xi8, #linear>
-    // CHECK: %[[CVT0:.*]] = ttg.convert_layout %[[SCALE]] : tensor<64x16xi8, #linear> -> tensor<64x16xi8, #blocked2>
-    // CHECK: %[[UPCASTED:.*]] = amdg.scaled_upcast_fp4 {{.*}} scale %[[CVT0]] {axis = 0 : i32} : tensor<32x16xi8, #blocked2>, tensor<64x16xi8, #blocked2> -> tensor<64x16xf16, #blocked2>
-    // CHECK: %[[SEL:.*]] = arith.select {{.*}}, %cst, %[[UPCASTED]] : tensor<64x16xi1, #blocked2>, tensor<64x16xf16, #blocked2>
-    // CHECK: %[[CVT1:.*]] = ttg.convert_layout %[[SEL]] : tensor<64x16xf16, #blocked2> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>>
+    // CHECK: tt.load %arg1 {amdg.decomposed_dot_scaled_source = true} : tensor<16x2x!tt.ptr<i8>, #[[LOAD_LAYOUT:.+]]>
+    // CHECK: %[[SCALE:.*]] = tt.reshape {{.*}} : tensor<2x32x16xi8, #[[RESHAPE_LAYOUT:.+]]> -> tensor<64x16xi8, #linear>
+    // CHECK: %[[CVT0:.*]] = ttg.convert_layout %[[SCALE]] : tensor<64x16xi8, #linear> -> tensor<64x16xi8, #[[UPCAST_LAYOUT:.+]]>
+    // CHECK: %[[UPCASTED:.*]] = amdg.scaled_upcast_fp4 {{.+}} scale %[[CVT0]] {axis = 0 : i32} : tensor<32x16xi8, #blocked2>, tensor<64x16xi8, #[[UPCAST_LAYOUT]]> -> tensor<64x16xf16, #[[UPCAST_LAYOUT]]>
+    // CHECK: %[[SEL:.*]] = arith.select {{.*}}, %cst, %[[UPCASTED]] : tensor<64x16xi1, #[[UPCAST_LAYOUT]]>, tensor<64x16xf16, #[[UPCAST_LAYOUT]]>
+    // CHECK: %[[CVT1:.*]] = ttg.convert_layout %[[SEL]] : tensor<64x16xf16, #[[UPCAST_LAYOUT]]> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>>
     // CHECK: %[[OPND1:.*]] = ttg.convert_layout %[[CVT1]] : tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
     // CHECK: tt.dot {{.*}}, %[[OPND1]]
     %a = tt.load %arg0 : tensor<16x64x!tt.ptr<f16>, #blocked5>
@@ -430,6 +430,40 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %res = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %cst lhs = e5m2 rhs = e5m2 {fastMath = false} : tensor<128x64xf8E5M2, #blocked4>, tensor<128x2xi8, #blocked1> * tensor<64x128xf8E5M2, #blocked5>, tensor<128x2xi8, #blocked2> -> tensor<128x128xf32, #blocked>
     %cvt = ttg.convert_layout %res : tensor<128x128xf32, #blocked> -> tensor<128x128xf32, #blocked3>
     tt.store %d, %cvt : tensor<128x128x!tt.ptr<f32>, #blocked3>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK-DAG: #[[$SCALE0_LAYOUT:.+]] = #ttg.linear{{<{register = \[\[0, 1\], \[0, 2\]\], lane = \[\[1, 0\], \[2, 0\], \[4, 0\], \[8, 0\], \[0, 0\]\], warp = \[\[0, 0\], \[16, 0\]\], block = \[\]}>}}
+// CHECK-DAG: #[[$SCALE1_LAYOUT:.+]] = #ttg.linear{{<{register = \[\[0, 1\], \[0, 2\]\], lane = \[\[1, 0\], \[2, 0\], \[4, 0\], \[8, 0\], \[0, 0\]\], warp = \[\[16, 0\], \[0, 0\]\], block = \[\]}>}}
+// CHECK-DAG: #[[$MMA:.+]] = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = {{\[\[0, 1\], \[1, 0\]\]}}}, instrShape = [16, 16, 128]}>
+// CHECK-DAG: #[[$MMA1:.+]] = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = {{\[\[0, 1\], \[1, 0\]\]}}}, instrShape = [16, 16, 64]}>
+// CHECK-LABEL: wmma_dot_scaled_mxfp4_mxfp4_missing_scale
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_scaled_mxfp4_mxfp4_missing_scale(
+      %arg0: tensor<32x64xi8, #blocked>,
+      %arg1: tensor<64x32xi8, #blocked1>,
+      %arg2: tensor<32x4xi8, #blocked2>,
+      %arg3: tensor<32x32x!tt.ptr<f32>, #blocked3>
+      ) {
+    // CHECK-NOT: arith.constant dense<127> : tensor<32x4xi8, #[[$SCALE0_LAYOUT]]>
+    // CHECK: %[[SCALE1:.+]] = arith.constant dense<127> : tensor<32x4xi8, #[[$SCALE1_LAYOUT]]>
+    // CHECK-NOT: arith.constant dense<127> : tensor<32x4xi8, #[[$SCALE0_LAYOUT]]>
+    // CHECK-NOT: tt.fp_to_fp
+    // CHECK: %[[C:.+]] = ttg.convert_layout {{.*}} : tensor<32x32xf32, {{.*}}> -> tensor<32x32xf32, #[[$MMA]]>
+    // CHECK: %[[A:.+]] = ttg.convert_layout {{.*}} : tensor<32x64xi8, {{.*}}> -> tensor<32x64xi8, #ttg.dot_op<{opIdx = 0, parent = #[[$MMA1]], kWidth = 16}>>
+    // CHECK: %[[B:.+]] = ttg.convert_layout {{.*}} : tensor<64x32xi8, {{.*}}> -> tensor<64x32xi8, #ttg.dot_op<{opIdx = 1, parent = #[[$MMA1]], kWidth = 16}>>
+    // CHECK: %[[SCALE0:.+]] = ttg.convert_layout {{.*}} : tensor<32x4xi8, {{.*}}> -> tensor<32x4xi8, #[[$SCALE0_LAYOUT]]>
+    // CHECK: tt.dot_scaled %[[A]] scale %[[SCALE0]], %[[B]] scale %[[SCALE1]], %[[C]] lhs = e2m1 rhs = e2m1
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked3>
+    %1 = tt.dot_scaled %arg0 scale %arg2, %arg1, %cst lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<32x64xi8, #blocked>, tensor<32x4xi8, #blocked2> * tensor<64x32xi8, #blocked1>, tensor<32x4xi8, #blocked2> -> tensor<32x32xf32, #blocked3>
+    tt.store %arg3, %1 : tensor<32x32x!tt.ptr<f32>, #blocked3>
     tt.return
   }
 }

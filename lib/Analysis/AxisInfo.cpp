@@ -134,43 +134,6 @@ protected:
   }
 };
 
-class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
-                             dataflow::Lattice<AxisInfo>> {
-private:
-  AxisInfoVisitorList visitors;
-
-  void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override {
-    propagateIfChanged(
-        lattice, lattice->join(
-                     AxisInfo::getPessimisticValueState(lattice->getAnchor())));
-  }
-
-  void visitNonControlFlowArguments(
-      Operation *op, const RegionSuccessor & /*successor*/,
-      ValueRange /*nonSuccessorInputs*/,
-      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) override {
-    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      visitForOpInductionVar(forOp, argLattices);
-    } else {
-      setAllToEntryStates(argLattices);
-    }
-  }
-
-public:
-  AxisInfoAnalysis(DataFlowSolver &solver,
-                   axisinfo::CallbackType callback = nullptr);
-  using dataflow::SparseForwardDataFlowAnalysis<
-      dataflow::Lattice<AxisInfo>>::getLatticeElement;
-
-  LogicalResult
-  visitOperation(Operation *op,
-                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
-                 ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
-  void
-  visitForOpInductionVar(scf::ForOp op,
-                         ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
-};
-
 template <typename OpTy>
 class CastOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
 public:
@@ -232,7 +195,7 @@ public:
     if (intAttr || boolAttr) {
       int64_t value{};
       if (intAttr)
-        value = intAttr.getValue().getZExtValue();
+        value = intAttr.getValue().getSExtValue();
       else
         value = boolAttr.getValue() ? 1 : 0;
       return AxisInfo(/*contiguity=*/{1},
@@ -243,7 +206,7 @@ public:
     // TODO: generalize to dense attr
     auto splatAttr = dyn_cast<SplatElementsAttr>(op.getValue());
     if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
-      int64_t value = splatAttr.template getSplatValue<APInt>().getZExtValue();
+      int64_t value = splatAttr.template getSplatValue<APInt>().getSExtValue();
       TensorType ty = cast<TensorType>(splatAttr.getType());
       return AxisInfo(
           /*contiguity=*/AxisInfo::DimVectorT(ty.getRank(), 1),
@@ -548,7 +511,6 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    auto resTy = dyn_cast<RankedTensorType>(op.getType());
     if (rhs.getConstancy(dim) > 1) {
       // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
       // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
@@ -1192,12 +1154,13 @@ public:
   }
 };
 
+} // anonymous namespace
+
 //===----------------------------------------------------------------------===//
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
 
-AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
-                                   axisinfo::CallbackType callback)
+AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
     : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
           solver) {
   // UnrealizedConversionCast:
@@ -1239,9 +1202,22 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
   visitors.append<TransOpAxisInfoVisitor>();
+}
 
-  if (callback)
-    callback(visitors);
+void AxisInfoAnalysis::setToEntryState(dataflow::Lattice<AxisInfo> *lattice) {
+  propagateIfChanged(lattice, lattice->join(AxisInfo::getPessimisticValueState(
+                                  lattice->getAnchor())));
+}
+
+void AxisInfoAnalysis::visitNonControlFlowArguments(
+    Operation *op, const RegionSuccessor & /*successor*/,
+    ValueRange /*nonSuccessorInputs*/,
+    ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
+  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+    visitForOpInductionVar(forOp, argLattices);
+  } else {
+    setAllToEntryStates(argLattices);
+  }
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(
@@ -1294,8 +1270,6 @@ void AxisInfoAnalysis::visitForOpInductionVar(
       AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
   (void)argLattices[0]->join(inductionVar);
 }
-
-} // anonymous namespace
 
 void AxisInfo::initPessimisticStateFromFunc(int argNumber,
                                             FunctionOpInterface funcOp,
@@ -1381,6 +1355,11 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
   return AxisInfo(contiguity, divisibility, constancy, constantValue);
 }
 
+AxisInfoAnalysis *
+AxisInfoAnalysis::loadDefaultAnalysis(DataFlowSolver *solver) {
+  return solver->load<AxisInfoAnalysis>();
+}
+
 unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
   auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy)
@@ -1399,11 +1378,10 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
   // the analysis to one dimension. We should determine contiguity on the
   // flattenOuts() layout
   auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
-  auto linAttr = gpu::toLinearEncoding(tensorTy);
-  auto order = linAttr.getOrder();
+  auto order = gpu::getOrder(tensorTy);
   unsigned align = getAlignment(offsetsValue, elementBitWidth);
 
-  auto uniqueContigPerThread = linAttr.getContigPerThread();
+  auto uniqueContigPerThread = gpu::getContigPerThread(tensorTy);
   assert(order[0] < uniqueContigPerThread.size() &&
          "Unexpected uniqueContigPerThread size");
   unsigned contiguity = uniqueContigPerThread[order[0]];
@@ -1432,8 +1410,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
   auto *axisInfo = getAxisInfo(offsetsValue);
   if (!axisInfo)
     return 1;
-  auto linAttr = gpu::toLinearEncoding(tensorTy);
-  auto order = linAttr.getOrder();
+  auto order = gpu::getOrder(tensorTy);
 
   auto divisibility = axisInfo->getDivisibility(order[0]);
   auto elemNumBytes = std::max<unsigned>(elementBitWidth / 8, 1);
@@ -1464,8 +1441,7 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto *axisInfo = getAxisInfo(mask);
   if (!axisInfo)
     return 1;
-  auto linAttr = gpu::toLinearEncoding(tensorTy);
-  auto maskOrder = linAttr.getOrder();
+  auto maskOrder = gpu::getOrder(tensorTy);
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
                                         << alignment);
@@ -1478,10 +1454,10 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
-void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp,
-                                        axisinfo::CallbackType callback) {
+void ModuleAxisInfoAnalysis::initialize(
+    FunctionOpInterface funcOp, AxisInfoAnalysis::LoadCallback loadAnalysis) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>(callback);
+  AxisInfoAnalysis *analysis = loadAnalysis(solver.get());
   if (failed(solver->initializeAndRun(funcOp)))
     return;
 

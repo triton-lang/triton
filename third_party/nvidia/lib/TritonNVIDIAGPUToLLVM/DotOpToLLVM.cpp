@@ -7,12 +7,13 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::getShapePerCTA;
+using ::mlir::triton::gpu::isPermutationMatrixLayout;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
+using ::mlir::triton::gpu::toLinearLayout;
 
 LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
-                         ConversionPatternRewriter &rewriter, bool isTuring,
-                         bool isHopperF64);
+                         ConversionPatternRewriter &rewriter, bool isTuring);
 
 LogicalResult convertMMADotScaled(triton::DotScaledOp op,
                                   triton::DotScaledOp::Adaptor adaptor,
@@ -37,6 +38,12 @@ struct ScaledDotOpConversion
   LogicalResult
   matchAndRewrite(triton::DotScaledOp op, triton::DotScaledOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto rty = cast<RankedTensorType>(op.getResult().getType());
+    if (!isPermutationMatrixLayout(
+            toLinearLayout(rty.getShape(), rty.getEncoding())))
+      return rewriter.notifyMatchFailure(
+          op, "ScaledDotOp result encoding must have a permutation-matrix "
+              "linear layout");
     return convertMMADotScaled(op, adaptor, getTypeConverter(), rewriter);
   }
 
@@ -56,26 +63,28 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // D = A * B + C
-    Value A = op.getA();
     Value D = op.getResult();
+    auto dType = op.getResult().getType();
+    auto dEncoding = dType.getEncoding();
 
-    NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(
-        cast<RankedTensorType>(D.getType()).getEncoding());
+    if (!isPermutationMatrixLayout(toLinearLayout(dType.getShape(), dEncoding)))
+      return rewriter.notifyMatchFailure(
+          op,
+          "DotOp result encoding must have a permutation-matrix linear layout");
+
+    NvidiaMmaEncodingAttr mmaLayout =
+        dyn_cast<NvidiaMmaEncodingAttr>(dEncoding);
     if (mmaLayout) {
       if (mmaLayout.getVersionMajor() == 2) {
-        bool isHopperF64 =
-            computeCapability == 90 &&
-            cast<RankedTensorType>(A.getType()).getElementType().isF64();
         return convertMMA(op, adaptor, getTypeConverter(), rewriter,
-                          mmaLayout.isTuring(), isHopperF64);
+                          mmaLayout.isTuring());
       }
 
       llvm::report_fatal_error(
           "Unsupported MMA kind found when converting DotOp to LLVM.");
     }
 
-    if (isa<BlockedEncodingAttr>(
-            cast<RankedTensorType>(D.getType()).getEncoding()))
+    if (isa<BlockedEncodingAttr>(dEncoding))
       return convertFMADot(op, adaptor, getTypeConverter(), rewriter);
 
     llvm::report_fatal_error(

@@ -5,7 +5,7 @@ import triton_kernels
 import triton_kernels.swiglu
 from triton_kernels.matmul import PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.numerics import InFlexData
-from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
+from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, Tensor
 from triton_kernels.target_info import is_cuda, get_cdna_version, cuda_capability_geq, is_hip
 from triton_kernels.tensor_details import layout
@@ -26,8 +26,8 @@ def _quantize_weight(w, dtype, **opt):
         assert dtype == "mx4", f"{dtype=}"
         w, w_scale = downcast_to_mxfp(w.to(torch.bfloat16), torch.uint8, axis=1)
         if opt:
-            w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"], **opt["value_layout_opts"])
-            w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"], **opt["scale_layout_opts"])
+            w = convert_layout(wrap_torch_tensor(w, dtype=FP4), opt["value_layout"])
+            w_scale = convert_layout(wrap_torch_tensor(w_scale), opt["scale_layout"])
         return w, InFlexData(), w_scale
 
 
@@ -53,13 +53,11 @@ def _make_mx4_quantization_opts(batch: int, w_dtype: str) -> dict:
     if w_dtype != "mx4" or is_hip():
         return {}
     num_warps = 4 if batch <= 512 and cuda_capability_geq(10, 0) else 8
-    value_layout, value_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=1)
-    scale_layout, scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=num_warps)
+    value_layout = layout.make_default_matmul_mxfp4_w_layout(mx_axis=-2)
+    scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=-2, num_warps=num_warps)
     return {
         "value_layout": value_layout,
-        "value_layout_opts": value_layout_opts,
         "scale_layout": scale_layout,
-        "scale_layout_opts": scale_layout_opts,
     }
 
 
@@ -73,9 +71,21 @@ def prepare_mlp_numerics(batch: int, w_dtype: str, wg, w1, w2) -> MlpNumerics:
         wg=wg,
         w1=w1,
         w2=w2,
-        pcg=PrecisionConfig(flex_ctx=FlexCtx(rhs_data=wg_flex), b_mx_scale=wg_scale),
-        pc1=PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w1_flex), b_mx_scale=w1_scale),
-        pc2=PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), b_mx_scale=w2_scale),
+        pcg=PrecisionConfig(
+            flex_ctx=FlexCtx(rhs_data=wg_flex),
+            b_mx_scale=wg_scale,
+            b_microblock_size=MXFP_BLOCK_SIZE.value,
+        ),
+        pc1=PrecisionConfig(
+            flex_ctx=FlexCtx(rhs_data=w1_flex),
+            b_mx_scale=w1_scale,
+            b_microblock_size=MXFP_BLOCK_SIZE.value,
+        ),
+        pc2=PrecisionConfig(
+            flex_ctx=FlexCtx(rhs_data=w2_flex),
+            b_mx_scale=w2_scale,
+            b_microblock_size=MXFP_BLOCK_SIZE.value,
+        ),
         activation=activation,
     )
 

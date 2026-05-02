@@ -3322,8 +3322,6 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_128) {
 TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
   auto d0 = S("dim0");
   auto d1 = S("dim1");
-  auto kRow = S("row");
-  auto kCol = S("col");
   auto kBlock = S("block");
   LinearLayout ll = LinearLayout({{kBlock, {{0, 1}}}}, {d0, d1});
   auto cgaLayout = CGAEncodingAttr::get(&ctx, std::move(ll));

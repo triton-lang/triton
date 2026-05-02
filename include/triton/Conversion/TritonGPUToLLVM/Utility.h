@@ -347,6 +347,18 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x);
 
 // Whether the convert layout should be forced to use warp shuffles.
 bool cvtAlwaysUseWarpShuffle(triton::gpu::ConvertLayoutOp cvt);
+
+// Return a predicate that is true only if the current thread holds unique data,
+// according to freeVarsMask. The predicate may be null to indicate no
+// predication is required.
+Value emitRedundantThreadPredicate(
+    const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    ConversionPatternRewriter &rewriter, Location loc,
+    const TargetInfoBase &targetInfo);
+
+// Takes two values that may be boolean, or null to represent constant True.
+Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b);
+
 } // namespace gpu
 
 } // namespace triton
@@ -444,6 +456,11 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
                                                    Type elemTy,
                                                    RewriterBase &rewriter);
 
+// Build a vector of shared-memory base pointers for dynamic partition
+// indexing (expects at least two bases).
+Value buildBasePtrVector(Location loc, RewriterBase &rewriter,
+                         ArrayRef<Value> smemBases);
+
 // Convert an \param index to a multi-dim coordinate given \param shape and
 // \param order.
 SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
@@ -494,7 +511,8 @@ Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
 
 Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
                            const TargetInfoBase &targetInfo,
-                           FunctionOpInterface funcOp, Value allocOffset = {});
+                           FunctionOpInterface funcOp, Value allocOffset = {},
+                           bool currentCTA = true);
 
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &target, Operation *op);
@@ -581,6 +599,21 @@ SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
 SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
+
+SmallVector<SmallVector<Value>>
+emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+            const LinearLayout &layout, RankedTensorType type,
+            bool withCTAOffset);
+
+// Compute per-element shared-memory pointers for a local atomic/ldst update by
+// replacing `coords[*][axis]` with `idxValues[*]` and mapping the resulting
+// logical coordinates back to shared-memory offsets.
+SmallVector<Value> computeLocalPtrs(Location loc,
+                                    triton::gpu::MemDescType memDescTy,
+                                    SharedMemoryObject smemObj, Type llvmElemTy,
+                                    ArrayRef<Value> idxValues,
+                                    ArrayRef<SmallVector<Value>> coords,
+                                    unsigned axis, RewriterBase &rewriter);
 
 // Calculates the required interval chunking and padding logical-shift values
 // for shared memory padding, depending on elements' bit width and whether

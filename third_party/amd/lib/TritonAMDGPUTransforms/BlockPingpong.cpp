@@ -865,12 +865,14 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
   auto newAsyncWaitOp = asyncWaitOps[0];
   if (asyncWaitOps.size() > 1) {
     SmallVector<Value> tokens;
+    int32_t minNum = std::numeric_limits<int32_t>::max();
     for (auto asyncWaitOp : asyncWaitOps) {
       for (auto token : asyncWaitOp.getAsyncToken()) {
         tokens.push_back(token);
       }
+      minNum = std::min<int32_t>(minNum, asyncWaitOp.getNum());
     }
-    newAsyncWaitOp = ttg::AsyncWaitOp::create(builder, loc, tokens, 0);
+    newAsyncWaitOp = ttg::AsyncWaitOp::create(builder, loc, tokens, minNum);
     for (auto asyncWaitOp : asyncWaitOps) {
       asyncWaitOp.getResult().replaceAllUsesWith(newAsyncWaitOp.getResult());
       asyncWaitOp->erase();
@@ -1031,7 +1033,6 @@ void Pingponger::getDotPingponged() {
     auto scaledDotType = scaledDotOps[0].getType();
     auto scaledDotShape = scaledDotType.getShape();
     auto aType = scaledDotOps[0].getA().getType();
-    auto aShape = aType.getShape();
     auto elemWidth = aType.getElementTypeBitWidth();
 
     // MxN = 256x256
