@@ -2409,7 +2409,6 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_fp4_padded_store_load_roundtrip(storage_dtype, torch_dtype, k_size, fp4_padded):
     M = 128
-    threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
 
     @gluon.jit
     def kernel(inp, out, M: ttgl.constexpr, K: ttgl.constexpr, FP4_PADDED: ttgl.constexpr):
