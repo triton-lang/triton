@@ -104,12 +104,10 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         RankedTensorType srcTy, Attribute dstEnc,
                         ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize);
 
-// Check if the result of this tl.dot is used as opA or opB of another tl.dot
-// in the same region
+// Check if the result of this tl.dot is used as opA or opB of another tl.dot.
 bool isChainDotHead(mlir::triton::DotOpInterface dotOp, unsigned opIdx = 0);
 
-// Check if the opA of this tl.dot is the result of another tl.dot
-// in the same region
+// Check if the opA of this tl.dot is the result of another tl.dot.
 bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
 
 // Branchless fp8 -> f32 via multiply trick.

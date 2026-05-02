@@ -5,6 +5,7 @@
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -856,6 +857,21 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   return true;
 }
 
+// For a region iter arg of an scf.for, return the yield operand that feeds it
+// on the back-edge. Returns {} if the parent isn't scf.for or the arg is the
+// induction variable.
+static Value resolveLoopBackedge(BlockArgument bbArg) {
+  auto forOp = dyn_cast<scf::ForOp>(bbArg.getOwner()->getParentOp());
+  if (!forOp)
+    return {};
+  auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+  int iterArgIdx = bbArg.getArgNumber() - forOp.getNumInductionVars();
+  if (iterArgIdx < 0 || iterArgIdx >= (int)yieldOp.getNumOperands())
+    return {};
+  return yieldOp.getOperand(iterArgIdx);
+}
+
+
 bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
   auto isInSameRegion = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
@@ -874,6 +890,37 @@ bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
       }
     }
   }
+
+  // Cross-iteration: for each op in the forward slice (including dotOp itself)
+  // that is consumed by a scf.yield, resolve to the corresponding iter arg and
+  // check that iter arg's forward slice for a dot.
+  fwdSlices.insert(dotOp);
+  for (Operation *op : fwdSlices) {
+    for (Value result : op->getResults()) {
+      for (OpOperand &use : result.getUses()) {
+        auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner());
+        if (!yieldOp)
+          continue;
+        auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp());
+        if (!forOp)
+          continue;
+        BlockArgument nextIterArg =
+            forOp.getRegionIterArg(use.getOperandNumber());
+        SetVector<Operation *> argFwdSlices;
+        getForwardSlice(nextIterArg, &argFwdSlices, fwdOpt);
+        for (Operation *argOp : argFwdSlices) {
+          auto dOp = dyn_cast<tt::DotOpInterface>(argOp);
+          if (!dOp || dOp == dotOp)
+            continue;
+          Value dotOperand = (opIdx == 0) ? dOp.getA() : dOp.getB();
+          if (dotOperand == nextIterArg ||
+              (dotOperand.getDefiningOp() &&
+               argFwdSlices.contains(dotOperand.getDefiningOp())))
+            return true;
+        }
+      }
+    }
+  }
   return false;
 }
 
@@ -886,13 +933,44 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   bwdOpt.filter = isInSameRegion;
   SetVector<Operation *> bwdSlices;
   Operation *opA = dotOp.getA().getDefiningOp();
-  if (!opA)
-    return false;
-  (void)getBackwardSlice(opA, &bwdSlices, bwdOpt);
-  if (llvm::find_if(bwdSlices, [](Operation *op) {
-        return isa<tt::DotOpInterface>(op);
-      }) != bwdSlices.end())
-    return true;
+  if (opA) {
+    (void)getBackwardSlice(opA, &bwdSlices, bwdOpt);
+    if (llvm::find_if(bwdSlices, [](Operation *op) {
+          return isa<tt::DotOpInterface>(op);
+        }) != bwdSlices.end())
+      return true;
+  }
+
+  // Cross-iteration: if operand A (or its backward slice) touches a block
+  // arg, resolve via the yield back-edge and check the backward slice of
+  // the yielded value for a dot (mirrors the intra-iteration check above).
+  SmallVector<BlockArgument, 4> bbArgs;
+  if (auto bbArg = dyn_cast<BlockArgument>(dotOp.getA())) {
+    bbArgs.push_back(bbArg);
+  } else if (opA) {
+    bwdSlices.insert(opA);
+    for (Operation *sliceOp : bwdSlices)
+      for (Value operand : sliceOp->getOperands())
+        if (auto bbArg = dyn_cast<BlockArgument>(operand))
+          bbArgs.push_back(bbArg);
+  }
+
+  for (BlockArgument bbArg : bbArgs) {
+    Value yieldVal = resolveLoopBackedge(bbArg);
+    if (!yieldVal)
+      continue;
+    Operation *yieldDef = yieldVal.getDefiningOp();
+    if (!yieldDef)
+      continue;
+    SetVector<Operation *> yieldBwdSlices;
+    (void)getBackwardSlice(yieldDef, &yieldBwdSlices, bwdOpt);
+    yieldBwdSlices.insert(yieldDef);
+    if (llvm::find_if(yieldBwdSlices, [&dotOp](Operation *op) {
+          return isa<tt::DotOpInterface>(op) && op != dotOp;
+        }) != yieldBwdSlices.end())
+      return true;
+  }
+
   return false;
 }
 
