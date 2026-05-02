@@ -1,3 +1,4 @@
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
@@ -15,6 +16,7 @@
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+using mlir::triton::amdgpu::TargetFeatures;
 
 //===----------------------------------------------------------------------===//
 // This file will conditionally allocate lds memory, create local/async load
@@ -186,7 +188,8 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
 // needs to be used to be compatible with users' layouts.
 std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
     Operation *loadOp, tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    const tt::AMD::TargetInfo &targetInfo, bool useAsyncCopy) {
+    const TargetFeatures &targetFeatures, const tt::AMD::TargetInfo &targetInfo,
+    bool useAsyncCopy) {
   assert(loadOp);
   Value loadedValue = loadOp->getResult(0);
   llvm::SmallVector<ttg::SharedEncodingTrait> sharedEncs;
@@ -205,7 +208,8 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
       // If the immediate user is ttg::LocalAllocOp, likely it's created in
       // TritonAMDGPUOptimizeDotOperands. We should just respect it.
       if (!isa<ttg::LocalAllocOp>(user) &&
-          !getSharedEncIfAllUsersAreDotEnc(user, axisInfoAnalysis, targetInfo,
+          !getSharedEncIfAllUsersAreDotEnc(user, axisInfoAnalysis,
+                                           targetFeatures, targetInfo,
                                            useAsyncCopy)) {
         return std::nullopt;
       }
@@ -275,7 +279,7 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
           canUseAsyncCopy = canBeConvertedToAsyncLoad(
               2, cast<tt::LoadOp>(loadOp), {}, axisInfoAnalysis, targetInfo);
         }
-        tempAttr = composePaddedLayout(targetInfo, dotOpEnc.getOpIdx(),
+        tempAttr = composePaddedLayout(targetFeatures, dotOpEnc.getOpIdx(),
                                        dotOpEnc.getKWidth(), srcTy, sharedOrder,
                                        dotOpEnc, canUseAsyncCopy);
         if (!tempAttr) {
@@ -892,6 +896,7 @@ static void lowerLoop(scf::ForOp forOp,
   llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =
       getIndirectLevel(axisInfoAnalysis, forOp, numStages);
 
+  TargetFeatures targetFeatures(getAMDArch(forOp->getParentOfType<ModuleOp>()));
   triton::AMD::TargetInfo targetInfo(
       getAMDArch(forOp->getParentOfType<ModuleOp>()));
 
@@ -916,10 +921,10 @@ static void lowerLoop(scf::ForOp forOp,
         loadToInfo[load] = ldInfo;
       } else {
         LDBG("Deduce shared encoding for: " << *load);
-        auto sharedEncoding =
-            getSharedEncIfAllUsersAreDotEnc(load, axisInfoAnalysis, targetInfo,
-                                            useAsyncCopy)
-                .value_or(nullptr);
+        auto sharedEncoding = getSharedEncIfAllUsersAreDotEnc(
+                                  load, axisInfoAnalysis, targetFeatures,
+                                  targetInfo, useAsyncCopy)
+                                  .value_or(nullptr);
         loadToInfo[load] = {sharedEncoding, distance, use};
         LDBG("Populate loadInfo with shared encoding: " << sharedEncoding);
       }

@@ -12,6 +12,7 @@
 namespace tt = triton;
 namespace ttg = triton::gpu;
 using mlir::triton::amdgpu::ISAFamily;
+using mlir::triton::amdgpu::TargetFeatures;
 
 namespace {
 
@@ -404,7 +405,7 @@ static ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
 static triton::gpu::PaddedSharedEncodingAttr
 composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
                         ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> order,
-                        const triton::AMD::TargetInfo &targetInfo) {
+                        const TargetFeatures &targetFeatures) {
   auto shape = srcTy.getShape();
   auto CGALayout = ttg::getCGALayout(srcTy.getEncoding());
   auto blockShapePerCTA =
@@ -422,7 +423,8 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
     // 2× ensures the stride (in dwords) is an odd multiple of the combined
     // row-access width, distributing all 16 lanes' bank accesses across
     // disjoint banks and eliminating conflicts for tile widths >= 32.
-    if (auto ldsParams = targetInfo.queryLDSTransLoadParams(typeWidthInBit)) {
+    if (auto ldsParams =
+            targetFeatures.queryLDSTransLoadParams(typeWidthInBit)) {
       padAmount = 2 * ldsParams->instBitWidth / typeWidthInBit;
     }
   } else {
@@ -507,22 +509,23 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
 }
 
 ttg::PaddedSharedEncodingAttr
-composePaddedLayout(const tt::AMD::TargetInfo &targetInfo, int opIdx,
+composePaddedLayout(const TargetFeatures &targetFeatures, int opIdx,
                     unsigned vecWidth, ttg::TensorOrMemDesc srcTy,
                     ArrayRef<unsigned> sharedOrder,
                     ttg::DotOperandEncodingAttr dotOpEnc, bool useAsyncCopy) {
-  if (targetInfo.getISAFamily() == ISAFamily::CDNA4) {
+  if (targetFeatures.getISAFamily() == ISAFamily::CDNA4) {
     if (!dotOpEnc)
       return {};
-    return composePaddedLayoutForAsyncCopyCDNA4(
-        dotOpEnc, srcTy, sharedOrder, useAsyncCopy, targetInfo.getWarpSize());
+    return composePaddedLayoutForAsyncCopyCDNA4(dotOpEnc, srcTy, sharedOrder,
+                                                useAsyncCopy,
+                                                targetFeatures.getWarpSize());
   }
 
-  if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
+  if (targetFeatures.getISAFamily() == ISAFamily::GFX1250) {
     if (!srcTy.getElementType().isIntOrFloat())
       return {};
     return composePaddedLayoutWMMA(opIdx, vecWidth, srcTy, sharedOrder,
-                                   targetInfo);
+                                   targetFeatures);
   }
 
   return {};

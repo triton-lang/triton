@@ -1,7 +1,7 @@
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
-#include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -90,9 +90,9 @@ namespace mlir {
 llvm::MapVector<Operation *, std::pair<int, Operation *>>
 getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                  scf::ForOp &forOp, int numStages) {
-  triton::AMD::TargetInfo targetInfo(
+  triton::amdgpu::TargetFeatures targetFeatures(
       getAMDArch(forOp->getParentOfType<ModuleOp>()));
-  ISAFamily isaFamily = targetInfo.getISAFamily();
+  ISAFamily isaFamily = targetFeatures.getISAFamily();
 
   bool filterSmallVectors = isaFamily != ISAFamily::CDNA4 &&
                             !triton::amdgpu::isRDNA(isaFamily) &&
