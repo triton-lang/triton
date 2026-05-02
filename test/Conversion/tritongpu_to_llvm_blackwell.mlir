@@ -1094,9 +1094,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 #shared_tmem_lhs = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
 #tmem_acc_tmem_lhs = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_fp8_lhs = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 #tmem_fp4_padded_lhs = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, fp4Padded = true>
 #tmem_scales_tmem_lhs = #ttng.tensor_memory_scales_encoding<>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tc_gen5_mma_scaled_fp8_tmem_lhs
+  tt.func @tc_gen5_mma_scaled_fp8_tmem_lhs(
+      %a_e4m3: !ttg.memdesc<128x128xf8E4M3FN, #tmem_fp8_lhs, #ttng.tensor_memory>,
+      %a_e5m2: !ttg.memdesc<128x128xf8E5M2, #tmem_fp8_lhs, #ttng.tensor_memory>,
+      %b_e4m3: !ttg.memdesc<128x128xf8E4M3FN, #shared_tmem_lhs, #ttg.shared_memory>,
+      %b_e5m2: !ttg.memdesc<128x128xf8E5M2, #shared_tmem_lhs, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf32, #tmem_acc_tmem_lhs, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x4xi8, #tmem_scales_tmem_lhs, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales_tmem_lhs, #ttng.tensor_memory>,
+      %useAcc: i1,
+      %pred: i1) {
+    // CHECK: %[[ACC_BASE:.+]] = llvm.ptrtoint %arg4 : !llvm.ptr<3> to i32
+    // CHECK: %[[A_E4M3_BASE:.+]] = llvm.ptrtoint %arg0 : !llvm.ptr<3> to i32
+    // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X [ $0 + 0 ], [ $1 + 0 ], $2
+    // CHECK-SAME: %[[ACC_BASE]], %[[A_E4M3_BASE]]
+    // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X [ $0 + 0 ], [ $1 + 8 ], $2
+    // CHECK-SAME: %[[ACC_BASE]], %[[A_E4M3_BASE]]
+    // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X [ $0 + 0 ], [ $1 + 16 ], $2
+    // CHECK-SAME: %[[ACC_BASE]], %[[A_E4M3_BASE]]
+    // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X [ $0 + 0 ], [ $1 + 24 ], $2
+    // CHECK-SAME: %[[ACC_BASE]], %[[A_E4M3_BASE]]
+    // CHECK: %[[A_E5M2_BASE:.+]] = llvm.ptrtoint %arg1 : !llvm.ptr<3> to i32
+    // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X [ $0 + 0 ], [ $1 + 0 ], $2
+    // CHECK-SAME: %[[ACC_BASE]], %[[A_E5M2_BASE]]
+    // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X [ $0 + 0 ], [ $1 + 8 ], $2
+    // CHECK-SAME: %[[ACC_BASE]], %[[A_E5M2_BASE]]
+    // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X [ $0 + 0 ], [ $1 + 16 ], $2
+    // CHECK-SAME: %[[ACC_BASE]], %[[A_E5M2_BASE]]
+    // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X [ $0 + 0 ], [ $1 + 24 ], $2
+    // CHECK-SAME: %[[ACC_BASE]], %[[A_E5M2_BASE]]
+    ttng.tc_gen5_mma_scaled %a_e4m3, %b_e5m2, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e4m3 rhs = e5m2 :
+       !ttg.memdesc<128x128xf8E4M3FN, #tmem_fp8_lhs, #ttng.tensor_memory>,
+       !ttg.memdesc<128x128xf8E5M2, #shared_tmem_lhs, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf32, #tmem_acc_tmem_lhs, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales_tmem_lhs, #ttng.tensor_memory>,
+       !ttg.memdesc<128x4xi8, #tmem_scales_tmem_lhs, #ttng.tensor_memory>
+    ttng.tc_gen5_mma_scaled %a_e5m2, %b_e4m3, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e5m2 rhs = e4m3 :
+       !ttg.memdesc<128x128xf8E5M2, #tmem_fp8_lhs, #ttng.tensor_memory>,
+       !ttg.memdesc<128x128xf8E4M3FN, #shared_tmem_lhs, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf32, #tmem_acc_tmem_lhs, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales_tmem_lhs, #ttng.tensor_memory>,
+       !ttg.memdesc<128x4xi8, #tmem_scales_tmem_lhs, #ttng.tensor_memory>
+    tt.return
+  }
+
   // CHECK-LABEL: @tc_gen5_mma_scaled_fp4_padded_tmem_lhs
   tt.func @tc_gen5_mma_scaled_fp4_padded_tmem_lhs(
       %a: !ttg.memdesc<128x128xi8, #tmem_fp4_padded_lhs, #ttng.tensor_memory>,
