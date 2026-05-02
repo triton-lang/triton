@@ -2258,17 +2258,15 @@ def test_tcgen05_mma_scaled_minimal():
                      id="fp8_e5m2_e4m3"),
         pytest.param("e5m2", torch.float8_e5m2, "e5m2", torch.float8_e5m2, False, False, False, 32, False,
                      id="fp8_e5m2_e5m2"),
-        pytest.param("e2m1", None, "e4m3", torch.float8_e4m3fn, True, False, True, 32, False,
-                     id="padded_fp4_e4m3"),
-        pytest.param("e2m1", None, "e5m2", torch.float8_e5m2, True, False, True, 32, False,
-                     id="padded_fp4_e5m2"),
+        pytest.param("e2m1", None, "e4m3", torch.float8_e4m3fn, True, False, True, 32, False, id="padded_fp4_e4m3"),
+        pytest.param("e2m1", None, "e5m2", torch.float8_e5m2, True, False, True, 32, False, id="padded_fp4_e5m2"),
         pytest.param("e2m1", None, "e2m1", None, True, True, False, 32, False, id="mxfp4_mxfp4"),
         pytest.param("e2m1", None, "e2m1", None, True, True, False, 16, True, id="nvfp4_nvfp4"),
     ],
 )
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_dtype, a_is_fp4, b_is_fp4,
-                                     a_fp4_padded, scale_vec_size, nvfp4):
+def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_dtype, a_is_fp4, b_is_fp4, a_fp4_padded,
+                                     scale_vec_size, nvfp4):
     M = 128
     N = 128
     K = 256 if b_is_fp4 else 128
@@ -2276,15 +2274,14 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
 
     @gluon.jit
     def kernel(out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, a, b, a_scale, b_scale,
-               A_FORMAT: ttgl.constexpr, B_FORMAT: ttgl.constexpr, A_IS_FP4: ttgl.constexpr,
-               B_IS_FP4: ttgl.constexpr, A_FP4_PADDED: ttgl.constexpr, SCALE_VEC_SIZE: ttgl.constexpr):
+               A_FORMAT: ttgl.constexpr, B_FORMAT: ttgl.constexpr, A_IS_FP4: ttgl.constexpr, B_IS_FP4: ttgl.constexpr,
+               A_FP4_PADDED: ttgl.constexpr, SCALE_VEC_SIZE: ttgl.constexpr):
         store_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [threads_per_warp, 1], [ttgl.num_warps(), 1], [1, 0])
 
         A_K_INPUT: ttgl.constexpr = K // 2 if A_IS_FP4 else K
         A_K_TMEM: ttgl.constexpr = K if A_FP4_PADDED else A_K_INPUT
         B_K_STORAGE: ttgl.constexpr = K // 2 if B_IS_FP4 else K
-        a_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, A_K_TMEM], col_stride=1,
-                                                           fp4_padded=A_FP4_PADDED)
+        a_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, A_K_TMEM], col_stride=1, fp4_padded=A_FP4_PADDED)
         a_tmem = allocate_tensor_memory(a.dtype.element_ty, [M, A_K_TMEM], a_tmem_layout)
         a_reg_layout: ttgl.constexpr = a_tmem.get_reg_layout()
         a_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, a_reg_layout))[:, None]
@@ -2335,12 +2332,12 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
         if B_IS_FP4:
-            tcgen05_mma_scaled(a_tmem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT,
-                               B_FORMAT, use_acc=False, mbarriers=[bar])
+            tcgen05_mma_scaled(a_tmem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT, B_FORMAT,
+                               use_acc=False, mbarriers=[bar])
             mbarrier.wait(bar, phase=0, deps=[b_smem])
         else:
-            tcgen05_mma_scaled(a_tmem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT, B_FORMAT,
-                               use_acc=False, mbarriers=[bar])
+            tcgen05_mma_scaled(a_tmem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT, B_FORMAT, use_acc=False,
+                               mbarriers=[bar])
             mbarrier.wait(bar, phase=0)
 
         out = acc_tmem.load()
@@ -2393,8 +2390,8 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
     ref = torch.matmul(a_ref, b_ref)
     atol, rtol = (1e-3, 1e-3) if a_is_fp4 or b_is_fp4 else (1e-6, 1e-6)
 
-    compiled = kernel[(1, )](out, M, N, K, a, b, a_scale, b_scale, a_format, b_format, a_is_fp4, b_is_fp4,
-                             a_fp4_padded, scale_vec_size)
+    compiled = kernel[(1, )](out, M, N, K, a, b, a_scale, b_scale, a_format, b_format, a_is_fp4, b_is_fp4, a_fp4_padded,
+                             scale_vec_size)
     torch.testing.assert_close(out, ref, atol=atol, rtol=rtol)
     assert "ttng.tc_gen5_mma_scaled" in compiled.asm["ttgir"]
     assert "#ttng.tensor_memory" in compiled.asm["ttgir"]
