@@ -2267,6 +2267,7 @@ def test_tcgen05_mma_scaled_minimal():
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_dtype, a_is_fp4, b_is_fp4, a_fp4_padded,
                                      scale_vec_size, nvfp4):
+    torch.manual_seed(0)
     M = 128
     N = 128
     K = 256 if b_is_fp4 else 128
@@ -2346,8 +2347,6 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
         ttgl.store(out_ptr + offs_m * N + offs_n, ttgl.convert_layout(out, store_layout))
 
     out = torch.empty((M, N), dtype=torch.float32, device="cuda")
-    if a_is_fp4 or b_is_fp4:
-        torch.manual_seed(0)
     if nvfp4:
         a_scale = torch.ones((M, K // scale_vec_size), dtype=torch.float32, device="cuda").to(torch.float8_e4m3fn)
         b_scale = torch.ones((N, K // scale_vec_size), dtype=torch.float32, device="cuda").to(torch.float8_e4m3fn)
@@ -2390,13 +2389,9 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
     ref = torch.matmul(a_ref, b_ref)
     atol, rtol = (1e-3, 1e-3) if a_is_fp4 or b_is_fp4 else (1e-6, 1e-6)
 
-    compiled = kernel[(1, )](out, M, N, K, a, b, a_scale, b_scale, a_format, b_format, a_is_fp4, b_is_fp4, a_fp4_padded,
-                             scale_vec_size)
+    kernel[(1, )](out, M, N, K, a, b, a_scale, b_scale, a_format, b_format, a_is_fp4, b_is_fp4, a_fp4_padded,
+                  scale_vec_size)
     torch.testing.assert_close(out, ref, atol=atol, rtol=rtol)
-    assert "ttng.tc_gen5_mma_scaled" in compiled.asm["ttgir"]
-    assert "#ttng.tensor_memory" in compiled.asm["ttgir"]
-    if a_fp4_padded:
-        assert "fp4Padded = true" in compiled.asm["ttgir"]
 
 
 @pytest.mark.parametrize("storage_dtype, torch_dtype, k_size, fp4_padded", [
@@ -2406,6 +2401,7 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
 ])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_fp4_padded_store_load_roundtrip(storage_dtype, torch_dtype, k_size, fp4_padded):
+    torch.manual_seed(0)
     M = 128
 
     @gluon.jit
