@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 
@@ -8,6 +10,15 @@ def pytest_addoption(parser):
 @pytest.fixture
 def device(request):
     return request.config.getoption("--device")
+
+
+@pytest.fixture(autouse=True)
+def proton_test_backend(monkeypatch):
+    backend = os.environ.get("PROTON_TEST_BACKEND")
+    if backend:
+        import triton.profiler.profile as profile
+
+        monkeypatch.setattr(profile, "_select_backend", lambda: backend)
 
 
 @pytest.fixture
