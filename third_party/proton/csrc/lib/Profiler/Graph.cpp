@@ -5,6 +5,7 @@
 
 #include <cstring>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <vector>
 
@@ -102,6 +103,41 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
         dataEntry.upsertFlexibleMetric(metricName, metricValueVariant);
       }
     }
+    ordinalEntryIt->second.pop_front();
+    ++matchedRecords;
+  }
+
+  size_t remainingRecords = 0;
+  std::vector<uint64_t> firstRemainingOrdinals;
+  for (const auto &[_, entries] : ordinalToEntryQueue) {
+    remainingRecords += entries.size();
+    if (!entries.empty() && firstRemainingOrdinals.size() < 8)
+      firstRemainingOrdinals.push_back(_);
+  }
+  if (remainingRecords != 0) {
+    auto join = [](const std::vector<uint64_t> &values) {
+      std::ostringstream os;
+      for (size_t i = 0; i < values.size(); ++i) {
+        if (i)
+          os << ",";
+        os << values[i];
+      }
+      return os.str();
+    };
+    std::ostringstream os;
+    os << "[PROTON] Missing CUDA graph metric records during flush"
+       << " remaining=" << remainingRecords << " records_read=" << recordsRead
+       << " matched=" << matchedRecords
+       << " unknown_ordinals=" << unknownOrdinalRecords
+       << " queue_start_word=" << startWordOffset
+       << " queue_num_words=" << queue.numWords
+       << " scan_start_word=" << scanStartWordOffset
+       << " scan_num_words=" << scanNumWords
+       << " words_written=" << wordsWritten << " first_seen=["
+       << join(firstSeenOrdinals) << "]"
+       << " first_unknown=[" << join(firstUnknownOrdinals) << "]"
+       << " first_remaining=[" << join(firstRemainingOrdinals) << "]";
+    throw std::runtime_error(os.str());
   }
 }
 } // namespace
@@ -160,10 +196,13 @@ void PendingGraphPool::peek(size_t phase) {
     if (!slot->queue.has_value())
       continue;
     auto &queue = *slot->queue;
-    metricBuffer->peek(static_cast<Device *>(device), [&](uint8_t *hostPtr) {
-      emitMetricRecords(*metricBuffer, reinterpret_cast<uint64_t *>(hostPtr),
-                        queue);
-    });
+    metricBuffer->peek(static_cast<Device *>(device),
+                       [&](uint8_t *hostPtr, uint64_t wordsWritten) {
+                         emitMetricRecords(
+                             *metricBuffer,
+                             reinterpret_cast<uint64_t *>(hostPtr), queue,
+                             wordsWritten);
+                       });
     deviceNumWords.emplace_back(device, queue.numWords);
     slot->queue.reset();
   }
@@ -201,7 +240,7 @@ bool PendingGraphPool::flushAll() {
   }
   std::vector<std::pair<void *, size_t>> deviceNumWords;
   metricBuffer->flush(
-      [&](void *device, uint8_t *hostPtr) {
+      [&](void *device, uint8_t *hostPtr, uint64_t wordsWritten) {
         auto deviceIt = poolCopy.find(device);
         if (deviceIt == poolCopy.end())
           return;

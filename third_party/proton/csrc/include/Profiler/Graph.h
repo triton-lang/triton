@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -53,6 +54,10 @@ struct GraphState {
     // created at capture time and won't change for the same node id. This is
     // used to link the graph node to the captured call path in Data.
     std::map<Data *, size_t> dataToEntryId;
+    // Metric-copy kernels can be shown under launch-metadata scopes while their
+    // flexible metrics still belong to the owning compute kernel's <metric>
+    // child. When present, this is that owner target.
+    std::map<Data *, size_t> dataToFlexibleMetricEntryId;
     // Whether the node has missing name or is a metric node, which is
     // determined at capture time and won't change for the same node id.
     NodeStatus status{};

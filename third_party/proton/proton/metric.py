@@ -4,7 +4,7 @@ import triton.runtime.driver as driver
 import triton.language as tl
 import triton
 from triton import MockTensor
-from .state import exit_state, enter_state, COMPUTE_METADATA_SCOPE_NAME
+from .state import exit_state, enter_state, COMPUTE_METADATA_SCOPE_NAME, is_metadata_state_active
 
 
 @triton.jit
@@ -67,7 +67,7 @@ def set_metric_kernels():
         mock_ptr,
         mock_size,
         mock_seq_id,
-        mock_seq_id,
+        mock_metric_value_size,
     )
     device = driver.active.get_current_device()
     stream = driver.active.get_current_stream(device)
@@ -148,9 +148,15 @@ def transform_tensor_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], d
             if value.device.type == "cpu":
                 scalar_metrics[key] = _scalar_metric_value(key, value)
             else:  # device tensor
-                enter_state(COMPUTE_METADATA_SCOPE_NAME)
-                value, metric_index = _tensor_metric_value_and_index(key, value)
-                exit_state()
+                entered_state = False
+                try:
+                    if not is_metadata_state_active():
+                        enter_state(COMPUTE_METADATA_SCOPE_NAME)
+                        entered_state = True
+                    value, metric_index = _tensor_metric_value_and_index(key, value)
+                finally:
+                    if entered_state:
+                        exit_state()
                 tensor_metrics[key] = _TensorMetric(value, metric_index)
         else:
             scalar_metrics[key] = _scalar_metric_value(key, value)

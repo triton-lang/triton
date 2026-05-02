@@ -49,6 +49,8 @@ public:
 
   virtual void synchronizeDevice() = 0;
 
+  virtual bool isStreamCapturing(void *stream) { return false; }
+
   virtual void
   processHostBuffer(uint8_t *hostBuffer, size_t hostBufferSize,
                     uint8_t *deviceBuffer, size_t deviceBufferSize,

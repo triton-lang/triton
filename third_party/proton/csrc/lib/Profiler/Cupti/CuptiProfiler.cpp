@@ -22,6 +22,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -33,6 +34,26 @@ thread_local GPUProfiler<CuptiProfiler>::ThreadState
     GPUProfiler<CuptiProfiler>::threadState(CuptiProfiler::instance());
 
 namespace {
+
+std::optional<std::pair<size_t, std::string>>
+findMetadataOwnerContext(const std::vector<Context> &contexts) {
+  const auto prefix = std::string(GraphState::metadataTag) + ":";
+  for (size_t i = 0; i < contexts.size(); ++i) {
+    const auto &name = contexts[i].name;
+    if (name.rfind(prefix, 0) == 0 && name.size() > prefix.size()) {
+      return std::make_pair(i, name.substr(prefix.size()));
+    }
+  }
+  return std::nullopt;
+}
+
+std::string findCurrentOpName(const std::vector<Scope> &scopeStack,
+                              const std::string &fallback) {
+  if (!scopeStack.empty() && !scopeStack.back().name.empty()) {
+    return scopeStack.back().name;
+  }
+  return fallback;
+}
 
 std::unique_ptr<Metric>
 convertKernelActivityToMetric(CUpti_Activity *activity,
@@ -482,7 +503,11 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       const auto &name = threadState.scopeStack.back().name;
       if (name.empty())
         nodeState.status.setMissingName();
-      if (threadState.isMetricKernelLaunching) {
+      const bool isMetricKernelNode =
+          threadState.isMetricKernelLaunching &&
+          !threadState.metricKernelNumWordsQueue.empty() &&
+          !threadState.metricKernelOrdinalQueue.empty();
+      if (isMetricKernelNode) {
         nodeState.status.setMetricNode();
         auto metricKernelLaunchInfo =
             threadState.metricKernelLaunchInfoQueue.front();
@@ -498,8 +523,19 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       }
       for (auto *data : profiler.dataSet) {
         auto contexts = data->getContexts();
-        if (threadState.isMetricKernelLaunching) {
-          if (threadState.isApiExternOp) { // API extern ops
+        std::optional<std::vector<Context>> flexibleMetricTargetContexts;
+        if (isMetricKernelNode) {
+          if (auto metadataOwner = findMetadataOwnerContext(contexts)) {
+            auto [metadataIndex, ownerName] = *metadataOwner;
+            auto metricOwnerName =
+                findCurrentOpName(threadState.scopeStack, ownerName);
+            flexibleMetricTargetContexts = std::vector<Context>(
+                contexts.begin(), contexts.begin() + metadataIndex);
+            flexibleMetricTargetContexts->push_back(Context(metricOwnerName));
+            flexibleMetricTargetContexts->push_back(
+                Context(GraphState::metricTag));
+            contexts.push_back(std::string(GraphState::metricTag));
+          } else if (threadState.isApiExternOp) { // API extern ops
             contexts.push_back(std::string(GraphState::metricTag));
           } else { // Triton ops
             contexts.push_back(name);
@@ -511,6 +547,18 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         auto staticEntry =
             data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
         nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
+        if (isMetricKernelNode) {
+          if (flexibleMetricTargetContexts) {
+            auto flexibleMetricTargetEntry =
+                data->addOp(Data::kVirtualPhase, Data::kRootEntryId,
+                            *flexibleMetricTargetContexts);
+            nodeState.dataToFlexibleMetricEntryId.insert_or_assign(
+                data, flexibleMetricTargetEntry.id);
+          } else {
+            nodeState.dataToFlexibleMetricEntryId.insert_or_assign(
+                data, staticEntry.id);
+          }
+        }
         graphState.dataToEntryIdToNodeStates[data][staticEntry.id].insert(
             &nodeState);
       }

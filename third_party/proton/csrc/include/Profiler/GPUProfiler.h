@@ -212,6 +212,7 @@ protected:
 
   std::unique_ptr<MetricBuffer> metricBuffer;
   std::unique_ptr<PendingGraphPool> pendingGraphPool;
+  std::atomic<uint64_t> nextMetricKernelOrdinal{0};
 
   Correlation correlation;
 
