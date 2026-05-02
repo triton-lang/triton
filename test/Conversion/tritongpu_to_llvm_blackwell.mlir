@@ -1128,6 +1128,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#shared_dense_tmem_lhs = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
+#tmem_acc_dense_lhs = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_fp4_dense_lhs = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_scales_dense_lhs = #ttng.tensor_memory_scales_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tc_gen5_mma_scaled_dense_fp4_tmem_lhs
+  tt.func @tc_gen5_mma_scaled_dense_fp4_tmem_lhs(
+      %a: !ttg.memdesc<128x128xi8, #tmem_fp4_dense_lhs, #ttng.tensor_memory>,
+      %b: !ttg.memdesc<128x128xi8, #shared_dense_tmem_lhs, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf32, #tmem_acc_dense_lhs, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x8xi8, #tmem_scales_dense_lhs, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<128x8xi8, #tmem_scales_dense_lhs, #ttng.tensor_memory>,
+      %useAcc: i1,
+      %pred: i1) {
+    // CHECK-DAG: %[[ACC_BASE:.+]] = llvm.ptrtoint %arg2 : !llvm.ptr<3> to i32
+    // CHECK-DAG: %[[A_BASE:.+]] = llvm.ptrtoint %arg0 : !llvm.ptr<3> to i32
+    // CHECK: tcgen05.mma.cta_group::1.kind::mxf4.block_scale.scale_vec::2X [ $0 + 0 ], [ $1 + 0 ], $2
+    // CHECK-SAME: %[[ACC_BASE]], %[[A_BASE]]
+    // CHECK: tcgen05.mma.cta_group::1.kind::mxf4.block_scale.scale_vec::2X [ $0 + 0 ], [ $1 + 8 ], $2
+    // CHECK-SAME: %[[ACC_BASE]], %[[A_BASE]]
+    // CHECK: tcgen05.mma.cta_group::1.kind::mxf4.block_scale.scale_vec::2X [ $0 + 0 ], [ $1 + 16 ], $2
+    // CHECK-SAME: %[[ACC_BASE]], %[[A_BASE]]
+    // CHECK: tcgen05.mma.cta_group::1.kind::mxf4.block_scale.scale_vec::2X [ $0 + 0 ], [ $1 + 24 ], $2
+    // CHECK-SAME: %[[ACC_BASE]], %[[A_BASE]]
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e2m1 rhs = e2m1 :
+       !ttg.memdesc<128x128xi8, #tmem_fp4_dense_lhs, #ttng.tensor_memory>,
+       !ttg.memdesc<128x128xi8, #shared_dense_tmem_lhs, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf32, #tmem_acc_dense_lhs, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x8xi8, #tmem_scales_dense_lhs, #ttng.tensor_memory>,
+       !ttg.memdesc<128x8xi8, #tmem_scales_dense_lhs, #ttng.tensor_memory>
+    tt.return
+  }
+}
+
+// -----
+
 // Test basic reduction with max
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked_red = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
