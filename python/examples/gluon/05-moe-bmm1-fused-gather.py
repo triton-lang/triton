@@ -249,6 +249,7 @@ class PartitionArgs:
     SCALE_SIZE_OUTER: gl.constexpr
     SCALE_SIZE_INNER: gl.constexpr
     MXFP_BLOCK_SIZE: gl.constexpr
+    MMA_BLOCK_COL: gl.constexpr
 
     SWIGLU_ALPHA: gl.constexpr
     SWIGLU_LIMIT: gl.constexpr
@@ -432,6 +433,56 @@ def mma_partition(p: PartitionArgs):
     mma_idx = 0
     mma_phase = 1
 
+    k_second_tmem_layout: gl.constexpr = blackwell.TensorMemoryLayout(
+        (p.MMA_BLOCK_COL, p.BLOCK_K // 4),
+        col_stride=1,
+        cga_layout=((1, 0),),
+        two_ctas=True,
+    )
+    k_second_tmem = blackwell.allocate_tensor_memory(
+        gl.uint32,
+        (p.BLOCK_N, p.BLOCK_K // 4),
+        k_second_tmem_layout,
+    )
+    k_second_layout: gl.constexpr = gl.NVMMASharedLayout(
+        swizzle_byte_width=128,
+        element_bitwidth=32,
+        rank=5,
+        fp4_padded=False,
+        cga_layout=((0, 0, 0, 1, 0),),
+    )
+    k_second_reg_layout: gl.constexpr = gl.DistributedLinearLayout(
+        reg_bases=[
+            [0, 0, 0, 8, 0, 0],
+            [0, 0, 0, 0, 2, 0],
+            [0, 0, 0, 0, 4, 0],
+            [0, 0, 0, 128, 0, 0],
+            [0, 0, 0, 16, 0, 0],
+        ],
+        lane_bases=[
+            [0, 0, 0, 0, 0, 1],
+            [0, 0, 0, 0, 1, 0],
+            [0, 0, 0, 1, 0, 0],
+            [0, 0, 0, 2, 0, 0],
+            [0, 0, 0, 4, 0, 0],
+        ],
+        warp_bases=[
+            [0, 0, 0, 32, 0, 0],
+            [0, 0, 0, 64, 0, 0],
+        ],
+        block_bases=[
+            [0, 0, 0, 256, 0, 0],
+        ],
+        shape=[1, 1, 1, p.BLOCK_N, p.BLOCK_K // 16, 2],
+    )
+    k_second_u8_layout: gl.constexpr = blackwell.TensorMemoryLayout(
+        (p.MMA_BLOCK_COL, p.BLOCK_K),
+        col_stride=1,
+        cga_layout=((1, 0),),
+        two_ctas=True,
+        fp4_padded=True,
+    )
+
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
         acc_empty_bar = p.acc_empty_bars.index(mma_idx)
         acc_ready_bar = p.acc_ready_bars.index(mma_idx)
@@ -440,6 +491,7 @@ def mma_partition(p: PartitionArgs):
 
         use_acc = False
         for _ in range(p.K_TILES):
+            # First K tile. Wait for scales, weight, and act tile.
             scale_ready_bar = p.w_scale_ready_bars.index(scale_idx)
             scale_empty_bar = p.w_scale_empty_bars.index(scale_idx)
             scale_buf = p.w_scale_bufs.index(scale_idx)
@@ -464,7 +516,7 @@ def mma_partition(p: PartitionArgs):
             fp4_padded_layout: gl.constexpr = gl.NVMMASharedLayout(
                 swizzle_byte_width=128,
                 element_bitwidth=8,
-                rank=5,
+                rank=2,
                 fp4_padded=True,
                 cga_layout=((1, 0),),
             )
@@ -474,7 +526,6 @@ def mma_partition(p: PartitionArgs):
                 (p.BLOCK_N, p.BLOCK_K // 2),
                 fp4_padded_layout,
             )
-            w_pair_second = w_packed_pair.reshape((p.BLOCK_N, p.BLOCK_K // 16, 2, 8))
 
             # mma_release_bars = [x_empty_bar, w_empty_bar, scale_empty_bar] if p.INLINE_MMA_INPUT_RELEASE else None
             blackwell.tcgen05_mma_scaled(
@@ -497,7 +548,50 @@ def mma_partition(p: PartitionArgs):
             scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
             use_acc = True
 
+            # Second K tile. Wait for scales and act tile.
+            scale_ready_bar = p.w_scale_ready_bars.index(scale_idx)
+            scale_empty_bar = p.w_scale_empty_bars.index(scale_idx)
+            scale_buf = p.w_scale_bufs.index(scale_idx)
+            mbarrier.wait(scale_ready_bar, scale_phase)
+            blackwell.tcgen05_copy(
+                unswizzle_mx_scale(scale_buf, p.SCALE_SIZE_OUTER, p.SCALE_SIZE_INNER, p.MXFP_BLOCK_SIZE),
+                p.w_scale_tmem,
+            )
+
+            k_second_view = w_buf._reinterpret(
+                gl.uint32,
+                [1, 1, 1, p.BLOCK_N, p.BLOCK_K // 4],
+                k_second_layout,
+            )
+            k_second_view = k_second_view.reshape((1, 1, 1, p.BLOCK_N, p.BLOCK_K // 16, 4))
+            k_second_view = k_second_view.slice(start=2, length=2, dim=5)
+            k_second = k_second_view.load(k_second_reg_layout)
+
+            # We can release the weight buffer as soon as the weight is loaded.
+            mbarrier.arrive(w_empty_bar)
             w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+
+            lo, hi = fp4_prmt_shuffle_elements(k_second)
+            k_second = gl.join(lo, hi).reshape([p.BLOCK_N, p.BLOCK_K // 4])
+            k_second_tmem.store(k_second)
+
+            x_ready_bar = p.x_ready_bars.index(x_idx)
+            x_empty_bar = p.x_empty_bars.index(x_idx)
+            x_buf = p.x_bufs.index(x_idx)
+            mbarrier.wait(x_ready_bar, x_phase)
+
+            blackwell.tcgen05_mma_scaled(
+                k_second_tmem._reinterpret(gl.uint8, (p.BLOCK_N, p.BLOCK_K), k_second_u8_layout),
+                x_buf.permute((1, 0)),
+                acc_buf,
+                p.w_scale_tmem,
+                p.x_scale_tmem,
+                a_type="e2m1",
+                b_type="e4m3",
+                use_acc=use_acc,
+            )
+            blackwell.tcgen05_commit(x_empty_bar)
+            blackwell.tcgen05_commit(scale_empty_bar)
 
         blackwell.tcgen05_commit(acc_ready_bar)
         mma_idx, mma_phase = advance(mma_idx, mma_phase, p.ACC_NUM_BUFS)
@@ -753,9 +847,9 @@ def ws_matmul_kernel(
     w_scale_layout: gl.constexpr = blackwell.TensorMemoryScalesLayout(
         cga_layout=((1, 0),) if use_2cta else (),
     )
-    mma_block_col: gl.constexpr = min(128, BLOCK_N // gl.num_ctas())
+    MMA_BLOCK_COL: gl.constexpr = min(128, BLOCK_N // gl.num_ctas())
     acc_layout: gl.constexpr = blackwell.TensorMemoryLayout(
-        [mma_block_col, BLOCK_M],
+        [MMA_BLOCK_COL, BLOCK_M],
         col_stride=1,
         cga_layout=((1, 0),) if use_2cta else (),
         two_ctas=use_2cta,
@@ -849,6 +943,7 @@ def ws_matmul_kernel(
         SCALE_SIZE_OUTER=SCALE_SIZE_OUTER,
         SCALE_SIZE_INNER=SCALE_SIZE_INNER,
         MXFP_BLOCK_SIZE=MXFP_BLOCK_SIZE,
+        MMA_BLOCK_COL=MMA_BLOCK_COL,
         #
         SWIGLU_ALPHA=SWIGLU_ALPHA,
         SWIGLU_LIMIT=SWIGLU_LIMIT,
@@ -1074,9 +1169,6 @@ def matmul(
     # The output descriptor is only used for shape/stride metadata during
     # direct stores, so cap the layout width to a legal FP8 swizzle size.
     out_desc = make_tensor_descriptor(c, (p.BLOCK_M, min(p.BLOCK_N // reduction_n, 128)))
-
-    print(w_desc)
-    sys.exit(0)
 
     ws_matmul_kernel[grid](
         x_desc=x_desc,
