@@ -428,7 +428,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   auto aTensorTy = cast<MemDescType>(a.getType());
   auto bTensorTy = cast<MemDescType>(b.getType());
-  auto aInTmem = dyn_cast<ttng::TensorMemoryEncodingAttr>(aTensorTy.getEncoding());
+  auto aInTmem =
+      dyn_cast<ttng::TensorMemoryEncodingAttr>(aTensorTy.getEncoding());
 
   Value baseA = loadedA;
   if (!aInTmem) {
