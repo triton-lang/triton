@@ -23,7 +23,7 @@ from triton_kernels.matmul import (
     matmul as reference_matmul,
 )
 from triton_kernels.numerics import InFlexData, OutFlexData
-from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp
+from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp, upcast_from_mxfp
 from triton_kernels.swiglu import swiglu_fn
 from triton_kernels.tensor import (
     FP4,
@@ -1513,8 +1513,9 @@ def fp4_prmt_shuffle_elements(x):
           .reg .b32 lo;
           .reg .b32 hi;
           and.b32 lo, $2, 0x0f0f0f0f;
-          shr.u32 hi, $2, 4;
-          and.b32 hi, hi, 0x0f0f0f0f;
+          and.b32 hi, $2, 0xf0f0f0f0;
+          shl.b32 lo, lo, 2;
+          shr.u32 hi, hi, 2;
           prmt.b32 $0, lo, hi, 0x5140;
           prmt.b32 $1, lo, hi, 0x7362;
         }
@@ -1609,20 +1610,20 @@ def pack_and_unpack_kernel(
     )
     pair_first_view = pair_first_view.reshape((BLOCK_N, BLOCK_K // 2))
 
-    # Load as i32 elements so we can prmt into the TMEM fp4_padded layout.
     pair_second_layout: gl.constexpr = gl.NVMMASharedLayout(
-        swizzle_byte_width=0,
+        swizzle_byte_width=128,
         element_bitwidth=32,
-        rank=6,
+        rank=5,
         fp4_padded=False,
-        cga_layout=((0, 0, 0, 1, 0, 0),),
+        cga_layout=((0, 0, 0, 1, 0),),
     )
     pair_second_view = in_smem._reinterpret(
         gl.uint32,
-        # 2*BLOCK_K elements -> BLOCK_K bytes, divided into 16 byte segments.
-        [1, 1, 1, BLOCK_N, BLOCK_K // 16, 4],
+        # 2*BLOCK_K elements -> BLOCK_K bytes, loaded as full 128-byte swizzled rows.
+        [1, 1, 1, BLOCK_N, BLOCK_K // 4],
         pair_second_layout,
     )
+    pair_second_view = pair_second_view.reshape([1, 1, 1, BLOCK_N, BLOCK_K // 16, 4])
     # Take the latter 8 bytes of each 16 byte segment along inner dim.
     pair_second_view = pair_second_view.slice(start=2, length=2, dim=5)
 
@@ -1716,10 +1717,14 @@ def pack_and_unpack_kernel(
         lhs_scales_tmem,
     )
     lhs_u8_layout: gl.constexpr = blackwell.TensorMemoryLayout(
-        (128, 128),
+        (128, BLOCK_K),
+        col_stride=1,
+        cga_layout=((1, 0),),
+        two_ctas=True,
+        fp4_padded=True,
     )
     blackwell.tcgen05_mma_scaled(
-        lhs_tmem._reinterpret(gl.uint8, [], lhs_u8_layout),
+        lhs_tmem._reinterpret(gl.uint8, (BLOCK_N, BLOCK_K), lhs_u8_layout),
         rhs_smem.permute((1, 0)),
         acc_tmem,
         lhs_scales_tmem,
@@ -1747,12 +1752,14 @@ def pack_and_unpack():
     from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 
     shape = (16, 1536, 1792)
+    block_n = 512
+    block_k = 128
     data = alloc_randn(shape, torch.bfloat16, device="cuda")
-    orig_data = data
 
     # Convert to interleaved fp4 tiles.
     data, scales = downcast_to_mxfp(data, FP4, axis=1)
-    data_layout = BlackwellMX4ValuePackedShuffledLayout(block_k=128, block_n=512)
+    reference = upcast_from_mxfp(data, scales, torch.bfloat16, axis=1).transpose(1, 2).contiguous()
+    data_layout = BlackwellMX4ValuePackedShuffledLayout(block_k=block_k, block_n=block_n)
     data = convert_layout(wrap_torch_tensor(data, dtype=FP4), data_layout)
 
     scales_layout = make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=4)
@@ -1770,14 +1777,14 @@ def pack_and_unpack():
     # Two K tiles interleaved.
     # CGA BLOCK_N=512, local CTA BLOCK_N=256.
     t = data.storage.data
-    descriptor = TensorDescriptor(t, t.shape, t.stride(), (1, 1, 1, 512, 128), layout)
+    descriptor = TensorDescriptor(t, t.shape, t.stride(), (1, 1, 1, block_n, block_k), layout)
 
-    output = torch.zeros((shape[0], shape[2], shape[1]), dtype=torch.bfloat16, device=orig_data.device)
+    output = torch.zeros((shape[0], shape[2], shape[1]), dtype=torch.bfloat16, device=data.device)
     out_desc = TensorDescriptor.from_tensor(
         output,
-        (1, 512, 128),
+        (1, block_n, block_k),
         gl.NVMMASharedLayout.get_default_for(
-            (1, 512, 128),
+            (1, block_n, block_k),
             gl.bfloat16,
             cga_layout=((0, 1, 0),),
         ),
@@ -1787,32 +1794,52 @@ def pack_and_unpack():
         scales,
         (
             1,
-            512 // 128,
-            128 // (32 * 4),
+            block_n // 128,
+            block_k // (32 * 4),
             2,
             256,
         ),
         cga_layout=((0, 1, 0, 0, 0),),
     )
 
-    grid = (triton.cdiv(shape[2], 512), triton.cdiv(shape[1], 128 * 2), shape[0])
+    grid = (triton.cdiv(shape[2], block_n), triton.cdiv(shape[1], block_k * 2), shape[0])
     pack_and_unpack_kernel[grid](
         descriptor,
         out_desc,
         scale_desc,
         N=shape[2],
-        BLOCK_N=512,
-        BLOCK_K=128,
+        BLOCK_N=block_n,
+        BLOCK_K=block_k,
         num_warps=4,
         num_ctas=2,
     )
     torch.cuda.synchronize()
 
-    return orig_data, output
+    return reference, output, block_k
+
+
+def check_pack_and_unpack():
+    reference, output, block_k = pack_and_unpack()
+    diff = (output - reference).abs()
+    print("overall", diff.max().item(), (diff != 0).sum().item(), diff.numel())
+
+    for parity, label in ((0, "even/normal"), (1, "odd/register-unpack")):
+        cols = torch.cat(
+            [
+                torch.arange(k * block_k, (k + 1) * block_k, device=output.device)
+                for k in range(reference.shape[2] // block_k)
+                if k % 2 == parity
+            ]
+        )
+        part = diff[:, :, cols]
+        print(label, part.max().item(), (part != 0).sum().item(), part.numel())
+
+    torch.testing.assert_close(output, reference, rtol=0, atol=0)
+    print("PASS pack_and_unpack exact")
 
 
 if __name__ == "__main__":
-    pack_and_unpack()
+    check_pack_and_unpack()
     sys.exit(0)
 
     c = KernelConfig()
