@@ -268,11 +268,11 @@ def get_dump_manager(key) -> CacheManager:
 
 def make_so_cache_key(version_hash, signature, constants, ids, **kwargs):
     # Get unique key for the compiled code
-    signature = {k: 'ptr' if v[0] == '*' else v for k, v in signature.items()}
-    key = f"{version_hash}-{''.join(signature.values())}-{constants}-{ids}"
-    for kw in kwargs:
-        key = f"{key}-{kwargs.get(kw)}"
-    key = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    signature_vals = ['ptr' if v[0] == '*' else v for v in signature.values()]
+    parts = [version_hash, "".join(signature_vals), str(constants), str(ids)]
+    for v in kwargs.values():
+        parts.append(str(v))
+    key = hashlib.sha256("-".join(parts).encode("utf-8")).hexdigest()
     return _base32(key)
 
 

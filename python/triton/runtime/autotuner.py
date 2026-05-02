@@ -213,10 +213,11 @@ class Autotuner(KernelInterface):
         self.nargs = dict(zip(self.arg_names, args))
         used_cached_result = True
         if len(self.configs) > 1:
-            all_args = {**self.nargs, **kwargs}
-            _args = {k: v for (k, v) in all_args.items() if k in self.arg_names}
-            key = [_args[key] for key in self.keys if key in _args]
-            for _, arg in _args.items():
+            key = [kwargs[k] if k in kwargs else self.nargs[k] for k in self.keys if k in kwargs or k in self.nargs]
+            for arg in self.nargs.values():
+                if hasattr(arg, "dtype"):
+                    key.append(str(arg.dtype))
+            for arg in kwargs.values():
                 if hasattr(arg, "dtype"):
                     key.append(str(arg.dtype))
             key = tuple(key)
@@ -341,18 +342,8 @@ class Config:
         self.maxnreg = maxnreg
         self.pre_hook = pre_hook
         self.ir_override = ir_override
-
-    def __setstate__(self, state):
-        self.kwargs = state.get("kwargs", {})
-        self.num_warps = state.get("num_warps", 4)
-        self.num_stages = state.get("num_stages", 3)
-        self.num_ctas = state.get("num_ctas", 1)
-        self.maxnreg = state.get("maxnreg", None)
-        self.pre_hook = state.get("pre_hook", None)
-        self.ir_override = state.get("ir_override", None)
-
-    def all_kwargs(self):
-        return {
+        # Pre-compute all_kwargs for faster hashing and equality checks
+        self._all_kwargs = {
             **self.kwargs, **{
                 k: v
                 for (k, v) in (
@@ -364,6 +355,23 @@ class Config:
                 ) if v is not None
             }
         }
+        self._frozen_items = tuple(sorted(self._all_kwargs.items()))
+        self._hash = hash((self._frozen_items, self.pre_hook))
+
+    def __setstate__(self, state):
+        self.kwargs = state.get("kwargs", {})
+        self.num_warps = state.get("num_warps", 4)
+        self.num_stages = state.get("num_stages", 3)
+        self.num_ctas = state.get("num_ctas", 1)
+        self.maxnreg = state.get("maxnreg", None)
+        self.pre_hook = state.get("pre_hook", None)
+        self.ir_override = state.get("ir_override", None)
+        # Re-initialize pre-computed state
+        self.__init__(self.kwargs, self.num_warps, self.num_stages, self.num_ctas, self.maxnreg, self.pre_hook,
+                      self.ir_override)
+
+    def all_kwargs(self):
+        return self._all_kwargs
 
     def __str__(self):
         res = []
@@ -376,18 +384,12 @@ class Config:
         return ", ".join(res)
 
     def __hash__(self):
-        return hash((*self.all_kwargs().items(), self.pre_hook))
+        return self._hash
 
     def __eq__(self, other):
-        self_tuple = tuple((
-            *self.all_kwargs().items(),
-            self.pre_hook,
-        ))
-        other_tuple = tuple((
-            *other.all_kwargs().items(),
-            other.pre_hook,
-        ))
-        return self_tuple == other_tuple
+        if not isinstance(other, Config):
+            return False
+        return self._hash == other._hash and self._frozen_items == other._frozen_items and self.pre_hook == other.pre_hook
 
 
 def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, pre_hook=None, post_hook=None,
