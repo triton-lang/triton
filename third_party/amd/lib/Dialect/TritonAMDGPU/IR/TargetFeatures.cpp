@@ -4,32 +4,38 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include <cassert>
 
 namespace mlir::triton::amdgpu {
 
 namespace {
 struct GfxArch {
-  unsigned number;
-  StringRef suffix;
+  unsigned major;
+  unsigned minor;
+  unsigned patch;
 };
 
 std::optional<GfxArch> parseGfxArch(StringRef arch) {
   if (!arch.consume_front("gfx"))
     return std::nullopt;
 
-  unsigned number = 0;
-  bool hasDigits = false;
-  while (!arch.empty() && arch.front() >= '0' && arch.front() <= '9') {
-    hasDigits = true;
-    number = number * 10 + (arch.front() - '0');
-    arch = arch.drop_front();
-  }
-
-  if (!hasDigits)
+  if (arch.size() < 3)
     return std::nullopt;
 
-  return GfxArch{number, arch};
+  unsigned patch;
+  if (arch.take_back(1).getAsInteger(16, patch))
+    return std::nullopt;
+  arch = arch.drop_back();
+
+  unsigned minor;
+  if (arch.take_back(1).getAsInteger(10, minor))
+    return std::nullopt;
+  arch = arch.drop_back();
+
+  unsigned major;
+  if (arch.getAsInteger(10, major))
+    return std::nullopt;
+
+  return GfxArch{major, minor, patch};
 }
 } // namespace
 
@@ -57,39 +63,36 @@ ISAFamily TargetFeatures::getISAFamily() const {
   std::optional<GfxArch> gfxArch = parseGfxArch(arch);
   if (!gfxArch)
     return ISAFamily::Unknown;
-
-  unsigned number = gfxArch->number;
+  auto [major, minor, patch] = *gfxArch;
 
   // See https://llvm.org/docs/AMDGPUUsage.html#processors for how to
   // categorize the following target gfx architectures. Parse the gfx number
   // directly here instead of depending on LLVM's target parser.
-  if (number == 1250)
+  if (major == 12 && minor == 5)
     return ISAFamily::GFX1250;
 
   // CDNA ISA cases.
-  switch (number) {
-  case 950:
-    return ISAFamily::CDNA4;
-  case 942:
-    return ISAFamily::CDNA3;
-  case 908:
-    return ISAFamily::CDNA1;
-  default:
-    break;
+  if (major == 9) {
+    if (minor == 5 && patch == 0)
+      return ISAFamily::CDNA4;
+    if (minor == 4 && patch == 2)
+      return ISAFamily::CDNA3;
+    if (minor == 0 && patch == 10)
+      return ISAFamily::CDNA2;
+    if (minor == 0 && patch == 8)
+      return ISAFamily::CDNA1;
+    if (minor == 0 && patch == 6)
+      return ISAFamily::GCN5_1;
   }
-  if (number == 90 && gfxArch->suffix.starts_with("a"))
-    return ISAFamily::CDNA2;
-  if (number == 906)
-    return ISAFamily::GCN5_1;
 
   // RDNA ISA cases.
-  if (number >= 1200 && number <= 1201)
+  if (major == 12 && minor == 0)
     return ISAFamily::RDNA4;
-  if (number >= 1100 && number <= 1153)
+  if (major == 11)
     return ISAFamily::RDNA3;
-  if (number >= 1030 && number <= 1036)
+  if (major == 10 && minor == 3)
     return ISAFamily::RDNA2;
-  if (number >= 1010 && number <= 1013)
+  if (major == 10 && minor == 1)
     return ISAFamily::RDNA1;
 
   return ISAFamily::Unknown;
