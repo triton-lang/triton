@@ -127,8 +127,7 @@ struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
 
     if (useAsyncCopy) {
       auto arch = getAMDArch(moduleOp);
-      auto family = arch ? tt::amdgpu::TargetFeatures(*arch).getISAFamily()
-                         : ISAFamily::Unknown;
+      auto family = tt::amdgpu::TargetFeatures(arch).getISAFamily();
       // Only asyncmark targets (CDNA3/CDNA4) need updateWaits here: their
       // lowering reads ttg.async_wait's `num` directly into wait.asyncmark(N),
       // and PR #9883 made UpdateAsyncWaitCount a no-op on those archs, so

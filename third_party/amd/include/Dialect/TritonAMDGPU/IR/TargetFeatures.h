@@ -4,8 +4,6 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Types.h"
 #include "llvm/ADT/StringRef.h"
-#include <cstddef>
-#include <cstdint>
 #include <optional>
 #include <string>
 
