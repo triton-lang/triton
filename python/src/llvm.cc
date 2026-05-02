@@ -333,6 +333,15 @@ std::string translateLLVMIRToASM(llvm::Module &module,
                                  bool enable_fp_fusion, bool isObject) {
   using namespace mlir;
 
+  auto amdgcnAsLevel = triton::tools::getStrEnv("TRITON_ENABLE_AMDGCN_AS");
+  // TRITON_ENABLE_AMDGPU_RA_HINTS=1 sets the RA hint flags without running the
+  // amdgcnas post-assembly pass. Lets us isolate the LLVM flag vs.
+  // post-assembly contributions. Back-compat: AMDGCN_AS=1|2 still implies it.
+  auto raHintsOnly = triton::tools::getStrEnv("TRITON_ENABLE_AMDGPU_RA_HINTS");
+  if (amdgcnAsLevel == "1" || amdgcnAsLevel == "2" || raHintsOnly == "1") {
+    setLLVMOption<bool>("amdgpu-mfma-vgpr-form", false);
+  }
+
   // Apply flags
   for (const std::string &flag : flags) {
     setLLVMOption<bool>(flag, true);
@@ -351,6 +360,28 @@ std::string translateLLVMIRToASM(llvm::Module &module,
       StringRef(flagList.c_str()).split(split, ',');
       for (const auto &flag : split) {
         setLLVMOption<bool>(flag.str(), true);
+      }
+    }
+  }
+
+  if (triton::tools::getBoolEnv("TRITON_ENABLE_LLIR_SCHED")) {
+    { // Disable pre-RA misched
+      auto options = llvm::cl::getRegisteredOptions();
+      auto optIt = options.find("enable-misched");
+      if (optIt != options.end()) {
+        auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+        optPtr->setValue(false);
+        optPtr->addOccurrence(0, "EnableMachineSched", "false", false);
+      }
+    }
+
+    { // Disable post-RA misched
+      auto options = llvm::cl::getRegisteredOptions();
+      auto optIt = options.find("enable-post-misched");
+      if (optIt != options.end()) {
+        auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+        optPtr->setValue(false);
+        optPtr->addOccurrence(0, "EnableMachineSched", "false", false);
       }
     }
   }
