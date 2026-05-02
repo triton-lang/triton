@@ -64,9 +64,6 @@ ISAFamily TargetFeatures::getISAFamily() const {
   if (number == 1250)
     return ISAFamily::GFX1250;
 
-  if (number == 906)
-    return ISAFamily::GCN5_1;
-
   // CDNA ISA cases.
   switch (number) {
   case 950:
@@ -80,6 +77,8 @@ ISAFamily TargetFeatures::getISAFamily() const {
   }
   if (number == 90 && gfxArch->suffix.starts_with("a"))
     return ISAFamily::CDNA2;
+  if (number == 906)
+    return ISAFamily::GCN5_1;
 
   // RDNA ISA cases.
   if (number >= 1200 && number <= 1201)
@@ -122,12 +121,9 @@ int TargetFeatures::getWarpSize() const {
   case ISAFamily::CDNA3:
   case ISAFamily::CDNA4:
     return 64;
-  case ISAFamily::GFX1250:
-    return 32;
   default:
-    break;
+    return 32;
   }
-  return 32;
 }
 
 bool TargetFeatures::supportsWaveId() const {
@@ -194,12 +190,7 @@ TargetFeatures::queryLDSTransLoadParams(int bitWidth) const {
 }
 
 bool TargetFeatures::supportsDirectToLdsScatter() const {
-  switch (getISAFamily()) {
-  case ISAFamily::GFX1250:
-    return true;
-  default:
-    return false;
-  }
+  return isGFX1250();
 }
 
 bool TargetFeatures::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
@@ -234,13 +225,8 @@ bool TargetFeatures::supportsBufferLoadToLocal() const {
 }
 
 bool TargetFeatures::requiresAliasInfoForAsyncOps() const {
-  switch (getISAFamily()) {
-  case ISAFamily::CDNA3:
-  case ISAFamily::CDNA4:
-    return true;
-  default:
-    return false;
-  }
+  return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                            getISAFamily());
 }
 
 bool TargetFeatures::useAsyncMarks() const {
@@ -249,11 +235,11 @@ bool TargetFeatures::useAsyncMarks() const {
 }
 
 bool TargetFeatures::supportsTDM() const {
-  return getISAFamily() == ISAFamily::GFX1250;
+  return isGFX1250();
 }
 
 bool TargetFeatures::supportsMultiCTALaunch() const {
-  return getISAFamily() == ISAFamily::GFX1250;
+  return isGFX1250();
 }
 
 bool TargetFeatures::supportsClusterLoadBitWidth(int bitWidth) const {
@@ -305,10 +291,8 @@ bool TargetFeatures::supportDppBroadcast() const {
   case ISAFamily::GFX1250:
     return false;
   default:
-    break;
+    return false;
   }
-
-  return false;
 }
 
 bool TargetFeatures::supportsPermlaneSwap() const {
@@ -317,7 +301,7 @@ bool TargetFeatures::supportsPermlaneSwap() const {
 }
 
 bool TargetFeatures::supportsCvtPkScalePk8() const {
-  return getISAFamily() == ISAFamily::GFX1250;
+  return isGFX1250();
 }
 
 bool TargetFeatures::supportsHwScaledUpcast() const {
@@ -348,10 +332,8 @@ bool isCDNA(ISAFamily isaFamily) {
   case ISAFamily::GFX1250:
     return true;
   default:
-    break;
+    return false;
   }
-
-  return false;
 }
 
 bool isRDNA(ISAFamily isaFamily) {
@@ -362,10 +344,8 @@ bool isRDNA(ISAFamily isaFamily) {
   case ISAFamily::RDNA4:
     return true;
   default:
-    break;
+    return false;
   }
-
-  return false;
 }
 
 } // namespace mlir::triton::amdgpu
