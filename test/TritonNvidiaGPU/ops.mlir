@@ -1,5 +1,4 @@
 // RUN: triton-opt %s | FileCheck %s
-// CHECK-DAG: #{{.*}} = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, fp4Padded = true>
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>

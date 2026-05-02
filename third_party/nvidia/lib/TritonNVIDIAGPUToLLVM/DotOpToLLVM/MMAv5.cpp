@@ -21,18 +21,24 @@ class DotOpMmaV5TmemLoader : public DotOpMmaMemLoader {
 public:
   static DotOpMmaV5TmemLoader build(Location loc, RewriterBase &rewriter,
                                     mlir::triton::gpu::MemDescType memTy,
-                                    Value tmemBase) {
+                                    Value tmemBase, bool isFp4 = false) {
     // We take the full layout even when it is a subview
     // We'll just iterate the real shape when calling tmemLoad tho
     auto ll = toLinearLayout(memTy);
     auto bitwidth = memTy.getElementTypeBitWidth();
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     Value address = tb.ptrtoint(i32_ty, tmemBase);
-    return DotOpMmaV5TmemLoader(ll.pseudoinvert(), address, bitwidth);
+
+    auto enc = cast<ttng::TensorMemoryEncodingAttr>(memTy.getEncoding());
+    return DotOpMmaV5TmemLoader(ll.pseudoinvert(), address, bitwidth, isFp4 && !enc.getFp4Padded());
   }
 
   MemDescOperand tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
                           Location loc) const {
+    // Densely packed fp4 elements along K.
+    if (isDenseFp4)
+      b /= 2;
+
     auto dims = to_vector(ll.getInDimNames());
     auto rowCol = ll.apply({{dims[0], a}, {dims[1], b}});
     int row = rowCol[0].second;
@@ -47,12 +53,13 @@ public:
   }
 
 private:
-  DotOpMmaV5TmemLoader(LinearLayout ll, Value address, int bitwidth)
-      : ll(std::move(ll)), address(address), bitwidth(bitwidth) {}
+  DotOpMmaV5TmemLoader(LinearLayout ll, Value address, int bitwidth, bool isDenseFp4)
+      : ll(std::move(ll)), address(address), bitwidth(bitwidth), isDenseFp4(isDenseFp4) {}
 
   LinearLayout ll;
   Value address;
   int bitwidth;
+  bool isDenseFp4;
 };
 
 //===----------------------------------------------------------------------===//
@@ -428,8 +435,7 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   auto aTensorTy = cast<MemDescType>(a.getType());
   auto bTensorTy = cast<MemDescType>(b.getType());
-  auto aInTmem =
-      dyn_cast<ttng::TensorMemoryEncodingAttr>(aTensorTy.getEncoding());
+  bool aInTmem = isa<ttng::TensorMemoryEncodingAttr>(aTensorTy.getEncoding());
 
   Value baseA = loadedA;
   if (!aInTmem) {
@@ -468,11 +474,11 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   std::unique_ptr<DotOpMmaMemLoader> aLoader;
   bool transA = false;
+  auto isFp4a = op.numBitsPerElementA == 4;
   if (aInTmem) {
     aLoader = std::make_unique<DotOpMmaV5TmemLoader>(
-        DotOpMmaV5TmemLoader::build(loc, rewriter, aTensorTy, baseA));
+        DotOpMmaV5TmemLoader::build(loc, rewriter, aTensorTy, baseA, isFp4a));
   } else {
-    auto isFp4a = op.numBitsPerElementA == 4;
     auto loader = DotOpMmaSmemLoader::build(loc, rewriter, aTensorTy, baseA,
                                             aOperandShape, 0, 5, isFp4a);
     if (failed(loader)) {
@@ -502,18 +508,13 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   }
 
   DotConversion::InstDesc desc{mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK},
-                               transA,   transB,   (bool)aInTmem};
+                               transA,   transB,   aInTmem};
   for (int m = 0; m < numRepM; m++) {
     for (int n = 0; n < numRepN; n++) {
       Value useInitAcc = useDFlag;
       MemDescOperand accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
       for (int k = 0; k < numRepK; k++) {
-        unsigned aTileK = aOperandShape[1];
-        if (aInTmem && aTensorTy.getElementTypeBitWidth() == 8 &&
-            op.numBitsPerElementA == 4 && !aInTmem.getFp4Padded())
-          aTileK /= 2;
-        MemDescOperand a =
-            aLoader->memLoad(m * aOperandShape[0], k * aTileK, rewriter, loc);
+        MemDescOperand a = aLoader->memLoad(m * aOperandShape[0], k * aOperandShape[1], rewriter, loc);
         Value b = bLoader->smemLoad(k * bOperandShape[0], n * bOperandShape[1],
                                     rewriter, loc);
         op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
