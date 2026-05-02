@@ -1,4 +1,5 @@
 #include "mlir/IR/TypeUtilities.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -50,6 +51,10 @@ public:
     unsigned elemBitWidth =
         lhs.getType().getElementType().getIntOrFloatBitWidth();
     if (!llvm::is_contained({8, 16, 32}, elemBitWidth)) {
+      return failure();
+    }
+    // Padded fp4 operand cannot be trivially promoted to TMEM.
+    if (isFp4Padded(lhs.getType().getEncoding())) {
       return failure();
     }
     const unsigned colStride = 1;
