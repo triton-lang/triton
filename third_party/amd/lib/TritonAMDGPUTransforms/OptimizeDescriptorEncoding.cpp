@@ -111,7 +111,7 @@ namespace mlir {
 // Attach the desired encoding as a discardable attribute to descriptor loads.
 // assignMemoryLayouts will propagate this attribute to rest of the descriptors
 static void computeDesiredEncodingAttr(mlir::ModuleOp &m) {
-  auto targetFeatures = TargetFeatures(getAMDArch(m));
+  auto targetFeatures = TargetFeatures::fromModuleOp(m);
   for (auto f : m.getOps<tt::FuncOp>()) {
     f.walk([&](tt::DescriptorLoadOp load) {
       auto paddedEncoding =

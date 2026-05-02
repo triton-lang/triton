@@ -3,6 +3,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include <cassert>
 
 namespace mlir::triton::amdgpu {
@@ -40,7 +41,8 @@ TargetFeatures::TargetFeatures(StringRef arch) : arch(arch.str()) {}
 TargetFeatures TargetFeatures::fromModuleOp(ModuleOp moduleOp) {
   auto targetAttr =
       moduleOp->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
-  assert(targetAttr && "Expected a target attribute on the module operation");
+  if (!targetAttr)
+    return TargetFeatures(StringRef());
 
   StringRef targetName = targetAttr.getValue();
   assert(targetName.starts_with(kTargetPrefix) &&
@@ -189,9 +191,7 @@ TargetFeatures::queryLDSTransLoadParams(int bitWidth) const {
                             doubleB8Contiguity};
 }
 
-bool TargetFeatures::supportsDirectToLdsScatter() const {
-  return isGFX1250();
-}
+bool TargetFeatures::supportsDirectToLdsScatter() const { return isGFX1250(); }
 
 bool TargetFeatures::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
   switch (getISAFamily()) {
@@ -234,13 +234,9 @@ bool TargetFeatures::useAsyncMarks() const {
                             getISAFamily());
 }
 
-bool TargetFeatures::supportsTDM() const {
-  return isGFX1250();
-}
+bool TargetFeatures::supportsTDM() const { return isGFX1250(); }
 
-bool TargetFeatures::supportsMultiCTALaunch() const {
-  return isGFX1250();
-}
+bool TargetFeatures::supportsMultiCTALaunch() const { return isGFX1250(); }
 
 bool TargetFeatures::supportsClusterLoadBitWidth(int bitWidth) const {
   if (getISAFamily() == ISAFamily::GFX1250) {
@@ -300,9 +296,7 @@ bool TargetFeatures::supportsPermlaneSwap() const {
          getISAFamily() == ISAFamily::GFX1250;
 }
 
-bool TargetFeatures::supportsCvtPkScalePk8() const {
-  return isGFX1250();
-}
+bool TargetFeatures::supportsCvtPkScalePk8() const { return isGFX1250(); }
 
 bool TargetFeatures::supportsHwScaledUpcast() const {
   return getISAFamily() == ISAFamily::CDNA4 ||

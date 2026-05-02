@@ -89,8 +89,8 @@ namespace mlir {
 llvm::MapVector<Operation *, std::pair<int, Operation *>>
 getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                  scf::ForOp &forOp, int numStages) {
-  triton::amdgpu::TargetFeatures targetFeatures(
-      getAMDArch(forOp->getParentOfType<ModuleOp>()));
+  auto targetFeatures = triton::amdgpu::TargetFeatures::fromModuleOp(
+      forOp->getParentOfType<ModuleOp>());
 
   bool filterSmallVectors = !targetFeatures.isCDNA4() &&
                             !targetFeatures.isRDNA() &&
