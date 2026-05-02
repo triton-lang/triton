@@ -102,6 +102,18 @@ bool TargetFeatures::isRDNA() const {
   return mlir::triton::amdgpu::isRDNA(getISAFamily());
 }
 
+bool TargetFeatures::isCDNA3() const {
+  return getISAFamily() == ISAFamily::CDNA3;
+}
+
+bool TargetFeatures::isCDNA4() const {
+  return getISAFamily() == ISAFamily::CDNA4;
+}
+
+bool TargetFeatures::isGFX1250() const {
+  return getISAFamily() == ISAFamily::GFX1250;
+}
+
 int TargetFeatures::getWarpSize() const {
   switch (getISAFamily()) {
   case ISAFamily::GCN5_1:

@@ -80,7 +80,6 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
 using mlir::triton::AMD::AttrBypassLDS;
-using mlir::triton::amdgpu::ISAFamily;
 
 namespace mlir {
 
@@ -92,11 +91,10 @@ getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                  scf::ForOp &forOp, int numStages) {
   triton::amdgpu::TargetFeatures targetFeatures(
       getAMDArch(forOp->getParentOfType<ModuleOp>()));
-  ISAFamily isaFamily = targetFeatures.getISAFamily();
 
-  bool filterSmallVectors = isaFamily != ISAFamily::CDNA4 &&
-                            !triton::amdgpu::isRDNA(isaFamily) &&
-                            isaFamily != ISAFamily::GFX1250;
+  bool filterSmallVectors = !targetFeatures.isCDNA4() &&
+                            !targetFeatures.isRDNA() &&
+                            !targetFeatures.isGFX1250();
 
   bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
   llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =

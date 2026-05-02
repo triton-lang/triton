@@ -1587,9 +1587,9 @@ public:
     }
 
     // CDNA4 has Bf16 v_dot2
-    if (targetFeatures.getISAFamily() == ISAFamily::CDNA4 &&
-        dotTypes.a.isBF16() && dotTypes.b.isBF16() && dotTypes.c.isF32() &&
-        dotTypes.d.isF32() && k % 2 == 0) {
+    if (targetFeatures.isCDNA4() && dotTypes.a.isBF16() &&
+        dotTypes.b.isBF16() && dotTypes.c.isF32() && dotTypes.d.isF32() &&
+        k % 2 == 0) {
       return true;
     }
 

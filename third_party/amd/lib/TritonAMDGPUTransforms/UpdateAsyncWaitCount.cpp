@@ -425,8 +425,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
 
   void runOnOperation() override {
     TargetFeatures targetFeatures{llvm::StringRef(gfxArch)};
-    if (!targetFeatures.isCDNA() &&
-        targetFeatures.getISAFamily() != tt::amdgpu::ISAFamily::GFX1250) {
+    if (!targetFeatures.isCDNA() && !targetFeatures.isGFX1250()) {
       return;
     }
 

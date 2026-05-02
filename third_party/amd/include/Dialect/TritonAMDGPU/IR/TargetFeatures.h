@@ -47,6 +47,9 @@ public:
 
   bool isCDNA() const;
   bool isRDNA() const;
+  bool isCDNA3() const;
+  bool isCDNA4() const;
+  bool isGFX1250() const;
 
   int getWarpSize() const;
   bool supportsWaveId() const;
