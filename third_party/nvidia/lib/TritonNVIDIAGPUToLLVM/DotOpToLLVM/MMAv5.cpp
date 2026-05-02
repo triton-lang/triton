@@ -508,7 +508,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
       MemDescOperand accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
       for (int k = 0; k < numRepK; k++) {
         unsigned aTileK = aOperandShape[1];
-        if (aInTmem && aInTmem.getFp4Padded())
+        if (aInTmem && aTensorTy.getElementTypeBitWidth() == 8 &&
+            op.numBitsPerElementA == 4)
           aTileK /= 2;
         MemDescOperand a =
             aLoader->memLoad(m * aOperandShape[0], k * aTileK, rewriter, loc);
