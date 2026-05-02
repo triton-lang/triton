@@ -871,7 +871,6 @@ static Value resolveLoopBackedge(BlockArgument bbArg) {
   return yieldOp.getOperand(iterArgIdx);
 }
 
-
 bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
   auto isInSameRegion = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
