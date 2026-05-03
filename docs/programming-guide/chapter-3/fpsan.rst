@@ -98,13 +98,17 @@ rewrite. The most important ones are:
 
 - ring identities for add, subtract, multiply, FMA, and dot-like accumulation
 - selected exponential identities for ``exp`` and ``exp2`` (see below for details)
+- trigonometric identities for ``sin`` and ``cos``
 - payload equality through casts, loads, stores, and copies
 - deterministic op-distinguishing tags for unary functions that do not yet have
   a richer algebraic model
 
 This is what makes FpSan valuable for kernel checks: if two kernels should be
 the same symbolic computation under the preserved properties, they should produce
-the same payloads.
+the same payloads. This holds assuming a (generally believed) conjecture in
+transcendental number theory, Schanuel's conjecture. One of the authors of FpSan
+has a [blog post](https://cp4space.hatsya.com/2026/05/03/schanuels-conjecture-and-the-semantics-of-fpsan/)
+explaining the theory behind FpSan from a mathematical perspective.
 
 ----------------------------------
 What FpSan Does Not Preserve
