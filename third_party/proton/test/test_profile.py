@@ -13,14 +13,24 @@ import pathlib
 import threading
 
 import triton.language as tl
-from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
+from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
 
 
 def _find_child_by_name(frame, name):
     return next((child for child in frame["children"] if child["frame"]["name"] == name), None)
+
+
+def _find_frame_by_name(frame, name):
+    queue = [frame]
+    while queue:
+        current = queue.pop(0)
+        if current["frame"]["name"] == name:
+            return current
+        queue.extend(current["children"])
+    return None
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -648,9 +658,67 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str, device: str):
         parent_frame = queue.pop(0)
         for child in parent_frame["children"]:
             if "reduce" in child["frame"]["name"]:
-                assert parent_frame["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME
+                assert parent_frame["frame"]["name"].startswith(COMPUTE_METADATA_SCOPE_NAME)
                 return
             queue.append(child)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+def test_hook_launch_metadata_cudagraph_metric_work_grouping(tmp_path: pathlib.Path, device: str):
+    owner_name = "metadata_owner_kernel"
+    metadata_scope_name = f"{COMPUTE_METADATA_SCOPE_NAME}:{owner_name}"
+
+    @triton.jit
+    def metadata_helper_kernel(metric_value):
+        tl.store(metric_value, 8.0)
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        metadata_helper_kernel[(1, )](args["metric_value"], num_warps=1)
+        return {"name": owner_name, "flops": args["metric_value"], "bytes": args["bytes_value"]}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def metadata_owner_kernel(x, y, metric_value, bytes_value):
+        tl.store(y, tl.load(x) + 1.0)
+
+    x = torch.tensor([1.0], device=device)
+    y = torch.empty_like(x)
+    metric_value = torch.tensor([0.0], device=device)
+    bytes_value = torch.tensor([64], device=device, dtype=torch.int64)
+
+    temp_file = tmp_path / "test_hook_metadata_metric_work_grouping.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
+    try:
+        metadata_owner_kernel[(1, )](x, y, metric_value, bytes_value, num_warps=1)
+        torch.cuda.synchronize()
+        metric_value.zero_()
+        torch.cuda.synchronize()
+
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            metadata_owner_kernel[(1, )](x, y, metric_value, bytes_value, num_warps=1)
+
+        with proton.scope("replay"):
+            graph.replay()
+        torch.cuda.synchronize()
+    finally:
+        proton.finalize(session)
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    replay_frame = _find_frame_by_name(data[0], "replay")
+    assert replay_frame is not None
+    capture_frame = _find_frame_by_name(replay_frame, "<captured_at>")
+    assert capture_frame is not None
+
+    owner_frame = _find_frame_by_name(capture_frame, owner_name)
+    metadata_frame = _find_frame_by_name(capture_frame, metadata_scope_name)
+    assert owner_frame is not None
+    assert metadata_frame is not None
+    assert owner_frame["metrics"]["flops"] == 8.0
+    assert owner_frame["metrics"]["bytes"] == 64
+    assert _find_frame_by_name(metadata_frame, "<metric>") is not None
+    assert _find_frame_by_name(metadata_frame, "metadata_helper_kernel") is not None
 
 
 def test_hook_with_third_party(tmp_path: pathlib.Path, device: str):
@@ -1244,8 +1312,8 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str)
     foo_events = [event for event in replay_kernel_events if event["name"] == "foo"]
     metric_kernel_events = [event for event in replay_kernel_events if event["name"] == "<metric>"]
     metadata_kernel_events = [
-        event for event in replay_kernel_events
-        if COMPUTE_METADATA_SCOPE_NAME in event.get("args", {}).get("call_stack", [])
+        event for event in replay_kernel_events if any(
+            frame.startswith(COMPUTE_METADATA_SCOPE_NAME) for frame in event.get("args", {}).get("call_stack", []))
     ]
 
     assert len(foo_events) == 3
