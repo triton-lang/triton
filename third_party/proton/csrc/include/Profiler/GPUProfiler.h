@@ -230,7 +230,14 @@ protected:
     doAddMetrics(size_t scopeId,
                  const std::map<std::string, MetricValueType> &scalarMetrics,
                  const std::map<std::string, TensorMetric> &tensorMetrics) {
-      if (threadState.isStreamCapturing) { // Graph capture mode
+      auto &metricKernelLaunchState = profiler.metricKernelLaunchState;
+      bool isStreamCapturing = threadState.isStreamCapturing;
+      if (!isStreamCapturing) {
+        isStreamCapturing =
+            profiler.metricBuffer->getRuntime()->isStreamCapturing(
+                metricKernelLaunchState.stream);
+      }
+      if (isStreamCapturing) { // Graph capture mode
         std::vector<uint64_t> metricOrdinals;
         metricOrdinals.reserve(tensorMetrics.size() + scalarMetrics.size());
         // The CUDA graph resource callback records the same ordinal that the
@@ -249,7 +256,6 @@ protected:
           reserveMetricOrdinal();
         }
         // Launch metric kernels
-        auto &metricKernelLaunchState = profiler.metricKernelLaunchState;
         // Keep the metric-node marker scoped to Proton's metric-copy launch.
         // Metadata hooks may launch helper kernels during graph capture, and
         // CUPTI can report those graph-node callbacks while add_metrics is

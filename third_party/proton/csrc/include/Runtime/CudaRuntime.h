@@ -29,6 +29,7 @@ public:
   void *getPriorityStream() override;
   void synchronizeStream(void *stream) override;
   void synchronizeDevice() override;
+  bool isStreamCapturing(void *stream) override;
   void destroyStream(void *stream) override;
   void
   processHostBuffer(uint8_t *hostBuffer, size_t hostBufferSize,

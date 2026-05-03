@@ -1579,8 +1579,8 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
         data = json.load(f)
 
     children = data[0]["children"]
-    # metadata scope + kernels + scope_a + scope_b + test0 + scope_d
-    assert len(children) == 8
+    # Warmup and graph-capture metadata scopes can add helper frames; validate
+    # the semantic frames below instead of pinning the root child count.
     test0_frame = None
     for child in children:
         if child["frame"]["name"] == "test0":
@@ -1603,6 +1603,9 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
             scope_b_frame = child
         if child["frame"]["name"] == "scope_d":
             scope_d_frame = child
+    metadata_foo_test_frame = _find_frame_by_name(capture_at_frame, f"{COMPUTE_METADATA_SCOPE_NAME}:foo_test")
+    assert metadata_foo_test_frame is not None
+    assert _find_frame_by_name(metadata_foo_test_frame, "<metric>") is not None
     assert foo_test_frame is not None
     assert foo_test_frame["metrics"]["bytes"] == 160
     assert foo_test_frame["metrics"]["flops"] == 40

@@ -1,4 +1,10 @@
-from ..state import enter_state, exit_state, is_metadata_state_active, metadata_state_name
+from ..state import (
+    COMPUTE_METADATA_SCOPE_NAME as COMPUTE_METADATA_SCOPE_NAME,
+    enter_state,
+    exit_state,
+    is_metadata_state_active,
+    metadata_state_name,
+)
 from ..metric import transform_tensor_metrics, set_metric_kernels
 from triton.compiler import LazyDict
 from .hook import Hook
@@ -96,12 +102,12 @@ class LaunchHook(Hook):
             enabled.set(False)
             return
 
-        owner_metadata_scope = metadata_state_name(kernel_name)
-        enter_state(owner_metadata_scope)
+        enter_state(metadata_state_name(kernel_name))
         try:
             lazy_metadata = metadata.get()
 
             kernel_name = lazy_metadata["name"]
+            owner_metadata_scope = metadata_state_name(kernel_name)
             # If name wasn't available (or changed), apply filters using the evaluated name.
             if not self._matches_kernel_name(kernel_name):
                 enabled.set(False)
