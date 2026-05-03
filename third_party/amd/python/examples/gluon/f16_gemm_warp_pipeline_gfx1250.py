@@ -96,19 +96,19 @@ def gemm_tdm_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
     offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
+    ttgl.amd.gfx1250.buffer_store(accumulator, c_ptr, offs_c, mask=mask_c)
 
 
 # ---------------------------------------------------------------------------
 # Partial TDM copy variant: only a subset of warps issue TDM copies.
-# Duplicate warps get pred=0 (hardware no-op), freeing TDM bandwidth.
+# Cleared warps get pred=0 (hardware no-op), freeing TDM bandwidth.
 # ---------------------------------------------------------------------------
 
 
 @gluon.jit
-def issue_loads_specialized(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BLOCK_K: ttgl.constexpr,
-                            NUM_BUFFERS: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr,
-                            TDM_WARP_USED_HINT: ttgl.constexpr, pred=1):
+def issue_loads_predicated(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BLOCK_K: ttgl.constexpr,
+                           NUM_BUFFERS: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr, TDM_WARP_USED_HINT: ttgl.constexpr,
+                           pred=1):
     pred_i32 = pred.to(ttgl.int32) if hasattr(pred, 'to') else pred
     ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_am, producer * BLOCK_K], a_buffer.index(producer % NUM_BUFFERS),
                                     pred=pred_i32, warp_used_hint=TDM_WARP_USED_HINT)
@@ -123,17 +123,17 @@ def issue_loads_specialized(producer, a_desc, b_desc, off_am, off_bn, a_buffer, 
 
 
 @gluon.jit
-def gemm_tdm_specialized_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
-                                                         M, N, K,  #
-                                                         stride_am, stride_ak,  #
-                                                         stride_bk, stride_bn,  #
-                                                         stride_cm, stride_cn,  #
-                                                         BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
-                                                         BLOCK_K: ttgl.constexpr,  #
-                                                         NUM_BUFFERS: ttgl.constexpr,  #
-                                                         TRANSPOSE_B: ttgl.constexpr,  #
-                                                         WARP_BASES: ttgl.constexpr,  #
-                                                         TDM_WARP_USED_HINT: ttgl.constexpr):
+def gemm_tdm_predicated_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
+                                                        M, N, K,  #
+                                                        stride_am, stride_ak,  #
+                                                        stride_bk, stride_bn,  #
+                                                        stride_cm, stride_cn,  #
+                                                        BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                                        BLOCK_K: ttgl.constexpr,  #
+                                                        NUM_BUFFERS: ttgl.constexpr,  #
+                                                        TRANSPOSE_B: ttgl.constexpr,  #
+                                                        WARP_BASES: ttgl.constexpr,  #
+                                                        TDM_WARP_USED_HINT: ttgl.constexpr):
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
@@ -164,16 +164,16 @@ def gemm_tdm_specialized_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=WMMA_LAYOUT)
 
     for _ in ttgl.static_range(2):
-        producer = issue_loads_specialized(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
-                                           TRANSPOSE_B, TDM_WARP_USED_HINT)
+        producer = issue_loads_predicated(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
+                                          TRANSPOSE_B, TDM_WARP_USED_HINT)
 
     ttgl.amd.gfx1250.tdm.async_wait(1 * 2)
     for _ in range(0, ttgl.cdiv(K, BLOCK_K) - (NUM_BUFFERS - 1)):
         with ttgl.amd.warp_pipeline_stage("stage0", priority=1):
             consumer, a, b = lds_load(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
                                       TRANSPOSE_B)
-            producer = issue_loads_specialized(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
-                                               TRANSPOSE_B, TDM_WARP_USED_HINT)
+            producer = issue_loads_predicated(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
+                                              TRANSPOSE_B, TDM_WARP_USED_HINT)
         with ttgl.amd.warp_pipeline_stage("stage1", priority=0):
             accumulator = issue_wmma_compute(a, b, accumulator)
         ttgl.amd.gfx1250.tdm.async_wait(2)
@@ -187,7 +187,7 @@ def gemm_tdm_specialized_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
     offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
+    ttgl.amd.gfx1250.buffer_store(accumulator, c_ptr, offs_c, mask=mask_c)
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +275,7 @@ def gemm_tdm_pipelined_warp_pipelined_kernelB(a_ptr, b_ptr, c_ptr,  #
     offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
     offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
+    ttgl.amd.gfx1250.buffer_store(accumulator, c_ptr, offs_c, mask=mask_c)
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +343,7 @@ def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
 @pytest.mark.parametrize("TRANSPOSE_B", [True])
 @pytest.mark.parametrize("M,N,K", [(2048, 2048, 2048)])
 @pytest.mark.parametrize("DUMP", [False])
-def test_runtime_gemm_tdm_specialized_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP):
+def test_runtime_gemm_tdm_predicated_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP):
     if triton.cdiv(K, BLOCK_K) < NUM_BUFFERS:
         pytest.skip("Skip tests where K/BLOCK_K < NUM_BUFFERS")
 
@@ -371,7 +371,7 @@ def test_runtime_gemm_tdm_specialized_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_B
 
     warp_bases = tuple(WARP_BASES)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    kernel = gemm_tdm_specialized_pipelined_warp_pipelined_kernel[grid](
+    kernel = gemm_tdm_predicated_pipelined_warp_pipelined_kernel[grid](
         a_device, b_device, c_device,  #
         M, N, K,  #
         stride_am, stride_ak,  #
@@ -420,7 +420,7 @@ if __name__ == "__main__":
     )
 
     if args.four_warp_tdm:
-        test_runtime_gemm_tdm_specialized_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP)
+        test_runtime_gemm_tdm_predicated_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP)
     else:
         test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, M, N, K, DUMP,
                                         USE_KERNEL_B)

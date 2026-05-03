@@ -177,16 +177,13 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 // per-warp tile (surjectivity); "block" comes from `cgaLayout`.
 //
 // `warpUsedHint`: power-of-two-popcount bitmask whose K = popcount(hint)
-// set bits select active warps.  The bit positions that vary across the
-// active set become the warp sublayout's identity rows; other warpId
-// bits become free variables.  The layout is invariant under shifting
-// the active set by `lsb(hint)` -- callers XOR warpId by that anchor at
-// runtime, not here -- so e.g. 0b00001111 and 0b11110000 produce the
-// same layout.  Empty = no-hint default (lowest log2(K) bits,
-// K = prod(warpsPerCTA)).
+// set bits select active warps.  The varying warpId bit positions in the
+// active set are the warp bits that contribute to per-warp offsets; all
+// other warpId bits become free variables for predicating inactive warps.
+// Empty = no-hint default (lowest log2(K) bits, K = prod(warpsPerCTA)).
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
-                                const LinearLayout &cgaLayout, int numWarps,
+                                const LinearLayout &cgaLayout, int totalWarps,
                                 std::optional<uint32_t> warpUsedHint = {});
 
 } // namespace mlir::triton::gpu

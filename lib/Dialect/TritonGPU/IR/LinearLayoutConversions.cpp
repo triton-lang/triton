@@ -1791,7 +1791,7 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
 
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
-                                const LinearLayout &cgaLayout, int numWarps,
+                                const LinearLayout &cgaLayout, int totalWarps,
                                 std::optional<uint32_t> warpUsedHint) {
   int numDims = blockShape.size();
   auto ctx = cgaLayout.getOutDimNames().begin()->getContext();
@@ -1805,11 +1805,11 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
     messageShape[i] = blockShape[i] / warpsPerCTA[i];
     activeWarps *= warpsPerCTA[i];
   }
-  assert(numWarps >= static_cast<int>(activeWarps) &&
-         "numWarps must be >= prod(warpsPerCTA)");
-  assert(llvm::isPowerOf2_32(static_cast<unsigned>(numWarps)) &&
+  assert(totalWarps >= static_cast<int>(activeWarps) &&
+         "totalWarps must be >= prod(warpsPerCTA)");
+  assert(llvm::isPowerOf2_32(static_cast<unsigned>(totalWarps)) &&
          llvm::isPowerOf2_32(activeWarps) &&
-         "numWarps and prod(warpsPerCTA) must be powers of two");
+         "totalWarps and prod(warpsPerCTA) must be powers of two");
 
   auto order = getMatrixOrder(numDims, /*rowMajor=*/false);
   auto kWarp = S("warp");
@@ -1820,7 +1820,7 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
   // the lowering uses to predicate inactive warps off.
   LinearLayout warpLayout = identityStandardND(kWarp, warpsPerCTA, order);
   unsigned numActiveBits = llvm::Log2_32(activeWarps);
-  unsigned numTotalBits = llvm::Log2_32(static_cast<unsigned>(numWarps));
+  unsigned numTotalBits = llvm::Log2_32(static_cast<unsigned>(totalWarps));
   assert(!warpUsedHint ||
          static_cast<unsigned>(llvm::popcount(*warpUsedHint)) == activeWarps);
 

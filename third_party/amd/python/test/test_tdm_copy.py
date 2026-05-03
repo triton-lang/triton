@@ -246,9 +246,6 @@ def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
     M, N = 256, 512
     NUM_WARPS = 8
 
-    # Keep all torch math on CPU: torch's HIP runtime often lacks
-    # kernels for gfx1250 (rand/add/zeros_like hit hipErrorInvalidImage).
-    # `.cuda()` is a pure memcpy and `torch.empty` only allocates.
     torch.manual_seed(0)
     a_cpu = torch.rand((M, N), dtype=torch.float16)
     b_cpu = torch.rand((M, N), dtype=torch.float16)
@@ -272,15 +269,3 @@ def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
 
     expected = a_cpu + b_cpu
     torch.testing.assert_close(c.cpu(), expected, atol=1e-3, rtol=1e-3)
-
-
-if __name__ == "__main__":
-    # Smoke test: iterate all cookbook entries at one block size.
-    # Run as `python test_tdm_copy.py` on a gfx1250 device.
-    if not is_hip_gfx1250():
-        raise SystemExit("This script requires a gfx1250 device.")
-    for p in _HINT_PARAMS:
-        ha, hb, ident = p
-        print(f"-- {ident}: HINT_A=0b{ha:08b}, HINT_B=0b{hb:08b}")
-        test_runtime_vector_add_tdm(64, 64, ha, hb)
-        print("   OK")

@@ -773,7 +773,7 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
 
     Restriction: the hint must be *axis-aligned*.  Pin some warpId bit
     positions to fixed values and leave the others free; the active
-    warps are exactly those whose warpId matches the pinned bits.
+    warps are exactly those with the pinned bits set accordingly.
     K = `popcount(hint)` is therefore a power of two (= 2^(number of
     free bits)).  Legal: `0x0F` (warps 0..3), `0xF0` (warps 4..7),
     `0x55` / `0xAA` / `0xCC` (stride-by-`2^j`).  Rejected: non

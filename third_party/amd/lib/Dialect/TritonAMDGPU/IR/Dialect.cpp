@@ -587,38 +587,35 @@ void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
 
 namespace {
 // Validate `warp_used_hint` against the axis-aligned hint rule (see
-// TritonAMDGPUOps.td).  Returns nullopt on success, else an error string.
-// Encoding-specific rules (e.g. PartitionedSharedEncoding) live in
-// verify() since they need the result type.
-std::optional<std::string> validateWarpUsedHint(uint32_t hint,
-                                                int64_t numWarps) {
+// TritonAMDGPUOps.td).  Encoding-specific rules (e.g.
+// PartitionedSharedEncoding) live in verify() since they need the result type.
+LogicalResult validateWarpUsedHint(AsyncTDMCopyGlobalToLocalOp op,
+                                   uint32_t hint, int64_t numWarps) {
   if (!llvm::isPowerOf2_64(numWarps))
-    return llvm::formatv("num_warps must be a power of two when using "
-                         "warp_used_hint, got {0}",
-                         numWarps)
-        .str();
+    return op.emitOpError("num_warps must be a power of two when using "
+                          "warp_used_hint, got ")
+           << numWarps;
+
+  if (numWarps >= 32)
+    return op.emitOpError("num_warps must be less than 32 when using "
+                          "warp_used_hint, got ")
+           << numWarps;
 
   if (hint == 0)
-    return std::string("warp_used_hint must have at least one bit set");
+    return op.emitOpError("warp_used_hint must have at least one bit set");
 
   // Bits above num_warps - 1 must be zero (no warp at those positions).
-  // Checked before the K-power-of-two check so out-of-range bits get the
-  // more specific message; afterwards K = popcount(hint) <= numWarps holds
-  // automatically, so no separate "K vs num_warps" check is needed.
-  uint32_t numWarpsMask =
-      (numWarps >= 32) ? ~uint32_t{0} : ((uint32_t{1} << numWarps) - 1);
+  uint32_t numWarpsMask = (uint32_t{1} << numWarps) - 1;
   if ((hint & ~numWarpsMask) != 0)
-    return llvm::formatv("warp_used_hint = {0:x} sets bits beyond "
-                         "num_warps = {1}",
-                         hint, numWarps)
-        .str();
+    return op.emitOpError("warp_used_hint = ")
+           << llvm::formatv("{0:x}", hint)
+           << " sets bits beyond num_warps = " << numWarps;
 
   unsigned K = llvm::popcount(hint);
   if (!llvm::isPowerOf2_32(K))
-    return llvm::formatv("popcount(warp_used_hint) = {0} must be a power "
-                         "of two (got hint {1:x})",
-                         K, hint)
-        .str();
+    return op.emitOpError("popcount(warp_used_hint) = ")
+           << K << " must be a power of two (got hint "
+           << llvm::formatv("{0:x}", hint) << ")";
 
   // Axis-aligned check.  Anchor at i0 = lsb(hint) and OR the shifted
   // warp indices: `support` is the bits that vary across the active
@@ -634,14 +631,13 @@ std::optional<std::string> validateWarpUsedHint(uint32_t hint,
   unsigned logK = llvm::Log2_32(K);
   unsigned spanned = static_cast<unsigned>(llvm::popcount(support));
   if (spanned != logK)
-    return llvm::formatv(
-               "warp_used_hint = {0:x} is not axis-aligned: "
-               "K = {1} active warps span {2} warpId bit positions, but "
-               "an axis-aligned hint spans exactly log2(K) = {3}",
-               hint, K, spanned, logK)
-        .str();
+    return op.emitOpError("warp_used_hint = ")
+           << llvm::formatv("{0:x}", hint) << " is not axis-aligned: K = " << K
+           << " active warps span " << spanned
+           << " warpId bit positions, but an axis-aligned hint "
+           << "spans exactly log2(K) = " << logK;
 
-  return std::nullopt;
+  return success();
 }
 } // namespace
 
@@ -711,8 +707,8 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   if (auto warpUsedHintAttr = getWarpUsedHintAttr()) {
     int numWarps = gpu::lookupNumWarps(*this);
     uint32_t hint = static_cast<uint32_t>(warpUsedHintAttr.getInt());
-    if (auto err = validateWarpUsedHint(hint, numWarps))
-      return emitOpError(*err);
+    if (failed(validateWarpUsedHint(*this, hint, numWarps)))
+      return failure();
 
     // PartitionedSharedEncoding: hinted path = single instruction, so
     // numLogicalPieces must divide K (equivalent to K >= numLogicalPieces

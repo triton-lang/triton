@@ -1058,9 +1058,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
   // fillTDMDescriptor's free-variable-mask predication (XOR-anchored at i0).
   int effectiveWarps = warpUsedHint ? llvm::popcount(*warpUsedHint) : numWarps;
 
-  SmallVector<unsigned> warpsPerCTA;
-  unsigned numTDMInstructions = 1;
-  std::tie(warpsPerCTA, numTDMInstructions) =
+  auto [warpsPerCTA, numTDMInstructions] =
       distributeTDMWarpsAlignToPartition(blockShape, effectiveWarps, encoding);
   assert((!warpUsedHint || numTDMInstructions == 1) &&
          "verifier should guarantee single-instruction emission for the "
