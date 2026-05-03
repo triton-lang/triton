@@ -270,8 +270,6 @@ def exceeds_smem_capacity(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, use_fp8):
 @pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
 def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, num_stages, num_warps, use_fp8,
                                     a_use_tma, b_use_tma):
-    if is_hopper() and not (a_use_tma and b_use_tma):
-        pytest.skip("Hopper warp specialization requires all TMA loads")
     if is_blackwell() and not a_use_tma and not b_use_tma:
         pytest.skip("Blackwell warp specialization requires at least one TMA load")
     if exceeds_smem_capacity(num_stages, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, use_fp8=use_fp8):
@@ -778,3 +776,60 @@ def test_grouped_gemm(M, N, K, group_size):
     tri_tma_out = group_gemm_tma_fn(group_A, group_B_T)
     for i in range(group_size):
         assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=1e-2)
+
+
+@triton.jit
+def _pointer_dot_loop_kernel_9728(
+    q_ptr,
+    k_ptr,
+    o_ptr,
+    N_CTX,
+    HEAD_DIM: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
+    start_m = tl.program_id(0)
+    offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = tl.arange(0, BLOCK_N)
+    offs_d = tl.arange(0, HEAD_DIM)
+
+    q = tl.load(q_ptr + offs_m[:, None] * HEAD_DIM + offs_d[None, :])
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+    for start_n in tl.range(0, N_CTX, BLOCK_N, warp_specialize=True, num_stages=2):
+        start_n = tl.multiple_of(start_n, BLOCK_N)
+        k = tl.load(k_ptr + (start_n + offs_n)[None, :] * HEAD_DIM + offs_d[:, None])
+        acc += tl.dot(q, k)
+
+    tl.store(o_ptr + offs_m[:, None] * BLOCK_N + offs_n[None, :], acc)
+
+
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.skipif(not is_hopper(), reason="Regression test for #9728 (Hopper non-TMA WS lowering)")
+def test_warp_specialize_pointer_dot_9728():
+    # Pointer-based tl.load + tl.dot in a warp_specialize loop crashed
+    # NVGPUWarpSpecialization on Hopper (AsyncLoadOp tokens hit an unhandled
+    # dispatch in WSLowerToken.cpp). Sized to surface the producer-consumer
+    # race that arises if the cp.async batch is not drained before mbarrier
+    # arrival.
+    N_CTX, HEAD_DIM, BLOCK_M, BLOCK_N = 2048, 64, 128, 128
+    torch.manual_seed(42)
+    q = torch.randn((N_CTX, HEAD_DIM), device="cuda", dtype=torch.float16)
+    k = torch.randn((N_CTX, HEAD_DIM), device="cuda", dtype=torch.float16)
+    out = torch.empty((N_CTX, BLOCK_N), device="cuda", dtype=torch.float32)
+
+    grid = (triton.cdiv(N_CTX, BLOCK_M), )
+    _pointer_dot_loop_kernel_9728[grid](
+        q,
+        k,
+        out,
+        N_CTX,
+        HEAD_DIM=HEAD_DIM,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        num_warps=4,
+    )
+
+    k_block_sum = k.view(N_CTX // BLOCK_N, BLOCK_N, HEAD_DIM).sum(dim=0)
+    ref = (q.float() @ k_block_sum.float().T)
+    torch.testing.assert_close(ref.to(torch.float32), out, atol=0.1, rtol=0.05)
