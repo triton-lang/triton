@@ -113,8 +113,9 @@ struct MakeTensorDescOpConversion
     auto sharedOrder = triton::gpu::getOrder(
         cast<triton::gpu::SharedEncodingTrait>(sharedEnc), shapePerCTA);
     bool isRowMajor = sharedOrder[0] == (sharedOrder.size() - 1);
-    // Create TDM descriptor for 2D-5D tensors.  Per-instruction fields
-    // (pred, lds addr, tile_dim*) are filled in at each TDM op site.
+    // Lower the tensor descriptor to a base TDM descriptor.  The final hardware
+    // descriptor is completed at each TDM op site because pred, LDS address,
+    // barrier, and tile_dim* are op-local.
     // Returns 2 (2D) or 4 (3D-5D) vector groups; scalarize into 12 or 20
     // i32 scalars to match the flat MLIR struct type from
     // `convertTensorDescType` (matches the host-side TDMDescriptor ABI).

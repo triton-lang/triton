@@ -29,8 +29,10 @@ SmallVector<Value> unpackTDMDescriptor(RewriterBase &rewriter, Location loc,
 SmallVector<Value> scalarizeTDMDescriptor(RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> vectors);
 
-// Create a partially filled TDM descriptor (shared address and pred zeroed;
-// caller fills them later).  Returns 2 vector groups for 1D-2D, 4 for 3D-5D.
+// Create the base TDM descriptor from tensor metadata: global base pointer,
+// tensor shape, strides, and padding.  Fields that depend on a particular TDM
+// operation (pred, LDS address, barrier, tile_dim*) are filled later by the
+// per-op descriptor fillers.  Returns 2 vector groups for 1D-2D, 4 for 3D-5D.
 SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
                                        const LLVMTypeConverter *typeConverter,
                                        Type elementType, size_t numDims,

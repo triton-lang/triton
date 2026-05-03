@@ -315,9 +315,10 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
     tensorStride[i] = b.trunc(i32_ty, tensorStride[i]);
   }
 
-  // Per-instruction fields (tile_dim*) are intentionally not written here;
-  // they are encoded later by fillTDMDescriptor / fillTDMDescriptorForGather
-  // Scatter, which know the warp distribution for the specific copy op.
+  // This base descriptor records only tensor metadata.  Per-op hardware fields
+  // (pred, LDS address, barrier, tile_dim*) are materialized by
+  // fillTDMDescriptor / fillTDMDescriptorForGatherScatter, where the
+  // destination, predicate, and warp distribution are known.
 
   // group0 (128 bits / 4 dwords) effective bit encoding:
   // [1:0]:     pred (to be filled later)
