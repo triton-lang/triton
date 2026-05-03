@@ -831,6 +831,31 @@ LogicalResult AsyncTDMGatherOp::verify() {
   return success();
 }
 
+// -- AdvanceTDMDescOp --
+LogicalResult AdvanceTDMDescOp::verify() {
+  auto descTy = getDesc().getType();
+  size_t rank = descTy.getShape().size();
+
+  if (!getOffsets().empty() && getOffsets().size() != rank)
+    return emitOpError("expected ")
+           << rank << " offsets to match descriptor rank, got "
+           << getOffsets().size();
+
+  if (!getBounds().empty() && getBounds().size() != rank)
+    return emitOpError("expected ")
+           << rank << " bounds to match descriptor rank, got "
+           << getBounds().size();
+
+  // At least one mutation parameter must be provided -- a no-op advance is
+  // either a user mistake or should be folded by canonicalizer.
+  if (getOffsets().empty() && getBounds().empty() && !getDest() && !getPred() &&
+      !getBarrier())
+    return emitOpError("must provide at least one of offsets, bounds, dest, "
+                       "pred, or barrier");
+
+  return success();
+}
+
 // -- InitBarrierOp --
 LogicalResult InitBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))

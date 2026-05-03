@@ -1064,6 +1064,14 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(
                  descPtr, indices, src, barrier, cacheModifier);
            })
+      .def("create_advance_tdm_desc",
+           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &offsets,
+              std::vector<Value> &bounds, Value lds, Value pred,
+              Value barrier) -> Value {
+             return self.create<ttag::AdvanceTDMDescOp>(
+                 descPtr.getType(), descPtr, ValueRange(offsets),
+                 ValueRange(bounds), lds, pred, barrier);
+           })
       .def("create_async_tdm_scatter",
            [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,
               Value dstColOffset, Value src, Value barrier) {

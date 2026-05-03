@@ -12,8 +12,8 @@ if TYPE_CHECKING:
     from triton.experimental.gluon.language._core import shared_memory_descriptor
 
 __all__ = [
-    "async_load", "async_wait", "make_tensor_descriptor", "tensor_descriptor", "tensor_descriptor_type", "prefetch",
-    "async_scatter"
+    "advance", "async_load", "async_wait", "make_tensor_descriptor", "tensor_descriptor", "tensor_descriptor_type",
+    "prefetch", "async_scatter"
 ]
 
 
@@ -140,6 +140,91 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
                                                              stride_handles, padding)
 
     return tensor_descriptor(handle, shape, strides, type)
+
+
+@builtin
+def advance(desc: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor] = None,
+            bounds: List[ttgl.constexpr | ttgl.tensor] = None, dest: shared_memory_descriptor = None, pred=None,
+            barrier: shared_memory_descriptor = None, _semantic=None) -> tensor_descriptor:
+    """Update selected fields of a TDM descriptor; return a new descriptor SSA value.
+
+    Each parameter is independently optional; only the fields the caller
+    names are written.  Everything else is inherited from the input
+    descriptor.
+
+    NOTE: Unlike the standard tensor-descriptor mental model, `offsets`
+    here moves the tile position only.  It does NOT update the descriptor's
+    bounds.  If the loop crosses an OOB boundary, you must also pass
+    `bounds` explicitly to install the correct OOB extent.
+
+    Args:
+        desc (tensor_descriptor): the input descriptor.
+        offsets (List[int], optional): per-dim deltas in element units that
+            move the tile position.  Does not touch the bounds.
+        bounds (List[int], optional): per-dim absolute rewrite of the
+            descriptor's bounds.  Use to install OOB extent at a peel
+            epilogue.
+        dest (shared_memory_descriptor, optional): set the descriptor's
+            shared-memory slot used by subsequent loads/stores.
+        pred (int, optional): set the descriptor's predicate.
+        barrier (shared_memory_descriptor, optional): enable barrier
+            signaling on this descriptor and set the barrier address.
+
+    Returns:
+        tensor_descriptor: a new descriptor SSA value with the requested
+        fields rewritten.
+
+    Raises:
+        ValueError: if no parameter is provided (no-op advances are forbidden).
+
+    Example:
+        # K-loop interior: bump tile position only
+        d = tdm.advance(d, offsets=[0, BLOCK_K])
+
+        # Prologue: position at first tile + wire LDS and barrier
+        d = tdm.advance(d, offsets=[pid_m * BLOCK_M, 0],
+                        dest=a_shared, barrier=a_bar)
+
+        # Peel epilogue: install real OOB extent for the partial last tile
+        d = tdm.advance(d, bounds=[M - pid_m * BLOCK_M, K - k_main])
+    """
+    if offsets is None and bounds is None and dest is None and pred is None and barrier is None:
+        raise ValueError("tdm.advance requires at least one of offsets, bounds, "
+                         "dest, pred, barrier")
+
+    rank = len(desc.block_shape)
+
+    offset_handles = []
+    if offsets is not None:
+        if len(offsets) != rank:
+            raise ValueError(f"offsets must have length {rank} (descriptor rank), got {len(offsets)}")
+        offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
+
+    bounds_handles = []
+    if bounds is not None:
+        if len(bounds) != rank:
+            raise ValueError(f"bounds must have length {rank} (descriptor rank), got {len(bounds)}")
+        bounds_handles = _semantic._convert_to_ir_values(bounds, require_i64=False)
+
+    dest = _unwrap_if_constexpr(dest)
+    dest_handle = dest.handle if dest is not None else ttgl.ir.value()
+
+    pred_handle = ttgl.ir.value()
+    if pred is not None:
+        pred_t = _semantic.to_tensor(pred)
+        pred_handle = pred_t.handle
+
+    barrier = _unwrap_if_constexpr(barrier)
+    barrier_handle = barrier.handle if barrier is not None else ttgl.ir.value()
+
+    new_handle = _semantic.builder.create_advance_tdm_desc(desc.handle, offset_handles, bounds_handles, dest_handle,
+                                                           pred_handle, barrier_handle)
+    # Rebuild shape/strides tuples so the returned descriptor's tuple objects
+    # don't alias the original's (the frontend's SSA tracking assumes distinct
+    # tuples per descriptor value).
+    new_shape = ttgl.tuple(list(desc.shape))
+    new_strides = ttgl.tuple(list(desc.strides))
+    return tensor_descriptor(new_handle, new_shape, new_strides, desc.type)
 
 
 @builtin
