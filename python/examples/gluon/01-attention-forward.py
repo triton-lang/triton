@@ -1254,7 +1254,13 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, use_tmem_red, provider):
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
-        ms = triton.testing.do_bench_cudagraph(fn)
+        try:
+            import triton.profiler  # noqa: F401
+            bench_fn = triton.testing.do_bench_cudagraph_proton
+        except ImportError:
+            # Fallback to do_bench as do_bench_cudagraph does not clear the L2 cache.
+            bench_fn = triton.testing.do_bench
+        ms = bench_fn(fn)
         flops_per_matmul = 2.0 * Z * H * N_CTX * N_CTX * HEAD_DIM
         total_flops = 2 * flops_per_matmul
         if causal:
