@@ -2056,6 +2056,81 @@ def test_deadlock_two_partitions(device, run_wrapper, monkeypatch, num_ctas):
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+def test_deadlock_with_padded_warp_specialize_partition(device, run_wrapper, monkeypatch, num_ctas):
+    if run_wrapper:
+        result = run_in_process(test_deadlock_with_padded_warp_specialize_partition,
+                                (device, False, monkeypatch, num_ctas))
+        assert_expected_cuda_failure(result.exc)
+        assert "Deadlock detected" in result.driver_stderr_output
+        return
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def wait_forever(bar):
+        mbarrier.wait(bar, phase=0)
+
+    @gluon.jit
+    def done(bar):
+        pass
+
+    @gluon.jit
+    def kernel():
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        ttgl.warp_specialize([
+            (done, (bar, )),
+            (wait_forever, (bar, )),
+            (wait_forever, (bar, )),
+            (wait_forever, (bar, )),
+        ], [1, 1, 1], [32, 32, 32])
+
+    kernel[(1, )](num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.parametrize("TWO_CTAS", [False, True], ids=["single-cta-barrier", "two-cta-barrier"])
+def test_deadlock_after_other_partition_returns(TWO_CTAS, device, run_wrapper, monkeypatch, num_ctas):
+    if TWO_CTAS and num_ctas == 1:
+        pytest.skip("two-CTA barriers require at least two CTAs")
+    if run_wrapper:
+        result = run_in_process(test_deadlock_after_other_partition_returns,
+                                (TWO_CTAS, device, False, monkeypatch, num_ctas))
+        assert_expected_cuda_failure(result.exc)
+        assert "Deadlock detected" in result.driver_stderr_output
+        return
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def done(bar):
+        pass
+
+    @gluon.jit
+    def wait_forever(bar):
+        mbarrier.wait(bar.index(0), phase=0)
+
+    @gluon.jit
+    def complete_and_return(bar):
+        mbarrier.arrive(bar.index(1), count=1)
+
+    @gluon.jit
+    def kernel(TWO_CTAS: ttgl.constexpr):
+        bar = mbarrier.allocate_mbarrier(batch=2, two_ctas=TWO_CTAS)
+        mbarrier.init(bar.index(0), count=1)
+        mbarrier.init(bar.index(1), count=1)
+        ttgl.warp_specialize([
+            (done, (bar, )),
+            (wait_forever, (bar, )),
+            (complete_and_return, (bar, )),
+        ], [4, 4], [32, 32])
+
+    kernel[(1, )](TWO_CTAS, num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_deadlock_overarrival(device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
         result = run_in_process(test_deadlock_overarrival, (device, False, monkeypatch, num_ctas))
