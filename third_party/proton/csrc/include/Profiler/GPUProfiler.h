@@ -232,31 +232,37 @@ protected:
                  const std::map<std::string, MetricValueType> &scalarMetrics,
                  const std::map<std::string, TensorMetric> &tensorMetrics) {
       if (threadState.isStreamCapturing) { // Graph capture mode
-        threadState.isMetricKernelLaunching = true;
         std::vector<uint64_t> metricOrdinals;
         metricOrdinals.reserve(tensorMetrics.size() + scalarMetrics.size());
         // The CUDA graph resource callback records the same ordinal that the
         // metric-copy kernel writes into the metric buffer. Replay can append
         // records out of graph-node order, so host-side decode matches by this
         // ordinal instead of by buffer position.
-        auto queueMetricKernel = [&](size_t metricValueWords) {
-          threadState.metricKernelNumWordsQueue.push_back(
-              /*ordinal=*/1 + /*metric_id=*/1 + metricValueWords);
+        auto reserveMetricOrdinal = [&]() {
           auto metricOrdinal = threadState.nextMetricKernelOrdinal++;
-          threadState.metricKernelOrdinalQueue.push_back(metricOrdinal);
           metricOrdinals.push_back(metricOrdinal);
         };
         for (const auto &[_, metric] : tensorMetrics) {
-          queueMetricKernel(metric.size);
+          reserveMetricOrdinal();
         }
         for (size_t i = 0; i < scalarMetrics.size(); ++i) {
-          queueMetricKernel(/*metricValueWords=*/1);
+          reserveMetricOrdinal();
         }
         // Launch metric kernels
         auto &metricKernelLaunchState = profiler.metricKernelLaunchState;
+        // Keep the metric-node marker scoped to Proton's metric-copy launch.
+        // Metadata hooks may launch helper kernels during graph capture, and CUPTI
+        // can report those graph-node callbacks while add_metrics is preparing or
+        // queueing metric descriptors.
+        auto beforeLaunch = [&](uint64_t metricOrdinal, size_t numWords) {
+          threadState.metricKernelNumWordsQueue.push_back(numWords);
+          threadState.metricKernelOrdinalQueue.push_back(metricOrdinal);
+          threadState.isMetricKernelLaunching = true;
+        };
+        auto afterLaunch = [&]() { threadState.isMetricKernelLaunching = false; };
         profiler.metricBuffer->receive(tensorMetrics, scalarMetrics,
-                                       metricKernelLaunchState, metricOrdinals);
-        threadState.isMetricKernelLaunching = false;
+                                       metricKernelLaunchState, metricOrdinals,
+                                       beforeLaunch, afterLaunch);
       } else { // Eager mode, directly copy
         // Populate tensor metrics
         auto tensorMetricsHost = collectTensorMetrics(

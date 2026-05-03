@@ -31,7 +31,9 @@ void MetricBuffer::receive(
     const std::map<std::string, TensorMetric> &tensorMetrics,
     const std::map<std::string, MetricValueType> &scalarMetrics,
     const MetricKernelLaunchState &metricKernelLaunchState,
-    const std::vector<uint64_t> &metricOrdinals) {
+    const std::vector<uint64_t> &metricOrdinals,
+    const std::function<void(uint64_t, size_t)> &beforeLaunch,
+    const std::function<void()> &afterLaunch) {
   const size_t numMetrics = tensorMetrics.size() + scalarMetrics.size();
   if (metricOrdinals.size() != numMetrics) {
     throw std::runtime_error(
@@ -39,9 +41,11 @@ void MetricBuffer::receive(
   }
   size_t ordinalIndex = 0;
   queueMetrics(tensorMetrics, metricKernelLaunchState.stream,
-               metricKernelLaunchState.tensor, metricOrdinals, ordinalIndex);
+               metricKernelLaunchState.tensor, metricOrdinals, ordinalIndex,
+               beforeLaunch, afterLaunch);
   queueMetrics(scalarMetrics, metricKernelLaunchState.stream,
-               metricKernelLaunchState.scalar, metricOrdinals, ordinalIndex);
+               metricKernelLaunchState.scalar, metricOrdinals, ordinalIndex,
+               beforeLaunch, afterLaunch);
 }
 
 MetricBuffer::MetricDescriptor
