@@ -148,7 +148,10 @@ def get_wmma_scale_layout(dot_operand_layout, shape, scale_factor=32):
     parent = dot_operand_layout.parent
     assert isinstance(parent, AMDWMMALayout), "Expected parent to be an instance of AMDWMMALayout"
     mdim = parent.instr_shape[0]
+    ndim = parent.instr_shape[1]
+    transposed = parent.transposed
     reg_bases = parent.reg_bases
     warp_bases = parent.warp_bases
     cga_bases = parent.cga_layout
-    return _get_wmma_scale_layout_impl(op_idx, shape, mdim, scale_factor, reg_bases, warp_bases, cga_bases)
+    return _get_wmma_scale_layout_impl(op_idx, shape, mdim, ndim, transposed, scale_factor, reg_bases, warp_bases,
+                                       cga_bases)
