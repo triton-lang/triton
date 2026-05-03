@@ -124,8 +124,6 @@ protected:
     bool isMetricKernelLaunching{false};
     std::deque<size_t> metricKernelNumWordsQueue;
     std::deque<uint64_t> metricKernelOrdinalQueue;
-    uint64_t nextMetricKernelOrdinal{};
-
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
     void enterOp(const Scope &scope) {
@@ -210,6 +208,7 @@ protected:
 
   std::unique_ptr<MetricBuffer> metricBuffer;
   std::unique_ptr<PendingGraphPool> pendingGraphPool;
+  std::atomic<uint64_t> nextMetricKernelOrdinal{0};
 
   Correlation correlation;
 
@@ -239,7 +238,8 @@ protected:
         // records out of graph-node order, so host-side decode matches by this
         // ordinal instead of by buffer position.
         auto reserveMetricOrdinal = [&]() {
-          auto metricOrdinal = threadState.nextMetricKernelOrdinal++;
+          auto metricOrdinal = profiler.nextMetricKernelOrdinal.fetch_add(
+              1, std::memory_order_relaxed);
           metricOrdinals.push_back(metricOrdinal);
         };
         for (const auto &[_, metric] : tensorMetrics) {
@@ -251,15 +251,17 @@ protected:
         // Launch metric kernels
         auto &metricKernelLaunchState = profiler.metricKernelLaunchState;
         // Keep the metric-node marker scoped to Proton's metric-copy launch.
-        // Metadata hooks may launch helper kernels during graph capture, and CUPTI
-        // can report those graph-node callbacks while add_metrics is preparing or
-        // queueing metric descriptors.
+        // Metadata hooks may launch helper kernels during graph capture, and
+        // CUPTI can report those graph-node callbacks while add_metrics is
+        // preparing or queueing metric descriptors.
         auto beforeLaunch = [&](uint64_t metricOrdinal, size_t numWords) {
           threadState.metricKernelNumWordsQueue.push_back(numWords);
           threadState.metricKernelOrdinalQueue.push_back(metricOrdinal);
           threadState.isMetricKernelLaunching = true;
         };
-        auto afterLaunch = [&]() { threadState.isMetricKernelLaunching = false; };
+        auto afterLaunch = [&]() {
+          threadState.isMetricKernelLaunching = false;
+        };
         profiler.metricBuffer->receive(tensorMetrics, scalarMetrics,
                                        metricKernelLaunchState, metricOrdinals,
                                        beforeLaunch, afterLaunch);

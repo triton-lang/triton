@@ -16,21 +16,13 @@ constexpr size_t bytesForWords(size_t numWords) {
   return numWords * sizeof(uint64_t);
 }
 
-std::pair<uint64_t, uint64_t> writtenWordRange(MetricBuffer &metricBuffer,
-                                               uint64_t wordsWritten) {
-  const size_t capacityWords = metricBuffer.getCapacity() / sizeof(uint64_t);
-  const uint64_t numWords = std::min<uint64_t>(wordsWritten, capacityWords);
-  const uint64_t startWordOffset =
-      wordsWritten > capacityWords ? wordsWritten - capacityWords : 0;
-  return {startWordOffset, numWords};
-}
-
 void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
-                       const PendingGraphQueue &queue,
-                       uint64_t scanStartWordOffset, uint64_t scanNumWords,
-                       uint64_t wordsWritten) {
+                       const PendingGraphQueue &queue, uint64_t wordsWritten) {
   const size_t capacityWords = metricBuffer.getCapacity() / sizeof(uint64_t);
-  const uint64_t startWordOffset = queue.startBufferOffset / sizeof(uint64_t);
+  const uint64_t scanStartWordOffset =
+      queue.startBufferOffset / sizeof(uint64_t);
+  const uint64_t scanNumWords = queue.numWords;
+  const uint64_t startWordOffset = scanStartWordOffset;
   const uint64_t endWordOffset = scanStartWordOffset + scanNumWords;
   uint64_t wordOffset = scanStartWordOffset;
   size_t recordsRead = 0;
@@ -163,8 +155,8 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
        << " queue_num_words=" << queue.numWords
        << " scan_start_word=" << scanStartWordOffset
        << " scan_num_words=" << scanNumWords
-       << " words_written=" << wordsWritten
-       << " first_seen=[" << join(firstSeenOrdinals) << "]"
+       << " words_written=" << wordsWritten << " first_seen=["
+       << join(firstSeenOrdinals) << "]"
        << " first_unknown=[" << join(firstUnknownOrdinals) << "]"
        << " first_remaining=[" << join(firstRemainingOrdinals) << "]";
     throw std::runtime_error(os.str());
@@ -228,14 +220,13 @@ void PendingGraphPool::peek(size_t phase) {
     if (!slot->queue.has_value())
       continue;
     auto &queue = *slot->queue;
-    metricBuffer->peek(static_cast<Device *>(device), [&](uint8_t *hostPtr,
-                                                          uint64_t wordsWritten) {
-      auto [scanStartWordOffset, scanNumWords] =
-          writtenWordRange(*metricBuffer, wordsWritten);
-      emitMetricRecords(*metricBuffer, reinterpret_cast<uint64_t *>(hostPtr),
-                        queue, scanStartWordOffset, scanNumWords,
-                        wordsWritten);
-    });
+    metricBuffer->peek(static_cast<Device *>(device),
+                       [&](uint8_t *hostPtr, uint64_t wordsWritten) {
+                         emitMetricRecords(
+                             *metricBuffer,
+                             reinterpret_cast<uint64_t *>(hostPtr), queue,
+                             wordsWritten);
+                       });
     deviceNumWords.emplace_back(device, queue.numWords);
     slot->queue.reset();
   }
@@ -277,26 +268,16 @@ bool PendingGraphPool::flushAll() {
         auto deviceIt = poolCopy.find(device);
         if (deviceIt == poolCopy.end())
           return;
-        auto combinedQueue = std::optional<PendingGraphQueue>(std::nullopt);
         for (auto &[_, slot] : deviceIt->second) {
           std::lock_guard<std::mutex> lock(slot->mutex);
           if (!slot->queue.has_value())
             continue;
           auto &queue = *slot->queue;
           deviceNumWords.emplace_back(device, queue.numWords);
-          if (!combinedQueue.has_value()) {
-            combinedQueue.emplace(queue.startBufferOffset);
-          }
-          combinedQueue->append(queue);
-          slot->queue.reset();
-        }
-        if (combinedQueue.has_value()) {
-          auto [scanStartWordOffset, scanNumWords] =
-              writtenWordRange(*metricBuffer, wordsWritten);
           emitMetricRecords(*metricBuffer,
-                            reinterpret_cast<uint64_t *>(hostPtr),
-                            *combinedQueue, scanStartWordOffset, scanNumWords,
+                            reinterpret_cast<uint64_t *>(hostPtr), queue,
                             wordsWritten);
+          slot->queue.reset();
         }
       },
       true);

@@ -4,7 +4,6 @@
 #include "Context/Context.h"
 #include "Data/Data.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -105,16 +104,6 @@ struct PendingGraphQueue {
       ordinalToEntryQueues[ordinal].push_back(entries);
     }
     this->numWords += numWords;
-  }
-
-  void append(const PendingGraphQueue &other) {
-    startBufferOffset = std::min(startBufferOffset, other.startBufferOffset);
-    for (const auto &[ordinal, entryQueue] : other.ordinalToEntryQueues) {
-      auto &targetQueue = ordinalToEntryQueues[ordinal];
-      targetQueue.insert(targetQueue.end(), entryQueue.begin(),
-                         entryQueue.end());
-    }
-    numWords += other.numWords;
   }
 };
 
