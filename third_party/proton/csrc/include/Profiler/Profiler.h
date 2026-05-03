@@ -50,6 +50,13 @@ public:
     return this;
   }
 
+  /// Best-effort poll of the profiler's data from the device to the host.
+  /// Unlike flush(), this does not imply phase completion on its own.
+  Profiler *poll() {
+    this->doPoll();
+    return this;
+  }
+
   /// Stop the profiler.
   /// Do real stop if there's no data to collect.
   Profiler *stop() {
@@ -98,6 +105,7 @@ public:
 
 protected:
   virtual void doStart() = 0;
+  virtual void doPoll() = 0;
   virtual void doFlush() = 0;
   virtual void doStop() = 0;
   virtual void doSetMode(const std::vector<std::string> &modeAndOptions) = 0;

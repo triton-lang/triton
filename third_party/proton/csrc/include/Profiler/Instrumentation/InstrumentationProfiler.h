@@ -22,6 +22,7 @@ public:
 protected:
   // Profiler
   virtual void doStart() override;
+  virtual void doPoll() override;
   virtual void doFlush() override;
   virtual void doStop() override;
   virtual void

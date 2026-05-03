@@ -60,6 +60,8 @@ void Session::activate() {
   profiler->registerData(data.get());
 }
 
+void Session::poll() { profiler->poll(); }
+
 void Session::deactivate(bool flushing) {
   if (flushing)
     profiler->flush();
@@ -347,6 +349,11 @@ std::string SessionManager::getData(size_t sessionId, size_t phase) {
         "Only TreeData is supported for getData() for now");
   }
   return treeData->toJsonString(phase);
+}
+
+void SessionManager::pollData(size_t sessionId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  getSessionOrThrow(sessionId)->poll();
 }
 
 void SessionManager::clearData(size_t sessionId, size_t phase,

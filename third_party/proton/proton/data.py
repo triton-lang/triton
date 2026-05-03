@@ -37,6 +37,20 @@ def get_msgpack(session: Optional[int] = 0, phase: int = 0):
     return libproton.get_data_msgpack(session, phase)
 
 
+def poll(session: Optional[int] = 0) -> None:
+    """
+    Best-effort poll for newly available profiling data.
+
+    This may make additional completed phases readable without forcing a full
+    flush or deactivating the session.
+    """
+    if session is None:
+        return
+    if flags.command_line and session != 0:
+        raise ValueError("Only one session can be polled when running from the command line.")
+    libproton.poll_data(session)
+
+
 def advance_phase(session: Optional[int] = 0) -> Optional[int]:
     """
     Advances the profiling phase for a given session.

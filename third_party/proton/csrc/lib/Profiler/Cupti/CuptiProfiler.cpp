@@ -363,6 +363,7 @@ struct CuptiProfiler::CuptiProfilerPimpl
   virtual ~CuptiProfilerPimpl() = default;
 
   void doStart() override;
+  void doPoll() override;
   void doFlush() override;
   void doStop() override;
 
@@ -770,6 +771,13 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   cupti::activityFlushAll<true>(/*flag=*/CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
   // Flush the tensor metric buffer
   profiler.pendingGraphPool->flushAll();
+}
+
+void CuptiProfiler::CuptiProfilerPimpl::doPoll() {
+  // Best-effort activity drain without forcing device synchronization or
+  // phase completion. Any completed records made visible here will flow
+  // through completeBuffer() and update phase completion there.
+  cupti::activityFlushAll<true>(/*flag=*/0);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {

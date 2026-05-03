@@ -22,6 +22,10 @@ void InstrumentationProfiler::doStart() {
   // Start the instrumentation profiler.
 }
 
+void InstrumentationProfiler::doPoll() {
+  // Poll the instrumentation profiler.
+}
+
 void InstrumentationProfiler::doFlush() {
   // Flush the instrumentation profiler.
 }

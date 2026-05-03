@@ -27,6 +27,8 @@ public:
 
   void activate();
 
+  void poll();
+
   void deactivate(bool flushing);
 
   void finalize(const std::string &outputFormat);
@@ -96,6 +98,8 @@ public:
   std::vector<uint8_t> getDataMsgPack(size_t sessionId, size_t phase);
 
   std::string getData(size_t sessionId, size_t phase);
+
+  void pollData(size_t sessionId);
 
   void clearData(size_t sessionId, size_t phase, bool clearUpToPhase = false);
 
