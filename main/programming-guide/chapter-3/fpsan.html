@@ -1,0 +1,630 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Floating-Point Sanitizer (FpSan) &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=fd6457a4" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../_static/sg-tags.js?v=d80f6fa4"></script>
+      <script src="../../_static/design-tabs.js?v=f930bc37"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="prev" title="Debugging Triton" href="debugging.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/gluon/index.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/api/index.html">API Reference</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="debugging.html">Debugging Triton</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Floating-Point Sanitizer (FpSan)</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#enabling-fpsan">Enabling FpSan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#how-to-use-it">How to Use It</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#payload-model">Payload Model</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#what-fpsan-preserves">What FpSan Preserves</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#what-fpsan-does-not-preserve">What FpSan Does Not Preserve</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#common-arithmetic-ops">Common Arithmetic Ops</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#add-sub-mul">Add, Sub, Mul</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#min-and-max">Min and Max</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#division">Division</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#remainder">Remainder</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#fma">FMA</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#unary-math-ops">Unary Math Ops</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#exp2"><code class="docutils literal notranslate"><span class="pre">exp2</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#exp"><code class="docutils literal notranslate"><span class="pre">exp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#sin-and-cos"><code class="docutils literal notranslate"><span class="pre">sin</span></code> and <code class="docutils literal notranslate"><span class="pre">cos</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#tagged-unary-ops">Tagged Unary Ops</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#casts-and-format-conversions">Casts and Format Conversions</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#float-to-float-width-changes">Float-to-Float Width Changes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#packed-fp4-conversion">Packed fp4 conversion</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#pure-extern-elementwise-ops">Pure Extern Elementwise Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#gluon-mma-and-tensor-memory">Gluon MMA and Tensor Memory</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#practical-guidance-for-checks">Practical Guidance for Checks</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Floating-Point Sanitizer (FpSan)</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/programming-guide/chapter-3/fpsan.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="floating-point-sanitizer-fpsan">
+<h1>Floating-Point Sanitizer (FpSan)<a class="headerlink" href="#floating-point-sanitizer-fpsan" title="Link to this heading"></a></h1>
+<p>FpSan is a compiler instrumentation mode that rewrites selected floating-point
+Triton IR operations into deterministic “payload algebra” over integer
+bit-patterns. Its goal is not to approximate IEEE floating-point arithmetic.
+Instead, it preserves selected algebraic structure so that kernels that are
+symbolically equivalent under the sanitized semantics continue to agree, while
+wrong rewrites, wrong operands, wrong dataflow, or missing synchronization tend
+to perturb the result.</p>
+<p>This makes FpSan primarily a kernel-checking tool. It is especially useful when
+you care more about whether a kernel preserves the intended symbolic
+computation than about its exact IEEE result on a particular input.</p>
+<p>At a high level, FpSan:</p>
+<ul class="simple">
+<li><p>maps floating-point bit-patterns into an integer payload domain</p></li>
+<li><p>replaces supported floating-point ops with integer-domain rewrites chosen to
+preserve selected identities exactly</p></li>
+<li><p>maps the resulting payload back into a floating-point bit-pattern so the rest
+of the pipeline can continue</p></li>
+</ul>
+<section id="enabling-fpsan">
+<h2>Enabling FpSan<a class="headerlink" href="#enabling-fpsan" title="Link to this heading"></a></h2>
+<p>Enable FpSan before the compile or run you want to instrument.</p>
+<p>From Python:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
+
+<span class="n">triton</span><span class="o">.</span><span class="n">knobs</span><span class="o">.</span><span class="n">compilation</span><span class="o">.</span><span class="n">instrumentation_mode</span> <span class="o">=</span> <span class="s2">&quot;fpsan&quot;</span>
+<span class="c1"># compile and run kernels here</span>
+<span class="n">triton</span><span class="o">.</span><span class="n">knobs</span><span class="o">.</span><span class="n">compilation</span><span class="o">.</span><span class="n">instrumentation_mode</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+</pre></div>
+</div>
+<p>From the shell:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">TRITON_INSTRUMENTATION_MODE</span><span class="o">=</span>fpsan<span class="w"> </span>python<span class="w"> </span>your_script.py
+</pre></div>
+</div>
+<p>Notes:</p>
+<ul class="simple">
+<li><p>FpSan is a compiler feature, so it does not apply in interpreter mode.</p></li>
+<li><p>On AMD, the backend currently enables FpSan only for <code class="docutils literal notranslate"><span class="pre">gfx942</span></code>, <code class="docutils literal notranslate"><span class="pre">gfx950</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">gfx1250</span></code>.</p></li>
+</ul>
+</section>
+<section id="how-to-use-it">
+<h2>How to Use It<a class="headerlink" href="#how-to-use-it" title="Link to this heading"></a></h2>
+<p>The most effective way to use FpSan is to compare two kernels, or two versions
+of one kernel, under the same FpSan mode. Typical uses include:</p>
+<ul class="simple">
+<li><p>comparing an optimized kernel against a simple reference kernel</p></li>
+<li><p>comparing a fused kernel against an unfused composition</p></li>
+<li><p>comparing two schedule variants that should be mathematically equivalent</p></li>
+<li><p>checking that accumulator selection, predication, or TMEM pipelines preserve
+the intended payload flow</p></li>
+</ul>
+<p>FpSan results should only be compared against other FpSan results, not
+against ordinary floating-point outputs.</p>
+</section>
+<section id="payload-model">
+<h2>Payload Model<a class="headerlink" href="#payload-model" title="Link to this heading"></a></h2>
+<p>For each floating-point width <code class="docutils literal notranslate"><span class="pre">w</span></code>, FpSan defines a bijection between
+floating-point bit-patterns and a w-bit integer payload; arithmetic wraps modulo 2^w.</p>
+<p>Conceptually:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">embed(x)</span></code> maps a float bit-pattern to an integer payload</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">unembed(u)</span></code> maps an integer payload back to a float bit-pattern</p></li>
+<li><p>sanitized float ops are implemented as <code class="docutils literal notranslate"><span class="pre">unembed(F(embed(...)))</span></code></p></li>
+</ul>
+<p>The embedding is deliberately chosen so that a few important constants are
+stable:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">embed(+0.0)</span> <span class="pre">=</span> <span class="pre">0</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">embed(+1.0)</span> <span class="pre">=</span> <span class="pre">1</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">embed(-1.0)</span> <span class="pre">=</span> <span class="pre">all-ones</span></code></p></li>
+</ul>
+<p>Those fixed points are the reason identities such as <code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">+</span> <span class="pre">0</span> <span class="pre">=</span> <span class="pre">x</span></code> and
+<code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">*</span> <span class="pre">1</span> <span class="pre">=</span> <span class="pre">x</span></code> behave naturally under FpSan.</p>
+</section>
+<section id="what-fpsan-preserves">
+<h2>What FpSan Preserves<a class="headerlink" href="#what-fpsan-preserves" title="Link to this heading"></a></h2>
+<p>FpSan preserves exact identities in the payload algebra selected by each
+rewrite. The most important ones are:</p>
+<ul class="simple">
+<li><p>ring identities for add, subtract, multiply, FMA, and dot-like accumulation</p></li>
+<li><p>selected exponential identities for <code class="docutils literal notranslate"><span class="pre">exp</span></code> and <code class="docutils literal notranslate"><span class="pre">exp2</span></code> (see below for details)</p></li>
+<li><p>trigonometric identities for <code class="docutils literal notranslate"><span class="pre">sin</span></code> and <code class="docutils literal notranslate"><span class="pre">cos</span></code></p></li>
+<li><p>payload equality through casts, loads, stores, and copies</p></li>
+<li><p>deterministic op-distinguishing tags for unary functions that do not yet have
+a richer algebraic model</p></li>
+</ul>
+<p>This is what makes FpSan valuable for kernel checks: if two kernels should be
+the same symbolic computation under the preserved properties, they should produce
+the same payloads. This holds assuming a (generally believed) conjecture in
+transcendental number theory, Schanuel’s conjecture. One of the authors of FpSan
+has a [blog post](<a class="reference external" href="https://cp4space.hatsya.com/2026/05/03/schanuels-conjecture-and-the-semantics-of-fpsan/">https://cp4space.hatsya.com/2026/05/03/schanuels-conjecture-and-the-semantics-of-fpsan/</a>)
+explaining the theory behind FpSan from a mathematical perspective.</p>
+</section>
+<section id="what-fpsan-does-not-preserve">
+<h2>What FpSan Does Not Preserve<a class="headerlink" href="#what-fpsan-does-not-preserve" title="Link to this heading"></a></h2>
+<p>FpSan is not an IEEE simulator.</p>
+<p>In particular, do not rely on it for:</p>
+<ul class="simple">
+<li><p>real floating-point ordering, rounding, NaN propagation, infinities,
+subnormals, or exceptions</p></li>
+<li><p>real transcendental semantics for <code class="docutils literal notranslate"><span class="pre">log</span></code>, <code class="docutils literal notranslate"><span class="pre">sqrt</span></code>, <code class="docutils literal notranslate"><span class="pre">erf</span></code>, <code class="docutils literal notranslate"><span class="pre">floor</span></code>,
+<code class="docutils literal notranslate"><span class="pre">ceil</span></code>, <code class="docutils literal notranslate"><span class="pre">rsqrt</span></code>, and similar tagged unary ops</p></li>
+<li><p>expected floating-point bit patterns (i.e. for kernels that bitcast
+between floats and integers)</p></li>
+</ul>
+<p>When a property matters for your check, the right question is:
+“is this property preserved by the payload rewrite for this specific op
+family?”</p>
+</section>
+<section id="common-arithmetic-ops">
+<h2>Common Arithmetic Ops<a class="headerlink" href="#common-arithmetic-ops" title="Link to this heading"></a></h2>
+<section id="add-sub-mul">
+<h3>Add, Sub, Mul<a class="headerlink" href="#add-sub-mul" title="Link to this heading"></a></h3>
+<p>Supported operations:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">+</span> <span class="pre">y</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">-</span> <span class="pre">y</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">*</span> <span class="pre">y</span></code></p></li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p>add, subtract, or multiply the embedded payloads, then unembed the result</p></li>
+</ul>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">+</span> <span class="pre">0</span> <span class="pre">=</span> <span class="pre">x</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">-</span> <span class="pre">0</span> <span class="pre">=</span> <span class="pre">x</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">-</span> <span class="pre">x</span> <span class="pre">=</span> <span class="pre">0</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">*</span> <span class="pre">1</span> <span class="pre">=</span> <span class="pre">x</span></code></p></li>
+<li><p>associativity and commutativity of add and mul</p></li>
+<li><p>distributivity of mul over add</p></li>
+</ul>
+<p>Important caveat:</p>
+<ul class="simple">
+<li><p>This is ring arithmetic modulo <code class="docutils literal notranslate"><span class="pre">2^w</span></code>, not IEEE arithmetic.</p></li>
+</ul>
+</section>
+<section id="min-and-max">
+<h3>Min and Max<a class="headerlink" href="#min-and-max" title="Link to this heading"></a></h3>
+<p>Supported operations:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.minimum(x,</span> <span class="pre">y)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.maximum(x,</span> <span class="pre">y)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">min(x,</span> <span class="pre">y)</span></code> and <code class="docutils literal notranslate"><span class="pre">max(x,</span> <span class="pre">y)</span></code> in Triton code</p></li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p>signed integer <code class="docutils literal notranslate"><span class="pre">min</span></code> or <code class="docutils literal notranslate"><span class="pre">max</span></code> on payloads</p></li>
+</ul>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p>idempotence: <code class="docutils literal notranslate"><span class="pre">min(x,</span> <span class="pre">x)</span> <span class="pre">=</span> <span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">max(x,</span> <span class="pre">x)</span> <span class="pre">=</span> <span class="pre">x</span></code></p></li>
+<li><p>commutativity</p></li>
+<li><p>associativity</p></li>
+</ul>
+<p>Important caveats:</p>
+<ul class="simple">
+<li><p>The order is the signed integer order of payloads, not IEEE float order.</p></li>
+<li><p>NaN handling, and the exact signed-zero contract, are not modeled.</p></li>
+</ul>
+</section>
+<section id="division">
+<h3>Division<a class="headerlink" href="#division" title="Link to this heading"></a></h3>
+<p>Supported operation:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">/</span> <span class="pre">y</span></code></p></li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">/</span> <span class="pre">y</span></code> becomes <code class="docutils literal notranslate"><span class="pre">embed(x)</span> <span class="pre">*</span> <span class="pre">inv(embed(y))</span></code>, then <code class="docutils literal notranslate"><span class="pre">unembed</span></code></p></li>
+</ul>
+<p>Here <code class="docutils literal notranslate"><span class="pre">inv</span></code> is:</p>
+<ul class="simple">
+<li><p>the true modular inverse for odd payloads</p></li>
+<li><p>a parity-preserving involution for even payloads</p></li>
+</ul>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">/</span> <span class="pre">1</span> <span class="pre">=</span> <span class="pre">x</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">/</span> <span class="pre">(1</span> <span class="pre">/</span> <span class="pre">x)</span> <span class="pre">=</span> <span class="pre">x</span></code></p></li>
+<li><p>for odd payloads, the usual modular inverse laws hold</p></li>
+</ul>
+<p>Important caveats:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">/</span> <span class="pre">x</span> <span class="pre">=</span> <span class="pre">1</span></code> is not guaranteed for all payloads.</p></li>
+<li><p>Division by zero does not produce IEEE infinities or traps.</p></li>
+<li><p>This rewrite is chosen for algebraic checking, not numeric realism.</p></li>
+</ul>
+</section>
+<section id="remainder">
+<h3>Remainder<a class="headerlink" href="#remainder" title="Link to this heading"></a></h3>
+<p>Supported operation:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">%</span> <span class="pre">y</span></code></p></li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p>signed integer remainder on payloads after forcing the denominator odd with
+<code class="docutils literal notranslate"><span class="pre">den</span> <span class="pre">|</span> <span class="pre">1</span></code></p></li>
+</ul>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p>same inputs produce the same sanitized remainder payload</p></li>
+</ul>
+<p>Important caveats:</p>
+<ul class="simple">
+<li><p>Real floating-point remainder semantics are not modeled.</p></li>
+<li><p>Zero denominators are intentionally mapped to a safe odd payload instead of
+trapping.</p></li>
+</ul>
+</section>
+<section id="fma">
+<h3>FMA<a class="headerlink" href="#fma" title="Link to this heading"></a></h3>
+<p>Supported operation:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.fma(a,</span> <span class="pre">b,</span> <span class="pre">c)</span></code></p></li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">*</span> <span class="pre">b</span> <span class="pre">+</span> <span class="pre">c</span></code> in payload arithmetic</p></li>
+</ul>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p>exact agreement with the sanitized expansion <code class="docutils literal notranslate"><span class="pre">mul</span></code> followed by <code class="docutils literal notranslate"><span class="pre">add</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">fma(a,</span> <span class="pre">b,</span> <span class="pre">c)</span> <span class="pre">=</span> <span class="pre">a*b</span> <span class="pre">+</span> <span class="pre">c</span></code> in the payload ring</p></li>
+</ul>
+<p>Important caveat:</p>
+<ul class="simple">
+<li><p>There is no special fused-rounding behavior.</p></li>
+</ul>
+</section>
+</section>
+<section id="unary-math-ops">
+<h2>Unary Math Ops<a class="headerlink" href="#unary-math-ops" title="Link to this heading"></a></h2>
+<section id="exp2">
+<h3><code class="docutils literal notranslate"><span class="pre">exp2</span></code><a class="headerlink" href="#exp2" title="Link to this heading"></a></h3>
+<p>Supported operation:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.exp2(x)</span></code></p></li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p>modular exponentiation by a fixed odd generator in payload space</p></li>
+</ul>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">exp2(x</span> <span class="pre">+</span> <span class="pre">y)</span> <span class="pre">=</span> <span class="pre">exp2(x)</span> <span class="pre">*</span> <span class="pre">exp2(y)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">exp2(0)</span> <span class="pre">=</span> <span class="pre">1</span></code></p></li>
+</ul>
+</section>
+<section id="exp">
+<h3><code class="docutils literal notranslate"><span class="pre">exp</span></code><a class="headerlink" href="#exp" title="Link to this heading"></a></h3>
+<p>Supported operation:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.exp(x)</span></code></p></li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">exp(x)</span></code> is implemented as <code class="docutils literal notranslate"><span class="pre">exp2(x</span> <span class="pre">*</span> <span class="pre">rcp_log2)</span></code> in payload space</p></li>
+</ul>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">exp</span></code> uses the same payload-space construction as <code class="docutils literal notranslate"><span class="pre">exp2</span></code> after scaling
+the input by a fixed internal payload constant</p></li>
+</ul>
+</section>
+<section id="sin-and-cos">
+<h3><code class="docutils literal notranslate"><span class="pre">sin</span></code> and <code class="docutils literal notranslate"><span class="pre">cos</span></code><a class="headerlink" href="#sin-and-cos" title="Link to this heading"></a></h3>
+<p>Supported operations:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.sin(x)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.cos(x)</span></code></p></li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p>a deterministic payload-space rewrite chosen to preserve the identities below</p></li>
+</ul>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">sin(x</span> <span class="pre">+</span> <span class="pre">y)</span> <span class="pre">=</span> <span class="pre">sin(x)</span> <span class="pre">*</span> <span class="pre">cos(y)</span> <span class="pre">+</span> <span class="pre">cos(x)</span> <span class="pre">*</span> <span class="pre">sin(y)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sin(x</span> <span class="pre">-</span> <span class="pre">y)</span> <span class="pre">=</span> <span class="pre">sin(x)</span> <span class="pre">*</span> <span class="pre">cos(y)</span> <span class="pre">-</span> <span class="pre">cos(x)</span> <span class="pre">*</span> <span class="pre">sin(y)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cos(x</span> <span class="pre">+</span> <span class="pre">y)</span> <span class="pre">=</span> <span class="pre">cos(x)</span> <span class="pre">*</span> <span class="pre">cos(y)</span> <span class="pre">-</span> <span class="pre">sin(x)</span> <span class="pre">*</span> <span class="pre">sin(y)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cos(x</span> <span class="pre">-</span> <span class="pre">y)</span> <span class="pre">=</span> <span class="pre">cos(x)</span> <span class="pre">*</span> <span class="pre">cos(y)</span> <span class="pre">+</span> <span class="pre">sin(x)</span> <span class="pre">*</span> <span class="pre">sin(y)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cos(x)^2</span> <span class="pre">+</span> <span class="pre">sin(x)^2</span> <span class="pre">=</span> <span class="pre">1</span></code></p></li>
+</ul>
+<p>Important caveat:</p>
+<ul class="simple">
+<li><p>These are not IEEE trig values; they are payload functions chosen to preserve
+the angle identities above.</p></li>
+</ul>
+</section>
+<section id="tagged-unary-ops">
+<h3>Tagged Unary Ops<a class="headerlink" href="#tagged-unary-ops" title="Link to this heading"></a></h3>
+<p>Supported operations:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.log(x)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.log2(x)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.sqrt(x)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.rsqrt(x)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.erf(x)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.floor(x)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.ceil(x)</span></code></p></li>
+<li><p>precise square root variants</p></li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p>an invertible payload tag: multiply by an odd constant, xor with an
+op-specific hash, then multiply again</p></li>
+</ul>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p>payload equality is preserved for the same op: if <code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">==</span> <span class="pre">y</span></code> in payload
+space, then <code class="docutils literal notranslate"><span class="pre">op(x)</span> <span class="pre">==</span> <span class="pre">op(y)</span></code></p></li>
+<li><p>different supported unary ops get different tags</p></li>
+</ul>
+<p>Important caveats:</p>
+<ul class="simple">
+<li><p>These rewrites intentionally do not preserve real mathematical identities
+such as <code class="docutils literal notranslate"><span class="pre">sqrt(x)^2</span> <span class="pre">=</span> <span class="pre">x</span></code> or <code class="docutils literal notranslate"><span class="pre">log(x*y)</span> <span class="pre">=</span> <span class="pre">log(x)</span> <span class="pre">+</span> <span class="pre">log(y)</span></code>.</p></li>
+</ul>
+</section>
+</section>
+<section id="casts-and-format-conversions">
+<h2>Casts and Format Conversions<a class="headerlink" href="#casts-and-format-conversions" title="Link to this heading"></a></h2>
+<section id="float-to-float-width-changes">
+<h3>Float-to-Float Width Changes<a class="headerlink" href="#float-to-float-width-changes" title="Link to this heading"></a></h3>
+<p>Supported operations:</p>
+<ul class="simple">
+<li><p>converting a tensor between floating-point types with <code class="docutils literal notranslate"><span class="pre">x.to(dtype)</span></code></p></li>
+<li><p>frontend-generated float widening and narrowing conversions</p></li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p>signed integer extension or truncation in payload space, followed by
+<code class="docutils literal notranslate"><span class="pre">unembed</span></code></p></li>
+</ul>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">+1</span></code>, and <code class="docutils literal notranslate"><span class="pre">-1</span></code> remain stable across the conversion</p></li>
+<li><p>sign-extension behavior in the payload domain</p></li>
+<li><p>truncation drops high payload bits</p></li>
+</ul>
+<p>Important caveat:</p>
+<ul class="simple">
+<li><p>This preserves payload structure, not IEEE conversion semantics.</p></li>
+</ul>
+</section>
+<section id="packed-fp4-conversion">
+<h3>Packed fp4 conversion<a class="headerlink" href="#packed-fp4-conversion" title="Link to this heading"></a></h3>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p>unpack low and high nibbles from the source byte tensor</p></li>
+<li><p>reshape and reorder them</p></li>
+<li><p>interpret each unpacked nibble directly as a payload in the destination float
+width</p></li>
+</ul>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p>deterministic unpacking of packed fp4 storage</p></li>
+<li><p>exact preservation of the unpacked nibble payloads</p></li>
+</ul>
+<p>Important caveat:</p>
+<ul class="simple">
+<li><p>This is not real fp4 numeric decoding.</p></li>
+<li><p>The same raw-payload interpretation is reused by scaled-dot paths for
+<code class="docutils literal notranslate"><span class="pre">e2m1</span></code>.</p></li>
+</ul>
+</section>
+</section>
+<section id="pure-extern-elementwise-ops">
+<h2>Pure Extern Elementwise Ops<a class="headerlink" href="#pure-extern-elementwise-ops" title="Link to this heading"></a></h2>
+<p>Supported operation:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.extern_elementwise</span></code> when all of the following hold:</p>
+<ul>
+<li><p>the op is <code class="docutils literal notranslate"><span class="pre">pure</span></code></p></li>
+<li><p>the result type is float-like</p></li>
+<li><p>there is at least one operand</p></li>
+<li><p>every operand is numeric</p></li>
+</ul>
+</li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p>rotate each operand payload by its argument index</p></li>
+<li><p>sum the rotated payloads</p></li>
+<li><p>xor the result with a stable hash of the symbol name</p></li>
+<li><p>unembed</p></li>
+</ul>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p>deterministic dependence on all operands and on operand order</p></li>
+<li><p>deterministic distinction between different external symbols</p></li>
+<li><p>mixed float and integer operands are supported; float operands are embedded,
+integer operands are used directly after signed casting to the result width</p></li>
+</ul>
+<p>Important caveat:</p>
+<ul class="simple">
+<li><p>This is a structural tag, not a numeric model of the external function.</p></li>
+</ul>
+</section>
+<section id="gluon-mma-and-tensor-memory">
+<h2>Gluon MMA and Tensor Memory<a class="headerlink" href="#gluon-mma-and-tensor-memory" title="Link to this heading"></a></h2>
+<p>Supported Gluon operations include:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">mma_v2</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">warpgroup_mma</span></code> and <code class="docutils literal notranslate"><span class="pre">warpgroup_mma_wait</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tcgen05_mma</span></code> and <code class="docutils literal notranslate"><span class="pre">tcgen05_mma_scaled</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tcgen05_copy</span></code> and <code class="docutils literal notranslate"><span class="pre">tcgen05_commit</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">allocate_tensor_memory</span></code></p></li>
+<li><p>tensor-memory descriptor methods such as <code class="docutils literal notranslate"><span class="pre">load</span></code>, <code class="docutils literal notranslate"><span class="pre">load_min</span></code>,
+<code class="docutils literal notranslate"><span class="pre">load_max</span></code>, <code class="docutils literal notranslate"><span class="pre">store</span></code>, <code class="docutils literal notranslate"><span class="pre">slice</span></code>, <code class="docutils literal notranslate"><span class="pre">index</span></code>, and <code class="docutils literal notranslate"><span class="pre">_reinterpret</span></code></p></li>
+<li><p>AMD <code class="docutils literal notranslate"><span class="pre">mfma</span></code>, <code class="docutils literal notranslate"><span class="pre">mfma_scaled</span></code>, <code class="docutils literal notranslate"><span class="pre">wmma</span></code>, <code class="docutils literal notranslate"><span class="pre">wmma_scaled</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">scaled_upcast</span></code></p></li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p>perform multiply-add accumulation in payload space</p></li>
+<li><p>preserve payload bits across tensor-memory loads, stores, copies, and views</p></li>
+<li><p>keep accumulator-selection and predication behavior structurally visible</p></li>
+</ul>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p>exact matrix-multiply algebra over the payload ring</p></li>
+<li><p>exact agreement with sanitized scalar multiply-add expansion</p></li>
+<li><p>accumulation with the provided accumulator is preserved as payload addition</p></li>
+<li><p>tensor-memory operations preserve payload flow across the pipeline</p></li>
+</ul>
+<p>Important caveats:</p>
+<ul class="simple">
+<li><p>Scaled MMA preserves the sanitizer’s payload treatment of low-precision
+operands and scales, not exact hardware-format numeric decoding.</p></li>
+<li><p>Tensor-memory operations preserve payload dataflow; they do not make FpSan a
+substitute for race or synchronization checking.</p></li>
+<li><p>Current backend support is explicitly enabled for AMD <code class="docutils literal notranslate"><span class="pre">gfx942</span></code>, <code class="docutils literal notranslate"><span class="pre">gfx950</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">gfx1250</span></code>.</p></li>
+</ul>
+</section>
+<section id="practical-guidance-for-checks">
+<h2>Practical Guidance for Checks<a class="headerlink" href="#practical-guidance-for-checks" title="Link to this heading"></a></h2>
+<p>FpSan is a good fit when you want to check:</p>
+<ul class="simple">
+<li><p>that two kernels implement the same preserved algebra</p></li>
+<li><p>that a fused kernel keeps the intended dataflow</p></li>
+<li><p>that predication or accumulator-selection logic is wired correctly</p></li>
+<li><p>that a tensor-memory or warp-specialized pipeline preserves payload flow</p></li>
+</ul>
+<p>FpSan is a poor fit when you want to check:</p>
+<ul class="simple">
+<li><p>IEEE edge cases</p></li>
+<li><p>real transcendental accuracy</p></li>
+<li><p>NaN or infinity behavior</p></li>
+<li><p>hardware-format decode semantics for low-precision formats</p></li>
+</ul>
+<p>In short, rely on FpSan for structure-preserving kernel validation, and rely on
+ordinary numerical tests for IEEE behavior.</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="debugging.html" class="btn btn-neutral float-left" title="Debugging Triton" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

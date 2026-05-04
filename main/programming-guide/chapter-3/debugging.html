@@ -28,6 +28,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Floating-Point Sanitizer (FpSan)" href="fpsan.html" />
     <link rel="prev" title="Related Work" href="../chapter-2/related-work.html" /> 
 </head>
 
@@ -87,6 +88,7 @@
 <li class="toctree-l2"><a class="reference internal" href="#using-third-party-tools">Using Third-party Tools</a></li>
 </ul>
 </li>
+<li class="toctree-l1"><a class="reference internal" href="fpsan.html">Floating-Point Sanitizer (FpSan)</a></li>
 </ul>
 
         </div>
@@ -119,6 +121,8 @@
 It is mostly documented for Triton users.
 Developers interested in exploring Triton’s backend, including MLIR code transformation and LLVM code generation,
 can refer to this <a class="reference external" href="https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking">section</a> to explore debugging options.</p>
+<p>For compiler-level instrumentation of floating-point computations, see
+<a class="reference internal" href="fpsan.html"><span class="doc">Floating-Point Sanitizer (FpSan)</span></a>.</p>
 <section id="using-triton-s-debugging-operations">
 <h2>Using Triton’s Debugging Operations<a class="headerlink" href="#using-triton-s-debugging-operations" title="Link to this heading"></a></h2>
 <p>Triton includes four debugging operators that allow users to check and inspect tensor values:</p>
@@ -189,6 +193,7 @@ To use it, prepend <code class="code docutils literal notranslate"><span class="
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="../chapter-2/related-work.html" class="btn btn-neutral float-left" title="Related Work" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="fpsan.html" class="btn btn-neutral float-right" title="Floating-Point Sanitizer (FpSan)" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
