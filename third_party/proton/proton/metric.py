@@ -8,8 +8,8 @@ from .state import exit_state, enter_state, COMPUTE_METADATA_SCOPE_NAME
 
 
 @triton.jit
-def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, stream_id: tl.uint64,
-                         metric_id: tl.uint64, metric_value_ptr, metric_value_size: tl.uint64):
+def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, stream_id: tl.uint64, metric_id: tl.uint64,
+                         metric_value_ptr, metric_value_size: tl.uint64):
     # Record layout is {stream_id, metric_id, <metric_values>}.
     BLOCK_SIZE: tl.constexpr = 128
     record_size = metric_value_size + 2
@@ -30,8 +30,8 @@ def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, stream_
 
 
 @triton.jit
-def scalar_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, stream_id: tl.uint64,
-                         metric_id: tl.uint64, metric_value: tl.uint64):
+def scalar_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, stream_id: tl.uint64, metric_id: tl.uint64,
+                         metric_value: tl.uint64):
     # Record layout is {stream_id, metric_id, metric_value}.
     device_offset = tl.atomic_add(device_offset_ptr, 3, sem="relaxed") % size
     tl.store(device_ptr + device_offset, stream_id)

@@ -96,9 +96,8 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
     auto &pendingGraphs = streamIdToPendingGraphs.at(streamId);
     auto &pendingGraph = pendingGraphs.front();
-    const auto entryIndex =
-        pendingGraph.dataToEntries.begin()->second.size() -
-        pendingGraph.numNodes;
+    const auto entryIndex = pendingGraph.dataToEntries.begin()->second.size() -
+                            pendingGraph.numNodes;
     for (auto &[data, entries] : pendingGraph.dataToEntries) {
       auto &dataEntry = entries[entryIndex];
       if (dataEntry.id != Scope::DummyScopeId) {
@@ -179,12 +178,10 @@ void PendingGraphPool::peek(size_t phase) {
     if (!slot->queue.has_value())
       continue;
     auto &queue = *slot->queue;
-    metricBuffer->peek(static_cast<Device *>(device),
-                       [&](uint8_t *hostPtr) {
-                         emitMetricRecords(
-                             *metricBuffer,
-                             reinterpret_cast<uint64_t *>(hostPtr), queue);
-                       });
+    metricBuffer->peek(static_cast<Device *>(device), [&](uint8_t *hostPtr) {
+      emitMetricRecords(*metricBuffer, reinterpret_cast<uint64_t *>(hostPtr),
+                        queue);
+    });
     deviceNumWords.emplace_back(device, queue.numWords);
     slot->queue.reset();
   }
