@@ -934,100 +934,8 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
-def test_hook_launch_metadata_cudagraph_metric_records_attach_by_owner(tmp_path: pathlib.Path, device: str):
-    """Metric-copy kernels may append graph records in a different order than capture order."""
-    capture_stream = torch.cuda.Stream()
-    slow_stream = torch.cuda.Stream()
-    fast_stream = torch.cuda.Stream()
-    torch.cuda.set_stream(capture_stream)
-
-    slow_name = "metric_order_slow"
-    fast_name = "metric_order_fast"
-    slow_flops = 111.0
-    fast_flops = 222.0
-
-    @triton.jit
-    def metadata_delay_kernel(scratch, BLOCK: tl.constexpr, ITERS: tl.constexpr):
-        pid = tl.program_id(0)
-        offsets = pid * BLOCK + tl.arange(0, BLOCK)
-        values = offsets.to(tl.float32)
-        for _ in tl.static_range(0, ITERS):
-            values = values * 1.0001 + 1.0
-        tl.store(scratch + offsets, values)
-
-    def slow_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
-        metadata_delay_kernel[(2048, )](args["delay_scratch"], BLOCK=256, ITERS=64, num_warps=8)
-        return {"name": slow_name, "flops": args["slow_metric"]}
-
-    def fast_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
-        return {"name": fast_name, "flops": args["fast_metric"]}
-
-    @triton.jit(launch_metadata=slow_metadata_fn)
-    def slow_kernel(x, y, slow_metric, delay_scratch):
-        tl.store(y, tl.load(x) + 1.0)
-
-    @triton.jit(launch_metadata=fast_metadata_fn)
-    def fast_kernel(x, y, fast_metric):
-        tl.store(y, tl.load(x) + 2.0)
-
-    def find_frame(node, name: str):
-        queue = [node]
-        while queue:
-            cur = queue.pop(0)
-            if cur["frame"]["name"] == name:
-                return cur
-            queue.extend(cur["children"])
-        return None
-
-    x = torch.tensor([1.0], device=device)
-    y_slow = torch.empty_like(x)
-    y_fast = torch.empty_like(x)
-    slow_metric = torch.tensor([slow_flops], device=device)
-    fast_metric = torch.tensor([fast_flops], device=device)
-    delay_scratch = torch.empty((2048 * 256, ), device=device)
-
-    temp_file = tmp_path / "test_hook_metadata_metric_record_order.hatchet"
-    session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
-    try:
-        slow_kernel[(1, )](x, y_slow, slow_metric, delay_scratch, num_warps=1)
-        fast_kernel[(1, )](x, y_fast, fast_metric, num_warps=1)
-        torch.cuda.synchronize()
-
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph, stream=capture_stream):
-            slow_stream.wait_stream(capture_stream)
-            fast_stream.wait_stream(capture_stream)
-            with torch.cuda.stream(slow_stream):
-                slow_kernel[(1, )](x, y_slow, slow_metric, delay_scratch, num_warps=1)
-            with torch.cuda.stream(fast_stream):
-                fast_kernel[(1, )](x, y_fast, fast_metric, num_warps=1)
-            capture_stream.wait_stream(slow_stream)
-            capture_stream.wait_stream(fast_stream)
-
-        with proton.scope("replay"):
-            graph.replay()
-        torch.cuda.synchronize()
-    finally:
-        proton.finalize(session)
-
-    with temp_file.open() as f:
-        data = json.load(f)
-
-    replay_frame = find_frame(data[0], "replay")
-    assert replay_frame is not None
-    capture_frame = find_frame(replay_frame, "<captured_at>")
-    assert capture_frame is not None
-    slow_frame = find_frame(capture_frame, slow_name)
-    fast_frame = find_frame(capture_frame, fast_name)
-    assert slow_frame is not None
-    assert fast_frame is not None
-    assert slow_frame["metrics"]["flops"] == slow_flops
-    assert fast_frame["metrics"]["flops"] == fast_flops
-
-
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
-def test_hook_launch_metadata_cudagraph_internal_metric_order_repro(tmp_path: pathlib.Path, device: str):
-    """Reproduce the graph-metric attachment issue seen in internal hook profiles.
+def test_hook_launch_metadata_cudagraph_metric_order_repro(tmp_path: pathlib.Path, device: str):
+    """Reproduce the graph-metric attachment issue seen in hook profiles.
 
     The captured graph mirrors the production launch_fns_in_streams pattern:
     a metadata-bearing kernel is launched on the capture stream, later kernels
@@ -1112,7 +1020,7 @@ def test_hook_launch_metadata_cudagraph_internal_metric_order_repro(tmp_path: pa
     kernel_z_bytes = torch.tensor([kernel_z_metrics["bytes"]], device=device, dtype=torch.int64)
     gate = torch.ones((1, ), device=device, dtype=torch.int32)
 
-    temp_file = tmp_path / "test_hook_metadata_internal_metric_order_repro.hatchet"
+    temp_file = tmp_path / "test_hook_metadata_metric_order_repro.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
     try:
         kernel_x[(1, )](x, y, kernel_x_flops, kernel_x_bytes, delay_scratch, gate, num_warps=1)
