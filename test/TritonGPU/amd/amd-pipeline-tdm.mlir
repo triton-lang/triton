@@ -60,14 +60,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // CHECK-LABEL: tt.func @matmul_kernel_make_tensor_descriptor
 // CHECK: async_tdm_copy_global_to_local {{.*}} : !tt.tensordesc<512x32xf16, #[[$PADDED_A]]> -> !ttg.memdesc<512x32xf16, #[[$PADDED_A]], #smem, mutable>
-// CHECK: ttg.async_commit_group tokens
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: async_tdm_copy_global_to_local {{.*}} : !tt.tensordesc<32x64xf16, #[[$PADDED_B]]> -> !ttg.memdesc<32x64xf16, #[[$PADDED_B]], #smem, mutable>
-// CHECK: ttg.async_commit_group tokens
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: scf.for
 // CHECK: async_tdm_copy_global_to_local {{.*}} : !tt.tensordesc<512x32xf16, #[[$PADDED_A]]> -> !ttg.memdesc<512x32xf16, #[[$PADDED_A]], #smem, mutable>
-// CHECK: ttg.async_commit_group tokens
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: async_tdm_copy_global_to_local {{.*}} : !tt.tensordesc<32x64xf16, #[[$PADDED_B]]> -> !ttg.memdesc<32x64xf16, #[[$PADDED_B]], #smem, mutable>
-// CHECK: ttg.async_commit_group tokens
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: }
 // CHECK: tt.descriptor_store {{.*}} : !tt.tensordesc<512x64xf16, #[[$PADDED_C]]>
 
@@ -135,12 +135,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // CHECK-LABEL: tt.func @tdm_padding_fp8
 // CHECK: async_tdm_copy_global_to_local {{.*}} : !tt.tensordesc<256x64xf8E5M2, #[[$PADDED_A]]> -> !ttg.memdesc<256x64xf8E5M2, #[[$PADDED_A]], #smem, mutable>
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: async_tdm_copy_global_to_local {{.*}} : !tt.tensordesc<64x64xf8E5M2, #[[$PADDED_B]]> -> !ttg.memdesc<64x64xf8E5M2, #[[$PADDED_B]], #smem, mutable>
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: scf.for
 // CHECK: async_tdm_copy_global_to_local {{.*}} : !tt.tensordesc<256x64xf8E5M2, #[[$PADDED_A]]> -> !ttg.memdesc<256x64xf8E5M2, #[[$PADDED_A]], #smem, mutable>
-// CHECK: ttg.async_commit_group tokens
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: async_tdm_copy_global_to_local {{.*}} : !tt.tensordesc<64x64xf8E5M2, #[[$PADDED_B]]> -> !ttg.memdesc<64x64xf8E5M2, #[[$PADDED_B]], #smem, mutable>
-// CHECK: ttg.async_commit_group tokens
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: }
 // CHECK: tt.descriptor_store {{.*}} : !tt.tensordesc<256x64xf16, #[[$PADDED_C]]>
 
@@ -207,12 +209,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // CHECK-LABEL: tt.func @tdm_padding_f32
 // CHECK: async_tdm_copy_global_to_local {{.*}} : !tt.tensordesc<256x16xf32, #[[$PADDED_A]]> -> !ttg.memdesc<256x16xf32, #[[$PADDED_A]], #smem, mutable>
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: async_tdm_copy_global_to_local {{.*}} : !tt.tensordesc<16x64xf32, #[[$PADDED_B]]> -> !ttg.memdesc<16x64xf32, #[[$PADDED_B]], #smem, mutable>
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: scf.for
 // CHECK: async_tdm_copy_global_to_local {{.*}} : !tt.tensordesc<256x16xf32, #[[$PADDED_A]]> -> !ttg.memdesc<256x16xf32, #[[$PADDED_A]], #smem, mutable>
-// CHECK: ttg.async_commit_group tokens
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: async_tdm_copy_global_to_local {{.*}} : !tt.tensordesc<16x64xf32, #[[$PADDED_B]]> -> !ttg.memdesc<16x64xf32, #[[$PADDED_B]], #smem, mutable>
-// CHECK: ttg.async_commit_group tokens
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: }
 // CHECK: tt.descriptor_store {{.*}} : !tt.tensordesc<256x64xf32, #[[$PADDED_C]]>
 
@@ -272,13 +276,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK-LABEL: tt.func @gather_dot_pipeline
 // Prologue: two async_tdm_gather ops before the loop
 // CHECK: amdg.async_tdm_gather
-// CHECK: ttg.async_commit_group tokens
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: amdg.async_tdm_gather
-// CHECK: ttg.async_commit_group tokens
+// CHECK-NOT: ttg.async_commit_group
 // Loop body: two more async_tdm_gather ops (pipelined next iteration)
 // CHECK: scf.for
 // CHECK: amdg.async_tdm_gather
-// CHECK: ttg.async_commit_group tokens
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: amdg.async_tdm_gather
-// CHECK: ttg.async_commit_group tokens
+// CHECK-NOT: ttg.async_commit_group
 // CHECK: }
