@@ -494,10 +494,10 @@ private:
 
   DeviceBuffer &getOrCreateBuffer();
 
-  void queue(uint64_t streamId, size_t metricId, TensorMetric tensorMetric,
+  void queue(size_t metricId, TensorMetric tensorMetric, void *stream,
              const MetricKernelLaunchConfig &launchConfig);
 
-  void queue(uint64_t streamId, size_t metricId, MetricValueType scalarMetric,
+  void queue(size_t metricId, MetricValueType scalarMetric, void *stream,
              const MetricKernelLaunchConfig &launchConfig);
 
   void synchronize(DeviceBuffer &buffer);
@@ -529,14 +529,13 @@ private:
   }
 
   template <typename MetricsT>
-  void queueMetrics(const MetricsT &metrics,
-                    const MetricKernelLaunchConfig &launchConfig,
-                    uint64_t streamId) {
+  void queueMetrics(const MetricsT &metrics, void *stream,
+                    const MetricKernelLaunchConfig &launchConfig) {
     for (const auto &[name, metric] : metrics) {
       size_t typeIndex = getMetricTypeIndex(metric);
       size_t size = getMetricSize(metric);
       auto descriptor = getOrCreateMetricDescriptor(name, typeIndex, size);
-      queue(streamId, descriptor.id, metric, launchConfig);
+      queue(descriptor.id, metric, stream, launchConfig);
     }
   }
 

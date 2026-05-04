@@ -126,7 +126,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 } // namespace
 
 void PendingGraphPool::push(size_t phase, uint64_t streamId,
-                            PendingGraph pendingGraph) {
+                            PendingGraph &&pendingGraph) {
   const size_t requiredBytes = bytesForWords(pendingGraph.numWords);
   void *device = runtime->getDevice();
   std::shared_ptr<Slot> slot;

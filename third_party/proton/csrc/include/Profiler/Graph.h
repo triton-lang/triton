@@ -98,7 +98,7 @@ struct PendingGraphQueue {
   explicit PendingGraphQueue(size_t startBufferOffset)
       : startBufferOffset(startBufferOffset) {}
 
-  void push(uint64_t streamId, PendingGraph pendingGraph) {
+  void push(uint64_t streamId, PendingGraph &&pendingGraph) {
     auto numWords = pendingGraph.numWords;
     streamIdToPendingGraphs[streamId].push_back(std::move(pendingGraph));
     this->numWords += numWords;
@@ -110,7 +110,7 @@ public:
   explicit PendingGraphPool(MetricBuffer *metricBuffer)
       : metricBuffer(metricBuffer), runtime(metricBuffer->getRuntime()) {}
 
-  void push(size_t phase, uint64_t streamId, PendingGraph pendingGraph);
+  void push(size_t phase, uint64_t streamId, PendingGraph &&pendingGraph);
 
   // No GPU synchronization, No CPU locks
   void peek(size_t phase);

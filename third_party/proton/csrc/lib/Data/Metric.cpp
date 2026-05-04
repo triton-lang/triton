@@ -31,11 +31,10 @@ void MetricBuffer::receive(
     const std::map<std::string, TensorMetric> &tensorMetrics,
     const std::map<std::string, MetricValueType> &scalarMetrics,
     const MetricKernelLaunchState &metricKernelLaunchState) {
-  // The replay stream id is resolved from the graph launch callback. Metric
-  // copy nodes captured before replay therefore write a placeholder stream id.
-  uint64_t streamId = 0;
-  queueMetrics(tensorMetrics, metricKernelLaunchState.tensor, streamId);
-  queueMetrics(scalarMetrics, metricKernelLaunchState.scalar, streamId);
+  queueMetrics(tensorMetrics, metricKernelLaunchState.tensor.stream,
+               metricKernelLaunchState.tensor);
+  queueMetrics(scalarMetrics, metricKernelLaunchState.scalar.stream,
+               metricKernelLaunchState.scalar);
 }
 
 MetricBuffer::MetricDescriptor
@@ -133,12 +132,15 @@ collectTensorMetrics(Runtime *runtime,
   return tensorMetricsHost;
 }
 
-void MetricBuffer::queue(uint64_t streamId, size_t metricId,
-                         TensorMetric tensorMetric,
+void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
+                         void *stream,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
   uint64_t numWords = capacity / sizeof(uint64_t);
   uint64_t metricValueSize = tensorMetric.size;
+  // The replay stream id is resolved from the graph launch callback. Metric
+  // copy nodes captured before replay therefore write a placeholder stream id.
+  uint64_t streamId = 0;
   void *globalScratchPtr = nullptr;
   void *profileScratchPtr = nullptr;
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
@@ -152,12 +154,12 @@ void MetricBuffer::queue(uint64_t streamId, size_t metricId,
                           reinterpret_cast<void *>(&profileScratchPtr)};
   unsigned int blockDimX = std::max(1u, launchConfig.numThreads);
   runtime->launchKernel(launchConfig.kernel, 1, 1, 1, blockDimX, 1, 1,
-                        launchConfig.sharedMemBytes, launchConfig.stream,
-                        kernelParams, nullptr);
+                        launchConfig.sharedMemBytes, stream, kernelParams,
+                        nullptr);
 }
 
-void MetricBuffer::queue(uint64_t streamId, size_t metricId,
-                         MetricValueType scalarMetric,
+void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
+                         void *stream,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
   uint64_t numWords = capacity / sizeof(uint64_t);
@@ -179,6 +181,9 @@ void MetricBuffer::queue(uint64_t streamId, size_t metricId,
         }
       },
       scalarMetric);
+  // The replay stream id is resolved from the graph launch callback. Metric
+  // copy nodes captured before replay therefore write a placeholder stream id.
+  uint64_t streamId = 0;
   void *globalScratchPtr = nullptr;
   void *profileScratchPtr = nullptr;
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
@@ -191,8 +196,8 @@ void MetricBuffer::queue(uint64_t streamId, size_t metricId,
                           reinterpret_cast<void *>(&profileScratchPtr)};
   unsigned int blockDimX = std::max(1u, launchConfig.numThreads);
   runtime->launchKernel(launchConfig.kernel, 1, 1, 1, blockDimX, 1, 1,
-                        launchConfig.sharedMemBytes, launchConfig.stream,
-                        kernelParams, nullptr);
+                        launchConfig.sharedMemBytes, stream, kernelParams,
+                        nullptr);
 }
 
 void MetricBuffer::synchronize(DeviceBuffer &buffer) {
