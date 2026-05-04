@@ -241,8 +241,7 @@ void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
         // not found.
         pendingMetricNode.dataToEntry.emplace(
             data,
-            DataEntry(Scope::DummyScopeId, phase,
-                      graphEntry.metricSet.get()));
+            DataEntry(Scope::DummyScopeId, phase, graphEntry.metricSet.get()));
       }
       hasMetricNodeEntries = true;
     }
@@ -499,9 +498,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
             threadState.metricKernelLaunchInfoQueue.front();
         threadState.metricKernelLaunchInfoQueue.pop_front();
         graphState.metricNodeIdToState.insert_or_assign(
-            nodeId, GraphState::MetricNodeState{
-                        metricKernelLaunchInfo.metricId,
-                        metricKernelLaunchInfo.numWords});
+            nodeId,
+            GraphState::MetricNodeState{metricKernelLaunchInfo.metricId,
+                                        metricKernelLaunchInfo.numWords});
         graphState.metricSeqIdToNodeId.insert_or_assign(
             metricKernelLaunchInfo.seqId, nodeId);
         graphState.numMetricWords += metricKernelLaunchInfo.numWords;

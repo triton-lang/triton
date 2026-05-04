@@ -134,8 +134,7 @@ collectTensorMetrics(Runtime *runtime,
   return tensorMetricsHost;
 }
 
-void MetricBuffer::queue(size_t seqId, TensorMetric tensorMetric,
-                         void *stream,
+void MetricBuffer::queue(size_t seqId, TensorMetric tensorMetric, void *stream,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
   uint64_t numWords = capacity / sizeof(uint64_t);
