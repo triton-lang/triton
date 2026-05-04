@@ -781,9 +781,6 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
   auto numMmaRets = bitwidthRet == 64 ? 2 : bitwidthRet / 8;
   int numCPackedElem = bitwidthRet == 64 ? 1 : 4 / numMmaRets;
 
-  if (mmaInstructions.find(mmaType) == mmaInstructions.end()) {
-    return emitError(loc, "Unsupported MMA instruction for the given mma type");
-  }
   auto rank = dTensorTy.getRank();
   auto elemsPerThread = triton::gpu::getElemsPerThread(dTensorTy);
   auto batchOffset =
@@ -847,11 +844,15 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto dTensorTy = op.getD().getType();
 
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
+  const auto &instrMap = isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
+  if (instrMap.find(mmaType) == instrMap.end())
+    return op.emitError(
+        "unsupported MMA instruction for the given operand/result types");
+
   NumRegisters numRegisters = (mmaType == TensorCoreType::FP64_FP64_FP64_FP64)
                                   ? NumRegisters{1, 1, 1}
                                   : NumRegisters{2, 1, 2};
 
-  const auto &instrMap = isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
   EmitMmaCallback emit = [&](PTXBuilder &builder, int b, int m, int n, int k,
                              mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                              unsigned colsPerThread, unsigned batchOffset,
@@ -899,6 +900,9 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
 
   TensorCoreType mmaType =
       getMmaTypeDotScaled(op, aTensorTy, bTensorTy, dTensorTy);
+  if (mmaInstrPtxScaled.find(mmaType) == mmaInstrPtxScaled.end())
+    return op.emitError(
+        "unsupported MMA instruction for the given operand/result types");
 
   SmallVector<Value> unpackedAScale =
       unpackLLElements(op.getLoc(), adaptor.getAScale(), rewriter);

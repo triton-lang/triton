@@ -34,6 +34,12 @@ struct LLVMDILocalVariablePass
       return;
     }
 
+    // Skip ops outside of a function (e.g. module-level globals) where
+    // diSubprogramAttr may not be valid for this op's scope.
+    if (!diSubprogramAttr || !op->getParentOfType<LLVM::LLVMFuncOp>()) {
+      return;
+    }
+
     MLIRContext *context = op->getContext();
     OpBuilder builder(context);
     Location loc = op->getLoc();
@@ -202,7 +208,7 @@ struct LLVMDILocalVariablePass
 
   // construct a subprogram of an operation by using its parent function's
   // DISubprogramAttr construction
-  LLVM::DISubprogramAttr getDISubprogramAttr(Operation op) {
+  LLVM::DISubprogramAttr getDISubprogramAttr(Operation &op) {
     auto funcOp = op.getParentOfType<LLVM::LLVMFuncOp>();
     return getDISubprogramAttr(funcOp);
   }
@@ -214,20 +220,31 @@ struct LLVMDILocalVariablePass
     MLIRContext *context = &getContext();
     OpBuilder builder(context);
     builder.setInsertionPointToStart(&funcOp.getBody().front());
-    llvm::SmallVector<mlir::LLVM::DINodeAttr> retainedNodes;
 
     LLVM::DIFileAttr fileAttr = subprogramAttr.getFile();
     LLVM::DISubroutineTypeAttr subroutineTypeAttr = subprogramAttr.getType();
     int64_t line = subprogramAttr.getLine();
-    auto localScopeAttr = dyn_cast<LLVM::DILocalScopeAttr>(subprogramAttr);
+    // The input subprogramAttr has isRecSelf=true. Use it as the scope for
+    // retainedNodes variables (proper recursive self-reference pattern).
+    auto selfRefScopeAttr = dyn_cast<LLVM::DILocalScopeAttr>(subprogramAttr);
     auto diFlag = LLVM::DIFlags::Zero;
 
-    // Extract function arguments and add them to retainedNodes:
-    // 0. Extract function argument types from subroutineTypeAttr
-    // 1. Create DILocalVariable and DebugValueOp for each arg
-    // 2. Add each arg as DILocalVariableAttr to retainedNodes
+    // Collect argument info and create retainedNodes variables scoped to the
+    // isRecSelf=true placeholder (these are nested inside the definition and
+    // resolved during translation).
     auto argTypeAttrs = subroutineTypeAttr.getTypes();
     unsigned resNum = funcOp.getNumResults() ? funcOp.getNumResults() : 1;
+
+    struct ArgInfo {
+      unsigned argIdx;
+      BlockArgument arg;
+      Location childLoc;
+      StringAttr nameAttr;
+      LLVM::DITypeAttr typeAttr;
+    };
+    llvm::SmallVector<ArgInfo> argInfos;
+    llvm::SmallVector<mlir::LLVM::DINodeAttr> retainedNodes;
+
     for (unsigned idx = resNum; idx < argTypeAttrs.size(); idx++) {
       LLVM::DITypeAttr argTypeAttr = argTypeAttrs[idx];
       unsigned argIdx = idx - resNum;
@@ -237,20 +254,18 @@ struct LLVMDILocalVariablePass
       auto nameLoc = dyn_cast<NameLoc>(argLoc);
       if (!nameLoc)
         continue;
-      Location childLoc = nameLoc.getChildLoc();
-      StringAttr nameAttr = nameLoc.getName();
 
+      // Create variable with isRecSelf=true scope for retainedNodes
       auto argVarAttr = LLVM::DILocalVariableAttr::get(
-          context, localScopeAttr, nameAttr, fileAttr, line, argIdx + 1, 0,
-          argTypeAttr, diFlag);
-
-      auto exprAttr = LLVM::DIExpressionAttr::get(context);
-      (void)LLVM::DbgValueOp::create(builder, childLoc, arg, argVarAttr,
-                                     exprAttr);
-
+          context, selfRefScopeAttr, nameLoc.getName(), fileAttr, line,
+          argIdx + 1, 0, argTypeAttr, diFlag);
       retainedNodes.push_back(argVarAttr);
+
+      argInfos.push_back(
+          {argIdx, arg, nameLoc.getChildLoc(), nameLoc.getName(), argTypeAttr});
     }
 
+    // Create the resolved subprogram (isRecSelf=false) with retainedNodes.
     mlir::DistinctAttr recId = subprogramAttr.getRecId();
     mlir::DistinctAttr id =
         mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
@@ -263,14 +278,93 @@ struct LLVMDILocalVariablePass
         funcNameAttr, funcNameAttr, fileAttr, line, line, subprogramFlags,
         subroutineTypeAttr, retainedNodes, /*annotations=*/{});
 
+    // Now create DbgValueOps with variables scoped to the RESOLVED subprogram.
+    // The isRecSelf=true scope must NOT appear in DbgValueOps because the
+    // translator's recursiveNodeMap entry is only valid during translation of
+    // the isRecSelf=false definition and is popped afterwards.
+    auto resolvedScopeAttr = dyn_cast<LLVM::DILocalScopeAttr>(subprogramAttr);
+    for (auto &info : argInfos) {
+      auto argVarAttr = LLVM::DILocalVariableAttr::get(
+          context, resolvedScopeAttr, info.nameAttr, fileAttr, line,
+          info.argIdx + 1, 0, info.typeAttr, diFlag);
+      auto exprAttr = LLVM::DIExpressionAttr::get(context);
+      (void)LLVM::DbgValueOp::create(builder, info.childLoc, info.arg,
+                                     argVarAttr, exprAttr);
+    }
+
     Location loc = funcOp.getLoc();
-    // Reset the subprogramAttr with retainedNodes to the funcOp
+    // Unwrap the old FusedLoc to avoid nesting a stale isRecSelf=true
+    // subprogram in the location chain.
+    if (auto fusedLoc = dyn_cast<FusedLoc>(loc)) {
+      if (fusedLoc.getMetadata() &&
+          isa<LLVM::DISubprogramAttr>(fusedLoc.getMetadata())) {
+        loc = FusedLoc::get(context, fusedLoc.getLocations(), Attribute());
+      }
+    }
     funcOp->setLoc(mlir::FusedLoc::get(context, {loc}, subprogramAttr));
     return subprogramAttr;
   }
 
+  // After creating the resolved subprogram, fix any DILexicalBlockFileAttr
+  // locations in the function that still reference the old isRecSelf=true
+  // subprogram. These were created by add_di_scope before this pass ran.
+  void fixLexicalBlockScopes(LLVM::LLVMFuncOp funcOp,
+                             LLVM::DISubprogramAttr oldSubprogram,
+                             LLVM::DISubprogramAttr newSubprogram) {
+    MLIRContext *context = &getContext();
+    funcOp.walk([&](Operation *op) {
+      Location loc = op->getLoc();
+      Location newLoc =
+          replaceLexicalBlockScope(context, loc, oldSubprogram, newSubprogram);
+      if (newLoc != loc)
+        op->setLoc(newLoc);
+    });
+  }
+
+  Location replaceLexicalBlockScope(MLIRContext *context, Location loc,
+                                    LLVM::DISubprogramAttr oldSP,
+                                    LLVM::DISubprogramAttr newSP) {
+    if (auto fusedLoc = dyn_cast<FusedLoc>(loc)) {
+      // Recursively fix inner locations
+      SmallVector<Location> newLocs;
+      bool changed = false;
+      for (Location inner : fusedLoc.getLocations()) {
+        Location fixed = replaceLexicalBlockScope(context, inner, oldSP, newSP);
+        newLocs.push_back(fixed);
+        if (fixed != inner)
+          changed = true;
+      }
+
+      auto metadata = fusedLoc.getMetadata();
+      if (auto lexBlock =
+              dyn_cast_or_null<LLVM::DILexicalBlockFileAttr>(metadata)) {
+        if (auto scope =
+                dyn_cast_or_null<LLVM::DISubprogramAttr>(lexBlock.getScope())) {
+          if (scope == oldSP) {
+            auto newBlock = LLVM::DILexicalBlockFileAttr::get(
+                context, newSP, lexBlock.getFile(),
+                lexBlock.getDiscriminator());
+            return FusedLoc::get(context, newLocs, newBlock);
+          }
+        }
+      }
+
+      if (changed)
+        return FusedLoc::get(context, newLocs, metadata);
+    } else if (auto callSiteLoc = dyn_cast<CallSiteLoc>(loc)) {
+      Location newCallee = replaceLexicalBlockScope(
+          context, callSiteLoc.getCallee(), oldSP, newSP);
+      Location newCaller = replaceLexicalBlockScope(
+          context, callSiteLoc.getCaller(), oldSP, newSP);
+      if (newCallee != callSiteLoc.getCallee() ||
+          newCaller != callSiteLoc.getCaller())
+        return CallSiteLoc::get(newCallee, newCaller);
+    }
+    return loc;
+  }
+
   // set it while traversing into a function
-  LLVM::DISubprogramAttr diSubprogramAttr;
+  LLVM::DISubprogramAttr diSubprogramAttr = {};
 
   void runOnOperation() override {
     Operation *op = getOperation();
@@ -278,11 +372,18 @@ struct LLVMDILocalVariablePass
     getOperation()->walk<WalkOrder::PreOrder>([&](Operation *op) -> void {
       if (isa<LLVM::LLVMFuncOp>(op)) {
         auto funcOp = cast<LLVM::LLVMFuncOp>(op);
-        diSubprogramAttr = getDISubprogramAttr(funcOp);
+        auto oldSubprogram = getDISubprogramAttr(funcOp);
         // External declarations (e.g., runtime builtins like vprintf) have no
         // body, so we cannot insert debug value intrinsics into them.
-        if (!funcOp.isExternal())
-          diSubprogramAttr = fuseFuncArgVariables(funcOp, diSubprogramAttr);
+        if (!funcOp.isExternal()) {
+          diSubprogramAttr = fuseFuncArgVariables(funcOp, oldSubprogram);
+          // Fix DILexicalBlockFileAttr locations that still reference the old
+          // isRecSelf=true subprogram from add_di_scope.
+          if (oldSubprogram.getIsRecSelf())
+            fixLexicalBlockScopes(funcOp, oldSubprogram, diSubprogramAttr);
+        } else {
+          diSubprogramAttr = oldSubprogram;
+        }
       } else {
         fuseDILocalVariable(op);
       }

@@ -29,6 +29,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     clc,
     tcgen05_copy,
     tcgen05_commit,
+    tcgen05_mma_barrier_count,
     tcgen05_mma_scaled,
     mbarrier,
     tma,
@@ -235,7 +236,7 @@ def unswizzle_scales_shared_memory(smem, BLOCK_MN: gl.constexpr, BLOCK_K: gl.con
 
 
 @gluon.jit
-def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, use_acc, pred):
+def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, mma_bar, use_acc, pred):
     A_ELEM_PER_BYTE: gl.constexpr = 2 if a_smem.dtype == gl.uint8 else 1
     BLOCK_M: gl.constexpr = a_smem.shape[0]
     BLOCK_N: gl.constexpr = b_smem.shape[0]
@@ -259,7 +260,7 @@ def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, 
     a_format: gl.constexpr = "e2m1" if a_smem.dtype == gl.uint8 else "e4m3"
     b_format: gl.constexpr = "e2m1" if b_smem.dtype == gl.uint8 else "e4m3"
     tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
-                       use_acc=use_acc, pred=pred)
+                       use_acc=use_acc, pred=pred, multicast=True, mbarriers=[mma_bar])
 
 
 # This helper function computes all the load indexing and issues the async loads
@@ -272,7 +273,7 @@ def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, 
 # clean, as pipelining can get messy.
 @gluon.jit
 def issue_loads(producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale_desc, a_bufs, b_bufs, a_scale_bufs,
-                b_scale_bufs, bars, pred, multicast_b_scale: gl.constexpr = False):
+                b_scale_bufs, bars, pred):
     A_ELEM_PER_BYTE: gl.constexpr = 2 if a_desc.dtype == gl.uint8 else 1
     B_ELEM_PER_BYTE: gl.constexpr = 2 if b_desc.dtype == gl.uint8 else 1
     BLOCK_M: gl.constexpr = a_desc.block_shape[0]
@@ -297,11 +298,12 @@ def issue_loads(producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale
     mbarrier.expect(
         bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta + a_scale_desc.nbytes_per_cta + b_scale_desc.nbytes_per_cta,
         pred)
-    tma.async_load(a_desc, [off_m, off_k_a], bar, a_bufs.index(index), pred)
-    tma.async_load(b_desc, [off_n, off_k_b], bar, b_bufs.index(index), pred)
-    tma.async_load(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_bufs.index(index), pred)
+    tma.async_load(a_desc, [off_m, off_k_a], bar, a_bufs.index(index), pred, multicast=True)
+    tma.async_load(b_desc, [off_n, off_k_b], bar, b_bufs.index(index), pred, multicast=True)
+    tma.async_load(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_bufs.index(index), pred,
+                   multicast=True)
     tma.async_load(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_bufs.index(index), pred,
-                   multicast=multicast_b_scale)
+                   multicast=True)
     return producer.next(pred)
 
 
@@ -310,8 +312,7 @@ def issue_mma(consumer, c_bars, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs, prod
     c_index = consumer.index
     mbarrier.wait(c_bars.index(c_index), consumer.phase, pred)
     async_mma_scaled_impl(a_bufs.index(c_index), b_bufs.index(c_index), a_scale_bufs.index(c_index),
-                          b_scale_bufs.index(c_index), acc_tmem, use_acc, pred)
-    tcgen05_commit(p_bars.index(producer.index), pred)
+                          b_scale_bufs.index(c_index), acc_tmem, p_bars.index(producer.index), use_acc, pred)
     return consumer.next(pred), producer.next(pred)
 
 
@@ -496,7 +497,7 @@ def mma_scaled_load_partition(p):
             mbarrier.wait(p.load_empty_bars.index(state.index), state.phase)
             state = issue_loads(state, scheduler.pid_m, scheduler.pid_n, k, p.a_desc, p.b_desc, p.a_scale_desc,
                                 p.b_scale_desc, p.a_bufs, p.b_bufs, p.a_scale_bufs, p.b_scale_bufs, p.load_ready_bars,
-                                pred=True, multicast_b_scale=gl.num_ctas() > 1)
+                                pred=True)
         scheduler = scheduler.step(i)
         i += 1
 
@@ -620,11 +621,16 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
 
     tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M_PER_CTA, BLOCK_N], col_stride=1, cga_layout=CGA_LAYOUT,
                                                    two_ctas=TWO_CTAS)
+    acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
+
+    mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count(
+        [a_bufs.index(0), b_bufs.index(0),
+         a_scale_bufs.index(0), b_scale_bufs.index(0)], multicast=True, two_ctas=acc_bufs.index(0).type.layout.two_ctas)
 
     load_empty_bars = mbarrier.allocate_mbarrier(batch=num_buffers)
     load_ready_bars = mbarrier.allocate_mbarrier(batch=num_buffers, two_ctas=TWO_CTAS)
     for i in gl.static_range(num_buffers):
-        mbarrier.init(load_empty_bars.index(i), count=1)
+        mbarrier.init(load_empty_bars.index(i), count=mma_barrier_count)
         mbarrier.init(load_ready_bars.index(i), count=1)
 
     acc_empty_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=TWO_CTAS)
@@ -646,7 +652,6 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
     clc_result_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 2], clc_layout)
     clc_planar_pid_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 1], clc_layout)
 
-    acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
     p = PartitionArgs(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs,
                       load_empty_bars, load_ready_bars, acc_bufs, acc_empty_bars, acc_ready_bars, clc_result_buffers,
                       clc_barriers, clc_planar_pid_buffers, clc_planar_ready_bars, clc_consumed_bars, GRID_MINOR_DIM,

@@ -249,15 +249,17 @@ void createTMAAsyncGather(scf::ForOp forOp, tt::DescriptorGatherOp gatherOp,
                           Value alloc, Value insertIdx, Value extractIdx,
                           Value barrier, Operation *waitOp,
                           CoarseSchedule &schedule) {
-  return createTMAAsyncCopy(forOp, gatherOp, gatherOp.getDesc(), alloc,
-                            insertIdx, extractIdx, barrier, waitOp, schedule,
-                            [&](OpBuilderForStage &builder, Value desc,
-                                Value barrier, Value view, Value pred) {
-                              ttng::AsyncTMAGatherOp::create(
-                                  builder, gatherOp.getLoc(), desc,
-                                  gatherOp.getXOffsets(), gatherOp.getYOffset(),
-                                  barrier, view, pred);
-                            });
+  return createTMAAsyncCopy(
+      forOp, gatherOp, gatherOp.getDesc(), alloc, insertIdx, extractIdx,
+      barrier, waitOp, schedule,
+      [&](OpBuilderForStage &builder, Value desc, Value barrier, Value view,
+          Value pred) {
+        Value xOffsets = ttng::sextI16ToI32Indices(gatherOp.getXOffsets(),
+                                                   builder, gatherOp.getLoc());
+        ttng::AsyncTMAGatherOp::create(builder, gatherOp.getLoc(), desc,
+                                       xOffsets, gatherOp.getYOffset(), barrier,
+                                       view, pred);
+      });
 }
 
 struct AsyncLoad {

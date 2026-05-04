@@ -25,7 +25,8 @@ def is_pingpong_schedule_enabled(arch, use_async_copy):
 
 
 def is_in_thread_transpose_enabled(arch):
-    return (arch == "gfx942") if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
+    return (arch == "gfx942" or "gfx120" in arch) \
+        if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
 
 
 def is_async_copy_enabled(arch):
@@ -314,6 +315,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
+        passes.ttir.add_loop_unroll(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         amd.passes.ttgpuir.add_warp_pipeline(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)

@@ -349,11 +349,12 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
                                         acc_tmem_layout: ttgl.constexpr, blocked_c: ttgl.constexpr):
     smem_a = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
     smem_b = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
+    acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_tmem_layout)
 
     tma_bar = mbarrier.allocate_mbarrier(two_ctas=acc_tmem_layout.two_ctas)
     mbarrier.init(tma_bar, count=1)
     mma_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True))
+    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True, acc_tmem.type.layout.two_ctas))
 
     mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
     tma.async_load(a_desc, [0, 0], tma_bar, smem_a, multicast=True)
@@ -361,7 +362,6 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
     mbarrier.wait(tma_bar, phase=0, deps=[smem_a, smem_b])
     mbarrier.invalidate(tma_bar)
 
-    acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_tmem_layout)
     # If it's not in a loop we don't striclty need multicast=True, but we add it to exercise the path in the test
     tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=False, multicast=True, mbarriers=[mma_bar])
     mbarrier.wait(mma_bar, phase=0, deps=[smem_a, smem_b])
@@ -482,7 +482,7 @@ def tcgen05_mma_scaled_direct_multicast_kernel(a_desc, b_desc, out_ptr, BLOCK_M:
     tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
     mbarrier.init(tma_bar, count=1)
     mma_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True))
+    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True, acc.type.layout.two_ctas))
 
     phase_tma = 0
     phase_mma = 0
@@ -753,14 +753,15 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, out_desc, gather_idx_p
     phase_tma = 0
 
     if use_tcgen05:
-        mma_bar = mbarrier.allocate_mbarrier()
-        phase_mma = 0
-        mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], multicast))
         acc_tmem = allocate_tensor_memory(
             element_ty=ttgl.float32,
             shape=[BLOCK_M, BLOCK_N],
             layout=acc_tmem_layout,
         )
+        mma_bar = mbarrier.allocate_mbarrier()
+        phase_mma = 0
+        mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], multicast,
+                                                               acc_tmem.type.layout.two_ctas))
     else:
         acc = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=acc_layout)
 
@@ -2560,6 +2561,124 @@ def test_shared_scatter(N, M):
     torch.testing.assert_close(output, expected)
 
 
+@gluon.jit
+def shared_atomic_scatter_add_kernel(
+    values_ptr,
+    indices_ptr,
+    mask_ptr,
+    old_ptr,
+    final_ptr,
+    N: ttgl.constexpr,
+    M: ttgl.constexpr,
+    axis: ttgl.constexpr,
+    dtype: ttgl.constexpr,
+    use_mask: ttgl.constexpr,
+    use_constant_values: ttgl.constexpr,
+    RHS_N: ttgl.constexpr,
+    RHS_M: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    layout_rhs: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    indices_x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
+    indices_y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
+    offsets_2d = indices_x[:, None] * M + indices_y[None, :]
+    rhs_x = ttgl.arange(0, RHS_N, layout=ttgl.SliceLayout(dim=1, parent=layout_rhs))
+    rhs_y = ttgl.arange(0, RHS_M, layout=ttgl.SliceLayout(dim=0, parent=layout_rhs))
+    offsets_rhs = rhs_x[:, None] * RHS_M + rhs_y[None, :]
+
+    smem = ttgl.allocate_shared_memory(dtype, [N, M], layout=shared_layout)
+    smem.store(ttgl.zeros([N, M], dtype, layout=layout_2d))
+
+    indices = ttgl.load(indices_ptr + offsets_rhs)
+    if use_constant_values:
+        # Cover the all-ones RHS path; int32 can lower to atom.inc on NVIDIA.
+        values = ttgl.full([RHS_N, RHS_M], 1, dtype, layout_rhs)
+    else:
+        values = ttgl.load(values_ptr + offsets_rhs)
+
+    if use_mask:
+        mask = ttgl.load(mask_ptr + offsets_rhs)
+        old = smem.atomic_scatter_add(values, indices, axis=axis, mask=mask)
+    else:
+        old = smem.atomic_scatter_add(values, indices, axis=axis)
+    ttgl.store(old_ptr + offsets_rhs, old)
+    final = smem.load(layout=layout_2d)
+
+    ttgl.store(final_ptr + offsets_2d, final)
+
+
+@pytest.mark.parametrize("use_mask,torch_dtype,gluon_dtype", [
+    pytest.param(False, torch.int32, ttgl.int32, id="unmasked_int32"),
+    pytest.param(False, torch.float16, ttgl.float16, id="unmasked_float16"),
+    pytest.param(False, torch.float32, ttgl.float32, id="unmasked_float32"),
+    pytest.param(True, torch.int32, ttgl.int32, id="masked_int32"),
+    pytest.param(True, torch.float32, ttgl.float32, id="masked_float32"),
+])
+@pytest.mark.parametrize("use_constant_values", [
+    pytest.param(False, id="loaded_values"),
+    pytest.param(True, id="constant_values"),
+])
+@pytest.mark.parametrize("N,M,axis,rhs_shape", [
+    pytest.param(16, 32, 1, (16, 2), id="axis1_rhs_cols"),
+    pytest.param(32, 16, 0, (2, 16), id="axis0_rhs_rows"),
+])
+def test_shared_atomic_scatter_add(use_mask, torch_dtype, gluon_dtype, use_constant_values, N, M, axis, rhs_shape):
+    if is_hip_cdna() or is_hip_rdna():
+        pytest.skip("Shared atomic_scatter_add is not supported on AMD")
+
+    device = torch.device("cuda")
+    rhs_n, rhs_m = rhs_shape
+
+    if use_constant_values:
+        values = torch.ones(rhs_shape, dtype=torch_dtype, device=device)
+    else:
+        values = torch.arange(rhs_n * rhs_m, dtype=torch.int32, device=device).reshape(rhs_shape)
+        values = (values % 7 + 1).to(torch_dtype)
+    torch.manual_seed(23 if use_mask else 17)
+    upper = M if axis == 1 else N
+    indices = torch.randint(0, upper, rhs_shape, dtype=torch.int32, device=device)
+    old = torch.empty(rhs_shape, dtype=torch_dtype, device=device)
+    final = torch.empty((N, M), dtype=torch_dtype, device=device)
+    expected = torch.zeros((N, M), dtype=torch_dtype, device=device)
+
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                   warps_per_cta=[4, 1], order=[1, 0])
+    layout_rhs = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                    warps_per_cta=[4, 1], order=[1, 0])
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    if use_mask:
+        mask = (torch.arange(rhs_n * rhs_m, device=device).reshape(rhs_shape) % 3) != 0
+        rhs = torch.where(mask, values, torch.zeros_like(values))
+    else:
+        mask = torch.empty(rhs_shape, dtype=torch.bool, device=device)
+        rhs = values
+    expected.scatter_add_(axis, indices.long(), rhs)
+
+    shared_atomic_scatter_add_kernel[(1, )](
+        values,
+        indices,
+        mask,
+        old,
+        final,
+        N=N,
+        M=M,
+        axis=axis,
+        dtype=gluon_dtype,
+        use_mask=use_mask,
+        use_constant_values=use_constant_values,
+        RHS_N=rhs_n,
+        RHS_M=rhs_m,
+        layout_2d=layout_2d,
+        layout_rhs=layout_rhs,
+        shared_layout=shared_layout,
+        num_warps=4,
+    )
+
+    torch.testing.assert_close(final, expected, atol=0, rtol=0)
+
+
 # ============================================================================
 # Multi-warp Tests
 # ============================================================================
@@ -3825,7 +3944,8 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     mbarrier.init(tma_bar, count=1)
 
     mma_bar = mbarrier.allocate_mbarrier()
-    mma_bar_count: ttgl.constexpr = tcgen05_mma_barrier_count([a_smem, b_smem], multicast=multicast)
+    mma_bar_count: ttgl.constexpr = tcgen05_mma_barrier_count([a_smem, b_smem], multicast=multicast,
+                                                              two_ctas=acc_tmem.type.layout.two_ctas)
     mbarrier.init(mma_bar, count=mma_bar_count)
 
     phase_tma = 0

@@ -873,12 +873,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     amdg.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tti.experimental_lock_acquire
-    // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
-    // CHECK: %[[THREAD_MASK:.*]] = arith.constant 562958543486978 : i64
-    // CHECK: tt.call @__triton_consan_copy_write_visibility{{.*}}(%[[THREAD_BIT]], %[[THREAD_MASK]]
-    // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
-    // CHECK: %[[THREAD_MASK:.*]] = arith.constant 562958543486978 : i64
-    // CHECK: tt.call @__triton_consan_copy_read_visibility{{.*}}(%[[THREAD_BIT]], %[[THREAD_MASK]]
+    // CHECK: arith.constant 1 : i32
+    // CHECK: tt.call @__triton_consan_set_active_mask
+    // CHECK: tti.experimental_lock_release
     ttg.warp_specialize(%smem, %bar) attributes {actualRegisters = array<i32: 480, 32>, allocation.offset = 512 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
     default {
       %c0_i32 = arith.constant 0 : i32
@@ -939,12 +936,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     amdg.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    // CHECK: %[[ACTIVE_MASK:.*]] = arith.constant 5 : i32
+    // CHECK: tt.call @__triton_consan_set_active_mask{{.*}}(%[[ACTIVE_MASK]],
     ttg.warp_specialize(%smem, %bar) attributes {actualRegisters = array<i32: 480, 32>, allocation.offset = 512 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
     default {
       // CHECK: tti.experimental_lock_acquire
       // CHECK: tt.call @__triton_consan_set_waiting
-      // CHECK: %[[ACTIVE_MASK:.*]] = arith.constant 5 : i32
-      // CHECK: tt.call @__triton_consan_check_all_active_waiting{{.*}}(%[[ACTIVE_MASK]], {{.*}}, {{.*}}, {{.*}})
+      // CHECK: tt.call @__triton_consan_check_all_active_waiting
       // CHECK: tti.experimental_lock_release
       %c0_i32 = arith.constant 0 : i32
       amdg.wait_barrier %bar, %c0_i32 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -954,8 +952,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // CHECK: partition0
       // CHECK: tti.experimental_lock_acquire
       // CHECK: tt.call @__triton_consan_set_waiting
-      // CHECK: %[[ACTIVE_MASK:.*]] = arith.constant 5 : i32
-      // CHECK: tt.call @__triton_consan_check_all_active_waiting{{.*}}(%[[ACTIVE_MASK]], {{.*}}, {{.*}}, {{.*}})
+      // CHECK: tt.call @__triton_consan_check_all_active_waiting
       // CHECK: tti.experimental_lock_release
       %c0_i32 = arith.constant 0 : i32
       amdg.wait_barrier %arg2, %c0_i32 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
