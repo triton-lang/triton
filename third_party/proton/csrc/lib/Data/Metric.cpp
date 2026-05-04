@@ -12,6 +12,7 @@ std::map<std::string, size_t> MetricBuffer::metricNameToId;
 std::shared_mutex MetricBuffer::metricDescriptorMutex;
 
 std::atomic<size_t> MetricBuffer::metricId{0};
+std::atomic_size_t MetricBuffer::metricSeqId{1};
 
 MetricBuffer::~MetricBuffer() {
   for (auto &[device, buffer] : deviceBuffers) {
@@ -30,11 +31,12 @@ MetricBuffer::~MetricBuffer() {
 void MetricBuffer::receive(
     const std::map<std::string, TensorMetric> &tensorMetrics,
     const std::map<std::string, MetricValueType> &scalarMetrics,
-    const MetricKernelLaunchState &metricKernelLaunchState) {
+    const MetricKernelLaunchState &metricKernelLaunchState,
+    const MetricKernelLaunchCallback &callback) {
   queueMetrics(tensorMetrics, metricKernelLaunchState.tensor.stream,
-               metricKernelLaunchState.tensor);
+               metricKernelLaunchState.tensor, callback);
   queueMetrics(scalarMetrics, metricKernelLaunchState.scalar.stream,
-               metricKernelLaunchState.scalar);
+               metricKernelLaunchState.scalar, callback);
 }
 
 MetricBuffer::MetricDescriptor
@@ -132,22 +134,19 @@ collectTensorMetrics(Runtime *runtime,
   return tensorMetricsHost;
 }
 
-void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
+void MetricBuffer::queue(size_t seqId, TensorMetric tensorMetric,
                          void *stream,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
   uint64_t numWords = capacity / sizeof(uint64_t);
+  uint64_t seqIdArg = seqId;
   uint64_t metricValueSize = tensorMetric.size;
-  // The replay stream id is resolved from the graph launch callback. Metric
-  // copy nodes captured before replay therefore write a placeholder stream id.
-  uint64_t streamId = 0;
   void *globalScratchPtr = nullptr;
   void *profileScratchPtr = nullptr;
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&numWords),
-                          reinterpret_cast<void *>(&streamId),
-                          reinterpret_cast<void *>(&metricId),
+                          reinterpret_cast<void *>(&seqIdArg),
                           reinterpret_cast<void *>(&tensorMetric.ptr),
                           reinterpret_cast<void *>(&metricValueSize),
                           reinterpret_cast<void *>(&globalScratchPtr),
@@ -158,11 +157,12 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
                         nullptr);
 }
 
-void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
+void MetricBuffer::queue(size_t seqId, MetricValueType scalarMetric,
                          void *stream,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
   uint64_t numWords = capacity / sizeof(uint64_t);
+  uint64_t seqIdArg = seqId;
   uint64_t metricBits = std::visit(
       [](auto &&value) -> uint64_t {
         using T = std::decay_t<decltype(value)>;
@@ -181,16 +181,12 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
         }
       },
       scalarMetric);
-  // The replay stream id is resolved from the graph launch callback. Metric
-  // copy nodes captured before replay therefore write a placeholder stream id.
-  uint64_t streamId = 0;
   void *globalScratchPtr = nullptr;
   void *profileScratchPtr = nullptr;
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&numWords),
-                          reinterpret_cast<void *>(&streamId),
-                          reinterpret_cast<void *>(&metricId),
+                          reinterpret_cast<void *>(&seqIdArg),
                           reinterpret_cast<void *>(&metricBits),
                           reinterpret_cast<void *>(&globalScratchPtr),
                           reinterpret_cast<void *>(&profileScratchPtr)};

@@ -6,7 +6,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -71,8 +70,16 @@ struct GraphState {
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation.
   NodeIdToStateMap nodeIdToState;
-  // Metric nodes and their per-node metric words, ordered by node id.
-  std::map<uint64_t, size_t> metricNodeIdToNumWords;
+  struct MetricNodeState {
+    size_t metricId{};
+    size_t numWords{};
+  };
+  // Metric nodes and their CPU-side metric state, ordered by node id.
+  std::map<uint64_t, MetricNodeState> metricNodeIdToState;
+  // Maps the sequence id captured in the metric record back to the graph node
+  // id. The sequence id is captured as a normal kernel argument before CUPTI
+  // reports the node id.
+  std::map<uint64_t, uint64_t> metricSeqIdToNodeId;
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
   bool captureStatusChecked{};
@@ -80,16 +87,14 @@ struct GraphState {
   size_t numMetricWords{};
 };
 
-struct PendingGraph {
-  size_t numNodes{};
-  size_t numWords{};
-  // Metric target entries grouped per Data sink and aligned with graph
-  // metric-node order.
-  std::map<Data *, std::vector<DataEntry>> dataToEntries;
-};
-
 struct PendingGraphQueue {
-  std::map<uint64_t, std::vector<PendingGraph>> streamIdToPendingGraphs;
+  struct MetricNodeState {
+    size_t metricId{};
+    std::map<Data *, DataEntry> dataToEntry;
+  };
+  using SeqIdToStateMap = std::map<uint64_t, MetricNodeState>;
+
+  SeqIdToStateMap seqIdToState;
   // The start buffer offset in the metric buffer for this queue
   size_t startBufferOffset{};
   // Total number of uint64 words written by all nodes in this queue
@@ -98,9 +103,8 @@ struct PendingGraphQueue {
   explicit PendingGraphQueue(size_t startBufferOffset)
       : startBufferOffset(startBufferOffset) {}
 
-  void push(uint64_t streamId, PendingGraph &&pendingGraph) {
-    auto numWords = pendingGraph.numWords;
-    streamIdToPendingGraphs[streamId].push_back(std::move(pendingGraph));
+  void push(size_t numWords, SeqIdToStateMap &&seqIdToState) {
+    this->seqIdToState.merge(std::move(seqIdToState));
     this->numWords += numWords;
   }
 };
@@ -110,7 +114,8 @@ public:
   explicit PendingGraphPool(MetricBuffer *metricBuffer)
       : metricBuffer(metricBuffer), runtime(metricBuffer->getRuntime()) {}
 
-  void push(size_t phase, uint64_t streamId, PendingGraph &&pendingGraph);
+  void push(size_t phase, size_t numWords,
+            PendingGraphQueue::SeqIdToStateMap &&seqIdToState);
 
   // No GPU synchronization, No CPU locks
   void peek(size_t phase);

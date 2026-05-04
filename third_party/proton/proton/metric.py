@@ -8,17 +8,17 @@ from .state import exit_state, enter_state, COMPUTE_METADATA_SCOPE_NAME
 
 
 @triton.jit
-def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, stream_id: tl.uint64, metric_id: tl.uint64,
-                         metric_value_ptr, metric_value_size: tl.uint64):
-    # Record layout is {stream_id, metric_id, <metric_values>}.
+def tensor_metric_kernel(
+    device_ptr, device_offset_ptr, size: tl.uint64, seq_id: tl.uint64, metric_value_ptr,
+    metric_value_size: tl.uint64
+):
+    # Record layout is {seq_id, <metric_values>}.
     BLOCK_SIZE: tl.constexpr = 128
-    record_size = metric_value_size + 2
+    record_size = metric_value_size + 1
     # Reserve the full record atomically so replayed graph streams can append
     # concurrently.
     device_offset = tl.atomic_add(device_offset_ptr, record_size, sem="relaxed") % size
-    tl.store(device_ptr + device_offset, stream_id)
-    device_offset = (device_offset + 1) % size
-    tl.store(device_ptr + device_offset, metric_id)
+    tl.store(device_ptr + device_offset, seq_id)
     device_offset = (device_offset + 1) % size
     num_iters = tl.cdiv(metric_value_size, BLOCK_SIZE)
     offsets = tl.arange(0, BLOCK_SIZE)
@@ -30,13 +30,12 @@ def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, stream_
 
 
 @triton.jit
-def scalar_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, stream_id: tl.uint64, metric_id: tl.uint64,
-                         metric_value: tl.uint64):
-    # Record layout is {stream_id, metric_id, metric_value}.
-    device_offset = tl.atomic_add(device_offset_ptr, 3, sem="relaxed") % size
-    tl.store(device_ptr + device_offset, stream_id)
-    device_offset = (device_offset + 1) % size
-    tl.store(device_ptr + device_offset, metric_id)
+def scalar_metric_kernel(
+    device_ptr, device_offset_ptr, size: tl.uint64, seq_id: tl.uint64, metric_value: tl.uint64
+):
+    # Record layout is {seq_id, metric_value}.
+    device_offset = tl.atomic_add(device_offset_ptr, 2, sem="relaxed") % size
+    tl.store(device_ptr + device_offset, seq_id)
     device_offset = (device_offset + 1) % size
     tl.store(device_ptr + device_offset, metric_value)
 
@@ -54,8 +53,7 @@ def _get_kernel(kernel_fn, *args):
 
 def set_metric_kernels():
     mock_ptr = MockTensor(tl.uint64)
-    mock_metric_id = 0
-    mock_stream_id = 0
+    mock_seq_id = 0
     mock_size = 1
     mock_metric_value_size = 1
     tensor_metric_kernel_fn, tensor_metric_kernel_num_threads, tensor_metric_kernel_shared = _get_kernel(
@@ -63,8 +61,7 @@ def set_metric_kernels():
         mock_ptr,
         mock_ptr,
         mock_size,
-        mock_stream_id,
-        mock_metric_id,
+        mock_seq_id,
         mock_ptr,
         mock_metric_value_size,
     )
@@ -73,9 +70,8 @@ def set_metric_kernels():
         mock_ptr,
         mock_ptr,
         mock_size,
-        mock_stream_id,
-        mock_metric_id,
-        mock_metric_id,
+        mock_seq_id,
+        mock_seq_id,
     )
     device = driver.active.get_current_device()
     stream = driver.active.get_current_stream(device)

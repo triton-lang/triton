@@ -5,6 +5,7 @@
 #include "Utility/String.h"
 #include "Utility/Traits.h"
 #include <atomic>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -398,6 +399,10 @@ struct MetricKernelLaunchState {
   MetricKernelLaunchConfig scalar{};
 };
 
+inline constexpr size_t kMetricRecordHeaderWords = 1;
+using MetricKernelLaunchCallback =
+    std::function<void(size_t seqId, size_t metricId, size_t numWords)>;
+
 /// Collect tensor metrics from device to host.
 std::map<std::string, MetricValueType>
 collectTensorMetrics(Runtime *runtime,
@@ -412,15 +417,15 @@ collectTensorMetrics(Runtime *runtime,
 /// Here's the layout of the buffer and it's meta data that are maintained on
 /// the host:
 ///
-///  host ->                             -------- kernel0 --------
-///                                     /                         \
-/// [device0] -> metric buffer ->
-///     {stream_id, metric_id, value, stream_id, metric_id, value,
-///     ...}
-///                   |                            /|\
-///                   |                             |
-///                   | deviceOffsetPtr -------------
+// clang-format off
+///  host ->                          -------- kernel0 --------   ------- kernel1 --------
+///                                   /                         \/                        \
+/// [device0] -> metric buffer ->  {seq_id, value, seq_id, value, ...}
+///                   |                                      /|\
+///                   |                                       |
+///                   | deviceOffsetPtr ----------------------|
 ///                   | devicePtr
+// clang-format on
 class MetricBuffer {
 public:
   struct MetricDescriptor {
@@ -439,7 +444,8 @@ public:
 
   void receive(const std::map<std::string, TensorMetric> &tensorMetrics,
                const std::map<std::string, MetricValueType> &scalarMetrics,
-               const MetricKernelLaunchState &metricKernelLaunchState);
+               const MetricKernelLaunchState &metricKernelLaunchState,
+               const MetricKernelLaunchCallback &callback = {});
 
   void reserve() { getOrCreateBuffer(); }
 
@@ -494,10 +500,10 @@ private:
 
   DeviceBuffer &getOrCreateBuffer();
 
-  void queue(size_t metricId, TensorMetric tensorMetric, void *stream,
+  void queue(size_t seqId, TensorMetric tensorMetric, void *stream,
              const MetricKernelLaunchConfig &launchConfig);
 
-  void queue(size_t metricId, MetricValueType scalarMetric, void *stream,
+  void queue(size_t seqId, MetricValueType scalarMetric, void *stream,
              const MetricKernelLaunchConfig &launchConfig);
 
   void synchronize(DeviceBuffer &buffer);
@@ -530,12 +536,17 @@ private:
 
   template <typename MetricsT>
   void queueMetrics(const MetricsT &metrics, void *stream,
-                    const MetricKernelLaunchConfig &launchConfig) {
+                    const MetricKernelLaunchConfig &launchConfig,
+                    const MetricKernelLaunchCallback &callback) {
     for (const auto &[name, metric] : metrics) {
       size_t typeIndex = getMetricTypeIndex(metric);
       size_t size = getMetricSize(metric);
       auto descriptor = getOrCreateMetricDescriptor(name, typeIndex, size);
-      queue(descriptor.id, metric, stream, launchConfig);
+      auto seqId = metricSeqId.fetch_add(1, std::memory_order_relaxed);
+      if (callback) {
+        callback(seqId, descriptor.id, kMetricRecordHeaderWords + size);
+      }
+      queue(seqId, metric, stream, launchConfig);
     }
   }
 
@@ -544,6 +555,7 @@ private:
 
 protected:
   static std::atomic<size_t> metricId;
+  static std::atomic_size_t metricSeqId;
   static std::map<size_t, MetricDescriptor> metricDescriptors;
   static std::map<std::string, size_t> metricNameToId;
   static std::shared_mutex metricDescriptorMutex;

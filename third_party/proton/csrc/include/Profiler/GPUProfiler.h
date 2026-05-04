@@ -122,7 +122,12 @@ protected:
     bool isApiExternOp{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
-    std::deque<size_t> metricKernelNumWordsQueue;
+    struct MetricKernelLaunchInfo {
+      uint64_t seqId{};
+      size_t metricId{};
+      size_t numWords{};
+    };
+    std::deque<MetricKernelLaunchInfo> metricKernelLaunchInfoQueue;
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
     void enterOp(const Scope &scope) {
@@ -231,18 +236,13 @@ protected:
       if (threadState.isStreamCapturing) { // Graph capture mode
         // Launch metric kernels
         auto &metricKernelLaunchState = profiler.metricKernelLaunchState;
-        for (const auto &[_, metric] : tensorMetrics) {
-          threadState.metricKernelNumWordsQueue.push_back(
-              /*stream_id=*/1 + /*metric_id=*/1 +
-              /*metric_values=*/metric.size);
-        }
-        for (size_t i = 0; i < scalarMetrics.size(); ++i) {
-          threadState.metricKernelNumWordsQueue.push_back(
-              /*stream_id=*/1 + /*metric_id=*/1 + /*metric_value=*/1);
-        }
         threadState.isMetricKernelLaunching = true;
-        profiler.metricBuffer->receive(tensorMetrics, scalarMetrics,
-                                       metricKernelLaunchState);
+        profiler.metricBuffer->receive(
+            tensorMetrics, scalarMetrics, metricKernelLaunchState,
+            [&](size_t seqId, size_t metricId, size_t numWords) {
+              threadState.metricKernelLaunchInfoQueue.push_back(
+                  {seqId, metricId, numWords});
+            });
         threadState.isMetricKernelLaunching = false;
       } else { // Eager mode, directly copy
         // Populate tensor metrics

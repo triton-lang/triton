@@ -25,10 +25,6 @@ template <bool CheckSuccess>
 CUptiResult getContextId(CUcontext context, uint32_t *pCtxId);
 
 template <bool CheckSuccess>
-CUptiResult getStreamIdEx(CUcontext context, CUstream stream,
-                          uint8_t perThreadStream, uint32_t *streamId);
-
-template <bool CheckSuccess>
 CUptiResult activityRegisterCallbacks(
     CUpti_BuffersCallbackRequestFunc funcBufferRequested,
     CUpti_BuffersCallbackCompleteFunc funcBufferCompleted);

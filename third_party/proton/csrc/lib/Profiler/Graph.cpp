@@ -25,15 +25,15 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
     return hostBasePtr[offset % capacityWords];
   };
 
-  auto &streamIdToPendingGraphs = queue.streamIdToPendingGraphs;
   for (uint64_t wordOffset = scanStartWordOffset; wordOffset < endWordOffset;) {
-    const uint64_t streamId = readWord(wordOffset);
+    const uint64_t seqId = readWord(wordOffset);
     wordOffset += 1;
 
-    const uint64_t metricId = readWord(wordOffset);
-    wordOffset += 1;
+    auto seqIdIt = queue.seqIdToState.find(seqId);
+    auto &metricNodeState = seqIdIt->second;
 
-    auto metricDesc = metricBuffer.getMetricDescriptor(metricId);
+    auto metricDesc =
+        metricBuffer.getMetricDescriptor(metricNodeState.metricId);
     const auto &metricName = metricDesc.name;
     const auto metricTypeIndex = metricDesc.typeIndex;
 
@@ -94,12 +94,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
     wordOffset += metricDesc.size;
 
-    auto &pendingGraphs = streamIdToPendingGraphs.at(streamId);
-    auto &pendingGraph = pendingGraphs.front();
-    const auto entryIndex = pendingGraph.dataToEntries.begin()->second.size() -
-                            pendingGraph.numNodes;
-    for (auto &[data, entries] : pendingGraph.dataToEntries) {
-      auto &dataEntry = entries[entryIndex];
+    for (auto &[data, dataEntry] : metricNodeState.dataToEntry) {
       if (dataEntry.id != Scope::DummyScopeId) {
         dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
                                              dataEntry.id);
@@ -107,26 +102,14 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
         dataEntry.upsertFlexibleMetric(metricName, metricValueVariant);
       }
     }
-    pendingGraph.numNodes -= 1;
-    pendingGraph.numWords -= 2 + metricDesc.size;
-    if (pendingGraph.numNodes == 0 && pendingGraph.numWords == 0) {
-      pendingGraphs.erase(pendingGraphs.begin());
-      if (pendingGraphs.empty()) {
-        streamIdToPendingGraphs.erase(streamId);
-      }
-    }
-  }
-
-  if (!streamIdToPendingGraphs.empty()) {
-    throw std::runtime_error(
-        "[PROTON] Missing CUDA graph metric records during flush");
+    queue.seqIdToState.erase(seqIdIt);
   }
 }
 } // namespace
 
-void PendingGraphPool::push(size_t phase, uint64_t streamId,
-                            PendingGraph &&pendingGraph) {
-  const size_t requiredBytes = bytesForWords(pendingGraph.numWords);
+void PendingGraphPool::push(size_t phase, size_t numWords,
+                            PendingGraphQueue::SeqIdToStateMap &&seqIdToState) {
+  const size_t requiredBytes = bytesForWords(numWords);
   void *device = runtime->getDevice();
   std::shared_ptr<Slot> slot;
   size_t startBufferOffset = 0;
@@ -144,7 +127,7 @@ void PendingGraphPool::push(size_t phase, uint64_t streamId,
     if (slot->queue == std::nullopt) {
       slot->queue = PendingGraphQueue(startBufferOffset);
     }
-    slot->queue->push(streamId, std::move(pendingGraph));
+    slot->queue->push(numWords, std::move(seqIdToState));
   }
   {
     std::lock_guard<std::mutex> lock(mutex);
