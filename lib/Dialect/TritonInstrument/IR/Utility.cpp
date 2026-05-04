@@ -590,7 +590,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
                        {createInitStateTensor(b, {numCTAs}, 32, 1, fb),
                         getIntTensorType(entryRegion, {numCTAs}, 32)});
     passToWarpSpecialize(entryPoint, activeMasks.at(entryRegion), activeMasks,
-                         captureCounter);
+                         captureCounter, captureBytes);
 
     barrierWriteRecipients.insert(
         entryRegion,
