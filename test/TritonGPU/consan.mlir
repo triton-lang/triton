@@ -287,10 +287,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #smem = #ttg.shared_memory
 #blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1], CGALayout = [[0, 0]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
-  // CHECK-LABEL: tt.func private @__triton_consan_check_outstanding_commits_noalias{{.*}}T2x1x2x1xI8
+  // CHECK-LABEL: tt.func private @__triton_consan_check_outstanding_commits_noalias{{.*}}T2x1x1xI8
   // CHECK-SAME: %arg6: i32
   // CHECK-NOT: tti.experimental_cluster_cta_id
-  // CHECK: tt.splat %arg6 : i32 -> tensor<2x1x2x1xi32
+  // CHECK: tt.splat %arg6 : i32 -> tensor<2x1x1xi32
   // CHECK: arith.shrui
   // CHECK-LABEL: @outstanding_commits_multicast_tma_recipients
   tt.func public @outstanding_commits_multicast_tma_recipients(

@@ -193,10 +193,12 @@ struct AuxDataMap {
   // tracks.
   RegionToValueMap readTracking[numMemTypes];
 
-  // scratch, <C x B x C x P x i8>
+  // scratch, <C x B x P x i8>
   // Per-commit-kind outstanding commit counters for shared-memory buffers.
   // Entries are 0 for none, -1 for staged but uncommitted, and positive for a
   // committed access with an outstanding-group distance.
+  // Just one C dimension as ampere async_copy, WGMMA and TMA store are
+  // intra-CTA.
   RegionToValueMap commits[CommitKind::NumCommitKinds];
 
   // tensor, <B x B x i1>
