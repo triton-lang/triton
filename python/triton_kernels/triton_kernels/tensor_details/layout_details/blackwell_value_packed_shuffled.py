@@ -9,23 +9,6 @@ from .torch_utils import repack
 
 @dataclass(frozen=True)
 class BlackwellMX4ValuePackedShuffledLayout(Layout):
-    """
-    Shuffled pair-packed Blackwell MX4 weight layout.
-
-    The canonical FP4 value tensor is stored as [..., K, N/2]. This layout
-    first repacks it to physical MX4 storage [E, K/2, N], then groups two
-    consecutive K tiles into one p64 byte footprint per N row. For
-    the default block_k=128 and block_n=512 the storage shape is:
-
-        [E, ceil((K/2) / 128), ceil(N / 512), 512, 128]
-
-    Each 16-byte group in the final dimension contains bytes [0, 8) for the
-    first K tile and bytes [8, 16) for the second K tile. Columns are
-    pre-xored with the 128B NVMMA shared-memory row phase so a dense TMA load
-    into NVMMASharedLayout(swizzle_byte_width=128, fp4_padded=False) lands
-    the bytes in physical p64 order in shared memory.
-    """
-
     block_k: int = 128
     block_n: int = 512
     k_tiles_per_pair: int = 2
@@ -70,13 +53,6 @@ class BlackwellMX4ValuePackedShuffledLayout(Layout):
         )
 
     def swizzle_block_shape(self, block_shape):
-        """Return the unhalved dense TMA block shape for one packed K pair.
-
-        block_shape is expressed in logical FP4 elements as
-        [1, 2 * block_k, block_n]. Existing FP4 tensor-descriptor builders
-        halve the contiguous byte dimension after calling this method, producing
-        the actual dense byte footprint [1, 1, 1, block_n, block_k].
-        """
         if len(block_shape) != 3:
             raise ValueError(f"Expected 3D block_shape, got {len(block_shape)}D: {block_shape}")
         _, block_k, block_n = block_shape
@@ -134,15 +110,13 @@ class BlackwellMX4ValuePackedShuffledTransformation(LayoutTransformation):
         return repack(data, -2, -1, self.is_fp4, out=out)
 
     def _tma_column_indices(self, device):
-        n_inner = torch.arange(self.block_n, device=device, dtype=torch.long)[:, None, None]
         tile = torch.arange(self.k_tiles_per_pair, device=device, dtype=torch.long)[None, :, None]
         k_byte = torch.arange(self.packed_block_k, device=device, dtype=torch.long)[None, None, :]
 
         group = k_byte // 8
         byte_in_group = k_byte % 8
         physical_col = 16 * group + 8 * tile + byte_in_group
-        phase = (n_inner % 8) * 16
-        return (physical_col ^ phase).reshape(self.block_n, self.p64_k_bytes)
+        return physical_col.expand(self.block_n, -1, -1).reshape(self.block_n, self.p64_k_bytes)
 
     def swizzle_data(self, data: torch.Tensor) -> torch.Tensor:
         data = self._canonical_to_physical(data)
