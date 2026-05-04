@@ -21,13 +21,18 @@
 #include "rocprofiler-sdk/marker/api_id.h"
 #include "rocprofiler-sdk/registration.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
 #include <dlfcn.h>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -105,14 +110,91 @@ private:
       return ROCPROFILER_STATUS_ERROR_INVALID_ARGUMENT;
     auto agentList =
         reinterpret_cast<const rocprofiler_agent_t *const *>(agents);
+    self->agentToDevice.clear();
     for (size_t i = 0; i < count; ++i) {
       const auto *agent = agentList[i];
-      if (agent->type == ROCPROFILER_AGENT_TYPE_GPU) {
-        self->agentToDevice[agent->id.handle] =
-            static_cast<uint32_t>(agent->logical_node_type_id);
+      if (agent->type == ROCPROFILER_AGENT_TYPE_GPU &&
+          agent->runtime_visibility.hip) {
+        auto ordinal = getHipOrdinal(*agent);
+        if (ordinal)
+          self->agentToDevice[agent->id.handle] =
+              static_cast<uint32_t>(*ordinal);
       }
     }
     return ROCPROFILER_STATUS_SUCCESS;
+  }
+
+  static uint64_t getUuidValue(const rocprofiler_uuid_t &uuid) {
+    uint64_t value = 0;
+    static_assert(sizeof(value) <= sizeof(uuid.bytes));
+    std::memcpy(&value, uuid.bytes, sizeof(value));
+    return value;
+  }
+
+  static bool isDecimalOrdinal(const std::string &token) {
+    return !token.empty() &&
+           std::all_of(token.begin(), token.end(),
+                       [](unsigned char c) { return std::isdigit(c); });
+  }
+
+  static std::optional<int32_t>
+  getVisibleIndex(const std::string &envName, int32_t ordinal,
+                  const rocprofiler_uuid_t &uuid) {
+    auto env = getStrEnv(envName);
+    if (env.empty())
+      return std::nullopt;
+
+    constexpr const char *UuidPrefix = "GPU-";
+    auto uuidValue = getUuidValue(uuid);
+    int32_t index = 0;
+    size_t tokenBegin = env.find_first_not_of(", ");
+    while (tokenBegin != std::string::npos) {
+      auto tokenEnd = env.find_first_of(", ", tokenBegin);
+      auto token = env.substr(tokenBegin, tokenEnd - tokenBegin);
+      if (isDecimalOrdinal(token)) {
+        if (std::stoll(token) == ordinal)
+          return index;
+      } else if (token.rfind(UuidPrefix, 0) == 0 &&
+                 token.size() > std::strlen(UuidPrefix)) {
+        auto tokenUuid =
+            std::strtoull(token.c_str() + std::strlen(UuidPrefix), nullptr, 16);
+        if (tokenUuid == uuidValue)
+          return index;
+      }
+      ++index;
+      if (tokenEnd == std::string::npos)
+        break;
+      tokenBegin = env.find_first_not_of(", ", tokenEnd);
+    }
+    return -1;
+  }
+
+  static std::optional<int32_t>
+  getHipOrdinal(const rocprofiler_agent_t &agent) {
+    auto rocrIndex = agent.logical_node_type_id;
+    auto rocrVisible = getVisibleIndex("ROCR_VISIBLE_DEVICES",
+                                       agent.logical_node_type_id, agent.uuid);
+    if (rocrVisible) {
+      if (*rocrVisible < 0)
+        return std::nullopt;
+      rocrIndex = *rocrVisible;
+    }
+
+    auto hipVisible =
+        getVisibleIndex("HIP_VISIBLE_DEVICES", rocrIndex, agent.uuid);
+    if (!hipVisible)
+      hipVisible =
+          getVisibleIndex("CUDA_VISIBLE_DEVICES", rocrIndex, agent.uuid);
+    if (!hipVisible)
+      hipVisible = getVisibleIndex("GPU_DEVICE_ORDINAL", rocrIndex, agent.uuid);
+    if (hipVisible) {
+      if (*hipVisible < 0)
+        return std::nullopt;
+      return *hipVisible;
+    }
+
+    return rocrVisible ? std::optional<int32_t>{rocrIndex}
+                       : std::optional<int32_t>{agent.logical_node_type_id};
   }
 
   std::once_flag initializeFlag;
