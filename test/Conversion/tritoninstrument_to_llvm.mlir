@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --dump-input-context 20
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK: global internal constant @tensor_constant_1([34359738368, 68719476736]) {addr_space = 0 : i32} : !llvm.array<2 x i64>
@@ -9,14 +9,14 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_buffer_descriptors_tmem
 // CHECK: llvm.mlir.constant(4294967295 : i64) : i64
 tt.func private @experimental_buffer_descriptors_tmem() {
-  tti.experimental_buffer_descriptors [0, 42], [8, 16], tensor_mem : tensor<1x2xi64, #blocked>
+  tti.experimental_buffer_descriptors [0, 42], [8, 16], tensor_mem : tensor<2xi64, #blocked>
   tt.return
 }
 }
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK: global internal constant @tensor_constant_1([17179869184, 51539607552])
@@ -25,7 +25,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_buffer_descriptors_shared
 // CHECK: llvm.mlir.constant(16777215 : i64) : i64
 tt.func private @experimental_buffer_descriptors_shared() {
-  tti.experimental_buffer_descriptors [0, 42], [4, 12], shared_mem : tensor<1x2xi64, #blocked>
+  tti.experimental_buffer_descriptors [0, 42], [4, 12], shared_mem : tensor<2xi64, #blocked>
   tt.return
 }
 }
