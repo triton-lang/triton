@@ -71,7 +71,7 @@ struct GraphState {
   // which is the order of node creation.
   NodeIdToStateMap nodeIdToState;
   struct MetricNodeState {
-    size_t metricId{};
+    uint64_t metricId{};
     size_t numWords{};
   };
   // Metric nodes and their CPU-side metric state, ordered by node id.
@@ -89,7 +89,7 @@ struct GraphState {
 
 struct PendingGraphQueue {
   struct MetricNodeState {
-    size_t metricId{};
+    uint64_t metricId{};
     std::map<Data *, DataEntry> dataToEntry;
   };
   using SeqIdToStateMap = std::map<uint64_t, MetricNodeState>;

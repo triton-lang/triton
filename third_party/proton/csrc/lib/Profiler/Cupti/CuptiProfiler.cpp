@@ -214,19 +214,15 @@ void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
   size_t phase = Data::kNoCompletePhase;
   size_t numWords = 0;
   for (const auto &[seqId, nodeId] : graphState.metricSeqIdToNodeId) {
-    auto metricNodeIter = graphState.metricNodeIdToState.find(nodeId);
-    if (metricNodeIter == graphState.metricNodeIdToState.end())
-      continue;
-    const auto &metricNodeState = metricNodeIter->second;
     auto nodeIter = graphState.nodeIdToState.find(nodeId);
     if (nodeIter ==
         graphState.nodeIdToState
             .end()) // The node has been skipped during graph capture
       continue;
     auto &nodeState = nodeIter->second;
+    const auto &metricNodeState = graphState.metricNodeIdToState.at(nodeId);
     PendingGraphQueue::MetricNodeState pendingMetricNode{
         metricNodeState.metricId, {}};
-    bool hasMetricNodeEntries = false;
     for (const auto &[data, graphEntry] : externIdState.dataToGraphEntry) {
       phase = graphEntry.phase;
       auto entryIdIter = nodeState.dataToEntryId.find(data);
@@ -243,17 +239,13 @@ void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
             data,
             DataEntry(Scope::DummyScopeId, phase, graphEntry.metricSet.get()));
       }
-      hasMetricNodeEntries = true;
     }
-    if (hasMetricNodeEntries) {
-      seqIdToState.emplace(seqId, std::move(pendingMetricNode));
-      numWords += metricNodeState.numWords;
-    }
+    seqIdToState.emplace(seqId, std::move(pendingMetricNode));
+    numWords += metricNodeState.numWords;
   }
-
-  if (seqIdToState.empty() || numWords == 0) {
+  // All data have been deactivated during graph launch
+  if (numWords == 0)
     return;
-  }
   if (callbackData->context != nullptr)
     pendingGraphPool->flushIfNeeded(numWords);
   pendingGraphPool->push(phase, numWords, std::move(seqIdToState));
@@ -546,13 +538,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         auto metricNodeState = originalMetricNodeIt->second;
         graphState.metricNodeIdToState.insert_or_assign(nodeId,
                                                         metricNodeState);
-        for (const auto &[seqId, metricNodeId] :
-             originalGraphState.metricSeqIdToNodeId) {
-          if (metricNodeId == originalNodeId) {
-            graphState.metricSeqIdToNodeId.insert_or_assign(seqId, nodeId);
-            break;
-          }
-        }
+        graphState.metricSeqIdToNodeId.insert_or_assign(
+            originalGraphState.metricSeqIdToNodeId.at(originalNodeId), nodeId);
         graphState.numMetricWords += metricNodeState.numWords;
       }
     }

@@ -124,7 +124,7 @@ protected:
     bool isMetricKernelLaunching{false};
     struct MetricKernelLaunchInfo {
       uint64_t seqId{};
-      size_t metricId{};
+      uint64_t metricId{};
       size_t numWords{};
     };
     std::deque<MetricKernelLaunchInfo> metricKernelLaunchInfoQueue;
@@ -239,7 +239,7 @@ protected:
         threadState.isMetricKernelLaunching = true;
         profiler.metricBuffer->receive(
             tensorMetrics, scalarMetrics, metricKernelLaunchState,
-            [&](size_t seqId, size_t metricId, size_t numWords) {
+            [&](uint64_t seqId, uint64_t metricId, size_t numWords) {
               threadState.metricKernelLaunchInfoQueue.push_back(
                   {seqId, metricId, numWords});
             });
