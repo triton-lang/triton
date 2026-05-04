@@ -73,7 +73,6 @@ struct GraphState {
   NodeIdToStateMap nodeIdToState;
   struct MetricNodeInfo {
     size_t numWords{};
-    uint64_t ordinal{};
   };
   // Metric nodes and their replay metadata, ordered by node id.
   std::map<uint64_t, MetricNodeInfo> metricNodeIdToInfo;
@@ -85,10 +84,11 @@ struct GraphState {
 };
 
 struct PendingGraphQueue {
-  // Metric target entries keyed by the ordinal written by each metric-copy
-  // kernel. The deque handles repeated launches of the same captured graph.
+  // Metric target entries keyed by the stream id written by each metric-copy
+  // kernel. Within a stream, graph replay preserves kernel order, so decode
+  // pops from the corresponding queue as records arrive.
   std::map<uint64_t, std::deque<std::map<Data *, DataEntry>>>
-      ordinalToEntryQueues;
+      streamIdToEntryQueues;
   // The start buffer offset in the metric buffer for this queue
   size_t startBufferOffset{};
   // Total number of uint64 words written by all nodes in this queue
@@ -97,12 +97,10 @@ struct PendingGraphQueue {
   explicit PendingGraphQueue(size_t startBufferOffset)
       : startBufferOffset(startBufferOffset) {}
 
-  void push(
-      size_t numWords,
-      const std::map<uint64_t, std::map<Data *, DataEntry>> &ordinalToEntries) {
-    for (const auto &[ordinal, entries] : ordinalToEntries) {
-      ordinalToEntryQueues[ordinal].push_back(entries);
-    }
+  void push(size_t numWords, uint64_t streamId,
+            const std::deque<std::map<Data *, DataEntry>> &entries) {
+    auto &entryQueue = streamIdToEntryQueues[streamId];
+    entryQueue.insert(entryQueue.end(), entries.begin(), entries.end());
     this->numWords += numWords;
   }
 };
@@ -112,10 +110,9 @@ public:
   explicit PendingGraphPool(MetricBuffer *metricBuffer)
       : metricBuffer(metricBuffer), runtime(metricBuffer->getRuntime()) {}
 
-  void
-  push(size_t phase,
-       const std::map<uint64_t, std::map<Data *, DataEntry>> &ordinalToEntries,
-       size_t numWords);
+  void push(size_t phase, uint64_t streamId,
+            const std::deque<std::map<Data *, DataEntry>> &entries,
+            size_t numWords);
 
   // No GPU synchronization, No CPU locks
   void peek(size_t phase);
@@ -141,8 +138,9 @@ private:
   MetricBuffer *metricBuffer{};
   Runtime *runtime{};
   mutable std::mutex mutex;
-  // device -> phase -> slot
-  std::map<void *, std::map<size_t, std::shared_ptr<Slot>>> pool;
+  // device -> phase -> stream id -> slot
+  std::map<void *, std::map<size_t, std::map<uint64_t, std::shared_ptr<Slot>>>>
+      pool;
 };
 
 } // namespace proton

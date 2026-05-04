@@ -207,26 +207,27 @@ void queueGraphMetrics(const DataToEntryMap &dataToEntry,
                        PendingGraphPool *pendingGraphPool,
                        const CUpti_CallbackData *callbackData,
                        const GraphState &graphState,
-                       CuptiProfiler::ExternIdState &externIdState) {
+                       CuptiProfiler::ExternIdState &externIdState,
+                       uint64_t streamId) {
   if (graphState.metricNodeIdToInfo.empty()) {
     return;
   }
-  std::map<uint64_t, std::map<Data *, DataEntry>> metricNodeEntries;
+  std::deque<std::map<Data *, DataEntry>> metricNodeEntryQueue;
   size_t phase = Data::kNoCompletePhase;
-  for (const auto &[data, graphEntry] : externIdState.dataToGraphEntry) {
-    phase = graphEntry.phase;
-    for (const auto &metricNode : graphState.metricNodeIdToInfo) {
-      auto nodeId = metricNode.first;
-      auto metricOrdinal = metricNode.second.ordinal;
-      auto nodeIter = graphState.nodeIdToState.find(nodeId);
-      if (nodeIter ==
-          graphState.nodeIdToState
-              .end()) // The node has been skipped during graph capture
-        continue;
-      auto &nodeState = nodeIter->second;
+  for (const auto &metricNode : graphState.metricNodeIdToInfo) {
+    auto nodeId = metricNode.first;
+    auto nodeIter = graphState.nodeIdToState.find(nodeId);
+    if (nodeIter ==
+        graphState.nodeIdToState
+            .end()) // The node has been skipped during graph capture
+      continue;
+    auto &nodeState = nodeIter->second;
+    std::map<Data *, DataEntry> metricNodeEntries;
+    for (const auto &[data, graphEntry] : externIdState.dataToGraphEntry) {
+      phase = graphEntry.phase;
       auto entryIdIter = nodeState.dataToEntryId.find(data);
       if (entryIdIter != nodeState.dataToEntryId.end()) {
-        metricNodeEntries[metricOrdinal].insert_or_assign(
+        metricNodeEntries.insert_or_assign(
             data,
             DataEntry(entryIdIter->second, phase, graphEntry.metricSet.get()));
       } else {
@@ -234,17 +235,33 @@ void queueGraphMetrics(const DataToEntryMap &dataToEntry,
         // upsertLinkedFlexibleMetric in queueGraphMetrics, so that the kernel
         // metric can be attached to the graph launch entry when node entry is
         // not found.
-        metricNodeEntries[metricOrdinal].insert_or_assign(
+        metricNodeEntries.insert_or_assign(
             data,
             DataEntry(Scope::DummyScopeId, phase, graphEntry.metricSet.get()));
       }
     }
+    if (!metricNodeEntries.empty()) {
+      metricNodeEntryQueue.push_back(std::move(metricNodeEntries));
+    }
   }
 
   const auto numMetricWords = graphState.numMetricWords;
+  if (metricNodeEntryQueue.empty() || numMetricWords == 0) {
+    return;
+  }
   if (callbackData->context != nullptr)
     pendingGraphPool->flushIfNeeded(numMetricWords);
-  pendingGraphPool->push(phase, metricNodeEntries, numMetricWords);
+  pendingGraphPool->push(phase, streamId, metricNodeEntryQueue,
+                         numMetricWords);
+}
+
+uint64_t getGraphLaunchStreamId(const CUpti_CallbackData *callbackData) {
+  auto *params =
+      static_cast<const cuGraphLaunch_params *>(callbackData->functionParams);
+  uint32_t streamId = 0;
+  cupti::getStreamIdEx<true>(nullptr, params->hStream,
+                             /*perThreadStream=*/0, &streamId);
+  return streamId;
 }
 
 constexpr std::array<CUpti_CallbackId, 11> kGraphCallbacks = {
@@ -480,25 +497,18 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       const auto &name = threadState.scopeStack.back().name;
       if (name.empty())
         nodeState.status.setMissingName();
-      const bool isMetricKernelNode =
-          threadState.isMetricKernelLaunching &&
-          !threadState.metricKernelNumWordsQueue.empty() &&
-          !threadState.metricKernelOrdinalQueue.empty();
-      if (isMetricKernelNode) {
+      if (threadState.isMetricKernelLaunching) {
         nodeState.status.setMetricNode();
         auto metricKernelNumWords =
             threadState.metricKernelNumWordsQueue.front();
         threadState.metricKernelNumWordsQueue.pop_front();
-        auto metricKernelOrdinal = threadState.metricKernelOrdinalQueue.front();
-        threadState.metricKernelOrdinalQueue.pop_front();
         graphState.metricNodeIdToInfo.insert_or_assign(
-            nodeId, GraphState::MetricNodeInfo{metricKernelNumWords,
-                                               metricKernelOrdinal});
+            nodeId, GraphState::MetricNodeInfo{metricKernelNumWords});
         graphState.numMetricWords += metricKernelNumWords;
       }
       for (auto *data : profiler.dataSet) {
         auto contexts = data->getContexts();
-        if (isMetricKernelNode) {
+        if (threadState.isMetricKernelLaunching) {
           if (threadState.isApiExternOp) { // API extern ops
             contexts.push_back(std::string(GraphState::metricTag));
           } else { // Triton ops
@@ -660,8 +670,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
         t0 = Clock::now();
       }
 
+      auto streamId = getGraphLaunchStreamId(callbackData);
       queueGraphMetrics(dataToEntry, profiler.pendingGraphPool.get(),
-                        callbackData, graphState, externIdState);
+                        callbackData, graphState, externIdState, streamId);
 
       if (timingEnabled) {
         auto t1 = Clock::now();

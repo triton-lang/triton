@@ -11,6 +11,9 @@ DEFINE_DISPATCH(ExternLibCupti, getVersion, cuptiGetVersion, uint32_t *);
 DEFINE_DISPATCH(ExternLibCupti, getContextId, cuptiGetContextId, CUcontext,
                 uint32_t *);
 
+DEFINE_DISPATCH(ExternLibCupti, getStreamIdEx, cuptiGetStreamIdEx, CUcontext,
+                CUstream, uint8_t, uint32_t *);
+
 DEFINE_DISPATCH(ExternLibCupti, activityRegisterCallbacks,
                 cuptiActivityRegisterCallbacks,
                 CUpti_BuffersCallbackRequestFunc,

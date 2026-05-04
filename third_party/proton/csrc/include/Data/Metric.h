@@ -5,7 +5,6 @@
 #include "Utility/String.h"
 #include "Utility/Traits.h"
 #include <atomic>
-#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -416,7 +415,7 @@ collectTensorMetrics(Runtime *runtime,
 ///  host ->                             -------- kernel0 --------
 ///                                     /                         \
 /// [device0] -> metric buffer ->
-///     {metric_ordinal, metric_id, value, metric_ordinal, metric_id, value,
+///     {stream_id, metric_id, value, stream_id, metric_id, value,
 ///     ...}
 ///                   |                            /|\
 ///                   |                             |
@@ -440,10 +439,7 @@ public:
 
   void receive(const std::map<std::string, TensorMetric> &tensorMetrics,
                const std::map<std::string, MetricValueType> &scalarMetrics,
-               const MetricKernelLaunchState &metricKernelLaunchState,
-               const std::vector<uint64_t> &metricOrdinals,
-               const std::function<void(uint64_t, size_t)> &beforeLaunch,
-               const std::function<void()> &afterLaunch);
+               const MetricKernelLaunchState &metricKernelLaunchState);
 
   void reserve() { getOrCreateBuffer(); }
 
@@ -498,12 +494,11 @@ private:
 
   DeviceBuffer &getOrCreateBuffer();
 
-  void queue(uint64_t metricOrdinal, size_t metricId, TensorMetric tensorMetric,
+  void queue(uint64_t streamId, size_t metricId, TensorMetric tensorMetric,
              void *stream, const MetricKernelLaunchConfig &launchConfig);
 
-  void queue(uint64_t metricOrdinal, size_t metricId,
-             MetricValueType scalarMetric, void *stream,
-             const MetricKernelLaunchConfig &launchConfig);
+  void queue(uint64_t streamId, size_t metricId, MetricValueType scalarMetric,
+             void *stream, const MetricKernelLaunchConfig &launchConfig);
 
   void synchronize(DeviceBuffer &buffer);
 
@@ -536,28 +531,12 @@ private:
   template <typename MetricsT>
   void queueMetrics(const MetricsT &metrics, void *stream,
                     const MetricKernelLaunchConfig &launchConfig,
-                    const std::vector<uint64_t> &metricOrdinals,
-                    size_t &ordinalIndex,
-                    const std::function<void(uint64_t, size_t)> &beforeLaunch,
-                    const std::function<void()> &afterLaunch) {
+                    uint64_t streamId) {
     for (const auto &[name, metric] : metrics) {
       size_t typeIndex = getMetricTypeIndex(metric);
       size_t size = getMetricSize(metric);
       auto descriptor = getOrCreateMetricDescriptor(name, typeIndex, size);
-      if (ordinalIndex >= metricOrdinals.size()) {
-        throw std::runtime_error(
-            "[PROTON] MetricBuffer: missing metric ordinal");
-      }
-      auto metricOrdinal = metricOrdinals[ordinalIndex++];
-      beforeLaunch(metricOrdinal, /*metric_ordinal=*/1 + /*metric_id=*/1 +
-                                      /*metric_values=*/size);
-      try {
-        queue(metricOrdinal, descriptor.id, metric, stream, launchConfig);
-      } catch (...) {
-        afterLaunch();
-        throw;
-      }
-      afterLaunch();
+      queue(streamId, descriptor.id, metric, stream, launchConfig);
     }
   }
 

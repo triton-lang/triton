@@ -30,22 +30,14 @@ MetricBuffer::~MetricBuffer() {
 void MetricBuffer::receive(
     const std::map<std::string, TensorMetric> &tensorMetrics,
     const std::map<std::string, MetricValueType> &scalarMetrics,
-    const MetricKernelLaunchState &metricKernelLaunchState,
-    const std::vector<uint64_t> &metricOrdinals,
-    const std::function<void(uint64_t, size_t)> &beforeLaunch,
-    const std::function<void()> &afterLaunch) {
-  const size_t numMetrics = tensorMetrics.size() + scalarMetrics.size();
-  if (metricOrdinals.size() != numMetrics) {
-    throw std::runtime_error(
-        "[PROTON] MetricBuffer: metric ordinal count mismatch");
-  }
-  size_t ordinalIndex = 0;
+    const MetricKernelLaunchState &metricKernelLaunchState) {
+  // The replay stream id is resolved from the graph launch callback. Metric
+  // copy nodes captured before replay therefore write a placeholder stream id.
+  uint64_t streamId = 0;
   queueMetrics(tensorMetrics, metricKernelLaunchState.stream,
-               metricKernelLaunchState.tensor, metricOrdinals, ordinalIndex,
-               beforeLaunch, afterLaunch);
+               metricKernelLaunchState.tensor, streamId);
   queueMetrics(scalarMetrics, metricKernelLaunchState.stream,
-               metricKernelLaunchState.scalar, metricOrdinals, ordinalIndex,
-               beforeLaunch, afterLaunch);
+               metricKernelLaunchState.scalar, streamId);
 }
 
 MetricBuffer::MetricDescriptor
@@ -143,7 +135,7 @@ collectTensorMetrics(Runtime *runtime,
   return tensorMetricsHost;
 }
 
-void MetricBuffer::queue(uint64_t metricOrdinal, size_t metricId,
+void MetricBuffer::queue(uint64_t streamId, size_t metricId,
                          TensorMetric tensorMetric, void *stream,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
@@ -154,7 +146,7 @@ void MetricBuffer::queue(uint64_t metricOrdinal, size_t metricId,
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&numWords),
-                          reinterpret_cast<void *>(&metricOrdinal),
+                          reinterpret_cast<void *>(&streamId),
                           reinterpret_cast<void *>(&metricId),
                           reinterpret_cast<void *>(&tensorMetric.ptr),
                           reinterpret_cast<void *>(&metricValueSize),
@@ -166,7 +158,7 @@ void MetricBuffer::queue(uint64_t metricOrdinal, size_t metricId,
                         nullptr);
 }
 
-void MetricBuffer::queue(uint64_t metricOrdinal, size_t metricId,
+void MetricBuffer::queue(uint64_t streamId, size_t metricId,
                          MetricValueType scalarMetric, void *stream,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
@@ -194,7 +186,7 @@ void MetricBuffer::queue(uint64_t metricOrdinal, size_t metricId,
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&numWords),
-                          reinterpret_cast<void *>(&metricOrdinal),
+                          reinterpret_cast<void *>(&streamId),
                           reinterpret_cast<void *>(&metricId),
                           reinterpret_cast<void *>(&metricBits),
                           reinterpret_cast<void *>(&globalScratchPtr),
