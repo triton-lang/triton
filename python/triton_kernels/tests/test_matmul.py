@@ -165,7 +165,9 @@ def _build_test_op_cases():
     ])
     # mxfloat x mxfloat
     test_cases.extend([
+        Case(16, 256, 256, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1"),
         Case(16, 256, 256, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True),
+        Case(1024, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", split_k=9),
         Case(1024, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", split_k=9, b_hbm_swizzling=True),
         Case(1024, 1024, 1024, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", split_k=9, colmajor_mxfp_weight=False),
         Case(1000, 704, 800, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True, a_hbm_swizzling=True),
@@ -282,7 +284,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if act_dtype_str == "float16" and weight_uses_mx and torch.cuda.get_device_capability()[0] >= 10:
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if weight_uses_mx:
-            if "float8" in act_dtype_str and torch.cuda.get_device_capability()[0] < 10:
+            if act_dtype_str.startswith("float8") and torch.cuda.get_device_capability()[0] < 10:
                 pytest.skip("float8 x mx not supported with cuda capability < 10")
         if swiglu_opts is not None and do_gamma:
             pytest.skip("NYI: swiglu and gamma not supported together")
@@ -318,8 +320,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if torch.cuda.get_device_capability()[0] < 10:
             if "mxfloat4" not in weight_dtype_str:
                 pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
-            if act_dtype_str in {"mxfloat4_e2m1", "mxfloat8_e4m3fn", "nvfp4_e2m1"}:
-                pytest.skip("Hopper mxfp4 swizzled weights do not support microscaled lhs.")
+            if act_dtype_str in {"mxfloat4_e2m1", "nvfp4_e2m1"}:
+                pytest.skip("Hopper mxfp4 swizzled weights do not support FP4 microscaled lhs.")
 
     if a_hbm_swizzling:
         # current x scale swizzling requires B200, batched input, microscaled act and persistent case
@@ -353,8 +355,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                 if b_hbm_swizzling:
                     pytest.skip("NYI: nner_expt_opt and HBM swizzling")
     if not colmajor_mxfp_weight:
-        if torch.cuda.get_device_capability()[0] < 10:
-            pytest.skip("transposed mxfp weight not supported with cuda capability < 10")
         if block_m == 16:
             pytest.skip("PassManager::run failed from Triton compiler")
     # TODO: should construct the test case differently rather than overriding here
