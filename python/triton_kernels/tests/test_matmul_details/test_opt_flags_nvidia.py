@@ -6,7 +6,7 @@ from triton_kernels.matmul import matmul, matmul_torch, PrecisionConfig
 from triton_kernels.matmul_details.opt_flags import InapplicableConstraint, scoped_opt_flags_constraints
 from triton_kernels.matmul_details.opt_flags_details import opt_flags_nvidia
 from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp
-from triton_kernels.tensor import FP4, UINT8, Storage, Tensor, convert_layout, wrap_torch_tensor
+from triton_kernels.tensor import FP4, FP8_E4M3FN, UINT8, Storage, Tensor, convert_layout, wrap_torch_tensor
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellMXScaleLayout
@@ -102,6 +102,50 @@ def test_matmul_hopper_mxfp4_rhs_scale_padding_is_masked(device, constraints):
         pytest.skip(f"inapplicable opt_flags constraint {e}")
 
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    "constraints",
+    [
+        pytest.param({"is_persistent": False}, id="regular"),
+        pytest.param({"is_persistent": True, "block_m": 128, "block_n": 128, "num_warps": 4}, id="persistent"),
+    ],
+)
+def test_matmul_hopper_mxfp4_rhs_supports_mxfp8_lhs(device, constraints):
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("requires CUDA")
+    if torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip("requires Hopper")
+
+    torch.manual_seed(0)
+    m, k, n = 128, 256, 256
+    a_fp = torch.randn((m, k), device=device, dtype=torch.bfloat16)
+    a_value, a_scale = downcast_to_mxfp(a_fp, torch.float8_e4m3fn, axis=-1)
+    a = wrap_torch_tensor(a_value, dtype=FP8_E4M3FN)
+    a_scale = wrap_torch_tensor(a_scale, dtype=UINT8)
+
+    weight_fp = torch.randn((n, k), device=device, dtype=torch.bfloat16).T
+    weight_value, weight_scale = downcast_to_mxfp(weight_fp, torch.uint8, axis=-2)
+    value_layout = layout.make_default_matmul_mxfp4_w_layout(mx_axis=-2)
+    scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=-2, num_warps=constraints.get("num_warps", 8))
+    b = convert_layout(wrap_torch_tensor(weight_value, dtype=FP4), value_layout)
+    b_scale = convert_layout(wrap_torch_tensor(weight_scale, dtype=UINT8), scale_layout)
+
+    precision_config = PrecisionConfig(
+        a_mx_scale=a_scale,
+        a_microblock_size=MXFP_BLOCK_SIZE.value,
+        b_mx_scale=b_scale,
+        b_microblock_size=MXFP_BLOCK_SIZE.value,
+        out_dtype=torch.bfloat16,
+    )
+    try:
+        with scoped_opt_flags_constraints(constraints):
+            tri_y = matmul(a, b, None, precision_config=precision_config)
+    except (InapplicableConstraint, NotImplementedError) as e:
+        pytest.skip(f"inapplicable opt_flags constraint {e}")
+
+    ref_y = matmul_torch(a, b, None, precision_config=precision_config)
+    assert_close(ref_y, tri_y, maxtol=3e-2, rmstol=None)
 
 
 @pytest.mark.parametrize("n, expected", [(64, 128), (200, 256)])
