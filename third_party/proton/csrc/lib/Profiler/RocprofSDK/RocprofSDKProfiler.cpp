@@ -21,7 +21,6 @@
 #include "rocprofiler-sdk/marker/api_id.h"
 #include "rocprofiler-sdk/registration.h"
 
-#include <algorithm>
 #include <atomic>
 #include <dlfcn.h>
 #include <iostream>
@@ -31,7 +30,6 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#include <vector>
 
 namespace proton {
 
@@ -107,20 +105,12 @@ private:
       return ROCPROFILER_STATUS_ERROR_INVALID_ARGUMENT;
     auto agentList =
         reinterpret_cast<const rocprofiler_agent_t *const *>(agents);
-    std::vector<const rocprofiler_agent_t *> gpuAgents;
     for (size_t i = 0; i < count; ++i) {
       const auto *agent = agentList[i];
       if (agent->type == ROCPROFILER_AGENT_TYPE_GPU) {
-        gpuAgents.push_back(agent);
+        self->agentToDevice[agent->id.handle] =
+            static_cast<uint32_t>(agent->logical_node_type_id);
       }
-    }
-    std::sort(
-        gpuAgents.begin(), gpuAgents.end(),
-        [](const rocprofiler_agent_t *lhs, const rocprofiler_agent_t *rhs) {
-          return lhs->logical_node_type_id < rhs->logical_node_type_id;
-        });
-    for (size_t i = 0; i < gpuAgents.size(); ++i) {
-      self->agentToDevice[gpuAgents[i]->id.handle] = static_cast<uint32_t>(i);
     }
     return ROCPROFILER_STATUS_SUCCESS;
   }
@@ -573,10 +563,11 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
 
 // ---- ROCTx marker callback via rocprofiler-sdk ----
 //
-// torch preloads both librocprofiler-sdk-roctx.so and libroctx64.so with
-// RTLD_GLOBAL. Because the SDK's roctx is loaded first, the global linker
-// resolves roctxRangePushA to the SDK's version. We therefore intercept
-// markers through the SDK's own callback tracing (MARKER_CORE_API).
+// Prefer rocprofiler-sdk marker tracing for ROCTx events. Some PyTorch/ROCm
+// environments load the legacy libroctx64 provider for torch.cuda.nvtx calls
+// without making its symbols globally visible, so MARKER_CORE_API alone does
+// not see those ranges. registerRoctxCallback below attaches to the loaded
+// legacy provider when present.
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::markerCallback(
     rocprofiler_callback_tracing_record_t record,
@@ -618,8 +609,16 @@ int roctxTracerCallback(uint32_t /*domain*/, uint32_t operationId, void *data) {
 }
 
 void registerRoctxCallback(bool enable) {
+  // torch.cuda.nvtx may route through a locally loaded libroctx64.so. In that
+  // case dlsym(RTLD_DEFAULT, "roctxRegisterTracerCallback") does not find the
+  // callback registration entry point, but resolving it from the library handle
+  // does.
+  void *roctxLib = dlopen("libroctx64.so", RTLD_NOLOAD | RTLD_NOW);
+  if (!roctxLib)
+    return;
   auto *fn = reinterpret_cast<RoctxRegisterTracerCallbackFn>(
-      dlsym(RTLD_DEFAULT, "roctxRegisterTracerCallback"));
+      dlsym(roctxLib, "roctxRegisterTracerCallback"));
+  dlclose(roctxLib);
   if (!fn)
     return;
   fn(enable ? &roctxTracerCallback : nullptr);
