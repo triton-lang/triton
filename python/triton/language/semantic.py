@@ -1144,6 +1144,8 @@ class TritonSemantic(Generic[TensorTy]):
 
         # Validate offsets.
         assert len(x_offsets.shape) == 1, f"x offsets must be 1D, but got {x_offsets.shape}"
+        assert x_offsets.dtype in {tl.int16,
+                                   tl.int32}, f"x offsets must have dtype int16 or int32, but got {x_offsets.dtype}"
 
         # Validate minimum block size.
         assert x_offsets.shape[0] >= 8, f"descriptor gather must have at least 8 rows, but got {x_offsets.shape}"
@@ -1166,6 +1168,8 @@ class TritonSemantic(Generic[TensorTy]):
 
         # Validate offsets.
         assert len(x_offsets.shape) == 1, f"x offsets must be 1D, but got {x_offsets.shape}"
+        assert x_offsets.dtype in {tl.int16,
+                                   tl.int32}, f"x offsets must have dtype int16 or int32, but got {x_offsets.dtype}"
 
         # Validate minimum block size.
         assert x_offsets.shape[0] >= 8, f"descriptor scatter must have at least 8 rows, but got {x_offsets.shape}"

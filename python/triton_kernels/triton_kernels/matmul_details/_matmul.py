@@ -404,6 +404,9 @@ def _matmul(
                 num_warps: tl.constexpr = tl.extra.cuda.num_warps()
                 tl.static_assert(num_warps == 8 or num_warps == 4)
                 w_scales = unswizzle_mxfp4_scale_hopper(tl.load(WMxScalePtrs), mx_axis=1, num_warps=num_warps)
+                mask_k_scale = off_k_x + tl.arange(0, MX_SCALE_BLOCK_K) * MX_PACK_DIVISOR < x_k_limit
+                scale_zero = tl.full(w_scales.shape, 0, dtype=w_scales.dtype)
+                w_scales = tl.where(mask_k_scale[None, :], w_scales, scale_zero)
             elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
                 w_scales = unswizzle_mx_scale_cdna4(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
             elif SWIZZLE_MX_SCALE == "GFX1250_SCALE":
