@@ -102,7 +102,6 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
         dataEntry.upsertFlexibleMetric(metricName, metricValueVariant);
       }
     }
-    queue.seqIdToState.erase(seqIdIt);
   }
 }
 } // namespace
