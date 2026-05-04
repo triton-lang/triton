@@ -71,6 +71,7 @@ struct GraphState {
   // which is the order of node creation.
   NodeIdToStateMap nodeIdToState;
   struct MetricNodeState {
+    uint64_t seqId{};
     uint64_t metricId{};
     size_t numWords{};
   };

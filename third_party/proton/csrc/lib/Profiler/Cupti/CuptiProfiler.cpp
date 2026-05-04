@@ -490,7 +490,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         threadState.metricKernelLaunchInfoQueue.pop_front();
         graphState.metricNodeIdToState.insert_or_assign(
             nodeId,
-            GraphState::MetricNodeState{metricKernelLaunchInfo.metricId,
+            GraphState::MetricNodeState{metricKernelLaunchInfo.seqId,
+                                        metricKernelLaunchInfo.metricId,
                                         metricKernelLaunchInfo.numWords});
         graphState.metricSeqIdToNodeId.insert_or_assign(
             metricKernelLaunchInfo.seqId, nodeId);
@@ -538,7 +539,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         graphState.metricNodeIdToState.insert_or_assign(nodeId,
                                                         metricNodeState);
         graphState.metricSeqIdToNodeId.insert_or_assign(
-            originalGraphState.metricSeqIdToNodeId.at(originalNodeId), nodeId);
+            metricNodeState.seqId, nodeId);
         graphState.numMetricWords += metricNodeState.numWords;
       }
     }
