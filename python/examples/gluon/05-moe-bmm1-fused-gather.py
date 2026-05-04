@@ -368,7 +368,7 @@ def load_weights(p: PartitionArgs):
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
         _, pid_n, slice_idx, _ = p.apply_block_schedule(block_id)
 
-        for ki in range(p.K_TILES, 2):
+        for ki in range(0, p.K_TILES, 2):
             w_empty_bar = p.w_empty_bars.index(idx)
             w_ready_bar = p.w_ready_bars.index(idx)
             w_buf = p.w_bufs.index(idx)
@@ -490,7 +490,7 @@ def mma_partition(p: PartitionArgs):
         mbarrier.wait(acc_empty_bar, mma_phase)
 
         use_acc = False
-        for _ in range(p.K_TILES):
+        for ki in range(0, p.K_TILES, 2):
             # First K tile. Wait for scales, weight, and act tile.
             scale_ready_bar = p.w_scale_ready_bars.index(scale_idx)
             scale_empty_bar = p.w_scale_empty_bars.index(scale_idx)

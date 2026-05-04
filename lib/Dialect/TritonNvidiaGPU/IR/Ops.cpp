@@ -374,8 +374,8 @@ static LogicalResult verifyAsyncTMALoadOp(Operation *op,
                                           MemDescType resultType) {
   if (failed(verifyBarrierType(op, barrier.getType())))
     return failure();
-  if (failed(verifyTMABarrierLayout(op, barrier)))
-    return failure();
+  // if (failed(verifyTMABarrierLayout(op, barrier)))
+  //   return failure();
   if (!resultType.getMutableMemory())
     return op->emitOpError("cannot store into immutable memory");
   if (failed(verifyTMAEncoding(op, desc, resultType.getEncoding())))

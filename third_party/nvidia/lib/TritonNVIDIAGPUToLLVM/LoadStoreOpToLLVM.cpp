@@ -1215,14 +1215,11 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
     // Use a cross-CTA mbarrier pointer when the barrier mask is set.
     bool crossCTABarrier = barrierMask != 0;
+    // Don't set cta_group::1 as it doesn't exist pre-Blackwell
+    std::string ctaGroup;
     if (crossCTABarrier) {
       barrierPtr =
           LLVM::NVIDIA::getLeaderAddress(loc, rewriter, barrierPtr, barrierTy);
-    }
-
-    // Don't set cta_group::1 as it doesn't exist pre-Blackwell
-    std::string ctaGroup;
-    if (getModuleTwoCTAs(op)) {
       ctaGroup = "cta_group::2.";
     }
 
@@ -1641,14 +1638,12 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
   Value barrierPtr = barrierMemObj.getBase();
   bool crossCTABarrier =
       toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock) != 0;
+  std::string ctaGroup;
   if (crossCTABarrier) {
     barrierPtr =
         LLVM::NVIDIA::getLeaderAddress(loc, rewriter, barrierPtr, barrierTy);
-  }
-
-  std::string ctaGroup;
-  if (getModuleTwoCTAs(op))
     ctaGroup = ".cta_group::2";
+  }
 
   // Callback to generate the gather4 instruction.
   auto callback = [&](Value pred, Value shMemPtr, Value yOffset,
