@@ -69,14 +69,13 @@ DistributedEncodingTrait getWarpLocalEncoding(MLIRContext *ctx,
   return LinearEncodingAttr::get(ctx, ll);
 }
 
-std::pair<Value, RankedTensorType>
-createBufferDescriptorsTensor(ImplicitLocOpBuilder &builder, MemType memType,
-                              ArrayRef<BufferRegion> regions) {
+ValueType createBufferDescriptorsTensor(ImplicitLocOpBuilder &builder,
+                                        MemType memType,
+                                        ArrayRef<BufferRegion> regions) {
   Region *region = builder.getInsertionBlock()->getParent();
   int64_t size = regions.size();
-  int64_t numCTAs = lookupNumCTAs(region->getParentOp());
   assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-  auto tensorType = getIntTensorType(region, {numCTAs, size}, 64);
+  auto tensorType = getIntTensorType(region, {size}, 64);
   SmallVector<int32_t> offsets;
   SmallVector<int32_t> lengths;
   offsets.reserve(size);
@@ -139,9 +138,10 @@ bool hasCrossBufferAliasing(ArrayRef<BufferRegion> regions) {
   return false;
 }
 
-Value createInitStateTensor(ImplicitLocOpBuilder &b, ArrayRef<int64_t> shape,
-                            int bitWidth, int64_t initialValue,
-                            FunctionBuilder &funcBuilder) {
+ValueType createInitStateTensor(ImplicitLocOpBuilder &b,
+                                ArrayRef<int64_t> shape, int bitWidth,
+                                int64_t initialValue,
+                                FunctionBuilder &funcBuilder) {
   auto type =
       getIntTensorType(b.getInsertionBlock()->getParent(), shape, bitWidth);
   Type elType = type.getElementType();
@@ -171,12 +171,12 @@ Value createInitStateTensor(ImplicitLocOpBuilder &b, ArrayRef<int64_t> shape,
   b.setInsertionPointToStart(ifBlock);
   funcBuilder.createFillGlobalTensorCall(b, alloc, type, cstInit);
   b.setInsertionPointToStart(thenBlock);
-  return alloc;
+  return {alloc, type};
 }
 
-Value createZeroInitStateTensor(ImplicitLocOpBuilder &b,
-                                ArrayRef<int64_t> shape, int bitWidth,
-                                FunctionBuilder &funcBuilder) {
+ValueType createZeroInitStateTensor(ImplicitLocOpBuilder &b,
+                                    ArrayRef<int64_t> shape, int bitWidth,
+                                    FunctionBuilder &funcBuilder) {
   return createInitStateTensor(b, shape, bitWidth, 0, funcBuilder);
 }
 
@@ -190,26 +190,17 @@ createAliasMatrixTensor(ImplicitLocOpBuilder &b,
   for (const auto &row : matrix)
     assert(row.size() == cols && "Expected square alias matrix");
 
-  int64_t numCTAs = lookupNumCTAs(region->getParentOp());
   auto type = getIntTensorType(
-      region, {numCTAs, static_cast<int64_t>(rows), static_cast<int64_t>(cols)},
+      region, {static_cast<int64_t>(rows), static_cast<int64_t>(cols)},
       /*bitWidth=*/1);
-  auto sliceType = RankedTensorType::get(
-      {static_cast<int64_t>(rows), static_cast<int64_t>(cols)}, b.getI1Type(),
-      SliceEncodingAttr::get(
-          b.getContext(), /*dim=*/0,
-          cast<DistributedEncodingTrait>(type.getEncoding())));
   SmallVector<APInt> values;
   values.reserve(rows * cols);
   for (const auto &row : matrix)
     for (uint8_t v : row)
       values.emplace_back(/*numBits=*/1, v);
 
-  auto denseAttr = DenseElementsAttr::get(sliceType, values);
-  Value constValue =
-      arith::ConstantOp::create(b, b.getLoc(), sliceType, denseAttr);
-  constValue = expandOuterSlicedDim(b, b.getLoc(), constValue);
-  constValue = BroadcastOp::create(b, b.getLoc(), type, constValue);
+  auto denseAttr = DenseElementsAttr::get(type, values);
+  Value constValue = arith::ConstantOp::create(b, b.getLoc(), type, denseAttr);
   return cast<TypedValue<RankedTensorType>>(constValue);
 }
 
@@ -515,14 +506,14 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
 
     buffers[iMemType].insert(
         entryRegion,
-        {createBufferDescriptorsTensor(b, memType, bufRegions[iMemType])});
+        createBufferDescriptorsTensor(b, memType, bufRegions[iMemType]));
     // Buffer descriptors are rematerialized in the warp specialize region,
     // not passed as an argument.
-    createInWarpSpecialize(
-        entryPoint, buffers[iMemType], [&](ImplicitLocOpBuilder &b) {
-          return ValueType{
-              createBufferDescriptorsTensor(b, memType, bufRegions[iMemType])};
-        });
+    createInWarpSpecialize(entryPoint, buffers[iMemType],
+                           [&](ImplicitLocOpBuilder &b) {
+                             return createBufferDescriptorsTensor(
+                                 b, memType, bufRegions[iMemType]);
+                           });
     int numBufs = bufRegions[iMemType].size();
 
     hasNonTrivialAliasing[iMemType] =
@@ -546,59 +537,45 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     }
 
     writeVisibility[iMemType].insert(
-        entryRegion, {createZeroInitStateTensor(b, {numCTAs, numBufs}, 64, fb),
-                      getIntTensorType(entryRegion, {numCTAs, numBufs}, 64)});
+        entryRegion,
+        createZeroInitStateTensor(b, {numCTAs, numBufs, numCTAs}, 64, fb));
     passValueToWarpSpecialize(writeVisibility[iMemType].at(entryRegion),
                               writeVisibility[iMemType]);
     readVisibility[iMemType].insert(
         entryRegion,
-        {createZeroInitStateTensor(b, {numCTAs, numBufs, THREADS_BITMASK_SIZE},
-                                   64, fb),
-         getIntTensorType(entryRegion, {numCTAs, numBufs, THREADS_BITMASK_SIZE},
-                          64)});
+        createZeroInitStateTensor(
+            b, {numCTAs, numBufs, numCTAs, THREADS_BITMASK_SIZE, numCTAs}, 64,
+            fb));
     passValueToWarpSpecialize(readVisibility[iMemType].at(entryRegion),
                               readVisibility[iMemType]);
   }
 
   if (!barrierRegions.empty()) {
     // Barriers allocations are in shared memory
-    barriers.insert(entryRegion, {createBufferDescriptorsTensor(
-                                     b, MemType::SHARED_MEM, barrierRegions)});
+    barriers.insert(entryRegion, createBufferDescriptorsTensor(
+                                     b, MemType::SHARED_MEM, barrierRegions));
     // Barriers allocations are rematerialized in the warp specialize region,
     // not passed as an argument.
     createInWarpSpecialize(entryPoint, barriers, [&](ImplicitLocOpBuilder &b) {
-      return ValueType{createBufferDescriptorsTensor(b, MemType::SHARED_MEM,
-                                                     barrierRegions)};
+      return createBufferDescriptorsTensor(b, MemType::SHARED_MEM,
+                                           barrierRegions);
     });
 
     int numBarriers = barrierRegions.size();
-    barrierStates.insert(
-        entryRegion,
-        {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 64, fb),
-         getIntTensorType(entryRegion, {numCTAs, numBarriers}, 64)});
+    barrierStates.insert(entryRegion, createZeroInitStateTensor(
+                                          b, {numCTAs, numBarriers}, 64, fb));
     passValueToWarpSpecialize(barrierStates.at(entryRegion), barrierStates);
 
     // Deadlock detection aux data over [cta, barrier]: waiting
     // stores waiting flag and phase bits per thread (two bits per thread).
     waiting.insert(
         entryRegion,
-        {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 32, fb),
-         getIntTensorType(entryRegion, {numCTAs, numBarriers}, 32)});
+        createZeroInitStateTensor(b, {numCTAs, numBarriers, numCTAs}, 32, fb));
     passValueToWarpSpecialize(waiting.at(entryRegion), waiting);
 
     activeMasks.insert(entryRegion,
-                       {createInitStateTensor(b, {numCTAs}, 32, 1, fb),
-                        getIntTensorType(entryRegion, {numCTAs}, 32)});
-    passToWarpSpecialize(entryPoint, activeMasks.at(entryRegion), activeMasks,
-                         captureCounter, captureBytes);
-
-    barrierWriteRecipients.insert(
-        entryRegion,
-        {createZeroInitStateTensor(b, {numCTAs, numBarriers}, 32, fb),
-         getIntTensorType(entryRegion, {numCTAs, numBarriers}, 32)});
-    passValueToWarpSpecialize(barrierWriteRecipients.at(entryRegion),
-                              barrierWriteRecipients);
-
+                       createInitStateTensor(b, {numCTAs}, 32, 1, fb));
+    passValueToWarpSpecialize(activeMasks.at(entryRegion), activeMasks);
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       int iMemType = (int)memType;
       // Create state tensors:
@@ -606,18 +583,14 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
       if (numBufs > 0) {
         writeTracking[iMemType].insert(
             entryRegion,
-            {createZeroInitStateTensor(b, {numCTAs, numBufs, numBarriers}, 8,
-                                       fb),
-             getIntTensorType(entryRegion, {numCTAs, numBufs, numBarriers},
-                              8)});
+            createZeroInitStateTensor(
+                b, {numCTAs, numBufs, numCTAs, numBarriers}, 8, fb));
         passValueToWarpSpecialize(writeTracking[iMemType].at(entryRegion),
                                   writeTracking[iMemType]);
         readTracking[iMemType].insert(
             entryRegion,
-            {createZeroInitStateTensor(b, {numCTAs, numBufs, numBarriers}, 64,
-                                       fb),
-             getIntTensorType(entryRegion, {numCTAs, numBufs, numBarriers},
-                              64)});
+            createZeroInitStateTensor(
+                b, {numCTAs, numBufs, numCTAs, numBarriers, numCTAs}, 64, fb));
         passValueToWarpSpecialize(readTracking[iMemType].at(entryRegion),
                                   readTracking[iMemType]);
       }
@@ -649,8 +622,8 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     // operates on base threads.
     commits[commitKind].insert(
         entryRegion,
-        {createZeroInitStateTensor(b, {numCTAs, numBufs, NUM_THREADS}, 8, fb),
-         getIntTensorType(entryRegion, {numCTAs, numBufs, NUM_THREADS}, 8)});
+        createZeroInitStateTensor(b, {numCTAs, numBufs, numCTAs, NUM_THREADS},
+                                  8, fb));
     passValueToWarpSpecialize(commits[commitKind].at(entryRegion),
                               commits[commitKind]);
   };
