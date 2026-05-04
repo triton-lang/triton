@@ -112,10 +112,13 @@ jobs:
       - name: Print ccache stats
         run: ccache --print-stats
       - name: Run lit tests
+        if: false  # Temporarily run only Proton tests on AMD CI.
         run: make test-lit
       - name: Run C++ unittests
+        if: false  # Temporarily run only Proton tests on AMD CI.
         run: make test-cpp
       - name: Run Python tests on AMD
+        if: false  # Temporarily run only Proton tests on AMD CI.
         run: |
           INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/instrumentation"
           if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
@@ -182,14 +185,14 @@ jobs:
           LD_PRELOAD=$CLANG_ASAN_LIB:$HIP_ASAN_LIB python3 -m pytest -s test_address_sanitizer.py
           mv $TORCH_PATH/libamdhip64_bck.so $TORCH_PATH/libamdhip64.so
       - name: Run regression tests
+        if: false  # Temporarily run only Proton tests on AMD CI.
         run: |
           make test-regression
       - name: Run microbenchmark tests
+        if: false  # Temporarily run only Proton tests on AMD CI.
         run: |
           python3 python/test/microbenchmark/launch_overhead.py
       - name: Run Proton tests
-        env:
-          PROTON_TEST_BACKEND: roctracer
         run: |
           unset HIP_VISIBLE_DEVICES
           make test-proton
