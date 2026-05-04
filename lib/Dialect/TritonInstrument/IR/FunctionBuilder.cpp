@@ -2746,11 +2746,11 @@ void FunctionBuilder::createStageAccessForCommitCall(
         Value descriptor = createBufferDescriptor(fb, bufOffset, lengthVal);
         Value buffersEqBuf = createCmpIntTensorScalar(fb, buffers, descriptor);
         buffersEqBuf = convertAndBroadcast(fb, buffersEqBuf, {1}, commitsType);
-        Value relationMask =
-            createLeadCTAEffectMask(fb, commitsType, createCurrentCTAMask(fb));
-        buffersEqBuf = arith::AndIOp::create(fb, buffersEqBuf, relationMask);
+        Value ctaMask = createCTASetMask(fb, commitsType, /*dim=*/0,
+                                         createCurrentCTAMask(fb));
+        buffersEqBuf = arith::AndIOp::create(fb, buffersEqBuf, ctaMask);
         Value threadColumnMask =
-            createDimMask(fb, threadVal, commitsType, /*dim=*/3);
+            createDimMask(fb, threadVal, commitsType, /*dim=*/2);
         Value bufAndThread =
             arith::AndIOp::create(fb, buffersEqBuf, threadColumnMask);
         Value minusOne =
@@ -2758,7 +2758,7 @@ void FunctionBuilder::createStageAccessForCommitCall(
         Value updated =
             arith::SelectOp::create(fb, bufAndThread, minusOne, commits);
         createMaskedStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
-                                       updated, commitsType, relationMask);
+                                       updated, commitsType, ctaMask);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -2798,10 +2798,10 @@ void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
             fb, elementType, fb.getIntegerAttr(elementType, -1));
         Value ones = tti::createConstIntTensor(fb, fb.getLoc(), 1, commitsType);
 
-        Value threadMask = createDimMask(fb, threadVal, commitsType, /*dim=*/3);
-        Value relationMask =
-            createLeadCTAEffectMask(fb, commitsType, createCurrentCTAMask(fb));
-        threadMask = arith::AndIOp::create(fb, threadMask, relationMask);
+        Value threadMask = createDimMask(fb, threadVal, commitsType, /*dim=*/2);
+        Value ctaMask = createCTASetMask(fb, commitsType, /*dim=*/0,
+                                         createCurrentCTAMask(fb));
+        threadMask = arith::AndIOp::create(fb, threadMask, ctaMask);
         auto commitsGtZero = createCmpIntTensorScalar(
             fb, commits, zero, arith::CmpIPredicate::sgt);
         commitsGtZero = arith::AndIOp::create(fb, commitsGtZero, threadMask);
@@ -2816,7 +2816,7 @@ void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
         commits = arith::SelectOp::create(fb, commitsEqMinusOne, ones, commits);
 
         createMaskedStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
-                                       commits, commitsType, relationMask);
+                                       commits, commitsType, ctaMask);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -2869,11 +2869,11 @@ void FunctionBuilder::createClearOutstandingCommitsTransferWritesCall(
         Value outstandingNumElem =
             adjustIntegerWidth(fb, outstandingNumVal, elemIntType);
         Value threadColumnMask =
-            createDimMask(fb, threadVal, commitsType, /*dim=*/3);
-        Value commitRelationMask =
-            createLeadCTAEffectMask(fb, commitsType, createCurrentCTAMask(fb));
+            createDimMask(fb, threadVal, commitsType, /*dim=*/2);
+        Value commitCTAMask = createCTASetMask(fb, commitsType, /*dim=*/0,
+                                               createCurrentCTAMask(fb));
         threadColumnMask =
-            arith::AndIOp::create(fb, threadColumnMask, commitRelationMask);
+            arith::AndIOp::create(fb, threadColumnMask, commitCTAMask);
         auto outstandingCommitsGtOutstandingNum =
             createCmpIntTensorScalar(fb, outstandingCommits, outstandingNumElem,
                                      arith::CmpIPredicate::sgt);
@@ -2882,8 +2882,7 @@ void FunctionBuilder::createClearOutstandingCommitsTransferWritesCall(
 
         Value rowMask =
             reduceLastDim<arith::OrIOp>(fb, outstandingCommitsGtOutstandingNum);
-        rowMask =
-            createConvertLayout(fb, rowMask, writeVisibilityType.getEncoding());
+        rowMask = convertAndBroadcast(fb, rowMask, {0, 1}, writeVisibilityType);
         Value transferMaskElem = adjustIntegerWidth(
             fb, transferMaskVal,
             cast<IntegerType>(writeVisibilityType.getElementType()));
@@ -2906,7 +2905,7 @@ void FunctionBuilder::createClearOutstandingCommitsTransferWritesCall(
                                     outstandingCommitsZero, outstandingCommits);
         createMaskedStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
                                        outstandingCommits, commitsType,
-                                       commitRelationMask);
+                                       commitCTAMask);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -2959,11 +2958,11 @@ void FunctionBuilder::createClearOutstandingCommitsTransferReadsCall(
         Value outstandingNumElem =
             adjustIntegerWidth(fb, outstandingNumVal, elemIntType);
         Value threadColumnMask =
-            createDimMask(fb, threadVal, commitsType, /*dim=*/3);
-        Value commitRelationMask =
-            createLeadCTAEffectMask(fb, commitsType, createCurrentCTAMask(fb));
+            createDimMask(fb, threadVal, commitsType, /*dim=*/2);
+        Value commitCTAMask = createCTASetMask(fb, commitsType, /*dim=*/0,
+                                               createCurrentCTAMask(fb));
         threadColumnMask =
-            arith::AndIOp::create(fb, threadColumnMask, commitRelationMask);
+            arith::AndIOp::create(fb, threadColumnMask, commitCTAMask);
         auto outstandingCommitsGtOutstandingNum =
             createCmpIntTensorScalar(fb, outstandingCommits, outstandingNumElem,
                                      arith::CmpIPredicate::sgt);
@@ -2972,8 +2971,7 @@ void FunctionBuilder::createClearOutstandingCommitsTransferReadsCall(
 
         Value rowMask =
             reduceLastDim<arith::OrIOp>(fb, outstandingCommitsGtOutstandingNum);
-        rowMask =
-            convertAndBroadcast(fb, rowMask, {0, 1, 2}, readVisibilityType);
+        rowMask = convertAndBroadcast(fb, rowMask, {0, 1}, readVisibilityType);
         Value cMask = createCTASetMask(fb, readVisibilityType, /*dim=*/4,
                                        createCurrentCTAMask(fb));
         rowMask = arith::AndIOp::create(fb, rowMask, cMask);
@@ -2999,7 +2997,7 @@ void FunctionBuilder::createClearOutstandingCommitsTransferReadsCall(
                                     outstandingCommitsZero, outstandingCommits);
         createMaskedStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
                                        outstandingCommits, commitsType,
-                                       commitRelationMask);
+                                       commitCTAMask);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -3077,11 +3075,11 @@ void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
         Value outstandingNumElem =
             adjustIntegerWidth(fb, outstandingNumVal, elemIntType);
         Value threadColumnMask =
-            createDimMask(fb, threadVal, commitsType, /*dim=*/3);
-        Value commitRelationMask =
-            createLeadCTAEffectMask(fb, commitsType, createCurrentCTAMask(fb));
+            createDimMask(fb, threadVal, commitsType, /*dim=*/2);
+        Value commitCTAMask = createCTASetMask(fb, commitsType, /*dim=*/0,
+                                               createCurrentCTAMask(fb));
         threadColumnMask =
-            arith::AndIOp::create(fb, threadColumnMask, commitRelationMask);
+            arith::AndIOp::create(fb, threadColumnMask, commitCTAMask);
         auto outstandingCommitsGtOutstandingNum =
             createCmpIntTensorScalar(fb, outstandingCommits, outstandingNumElem,
                                      arith::CmpIPredicate::sgt);
@@ -3091,8 +3089,8 @@ void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
         // Update write visibility
         Value writeRowMask =
             reduceLastDim<arith::OrIOp>(fb, outstandingCommitsGtOutstandingNum);
-        writeRowMask = createConvertLayout(fb, writeRowMask,
-                                           writeVisibilityType.getEncoding());
+        writeRowMask =
+            convertAndBroadcast(fb, writeRowMask, {0, 1}, writeVisibilityType);
         Value writeTransferMaskElem = adjustIntegerWidth(
             fb, transferMaskVal,
             cast<IntegerType>(writeVisibilityType.getElementType()));
@@ -3112,7 +3110,7 @@ void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
         Value readRowMask =
             reduceLastDim<arith::OrIOp>(fb, outstandingCommitsGtOutstandingNum);
         readRowMask =
-            convertAndBroadcast(fb, readRowMask, {0, 1, 2}, readVisibilityType);
+            convertAndBroadcast(fb, readRowMask, {0, 1}, readVisibilityType);
         Value cMask = createCTASetMask(fb, readVisibilityType, /*dim=*/4,
                                        createCurrentCTAMask(fb));
         readRowMask = arith::AndIOp::create(fb, readRowMask, cMask);
@@ -3139,7 +3137,7 @@ void FunctionBuilder::createClearOutstandingCommitsTransferBothCall(
                                     outstandingCommitsZero, outstandingCommits);
         createMaskedStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
                                        outstandingCommits, commitsType,
-                                       commitRelationMask);
+                                       commitCTAMask);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
@@ -3196,15 +3194,15 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
                           cast<RankedTensorType>(aliasMatrixTypeBase));
       }
       buffersEqBuf = convertAndBroadcast(fb, buffersEqBuf, {1}, commitsType);
-      Value relationMask = createLeadCTAEffectMask(fb, commitsType, effectCTAs);
-      buffersEqBuf = arith::AndIOp::create(fb, buffersEqBuf, relationMask);
+      Value ctaMask = createCTASetMask(fb, commitsType, /*dim=*/0, effectCTAs);
+      buffersEqBuf = arith::AndIOp::create(fb, buffersEqBuf, ctaMask);
       Value zeroTensor =
           tti::createConstIntTensor(fb, fb.getLoc(), 0, commitsType);
       Value selectedRows = arith::SelectOp::create(
           fb, buffersEqBuf, outstandingCommits, zeroTensor);
       if (exclSelf) {
         Value threadColumnMask =
-            createDimMask(fb, threadVal, commitsType, /*dim=*/3);
+            createDimMask(fb, threadVal, commitsType, /*dim=*/2);
         selectedRows = arith::SelectOp::create(fb, threadColumnMask, zeroTensor,
                                                selectedRows);
       }

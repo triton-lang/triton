@@ -622,8 +622,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(
     commits[commitKind].insert(
         entryRegion,
         createZeroInitStateTensor(
-            b, {numCTAs, numBufs, numCTAs, threadLayout.numBaseThreadSlots}, 8,
-            fb));
+            b, {numCTAs, numBufs, threadLayout.numBaseThreadSlots}, 8, fb));
     passToWarpSpecialize(entryPoint, commits[commitKind].at(entryRegion),
                          commits[commitKind], captureCounter);
   };
