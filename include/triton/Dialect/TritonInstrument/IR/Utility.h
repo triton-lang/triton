@@ -41,9 +41,8 @@ enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
 // writeVisibility + readVisibility per active memory type.
 constexpr int kCapturesPerMemType = 2;
 
-// barrierStates + waiting + activeMasks + barrierWriteRecipients (only when
-// barriers exist).
-constexpr int kBarrierBaseCaptures = 4;
+// barrierStates + waiting + activeMasks (only when barriers exist).
+constexpr int kBarrierBaseCaptures = 3;
 
 // writeTracking + readTracking per active memory type (only when barriers
 // exist and the memory type has buffers).
@@ -150,12 +149,12 @@ struct AuxDataMap {
   //   tensor  = distributed tensor value.
   //   scratch = pointer to shared-cluster global scratch memory.
 
-  // tensor, <C x B x i64>
+  // tensor, <B x i64>
   // Per-memory-type packed buffer descriptors. Each i64 stores the 32-bit base
   // offset and 32-bit length of one shared-memory or tensor-memory region.
   RegionToValueMap buffers[numMemTypes];
 
-  // tensor, <C x K x i64>
+  // tensor, <K x i64>
   // Packed descriptors for tracked mbarrier allocations. Barriers are shared
   // memory descriptors.
   RegionToValueMap barriers;
@@ -166,38 +165,32 @@ struct AuxDataMap {
   // current arrival count, and bits [41..61] hold a signed tx-count.
   RegionToValueMap barrierStates;
 
-  // scratch, <C x K x i32>
-  // Per-barrier CTA bitsets of write-recipient rows reached by outstanding
-  // EffectWrites operations such as TMA and CLC. Used when a later wait
-  // transfers tracked writes.
-  RegionToValueMap barrierWriteRecipients;
-
-  // scratch, <C x B x i64>
+  // scratch, <C x B x C x i64>
   // Per-memory-type write frontier. Bit i means logical ConSan thread i can see
   // the latest write to the buffer row.
   RegionToValueMap writeVisibility[numMemTypes];
 
-  // scratch, <C x B x K x i8>
+  // scratch, <C x B x C x K x i8>
   // Per-memory-type buffer/barrier map for writes that a barrier tracks.
   RegionToValueMap writeTracking[numMemTypes];
 
-  // scratch, <C x B x T x i64>
+  // scratch, <C x B x C x T x C x i64>
   // Per-memory-type read frontier. For each buffer and logical thread lane, the
   // i64 value is a bitmask of reads visible to that lane's thread.
   RegionToValueMap readVisibility[numMemTypes];
 
-  // scratch, <C x B x K x i64>
+  // scratch, <C x B x C x K x C x i64>
   // Per-memory-type buffer/barrier map for read visibility masks that a barrier
   // tracks.
   RegionToValueMap readTracking[numMemTypes];
 
-  // scratch, <C x B x P x i8>
+  // scratch, <C x B x C x P x i8>
   // Per-commit-kind outstanding commit counters for shared-memory buffers.
   // Entries are 0 for none, -1 for staged but uncommitted, and positive for a
   // committed access with an outstanding-group distance.
   RegionToValueMap commits[CommitKind::NumCommitKinds];
 
-  // tensor, <C x B x B x i1>
+  // tensor, <B x B x i1>
   // Optional per-memory-type alias matrix. Created only when BufferRegion
   // analysis finds cross-buffer aliasing; checks expand selected buffer rows
   // through this matrix.
@@ -207,7 +200,7 @@ struct AuxDataMap {
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
   RegionToValueMap lock;
 
-  // scratch, <C x K x i32>
+  // scratch, <C x K x C x i32>
   // Deadlock-detection bitfield. Each base thread uses two bits: waiting flag
   // and stored phase.
   RegionToValueMap waiting;
