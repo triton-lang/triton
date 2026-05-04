@@ -77,9 +77,8 @@ struct GraphState {
   // Metric nodes and their CPU-side metric state, ordered by node id.
   std::map<uint64_t, MetricNodeState> metricNodeIdToState;
   // Maps the sequence id captured in the metric record back to the graph node
-  // id. The sequence id is captured as a normal kernel argument before CUPTI
-  // reports the node id.
-  std::map<uint64_t, uint64_t> metricSeqIdToNodeId;
+  // id.
+  std::unordered_map<uint64_t, uint64_t> metricSeqIdToNodeId;
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
   bool captureStatusChecked{};

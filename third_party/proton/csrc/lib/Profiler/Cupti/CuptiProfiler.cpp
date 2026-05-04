@@ -241,14 +241,13 @@ void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
       }
     }
     seqIdToState.emplace(seqId, std::move(pendingMetricNode));
-    numWords += metricNodeState.numWords;
   }
-  // All data have been deactivated during graph launch
-  if (numWords == 0)
-    return;
+  // Whether a data is active or not, the GPU will write the metric data into
+  // the metric buffer if there is a metric node. So we need the complete number
+  // of metrics of a graph
   if (callbackData->context != nullptr)
-    pendingGraphPool->flushIfNeeded(numWords);
-  pendingGraphPool->push(phase, numWords, std::move(seqIdToState));
+    pendingGraphPool->flushIfNeeded(graphState.numMetricWords);
+  pendingGraphPool->push(phase, graphState.numMetricWords, std::move(seqIdToState));
 }
 
 constexpr std::array<CUpti_CallbackId, 11> kGraphCallbacks = {
