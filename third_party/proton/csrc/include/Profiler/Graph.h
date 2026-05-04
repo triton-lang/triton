@@ -89,7 +89,7 @@ struct PendingGraph {
 };
 
 struct PendingGraphQueue {
-  std::map<uint64_t, PendingGraph> streamIdToPendingGraphs;
+  std::map<uint64_t, std::vector<PendingGraph>> streamIdToPendingGraphs;
   // The start buffer offset in the metric buffer for this queue
   size_t startBufferOffset{};
   // Total number of uint64 words written by all nodes in this queue
@@ -100,20 +100,7 @@ struct PendingGraphQueue {
 
   void push(uint64_t streamId, PendingGraph pendingGraph) {
     auto numWords = pendingGraph.numWords;
-    auto it = streamIdToPendingGraphs.find(streamId);
-    if (it == streamIdToPendingGraphs.end()) {
-      streamIdToPendingGraphs.emplace(streamId, std::move(pendingGraph));
-      this->numWords += numWords;
-      return;
-    }
-    auto &current = it->second;
-    current.numNodes += pendingGraph.numNodes;
-    current.numWords += pendingGraph.numWords;
-    for (auto &[data, entries] : pendingGraph.dataToEntries) {
-      auto &currentEntries = current.dataToEntries[data];
-      currentEntries.insert(currentEntries.end(), entries.begin(),
-                            entries.end());
-    }
+    streamIdToPendingGraphs[streamId].push_back(std::move(pendingGraph));
     this->numWords += numWords;
   }
 };

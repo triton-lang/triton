@@ -94,7 +94,8 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
     wordOffset += metricDesc.size;
 
-    auto &pendingGraph = streamIdToPendingGraphs.at(streamId);
+    auto &pendingGraphs = streamIdToPendingGraphs.at(streamId);
+    auto &pendingGraph = pendingGraphs.front();
     const auto entryIndex =
         pendingGraph.dataToEntries.begin()->second.size() -
         pendingGraph.numNodes;
@@ -110,7 +111,10 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
     pendingGraph.numNodes -= 1;
     pendingGraph.numWords -= 2 + metricDesc.size;
     if (pendingGraph.numNodes == 0 && pendingGraph.numWords == 0) {
-      streamIdToPendingGraphs.erase(streamId);
+      pendingGraphs.erase(pendingGraphs.begin());
+      if (pendingGraphs.empty()) {
+        streamIdToPendingGraphs.erase(streamId);
+      }
     }
   }
 
