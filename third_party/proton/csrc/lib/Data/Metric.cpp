@@ -34,10 +34,8 @@ void MetricBuffer::receive(
   // The replay stream id is resolved from the graph launch callback. Metric
   // copy nodes captured before replay therefore write a placeholder stream id.
   uint64_t streamId = 0;
-  queueMetrics(tensorMetrics, metricKernelLaunchState.stream,
-               metricKernelLaunchState.tensor, streamId);
-  queueMetrics(scalarMetrics, metricKernelLaunchState.stream,
-               metricKernelLaunchState.scalar, streamId);
+  queueMetrics(tensorMetrics, metricKernelLaunchState.tensor, streamId);
+  queueMetrics(scalarMetrics, metricKernelLaunchState.scalar, streamId);
 }
 
 MetricBuffer::MetricDescriptor
@@ -136,7 +134,7 @@ collectTensorMetrics(Runtime *runtime,
 }
 
 void MetricBuffer::queue(uint64_t streamId, size_t metricId,
-                         TensorMetric tensorMetric, void *stream,
+                         TensorMetric tensorMetric,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
   uint64_t numWords = capacity / sizeof(uint64_t);
@@ -154,12 +152,12 @@ void MetricBuffer::queue(uint64_t streamId, size_t metricId,
                           reinterpret_cast<void *>(&profileScratchPtr)};
   unsigned int blockDimX = std::max(1u, launchConfig.numThreads);
   runtime->launchKernel(launchConfig.kernel, 1, 1, 1, blockDimX, 1, 1,
-                        launchConfig.sharedMemBytes, stream, kernelParams,
-                        nullptr);
+                        launchConfig.sharedMemBytes, launchConfig.stream,
+                        kernelParams, nullptr);
 }
 
 void MetricBuffer::queue(uint64_t streamId, size_t metricId,
-                         MetricValueType scalarMetric, void *stream,
+                         MetricValueType scalarMetric,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
   uint64_t numWords = capacity / sizeof(uint64_t);
@@ -193,8 +191,8 @@ void MetricBuffer::queue(uint64_t streamId, size_t metricId,
                           reinterpret_cast<void *>(&profileScratchPtr)};
   unsigned int blockDimX = std::max(1u, launchConfig.numThreads);
   runtime->launchKernel(launchConfig.kernel, 1, 1, 1, blockDimX, 1, 1,
-                        launchConfig.sharedMemBytes, stream, kernelParams,
-                        nullptr);
+                        launchConfig.sharedMemBytes, launchConfig.stream,
+                        kernelParams, nullptr);
 }
 
 void MetricBuffer::synchronize(DeviceBuffer &buffer) {

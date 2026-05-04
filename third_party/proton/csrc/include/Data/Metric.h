@@ -388,6 +388,7 @@ struct TensorMetric {
 
 struct MetricKernelLaunchConfig {
   void *kernel{nullptr};
+  void *stream{nullptr};
   unsigned int numThreads{1};
   unsigned int sharedMemBytes{0};
 };
@@ -395,7 +396,6 @@ struct MetricKernelLaunchConfig {
 struct MetricKernelLaunchState {
   MetricKernelLaunchConfig tensor{};
   MetricKernelLaunchConfig scalar{};
-  void *stream{nullptr};
 };
 
 /// Collect tensor metrics from device to host.
@@ -451,7 +451,7 @@ public:
     auto it = deviceBuffers.find(device);
     if (it != deviceBuffers.end()) {
       auto &buffer = it->second;
-      callback(buffer.hostPtr, *buffer.hostOffset);
+      callback(buffer.hostPtr);
     }
   }
 
@@ -467,7 +467,7 @@ public:
     }
     for (auto &[device, buffer] : buffersToFlush) {
       synchronize(buffer);
-      callback(device, buffer.hostPtr, *buffer.hostOffset);
+      callback(device, buffer.hostPtr);
     }
   }
 
@@ -495,10 +495,10 @@ private:
   DeviceBuffer &getOrCreateBuffer();
 
   void queue(uint64_t streamId, size_t metricId, TensorMetric tensorMetric,
-             void *stream, const MetricKernelLaunchConfig &launchConfig);
+             const MetricKernelLaunchConfig &launchConfig);
 
   void queue(uint64_t streamId, size_t metricId, MetricValueType scalarMetric,
-             void *stream, const MetricKernelLaunchConfig &launchConfig);
+             const MetricKernelLaunchConfig &launchConfig);
 
   void synchronize(DeviceBuffer &buffer);
 
@@ -529,14 +529,14 @@ private:
   }
 
   template <typename MetricsT>
-  void queueMetrics(const MetricsT &metrics, void *stream,
+  void queueMetrics(const MetricsT &metrics,
                     const MetricKernelLaunchConfig &launchConfig,
                     uint64_t streamId) {
     for (const auto &[name, metric] : metrics) {
       size_t typeIndex = getMetricTypeIndex(metric);
       size_t size = getMetricSize(metric);
       auto descriptor = getOrCreateMetricDescriptor(name, typeIndex, size);
-      queue(streamId, descriptor.id, metric, stream, launchConfig);
+      queue(streamId, descriptor.id, metric, launchConfig);
     }
   }
 

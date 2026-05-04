@@ -16,7 +16,7 @@ constexpr size_t bytesForWords(size_t numWords) {
 }
 
 void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
-                       const PendingGraphQueue &queue) {
+                       PendingGraphQueue &queue) {
   const size_t capacityWords = metricBuffer.getCapacity() / sizeof(uint64_t);
   const uint64_t scanStartWordOffset =
       queue.startBufferOffset / sizeof(uint64_t);
@@ -25,10 +25,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
     return hostBasePtr[offset % capacityWords];
   };
 
-  auto streamIdToEntryQueue = queue.streamIdToEntryQueues;
-  // Metric records are scanned in GPU append order, which can interleave
-  // streams. Within each stream, graph replay preserves metric-copy kernel
-  // order, so the stream id routes the record to the next pending entry.
+  auto &streamIdToPendingGraphs = queue.streamIdToPendingGraphs;
   for (uint64_t wordOffset = scanStartWordOffset; wordOffset < endWordOffset;) {
     const uint64_t streamId = readWord(wordOffset);
     wordOffset += 1;
@@ -97,8 +94,12 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
 
     wordOffset += metricDesc.size;
 
-    auto &entryQueue = streamIdToEntryQueue.at(streamId);
-    for (auto &[data, dataEntry] : entryQueue.front()) {
+    auto &pendingGraph = streamIdToPendingGraphs.at(streamId);
+    const auto entryIndex =
+        pendingGraph.dataToEntries.begin()->second.size() -
+        pendingGraph.numNodes;
+    for (auto &[data, entries] : pendingGraph.dataToEntries) {
+      auto &dataEntry = entries[entryIndex];
       if (dataEntry.id != Scope::DummyScopeId) {
         dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
                                              dataEntry.id);
@@ -106,24 +107,30 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
         dataEntry.upsertFlexibleMetric(metricName, metricValueVariant);
       }
     }
-    entryQueue.pop_front();
+    pendingGraph.numNodes -= 1;
+    pendingGraph.numWords -= 2 + metricDesc.size;
+    if (pendingGraph.numNodes == 0 && pendingGraph.numWords == 0) {
+      streamIdToPendingGraphs.erase(streamId);
+    }
+  }
+
+  if (!streamIdToPendingGraphs.empty()) {
+    throw std::runtime_error(
+        "[PROTON] Missing CUDA graph metric records during flush");
   }
 }
 } // namespace
 
-void PendingGraphPool::push(
-    size_t phase, uint64_t streamId,
-    const std::deque<std::map<Data *, DataEntry>> &entries,
-    size_t numWords) {
-  const size_t requiredBytes = bytesForWords(numWords);
+void PendingGraphPool::push(size_t phase, uint64_t streamId,
+                            PendingGraph pendingGraph) {
+  const size_t requiredBytes = bytesForWords(pendingGraph.numWords);
   void *device = runtime->getDevice();
   std::shared_ptr<Slot> slot;
   size_t startBufferOffset = 0;
   {
     std::lock_guard<std::mutex> lock(mutex);
     auto &devicePool = pool[device];
-    auto &phasePool = devicePool[phase];
-    auto [poolIt, inserted] = phasePool.try_emplace(streamId);
+    auto [poolIt, inserted] = devicePool.try_emplace(phase);
     if (inserted)
       poolIt->second = std::make_shared<Slot>();
     startBufferOffset = deviceBufferOffset.try_emplace(device, 0).first->second;
@@ -134,7 +141,7 @@ void PendingGraphPool::push(
     if (slot->queue == std::nullopt) {
       slot->queue = PendingGraphQueue(startBufferOffset);
     }
-    slot->queue->push(numWords, streamId, entries);
+    slot->queue->push(streamId, std::move(pendingGraph));
   }
   {
     std::lock_guard<std::mutex> lock(mutex);
@@ -152,11 +159,9 @@ void PendingGraphPool::peek(size_t phase) {
   {
     std::lock_guard<std::mutex> lock(mutex);
     for (auto &[device, devicePool] : pool) {
-      auto phaseIt = devicePool.find(phase);
-      if (phaseIt != devicePool.end()) {
-        for (auto &[_, slot] : phaseIt->second) {
-          slots.emplace_back(device, slot);
-        }
+      auto slotIt = devicePool.find(phase);
+      if (slotIt != devicePool.end()) {
+        slots.emplace_back(device, slotIt->second);
       }
     }
     for (auto &[device, _] : slots) {
@@ -171,7 +176,7 @@ void PendingGraphPool::peek(size_t phase) {
       continue;
     auto &queue = *slot->queue;
     metricBuffer->peek(static_cast<Device *>(device),
-                       [&](uint8_t *hostPtr, uint64_t) {
+                       [&](uint8_t *hostPtr) {
                          emitMetricRecords(
                              *metricBuffer,
                              reinterpret_cast<uint64_t *>(hostPtr), queue);
@@ -213,21 +218,19 @@ bool PendingGraphPool::flushAll() {
   }
   std::vector<std::pair<void *, size_t>> deviceNumWords;
   metricBuffer->flush(
-      [&](void *device, uint8_t *hostPtr, uint64_t) {
+      [&](void *device, uint8_t *hostPtr) {
         auto deviceIt = poolCopy.find(device);
         if (deviceIt == poolCopy.end())
           return;
-        for (auto &[_, streamPool] : deviceIt->second) {
-          for (auto &[_, slot] : streamPool) {
-            std::lock_guard<std::mutex> lock(slot->mutex);
-            if (!slot->queue.has_value())
-              continue;
-            auto &queue = *slot->queue;
-            deviceNumWords.emplace_back(device, queue.numWords);
-            emitMetricRecords(*metricBuffer,
-                              reinterpret_cast<uint64_t *>(hostPtr), queue);
-            slot->queue.reset();
-          }
+        for (auto &[_, slot] : deviceIt->second) {
+          std::lock_guard<std::mutex> lock(slot->mutex);
+          if (!slot->queue.has_value())
+            continue;
+          auto &queue = *slot->queue;
+          deviceNumWords.emplace_back(device, queue.numWords);
+          emitMetricRecords(*metricBuffer,
+                            reinterpret_cast<uint64_t *>(hostPtr), queue);
+          slot->queue.reset();
         }
       },
       true);

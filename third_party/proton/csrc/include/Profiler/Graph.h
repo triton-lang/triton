@@ -71,11 +71,8 @@ struct GraphState {
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation.
   NodeIdToStateMap nodeIdToState;
-  struct MetricNodeInfo {
-    size_t numWords{};
-  };
-  // Metric nodes and their replay metadata, ordered by node id.
-  std::map<uint64_t, MetricNodeInfo> metricNodeIdToInfo;
+  // Metric nodes and their per-node metric words, ordered by node id.
+  std::map<uint64_t, size_t> metricNodeIdToNumWords;
   // If the graph is launched after profiling started,
   // we need to throw an error and this error is only thrown once
   bool captureStatusChecked{};
@@ -83,12 +80,16 @@ struct GraphState {
   size_t numMetricWords{};
 };
 
+struct PendingGraph {
+  size_t numNodes{};
+  size_t numWords{};
+  // Metric target entries grouped per Data sink and aligned with graph
+  // metric-node order.
+  std::map<Data *, std::vector<DataEntry>> dataToEntries;
+};
+
 struct PendingGraphQueue {
-  // Metric target entries keyed by the stream id written by each metric-copy
-  // kernel. Within a stream, graph replay preserves kernel order, so decode
-  // pops from the corresponding queue as records arrive.
-  std::map<uint64_t, std::deque<std::map<Data *, DataEntry>>>
-      streamIdToEntryQueues;
+  std::map<uint64_t, PendingGraph> streamIdToPendingGraphs;
   // The start buffer offset in the metric buffer for this queue
   size_t startBufferOffset{};
   // Total number of uint64 words written by all nodes in this queue
@@ -97,10 +98,22 @@ struct PendingGraphQueue {
   explicit PendingGraphQueue(size_t startBufferOffset)
       : startBufferOffset(startBufferOffset) {}
 
-  void push(size_t numWords, uint64_t streamId,
-            const std::deque<std::map<Data *, DataEntry>> &entries) {
-    auto &entryQueue = streamIdToEntryQueues[streamId];
-    entryQueue.insert(entryQueue.end(), entries.begin(), entries.end());
+  void push(uint64_t streamId, PendingGraph pendingGraph) {
+    auto numWords = pendingGraph.numWords;
+    auto it = streamIdToPendingGraphs.find(streamId);
+    if (it == streamIdToPendingGraphs.end()) {
+      streamIdToPendingGraphs.emplace(streamId, std::move(pendingGraph));
+      this->numWords += numWords;
+      return;
+    }
+    auto &current = it->second;
+    current.numNodes += pendingGraph.numNodes;
+    current.numWords += pendingGraph.numWords;
+    for (auto &[data, entries] : pendingGraph.dataToEntries) {
+      auto &currentEntries = current.dataToEntries[data];
+      currentEntries.insert(currentEntries.end(), entries.begin(),
+                            entries.end());
+    }
     this->numWords += numWords;
   }
 };
@@ -110,9 +123,7 @@ public:
   explicit PendingGraphPool(MetricBuffer *metricBuffer)
       : metricBuffer(metricBuffer), runtime(metricBuffer->getRuntime()) {}
 
-  void push(size_t phase, uint64_t streamId,
-            const std::deque<std::map<Data *, DataEntry>> &entries,
-            size_t numWords);
+  void push(size_t phase, uint64_t streamId, PendingGraph pendingGraph);
 
   // No GPU synchronization, No CPU locks
   void peek(size_t phase);
@@ -138,9 +149,8 @@ private:
   MetricBuffer *metricBuffer{};
   Runtime *runtime{};
   mutable std::mutex mutex;
-  // device -> phase -> stream id -> slot
-  std::map<void *, std::map<size_t, std::map<uint64_t, std::shared_ptr<Slot>>>>
-      pool;
+  // device -> phase -> slot
+  std::map<void *, std::map<size_t, std::shared_ptr<Slot>>> pool;
 };
 
 } // namespace proton
