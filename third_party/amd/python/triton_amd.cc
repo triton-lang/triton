@@ -28,6 +28,7 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
@@ -547,6 +548,45 @@ void init_triton_amd(py::module &&m) {
       if (arg.hasByRefAttr() || arg.hasNestAttr())
         continue;
       arg.addAttr(llvm::Attribute::InReg);
+    }
+  });
+
+  // Set LLVM cl::opt flags for the duration of a codegen call.
+  // Handles both bare boolean flags ("flag-name") and key=value pairs
+  // ("flag-name=value"). Returns the list of option names that were modified
+  // so they can be restored via restore_llvm_flags.
+  m.def("set_llvm_flags",
+        [](const std::vector<std::string> &flags) -> std::vector<std::string> {
+          auto options = llvm::cl::getRegisteredOptions();
+          std::vector<std::string> modified;
+          for (const auto &flag : flags) {
+            std::string key, val;
+            auto eq = flag.find('=');
+            if (eq != std::string::npos) {
+              key = flag.substr(0, eq);
+              val = flag.substr(eq + 1);
+            } else {
+              key = flag;
+              val = "true";
+            }
+            auto it = options.find(key);
+            if (it == options.end()) {
+              llvm::errs() << "Warning: unknown LLVM option '" << key << "'\n";
+              continue;
+            }
+            it->second->addOccurrence(1, key, val);
+            modified.push_back(key);
+          }
+          return modified;
+        });
+
+  // Restore LLVM cl::opt flags to their compile-time defaults.
+  m.def("restore_llvm_flags", [](const std::vector<std::string> &modified) {
+    auto options = llvm::cl::getRegisteredOptions();
+    for (const auto &key : modified) {
+      auto it = options.find(key);
+      if (it != options.end())
+        it->second->setDefault();
     }
   });
 

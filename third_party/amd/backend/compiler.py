@@ -89,6 +89,10 @@ class HIPOptions:
     # schedule_hint="attention,memory-bound-attention"
     schedule_hint: str = 'none'
 
+    # Extra LLVM cl::opt flags for the AMDGPU codegen backend (e.g. "flag=value").
+    # Set per-kernel via llvm_flags=(...) or globally via TRITON_AMD_LLVM_FLAGS.
+    llvm_flags: tuple = ()
+
     def __post_init__(self):
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
@@ -101,6 +105,10 @@ class HIPOptions:
                 f"kpack is deprecated starting from gfx950 and will be removed in later releases. So for now kpack = {self.kpack} will be overwritten to 1 to make transitioning easier."
             )
             object.__setattr__(self, 'kpack', 1)
+
+        env_llvm_flags = knobs.amd.llvm_flags
+        if env_llvm_flags:
+            object.__setattr__(self, 'llvm_flags', tuple(env_llvm_flags.split(",")) + self.llvm_flags)
 
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
@@ -517,6 +525,7 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
+        modified = amd.set_llvm_flags(list(options.llvm_flags)) if options.llvm_flags else []
         features = '-real-true16' if 'gfx11' in options.arch else ''
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
@@ -533,6 +542,8 @@ class HIPBackend(BaseBackend):
         else:
             amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags,
                                            options.enable_fp_fusion, False)
+        if modified:  # Reset flags to defaults so they don't leak into other kernels.
+            amd.restore_llvm_flags(modified)
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)

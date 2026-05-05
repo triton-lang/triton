@@ -529,6 +529,11 @@ class amd_knobs(base_knobs):
 
     scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
 
+    # Comma-separated LLVM flags passed to the AMDGPU codegen backend.
+    # Supports key=value pairs for non-boolean options.
+    # Example: TRITON_AMD_LLVM_FLAGS="amdgpu-loop-carried-load-percent=0,amdgpu-coexec-window-singular-flavor=1"
+    llvm_flags: env_opt_str = env_opt_str("TRITON_AMD_LLVM_FLAGS")
+
     # Path to dump MIR files for debugging/analysis
     dump_mir: env_opt_str = env_opt_str("TRITON_DUMP_MIR")
     # Path to externally-provided MIR files to use instead of generated ones
