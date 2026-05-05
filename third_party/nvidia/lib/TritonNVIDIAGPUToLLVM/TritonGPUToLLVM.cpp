@@ -112,7 +112,9 @@ struct ConvertTritonGPUToLLVM
     if (enableConcurrencySanitizer) {
       auto hooks = mlir::triton::instrument::createConSanHooks("nvidia");
       assert(hooks && "no ConSan hooks registered for nvidia");
-      mlir::triton::instrument::runConcurrencySanitizer(mod, hooks.get());
+      if (failed(mlir::triton::instrument::runConcurrencySanitizer(
+              mod, hooks.get())))
+        return signalPassFailure();
       mlir::PassManager cleanupPm(context);
       cleanupPm.addPass(mlir::triton::gluon::createGluonCanonicalize());
       cleanupPm.addPass(mlir::createCSEPass());

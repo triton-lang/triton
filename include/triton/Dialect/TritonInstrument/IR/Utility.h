@@ -5,6 +5,7 @@
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonInstrument/IR/ConSanConstants.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -222,9 +223,9 @@ struct AuxDataMap {
   // aliasMatrices to make visibility and commit checks conservative.
   std::array<bool, numMemTypes> hasNonTrivialAliasing{};
 
-  void populateAndPassToWarpSpecialize(ModuleOp module,
-                                       FunctionBuilder &funcBuilder,
-                                       const ConSanTargetHooks *hooks);
+  LogicalResult populateAndPassToWarpSpecialize(ModuleOp module,
+                                                FunctionBuilder &funcBuilder,
+                                                const ConSanTargetHooks *hooks);
 
 private:
   void getBuffersAndBarriers(
@@ -232,7 +233,8 @@ private:
       SmallVector<SmallVector<triton::BufferRegion>, 2> &bufRegions,
       SmallVector<triton::BufferRegion> &barrierRegions);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,
-                            RegionToValueMap &map, int &captureCounter);
+                            RegionToValueMap &map, int &captureCounter,
+                            int64_t &captureBytes);
   void createInWarpSpecialize(
       triton::FuncOp func, RegionToValueMap &map,
       std::function<ValueType(ImplicitLocOpBuilder &)> createFn);

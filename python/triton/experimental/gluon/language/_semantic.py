@@ -4,6 +4,7 @@ from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
 from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout, CoalescedLayout, SharedLinearLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder, compute_tmem_reg_layout
+from triton._C.libtriton import ir
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
 TensorTy = TypeVar("TensorTy")
@@ -308,7 +309,32 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         self.builder.create_local_scatter(mem_desc.handle, values.handle, indices.handle, axis)
 
-    def shared_atomic_scatter_add(self, mem_desc, values, indices, axis, mask):
+    def _get_shared_atomic_scatter_rmw_op(self, op, dtype):
+        if op == "add":
+            _check(dtype.is_int() or dtype.is_floating(), lambda: f"atomic_scatter_add does not support dtype {dtype}")
+            return ir.ATOMIC_OP.FADD if dtype.is_floating() else ir.ATOMIC_OP.ADD
+
+        if op in ("max", "min"):
+            _check(dtype.is_int(), lambda: f"atomic_scatter_{op} does not support dtype {dtype}")
+            if dtype.is_int_unsigned():
+                return ir.ATOMIC_OP.UMAX if op == "max" else ir.ATOMIC_OP.UMIN
+            return ir.ATOMIC_OP.MAX if op == "max" else ir.ATOMIC_OP.MIN
+
+        if op in ("and", "or", "xor"):
+            _check(dtype.is_int(), lambda: f"atomic_scatter_{op} does not support dtype {dtype}")
+            return {
+                "and": ir.ATOMIC_OP.AND,
+                "or": ir.ATOMIC_OP.OR,
+                "xor": ir.ATOMIC_OP.XOR,
+            }[op]
+
+        if op == "xchg":
+            _check(dtype.is_int() or dtype.is_floating(), lambda: f"atomic_scatter_xchg does not support dtype {dtype}")
+            return ir.ATOMIC_OP.XCHG
+
+        raise ValueError(f"unknown atomic scatter rmw op {op}")
+
+    def shared_atomic_scatter_rmw(self, mem_desc, op, values, indices, axis, mask):
         _check(isinstance(indices, ttgl.tensor),
                lambda: f"expected 'indices' to be a tensor, but got a {type(indices)}")
         _check(isinstance(axis, int), lambda: f"expected 'axis' to be an int, but got a {type(axis)}")
@@ -333,10 +359,14 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             _check(mask.type.layout == values.type.layout, lambda: "mask must have the same layout as values")
 
         mask_handle = mask.handle if mask is not None else None
-        handle = self.builder.create_local_atomic_scatter_add(mem_desc.handle, values.handle, indices.handle,
+        rmw_op = self._get_shared_atomic_scatter_rmw_op(op, values.dtype)
+        handle = self.builder.create_local_atomic_scatter_rmw(rmw_op, mem_desc.handle, values.handle, indices.handle,
                                                               mask_handle, axis)
         ret_ty = ttgl.distributed_type(mem_desc.dtype, values.shape, values.type.layout)
         return ttgl.tensor(handle, ret_ty)
+
+    def shared_atomic_scatter_add(self, mem_desc, values, indices, axis, mask):
+        return self.shared_atomic_scatter_rmw(mem_desc, "add", values, indices, axis, mask)
 
     def bank_conflicts(self, distr_ty, shared_ty):
         if not isinstance(distr_ty, ttgl.distributed_type):

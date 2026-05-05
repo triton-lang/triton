@@ -826,7 +826,7 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
 
   auto mnkDim = wmmaLayout.getInstrShape();
   auto kDim = mnkDim[2];
-  auto nonKDim = dotWmmaLayout.getOpIdx() == 0 ? mnkDim[0] : mnkDim[1];
+  auto nonKDim = wmmaLayout.getOperandNonKDim(dotWmmaLayout.getOpIdx());
   auto kWidth = dotWmmaLayout.getKWidth();
   constexpr int warpSize = 32;
 
@@ -1424,12 +1424,10 @@ chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
                                  numLanesInShuffleGroup);
 }
 
-LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
-                                         ArrayRef<int64_t> dotOperandShape,
-                                         unsigned wmmaMDim,
-                                         unsigned scaleFactor,
-                                         LinearLayout ctaLayout,
-                                         CGAEncodingAttr cgaLayout) {
+LinearLayout chooseScaledWmmaScaleLayout(
+    MLIRContext *ctx, int dotOperandIdx, ArrayRef<int64_t> dotOperandShape,
+    unsigned wmmaMDim, unsigned wmmaNDim, bool isTransposed,
+    unsigned scaleFactor, LinearLayout ctaLayout, CGAEncodingAttr cgaLayout) {
   using basisT = std::vector<std::vector<int32_t>>;
   unsigned rank = dotOperandShape.size();
   bool hasBatchDim = rank == 3;
@@ -1448,9 +1446,11 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   auto dimNonK = outDimNames[rank - 2];
 
   // Each lane holds kWidth=4(scale32) or kWidth=8(scale16) consecutive values
-  // along the K dim. The first 16 lanes are distributed along the nonK dim.
+  // along the K dim. The first nonKDim lanes are distributed along the nonK
+  // dim.
   constexpr unsigned warpSize = 32;
-  unsigned nonKDim = (dotOperandIdx == 0) ? wmmaMDim : 16;
+  unsigned nonKDim = AMDWmmaEncodingAttr::getOperandNonKDim(
+      wmmaMDim, wmmaNDim, isTransposed, dotOperandIdx);
   unsigned depth = warpSize / nonKDim;
   unsigned scaleKWidth = scaleFactor == 32 ? 4 : 8;
   auto kSize = dotOperandShape[1];

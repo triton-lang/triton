@@ -2379,8 +2379,13 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     :param rhs_k_pack: If false, the rhs tensor is packed into uint8 along N dimension.
     :type rhs_k_pack: bool, optional
     """
-    out_dtype = _unwrap_if_constexpr(out_dtype)
+    lhs_format = _unwrap_if_constexpr(lhs_format)
+    rhs_format = _unwrap_if_constexpr(rhs_format)
     acc = _unwrap_if_constexpr(acc)
+    fast_math = _unwrap_if_constexpr(fast_math)
+    out_dtype = _unwrap_if_constexpr(out_dtype)
+    lhs_k_pack = _unwrap_if_constexpr(lhs_k_pack)
+    rhs_k_pack = _unwrap_if_constexpr(rhs_k_pack)
     assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
     return _semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math, lhs_k_pack,
                                 rhs_k_pack, out_dtype)
@@ -3060,6 +3065,7 @@ def associative_scan(input, axis, combine_fn, reverse=False, _semantic=None, _ge
             builder.create_scan_ret(*handles)
 
     axis = _unwrap_if_constexpr(axis)
+    reverse = _unwrap_if_constexpr(reverse)
     if axis is not None:
         axis = _wrap_axis(axis, len(input[0].shape))
     return _semantic.associative_scan(input, axis, make_combine_region, reverse)
