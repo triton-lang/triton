@@ -212,7 +212,6 @@ void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
   }
   PendingGraphQueue::SeqIdToStateMap seqIdToState;
   size_t phase = Data::kNoCompletePhase;
-  size_t numWords = 0;
   for (const auto &[seqId, nodeId] : graphState.metricSeqIdToNodeId) {
     auto nodeIter = graphState.nodeIdToState.find(nodeId);
     if (nodeIter ==
@@ -221,26 +220,25 @@ void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
       continue;
     auto &nodeState = nodeIter->second;
     const auto &metricNodeState = graphState.metricNodeIdToState.at(nodeId);
-    PendingGraphQueue::MetricNodeState pendingMetricNode{
-        metricNodeState.metricId, {}};
+    auto &pendingMetricNode =
+        seqIdToState
+            .emplace(seqId, PendingGraphQueue::MetricNodeState{
+                                metricNodeState.metricId, {}})
+            .first->second;
     for (const auto &[data, graphEntry] : externIdState.dataToGraphEntry) {
       phase = graphEntry.phase;
-      auto entryIdIter = nodeState.dataToEntryId.find(data);
-      if (entryIdIter != nodeState.dataToEntryId.end()) {
-        pendingMetricNode.dataToEntry.emplace(
-            data,
-            DataEntry(entryIdIter->second, phase, graphEntry.metricSet.get()));
-      } else {
-        // Indicate that we'll call upsertFlexibleMetric instead of
-        // upsertLinkedFlexibleMetric in queueGraphMetrics, so that the kernel
-        // metric can be attached to the graph launch entry when node entry is
-        // not found.
-        pendingMetricNode.dataToEntry.emplace(
-            data,
-            DataEntry(Scope::DummyScopeId, phase, graphEntry.metricSet.get()));
+      auto entryId = Scope::DummyScopeId;
+      if (auto entryIdIter = nodeState.dataToEntryId.find(data);
+          entryIdIter != nodeState.dataToEntryId.end()) {
+        entryId = entryIdIter->second;
       }
+      // Otherwise, a DummyScopeId entry indicates that we'll call
+      // upsertFlexibleMetric instead of upsertLinkedFlexibleMetric in
+      // queueGraphMetrics, so that the kernel metric can be attached to the
+      // graph launch entry.
+      pendingMetricNode.dataToEntry.emplace(
+          data, DataEntry(entryId, phase, graphEntry.metricSet.get()));
     }
-    seqIdToState.emplace(seqId, std::move(pendingMetricNode));
   }
   // Whether a data is active or not, the GPU will write the metric data into
   // the metric buffer if there is a metric node. So we need the complete number
