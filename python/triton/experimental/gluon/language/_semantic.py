@@ -482,7 +482,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def associative_scan(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn,
                          reverse: bool) -> Tuple[TensorTy, ...]:
-        reverse = ttgl._unwrap_if_constexpr(reverse)
         shape = inputs[0].type.shape
         rank = len(shape)
 

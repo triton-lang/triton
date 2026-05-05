@@ -1544,11 +1544,9 @@ class TritonSemantic(Generic[TensorTy]):
 
             return scale.handle
 
-        lhs_format_str = lhs_format.value if hasattr(lhs_format, 'value') else lhs_format
-        rhs_format_str = rhs_format.value if hasattr(rhs_format, 'value') else rhs_format
-        return ir.deduce_scale_factor(lhs.handle, _to_scale_handle(lhs_scale), self._str_to_fp_type(lhs_format_str),
+        return ir.deduce_scale_factor(lhs.handle, _to_scale_handle(lhs_scale), self._str_to_fp_type(lhs_format),
                                       lhs_k_pack, rhs.handle, _to_scale_handle(rhs_scale),
-                                      self._str_to_fp_type(rhs_format_str), rhs_k_pack)
+                                      self._str_to_fp_type(rhs_format), rhs_k_pack)
 
     def verify_scaled_shape(self, M, N, K, lhs_scale, rhs_scale, scale_factor):
         if lhs_scale is not None:
@@ -1565,16 +1563,11 @@ class TritonSemantic(Generic[TensorTy]):
     def dot_scaled(self, lhs: TensorTy, lhs_scale: TensorTy, lhs_format: str, rhs: TensorTy,
                    rhs_scale: Optional[TensorTy], rhs_format: str, acc: TensorTy | None, fast_math: bool,
                    lhs_k_pack: bool, rhs_k_pack: bool, out_dtype: tl.dtype) -> TensorTy:
-        fast_math = tl._unwrap_if_constexpr(fast_math)
-        lhs_k_pack = tl._unwrap_if_constexpr(lhs_k_pack)
-        rhs_k_pack = tl._unwrap_if_constexpr(rhs_k_pack)
         assert lhs.type.is_block() and rhs.type.is_block()
         #TODO: validate types.
         lhs_rank = len(lhs.shape)
         rhs_rank = len(rhs.shape)
         assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
-        lhs_format: str = lhs_format.value
-        rhs_format: str = rhs_format.value
         lhs_format_enum = self._str_to_fp_type(lhs_format)
         rhs_format_enum = self._str_to_fp_type(rhs_format)
         allowed_formats = {"e2m1", "e4m3", "e5m2", "bf16", "fp16"}
@@ -1677,7 +1670,6 @@ class TritonSemantic(Generic[TensorTy]):
 
     def associative_scan(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn,
                          reverse: bool) -> Tuple[TensorTy, ...]:
-        reverse = tl._unwrap_if_constexpr(reverse)
         shape = inputs[0].type.shape
         rank = len(shape)
 
