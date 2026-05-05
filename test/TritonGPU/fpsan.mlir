@@ -1,5 +1,6 @@
 // RUN: split-file %s %t
 // RUN: triton-opt %t/success.mlir -split-input-file -tritoninstrument-fp-sanitizer | FileCheck %t/success.mlir
+// RUN: triton-opt %t/canonicalize.mlir -canonicalize | FileCheck %t/canonicalize.mlir
 // RUN: not triton-opt %t/unsupported.mlir -tritoninstrument-fp-sanitizer 2>&1 | FileCheck %t/unsupported.mlir --check-prefix=FPSANERR
 
 //--- success.mlir
@@ -93,7 +94,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @binary_ops
   tt.func public @binary_ops(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
-    // CHECK: tt.bitcast
+    // CHECK: tti.experimental_fpsan_embed
     // CHECK: arith.addi
     // CHECK: arith.subi
     // CHECK: arith.muli
@@ -112,10 +113,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @chained_ops
+  tt.func public @chained_ops(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
+    // CHECK: %[[A:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[B:.*]] = tti.experimental_fpsan_embed %arg1 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[SUM0:.*]] = arith.addi %[[A]], %[[B]] : tensor<4xi32>
+    // CHECK: %[[C:.*]] = tti.experimental_fpsan_embed %arg2 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[SUM1:.*]] = arith.addi %[[SUM0]], %[[C]] : tensor<4xi32>
+    // CHECK: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[SUM1]] : (tensor<4xi32>) -> tensor<4xf32>
+    // CHECK: tt.return %[[OUT]] : tensor<4xf32>
+    %sum0 = arith.addf %a, %b : tensor<4xf32>
+    %sum1 = arith.addf %sum0, %c : tensor<4xf32>
+    tt.return %sum1 : tensor<4xf32>
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @div_rem_ops
   tt.func public @div_rem_ops(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
-    // CHECK: tt.bitcast
-    // CHECK: arith.xori
+    // CHECK: tti.experimental_fpsan_embed
     // CHECK: arith.muli
     // CHECK-NOT: arith.divf
     // CHECK-NOT: arith.remf
@@ -145,7 +163,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @unary_ops
   tt.func public @unary_ops(%a: tensor<4xf32>) -> tensor<4xf32> {
     // CHECK-DAG: arith.constant dense<314159>
-    // CHECK: tt.bitcast
+    // CHECK: tti.experimental_fpsan_embed
     // CHECK: arith.muli
     // CHECK: arith.xori
     // CHECK: arith.xori
@@ -166,7 +184,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-DAG: arith.constant dense<1>
     // CHECK-DAG: arith.constant dense<0>
     // CHECK-DAG: arith.constant dense<-1555856531>
-    // CHECK: tt.bitcast
+    // CHECK: tti.experimental_fpsan_embed
     // CHECK: arith.muli
     // CHECK: arith.andi
     // CHECK: arith.cmpi
@@ -184,7 +202,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @cast_extf
   tt.func public @cast_extf(%a: tensor<4xf16>) -> tensor<4xf32> {
-    // CHECK: tt.bitcast
+    // CHECK: tti.experimental_fpsan_embed
     // CHECK: arith.extsi
     // CHECK-NOT: arith.extf
     %0 = arith.extf %a : tensor<4xf16> to tensor<4xf32>
@@ -197,7 +215,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @cast_truncf
   tt.func public @cast_truncf(%a: tensor<4xf32>) -> tensor<4xf16> {
-    // CHECK: tt.bitcast
+    // CHECK: tti.experimental_fpsan_embed
     // CHECK: arith.trunci
     // CHECK-NOT: arith.truncf
     %0 = arith.truncf %a : tensor<4xf32> to tensor<4xf16>
@@ -210,7 +228,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @cast_fp_to_fp
   tt.func public @cast_fp_to_fp(%a: tensor<4xf8E4M3FN>) -> tensor<4xf16> {
-    // CHECK: tt.bitcast
+    // CHECK: tti.experimental_fpsan_embed
     // CHECK: arith.extsi
     // CHECK-NOT: tt.fp_to_fp
     %0 = tt.fp_to_fp %a : tensor<4xf8E4M3FN> -> tensor<4xf16>
@@ -239,7 +257,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // CHECK-LABEL: @extern_unary
 tt.func public @extern_unary(%a: tensor<4xf32>) -> tensor<4xf32> {
-  // CHECK: tt.bitcast
+  // CHECK: tti.experimental_fpsan_embed
   // CHECK: arith.xori
   // CHECK-NOT: tt.extern_elementwise
   %0 = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "__nv_tanf"} : (tensor<4xf32>) -> tensor<4xf32>
@@ -250,7 +268,7 @@ tt.func public @extern_unary(%a: tensor<4xf32>) -> tensor<4xf32> {
 
 // CHECK-LABEL: @extern_binary
 tt.func public @extern_binary(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
-  // CHECK: tt.bitcast
+  // CHECK: tti.experimental_fpsan_embed
   // CHECK: arith.addi
   // CHECK: arith.xori
   // CHECK-NOT: tt.extern_elementwise
@@ -262,7 +280,7 @@ tt.func public @extern_binary(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4x
 
 // CHECK-LABEL: @extern_ternary
 tt.func public @extern_ternary(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
-  // CHECK: tt.bitcast
+  // CHECK: tti.experimental_fpsan_embed
   // CHECK: arith.addi
   // CHECK: arith.xori
   // CHECK-NOT: tt.extern_elementwise
@@ -274,12 +292,27 @@ tt.func public @extern_ternary(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<
 
 // CHECK-LABEL: @extern_mixed
 tt.func public @extern_mixed(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf32> {
-  // CHECK: tt.bitcast
+  // CHECK: tti.experimental_fpsan_embed
   // CHECK: arith.addi
   // CHECK: arith.xori
   // CHECK-NOT: tt.extern_elementwise
   %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_ldexpf"} : (tensor<4xf32>, tensor<4xi32>) -> tensor<4xf32>
   tt.return %0 : tensor<4xf32>
+}
+
+//--- canonicalize.mlir
+
+module {
+  // CHECK-LABEL: @fold_fpsan_embedding_roundtrips
+  tt.func public @fold_fpsan_embedding_roundtrips(%arg0: tensor<4xi32>, %arg1: tensor<4xf32>) -> (tensor<4xi32>, tensor<4xf32>) {
+    // CHECK-NOT: tti.experimental_fpsan
+    // CHECK: tt.return %arg0, %arg1
+    %0 = tti.experimental_fpsan_unembed %arg0 : (tensor<4xi32>) -> tensor<4xf32>
+    %1 = tti.experimental_fpsan_embed %0 : (tensor<4xf32>) -> tensor<4xi32>
+    %2 = tti.experimental_fpsan_embed %arg1 : (tensor<4xf32>) -> tensor<4xi32>
+    %3 = tti.experimental_fpsan_unembed %2 : (tensor<4xi32>) -> tensor<4xf32>
+    tt.return %1, %3 : tensor<4xi32>, tensor<4xf32>
+  }
 }
 
 //--- unsupported.mlir
