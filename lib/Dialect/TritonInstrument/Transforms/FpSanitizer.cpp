@@ -29,6 +29,12 @@ namespace {
 
 Type getIntTypeLike(Type ty);
 bool isFloatLike(Type ty) { return isa<FloatType>(getElementTypeOrSelf(ty)); }
+bool isIntLike(Type ty) { return isa<IntegerType>(getElementTypeOrSelf(ty)); }
+
+bool isNumericLike(Type ty) {
+  Type elemTy = getElementTypeOrSelf(ty);
+  return isa<FloatType>(elemTy) || isa<IntegerType>(elemTy);
+}
 
 static bool isValueAvailableInScope(Value value, Region *scope) {
   if (!scope)
@@ -409,12 +415,6 @@ Region *getScratchScopeRegion(Operation *anchor) {
 // Utility functions
 // ------------------------------------------------------------
 
-Type getElementType(Type ty) {
-  if (auto shaped = dyn_cast<ShapedType>(ty))
-    return shaped.getElementType();
-  return ty;
-}
-
 LogicalResult emitFpSanUnsupported(Operation *op) {
   op->emitOpError() << "unsupported by fpsan";
   return failure();
@@ -432,7 +432,7 @@ LogicalResult emitFpSanInvariantError(Operation *op) {
 }
 
 Type getIntTypeLike(Type ty) {
-  auto elem = dyn_cast<FloatType>(getElementType(ty));
+  auto elem = dyn_cast<FloatType>(getElementTypeOrSelf(ty));
   if (!elem)
     return Type();
 
@@ -448,7 +448,7 @@ Type getIntTypeLike(Type ty) {
 }
 
 unsigned getIntBitwidth(Type ty) {
-  auto elem = cast<IntegerType>(getElementType(ty));
+  auto elem = cast<IntegerType>(getElementTypeOrSelf(ty));
   return elem.getWidth();
 }
 
@@ -513,7 +513,7 @@ Value castSignedIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
 
 Value castScalarIntToIntLike(PatternRewriter &rewriter, Location loc,
                              Value scalar, Type targetTy) {
-  auto elemTy = cast<IntegerType>(getElementType(targetTy));
+  auto elemTy = cast<IntegerType>(getElementTypeOrSelf(targetTy));
   if (scalar.getType() != elemTy)
     scalar = castSignedIntValueToType(rewriter, loc, scalar, elemTy);
   if (isa<ShapedType>(targetTy))
@@ -654,7 +654,7 @@ Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
 }
 
 Value fpsanExp2(PatternRewriter &rewriter, Location loc, Value input) {
-  auto elemTy = dyn_cast<FloatType>(getElementType(input.getType()));
+  auto elemTy = dyn_cast<FloatType>(getElementTypeOrSelf(input.getType()));
   if (!elemTy)
     return Value();
   return fpsanExp2FromInt(rewriter, loc, embedToInt(rewriter, loc, input),
@@ -662,7 +662,7 @@ Value fpsanExp2(PatternRewriter &rewriter, Location loc, Value input) {
 }
 
 Value fpsanExp(PatternRewriter &rewriter, Location loc, Value input) {
-  auto elemTy = dyn_cast<FloatType>(getElementType(input.getType()));
+  auto elemTy = dyn_cast<FloatType>(getElementTypeOrSelf(input.getType()));
   if (!elemTy)
     return Value();
 
@@ -737,7 +737,7 @@ FpSanCosSin fpsanCosSinPayload(PatternRewriter &rewriter, Location loc,
 }
 
 Value fpsanCos(PatternRewriter &rewriter, Location loc, Value input) {
-  if (!isa<FloatType>(getElementType(input.getType())))
+  if (!isFloatLike(input.getType()))
     return Value();
   auto cosSin =
       fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
@@ -745,18 +745,11 @@ Value fpsanCos(PatternRewriter &rewriter, Location loc, Value input) {
 }
 
 Value fpsanSin(PatternRewriter &rewriter, Location loc, Value input) {
-  if (!isa<FloatType>(getElementType(input.getType())))
+  if (!isFloatLike(input.getType()))
     return Value();
   auto cosSin =
       fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
   return unembedToFloat(rewriter, loc, cosSin.sin, input.getType());
-}
-
-bool isIntLike(Type ty) { return isa<IntegerType>(getElementType(ty)); }
-
-bool isNumericLike(Type ty) {
-  Type elemTy = getElementType(ty);
-  return isa<FloatType>(elemTy) || isa<IntegerType>(elemTy);
 }
 
 bool externHasNumericOperands(tt::ExternElementwiseOp op) {
