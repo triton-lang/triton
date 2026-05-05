@@ -425,6 +425,11 @@ def load_weight_scales(p: PartitionArgs):
 
 
 @gluon.jit
+def issue_mma_first():
+    pass
+
+
+@gluon.jit
 def mma_partition(p: PartitionArgs):
     # Consumers.
     x_idx = 0
@@ -458,20 +463,21 @@ def mma_partition(p: PartitionArgs):
         fp4_padded=False,
         cga_layout=((0, 0, 0, 1, 0),),
     )
-    k_second_reg_layout: gl.constexpr = gl.DistributedLinearLayout(
+    k_second_full_reg_layout: gl.constexpr = gl.DistributedLinearLayout(
         reg_bases=[
-            [0, 0, 0, 8, 0, 0],
+            [0, 0, 0, 0, 0, 1],
+            [0, 0, 0, 0, 0, 2],
+            [0, 0, 0, 0, 1, 0],
             [0, 0, 0, 0, 2, 0],
             [0, 0, 0, 0, 4, 0],
             [0, 0, 0, 128, 0, 0],
-            [0, 0, 0, 16, 0, 0],
         ],
         lane_bases=[
-            [0, 0, 0, 0, 0, 1],
-            [0, 0, 0, 0, 1, 0],
             [0, 0, 0, 1, 0, 0],
             [0, 0, 0, 2, 0, 0],
             [0, 0, 0, 4, 0, 0],
+            [0, 0, 0, 8, 0, 0],
+            [0, 0, 0, 16, 0, 0],
         ],
         warp_bases=[
             [0, 0, 0, 32, 0, 0],
@@ -480,7 +486,7 @@ def mma_partition(p: PartitionArgs):
         block_bases=[
             [0, 0, 0, 256, 0, 0],
         ],
-        shape=[1, 1, 1, p.BLOCK_N, p.BLOCK_K // 16, 2],
+        shape=[1, 1, 1, p.BLOCK_N, p.BLOCK_K // 16, 4],
     )
     k_second_u8_layout: gl.constexpr = blackwell.TensorMemoryLayout(
         (p.MMA_BLOCK_COL, p.BLOCK_K),
@@ -559,8 +565,13 @@ def mma_partition(p: PartitionArgs):
                 k_second_layout,
             )
             k_second_view = k_second_view.reshape((1, 1, 1, p.BLOCK_N, p.BLOCK_K // 16, 4))
-            k_second_view = k_second_view.slice(start=2, length=2, dim=5)
-            k_second = k_second_view.load(k_second_reg_layout)
+            k_second_pair = k_second_view.load(k_second_full_reg_layout)
+            # Keep the full 16B segment load intact, then drop the even half in registers.
+            _k_second_even, k_second = (
+                k_second_pair.reshape((1, 1, 1, p.BLOCK_N, p.BLOCK_K // 16, 2, 2))
+                .permute((0, 1, 2, 3, 4, 6, 5))
+                .split()
+            )
 
             # Fence against next TMA load into the same buffer.
             blackwell.fence_async_shared()
@@ -569,6 +580,7 @@ def mma_partition(p: PartitionArgs):
 
             lo, hi = fp4_prmt_shuffle_elements(k_second)
             k_second = gl.join(lo, hi).reshape([p.BLOCK_N, p.BLOCK_K // 4])
+            k_second = gl.convert_layout(k_second, k_second_tmem.get_reg_layout(instr_variant="32x32b"))
 
             mbarrier.wait(p.mma_done_bar, mma_done_phase)
             mma_done_phase = mma_done_phase ^ 1
@@ -1156,10 +1168,10 @@ class KernelConfig:
     REUSE_GATHER_INDICES: bool = False
     INLINE_MMA_INPUT_RELEASE: bool = False
 
-    LOAD_ACTIVATION_REGS: int = 112
-    LOAD_WEIGHT_REGS: int = 48
-    LOAD_WEIGHT_SCALES_REGS: int = 48
-    MMA_REGS: int = 48
+    LOAD_ACTIVATION_REGS: int = 32
+    LOAD_WEIGHT_REGS: int = 24
+    LOAD_WEIGHT_SCALES_REGS: int = 24
+    MMA_REGS: int = 96
     MAXNREG: int = None
     OCCUPANCY: int = 1
 
@@ -1807,25 +1819,22 @@ def pack_and_unpack_kernel(
         pair_second_layout,
     )
     pair_second_view = pair_second_view.reshape([1, 1, 1, BLOCK_N, BLOCK_K // 16, 4])
-    # Take the latter 8 bytes of each 16 byte segment along inner dim.
-    pair_second_view = pair_second_view.slice(start=2, length=2, dim=5)
 
-    pair_second_reg_layout: gl.constexpr = gl.DistributedLinearLayout(
+    pair_second_full_reg_layout: gl.constexpr = gl.DistributedLinearLayout(
         reg_bases=[
-            # Target 16x256b st layout.
-            [0, 0, 0, 8, 0, 0],
+            [0, 0, 0, 0, 0, 1],
+            [0, 0, 0, 0, 0, 2],
+            [0, 0, 0, 0, 1, 0],
             [0, 0, 0, 0, 2, 0],
             [0, 0, 0, 0, 4, 0],
             [0, 0, 0, 128, 0, 0],
-            [0, 0, 0, 16, 0, 0],
         ],
         lane_bases=[
-            # Spread the eventual TMEM lanes across banks to reduce bank conflicts.
-            [0, 0, 0, 0, 0, 1],
-            [0, 0, 0, 0, 1, 0],
             [0, 0, 0, 1, 0, 0],
             [0, 0, 0, 2, 0, 0],
             [0, 0, 0, 4, 0, 0],
+            [0, 0, 0, 8, 0, 0],
+            [0, 0, 0, 16, 0, 0],
         ],
         warp_bases=[
             # In each CTA, this encodes the lanes of TMEM each warp can access,
@@ -1837,9 +1846,16 @@ def pack_and_unpack_kernel(
             # CGA shards outermost product over N.
             [0, 0, 0, 256, 0, 0],
         ],
-        shape=[1, 1, 1, BLOCK_N, BLOCK_K // 16, 2],
+        shape=[1, 1, 1, BLOCK_N, BLOCK_K // 16, 4],
     )
-    pair_second = pair_second_view.load(pair_second_reg_layout)
+    # Load the full 16B segment to avoid 2-way bank conflict.
+    pair_second_pair = pair_second_view.load(pair_second_full_reg_layout)
+    # Throw away the left half.
+    pair_first_unused, pair_second = (
+        pair_second_pair.reshape((1, 1, 1, BLOCK_N, BLOCK_K // 16, 2, 2))
+        .permute((0, 1, 2, 3, 4, 6, 5))
+        .split()
+    )
     lo, hi = fp4_prmt_shuffle_elements(pair_second)
     pair_second = gl.join(lo, hi).reshape([BLOCK_N, BLOCK_K // 4])
 
@@ -1850,6 +1866,7 @@ def pack_and_unpack_kernel(
         two_ctas=True,
     )
     lhs_tmem = blackwell.allocate_tensor_memory(gl.uint32, (BLOCK_N, BLOCK_K // 4), lhs_tmem_layout)
+    pair_second = gl.convert_layout(pair_second, lhs_tmem.get_reg_layout(instr_variant="32x32b"), assert_trivial=True)
     lhs_tmem.store(pair_second)
 
     blackwell.tcgen05_copy(
@@ -2022,26 +2039,4 @@ def check_pack_and_unpack():
 
 
 if __name__ == "__main__":
-    check_pack_and_unpack()
-    sys.exit(0)
-
-    c = KernelConfig()
-    x_smem = c.get_x_smem()
-    w_smem = c.get_w_tile_smem()
-    w_mx_smem = c.get_w_mx_tile_smem()
-    print(x_smem)
-    print(w_smem)
-    print(w_mx_smem)
-    print(x_smem + w_smem + w_mx_smem)
-    print(227 * 1024)
-
     bench(uniform_routing=False)
-
-    mlp = GPT_OSS_120B_CONFIG
-    bs = get_batch_sizes(mlp)[-1]
-    print("Batch size", bs)
-    prepared = prepare_case(mlp, bs, device=f"cuda:{torch.cuda.current_device()}")
-    slice_size = prepared.ragged_metadata.expected_slice_size
-    print("Slice size", slice_size)
-    print(select_kernel_config(slice_size))
-    print(KernelConfig())
