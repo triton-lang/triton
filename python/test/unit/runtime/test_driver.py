@@ -1,10 +1,11 @@
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 import torch
 
 import triton
 import triton.language as tl
-from triton.backends.driver import expand_signature, wrap_handle_tensordesc_impl
+from triton.backends.driver import GPUDriver, expand_signature, wrap_handle_tensordesc_impl
 
 
 def test_is_lazy():
@@ -16,6 +17,57 @@ def test_is_lazy():
     assert isinstance(triton.runtime.driver.active, getattr(triton.backends.driver, "DriverBase"))
     assert isinstance(triton.runtime.driver.default, getattr(triton.backends.driver, "DriverBase"))
     utils = triton.runtime.driver.active.utils  # noqa: F841
+
+
+def test_profile_scratch_stream_zero_uses_default_stream(monkeypatch):
+
+    class Scratch:
+
+        def __init__(self):
+            self.recorded_streams = []
+
+        def record_stream(self, stream):
+            self.recorded_streams.append(stream)
+
+    class DeviceInterface:
+
+        def __init__(self):
+            self.default_stream_arg = None
+            self.stream_args = []
+
+        def ExternalStream(self, stream, device):
+            raise AssertionError("stream 0 must use the default stream")
+
+        def stream(self, stream):
+            self.stream_args.append(stream)
+            return stream
+
+        def default_stream(self, device):
+            self.default_stream_arg = device
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    zeros_calls = []
+
+    def zeros(size, dtype, device):
+        zeros_calls.append((size, dtype, device))
+        return Scratch()
+
+    device_interface = DeviceInterface()
+    driver = SimpleNamespace(get_active_torch_device=lambda: "cuda:0", get_device_interface=lambda: device_interface)
+    monkeypatch.setattr(torch, "zeros", zeros)
+
+    scratch = GPUDriver.allocate_default_profile_scratch(driver, 16, 8, 0)
+
+    assert device_interface.default_stream_arg == "cuda:0"
+    assert device_interface.stream_args == [device_interface]
+    assert zeros_calls == [(16, torch.int8, "cuda:0")]
+    assert scratch.recorded_streams == []
 
 
 def test_kernel_in_thread(device):

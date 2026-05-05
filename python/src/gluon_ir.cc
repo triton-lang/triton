@@ -711,6 +711,13 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttg::LocalScatterOp>(memDesc, values, indices,
                                               axisAttr);
            })
+      .def("create_local_atomic_scatter_rmw",
+           [](GluonOpBuilder &self, tt::RMWOp rmwOp, Value memDesc,
+              Value values, Value indices, std::optional<Value> mask,
+              int32_t axis) -> Value {
+             return self.create<ttg::LocalAtomicScatterRMWOp>(
+                 rmwOp, memDesc, values, indices, mask.value_or(Value()), axis);
+           })
       .def("get_shared_bank_conflicts",
            [](GluonOpBuilder &self, Attribute regLayoutAttr,
               Attribute sharedLayoutAttr, std::vector<int64_t> &shape,
@@ -1206,7 +1213,8 @@ void init_gluon_ir(py::module &&m) {
 
   m.def("get_amd_wmma_scale_layout",
         [](unsigned opIdx, std::vector<int64_t> &shape, unsigned wmmaMDim,
-           unsigned scaleFactor, std::vector<std::vector<int32_t>> &regBases,
+           unsigned wmmaNDim, bool isTransposed, unsigned scaleFactor,
+           std::vector<std::vector<int32_t>> &regBases,
            std::vector<std::vector<int32_t>> &warpBases,
            std::vector<std::vector<int32_t>> &cgaBases) -> py::object {
           DialectRegistry registry;
@@ -1224,7 +1232,8 @@ void init_gluon_ir(py::module &&m) {
                                tt::standardOutDimNames(&ctx, rank));
           auto cgaLayout = buildCgaLayoutAttr(&ctx, cgaBases, rank);
           auto ll = ttg::chooseScaledWmmaScaleLayout(
-              &ctx, opIdx, shape, wmmaMDim, scaleFactor, ctaLayout, cgaLayout);
+              &ctx, opIdx, shape, wmmaMDim, wmmaNDim, isTransposed, scaleFactor,
+              ctaLayout, cgaLayout);
           auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
           return layoutToGluon(attr);
         });

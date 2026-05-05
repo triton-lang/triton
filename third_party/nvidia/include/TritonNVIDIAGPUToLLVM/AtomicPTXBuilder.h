@@ -16,6 +16,9 @@
 
 namespace mlir::triton::NVIDIA {
 
+enum class PtxAtomicAddrSpace { Global, Shared };
+enum class PtxAtomicInstr { Atom, Red };
+
 inline std::string getPtxRegisterSizeCode(int size, bool isFloat) {
   switch (size) {
   case 1:
@@ -37,10 +40,17 @@ inline FailureOr<Value>
 emitPtxAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
                  Type valueElemTy, Value ptr, ArrayRef<Value> vals,
                  RMWOp rmwOpAttr, MemSemantic sem, MemSyncScope scope,
-                 Value pred, unsigned vec = 1, unsigned packed = 1) {
+                 Value pred, unsigned vec = 1, unsigned packed = 1,
+                 PtxAtomicAddrSpace addrSpace = PtxAtomicAddrSpace::Global,
+                 PtxAtomicInstr instr = PtxAtomicInstr::Atom) {
   assert((vec == 1 || packed == 1) && "packed or vec must be 1");
   assert(vals.size() == (vec > 1 ? vec : packed) &&
          "Expected atomic RMW operand count to match vectorization");
+
+  bool isRed = instr == PtxAtomicInstr::Red;
+  bool isGlobal = addrSpace == PtxAtomicAddrSpace::Global;
+  assert((isGlobal || (vec == 1 && packed == 1)) &&
+         "shared atomic RMW does not support vectorized lowering");
 
   TritonLLVMOpBuilder b(loc, rewriter);
   unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
@@ -50,7 +60,7 @@ emitPtxAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
   std::string tyId =
       getPtxRegisterSizeCode(valueElemNBits * packed, /*isFloat=*/false);
 
-  PTXBuilder::Operand *dstOpr;
+  PTXBuilder::Operand *dstOpr = nullptr;
   if (vec > 1) {
     dstOpr = ptxBuilderAtomicRMW.newListOperand();
     for (unsigned ii = 0; ii < vec; ++ii) {
@@ -61,7 +71,7 @@ emitPtxAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
     dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true);
   }
 
-  auto *ptrOpr = ptxBuilderAtomicRMW.newAddrOperand(ptr, "l");
+  auto *ptrOpr = ptxBuilderAtomicRMW.newAddrOperand(ptr, isGlobal ? "l" : "r");
 
   PTXBuilder::Operand *valOpr;
   if (vec > 1) {
@@ -77,48 +87,63 @@ emitPtxAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
     valOpr = ptxBuilderAtomicRMW.newOperand(vals.front(), tyId);
   }
 
-  auto &atom = ptxBuilderAtomicRMW.create("atom")->global().o(
-      stringifyMemSyncScope(scope).str());
+  auto &atomicInstr = *ptxBuilderAtomicRMW.create(isRed ? std::string("red")
+                                                        : std::string("atom"));
+  if (isGlobal)
+    atomicInstr.global();
+  else
+    atomicInstr.shared();
+  atomicInstr.o(stringifyMemSyncScope(scope).str());
+
   std::string rmwOp = stringifyRMWOp(rmwOpAttr).str();
-  std::string sTy;
+  std::string suffix;
   auto sBits = std::to_string(valueElemNBits);
+
   switch (rmwOpAttr) {
   case RMWOp::AND:
   case RMWOp::OR:
   case RMWOp::XOR:
   case RMWOp::XCHG:
-    sTy = "b" + sBits;
+    suffix = "b" + sBits;
     break;
   case RMWOp::ADD:
-    sTy = "u" + sBits;
+    suffix = "u" + sBits;
     break;
   case RMWOp::FADD:
     rmwOp = "add";
-    rmwOp += (valueElemNBits == 16 ? ".noftz" : "");
-    sTy = (valueElemTy.isBF16() ? "bf" : "f") + sBits;
-    sTy += (packed == 2 && valueElemNBits == 16) ? "x2" : "";
+    rmwOp += valueElemNBits == 16 ? ".noftz" : "";
+    suffix = (valueElemTy.isBF16() ? "bf" : "f") + sBits;
+    suffix += packed == 2 && valueElemNBits == 16 ? "x2" : "";
     break;
   case RMWOp::MAX:
   case RMWOp::MIN:
-    sTy = "s" + sBits;
+    suffix = "s" + sBits;
     break;
   case RMWOp::UMAX:
     rmwOp = "max";
-    sTy = "u" + sBits;
+    suffix = "u" + sBits;
     break;
   case RMWOp::UMIN:
     rmwOp = "min";
-    sTy = "u" + sBits;
+    suffix = "u" + sBits;
     break;
   default:
     return failure();
   }
+  if (isRed && rmwOpAttr == RMWOp::XCHG)
+    return failure();
 
   std::string semStr;
   llvm::raw_string_ostream os(semStr);
   os << sem;
-  atom.o(semStr).o(rmwOp).v(vec).o(sTy);
-  atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
+  atomicInstr.o(semStr).o(rmwOp).v(vec).o(suffix);
+  if (isRed) {
+    atomicInstr(ptrOpr, valOpr).maybePredicate(pred);
+    return ptxBuilderAtomicRMW.launch(rewriter, loc,
+                                      void_ty(rewriter.getContext()));
+  }
+
+  atomicInstr(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
 
   Type retType;
   if (vec > 1) {

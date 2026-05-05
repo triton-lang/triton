@@ -43,8 +43,12 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     assert (isinstance(b.type.layout, DotOperandLayout) and b.type.layout.parent == layout), \
             "Expected rhs layout to be a DotOperandLayout with parent matching MFMA layout"
 
-    assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
-    assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
+    a_format = _unwrap_if_constexpr(a_format)
+    b_format = _unwrap_if_constexpr(b_format)
+    a_scale = _unwrap_if_constexpr(a_scale)
+    b_scale = _unwrap_if_constexpr(b_scale)
+    assert a_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format}"
+    assert b_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format}"
 
     return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_mfma_scale_layout, _semantic)
 
