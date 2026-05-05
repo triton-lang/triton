@@ -247,7 +247,8 @@ void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
   // of metrics of a graph
   if (callbackData->context != nullptr)
     pendingGraphPool->flushIfNeeded(graphState.numMetricWords);
-  pendingGraphPool->push(phase, graphState.numMetricWords, std::move(seqIdToState));
+  pendingGraphPool->push(phase, graphState.numMetricWords,
+                         std::move(seqIdToState));
 }
 
 constexpr std::array<CUpti_CallbackId, 11> kGraphCallbacks = {
@@ -538,8 +539,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         auto metricNodeState = originalMetricNodeIt->second;
         graphState.metricNodeIdToState.insert_or_assign(nodeId,
                                                         metricNodeState);
-        graphState.metricSeqIdToNodeId.insert_or_assign(
-            metricNodeState.seqId, nodeId);
+        graphState.metricSeqIdToNodeId.insert_or_assign(metricNodeState.seqId,
+                                                        nodeId);
         graphState.numMetricWords += metricNodeState.numWords;
       }
     }
