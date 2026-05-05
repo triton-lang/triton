@@ -2562,7 +2562,7 @@ def test_shared_scatter(N, M):
 
 
 @gluon.jit
-def shared_atomic_scatter_add_kernel(
+def shared_atomic_scatter_rmw_kernel(
     values_ptr,
     indices_ptr,
     mask_ptr,
@@ -2571,9 +2571,11 @@ def shared_atomic_scatter_add_kernel(
     N: ttgl.constexpr,
     M: ttgl.constexpr,
     axis: ttgl.constexpr,
+    op: ttgl.constexpr,
     dtype: ttgl.constexpr,
     use_mask: ttgl.constexpr,
     use_constant_values: ttgl.constexpr,
+    init_value: ttgl.constexpr,
     RHS_N: ttgl.constexpr,
     RHS_M: ttgl.constexpr,
     layout_2d: ttgl.constexpr,
@@ -2588,44 +2590,161 @@ def shared_atomic_scatter_add_kernel(
     offsets_rhs = rhs_x[:, None] * RHS_M + rhs_y[None, :]
 
     smem = ttgl.allocate_shared_memory(dtype, [N, M], layout=shared_layout)
-    smem.store(ttgl.zeros([N, M], dtype, layout=layout_2d))
+    smem.store(ttgl.full([N, M], init_value, dtype, layout=layout_2d))
 
     indices = ttgl.load(indices_ptr + offsets_rhs)
     if use_constant_values:
-        # Cover the all-ones RHS path; int32 can lower to atom.inc on NVIDIA.
+        # Cover the all-ones RHS path; int32 add can lower to atom.inc on NVIDIA.
         values = ttgl.full([RHS_N, RHS_M], 1, dtype, layout_rhs)
     else:
         values = ttgl.load(values_ptr + offsets_rhs)
 
     if use_mask:
         mask = ttgl.load(mask_ptr + offsets_rhs)
-        old = smem.atomic_scatter_add(values, indices, axis=axis, mask=mask)
+        if op == "add":
+            old = smem.atomic_scatter_add(values, indices, axis=axis, mask=mask)
+        elif op == "max":
+            old = smem.atomic_scatter_max(values, indices, axis=axis, mask=mask)
+        elif op == "min":
+            old = smem.atomic_scatter_min(values, indices, axis=axis, mask=mask)
+        elif op == "and":
+            old = smem.atomic_scatter_and(values, indices, axis=axis, mask=mask)
+        elif op == "or":
+            old = smem.atomic_scatter_or(values, indices, axis=axis, mask=mask)
+        elif op == "xor":
+            old = smem.atomic_scatter_xor(values, indices, axis=axis, mask=mask)
+        else:
+            old = smem.atomic_scatter_xchg(values, indices, axis=axis, mask=mask)
     else:
-        old = smem.atomic_scatter_add(values, indices, axis=axis)
+        if op == "add":
+            old = smem.atomic_scatter_add(values, indices, axis=axis)
+        elif op == "max":
+            old = smem.atomic_scatter_max(values, indices, axis=axis)
+        elif op == "min":
+            old = smem.atomic_scatter_min(values, indices, axis=axis)
+        elif op == "and":
+            old = smem.atomic_scatter_and(values, indices, axis=axis)
+        elif op == "or":
+            old = smem.atomic_scatter_or(values, indices, axis=axis)
+        elif op == "xor":
+            old = smem.atomic_scatter_xor(values, indices, axis=axis)
+        else:
+            old = smem.atomic_scatter_xchg(values, indices, axis=axis)
     ttgl.store(old_ptr + offsets_rhs, old)
-    final = smem.load(layout=layout_2d)
 
+    final = smem.load(layout=layout_2d)
     ttgl.store(final_ptr + offsets_2d, final)
 
 
-@pytest.mark.parametrize("use_mask,torch_dtype,gluon_dtype", [
-    pytest.param(False, torch.int32, ttgl.int32, id="unmasked_int32"),
-    pytest.param(False, torch.float16, ttgl.float16, id="unmasked_float16"),
-    pytest.param(False, torch.float32, ttgl.float32, id="unmasked_float32"),
-    pytest.param(True, torch.int32, ttgl.int32, id="masked_int32"),
-    pytest.param(True, torch.float32, ttgl.float32, id="masked_float32"),
-])
-@pytest.mark.parametrize("use_constant_values", [
-    pytest.param(False, id="loaded_values"),
-    pytest.param(True, id="constant_values"),
-])
-@pytest.mark.parametrize("N,M,axis,rhs_shape", [
-    pytest.param(16, 32, 1, (16, 2), id="axis1_rhs_cols"),
-    pytest.param(32, 16, 0, (2, 16), id="axis0_rhs_rows"),
-])
-def test_shared_atomic_scatter_add(use_mask, torch_dtype, gluon_dtype, use_constant_values, N, M, axis, rhs_shape):
+def _expected_shared_atomic_scatter_rmw(op, init_value, indices, values, mask, axis, shape):
+    device = values.device
+    expected = torch.full(shape, init_value, dtype=values.dtype, device=device)
+    rhs_n, rhs_m = values.shape
+
+    def combine(old, val):
+        if op == "add":
+            return old + val
+        if op == "max":
+            return torch.maximum(old, val)
+        if op == "min":
+            return torch.minimum(old, val)
+        if op == "and":
+            return old & val
+        if op == "or":
+            return old | val
+        if op == "xor":
+            return old ^ val
+        # xchg
+        return val
+
+    if axis == 1:
+        row_ids = torch.arange(rhs_n, device=device)
+        for j in range(rhs_m):
+            active = mask[:, j]
+            rows = row_ids[active]
+            cols = indices[active, j].long()
+            expected[rows, cols] = combine(expected[rows, cols], values[active, j])
+    else:
+        col_ids = torch.arange(rhs_m, device=device)
+        for i in range(rhs_n):
+            active = mask[i, :]
+            rows = indices[i, active].long()
+            cols = col_ids[active]
+            expected[rows, cols] = combine(expected[rows, cols], values[i, active])
+    return expected
+
+
+def _shared_atomic_scatter_rmw_cases():
+    int32_dtype_cases = [
+        ("unmasked_int32", False, torch.int32, ttgl.int32),
+        ("masked_int32", True, torch.int32, ttgl.int32),
+    ]
+    add_dtype_cases = [
+        *int32_dtype_cases,
+        ("unmasked_float16", False, torch.float16, ttgl.float16),
+        ("unmasked_float32", False, torch.float32, ttgl.float32),
+        ("masked_float32", True, torch.float32, ttgl.float32),
+    ]
+    xchg_dtype_cases = [
+        *int32_dtype_cases,
+        ("unmasked_float32", False, torch.float32, ttgl.float32),
+        ("masked_float32", True, torch.float32, ttgl.float32),
+    ]
+    value_cases = [
+        ("loaded_values", False),
+        ("constant_values", True),
+    ]
+    shape_cases = [
+        ("axis1_rhs_cols", 16, 32, 1, (16, 2)),
+        ("axis0_rhs_rows", 32, 16, 0, (2, 16)),
+    ]
+    op_cases = [
+        ("add", 0, add_dtype_cases),
+        ("max", 0, int32_dtype_cases),
+        ("min", 99, int32_dtype_cases),
+        ("and", 15, int32_dtype_cases),
+        ("or", 0, int32_dtype_cases),
+        ("xor", 0, int32_dtype_cases),
+        ("xchg", 0, xchg_dtype_cases),
+    ]
+
+    cases = []
+    for op, init_value, dtype_cases in op_cases:
+        for dtype_id, use_mask, torch_dtype, gluon_dtype in dtype_cases:
+            for values_id, use_constant_values in value_cases:
+                for shape_id, N, M, axis, rhs_shape in shape_cases:
+                    id_parts = [op, dtype_id]
+                    if values_id:
+                        id_parts.append(values_id)
+                    if shape_id:
+                        id_parts.append(shape_id)
+                    case_id = "_".join(id_parts)
+                    cases.append(
+                        pytest.param(
+                            op,
+                            init_value,
+                            use_mask,
+                            torch_dtype,
+                            gluon_dtype,
+                            use_constant_values,
+                            N,
+                            M,
+                            axis,
+                            rhs_shape,
+                            id=case_id,
+                        ))
+
+    return cases
+
+
+@pytest.mark.parametrize(
+    "op,init_value,use_mask,torch_dtype,gluon_dtype,use_constant_values,N,M,axis,rhs_shape",
+    _shared_atomic_scatter_rmw_cases(),
+)
+def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_dtype, use_constant_values, N, M, axis,
+                                   rhs_shape):
     if is_hip_cdna() or is_hip_rdna():
-        pytest.skip("Shared atomic_scatter_add is not supported on AMD")
+        pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
 
     device = torch.device("cuda")
     rhs_n, rhs_m = rhs_shape
@@ -2635,12 +2754,26 @@ def test_shared_atomic_scatter_add(use_mask, torch_dtype, gluon_dtype, use_const
     else:
         values = torch.arange(rhs_n * rhs_m, dtype=torch.int32, device=device).reshape(rhs_shape)
         values = (values % 7 + 1).to(torch_dtype)
-    torch.manual_seed(23 if use_mask else 17)
-    upper = M if axis == 1 else N
-    indices = torch.randint(0, upper, rhs_shape, dtype=torch.int32, device=device)
-    old = torch.empty(rhs_shape, dtype=torch_dtype, device=device)
+    if op == "xchg":
+        # make xchg deterministic with broadcasting
+        if axis == 1:
+            base_indices = torch.arange(0, rhs_m, dtype=torch.int32, device=device)[None, :]
+        else:
+            base_indices = torch.arange(0, rhs_n, dtype=torch.int32, device=device)[:, None]
+        indices = base_indices.expand(rhs_n, rhs_m).contiguous()
+    else:
+        torch.manual_seed(23 if use_mask else 17)
+        upper = M if axis == 1 else N
+        indices = torch.randint(0, upper, rhs_shape, dtype=torch.int32, device=device)
+
+    if use_mask:
+        mask = (torch.arange(rhs_n * rhs_m, device=device).reshape(rhs_n, rhs_m) % 3) != 0
+    else:
+        mask = torch.ones((rhs_n, rhs_m), dtype=torch.bool, device=device)
+
+    old = torch.empty((rhs_n, rhs_m), dtype=torch_dtype, device=device)
     final = torch.empty((N, M), dtype=torch_dtype, device=device)
-    expected = torch.zeros((N, M), dtype=torch_dtype, device=device)
+    expected = _expected_shared_atomic_scatter_rmw(op, init_value, indices, values, mask, axis, (N, M))
 
     layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
                                    warps_per_cta=[4, 1], order=[1, 0])
@@ -2648,15 +2781,7 @@ def test_shared_atomic_scatter_add(use_mask, torch_dtype, gluon_dtype, use_const
                                     warps_per_cta=[4, 1], order=[1, 0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
-    if use_mask:
-        mask = (torch.arange(rhs_n * rhs_m, device=device).reshape(rhs_shape) % 3) != 0
-        rhs = torch.where(mask, values, torch.zeros_like(values))
-    else:
-        mask = torch.empty(rhs_shape, dtype=torch.bool, device=device)
-        rhs = values
-    expected.scatter_add_(axis, indices.long(), rhs)
-
-    shared_atomic_scatter_add_kernel[(1, )](
+    shared_atomic_scatter_rmw_kernel[(1, )](
         values,
         indices,
         mask,
@@ -2665,9 +2790,11 @@ def test_shared_atomic_scatter_add(use_mask, torch_dtype, gluon_dtype, use_const
         N=N,
         M=M,
         axis=axis,
+        op=op,
         dtype=gluon_dtype,
         use_mask=use_mask,
         use_constant_values=use_constant_values,
+        init_value=init_value,
         RHS_N=rhs_n,
         RHS_M=rhs_m,
         layout_2d=layout_2d,
