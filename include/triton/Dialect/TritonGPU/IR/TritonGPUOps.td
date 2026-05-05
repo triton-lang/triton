@@ -647,6 +647,7 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
 
   let extraClassDeclaration = [{
     RegionRange getPartitionRegions();
+    SmallVector<Region *> getNonEmptyPartitionRegions();
     WarpSpecializePartitionsOp getPartitionOp();
 
     // Get the size of the capture list.

@@ -27,7 +27,7 @@ tt.func public @test_gather_i32(%desc: !tt.tensordesc<1x32xi8, #padded_desc>,
 // -----
 
 // Gather i16: same NVIDIA-oriented slice encoding on the indices (the shared
-// pass doesn't special-case index element type). i16 indices are AMD-only.
+// pass doesn't special-case index element type).
 
 #nv_slice16 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked_res16 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -79,7 +79,7 @@ tt.func public @test_scatter_i32(%desc: !tt.tensordesc<1x32xi8, #padded_desc_s>,
 // -----
 
 // Scatter i16: same NVIDIA-oriented slice encoding on the indices (the shared
-// pass doesn't special-case index element type). i16 indices are AMD-only.
+// pass doesn't special-case index element type).
 
 #nv_slice_s16 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked_src16 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>

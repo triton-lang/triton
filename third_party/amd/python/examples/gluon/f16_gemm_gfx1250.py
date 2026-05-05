@@ -408,7 +408,7 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
                                   TRANSPOSE_B, SUBTILE_LEN)
         accumulator = ttgl.amd.gfx1250.wmma(a3, b3, accumulator)
 
-    acc_buffer = a_buffer._reinterpret(ttgl.bfloat16, [BLOCK_M, BLOCK_N], SHARED_LAYOUT_ACC)
+    acc_buffer = ttgl.allocate_shared_memory(ttgl.bfloat16, [BLOCK_M, BLOCK_N], SHARED_LAYOUT_ACC)
     acc_buffer.store(accumulator.to(ttgl.bfloat16))
     ttgl.amd.gfx1250.tdm.async_store(c_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], acc_buffer)
     ttgl.amd.gfx1250.tdm.async_wait(0)

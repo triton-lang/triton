@@ -6,11 +6,13 @@ Profile correctness tests involving GPU kernels should be placed in `test_profil
 
 import pytest
 import json
+import torch
 import triton.profiler as proton
 import pathlib
 from triton.profiler.hooks.hook import HookManager
 from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler.hooks.instrumentation import InstrumentationHook
+from triton.profiler.metric import transform_tensor_metrics
 from triton._internal_testing import is_hip
 
 
@@ -37,6 +39,33 @@ def test_profile_single_session(tmp_path: pathlib.Path):
     assert session_id2 == session_id1 + 1
     assert pathlib.Path("test.hatchet").exists()
     pathlib.Path("test.hatchet").unlink()
+
+
+def test_roofline_scalar_metric_types():
+    scalar_metrics, tensor_metrics = transform_tensor_metrics({
+        "flops": 1,
+        "flops16": 2,
+        "flops32": [5, 6],
+        "flops64": torch.tensor([7, 8], dtype=torch.int64),
+        "bytes": 3.0,
+        "custom": 4,
+    })
+
+    assert tensor_metrics == {}
+    assert scalar_metrics["flops"] == 1.0
+    assert type(scalar_metrics["flops"]) is float
+    assert scalar_metrics["flops16"] == 2.0
+    assert type(scalar_metrics["flops16"]) is float
+    assert scalar_metrics["flops32"] == [5.0, 6.0]
+    assert scalar_metrics["flops64"] == [7.0, 8.0]
+    assert scalar_metrics["bytes"] == 3
+    assert type(scalar_metrics["bytes"]) is int
+    assert scalar_metrics["custom"] == 4
+    assert type(scalar_metrics["custom"]) is int
+
+    scalar_metrics, tensor_metrics = transform_tensor_metrics({"bytes": torch.tensor([9.0, 10.0])})
+    assert tensor_metrics == {}
+    assert scalar_metrics["bytes"] == [9, 10]
 
 
 def test_profile_multiple_sessions(tmp_path: pathlib.Path):
