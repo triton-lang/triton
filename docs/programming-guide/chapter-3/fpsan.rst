@@ -272,6 +272,7 @@ Exact preserved properties:
 
 - ``exp2(x + y) = exp2(x) * exp2(y)``
 - ``exp2(0) = 1``
+- ``exp2(-x) = 1.0 / exp2(x)``
 
 ``exp``
 =======
@@ -366,6 +367,7 @@ Exact preserved properties:
 - ``0``, ``+1``, and ``-1`` remain stable across the conversion
 - sign-extension behavior in the payload domain
 - truncation drops high payload bits
+- an upcast followed by a downcast is the identity
 
 Important caveat:
 
