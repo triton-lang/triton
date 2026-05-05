@@ -539,7 +539,7 @@ private:
   }
 
   template <typename MetricsT>
-  void queueMetrics(const MetricsT &metrics, void *stream,
+  void queueMetrics(const MetricsT &metrics,
                     const MetricKernelLaunchConfig &launchConfig,
                     const MetricKernelLaunchCallback &callback) {
     for (const auto &[name, metric] : metrics) {
@@ -550,7 +550,7 @@ private:
       if (callback) {
         callback(seqId, descriptor.id, kMetricRecordHeaderWords + size);
       }
-      queue(seqId, metric, stream, launchConfig);
+      queue(seqId, metric, launchConfig.stream, launchConfig);
     }
   }
 

@@ -934,7 +934,7 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
-def test_hook_launch_metadata_cudagraph_metric_order_repro(tmp_path: pathlib.Path, device: str):
+def test_cudagraph_multi_stream_internal(tmp_path: pathlib.Path, device: str):
     """
     kernels in a cudagraph can be launched using multiple internal streams, without
     a deterministic order.

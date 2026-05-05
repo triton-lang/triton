@@ -33,10 +33,8 @@ void MetricBuffer::receive(
     const std::map<std::string, MetricValueType> &scalarMetrics,
     const MetricKernelLaunchState &metricKernelLaunchState,
     const MetricKernelLaunchCallback &callback) {
-  queueMetrics(tensorMetrics, metricKernelLaunchState.tensor.stream,
-               metricKernelLaunchState.tensor, callback);
-  queueMetrics(scalarMetrics, metricKernelLaunchState.scalar.stream,
-               metricKernelLaunchState.scalar, callback);
+  queueMetrics(tensorMetrics, metricKernelLaunchState.tensor, callback);
+  queueMetrics(scalarMetrics, metricKernelLaunchState.scalar, callback);
 }
 
 MetricBuffer::MetricDescriptor
