@@ -43,7 +43,6 @@ struct AsyncCopyChainOps {
 // gather) is type-erased because every consumer below only needs Operation *.
 struct TDMChainOps {
   Operation *tdmOp;
-  ttg::AsyncCommitGroupOp commitOp;
   triton::amdgpu::AsyncTDMWait waitOp;
   ttg::LocalLoadOp maybeLocalLoadOp;
 };
@@ -55,8 +54,7 @@ using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
 // Shared skeleton for building a TDM chain:
 //   <buffer view> = createSingleBufferView(...)
 //   <tdmOp>       = buildTDMOp(builder, view, pred)   <- caller-supplied
-//   <commitOp>    = ttg::AsyncCommitGroupOp(tdmOp)
-//   <waitOp>      = amdgpu::AsyncTDMWait(commitOp)
+//   <waitOp>      = amdgpu::AsyncTDMWait(tdmOp)
 //   replace uses of original load with a local_load after waitOp
 TDMChainOps createTDMAsync(
     Operation *origLoad, Value alloc, Value extractIdx,
@@ -71,15 +69,13 @@ TDMChainOps createTDMAsync(
 
   Operation *tdmOp = buildTDMOp(builder, loc, viewLoad, pred);
 
-  auto commitOp =
-      ttg::AsyncCommitGroupOp::create(builder, loc, tdmOp->getResult(0));
   auto waitOp = triton::amdgpu::AsyncTDMWait::create(builder, loc,
-                                                     commitOp->getResult(0), 0);
+                                                     tdmOp->getResult(0), 0);
 
   auto maybeSharedLoad = tt::replaceUsesWithLocalLoad(
       builder, origLoad->getResult(0), viewLoad, waitOp);
 
-  return {tdmOp, commitOp, waitOp, maybeSharedLoad};
+  return {tdmOp, waitOp, maybeSharedLoad};
 }
 
 TDMChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
@@ -623,15 +619,12 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   return success();
 }
 
-void scheduleTDMOps(Operation *tdmOp, Operation *commitOp, Operation *waitOp,
+void scheduleTDMOps(Operation *tdmOp, Operation *waitOp,
                     ttg::LocalLoadOp maybeLocalLoadOp, Operation *origLoadOp,
                     tt::CoarseSchedule &schedule, const Stages &stages,
                     const Clusters &clusters) {
   auto [loadStage, loadCluster] = schedule[origLoadOp];
   schedule.insert(tdmOp, loadStage, loadCluster);
-  // Place ttg.async_commit_group op in the same stage/cluster as the TDM op so
-  // the later UpdateAsyncWaitCount pass can deduce better waitcnts.
-  schedule.insert(commitOp, loadStage, loadCluster);
   // If the LocalLoads are scheduled to a later stage than AsyncCopy we need to
   // place the AsyncCopy prefetches after the AsyncWaits which create a barrier
   // to ensure all warps are finished reading the shared buffer we will write
@@ -695,9 +688,8 @@ void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
                        const Clusters &clusters) {
   for (auto [l, streamOps] : loadToStreamOp) {
     if (auto asyncOps = std::get_if<TDMChainOps>(&streamOps)) {
-      auto [tdmOp, commitOp, waitOp, localLoad] = *asyncOps;
-      scheduleTDMOps(tdmOp, commitOp, waitOp, localLoad, l, schedule, stages,
-                     clusters);
+      auto [tdmOp, waitOp, localLoad] = *asyncOps;
+      scheduleTDMOps(tdmOp, waitOp, localLoad, l, schedule, stages, clusters);
     } else if (auto asyncOps = std::get_if<AsyncCopyChainOps>(&streamOps)) {
       auto loadOp = cast<tt::LoadOp>(l);
       scheduleAsyncCopy(*asyncOps, loadOp, schedule, stages, clusters);

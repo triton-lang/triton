@@ -30,7 +30,7 @@ bool isConstI32OneTensor(Value value) {
                       [](const APInt &value) { return value.isOne(); });
 }
 
-struct LocalAtomicScatterAddInfo {
+struct LocalAtomicScatterRMWInfo {
   RankedTensorType valuesTy;
   Type llvmElemTy;
   LinearLayout regLayout;
@@ -41,8 +41,8 @@ struct LocalAtomicScatterAddInfo {
   SmallVector<Value> ptrs;
 };
 
-FailureOr<LocalAtomicScatterAddInfo>
-prepareLocalAtomicScatterAdd(triton::gpu::LocalAtomicScatterAddOp op, Value dst,
+FailureOr<LocalAtomicScatterRMWInfo>
+prepareLocalAtomicScatterRMW(triton::gpu::LocalAtomicScatterRMWOp op, Value dst,
                              Value indices, Value inputValues, Value mask,
                              ConversionPatternRewriter &rewriter,
                              const NVIDIA::TargetInfo &targetInfo,
@@ -85,7 +85,7 @@ prepareLocalAtomicScatterAdd(triton::gpu::LocalAtomicScatterAddOp op, Value dst,
       computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
                        srcIndices, op.getAxis(), rewriter);
 
-  return LocalAtomicScatterAddInfo{valuesTy,        llvmElemTy, regLayout,
+  return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,
                                    removeBroadcast, threadPred, values,
                                    maskValues,      ptrs};
 }
@@ -99,7 +99,7 @@ Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
   if (!returnOld) {
     auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
     auto &red = *ptxBuilder.create("red");
-    red.shared().o("inc").o("u32");
+    red.shared().o("cta").o("relaxed").o("inc").o("u32");
     red(ptrOpr, boundOpr).maybePredicate(pred, "b");
     return ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
   }
@@ -107,51 +107,29 @@ Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
   auto *dstOpr = ptxBuilder.newOperand("=r", /*init=*/true);
   auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
   auto &atom = *ptxBuilder.create("atom");
-  atom.shared().o("inc").o("u32");
+  atom.shared().o("cta").o("relaxed").o("inc").o("u32");
   atom(dstOpr, ptrOpr, boundOpr).maybePredicate(pred, "b");
   return ptxBuilder.launch(rewriter, loc, i32_ty);
 }
 
-FailureOr<Value> emitSharedAtomicAdd(ConversionPatternRewriter &rewriter,
+FailureOr<Value> emitSharedAtomicRMW(ConversionPatternRewriter &rewriter,
                                      Location loc, Type valueElemTy, Value ptr,
-                                     Value value, bool returnOld, Value pred) {
-  unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
-  if (valueElemNBits != 16 && valueElemNBits != 32 && valueElemNBits != 64)
-    return failure();
-
-  std::string tyId = getPtxRegisterSizeCode(valueElemNBits, /*isFloat=*/false);
-  std::string addOp = "add";
-  std::string suffix;
-  if (isa<IntegerType>(valueElemTy)) {
-    if (valueElemNBits < 32)
-      return failure();
-    suffix = "u" + std::to_string(valueElemNBits);
-  } else if (isa<FloatType>(valueElemTy)) {
-    addOp += valueElemNBits == 16 ? ".noftz" : "";
-    suffix =
-        (valueElemTy.isBF16() ? "bf" : "f") + std::to_string(valueElemNBits);
-  } else {
-    return failure();
-  }
-
+                                     Value value, RMWOp rmwOp, bool returnOld,
+                                     Value pred) {
+  SmallVector<Value> vals{value};
   if (!returnOld) {
-    PTXBuilder ptxBuilder;
-    auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
-    auto *valOpr = ptxBuilder.newOperand(value, tyId);
-    auto &red = *ptxBuilder.create("red");
-    red.shared().o(addOp).o(suffix);
-    red(ptrOpr, valOpr).maybePredicate(pred, "b");
-    return ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+    auto result = emitPtxAtomicRMW(
+        rewriter, loc, valueElemTy, ptr, vals, rmwOp, MemSemantic::RELAXED,
+        MemSyncScope::CTA, pred, /*vec=*/1, /*packed=*/1,
+        PtxAtomicAddrSpace::Shared, PtxAtomicInstr::Red);
+    if (succeeded(result))
+      return result;
   }
 
-  PTXBuilder ptxBuilder;
-  auto *dstOpr = ptxBuilder.newOperand("=" + tyId, /*init=*/true);
-  auto *ptrOpr = ptxBuilder.newAddrOperand(ptr, "r");
-  auto *valOpr = ptxBuilder.newOperand(value, tyId);
-  auto &atom = *ptxBuilder.create("atom");
-  atom.shared().o(addOp).o(suffix);
-  atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred, "b");
-  return ptxBuilder.launch(rewriter, loc, valueElemTy);
+  return emitPtxAtomicRMW(rewriter, loc, valueElemTy, ptr, vals, rmwOp,
+                          MemSemantic::RELAXED, MemSyncScope::CTA, pred,
+                          /*vec=*/1, /*packed=*/1, PtxAtomicAddrSpace::Shared,
+                          PtxAtomicInstr::Atom);
 }
 
 LogicalResult lowerLdStMatrix(
@@ -322,30 +300,32 @@ private:
   const NVIDIA::TargetInfo &targetInfo;
 };
 
-struct LocalAtomicScatterAddOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::LocalAtomicScatterAddOp> {
+struct LocalAtomicScatterRMWOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalAtomicScatterRMWOp> {
 public:
-  LocalAtomicScatterAddOpConversion(const LLVMTypeConverter &converter,
+  LocalAtomicScatterRMWOpConversion(const LLVMTypeConverter &converter,
                                     const NVIDIA::TargetInfo &targetInfo,
                                     PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<triton::gpu::LocalAtomicScatterAddOp>(converter,
+      : ConvertOpToLLVMPattern<triton::gpu::LocalAtomicScatterRMWOp>(converter,
                                                                      benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
-  matchAndRewrite(triton::gpu::LocalAtomicScatterAddOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::LocalAtomicScatterRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto lowering = prepareLocalAtomicScatterAdd(
+    auto lowering = prepareLocalAtomicScatterRMW(
         op, adaptor.getDst(), adaptor.getIndices(), adaptor.getValues(),
         op.getMask() ? adaptor.getMask() : Value(), rewriter, targetInfo,
         getTypeConverter());
     if (failed(lowering))
       return failure();
-    LocalAtomicScatterAddInfo &info = *lowering;
+    LocalAtomicScatterRMWInfo &info = *lowering;
 
-    bool isI32Inc = info.valuesTy.getElementType().isInteger(32) &&
+    RMWOp rmwOp = op.getAtomicRmwOp();
+    bool isI32Inc = rmwOp == RMWOp::ADD &&
+                    info.valuesTy.getElementType().isInteger(32) &&
                     isConstI32OneTensor(op.getValues());
     bool returnOld = !op.getResult().use_empty();
 
@@ -364,8 +344,8 @@ public:
           results.push_back(result);
         continue;
       }
-      auto old = emitSharedAtomicAdd(rewriter, loc, info.llvmElemTy, ptr, value,
-                                     returnOld, pred);
+      auto old = emitSharedAtomicRMW(rewriter, loc, info.llvmElemTy, ptr, value,
+                                     rmwOp, returnOld, pred);
       if (failed(old))
         return failure();
       if (returnOld)
@@ -398,7 +378,7 @@ void mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
                                        benefit.getBenefit() + 1);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo,
                                        benefit.getBenefit() + 1);
-  patterns.add<LocalAtomicScatterAddOpConversion>(typeConverter, targetInfo,
+  patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
                                                   benefit.getBenefit() + 1);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo,
                                       benefit.getBenefit() + 1);
