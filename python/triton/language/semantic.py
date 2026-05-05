@@ -1565,6 +1565,9 @@ class TritonSemantic(Generic[TensorTy]):
     def dot_scaled(self, lhs: TensorTy, lhs_scale: TensorTy, lhs_format: str, rhs: TensorTy,
                    rhs_scale: Optional[TensorTy], rhs_format: str, acc: TensorTy | None, fast_math: bool,
                    lhs_k_pack: bool, rhs_k_pack: bool, out_dtype: tl.dtype) -> TensorTy:
+        fast_math = tl._unwrap_if_constexpr(fast_math)
+        lhs_k_pack = tl._unwrap_if_constexpr(lhs_k_pack)
+        rhs_k_pack = tl._unwrap_if_constexpr(rhs_k_pack)
         assert lhs.type.is_block() and rhs.type.is_block()
         #TODO: validate types.
         lhs_rank = len(lhs.shape)
@@ -1674,6 +1677,7 @@ class TritonSemantic(Generic[TensorTy]):
 
     def associative_scan(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn,
                          reverse: bool) -> Tuple[TensorTy, ...]:
+        reverse = tl._unwrap_if_constexpr(reverse)
         shape = inputs[0].type.shape
         rank = len(shape)
 
