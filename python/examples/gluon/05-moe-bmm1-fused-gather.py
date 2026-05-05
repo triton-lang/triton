@@ -111,10 +111,10 @@ def unswizzle_mx_scale(
 
 
 @gluon.jit
-def alloc_barrier_ring(num_bufs: gl.constexpr, two_ctas: gl.constexpr = False):
+def alloc_barrier_ring(num_bufs: gl.constexpr, two_ctas: gl.constexpr = False, count: gl.constexpr = 1):
     bars = mbarrier.allocate_mbarrier(batch=num_bufs, two_ctas=two_ctas)
     for i in gl.static_range(num_bufs):
-        mbarrier.init(bars.index(i), count=1)
+        mbarrier.init(bars.index(i), count=count)
     return bars
 
 
@@ -123,9 +123,10 @@ def alloc_ring_barriers(
     num_bufs: gl.constexpr,
     producer_two_ctas: gl.constexpr = False,
     consumer_two_ctas: gl.constexpr = False,
+    consumer_count: gl.constexpr = 1,
 ):
     return (
-        alloc_barrier_ring(num_bufs, two_ctas=producer_two_ctas),
+        alloc_barrier_ring(num_bufs, two_ctas=producer_two_ctas, count=consumer_count),
         alloc_barrier_ring(num_bufs, two_ctas=consumer_two_ctas),
     )
 
@@ -235,7 +236,6 @@ class PartitionArgs:
     mma_done_bar: gl.shared_memory_descriptor
     load_sync_bar: gl.shared_memory_descriptor
     unpack_sync_bar: gl.shared_memory_descriptor
-    mma_sync_bar: gl.shared_memory_descriptor
 
     grid_m: gl.tensor
     GRID_N: gl.constexpr
@@ -439,7 +439,6 @@ def mma_partition(p: PartitionArgs):
     mma_done_phase = 1
     load_sync_phase = 0
     unpack_sync_phase = 0
-    mma_sync_phase = 0
 
     k_second_tmem_layout: gl.constexpr = blackwell.TensorMemoryLayout(
         (p.MMA_BLOCK_COL, p.BLOCK_K // 4),
@@ -549,7 +548,7 @@ def mma_partition(p: PartitionArgs):
                 a_type="e2m1",
                 b_type="e4m3",
                 use_acc=use_acc,
-                mbarriers=[x_empty_bar, scale_empty_bar],
+                mbarriers=[x_empty_bar, scale_empty_bar, w_empty_bar],
             )
 
             use_acc = True
@@ -566,7 +565,7 @@ def mma_partition(p: PartitionArgs):
 
                 # Fence against next TMA load into the same buffer.
                 blackwell.fence_async_shared()
-                blackwell.tcgen05_commit(w_empty_bar)
+                mbarrier.arrive(w_empty_bar)
                 w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
 
                 lo, hi = fp4_prmt_shuffle_elements(k_second)
@@ -574,10 +573,6 @@ def mma_partition(p: PartitionArgs):
 
                 mbarrier.wait(p.mma_done_bar, mma_done_phase)
                 mma_done_phase = mma_done_phase ^ 1
-
-                mbarrier.arrive(p.mma_sync_bar)
-                mbarrier.wait(p.mma_sync_bar, mma_sync_phase)
-                mma_sync_phase = mma_sync_phase ^ 1
 
                 k_second_tmem.store(k_second)
 
@@ -895,7 +890,7 @@ def ws_matmul_kernel(
         [W_NUM_BUFS] + w_desc.block_type.shape,
         w_desc.layout,
     )
-    w_empty_bars, w_ready_bars = alloc_ring_barriers(W_NUM_BUFS, consumer_two_ctas=False)
+    w_empty_bars, w_ready_bars = alloc_ring_barriers(W_NUM_BUFS, consumer_two_ctas=False, consumer_count=2)
 
     w_scale_bufs = gl.allocate_shared_memory(
         scale_desc.dtype,
@@ -920,8 +915,6 @@ def ws_matmul_kernel(
     mbarrier.init(load_sync_bar, count=1)
     unpack_sync_bar = mbarrier.allocate_mbarrier(two_ctas=True)
     mbarrier.init(unpack_sync_bar, count=1)
-    mma_sync_bar = mbarrier.allocate_mbarrier(two_ctas=True)
-    mbarrier.init(mma_sync_bar, count=1)
 
     x_scale_tmem.store(gl.full((BLOCK_M, scale_k), 127, dtype=gl.uint8, layout=x_scale_tmem.get_reg_layout()))
 
@@ -966,7 +959,6 @@ def ws_matmul_kernel(
         mma_done_bar=mma_done_bar,
         load_sync_bar=load_sync_bar,
         unpack_sync_bar=unpack_sync_bar,
-        mma_sync_bar=mma_sync_bar,
         #
         grid_m=grid_m,
         GRID_N=grid_n,
