@@ -2791,3 +2791,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 2304 : i32} {
+  // CHECK-LABEL: @profile_scratch_ptr_uses_i64
+  // CHECK: %[[CLUSTER_Z:.*]] = nvvm.read.ptx.sreg.clusterid.z : i32
+  // CHECK: %[[NCLUSTER_Y:.*]] = nvvm.read.ptx.sreg.nclusterid.y : i32
+  // CHECK: %[[CLUSTER_Z_I64:.*]] = llvm.zext %[[CLUSTER_Z]] : i32 to i64
+  // CHECK: %[[NCLUSTER_Y_I64:.*]] = llvm.zext %[[NCLUSTER_Y]] : i32 to i64
+  // CHECK: %[[LINEAR_Z:.*]] = llvm.mul %[[CLUSTER_Z_I64]], %[[NCLUSTER_Y_I64]] : i64
+  // CHECK: %[[NUM_CTAS:.*]] = llvm.mlir.constant(4 : i64) : i64
+  // CHECK: %[[CTA_OFFSET:.*]] = llvm.mul %{{.*}}, %[[NUM_CTAS]] : i64
+  // CHECK: %[[PROFILE_SIZE:.*]] = llvm.mlir.constant(2304 : i64) : i64
+  // CHECK: %[[BYTE_OFFSET:.*]] = llvm.mul %{{.*}}, %[[PROFILE_SIZE]] : i64
+  // CHECK: %[[TOTAL_OFFSET:.*]] = llvm.add %[[BYTE_OFFSET]], %{{.*}} : i64
+  // CHECK: llvm.getelementptr %arg1[%[[TOTAL_OFFSET]]] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, i8
+  tt.func @profile_scratch_ptr_uses_i64() {
+    %0 = ttg.global_scratch_alloc {alignment = 128 : i32, third_party_allocation, nbytes = 2304 : i32, ttg.global_scratch_memory_offset = 0 : i32} : !tt.ptr<i32>
+    tt.return
+  }
+}

@@ -207,13 +207,13 @@ public:
   void createTransferVisibleReadsCall(ImplicitLocOpBuilder &b, Value mbar,
                                       uint64_t threadMask, Value pred,
                                       MemType memType, Operation *insertPoint);
-  // verifyWriteVisibility: ensure the thread either sees the latest write or no
-  // other thread is writing the buffer.
+  // verifyWriteVisibility: ensure the thread sees the latest write. When
+  // allowNoWrite is true, also allow rows that have not been written yet.
   void createVerifyWriteVisibilityCall(ImplicitLocOpBuilder &b, Value buf,
                                        uint32_t length, int thread,
                                        StringRef operandName, Value pred,
                                        MemType memType, Operation *insertPoint,
-                                       Value recipientCTAs);
+                                       Value recipientCTAs, bool allowNoWrite);
   // verifyReadVisibility: ensure all reads from the buffer are visible to the
   // thread.
   void createVerifyReadVisibilityCall(ImplicitLocOpBuilder &b, Value buf,

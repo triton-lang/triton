@@ -907,6 +907,7 @@ def get_test_mxfp_variants():
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
 @pytest.mark.parametrize("wmma_shape", [(16, 16), (32, 16)])
+@pytest.mark.parametrize("transposed", [False, True])
 @pytest.mark.parametrize(
     "M, N, K",
     get_test_mxfp_block_mnk() +
@@ -918,8 +919,8 @@ def get_test_mxfp_variants():
 @pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
 @pytest.mark.parametrize("scale_factor", [16, 32])
 @pytest.mark.parametrize("with_a_scale, with_b_scale", itertools.product([True, False], repeat=2))
-def test_amd_wmma_scaled(wmma_shape, M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor, with_a_scale,
-                         with_b_scale):
+def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor,
+                         with_a_scale, with_b_scale):
     instr_m, instr_n = wmma_shape
 
     if instr_m == 32:
@@ -930,10 +931,10 @@ def test_amd_wmma_scaled(wmma_shape, M, N, K, a_type, b_type, a_scale_type, b_sc
     def kernel(c_ptr, a_ptr, a_scale_ptr, b_ptr, b_scale_ptr,  #
                a_type: ttgl.constexpr, b_type: ttgl.constexpr,  #
                BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,  #
-               SCALE_FACTOR: ttgl.constexpr, INSTR_SHAPE_M: ttgl.constexpr, INSTR_SHAPE_N: ttgl.constexpr):
+               SCALE_FACTOR: ttgl.constexpr, INSTR_SHAPE_M: ttgl.constexpr, INSTR_SHAPE_N: ttgl.constexpr,  #
+               TRANSPOSED: ttgl.constexpr):
         DIV_FACTOR_A: ttgl.constexpr = 2 if a_type == "e2m1" else 1
         DIV_FACTOR_B: ttgl.constexpr = 2 if b_type == "e2m1" else 1
-        TRANSPOSED: ttgl.constexpr = INSTR_SHAPE_M == INSTR_SHAPE_N
 
         wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(  #
             version=3, transposed=TRANSPOSED, warp_bases=[[0, 1], [1, 0]],
@@ -1002,7 +1003,8 @@ def test_amd_wmma_scaled(wmma_shape, M, N, K, a_type, b_type, a_scale_type, b_sc
         b_scale_ref = 1.0
 
     c = torch.zeros((M, N), dtype=torch.float32).cuda()
-    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, instr_m, instr_n, num_warps=4)
+    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, instr_m, instr_n, transposed,
+                        num_warps=4)
 
     no_scales = not with_a_scale and not with_b_scale
 
