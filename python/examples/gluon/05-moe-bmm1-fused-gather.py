@@ -111,10 +111,10 @@ def unswizzle_mx_scale(
 
 
 @gluon.jit
-def alloc_barrier_ring(num_bufs: gl.constexpr, two_ctas: gl.constexpr = False, count: gl.constexpr = 1):
+def alloc_barrier_ring(num_bufs: gl.constexpr, two_ctas: gl.constexpr = False):
     bars = mbarrier.allocate_mbarrier(batch=num_bufs, two_ctas=two_ctas)
     for i in gl.static_range(num_bufs):
-        mbarrier.init(bars.index(i), count=count)
+        mbarrier.init(bars.index(i), count=1)
     return bars
 
 
@@ -123,10 +123,9 @@ def alloc_ring_barriers(
     num_bufs: gl.constexpr,
     producer_two_ctas: gl.constexpr = False,
     consumer_two_ctas: gl.constexpr = False,
-    consumer_count: gl.constexpr = 1,
 ):
     return (
-        alloc_barrier_ring(num_bufs, two_ctas=producer_two_ctas, count=consumer_count),
+        alloc_barrier_ring(num_bufs, two_ctas=producer_two_ctas),
         alloc_barrier_ring(num_bufs, two_ctas=consumer_two_ctas),
     )
 
@@ -426,66 +425,6 @@ def load_weight_scales(p: PartitionArgs):
 
 
 @gluon.jit
-def issue_first_mma(p: PartitionArgs, acc_buf, use_acc, scale_idx, scale_phase, x_idx, x_phase, w_idx, w_phase, load_sync_phase):
-    scale_ready_bar = p.w_scale_ready_bars.index(scale_idx)
-    scale_empty_bar = p.w_scale_empty_bars.index(scale_idx)
-    scale_buf = p.w_scale_bufs.index(scale_idx)
-    # Leader waits for scales.
-    mbarrier.wait(scale_ready_bar, scale_phase)
-    blackwell.tcgen05_copy(
-        unswizzle_mx_scale(scale_buf, p.SCALE_SIZE_OUTER, p.SCALE_SIZE_INNER, p.MXFP_BLOCK_SIZE),
-        p.w_scale_tmem,
-    )
-
-    x_ready_bar = p.x_ready_bars.index(x_idx)
-    x_empty_bar = p.x_empty_bars.index(x_idx)
-    x_buf = p.x_bufs.index(x_idx)
-    # Leader waits for X.
-    mbarrier.wait(x_ready_bar, x_phase)
-
-    w_ready_bar = p.w_ready_bars.index(w_idx)
-    w_buf = p.w_bufs.index(w_idx)
-    # Both CTAs independently wait for their W tile.
-    mbarrier.wait(w_ready_bar, w_phase)
-
-    # CGA syncs to leader.
-    mbarrier.arrive(p.load_sync_bar)
-    mbarrier.wait(p.load_sync_bar, load_sync_phase)
-    load_sync_phase = load_sync_phase ^ 1
-
-    # w_packed_pair 512x128xi8, logical 512x256xfp4
-    w_packed_pair = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))
-    fp4_padded_layout: gl.constexpr = gl.NVMMASharedLayout(
-        swizzle_byte_width=128,
-        element_bitwidth=8,
-        rank=2,
-        fp4_padded=True,
-        cga_layout=((1, 0),),
-    )
-
-    w_pair_first = w_packed_pair._reinterpret(
-        gl.uint8,
-        (p.BLOCK_N, p.BLOCK_K // 2),
-        fp4_padded_layout,
-    )
-
-    # Leader issues MMA.
-    blackwell.tcgen05_mma_scaled(
-        w_pair_first,
-        x_buf.permute((1, 0)),
-        acc_buf,
-        p.w_scale_tmem,
-        p.x_scale_tmem,
-        a_type="e2m1",
-        b_type="e4m3",
-        use_acc=use_acc,
-        mbarriers=[x_empty_bar, scale_empty_bar],
-    )
-
-    return scale_idx, scale_phase, x_idx, x_phase, w_idx, w_phase, load_sync_phase
-
-
-@gluon.jit
 def mma_partition(p: PartitionArgs):
     # Consumers.
     x_idx = 0
@@ -559,61 +498,11 @@ def mma_partition(p: PartitionArgs):
         mbarrier.wait(acc_empty_bar, mma_phase)
 
         use_acc = False
-        NUM_K_PAIRS: gl.constexpr = p.K_TILES // 2
-        for _ in range(0, NUM_K_PAIRS):
-            w_buf = p.w_bufs.index(w_idx)
-            w_empty_bar = p.w_empty_bars.index(w_idx)
-
-            # 1. Both CTAs issue X and scale loads. Arrival is joined on leader.
-            # 2. Leader waits for X and scale loads.
-            # 3. Both CTAs wait for their respective W tile loads.
-            # 4. Both CTAs sync to leader.
-            # 5. Leader issues 2 CTA MMA.
-            # 6. 2 CTA MMA will broadcast arrive on X and scales to both CTAs.
-            scale_idx, scale_phase, x_idx, x_phase, w_idx, w_phase, load_sync_phase = issue_first_mma(p, acc_buf, use_acc, scale_idx, scale_phase, x_idx, x_phase, w_idx, w_phase, load_sync_phase)
-            # 7. 2 CTA MMA will broadcast arrive on W to both CTAs.
-            blackwell.tcgen05_commit(w_empty_bar)
-            use_acc = True
-
-            k_second_view = w_buf._reinterpret(
-                gl.uint32,
-                [1, 1, 1, p.BLOCK_N, p.BLOCK_K // 4],
-                k_second_layout,
-            )
-            k_second_view = k_second_view.reshape((1, 1, 1, p.BLOCK_N, p.BLOCK_K // 16, 4))
-            k_second_view = k_second_view.slice(start=2, length=2, dim=5)
-
-            # 8. Both CTAs load W.
-            k_second = k_second_view.load(k_second_reg_layout)
-
-            # 9. Both CTAs fence async proxy between local load and next TMA load.
-            blackwell.fence_async_shared()
-            # 10. Both CTAs signal their W tile.
-            mbarrier.arrive(w_empty_bar)
-            w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
-
-            lo, hi = fp4_prmt_shuffle_elements(k_second)
-            k_second = gl.join(lo, hi).reshape([p.BLOCK_N, p.BLOCK_K // 4])
-
-            # 11. Both CTAs wait for the previous second 2 CTA MMA to complete.
-            mbarrier.wait(p.mma_done_bar, mma_done_phase)
-            mma_done_phase = mma_done_phase ^ 1
-
-            # 12. Both CTAs write LHS TMEM.
-            k_second_tmem.store(k_second)
-
-            # 13. Both CTAs sync to leader.
-            mbarrier.arrive(p.unpack_sync_bar)
-            mbarrier.wait(p.unpack_sync_bar, unpack_sync_phase)
-            unpack_sync_phase = unpack_sync_phase ^ 1
-
-            scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
-            x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
-
+        for ki in range(0, p.K_TILES, 2):
+            # First K tile. Wait for scales, weight, and act tile.
             scale_ready_bar = p.w_scale_ready_bars.index(scale_idx)
             scale_empty_bar = p.w_scale_empty_bars.index(scale_idx)
             scale_buf = p.w_scale_bufs.index(scale_idx)
-            # 14. Leader waits for scales.
             mbarrier.wait(scale_ready_bar, scale_phase)
             blackwell.tcgen05_copy(
                 unswizzle_mx_scale(scale_buf, p.SCALE_SIZE_OUTER, p.SCALE_SIZE_INNER, p.MXFP_BLOCK_SIZE),
@@ -623,12 +512,36 @@ def mma_partition(p: PartitionArgs):
             x_ready_bar = p.x_ready_bars.index(x_idx)
             x_empty_bar = p.x_empty_bars.index(x_idx)
             x_buf = p.x_bufs.index(x_idx)
-            # 15. Leader waits for X.
             mbarrier.wait(x_ready_bar, x_phase)
 
-            # 16. Leader issues 2 CTA MMA.
+            w_ready_bar = p.w_ready_bars.index(w_idx)
+            w_empty_bar = p.w_empty_bars.index(w_idx)
+            w_buf = p.w_bufs.index(w_idx)
+            mbarrier.wait(w_ready_bar, w_phase)
+
+            # CGA sync to leader.
+            mbarrier.arrive(p.load_sync_bar)
+            mbarrier.wait(p.load_sync_bar, load_sync_phase)
+            load_sync_phase = load_sync_phase ^ 1
+
+            # w_packed_pair 512x128xi8, logical 512x256xfp4
+            w_packed_pair = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))
+            fp4_padded_layout: gl.constexpr = gl.NVMMASharedLayout(
+                swizzle_byte_width=128,
+                element_bitwidth=8,
+                rank=2,
+                fp4_padded=True,
+                cga_layout=((1, 0),),
+            )
+
+            w_pair_first = w_packed_pair._reinterpret(
+                gl.uint8,
+                (p.BLOCK_N, p.BLOCK_K // 2),
+                fp4_padded_layout,
+            )
+
             blackwell.tcgen05_mma_scaled(
-                k_second_tmem._reinterpret(gl.uint8, (p.BLOCK_N, p.BLOCK_K), k_second_u8_layout),
+                w_pair_first,
                 x_buf.permute((1, 0)),
                 acc_buf,
                 p.w_scale_tmem,
@@ -636,28 +549,77 @@ def mma_partition(p: PartitionArgs):
                 a_type="e2m1",
                 b_type="e4m3",
                 use_acc=use_acc,
-                # 17. 2 CTA MMA will broadcast arrive on X and scales to both CTAs.
-                # 18. 2 CTA MMA will broadcast completion to both CTAs.
                 mbarriers=[x_empty_bar, scale_empty_bar],
             )
-            blackwell.tcgen05_commit(p.mma_done_bar)
 
-            x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
+            use_acc = True
+
+            if ki + 1 < p.K_TILES:
+                k_second_view = w_buf._reinterpret(
+                    gl.uint32,
+                    [1, 1, 1, p.BLOCK_N, p.BLOCK_K // 4],
+                    k_second_layout,
+                )
+                k_second_view = k_second_view.reshape((1, 1, 1, p.BLOCK_N, p.BLOCK_K // 16, 4))
+                k_second_view = k_second_view.slice(start=2, length=2, dim=5)
+                k_second = k_second_view.load(k_second_reg_layout)
+
+                # Fence against next TMA load into the same buffer.
+                blackwell.fence_async_shared()
+                blackwell.tcgen05_commit(w_empty_bar)
+                w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+
+                lo, hi = fp4_prmt_shuffle_elements(k_second)
+                k_second = gl.join(lo, hi).reshape([p.BLOCK_N, p.BLOCK_K // 4])
+
+                mbarrier.wait(p.mma_done_bar, mma_done_phase)
+                mma_done_phase = mma_done_phase ^ 1
+
+                mbarrier.arrive(p.mma_sync_bar)
+                mbarrier.wait(p.mma_sync_bar, mma_sync_phase)
+                mma_sync_phase = mma_sync_phase ^ 1
+
+                k_second_tmem.store(k_second)
+
+                mbarrier.arrive(p.unpack_sync_bar)
+                mbarrier.wait(p.unpack_sync_bar, unpack_sync_phase)
+                unpack_sync_phase = unpack_sync_phase ^ 1
+            else:
+                blackwell.tcgen05_commit(w_empty_bar)
+                w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+
             scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
+            x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
+            if ki + 1 < p.K_TILES:
+                # Second K tile. Wait for scales and act tile.
+                scale_ready_bar = p.w_scale_ready_bars.index(scale_idx)
+                scale_empty_bar = p.w_scale_empty_bars.index(scale_idx)
+                scale_buf = p.w_scale_bufs.index(scale_idx)
+                mbarrier.wait(scale_ready_bar, scale_phase)
+                blackwell.tcgen05_copy(
+                    unswizzle_mx_scale(scale_buf, p.SCALE_SIZE_OUTER, p.SCALE_SIZE_INNER, p.MXFP_BLOCK_SIZE),
+                    p.w_scale_tmem,
+                )
 
-        if NUM_K_PAIRS * 2 != p.K_TILES:
-            w_empty_bar = p.w_empty_bars.index(w_idx)
-            # 19. Both CTAs issue X and scale loads. Arrival is joined on leader.
-            # 20. Leader waits for X and scale loads.
-            # 21. Both CTAs wait for their respective W tile loads.
-            # 22. Both CTAs sync to leader.
-            # 23. Leader issues 2 CTA MMA.
-            # 24. 2 CTA MMA will broadcast arrive on X and scales to both CTAs.
-            scale_idx, scale_phase, x_idx, x_phase, w_idx, w_phase, load_sync_phase = issue_first_mma(p, acc_buf, use_acc, scale_idx, scale_phase, x_idx, x_phase, w_idx, w_phase, load_sync_phase)
-            # 25. 2 CTA MMA will broadcast arrive twice on W to both CTAs.
-            blackwell.tcgen05_commit(w_empty_bar)
-            blackwell.tcgen05_commit(w_empty_bar)
-            w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+                x_ready_bar = p.x_ready_bars.index(x_idx)
+                x_empty_bar = p.x_empty_bars.index(x_idx)
+                x_buf = p.x_bufs.index(x_idx)
+                mbarrier.wait(x_ready_bar, x_phase)
+
+                blackwell.tcgen05_mma_scaled(
+                    k_second_tmem._reinterpret(gl.uint8, (p.BLOCK_N, p.BLOCK_K), k_second_u8_layout),
+                    x_buf.permute((1, 0)),
+                    acc_buf,
+                    p.w_scale_tmem,
+                    p.x_scale_tmem,
+                    a_type="e2m1",
+                    b_type="e4m3",
+                    use_acc=use_acc,
+                    mbarriers=[x_empty_bar, scale_empty_bar, p.mma_done_bar],
+                )
+
+                x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
+                scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
 
         blackwell.tcgen05_commit(acc_ready_bar)
         mma_idx, mma_phase = advance(mma_idx, mma_phase, p.ACC_NUM_BUFS)
@@ -933,7 +895,7 @@ def ws_matmul_kernel(
         [W_NUM_BUFS] + w_desc.block_type.shape,
         w_desc.layout,
     )
-    w_empty_bars, w_ready_bars = alloc_ring_barriers(W_NUM_BUFS, consumer_two_ctas=False, consumer_count=2)
+    w_empty_bars, w_ready_bars = alloc_ring_barriers(W_NUM_BUFS, consumer_two_ctas=False)
 
     w_scale_bufs = gl.allocate_shared_memory(
         scale_desc.dtype,
