@@ -1029,6 +1029,23 @@ LogicalResult FpToFpOp::verify() {
 }
 
 //-- BitcastOp --
+struct CanonicalizeIdentityBitcast : public OpRewritePattern<BitcastOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(BitcastOp bitcastOp,
+                                PatternRewriter &rewriter) const override {
+    if (bitcastOp.getSrc().getType() != bitcastOp.getType())
+      return failure();
+    rewriter.replaceOp(bitcastOp, bitcastOp.getSrc());
+    return success();
+  }
+};
+
+void BitcastOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                            MLIRContext *context) {
+  results.add<CanonicalizeIdentityBitcast>(context);
+}
+
 LogicalResult BitcastOp::verify() {
   // Bitcast only allows conversion between types with the same bit width.
   Type dstType = getType();
@@ -1141,9 +1158,8 @@ struct CanonicalizeIntToPtrOfPtrToInt : public OpRewritePattern<IntToPtrOp> {
     auto ptrToIntOp = intToPtrOp.getSrc().getDefiningOp<PtrToIntOp>();
     if (!ptrToIntOp)
       return failure();
-
-    // Replace with the original pointer
-    rewriter.replaceOp(intToPtrOp, ptrToIntOp.getSrc());
+    rewriter.replaceOpWithNewOp<BitcastOp>(intToPtrOp, intToPtrOp.getType(),
+                                           ptrToIntOp.getSrc());
     return success();
   }
 };
