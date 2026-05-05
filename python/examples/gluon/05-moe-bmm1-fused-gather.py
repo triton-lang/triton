@@ -1134,7 +1134,7 @@ class KernelConfig:
 
     NUM_CTAS: int = 2
     X_NUM_BUFS: int = 5
-    W_NUM_BUFS: int = 2
+    W_NUM_BUFS: int = 5
     W_SCALE_NUM_BUFS: int = 10
     ACC_NUM_BUFS: int = 1
     BITPACKED_K: bool = True
@@ -1156,10 +1156,10 @@ class KernelConfig:
     REUSE_GATHER_INDICES: bool = False
     INLINE_MMA_INPUT_RELEASE: bool = False
 
-    LOAD_ACTIVATION_REGS: int = 112
-    LOAD_WEIGHT_REGS: int = 48
-    LOAD_WEIGHT_SCALES_REGS: int = 48
-    MMA_REGS: int = 48
+    LOAD_ACTIVATION_REGS: int = 32
+    LOAD_WEIGHT_REGS: int = 24
+    LOAD_WEIGHT_SCALES_REGS: int = 24
+    MMA_REGS: int = 96
     MAXNREG: int = None
     OCCUPANCY: int = 1
 
@@ -2022,26 +2022,4 @@ def check_pack_and_unpack():
 
 
 if __name__ == "__main__":
-    check_pack_and_unpack()
-    sys.exit(0)
-
-    c = KernelConfig()
-    x_smem = c.get_x_smem()
-    w_smem = c.get_w_tile_smem()
-    w_mx_smem = c.get_w_mx_tile_smem()
-    print(x_smem)
-    print(w_smem)
-    print(w_mx_smem)
-    print(x_smem + w_smem + w_mx_smem)
-    print(227 * 1024)
-
     bench(uniform_routing=False)
-
-    mlp = GPT_OSS_120B_CONFIG
-    bs = get_batch_sizes(mlp)[-1]
-    print("Batch size", bs)
-    prepared = prepare_case(mlp, bs, device=f"cuda:{torch.cuda.current_device()}")
-    slice_size = prepared.ragged_metadata.expected_slice_size
-    print("Slice size", slice_size)
-    print(select_kernel_config(slice_size))
-    print(KernelConfig())
