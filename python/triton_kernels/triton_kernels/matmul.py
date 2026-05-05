@@ -176,7 +176,7 @@ def init_allocation(x, w, precision_config, fused_activation,
     scratchpad = dict()
     N_scratch = N // fused_activation.specs.reduction_n if opt_flags.split_k == 1 else N
     if opt_flags.split_k > 1:
-        scratch_out_dtype = precision_config.intermediate_out_dtype
+        scratch_out_dtype = dtype_to_torch_dtype(precision_config.intermediate_out_dtype)
         scratchpad["matmul"] = ((opt_flags.split_k, batch_dim, M, N_scratch), scratch_out_dtype)
     if "matmul" in scratchpad and precision_config.c_mx_scale is not None:
         assert batch_dim == 1, "batch_dim > 1 not supported yet"
