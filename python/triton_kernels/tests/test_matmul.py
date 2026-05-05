@@ -279,7 +279,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     a_dtype = DType(act_dtype_str)
     b_dtype = DType(weight_dtype_str)
     c_dtype = DType(output_dtype_str or act_dtype_str)
-    device_capability = torch.cuda.get_device_capability()[0] if (is_cuda() or is_hip()) else None
+    device_capability = torch.cuda.get_device_capability()[0]
     # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
         if device_capability < 9 and (a_dtype.uses_fp8e4nv or b_dtype.uses_fp8e4nv or c_dtype.uses_fp8e4nv):
@@ -319,9 +319,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                 pytest.skip("Scale preshuffling on AMD GPU has not been emulated on archs other than CDNA4 and gfx1250 yet.")
             if not b_dtype.has_mx_scale:
                 pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
-        if is_cuda() and device_capability < 9:
+        if device_capability < 9:
             pytest.skip("NYI. Ampere swizzling.")
-        if is_cuda() and device_capability < 10:
+        if device_capability < 10:
             if b_dtype.name != "mxfloat4_e2m1":
                 pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
             if a_dtype.is_mxfloat4:
@@ -331,7 +331,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         # current x scale swizzling requires B200, batched input, microscaled act and persistent case
         if is_hip():
             pytest.skip("NYI. X swizzling not tested on AMD GPU yet.")
-        if is_cuda() and device_capability < 10:
+        if device_capability < 10:
             pytest.skip("NYI. X swizzling only implemented for B200 for now.")
         if not a_dtype.has_mx_scale:
             pytest.skip(f"NYI. X swizzling only implemented for microscaled activations for now. Got {act_dtype_str}")
@@ -362,7 +362,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if block_m == 16:
             pytest.skip("PassManager::run failed from Triton compiler")
     # TODO: should construct the test case differently rather than overriding here
-    if b_dtype.is_any_float8 and device_capability is not None and device_capability < 10:
+    if b_dtype.is_any_float8 and device_capability < 10:
         b_transpose = True
 
     torch.manual_seed(0)
@@ -373,7 +373,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if shuffle_mxfp4_w_layout:
         if not b_hbm_swizzling:
             pytest.skip("Shuffled MXFP4 weight layout only applies with b_hbm_swizzling")
-        if is_hip() or device_capability is None or device_capability < 10:
+        if is_hip() or device_capability < 10:
             pytest.skip("Shuffled MXFP4 weight layout requires Blackwell or newer")
         if b_dtype.name != "mxfloat4_e2m1":
             pytest.skip("Shuffled MXFP4 weight layout only supports mxfloat4_e2m1 weights")
