@@ -30,11 +30,14 @@ from triton_kernels.tensor_details.dtype import FP32
 class DType:
 
     def __init__(self, dtype_str):
+        self.name = dtype_str
         # This tracks the regular fp8 flex scale path. NVFP4 has a tensor scale,
         # but it is handled separately because it also has MX microscale storage.
         self.has_global_scale = dtype_str.startswith("float8")
         self.is_nvfp4 = dtype_str == "nvfp4_e2m1"
         self.has_mx_scale = dtype_str.startswith("mx") or self.is_nvfp4
+        self.is_any_float8 = "float8" in dtype_str
+        self.uses_fp8e4nv = dtype_str in {"mxfloat8_e4m3fn", "nvfp4_e2m1"}
         if dtype_str in {"float4_e2m1", "mxfloat4_e2m1", "nvfp4_e2m1"}:
             self.torch_dtype = torch.uint8
         else:
@@ -273,29 +276,31 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, shuffle_mxfp4_w_layout, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
             swiglu_opts, device, opt_flags_scope):
-    act_uses_mx = act_dtype_str.startswith("mx") or act_dtype_str == "nvfp4_e2m1"
-    weight_uses_mx = weight_dtype_str.startswith("mx") or weight_dtype_str == "nvfp4_e2m1"
+    a_dtype = DType(act_dtype_str)
+    b_dtype = DType(weight_dtype_str)
+    c_dtype = DType(output_dtype_str or act_dtype_str)
+    act_uses_mx = a_dtype.has_mx_scale
+    weight_uses_mx = b_dtype.has_mx_scale
+    on_cuda = is_cuda()
+    on_hip = is_hip()
+    device_capability = torch.cuda.get_device_capability()[0] if (on_cuda or on_hip) else None
     # TODO: remove when Triton FP8 supports proper RTNE
-    if is_cuda():
-        fp8e4nv_mx_dtypes = {"mxfloat8_e4m3fn", "nvfp4_e2m1"}
-        if torch.cuda.get_device_capability()[0] < 9 and (
-                act_dtype_str in fp8e4nv_mx_dtypes or weight_dtype_str in fp8e4nv_mx_dtypes
-                or output_dtype_str in fp8e4nv_mx_dtypes):
+    if on_cuda:
+        if device_capability < 9 and (a_dtype.uses_fp8e4nv or b_dtype.uses_fp8e4nv or c_dtype.uses_fp8e4nv):
             pytest.skip("MXFP8/NVFP4 tensors use fp8e4nv, which is not supported on A100")
-        if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
+        if b_dtype.is_any_float8 and device_capability < 9:
             pytest.skip("Float8 not tested on A100")
-        if act_dtype_str == "float16" and weight_uses_mx and torch.cuda.get_device_capability()[0] >= 10:
+        if act_dtype_str == "float16" and weight_uses_mx and device_capability >= 10:
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
-        if weight_uses_mx:
-            if act_dtype_str.startswith("float8") and torch.cuda.get_device_capability()[0] < 10:
-                pytest.skip("float8 x mx not supported with cuda capability < 10")
+        if weight_uses_mx and a_dtype.has_global_scale and device_capability < 10:
+            pytest.skip("float8 x mx not supported with cuda capability < 10")
         if swiglu_opts is not None and do_gamma:
             pytest.skip("NYI: swiglu and gamma not supported together")
 
-    elif is_hip():
-        if "float8" in act_dtype_str and weight_uses_mx and not (is_hip_cdna4() or is_hip_gfx1250()):
+    elif on_hip:
+        if a_dtype.is_any_float8 and weight_uses_mx and not (is_hip_cdna4() or is_hip_gfx1250()):
             pytest.skip("float8 x mx only supported on CDNA4 and gfx1250")
-        if "float8" in act_dtype_str and "mxfloat8" in weight_dtype_str:
+        if a_dtype.is_any_float8 and b_dtype.name == "mxfloat8_e4m3fn":
             pytest.skip("NYI: float8 x mxfloat8 not tested on AMD GPU")
         if act_uses_mx and weight_uses_mx:
             pytest.skip("NYI: mx x mx not tested on AMD GPU")
@@ -306,31 +311,31 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("NYI: gamma and swiglu not supported together on AMD GPU")
         if split_k is not None and split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
-        if "float32" in act_dtype_str:
+        if act_dtype_str == "float32":
             pytest.skip("float32 not fully tested on AMD GPU")
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 
     if b_hbm_swizzling:
-        if is_hip():
+        if on_hip:
             if not (is_hip_cdna4() or is_hip_gfx1250()):
                 pytest.skip("Scale preshuffling on AMD GPU has not been emulated on archs other than CDNA4 and gfx1250 yet.")
-            if "mx" not in weight_dtype_str:
+            if not weight_uses_mx:
                 pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
-        if torch.cuda.get_device_capability()[0] < 9:
+        if on_cuda and device_capability < 9:
             pytest.skip("NYI. Ampere swizzling.")
-        if torch.cuda.get_device_capability()[0] < 10:
-            if "mxfloat4" not in weight_dtype_str:
+        if on_cuda and device_capability < 10:
+            if b_dtype.name != "mxfloat4_e2m1":
                 pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
-            if act_dtype_str in {"mxfloat4_e2m1", "nvfp4_e2m1"}:
+            if a_dtype.is_mxfloat4:
                 pytest.skip("Hopper mxfp4 swizzled weights do not support FP4 microscaled lhs.")
 
     if a_hbm_swizzling:
         # current x scale swizzling requires B200, batched input, microscaled act and persistent case
-        if is_hip():
+        if on_hip:
             pytest.skip("NYI. X swizzling not tested on AMD GPU yet.")
-        if torch.cuda.get_device_capability()[0] < 10:
+        if on_cuda and device_capability < 10:
             pytest.skip("NYI. X swizzling only implemented for B200 for now.")
         if not act_uses_mx:
             pytest.skip(f"NYI. X swizzling only implemented for microscaled activations for now. Got {act_dtype_str}")
@@ -352,7 +357,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                 pytest.skip("inner_expt_opt and weight mx only supported with pad_b")
             if is_persistent and not b_hbm_swizzling:
                 pytest.skip("FIXME: Fatal Python error: Aborted")
-            if is_hip():
+            if on_hip:
                 if act_dtype_str == "bfloat16":
                     pytest.skip("FIXME: failed to translate module to LLVM IR")
                 if b_hbm_swizzling:
@@ -361,7 +366,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if block_m == 16:
             pytest.skip("PassManager::run failed from Triton compiler")
     # TODO: should construct the test case differently rather than overriding here
-    if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 10:
+    if b_dtype.is_any_float8 and device_capability is not None and device_capability < 10:
         b_transpose = True
 
     torch.manual_seed(0)
@@ -372,21 +377,17 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if shuffle_mxfp4_w_layout:
         if not b_hbm_swizzling:
             pytest.skip("Shuffled MXFP4 weight layout only applies with b_hbm_swizzling")
-        if is_hip() or torch.cuda.get_device_capability()[0] < 10:
+        if on_hip or device_capability is None or device_capability < 10:
             pytest.skip("Shuffled MXFP4 weight layout requires Blackwell or newer")
-        if weight_dtype_str != "mxfloat4_e2m1":
+        if b_dtype.name != "mxfloat4_e2m1":
             pytest.skip("Shuffled MXFP4 weight layout only supports mxfloat4_e2m1 weights")
-        if not act_dtype_str.startswith("float8"):
+        if not a_dtype.has_global_scale:
             pytest.skip("Shuffled MXFP4 weight layout is only tested with FP8 activations")
         if not colmajor_mxfp_weight:
             pytest.skip("Shuffled MXFP4 weight layout requires column-major MXFP weights")
         if not is_persistent:
             pytest.skip("Shuffled MXFP4 weight layout requires the persistent TMA kernel")
     opt_flags.update_opt_flags_constraints(constraints)
-
-    a_dtype = DType(act_dtype_str)
-    b_dtype = DType(weight_dtype_str)
-    c_dtype = DType(output_dtype_str or act_dtype_str)
 
     # --- create conditionals ---
     do_bias = inner_expt_opt is None
