@@ -223,6 +223,7 @@ def TTI_ExperimentalFPSanEmbedOp : TTI_Op<"experimental_fpsan_embed", [
     $val attr-dict `:` functional-type(operands, $result)
   }];
 
+  let hasCanonicalizer = true;
   let hasFolder = true;
 }
 
@@ -239,6 +240,7 @@ def TTI_ExperimentalFPSanUnembedOp : TTI_Op<"experimental_fpsan_unembed", [
     $val attr-dict `:` functional-type(operands, $result)
   }];
 
+  let hasCanonicalizer = true;
   let hasFolder = true;
 }
 

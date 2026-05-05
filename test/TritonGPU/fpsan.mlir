@@ -315,6 +315,45 @@ module {
   }
 }
 
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @push_unembed_through_views
+  tt.func public @push_unembed_through_views(
+      %arg0: tensor<16x16xi32, #blocked>,
+      %arg1: tensor<2x4xi32>,
+      %arg2: tensor<8xi32>,
+      %arg3: tensor<1x4xi32>,
+      %arg4: tensor<4xi32>) ->
+      (tensor<16x16xf32, #blocked1>, tensor<4x2xf32>, tensor<2x4xf32>,
+       tensor<2x4xf32>, tensor<1x4xf32>) {
+    // CHECK: %[[CVT:.*]] = ttg.convert_layout %arg0 : tensor<16x16xi32, #blocked> -> tensor<16x16xi32, #blocked1>
+    // CHECK: %[[CVT_OUT:.*]] = tti.experimental_fpsan_unembed %[[CVT]] : (tensor<16x16xi32, #blocked1>) -> tensor<16x16xf32, #blocked1>
+    // CHECK: %[[TRANS:.*]] = tt.trans %arg1 {order = array<i32: 1, 0>} : tensor<2x4xi32> -> tensor<4x2xi32>
+    // CHECK: %[[TRANS_OUT:.*]] = tti.experimental_fpsan_unembed %[[TRANS]] : (tensor<4x2xi32>) -> tensor<4x2xf32>
+    // CHECK: %[[RESHAPE:.*]] = tt.reshape %arg2 : tensor<8xi32> -> tensor<2x4xi32>
+    // CHECK: %[[RESHAPE_OUT:.*]] = tti.experimental_fpsan_unembed %[[RESHAPE]] : (tensor<2x4xi32>) -> tensor<2x4xf32>
+    // CHECK: %[[BCAST:.*]] = tt.broadcast %arg3 : tensor<1x4xi32> -> tensor<2x4xi32>
+    // CHECK: %[[BCAST_OUT:.*]] = tti.experimental_fpsan_unembed %[[BCAST]] : (tensor<2x4xi32>) -> tensor<2x4xf32>
+    // CHECK: %[[EXPAND:.*]] = tt.expand_dims %arg4 {axis = 0 : i32} : tensor<4xi32> -> tensor<1x4xi32>
+    // CHECK: %[[EXPAND_OUT:.*]] = tti.experimental_fpsan_unembed %[[EXPAND]] : (tensor<1x4xi32>) -> tensor<1x4xf32>
+    %0 = tti.experimental_fpsan_unembed %arg0 : (tensor<16x16xi32, #blocked>) -> tensor<16x16xf32, #blocked>
+    %1 = ttg.convert_layout %0 : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #blocked1>
+    %2 = tti.experimental_fpsan_unembed %arg1 : (tensor<2x4xi32>) -> tensor<2x4xf32>
+    %3 = tt.trans %2 {order = array<i32: 1, 0>} : tensor<2x4xf32> -> tensor<4x2xf32>
+    %4 = tti.experimental_fpsan_unembed %arg2 : (tensor<8xi32>) -> tensor<8xf32>
+    %5 = tt.reshape %4 : tensor<8xf32> -> tensor<2x4xf32>
+    %6 = tti.experimental_fpsan_unembed %arg3 : (tensor<1x4xi32>) -> tensor<1x4xf32>
+    %7 = tt.broadcast %6 : tensor<1x4xf32> -> tensor<2x4xf32>
+    %8 = tti.experimental_fpsan_unembed %arg4 : (tensor<4xi32>) -> tensor<4xf32>
+    %9 = tt.expand_dims %8 {axis = 0 : i32} : tensor<4xf32> -> tensor<1x4xf32>
+    tt.return %1, %3, %5, %7, %9 : tensor<16x16xf32, #blocked1>, tensor<4x2xf32>,
+                                          tensor<2x4xf32>, tensor<2x4xf32>, tensor<1x4xf32>
+  }
+}
+
 //--- unsupported.mlir
 
 module {
