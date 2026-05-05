@@ -871,8 +871,9 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
         tokens.push_back(token);
       }
     }
-    // Seed `num` with the conservative 0; runOnOperation re-derives the
-    // tight value via updateWaits after the reorder below.
+    // Drop pre-calculated mark_num and conservatively set 0 before
+    // updateWaits (in runOnOperation) re-evaluates against the token chain
+    // post-reorder.
     newAsyncWaitOp = ttg::AsyncWaitOp::create(builder, loc, tokens, /*num=*/0);
     for (auto asyncWaitOp : asyncWaitOps) {
       asyncWaitOp.getResult().replaceAllUsesWith(newAsyncWaitOp.getResult());
