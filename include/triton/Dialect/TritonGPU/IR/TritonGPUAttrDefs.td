@@ -1250,6 +1250,11 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
       return {16, 16, 16};
     }
 
+    // Returns nonK dim of operand opIdx (swapped for asymmetric transposed WMMA).
+    unsigned getOperandNonKDim(unsigned opIdx) const;
+    static unsigned getOperandNonKDim(unsigned mDim, unsigned nDim,
+                                      bool isTransposed, unsigned opIdx);
+
     // Returns a swizzled shared layout matching this WMMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.
     SwizzledSharedEncodingAttr composeSharedLayoutForOperand(
