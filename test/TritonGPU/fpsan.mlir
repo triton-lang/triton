@@ -74,11 +74,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @warp_group_dot_emulation
   tt.func public @warp_group_dot_emulation() -> tensor<64x32xf32, #mma> {
+    // CHECK: ttg.local_load
+    // CHECK: tti.experimental_fpsan_embed
+    // CHECK: tt.store
     // CHECK: ttg.barrier global_read|global_write
     // CHECK: scf.for
     // CHECK: ttg.barrier global_read|global_write
+    // CHECK: %[[RAW:.*]] = tt.load
+    // CHECK: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[RAW]]
     // CHECK-NOT: ttng.warp_group_dot {{.*}} :
-    // CHECK: ttng.warp_group_dot_wait
+    // CHECK: ttng.warp_group_dot_wait %[[OUT]]
     %a = ttg.local_alloc : () -> !ttg.memdesc<64x32xf32, #shared, #smem, mutable>
     %b = ttg.local_alloc : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %c = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #mma>
@@ -86,6 +91,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %d = ttng.warp_group_dot %a, %b, %c, %true {inputPrecision = 1 : i32, isAsync = true} : !ttg.memdesc<64x32xf32, #shared, #smem, mutable> * !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<64x32xf32, #mma>
     %wait = ttng.warp_group_dot_wait %d {pendings = 0 : i32} : tensor<64x32xf32, #mma>
     tt.return %wait : tensor<64x32xf32, #mma>
+  }
+}
+
+// -----
+
+#tmem_linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = []}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @tmem_scratch_payloads
+  tt.func public @tmem_scratch_payloads(%arg0: tensor<128x64xf32, #tmem_linear>) -> tensor<128x64xf32, #tmem_linear> {
+    // CHECK: %[[PAYLOAD:.*]] = tti.experimental_fpsan_embed %arg0
+    // CHECK: tt.store {{.*}}, %[[PAYLOAD]]
+    // CHECK: %[[RAW:.*]] = tt.load
+    // CHECK: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[RAW]]
+    // CHECK: tt.return %[[OUT]]
+    // CHECK-NOT: ttng.tmem_store
+    // CHECK-NOT: ttng.tmem_load
+    %true = arith.constant true
+    %tmem = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %arg0, %tmem, %true : tensor<128x64xf32, #tmem_linear> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    %out = ttng.tmem_load %tmem : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x64xf32, #tmem_linear>
+    tt.return %out : tensor<128x64xf32, #tmem_linear>
   }
 }
 
