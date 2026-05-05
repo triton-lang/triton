@@ -5,6 +5,7 @@
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonInstrument/IR/ConSanConstants.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -41,8 +42,9 @@ enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
 // writeVisibility + readVisibility per active memory type.
 constexpr int kCapturesPerMemType = 2;
 
-// barrierStates + waiting + barrierWriteRecipients (only when barriers exist).
-constexpr int kBarrierBaseCaptures = 3;
+// barrierStates + waiting + activeMasks + barrierWriteRecipients (only when
+// barriers exist).
+constexpr int kBarrierBaseCaptures = 4;
 
 // writeTracking + readTracking per active memory type (only when barriers
 // exist and the memory type has buffers).
@@ -211,13 +213,19 @@ struct AuxDataMap {
   // and stored phase.
   RegionToValueMap waiting;
 
+  // scratch, <C x i32>
+  // Deadlock-detection bitfield. Outside warp specialization this is 1; inside
+  // it, set bits denote base threads that have not yet reached their
+  // terminator.
+  RegionToValueMap activeMasks;
+
   // True when a memory type has cross-buffer aliasing and therefore requires
   // aliasMatrices to make visibility and commit checks conservative.
   std::array<bool, numMemTypes> hasNonTrivialAliasing{};
 
-  void populateAndPassToWarpSpecialize(ModuleOp module,
-                                       FunctionBuilder &funcBuilder,
-                                       const ConSanTargetHooks *hooks);
+  LogicalResult populateAndPassToWarpSpecialize(ModuleOp module,
+                                                FunctionBuilder &funcBuilder,
+                                                const ConSanTargetHooks *hooks);
 
 private:
   void getBuffersAndBarriers(
@@ -225,7 +233,8 @@ private:
       SmallVector<SmallVector<triton::BufferRegion>, 2> &bufRegions,
       SmallVector<triton::BufferRegion> &barrierRegions);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,
-                            RegionToValueMap &map, int &captureCounter);
+                            RegionToValueMap &map, int &captureCounter,
+                            int64_t &captureBytes);
   void createInWarpSpecialize(
       triton::FuncOp func, RegionToValueMap &map,
       std::function<ValueType(ImplicitLocOpBuilder &)> createFn);
