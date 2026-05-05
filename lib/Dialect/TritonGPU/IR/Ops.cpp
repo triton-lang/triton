@@ -1128,6 +1128,14 @@ RegionRange WarpSpecializeOp::getPartitionRegions() {
   return getPartitionOp().getPartitionRegions();
 }
 
+SmallVector<Region *> WarpSpecializeOp::getNonEmptyPartitionRegions() {
+  SmallVector<Region *> regions;
+  for (Region *region : getPartitionRegions())
+    if (!region->empty() && !region->front().without_terminator().empty())
+      regions.push_back(region);
+  return regions;
+}
+
 WarpSpecializePartitionsOp WarpSpecializeOp::getPartitionOp() {
   return cast<WarpSpecializePartitionsOp>(
       getPartitionOpHolder().front().front());

@@ -1,9 +1,3 @@
-# ruff: noqa: E402
-import hip
-
-hip.hip.hipInit(0)
-# Needed for internal dev flow for now; will remove later
-
 import re
 import math
 import itertools
@@ -3461,6 +3455,7 @@ def async_copy_shared_to_global_multi_cta_kernel(a_ptr, out_ptr, M, N, BLOCK_M: 
     ttgl.amd.gfx1250.async_copy.wait_group(0)
 
 
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
 @ASYNC_COPY_TEST_PARAM_SIZE
 @ASYNC_COPY_TEST_PARAM_SHARED_LAYOUT
 @ASYNC_COPY_TEST_PARAM_DTYPE
@@ -3482,15 +3477,10 @@ def test_runtime_async_store(M, N, vec_size, shared_layout, dtype):
     run_kernel = lambda: async_store_and_write_back_kernel[grid](a.cuda(), out_handle, M, N, BLOCK_M, BLOCK_N,
                                                                  blocked_layout, shared_layout)
 
-    if (vec_size * dtype.itemsize) == 2:
-        # since 16 bit stores are not supported, we have to abort compilation
-        with pytest.raises(RuntimeError):
-            run_kernel()
-    else:
-        run_kernel()
-        out_tri = out_handle.cpu()
-        out_ref = a.cpu()
-        assert torch.equal(out_tri, out_ref)
+    run_kernel()
+    out_tri = out_handle.cpu()
+    out_ref = a.cpu()
+    assert torch.equal(out_tri, out_ref)
 
 
 @pytest.mark.parametrize("blocked_layout", [
