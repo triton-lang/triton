@@ -1381,8 +1381,6 @@ def torch_gather_rows(input, idx, y, block_y):
 def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, idx_dtype, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.skip()
-    if idx_dtype == torch.int16 and not is_hip():
-        pytest.skip("I16 gather indices only supported on AMD")
 
     torch.manual_seed(42)
     if dtype != torch.int8:
@@ -1484,8 +1482,6 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
 def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, idx_dtype, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.skip()
-    if idx_dtype == torch.int16 and not is_hip():
-        pytest.skip("I16 scatter indices only supported on AMD")
 
     torch.manual_seed(42)
     input = torch.arange(BLOCK_X * BLOCK_Y, dtype=dtype, device=device).reshape(BLOCK_X, BLOCK_Y)

@@ -275,15 +275,18 @@ public:
   ConcurrencySanitizerImpl(ModuleOp module, const ConSanTargetHooks *hooks)
       : module(module), hooks(hooks) {}
 
-  void run() {
+  LogicalResult run() {
     tti::FunctionBuilder funcBuilder(module, auxData);
-    auxData.populateAndPassToWarpSpecialize(module, funcBuilder, hooks);
+    if (failed(auxData.populateAndPassToWarpSpecialize(module, funcBuilder,
+                                                       hooks)))
+      return failure();
 
     tt::FuncOp entryPoint = tti::getEntryPoint(module);
 
     ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
     b.setInsertionPointToStart(&entryPoint.getBody().front());
     instrumentMemoryOperations(b, funcBuilder);
+    return success();
   }
 
 private:
@@ -462,7 +465,7 @@ private:
         // is writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
                        thread, effect.operandName, effectRecipientCTAs,
-                       opInfo->commitKind);
+                       /*allowNoWrite=*/false, opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createSetReadVisibilityCall(
               b, buf, effect.length, getThreadPeersMask(thread), pred, memType,
@@ -481,7 +484,7 @@ private:
         // is reading or writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
                        thread, effect.operandName, effectRecipientCTAs,
-                       opInfo->commitKind);
+                       /*allowNoWrite=*/true, opInfo->commitKind);
         addReadChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
                       thread, effect.operandName, effectRecipientCTAs,
                       opInfo->commitKind);
@@ -557,10 +560,11 @@ private:
                       tti::FunctionBuilder &funcBuilder, Operation *op,
                       Value buf, uint32_t length, Value pred, MemType memType,
                       int thread, const std::string &operandName,
-                      Value recipientCTAs,
+                      Value recipientCTAs, bool allowNoWrite,
                       CommitKind::Kind opCommitKind = CommitKind::None) {
-    funcBuilder.createVerifyWriteVisibilityCall(
-        b, buf, length, thread, operandName, pred, memType, op, recipientCTAs);
+    funcBuilder.createVerifyWriteVisibilityCall(b, buf, length, thread,
+                                                operandName, pred, memType, op,
+                                                recipientCTAs, allowNoWrite);
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc :
@@ -601,10 +605,11 @@ private:
 
 } // namespace
 
-void runConcurrencySanitizer(ModuleOp module, const ConSanTargetHooks *hooks) {
+LogicalResult runConcurrencySanitizer(ModuleOp module,
+                                      const ConSanTargetHooks *hooks) {
   assert(hooks && "hooks must not be null");
   ConcurrencySanitizerImpl impl(module, hooks);
-  impl.run();
+  return impl.run();
 }
 
 class ConcurrencySanitizerPass
@@ -621,7 +626,8 @@ public:
                                                  : "";
     auto hooks = createConSanHooks(key);
     assert(hooks && "no ConSan hooks registered for target");
-    runConcurrencySanitizer(module, hooks.get());
+    if (failed(runConcurrencySanitizer(module, hooks.get())))
+      return signalPassFailure();
   }
 };
 

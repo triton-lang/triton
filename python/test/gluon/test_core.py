@@ -349,11 +349,12 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
                                         acc_tmem_layout: ttgl.constexpr, blocked_c: ttgl.constexpr):
     smem_a = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
     smem_b = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
+    acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_tmem_layout)
 
     tma_bar = mbarrier.allocate_mbarrier(two_ctas=acc_tmem_layout.two_ctas)
     mbarrier.init(tma_bar, count=1)
     mma_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True))
+    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True, acc_tmem.type.layout.two_ctas))
 
     mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
     tma.async_load(a_desc, [0, 0], tma_bar, smem_a, multicast=True)
@@ -361,7 +362,6 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
     mbarrier.wait(tma_bar, phase=0, deps=[smem_a, smem_b])
     mbarrier.invalidate(tma_bar)
 
-    acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_tmem_layout)
     # If it's not in a loop we don't striclty need multicast=True, but we add it to exercise the path in the test
     tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=False, multicast=True, mbarriers=[mma_bar])
     mbarrier.wait(mma_bar, phase=0, deps=[smem_a, smem_b])
@@ -482,7 +482,7 @@ def tcgen05_mma_scaled_direct_multicast_kernel(a_desc, b_desc, out_ptr, BLOCK_M:
     tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
     mbarrier.init(tma_bar, count=1)
     mma_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True))
+    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True, acc.type.layout.two_ctas))
 
     phase_tma = 0
     phase_mma = 0
@@ -753,14 +753,15 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, out_desc, gather_idx_p
     phase_tma = 0
 
     if use_tcgen05:
-        mma_bar = mbarrier.allocate_mbarrier()
-        phase_mma = 0
-        mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], multicast))
         acc_tmem = allocate_tensor_memory(
             element_ty=ttgl.float32,
             shape=[BLOCK_M, BLOCK_N],
             layout=acc_tmem_layout,
         )
+        mma_bar = mbarrier.allocate_mbarrier()
+        phase_mma = 0
+        mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], multicast,
+                                                               acc_tmem.type.layout.two_ctas))
     else:
         acc = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=acc_layout)
 
@@ -3943,7 +3944,8 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     mbarrier.init(tma_bar, count=1)
 
     mma_bar = mbarrier.allocate_mbarrier()
-    mma_bar_count: ttgl.constexpr = tcgen05_mma_barrier_count([a_smem, b_smem], multicast=multicast)
+    mma_bar_count: ttgl.constexpr = tcgen05_mma_barrier_count([a_smem, b_smem], multicast=multicast,
+                                                              two_ctas=acc_tmem.type.layout.two_ctas)
     mbarrier.init(mma_bar, count=mma_bar_count)
 
     phase_tma = 0
