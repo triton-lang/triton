@@ -277,10 +277,13 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     weight_uses_mx = weight_dtype_str.startswith("mx") or weight_dtype_str == "nvfp4_e2m1"
     # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
+        fp8e4nv_mx_dtypes = {"mxfloat8_e4m3fn", "nvfp4_e2m1"}
+        if torch.cuda.get_device_capability()[0] < 9 and (
+                act_dtype_str in fp8e4nv_mx_dtypes or weight_dtype_str in fp8e4nv_mx_dtypes
+                or output_dtype_str in fp8e4nv_mx_dtypes):
+            pytest.skip("MXFP8/NVFP4 tensors use fp8e4nv, which is not supported on A100")
         if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("Float8 not tested on A100")
-        if output_dtype_str == "nvfp4_e2m1" and torch.cuda.get_device_capability()[0] < 9:
-            pytest.skip("NVFP4 output scales use fp8e4nv, which is not supported on A100")
         if act_dtype_str == "float16" and weight_uses_mx and torch.cuda.get_device_capability()[0] >= 10:
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if weight_uses_mx:
