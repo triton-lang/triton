@@ -1537,12 +1537,9 @@ class TritonSemantic(Generic[TensorTy]):
     def deduce_scale_factor(self, lhs, lhs_scale, lhs_format, lhs_k_pack, rhs, rhs_scale, rhs_format, rhs_k_pack):
 
         def _to_scale_handle(scale):
-            if scale is None or isinstance(scale, tl.constexpr):
-                return None
-            elif isinstance(scale, tl.tensor) and scale.numel.value == 1:
-                return None
-
-            return scale.handle
+            if isinstance(scale, tl.tensor) and scale.numel.value != 1:
+                return scale.handle
+            return None
 
         return ir.deduce_scale_factor(lhs.handle, _to_scale_handle(lhs_scale), self._str_to_fp_type(lhs_format),
                                       lhs_k_pack, rhs.handle, _to_scale_handle(rhs_scale),
