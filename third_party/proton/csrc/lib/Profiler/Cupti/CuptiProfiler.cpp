@@ -220,11 +220,11 @@ void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
       continue;
     auto &nodeState = nodeIter->second;
     const auto &metricNodeState = graphState.metricNodeIdToState.at(nodeId);
-    auto &pendingMetricNode =
-        seqIdToState
-            .emplace(seqId, PendingGraphQueue::MetricNodeState{
-                                metricNodeState.metricId, {}})
-            .first->second;
+    auto &pendingMetricNode = seqIdToState
+                                  .emplace(seqId,
+                                           PendingGraphQueue::MetricNodeState{
+                                               metricNodeState.metricId, {}})
+                                  .first->second;
     for (const auto &[data, graphEntry] : externIdState.dataToGraphEntry) {
       phase = graphEntry.phase;
       auto entryId = Scope::DummyScopeId;
