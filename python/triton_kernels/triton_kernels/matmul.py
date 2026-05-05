@@ -293,9 +293,9 @@ def matmul(a, b, bias,
     b_scale_layout = None if b_scale is None else b_scale.storage.layout
     if b_has_mx and (
             b.storage.layout is not None and not isinstance(b.storage.layout, StridedLayout)
-            or b_scale_layout is not None and not isinstance(b_scale_layout, StridedLayout)):
+            or isinstance(b_scale_layout, HopperMXScaleLayout)):
         if not b_is_shuffled:
-            assert b.stride(-2) == 1, "`w` must be column-major with swizzled MX scales or non-strided MX value layouts"
+            assert b.stride(-2) == 1, "`w` must be column-major with Hopper-swizzled MX scales or non-strided MX value layouts"
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
     if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     # unpack a scale
