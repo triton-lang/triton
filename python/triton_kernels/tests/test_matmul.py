@@ -279,30 +279,26 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     a_dtype = DType(act_dtype_str)
     b_dtype = DType(weight_dtype_str)
     c_dtype = DType(output_dtype_str or act_dtype_str)
-    act_uses_mx = a_dtype.has_mx_scale
-    weight_uses_mx = b_dtype.has_mx_scale
-    on_cuda = is_cuda()
-    on_hip = is_hip()
-    device_capability = torch.cuda.get_device_capability()[0] if (on_cuda or on_hip) else None
+    device_capability = torch.cuda.get_device_capability()[0] if (is_cuda() or is_hip()) else None
     # TODO: remove when Triton FP8 supports proper RTNE
-    if on_cuda:
+    if is_cuda():
         if device_capability < 9 and (a_dtype.uses_fp8e4nv or b_dtype.uses_fp8e4nv or c_dtype.uses_fp8e4nv):
             pytest.skip("MXFP8/NVFP4 tensors use fp8e4nv, which is not supported on A100")
         if b_dtype.is_any_float8 and device_capability < 9:
             pytest.skip("Float8 not tested on A100")
-        if act_dtype_str == "float16" and weight_uses_mx and device_capability >= 10:
+        if act_dtype_str == "float16" and b_dtype.has_mx_scale and device_capability >= 10:
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
-        if weight_uses_mx and a_dtype.has_global_scale and device_capability < 10:
+        if b_dtype.has_mx_scale and a_dtype.has_global_scale and device_capability < 10:
             pytest.skip("float8 x mx not supported with cuda capability < 10")
         if swiglu_opts is not None and do_gamma:
             pytest.skip("NYI: swiglu and gamma not supported together")
 
-    elif on_hip:
-        if a_dtype.is_any_float8 and weight_uses_mx and not (is_hip_cdna4() or is_hip_gfx1250()):
+    elif is_hip():
+        if a_dtype.is_any_float8 and b_dtype.has_mx_scale and not (is_hip_cdna4() or is_hip_gfx1250()):
             pytest.skip("float8 x mx only supported on CDNA4 and gfx1250")
         if a_dtype.is_any_float8 and b_dtype.name == "mxfloat8_e4m3fn":
             pytest.skip("NYI: float8 x mxfloat8 not tested on AMD GPU")
-        if act_uses_mx and weight_uses_mx:
+        if a_dtype.has_mx_scale and b_dtype.has_mx_scale:
             pytest.skip("NYI: mx x mx not tested on AMD GPU")
         if is_persistent:
             pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
@@ -318,14 +314,14 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 
     if b_hbm_swizzling:
-        if on_hip:
+        if is_hip():
             if not (is_hip_cdna4() or is_hip_gfx1250()):
                 pytest.skip("Scale preshuffling on AMD GPU has not been emulated on archs other than CDNA4 and gfx1250 yet.")
-            if not weight_uses_mx:
+            if not b_dtype.has_mx_scale:
                 pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
-        if on_cuda and device_capability < 9:
+        if is_cuda() and device_capability < 9:
             pytest.skip("NYI. Ampere swizzling.")
-        if on_cuda and device_capability < 10:
+        if is_cuda() and device_capability < 10:
             if b_dtype.name != "mxfloat4_e2m1":
                 pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
             if a_dtype.is_mxfloat4:
@@ -333,11 +329,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
     if a_hbm_swizzling:
         # current x scale swizzling requires B200, batched input, microscaled act and persistent case
-        if on_hip:
+        if is_hip():
             pytest.skip("NYI. X swizzling not tested on AMD GPU yet.")
-        if on_cuda and device_capability < 10:
+        if is_cuda() and device_capability < 10:
             pytest.skip("NYI. X swizzling only implemented for B200 for now.")
-        if not act_uses_mx:
+        if not a_dtype.has_mx_scale:
             pytest.skip(f"NYI. X swizzling only implemented for microscaled activations for now. Got {act_dtype_str}")
         if not is_persistent:
             pytest.skip("NYI. X swizzling only implemented for persistent case for now.")
@@ -350,14 +346,14 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if expt_is_inner:
         if mode != "ragged":
             pytest.skip("inner_expt_opt only meaningful with ragged")
-        if act_uses_mx and inner_expt_opt != "pad_a":
+        if a_dtype.has_mx_scale and inner_expt_opt != "pad_a":
             pytest.skip("inner_expt_opt and act mx only supported with pad_a")
-        if weight_uses_mx:
+        if b_dtype.has_mx_scale:
             if inner_expt_opt != "pad_b":
                 pytest.skip("inner_expt_opt and weight mx only supported with pad_b")
             if is_persistent and not b_hbm_swizzling:
                 pytest.skip("FIXME: Fatal Python error: Aborted")
-            if on_hip:
+            if is_hip():
                 if act_dtype_str == "bfloat16":
                     pytest.skip("FIXME: failed to translate module to LLVM IR")
                 if b_hbm_swizzling:
@@ -377,7 +373,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if shuffle_mxfp4_w_layout:
         if not b_hbm_swizzling:
             pytest.skip("Shuffled MXFP4 weight layout only applies with b_hbm_swizzling")
-        if on_hip or device_capability is None or device_capability < 10:
+        if is_hip() or device_capability is None or device_capability < 10:
             pytest.skip("Shuffled MXFP4 weight layout requires Blackwell or newer")
         if b_dtype.name != "mxfloat4_e2m1":
             pytest.skip("Shuffled MXFP4 weight layout only supports mxfloat4_e2m1 weights")
