@@ -935,16 +935,9 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
 def test_hook_launch_metadata_cudagraph_metric_order_repro(tmp_path: pathlib.Path, device: str):
-    """Reproduce the graph-metric attachment issue seen in hook profiles.
-
-    The captured graph mirrors the production launch_fns_in_streams pattern:
-    a metadata-bearing kernel is launched on the capture stream, later kernels
-    are launched on a side stream that waits on the same start event, then the
-    capture stream joins the side stream. The first metadata path is
-    deliberately gated so the side-stream metric-copy kernels append to
-    Proton's shared metric buffer first during graph replay. Positional
-    attachment assigns those records to the wrong kernel; ordinal attachment
-    keeps each kernel's metrics on its owning frame.
+    """
+    kernels in a cudagraph can be launched using multiple internal streams, without
+    a deterministic order.
     """
 
     capture_stream = torch.cuda.Stream()
@@ -1034,6 +1027,7 @@ def test_hook_launch_metadata_cudagraph_metric_order_repro(tmp_path: pathlib.Pat
         start_event = torch.cuda.Event()
         with torch.cuda.graph(graph, stream=capture_stream):
             start_event.record()
+            # x and y are executed concurrently
             kernel_x[(1, )](x, y, kernel_x_flops, kernel_x_bytes, delay_scratch, gate, num_warps=1)
             with torch.cuda.stream(side_stream):
                 side_stream.wait_event(start_event)
