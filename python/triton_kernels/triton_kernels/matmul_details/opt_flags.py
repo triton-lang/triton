@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import triton
 from triton_kernels import target_info
 from triton_kernels.target_info import get_cdna_version, get_rdna_version, cuda_capability_geq
-from triton_kernels.tensor import FP4, FP32, Tensor
+from triton_kernels.tensor import FP4, FP32, Tensor, torch_dtype_to_dtype
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.strided import StridedLayout
@@ -302,7 +302,7 @@ def make_default_opt_flags_nvidia(
         estimated_actual_grid_size = opt_flags_nvidia.compute_grid_size(None, batch_size, m, n, block_m, block_n)
         split_k = opt_flags_nvidia.compute_split_k(block_k, k, estimated_actual_grid_size)
     if split_k > 1:
-        # Split-K writes full-N fp32 scratch and applies fused reductions in the
+        # Split-K writes full-N scratch and applies fused reductions in the
         # reduce kernel, not in the matmul epilogue.
         epilogue_reduction_n = 1
     compute_num_stages_args = (
@@ -311,7 +311,7 @@ def make_default_opt_flags_nvidia(
         block_m,
         block_n,
         block_k,
-        FP32 if split_k > 1 else out_dtype,
+        torch_dtype_to_dtype(precision_config.intermediate_out_dtype) if split_k > 1 else out_dtype,
         lhs_dtype,
         rhs_dtype,
         x_transpose,
