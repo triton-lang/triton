@@ -136,7 +136,7 @@ it sends an "LDS atomic arrive" to signal its completion.
 
 Traits: `AttrSizedOperandSegments`
 
-Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `PredicatedOpInterface`
+Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `PredicatedOpInterface`, `TDMOpInterface`
 
 #### Attributes:
 
@@ -184,7 +184,7 @@ it sends an "LDS atomic arrive" to signal its completion.
 
 Traits: `AttrSizedOperandSegments`
 
-Interfaces: `MBarrierOpInterface`
+Interfaces: `MBarrierOpInterface`, `TDMOpInterface`
 
 #### Attributes:
 
@@ -229,7 +229,7 @@ If more rows are needed, multiple TDM instructions will be issued.
 The src_col_offset specifies the starting column in the source tensor for
 all gathered rows.
 
-Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `PredicatedOpInterface`
+Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `PredicatedOpInterface`, `TDMOpInterface`
 
 #### Operands:
 
@@ -320,7 +320,7 @@ If more rows are needed, multiple TDM instructions will be issued.
 The dst_col_offset specifies the starting column in the destination tensor for
 all scattered rows.
 
-Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`
+Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `TDMOpInterface`
 
 #### Operands:
 

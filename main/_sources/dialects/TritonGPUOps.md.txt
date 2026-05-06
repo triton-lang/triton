@@ -328,25 +328,26 @@ Interfaces: `MemoryEffectOpInterface`
 
 
 
-### `ttg.local_atomic_scatter_add` (triton::gpu::LocalAtomicScatterAddOp)
+### `ttg.local_atomic_scatter_rmw` (triton::gpu::LocalAtomicScatterRMWOp)
 
-_Atomically scatter-add elements into shared memory along a specified axis_
+_Atomically scatter RMW elements into shared memory along a specified axis_
 
 Syntax:
 
 ```
-operation ::= `ttg.local_atomic_scatter_add` $dst `[` $indices `]` `,` $values (`,` $mask^)? attr-dict `:`
+operation ::= `ttg.local_atomic_scatter_rmw` $atomic_rmw_op `,` $dst `[` $indices `]` `,` $values (`,` $mask^)? attr-dict `:`
               functional-type(operands, results)
 ```
 
-Atomically scatter-adds elements to a shared memory descriptor using an indices tensor
+Atomically updates elements in a shared memory descriptor using an indices tensor
 along a single specified axis. The values tensor has the same shape as the
 indices tensor and the result returns the previous values observed at each
 updated location.
 
 For each input position I, the operation atomically updates dst where the
 coordinate at the axis is replaced by indices[I]:
-  dst[I[0], ..., indices[I], ..., I[n]] += values[I]
+  dst[I[0], ..., indices[I], ..., I[n]] =
+    rmw(dst[I[0], ..., indices[I], ..., I[n]], values[I])
 
 If mask is present, the update is performed only for positions where
 mask[I] is true. Masked-off positions do not update shared memory and return
@@ -360,6 +361,7 @@ Interfaces: `InferTypeOpInterface`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>atomic_rmw_op</code></td><td>::mlir::triton::RMWOpAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10</td></tr>
 <tr><td><code>axis</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 

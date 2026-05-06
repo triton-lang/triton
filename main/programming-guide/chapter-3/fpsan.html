@@ -101,7 +101,7 @@
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#casts-and-format-conversions">Casts and Format Conversions</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="#float-to-float-width-changes">Float-to-Float Width Changes</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#float-to-float-conversions">Float-to-Float Conversions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#packed-fp4-conversion">Packed fp4 conversion</a></li>
 </ul>
 </li>
@@ -386,6 +386,7 @@ trapping.</p></li>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">exp2(x</span> <span class="pre">+</span> <span class="pre">y)</span> <span class="pre">=</span> <span class="pre">exp2(x)</span> <span class="pre">*</span> <span class="pre">exp2(y)</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">exp2(0)</span> <span class="pre">=</span> <span class="pre">1</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">exp2(-x)</span> <span class="pre">=</span> <span class="pre">1.0</span> <span class="pre">/</span> <span class="pre">exp2(x)</span></code></p></li>
 </ul>
 </section>
 <section id="exp">
@@ -462,12 +463,12 @@ such as <code class="docutils literal notranslate"><span class="pre">sqrt(x)^2</
 </section>
 <section id="casts-and-format-conversions">
 <h2>Casts and Format Conversions<a class="headerlink" href="#casts-and-format-conversions" title="Link to this heading"></a></h2>
-<section id="float-to-float-width-changes">
-<h3>Float-to-Float Width Changes<a class="headerlink" href="#float-to-float-width-changes" title="Link to this heading"></a></h3>
+<section id="float-to-float-conversions">
+<h3>Float-to-Float Conversions<a class="headerlink" href="#float-to-float-conversions" title="Link to this heading"></a></h3>
 <p>Supported operations:</p>
 <ul class="simple">
 <li><p>converting a tensor between floating-point types with <code class="docutils literal notranslate"><span class="pre">x.to(dtype)</span></code></p></li>
-<li><p>frontend-generated float widening and narrowing conversions</p></li>
+<li><p>implicit float widening and narrowing conversions</p></li>
 </ul>
 <p>Rewrite:</p>
 <ul class="simple">
@@ -479,10 +480,14 @@ such as <code class="docutils literal notranslate"><span class="pre">sqrt(x)^2</
 <li><p><code class="docutils literal notranslate"><span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">+1</span></code>, and <code class="docutils literal notranslate"><span class="pre">-1</span></code> remain stable across the conversion</p></li>
 <li><p>sign-extension behavior in the payload domain</p></li>
 <li><p>truncation drops high payload bits</p></li>
+<li><p>an upcast followed by a downcast is the identity</p></li>
 </ul>
 <p>Important caveat:</p>
 <ul class="simple">
 <li><p>This preserves payload structure, not IEEE conversion semantics.</p></li>
+<li><p>Conversions between fp types of the same width do not model any loss of
+precision or range, so for example under fpsan
+<code class="docutils literal notranslate"><span class="pre">fn(a.to(tl.float16)).to(tl.bfloat16)</span> <span class="pre">==</span> <span class="pre">fn(a)</span></code> (for any bfloat16 <code class="docutils literal notranslate"><span class="pre">a</span></code>).</p></li>
 </ul>
 </section>
 <section id="packed-fp4-conversion">
@@ -572,7 +577,7 @@ integer operands are used directly after signed casting to the result width</p><
 operands and scales, not exact hardware-format numeric decoding.</p></li>
 <li><p>Tensor-memory operations preserve payload dataflow; they do not make FpSan a
 substitute for race or synchronization checking.</p></li>
-<li><p>Current backend support is explicitly enabled for AMD <code class="docutils literal notranslate"><span class="pre">gfx942</span></code>, <code class="docutils literal notranslate"><span class="pre">gfx950</span></code>,
+<li><p>Currently fpsan is supported on all NVIDIA hardware, as well as AMD <code class="docutils literal notranslate"><span class="pre">gfx942</span></code>, <code class="docutils literal notranslate"><span class="pre">gfx950</span></code>,
 and <code class="docutils literal notranslate"><span class="pre">gfx1250</span></code>.</p></li>
 </ul>
 </section>

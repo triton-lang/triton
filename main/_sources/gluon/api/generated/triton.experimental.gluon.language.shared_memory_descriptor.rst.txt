@@ -15,6 +15,12 @@
    
       ~shared_memory_descriptor.__init__
       ~shared_memory_descriptor.atomic_scatter_add
+      ~shared_memory_descriptor.atomic_scatter_and
+      ~shared_memory_descriptor.atomic_scatter_max
+      ~shared_memory_descriptor.atomic_scatter_min
+      ~shared_memory_descriptor.atomic_scatter_or
+      ~shared_memory_descriptor.atomic_scatter_xchg
+      ~shared_memory_descriptor.atomic_scatter_xor
       ~shared_memory_descriptor.gather
       ~shared_memory_descriptor.index
       ~shared_memory_descriptor.load

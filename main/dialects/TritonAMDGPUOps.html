@@ -450,7 +450,7 @@ swizzling.
 The operation can also take an optional 64bit LDS barrier address, in which case
 it sends an “LDS atomic arrive” to signal its completion.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TDMOpInterface</span></code></p>
 <section id="id5">
 <h3>Attributes:<a class="headerlink" href="#id5" title="Link to this heading"></a></h3>
 <table>
@@ -517,7 +517,7 @@ operation does not support shared memory padding or swizzling.
 The operation can also take an optional 64bit LDS barrier address, in which case
 it sends an “LDS atomic arrive” to signal its completion.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TDMOpInterface</span></code></p>
 <section id="id8">
 <h3>Attributes:<a class="headerlink" href="#id8" title="Link to this heading"></a></h3>
 <table>
@@ -571,7 +571,7 @@ If more rows are needed, multiple TDM instructions will be issued.</p></li>
 </ul>
 <p>The src_col_offset specifies the starting column in the source tensor for
 all gathered rows.</p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TDMOpInterface</span></code></p>
 <section id="id10">
 <h3>Operands:<a class="headerlink" href="#id10" title="Link to this heading"></a></h3>
 <table class="docutils align-default">
@@ -694,7 +694,7 @@ If more rows are needed, multiple TDM instructions will be issued.</p></li>
 </ul>
 <p>The dst_col_offset specifies the starting column in the destination tensor for
 all scattered rows.</p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TDMOpInterface</span></code></p>
 <section id="id15">
 <h3>Operands:<a class="headerlink" href="#id15" title="Link to this heading"></a></h3>
 <table class="docutils align-default">

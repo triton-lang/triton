@@ -156,7 +156,25 @@
 <td><p></p></td>
 </tr>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_scatter_add</span></code>(self, values, indices, axis)</p></td>
-<td><p>Atomically scatter-add elements to shared memory along a specified axis using an indices tensor.</p></td>
+<td><p>Performs an atomic scatter add on this shared-memory descriptor.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_scatter_and</span></code>(self, values, indices, axis)</p></td>
+<td><p>Performs an atomic scatter logical and on this shared-memory descriptor.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_scatter_max</span></code>(self, values, indices, axis)</p></td>
+<td><p>Performs an atomic scatter max on this shared-memory descriptor.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_scatter_min</span></code>(self, values, indices, axis)</p></td>
+<td><p>Performs an atomic scatter min on this shared-memory descriptor.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_scatter_or</span></code>(self, values, indices, axis)</p></td>
+<td><p>Performs an atomic scatter logical or on this shared-memory descriptor.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_scatter_xchg</span></code>(self, values, indices, axis)</p></td>
+<td><p>Performs an atomic scatter exchange on this shared-memory descriptor.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_scatter_xor</span></code>(self, values, indices, axis)</p></td>
+<td><p>Performs an atomic scatter logical xor on this shared-memory descriptor.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">gather</span></code>(self, indices, axis[, _semantic])</p></td>
 <td><p>Gather elements from shared memory along a specified axis using an indices tensor.</p></td>
