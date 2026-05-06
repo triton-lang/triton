@@ -1009,6 +1009,7 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
               Value mask, Value other, tt::CacheModifier cache) -> Value {
              return self.create<ttag::BufferLoadOp>(resultType, ptr, offsets,
+                                                    Value() /*soffset*/,
                                                     Value() /*stride*/, cache,
                                                     mask, other);
            })
@@ -1016,6 +1017,7 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,
               Value mask, tt::CacheModifier cache) {
              self.create<ttag::BufferStoreOp>(storedValue, ptr, offsets,
+                                              Value() /*soffset*/,
                                               Value() /*stride*/, cache, mask);
            })
       .def("create_buffer_atomic_rmw",
@@ -1031,7 +1033,8 @@ void init_gluon_ir(py::module &&m) {
               Value mask, Value other, Value stride,
               tt::CacheModifier cacheModifier) {
              self.create<ttag::BufferLoadToLocalOp>(
-                 dest, ptr, offsets, mask, other, stride, cacheModifier);
+                 dest, ptr, offsets, Value() /*soffset*/, mask, other, stride,
+                 cacheModifier);
            })
       .def("create_scaled_upcast_fp4",
            [](GluonOpBuilder &self, Value input, Value scale, Type elemType,
