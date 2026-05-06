@@ -4,7 +4,7 @@ import pytest
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
@@ -162,8 +162,8 @@ def test_scan_blocked_broadcast_layout_multiblock(device):
     torch.testing.assert_close(y, torch.cumsum(x, dim=0))
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("num_ctas", [2, 4])
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("num_ctas", [2, 4, 8])
 def test_convert_1d_to_2d_slice_cga(num_ctas, device):
     head = 64
     out = torch.empty((head, ), device=device, dtype=torch.float32)
