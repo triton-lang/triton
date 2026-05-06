@@ -186,14 +186,6 @@ struct TritonExpandDimsPattern
                   adaptor.getAttributes());
     return success();
   }
-
-private:
-  template <typename T>
-  SmallVector<T> insertOne(ArrayRef<T> vec, unsigned axis) const {
-    SmallVector<T> res(vec.begin(), vec.end());
-    res.insert(res.begin() + axis, 1);
-    return res;
-  }
 };
 
 struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {

@@ -731,13 +731,6 @@ bool externHasNumericOperands(tt::ExternElementwiseOp op) {
   });
 }
 
-bool externInvolvesFloatLike(tt::ExternElementwiseOp op) {
-  return isFloatLike(op.getType()) ||
-         llvm::any_of(op.getOperands(), [](Value operand) {
-           return isFloatLike(operand.getType());
-         });
-}
-
 Value castExternOperandToResultInt(PatternRewriter &rewriter, Location loc,
                                    Value operand, Type resultIntTy) {
   if (isFloatLike(operand.getType())) {
@@ -906,13 +899,6 @@ Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
   return ptrTensor;
 }
 
-Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
-                                   Value base, RankedTensorType resultTy,
-                                   int64_t stride1) {
-  return createPointerTensorStrided2D(rewriter, loc, base, resultTy,
-                                      /*stride0=*/1, stride1);
-}
-
 Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc, Value base,
                            RankedTensorType tensorTy, int64_t stride0,
                            int64_t stride1) {
@@ -936,13 +922,6 @@ Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
                                                 stride0, stride1);
   return tt::StoreOp::create(rewriter, loc, ptrTensor, tensor,
                              CacheModifier::NONE, EvictionPolicy::NORMAL);
-}
-
-Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
-                                 Value base, Value tensor,
-                                 RankedTensorType tensorTy, int64_t stride1) {
-  return storeScratchStrided2D(rewriter, loc, base, tensor, tensorTy,
-                               /*stride0=*/1, stride1);
 }
 
 Value unpackPackedFp4Slice(PatternRewriter &rewriter, Location loc,
