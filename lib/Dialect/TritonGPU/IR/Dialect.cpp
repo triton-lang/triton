@@ -441,7 +441,8 @@ SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
   if (auto sharedMMALayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
     if (sharedMMALayout.getFp4Padded())
       packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
-  } else if (auto tmemLayout = dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
+  } else if (auto tmemLayout =
+                 dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
     // We know fp4 padded TMEM is always on the LHS, so the packed axis is the
     // inner dimension.
     if (tmemLayout.getFp4Padded())
