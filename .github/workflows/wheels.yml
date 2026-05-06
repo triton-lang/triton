@@ -83,6 +83,12 @@ jobs:
           # With this install, it gets clang 16.0.6.
           export CIBW_BEFORE_ALL="dnf install clang lld -y"
 
+          # Skip auditwheel's dependency-bundling pass on libtriton.so. Without
+          # this, every shared library libtriton.so links against is copied into
+          # triton.libs/ and the wheel grows by ~130MB. PyTorch's build script
+          # uses the same flag for the same reason.
+          export CIBW_REPAIR_WHEEL_COMMAND_LINUX="auditwheel repair --exclude libtriton.so -w {dest_dir} {wheel}"
+
           if [[ ${{ matrix.config.arch }} == 'x86_64' ]]; then
             export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux_2_28_${{ matrix.config.arch }}:latest"
           else
