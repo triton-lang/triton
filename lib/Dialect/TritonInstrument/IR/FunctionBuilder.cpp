@@ -2371,6 +2371,19 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
           fb, arith::CmpIPredicate::eq, bufferHasVisibility, bufferThreadBit);
       Value result;
       if (!allowNoWrite) {
+        // Every selected CTA must have a covering initialized row set.
+        auto allSelectedCTAsCovered = [&](Value coveredCTAs,
+                                          Value selectedRows) {
+          Value selectedCTAs = reduceLastDim<arith::OrIOp>(fb, selectedRows);
+          Value ctaOne = tti::createConstIntTensor(
+              fb, fb.getLoc(), 1,
+              cast<RankedTensorType>(selectedCTAs.getType()));
+          Value unselectedCTAs =
+              arith::XOrIOp::create(fb, selectedCTAs, ctaOne);
+          Value coveredOrUnselected =
+              arith::OrIOp::create(fb, coveredCTAs, unselectedCTAs);
+          return reduceAll<arith::AndIOp>(fb, coveredOrUnselected);
+        };
         if (useAlias) {
           // Initialization needs the union of exact initialized rows to cover
           // the whole interval; mere overlap is not enough.
@@ -2385,14 +2398,7 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
               arith::XOrIOp::create(fb, uninitializedRows, rowOne);
           Value intervalCovered = createIntervalCoverageMask(
               fb, buffers, initializedRows, bufOffset, lengthVal);
-          Value selectedCTAs = reduceLastDim<arith::OrIOp>(fb, ctaMask);
-          Value ctaOne = tti::createConstIntTensor(
-              fb, fb.getLoc(), 1,
-              cast<RankedTensorType>(selectedCTAs.getType()));
-          Value unmatchedCTAs = arith::XOrIOp::create(fb, selectedCTAs, ctaOne);
-          Value coveredOrUnmatched =
-              arith::OrIOp::create(fb, intervalCovered, unmatchedCTAs);
-          result = reduceAll<arith::AndIOp>(fb, coveredOrUnmatched);
+          result = allSelectedCTAsCovered(intervalCovered, ctaMask);
         } else {
           Value rowOne = tti::createConstIntTensor(
               fb, fb.getLoc(), 1,
@@ -2401,18 +2407,9 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
               arith::XOrIOp::create(fb, noOneIsWriting, rowOne);
           Value initializedRows =
               arith::AndIOp::create(fb, rowInitialized, buffersEqBuf);
-          // Alias rows are alternatives within a CTA, but every selected CTA
-          // must have at least one initialized row.
           Value initializedCTAs =
               reduceLastDim<arith::OrIOp>(fb, initializedRows);
-          Value selectedCTAs = reduceLastDim<arith::OrIOp>(fb, buffersEqBuf);
-          Value ctaOne = tti::createConstIntTensor(
-              fb, fb.getLoc(), 1,
-              cast<RankedTensorType>(selectedCTAs.getType()));
-          Value unmatchedCTAs = arith::XOrIOp::create(fb, selectedCTAs, ctaOne);
-          Value initializedOrUnmatched =
-              arith::OrIOp::create(fb, initializedCTAs, unmatchedCTAs);
-          result = reduceAll<arith::AndIOp>(fb, initializedOrUnmatched);
+          result = allSelectedCTAsCovered(initializedCTAs, buffersEqBuf);
         }
       } else {
         Value writeVisible =
