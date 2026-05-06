@@ -126,35 +126,37 @@ private:
     unsigned argIdx = blockArg.getArgNumber();
     for (Block *pred : block->getPredecessors()) {
       Operation *term = pred->getTerminator();
-      Value incoming = getIncomingFromTerminator(term, block, argIdx);
-      if (!incoming || !isUniform(incoming))
+      if (!areIncomingValuesUniform(term, block, argIdx))
         return false;
     }
     return true;
   }
 
-  static Value getIncomingFromTerminator(Operation *term, Block *target,
-                                         unsigned argIdx) {
+  bool areIncomingValuesUniform(Operation *term, Block *target,
+                                unsigned argIdx) {
     if (auto br = dyn_cast<LLVM::BrOp>(term)) {
       auto operands = br.getDestOperands();
       if (argIdx < operands.size())
-        return operands[argIdx];
-      return nullptr;
+        return isUniform(operands[argIdx]);
+      return false;
     }
     if (auto cb = dyn_cast<LLVM::CondBrOp>(term)) {
+      bool sawTargetEdge = false;
       if (cb.getTrueDest() == target) {
+        sawTargetEdge = true;
         auto operands = cb.getTrueDestOperands();
-        if (argIdx < operands.size())
-          return operands[argIdx];
+        if (argIdx >= operands.size() || !isUniform(operands[argIdx]))
+          return false;
       }
       if (cb.getFalseDest() == target) {
+        sawTargetEdge = true;
         auto operands = cb.getFalseDestOperands();
-        if (argIdx < operands.size())
-          return operands[argIdx];
+        if (argIdx >= operands.size() || !isUniform(operands[argIdx]))
+          return false;
       }
-      return nullptr;
+      return sawTargetEdge;
     }
-    return nullptr;
+    return false;
   }
 
   llvm::DenseMap<Value, bool> cache;
