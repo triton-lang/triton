@@ -120,7 +120,6 @@ protected:
     std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
     DataToEntryMap dataToEntry;
     bool isApiExternOp{false};
-    bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
     struct MetricKernelLaunchInfo {
       uint64_t seqId{};
@@ -212,7 +211,6 @@ protected:
 
   std::unique_ptr<MetricBuffer> metricBuffer;
   std::unique_ptr<PendingGraphPool> pendingGraphPool;
-  std::atomic<uint64_t> nextMetricKernelOrdinal{0};
 
   Correlation correlation;
 
@@ -229,12 +227,13 @@ protected:
     virtual void doStart() = 0;
     virtual void doFlush() = 0;
     virtual void doStop() = 0;
+    virtual bool isMetricCaptureActive() { return false; }
 
     void
     doAddMetrics(size_t scopeId,
                  const std::map<std::string, MetricValueType> &scalarMetrics,
                  const std::map<std::string, TensorMetric> &tensorMetrics) {
-      if (threadState.isStreamCapturing) { // Graph capture mode
+      if (isMetricCaptureActive()) { // Graph capture mode
         // Launch metric kernels
         auto &metricKernelLaunchState = profiler.metricKernelLaunchState;
         threadState.isMetricKernelLaunching = true;

@@ -35,26 +35,6 @@ thread_local GPUProfiler<CuptiProfiler>::ThreadState
 
 namespace {
 
-std::optional<std::pair<size_t, std::string>>
-findMetadataOwnerContext(const std::vector<Context> &contexts) {
-  const auto prefix = std::string(GraphState::metadataTag) + ":";
-  for (size_t i = 0; i < contexts.size(); ++i) {
-    const auto &name = contexts[i].name;
-    if (name.rfind(prefix, 0) == 0 && name.size() > prefix.size()) {
-      return std::make_pair(i, name.substr(prefix.size()));
-    }
-  }
-  return std::nullopt;
-}
-
-std::string findCurrentOpName(const std::vector<Scope> &scopeStack,
-                              const std::string &fallback) {
-  if (!scopeStack.empty() && !scopeStack.back().name.empty()) {
-    return scopeStack.back().name;
-  }
-  return fallback;
-}
-
 std::unique_ptr<Metric>
 convertKernelActivityToMetric(CUpti_Activity *activity,
                               bool isMetricKernel = false) {
@@ -369,6 +349,74 @@ bool isLaunch(CUpti_CallbackId cbId) {
   return isKernel(cbId) || isGraphLaunch(cbId);
 }
 
+bool streamCaptureActive(CUstream stream) {
+  CUstreamCaptureStatus status = CU_STREAM_CAPTURE_STATUS_NONE;
+  auto result = cuda::streamIsCapturing<false>(stream, &status);
+  return result == CUDA_SUCCESS && status == CU_STREAM_CAPTURE_STATUS_ACTIVE;
+}
+
+bool launchConfigCaptureActive(const CUlaunchConfig *config) {
+  return config != nullptr && streamCaptureActive(config->hStream);
+}
+
+bool kernelLaunchCaptureActive(CUpti_CallbackId cbId,
+                               const CUpti_CallbackData *callbackData) {
+  if (callbackData == nullptr || callbackData->functionParams == nullptr)
+    return false;
+
+  switch (cbId) {
+  case CUPTI_DRIVER_TRACE_CBID_cuLaunch:
+  case CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid:
+    return streamCaptureActive(nullptr);
+  case CUPTI_DRIVER_TRACE_CBID_cuLaunchGridAsync:
+    return streamCaptureActive(
+        static_cast<const cuLaunchGridAsync_params *>(
+            callbackData->functionParams)
+            ->hStream);
+  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel:
+    return streamCaptureActive(
+        static_cast<const cuLaunchKernel_params *>(
+            callbackData->functionParams)
+            ->hStream);
+  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel_ptsz:
+    return streamCaptureActive(
+        static_cast<const cuLaunchKernel_ptsz_params *>(
+            callbackData->functionParams)
+            ->hStream);
+  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx:
+    return launchConfigCaptureActive(
+        static_cast<const cuLaunchKernelEx_params *>(
+            callbackData->functionParams)
+            ->config);
+  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx_ptsz:
+    return launchConfigCaptureActive(
+        static_cast<const cuLaunchKernelEx_ptsz_params *>(
+            callbackData->functionParams)
+            ->config);
+  case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel:
+    return streamCaptureActive(
+        static_cast<const cuLaunchCooperativeKernel_params *>(
+            callbackData->functionParams)
+            ->hStream);
+  case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel_ptsz:
+    return streamCaptureActive(
+        static_cast<const cuLaunchCooperativeKernel_ptsz_params *>(
+            callbackData->functionParams)
+            ->hStream);
+  case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice: {
+    auto *params = static_cast<const cuLaunchCooperativeKernelMultiDevice_params
+                                  *>(callbackData->functionParams);
+    for (unsigned int i = 0; i < params->numDevices; ++i) {
+      if (streamCaptureActive(params->launchParamsList[i].hStream))
+        return true;
+    }
+    return false;
+  }
+  default:
+    return false;
+  }
+}
+
 #undef PROTON_KERNEL_CALLBACK_LIST
 
 } // namespace
@@ -414,7 +462,7 @@ private:
                                const void *cbData);
   void handleNvtxCallbacks(CUpti_CallbackId cbId, const void *cbData);
 
-  bool handleStreamCaptureCallbacks(CUpti_CallbackId cbId);
+  void handleStreamCaptureBeginCallbacks(CUpti_CallbackId cbId);
   void handleApiEnterLaunchCallbacks(CuptiProfiler &profiler,
                                      CUpti_CallbackId cbId,
                                      const CUpti_CallbackData *callbackData);
@@ -423,6 +471,7 @@ private:
                                     const CUpti_CallbackData *callbackData);
   void handleApiCallbacks(CuptiProfiler &profiler, CUpti_CallbackId cbId,
                           const void *cbData);
+  bool isMetricCaptureActive() override;
 };
 
 void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
@@ -505,8 +554,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         nodeState.status.setMissingName();
       const bool isMetricKernelNode =
           threadState.isMetricKernelLaunching &&
-          !threadState.metricKernelNumWordsQueue.empty() &&
-          !threadState.metricKernelOrdinalQueue.empty();
+          !threadState.metricKernelLaunchInfoQueue.empty();
       if (isMetricKernelNode) {
         nodeState.status.setMetricNode();
         auto metricKernelLaunchInfo =
@@ -523,19 +571,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       }
       for (auto *data : profiler.dataSet) {
         auto contexts = data->getContexts();
-        std::optional<std::vector<Context>> flexibleMetricTargetContexts;
         if (isMetricKernelNode) {
-          if (auto metadataOwner = findMetadataOwnerContext(contexts)) {
-            auto [metadataIndex, ownerName] = *metadataOwner;
-            auto metricOwnerName =
-                findCurrentOpName(threadState.scopeStack, ownerName);
-            flexibleMetricTargetContexts = std::vector<Context>(
-                contexts.begin(), contexts.begin() + metadataIndex);
-            flexibleMetricTargetContexts->push_back(Context(metricOwnerName));
-            flexibleMetricTargetContexts->push_back(
-                Context(GraphState::metricTag));
-            contexts.push_back(std::string(GraphState::metricTag));
-          } else if (threadState.isApiExternOp) { // API extern ops
+          if (threadState.isApiExternOp) { // API extern ops
             contexts.push_back(std::string(GraphState::metricTag));
           } else { // Triton ops
             contexts.push_back(name);
@@ -547,18 +584,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         auto staticEntry =
             data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
         nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
-        if (isMetricKernelNode) {
-          if (flexibleMetricTargetContexts) {
-            auto flexibleMetricTargetEntry =
-                data->addOp(Data::kVirtualPhase, Data::kRootEntryId,
-                            *flexibleMetricTargetContexts);
-            nodeState.dataToFlexibleMetricEntryId.insert_or_assign(
-                data, flexibleMetricTargetEntry.id);
-          } else {
-            nodeState.dataToFlexibleMetricEntryId.insert_or_assign(
-                data, staticEntry.id);
-          }
-        }
         graphState.dataToEntryIdToNodeStates[data][staticEntry.id].insert(
             &nodeState);
       }
@@ -632,22 +657,22 @@ void CuptiProfiler::CuptiProfilerPimpl::handleNvtxCallbacks(
   } // TODO: else handle other NVTX range functions
 }
 
-bool CuptiProfiler::CuptiProfilerPimpl::handleStreamCaptureCallbacks(
+void CuptiProfiler::CuptiProfilerPimpl::handleStreamCaptureBeginCallbacks(
     CUpti_CallbackId cbId) {
   if (cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture ||
       cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_ptsz ||
       cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2 ||
-      cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2_ptsz) {
-    threadState.isStreamCapturing = true;
+      cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2_ptsz ||
+      cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCaptureToGraph ||
+      cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCaptureToGraph_ptsz) {
     profiler.metricBuffer->reserve();
-    return true;
   }
-  if (cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture ||
-      cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture_ptsz) {
-    threadState.isStreamCapturing = false;
-    return true;
-  }
-  return false;
+}
+
+bool CuptiProfiler::CuptiProfilerPimpl::isMetricCaptureActive() {
+  auto stream = reinterpret_cast<CUstream>(
+      profiler.metricKernelLaunchState.tensor.stream);
+  return streamCaptureActive(stream);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
@@ -665,7 +690,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   }
 
   auto &dataToEntry = threadState.dataToEntry;
-  if (threadState.isStreamCapturing) // Do not correlate stream captured kernels
+  if (isKernel(cbId) && kernelLaunchCaptureActive(cbId, callbackData))
     return;
   if (dataToEntry.empty()) // Profiler is deactivated
     return;
@@ -745,8 +770,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
 
   threadState.exitOp();
 
-  if (threadState
-          .isStreamCapturing) // Do not correlate for stream captured kernels
+  if (isKernel(cbId) && kernelLaunchCaptureActive(cbId, callbackData))
     return;
   if (deactivated) // Profiler is deactivated
     return;
@@ -757,7 +781,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId, const void *cbData) {
   const CUpti_CallbackData *callbackData =
       static_cast<const CUpti_CallbackData *>(cbData);
-  handleStreamCaptureCallbacks(cbId);
+  handleStreamCaptureBeginCallbacks(cbId);
   if (isLaunch(cbId)) {
     if (callbackData->callbackSite == CUPTI_API_ENTER) {
       handleApiEnterLaunchCallbacks(profiler, cbId, callbackData);

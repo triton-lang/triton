@@ -96,12 +96,6 @@ void CudaRuntime::synchronizeDevice() {
   }
 }
 
-bool CudaRuntime::isStreamCapturing(void *stream) {
-  CUstreamCaptureStatus status = CU_STREAM_CAPTURE_STATUS_NONE;
-  cuda::streamIsCapturing<true>(reinterpret_cast<CUstream>(stream), &status);
-  return status == CU_STREAM_CAPTURE_STATUS_ACTIVE;
-}
-
 void CudaRuntime::processHostBuffer(
     uint8_t *hostBuffer, size_t hostBufferSize, uint8_t *deviceBuffer,
     size_t deviceBufferSize, void *stream,
