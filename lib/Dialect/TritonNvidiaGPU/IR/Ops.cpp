@@ -931,8 +931,7 @@ ValueRange TCGen5MMAOp::getCompletionBarrierPreds() {
 
 static void appendMulticastDesc(SmallVectorImpl<Value> &descs,
                                 TypedValue<MemDescType> desc) {
-  if (isa<SharedEncodingTrait>(desc.getType().getEncoding()))
-    descs.push_back(desc);
+  descs.push_back(desc);
 }
 
 SmallVector<Value> TCGen5MMAOp::getCompletionDescs() {

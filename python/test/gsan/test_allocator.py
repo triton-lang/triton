@@ -12,6 +12,10 @@ from triton.experimental.gsan._allocator import (export_allocation_handles, free
 from triton.experimental.gsan._testing_utils import shadow_tensor_for
 from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
 
+# With 2 MiB pages, this rounds to a 6 MiB allocation inside an 8 MiB tree node.
+# This tests cases where AllocNode.size != AllocNode.allocSize
+_ODD_LARGE_ALLOCATION_SIZE = 4 * 1024 * 1024 + 1
+
 
 @pytest.fixture
 def _direct_allocator():
@@ -99,6 +103,17 @@ def test_malloc_fragmentation_reuse_and_coalesce(_direct_allocator):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_malloc_free_large_odd_size(_direct_allocator):
+    malloc, free, _, _ = _direct_allocator
+
+    ptr = malloc(_ODD_LARGE_ALLOCATION_SIZE)
+    assert ptr != 0
+
+    free(ptr)
+    torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 def test_free_invalid_pointer_and_double_free(_direct_allocator):
     malloc, free, _, _ = _direct_allocator
 
@@ -151,11 +166,12 @@ def test_mem_pool():
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator):
+@pytest.mark.parametrize("size", [4096, _ODD_LARGE_ALLOCATION_SIZE])
+def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator, size):
     malloc, free, reserve_ptr, reserve_size = _direct_allocator
     device = torch.cuda.current_device()
 
-    real_ptr = malloc(4096)
+    real_ptr = malloc(size)
     assert real_ptr != 0
 
     imported_ptr = 0

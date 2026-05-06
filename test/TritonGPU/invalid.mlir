@@ -174,11 +174,24 @@ tt.func public @subview_along_swizzling(%arg0: !ttg.memdesc<8x16xf32, #shared, #
 #linear = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [], block = []}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
-tt.func public @local_atomic_scatter_add_immutable_dst(%values: tensor<32xi32, #linear>,
+tt.func public @local_atomic_scatter_rmw_immutable_dst(%values: tensor<32xi32, #linear>,
                                                        %indices: tensor<32xi32, #linear>,
                                                        %dst: !ttg.memdesc<32xi32, #shared, #smem>) attributes {"ttg.num-warps" = 1 : i32} {
     // expected-error @+1 {{Cannot store into immutable memory}}
-    %0 = ttg.local_atomic_scatter_add %dst[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<32xi32, #shared, #smem>, tensor<32xi32, #linear>, tensor<32xi32, #linear>) -> tensor<32xi32, #linear>
+    %0 = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<32xi32, #shared, #smem>, tensor<32xi32, #linear>, tensor<32xi32, #linear>) -> tensor<32xi32, #linear>
+    tt.return
+}
+
+// -----
+
+#linear = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [], block = []}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+tt.func public @local_atomic_scatter_rmw_bad_value_kind(%values: tensor<32x!tt.ptr<i32>, #linear>,
+                                                        %indices: tensor<32xi32, #linear>,
+                                                        %dst: !ttg.memdesc<32x!tt.ptr<i32>, #shared, #smem, mutable>) attributes {"ttg.num-warps" = 1 : i32} {
+    // expected-error @+1 {{values must have integer or floating element type}}
+    %0 = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<32x!tt.ptr<i32>, #shared, #smem, mutable>, tensor<32x!tt.ptr<i32>, #linear>, tensor<32xi32, #linear>) -> tensor<32x!tt.ptr<i32>, #linear>
     tt.return
 }
 

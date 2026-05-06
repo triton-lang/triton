@@ -66,7 +66,9 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
                                    reduceOp.getIndices(), alloc);
   } else {
     auto scatterOp = cast<tt::DescriptorScatterOp>(store.op);
-    ttng::AsyncTMAScatterOp::create(builder, loc, desc, scatterOp.getXOffsets(),
+    Value xOffsets =
+        ttng::sextI16ToI32Indices(scatterOp.getXOffsets(), builder, loc);
+    ttng::AsyncTMAScatterOp::create(builder, loc, desc, xOffsets,
                                     scatterOp.getYOffset(), alloc);
   }
 

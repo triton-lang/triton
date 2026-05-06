@@ -111,17 +111,22 @@ static int minNumInterleavedCommitOps(Operation *waitOp) {
     return 0;
   };
 
-  if (waitOp->getNumOperands() != 1)
+  if (waitOp->getNumOperands() == 0)
     return 0;
-  Value val = waitOp->getOperand(0);
-  // If the value resides in a region other than the region of the wait op, then
-  // the wait op must be in some nested region. Measure the number of commits
-  // between the definition value and the parent op.
-  // TODO: We could measure commits in nested regions along the path if
-  // necessary.
-  while (waitOp->getParentRegion() != val.getParentRegion())
-    waitOp = waitOp->getParentOp();
-  int minCommits = minOverHistories(val, waitOp, 0);
+  // Multi-token waits: take the min of minOverHistories across operands. Both
+  // the captured `minCommitNumber` and the returned bailout-0s are folded in.
+  int minCommits = INT_MAX;
+  for (Value val : waitOp->getOperands()) {
+    Operation *anchor = waitOp;
+    // If the value resides in a region other than the region of the wait op,
+    // then the wait op must be in some nested region. Measure the number of
+    // commits between the definition value and the parent op.
+    // TODO: We could measure commits in nested regions along the path if
+    // necessary.
+    while (anchor->getParentRegion() != val.getParentRegion())
+      anchor = anchor->getParentOp();
+    minCommits = std::min(minCommits, minOverHistories(val, anchor, 0));
+  }
   return minCommits;
 }
 
