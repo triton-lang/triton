@@ -54,6 +54,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+#blocked_direct = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#shared_direct = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: direct_buffer_load_store_soffset_split
+  tt.func @direct_buffer_load_store_soffset_split(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32, %arg3: tensor<64xf32, #blocked_direct>) -> tensor<64xf32, #blocked_direct> {
+    // COMMON: %[[RANGE:.*]] = tt.make_range
+    %range = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked_direct>
+    %base = tt.splat %arg2 : i32 -> tensor<64xi32, #blocked_direct>
+    %offset = arith.addi %base, %range : tensor<64xi32, #blocked_direct>
+    // COMMON: %[[LOAD:.*]] = amdg.buffer_load %arg0[%[[RANGE]], %arg2]
+    %loaded = amdg.buffer_load %arg0[%offset] : tensor<64xf32, #blocked_direct>
+    // COMMON: amdg.buffer_store %arg3, %arg1[%[[RANGE]], %arg2]
+    amdg.buffer_store %arg3, %arg1[%offset] : tensor<64xf32, #blocked_direct>
+    tt.return %loaded : tensor<64xf32, #blocked_direct>
+  }
+}
+
+// -----
+
+#blocked_direct = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: direct_buffer_load_lane_splat_no_soffset_split
+  tt.func @direct_buffer_load_lane_splat_no_soffset_split(%arg0: !tt.ptr<f32>) -> tensor<64xf32, #blocked_direct> {
+    %range = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked_direct>
+    %lane = rocdl.workitem.id.x : i32
+    %lane_splat = tt.splat %lane : i32 -> tensor<64xi32, #blocked_direct>
+    // COMMON: %[[OFFSET:.*]] = arith.addi
+    %offset = arith.addi %range, %lane_splat : tensor<64xi32, #blocked_direct>
+    // COMMON: %[[LOAD:.*]] = amdg.buffer_load %arg0[%[[OFFSET]]]
+    %loaded = amdg.buffer_load %arg0[%offset] : tensor<64xf32, #blocked_direct>
+    tt.return %loaded : tensor<64xf32, #blocked_direct>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
 // COMMON-LABEL: buffer_stride
