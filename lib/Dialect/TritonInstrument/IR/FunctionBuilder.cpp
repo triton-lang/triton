@@ -267,6 +267,86 @@ Value convertAndBroadcast(ImplicitLocOpBuilder &b, Value tensor,
   return triton::BroadcastOp::create(b, resultType, tensor);
 }
 
+Value createIntervalCoverageMask(ImplicitLocOpBuilder &b, Value descriptors,
+                                 Value initializedRows, Value offsetI32,
+                                 Value lengthI32) {
+  auto descriptorsType = cast<RankedTensorType>(descriptors.getType());
+  auto initializedRowsType = cast<RankedTensorType>(initializedRows.getType());
+  assert(descriptorsType.getRank() == 2 && initializedRowsType.getRank() == 2 &&
+         "expected [C x B] descriptors and initialized rows");
+  Value offsetMask =
+      tti::createConstIntTensor(b, b.getLoc(), 0xffffffffull, descriptorsType);
+  Value descriptorOffsets = arith::AndIOp::create(b, descriptors, offsetMask);
+  Value shiftAmount =
+      tti::createConstIntTensor(b, b.getLoc(), 32, descriptorsType);
+  Value descriptorLengths = arith::ShRUIOp::create(b, descriptors, shiftAmount);
+  Value requestedOffset = arith::ExtUIOp::create(b, b.getI64Type(), offsetI32);
+  Value requestedLength = arith::ExtUIOp::create(b, b.getI64Type(), lengthI32);
+  Value requestedEnd =
+      arith::AddIOp::create(b, requestedOffset, requestedLength);
+  Value descriptorEnds =
+      arith::AddIOp::create(b, descriptorOffsets, descriptorLengths);
+
+  // An interval is covered iff the following are true:
+  // 1. The requested start is covered.
+  // 2. Every descriptor end inside the requested interval is covered.
+  Value startsBeforeRequested = createCmpIntTensorScalar(
+      b, descriptorOffsets, requestedOffset, arith::CmpIPredicate::ule);
+  Value endsAfterRequested = createCmpIntTensorScalar(
+      b, descriptorEnds, requestedOffset, arith::CmpIPredicate::ugt);
+  Value coversRequestedStart =
+      arith::AndIOp::create(b, startsBeforeRequested, endsAfterRequested);
+  coversRequestedStart =
+      arith::AndIOp::create(b, coversRequestedStart, initializedRows);
+  Value requestedStartCovered =
+      reduceLastDim<arith::OrIOp>(b, coversRequestedStart);
+
+  SmallVector<int64_t> coverageShape = {initializedRowsType.getShape()[0],
+                                        initializedRowsType.getShape()[1],
+                                        initializedRowsType.getShape()[1]};
+  auto coverageType =
+      tti::getIntTensorType(b.getInsertionBlock()->getParent(), coverageShape,
+                            /*bitWidth=*/1);
+  Value candidateStarts =
+      convertAndBroadcast(b, descriptorOffsets, {0, 1}, coverageType);
+  Value candidateEnds =
+      convertAndBroadcast(b, descriptorEnds, {0, 1}, coverageType);
+  Value probePoints =
+      convertAndBroadcast(b, descriptorEnds, {0, 2}, coverageType);
+  Value candidateStartsBeforeProbe = arith::CmpIOp::create(
+      b, arith::CmpIPredicate::ule, candidateStarts, probePoints);
+  Value candidateEndsAfterProbe = arith::CmpIOp::create(
+      b, arith::CmpIPredicate::ugt, candidateEnds, probePoints);
+  Value candidateCoversProbe = arith::AndIOp::create(
+      b, candidateStartsBeforeProbe, candidateEndsAfterProbe);
+  Value initializedCandidates =
+      convertAndBroadcast(b, initializedRows, {0, 1}, coverageType);
+  Value coveredProbesByCandidate =
+      arith::AndIOp::create(b, candidateCoversProbe, initializedCandidates);
+  Value coveredProbes =
+      reduce<arith::OrIOp>(b, coveredProbesByCandidate, /*axis=*/1);
+  coveredProbes =
+      createConvertLayout(b, coveredProbes, initializedRowsType.getEncoding());
+
+  Value probeAfterStart = createCmpIntTensorScalar(
+      b, descriptorEnds, requestedOffset, arith::CmpIPredicate::uge);
+  Value probeBeforeEnd = createCmpIntTensorScalar(
+      b, descriptorEnds, requestedEnd, arith::CmpIPredicate::ult);
+  Value probesInInterval =
+      arith::AndIOp::create(b, probeAfterStart, probeBeforeEnd);
+  Value one = tti::createConstIntTensor(
+      b, b.getLoc(), 1, cast<RankedTensorType>(probesInInterval.getType()));
+  Value probesOutOfInterval = arith::XOrIOp::create(b, probesInInterval, one);
+  Value coveredOrOutOfInterval =
+      arith::OrIOp::create(b, coveredProbes, probesOutOfInterval);
+  Value allProbePointsCovered =
+      reduceLastDim<arith::AndIOp>(b, coveredOrOutOfInterval);
+  allProbePointsCovered = createConvertLayout(
+      b, allProbePointsCovered,
+      cast<RankedTensorType>(requestedStartCovered.getType()).getEncoding());
+  return arith::AndIOp::create(b, requestedStartCovered, allProbePointsCovered);
+}
+
 Value expandAliases(ImplicitLocOpBuilder &b, Value bufferMask,
                     Value aliasMatrix, RankedTensorType aliasMatrixType) {
   assert(aliasMatrixType.getRank() == 3 &&
@@ -2263,11 +2343,10 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
           fb, fb.getLoc(), writeVisibilityPtr, writeVisibilityType);
       Value descriptor = createBufferDescriptor(fb, bufOffset, lengthVal);
       Value buffersEqBuf = createCmpIntTensorScalar(fb, buffers, descriptor);
-      if (useAlias) {
+      if (useAlias && allowNoWrite)
         buffersEqBuf =
             expandAliases(fb, buffersEqBuf, aliasMatrix,
                           cast<RankedTensorType>(aliasMatrixTypeBase));
-      }
       buffersEqBuf =
           convertAndBroadcast(fb, buffersEqBuf, {0, 1}, writeVisibilityType);
       Value ctaMask =
@@ -2292,23 +2371,49 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
           fb, arith::CmpIPredicate::eq, bufferHasVisibility, bufferThreadBit);
       Value result;
       if (!allowNoWrite) {
-        Value rowOne = tti::createConstIntTensor(
-            fb, fb.getLoc(), 1, cast<RankedTensorType>(buffersEqBuf.getType()));
-        Value rowInitialized =
-            arith::XOrIOp::create(fb, noOneIsWriting, rowOne);
-        Value initializedRows =
-            arith::AndIOp::create(fb, rowInitialized, buffersEqBuf);
-        // Alias rows are alternatives within a CTA, but every selected CTA must
-        // have at least one initialized row.
-        Value initializedCTAs =
-            reduceLastDim<arith::OrIOp>(fb, initializedRows);
-        Value selectedCTAs = reduceLastDim<arith::OrIOp>(fb, buffersEqBuf);
-        Value ctaOne = tti::createConstIntTensor(
-            fb, fb.getLoc(), 1, cast<RankedTensorType>(selectedCTAs.getType()));
-        Value unmatchedCTAs = arith::XOrIOp::create(fb, selectedCTAs, ctaOne);
-        Value initializedOrUnmatched =
-            arith::OrIOp::create(fb, initializedCTAs, unmatchedCTAs);
-        result = reduceAll<arith::AndIOp>(fb, initializedOrUnmatched);
+        if (useAlias) {
+          // Initialization needs the union of exact initialized rows to cover
+          // the whole interval; mere overlap is not enough.
+          Value visibleRows = arith::SelectOp::create(
+              fb, ctaMask, writeVisibility, writeVisibilityZero);
+          Value uninitializedRows = arith::CmpIOp::create(
+              fb, arith::CmpIPredicate::eq, visibleRows, writeVisibilityZero);
+          Value rowOne = tti::createConstIntTensor(
+              fb, fb.getLoc(), 1,
+              cast<RankedTensorType>(uninitializedRows.getType()));
+          Value initializedRows =
+              arith::XOrIOp::create(fb, uninitializedRows, rowOne);
+          Value intervalCovered = createIntervalCoverageMask(
+              fb, buffers, initializedRows, bufOffset, lengthVal);
+          Value selectedCTAs = reduceLastDim<arith::OrIOp>(fb, ctaMask);
+          Value ctaOne = tti::createConstIntTensor(
+              fb, fb.getLoc(), 1,
+              cast<RankedTensorType>(selectedCTAs.getType()));
+          Value unmatchedCTAs = arith::XOrIOp::create(fb, selectedCTAs, ctaOne);
+          Value coveredOrUnmatched =
+              arith::OrIOp::create(fb, intervalCovered, unmatchedCTAs);
+          result = reduceAll<arith::AndIOp>(fb, coveredOrUnmatched);
+        } else {
+          Value rowOne = tti::createConstIntTensor(
+              fb, fb.getLoc(), 1,
+              cast<RankedTensorType>(buffersEqBuf.getType()));
+          Value rowInitialized =
+              arith::XOrIOp::create(fb, noOneIsWriting, rowOne);
+          Value initializedRows =
+              arith::AndIOp::create(fb, rowInitialized, buffersEqBuf);
+          // Alias rows are alternatives within a CTA, but every selected CTA
+          // must have at least one initialized row.
+          Value initializedCTAs =
+              reduceLastDim<arith::OrIOp>(fb, initializedRows);
+          Value selectedCTAs = reduceLastDim<arith::OrIOp>(fb, buffersEqBuf);
+          Value ctaOne = tti::createConstIntTensor(
+              fb, fb.getLoc(), 1,
+              cast<RankedTensorType>(selectedCTAs.getType()));
+          Value unmatchedCTAs = arith::XOrIOp::create(fb, selectedCTAs, ctaOne);
+          Value initializedOrUnmatched =
+              arith::OrIOp::create(fb, initializedCTAs, unmatchedCTAs);
+          result = reduceAll<arith::AndIOp>(fb, initializedOrUnmatched);
+        }
       } else {
         Value writeVisible =
             arith::OrIOp::create(fb, noOneIsWriting, bufferHasVisibility);

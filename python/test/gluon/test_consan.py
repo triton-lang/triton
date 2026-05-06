@@ -2615,6 +2615,47 @@ def test_aliasing_tensor_visibility_outstanding_read(FAILURE, device, run_wrappe
     kernel[(1, )](FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.parametrize("num_written", [3, 4])
+def test_aliasing_tensor_subslice_writes_initialize_full_alias(num_written, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_aliasing_tensor_subslice_writes_initialize_full_alias,
+                                (num_written, device, False, monkeypatch))
+        if num_written == 3:
+            assert result.exc is not None
+            assert_expected_cuda_failure(result.exc)
+            assert "Buffer being read before any write" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(NUM_WRITTEN: ttgl.constexpr):
+        blocked_layout_read: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                                 warps_per_cta=[4, 1], order=[0, 1])
+        blocked_layout_write: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK // 4],
+                                                                  threads_per_warp=[32, 1], warps_per_cta=[4, 1],
+                                                                  order=[0, 1])
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1])
+        tmem_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK * 2], col_stride=1)
+        tmem = blackwell.allocate_tensor_memory(ttgl.float32, [XBLOCK, XBLOCK * 2], tmem_layout)
+        smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], smem_layout)
+        full = tmem.slice(0, XBLOCK)
+        for i in ttgl.static_range(4):
+            if NUM_WRITTEN == 4 or i != 2:
+                quarter = tmem.slice(i * (XBLOCK // 4), XBLOCK // 4)
+                quarter.store(ttgl.zeros([XBLOCK, XBLOCK // 4], ttgl.float32, blocked_layout_write))
+        val = full.load(blocked_layout_read)
+        smem.store(val)
+
+    kernel[(1, )](NUM_WRITTEN=num_written, num_warps=4, num_ctas=1)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("MISSING_WAIT", [True, False])
 @pytest.mark.parametrize("OVERLAP", [True, False])
