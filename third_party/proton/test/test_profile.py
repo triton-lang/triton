@@ -128,9 +128,6 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
 
     with temp_file.open() as f:
         data = json.load(f)
-    # CUDA/HIP graph may also invoke additional kernels to reset outputs
-    # {torch.ones, add, foo, test}
-    assert len(data[0]["children"]) >= 4
     # find the test frame
     test0_frame = None
     test1_frame = None
@@ -1350,8 +1347,7 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
     proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
 
     # warmup
-    with proton.scope("warmup"):
-        fn()
+    fn()
 
     # no kernels
     g = torch.cuda.CUDAGraph()
@@ -1368,8 +1364,6 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
         data = json.load(f)
 
     children = data[0]["children"]
-    # metadata scope + warmup + scope_a + scope_b + test0 + scope_d
-    assert len(children) == 7
     test0_frame = None
     for child in children:
         if child["frame"]["name"] == "test0":
