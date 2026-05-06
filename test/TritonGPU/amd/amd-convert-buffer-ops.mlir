@@ -35,6 +35,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#blocked_direct = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#shared_direct = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CDNA-LABEL: direct_buffer_load_to_local_soffset_split
+  tt.func @direct_buffer_load_to_local_soffset_split(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !ttg.memdesc<64xf32, #shared_direct, #smem, mutable>) {
+    // CDNA: %[[RANGE:.*]] = tt.make_range
+    %range = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked_direct>
+    %base = tt.splat %arg1 : i32 -> tensor<64xi32, #blocked_direct>
+    %offset = arith.addi %range, %base : tensor<64xi32, #blocked_direct>
+    // CDNA: amdg.buffer_load_to_local %arg0[%[[RANGE]], %arg1] into %arg2
+    %0 = amdg.buffer_load_to_local %arg0[%offset] into %arg2 : <f32>[tensor<64xi32, #blocked_direct>] -> <64xf32, #shared_direct, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
 // COMMON-LABEL: buffer_stride

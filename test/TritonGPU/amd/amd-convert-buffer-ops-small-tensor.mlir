@@ -34,7 +34,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %6 = tt.addptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
     %7 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
-    // COMMON: buffer_load %arg0[%[[offset]]]
+    // COMMON: buffer_load %arg0[%{{.*}}, %{{.*}}]
     %9 = tt.load %6 : tensor<256x!tt.ptr<f32>, #blocked0>
     // Note: offset = pid * 256 + arange(0, 256); byte-ofst="offset * sizeof(i32)" may not fall into range of 2G.
     // COMMON-NOT: buffer_load %arg1[%[[offset]]]
@@ -232,13 +232,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // COMMON: %[[range:.*]] = tt.make_range
     %11 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #blocked>
     %12 = tt.splat %10 : i32 -> tensor<16xi32, #blocked>
-    // COMMON: %[[offsets:.*]] = arith.addi
     %offsets = arith.addi %11, %12 : tensor<16xi32, #blocked>
     %13 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<16x!tt.ptr<bf16>, #blocked>
     %14 = tt.addptr %13, %11 : tensor<16x!tt.ptr<bf16>, #blocked>, tensor<16xi32, #blocked>
     %15 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<16x!tt.ptr<bf16>, #blocked>
     %16 = tt.addptr %15, %offsets : tensor<16x!tt.ptr<bf16>, #blocked>, tensor<16xi32, #blocked>
-    // COMMON: %[[loaded:.*]] = amdg.buffer_load %arg1[%[[offsets]]]
+    // COMMON: %[[loaded:.*]] = amdg.buffer_load %arg1[%[[range]], %{{.*}}]
     %17 = tt.load %16 : tensor<16x!tt.ptr<bf16>, #blocked>
     // COMMON: amdg.buffer_store %[[loaded]], %arg0[%[[range]]]
     tt.store %14, %17 : tensor<16x!tt.ptr<bf16>, #blocked>

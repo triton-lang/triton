@@ -274,7 +274,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
 
   static bool isAddFirst(amdttg::BufferOpInterface bufferOp) {
     return isa_and_nonnull<arith::AddIOp>(
-        bufferOp.getOffsets().getDefiningOp());
+        bufferOp.getVoffset().getDefiningOp());
   }
 
   static BlockArgument findOffsetLoopArgumentCandidate(Value offsetValue,
@@ -314,7 +314,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
       return false;
     }
     if (isAddFirst(bufferOp) &&
-        bufferOp.getOffsets().getDefiningOp() != offsetAddOp) {
+        bufferOp.getVoffset().getDefiningOp() != offsetAddOp) {
       return false;
     }
     return true;
@@ -329,7 +329,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
   static std::optional<BufferOpInfo>
   analyzeBufferOp(amdttg::BufferOpInterface op, scf::ForOp targetFor,
                   DataFlowSolver *solver) {
-    auto offsetValue = op.getOffsets();
+    auto offsetValue = op.getVoffset();
 
     // Try to match components of two following patterns:
     //
@@ -488,7 +488,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
          llvm::zip(infoList, basePtrs, nextIterBasePtrs)) {
       auto newBufferOp = cast<amdttg::BufferOpInterface>(
           mapping.lookup<Operation *>(info.op.getOperation()));
-      newBufferOp.getOffsetsMutable().assign(info.offsetInitializer);
+      newBufferOp.getVoffsetMutable().assign(info.offsetInitializer);
       // two cases:
       // 1. buffer op uses pointer after increment
       // 2. buffer op uses pointers from loop arguments,

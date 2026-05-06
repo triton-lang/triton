@@ -6,6 +6,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -20,6 +21,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/TypeSwitch.h"
+
+#include <algorithm>
 
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-convert-buffer-ops"
@@ -51,6 +54,158 @@ bool isSplatOneConstTensor(const Value v) {
     return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isOne();
 
   return false;
+}
+
+bool isScalarLiteralZero(Value v) {
+  auto constantOp = v.getDefiningOp<arith::ConstantOp>();
+  if (!constantOp)
+    return false;
+  if (auto intAttr = dyn_cast<IntegerAttr>(constantOp.getValue()))
+    return intAttr.getValue().isZero();
+  return false;
+}
+
+Value sumIntegerValues(ArrayRef<Value> values, PatternRewriter &rewriter,
+                       Location loc) {
+  if (values.empty())
+    return Value();
+  Value sum = values.front();
+  for (Value value : values.drop_front())
+    sum = arith::AddIOp::create(rewriter, loc, sum, value);
+  return sum;
+}
+
+Value createZeroTensorLike(Value tensor, PatternRewriter &rewriter,
+                           Location loc) {
+  auto tensorTy = cast<RankedTensorType>(tensor.getType());
+  return arith::ConstantOp::create(rewriter, loc, tensorTy,
+                                   rewriter.getZeroAttr(tensorTy));
+}
+
+class HighLevelUniformityChecker {
+public:
+  bool isUniform(Value value) {
+    auto it = cache.find(value);
+    if (it != cache.end())
+      return it->second;
+    bool result = compute(value);
+    cache[value] = result;
+    return result;
+  }
+
+private:
+  bool compute(Value value) {
+    if (auto blockArg = dyn_cast<BlockArgument>(value))
+      return computeBlockArg(blockArg);
+
+    Operation *def = value.getDefiningOp();
+    if (!def)
+      return false;
+
+    if (isa<arith::ConstantOp, tt::GetProgramIdOp, tt::GetNumProgramsOp>(def))
+      return true;
+
+    if (isa<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::ShLIOp,
+            arith::ShRSIOp, arith::ShRUIOp, arith::AndIOp, arith::OrIOp,
+            arith::XOrIOp, arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp,
+            arith::SelectOp, arith::CmpIOp, arith::IndexCastOp,
+            arith::IndexCastUIOp, arith::BitcastOp, arith::DivSIOp,
+            arith::DivUIOp, arith::RemSIOp, arith::RemUIOp, arith::MinSIOp,
+            arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp>(def)) {
+      for (Value operand : def->getOperands())
+        if (!isUniform(operand))
+          return false;
+      return true;
+    }
+
+    return false;
+  }
+
+  bool computeBlockArg(BlockArgument blockArg) {
+    Block *block = blockArg.getOwner();
+    Operation *parent = block->getParentOp();
+    if (block->isEntryBlock() && isa<FunctionOpInterface>(parent))
+      return true;
+
+    if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
+      if (blockArg.getArgNumber() == 0)
+        return isUniform(forOp.getLowerBound()) &&
+               isUniform(forOp.getUpperBound()) && isUniform(forOp.getStep());
+    }
+
+    return false;
+  }
+
+  DenseMap<Value, bool> cache;
+};
+
+void collectHighLevelOffsetLeaves(Value offset,
+                                  SmallVectorImpl<Value> &uniformLeaves,
+                                  SmallVectorImpl<Value> &perLaneLeaves,
+                                  HighLevelUniformityChecker &uniformity,
+                                  PatternRewriter &rewriter) {
+  if (auto addOp = offset.getDefiningOp<arith::AddIOp>()) {
+    collectHighLevelOffsetLeaves(addOp.getLhs(), uniformLeaves, perLaneLeaves,
+                                 uniformity, rewriter);
+    collectHighLevelOffsetLeaves(addOp.getRhs(), uniformLeaves, perLaneLeaves,
+                                 uniformity, rewriter);
+    return;
+  }
+  if (auto splatOp = offset.getDefiningOp<triton::SplatOp>()) {
+    if (uniformity.isUniform(splatOp.getSrc()))
+      uniformLeaves.push_back(splatOp.getSrc());
+    else
+      perLaneLeaves.push_back(offset);
+    return;
+  }
+  perLaneLeaves.push_back(offset);
+}
+
+bool collectSplatThroughTensorTrunc(Value offset,
+                                    SmallVectorImpl<Value> &uniformLeaves,
+                                    HighLevelUniformityChecker &uniformity,
+                                    PatternRewriter &rewriter) {
+  auto truncOp = offset.getDefiningOp<arith::TruncIOp>();
+  if (!truncOp)
+    return false;
+  auto splatOp = truncOp.getIn().getDefiningOp<triton::SplatOp>();
+  if (!splatOp || !uniformity.isUniform(splatOp.getSrc()))
+    return false;
+
+  auto resultTy = cast<RankedTensorType>(truncOp.getResult().getType());
+  Type scalarTy = resultTy.getElementType();
+  Value scalar = splatOp.getSrc();
+  if (scalar.getType() != scalarTy)
+    scalar = arith::TruncIOp::create(rewriter, offset.getLoc(), scalarTy,
+                                     scalar);
+  uniformLeaves.push_back(scalar);
+  return true;
+}
+
+std::pair<Value, Value> splitHighLevelBufferOffset(Value offset,
+                                                   PatternRewriter &rewriter) {
+  SmallVector<Value> uniformLeaves;
+  SmallVector<Value> perLaneLeaves;
+  HighLevelUniformityChecker uniformity;
+  if (!collectSplatThroughTensorTrunc(offset, uniformLeaves, uniformity,
+                                      rewriter)) {
+    collectHighLevelOffsetLeaves(offset, uniformLeaves, perLaneLeaves,
+                                 uniformity, rewriter);
+  }
+
+  uniformLeaves.erase(
+      std::remove_if(uniformLeaves.begin(), uniformLeaves.end(),
+                     isScalarLiteralZero),
+      uniformLeaves.end());
+  if (uniformLeaves.empty())
+    return {offset, Value()};
+
+  Location loc = offset.getLoc();
+  Value uniform = sumIntegerValues(uniformLeaves, rewriter, loc);
+  Value perLane = perLaneLeaves.empty()
+                      ? createZeroTensorLike(offset, rewriter, loc)
+                      : sumIntegerValues(perLaneLeaves, rewriter, loc);
+  return {perLane, uniform};
 }
 
 bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp,
@@ -183,6 +338,19 @@ Value truncateOffsetToI32(Value origOffset, OpBuilder &builder, Location loc,
   auto i32Ty = RankedTensorType::get(offsetTy.getShape(), builder.getI32Type(),
                                      offsetTy.getEncoding());
   return arith::TruncIOp::create(builder, loc, i32Ty, origOffset);
+}
+
+Value truncateScalarOffsetToI32(Value origOffset, OpBuilder &builder,
+                                Location loc, Operation *insertBefore) {
+  if (!origOffset)
+    return origOffset;
+  auto intTy = dyn_cast<IntegerType>(origOffset.getType());
+  if (!intTy || intTy.getWidth() == 32)
+    return origOffset;
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPoint(insertBefore);
+  return arith::TruncIOp::create(builder, loc, builder.getI32Type(),
+                                 origOffset);
 }
 
 // Extract stride of the blocked offset of LD/ST ops.
@@ -537,14 +705,15 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
                 contig, axisAnalysisPass.getMaskAlignment(maybeMask));
           return triton::amdgpu::BufferLoadOp::create(
               rewriter, op->getLoc(), op.getType(), basePtr, tensorOffset,
-              blockStride, op.getCache(), maybeMask, maybeOther, contig);
+              /*soffset=*/Value(), blockStride, op.getCache(), maybeMask,
+              maybeOther, contig);
         } else if constexpr (std::is_same_v<
                                  SourceOp,
                                  triton::gpu::AsyncCopyGlobalToLocalOp>) {
           return triton::amdgpu::BufferLoadToLocalOp::create(
               rewriter, op->getLoc(), op.getType(), op.getResult(), basePtr,
-              tensorOffset, maybeMask, maybeOther, blockStride, op.getCache(),
-              op.getContiguity());
+              tensorOffset, /*soffset=*/Value(), maybeMask, maybeOther,
+              blockStride, op.getCache(), op.getContiguity());
         } else {
           static_assert(always_false<SourceOp>::value,
                         "Unsupported type in ConvertTritonLoadToBufferLoad");
@@ -609,8 +778,8 @@ struct ConvertTritonStoreToBufferStore
           op->getLoc(), op);
 
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
-          op, op.getValue(), basePtr, tensorOffset, blockStride, op.getCache(),
-          maybeMask, contig);
+          op, op.getValue(), basePtr, tensorOffset, /*soffset=*/Value(),
+          blockStride, op.getCache(), maybeMask, contig);
       return success();
     }
     LDBG("Failed to convert: " << op);
@@ -623,6 +792,71 @@ private:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
   std::shared_ptr<DataFlowSolver> solver;
   bool analyzeSmallTensorOfst;
+};
+
+struct SplitBufferLoadOffset
+    : public mlir::OpRewritePattern<triton::amdgpu::BufferLoadOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::amdgpu::BufferLoadOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getSoffset())
+      return failure();
+
+    auto [voffset, soffset] = splitHighLevelBufferOffset(op.getVoffset(),
+                                                         rewriter);
+    if (!soffset)
+      return failure();
+
+    rewriter.replaceOpWithNewOp<triton::amdgpu::BufferLoadOp>(
+        op, op.getType(), op.getPtr(), voffset, soffset, op.getStride(),
+        op.getCache(), op.getMask(), op.getOther(), op.getContiguity());
+    return success();
+  }
+};
+
+struct SplitBufferLoadToLocalOffset
+    : public mlir::OpRewritePattern<triton::amdgpu::BufferLoadToLocalOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::BufferLoadToLocalOp op,
+                  PatternRewriter &rewriter) const override {
+    if (op.getSoffset())
+      return failure();
+
+    auto [voffset, soffset] = splitHighLevelBufferOffset(op.getVoffset(),
+                                                         rewriter);
+    if (!soffset)
+      return failure();
+
+    rewriter.replaceOpWithNewOp<triton::amdgpu::BufferLoadToLocalOp>(
+        op, op.getType(), op.getDest(), op.getPtr(), voffset, soffset,
+        op.getMask(), op.getOther(), op.getStride(), op.getCache(),
+        op.getContiguity());
+    return success();
+  }
+};
+
+struct SplitBufferStoreOffset
+    : public mlir::OpRewritePattern<triton::amdgpu::BufferStoreOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::amdgpu::BufferStoreOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getSoffset())
+      return failure();
+
+    auto [voffset, soffset] = splitHighLevelBufferOffset(op.getVoffset(),
+                                                         rewriter);
+    if (!soffset)
+      return failure();
+
+    rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
+        op, op.getValue(), op.getPtr(), voffset, soffset, op.getStride(),
+        op.getCache(), op.getMask(), op.getContiguity());
+    return success();
+  }
 };
 
 } // anonymous namespace
@@ -655,11 +889,13 @@ struct TritonAMDGPUConvertToBufferOpsPass
                  ConvertTritonStoreToBufferStore>(context, assumptions,
                                                   axisInfoAnalysis, solver,
                                                   this->analyzeSmallTensorOfst);
+    patterns.add<SplitBufferLoadOffset, SplitBufferStoreOffset>(context);
     if (targetInfo.supportsBufferLoadToLocal()) {
       patterns
           .add<ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>>(
               context, assumptions, axisInfoAnalysis, solver,
               this->analyzeSmallTensorOfst);
+      patterns.add<SplitBufferLoadToLocalOffset>(context);
     }
 
     if (this->allowBufferAtomics && targetInfo.supportsBufferAtomicRMW())

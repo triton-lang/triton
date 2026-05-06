@@ -6,7 +6,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include "BufferOpsEmitter.h"
-#include "OffsetUniformitySplit.h"
 
 using namespace triton::AMD;
 
@@ -109,11 +108,12 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
 }
 
 Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
-                              Value pred, Value falseVal,
+                              Value scalarOffset, Value pred, Value falseVal,
                               triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> args;
-  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true, args);
+  fillCommonArgs(type, rsrcDesc, offset, scalarOffset, pred, cm,
+                 /*isBufferLoad=*/true, args);
   Type bufferType = getBufferOpType(type, false);
   Value data = ROCDL::RawPtrBufferLoadOp::create(
       rewriter, loc, bufferType, args, ArrayRef<NamedAttribute>());
@@ -125,8 +125,8 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
 
 ROCDL::RawPtrBufferLoadAsyncLdsOp
 BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
-                             Value offset, Value dst, Value pred,
-                             triton::CacheModifier cm) {
+                             Value offset, Value scalarOffset, Value dst,
+                             Value pred, triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> commonArgs;
   // The async-LDS intrinsic only marks ArgIndex 2/5/6 as `immarg`; the
@@ -134,8 +134,8 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
   // wave-uniform splitter to lift a scalar contribution into that slot.
   // gemm.rocmasm uses exactly this pattern
   // (`buffer_load_dwordx4 v245, s[20:23], s3 offen lds`).
-  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
-                 commonArgs);
+  fillCommonArgs(type, rsrcDesc, offset, scalarOffset, pred, cm,
+                 /*isBufferLoad=*/true, commonArgs);
   Type bufferType = getBufferOpType(type, false);
 
   // buffer_load_to_lds is only supported on gfx942/gfx950 which always use
@@ -212,16 +212,17 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
   return b.bitcast(bufferAtomicRMW.getResult(0), type);
 }
 
-void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
-                              Value pred, triton::CacheModifier cm) {
+void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value scalarOffset,
+                              Value data, Value pred,
+                              triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   VectorType vecTy = cast<VectorType>(data.getType());
   Type bufferType = getBufferOpType(vecTy, false);
   if (vecTy != bufferType)
     data = b.bitcast(data, bufferType);
   SmallVector<Value, 6> args{data};
-  fillCommonArgs(vecTy, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/false,
-                 args);
+  fillCommonArgs(vecTy, rsrcDesc, offset, scalarOffset, pred, cm,
+                 /*isBufferLoad=*/false, args);
   ROCDL::RawPtrBufferStoreOp::create(rewriter, loc, TypeRange{}, args,
                                      ArrayRef<NamedAttribute>());
 }
@@ -273,8 +274,9 @@ Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
 }
 
 void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
-                                   Value vOffsetElems, Value pred,
-                                   triton::CacheModifier cm, bool isBufferLoad,
+                                   Value vOffsetElems, Value sOffsetElems,
+                                   Value pred, triton::CacheModifier cm,
+                                   bool isBufferLoad,
                                    SmallVector<Value> &args) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // 1. Create the (masked) offset
@@ -286,27 +288,19 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   Value vOffsetOutOfBunds = b.int_val(
       32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
 
-  // 2. Try to lift the wave-uniform sub-tree of the element offset into the
-  // buffer op `soffset` slot. The intrinsic computes
-  // `addr = base + voffset + soffset` per-lane, so a uniform offset that
-  // would otherwise consume per-lane VGPR adds can travel through one SGPR.
-  // The split happens on the element-count offset before the byte-width
-  // multiply so the produced byte-level adds stay flat (`mul` distributes
-  // over the partitioned leaves).
+  // 2. Convert the pre-split voffset/soffset element offsets to bytes. The
+  // intrinsic computes `addr = base + voffset + soffset` per-lane.
   Value elemByteWidthVal = b.int_val(32, elementByteWidth);
-  Value vOffsetElemsForIntrinsic = vOffsetElems;
-  Value sgprOffsetBytes = b.int_val(32, 0);
-  auto [uniformOffsetElems, perLaneOffsetElems] =
-      splitUniformAdditive(vOffsetElems, rewriter, loc);
-  if (uniformOffsetElems) {
-    sgprOffsetBytes = b.mul(elemByteWidthVal, uniformOffsetElems);
-    vOffsetElemsForIntrinsic = perLaneOffsetElems;
-  }
-  Value vOffsetBytes = b.mul(elemByteWidthVal, vOffsetElemsForIntrinsic);
+  Value sgprOffsetBytes;
+  if (sOffsetElems)
+    sgprOffsetBytes = b.mul(elemByteWidthVal, sOffsetElems);
+  Value vOffsetBytes = b.mul(elemByteWidthVal, vOffsetElems);
 
   // Keep masked lanes OOB in the voffset field itself because AMD buffer bounds
   // checks do not include soffset.
   Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBunds);
+  if (!sOffsetElems)
+    sgprOffsetBytes = b.int_val(32, 0);
 
   // 3. Create the cache modifiers word
   int32_t aux =

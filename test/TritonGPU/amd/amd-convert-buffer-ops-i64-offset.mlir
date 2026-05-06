@@ -80,10 +80,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     %splat_off = tt.splat %arg1 : i64 -> tensor<256xi64, #blocked3>
     %base = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked3>
     %ptr = tt.addptr %base, %splat_off : tensor<256x!tt.ptr<f32>, #blocked3>, tensor<256xi64, #blocked3>
-    // CHECK: arith.trunci
-    // CHECK-SAME: tensor<256xi64,
-    // CHECK-SAME: to tensor<256xi32,
-    // CHECK: amdg.buffer_load
+    // CHECK: %[[OFF:.*]] = arith.trunci %arg1 : i64 to i32
+    // CHECK: amdg.buffer_load %arg0[%{{.*}}, %[[OFF]]
     %val = tt.load %ptr : tensor<256x!tt.ptr<f32>, #blocked3>
     tt.return %val : tensor<256xf32, #blocked3>
   }

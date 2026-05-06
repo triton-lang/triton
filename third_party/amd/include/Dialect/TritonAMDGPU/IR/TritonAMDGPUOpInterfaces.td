@@ -21,7 +21,8 @@ def TDMOpInterface : OpInterface<"TDMOpInterface"> {
 def BufferOpInterface : OpInterface<"BufferOpInterface"> {
   let description = [{
     This interface is implemented by buffer load/store operations.
-    It provides methods to access common properties such base pointer, offset, mask and others.
+    It provides methods to access common properties such as base pointer,
+    voffset, mask and others.
   }];
 
   let cppNamespace = "::mlir::triton::amdgpu";
@@ -36,13 +37,13 @@ def BufferOpInterface : OpInterface<"BufferOpInterface"> {
       /*retType=*/"::mlir::OpOperand &",
       /*methodName=*/"getPtrMutable">,
     InterfaceMethod<
-      /*desc=*/"Get operation offset tensor.",
+      /*desc=*/"Get operation voffset tensor.",
       /*retType=*/"::mlir::TypedValue<::mlir::TensorType>",
-      /*methodName=*/"getOffsets">,
+      /*methodName=*/"getVoffset">,
     InterfaceMethod<
-      /*desc=*/"Get mutable operation offset tensor.",
+      /*desc=*/"Get mutable operation voffset tensor.",
       /*retType=*/"::mlir::OpOperand &",
-      /*methodName=*/"getOffsetsMutable">,
+      /*methodName=*/"getVoffsetMutable">,
     InterfaceMethod<
       /*desc=*/"Get operation stride.",
       /*retType=*/"::mlir::TypedValue<::mlir::IntegerType>",

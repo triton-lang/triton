@@ -67,16 +67,17 @@ struct BufferEmitter {
   Value createResourceDescriptor(Value basePtr, Value inferredStride = nullptr);
 
   // Emit a predicated rocdl.raw.ptr.buffer.load
-  Value emitLoad(Type type, Value rsrcDesc, Value offset, Value pred,
-                 Value falseVal, CacheModifier cm);
+  Value emitLoad(Type type, Value rsrcDesc, Value offset, Value scalarOffset,
+                 Value pred, Value falseVal, CacheModifier cm);
 
   // Emit a rocdl.raw.ptr.buffer.load.async.lds for direct-to-LDS loads.
   // Always emits the async variant since buffer_load_to_lds is only supported
   // on gfx942/gfx950 which use asyncmark-based synchronization.
   ROCDL::RawPtrBufferLoadAsyncLdsOp emitLoadToLds(Type type, Value byteWidth,
                                                   Value rsrcDesc, Value offset,
-                                                  Value dst, Value pred,
-                                                  CacheModifier cm);
+                                                   Value scalarOffset,
+                                                   Value dst, Value pred,
+                                                   CacheModifier cm);
 
   // Emit a predicated rocdl.raw.ptr.buffer.atomic.* RMWOp
   Value emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset,
@@ -87,14 +88,14 @@ struct BufferEmitter {
                       Value casStoreVal, Value pred, bool hasUsers);
 
   // Emit a predicated rocdl.raw.ptr.buffer.store
-  void emitStore(Value rsrcDesc, Value offset, Value data, Value pred,
-                 CacheModifier cm);
+  void emitStore(Value rsrcDesc, Value offset, Value scalarOffset, Value data,
+                 Value pred, CacheModifier cm);
 
 private:
   // Fill common buffer operation arguments.
-  void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems, Value pred,
-                      CacheModifier cm, bool isBufferLoad,
-                      SmallVector<Value> &args);
+  void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems,
+                      Value sOffsetElems, Value pred, CacheModifier cm,
+                      bool isBufferLoad, SmallVector<Value> &args);
 
   // Fill buffer atomics arguments
   void fillCommonArgsAtomics(Type type, Value rsrcDesc, Value vOffsetElems,

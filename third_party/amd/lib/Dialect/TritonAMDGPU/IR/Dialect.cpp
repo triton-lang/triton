@@ -960,7 +960,7 @@ void BufferLoadOp::setPredicateOperand(Value pred) {
   getMaskMutable().assign(pred);
 }
 Type BufferLoadOp::getPredicateOperandTypeLike() {
-  return getOffsets().getType();
+  return getVoffset().getType();
 }
 
 Value BufferLoadToLocalOp::getPredicateOperand() { return getMask(); }
@@ -968,7 +968,7 @@ void BufferLoadToLocalOp::setPredicateOperand(Value pred) {
   getMaskMutable().assign(pred);
 }
 Type BufferLoadToLocalOp::getPredicateOperandTypeLike() {
-  return getOffsets().getType();
+  return getVoffset().getType();
 }
 
 Value BufferAtomicRMWOp::getPredicateOperand() { return getMask(); }
@@ -976,7 +976,7 @@ void BufferAtomicRMWOp::setPredicateOperand(Value pred) {
   getMaskMutable().assign(pred);
 }
 Type BufferAtomicRMWOp::getPredicateOperandTypeLike() {
-  return getOffsets().getType();
+  return getVoffset().getType();
 }
 
 Value BufferStoreOp::getPredicateOperand() { return getMask(); }
@@ -984,7 +984,7 @@ void BufferStoreOp::setPredicateOperand(Value pred) {
   getMaskMutable().assign(pred);
 }
 Type BufferStoreOp::getPredicateOperandTypeLike() {
-  return getOffsets().getType();
+  return getVoffset().getType();
 }
 
 Value AsyncCopyLocalToGlobalOp::getPredicateOperand() { return getMask(); }

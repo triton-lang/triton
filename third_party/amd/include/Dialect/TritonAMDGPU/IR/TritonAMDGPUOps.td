@@ -288,20 +288,24 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
-  TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"result and voffset have the same shape", "result", "voffset", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
                  "(cast<BufferLoadOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
   TypesMatchWith<"result and other have the same type", "result", "other", "$_self",
                  "(cast<BufferLoadOp>($_op).getOther() == nullptr) || std::equal_to<>()">,
 ]>{
-    let summary = "Load from a scalar base pointer and a tensor offset";
+    let summary = "Load from a scalar base pointer and AMD buffer offsets";
     let description = [{
-      AMD Buffer load operation. Buffer store is similar to
+      AMD Buffer load operation. Buffer load is similar to
       a normal store but it accesses global memory via a scalar base pointer
-      and a tensor of offsets instead of a tensor of pointers. The other fields
-      are similar to a normal load, i.e., the `mask` is a boolean vector that
-      determines if a given element should be read from memory, and `other` is the
-      element that should be returned on lane `i` when `mask[i] == 0`.
+      and AMD buffer offset operands instead of a tensor of pointers. The
+      `voffset` operand is the per-lane tensor element offset lowered to the
+      raw buffer instruction's VGPR offset. The optional `soffset` operand is
+      a wave-uniform scalar element offset lowered to the raw buffer
+      instruction's SGPR offset. The other fields are similar to a normal load:
+      `mask` is a boolean vector that determines if a given element should be
+      read from memory, and `other` is the element returned on lane `i` when
+      `mask[i] == 0`.
       Stride is the distance between the beginning of contiguous memory chunks.
       When performing a load of a block, the `stride` is the address difference between
       the first elements of each row in bytes. Compiler tries to obtain the `stride`
@@ -313,7 +317,8 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
     }];
     let arguments = (ins
       Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>]>:$ptr,
-      I32Tensor:$offsets,
+      I32Tensor:$voffset,
+      Optional<I32>:$soffset,
       Optional<I32>:$stride,
       DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
       Optional<TT_BoolTensor>:$mask,
@@ -323,7 +328,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = [{
-      $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
+      $ptr `[` $voffset (`,` $soffset^)? `]` (`,` $mask^)? (`,` $other^)?
       oilist(`cacheModifier` `=` $cache)
       (`stride` `=` $stride^)?
       attr-dict `:` type($result)
@@ -339,23 +344,29 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"dest element type matches pointee type of ptr", "dest", "ptr", "getPointerTypeToElement($_self)">,
-  TypesMatchWith<"infer mask shape from offsets",
-                 "offsets", "mask", "getI1SameShape($_self)",
+  TypesMatchWith<"infer mask shape from voffset",
+                 "voffset", "mask", "getI1SameShape($_self)",
                  "(cast<BufferLoadToLocalOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
-  TypesMatchWith<"other matches shape and layout of offsets and the element type matches the pointee type of ptr",
-                 "offsets", "other", "cast<TensorType>($_self).clone(getPointeeType($ptr.getType()))",
+  TypesMatchWith<"other matches shape and layout of voffset and the element type matches the pointee type of ptr",
+                 "voffset", "other", "cast<TensorType>($_self).clone(getPointeeType($ptr.getType()))",
                  "(cast<BufferLoadToLocalOp>($_op).getOther() == nullptr) || std::equal_to<>()">,
 ]>{
-    let summary = "Load from a scalar base pointer and a tensor offset to shared memory";
+    let summary = "Load from a scalar base pointer and AMD buffer offsets to shared memory";
     let description = [{
-      AMD Buffer load operation. Similar to amdg.buffer_load op but directly wirtes to shared memory instead of into registers.
+      AMD Buffer load operation. Similar to amdg.buffer_load op but directly
+      writes to shared memory instead of into registers. The `voffset` operand
+      is the per-lane tensor element offset lowered to the raw buffer
+      instruction's VGPR offset. The optional `soffset` operand is a
+      wave-uniform scalar element offset lowered to the raw buffer
+      instruction's SGPR offset.
       Contiguity is the maximum number of elements that can be loaded in a single vector with the given layout and mask.
       This allows to use buffer_load_to_local even if the alignment cannot be proven based on IR.
     }];
     let arguments = (ins
       Arg<TTG_MemDescType, "Shared memory slice to write to", [MemWrite<SharedMemory>]>:$dest,
       Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>]>:$ptr,
-      I32Tensor:$offsets,
+      I32Tensor:$voffset,
+      Optional<I32>:$soffset,
       Optional<TT_BoolTensor>:$mask,
       Optional<TT_Tensor>:$other,
       Optional<I32>:$stride,
@@ -367,9 +378,9 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
     let hasVerifier = 1;
 
     let assemblyFormat = [{
-      $ptr `[` $offsets `]` (`mask` `=` $mask^)? (`other` `=` $other^)? (`stride` `=` $stride^)?
+      $ptr `[` $voffset (`,` $soffset^)? `]` (`mask` `=` $mask^)? (`other` `=` $other^)? (`stride` `=` $stride^)?
       oilist(`cacheModifier` `=` $cache) `into` $dest
-      attr-dict `:` type($ptr) `[` type($offsets) `]` type($other) `->` type($dest)
+      attr-dict `:` type($ptr) `[` type($voffset) `]` type($other) `->` type($dest)
     }];
 }
 
@@ -384,18 +395,18 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"result element type matches the value type", "result", "value", "$_self">,
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
-  TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"result and voffset have the same shape", "result", "voffset", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
                  "(cast<BufferAtomicRMWOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
   TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
-  TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"value and voffset have the same shape", "value", "voffset", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
                  "(cast<BufferAtomicRMWOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
 ]>{
-    let summary = "Atomic RMW op which reads, modifies, and writes to a scalar base pointer and a tensor offset";
+    let summary = "Atomic RMW op which reads, modifies, and writes to a scalar base pointer and a tensor voffset";
     let description = [{
         AMD Buffer atomic RMW operation. Buffer atomics are similar to normal atomics, but access global memory via a
-        scalar base pointer and a tensor of offsets instead of a tensor of pointers.
+        scalar base pointer and a tensor voffset instead of a tensor of pointers.
         Similar to other buffer ops, the `mask` is a boolean vector that determines if a given element should be processed with
         the atomic RMW op. Elements with `mask[i] == 0` are dropped (i.e., the atomic is not executed).
         Similar to TT_AtomicRMWOp: Buffer atomic RMW ops load data at $ptr, do $rmw_op with $val, and store result to $ptr with
@@ -407,7 +418,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
     let arguments = (ins
       TT_AtomicRMWAttr:$atomic_rmw_op,
       Arg<TT_Ptr, "Global memory pointer", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
-      I32Tensor:$offsets,
+      I32Tensor:$voffset,
       TT_Tensor:$value,
       Optional<I32>:$stride,
       TT_MemSemanticAttr:$sem,
@@ -417,7 +428,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = [{
-        $atomic_rmw_op `,` $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
+        $atomic_rmw_op `,` $sem `,` $scope `,` $value `,` $ptr `[` $voffset `]` (`,` $mask^)?
         (`stride` `=` $stride^)?
         attr-dict `:` type($result)
     }];
@@ -432,14 +443,14 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
   TypesMatchWith<"result element type matches the val type", "result", "val", "$_self">,
   TypesMatchWith<"result element type matches the cmp type", "result", "cmp", "$_self">,
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
-  TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
-  TypesMatchWith<"val and offsets have the same shape", "val", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"result and voffset have the same shape", "result", "voffset", "getI32SameShape($_self)">,
+  TypesMatchWith<"val and voffset have the same shape", "val", "voffset", "getI32SameShape($_self)">,
   TypesMatchWith<"val and cmp have the same shape", "val", "cmp", "$_self">,
 ]>{
-    let summary = "Atomic CAS op which does compare-exchange to a scalar base pointer and a tensor offset";
+    let summary = "Atomic CAS op which does compare-exchange to a scalar base pointer and a tensor voffset";
     let description = [{
         AMD Buffer Atomic CAS operation. Buffer atomics are similar to normal atomics, but access global memory via a
-        scalar base pointer and a tensor of offsets instead of a tensor of pointers.
+        scalar base pointer and a tensor voffset instead of a tensor of pointers.
         Similar to TT_AtomicCASOp: Buffer atomic CAS op loads data at $ptr, and stores $val to $ptr atomically if value at $ptr equals $cmp, with
         the specified memory semantics and scope. Atomic CAS ops return the pre-op value if used, otherwise the value is implicitly dropped.
         Stride is the distance between the beginning of contiguous memory chunks. When performing a CAS, the `stride` is
@@ -448,7 +459,7 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
     }];
     let arguments = (ins
       Arg<TT_Ptr, "Global memory pointer", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
-      I32Tensor:$offsets,
+      I32Tensor:$voffset,
       TT_Tensor:$cmp,
       TT_Tensor:$val,
       Optional<I32>:$stride,
@@ -458,7 +469,7 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = [{
-        $sem `,` $scope `,` $cmp `,` $val `,` $ptr `[` $offsets `]`
+        $sem `,` $scope `,` $cmp `,` $val `,` $ptr `[` $voffset `]`
         (`stride` `=` $stride^)?
         attr-dict `:` type($result)
     }];
@@ -474,18 +485,22 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
-  TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"value and voffset have the same shape", "value", "voffset", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
                  "(cast<BufferStoreOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
 ]>{
-    let summary = "Store into scalar base pointer and a tensor offset";
+    let summary = "Store into scalar base pointer and AMD buffer offsets";
     let description = [{
       AMD Buffer store operation. Buffer store is similar to
       normal store but it accesses global memory via a scalar base pointer
-      and a tensor of offsets instead of a tensor of pointers. The other fields
-      are similar to a normal store , i.e., the `mask` is a boolean vector that
-      determines if a given element should be written to memory, and `value` is the
-      tensor of elements that should be written on lane `i` when `mask[i] == 1`.
+      and AMD buffer offset operands instead of a tensor of pointers. The
+      `voffset` operand is the per-lane tensor element offset lowered to the
+      raw buffer instruction's VGPR offset. The optional `soffset` operand is
+      a wave-uniform scalar element offset lowered to the raw buffer
+      instruction's SGPR offset. The other fields are similar to a normal
+      store: `mask` is a boolean vector that determines if a given element
+      should be written to memory, and `value` is the tensor of elements that
+      should be written on lane `i` when `mask[i] == 1`.
       Stride is the distance between the beginning of contiguous memory chunks.
       When performing a block store, the `stride` is the address difference between
       the first elements of each row in bytes. Compiler tries to obtain the `stride`
@@ -498,7 +513,8 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
     let arguments = (ins
       TT_Tensor:$value,
       Arg<TT_Ptr, "Global memory scalar base pointer to write to", [MemWrite<GlobalMemory>]>:$ptr,
-      I32Tensor:$offsets,
+      I32Tensor:$voffset,
+      Optional<I32>:$soffset,
       Optional<I32>:$stride,
       DefaultValuedAttr<TT_CacheModifierAttr, "mlir::triton::CacheModifier::NONE">:$cache,
       Optional<TT_BoolTensor>:$mask,
@@ -506,7 +522,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
     );
 
     let assemblyFormat = [{
-      $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
+      $value `,` $ptr `[` $voffset (`,` $soffset^)? `]` (`,` $mask^)?
       oilist(`cacheModifier` `=` $cache)
       (`stride` `=` $stride^)?
       attr-dict `:` type($value)

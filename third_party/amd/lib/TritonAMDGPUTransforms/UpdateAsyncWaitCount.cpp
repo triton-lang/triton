@@ -137,9 +137,9 @@ int getOpNumberOfAsyncCopyInstructions(Operation *op,
         /*isStore=*/false);
   } else if (auto bufferOp = dyn_cast<amdgpu::BufferLoadToLocalOp>(op)) {
     auto ptrType = cast<RankedTensorType>(LLVM::AMD::getPointerTypeWithShape(
-        bufferOp.getPtr(), bufferOp.getOffsets()));
+        bufferOp.getPtr(), bufferOp.getVoffset()));
     int contig = LLVM::AMD::getVectorSize(bufferOp.getPtr(),
-                                          bufferOp.getOffsets(), axisInfo);
+                                          bufferOp.getVoffset(), axisInfo);
     return getNumberOfAsyncCopyInstructions(
         ptrType, bufferOp.getDest().getType(), bufferOp.getMask(), contig,
         bufferOp.getContiguity(), axisInfo, targetInfo, /*isStore=*/false);

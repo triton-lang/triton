@@ -632,13 +632,14 @@ struct BufferLoadOpConversion
 
     // original values
     Value ptr = op.getPtr();
-    Value offset = op.getOffsets();
+    Value offset = op.getVoffset();
     Value mask = op.getMask();
     auto cacheMod = op.getCache();
 
     // Converted values
     Value llPtr = adaptor.getPtr();
-    Value llOffset = adaptor.getOffsets();
+    Value llOffset = adaptor.getVoffset();
+    Value llScalarOffset = adaptor.getSoffset();
     Value llMask = adaptor.getMask();
     Value llOther = adaptor.getOther();
     Value llStride = adaptor.getStride();
@@ -678,7 +679,8 @@ struct BufferLoadOpConversion
             rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
             otherElems, vecStart);
       Value loadVal = bufferEmitter.emitLoad(
-          vecTy, rsrcDesc, offsetElems[vecStart], pred, falseVal, cacheMod);
+          vecTy, rsrcDesc, offsetElems[vecStart], llScalarOffset, pred,
+          falseVal, cacheMod);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
@@ -715,12 +717,13 @@ struct BufferLoadToLocalOpConversion
 
     // Original values
     Value ptr = op.getPtr();
-    Value offset = op.getOffsets();
+    Value offset = op.getVoffset();
     Value mask = op.getMask();
 
     // Converted values
     Value llPtr = adaptor.getPtr();
-    Value llOffset = adaptor.getOffsets();
+    Value llOffset = adaptor.getVoffset();
+    Value llScalarOffset = adaptor.getSoffset();
     Value llDst = adaptor.getDest();
     Value llMask = adaptor.getMask();
     Value llOther = adaptor.getOther();
@@ -796,7 +799,7 @@ struct BufferLoadToLocalOpConversion
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     auto emitBufferLoadLds =
         [this, &op, &b, &bufferEmitter, &rsrcDesc, laneId = laneId, threadPred,
-         offsetTy, otherTy, hasOther, requiresSrcPtrSwizzling](
+         llScalarOffset, offsetTy, otherTy, hasOther, requiresSrcPtrSwizzling](
             RewriterBase &rewriter, Location loc, ArrayRef<Value> loadVals,
             Value shmemAddr, int startIdx, VectorType vecTy,
             Value multicastMask) -> SmallVector<Value> {
@@ -821,7 +824,7 @@ struct BufferLoadToLocalOpConversion
       auto [loadBlock, afterLoadBlock] = emitBranch(rewriter, loc, cond);
 
       auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
-          vecTy, vecBytesVal, rsrcDesc, offsetElem, shmemAddr,
+          vecTy, vecBytesVal, rsrcDesc, offsetElem, llScalarOffset, shmemAddr,
           hasOther ? b.true_val() : maybeSwizzledMaskElem, op.getCache());
       if (targetInfo.requiresAliasInfoForAsyncOps())
         AMD::addAsyncCopyAliasScope(bufferLoadToLds);
@@ -1648,13 +1651,13 @@ struct BufferAtomicRMWOpConversion
 
     // original values
     Value ptr = op.getPtr();
-    Value offset = op.getOffsets();
+    Value offset = op.getVoffset();
     Value mask = op.getMask();
     Value data = op.getValue();
     auto atomicRmwAttr = op.getAtomicRmwOp();
 
     Value llPtr = adaptor.getPtr();
-    Value llOffset = adaptor.getOffsets();
+    Value llOffset = adaptor.getVoffset();
     Value llMask = adaptor.getMask();
     Value llData = adaptor.getValue();
     Value llStride = adaptor.getStride();
@@ -1780,11 +1783,11 @@ struct BufferAtomicCASOpConversion
 
     // original values
     Value ptr = op.getPtr();
-    Value offset = op.getOffsets();
+    Value offset = op.getVoffset();
     Value val = op.getVal();
 
     Value llPtr = adaptor.getPtr();
-    Value llOffset = adaptor.getOffsets();
+    Value llOffset = adaptor.getVoffset();
     Value llVal = adaptor.getVal();
     Value llCmp = adaptor.getCmp();
     Value llStride = adaptor.getStride();
@@ -1887,13 +1890,14 @@ struct BufferStoreOpConversion
 
     // original values
     Value ptr = op.getPtr();
-    Value offset = op.getOffsets();
+    Value offset = op.getVoffset();
     Value mask = op.getMask();
     Value data = op.getValue();
     auto cacheMod = op.getCache();
 
     Value llPtr = adaptor.getPtr();
-    Value llOffset = adaptor.getOffsets();
+    Value llOffset = adaptor.getVoffset();
+    Value llScalarOffset = adaptor.getSoffset();
     Value llMask = adaptor.getMask();
     Value llData = adaptor.getValue();
     Value llStride = adaptor.getStride();
@@ -1937,8 +1941,8 @@ struct BufferStoreOpConversion
       Value storeVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
           valueElems, vecStart);
-      bufferEmitter.emitStore(rsrcDesc, offsetElems[vecStart], storeVal, pred,
-                              cacheMod);
+      bufferEmitter.emitStore(rsrcDesc, offsetElems[vecStart], llScalarOffset,
+                              storeVal, pred, cacheMod);
     } // end vec
 
     rewriter.eraseOp(op);
