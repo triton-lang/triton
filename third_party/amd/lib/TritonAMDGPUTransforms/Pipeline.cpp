@@ -114,6 +114,36 @@ void expandLoops(ModuleOp moduleOp) {
 
   tt::resolveMaskOp(moduleOp);
 }
+
+// Fold consecutive waits of the same kind into a single wait.
+void combineWaitOps(ModuleOp moduleOp, bool useAsyncCopy) {
+  llvm::SmallSetVector<Operation *, 8> asyncWaitOps;
+  llvm::SmallSetVector<Operation *, 8> tdmWaitOps;
+  moduleOp.walk([&](Operation *op) {
+    if (useAsyncCopy && isa<ttg::AsyncWaitOp>(op))
+      asyncWaitOps.insert(op);
+    else if (isa<triton::amdgpu::AsyncTDMWait>(op))
+      tdmWaitOps.insert(op);
+  });
+
+  if (useAsyncCopy) {
+    tt::combineRedundantWaitOps(
+        asyncWaitOps,
+        [](Operation *op) { return isa<ttg::AsyncCommitGroupOp>(op); },
+        [](OpBuilder &b, Location loc, ValueRange operands,
+           unsigned num) -> Operation * {
+          return ttg::AsyncWaitOp::create(b, loc, operands, num);
+        });
+  }
+
+  tt::combineRedundantWaitOps(
+      tdmWaitOps,
+      [](Operation *op) { return isa<triton::amdgpu::TDMOpInterface>(op); },
+      [](OpBuilder &b, Location loc, ValueRange operands,
+         unsigned num) -> Operation * {
+        return triton::amdgpu::AsyncTDMWait::create(b, loc, operands, num);
+      });
+}
 } // namespace
 
 struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
@@ -137,12 +167,9 @@ struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
       if (family == tt::AMD::ISAFamily::CDNA3 ||
           family == tt::AMD::ISAFamily::CDNA4) {
         mlir::triton::updateWaits(moduleOp);
-      } else {
-        llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
-        moduleOp.walk([&](ttg::AsyncWaitOp waitOp) { waitOps.insert(waitOp); });
-        tt::combineRedundantWaitOps(waitOps);
       }
     }
+    combineWaitOps(moduleOp, useAsyncCopy);
 
     tt::removePipeliningAttributes(moduleOp);
   }
