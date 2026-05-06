@@ -22,7 +22,6 @@
 #include <iostream>
 #include <limits>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -349,72 +348,18 @@ bool isLaunch(CUpti_CallbackId cbId) {
   return isKernel(cbId) || isGraphLaunch(cbId);
 }
 
-bool streamCaptureActive(CUstream stream) {
-  CUstreamCaptureStatus status = CU_STREAM_CAPTURE_STATUS_NONE;
-  auto result = cuda::streamIsCapturing<false>(stream, &status);
-  return result == CUDA_SUCCESS && status == CU_STREAM_CAPTURE_STATUS_ACTIVE;
+bool isStreamCaptureBegin(CUpti_CallbackId cbId) {
+  return cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_ptsz ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2 ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2_ptsz ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCaptureToGraph ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCaptureToGraph_ptsz;
 }
 
-bool launchConfigCaptureActive(const CUlaunchConfig *config) {
-  return config != nullptr && streamCaptureActive(config->hStream);
-}
-
-bool kernelLaunchCaptureActive(CUpti_CallbackId cbId,
-                               const CUpti_CallbackData *callbackData) {
-  if (callbackData == nullptr || callbackData->functionParams == nullptr)
-    return false;
-
-  switch (cbId) {
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunch:
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid:
-    return streamCaptureActive(nullptr);
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchGridAsync:
-    return streamCaptureActive(
-        static_cast<const cuLaunchGridAsync_params *>(
-            callbackData->functionParams)
-            ->hStream);
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel:
-    return streamCaptureActive(
-        static_cast<const cuLaunchKernel_params *>(
-            callbackData->functionParams)
-            ->hStream);
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel_ptsz:
-    return streamCaptureActive(
-        static_cast<const cuLaunchKernel_ptsz_params *>(
-            callbackData->functionParams)
-            ->hStream);
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx:
-    return launchConfigCaptureActive(
-        static_cast<const cuLaunchKernelEx_params *>(
-            callbackData->functionParams)
-            ->config);
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx_ptsz:
-    return launchConfigCaptureActive(
-        static_cast<const cuLaunchKernelEx_ptsz_params *>(
-            callbackData->functionParams)
-            ->config);
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel:
-    return streamCaptureActive(
-        static_cast<const cuLaunchCooperativeKernel_params *>(
-            callbackData->functionParams)
-            ->hStream);
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel_ptsz:
-    return streamCaptureActive(
-        static_cast<const cuLaunchCooperativeKernel_ptsz_params *>(
-            callbackData->functionParams)
-            ->hStream);
-  case CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice: {
-    auto *params = static_cast<const cuLaunchCooperativeKernelMultiDevice_params
-                                  *>(callbackData->functionParams);
-    for (unsigned int i = 0; i < params->numDevices; ++i) {
-      if (streamCaptureActive(params->launchParamsList[i].hStream))
-        return true;
-    }
-    return false;
-  }
-  default:
-    return false;
-  }
+bool isStreamCaptureEnd(CUpti_CallbackId cbId) {
+  return cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture ||
+         cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture_ptsz;
 }
 
 #undef PROTON_KERNEL_CALLBACK_LIST
@@ -462,7 +407,8 @@ private:
                                const void *cbData);
   void handleNvtxCallbacks(CUpti_CallbackId cbId, const void *cbData);
 
-  void handleStreamCaptureBeginCallbacks(CUpti_CallbackId cbId);
+  void handleStreamCaptureCallbacks(CUpti_CallbackId cbId,
+                                    const CUpti_CallbackData *callbackData);
   void handleApiEnterLaunchCallbacks(CuptiProfiler &profiler,
                                      CUpti_CallbackId cbId,
                                      const CUpti_CallbackData *callbackData);
@@ -471,7 +417,6 @@ private:
                                     const CUpti_CallbackData *callbackData);
   void handleApiCallbacks(CuptiProfiler &profiler, CUpti_CallbackId cbId,
                           const void *cbData);
-  bool isMetricCaptureActive() override;
 };
 
 void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
@@ -657,22 +602,17 @@ void CuptiProfiler::CuptiProfilerPimpl::handleNvtxCallbacks(
   } // TODO: else handle other NVTX range functions
 }
 
-void CuptiProfiler::CuptiProfilerPimpl::handleStreamCaptureBeginCallbacks(
-    CUpti_CallbackId cbId) {
-  if (cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture ||
-      cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_ptsz ||
-      cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2 ||
-      cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2_ptsz ||
-      cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCaptureToGraph ||
-      cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCaptureToGraph_ptsz) {
-    profiler.metricBuffer->reserve();
-  }
-}
+void CuptiProfiler::CuptiProfilerPimpl::handleStreamCaptureCallbacks(
+    CUpti_CallbackId cbId, const CUpti_CallbackData *callbackData) {
+  if (callbackData == nullptr || callbackData->callbackSite != CUPTI_API_ENTER)
+    return;
 
-bool CuptiProfiler::CuptiProfilerPimpl::isMetricCaptureActive() {
-  auto stream = reinterpret_cast<CUstream>(
-      profiler.metricKernelLaunchState.tensor.stream);
-  return streamCaptureActive(stream);
+  if (isStreamCaptureBegin(cbId)) {
+    threadState.isStreamCapturing = true;
+    profiler.metricBuffer->reserve();
+  } else if (isStreamCaptureEnd(cbId)) {
+    threadState.isStreamCapturing = false;
+  }
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
@@ -690,7 +630,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   }
 
   auto &dataToEntry = threadState.dataToEntry;
-  if (isKernel(cbId) && kernelLaunchCaptureActive(cbId, callbackData))
+  if (threadState.isStreamCapturing) // Do not correlate stream captured kernels
     return;
   if (dataToEntry.empty()) // Profiler is deactivated
     return;
@@ -770,7 +710,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiExitLaunchCallbacks(
 
   threadState.exitOp();
 
-  if (isKernel(cbId) && kernelLaunchCaptureActive(cbId, callbackData))
+  if (threadState
+          .isStreamCapturing) // Do not correlate for stream captured kernels
     return;
   if (deactivated) // Profiler is deactivated
     return;
@@ -781,7 +722,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiCallbacks(
     CuptiProfiler &profiler, CUpti_CallbackId cbId, const void *cbData) {
   const CUpti_CallbackData *callbackData =
       static_cast<const CUpti_CallbackData *>(cbData);
-  handleStreamCaptureBeginCallbacks(cbId);
+  handleStreamCaptureCallbacks(cbId, callbackData);
   if (isLaunch(cbId)) {
     if (callbackData->callbackSite == CUPTI_API_ENTER) {
       handleApiEnterLaunchCallbacks(profiler, cbId, callbackData);

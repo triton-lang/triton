@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -32,6 +33,8 @@ public:
   void finalize(const std::string &outputFormat);
 
   size_t getContextDepth();
+
+  std::optional<std::string> getState() const;
 
   Profiler *getProfiler() const { return profiler; }
 
@@ -92,6 +95,8 @@ public:
   void deactivateAllSessions(bool flushing);
 
   size_t getContextDepth(size_t sessionId);
+
+  std::optional<std::string> getState(size_t sessionId);
 
   std::vector<uint8_t> getDataMsgPack(size_t sessionId, size_t phase);
 

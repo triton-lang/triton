@@ -74,6 +74,10 @@ void Session::finalize(const std::string &outputFormat) {
 
 size_t Session::getContextDepth() { return contextSource->getDepth(); }
 
+std::optional<std::string> Session::getState() const {
+  return contextSource->getState();
+}
+
 Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
                                                      const std::string &mode) {
   std::vector<std::string> modeAndOptions = proton::split(mode, ":");
@@ -324,6 +328,11 @@ void SessionManager::setState(std::optional<Context> context) {
 size_t SessionManager::getContextDepth(size_t sessionId) {
   std::lock_guard<std::mutex> lock(mutex);
   return getSessionOrThrow(sessionId)->getContextDepth();
+}
+
+std::optional<std::string> SessionManager::getState(size_t sessionId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  return getSessionOrThrow(sessionId)->getState();
 }
 
 std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId,

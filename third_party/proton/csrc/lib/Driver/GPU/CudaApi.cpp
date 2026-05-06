@@ -39,9 +39,6 @@ DEFINE_DISPATCH(ExternLibCuda, streamCreateWithPriority,
 
 DEFINE_DISPATCH(ExternLibCuda, streamSynchronize, cuStreamSynchronize, CUstream)
 
-DEFINE_DISPATCH(ExternLibCuda, streamIsCapturing, cuStreamIsCapturing, CUstream,
-                CUstreamCaptureStatus *)
-
 DEFINE_DISPATCH(ExternLibCuda, streamDestroy, cuStreamDestroy, CUstream)
 
 DEFINE_DISPATCH(ExternLibCuda, memcpyDToHAsync, cuMemcpyDtoHAsync, void *,

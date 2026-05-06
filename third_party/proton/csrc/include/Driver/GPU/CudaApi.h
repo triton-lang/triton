@@ -30,9 +30,6 @@ CUresult streamCreateWithPriority(CUstream *pStream, unsigned int flags,
 
 template <bool CheckSuccess> CUresult streamSynchronize(CUstream stream);
 
-template <bool CheckSuccess>
-CUresult streamIsCapturing(CUstream stream, CUstreamCaptureStatus *status);
-
 template <bool CheckSuccess> CUresult streamDestroy(CUstream stream);
 
 template <bool CheckSuccess>

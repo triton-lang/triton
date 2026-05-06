@@ -201,6 +201,14 @@ static void initProton(pybind11::module &&m) {
     return SessionManager::instance().getContextDepth(sessionId);
   });
 
+  m.def("get_state", [](size_t sessionId) -> pybind11::object {
+    auto state = SessionManager::instance().getState(sessionId);
+    if (!state.has_value()) {
+      return pybind11::none();
+    }
+    return pybind11::cast(state.value());
+  });
+
   m.def(
       "get_data",
       [](size_t sessionId, size_t phase) {
