@@ -141,15 +141,7 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
   // buffer_load_to_lds is only supported on gfx942/gfx950 which always use
   // asyncmark. Emit the async intrinsic so LLVM's SIInsertWaitcnts tracks
   // these operations via asyncmark/wait_asyncmark.
-  //
-  // Intrinsic operand layout (int_amdgcn_raw_ptr_buffer_load_async_lds):
-  //   ArgIndex 0: rsrc                       (SGPR)
-  //   ArgIndex 1: ldsPtr                     (LDS ptr)
-  //   ArgIndex 2: byteWidth                  (immarg)
-  //   ArgIndex 3: voffset                    (per-lane VGPR)
-  //   ArgIndex 4: soffset                    (uniform SGPR or imm)
-  //   ArgIndex 5: imm offset                 (immarg, must be constant)
-  //   ArgIndex 6: aux/cachepolicy            (immarg)
+  // ArgIndex 4 is the runtime SGPR soffset; ArgIndex 5 is the immarg offset.
   return ROCDL::RawPtrBufferLoadAsyncLdsOp::create(
       rewriter, loc, TypeRange{},
       ValueRange{

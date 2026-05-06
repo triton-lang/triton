@@ -889,14 +889,14 @@ struct TritonAMDGPUConvertToBufferOpsPass
                  ConvertTritonStoreToBufferStore>(context, assumptions,
                                                   axisInfoAnalysis, solver,
                                                   this->analyzeSmallTensorOfst);
-    patterns.add<SplitBufferLoadOffset, SplitBufferStoreOffset>(context);
     if (targetInfo.supportsBufferLoadToLocal()) {
       patterns
           .add<ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>>(
               context, assumptions, axisInfoAnalysis, solver,
               this->analyzeSmallTensorOfst);
-      patterns.add<SplitBufferLoadToLocalOffset>(context);
     }
+    patterns.add<SplitBufferLoadOffset, SplitBufferLoadToLocalOffset,
+                 SplitBufferStoreOffset>(context);
 
     if (this->allowBufferAtomics && targetInfo.supportsBufferAtomicRMW())
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
