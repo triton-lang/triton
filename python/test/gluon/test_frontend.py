@@ -3905,26 +3905,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def amd_tdm_load_pred_kernel(ptr):
+def amd_tdm_load_pred_kernel(ptr, n):
     layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [64, 64], [1, 0])
     desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=ptr, shape=(64, 64), strides=(64, 1), block_shape=(64, 64),
                                                        layout=layout)
     buffer = ttgl.allocate_shared_memory(desc.dtype, shape=desc.block_shape, layout=desc.layout)
     ttgl.amd.gfx1250.tdm.async_load(desc, offsets=[0, 2], dest=buffer, pred=False)
     ttgl.amd.gfx1250.tdm.async_load(desc, offsets=[0, 2], dest=buffer, pred=True)
+    ttgl.amd.gfx1250.tdm.async_load(desc, offsets=[0, 2], dest=buffer, pred=n < 64)
+    ttgl.amd.gfx1250.tdm.async_load(desc, offsets=[0, 2], dest=buffer, pred=n & 1)
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
 def test_amd_tdm_load_pred(target):
 
     ptr = MockTensor(ttgl.float16)
-    module = run_parser(amd_tdm_load_pred_kernel, *make_args(ptr), target)
+    module = run_parser(amd_tdm_load_pred_kernel, *make_args(ptr, 32), target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
 #shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [64, 64]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @amd_tdm_load_pred_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @amd_tdm_load_pred_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %c64_i32 = arith.constant 64 : i32
     %c64_i32_0 = arith.constant 64 : i32
     %c64_i64 = arith.constant 64 : i64
@@ -3939,6 +3941,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c2_i32_3 = arith.constant 2 : i32
     %c1_i32 = arith.constant 1 : i32
     %3 = amdg.async_tdm_copy_global_to_local %0[%c0_i32_2, %c2_i32_3] into %1, pred = %c1_i32 : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %c64_i32_4 = arith.constant 64 : i32
+    %4 = arith.cmpi slt, %arg1, %c64_i32_4 : i32
+    %c0_i32_5 = arith.constant 0 : i32
+    %c2_i32_6 = arith.constant 2 : i32
+    %5 = arith.extui %4 : i1 to i32
+    %6 = amdg.async_tdm_copy_global_to_local %0[%c0_i32_5, %c2_i32_6] into %1, pred = %5 : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %c1_i32_7 = arith.constant 1 : i32
+    %c1_i32_8 = arith.constant 1 : i32
+    %7 = arith.andi %arg1, %c1_i32_8 : i32
+    %c0_i32_9 = arith.constant 0 : i32
+    %c2_i32_10 = arith.constant 2 : i32
+    %8 = amdg.async_tdm_copy_global_to_local %0[%c0_i32_9, %c2_i32_10] into %1, pred = %7 : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     tt.return
   }
 }

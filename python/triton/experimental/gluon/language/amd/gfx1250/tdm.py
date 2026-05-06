@@ -162,7 +162,7 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
         src (tensor_descriptor): the source tensor descriptor.
         offsets (List[int]): the offsets from the base pointer in the tensor descriptor.
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
-        pred (int, optional): Predicate to enable or disable the load. Defaults to 1.
+        pred (bool, optional): Predicate to enable or disable the load. Defaults to True.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
@@ -262,7 +262,7 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, src_col_
         src_col_offset (int or tensor): the starting column offset in the source tensor
                                         for all gathered rows.
         dst (shared_memory_descriptor): the shared memory destination to store gathered data. Must be 2D.
-        pred (int, optional): Predicate to enable or disable the gather. Defaults to 1.
+        pred (bool, optional): Predicate to enable or disable the gather. Defaults to True.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
     ndim = len(desc.block_shape)
