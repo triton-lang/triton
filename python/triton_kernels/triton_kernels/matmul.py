@@ -135,6 +135,7 @@ class PrecisionConfig:
     c_microblock_size: int | None = None
     c_value_pack_factor: int = 1
     out_dtype: torch.dtype | None = None
+    intermediate_out_dtype: torch.dtype = torch.float32
     enforce_bitwise_invariance: bool = False
 
 # TODO: merge in opt_flags
@@ -175,7 +176,7 @@ def init_allocation(x, w, precision_config, fused_activation,
     scratchpad = dict()
     N_scratch = N // fused_activation.specs.reduction_n if opt_flags.split_k == 1 else N
     if opt_flags.split_k > 1:
-        scratch_out_dtype = torch.float32 if opt_flags.split_k > 1 else out_dtype
+        scratch_out_dtype = dtype_to_torch_dtype(precision_config.intermediate_out_dtype)
         scratchpad["matmul"] = ((opt_flags.split_k, batch_dim, M, N_scratch), scratch_out_dtype)
     if "matmul" in scratchpad and precision_config.c_mx_scale is not None:
         assert batch_dim == 1, "batch_dim > 1 not supported yet"
@@ -470,7 +471,7 @@ def matmul(a, b, bias,
     has_scratchpad = "matmul" in memory["scratchpad"]
     # Canonical output tensor (matmul scratchpad if present, otherwise final output tensor)
     out_matmul = memory["scratchpad"].get("matmul", memory["output"])
-    out_matmul_flex = OutFlexData() if out_matmul.dtype == torch.float32 else precision_config.flex_ctx.out_data
+    out_matmul_flex = OutFlexData() if has_scratchpad or out_matmul.dtype == torch.float32 else precision_config.flex_ctx.out_data
     # Unified mx-scale pointer; when scratchpad exists, prefer its mx buffer
     out_matmul_scale = precision_config.c_mx_scale
     if out_matmul_scale is not None:
@@ -499,7 +500,7 @@ def matmul(a, b, bias,
     a = Tensor(_canonicalize_storage(a.storage, 2 if has_gather_tma else 3, flex.lhs_data), dtype=a.dtype, shape=a.shape, shape_max=a.shape_max)
     b_storage_ndim = 5 if b_is_shuffled else 3
     b = Tensor(_canonicalize_storage(b.storage, b_storage_ndim, flex.rhs_data), dtype=b.dtype, shape=b.shape, shape_max=b.shape_max)
-    c = Tensor(_canonicalize_storage(c.storage, 2 if has_scatter_tma else 3, flex.out_data), dtype=c.dtype, shape=c.shape, shape_max=c.shape_max)
+    c = Tensor(_canonicalize_storage(c.storage, 2 if has_scatter_tma else 3, out_matmul_flex), dtype=c.dtype, shape=c.shape, shape_max=c.shape_max)
     # create tma descriptor for x
     if c_acc_in is not None:
         assert opt_flags.split_k == 1, "c_acc_in + split_k is not supported."
