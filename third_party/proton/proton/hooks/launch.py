@@ -3,7 +3,7 @@ from ..state import (
     enter_state,
     exit_state,
     is_metadata_state_active,
-    metadata_state_name,
+    get_metadata_state_name,
 )
 from ..metric import transform_tensor_metrics, set_metric_kernels
 from triton.compiler import LazyDict
@@ -91,9 +91,9 @@ class LaunchHook(Hook):
         pass
 
     def enter(self, metadata: LazyDict) -> None:
-        if is_metadata_state_active():
-            enabled.set(False)
+        if enabled.get():
             return
+        enabled.set(True)
 
         # Fast path: if the kernel name is already available without evaluating launch_metadata,
         # apply include/exclude filters and potentially skip metadata evaluation entirely.
@@ -102,12 +102,12 @@ class LaunchHook(Hook):
             enabled.set(False)
             return
 
-        enter_state(metadata_state_name(kernel_name))
+        enter_state(get_metadata_state_name(kernel_name))
         try:
             lazy_metadata = metadata.get()
 
             kernel_name = lazy_metadata["name"]
-            owner_metadata_scope = metadata_state_name(kernel_name)
+            owner_metadata_scope = get_metadata_state_name(kernel_name)
             # If name wasn't available (or changed), apply filters using the evaluated name.
             if not self._matches_kernel_name(kernel_name):
                 enabled.set(False)
