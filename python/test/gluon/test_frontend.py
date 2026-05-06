@@ -1655,6 +1655,12 @@ def cluster_barrier_multi_cta_kernel():
     ttgl.barrier(cluster=True)
 
 
+@gluon.jit
+def cluster_cta_rank_kernel(out):
+    rank = cluster.cta_rank()
+    ttgl.store(out, rank)
+
+
 def test_cluster_barrier_multi_cta():
     mod = run_parser(cluster_barrier_multi_cta_kernel, *make_args(num_ctas=2), target=BLACKWELL_TARGET)
     expecttest.assert_expected_inline(
@@ -1662,6 +1668,20 @@ def test_cluster_barrier_multi_cta():
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @cluster_barrier_multi_cta_kernel() attributes {noinline = false} {
     ttng.cluster_barrier
+    tt.return
+  }
+}
+""")
+
+
+def test_cluster_cta_rank():
+    mod = run_parser(cluster_cta_rank_kernel, *make_args(MockTensor(ttgl.int32), num_ctas=2), target=BLACKWELL_TARGET)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @cluster_cta_rank_kernel(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = nvg.cluster_id
+    tt.store %arg0, %0 : !tt.ptr<i32>
     tt.return
   }
 }

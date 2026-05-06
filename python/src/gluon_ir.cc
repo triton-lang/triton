@@ -10,6 +10,7 @@
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Types.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -886,6 +887,11 @@ void init_gluon_ir(py::module &&m) {
           [](GluonOpBuilder &self,
              bool relaxed) { self.create<ttng::ClusterBarrierOp>(relaxed); },
           py::arg("relaxed") = false)
+      .def("create_cluster_cta_rank",
+           [](GluonOpBuilder &self) -> Value {
+             return self.create<mlir::triton::nvgpu::ClusterCTAIdOp>()
+                 .getResult();
+           })
       // CLC (Cluster Launch Control) ops - SM100+
       .def("create_clc_try_cancel",
            [](GluonOpBuilder &self, Value result, Value mbarrier) {

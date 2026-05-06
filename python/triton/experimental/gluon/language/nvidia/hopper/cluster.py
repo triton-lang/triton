@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
 
-__all__ = ["arrive", "wait", "barrier"]
+__all__ = ["arrive", "wait", "barrier", "cta_rank"]
 
 
 @builtin
@@ -36,3 +37,15 @@ def barrier(relaxed: bool = False, _semantic=None):
     """
     relaxed = _unwrap_if_constexpr(relaxed)
     _semantic.builder.create_cluster_barrier(relaxed)
+
+
+@builtin
+def cta_rank(_semantic=None):
+    """
+    Return the linear rank of the current CTA within its cluster.
+
+    The result is in the range [0, num_ctas). For single-CTA launches this is
+    zero.
+    """
+    handle = _semantic.builder.create_cluster_cta_rank()
+    return ttgl.tensor(handle, ttgl.int32)
