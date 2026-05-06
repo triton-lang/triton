@@ -24,22 +24,26 @@ public:
                                     Value tmemBase, bool isFp4 = false) {
     // We take the full layout even when it is a subview
     // We'll just iterate the real shape when calling tmemLoad tho
-    auto ll = toLinearLayout(memTy);
     auto bitwidth = memTy.getElementTypeBitWidth();
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     Value address = tb.ptrtoint(i32_ty, tmemBase);
 
-    auto enc = cast<ttng::TensorMemoryEncodingAttr>(memTy.getEncoding());
-    return DotOpMmaV5TmemLoader(ll.pseudoinvert(), address, bitwidth,
-                                isFp4 && !enc.getFp4Padded());
+    auto llInv = toLinearLayout(memTy).pseudoinvert();
+    if (isFp4) {
+      auto dims = to_vector(llInv.getInDimNames());
+      auto logicalToPacked =
+          LinearLayout::identity1D(llInv.getInDimSize(dims[0]), dims[0],
+                                   dims[0]) *
+          LinearLayout::zeros1D(2, dims[1], dims[1]) *
+          LinearLayout::identity1D(llInv.getInDimSize(dims[1]), dims[1],
+                                   dims[1]);
+      llInv = logicalToPacked.compose(llInv);
+    }
+    return DotOpMmaV5TmemLoader(llInv, address, bitwidth);
   }
 
   MemDescOperand tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
                           Location loc) const {
-    // Densely packed fp4 elements along K.
-    if (isDenseFp4)
-      b /= 2;
-
     auto dims = to_vector(ll.getInDimNames());
     auto rowCol = ll.apply({{dims[0], a}, {dims[1], b}});
     int row = rowCol[0].second;
@@ -54,15 +58,12 @@ public:
   }
 
 private:
-  DotOpMmaV5TmemLoader(LinearLayout ll, Value address, int bitwidth,
-                       bool isDenseFp4)
-      : ll(std::move(ll)), address(address), bitwidth(bitwidth),
-        isDenseFp4(isDenseFp4) {}
+  DotOpMmaV5TmemLoader(LinearLayout ll, Value address, int bitwidth)
+      : ll(std::move(ll)), address(address), bitwidth(bitwidth) {}
 
   LinearLayout ll;
   Value address;
   int bitwidth;
-  bool isDenseFp4;
 };
 
 //===----------------------------------------------------------------------===//

@@ -437,12 +437,18 @@ SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
                                               ArrayRef<int64_t> shapeLogical) {
   SmallVector<int64_t> shape(shapeLogical);
+  std::optional<int64_t> packedAxis;
   if (auto sharedMMALayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-    if (sharedMMALayout.getFp4Padded()) {
-      auto packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
-      shape[packedAxis] *= 2;
-    }
+    if (sharedMMALayout.getFp4Padded())
+      packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
+  } else if (auto tmemLayout = dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
+    // We know fp4 padded TMEM is always on the LHS, so the packed axis is the
+    // inner dimension.
+    if (tmemLayout.getFp4Padded())
+      packedAxis = 1;
   }
+  if (packedAxis)
+    shape[*packedAxis] *= 2;
   return getShapePerCTA(layout, shape);
 }
 

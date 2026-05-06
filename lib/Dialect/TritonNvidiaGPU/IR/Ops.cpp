@@ -1130,13 +1130,9 @@ bool TCGen5MMAScaledOp::verifyDims() {
   auto bShape = this->getB().getType().getShape();
 
   bool transA = false;
-  bool fp4PaddedLhsTmem = false;
   if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
           getA().getType().getEncoding())) {
     transA = aSharedLayout.getTransposed();
-  } else if (auto aTmemLayout = dyn_cast<TensorMemoryEncodingAttr>(
-                 getA().getType().getEncoding())) {
-    fp4PaddedLhsTmem = aTmemLayout.getFp4Padded();
   }
   bool transB = false;
   if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
@@ -1145,8 +1141,7 @@ bool TCGen5MMAScaledOp::verifyDims() {
   }
   auto aKdim = aShape[aShape.size() - 1];
   auto bKdim = bShape[aShape.size() - 2];
-  if (this->getAType() == ScaleDotElemType::E2M1 && !transA &&
-      !fp4PaddedLhsTmem)
+  if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
     aKdim *= 2;
   if (this->getBType() == ScaleDotElemType::E2M1 && !transB)
     bKdim *= 2;
@@ -1260,16 +1255,11 @@ int64_t TCGen5MMAScaledOp::getBlockK() {
   ArrayRef<int64_t> shape = getA().getType().getShape();
   int64_t blockK = shape[shape.size() - 1];
   bool transA = false;
-  bool fp4PaddedLhsTmem = false;
   if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
           getA().getType().getEncoding())) {
     transA = aSharedLayout.getTransposed();
-  } else if (auto aTmemLayout = dyn_cast<TensorMemoryEncodingAttr>(
-                 getA().getType().getEncoding())) {
-    fp4PaddedLhsTmem = aTmemLayout.getFp4Padded();
   }
-  if (this->getAType() == ScaleDotElemType::E2M1 && !transA &&
-      !fp4PaddedLhsTmem)
+  if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
     blockK *= 2;
   return blockK;
 }
