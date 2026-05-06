@@ -1618,14 +1618,25 @@ def _resolve_aggregate_fields(cls):
         # Only include the class itself and processed aggregate parents
         if base is not cls and not getattr(base, "__triton_aggregate__", False):
             continue
-        for name, ann in getattr(base, "__annotations__", {}).items():
-            all_annotations[name] = ann
+        # Resolve string annotations (PEP 649 / Python 3.13+). typing.get_type_hints
+        # evaluates forward references against the defining module's namespace; we
+        # fall back to the raw __annotations__ values if resolution fails so any
+        # legitimately-unresolvable annotation surfaces a clearer error downstream
+        # rather than crashing this resolver. Matches the convention used by the
+        # outer _aggregate(cls) call at the top of this module.
+        raw_annotations = getattr(base, "__annotations__", {})
+        try:
+            resolved = typing.get_type_hints(base)
+        except Exception:
+            resolved = raw_annotations
+        for name in raw_annotations:
+            all_annotations[name] = resolved.get(name, raw_annotations[name])
         # Collect default values: from __aggregate_defaults__ (processed parents)
         # or from the class dict (the class being processed)
         parent_defaults = getattr(base, "__aggregate_defaults__", None)
         if parent_defaults is not None:
             all_defaults.update(parent_defaults)
-        for name in getattr(base, "__annotations__", {}):
+        for name in raw_annotations:
             if name in base.__dict__:
                 val = base.__dict__[name]
                 # Skip descriptors and methods — only plain values are defaults

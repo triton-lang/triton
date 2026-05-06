@@ -855,6 +855,30 @@ def test_aggregate_inherited_defaults():
     assert child.y.value == 7
 
 
+def test_aggregate_string_annotations_resolved():
+    """String annotations (PEP 649 / forward refs) resolve via typing.get_type_hints.
+
+    On Python 3.13+ class annotations may be stored as strings rather than evaluated
+    types. _resolve_aggregate_fields walks the MRO directly, so it must call
+    typing.get_type_hints to resolve those strings — otherwise downstream
+    isinstance(value, ann) raises 'isinstance() arg 2 must be a type'.
+    """
+
+    @triton.aggregate
+    class StringAnnoBase:
+        x: "tl.constexpr"  # explicit string annotation — must resolve
+
+    @triton.aggregate
+    class StringAnnoChild(StringAnnoBase):
+        y: "tl.constexpr"  # inherited annotation chain must resolve too
+
+    child = StringAnnoChild(10, 20)
+    assert isinstance(child.x, tl.constexpr)
+    assert isinstance(child.y, tl.constexpr)
+    assert child.x.value == 10
+    assert child.y.value == 20
+
+
 def test_aggregate_default_value_auto_wrapped():
     """A raw-int default (`y: tl.constexpr = 42`) is auto-wrapped to constexpr at init."""
 
