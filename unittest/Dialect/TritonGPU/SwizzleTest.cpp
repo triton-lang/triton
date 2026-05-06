@@ -436,25 +436,25 @@ TEST_F(SwizzleTest, Test64x128F16BlockedLinear32Bank) {
 }
 
 TEST_F(SwizzleTest, Test64x128F16BlockedMfma64Bank) {
-  LinearLayout blocked(
-      {{S("register"), {{1, 0}, {2, 0}, {0, 1}, {0, 2}, {0, 4}}},
-       {S("lane"), {{0, 8}, {0, 16}, {0, 32}, {0, 64}, {4, 0}, {8, 0}}},
-       {S("warp"), {{16, 0}, {32, 0}}},
+  LinearLayout src(
+      {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {16, 0}, {32, 0}}},
+       {S("lane"), {{0, 8}, {0, 16}, {0, 32}, {0, 64}, {1, 0}, {2, 0}}},
+       {S("warp"), {{4, 0}, {8, 0}}},
        {S("block"), {}}},
       {{S("dim0"), 64}, {S("dim1"), 128}},
       /*requireSurjective=*/true);
-  LinearLayout mma(
+  LinearLayout dst(
       {{S("register"),
-        {{1, 0}, {2, 0}, {8, 0}, {16, 0}, {32, 0}, {0, 32}, {0, 64}}},
-       {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {4, 0}}},
+        {{0, 1}, {0, 2}, {0, 4}, {0, 16}, {0, 32}, {0, 64}, {32, 0}}},
+       {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 8}}},
        {S("warp"), {{0, 0}, {0, 0}}},
        {S("block"), {}}},
       {{S("dim0"), 64}, {S("dim1"), 128}},
       /*requireSurjective=*/true);
-  auto smem = optimalSwizzlingLdSt(blocked, mma, /*bitwidth=*/16,
+  auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/16,
                                    /*numBanks*/ 64, /*srcTile*/ {},
                                    /*dstTile*/ {{}, {0, 1, 3, 4}});
-  auto [r, w] = bankConflictsLdSt(blocked, mma, smem, /*bitwidth=*/16,
+  auto [r, w] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/16,
                                   /*numBanks*/ 64, /*srcTile*/ {},
                                   /*dstTile*/ {{}, {0, 1, 3, 4}});
   EXPECT_EQ(r, 0);
