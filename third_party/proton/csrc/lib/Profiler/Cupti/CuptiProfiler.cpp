@@ -604,7 +604,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleNvtxCallbacks(
 
 void CuptiProfiler::CuptiProfilerPimpl::handleStreamCaptureCallbacks(
     CUpti_CallbackId cbId, const CUpti_CallbackData *callbackData) {
-  if (callbackData == nullptr || callbackData->callbackSite != CUPTI_API_ENTER)
+  if (callbackData->callbackSite != CUPTI_API_ENTER)
     return;
 
   if (isStreamCaptureBegin(cbId)) {
