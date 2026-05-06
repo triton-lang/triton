@@ -24,6 +24,7 @@ from triton._internal_testing import is_hip, is_cuda, is_blackwell
 def _find_child_by_name(frame, name):
     return next((child for child in frame["children"] if child["frame"]["name"] == name), None)
 
+
 @contextmanager
 def cuda_graph_without_gc(*args, **kwargs):
     # A loaded Triton CompiledKernel may be finalized by Python's cyclic GC.
@@ -39,6 +40,7 @@ def cuda_graph_without_gc(*args, **kwargs):
     finally:
         if gc_was_enabled:
             gc.enable()
+
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path, device: str):
