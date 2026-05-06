@@ -25,7 +25,8 @@ def is_pingpong_schedule_enabled(arch, use_async_copy):
 
 
 def is_in_thread_transpose_enabled(arch):
-    return (arch == "gfx942") if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
+    return (arch == "gfx942" or "gfx120" in arch) \
+        if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
 
 
 def is_async_copy_enabled(arch):
@@ -314,6 +315,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
+        passes.ttir.add_loop_unroll(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         amd.passes.ttgpuir.add_warp_pipeline(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
@@ -340,7 +342,7 @@ class HIPBackend(BaseBackend):
 
         # Reserve LDS space for ConSan captures before allocation computes offsets.
         if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):
-            amd.passes.ttgpuir.add_prepare_consan_captures(pm)
+            passes.ttgpuir.add_prepare_consan_captures(pm, "amd")
         amd.passes.ttgpuir.add_allocate_shared_memory(pm)
         # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after shared
         if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):

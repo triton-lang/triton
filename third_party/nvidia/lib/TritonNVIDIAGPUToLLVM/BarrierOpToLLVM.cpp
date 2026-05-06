@@ -198,49 +198,30 @@ struct BarrierExpectConversion
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getAlloc(),
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
-    // If several CTAs cast to the same barrier, that barrier will receive all
-    // the bytes from its broadcast group
-    auto numCTAs = triton::gpu::lookupNumCTAs(rewriter);
-    auto expectedBytes = op.getSize() * (numCTAs / barrierTy.getNumElements());
-
     // Because this operation can signal other partitions we need to synchronize
     // the current partition first.
     ttg::BarrierOp::create(rewriter, loc, ttg::AddrSpace::Local);
 
-    auto id = getThreadId(rewriter, loc);
-    Value basePred = b.icmp_eq(id, b.i32_val(0));
-    basePred = b.and_(basePred, adaptor.getPred());
-    auto leaderCTAPred =
-        LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy);
-    bool crossCluster = leaderCTAPred.has_value();
-    Value leaderPred =
-        leaderCTAPred ? b.and_(basePred, *leaderCTAPred) : basePred;
+    // The partition-relative thread ID lowers the same or marginally better
+    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
+    Value id = getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(id, b.i32_val(0));
+    pred = b.and_(pred, adaptor.getPred());
+    bool crossCluster = LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
     Value leaderBarrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
 
     ::mlir::triton::PTXBuilder expectPtxBuilder;
     const std::string expectPtx =
-        "@$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], " +
-        std::to_string(expectedBytes) + ";";
+        "@$0 mbarrier.arrive.expect_tx." +
+        std::string(crossCluster ? "shared::cluster" : "shared::cta") +
+        ".b64 _, [$1], " + std::to_string(op.getSize()) + ";";
     auto &expectOp = *expectPtxBuilder.create(expectPtx);
-    expectOp({expectPtxBuilder.newOperand(leaderPred, "b"),
+    expectOp({expectPtxBuilder.newOperand(pred, "b"),
               expectPtxBuilder.newOperand(leaderBarrierPtr, "r")},
              /*onlyAttachMLIRArgs=*/true);
     auto voidTy = void_ty(op->getContext());
     expectPtxBuilder.launch(rewriter, loc, voidTy);
-
-    if (crossCluster) {
-      // Non-leader CTAs still contribute one arrival to the lead CTA barrier.
-      auto nonLeaderPred = b.and_(basePred, b.xor_(leaderPred, b.true_val()));
-      ::mlir::triton::PTXBuilder arrivePtxBuilder;
-      const std::string arrivePtx =
-          "@$0 mbarrier.arrive.shared::cluster.b64 _, [$1], 1;";
-      auto &arriveOp = *arrivePtxBuilder.create(arrivePtx);
-      arriveOp({arrivePtxBuilder.newOperand(nonLeaderPred, "b"),
-                arrivePtxBuilder.newOperand(leaderBarrierPtr, "r")},
-               /*onlyAttachMLIRArgs=*/true);
-      arrivePtxBuilder.launch(rewriter, loc, voidTy);
-    }
 
     rewriter.eraseOp(op);
     return success();
@@ -354,14 +335,14 @@ struct ArriveBarrierOpConversion
     // accesses which doesn't have a MemBar equivalent :/
     ttg::BarrierOp::create(rewriter, loc, ttg::AddrSpace::Local);
 
+    // The partition-relative thread ID lowers the same or marginally better
+    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
     Value id = getThreadId(rewriter, loc);
     Value pred = b.icmp_eq(id, b.i32_val(0));
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
 
-    bool isCrossCluster =
-        LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy)
-            .has_value();
+    bool isCrossCluster = LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
 
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);

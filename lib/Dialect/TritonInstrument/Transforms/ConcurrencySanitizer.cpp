@@ -11,28 +11,6 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/ErrorHandling.h"
 
-// clang-format off
-// Concurrency Sanitizer data structures:
-// ConSan keeps auxilary data requied for tracking memory accesses in tensors.
-// These tensors are stored as a distributed tensor or in global scratch memory.
-// C = CTAs, B = buffers, K = mbarriers, T = logical ConSan thread bit slots,
-// P = max number of warp-specialize partitions tracked by ConSan (16 for now).
-//
-// Name                   | Storage | Rank/Type          | Description
-// -----------------------|---------|--------------------|------------
-// buffers                | tensor  | <C x B x i64>      | Base pointers of all (sub)buffers
-// barriers               | tensor  | <C x K x i64>      | Pointers to all individual mbarriers
-// barrierStates          | scratch | <C x K x i64>      | Packed barrier phase (bit 0), arrival counts (bits[1..20] init, [21..40] current), and signed tx-count (bits[41..61]); zero means invalid/uninitialized
-// barrierWriteRecipients | scratch | <C x K x i32>      | CTA bitsets of EffectWrites rows published by each barrier
-// waiting                | scratch | <C x K x i32>      | Two bits per thread: waiting flag bit (LSB), stored phase bit (bit 1)
-// writeVisibility        | scratch | <C x B x i64>      | Per-buffer thread-visibility bitmask (bit i => thread i visible)
-// readVisibility         | scratch | <C x B x T x i64>  | Per-buffer, per-thread visibility lanes (row-updated; values are bitmasks)
-// writeTracking          | scratch | <C x B x K x i8>   | Map buffers -> barriers that track writes
-// readTracking           | scratch | <C x B x K x i64>  | Map buffers -> barriers that track reads
-// outstandingCommits
-//   (async/wgmma)        | scratch | <C x B x P x i8>   | Number of outstanding commits per buffer/base partition-thread (2D replaces prior 1D)
-// clang-format on
-
 namespace mlir {
 namespace triton {
 namespace instrument {
@@ -143,18 +121,10 @@ uint64_t getThreadPeersMask(int thread) {
   return mask;
 }
 
-int getActiveMask(Operation *op) {
-  int numParts = 1;
-
-  if (auto wsOp = op->getParentOfType<ttg::WarpSpecializeOp>()) {
-    numParts = wsOp.getPartitionRegions().size() + 1;
-  }
-  if (auto wsOp = op->getParentOfType<ttg::WarpSpecializePartitionsOp>()) {
-    numParts = wsOp.getPartitionRegions().size() + 1;
-  }
-  int activeMask = 0;
-  for (int i = 0; i < numParts; ++i)
-    activeMask |= (1 << i);
+int getActiveMask(ttg::WarpSpecializeOp wsOp) {
+  int activeMask = 1;
+  for (Region *region : wsOp.getNonEmptyPartitionRegions())
+    activeMask |= 1 << (region->getRegionNumber() + 1);
   return activeMask;
 }
 
@@ -305,15 +275,18 @@ public:
   ConcurrencySanitizerImpl(ModuleOp module, const ConSanTargetHooks *hooks)
       : module(module), hooks(hooks) {}
 
-  void run() {
+  LogicalResult run() {
     tti::FunctionBuilder funcBuilder(module, auxData);
-    auxData.populateAndPassToWarpSpecialize(module, funcBuilder, hooks);
+    if (failed(auxData.populateAndPassToWarpSpecialize(module, funcBuilder,
+                                                       hooks)))
+      return failure();
 
     tt::FuncOp entryPoint = tti::getEntryPoint(module);
 
     ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
     b.setInsertionPointToStart(&entryPoint.getBody().front());
     instrumentMemoryOperations(b, funcBuilder);
+    return success();
   }
 
 private:
@@ -348,11 +321,12 @@ private:
       instrumentMemEffects(b, op, thread, funcBuilder);
       b.setLoc(op->getLoc());
       if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(op)) {
-        auto partitionRegions = wsOp.getPartitionRegions();
+        funcBuilder.createSetActiveMaskCall(b, getActiveMask(wsOp), op);
+        auto partitionRegions = wsOp.getNonEmptyPartitionRegions();
         if (!partitionRegions.empty()) {
           uint64_t destMask = 0;
-          for (size_t idx = 0, e = partitionRegions.size(); idx < e; ++idx)
-            destMask |= getThreadPeersMask(idx + 1);
+          for (Region *region : partitionRegions)
+            destMask |= getThreadPeersMask(region->getRegionNumber() + 1);
           if (destMask) {
             for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
               funcBuilder.createCopyWriteVisibilityCall(b, thread, destMask,
@@ -415,6 +389,25 @@ private:
         }
       }
 
+      if (isa<ttg::WarpYieldOp, ttg::WarpReturnOp>(op) &&
+          !auxData.activeMasks.empty()) {
+        auto wsOp = op->getParentOfType<ttg::WarpSpecializeOp>();
+        bool shouldRetire =
+            isa<ttg::WarpYieldOp>(op) ||
+            llvm::is_contained(wsOp.getNonEmptyPartitionRegions(),
+                               op->getParentRegion());
+        if (shouldRetire) {
+          b.setLoc(wsOp.getLoc());
+          funcBuilder.createRetireActiveThreadCall(b, baseThread, op);
+          funcBuilder.createCheckAllActiveWaitingCall(b, nullptr, op);
+        }
+      }
+      if (isa<tt::ReturnOp>(op) && !auxData.activeMasks.empty() &&
+          op->getParentOfType<tt::FuncOp>() == tti::getEntryPoint(module)) {
+        funcBuilder.createSetActiveMaskCall(b, 0, op);
+        funcBuilder.createCheckAllActiveWaitingCall(b, nullptr, op);
+      }
+
       listener.maybeWrapWithCriticalSection(b, auxData, nullptr);
       b.setListener(nullptr);
     });
@@ -431,8 +424,7 @@ private:
     funcBuilder.createVerifyBarrierInitializedCall(wb, alloc, pred, op,
                                                    currentCTAMask(wb));
     funcBuilder.createSetWaitingCall(wb, alloc, baseThread, phase, pred, op);
-    funcBuilder.createCheckAllActiveWaitingCall(wb, getActiveMask(op), pred,
-                                                op);
+    funcBuilder.createCheckAllActiveWaitingCall(wb, pred, op);
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
     // Post-wait: transfer visible writes and reads to all peer threads,
     // and clear waiting for this barrier.
@@ -450,27 +442,6 @@ private:
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
   }
 
-  void instrumentBarrierExpectNonLeaderArrive(
-      ImplicitLocOpBuilder &b, ttng::BarrierExpectOp expectOp,
-      Value nonLeaderPred, int thread, tti::FunctionBuilder &funcBuilder) {
-    Value barrier = expectOp.getAlloc();
-    Value recipientCTAs = getLeaderCTA(b, barrier);
-
-    // Match BarrierOpToLLVM's cross-CTA path: non-leader CTAs contribute a
-    // plain arrive of count 1 to the leader barrier. The generic barrier path
-    // models the leader CTA's expect_tx.
-    for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
-      funcBuilder.createTrackVisibleWritesCall(
-          b, barrier, thread, nonLeaderPred, memType, expectOp, recipientCTAs);
-      funcBuilder.createTrackVisibleReadsCall(b, barrier, thread, nonLeaderPred,
-                                              memType, expectOp, recipientCTAs);
-    }
-    funcBuilder.createVerifyBarrierArriveCall(
-        b, barrier, /*count=*/1, nonLeaderPred, expectOp, recipientCTAs);
-    funcBuilder.createUpdateBarrierStateCall(
-        b, barrier, /*count=*/1, nonLeaderPred, expectOp, recipientCTAs);
-  }
-
   void instrumentMemEffects(ImplicitLocOpBuilder &b, Operation *op, int thread,
                             tti::FunctionBuilder &funcBuilder) {
     int baseThread = getBaseThread(thread);
@@ -479,18 +450,7 @@ private:
       return;
     }
     Value pred = opInfo->pred;
-    // Barrier expect performs an arrive on non-leader CTAs, so we need to
-    // instrument it separately before incorporating getIssuerCTAPred.
     Value issuerCTAPred = hooks->getIssuerCTAPred(b, op);
-    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
-      if (issuerCTAPred) {
-        Value nonLeaderPred = arith::XOrIOp::create(
-            b, issuerCTAPred, arith::ConstantIntOp::create(b, 1, 1));
-        nonLeaderPred = tti::maybeAnd(b, pred, nonLeaderPred);
-        instrumentBarrierExpectNonLeaderArrive(b, expectOp, nonLeaderPred,
-                                               thread, funcBuilder);
-      }
-    }
     pred = tti::maybeAnd(b, pred, issuerCTAPred);
     Value effectRecipientCTAs = getMemEffectRecipientCTAs(b, op);
     for (auto effect : opInfo->operandEffects) {
@@ -505,7 +465,7 @@ private:
         // is writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
                        thread, effect.operandName, effectRecipientCTAs,
-                       opInfo->commitKind);
+                       /*allowNoWrite=*/false, opInfo->commitKind);
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createSetReadVisibilityCall(
               b, buf, effect.length, getThreadPeersMask(thread), pred, memType,
@@ -524,7 +484,7 @@ private:
         // is reading or writing to the same buffer.
         addWriteChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
                        thread, effect.operandName, effectRecipientCTAs,
-                       opInfo->commitKind);
+                       /*allowNoWrite=*/true, opInfo->commitKind);
         addReadChecks(b, funcBuilder, op, buf, effect.length, pred, memType,
                       thread, effect.operandName, effectRecipientCTAs,
                       opInfo->commitKind);
@@ -600,10 +560,11 @@ private:
                       tti::FunctionBuilder &funcBuilder, Operation *op,
                       Value buf, uint32_t length, Value pred, MemType memType,
                       int thread, const std::string &operandName,
-                      Value recipientCTAs,
+                      Value recipientCTAs, bool allowNoWrite,
                       CommitKind::Kind opCommitKind = CommitKind::None) {
-    funcBuilder.createVerifyWriteVisibilityCall(
-        b, buf, length, thread, operandName, pred, memType, op, recipientCTAs);
+    funcBuilder.createVerifyWriteVisibilityCall(b, buf, length, thread,
+                                                operandName, pred, memType, op,
+                                                recipientCTAs, allowNoWrite);
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc :
@@ -644,10 +605,11 @@ private:
 
 } // namespace
 
-void runConcurrencySanitizer(ModuleOp module, const ConSanTargetHooks *hooks) {
+LogicalResult runConcurrencySanitizer(ModuleOp module,
+                                      const ConSanTargetHooks *hooks) {
   assert(hooks && "hooks must not be null");
   ConcurrencySanitizerImpl impl(module, hooks);
-  impl.run();
+  return impl.run();
 }
 
 class ConcurrencySanitizerPass
@@ -664,7 +626,8 @@ public:
                                                  : "";
     auto hooks = createConSanHooks(key);
     assert(hooks && "no ConSan hooks registered for target");
-    runConcurrencySanitizer(module, hooks.get());
+    if (failed(runConcurrencySanitizer(module, hooks.get())))
+      return signalPassFailure();
   }
 };
 
