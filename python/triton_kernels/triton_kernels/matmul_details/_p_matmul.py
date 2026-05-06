@@ -461,7 +461,7 @@ def _p_matmul(
                 eM1 = M
         else:
             tile_id1, expt_id1, start_z1, start_m1, eM1 = block_id, off_w_z, off_y_z, slice_off_m, shape_m
-            slice_block_off_m1, off_m1, off_n1, pid_k1 = slice_block_off_m, off_m, off_n, pid_k
+            _, off_m1, off_n1, pid_k1 = slice_block_off_m, off_m, off_n, pid_k
 
         offs_m = off_m1 + tl.arange(0, BLOCK_M)
         mask_m = offs_m < eM1

@@ -218,13 +218,8 @@ def output_mx_scale_store_ptr(
             scale_k = pid_k_direct
             scale_z = start_z
             scale_rows = output_rows
-        return (
-            base
-            + scale_k.to(INDEX_TYPE) * stride_k
-            + scale_z.to(INDEX_TYPE) * stride_z
-            + scale_rows.to(INDEX_TYPE)[:, None] * stride_m
-            + cols.to(INDEX_TYPE)[None, :] * stride_n
-        )
+        return (base + scale_k.to(INDEX_TYPE) * stride_k + scale_z.to(INDEX_TYPE) * stride_z +
+                scale_rows.to(INDEX_TYPE)[:, None] * stride_m + cols.to(INDEX_TYPE)[None, :] * stride_n)
 
 
 def make_matmul_repr(base_name, order):

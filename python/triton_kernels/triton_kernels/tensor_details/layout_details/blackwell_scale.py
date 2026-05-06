@@ -424,10 +424,12 @@ def unswizzle_mx_scale_bw(
 
 
 @triton.jit
-def unswizzle_act_mx_scale_bw(x, SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,  # 128
-                              SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,  # 4
-                              SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
-                              ):
+def unswizzle_act_mx_scale_bw(
+    x,
+    SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,  # 128
+    SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,  # 4
+    SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
+):
     # input block shape is [1, BLOCK_M//128, BLOCK_K//32//4, 2, 256] and we want to unswizzle it to [BLOCK_M, BLOCK_K//32]
     shape_1: tl.constexpr = x.shape[1]
     shape_2: tl.constexpr = x.shape[2]
@@ -440,13 +442,11 @@ def unswizzle_act_mx_scale_bw(x, SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER, 
 
 
 @triton.jit
-def swizzle_mx_scale_bw_store_ptr(base, rows, cols, leading_idx, n_cols,
-                                  stride_outer, stride_inner, stride_half, stride_lane,
-                                  SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
+def swizzle_mx_scale_bw_store_ptr(base, rows, cols, leading_idx, n_cols, stride_outer, stride_inner, stride_half,
+                                  stride_lane, SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
                                   SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,
                                   SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
-                                  SIZE_HALF: tl.constexpr = SWIZZLE_SIZE_HALF,
-                                  INDEX_TYPE: tl.constexpr = tl.int64):
+                                  SIZE_HALF: tl.constexpr = SWIZZLE_SIZE_HALF, INDEX_TYPE: tl.constexpr = tl.int64):
     col_block = cols // SIZE_OUTER
     outer = leading_idx * tl.cdiv(n_cols, SIZE_OUTER) + col_block
     inner_group = rows // SIZE_INNER
@@ -454,29 +454,20 @@ def swizzle_mx_scale_bw_store_ptr(base, rows, cols, leading_idx, n_cols,
     col_quad = col_lane // SIZE_LANE
     col_lane_inner = col_lane - col_quad * SIZE_LANE
     row_lane = rows - inner_group * SIZE_INNER
-    inner_linear = (
-        (col_lane_inner[None, :] * (SIZE_OUTER // SIZE_LANE) + col_quad[None, :]) * SIZE_INNER
-        + row_lane[:, None]
-    )
+    inner_linear = ((col_lane_inner[None, :] * (SIZE_OUTER // SIZE_LANE) + col_quad[None, :]) * SIZE_INNER +
+                    row_lane[:, None])
     half = inner_linear // SIZE_HALF
     inner = inner_linear - half * SIZE_HALF
-    return (
-        base
-        + outer.to(INDEX_TYPE)[None, :] * stride_outer
-        + inner_group.to(INDEX_TYPE)[:, None] * stride_inner
-        + half.to(INDEX_TYPE) * stride_half
-        + inner.to(INDEX_TYPE) * stride_lane
-    )
+    return (base + outer.to(INDEX_TYPE)[None, :] * stride_outer + inner_group.to(INDEX_TYPE)[:, None] * stride_inner +
+            half.to(INDEX_TYPE) * stride_half + inner.to(INDEX_TYPE) * stride_lane)
 
 
 @triton.jit
-def swizzle_act_mx_scale_bw_store_ptr(base, rows, cols, leading_m_block,
-                                      stride_outer, stride_inner, stride_half, stride_lane,
-                                      SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
+def swizzle_act_mx_scale_bw_store_ptr(base, rows, cols, leading_m_block, stride_outer, stride_inner, stride_half,
+                                      stride_lane, SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
                                       SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,
                                       SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
-                                      SIZE_HALF: tl.constexpr = SWIZZLE_SIZE_HALF,
-                                      INDEX_TYPE: tl.constexpr = tl.int64):
+                                      SIZE_HALF: tl.constexpr = SWIZZLE_SIZE_HALF, INDEX_TYPE: tl.constexpr = tl.int64):
     row_block = rows // SIZE_OUTER
     outer = leading_m_block + row_block
     inner_group = cols // SIZE_INNER
@@ -484,16 +475,9 @@ def swizzle_act_mx_scale_bw_store_ptr(base, rows, cols, leading_m_block,
     row_lane = rows - row_block * SIZE_OUTER
     row_quad = row_lane // SIZE_LANE
     row_lane_inner = row_lane - row_quad * SIZE_LANE
-    inner_linear = (
-        (row_lane_inner[:, None] * (SIZE_OUTER // SIZE_LANE) + row_quad[:, None]) * SIZE_INNER
-        + col_lane[None, :]
-    )
+    inner_linear = ((row_lane_inner[:, None] * (SIZE_OUTER // SIZE_LANE) + row_quad[:, None]) * SIZE_INNER +
+                    col_lane[None, :])
     half = inner_linear // SIZE_HALF
     inner = inner_linear - half * SIZE_HALF
-    return (
-        base
-        + outer.to(INDEX_TYPE)[:, None] * stride_outer
-        + inner_group.to(INDEX_TYPE)[None, :] * stride_inner
-        + half.to(INDEX_TYPE) * stride_half
-        + inner.to(INDEX_TYPE) * stride_lane
-    )
+    return (base + outer.to(INDEX_TYPE)[:, None] * stride_outer + inner_group.to(INDEX_TYPE)[None, :] * stride_inner +
+            half.to(INDEX_TYPE) * stride_half + inner.to(INDEX_TYPE) * stride_lane)
