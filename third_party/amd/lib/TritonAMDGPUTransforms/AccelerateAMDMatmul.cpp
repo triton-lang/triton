@@ -1503,11 +1503,11 @@ public:
     auto newAcc =
         convertAndCastTensor(rewriter, oldAcc, wmmaEnc, operandTypes[2]);
 
-    // deduce `kWidth` - the number of consecutive elements along K dimension
-    // for a lane derive it from `kBase` the number of elements along K
-    // dimension in a wmma instruction for a lane Note, kBase can consist of a
-    // several separated groups of consecutive elements. This depends on
-    // instruction encoding
+    // deduce `kWidth` which is the number of consecutive elements along the K
+    // dimension for a lane. Derive it from `kBase` which is the number of
+    // elements along the K dimension in a WMMA instruction per lane. Note:
+    // `kBase` can consist of several separated groups of consecutive elements.
+    // This depends on the instruction encoding.
     auto kWidth = 0;
     if (kDimTensor < kDim) {
       // TODO: implement zero padding for small K
