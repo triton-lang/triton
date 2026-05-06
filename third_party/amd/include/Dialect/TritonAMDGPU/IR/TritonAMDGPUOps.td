@@ -769,7 +769,7 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
 
     For "all warps participate", omit the attribute (preferred) or pass
     a full bitmask `K = num_warps`; an explicit `warp_used_hint = 0` is
-    rejected.  Front-ends should map a Python-side `0` to "no attribute".
+    rejected by the verifier.
 
     Restriction: the hint must be *axis-aligned*.  Pin some warpId bit
     positions to fixed values and leave the others free; the active

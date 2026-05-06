@@ -107,17 +107,16 @@ def gemm_tdm_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 
 @gluon.jit
 def issue_loads_predicated(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BLOCK_K: ttgl.constexpr,
-                           NUM_BUFFERS: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr, TDM_WARP_USED_HINT: ttgl.constexpr,
-                           pred=1):
-    pred_i32 = pred.to(ttgl.int32) if hasattr(pred, 'to') else pred
+                           NUM_BUFFERS: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr,
+                           TDM_WARP_USED_HINT: ttgl.constexpr):
     ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_am, producer * BLOCK_K], a_buffer.index(producer % NUM_BUFFERS),
-                                    pred=pred_i32, warp_used_hint=TDM_WARP_USED_HINT)
+                                    warp_used_hint=TDM_WARP_USED_HINT)
     if not TRANSPOSE_B:
         ttgl.amd.gfx1250.tdm.async_load(b_desc, [producer * BLOCK_K, off_bn], b_buffer.index(producer % NUM_BUFFERS),
-                                        pred=pred_i32, warp_used_hint=TDM_WARP_USED_HINT)
+                                        warp_used_hint=TDM_WARP_USED_HINT)
     else:
         ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_bn, producer * BLOCK_K], b_buffer.index(producer % NUM_BUFFERS),
-                                        pred=pred_i32, warp_used_hint=TDM_WARP_USED_HINT)
+                                        warp_used_hint=TDM_WARP_USED_HINT)
     producer += 1
     return producer
 
@@ -379,8 +378,7 @@ def test_runtime_gemm_tdm_predicated_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BU
         stride_cm, stride_cn,  #
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
         NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B, WARP_BASES=warp_bases,  #
-        TDM_WARP_USED_HINT=tdm_warp_used_hint,  #
-        num_warps=num_warps, waves_per_eu=num_warps // 4)
+        TDM_WARP_USED_HINT=tdm_warp_used_hint, num_warps=num_warps, waves_per_eu=num_warps // 4)
     static_profile(kernel)
 
     c_triton = c_device.cpu()
