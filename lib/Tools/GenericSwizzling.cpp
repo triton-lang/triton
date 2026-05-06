@@ -274,13 +274,26 @@ SmallVector<int32_t> LocalMemOpTile::getLaneAddr(ArrayRef<int32_t> lane) const {
   return ret;
 }
 
-SmallVector<int32_t> getLaneTile(ArrayRef<int32_t> lane,
-                                 const LocalMemOpTile &tile,
-                                 int32_t log2Phase) {
+SmallVector<int32_t> getLaneTile(const LocalMemOpTile &tile,
+                                 ArrayRef<int32_t> lane, int32_t vecSize,
+                                 int32_t bitwidth, int32_t numBanks) {
+  auto log2Vec = llvm::Log2_32(std::max<int32_t>(1, (vecSize * bitwidth) / 32));
+  auto log2Bank = llvm::Log2_32(numBanks);
+  auto log2Phase = std::max<int32_t>(0, log2Vec + lane.size() - log2Bank);
+  SmallVector<int32_t> res;
   if (!tile.laneAddr.empty()) {
-    return tile.getLaneAddr(lane);
+    // The laneAddr field explicitly defines the lane basis indices for
+    // load/store instructions with non-sequential lane IDs within a single
+    // phase, like ds_read_b128.
+    res = tile.getLaneAddr(lane);
+  } else {
+    // If laneAddr is empty, we fall back to the standard assumption for
+    // regular loads/stores: lane IDs are sequential within a single phase.
+    res = to_vector(lane.drop_back(log2Phase));
   }
-  return to_vector(lane.drop_back(log2Phase));
+  assert(res.size() == lane.size() - log2Phase &&
+         "Both paths should return the expected number of elements");
+  return res;
 }
 
 std::pair<int, int>
@@ -294,12 +307,9 @@ bankConflictsLdSt(const LinearLayout &src, const LinearLayout &dst,
   auto kVec = S("vector");
   auto srcLane = flatten(srcFlat, S("lane"));
   auto dstLane = flatten(dstFlat, S("lane"));
-  auto log2Vec =
-      llvm::Log2_32(std::max(smem.getInDimSize(kVec) * bitwidth / 32, 1));
-  auto log2Bank = llvm::Log2_32(numBanks);
-  auto log2Phase = std::max<int32_t>(0, log2Vec + srcLane.size() - log2Bank);
-  auto tileSrc = getLaneTile(srcLane, srcTile, log2Phase);
-  auto tileDst = getLaneTile(dstLane, dstTile, log2Phase);
+  auto vecSize = smem.getInDimSize(kVec);
+  auto tileSrc = getLaneTile(srcTile, srcLane, vecSize, bitwidth, numBanks);
+  auto tileDst = getLaneTile(dstTile, dstLane, vecSize, bitwidth, numBanks);
   return bankConflicts(tileSrc, tileDst, smem);
 }
 
@@ -597,12 +607,10 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
       vbasis.resize(basesPerBank);
     }
   }
-  auto log2Vec = llvm::Log2_32(
-      std::max<int32_t>(1, ((1 << vbasis.size()) * bitwidth) / 32));
-  auto log2Bank = llvm::Log2_32(numBanks);
-  auto log2Phase = std::max<int32_t>(0, log2Vec + laneSrc.size() - log2Bank);
-  auto tileSrc = getLaneTile(laneSrc, srcTile, log2Phase);
-  auto tileDst = getLaneTile(laneDst, dstTile, log2Phase);
+  auto vecSize = 1 << vbasis.size();
+  auto log2Vec = llvm::Log2_32(std::max<int32_t>(1, (vecSize * bitwidth) / 32));
+  auto tileSrc = getLaneTile(srcTile, laneSrc, vecSize, bitwidth, numBanks);
+  auto tileDst = getLaneTile(dstTile, laneDst, vecSize, bitwidth, numBanks);
   auto smem =
       optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc, tileDst,
                        blockSrc, src.getOutDims(), 0, numBanks);
