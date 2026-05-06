@@ -11,6 +11,8 @@
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 
+#include <optional>
+
 namespace {
 
 using namespace mlir;
@@ -49,16 +51,18 @@ struct ConvertLayoutOpSwizzlingConversion
       auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
       auto outVals = transferWithinBlockSwizzling(
           loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase);
+      if (!outVals)
+        return failure();
 
       Value result =
-          packLLElements(loc, getTypeConverter(), outVals, rewriter, dstTy);
+          packLLElements(loc, getTypeConverter(), *outVals, rewriter, dstTy);
       rewriter.replaceOp(op, result);
       return success();
     }
     return failure();
   }
 
-  SmallVector<Value> transferWithinBlockSwizzling(
+  std::optional<SmallVector<Value>> transferWithinBlockSwizzling(
       Location loc, ConversionPatternRewriter &rewriter,
       const LinearLayout &srcLayout, const LinearLayout &dstLayout,
       ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase) const {
@@ -76,7 +80,9 @@ struct ConvertLayoutOpSwizzlingConversion
       auto outVals =
           transferWithinBlockSwizzling(loc, rewriter, srcLayout, dstLayout,
                                        newInVals, llvmElemTyPtr, smemBase);
-      for (auto &v : outVals) {
+      if (!outVals)
+        return std::nullopt;
+      for (auto &v : *outVals) {
         v = b.inttoptr(llvmElemTy, v);
       }
       return outVals;
@@ -90,7 +96,9 @@ struct ConvertLayoutOpSwizzlingConversion
           inVals, [&](Value v) { return b.zext(i8ElemTy, v).getResult(); }));
       auto outVals = transferWithinBlockSwizzling(
           loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase);
-      for (auto &v : outVals) {
+      if (!outVals)
+        return std::nullopt;
+      for (auto &v : *outVals) {
         v = b.trunc(llvmElemTy, v);
       }
       return outVals;
@@ -111,7 +119,9 @@ struct ConvertLayoutOpSwizzlingConversion
       auto prmtDst = removeBroadcastDst.apply(dstLayout);
       auto outVals = transferWithinBlockSwizzling(
           loc, rewriter, srcLayout, prmtDst, inVals, llvmElemTy, smemBase);
-      return broadcastAs(outVals, dstLayout);
+      if (!outVals)
+        return std::nullopt;
+      return broadcastAs(*outVals, dstLayout);
     }
 
     // At this point we have a type that's at least 8-bit
@@ -156,10 +166,12 @@ struct ConvertLayoutOpSwizzlingConversion
     loadCvt = loadCvt.reshapeOuts(
         {{kOffset, loadCvt.getTotalOutDimSize() / nBlock}, {kBlock, nBlock}});
 
-    // We never do cross-CTA writes by construction. We may do cross-CTA reads,
-    // but in that case we lower to ld.shared/st.shared
-    assert(storeCvt.isTrivialOver({kBlock}));
-    assert(loadCvt.isTrivialOver({kBlock}) || idxDst == 0);
+    // Shared-memory load/store can carry a CTA-cluster offset, but the
+    // matrix instructions below cannot.
+    if (idxSrc != 0 && !storeCvt.isTrivialOver({kBlock}))
+      return std::nullopt;
+    if (idxDst != 0 && !loadCvt.isTrivialOver({kBlock}))
+      return std::nullopt;
 
     auto tileSize = storeCvt.getInDimSize(kReg);
 
