@@ -673,8 +673,13 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   auto regDst = flatten(dstFlat, kReg);
   auto laneSrc = flatten(srcFlat, kLane);
   auto laneDst = flatten(dstFlat, kLane);
-  auto blockSrcSet =
-      SetVector<int32_t>(llvm::from_range_t{}, flatten(srcFlat, kBlock));
+  // Block bases describe the smem slices owned by each CTA. Pass them as a
+  // SmallVector (not a SetVector) to preserve duplicate zeros: when src
+  // broadcasts over the block dimension every basis is 0, and we need
+  // unflatten() in the inner optimalSwizzling to see all of them so that the
+  // smem block in-dim size equals num_ctas. This ensures storeCvt's
+  // block→block sub-mapping is an identity after invertAndCompose.
+  auto blockBases = flatten(srcFlat, kBlock);
   // Get the associated src/dst tiles for each instruction if they exist
   SmallVector<std::tuple<std::pair<int32_t, int32_t>, SmallVector<int32_t>,
                          SmallVector<int32_t>, SmallVector<int32_t>, int32_t>>
@@ -711,7 +716,7 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
     // conflicts
     for (auto [instrs, vbasis, tileSrc, tileDst, leaveReps] : tiles) {
       auto smem = optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc,
-                                   tileDst, blockSrcSet.getArrayRef(),
+                                   tileDst, blockBases,
                                    src.getOutDims(), leaveReps);
       auto [read, write] = bankConflicts(tileSrc, tileDst, smem);
       smems.push_back({read + write, smem, {instrs.first, instrs.second}});
