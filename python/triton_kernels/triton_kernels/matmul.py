@@ -533,7 +533,7 @@ def matmul(a, b, bias,
     )
     c_logical_block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
     c_tma_block_n = c_logical_block_n // precision_config.c_value_pack_factor
-    out_tile_n = c_logical_block_n if opt_flags.is_persistent else opt_flags.block_n // matmul_fused_activation.specs.reduction_n
+    out_tile_n = opt_flags.block_n // matmul_fused_activation.specs.reduction_n
     c_tma_block_size = [1, c_tma_block_n] if has_scatter_tma else [1, opt_flags.block_m, c_tma_block_n]
     c_tma_mode = None if not c_has_tma else "ragged" if is_c_ragged and not has_scatter_tma else "dense"
     c_tensor_or_tma = make_tma(c, c_tma_block_size, c_tma_mode) if c_has_tma else c.storage.data
