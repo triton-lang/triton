@@ -810,10 +810,10 @@ tt.func @tc_gen5_commit(%arg0: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %pr
 module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL: @reinterpret
-tt.func private @reinterpret(%arg0: !ttg.memdesc<128x32xf32, #tmem_f32, #ttng.tensor_memory>) -> !ttg.memdesc<256x32xf16, #tmem_f16, #ttng.tensor_memory> {
-  %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x32xf32, #tmem_f32, #ttng.tensor_memory> -> !ttg.memdesc<256x32xf16, #tmem_f16, #ttng.tensor_memory>
+tt.func private @reinterpret(%arg0: !ttg.memdesc<128x32xf32, #tmem_f32, #ttng.tensor_memory>) -> !ttg.memdesc<128x32xf16, #tmem_f16, #ttng.tensor_memory> {
+  %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x32xf32, #tmem_f32, #ttng.tensor_memory> -> !ttg.memdesc<128x32xf16, #tmem_f16, #ttng.tensor_memory>
   // CHECK-NEXT: return %arg0
-  tt.return %0 : !ttg.memdesc<256x32xf16, #tmem_f16, #ttng.tensor_memory>
+  tt.return %0 : !ttg.memdesc<128x32xf16, #tmem_f16, #ttng.tensor_memory>
 }
 
 }
