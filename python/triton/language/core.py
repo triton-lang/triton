@@ -1598,45 +1598,32 @@ _AGGREGATE_MISSING = object()
 def _resolve_aggregate_fields(cls):
     """Resolve annotations across the MRO for field inheritance.
 
-    Walks the class hierarchy (excluding object) in reverse MRO order so that
-    child annotations override parent annotations while preserving field order:
-    parent fields come first, then child fields.
-
-    Only considers the class itself and parent classes marked as aggregates
-    (__triton_aggregate__ = True), skipping infrastructure bases like base_value.
+    Returns annotations from cls and from any __triton_aggregate__ parents in
+    MRO order (parent fields first, child fields after). typing.get_type_hints
+    handles PEP 649 string annotation resolution; we then filter out names from
+    infrastructure bases like base_value that aren't aggregate fields.
 
     Returns:
         all_annotations: dict mapping field name -> type annotation
         all_defaults: dict mapping field name -> default value (only for fields with defaults)
     """
-    all_annotations = {}
+    hints = typing.get_type_hints(cls)
+    aggregate_names = set()
+    for base in cls.__mro__:
+        if base is cls or getattr(base, "__triton_aggregate__", False):
+            aggregate_names.update(getattr(base, "__annotations__", {}))
+    all_annotations = {name: hints[name] for name in hints if name in aggregate_names}
+
     all_defaults = {}
-    # Walk MRO in reverse (most base first, excluding object) so child overrides parent
     for base in reversed(cls.__mro__):
         if base is object:
             continue
-        # Only include the class itself and processed aggregate parents
         if base is not cls and not getattr(base, "__triton_aggregate__", False):
             continue
-        # Resolve string annotations (PEP 649 / Python 3.13+). typing.get_type_hints
-        # evaluates forward references against the defining module's namespace; we
-        # fall back to the raw __annotations__ values if resolution fails so any
-        # legitimately-unresolvable annotation surfaces a clearer error downstream
-        # rather than crashing this resolver. Matches the convention used by the
-        # outer _aggregate(cls) call at the top of this module.
-        raw_annotations = getattr(base, "__annotations__", {})
-        try:
-            resolved = typing.get_type_hints(base)
-        except Exception:
-            resolved = raw_annotations
-        for name in raw_annotations:
-            all_annotations[name] = resolved.get(name, raw_annotations[name])
-        # Collect default values: from __aggregate_defaults__ (processed parents)
-        # or from the class dict (the class being processed)
         parent_defaults = getattr(base, "__aggregate_defaults__", None)
         if parent_defaults is not None:
             all_defaults.update(parent_defaults)
-        for name in raw_annotations:
+        for name in getattr(base, "__annotations__", {}):
             if name in base.__dict__:
                 val = base.__dict__[name]
                 # Skip descriptors and methods — only plain values are defaults
