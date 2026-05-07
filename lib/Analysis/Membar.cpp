@@ -344,7 +344,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     bool hasExplicitSharedDeps = !curBlockInfo.syncReadSlices.empty() ||
                                  !curBlockInfo.syncWriteSlices.empty();
     if (hasExplicitSharedDeps &&
-        !isa<triton::gpu::LocalAtomicScatterAddOp>(op)) {
+        !isa<triton::gpu::LocalAtomicScatterRMWOp>(op)) {
       llvm::report_fatal_error(
           "scratch buffer operations should not have any shared memory "
           "dependencies");

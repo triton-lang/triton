@@ -422,39 +422,48 @@ bool mlir::triton::canBeAsyncLoad(Operation *op) {
 }
 
 void mlir::triton::combineRedundantWaitOps(
-    llvm::SmallSetVector<ttg::AsyncWaitOp, 8> &waitOps) {
-  llvm::MapVector<ttg::AsyncWaitOp, ttg::AsyncWaitOp> toDelete;
-  for (auto waitOp : waitOps) {
+    llvm::SmallSetVector<Operation *, 8> &waitOps,
+    llvm::function_ref<bool(Operation *)> isCounterBarrier,
+    llvm::function_ref<Operation *(OpBuilder &, Location, ValueRange, unsigned)>
+        createWait) {
+  llvm::MapVector<Operation *, Operation *> toDelete;
+  for (Operation *waitOp : waitOps) {
     if (toDelete.count(waitOp))
       continue;
-    SmallVector<ttg::AsyncWaitOp> waitGroup = {waitOp};
-    SmallVector<Value> depTokens = waitOp.getOperands();
-    unsigned minWaitNumber = waitOp.getNum();
+    StringRef waitName = waitOp->getName().getStringRef();
+    auto getNum = [](Operation *op) {
+      return static_cast<unsigned>(
+          op->getAttrOfType<IntegerAttr>("num").getInt());
+    };
+    SmallVector<Operation *> waitGroup = {waitOp};
+    SmallVector<Value> depTokens(waitOp->getOperands().begin(),
+                                 waitOp->getOperands().end());
+    unsigned minWaitNumber = getNum(waitOp);
     Operation *next = waitOp->getNextNode();
-    // Stop if we reach the end of the block or if there is another commit group
-    // or a branching op (forOp, ifOp, whileOp) in between the waits
-    while (next &&
-           !isa<ttg::AsyncCommitGroupOp, RegionBranchOpInterface>(next)) {
-      if (auto nextWait = dyn_cast<ttg::AsyncWaitOp>(next)) {
-        waitGroup.push_back(nextWait);
-        minWaitNumber = std::min(minWaitNumber, nextWait.getNum());
-        depTokens.append(nextWait.getOperands().begin(),
-                         nextWait.getOperands().end());
+    // Stop at the end of the block, at any branching op (forOp, ifOp, whileOp),
+    // or at any caller-declared counter barrier.
+    while (next && !isa<RegionBranchOpInterface>(next) &&
+           !isCounterBarrier(next)) {
+      if (next->getName().getStringRef() == waitName) {
+        waitGroup.push_back(next);
+        minWaitNumber = std::min(minWaitNumber, getNum(next));
+        depTokens.append(next->getOperands().begin(),
+                         next->getOperands().end());
       }
       next = next->getNextNode();
     }
     if (waitGroup.size() == 1)
       continue;
     OpBuilder builder(waitGroup.front());
-    auto newWaitOp = ttg::AsyncWaitOp::create(builder, waitOp.getLoc(),
-                                              depTokens, minWaitNumber);
-    for (auto waitOp : waitGroup) {
-      toDelete[waitOp] = newWaitOp;
+    Operation *newWaitOp =
+        createWait(builder, waitOp->getLoc(), depTokens, minWaitNumber);
+    for (Operation *wo : waitGroup) {
+      toDelete[wo] = newWaitOp;
     }
   }
-  for (auto waitOp : toDelete) {
-    waitOp.first->replaceAllUsesWith(waitOp.second);
-    waitOp.first->erase();
+  for (auto entry : toDelete) {
+    entry.first->replaceAllUsesWith(entry.second);
+    entry.first->erase();
   }
 }
 
