@@ -320,12 +320,6 @@ class CMakeBuild(build_ext):
                 "-DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld",
                 "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld",
             ]
-
-        if check_env_flag("TRITON_EXT_ENABLED"):
-            cmake_args += ["-DTRITON_EXT_ENABLED=1"]
-        else:
-            cmake_args += ["-DTRITON_EXT_ENABLED=0"]
-
         # Note that asan doesn't work with binaries that use the GPU, so this is
         # only useful for tools like triton-opt that don't run code on the GPU.
         #

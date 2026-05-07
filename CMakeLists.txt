@@ -23,7 +23,6 @@ option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
 option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
-option(TRITON_EXT_ENABLED "Build with default visibility for Triton+LLVM symbol exposure to plugin extensions" OFF)
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 set(TRITON_VERSION "" CACHE STRING "Triton version string (passed from setup.py)")
 
@@ -275,14 +274,6 @@ endfunction()
 # Disable warnings that show up in external code (gtest;pybind11)
 if(NOT MSVC)
   set(TRITON_DISABLE_EH_RTTI_FLAGS "$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti>")
-  if(NOT TRITON_EXT_ENABLED)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
-  else()
-    # Inform plugin loader if that libtriton is compiled with visibility
-    # so that they will not proceed with loading plugins if that will
-    # crash a Triton not compiled with visibility due to missing symbols.
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRITON_EXT_ENABLED=1")
-  endif()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default ")
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4244 /wd4624 /wd4715 /wd4530")
@@ -498,22 +489,21 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
   target_link_options(tritoncore PRIVATE ${LLVM_LDFLAGS})
 
-  if(NOT TRITON_EXT_ENABLED)
-    # When extensions are disabled, only export the Python entrypoint.
-    set(TRITON_EXPORT_SYMBOLS_FILE "${CMAKE_CURRENT_BINARY_DIR}/triton.exports")
-    if(APPLE)
-      set(TRITON_EXPORT_SYMBOLS_FILE_CONTENT "_PyInit_libtriton\n")
-      target_link_options(triton PRIVATE
-        "LINKER:-exported_symbols_list,${TRITON_EXPORT_SYMBOLS_FILE}")
-    elseif(UNIX)
-      set(TRITON_EXPORT_SYMBOLS_FILE_CONTENT
-        "{\n  global:\n    PyInit_libtriton;\n  local:\n    *;\n};\n")
-      target_link_options(triton PRIVATE
-        "LINKER:--version-script,${TRITON_EXPORT_SYMBOLS_FILE}")
-    endif()
-    file(GENERATE OUTPUT "${TRITON_EXPORT_SYMBOLS_FILE}"
-      CONTENT "${TRITON_EXPORT_SYMBOLS_FILE_CONTENT}")
+  # Only export the Python entrypoint from libtriton; all C++ symbols live in
+  # libtritoncore.
+  set(TRITON_EXPORT_SYMBOLS_FILE "${CMAKE_CURRENT_BINARY_DIR}/triton.exports")
+  if(APPLE)
+    set(TRITON_EXPORT_SYMBOLS_FILE_CONTENT "_PyInit_libtriton\n")
+    target_link_options(triton PRIVATE
+      "LINKER:-exported_symbols_list,${TRITON_EXPORT_SYMBOLS_FILE}")
+  elseif(UNIX)
+    set(TRITON_EXPORT_SYMBOLS_FILE_CONTENT
+      "{\n  global:\n    PyInit_libtriton;\n  local:\n    *;\n};\n")
+    target_link_options(triton PRIVATE
+      "LINKER:--version-script,${TRITON_EXPORT_SYMBOLS_FILE}")
   endif()
+  file(GENERATE OUTPUT "${TRITON_EXPORT_SYMBOLS_FILE}"
+    CONTENT "${TRITON_EXPORT_SYMBOLS_FILE_CONTENT}")
 
   install(TARGETS triton
     COMPONENT libraries
@@ -535,9 +525,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     COPYONLY)
 
   # Build plugins when building libtriton since they depend on Triton libs.
-  if(TRITON_EXT_ENABLED)
-    add_subdirectory(examples/plugins)
-  endif()
+  add_subdirectory(examples/plugins)
 endif()
 
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)

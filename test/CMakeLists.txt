@@ -2,7 +2,6 @@ add_subdirectory(lib)
 
 llvm_canonicalize_cmake_booleans(
   MLIR_ENABLE_BINDINGS_PYTHON
-  TRITON_EXT_ENABLED
 )
 
 configure_lit_site_cfg(

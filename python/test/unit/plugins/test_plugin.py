@@ -1,7 +1,6 @@
 import torch
 
 import pytest
-import os
 
 import triton
 import triton.language as tl
@@ -28,9 +27,6 @@ def kernel3(BLOCK_SIZE: tl.constexpr):
 
 
 def test_op(capfd, device: str):
-    if os.environ.get('TRITON_EXT_ENABLED', '0') == '0':
-        return
-
     size = 98432
     x = torch.rand(size, device=device)
     output = torch.empty_like(x)
