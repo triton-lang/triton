@@ -9,7 +9,7 @@ from triton.experimental.gluon.language._semantic import _check, _compute_tmem_r
 
 from . import tma
 from . import clc
-from ..hopper import fence_async_shared, mbarrier
+from ..hopper import fence_async_shared, mbarrier, cluster
 from ..ampere import async_copy, mma_v2
 
 from triton._C.libtriton import ir
@@ -22,6 +22,7 @@ __all__ = [
     "allocate_tensor_memory",
     "async_copy",
     "clc",
+    "cluster",
     "fence_async_shared",
     "mbarrier",
     "mma_v2",
