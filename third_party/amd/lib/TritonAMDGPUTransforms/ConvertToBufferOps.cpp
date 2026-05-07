@@ -65,6 +65,19 @@ bool isScalarLiteralZero(Value v) {
   return false;
 }
 
+// Returns true iff `solver` has a non-empty range for `v` whose minimum
+// signed value is non-negative.
+bool isProvenNonNegative(Value v, DataFlowSolver *solver) {
+  const auto *lattice =
+      solver->lookupState<dataflow::IntegerValueRangeLattice>(v);
+  if (!lattice)
+    return false;
+  const mlir::IntegerValueRange &vr = lattice->getValue();
+  if (vr.isUninitialized() || AMD::isEmptyInitializedRange(vr.getValue()))
+    return false;
+  return !vr.getValue().smin().isNegative();
+}
+
 Value sumIntegerValues(ArrayRef<Value> values, PatternRewriter &rewriter,
                        Location loc) {
   if (values.empty())
@@ -182,22 +195,28 @@ bool collectSplatThroughTensorTrunc(Value offset,
   return true;
 }
 
-std::pair<Value, Value> splitHighLevelBufferOffset(Value offset,
-                                                   PatternRewriter &rewriter) {
+std::pair<Value, Value>
+splitHighLevelBufferOffset(Value offset, PatternRewriter &rewriter,
+                           DataFlowSolver *solver) {
   SmallVector<Value> uniformLeaves;
   SmallVector<Value> perLaneLeaves;
   HighLevelUniformityChecker uniformity;
   if (!collectSplatThroughTensorTrunc(offset, uniformLeaves, uniformity,
-                                      rewriter)) {
+                                      rewriter))
     collectHighLevelOffsetLeaves(offset, uniformLeaves, perLaneLeaves,
                                  uniformity, rewriter);
-  }
 
-  uniformLeaves.erase(
-      std::remove_if(uniformLeaves.begin(), uniformLeaves.end(),
-                     isScalarLiteralZero),
-      uniformLeaves.end());
+  llvm::erase_if(uniformLeaves, isScalarLiteralZero);
   if (uniformLeaves.empty())
+    return {offset, Value()};
+
+  // AMD raw buffer ops bound-check `voffset` without including `soffset`.
+  // Lifting a positive uniform component into `soffset` while leaving a
+  // possibly-negative one in `voffset` would let some lane's `voffset` go
+  // negative, wrap to a huge unsigned, and OOB-drop the access. Only split
+  // when every per-lane leaf is provably non-negative.
+  auto nonNegative = [&](Value v) { return isProvenNonNegative(v, solver); };
+  if (!llvm::all_of(perLaneLeaves, nonNegative))
     return {offset, Value()};
 
   Location loc = offset.getLoc();
@@ -796,7 +815,8 @@ private:
 
 struct SplitBufferLoadOffset
     : public mlir::OpRewritePattern<triton::amdgpu::BufferLoadOp> {
-  using OpRewritePattern::OpRewritePattern;
+  SplitBufferLoadOffset(MLIRContext *context, DataFlowSolver *solver)
+      : OpRewritePattern(context), solver(solver) {}
 
   LogicalResult matchAndRewrite(triton::amdgpu::BufferLoadOp op,
                                 PatternRewriter &rewriter) const override {
@@ -804,7 +824,7 @@ struct SplitBufferLoadOffset
       return failure();
 
     auto [voffset, soffset] = splitHighLevelBufferOffset(op.getVoffset(),
-                                                         rewriter);
+                                                         rewriter, solver);
     if (!soffset)
       return failure();
 
@@ -813,11 +833,15 @@ struct SplitBufferLoadOffset
         op.getCache(), op.getMask(), op.getOther(), op.getContiguity());
     return success();
   }
+
+private:
+  DataFlowSolver *solver;
 };
 
 struct SplitBufferLoadToLocalOffset
     : public mlir::OpRewritePattern<triton::amdgpu::BufferLoadToLocalOp> {
-  using OpRewritePattern::OpRewritePattern;
+  SplitBufferLoadToLocalOffset(MLIRContext *context, DataFlowSolver *solver)
+      : OpRewritePattern(context), solver(solver) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::BufferLoadToLocalOp op,
@@ -826,7 +850,7 @@ struct SplitBufferLoadToLocalOffset
       return failure();
 
     auto [voffset, soffset] = splitHighLevelBufferOffset(op.getVoffset(),
-                                                         rewriter);
+                                                         rewriter, solver);
     if (!soffset)
       return failure();
 
@@ -836,11 +860,15 @@ struct SplitBufferLoadToLocalOffset
         op.getContiguity());
     return success();
   }
+
+private:
+  DataFlowSolver *solver;
 };
 
 struct SplitBufferStoreOffset
     : public mlir::OpRewritePattern<triton::amdgpu::BufferStoreOp> {
-  using OpRewritePattern::OpRewritePattern;
+  SplitBufferStoreOffset(MLIRContext *context, DataFlowSolver *solver)
+      : OpRewritePattern(context), solver(solver) {}
 
   LogicalResult matchAndRewrite(triton::amdgpu::BufferStoreOp op,
                                 PatternRewriter &rewriter) const override {
@@ -848,7 +876,7 @@ struct SplitBufferStoreOffset
       return failure();
 
     auto [voffset, soffset] = splitHighLevelBufferOffset(op.getVoffset(),
-                                                         rewriter);
+                                                         rewriter, solver);
     if (!soffset)
       return failure();
 
@@ -857,6 +885,9 @@ struct SplitBufferStoreOffset
         op.getCache(), op.getMask(), op.getContiguity());
     return success();
   }
+
+private:
+  DataFlowSolver *solver;
 };
 
 } // anonymous namespace
@@ -896,7 +927,7 @@ struct TritonAMDGPUConvertToBufferOpsPass
               this->analyzeSmallTensorOfst);
     }
     patterns.add<SplitBufferLoadOffset, SplitBufferLoadToLocalOffset,
-                 SplitBufferStoreOffset>(context);
+                 SplitBufferStoreOffset>(context, solver.get());
 
     if (this->allowBufferAtomics && targetInfo.supportsBufferAtomicRMW())
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(

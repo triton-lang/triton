@@ -93,6 +93,52 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+#blocked_direct = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // The streaming-topk pattern emits `splat(uniform) + per_lane + dense<-N>`.
+  // Lifting the uniform into `soffset` would leave a negative constant in
+  // `voffset`, which the AMD raw-buffer OOB check (which excludes `soffset`)
+  // would reject. The splitter must refuse the rewrite here.
+  // COMMON-LABEL: direct_buffer_load_negative_const_no_soffset_split
+  tt.func @direct_buffer_load_negative_const_no_soffset_split(%arg0: !tt.ptr<f32>, %arg1: i32) -> tensor<64xf32, #blocked_direct> {
+    %neg_cst = arith.constant dense<-32> : tensor<64xi32, #blocked_direct>
+    %range = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked_direct>
+    %base = tt.splat %arg1 : i32 -> tensor<64xi32, #blocked_direct>
+    %positive_offset = arith.addi %base, %range : tensor<64xi32, #blocked_direct>
+    %offset = arith.addi %positive_offset, %neg_cst : tensor<64xi32, #blocked_direct>
+    // COMMON-NOT: amdg.buffer_load {{.*}}, %arg1
+    // COMMON: amdg.buffer_load %arg0[%{{.*}}]{{.*}} : tensor<64xf32
+    %loaded = amdg.buffer_load %arg0[%offset] : tensor<64xf32, #blocked_direct>
+    tt.return %loaded : tensor<64xf32, #blocked_direct>
+  }
+}
+
+// -----
+
+#blocked_direct = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // Fused-attention bwd `DK`/`DV`-style stores have per-lane offsets that
+  // multiply `tt.make_range` by an unannotated stride argument. The product
+  // has unknown sign, so range analysis cannot prove `voffset >= 0` and the
+  // splitter must keep the uniform component in `voffset`.
+  // COMMON-LABEL: direct_buffer_store_unsigned_stride_no_soffset_split
+  tt.func @direct_buffer_store_unsigned_stride_no_soffset_split(%arg0: !tt.ptr<f32>, %arg1: i32, %stride: i32, %value: tensor<64xf32, #blocked_direct>) {
+    %range = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked_direct>
+    %stride_splat = tt.splat %stride : i32 -> tensor<64xi32, #blocked_direct>
+    %per_lane = arith.muli %range, %stride_splat : tensor<64xi32, #blocked_direct>
+    %base = tt.splat %arg1 : i32 -> tensor<64xi32, #blocked_direct>
+    %offset = arith.addi %base, %per_lane : tensor<64xi32, #blocked_direct>
+    // COMMON-NOT: amdg.buffer_store {{.*}}, %arg1
+    // COMMON: amdg.buffer_store %{{.*}}, %arg0[%{{.*}}]{{.*}} : tensor<64xf32
+    amdg.buffer_store %value, %arg0[%offset] : tensor<64xf32, #blocked_direct>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
 // COMMON-LABEL: buffer_stride
