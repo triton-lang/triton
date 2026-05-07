@@ -1596,36 +1596,31 @@ _AGGREGATE_MISSING = object()
 
 
 def _resolve_aggregate_fields(cls):
-    """Resolve annotations across the MRO for field inheritance.
+    """Assemble annotations and defaults from cls's own declarations + any
+    aggregate ancestors. Each aggregate's __annotations__ and __aggregate_defaults__
+    are already resolved when set on its aggregate_value wrapper, so we just merge.
 
-    Returns annotations from cls and from any __triton_aggregate__ parents in
-    MRO order (parent fields first, child fields after). typing.get_type_hints
-    handles PEP 649 string annotation resolution; we then filter out names from
-    infrastructure bases like base_value that aren't aggregate fields.
-
-    Returns:
-        all_annotations: dict mapping field name -> type annotation
-        all_defaults: dict mapping field name -> default value (only for fields with defaults)
+    typing.get_type_hints(cls) handles PEP 649 string-annotation resolution for cls's
+    own annotations. We don't read from non-aggregate bases (e.g. base_value), so
+    their stray annotations like type: base_type never enter the result.
     """
-    hints = typing.get_type_hints(cls)
-    aggregate_names = set()
-    for base in cls.__mro__:
-        if base is cls or getattr(base, "__triton_aggregate__", False):
-            aggregate_names.update(getattr(base, "__annotations__", {}))
-    all_annotations = {name: hints[name] for name in hints if name in aggregate_names}
-
+    all_annotations = {}
     all_defaults = {}
-    for base in reversed(cls.__mro__):
-        if base is object:
+    # Inherit from aggregate ancestors in MRO order (oldest first → child overrides parent)
+    for base in reversed(cls.__mro__[1:]):
+        if not getattr(base, "__triton_aggregate__", False):
             continue
-        if base is not cls and not getattr(base, "__triton_aggregate__", False):
-            continue
-        parent_defaults = getattr(base, "__aggregate_defaults__", None)
-        if parent_defaults is not None:
-            all_defaults.update(parent_defaults)
-        for name in getattr(base, "__annotations__", {}):
-            if name in base.__dict__:
-                val = base.__dict__[name]
+        all_annotations.update(getattr(base, "__annotations__", {}))
+        all_defaults.update(getattr(base, "__aggregate_defaults__", None) or {})
+
+    # Add cls's own fields, resolving string annotations via typing.get_type_hints.
+    own_names = cls.__dict__.get("__annotations__", {})
+    if own_names:
+        hints = typing.get_type_hints(cls)
+        for name in own_names:
+            all_annotations[name] = hints[name]
+            if name in cls.__dict__:
+                val = cls.__dict__[name]
                 # Skip descriptors and methods — only plain values are defaults
                 if not callable(val) or isinstance(val, (constexpr, base_value)):
                     all_defaults[name] = val
