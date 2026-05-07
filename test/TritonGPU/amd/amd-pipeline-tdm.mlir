@@ -163,7 +163,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 //   → padded_shared<[16:+4]>
 //
 // Operand B (opIdx=1, order=[1,0]): loadTransposed = (1 != 0) = true → transposed
-//   queryLDSTransLoadParams(32) → nullopt, falls back to padAmount = 128/32 = 4
+//   queryLDSTransLoadParams(32) → empty, falls back to padAmount = 128/32 = 4
 //   innerDimLength = shape[1] = 64 (N dim)
 //   → padded_shared<[64:+4]>
 //
