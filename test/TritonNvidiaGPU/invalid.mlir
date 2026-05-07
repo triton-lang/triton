@@ -5,8 +5,10 @@
 
 // -----
 
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_acc_fp4_padded = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, fp4Padded = true>
 #tmem_fp4_dense = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 #tmem_fp4_padded = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, fp4Padded = true>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
@@ -42,6 +44,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
        !ttg.memdesc<128x64xf8E5M2, #tmem_fp4_padded, #ttng.tensor_memory>,
        !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
        !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>
+    tt.return
+  }
+
+  tt.func public @tcgen5_fp4_padded_accumulator_invalid(
+      %a: !ttg.memdesc<128x128xf8E5M2, #shared_a, #ttg.shared_memory>,
+      %b: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf16, #tmem_acc_fp4_padded, #ttng.tensor_memory, mutable>,
+      %accUse: i1,
+      %pred: i1) {
+    // expected-error @below {{Accumulator must not be fp4_padded}}
+    ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred :
+       !ttg.memdesc<128x128xf8E5M2, #shared_a, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf16, #tmem_acc_fp4_padded, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  tt.func public @tcgen5_scaled_fp4_padded_accumulator_invalid(
+      %a: !ttg.memdesc<128x64xi8, #tmem_fp4_padded, #ttng.tensor_memory>,
+      %b: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf32, #tmem_acc_fp4_padded, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %useAcc: i1,
+      %pred: i1) {
+    // expected-error @below {{accumulator layout must not be fp4_padded}}
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e2m1 rhs = e5m2 :
+       !ttg.memdesc<128x64xi8, #tmem_fp4_padded, #ttng.tensor_memory>,
+       !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf32, #tmem_acc_fp4_padded, #ttng.tensor_memory, mutable>,
        !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
        !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>
     tt.return

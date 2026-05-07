@@ -1105,9 +1105,13 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   LinearLayout tile =
       LinearLayout::zeros1D(encoding.getColStride(), kCol, dims[1]);
 
-  auto colLayout = LinearLayout::identity1D(blockN, kCol, dims[1]);
-  if (encoding.getFp4Padded())
-    colLayout = LinearLayout::zeros1D(2, kCol, dims[1]) * colLayout;
+  LinearLayout colLayout;
+  if (encoding.getFp4Padded()) {
+    // The physical low column bit selects the real/padded half, so the logical
+    // column bits start one bit later than they do for dense TMEM layouts.
+    colLayout *= LinearLayout::zeros1D(2, kCol, dims[1]);
+  }
+  colLayout *= LinearLayout::identity1D(blockN, kCol, dims[1]);
 
   if (blockM == 64 && !encoding.getTwoCTAs()) {
     tile *= LinearLayout::identity1D(16, kRow, dims[0]) * colLayout;

@@ -206,6 +206,8 @@ getDistributedLayoutForTmemLdSt(const LinearLayout &ll, TMemAccessAtom atom,
       // Software padding with just one column
       return getDistributedLayoutForTmemLdSt(ll, atom, numWarps, 32);
     } else {
+      // This can fail for fp4_padded layouts as we don't support implicit
+      // padding and unpadding upon load yet.
       return std::nullopt;
     }
   }
