@@ -272,6 +272,7 @@ Exact preserved properties:
 
 - ``exp2(x + y) = exp2(x) * exp2(y)``
 - ``exp2(0) = 1``
+- ``exp2(-x) = 1.0 / exp2(x)``
 
 ``exp``
 =======
@@ -348,13 +349,13 @@ Important caveats:
 Casts and Format Conversions
 --------------------------
 
-Float-to-Float Width Changes
+Float-to-Float Conversions
 ============================
 
 Supported operations:
 
 - converting a tensor between floating-point types with ``x.to(dtype)``
-- frontend-generated float widening and narrowing conversions
+- implicit float widening and narrowing conversions
 
 Rewrite:
 
@@ -366,10 +367,14 @@ Exact preserved properties:
 - ``0``, ``+1``, and ``-1`` remain stable across the conversion
 - sign-extension behavior in the payload domain
 - truncation drops high payload bits
+- an upcast followed by a downcast is the identity
 
 Important caveat:
 
 - This preserves payload structure, not IEEE conversion semantics.
+- Conversions between fp types of the same width do not model any loss of
+  precision or range, so for example under fpsan
+  ``fn(a.to(tl.float16)).to(tl.bfloat16) == fn(a)`` (for any bfloat16 ``a``).
 
 Packed fp4 conversion
 =====================
@@ -458,7 +463,7 @@ Important caveats:
   operands and scales, not exact hardware-format numeric decoding.
 - Tensor-memory operations preserve payload dataflow; they do not make FpSan a
   substitute for race or synchronization checking.
-- Current backend support is explicitly enabled for AMD ``gfx942``, ``gfx950``,
+- Currently fpsan is supported on all NVIDIA hardware, as well as AMD ``gfx942``, ``gfx950``,
   and ``gfx1250``.
 
 ------------------------------

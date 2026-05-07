@@ -275,15 +275,18 @@ public:
   ConcurrencySanitizerImpl(ModuleOp module, const ConSanTargetHooks *hooks)
       : module(module), hooks(hooks) {}
 
-  void run() {
+  LogicalResult run() {
     tti::FunctionBuilder funcBuilder(module, auxData);
-    auxData.populateAndPassToWarpSpecialize(module, funcBuilder, hooks);
+    if (failed(auxData.populateAndPassToWarpSpecialize(module, funcBuilder,
+                                                       hooks)))
+      return failure();
 
     tt::FuncOp entryPoint = tti::getEntryPoint(module);
 
     ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
     b.setInsertionPointToStart(&entryPoint.getBody().front());
     instrumentMemoryOperations(b, funcBuilder);
+    return success();
   }
 
 private:
@@ -602,10 +605,11 @@ private:
 
 } // namespace
 
-void runConcurrencySanitizer(ModuleOp module, const ConSanTargetHooks *hooks) {
+LogicalResult runConcurrencySanitizer(ModuleOp module,
+                                      const ConSanTargetHooks *hooks) {
   assert(hooks && "hooks must not be null");
   ConcurrencySanitizerImpl impl(module, hooks);
-  impl.run();
+  return impl.run();
 }
 
 class ConcurrencySanitizerPass
@@ -622,7 +626,8 @@ public:
                                                  : "";
     auto hooks = createConSanHooks(key);
     assert(hooks && "no ConSan hooks registered for target");
-    runConcurrencySanitizer(module, hooks.get());
+    if (failed(runConcurrencySanitizer(module, hooks.get())))
+      return signalPassFailure();
   }
 };
 

@@ -218,12 +218,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @filecheck_test
 @gluon.jit
-def test_shared_atomic_scatter_add():
+def test_shared_atomic_scatter_rmw():
     # CHECK: [[SMEM:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<8x32xi32
     # CHECK: [[INDICES:%.*]] = arith.addi
     # CHECK: [[VALUES:%.*]] = arith.constant dense<1> : tensor<8x32xi32, #blocked>
     # CHECK: [[MASK:%.*]] = arith.constant dense<true> : tensor<8x32xi1, #blocked>
-    # CHECK: ttg.local_atomic_scatter_add [[SMEM]][[[INDICES]]], [[VALUES]], [[MASK]] {axis = 1 : i32} : (!ttg.memdesc<8x32xi32, #shared, #smem, mutable>, tensor<8x32xi32, #blocked>, tensor<8x32xi32, #blocked>, tensor<8x32xi1, #blocked>) -> tensor<8x32xi32, #blocked>
+    # CHECK: ttg.local_atomic_scatter_rmw add, [[SMEM]][[[INDICES]]], [[VALUES]], [[MASK]]
+    # CHECK: ttg.local_atomic_scatter_rmw max, [[SMEM]][[[INDICES]]], [[VALUES]], [[MASK]]
+    # CHECK: ttg.local_atomic_scatter_rmw min, [[SMEM]][[[INDICES]]], [[VALUES]], [[MASK]]
+    # CHECK: ttg.local_atomic_scatter_rmw and, [[SMEM]][[[INDICES]]], [[VALUES]], [[MASK]]
+    # CHECK: ttg.local_atomic_scatter_rmw or, [[SMEM]][[[INDICES]]], [[VALUES]], [[MASK]]
+    # CHECK: ttg.local_atomic_scatter_rmw xor, [[SMEM]][[[INDICES]]], [[VALUES]], [[MASK]]
+    # CHECK: ttg.local_atomic_scatter_rmw exch, [[SMEM]][[[INDICES]]], [[VALUES]], [[MASK]]
+    # CHECK: ttg.local_atomic_scatter_rmw umax
+    # CHECK: ttg.local_atomic_scatter_rmw umin
+    # CHECK: ttg.local_atomic_scatter_rmw fadd
     shape: ttgl.constexpr = [8, 32]
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
     smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
@@ -236,6 +245,23 @@ def test_shared_atomic_scatter_add():
     values = ttgl.full(shape, 1, ttgl.int32, layout)
     mask = ttgl.full(shape, True, ttgl.int1, layout)
     old = smem.atomic_scatter_add(values, indices, axis=1, mask=mask)  # noqa: F841
+    old = smem.atomic_scatter_max(values, indices, axis=1, mask=mask)  # noqa: F841
+    old = smem.atomic_scatter_min(values, indices, axis=1, mask=mask)  # noqa: F841
+    old = smem.atomic_scatter_and(values, indices, axis=1, mask=mask)  # noqa: F841
+    old = smem.atomic_scatter_or(values, indices, axis=1, mask=mask)  # noqa: F841
+    old = smem.atomic_scatter_xor(values, indices, axis=1, mask=mask)  # noqa: F841
+    old = smem.atomic_scatter_xchg(values, indices, axis=1, mask=mask)  # noqa: F841
+
+    smem_u = ttgl.allocate_shared_memory(ttgl.uint32, shape, smem_layout)
+    smem_u.store(ttgl.zeros(shape, ttgl.uint32, layout))
+    values_u = ttgl.full(shape, 1, ttgl.uint32, layout)
+    old = smem_u.atomic_scatter_max(values_u, indices, axis=1, mask=mask)  # noqa: F841
+    old = smem_u.atomic_scatter_min(values_u, indices, axis=1, mask=mask)  # noqa: F841
+
+    smem_f = ttgl.allocate_shared_memory(ttgl.float32, shape, smem_layout)
+    smem_f.store(ttgl.zeros(shape, ttgl.float32, layout))
+    values_f = ttgl.full(shape, 1.0, ttgl.float32, layout)
+    old = smem_f.atomic_scatter_add(values_f, indices, axis=1, mask=mask)  # noqa: F841
 
 
 @gluon.jit
