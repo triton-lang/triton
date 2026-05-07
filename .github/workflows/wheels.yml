@@ -27,6 +27,13 @@ jobs:
       id-token: write
       contents: read
 
+    # The self-hosted x86_64 runner ships a docker CLI (1.52) newer than the
+    # daemon's max API version (1.43), so unpinned docker commands fail with
+    # "client version 1.52 is too new". Pin at the job level so every step
+    # (including cibuildwheel's internal docker invocations) inherits it.
+    env:
+      DOCKER_API_VERSION: "1.43"
+
     steps:
 
       - name: Prune stale docker containers

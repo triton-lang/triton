@@ -485,21 +485,22 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_reshape(self, shape)
 
     @builtin
-    def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
+    def _reinterpret(self, dtype=None, shape=None, layout=None,
+                     _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Reinterpret the shared memory descriptor as a different dtype, shape, or layout.
 
         Args:
-            dtype (dtype): The new data type.
-            shape (List[int]): The new shape.
-            layout (SharedLayout): The new layout.
+            dtype (dtype): The new data type. Defaults to the descriptor dtype.
+            shape (List[int]): The new shape. Defaults to the descriptor shape.
+            layout (SharedLayout): The new layout. Defaults to the descriptor layout.
 
         Returns:
             shared_memory_descriptor: Descriptor with updated type and layout.
         """
-        dtype = _unwrap_if_constexpr(dtype)
-        shape = [_unwrap_if_constexpr(s) for s in shape]
-        layout = _unwrap_if_constexpr(layout)
+        dtype = self.dtype if dtype is None else _unwrap_if_constexpr(dtype)
+        shape = self.shape if shape is None else [_unwrap_if_constexpr(s) for s in shape]
+        layout = self.layout if layout is None else _unwrap_if_constexpr(layout)
 
         return _semantic.memdesc_reinterpret(self, dtype, shape, layout)
 

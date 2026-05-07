@@ -2,7 +2,9 @@
 # fmt: off
 import triton
 import triton.language as tl
-from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
+from triton_kernels.tensor_details.layout_details.blackwell_scale import (
+    unswizzle_mx_scale_bw,
+)
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_mx_scale_cdna4
@@ -16,6 +18,7 @@ from ._common import (
     make_matmul_repr,
     matmul_launch_metadata,
     compute_pids,
+    output_mx_scale_store_ptr,
 )
 
 
@@ -48,6 +51,7 @@ def _matmul(
              WriteBackIndx, writeback_size,
              RAGGED_DIMENSION: tl.constexpr,
              XSliceSizes, XSliceOffs, XBlockOffs, XBlockSchedule, X_EXPECTED_SLICE_SIZE: tl.constexpr, X_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
+             XOutputScaleBlockOffs,
              WSliceSizes, WSliceOffs, WBlockOffs, WBlockSchedule, W_EXPECTED_SLICE_SIZE: tl.constexpr, _W_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
              # true grid size
              batch_size, grid_m, grid_n,
@@ -79,6 +83,8 @@ def _matmul(
              NUM_SMS: tl.constexpr,
              X_TMA_MODE: tl.constexpr,
              Y_TMA_MODE: tl.constexpr,
+             Y_MX_SCALE_LAYOUT: tl.constexpr = None,
+             OUT_N_TILE_ALIGNED: tl.constexpr = False,
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES: tl.constexpr = False,
              SWAP_XW: tl.constexpr = False,
@@ -215,7 +221,7 @@ def _matmul(
 
     (
         expt_id, start_z, start_z_out,
-        start_m, _, off_m,
+        start_m, slice_block_off_m, off_m,
         off_k_x, off_k_w
     ) = compute_offsets(
             pid_s, pid_m, pid_k,
@@ -503,11 +509,11 @@ def _matmul(
         tl.static_assert(Y_TMA_MODE is None, "FP4 outputs are only supported without output TMA")
         offs_y_n_store = pid_n * (OUT_BLOCK_N // 2) + tl.arange(0, OUT_BLOCK_N // 2)
         YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n_store.to(index_type)[None, :] * stride_y_n
-        mask_store = mask_m[:, None] & (offs_y_n_store[None, :] < tl.cdiv(yN, 2))
+        mask_store = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & (offs_y_n_store[None, :] < tl.cdiv(yN, 2))
     else:
         YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
-        mask_store = mask_m[:, None] & mask_n[None, :]
-    mask = mask_m[:, None] & mask_n[None, :]
+        mask_store = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
+    mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
 
     if OutAcc is not None:
         if PER_BATCH_ACC_SCALE:
@@ -534,14 +540,35 @@ def _matmul(
         out, out_scale = EPILOGUE_FN(out, mask, *epilogue_fn_args)
         tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")
         offs_y_n_scale = MX_SCALE_BLOCK_N * pid_n + tl.arange(0, MX_SCALE_BLOCK_N)
+        output_scale_rows = offs_y_m if WriteBackIndx is not None else start_m + offs_y_m
+        YActualScalePtrs = output_mx_scale_store_ptr(
+            YActualScale,
+            offs_m,
+            output_scale_rows,
+            offs_y_n_scale,
+            start_z_out,
+            start_m,
+            M,
+            N_MX_BLOCK,
+            XOutputScaleBlockOffs,
+            expt_id,
+            pid_k - pid_k,
+            pid_k - pid_k,
+            batch_size,
+            stride_y_mx_k,
+            stride_y_mx_z,
+            stride_y_mx_m,
+            stride_y_mx_n,
+            WriteBackIndx is not None,
+            False,
+            Y_TMA_MODE,
+            RAGGED_DIMENSION,
+            Y_MX_SCALE_LAYOUT,
+            INDEX_TYPE=index_type,
+        )
         mask_n_scale = offs_y_n_scale < N_MX_BLOCK
-        YActualScale += start_z_out.to(index_type) * stride_y_mx_z
-        if WriteBackIndx is None:
-            YActualScale += start_m * stride_y_mx_m
-            YActualScalePtrs = YActualScale + offs_y_m.to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
-        else:
-            YActualScalePtrs = YActualScale + offs_y_m.to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
-        tl.store(YActualScalePtrs, out_scale, mask=mask_m[:, None] & mask_n_scale[None, :])
+        scale_store_mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n_scale[None, :]
+        tl.store(YActualScalePtrs, out_scale, mask=scale_store_mask)
     else:
         if PER_BATCH_OUT_SCALE:
             YExpectedScale = YExpectedScale + start_z_out
