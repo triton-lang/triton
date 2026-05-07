@@ -142,25 +142,35 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
     return tensor_descriptor(handle, shape, strides, type)
 
 
+def _handle_i32_pred(pred, _semantic):
+    pred = _unwrap_if_constexpr(pred)
+    if isinstance(pred, bool):
+        pred = int(pred)
+    pred = _semantic.to_tensor(pred)
+    if pred.type.is_int1():
+        pred = _semantic.cast(pred, ttgl.int32)
+    assert pred.type.is_int32(), f"Expected pred to be an int32 or int1 value, but got {pred.type}"
+    return pred
+
+
 @builtin
 def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], dest: shared_memory_descriptor,
-               pred=1, mbarrier: shared_memory_descriptor = None, cache_modifier="", _semantic=None) -> None:
+               pred=True, mbarrier: shared_memory_descriptor = None, cache_modifier="", _semantic=None) -> None:
     """Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.
 
     Args:
         src (tensor_descriptor): the source tensor descriptor.
         offsets (List[int]): the offsets from the base pointer in the tensor descriptor.
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
-        pred (int, optional): Predicate to enable or disable the load. Defaults to 1.
+        pred (bool, optional): Predicate to enable or disable the load. Defaults to True.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
-    pred = _semantic.to_tensor(pred)
-    pred_handle = pred.handle
+    pred = _handle_i32_pred(pred, _semantic)
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
-    _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, offset_handles, dest.handle, pred_handle,
+    _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, offset_handles, dest.handle, pred.handle,
                                                             mbarrier_handle, cache_modifier)
 
 
@@ -234,7 +244,7 @@ def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, dst_col
 
 @builtin
 def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, src_col_offset, dst: shared_memory_descriptor,
-                 pred=1, mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+                 pred=True, mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
     """Gather data from non-contiguous rows in global memory to shared memory asynchronously.
 
     This operation uses TDM gather mode to read data from non-contiguous rows in global memory.
@@ -252,7 +262,7 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, src_col_
         src_col_offset (int or tensor): the starting column offset in the source tensor
                                         for all gathered rows.
         dst (shared_memory_descriptor): the shared memory destination to store gathered data. Must be 2D.
-        pred (int, optional): Predicate to enable or disable the gather. Defaults to 1.
+        pred (bool, optional): Predicate to enable or disable the gather. Defaults to True.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
     ndim = len(desc.block_shape)
@@ -264,14 +274,13 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, src_col_
     # Convert src_col_offset to i32
     src_col_offset_handle = _semantic._convert_to_ir_values([src_col_offset], require_i64=False)[0]
 
-    pred = _semantic.to_tensor(pred)
-    pred_handle = pred.handle
+    pred = _handle_i32_pred(pred, _semantic)
 
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
 
     _semantic.builder.create_async_tdm_gather(desc.handle, src_row_indices.handle, src_col_offset_handle, dst.handle,
-                                              pred_handle, mbarrier_handle)
+                                              pred.handle, mbarrier_handle)
 
 
 @builtin

@@ -115,7 +115,7 @@ class WGMMA:
 
     # Take the result and reset the accumulator.
     @gluon.jit
-    def take_result(self):
+    def take_result(self, splitn: gl.constexpr = False):
         return self.acc, WGMMA(self.acc, gl.to_tensor(False))
 
 
@@ -149,9 +149,13 @@ class MMAv5:
         return self
 
     @gluon.jit
-    def take_result(self):
+    def take_result(self, splitn: gl.constexpr = False):
         next = MMAv5(gl.to_tensor(False), self.acc_tmem, self.bar, self.counter)
-        return self.acc_tmem.load(), next
+        if splitn:
+            layout: gl.constexpr = self.acc_tmem.get_reg_layout(instr_variant="32x32b_splitn")
+            return self.acc_tmem.load(layout), next
+        else:
+            return self.acc_tmem.load(), next
 
 
 def select_mma_impl():
@@ -620,8 +624,9 @@ def issue_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, stealb: gl.constexpr, 
 
 
 @gluon.jit
-def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.constexpr, SchedulerImpl: gl.constexpr,
-                                       num_buffers: gl.constexpr, STEALB: gl.constexpr, num_warps: gl.constexpr):
+def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, c_half_desc, MMAImpl: gl.constexpr,
+                                       SchedulerImpl: gl.constexpr, num_buffers: gl.constexpr, STEALB: gl.constexpr,
+                                       num_warps: gl.constexpr):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
@@ -636,7 +641,8 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
     if not STEALB:
         c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
     else:
-        gl.static_assert(2 * BLOCK_N * BLOCK_K >= BLOCK_M * BLOCK_N, "B tile not large enough to steal")
+        gl.static_assert(BLOCK_M == BLOCK_K or BLOCK_M == 2 * BLOCK_K,
+                         "expected one or two B tiles to cover the epilogue tile")
     bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
     for i in gl.static_range(num_buffers):
         mbarrier.init(bars.index(i), count=1)
@@ -687,18 +693,33 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
                                       num_buffers)
 
         mma = mma.wait_num_outstanding(0)
-        c, mma = mma.take_result()
+        use_split_n_load: gl.constexpr = STEALB and BLOCK_M != BLOCK_K
+        c, mma = mma.take_result(splitn=use_split_n_load)
         c = c.to(dtype)
         if not STEALB:
             c_buf = c_smem
             tma.store_wait(pendings=0)
+            c_buf.store(c)
+            fence_async_shared()
+            tma.async_copy_shared_to_global(c_desc, [epilogue_off_m, epilogue_off_n], c_buf)
+        elif BLOCK_M == BLOCK_K:
+            c_buf = b_bufs.index(producer % (num_buffers + STEALB))
+            c_buf.store(c)
+            fence_async_shared()
+            tma.async_copy_shared_to_global(c_desc, [epilogue_off_m, epilogue_off_n], c_buf)
         else:
             # Steal the next 2 B buffers for the epilogue.
-            c_buf = b_bufs.index(producer % (num_buffers + STEALB))._reinterpret(dtype, c_desc.block_type.shape,
-                                                                                 c_desc.layout)
-        c_buf.store(c)
-        fence_async_shared()
-        tma.async_copy_shared_to_global(c_desc, [epilogue_off_m, epilogue_off_n], c_buf)
+            c0, c1 = c.reshape((BLOCK_M, 2, BLOCK_N // 2)).permute(0, 2, 1).split()
+            c0_buf = b_bufs.index(producer % (num_buffers + STEALB))._reinterpret(shape=c_half_desc.block_type.shape,
+                                                                                  layout=c_half_desc.layout)
+            c1_buf = b_bufs.index(
+                (producer + 1) % (num_buffers + STEALB))._reinterpret(shape=c_half_desc.block_type.shape,
+                                                                      layout=c_half_desc.layout)
+            c0_buf.store(c0)
+            c1_buf.store(c1)
+            fence_async_shared()
+            tma.async_copy_shared_to_global(c_half_desc, [epilogue_off_m, epilogue_off_n], c0_buf)
+            tma.async_copy_shared_to_global(c_half_desc, [epilogue_off_m, epilogue_off_n + BLOCK_N // 2], c1_buf)
     tma.store_wait(pendings=0)
 
 
@@ -709,16 +730,19 @@ def persistent_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers,
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
     b_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float16)
     c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
+    c_half_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N // 2], gl.float16)
 
     a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
     b_desc = TensorDescriptor.from_tensor(B, [BLOCK_K, BLOCK_N], b_layout)
     c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
+    c_half_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N // 2], c_half_layout)
 
     num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
     grid = (min(num_sms, num_pid), )
-    persistent_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, MMAImpl, SchedulerImpl, num_buffers,
-                                             STEALB=num_buffers == 4, num_warps=num_warps)
+    stealb = num_buffers == 4
+    persistent_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, c_half_desc, MMAImpl, SchedulerImpl, num_buffers,
+                                             STEALB=stealb, num_warps=num_warps)
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])

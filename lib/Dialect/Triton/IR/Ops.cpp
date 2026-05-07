@@ -1029,6 +1029,12 @@ LogicalResult FpToFpOp::verify() {
 }
 
 //-- BitcastOp --
+OpFoldResult BitcastOp::fold(FoldAdaptor adaptor) {
+  if (getSrc().getType() == getType())
+    return getSrc();
+  return {};
+}
+
 LogicalResult BitcastOp::verify() {
   // Bitcast only allows conversion between types with the same bit width.
   Type dstType = getType();
@@ -1141,9 +1147,8 @@ struct CanonicalizeIntToPtrOfPtrToInt : public OpRewritePattern<IntToPtrOp> {
     auto ptrToIntOp = intToPtrOp.getSrc().getDefiningOp<PtrToIntOp>();
     if (!ptrToIntOp)
       return failure();
-
-    // Replace with the original pointer
-    rewriter.replaceOp(intToPtrOp, ptrToIntOp.getSrc());
+    rewriter.replaceOpWithNewOp<BitcastOp>(intToPtrOp, intToPtrOp.getType(),
+                                           ptrToIntOp.getSrc());
     return success();
   }
 };

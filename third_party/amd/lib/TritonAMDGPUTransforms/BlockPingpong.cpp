@@ -9,6 +9,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -865,14 +866,15 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
   auto newAsyncWaitOp = asyncWaitOps[0];
   if (asyncWaitOps.size() > 1) {
     SmallVector<Value> tokens;
-    int32_t minNum = std::numeric_limits<int32_t>::max();
     for (auto asyncWaitOp : asyncWaitOps) {
       for (auto token : asyncWaitOp.getAsyncToken()) {
         tokens.push_back(token);
       }
-      minNum = std::min<int32_t>(minNum, asyncWaitOp.getNum());
     }
-    newAsyncWaitOp = ttg::AsyncWaitOp::create(builder, loc, tokens, minNum);
+    // Drop pre-calculated mark_num and conservatively set 0 before
+    // updateWaits (in runOnOperation) re-evaluates against the token chain
+    // post-reorder.
+    newAsyncWaitOp = ttg::AsyncWaitOp::create(builder, loc, tokens, /*num=*/0);
     for (auto asyncWaitOp : asyncWaitOps) {
       asyncWaitOp.getResult().replaceAllUsesWith(newAsyncWaitOp.getResult());
       asyncWaitOp->erase();
@@ -1267,12 +1269,19 @@ struct TritonAMDGPUBlockPingpongPass
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
+    bool transformed = false;
     for (auto funcOp : m.getOps<tt::FuncOp>()) {
       funcOp.walk([&](scf::ForOp forOp) {
         Pingponger pingponger(forOp, ttg::lookupNumWarps(forOp), numStages);
         pingponger.getDotPingponged();
+        transformed = true;
       });
     }
+    // Pingpong reorders async copies/commits around the merged ttg.async_wait,
+    // invalidating any `num` Pipeline.cpp set earlier. Recompute against the
+    // post-reorder IR.
+    if (transformed)
+      mlir::triton::updateWaits(m);
   }
 };
 
