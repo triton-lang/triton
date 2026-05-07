@@ -2282,7 +2282,7 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
         A_K_INPUT: ttgl.constexpr = K // 2 if A_IS_FP4 else K
         A_K_TMEM: ttgl.constexpr = K if A_FP4_PADDED else A_K_INPUT
         B_K_STORAGE: ttgl.constexpr = K // 2 if B_IS_FP4 else K
-        a_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, A_K_TMEM], col_stride=1, fp4_padded=A_FP4_PADDED)
+        a_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, A_K_TMEM], col_stride=1)
         a_tmem = allocate_tensor_memory(a.dtype.element_ty, [M, A_K_TMEM], a_tmem_layout)
         a_reg_layout: ttgl.constexpr = a_tmem.get_reg_layout()
         a_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, a_reg_layout))[:, None]
@@ -2332,6 +2332,9 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
 
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
+        if A_FP4_PADDED:
+            padded_layout: ttgl.constexpr = TensorMemoryLayout([M, A_K_INPUT], col_stride=1, fp4_padded=True)
+            a_tmem = a_tmem._reinterpret(a.dtype.element_ty, [M, A_K_INPUT], padded_layout)
         if B_IS_FP4:
             tcgen05_mma_scaled(a_tmem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT, B_FORMAT,
                                use_acc=False, mbarriers=[bar])
@@ -2392,37 +2395,6 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
     kernel[(1, )](out, M, N, K, a, b, a_scale, b_scale, a_format, b_format, a_is_fp4, b_is_fp4, a_fp4_padded,
                   scale_vec_size)
     torch.testing.assert_close(out, ref, atol=atol, rtol=rtol)
-
-
-@pytest.mark.parametrize("storage_dtype, torch_dtype, k_size, fp4_padded", [
-    pytest.param("fp8", torch.float8_e4m3fn, 128, False, id="fp8"),
-    pytest.param("fp4", torch.uint8, 64, False, id="fp4"),
-    pytest.param("fp4_padded", torch.uint8, 128, True, id="fp4_padded"),
-])
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_tmem_fp4_padded_store_load_roundtrip(storage_dtype, torch_dtype, k_size, fp4_padded):
-    torch.manual_seed(0)
-    M = 128
-
-    @gluon.jit
-    def kernel(inp, out, M: ttgl.constexpr, K: ttgl.constexpr, FP4_PADDED: ttgl.constexpr):
-        layout: ttgl.constexpr = TensorMemoryLayout([M, K], col_stride=1, fp4_padded=FP4_PADDED)
-        tmem = allocate_tensor_memory(inp.dtype.element_ty, [M, K], layout)
-        reg_layout: ttgl.constexpr = tmem.get_reg_layout()
-        offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, reg_layout))[:, None]
-        offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, reg_layout))[None, :]
-        values = ttgl.load(inp + offs_m * K + offs_k)
-        tmem.store(values)
-        loaded = tmem.load(reg_layout)
-        ttgl.store(out + offs_m * K + offs_k, loaded)
-
-    if storage_dtype == "fp8":
-        inp = torch.randint(20, 40, (M, k_size), dtype=torch.uint8, device="cuda").view(torch_dtype)
-    else:
-        inp = torch.randint(0, 256, (M, k_size), dtype=torch.uint8, device="cuda")
-    out = torch.empty_like(inp)
-    kernel[(1, )](inp, out, M, k_size, fp4_padded)
-    torch.testing.assert_close(out.view(torch.uint8), inp.view(torch.uint8), atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")

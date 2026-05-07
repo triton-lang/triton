@@ -206,7 +206,7 @@ getDistributedLayoutForTmemLdSt(const LinearLayout &ll, TMemAccessAtom atom,
       // Software padding with just one column
       return getDistributedLayoutForTmemLdSt(ll, atom, numWarps, 32);
     } else {
-      assert(false && "Should not happen");
+      return std::nullopt;
     }
   }
   // getTileLayout returns the layout for a bitwidth of 32

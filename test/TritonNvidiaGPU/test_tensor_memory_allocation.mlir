@@ -297,6 +297,27 @@ tt.func @mma_scaled_lhs_tmem(
 
 // -----
 
+#tmem_fp4_padded = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, fp4Padded = true>
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+#tmem = #ttng.tensor_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100"} {
+
+// CHECK: ttg.tensor_memory_size = 64
+// CHECK-LABEL: @fp4_padded_tmem_alloc_columns
+tt.func @fp4_padded_tmem_alloc_columns() {
+  // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+  %fp4 = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xi8, #tmem_fp4_padded, #tmem, mutable>
+  // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 32 : i32, tensor_memory_row_offset = 0 : i32}
+  %next = ttng.tmem_alloc : () -> !ttg.memdesc<128x4xi8, #tmem_scales, #tmem, mutable>
+  "use"(%fp4, %next) : (!ttg.memdesc<128x64xi8, #tmem_fp4_padded, #tmem, mutable>, !ttg.memdesc<128x4xi8, #tmem_scales, #tmem, mutable>) -> ()
+  tt.return
+}
+
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
