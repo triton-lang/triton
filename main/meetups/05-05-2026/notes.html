@@ -1,0 +1,294 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agenda: &mdash; Triton  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=fd6457a4" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+      <script src="../../_static/sg-tags.js?v=d80f6fa4"></script>
+      <script src="../../_static/design-tabs.js?v=f930bc37"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            Triton
+              <img src="https://cdn.openai.com/triton/assets/triton-logo.png" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/index.html">Tutorials</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Python API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.html">triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.language.html">triton.language</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton.testing.html">triton.testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../python-api/triton-semantics.html">Triton Semantics</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Gluon</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/index.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/tutorials/gluon/index.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../getting-started/examples/gluon/index.html">Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../gluon/api/index.html">API Reference</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Triton MLIR Dialects</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../dialects/dialects.html">Triton MLIR Dialects and Ops</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Programming Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-1/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-2/related-work.html">Related Work</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-3/debugging.html">Debugging Triton</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../programming-guide/chapter-3/fpsan.html">Floating-Point Sanitizer (FpSan)</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Triton</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Agenda:</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/meetups/05-05-2026/notes.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="agenda">
+<h1>Agenda:<a class="headerlink" href="#agenda" title="Link to this heading"></a></h1>
+<ul class="simple">
+<li><p>TileLens: Visual program analysis for tile-based programming models - Taihua He, George Mason University</p></li>
+<li><p>Triton Extensions on Windows: investigation and findings - Quinn Pham, Intel</p></li>
+<li><p>Community questions (block pointer deprecation, TMA naming, Triton releases) - Whitney Tsang, Intel</p></li>
+</ul>
+</section>
+<section id="minutes">
+<h1>Minutes:<a class="headerlink" href="#minutes" title="Link to this heading"></a></h1>
+<ul class="simple">
+<li><p>TileLens - Taihua He, George Mason University</p>
+<ul>
+<li><p>Motivation</p>
+<ul>
+<li><p>Kernel observability is increasingly important (determinism, mega kernels, asynchrony).</p></li>
+<li><p>Fragmented tooling ecosystem: Nvidia, AMD, and Tranium each ship their own tools.</p></li>
+<li><p>Software side is also fragmented: many tile-based DSLs (Triton, Tilelang, CuTile, Amazon NKI). Some projects mix multiple DSLs (e.g. Mamba3 uses CuTeDSL, Triton, and Tilelang in the same project).</p></li>
+<li><p>Goal: a general-purpose analyzer for tile-based DSLs.</p></li>
+</ul>
+</li>
+<li><p>TileLens design</p>
+<ul>
+<li><p>Frontends (Triton, NKI, etc.) lower common ops (e.g. <code class="docutils literal notranslate"><span class="pre">tl.load</span></code>, <code class="docutils literal notranslate"><span class="pre">nki.load</span></code>) into a common IR.</p></li>
+<li><p>Trace kernels via a function decorator and emit a list of IR records.</p></li>
+<li><p>IR records are consumed by clients: tracer, profiler, sanitizer, visualizer.</p></li>
+<li><p>Usage: <code class="docutils literal notranslate"><span class="pre">import</span> <span class="pre">triton_viz</span></code>, decorate the kernel, swap clients (tracer/sanitizer/profiler) by changing one config value.</p></li>
+</ul>
+</li>
+<li><p>Implementation</p>
+<ul>
+<li><p>Decorator wraps the kernel with a kernel interface (Triton-style <code class="docutils literal notranslate"><span class="pre">[grid]</span></code> syntax) and an SPMD run function.</p></li>
+<li><p>DSL is patched to use an interpreter (Triton already had one; a custom NKI interpreter was added).</p></li>
+<li><p>Operations are double-patched to add instrumentation hooks that map DSL ops to common TileLens ops.</p></li>
+</ul>
+</li>
+<li><p>Adding a new DSL frontend (NKI case study)</p>
+<ul>
+<li><p>Write NumPy implementations of all DSL functions (e.g. <code class="docutils literal notranslate"><span class="pre">nki.ndarray</span></code>, <code class="docutils literal notranslate"><span class="pre">nki.matmul</span></code>).</p></li>
+<li><p>Patch the DSL namespace to point to those implementations; provide an <code class="docutils literal notranslate"><span class="pre">unpatch</span></code> to restore.</p></li>
+<li><p>Provide an interpreter that runs the kernel over an SPMD grid on CPU.</p></li>
+<li><p>Add custom IR ops where DSL semantics differ (e.g. NKI’s <code class="docutils literal notranslate"><span class="pre">dma_copy</span></code> / <code class="docutils literal notranslate"><span class="pre">tensor_copy</span></code> mapped to a new <code class="docutils literal notranslate"><span class="pre">transfer</span></code> op).</p></li>
+<li><p>Provide adapter functions and op-name maps, then register as a frontend.</p></li>
+</ul>
+</li>
+<li><p>Adding a new client</p>
+<ul>
+<li><p>Implement the client abstract class and override hooks (pre/post run, arg callback, <code class="docutils literal notranslate"><span class="pre">register_op_callback</span></code>, etc.).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">register_op_callback</span></code> lets clients define per-op behavior (e.g. tracer stores outputs after <code class="docutils literal notranslate"><span class="pre">tl.dot</span></code>, <code class="docutils literal notranslate"><span class="pre">tl.load</span></code>, <code class="docutils literal notranslate"><span class="pre">tl.store</span></code>).</p></li>
+</ul>
+</li>
+<li><p>Notable features</p>
+<ul>
+<li><p>Eager and symbolic execution (sanitizer/profiler): build a graph of address computations and only evaluate what is needed for analysis (e.g. bounds checks). Much faster than full eager execution.</p></li>
+<li><p>Concurrent grid launch: simulates concurrent SM execution by running PIDs in multiple threads, so atomic races behave like they would on GPU. Configured via <code class="docutils literal notranslate"><span class="pre">triton_viz.config.num_sms</span></code>.</p></li>
+</ul>
+</li>
+<li><p>Live demo</p>
+<ul>
+<li><p>Visualizer: matmul kernel, shows input arrays, masks, per-PID load regions, value heatmaps, dot/load/store records, transposes.</p></li>
+<li><p>Sanitizer: runs cleanly on a correct matmul; flags out-of-bounds access (e.g. an injected <code class="docutils literal notranslate"><span class="pre">+</span> <span class="pre">1</span></code>) with the offending line and a trace of address computation.</p></li>
+<li><p>Profiler: shows load/store efficiency, mask metrics, and potential issues.</p></li>
+</ul>
+</li>
+<li><p>Limitations / future work</p>
+<ul>
+<li><p>Sanitizer still in active development (data-race checkers in progress).</p></li>
+<li><p>Tracer is slow (Python) and memory-heavy (stores all activations); activation-checkpointing could help.</p></li>
+<li><p>Doesn’t model memory allocation or concurrency in detail today.</p></li>
+<li><p>More DSL support needed; CuTile is on the roadmap.</p></li>
+</ul>
+</li>
+<li><p>Q&amp;A</p>
+<ul>
+<li><p>Q&gt; How does this compare to CUTracer / tritonparse / tl.parse?</p></li>
+<li><p>A&gt; TileLens is higher level - takes any high-level DSL and squishes it into a common interface. Focused on semantic correctness and intermediate activations, not extracting peak performance.</p></li>
+<li><p>Q&gt; (Simon) Any plans for shared-memory allocation visualization, register/occupancy roofline, or lifetime analysis (e.g. for TLX where users explicitly allocate shared memory)?</p></li>
+<li><p>A&gt; Wanted to do this for NKI but it’s hard without compiler internals; out of scope today, but a great extension point for users to add custom hardware-specific clients.</p></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p>Triton Extensions on Windows - Quinn Pham, Intel</p>
+<ul>
+<li><p>Background: Triton extensions framework (Corbin, Puyan, Thomas, Simon - January 2026 meetup) lets you add passes/dialects/ops without modifying core Triton. Built on the Triton plugin infrastructure. See the <code class="docutils literal notranslate"><span class="pre">triton-ext</span></code> repo.</p></li>
+<li><p>Intel’s investigation: use pass extensions to upstream target-independent passes that benefit multiple backends.</p></li>
+<li><p>Implemented 3 passes as extensions: hoist layout conversions, fuse reshape, remove boundary checks.</p>
+<ul>
+<li><p>Hoist layout conversions is used by both Intel and AMD - good upstream candidate.</p></li>
+</ul>
+</li>
+<li><p>What worked</p>
+<ul>
+<li><p>Minimal changes required - just hook into the pass infrastructure.</p></li>
+<li><p>Works great on Linux.</p></li>
+</ul>
+</li>
+<li><p>Windows problems</p>
+<ul>
+<li><p>Extensions are shared libraries dynamically loaded at runtime. Need a single-source definition of LLVM/MLIR/Triton symbols for consistent type identity (e.g. dynamic casts).</p></li>
+<li><p>On Linux: disable <code class="docutils literal notranslate"><span class="pre">-fvisibility=hidden</span></code> to export everything from <code class="docutils literal notranslate"><span class="pre">libtriton.so</span></code>. Works fine.</p></li>
+<li><p>On Windows: equivalent <code class="docutils literal notranslate"><span class="pre">WINDOWS_EXPORT_ALL_SYMBOLS</span></code> hits the 65,000 symbol limit per DLL. There’s an MSVC linker RFC to lift this, but it has been under review for over a year.</p></li>
+</ul>
+</li>
+<li><p>Path forward</p>
+<ul>
+<li><p>LLVM/MLIR symbols: no supported way to distribute LLVM/MLIR shared libs on Windows today. <code class="docutils literal notranslate"><span class="pre">BUILD_SHARED_LIBS</span></code> is dev-only; <code class="docutils literal notranslate"><span class="pre">LLVM_BUILD_DYLIB</span></code> is the recommended distribution option but isn’t supported on Windows. There is upstream effort to annotate LLVM’s public interface with an <code class="docutils literal notranslate"><span class="pre">LLVM_ABI</span></code> macro so the DyLib build stays under the 65K limit.</p></li>
+<li><p>Triton symbols: Triton can do the same - annotate the public Triton interface and only export those symbols. This is feasible and would give us cleaner ABI control even on Linux.</p></li>
+</ul>
+</li>
+<li><p>Q&amp;A</p>
+<ul>
+<li><p>Q&gt; (Andrew) How much effort is the <code class="docutils literal notranslate"><span class="pre">LLVM_BUILD_DYLIB</span></code> Windows work?</p></li>
+<li><p>A&gt; A lot. CI for annotation has been disabled and many sub-tasks don’t even have issues yet.</p></li>
+<li><p>Q&gt; Will this require splitting libraries (LLVM, MLIR, Triton, extensions)?</p></li>
+<li><p>A&gt; Yes - extensions would link against <code class="docutils literal notranslate"><span class="pre">libLLVM</span></code>, <code class="docutils literal notranslate"><span class="pre">libMLIR</span></code>, and one (or more) Triton libs.</p></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p>Community questions - Whitney Tsang, Intel</p>
+<ul>
+<li><p>Block pointer deprecation</p>
+<ul>
+<li><p>Q&gt; (Whitney, Intel) The recent OpenAI change deprecates block pointer and lowers it to tensor pointer in the frontend. Block pointer carries structural info that is critical for Intel; we have a downstream change that lowers to tensor descriptor instead. Why was tensor pointer chosen, and would lowering to tensor descriptor be welcome upstream?</p></li>
+<li><p>A&gt; (Ettore, Intel) Logically, replacing a deprecated language feature should preserve semantic info - tensor descriptor carries similar info to block pointer, while tensor pointer loses it.</p></li>
+<li><p>A&gt; (Thomas Raoux, OpenAI - joined late) Goal is to remove block pointer entirely. Mapping to pointers is straightforward via a language wrapper; mapping to tensor descriptor is more work and doesn’t translate 1:1. Open to a clean standard-library-style wrapper that emulates block pointer via tensor descriptor where the target supports it. Backends already differ today (some Nvidia versions fall back to tensor pointer, others use TMA). Whitney to send a PR for review.</p></li>
+</ul>
+</li>
+<li><p><code class="docutils literal notranslate"><span class="pre">use_tma</span></code> naming for tensor descriptors in inductor</p>
+<ul>
+<li><p>Q&gt; An issue was filed a few meetups ago to rename <code class="docutils literal notranslate"><span class="pre">use_tma</span></code> since nothing forces tensor descriptors to use TMA. No progress yet. https://github.com/pytorch/pytorch/issues/163536</p></li>
+<li><p>A&gt; (Bill) No update; will follow up offline.</p></li>
+</ul>
+</li>
+<li><p>Triton release cadence vs PyTorch</p>
+<ul>
+<li><p>Q&gt; PyTorch is releasing more frequently - how does that affect Triton releases?</p></li>
+<li><p>A&gt; (Andrey) Plan is to keep aligning Triton releases just before PyTorch releases - aiming for every PyTorch release, but in practice it may be every other release. Gating step is moving the Triton pin in PyTorch CI green; if that succeeds, we cut a Triton release. Will invest more effort around releases that introduce new architectures or important features.</p></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p>Deferred</p>
+<ul>
+<li><p>Felix Lee (AMD) - fly DSL talk pushed to the July 2026 meetup.</p></li>
+<li><p>Andrew Brown’s team work on Triton extensions also targeted for July.</p></li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="recording">
+<h1>Recording<a class="headerlink" href="#recording" title="Link to this heading"></a></h1>
+<ul class="simple">
+<li><p>Recording link <a class="reference external" href="https://youtu.be/RwqdPXBSMCE">here</a></p></li>
+</ul>
+</section>
+
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Philippe Tillet.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

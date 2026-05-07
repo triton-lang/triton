@@ -650,7 +650,9 @@ operation ::= `ttg.memdesc_reinterpret` $src attr-dict `:` qualified(type($src))
 The `ttg.memdesc_reinterpret` operation reinterprets a memory descriptor
 as one with a different shape and element type. Because memory descriptors
 lack strides, this operation is only valid if the original memory descriptor
-is contiguous.
+is contiguous. Reinterpretation of subviews is not allowed; reinterpret the
+parent descriptor and then take a subview of the reinterpreted descriptor
+instead.
 
 Traits: `AlwaysSpeculatableImplTrait`, `MemDescViewTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 

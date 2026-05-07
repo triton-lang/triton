@@ -1058,7 +1058,9 @@ Then the output descriptor is equivalent to input[1], where input is the logical
 <p>The <code class="docutils literal notranslate"><span class="pre">ttg.memdesc_reinterpret</span></code> operation reinterprets a memory descriptor
 as one with a different shape and element type. Because memory descriptors
 lack strides, this operation is only valid if the original memory descriptor
-is contiguous.</p>
+is contiguous. Reinterpretation of subviews is not allowed; reinterpret the
+parent descriptor and then take a subview of the reinterpreted descriptor
+instead.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>

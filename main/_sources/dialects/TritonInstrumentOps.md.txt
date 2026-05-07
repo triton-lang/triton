@@ -96,6 +96,66 @@ Effects: `MemoryEffects::Effect{}`
 
 
 
+### `tti.experimental_fpsan_embed` (triton::instrument::ExperimentalFPSanEmbedOp)
+
+_Embed float value in the fpsan integer ring_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_fpsan_embed` $val attr-dict `:` functional-type(operands, $result)
+```
+
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `val` | floating-point or ranked tensor of floating-point values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | integer or ranked tensor of integer values |
+
+
+
+### `tti.experimental_fpsan_unembed` (triton::instrument::ExperimentalFPSanUnembedOp)
+
+_Unembed fpsan integer payload as a float value_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_fpsan_unembed` $val attr-dict `:` functional-type(operands, $result)
+```
+
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `val` | integer or ranked tensor of integer values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | floating-point or ranked tensor of floating-point values |
+
+
+
 ### `tti.experimental_gsan_atomic_cas` (triton::instrument::ExperimentalGSanAtomicCASOp)
 
 _Lower a GSan-instrumented atomic cas_
