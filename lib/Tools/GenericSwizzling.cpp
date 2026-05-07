@@ -673,8 +673,7 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   auto regDst = flatten(dstFlat, kReg);
   auto laneSrc = flatten(srcFlat, kLane);
   auto laneDst = flatten(dstFlat, kLane);
-  auto blockSrcSet =
-      SetVector<int32_t>(llvm::from_range_t{}, flatten(srcFlat, kBlock));
+  auto blockBases = flatten(srcFlat, kBlock);
   // Get the associated src/dst tiles for each instruction if they exist
   SmallVector<std::tuple<std::pair<int32_t, int32_t>, SmallVector<int32_t>,
                          SmallVector<int32_t>, SmallVector<int32_t>, int32_t>>
@@ -710,9 +709,9 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
     // We choose the pair of instructions that minimises the total bank
     // conflicts
     for (auto [instrs, vbasis, tileSrc, tileDst, leaveReps] : tiles) {
-      auto smem = optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc,
-                                   tileDst, blockSrcSet.getArrayRef(),
-                                   src.getOutDims(), leaveReps);
+      auto smem =
+          optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc, tileDst,
+                           blockBases, src.getOutDims(), leaveReps);
       auto [read, write] = bankConflicts(tileSrc, tileDst, smem);
       smems.push_back({read + write, smem, {instrs.first, instrs.second}});
     }

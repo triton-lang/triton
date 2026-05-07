@@ -40,16 +40,13 @@ public:
     if (bitWidth != 16 && bitWidth != 8) {
       return failure();
     }
-    auto ldsParams = targetInfo.queryLDSTransLoadParams(bitWidth);
-    if (!ldsParams)
+    auto ldsParamsVec = targetInfo.queryLDSTransLoadParams(bitWidth);
+    if (ldsParamsVec.empty())
       return failure();
 
     LinearLayout sharedLL;
     if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
       sharedLL = triton::gpu::paddedLinearLayout(srcTy);
-      if (triton::gpu::getMinInterval(srcTy.getEncoding()) <
-          ldsParams->tileSize)
-        return failure();
     } else {
       sharedLL = triton::gpu::toLinearLayout(srcTy);
     }
@@ -70,20 +67,30 @@ public:
                                                srcTy.getElementTypeBitWidth(),
                                                /*offsetInBytes=*/true);
 
-    llvm::SmallVector<Value> values;
-    auto result = lowerDsReadTr(
-        op, ldsParams.value(), loc, cvtDstLL, values, smemBases, affineOffset,
-        maskSpanAffineOffset, paddingShifts, llvmElemTy, rewriter, targetInfo);
-    if (failed(result)) {
-      return failure();
+    for (const auto &ldsParams : ldsParamsVec) {
+      if (triton::gpu::isPaddedEncoding(srcTy.getEncoding()) &&
+          triton::gpu::getMinInterval(srcTy.getEncoding()) <
+              ldsParams.tileSize) {
+        continue;
+      }
+
+      llvm::SmallVector<Value> values;
+      auto result =
+          lowerDsReadTr(op, ldsParams, loc, cvtDstLL, values, smemBases,
+                        affineOffset, maskSpanAffineOffset, paddingShifts,
+                        llvmElemTy, rewriter, targetInfo);
+      if (failed(result))
+        continue;
+
+      auto structTy = LLVM::LLVMStructType::getLiteral(
+          ctx, SmallVector<Type>(values.size(), llvmElemTy));
+      auto value =
+          packLLElements(loc, typeConverter, values, rewriter, structTy);
+
+      rewriter.replaceOp(op, value);
+      return success();
     }
-
-    auto structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(values.size(), llvmElemTy));
-    auto value = packLLElements(loc, typeConverter, values, rewriter, structTy);
-
-    rewriter.replaceOp(op, value);
-    return success();
+    return failure();
   }
 
 private:
@@ -167,21 +174,25 @@ private:
     unsigned otherLanes = 1;
     if (isaFamily == AMD::ISAFamily::CDNA4) {
       otherLanes = (bitWidth == 8) ? 2 : 4;
-    } else if (ldsParams.needsDoubleB8Contiguity) {
+    } else if (ldsParams.tileKind ==
+               AMD::TargetInfo::TileKind::DoubleContiguity) {
       otherLanes = 2;
     }
 
-    if (ldsParams.needsDoubleB8Contiguity) {
+    switch (ldsParams.tileKind) {
+    case AMD::TargetInfo::TileKind::DoubleContiguity:
       fullTile =
           tile * LinearLayout::identity1D(ldsParams.tileSize / 2, kReg, kAddr) *
           LinearLayout::identity1D(otherLanes, kLane, kAddr) *
           LinearLayout::identity1D(2, kReg, kAddr) *
           LinearLayout::identity1D(missingLanes / otherLanes, kLane, kAddr);
-    } else {
+      break;
+    case AMD::TargetInfo::TileKind::Standard:
       fullTile =
           tile * LinearLayout::identity1D(otherLanes, kLane, kAddr) *
           LinearLayout::identity1D(ldsParams.tileSize, kReg, kAddr) *
           LinearLayout::identity1D(missingLanes / otherLanes, kLane, kAddr);
+      break;
     }
     // Add warp dimension so we can invert and compose with reps later
     fullTile *= LinearLayout::identity1D(1, kWarp, kAddr);
@@ -271,56 +282,6 @@ private:
       regBase = b.xor_(regBase, affineOffsetI8);
     }
 
-    auto lowerInst = [&](RewriterBase &rewriter, Location loc, Value vecAddr,
-                         int idx, VectorType vTy) -> SmallVector<Value> {
-      assert(bitWidth == 16 || bitWidth == 8);
-      Value dsReadTr;
-      // tr16 instructions return vectors of bf16/f16 while "tr8" instructions
-      // return vectors of i32. Generate the corresponding i32 vector
-      auto numElemsI32 = (vTy.getNumElements() * bitWidth / 32);
-      auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
-      switch (targetInfo.getISAFamily()) {
-      case AMD::ISAFamily::GFX1250: {
-        if (bitWidth == 16) {
-          dsReadTr = LLVM::createLLVMIntrinsicCallOp(
-                         rewriter, loc, "llvm.amdgcn.ds.load.tr16.b128", {vTy},
-                         {vecAddr})
-                         .getResult(0);
-        } else
-          dsReadTr = LLVM::createLLVMIntrinsicCallOp(
-                         rewriter, loc, "llvm.amdgcn.ds.load.tr8.b64", {vTyI32},
-                         {vecAddr})
-                         .getResult(0);
-        break;
-      }
-      case AMD::ISAFamily::CDNA4: {
-        if (bitWidth == 16) {
-          dsReadTr =
-              ROCDL::ds_read_tr16_b64::create(rewriter, loc, vTy, vecAddr);
-        } else {
-          dsReadTr =
-              ROCDL::ds_read_tr8_b64::create(rewriter, loc, vTyI32, vecAddr);
-        }
-        break;
-      }
-      default:
-        return {};
-      }
-      // GFX1250 is currently using LLVM intrinsics so it cannot cast it to
-      // AliasAnalysisOpInterface
-      if (targetInfo.getISAFamily() != AMD::ISAFamily::GFX1250)
-        AMD::addLocalLoadNoAliasScope(
-            op, cast<LLVM::AliasAnalysisOpInterface>(dsReadTr.getDefiningOp()));
-      Value vecVal = b.bitcast(dsReadTr, vTy);
-      SmallVector<Value> loadedVals;
-      for (int v = 0; v < vTy.getNumElements(); v++) {
-        loadedVals.push_back(
-            b.extract_element(llvmElemTy, vecVal, b.i32_val(v)));
-      }
-
-      return loadedVals;
-    };
-
     // Elements per op
     auto elemsPerInstr = fullTile.getInDimSize(kReg);
     auto elemsPerVec = ldsParams.instBitWidth / bitWidth;
@@ -356,7 +317,8 @@ private:
         auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBaseVal, innerOffset,
                              LLVM::GEPNoWrapFlags::inbounds);
         llvm::append_range(vals,
-                           lowerInst(rewriter, loc, vecAddr, i + i2, vecTy));
+                           emitDsReadTr(op, loc, vecAddr, vecTy, llvmElemTy,
+                                        rewriter, targetInfo));
       }
     }
     // apply all the inverse permutations in the reverse order
@@ -364,6 +326,70 @@ private:
     vals = permStrides.inverse().apply(vals);
 
     return success();
+  }
+
+  // Emits a single ds_read_tr* operation at `vecAddr` and unpacks the loaded
+  // vector into individual element Values. Returns an empty vector if the ISA
+  // family does not support a ds_read_tr* instruction.
+  SmallVector<Value>
+  emitDsReadTr(triton::gpu::LocalLoadOp op, Location loc, Value vecAddr,
+               VectorType vTy, Type llvmElemTy,
+               ConversionPatternRewriter &rewriter,
+               const ::triton::AMD::TargetInfo &targetInfo) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    const auto bitWidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+    assert(bitWidth == 16 || bitWidth == 8);
+
+    Value dsReadTr = createDsReadTr(op, rewriter, loc, vecAddr, vTy,
+                                    targetInfo.getISAFamily(), bitWidth);
+    if (!dsReadTr)
+      return {};
+
+    Value vecVal = b.bitcast(dsReadTr, vTy);
+    SmallVector<Value> loadedVals;
+    for (int v = 0; v < vTy.getNumElements(); v++)
+      loadedVals.push_back(b.extract_element(llvmElemTy, vecVal, b.i32_val(v)));
+    return loadedVals;
+  }
+
+  // Creates and returns the result Value of a single ds_read_tr* op for the
+  // given (isaFamily, bitWidth).
+  static Value createDsReadTr(triton::gpu::LocalLoadOp op,
+                              RewriterBase &rewriter, Location loc,
+                              Value vecAddr, VectorType vTy,
+                              AMD::ISAFamily isaFamily, unsigned bitWidth) {
+    // tr16 instructions return vectors of bf16/f16 while "tr8" instructions
+    // return vectors of i32. Generate the corresponding i32 vector type.
+    const auto numElemsI32 = (vTy.getNumElements() * bitWidth / 32);
+    const auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
+
+    // GFX1250 uses opaque LLVM intrinsic calls; their results cannot be cast to
+    // AliasAnalysisOpInterface, so no no-alias scope is attached.
+    auto callIntrinsic = [&](StringRef name, VectorType retTy) -> Value {
+      return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, {retTy},
+                                             {vecAddr})
+          .getResult(0);
+    };
+
+    switch (isaFamily) {
+    case AMD::ISAFamily::GFX1250:
+      if (bitWidth == 16)
+        return callIntrinsic("llvm.amdgcn.ds.load.tr16.b128", vTy);
+      return callIntrinsic("llvm.amdgcn.ds.load.tr8.b64", vTyI32);
+    case AMD::ISAFamily::CDNA4: {
+      Value dsReadTr;
+      if (bitWidth == 16)
+        dsReadTr = ROCDL::ds_read_tr16_b64::create(rewriter, loc, vTy, vecAddr);
+      else
+        dsReadTr =
+            ROCDL::ds_read_tr8_b64::create(rewriter, loc, vTyI32, vecAddr);
+      AMD::addLocalLoadNoAliasScope(
+          op, cast<LLVM::AliasAnalysisOpInterface>(dsReadTr.getDefiningOp()));
+      return dsReadTr;
+    }
+    default:
+      return {};
+    }
   }
 
 private:
@@ -428,9 +454,10 @@ private:
                                                /*offsetInBytes=*/true);
 
     auto shape = srcTy.getShape();
-    auto ldsTransLoadParams = targetInfo.queryLDSTransLoadParams(bitWidth);
-    if (!ldsTransLoadParams)
+    auto ldsParamsVec = targetInfo.queryLDSTransLoadParams(bitWidth);
+    if (ldsParamsVec.size() != 1)
       return failure();
+    const auto ldsTransLoadParams = &ldsParamsVec[0];
     // FP4 are packed into i8 so the real bitWidth is different
     auto llBitWidth = 4;
     auto ldsTransLayout = triton::gpu::chooseDsReadTrLayout(
