@@ -85,6 +85,18 @@ def TTG_TensorMemoryEncodingAttr
     DefaultValuedParameter<"bool", "false">:$twoCTAs,
     DefaultValuedParameter<"bool", "false">:$fp4Padded
   );
+  let skipDefaultBuilders = 1;
+  let builders = [
+    AttrBuilder<(ins "unsigned":$blockM,
+                     "unsigned":$blockN,
+                     "unsigned":$colStride,
+                     "::mlir::triton::gpu::CGAEncodingAttr":$CGALayout,
+                     CArg<"bool", "false">:$twoCTAs,
+                     CArg<"bool", "false">:$fp4Padded), [{
+      return $_get($_ctxt, blockM, blockN, colStride, CGALayout, twoCTAs,
+                   fp4Padded);
+    }]>
+  ];
   let genVerifyDecl = 1;
   let assemblyFormat = "`<` struct(params) `>`";
 }

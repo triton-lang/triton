@@ -2336,13 +2336,10 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
             padded_layout: ttgl.constexpr = TensorMemoryLayout([M, A_K_INPUT], col_stride=1, fp4_padded=True)
             a_tmem = a_tmem._reinterpret(a.dtype.element_ty, [M, A_K_INPUT], padded_layout)
         if B_IS_FP4:
-            tcgen05_mma_scaled(a_tmem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT, B_FORMAT,
-                               use_acc=False, mbarriers=[bar])
-            mbarrier.wait(bar, phase=0, deps=[b_smem])
-        else:
-            tcgen05_mma_scaled(a_tmem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT, B_FORMAT, use_acc=False,
-                               mbarriers=[bar])
-            mbarrier.wait(bar, phase=0)
+            b_smem = b_smem.permute((1, 0))
+        tcgen05_mma_scaled(a_tmem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT, B_FORMAT, use_acc=False,
+                           mbarriers=[bar])
+        mbarrier.wait(bar, phase=0, deps=[b_smem])
 
         out = acc_tmem.load()
         offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, store_layout))[:, None]

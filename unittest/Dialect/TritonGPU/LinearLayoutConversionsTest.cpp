@@ -135,9 +135,7 @@ public:
 
   TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN,
                                 CGAEncodingAttr cgaLayout) {
-    return TensorMemoryEncodingAttr::get(&ctx, blockM, blockN, 1, cgaLayout,
-                                         /*twoCTAs=*/false,
-                                         /*fp4Padded=*/false);
+    return TensorMemoryEncodingAttr::get(&ctx, blockM, blockN, 1, cgaLayout);
   }
 
   TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN) {
