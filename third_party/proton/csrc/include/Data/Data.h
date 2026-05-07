@@ -70,10 +70,6 @@ struct DataEntry {
   void upsertLinkedFlexibleMetric(const std::string &metricName,
                                   const MetricValueType &metricValue,
                                   size_t linkedId) const;
-
-  void upsertLinkedFlexibleMetrics(
-      const std::map<std::string, MetricValueType> &metrics,
-      size_t linkedId) const;
 };
 
 class Data : public ScopeInterface {

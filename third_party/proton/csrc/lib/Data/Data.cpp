@@ -64,14 +64,6 @@ void DataEntry::upsertLinkedFlexibleMetric(const std::string &metricName,
   }
 }
 
-void DataEntry::upsertLinkedFlexibleMetrics(
-    const std::map<std::string, MetricValueType> &metrics,
-    size_t linkedId) const {
-  for (const auto &[metricName, metricValue] : metrics) {
-    upsertLinkedFlexibleMetric(metricName, metricValue, linkedId);
-  }
-}
-
 void Data::initPhaseStore(PhaseStoreBase &store) {
   phaseStore = &store;
   currentPhasePtr = phaseStore->createPtr(0);
