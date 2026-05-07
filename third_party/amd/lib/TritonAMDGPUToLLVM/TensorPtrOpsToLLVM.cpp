@@ -45,7 +45,8 @@ LogicalResult validateStridesAndSharedOrder(triton::MakeTensorDescOp op,
 
 // Collects all users of the value beyond the basic block boundaries
 // defining a given value.
-void collectUsers(Value value, llvm::SetVector<Operation *> &users) {
+[[maybe_unused]] void collectUsers(Value value,
+                                   llvm::SetVector<Operation *> &users) {
   for (OpOperand &use : value.getUses()) {
     Operation *userOp = use.getOwner();
     if (users.contains(userOp)) {
@@ -113,7 +114,6 @@ struct MakeTensorDescOpConversion
     }
     auto sharedOrder = triton::gpu::getOrder(
         cast<triton::gpu::SharedEncodingTrait>(sharedEnc), shapePerCTA);
-    bool isRowMajor = sharedOrder[0] == (sharedOrder.size() - 1);
     // Create TDM descriptor for 2D-5D tensors
     auto tdmDesc = LLVM::AMD::createTDMDescriptor(
         rewriter, loc, getTypeConverter(), elementType, shapePerCTA, numWarps,

@@ -54,7 +54,7 @@ BasesT makeBasesMap(
 }
 
 // Dump the matrix to stderr in a human-readable format for debugging.
-void dumpMatrix(uint64_t *m, int numRows, int numCols) {
+[[maybe_unused]] void dumpMatrix(uint64_t *m, int numRows, int numCols) {
   assert(numCols <= 64);
   for (int r = 0; r < numRows; r++) {
     llvm::errs() << "0b";

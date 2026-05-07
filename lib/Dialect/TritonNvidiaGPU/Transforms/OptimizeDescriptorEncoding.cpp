@@ -102,7 +102,6 @@ public:
   using BaseT::BaseT;
 
   void runOnOperation() override {
-    MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     NvidiaGPUAssignDescriptorMemoryLayouts assignMemoryLayouts;
     assignMemoryLayouts.assignMemoryLayouts(m);

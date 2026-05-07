@@ -539,12 +539,6 @@ json buildCallStackJson(const std::vector<Context> &contexts) {
   return callStack;
 }
 
-json buildCallStackJson(const Context &context) {
-  json callStack = json::array();
-  callStack.push_back(context.name);
-  return callStack;
-}
-
 json buildFlexibleMetricsJson(
     const DataEntry::FlexibleMetricMap &flexibleMetrics) {
   json metrics = json::object();

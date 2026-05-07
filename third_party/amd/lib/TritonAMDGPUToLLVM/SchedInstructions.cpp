@@ -48,9 +48,7 @@ Operation *createIglpOpt(PatternRewriter &rewriter, Location loc, int value) {
 struct InstructionSchedHintsRewriter
     : public OpRewritePattern<triton::amdgpu::InstructionSchedHint> {
 
-  InstructionSchedHintsRewriter(MLIRContext *ctx, StringRef arch,
-                                int32_t numStages)
-      : OpRewritePattern(ctx), numStages(numStages) {}
+  InstructionSchedHintsRewriter(MLIRContext *ctx) : OpRewritePattern(ctx) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::InstructionSchedHint instructionSchedHint,
@@ -95,8 +93,6 @@ struct InstructionSchedHintsRewriter
     return success();
   }
 
-private:
-  int32_t numStages;
 };
 
 struct TritonAMDGPULowerInstructionSchedHints
@@ -121,8 +117,7 @@ struct TritonAMDGPULowerInstructionSchedHints
 
     RewritePatternSet patterns(ctx);
 
-    patterns.add<InstructionSchedHintsRewriter>(ctx, this->gfxArch,
-                                                this->numStages);
+    patterns.add<InstructionSchedHintsRewriter>(ctx);
 
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns)))) {
