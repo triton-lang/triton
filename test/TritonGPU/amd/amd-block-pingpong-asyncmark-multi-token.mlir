@@ -2,10 +2,10 @@
 // RUN: triton-opt %s --tritonamdgpu-block-pingpong=num-stages=3 --tritonamdgpu-update-async-wait-count=gfx-arch=gfx950 | FileCheck %s
 
 // BlockPingpong's transformTwoClusterWithLocalLoadAndAll combines per-operand
-// ttg.async_waits into a single multi-token wait. The Pipeline pass's
-// updateWaits already set each input wait's `num` to the in-flight commit-
-// group count it can tolerate; the merged wait must preserve the *minimum*
-// of those counts so the pipeline isn't accidentally serialized.
+// ttg.async_waits into a single multi-token wait, then reorders async copies
+// and commits around it. After the reorder the pass re-runs updateWaits, so
+// the merged wait's `num` is derived via minNumInterleavedCommitOps against
+// the post-reorder IR (with multi-token support added in the same patch).
 //
 // On asyncmark targets (CDNA3/CDNA4) this `num` lowers straight to
 // rocdl.wait.asyncmark(N), and UpdateAsyncWaitCount is a no-op since PR #9883
@@ -21,9 +21,14 @@
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: async_ns3_gemm_pingpong_multi_token
   // The two per-operand waits in the input carry num=2 and num=1; pingpong
-  // fuses them into a single multi-token wait that preserves min(2, 1) = 1.
+  // fuses them into a single multi-token wait whose num is recomputed against
+  // the post-reorder IR. In this synthetic test the tokens come from tt.func
+  // args (no prologue commit chain), so minNumInterleavedCommitOps bails to
+  // its conservative N=0; in a real kernel the chains terminate at prologue
+  // async_commit_groups and yield a tighter bound (e.g. 1 for a real
+  // gfx950 simple_persistent_matmul kernel).
   // CHECK: scf.for
-  // CHECK: ttg.async_wait %{{[^,]+}}, %{{[^,]+}} {num = 1 : i32}
+  // CHECK: ttg.async_wait %{{[^,]+}}, %{{[^,]+}} {num = 0 : i32}
   tt.func public @async_ns3_gemm_pingpong_multi_token(
       %arg0: i32,
       %arg1: tensor<256x32x!tt.ptr<bf16>, #blocked>,

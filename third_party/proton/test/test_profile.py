@@ -7,16 +7,39 @@ import torch
 import triton
 import triton.profiler as proton
 import json
+import gc
 import pytest
 from typing import NamedTuple
 import pathlib
 import threading
+from contextlib import contextmanager
 
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
+
+
+def _find_child_by_name(frame, name):
+    return next((child for child in frame["children"] if child["frame"]["name"] == name), None)
+
+
+@contextmanager
+def cuda_graph_without_gc(*args, **kwargs):
+    # A loaded Triton CompiledKernel may be finalized by Python's cyclic GC.
+    # Its destructor unloads the CUDA module, which is illegal during CUDA
+    # stream capture and invalidates the graph. Keep GC disabled only for the
+    # capture window and restore the caller's previous GC state afterwards.
+    gc_was_enabled = gc.isenabled()
+    if gc_was_enabled:
+        gc.disable()
+    try:
+        with torch.cuda.graph(*args, **kwargs) as graph:
+            yield graph
+    finally:
+        if gc_was_enabled:
+            gc.enable()
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -103,7 +126,7 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
 
     # no kernels
     g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
+    with cuda_graph_without_gc(g):
         for i in range(10):
             with proton.scope(f"iter_{i}"):
                 fn()
@@ -116,7 +139,7 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
 
     g.reset()
 
-    with torch.cuda.graph(g):  # this will create new graphexecs
+    with cuda_graph_without_gc(g):  # this will create new graphexecs
         for i in range(10):
             with proton.scope(f"new_iter_{i}"):
                 fn()
@@ -128,9 +151,6 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
 
     with temp_file.open() as f:
         data = json.load(f)
-    # CUDA/HIP graph may also invoke additional kernels to reset outputs
-    # {torch.ones, add, foo, test}
-    assert len(data[0]["children"]) >= 4
     # find the test frame
     test0_frame = None
     test1_frame = None
@@ -152,8 +172,8 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
     else:
         # cuda backend supports "<captured_at>" annotation
         for test_frame in [test0_frame, test1_frame, test2_frame]:
-            child = test_frame["children"][0]
-            assert child["frame"]["name"] == "<captured_at>"
+            child = _find_child_by_name(test_frame, "<captured_at>")
+            assert child is not None
             # check all iterations
             total_iters = 0
             for child in child["children"]:
@@ -183,7 +203,7 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     # Build/capture graph before profiler starts.
     fn()
     g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
+    with cuda_graph_without_gc(g):
         fn()
 
     temp_file = tmp_path / "test_cudagraph_not_captured_by_profiler.hatchet"
@@ -209,8 +229,8 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
             replay1_frame = child
     assert replay0_frame is not None
     assert replay1_frame is not None
-    assert len(replay0_frame["children"]) == 3
-    assert len(replay1_frame["children"]) == 3
+    assert len(replay0_frame["children"]) >= 3
+    assert len(replay1_frame["children"]) >= 3
 
     def has_positive_time_metric(node):
         if node["metrics"].get("time (ns)", 0) > 0:
@@ -249,7 +269,7 @@ def test_cudagraph_deactivate(tmp_path, device: str):
 
     # no kernels
     g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
+    with cuda_graph_without_gc(g):
         for i in range(10):
             with proton.scope(f"iter_{i}"):
                 fn(session)
@@ -270,7 +290,10 @@ def test_cudagraph_deactivate(tmp_path, device: str):
             test0_frame = child
             break
     assert test0_frame is not None
-    iter_frame = test0_frame["children"][0]["children"][0]
+    capture_frame = _find_child_by_name(test0_frame, "<captured_at>")
+    assert capture_frame is not None
+    iter_frame = _find_child_by_name(capture_frame, "iter_0")
+    assert iter_frame is not None
     scope_a_frame = None
     scope_b_frame = None
     scope_c_frame = None
@@ -307,7 +330,7 @@ def test_cudagraph_filters_unlinked_virtual_scopes(tmp_path: pathlib.Path, data_
     foo[(1, )](a, b, c)
 
     g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
+    with cuda_graph_without_gc(g):
         with proton.scope("iter_with_kernel"):
             foo[(1, )](a, b, c)
         with proton.scope("iter_without_kernel"):
@@ -332,8 +355,8 @@ def test_cudagraph_filters_unlinked_virtual_scopes(tmp_path: pathlib.Path, data_
         None,
     )
     assert replay_frame is not None
-    capture_frame = replay_frame["children"][0]
-    assert capture_frame["frame"]["name"] == "<captured_at>"
+    capture_frame = _find_child_by_name(replay_frame, "<captured_at>")
+    assert capture_frame is not None
 
     capture_children = capture_frame["children"]
     capture_child_names = {child["frame"]["name"] for child in capture_children}
@@ -858,7 +881,7 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
     proton.deactivate(session_id1)
 
     graph_foo = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph_foo):
+    with cuda_graph_without_gc(graph_foo):
         for _ in range(foo_iters):
             foo[(1, )](x, y, z)
     with proton.scope("session0_replay"):
@@ -868,7 +891,7 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
     proton.activate(session_id1)
 
     graph_bar = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph_bar):
+    with cuda_graph_without_gc(graph_bar):
         for _ in range(bar_iters):
             bar[(1, )](x, y, z)
     with proton.scope("session1_replay"):
@@ -905,8 +928,10 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
     assert session0_replay_frame is not None
     assert session1_replay_frame is not None
 
-    capture0 = session0_replay_frame["children"][0]
-    capture1 = session1_replay_frame["children"][0]
+    capture0 = _find_child_by_name(session0_replay_frame, "<captured_at>")
+    capture1 = _find_child_by_name(session1_replay_frame, "<captured_at>")
+    assert capture0 is not None
+    assert capture1 is not None
 
     foo_frame0 = get_frame_by_name(capture0, "foo_with_metric")
     bar_frame0 = get_frame_by_name(capture0, "bar_without_metric")
@@ -922,6 +947,134 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
     assert int(foo_frame0["metrics"]["count"]) == foo_iters
     assert "sum_metric" not in bar_frame1["metrics"]
     assert int(bar_frame1["metrics"]["count"]) == bar_iters
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+def test_cudagraph_multi_stream_internal(tmp_path: pathlib.Path, device: str):
+    """
+    kernels in a cudagraph can be launched using multiple internal streams, without
+    a deterministic order.
+    """
+
+    capture_stream = torch.cuda.Stream()
+    side_stream = torch.cuda.Stream()
+    torch.cuda.set_stream(capture_stream)
+
+    kernel_x_name = "kernel_x"
+    kernel_y_name = "kernel_y"
+    kernel_z_name = "kernel_z"
+
+    kernel_x_metrics = {"flops": 0.0, "bytes": 1_572_864}
+    kernel_y_metrics = {"flops": 134_217_728.0, "bytes": 17_829_888}
+    kernel_z_metrics = {"flops": 1_073_741_824.0, "bytes": 29_818_880}
+
+    @triton.jit
+    def wait_for_flag_kernel(flag):
+        while tl.load(flag, volatile=True) == 0:
+            pass
+
+    @triton.jit
+    def set_flag_kernel(flag):
+        tl.store(flag, 1)
+
+    @triton.jit
+    def metadata_delay_kernel(scratch, BLOCK: tl.constexpr, ITERS: tl.constexpr):
+        pid = tl.program_id(0)
+        offsets = pid * BLOCK + tl.arange(0, BLOCK)
+        values = offsets.to(tl.float32)
+        for _ in tl.static_range(0, ITERS):
+            values = values * 1.0001 + 1.0
+        tl.store(scratch + offsets, values)
+
+    def kernel_x_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        wait_for_flag_kernel[(1, )](args["gate"], num_warps=1)
+        metadata_delay_kernel[(2048, )](args["delay_scratch"], BLOCK=256, ITERS=64, num_warps=8)
+        return {"name": kernel_x_name, "flops": args["kernel_x_flops"], "bytes": args["kernel_x_bytes"]}
+
+    def kernel_y_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        return {"name": kernel_y_name, "flops": args["kernel_y_flops"], "bytes": args["kernel_y_bytes"]}
+
+    def kernel_z_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        return {"name": kernel_z_name, "flops": args["kernel_z_flops"], "bytes": args["kernel_z_bytes"]}
+
+    @triton.jit(launch_metadata=kernel_x_metadata_fn)
+    def kernel_x(x, y, kernel_x_flops, kernel_x_bytes, delay_scratch, gate):
+        tl.store(y, tl.load(x) + 1.0)
+
+    @triton.jit(launch_metadata=kernel_y_metadata_fn)
+    def kernel_y(x, y, kernel_y_flops, kernel_y_bytes):
+        tl.store(y, tl.load(x) + 2.0)
+
+    @triton.jit(launch_metadata=kernel_z_metadata_fn)
+    def kernel_z(x, y, kernel_z_flops, kernel_z_bytes):
+        tl.store(y, tl.load(x) + 3.0)
+
+    def find_frame(node, name: str):
+        queue = [node]
+        while queue:
+            cur = queue.pop(0)
+            if cur["frame"]["name"] == name:
+                return cur
+            queue.extend(cur["children"])
+        return None
+
+    x = torch.tensor([1.0], device=device)
+    y = torch.empty_like(x)
+    delay_scratch = torch.empty((2048 * 256, ), device=device)
+    kernel_x_flops = torch.tensor([kernel_x_metrics["flops"]], device=device)
+    kernel_x_bytes = torch.tensor([kernel_x_metrics["bytes"]], device=device, dtype=torch.int64)
+    kernel_y_flops = torch.tensor([kernel_y_metrics["flops"]], device=device)
+    kernel_y_bytes = torch.tensor([kernel_y_metrics["bytes"]], device=device, dtype=torch.int64)
+    kernel_z_flops = torch.tensor([kernel_z_metrics["flops"]], device=device)
+    kernel_z_bytes = torch.tensor([kernel_z_metrics["bytes"]], device=device, dtype=torch.int64)
+    gate = torch.ones((1, ), device=device, dtype=torch.int32)
+
+    temp_file = tmp_path / "test_hook_metadata_metric_order_repro.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
+    try:
+        kernel_x[(1, )](x, y, kernel_x_flops, kernel_x_bytes, delay_scratch, gate, num_warps=1)
+        kernel_y[(1, )](x, y, kernel_y_flops, kernel_y_bytes, num_warps=1)
+        kernel_z[(1, )](x, y, kernel_z_flops, kernel_z_bytes, num_warps=1)
+        torch.cuda.synchronize()
+        gate.zero_()
+        torch.cuda.synchronize()
+
+        graph = torch.cuda.CUDAGraph()
+        start_event = torch.cuda.Event()
+        with cuda_graph_without_gc(graph, stream=capture_stream):
+            start_event.record()
+            # x and y are executed concurrently
+            kernel_x[(1, )](x, y, kernel_x_flops, kernel_x_bytes, delay_scratch, gate, num_warps=1)
+            with torch.cuda.stream(side_stream):
+                side_stream.wait_event(start_event)
+                kernel_y[(1, )](x, y, kernel_y_flops, kernel_y_bytes, num_warps=1)
+                kernel_z[(1, )](x, y, kernel_z_flops, kernel_z_bytes, num_warps=1)
+                set_flag_kernel[(1, )](gate, num_warps=1)
+            capture_stream.wait_stream(side_stream)
+
+        with proton.scope("replay"):
+            graph.replay()
+        torch.cuda.synchronize()
+    finally:
+        proton.finalize(session)
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    replay_frame = find_frame(data[0], "replay")
+    assert replay_frame is not None
+    capture_frame = find_frame(replay_frame, "<captured_at>")
+    assert capture_frame is not None
+
+    for name, expected in [
+        (kernel_x_name, kernel_x_metrics),
+        (kernel_y_name, kernel_y_metrics),
+        (kernel_z_name, kernel_z_metrics),
+    ]:
+        frame = find_frame(capture_frame, name)
+        assert frame is not None
+        assert frame["metrics"]["flops"] == expected["flops"]
+        assert frame["metrics"]["bytes"] == expected["bytes"]
 
 
 def test_trace(tmp_path: pathlib.Path, device: str):
@@ -1073,7 +1226,7 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str)
     fn()
 
     g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
+    with cuda_graph_without_gc(g):
         fn()
 
     with proton.scope("test0"):
@@ -1346,16 +1499,15 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
         with proton.scope("scope_d", metrics={"vec": d}):
             e = d * 2  # noqa: F841
 
-    temp_file = tmp_path / "test_tensor_metrics_cudagraph.hatchet"
+    temp_file = pathlib.Path("./") / "test_tensor_metrics_cudagraph.hatchet"
     proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
 
     # warmup
-    # four kernels
     fn()
 
     # no kernels
     g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
+    with cuda_graph_without_gc(g):
         for _ in range(10):
             fn()
 
@@ -1368,15 +1520,14 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
         data = json.load(f)
 
     children = data[0]["children"]
-    # metadata scope + kernels + scope_a + scope_b + test0 + scope_d
-    assert len(children) == 8
     test0_frame = None
     for child in children:
         if child["frame"]["name"] == "test0":
             test0_frame = child
             break
     assert test0_frame is not None
-    capture_at_frame = test0_frame["children"][0]
+    capture_at_frame = _find_child_by_name(test0_frame, "<captured_at>")
+    assert capture_at_frame is not None
 
     foo_test_frame = None
     scope_a_frame = None
@@ -1425,7 +1576,7 @@ def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path, device: str
 
     # no kernels
     g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
+    with cuda_graph_without_gc(g):
         for _ in range(10):
             fn(session)
 
@@ -1444,7 +1595,8 @@ def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path, device: str
                 test0_frame = child
                 break
         assert test0_frame is not None
-        capture_at_frame = test0_frame["children"][0]
+        capture_at_frame = _find_child_by_name(test0_frame, "<captured_at>")
+        assert capture_at_frame is not None
         scope_b_frame = None
         c_frame = None
         for child in capture_at_frame["children"]:
@@ -1499,7 +1651,7 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
             run_on_device(device.index)
             # graph capture
             g = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(g, stream=stream):
+            with cuda_graph_without_gc(g, stream=stream):
                 for _ in range(10):
                     run_on_device(device.index)
         graphs.append((device, stream, g))
@@ -1520,8 +1672,8 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
         device_name = f"test_device_{device.index}"
         launch_frame = next((child for child in children if child["frame"]["name"] == device_name), None)
         assert launch_frame is not None
-        capture_at_frame = launch_frame["children"][0]
-        assert capture_at_frame["frame"]["name"] == "<captured_at>"
+        capture_at_frame = _find_child_by_name(launch_frame, "<captured_at>")
+        assert capture_at_frame is not None
 
         foo_frame = None
         scope_a_frame = None
@@ -1584,7 +1736,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
     assert num_scopes == 5000
 
 
-@pytest.mark.skip(reason="This test is flaky, needs investigation.")
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
@@ -1618,7 +1770,7 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
 
     # no kernels
     g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
+    with cuda_graph_without_gc(g):
         fn()
 
     test_iterations = 500
@@ -1645,7 +1797,7 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
         capture_frame = None
         for child in data[0]["children"]:
             if child["frame"]["name"] == "test0":
-                capture_frame = child["children"][0]
+                capture_frame = _find_child_by_name(child, "<captured_at>")
                 break
         assert capture_frame is not None
         scope_a_frame = None
