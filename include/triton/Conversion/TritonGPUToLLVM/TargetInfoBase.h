@@ -125,6 +125,8 @@ public:
   virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                      Operation *llLoadOp) const {}
 
+  virtual bool supportsVectorOfPointers() const { return true; }
+
   virtual ~TargetInfoBase() {}
 };
 } // namespace mlir::triton

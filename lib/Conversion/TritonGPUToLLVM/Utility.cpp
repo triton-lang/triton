@@ -750,9 +750,12 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   auto inDimNames = to_vector(cvt.getInDimNames());
   LinearLayout partitionLayout;
   Value basesVec;
+  bool useVectorOfPointers =
+      isPartitioned && targetInfo.supportsVectorOfPointers();
   if (isPartitioned) {
     partitionLayout = cvt.sublayout(inDimNames, {kPartition});
-    basesVec = LLVM::buildBasePtrVector(loc, rewriter, smemBases);
+    if (useVectorOfPointers)
+      basesVec = LLVM::buildBasePtrVector(loc, rewriter, smemBases);
   }
 
   // Strip kPartition output for vectorization analysis.
@@ -867,7 +870,14 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
                                                   {kWarp, warpId},
                                                   {kBlock, blockId}});
         Value partitionIdx = partitionResult[0].second;
-        smemBase = b.extract_element(basesVec, partitionIdx);
+        if (useVectorOfPointers) {
+          smemBase = b.extract_element(basesVec, partitionIdx);
+        } else {
+          for (size_t p = 1; p < smemBases.size(); ++p) {
+            Value cmp = b.icmp_eq(partitionIdx, b.i32_val(p));
+            smemBase = b.select(cmp, smemBases[p], smemBase);
+          }
+        }
       }
 
       std::optional<Value> innerCtaOffset;
