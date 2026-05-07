@@ -241,8 +241,7 @@ class MetalBackend(BaseBackend):
         return {"min_dot_size": get_min_dot_size(self.target)}
 
     def load_dialects(self, context):
-        # TODO no dialects for now, add if needed
-        pass
+        metal.load_dialects(context)
 
     def get_module_map(self) -> dict:
         # TODO no additional modules for now, add if needed

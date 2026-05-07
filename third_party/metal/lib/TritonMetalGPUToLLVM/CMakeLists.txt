@@ -10,6 +10,8 @@ add_triton_library(TritonMetalGPUToLLVM
     GPUIdxOpsToLLVM.cpp
     SPMDOpToLLVM.cpp
     DotOpToLLVM.cpp
+    SimdgroupAsyncCopyOpToLLVM.cpp
+    SimdgroupMMAOpToLLVM.cpp
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM/SimdgroupMatmul.cpp
 
