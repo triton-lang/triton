@@ -168,7 +168,7 @@ struct ConvertLayoutOpConversion
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
     int numBanks = targetInfo.getSharedMemoryBanks();
     int32_t vecBitwidth =
-        triton::gpu::getLdStVecBitwidth(srcLayout, dstLayout, bitwidth);
+        triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
     auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
     auto smem = optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth, numBanks,
                                      srcTile, dstTile);

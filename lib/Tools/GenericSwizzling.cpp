@@ -497,38 +497,17 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   return basis1D.reshapeOuts(outDims);
 }
 
-int32_t getLdStVecBitwidth(const LinearLayout &src, const LinearLayout &dst,
-                           int32_t bitwidth) {
-  auto *ctx = src.getInDimNames().begin()->getContext();
+std::pair<SmallVector<int32_t>, std::optional<bool>>
+getVecBasisLdSt(const LinearLayout &srcFlat, const LinearLayout &dstFlat,
+                int32_t bitwidth) {
+  auto *ctx = srcFlat.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
-  auto srcFlat = src.flattenOuts();
-  auto dstFlat = dst.flattenOuts();
-  auto regSrc = flatten(srcFlat, kReg);
-  auto regDst = flatten(dstFlat, kReg);
-  auto dim = src.getTotalOutDimSizeLog2();
-  SmallVector<int32_t> vbasis = intersectionBasis(regSrc, regDst, dim);
-  auto maxVecBases = llvm::Log2_32(128 / bitwidth);
-  int32_t vecBases = std::min<int32_t>(vbasis.size(), maxVecBases);
-  return std::max<int32_t>(32, (1 << vecBases) * bitwidth);
-}
-
-LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
-                                  const LinearLayout &dst, int32_t bitwidth,
-                                  int32_t numBanks, LocalMemOpTile srcTile,
-                                  LocalMemOpTile dstTile) {
-  auto *ctx = src.getInDimNames().begin()->getContext();
-  auto kReg = StringAttr::get(ctx, "register");
-  auto kLane = StringAttr::get(ctx, "lane");
   auto kBlock = StringAttr::get(ctx, "block");
-  auto srcFlat = src.flattenOuts();
-  auto dstFlat = dst.flattenOuts();
   auto regSrc = flatten(srcFlat, kReg);
   auto regDst = flatten(dstFlat, kReg);
-  auto laneSrc = flatten(srcFlat, kLane);
-  auto laneDst = flatten(dstFlat, kLane);
   auto blockSrc = flatten(srcFlat, kBlock);
 
-  auto dim = src.getTotalOutDimSizeLog2();
+  auto dim = srcFlat.getTotalOutDimSizeLog2();
   SmallVector<int32_t> vbasis = intersectionBasis(regSrc, regDst, dim);
   // Restrict the vectorisation to the maximum we can use
   auto maxVecBases = llvm::Log2_32(128 / bitwidth);
@@ -607,6 +586,34 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
       vbasis.resize(basesPerBank);
     }
   }
+  return {vbasis, srcFillsBank};
+}
+
+int32_t getVecBitwidthLdSt(const LinearLayout &src, const LinearLayout &dst,
+                           int32_t bitwidth) {
+  auto srcFlat = src.flattenOuts();
+  auto dstFlat = dst.flattenOuts();
+  auto vbasis = getVecBasisLdSt(srcFlat, dstFlat, bitwidth).first;
+  return (1 << vbasis.size()) * bitwidth;
+}
+
+LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
+                                  const LinearLayout &dst, int32_t bitwidth,
+                                  int32_t numBanks, LocalMemOpTile srcTile,
+                                  LocalMemOpTile dstTile) {
+  auto *ctx = src.getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto srcFlat = src.flattenOuts();
+  auto dstFlat = dst.flattenOuts();
+  auto regSrc = flatten(srcFlat, kReg);
+  auto regDst = flatten(dstFlat, kReg);
+  auto laneSrc = flatten(srcFlat, kLane);
+  auto laneDst = flatten(dstFlat, kLane);
+  auto blockSrc = flatten(srcFlat, kBlock);
+
+  auto [vbasis, srcFillsBank] = getVecBasisLdSt(srcFlat, dstFlat, bitwidth);
   auto vecSize = 1 << vbasis.size();
   auto log2Vec = llvm::Log2_32(std::max<int32_t>(1, (vecSize * bitwidth) / 32));
   auto tileSrc = getLaneTile(srcTile, laneSrc, vecSize, bitwidth, numBanks);

@@ -39,7 +39,7 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
                  llvm::ArrayRef<LocalMemOpTile> srcTiles,
                  llvm::ArrayRef<LocalMemOpTile> dstTiles, int32_t bitwidth);
 
-int32_t getLdStVecBitwidth(const LinearLayout &src, const LinearLayout &dst,
+int32_t getVecBitwidthLdSt(const LinearLayout &src, const LinearLayout &dst,
                            int32_t bitwidth);
 
 LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,

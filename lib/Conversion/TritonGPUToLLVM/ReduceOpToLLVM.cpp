@@ -479,7 +479,7 @@ private:
       unsigned idx = indices[i];
       offsets[idx] = offset;
       auto inputTy = op.getInputTypes()[idx];
-      auto vecBitwidth = triton::gpu::getLdStVecBitwidth(srcLayout, dstLayout,
+      auto vecBitwidth = triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout,
                                                          getBitwidth(inputTy));
       auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
       auto bytes = getNumScratchElemsSwizzledCvt(srcLayout, dstLayout,

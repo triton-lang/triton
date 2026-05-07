@@ -22,7 +22,7 @@ unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
   auto dstLayout = gpu::toLinearLayout(dstTy);
   auto bitwidth = getBitwidth(srcTy);
   auto vecBitwidth =
-      triton::gpu::getLdStVecBitwidth(srcLayout, dstLayout, bitwidth);
+      triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
   auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
   unsigned elems = getNumScratchElemsSwizzledCvt(srcLayout, dstLayout, bitwidth,
                                                  numBanks, srcTile, dstTile);
@@ -58,7 +58,7 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
                       const triton::LinearLayout &dst, unsigned bitwidth) {
           int numBanks = targetInfo.getSharedMemoryBanks();
           auto vecBitwidth =
-              triton::gpu::getLdStVecBitwidth(src, dst, bitwidth);
+              triton::gpu::getVecBitwidthLdSt(src, dst, bitwidth);
           auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
           return getNumScratchElemsSwizzledCvt(src, dst, bitwidth, numBanks,
                                                srcTile, dstTile);
