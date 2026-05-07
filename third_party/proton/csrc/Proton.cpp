@@ -160,6 +160,11 @@ static void initProton(pybind11::module &&m) {
   m.def("exit_state",
         []() { SessionManager::instance().setState(std::nullopt); });
 
+  m.def("rename_state", [](const std::string &oldName,
+                           const std::string &newName) {
+    SessionManager::instance().renameState(oldName, newName);
+  });
+
   m.def(
       "add_metrics",
       [](size_t scopeId,
@@ -199,14 +204,6 @@ static void initProton(pybind11::module &&m) {
 
   m.def("get_context_depth", [](size_t sessionId) {
     return SessionManager::instance().getContextDepth(sessionId);
-  });
-
-  m.def("get_state", [](size_t sessionId) -> pybind11::object {
-    auto state = SessionManager::instance().getState(sessionId);
-    if (!state.has_value()) {
-      return pybind11::none();
-    }
-    return pybind11::cast(state.value());
   });
 
   m.def(

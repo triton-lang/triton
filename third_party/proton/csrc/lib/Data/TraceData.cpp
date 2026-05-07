@@ -596,6 +596,12 @@ uint64_t getGraphLaneId(size_t streamId) { return kGraphLaneBase + streamId; }
 
 uint64_t getGpuLaneId(size_t streamId) { return kGpuLaneBase + streamId; }
 
+bool isMetadataContextName(const std::string &name) {
+  const std::string metadataPrefix =
+      std::string(GraphState::metadataTag) + ":";
+  return name == GraphState::metadataTag || name.rfind(metadataPrefix, 0) == 0;
+}
+
 void appendThreadMetadata(json &traceEvents, uint64_t tid,
                           const std::string &name, uint64_t sortIndex) {
   json nameEvent;
@@ -676,7 +682,7 @@ void reconstructGraphScopeEvents(
       bool isMetadataKernel = false;
       for (const auto &context : kernelEvent.contexts) {
         if (context.name == GraphState::metricTag ||
-            context.name == GraphState::metadataTag) {
+            isMetadataContextName(context.name)) {
           isMetadataKernel = true;
           break;
         }
@@ -687,13 +693,13 @@ void reconstructGraphScopeEvents(
           graphContexts.push_back(context);
         }
       }
+      if (isMetadataKernel) {
+        continue;
+      }
       if (!seenCaptureTag) {
         throw std::runtime_error("Invalid graph contexts without capture tag");
       }
-      if (!isMetadataKernel) {
-        graphContexts
-            .pop_back(); // Remove kernel name context for non-metadata kernels
-      }
+      graphContexts.pop_back(); // Remove kernel name context
       auto startTimeNs = std::get<uint64_t>(
           kernelEvent.kernelMetric->getValue(KernelMetric::StartTime));
       auto endTimeNs = std::get<uint64_t>(
@@ -966,7 +972,8 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
       for (auto targetEntryId : targetEntryIds) {
         // Linked target ids are event ids, so resolve through the event first.
         auto &targetEvent = virtualTrace->getEvent(targetEntryId);
-        auto contexts = virtualTrace->getContexts(targetEvent.contextId);
+        auto contexts =
+            getRenamedContexts(virtualTrace->getContexts(targetEvent.contextId));
         contexts.erase(contexts.begin());
         targetIdToVirtualContexts.emplace(targetEntryId, std::move(contexts));
       }
@@ -990,7 +997,8 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
         events.size());
     for (const auto &[_, event] : events) {
       contextIdToContexts.try_emplace(event.contextId,
-                                      trace->getContexts(event.contextId));
+                                      getRenamedContexts(trace->getContexts(
+                                          event.contextId)));
     }
     bool hasKernelMetrics = false, hasCycleMetrics = false;
 
@@ -1007,12 +1015,6 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
             auto startTimeNs = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::StartTime));
             auto launchEventId = events.at(eventId).parentEventId;
-            if (isGraphLinked) {
-              // For graph-linked kernels, the parent maybe the <captured_at>
-              // tag. So we need to go one level up to find the actual launch
-              // event
-              launchEventId = events.at(launchEventId).parentEventId;
-            }
             kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
                                                 contexts, launchEventId,
                                                 isGraphLinked);

@@ -1,10 +1,4 @@
-from ..state import (
-    COMPUTE_METADATA_SCOPE_NAME as COMPUTE_METADATA_SCOPE_NAME,
-    enter_state,
-    exit_state,
-    is_metadata_state_active,
-    get_metadata_state_name,
-)
+from ..state import get_metadata_state_name, metadata_state
 from ..metric import transform_tensor_metrics, set_metric_kernels
 from triton.compiler import LazyDict
 from .hook import Hook
@@ -23,7 +17,7 @@ class LaunchHook(Hook):
     # Highest priority
     priority = 100
 
-    # Reserved keys that Triton’s runtime always attaches to launch_metadata.
+    # Reserved keys that Triton's runtime always attaches to launch_metadata.
     # We never treat these as metrics.
     _reserved_metadata_keys = {"name", "function", "stream"}
 
@@ -34,12 +28,12 @@ class LaunchHook(Hook):
 
     def configure(self, *, include: Optional[str] = None, exclude: Optional[str] = None) -> None:
         # Regexes over the compiled kernel name (metadata.data["name"]).
-        self._include_pattern = include
-        self._exclude_pattern = exclude
         self._include_re = re.compile(include) if include else None
         self._exclude_re = re.compile(exclude) if exclude else None
 
     def _matches_kernel_name(self, kernel_name: str) -> bool:
+        if kernel_name is None:
+            return True
         if self._include_re is not None and self._include_re.match(kernel_name) is None:
             return False
         if self._exclude_re is not None and self._exclude_re.match(kernel_name) is not None:
@@ -93,51 +87,45 @@ class LaunchHook(Hook):
     def enter(self, metadata: LazyDict) -> None:
         if enabled.get():
             return
-        enabled.set(True)
 
-        # Fast path: if the kernel name is already available without evaluating launch_metadata,
-        # apply include/exclude filters and potentially skip metadata evaluation entirely.
-        kernel_name = metadata.data.get("name")
+        # Reset all context vars
+        enabled.set(True)
+        id.set(None)
+        op_name.set(None)
+
+        # Early return path 1: Skip metadata evaluation when the raw kernel name is enough to filter.
+        raw_kernel_name = metadata.data.get("name")
+        if not self._matches_kernel_name(raw_kernel_name):
+            enabled.set(False)
+            return
+
+        # Evaluate metadata, invoking metadata kernels attached to a state.
+        # Note that the evaluated kernel name (lazy_metadata["name"]) may differ from the raw kernel name (metadata.data["name"]) and may
+        # depend on information returned by metadata kernels, so we rename it later.
+        raw_metadata_state = get_metadata_state_name(raw_kernel_name)
+        with metadata_state(raw_kernel_name):
+            lazy_metadata = metadata.get()
+        kernel_name = lazy_metadata["name"]
+        libproton.rename_state(raw_metadata_state,
+                               get_metadata_state_name(kernel_name))
+
+        # Early return path 2: If the evaluated kernel name doesn't match filters, skip recording.
         if not self._matches_kernel_name(kernel_name):
             enabled.set(False)
             return
 
-        enter_state(get_metadata_state_name(kernel_name))
-        try:
-            lazy_metadata = metadata.get()
-
-            kernel_name = lazy_metadata["name"]
-            owner_metadata_scope = get_metadata_state_name(kernel_name)
-            # If name wasn't available (or changed), apply filters using the evaluated name.
-            if not self._matches_kernel_name(kernel_name):
-                enabled.set(False)
-                return
-
-            fn_metrics = LaunchHook._extract_metrics(lazy_metadata)
+        fn_metrics = LaunchHook._extract_metrics(lazy_metadata)
+        with metadata_state(raw_kernel_name):
             if fn_metrics:
                 set_metric_kernels()
             scalar_metrics, tensor_metrics = transform_tensor_metrics(fn_metrics)
-        finally:
-            exit_state()
 
+        scope_id = libproton.record_scope()
+        libproton.enter_op(scope_id, kernel_name)
+        with metadata_state(raw_kernel_name):
+            libproton.add_metrics(scope_id, scalar_metrics, tensor_metrics)
+        id.set(scope_id)
         op_name.set(kernel_name)
-        id.set(libproton.record_scope())
-        op_entered = False
-        try:
-            libproton.enter_op(id.get(), lazy_metadata["name"])
-            op_entered = True
-            # The flexible metrics are attached to the compute op, but any GPU
-            # work needed to copy tensor metrics belongs to launch metadata.
-            enter_state(owner_metadata_scope)
-            try:
-                libproton.add_metrics(id.get(), scalar_metrics, tensor_metrics)
-            finally:
-                exit_state()
-        except Exception:
-            if op_entered:
-                libproton.exit_op(id.get(), op_name.get())
-            raise
-        enabled.set(True)
 
     def exit(self, metadata: LazyDict) -> None:
         if not enabled.get():

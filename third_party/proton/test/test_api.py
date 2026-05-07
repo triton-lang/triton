@@ -13,7 +13,6 @@ from triton.profiler.hooks.hook import HookManager
 from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler.hooks.instrumentation import InstrumentationHook
 from triton.profiler.metric import transform_tensor_metrics
-from triton.profiler.state import get_state
 from triton._internal_testing import is_hip
 
 
@@ -391,17 +390,6 @@ def test_context_depth(tmp_path: pathlib.Path):
     assert proton.context.depth(session_id) == 1
     proton.exit_scope()
     assert proton.context.depth(session_id) == 0
-    proton.finalize()
-
-
-def test_state_get_state(tmp_path: pathlib.Path):
-    temp_file = tmp_path / "test_state_get_state.hatchet"
-    session_id = proton.start(str(temp_file.with_suffix("")))
-    assert get_state(session_id) is None
-    proton.enter_state("state0")
-    assert get_state(session_id) == "state0"
-    proton.exit_state()
-    assert get_state(session_id) is None
     proton.finalize()
 
 

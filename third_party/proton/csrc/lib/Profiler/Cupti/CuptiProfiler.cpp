@@ -196,9 +196,7 @@ void buildGraphNodeEntries(const DataToEntryMap &dataToEntry,
     if (nodeStateIt == graphState.dataToEntryIdToNodeStates.end())
       // This is a new data which was not enabled during graph capture
       continue;
-    externIdState.dataToGraphEntry.insert(
-        {data, data->addOp(entry.phase, entry.id,
-                           {Context{GraphState::captureTag}})});
+    externIdState.dataToGraphEntry.insert({data, entry});
   }
   externIdState.nodeIdToState = &graphState.nodeIdToState;
 }
@@ -515,7 +513,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         graphState.numMetricWords += metricKernelLaunchInfo.numWords;
       }
       for (auto *data : profiler.dataSet) {
-        auto contexts = data->getContexts();
+        auto currentContexts = data->getContexts();
+        std::vector<Context> contexts{Context(GraphState::captureTag)};
+        contexts.insert(contexts.end(), currentContexts.begin(),
+                        currentContexts.end());
         if (isMetricKernelNode) {
           if (threadState.isApiExternOp) { // API extern ops
             contexts.push_back(std::string(GraphState::metricTag));

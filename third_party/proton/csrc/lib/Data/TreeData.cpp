@@ -328,7 +328,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
 
   tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
       [&](TreeData::Tree::TreeNode &treeNode) {
-        const auto contextName = treeNode.name;
+        const auto contextName = getContextName(treeNode);
         auto contextId = treeNode.id;
         json *jsonNode = jsonNodes[contextId];
         (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
@@ -359,7 +359,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               const auto flexibleIt =
                   treeNode.metricSet.linkedFlexibleMetrics.find(virtualNodeId);
               outNode = json::object();
-              outNode["frame"] = {{"name", virtualNode.name},
+              outNode["frame"] = {{"name", getContextName(virtualNode)},
                                   {"type", "function"}};
               outNode["metrics"] = json::object();
               if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
@@ -710,7 +710,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         writer.packStr("frame");
         writer.packMap(2);
         writer.packStr("name");
-        writer.packStr(treeNode.name);
+        writer.packStr(getContextName(treeNode));
         writer.packStr("type");
         writer.packStr("function");
 
@@ -738,7 +738,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
               writer.packStr("frame");
               writer.packMap(2);
               writer.packStr("name");
-              writer.packStr(virtualNode.name);
+              writer.packStr(getContextName(virtualNode));
               writer.packStr("type");
               writer.packStr("function");
 

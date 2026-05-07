@@ -1,6 +1,4 @@
 from functools import wraps
-import threading
-from typing import Optional
 
 from triton._C.libproton import proton as libproton
 from .flags import flags
@@ -61,8 +59,8 @@ class state:
 
 class metadata_state(state):
 
-    def __init__(self) -> None:
-        super().__init__(COMPUTE_METADATA_SCOPE_NAME)
+    def __init__(self, kernel_name=None) -> None:
+        super().__init__(get_metadata_state_name(kernel_name))
 
 
 def enter_state(name: str) -> None:
@@ -73,30 +71,7 @@ def exit_state() -> None:
     libproton.exit_state()
 
 
-def get_state(session: Optional[int] = 0) -> Optional[str]:
-    """
-    Get the current state.
-
-    Args:
-        session (int): The session ID of the profiling session. Defaults to 0.
-
-    Returns:
-        state (str or None): The current state. If profiling is off or no state is active, returns None.
-    """
-    if not flags.profiling_on:
-        return None
-    return libproton.get_state(session)
-
-
 def get_metadata_state_name(kernel_name=None) -> str:
     if not kernel_name:
         return COMPUTE_METADATA_SCOPE_NAME
     return f"{COMPUTE_METADATA_SCOPE_PREFIX}{kernel_name}"
-
-
-def is_metadata_state_active() -> bool:
-    stack = getattr(_thread_state, "state_stack", None)
-    if not stack:
-        return False
-    state_name = stack[-1]
-    return state_name == COMPUTE_METADATA_SCOPE_NAME or state_name.startswith(COMPUTE_METADATA_SCOPE_PREFIX)

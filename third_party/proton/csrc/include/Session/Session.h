@@ -34,8 +34,6 @@ public:
 
   size_t getContextDepth();
 
-  std::optional<std::string> getState() const;
-
   Profiler *getProfiler() const { return profiler; }
 
 private:
@@ -96,8 +94,6 @@ public:
 
   size_t getContextDepth(size_t sessionId);
 
-  std::optional<std::string> getState(size_t sessionId);
-
   std::vector<uint8_t> getDataMsgPack(size_t sessionId, size_t phase);
 
   std::string getData(size_t sessionId, size_t phase);
@@ -134,6 +130,8 @@ public:
                   const std::map<std::string, TensorMetric> &tensorMetrics);
 
   void setMetricKernels(const MetricKernelLaunchState &metricKernelLaunchState);
+
+  void renameState(const std::string &oldName, const std::string &newName);
 
   void setState(std::optional<Context> context);
 
