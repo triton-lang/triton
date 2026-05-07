@@ -98,7 +98,7 @@ static int computeKPadding(int kBase, int64_t tensorK,
   // means if tensorK is smaller than one k repetition we get broadcasts in the
   // lane dimension so we have tensorK valid elements per nonKRepeat subtile.
   constexpr int wmmaTileDim = 16;
-  int nonKDim = dotEnc.getOpIdx() == 0 ? mnkDim[0] : mnkDim[1];
+  int nonKDim = wmmaLayout.getOperandNonKDim(dotEnc.getOpIdx());
   int nonKRepeat = nonKDim / wmmaTileDim;
   int lanesInKDim = warpSize / wmmaTileDim;
   int elemsPerKRep = lanesInKDim * dotEnc.getKWidth();
@@ -213,8 +213,7 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
   // Padding must be applied per-subtile so each nonK half is padded
   // independently.
   auto wmmaLayout = cast<AMDWmmaEncodingAttr>(dotEnc.getParent());
-  auto mnkDim = wmmaLayout.getInstrShape();
-  int nonKDim = dotEnc.getOpIdx() == 0 ? mnkDim[0] : mnkDim[1];
+  int nonKDim = wmmaLayout.getOperandNonKDim(dotEnc.getOpIdx());
   const int nonKTileDim = 16;
   int nonKRepeat = nonKDim / nonKTileDim;
   int kPerSubtile = kBase / nonKRepeat;
@@ -580,6 +579,16 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   return success();
 }
 
+// For asymmetric WMMA (e.g. 32x16) with isTransposed=true the dot's operand A
+// is 16xK and operand B is Kx32, but the intrinsic expects A as 32xK and B as
+// Kx16, so we swap A and B and adjust the layouts for the operands and scale
+// accordingly:
+//  - layout adjustment uses AMDWmmaEncodingAttr::getOperandNonKDim which
+//    returns the swapped nonK dim for asymmetric transposed WMMA
+//  - WmmaScaleIntrinsic::get returns swapped kBaseA and kBaseB for
+//    asymmetric transposed WMMA
+//  - Intrinsic call created with (hb, sb, ha, sa) matches the expected LLVM
+//  types
 LogicalResult convertScaledDot(triton::DotScaledOp op,
                                triton::DotScaledOp::Adaptor adaptor,
                                ConversionPatternRewriter &rewriter,
@@ -634,7 +643,8 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   FailureOr<WmmaScaleIntrinsic> maybeWmmaScaleIntrinsic =
       WmmaScaleIntrinsic::get(wmmaVer, mnkDim[0], mnkDim[1], scaledAElemType,
                               scaledBElemType, dTensorTy.getElementType(),
-                              (scaleFactor == 16) /*isScale16*/);
+                              (scaleFactor == 16) /*isScale16*/,
+                              wmmaLayout.getIsTransposed());
   if (failed(maybeWmmaScaleIntrinsic)) {
     return op.emitError("no matching wmma scale intrinsic ")
            << "for wmma version " << wmmaVer << " with instruction shape ["

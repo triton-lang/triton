@@ -1445,23 +1445,30 @@ static Value getScratchPtrImpl(Location loc, RewriterBase &rewriter,
     gridDim[k] = GetNumProgramsOp::create(rewriter, loc, k);
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value linearId = gridIdx[2];
+  auto zextToI64 = [&](Value value) {
+    if (value.getType() == i64_ty)
+      return value;
+    return b.zext(i64_ty, value).getResult();
+  };
+  Value linearId = zextToI64(gridIdx[2]);
   for (int k = 0; k < 2; ++k)
-    linearId = b.add(gridIdx[1 - k], b.mul(linearId, gridDim[1 - k]));
+    linearId = b.add(zextToI64(gridIdx[1 - k]),
+                     b.mul(linearId, zextToI64(gridDim[1 - k])));
 
   auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
   if (numCTAs > 1) {
-    linearId = b.mul(linearId, b.i32_val(numCTAs));
+    linearId = b.mul(linearId, b.i64_val(numCTAs));
     // currentCTA sets whether to rebase the linearId to the CTA id or
     // just keep the pointer to the whole tensor
     if (currentCTA)
-      linearId = b.add(linearId, targetInfo.getClusterCTAId(rewriter, loc));
+      linearId =
+          b.add(linearId, zextToI64(targetInfo.getClusterCTAId(rewriter, loc)));
   }
 
   auto allocSize = allocSizeAttrVal.getValue().getZExtValue();
-  Value offset = b.mul(linearId, b.i32_val(allocSize));
+  Value offset = b.mul(linearId, b.i64_val(allocSize));
   if (allocOffset)
-    offset = b.add(offset, allocOffset);
+    offset = b.add(offset, zextToI64(allocOffset));
 
   auto *ctx = rewriter.getContext();
   return b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase,
