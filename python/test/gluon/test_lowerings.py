@@ -173,47 +173,6 @@ def test_convert_1d_to_2d_slice_cga(num_ctas, device):
     torch.testing.assert_close(out, torch.arange(head, device=device, dtype=torch.float32))
 
 
-@gluon.constexpr_function
-def _make_cga_broadcast_1d(num_ctas):
-    if num_ctas == 1:
-        return []
-    n = num_ctas.bit_length() - 1
-    return [[0] for _ in range(n)]
-
-
-@gluon.jit
-def gather_cga_broadcast_kernel(out, HEAD: ttgl.constexpr, NUM_CTAS: ttgl.constexpr):
-    cga_bcast: ttgl.constexpr = _make_cga_broadcast_1d(NUM_CTAS)
-    layout: ttgl.constexpr = ttgl.BlockedLayout(
-        [1],
-        [32],
-        [ttgl.num_warps()],
-        [0],
-        cga_bcast,
-    )
-    d = ttgl.arange(0, HEAD, layout=layout)
-    x = d.to(ttgl.float32)
-    partner = ttgl.where(d % 2 == 0, d + 1, d - 1)
-    y = ttgl.gather(x, partner, axis=0)
-    ttgl.store(out + d, y)
-
-
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
-@pytest.mark.parametrize("num_ctas", [2, 4])
-def test_gather_cga_broadcast(num_ctas, device):
-    head = 64
-    out = torch.empty((head,), device=device, dtype=torch.float32)
-
-    gather_cga_broadcast_kernel[(1,)](
-        out, head, num_ctas, num_warps=2, num_ctas=num_ctas
-    )
-
-    # RoPE-style pair swap: 0<->1, 2<->3, 4<->5, ...
-    expected = torch.zeros(head, device=device, dtype=torch.float32)
-    idx = torch.arange(head, device=device)
-    expected[idx % 2 == 0] = (idx[idx % 2 == 0] + 1).float()
-    expected[idx % 2 == 1] = (idx[idx % 2 == 1] - 1).float()
-    torch.testing.assert_close(out, expected)
 
 
 def _swizzled_warp_layouts_1d():

@@ -673,12 +673,6 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   auto regDst = flatten(dstFlat, kReg);
   auto laneSrc = flatten(srcFlat, kLane);
   auto laneDst = flatten(dstFlat, kLane);
-  // Block bases describe the smem slices owned by each CTA. Pass them as a
-  // SmallVector (not a SetVector) to preserve duplicate zeros: when src
-  // broadcasts over the block dimension every basis is 0, and we need
-  // unflatten() in the inner optimalSwizzling to see all of them so that the
-  // smem block in-dim size equals num_ctas. This ensures storeCvt's
-  // block→block sub-mapping is an identity after invertAndCompose.
   auto blockBases = flatten(srcFlat, kBlock);
   // Get the associated src/dst tiles for each instruction if they exist
   SmallVector<std::tuple<std::pair<int32_t, int32_t>, SmallVector<int32_t>,
