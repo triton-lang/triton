@@ -160,10 +160,10 @@ static void initProton(pybind11::module &&m) {
   m.def("exit_state",
         []() { SessionManager::instance().setState(std::nullopt); });
 
-  m.def("rename_state", [](const std::string &oldName,
-                           const std::string &newName) {
-    SessionManager::instance().renameState(oldName, newName);
-  });
+  m.def("rename_state",
+        [](const std::string &oldName, const std::string &newName) {
+          SessionManager::instance().renameState(oldName, newName);
+        });
 
   m.def(
       "add_metrics",

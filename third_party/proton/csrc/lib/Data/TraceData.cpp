@@ -597,8 +597,7 @@ uint64_t getGraphLaneId(size_t streamId) { return kGraphLaneBase + streamId; }
 uint64_t getGpuLaneId(size_t streamId) { return kGpuLaneBase + streamId; }
 
 bool isMetadataContextName(const std::string &name) {
-  const std::string metadataPrefix =
-      std::string(GraphState::metadataTag) + ":";
+  const std::string metadataPrefix = std::string(GraphState::metadataTag) + ":";
   return name == GraphState::metadataTag || name.rfind(metadataPrefix, 0) == 0;
 }
 
@@ -972,8 +971,8 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
       for (auto targetEntryId : targetEntryIds) {
         // Linked target ids are event ids, so resolve through the event first.
         auto &targetEvent = virtualTrace->getEvent(targetEntryId);
-        auto contexts =
-            getRenamedContexts(virtualTrace->getContexts(targetEvent.contextId));
+        auto contexts = getRenamedContexts(
+            virtualTrace->getContexts(targetEvent.contextId));
         contexts.erase(contexts.begin());
         targetIdToVirtualContexts.emplace(targetEntryId, std::move(contexts));
       }
@@ -996,9 +995,9 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
     std::unordered_map<size_t, std::vector<Context>> contextIdToContexts(
         events.size());
     for (const auto &[_, event] : events) {
-      contextIdToContexts.try_emplace(event.contextId,
-                                      getRenamedContexts(trace->getContexts(
-                                          event.contextId)));
+      contextIdToContexts.try_emplace(
+          event.contextId,
+          getRenamedContexts(trace->getContexts(event.contextId)));
     }
     bool hasKernelMetrics = false, hasCycleMetrics = false;
 

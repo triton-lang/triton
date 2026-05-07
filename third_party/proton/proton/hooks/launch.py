@@ -106,8 +106,7 @@ class LaunchHook(Hook):
         with metadata_state(raw_kernel_name):
             lazy_metadata = metadata.get()
         kernel_name = lazy_metadata["name"]
-        libproton.rename_state(raw_metadata_state,
-                               get_metadata_state_name(kernel_name))
+        libproton.rename_state(raw_metadata_state, get_metadata_state_name(kernel_name))
 
         # Early return path 2: If the evaluated kernel name doesn't match filters, skip recording.
         if not self._matches_kernel_name(kernel_name):
