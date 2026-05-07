@@ -1,6 +1,8 @@
-#include "TritonAMDGPUTransforms/Passes.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
+#include "TritonAMDGPUTransforms/Passes.h" // IWYU pragma: keep
 #include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #define DEBUG_TYPE "tritonamdgpu-pipeline-expand-loops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -112,6 +114,36 @@ void expandLoops(ModuleOp moduleOp) {
 
   tt::resolveMaskOp(moduleOp);
 }
+
+// Fold consecutive waits of the same kind into a single wait.
+void combineWaitOps(ModuleOp moduleOp, bool useAsyncCopy) {
+  llvm::SmallSetVector<Operation *, 8> asyncWaitOps;
+  llvm::SmallSetVector<Operation *, 8> tdmWaitOps;
+  moduleOp.walk([&](Operation *op) {
+    if (useAsyncCopy && isa<ttg::AsyncWaitOp>(op))
+      asyncWaitOps.insert(op);
+    else if (isa<triton::amdgpu::AsyncTDMWait>(op))
+      tdmWaitOps.insert(op);
+  });
+
+  if (useAsyncCopy) {
+    tt::combineRedundantWaitOps(
+        asyncWaitOps,
+        [](Operation *op) { return isa<ttg::AsyncCommitGroupOp>(op); },
+        [](OpBuilder &b, Location loc, ValueRange operands,
+           unsigned num) -> Operation * {
+          return ttg::AsyncWaitOp::create(b, loc, operands, num);
+        });
+  }
+
+  tt::combineRedundantWaitOps(
+      tdmWaitOps,
+      [](Operation *op) { return isa<triton::amdgpu::TDMOpInterface>(op); },
+      [](OpBuilder &b, Location loc, ValueRange operands,
+         unsigned num) -> Operation * {
+        return triton::amdgpu::AsyncTDMWait::create(b, loc, operands, num);
+      });
+}
 } // namespace
 
 struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
@@ -123,10 +155,21 @@ struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
     expandLoops(moduleOp);
 
     if (useAsyncCopy) {
-      llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
-      moduleOp.walk([&](ttg::AsyncWaitOp waitOp) { waitOps.insert(waitOp); });
-      tt::combineRedundantWaitOps(waitOps);
+      auto arch = getAMDArch(moduleOp);
+      auto family =
+          arch ? tt::AMD::deduceISAFamily(*arch) : tt::AMD::ISAFamily::Unknown;
+      // Only asyncmark targets (CDNA3/CDNA4) need updateWaits here: their
+      // lowering reads ttg.async_wait's `num` directly into wait.asyncmark(N),
+      // and PR #9883 made UpdateAsyncWaitCount a no-op on those archs, so
+      // without this call the pipeliner-authored num=0 would serialize the
+      // SWP. Every other family keeps the prior combineRedundantWaitOps-only
+      // path: their num is re-derived downstream by UpdateAsyncWaitCount.
+      if (family == tt::AMD::ISAFamily::CDNA3 ||
+          family == tt::AMD::ISAFamily::CDNA4) {
+        mlir::triton::updateWaits(moduleOp);
+      }
     }
+    combineWaitOps(moduleOp, useAsyncCopy);
 
     tt::removePipeliningAttributes(moduleOp);
   }

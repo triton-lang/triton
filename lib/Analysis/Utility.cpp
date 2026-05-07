@@ -1168,6 +1168,9 @@ bool supportMMA(triton::DotOp op, int version) {
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
   auto aElemTy = op.getA().getType().getElementType();
   auto bElemTy = op.getB().getType().getElementType();
+  if (aElemTy.isF32() && bElemTy.isF32() &&
+      op.getInputPrecision() != InputPrecision::TF32)
+    return false;
   if (version == 5) {
     if (triton::tools::getBoolEnv("DISABLE_MMA_V5"))
       return false;
@@ -1196,6 +1199,11 @@ bool supportMMA(triton::DotOp op, int version) {
     if (!(retShapePerCTA[rank - 2] % 64 == 0 &&
           retShapePerCTA[rank - 1] % 16 == 0))
       return false;
+    if (aElemTy.isF64() || bElemTy.isF64() ||
+        retType.getElementType().isF64()) {
+      // tcgen05.mma doesn't support F64.
+      return false;
+    }
     return true;
   }
   if (version == 3) {
@@ -1228,7 +1236,8 @@ bool supportMMA(triton::DotOp op, int version) {
     }
   }
   if (aElemTy.isF32() && bElemTy.isF32()) {
-    return op.getInputPrecision() == InputPrecision::TF32 && version >= 2;
+    assert(op.getInputPrecision() == InputPrecision::TF32);
+    return version >= 2;
   }
   return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }

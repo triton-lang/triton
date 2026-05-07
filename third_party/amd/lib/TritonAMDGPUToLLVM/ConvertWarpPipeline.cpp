@@ -351,15 +351,15 @@ struct ConvertWarpPipeline
     : public mlir::triton::impl::ConvertWarpPipelineBase<ConvertWarpPipeline> {
 
 public:
-  ConvertWarpPipeline(StringRef arch)
+  ConvertWarpPipeline(StringRef gfxArch)
       : ConvertWarpPipelineBase<ConvertWarpPipeline>() {
-    this->arch = arch.str();
+    this->gfxArch = gfxArch.str();
   }
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
 
-    mlir::triton::AMD::TargetInfo targetInfo(arch.getValue());
+    mlir::triton::AMD::TargetInfo targetInfo(gfxArch.getValue());
     size_t partitionSize = targetInfo.getSharedMemoryPartitionSize();
     auto allocationFn = [&targetInfo](Operation *op) -> unsigned {
       return mlir::triton::AMD::AMDAllocationAnalysisScratchSizeFn(op,
@@ -368,7 +368,7 @@ public:
     ModuleAllocation moduleAllocation(m, allocationFn, partitionSize);
 
     if (targetInfo.getISAFamily() == mlir::triton::AMD::ISAFamily::Unknown) {
-      m.emitError("unsupported target: '") << arch.getValue() << "'";
+      m.emitError("unsupported target: '") << gfxArch.getValue() << "'";
       return signalPassFailure();
     }
     // Thread count of one warp-pipeline group.
@@ -394,7 +394,7 @@ public:
 
 namespace mlir::triton::AMD {
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertWarpPipelinePass(StringRef arch) {
-  return std::make_unique<ConvertWarpPipeline>(arch);
+createConvertWarpPipelinePass(StringRef gfxArch) {
+  return std::make_unique<ConvertWarpPipeline>(gfxArch);
 }
 } // namespace mlir::triton::AMD

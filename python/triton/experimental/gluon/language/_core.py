@@ -1,7 +1,7 @@
 from __future__ import annotations
 import inspect
 import math
-from typing import TypeVar, List, TYPE_CHECKING, Tuple
+from typing import Callable, TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
 import warnings
 
@@ -239,6 +239,42 @@ class shared_memory_descriptor_type(base_type):
         return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{alloc_shape_str}ASMD"
 
 
+def _add_atomic_scatter_docstring(kind: str) -> Callable[[T], T]:
+
+    def _decorator(func: T) -> T:
+        integer_only = kind in ("max", "min", "logical and", "logical or", "logical xor")
+        value_kind = "integer values" if integer_only else "values"
+        value_type = ("Integer tensor with the same shape as :code:`indices`"
+                      if integer_only else "Tensor with the same shape as :code:`indices`")
+        docstr = f"""
+    Performs an atomic scatter {kind} on this shared-memory descriptor.
+
+    For each input position :code:`I`, reads from and writes to the element whose
+    coordinate at :code:`axis` is replaced by :code:`indices[I]`:
+      :code:`old = dst[I[0], ..., indices[I], ..., I[n]]`
+      :code:`dst[I[0], ..., indices[I], ..., I[n]] = op(old, values[I])`
+    where :code:`op` is {kind}.
+
+    Return the data stored at the scattered location before the atomic operation.
+
+    :param values: The {value_kind} with which to perform the atomic operation
+    :type values: {value_type}
+    :param indices: The indices to update along :code:`axis`
+    :type indices: Integer tensor
+    :param axis: The axis along which to update values
+    :type axis: int
+    :param mask: Boolean tensor selecting which elements to update
+    :type mask: Tensor, optional
+
+    :note: This operation currently uses relaxed memory semantics. Users are responsible
+        for inserting mbarrier synchronization themselves.
+    """
+        func.__doc__ = docstr
+        return func
+
+    return _decorator
+
+
 class shared_memory_descriptor(base_value):
     """
     Represents a handle to a shared memory allocation in Gluon IR.
@@ -344,6 +380,50 @@ class shared_memory_descriptor(base_value):
         axis = _unwrap_if_constexpr(axis)
         return _semantic.shared_scatter(self, values, indices, axis)
 
+    def _atomic_scatter_rmw(self, op, values, indices, axis, mask, _semantic: GluonSemantic = None) -> tensor:
+        values = _unwrap_if_constexpr(values)
+        indices = _unwrap_if_constexpr(indices)
+        axis = _unwrap_if_constexpr(axis)
+        mask = _unwrap_if_constexpr(mask)
+        if mask is not None:
+            mask = _semantic.to_tensor(mask)
+        return _semantic.shared_atomic_scatter_rmw(self, op, values, indices, axis, mask)
+
+    @builtin
+    @_add_atomic_scatter_docstring("add")
+    def atomic_scatter_add(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("add", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("max")
+    def atomic_scatter_max(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("max", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("min")
+    def atomic_scatter_min(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("min", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("logical and")
+    def atomic_scatter_and(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("and", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("logical or")
+    def atomic_scatter_or(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("or", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("logical xor")
+    def atomic_scatter_xor(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("xor", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("exchange")
+    def atomic_scatter_xchg(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("xchg", values, indices, axis, mask, _semantic)
+
     def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Create a subview of shared memory by slicing along a given dimension.
@@ -405,21 +485,22 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_reshape(self, shape)
 
     @builtin
-    def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
+    def _reinterpret(self, dtype=None, shape=None, layout=None,
+                     _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Reinterpret the shared memory descriptor as a different dtype, shape, or layout.
 
         Args:
-            dtype (dtype): The new data type.
-            shape (List[int]): The new shape.
-            layout (SharedLayout): The new layout.
+            dtype (dtype): The new data type. Defaults to the descriptor dtype.
+            shape (List[int]): The new shape. Defaults to the descriptor shape.
+            layout (SharedLayout): The new layout. Defaults to the descriptor layout.
 
         Returns:
             shared_memory_descriptor: Descriptor with updated type and layout.
         """
-        dtype = _unwrap_if_constexpr(dtype)
-        shape = [_unwrap_if_constexpr(s) for s in shape]
-        layout = _unwrap_if_constexpr(layout)
+        dtype = self.dtype if dtype is None else _unwrap_if_constexpr(dtype)
+        shape = self.shape if shape is None else [_unwrap_if_constexpr(s) for s in shape]
+        layout = self.layout if layout is None else _unwrap_if_constexpr(layout)
 
         return _semantic.memdesc_reinterpret(self, dtype, shape, layout)
 

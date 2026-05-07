@@ -354,6 +354,13 @@ OperandTypesVector getOperandTypesForWmmaOp(PatternRewriter &rewriter,
         // clang-format on
     });
   }
+  if (version == 3) {
+    applicableTypes.append({
+        // clang-format off
+        {f32, f32, f32, f32},
+        // clang-format on
+    });
+  }
   return selectMatrixCoreOperandTypes(dot, applicableTypes);
 }
 
@@ -1247,7 +1254,8 @@ public:
       }
 
       LinearLayout newLL = ttg::chooseScaledWmmaScaleLayout(
-          ctx, idx, shape, mDim, scaleFactor, ctaLayout, cgaLayout);
+          ctx, idx, shape, mDim, nDim, wmmaEnc.getIsTransposed(), scaleFactor,
+          ctaLayout, cgaLayout);
       Attribute newScaleEncoding = ttg::LinearEncodingAttr::get(ctx, newLL);
       auto newScaleType =
           RankedTensorType::get(shape, scaleType, newScaleEncoding);
@@ -1496,14 +1504,21 @@ public:
     auto newAcc =
         convertAndCastTensor(rewriter, oldAcc, wmmaEnc, operandTypes[2]);
 
-    auto kWidth = 0;
-    // Adjust kWidth=kDimTensor/2 when kDimTensor < kDim
-    if (kDimTensor < kDim) {
-      kWidth = kDimTensor / 2;
-    } else {
-      // kWidth is always 8 for WMMA v3, and equals to kBase for WMMA v1/2
-      kWidth = wmmaVersion == 3 ? 8 : kBase;
+    // deduce `kWidth` which is the number of consecutive elements along the K
+    // dimension for a lane. Derive it from `kBase` which is the number of
+    // elements along the K dimension in a WMMA instruction per lane. Note:
+    // `kBase` can consist of several separated groups of consecutive elements.
+    // This depends on the instruction encoding.
+
+    // kWidth is always equals to kBase for WMMA v1/2
+    auto kWidth = kBase;
+    if (wmmaVersion == 3) {
+      const bool isF32 = oldAType.getElementType().isF32();
+      // kBase always consits of several groups of 8 elments except F32 case
+      kWidth = isF32 ? 2 : 8;
     }
+    assert(kWidth != 0);
+
     auto newAType = RankedTensorType::get(
         aShape, operandTypes[0],
         ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEnc, kWidth));
@@ -1725,9 +1740,9 @@ struct TritonAMDGPUAccelerateMatmulPass
     ModuleOp m = getOperation();
 
     RewritePatternSet mfmaPatterns(context);
-    AMD::TargetInfo ti = AMD::TargetInfo(archGenerationName);
-    unsigned wmmaVersion = getWmmaVersion(archGenerationName);
-    switch (auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName)) {
+    AMD::TargetInfo ti = AMD::TargetInfo(gfxArch);
+    unsigned wmmaVersion = getWmmaVersion(gfxArch);
+    switch (auto isaFamily = triton::AMD::deduceISAFamily(gfxArch)) {
     case ISAFamily::GFX1250:
       mfmaPatterns.add<ScaledBlockedToScaledWMMAF8F6F4>(context, wmmaVersion,
                                                         /*benefit=*/4);
@@ -1752,9 +1767,9 @@ struct TritonAMDGPUAccelerateMatmulPass
     case ISAFamily::RDNA4:
       ttg::populateDecomposeScaledBlockedPatterns(mfmaPatterns,
                                                   /*benefit=*/3);
-      mfmaPatterns.add<::BlockedToWMMA>(
-          context, getWmmaVersion(archGenerationName), matrixInstructionSize,
-          /*benefit=*/2);
+      mfmaPatterns.add<::BlockedToWMMA>(context, getWmmaVersion(gfxArch),
+                                        matrixInstructionSize,
+                                        /*benefit=*/2);
       break;
     default:
       break;
@@ -1763,7 +1778,7 @@ struct TritonAMDGPUAccelerateMatmulPass
       signalPassFailure();
 
     RewritePatternSet patterns(context);
-    patterns.add<AccelerateBlocked>(context, archGenerationName, /*benefit=*/1);
+    patterns.add<AccelerateBlocked>(context, gfxArch, /*benefit=*/1);
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
     decomposeMixedModeDotOp(m);

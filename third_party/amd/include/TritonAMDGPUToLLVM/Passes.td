@@ -34,8 +34,8 @@ def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::Mod
                              "mlir::ROCDL::ROCDLDialect"];
 
     let options = [
-        Option<"arch", "arch", "std::string", /*default*/"\"\"",
-               "gfx target device architecture, e.g., gfx942">,
+        Option<"gfxArch", "gfx-arch", "std::string", /*default*/"std::string{}",
+               "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
         Option<"ftz", "ftz", "bool", /*default*/"true",
                "flush denorms for math functions">,
     ];
@@ -48,8 +48,8 @@ def ConvertBuiltinFuncToLLVM : Pass<"convert-builtin-func-to-llvm", "mlir::Modul
     let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 
     let options = [
-        Option<"arch", "arch", "std::string", /*default*/"\"\"",
-               "gfx target device architecture, e.g., gfx942">,
+        Option<"gfxArch", "gfx-arch", "std::string", /*default*/"std::string{}",
+               "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
         Option<"ftz", "ftz", "bool", /*default*/"true",
                "flush denorms for math functions">,
     ];
@@ -70,15 +70,15 @@ def TritonAMDGPUInsertInstructionSchedHints : Pass<"triton-amdgpu-insert-instruc
 
 def TritonAMDGPULowerInstructionSchedHints : Pass<"triton-amdgpu-lower-insert-instruction-sched-hints", "mlir::ModuleOp"> {
     let summary = "Lower instruction scheduling hints to LLVM intrinsics";
-    let constructor = "mlir::triton::createTritonAMDGPULowerInstructionSchedHintsPass(/*arch=*/\"\",/*numStages=*/2)";
+    let constructor = "mlir::triton::createTritonAMDGPULowerInstructionSchedHintsPass(/*gfxArch=*/\"\",/*numStages=*/2)";
 
     let dependentDialects = ["mlir::LLVM::LLVMDialect",
                              "mlir::ROCDL::ROCDLDialect",
                              "mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
     let options = [
-        Option<"arch", "arch", "std::string", /*default*/"\"\"",
-               "gfx target device architecture, e.g., gfx942">,
+        Option<"gfxArch", "gfx-arch", "std::string", /*default*/"std::string{}",
+               "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
         Option<"numStages", "num_stages", "int32_t", /*default*/"2",
                 "number of pipeline stages">,
     ];
@@ -94,8 +94,8 @@ def ConvertWarpPipeline : Pass<"convert-warp-pipeline", "mlir::ModuleOp"> {
                              "mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
     let options = [
-        Option<"arch", "arch", "std::string", /*default*/"\"\"",
-               "gfx target device architecture, e.g., gfx942">,
+        Option<"gfxArch", "gfx-arch", "std::string", /*default*/"std::string{}",
+               "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
     ];
 }
 
@@ -112,20 +112,9 @@ def TritonAMDGPUConvertWarpSpecializeToLLVM : Pass<"triton-amdgpu-convert-warp-s
   let dependentDialects = ["mlir::LLVM::LLVMDialect", "mlir::ROCDL::ROCDLDialect"];
 
   let options = [
-    Option<"arch", "arch", "std::string", /*default*/"\"\"",
-           "target device architecture, e.g., gfx1250">,
+    Option<"gfxArch", "gfx-arch", "std::string", /*default*/"std::string{}",
+           "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
   ];
-}
-
-def PrepareConSanCaptures : Pass<"prepare-consan-captures", "mlir::ModuleOp"> {
-  let summary = "Reserve shared memory for ConSan captures in WarpSpecializeOps";
-  let description = [{
-    Scans the module to estimate how many WarpSpecialize captures the
-    ConcurrencySanitizer pass will add, and sets a
-    `consan.extra_capture_bytes` attribute on each WarpSpecializeOp.
-    The AllocateAMDGPUSharedMemory pass reads this attribute to reserve
-    enough LDS for the expanded capture struct.
-  }];
 }
 
 #endif

@@ -38,9 +38,41 @@ def _filter_layouts(layouts):
     return [l for l in layouts if _is_layout_applicable(l)]
 
 
+@gluon.constexpr_function
+def _make_cga_broadcast(rank: ttgl.constexpr, num_ctas: ttgl.constexpr):
+    if num_ctas == 1:
+        return []
+    n = num_ctas.bit_length() - 1
+    return [[0] * rank for _ in range(n)]
+
+
 @gluon.jit
 def _combine(a, b):
     return a + b
+
+
+@gluon.jit
+def convert_1d_to_2d_slice_cga_kernel(out, HEAD: ttgl.constexpr, NUM_CTAS: ttgl.constexpr):
+    layout_d: ttgl.constexpr = ttgl.BlockedLayout(
+        [1],
+        [32],
+        [ttgl.num_warps()],
+        [0],
+        _make_cga_broadcast(1, NUM_CTAS),
+    )
+    layout_nd: ttgl.constexpr = ttgl.BlockedLayout(
+        [1, 1],
+        [1, 32],
+        [ttgl.num_warps(), 1],
+        [1, 0],
+        _make_cga_broadcast(2, NUM_CTAS),
+    )
+
+    d = ttgl.arange(0, HEAD, layout=layout_d)
+    x = d.to(ttgl.float32)
+    dd = ttgl.arange(0, HEAD, layout=ttgl.SliceLayout(0, layout_nd))
+    y = ttgl.convert_layout(x, ttgl.SliceLayout(0, layout_nd))
+    ttgl.store(out + dd, y)
 
 
 @gluon.jit
@@ -128,6 +160,17 @@ def test_scan_blocked_broadcast_layout_multiblock(device):
     scan_kernel[(1, )](x, y, M, 1, src_layout, 0, num_warps=2)
 
     torch.testing.assert_close(y, torch.cumsum(x, dim=0))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("num_ctas", [2, 4, 8])
+def test_convert_1d_to_2d_slice_cga(num_ctas, device):
+    head = 64
+    out = torch.empty((head, ), device=device, dtype=torch.float32)
+
+    convert_1d_to_2d_slice_cga_kernel[(1, )](out, head, num_ctas, num_warps=2, num_ctas=num_ctas)
+
+    torch.testing.assert_close(out, torch.arange(head, device=device, dtype=torch.float32))
 
 
 def _swizzled_warp_layouts_1d():
@@ -1717,14 +1760,56 @@ def test_gather_layouts(axis, src_layout, index_layout, src_shape, idx_shape, de
 
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
                          [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
-def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
+@pytest.mark.parametrize("shared_layout_cfg", [
+    pytest.param(("swizzled", None, None, None), id="swizzled"),
+    pytest.param(("partitioned-swizzled", 0, 2, 1), id="partitioned-swizzled-dim0-p2-g1"),
+    pytest.param(("partitioned-swizzled", 0, 2, 2), id="partitioned-swizzled-dim0-p2-g2"),
+    pytest.param(("partitioned-swizzled", 0, 4, 1), id="partitioned-swizzled-dim0-p4-g1"),
+    pytest.param(("partitioned-swizzled", 1, 2, 1), id="partitioned-swizzled-dim1-p2-g1"),
+    pytest.param(("partitioned-swizzled", 1, 2, 2), id="partitioned-swizzled-dim1-p2-g2"),
+    pytest.param(("partitioned-swizzled", 1, 4, 1), id="partitioned-swizzled-dim1-p4-g1"),
+    pytest.param(("partitioned-padded", 0, 2, 1), id="partitioned-padded-dim0-p2-g1"),
+    pytest.param(("partitioned-padded", 0, 2, 2), id="partitioned-padded-dim0-p2-g2"),
+    pytest.param(("partitioned-padded", 0, 4, 1), id="partitioned-padded-dim0-p4-g1"),
+    pytest.param(("partitioned-padded", 1, 2, 1), id="partitioned-padded-dim1-p2-g1"),
+    pytest.param(("partitioned-padded", 1, 2, 2), id="partitioned-padded-dim1-p2-g2"),
+    pytest.param(("partitioned-padded", 1, 4, 1), id="partitioned-padded-dim1-p4-g1"),
+])
+def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, shared_layout_cfg, device):
     if M % M_tile_size != 0 or N % N_tile_size != 0:
         pytest.skip(f"Shape size ({M}, {N}) must be divisible by tile size ({M_tile_size}, {N_tile_size})")
+
+    layout_type, partition_dim, num_partitions, num_groups = shared_layout_cfg
+    if layout_type == "swizzled":
+        shared_layout = ttgl.SwizzledSharedLayout(vec=8, per_phase=1, max_phase=8, order=[1, 0])
+    else:
+        assert layout_type in ("partitioned-swizzled", "partitioned-padded")
+        if not is_hip():
+            pytest.skip("PartitionedSharedLayout is supported only on AMD backend")
+        if layout_type == "partitioned-swizzled":
+            inner_layout = ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=8, order=[1, 0])
+        else:
+            pad_interval, pad_amount = 16, 4
+            # Skip cases that would not fit in LDS on the current architecture.
+            elem_size = 2  # float16
+            padded_bytes = ((M * N * (pad_interval + pad_amount)) // pad_interval) * elem_size
+            if padded_bytes >= get_hip_lds_size():
+                pytest.skip(f"Partitioned-padded allocation ({padded_bytes} B) exceeds LDS ({get_hip_lds_size()} B)")
+            inner_layout = ttgl.PaddedSharedLayout.with_identity_for(
+                interval_padding_pairs=[[pad_interval, pad_amount]],
+                shape=[M, N],
+                order=[1, 0],
+            )
+        shared_layout = PartitionedSharedLayout(
+            num_partitions=num_partitions,
+            num_groups=num_groups,
+            partition_dim=partition_dim,
+            partition_layout=inner_layout,
+        )
 
     num_rows_per_warp = THREADS_PER_WARP // 4
     blocked_layout = ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[num_rows_per_warp, 4],
                                         warps_per_cta=[4, 1], order=[1, 0])
-    shared_layout = ttgl.SwizzledSharedLayout(vec=8, per_phase=1, max_phase=8, order=[1, 0])
 
     @gluon.jit
     def kernel(

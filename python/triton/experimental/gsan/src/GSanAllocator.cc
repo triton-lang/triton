@@ -459,16 +459,17 @@ error:
 
 CUresult mapNodeHandles(AllocNode *node,
                         CUmemGenericAllocationHandle realHandle,
-                        CUmemGenericAllocationHandle shadowHandle, int device,
-                        bool *realMapped, bool *shadowMapped) {
+                        CUmemGenericAllocationHandle shadowHandle,
+                        size_t allocSize, int device, bool *realMapped,
+                        bool *shadowMapped) {
   assert(node != nullptr);
   assert(realMapped != nullptr);
   assert(shadowMapped != nullptr);
 
   const auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
-  const auto shadowSize = getShadowSize(node->size);
+  const auto shadowSize = getShadowSize(allocSize);
 
-  CUresult err = cuMemMap(node->virtualAddress, node->size, /*offset*/ 0,
+  CUresult err = cuMemMap(node->virtualAddress, allocSize, /*offset*/ 0,
                           realHandle, /*flags*/ 0);
   if (err != CUDA_SUCCESS)
     return err;
@@ -485,21 +486,28 @@ CUresult mapNodeHandles(AllocNode *node,
   accessDesc.location.id = device;
   accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
 
-  err = cuMemSetAccess(node->virtualAddress, node->size, &accessDesc, 1);
+  err = cuMemSetAccess(node->virtualAddress, allocSize, &accessDesc, 1);
   if (err != CUDA_SUCCESS)
     return err;
 
-  return cuMemSetAccess(shadowAddress, shadowSize, &accessDesc, 1);
+  err = cuMemSetAccess(shadowAddress, shadowSize, &accessDesc, 1);
+  if (err != CUDA_SUCCESS)
+    return err;
+
+  node->allocSize = allocSize;
+  node->realHandle = realHandle;
+  node->shadowHandle = shadowHandle;
+  return CUDA_SUCCESS;
 }
 
 void unmapNodeHandles(AllocNode *node, bool realMapped, bool shadowMapped) {
   assert(node != nullptr);
   const auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
-  const auto shadowSize = getShadowSize(node->size);
+  const auto shadowSize = getShadowSize(node->allocSize);
   if (shadowMapped)
     cuMemUnmap(shadowAddress, shadowSize);
   if (realMapped)
-    cuMemUnmap(node->virtualAddress, node->size);
+    cuMemUnmap(node->virtualAddress, node->allocSize);
 }
 
 } // namespace
@@ -550,7 +558,6 @@ extern "C" void *gsanMalloc(ssize_t size, int device,
   auto cuStream = reinterpret_cast<CUstream>(stream);
   auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
   auto shadowSize = getShadowSize(allocSize);
-
   err = cuMemCreate(&realHandle, allocSize, &prop, 0);
   if (err != CUDA_SUCCESS)
     goto error;
@@ -559,8 +566,8 @@ extern "C" void *gsanMalloc(ssize_t size, int device,
   if (err != CUDA_SUCCESS)
     goto error;
 
-  err = mapNodeHandles(node, realHandle, shadowHandle, device, &realMapped,
-                       &shadowMapped);
+  err = mapNodeHandles(node, realHandle, shadowHandle, allocSize, device,
+                       &realMapped, &shadowMapped);
   if (err != CUDA_SUCCESS)
     goto error;
 
@@ -569,9 +576,6 @@ extern "C" void *gsanMalloc(ssize_t size, int device,
   if (err != CUDA_SUCCESS)
     goto error;
 
-  node->allocSize = allocSize;
-  node->realHandle = realHandle;
-  node->shadowHandle = shadowHandle;
   LOGF("gsanMalloc: %p, 0x%zxu", reinterpret_cast<void *>(node->virtualAddress),
        size);
   return reinterpret_cast<void *>(node->virtualAddress);
@@ -686,7 +690,7 @@ int gsanExportAllocationHandles(void *void_ptr, int *realFd, int *shadowFd,
 
   *realFd = realFdLocal;
   *shadowFd = shadowFdLocal;
-  *allocSize = node->size;
+  *allocSize = node->allocSize;
   return 0;
 }
 
@@ -754,12 +758,6 @@ void *gsanImportAllocationHandles(int realFd, int shadowFd, size_t allocSize,
   if (node == nullptr)
     return nullptr;
 
-  if (node->size != allocSize) {
-    freeNode(node);
-    fprintf(stderr, "gsanImportAllocationHandles requires power-of-two size\n");
-    return nullptr;
-  }
-
   CUmemGenericAllocationHandle realHandle = 0;
   CUmemGenericAllocationHandle shadowHandle = 0;
   bool realMapped = false;
@@ -776,14 +774,11 @@ void *gsanImportAllocationHandles(int realFd, int shadowFd, size_t allocSize,
   if (err != CUDA_SUCCESS)
     goto error;
 
-  err = mapNodeHandles(node, realHandle, shadowHandle, device, &realMapped,
-                       &shadowMapped);
+  err = mapNodeHandles(node, realHandle, shadowHandle, allocSize, device,
+                       &realMapped, &shadowMapped);
   if (err != CUDA_SUCCESS)
     goto error;
 
-  node->allocSize = allocSize;
-  node->realHandle = realHandle;
-  node->shadowHandle = shadowHandle;
   return reinterpret_cast<void *>(node->virtualAddress);
 
 error:

@@ -122,8 +122,12 @@ protected:
     bool isApiExternOp{false};
     bool isStreamCapturing{false};
     bool isMetricKernelLaunching{false};
-    std::deque<size_t> metricKernelNumWordsQueue;
-
+    struct MetricKernelLaunchInfo {
+      uint64_t seqId{};
+      uint64_t metricId{};
+      size_t numWords{};
+    };
+    std::deque<MetricKernelLaunchInfo> metricKernelLaunchInfoQueue;
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
     void enterOp(const Scope &scope) {
@@ -230,25 +234,21 @@ protected:
                  const std::map<std::string, MetricValueType> &scalarMetrics,
                  const std::map<std::string, TensorMetric> &tensorMetrics) {
       if (threadState.isStreamCapturing) { // Graph capture mode
-        threadState.isMetricKernelLaunching = true;
-        for (const auto &[_, metric] : tensorMetrics) {
-          threadState.metricKernelNumWordsQueue.push_back(
-              /*metric_id=*/1 + metric.size); // metric_id + num_values
-        }
-        for (const auto &[_, metric] : scalarMetrics) {
-          threadState.metricKernelNumWordsQueue.push_back(
-              /*metric_id=*/1 + 1); // scalar metric has 1 value
-        }
         // Launch metric kernels
         auto &metricKernelLaunchState = profiler.metricKernelLaunchState;
-        profiler.metricBuffer->receive(tensorMetrics, scalarMetrics,
-                                       metricKernelLaunchState);
+        threadState.isMetricKernelLaunching = true;
+        profiler.metricBuffer->receive(
+            tensorMetrics, scalarMetrics, metricKernelLaunchState,
+            [&](uint64_t seqId, uint64_t metricId, size_t numWords) {
+              threadState.metricKernelLaunchInfoQueue.push_back(
+                  {seqId, metricId, numWords});
+            });
         threadState.isMetricKernelLaunching = false;
       } else { // Eager mode, directly copy
         // Populate tensor metrics
         auto tensorMetricsHost = collectTensorMetrics(
             profiler.metricBuffer->getRuntime(), tensorMetrics,
-            profiler.metricKernelLaunchState.stream);
+            profiler.metricKernelLaunchState.tensor.stream);
         auto &dataToEntry = threadState.dataToEntry;
         if (dataToEntry.empty()) {
           // Add metrics to a specific scope

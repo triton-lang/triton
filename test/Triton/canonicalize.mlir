@@ -180,10 +180,24 @@ tt.func @fold_transpose_constant() -> tensor<128x16xf32> {
 tt.func @canonicalize_int_to_ptr_of_ptr_to_int(%ptr: tensor<64x!tt.ptr<f32>>) -> tensor<64x!tt.ptr<f32>> {
   // CHECK-NOT: tt.ptr_to_int
   // CHECK-NOT: tt.int_to_ptr
+  // CHECK-NOT: tt.bitcast
   // CHECK: tt.return %{{.*}} : tensor<64x!tt.ptr<f32>>
   %int = tt.ptr_to_int %ptr : tensor<64x!tt.ptr<f32>> -> tensor<64xi64>
   %result = tt.int_to_ptr %int : tensor<64xi64> -> tensor<64x!tt.ptr<f32>>
   tt.return %result : tensor<64x!tt.ptr<f32>>
+}
+
+// -----
+
+// CHECK-LABEL: @canonicalize_int_to_ptr_of_ptr_to_int_with_different_ptr_type
+tt.func @canonicalize_int_to_ptr_of_ptr_to_int_with_different_ptr_type(%ptr: !tt.ptr<f32>) -> !tt.ptr<f16> {
+  // CHECK-NOT: tt.ptr_to_int
+  // CHECK-NOT: tt.int_to_ptr
+  // CHECK: %[[RESULT:.*]] = tt.bitcast %{{.*}} : !tt.ptr<f32> -> !tt.ptr<f16>
+  %int = tt.ptr_to_int %ptr : !tt.ptr<f32> -> i64
+  %result = tt.int_to_ptr %int : i64 -> !tt.ptr<f16>
+  // CHECK-NEXT: tt.return %[[RESULT]] : !tt.ptr<f16>
+  tt.return %result : !tt.ptr<f16>
 }
 
 // -----

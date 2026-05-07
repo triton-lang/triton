@@ -243,7 +243,7 @@ public:
     ModuleOp m = getOperation();
     MLIRContext *context = &getContext();
 
-    triton::AMD::TargetInfo targetInfo(archGenerationName);
+    triton::AMD::TargetInfo targetInfo(gfxArch);
 
     mlir::RewritePatternSet patterns(context);
 
