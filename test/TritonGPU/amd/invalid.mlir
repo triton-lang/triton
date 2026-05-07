@@ -336,11 +336,11 @@ module attributes {"ttg.target" = "hip:gfx950", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @advance_wrong_offset_count(
+  tt.func public @update_tensor_descriptor_wrong_offset_count(
     %desc: !tt.tensordesc<64x64xf16, #shared>, %dx: i32
   ) -> !tt.tensordesc<64x64xf16, #shared> {
-    // expected-error @+1 {{expected 2 offsets to match descriptor rank, got 1}}
-    %result = amdg.tdm_advance_descriptor %desc offsets = [%dx] : !tt.tensordesc<64x64xf16, #shared>
+    // expected-error @+1 {{expected 2 add_offsets to match descriptor rank, got 1}}
+    %result = amdg.update_tensor_descriptor %desc add_offsets = [%dx] : !tt.tensordesc<64x64xf16, #shared>
     tt.return %result : !tt.tensordesc<64x64xf16, #shared>
   }
 }
@@ -349,11 +349,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @advance_wrong_bounds_count(
+  tt.func public @update_tensor_descriptor_wrong_bounds_count(
     %desc: !tt.tensordesc<64x64xf16, #shared>, %m: i32, %n: i32, %k: i32
   ) -> !tt.tensordesc<64x64xf16, #shared> {
-    // expected-error @+1 {{expected 2 bounds to match descriptor rank, got 3}}
-    %result = amdg.tdm_advance_descriptor %desc bounds = [%m, %n, %k] : !tt.tensordesc<64x64xf16, #shared>
+    // expected-error @+1 {{expected 2 set_bounds to match descriptor rank, got 3}}
+    %result = amdg.update_tensor_descriptor %desc set_bounds = [%m, %n, %k] : !tt.tensordesc<64x64xf16, #shared>
     tt.return %result : !tt.tensordesc<64x64xf16, #shared>
   }
 }
@@ -362,11 +362,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @advance_no_kwargs(
+  tt.func public @update_tensor_descriptor_no_kwargs(
     %desc: !tt.tensordesc<64x64xf16, #shared>
   ) -> !tt.tensordesc<64x64xf16, #shared> {
-    // expected-error @+1 {{must provide at least one of offsets, bounds, dest, pred, or barrier}}
-    %result = amdg.tdm_advance_descriptor %desc : !tt.tensordesc<64x64xf16, #shared>
+    // expected-error @+1 {{must provide at least one of add_offsets, set_bounds, dest, pred, or barrier}}
+    %result = amdg.update_tensor_descriptor %desc : !tt.tensordesc<64x64xf16, #shared>
     tt.return %result : !tt.tensordesc<64x64xf16, #shared>
   }
 }

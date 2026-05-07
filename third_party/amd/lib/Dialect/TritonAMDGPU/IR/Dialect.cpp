@@ -831,27 +831,27 @@ LogicalResult AsyncTDMGatherOp::verify() {
   return success();
 }
 
-// -- AdvanceTDMDescOp --
-LogicalResult AdvanceTDMDescOp::verify() {
+// -- UpdateTensorDescriptorOp --
+LogicalResult UpdateTensorDescriptorOp::verify() {
   auto descTy = getDesc().getType();
   size_t rank = descTy.getShape().size();
 
-  if (!getOffsets().empty() && getOffsets().size() != rank)
+  if (!getAddOffsets().empty() && getAddOffsets().size() != rank)
     return emitOpError("expected ")
-           << rank << " offsets to match descriptor rank, got "
-           << getOffsets().size();
+           << rank << " add_offsets to match descriptor rank, got "
+           << getAddOffsets().size();
 
-  if (!getBounds().empty() && getBounds().size() != rank)
+  if (!getSetBounds().empty() && getSetBounds().size() != rank)
     return emitOpError("expected ")
-           << rank << " bounds to match descriptor rank, got "
-           << getBounds().size();
+           << rank << " set_bounds to match descriptor rank, got "
+           << getSetBounds().size();
 
-  // At least one mutation parameter must be provided -- a no-op advance is
+  // At least one mutation parameter must be provided -- a no-op update is
   // either a user mistake or should be folded by canonicalizer.
-  if (getOffsets().empty() && getBounds().empty() && !getDest() && !getPred() &&
-      !getBarrier())
-    return emitOpError("must provide at least one of offsets, bounds, dest, "
-                       "pred, or barrier");
+  if (getAddOffsets().empty() && getSetBounds().empty() && !getDest() &&
+      !getPred() && !getBarrier())
+    return emitOpError("must provide at least one of add_offsets, set_bounds, "
+                       "dest, pred, or barrier");
 
   return success();
 }

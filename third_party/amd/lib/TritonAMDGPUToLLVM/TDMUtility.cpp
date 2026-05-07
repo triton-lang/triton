@@ -223,20 +223,21 @@ SmallVector<Value> scalarizeTDMDescriptor(RewriterBase &rewriter, Location loc,
   return scalars;
 }
 
-void advanceTDMDescriptor(RewriterBase &rewriter, Location loc,
-                          Type elementType, ArrayRef<int64_t> blockShape,
-                          Value &group0, Value &group1, ArrayRef<Value> offsets,
-                          ArrayRef<Value> bounds, Value lds, Value pred,
-                          Value barrier) {
+void updateTensorDescriptor(RewriterBase &rewriter, Location loc,
+                            Type elementType, ArrayRef<int64_t> blockShape,
+                            Value &group0, Value &group1,
+                            ArrayRef<Value> addOffsets,
+                            ArrayRef<Value> setBounds, Value dest, Value pred,
+                            Value barrier) {
   size_t numDims = blockShape.size();
-  assert(numDims == 2 && "advanceTDMDescriptor currently supports 2D");
+  assert(numDims == 2 && "updateTensorDescriptor currently supports 2D");
   (void)numDims;
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value v16 = b.i32_val(16);
 
-  // ---- offsets: bump global_addr ----
-  if (!offsets.empty()) {
+  // ---- add_offsets: bump global_addr ----
+  if (!addOffsets.empty()) {
     auto elementBitWidth = elementType.getIntOrFloatBitWidth();
     Value elemSize = b.i64_val(elementBitWidth / 8);
 
@@ -247,15 +248,15 @@ void advanceTDMDescriptor(RewriterBase &rewriter, Location loc,
                        b.shl(b.zext(i64_ty, addrHi), b.i64_val(32)));
 
     // Byte delta:
-    //   offsets[1] (innermost, stride 1) +
-    //   offsets[0] * tensor_dim0_stride (from group1[5]),
+    //   addOffsets[1] (innermost, stride 1) +
+    //   addOffsets[0] * tensor_dim0_stride (from group1[5]),
     // all scaled by element size.  Promote to i64 before the multiply so
-    // offsets[0] * stride0 doesn't overflow i32 for large tensors.
+    // addOffsets[0] * stride0 doesn't overflow i32 for large tensors.
     // Offsets are signed (advancing backward is allowed) so sext; stride is
     // unsigned so zext.
     Value stride0 = vecGet(b, group1, 5);
-    Value off0_64 = b.sext(i64_ty, offsets[0]);
-    Value off1_64 = b.sext(i64_ty, offsets[1]);
+    Value off0_64 = b.sext(i64_ty, addOffsets[0]);
+    Value off1_64 = b.sext(i64_ty, addOffsets[1]);
     Value stride0_64 = b.zext(i64_ty, stride0);
     Value deltaElem = b.add(off1_64, b.mul(off0_64, stride0_64));
     Value byteDelta = b.mul(deltaElem, elemSize);
@@ -269,12 +270,12 @@ void advanceTDMDescriptor(RewriterBase &rewriter, Location loc,
     group0 = vecSet(b, group0, 3, newHi);
   }
 
-  // ---- bounds: absolute rewrite of tensor_dim ----
-  // tensor_dim_inner (bounds[1] for 2D) spans
+  // ---- set_bounds: absolute rewrite of tensor_dim ----
+  // tensor_dim_inner (setBounds[1] for 2D) spans
   //   group1[1] hi-16 | group1[2] lo-16
-  // tensor_dim_outer (bounds[0]) spans
+  // tensor_dim_outer (setBounds[0]) spans
   //   group1[2] hi-16 | group1[3] lo-16
-  if (!bounds.empty()) {
+  if (!setBounds.empty()) {
     auto stampDim = [&](int loDword, int hiDword, Value newDim) {
       // loDword: keep lo-16, replace hi-16 with (newDim & 0xFFFF) << 16
       Value loHi = b.shl(b.and_(newDim, b.i32_val(0xFFFF)), v16);
@@ -287,13 +288,13 @@ void advanceTDMDescriptor(RewriterBase &rewriter, Location loc,
           b.and_(vecGet(b, group1, hiDword), b.i32_val(0xFFFF0000)), hiLo);
       group1 = vecSet(b, group1, hiDword, g_hi);
     };
-    stampDim(/*loDword=*/1, /*hiDword=*/2, bounds[1]); // inner
-    stampDim(/*loDword=*/2, /*hiDword=*/3, bounds[0]); // outer
+    stampDim(/*loDword=*/1, /*hiDword=*/2, setBounds[1]); // inner
+    stampDim(/*loDword=*/2, /*hiDword=*/3, setBounds[0]); // outer
   }
 
-  // ---- lds: rewrite lds_addr in group0[1] ----
-  if (lds) {
-    Value ldsAddr = b.ptrtoint(i32_ty, lds);
+  // ---- dest: rewrite lds_addr in group0[1] ----
+  if (dest) {
+    Value ldsAddr = b.ptrtoint(i32_ty, dest);
     group0 = vecSet(b, group0, 1, ldsAddr);
   }
 

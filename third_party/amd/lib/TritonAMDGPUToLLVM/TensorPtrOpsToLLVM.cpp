@@ -135,13 +135,14 @@ struct MakeTensorDescOpConversion
   }
 };
 
-struct AdvanceTDMDescOpConversion
-    : public ConvertOpToLLVMPattern<triton::amdgpu::AdvanceTDMDescOp> {
+struct UpdateTensorDescriptorOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::UpdateTensorDescriptorOp> {
   using ConvertOpToLLVMPattern<
-      triton::amdgpu::AdvanceTDMDescOp>::ConvertOpToLLVMPattern;
+      triton::amdgpu::UpdateTensorDescriptorOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::amdgpu::AdvanceTDMDescOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::amdgpu::UpdateTensorDescriptorOp op,
+                  OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto tensorDescTy = op.getDesc().getType();
@@ -151,7 +152,7 @@ struct AdvanceTDMDescOpConversion
 
     if (blockShape.size() != 2) {
       return rewriter.notifyMatchFailure(
-          op, "AdvanceTDMDescOp lowering currently supports 2D only");
+          op, "UpdateTensorDescriptorOp lowering currently supports 2D only");
     }
 
     // Unpack the input descriptor into vector groups (group0: <4 x i32>,
@@ -162,14 +163,14 @@ struct AdvanceTDMDescOpConversion
     Value group0 = groups[0];
     Value group1 = groups[1];
 
-    SmallVector<Value> offsets = llvm::to_vector(adaptor.getOffsets());
-    SmallVector<Value> bounds = llvm::to_vector(adaptor.getBounds());
+    SmallVector<Value> addOffsets = llvm::to_vector(adaptor.getAddOffsets());
+    SmallVector<Value> setBounds = llvm::to_vector(adaptor.getSetBounds());
 
-    Value ldsPtr;
+    Value destPtr;
     if (op.getDest()) {
       auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
           loc, adaptor.getDest(), elementType, rewriter);
-      ldsPtr = smemObj.getBase();
+      destPtr = smemObj.getBase();
     }
     Value barrierPtr;
     if (op.getBarrier()) {
@@ -182,9 +183,9 @@ struct AdvanceTDMDescOpConversion
     }
     Value pred = adaptor.getPred();
 
-    mlir::LLVM::AMD::advanceTDMDescriptor(rewriter, loc, elementType,
-                                          blockShape, group0, group1, offsets,
-                                          bounds, ldsPtr, pred, barrierPtr);
+    mlir::LLVM::AMD::updateTensorDescriptor(
+        rewriter, loc, elementType, blockShape, group0, group1, addOffsets,
+        setBounds, destPtr, pred, barrierPtr);
 
     // Re-pack the mutated groups back into the flat MLIR struct that
     // matches convertTensorDescType / the host-side TDMDescriptor ABI.
@@ -204,6 +205,6 @@ void mlir::triton::AMD::populateTensorPtrOpsToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<MakeTensorDescOpConversion>(typeConverter, benefit);
-  patterns.add<AdvanceTDMDescOpConversion>(typeConverter, benefit);
+  patterns.add<UpdateTensorDescriptorOpConversion>(typeConverter, benefit);
   return;
 }

@@ -44,22 +44,23 @@ SmallVector<Value> scalarizeTDMDescriptor(RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> vectors);
 
 // Updates TDM descriptor fields in place.
-// Mirrors the parameter semantics of `amdg.tdm_advance_descriptor`.
+// Mirrors the parameter semantics of `amdg.update_tensor_descriptor`.
 //
-// - offsets (incremental): bumps global_addr by sum(offsets[i]*stride[i])
-//   scaled by element size.  Empty = skip.
-// - bounds  (rewrite):     overwrites tensor_dim absolutely.  Empty = skip.
-// - lds     (rewrite):     overwrites lds_addr.  Null = skip.
-// - pred    (rewrite):     overwrites pred.  Null = skip.
-// - barrier (rewrite):     enables barrier signaling and writes barrier addr.
-//                          Null = skip.
+// - addOffsets (incremental): bumps global_addr by
+//   sum(addOffsets[i]*stride[i]) scaled by element size.  Empty = skip.
+// - setBounds  (rewrite):     overwrites tensor_dim absolutely.  Empty = skip.
+// - dest       (rewrite):     overwrites lds_addr.  Null = skip.
+// - pred       (rewrite):     overwrites pred.  Null = skip.
+// - barrier    (rewrite):     enables barrier signaling and writes barrier
+//                             addr.  Null = skip.
 //
 // Currently 2D-only; 3D-5D support TBD.
-void advanceTDMDescriptor(RewriterBase &rewriter, Location loc,
-                          Type elementType, ArrayRef<int64_t> blockShape,
-                          Value &group0, Value &group1, ArrayRef<Value> offsets,
-                          ArrayRef<Value> bounds, Value lds, Value pred,
-                          Value barrier);
+void updateTensorDescriptor(RewriterBase &rewriter, Location loc,
+                            Type elementType, ArrayRef<int64_t> blockShape,
+                            Value &group0, Value &group1,
+                            ArrayRef<Value> addOffsets,
+                            ArrayRef<Value> setBounds, Value dest, Value pred,
+                            Value barrier);
 
 // Create a TDM descriptor. This creates a partially filled descriptor, with
 // shared memory address and pred set to zero. User of the descriptor is

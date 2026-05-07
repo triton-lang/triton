@@ -1064,13 +1064,13 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(
                  descPtr, indices, src, barrier, cacheModifier);
            })
-      .def("create_advance_tdm_desc",
-           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &offsets,
-              std::vector<Value> &bounds, Value lds, Value pred,
-              Value barrier) -> Value {
-             return self.create<ttag::AdvanceTDMDescOp>(
-                 descPtr.getType(), descPtr, ValueRange(offsets),
-                 ValueRange(bounds), lds, pred, barrier);
+      .def("create_update_tensor_descriptor",
+           [](GluonOpBuilder &self, Value descPtr,
+              std::vector<Value> &addOffsets, std::vector<Value> &setBounds,
+              Value dest, Value pred, Value barrier) -> Value {
+             return self.create<ttag::UpdateTensorDescriptorOp>(
+                 descPtr.getType(), descPtr, ValueRange(addOffsets),
+                 ValueRange(setBounds), dest, pred, barrier);
            })
       .def("create_async_tdm_scatter",
            [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,

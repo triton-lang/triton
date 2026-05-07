@@ -989,10 +989,10 @@ def TDMPrefetchOp : TT_AMDGPU_Op<"tdm_prefetch", [
 }
 
 //===----------------------------------------------------------------------===//
-// AdvanceTDMDescOp
+// UpdateTensorDescriptorOp
 //===----------------------------------------------------------------------===//
 
-def AdvanceTDMDescOp : TT_AMDGPU_Op<"tdm_advance_descriptor", [Pure,
+def UpdateTensorDescriptorOp : TT_AMDGPU_Op<"update_tensor_descriptor", [Pure,
     AttrSizedOperandSegments,
     TypesMatchWith<"result type matches desc type", "desc", "result", "$_self">]> {
   let summary = "Update selected fields of a TDM descriptor; produce a new descriptor SSA value";
@@ -1002,41 +1002,41 @@ def AdvanceTDMDescOp : TT_AMDGPU_Op<"tdm_advance_descriptor", [Pure,
     parameter is independently optional; only the fields the caller names
     are written.  Everything else is inherited from the input descriptor.
 
-    | parameter      | kind        | effect on descriptor                                        |
-    |----------------|-------------|-------------------------------------------------------------|
-    | `offsets`      | incremental | `global_addr += sum(offsets[i] * stride[i] * elem_size)`    |
-    | `bounds`       | rewrite     | `tensor_dim[i] = bounds[i]` (absolute)                      |
-    | `dest`         | rewrite     | `lds_addr = dest`                                           |
-    | `pred`         | rewrite     | `pred = pred`                                               |
-    | `barrier`      | rewrite     | `barrier_addr = barrier`                                    |
+    | parameter      | kind        | effect on descriptor                                            |
+    |----------------|-------------|-----------------------------------------------------------------|
+    | `add_offsets`  | incremental | `global_addr += sum(add_offsets[i] * stride[i] * elem_size)`    |
+    | `set_bounds`   | rewrite     | `tensor_dim[i] = set_bounds[i]` (absolute)                      |
+    | `dest`         | rewrite     | `lds_addr = dest`                                               |
+    | `pred`         | rewrite     | `pred = pred`                                                   |
+    | `barrier`      | rewrite     | `barrier_addr = barrier`                                        |
 
-    `offsets` is incremental (deltas in element units) and does not
-    touch `tensor_dim` — for OOB-correct loops, set `bounds` once
+    `add_offsets` is incremental (deltas in element units) and does not
+    touch `tensor_dim` — for OOB-correct loops, set `set_bounds` once
     outside the loop (interior tiles see a loop-invariant tensor_dim
-    that hoists), or set `bounds` per iteration when OOB must fire.
+    that hoists), or set `set_bounds` per iteration when OOB must fire.
 
     Examples:
     ```
     // K-loop interior: bump tile position only
-    %d1 = amdg.tdm_advance_descriptor %d, offsets=[%c0, %BLOCK_K]
+    %d1 = amdg.update_tensor_descriptor %d, add_offsets=[%c0, %BLOCK_K]
             : !tt.tensordesc<64x64xf16, #shared>
 
     // Prologue: position at first tile + wire LDS and barrier
-    %d1 = amdg.tdm_advance_descriptor %d,
-            offsets=[%pid_m_off, %c0],
+    %d1 = amdg.update_tensor_descriptor %d,
+            add_offsets=[%pid_m_off, %c0],
             dest=%a_shared, barrier=%a_bar
             : !tt.tensordesc<64x64xf16, #shared>
 
     // Peel epilogue: install real OOB extent for the partial last tile
-    %d1 = amdg.tdm_advance_descriptor %d, bounds=[%m_remain, %k_remain]
+    %d1 = amdg.update_tensor_descriptor %d, set_bounds=[%m_remain, %k_remain]
             : !tt.tensordesc<64x64xf16, #shared>
     ```
   }];
 
   let arguments = (ins
     TT_TensorDescType:$desc,
-    Variadic<I32>:$offsets,
-    Variadic<I32>:$bounds,
+    Variadic<I32>:$add_offsets,
+    Variadic<I32>:$set_bounds,
     Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$dest,
     Optional<I32>:$pred,
     Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
@@ -1047,8 +1047,8 @@ def AdvanceTDMDescOp : TT_AMDGPU_Op<"tdm_advance_descriptor", [Pure,
   let assemblyFormat = [{
     $desc
     oilist(
-        `offsets` `=` `[` $offsets `]`
-      | `bounds` `=` `[` $bounds `]`
+        `add_offsets` `=` `[` $add_offsets `]`
+      | `set_bounds` `=` `[` $set_bounds `]`
       | `dest` `=` $dest `:` qualified(type($dest))
       | `pred` `=` $pred
       | `barrier` `=` $barrier `:` qualified(type($barrier))
