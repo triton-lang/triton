@@ -173,8 +173,6 @@ def test_convert_1d_to_2d_slice_cga(num_ctas, device):
     torch.testing.assert_close(out, torch.arange(head, device=device, dtype=torch.float32))
 
 
-
-
 def _swizzled_warp_layouts_1d():
     """1D DistributedLinearLayout test layouts (non-injective, lowered as GenericLinearEncoding)."""
 
