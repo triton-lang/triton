@@ -7,7 +7,6 @@ import triton
 current_target = triton.runtime.driver.active.get_current_target()
 TTIR_PATH = str(Path(__file__).parent / "attn_fwd.ttir")
 
-
 # -- Unit tests for the C++ bindings (no GPU needed) --
 
 
@@ -53,7 +52,7 @@ def test_compile_accepts_llvm_flags():
     kernel = triton.compile(
         TTIR_PATH,
         target=current_target,
-        options={"llvm_flags": ("enable-misched=0",)},
+        options={"llvm_flags": ("enable-misched=0", )},
     )
     assert "attn_fwd" in kernel.asm["amdgcn"]
 
@@ -65,7 +64,7 @@ def test_llvm_flags_change_codegen():
     with_flags = triton.compile(
         TTIR_PATH,
         target=current_target,
-        options={"llvm_flags": ("enable-misched=0",)},
+        options={"llvm_flags": ("enable-misched=0", )},
     )
     assert baseline.asm["amdgcn"] != with_flags.asm["amdgcn"], \
         "expected llvm_flags to change generated assembly"
