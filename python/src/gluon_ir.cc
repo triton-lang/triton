@@ -1008,10 +1008,9 @@ void init_gluon_ir(py::module &&m) {
       .def("create_buffer_load",
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
               Value mask, Value other, tt::CacheModifier cache) -> Value {
-             return self.create<ttag::BufferLoadOp>(resultType, ptr, offsets,
-                                                    Value() /*soffset*/,
-                                                    Value() /*stride*/, cache,
-                                                    mask, other);
+             return self.create<ttag::BufferLoadOp>(
+                 resultType, ptr, offsets, Value() /*soffset*/,
+                 Value() /*stride*/, cache, mask, other);
            })
       .def("create_buffer_store",
            [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,

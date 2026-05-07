@@ -189,15 +189,15 @@ bool collectSplatThroughTensorTrunc(Value offset,
   Type scalarTy = resultTy.getElementType();
   Value scalar = splatOp.getSrc();
   if (scalar.getType() != scalarTy)
-    scalar = arith::TruncIOp::create(rewriter, offset.getLoc(), scalarTy,
-                                     scalar);
+    scalar =
+        arith::TruncIOp::create(rewriter, offset.getLoc(), scalarTy, scalar);
   uniformLeaves.push_back(scalar);
   return true;
 }
 
-std::pair<Value, Value>
-splitHighLevelBufferOffset(Value offset, PatternRewriter &rewriter,
-                           DataFlowSolver *solver) {
+std::pair<Value, Value> splitHighLevelBufferOffset(Value offset,
+                                                   PatternRewriter &rewriter,
+                                                   DataFlowSolver *solver) {
   SmallVector<Value> uniformLeaves;
   SmallVector<Value> perLaneLeaves;
   HighLevelUniformityChecker uniformity;
@@ -823,8 +823,8 @@ struct SplitBufferLoadOffset
     if (op.getSoffset())
       return failure();
 
-    auto [voffset, soffset] = splitHighLevelBufferOffset(op.getVoffset(),
-                                                         rewriter, solver);
+    auto [voffset, soffset] =
+        splitHighLevelBufferOffset(op.getVoffset(), rewriter, solver);
     if (!soffset)
       return failure();
 
@@ -843,14 +843,13 @@ struct SplitBufferLoadToLocalOffset
   SplitBufferLoadToLocalOffset(MLIRContext *context, DataFlowSolver *solver)
       : OpRewritePattern(context), solver(solver) {}
 
-  LogicalResult
-  matchAndRewrite(triton::amdgpu::BufferLoadToLocalOp op,
-                  PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(triton::amdgpu::BufferLoadToLocalOp op,
+                                PatternRewriter &rewriter) const override {
     if (op.getSoffset())
       return failure();
 
-    auto [voffset, soffset] = splitHighLevelBufferOffset(op.getVoffset(),
-                                                         rewriter, solver);
+    auto [voffset, soffset] =
+        splitHighLevelBufferOffset(op.getVoffset(), rewriter, solver);
     if (!soffset)
       return failure();
 
@@ -875,8 +874,8 @@ struct SplitBufferStoreOffset
     if (op.getSoffset())
       return failure();
 
-    auto [voffset, soffset] = splitHighLevelBufferOffset(op.getVoffset(),
-                                                         rewriter, solver);
+    auto [voffset, soffset] =
+        splitHighLevelBufferOffset(op.getVoffset(), rewriter, solver);
     if (!soffset)
       return failure();
 

@@ -75,9 +75,8 @@ struct BufferEmitter {
   // on gfx942/gfx950 which use asyncmark-based synchronization.
   ROCDL::RawPtrBufferLoadAsyncLdsOp emitLoadToLds(Type type, Value byteWidth,
                                                   Value rsrcDesc, Value offset,
-                                                   Value scalarOffset,
-                                                   Value dst, Value pred,
-                                                   CacheModifier cm);
+                                                  Value scalarOffset, Value dst,
+                                                  Value pred, CacheModifier cm);
 
   // Emit a predicated rocdl.raw.ptr.buffer.atomic.* RMWOp
   Value emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset,

@@ -678,9 +678,9 @@ struct BufferLoadOpConversion
         falseVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
             otherElems, vecStart);
-      Value loadVal = bufferEmitter.emitLoad(
-          vecTy, rsrcDesc, offsetElems[vecStart], llScalarOffset, pred,
-          falseVal, cacheMod);
+      Value loadVal =
+          bufferEmitter.emitLoad(vecTy, rsrcDesc, offsetElems[vecStart],
+                                 llScalarOffset, pred, falseVal, cacheMod);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
