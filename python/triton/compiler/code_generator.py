@@ -336,6 +336,10 @@ class CodeGenerator(ast.NodeVisitor):
         self.local_defs: Dict[str, tensor] = {}
         self.dereference_name: Callable[[str], Any] = self._define_name_lookup()
         self.fn = None
+        # Whether a constexpr if branch containing a top-level return was
+        # just visited, making subsequent statements in the parent block
+        # unreachable.
+        self._constexpr_return = False
         # Are we currently visiting an ast.arg's default value?  These have some
         # special handling.
         self.visiting_arg_default_value = False
@@ -496,6 +500,11 @@ class CodeGenerator(ast.NodeVisitor):
         if not _is_list_like(stmts):
             stmts = [stmts]
         for stmt in stmts:
+            # Skip statements that are unreachable after a constexpr if branch
+            # containing a top-level return was taken.
+            if self._constexpr_return:
+                self._constexpr_return = False
+                break
             self.visit(stmt)
             # Stop parsing as soon as we hit a `return` statement; everything
             # after this is dead code.
@@ -957,6 +966,10 @@ class CodeGenerator(ast.NodeVisitor):
 
             active_block = node.body if cond else node.orelse
             self.visit_compound_statement(active_block)
+            # If the taken constexpr branch contains a top-level return,
+            # subsequent statements in the parent block are unreachable.
+            if any(isinstance(s, ast.Return) for s in active_block):
+                self._constexpr_return = True
 
     def visit_IfExp(self, node):
         cond = self.visit(node.test)

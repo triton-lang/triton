@@ -5608,6 +5608,37 @@ def test_constexpr_if_return(device):
     assert out.item() >= 0
 
 
+def test_constexpr_if_return_separate(device):
+    # Reproducer for #9719: a `if <constexpr>: return X; return Y` pattern
+    # creates two separate AST statements (If + Return). When the constexpr
+    # branch containing `return` is taken, the second `return` is unreachable
+    # but was still visited by the compiler, causing errors in @builtin
+    # functions that were never meant to execute on that path.
+    # Using tl.static_assert(not cond) in the unreachable branch ensures the
+    # compiler actually skips it — unpatched Triton would crash at compile time.
+
+    @triton.jit
+    def early_return_kernel(Out, cond: tl.constexpr):
+        if cond:
+            tl.store(Out, 0)
+            return
+        # Unreachable when cond=True. If visited by the compiler,
+        # tl.static_assert(False) raises at compile time.
+        tl.static_assert(not cond, "unreachable code was visited")
+        tl.store(Out, 1)
+        return
+
+    out = torch.empty(1, device=device, dtype=torch.int32)
+
+    # constexpr True: first branch taken, static_assert skipped
+    early_return_kernel[(1,)](out, True)
+    assert out[0].item() == 0
+
+    # constexpr False: first branch skipped, static_assert(True) passes
+    early_return_kernel[(1,)](out, False)
+    assert out[0].item() == 1
+
+
 def test_constexpr_flattens():
     assert tl.constexpr(tl.constexpr(5)) == tl.constexpr(5)
     assert tl.constexpr(tl.constexpr(tl.constexpr(5))) == tl.constexpr(5)
