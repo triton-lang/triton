@@ -1082,16 +1082,18 @@ across the important batch regime.
   - The direct overwrite story is wrong here. Source-level ownership is already
     explicit: replay waits `replay_empty_bar` before touching `replay_tmem[idx]`
     again, and the second MMA passes that same barrier as its completion signal.
-    The remaining conflict is on the `replay_full_bar` generation, not on the
-    TMEM payload slot. PTX says parity waits are valid only for the current or
-    immediately preceding mbarrier phase. The MMAv5 completion barrier can free
-    the slot after the issuer has launched/completed MMA2 even if another MMA
-    warp still carries the older local `replay_full_phase`; if replay republishes
-    the same ring entry before that late warp consumes the old generation, that
-    late parity wait no longer has a unique legal target. The retained
-    `bar.sync 14,256` is therefore a real cross-partition acknowledgment boundary:
-    replay may publish, but it cannot advance the full-barrier ring until every
-    replay and MMA thread has crossed the same generation boundary.
+    The "late MMA warp loses the old `replay_full_phase`" explanation is also
+    ruled out by the lowered program: in the no-replay-sync artifact, Triton
+    emits a 128-thread MMA-local barrier immediately after the
+    `replay_full_bar` wait because the following `ttng.arrive_barrier` lowering
+    inserts a local barrier before the elected arriver. Replay publication is
+    likewise locally converged before `mbarrier.arrive(replay_full_bar)`.
+  - What remains proven is narrower: the emitted no-sync program has only
+    replay-local and MMA-local barriers; it has no 256-thread replay+MMA
+    rendezvous. Adding exactly that cross-partition `bar.sync 14,256` fixes the
+    stress test. The mechanism behind why the generic local-barrier +
+    arrive/wait protocol is insufficient is still open; do not claim a
+    replay-full generation hazard until that is separately proven.
   - Plan updates: keep the local inline generic wait as the application-level
     workaround, but treat the compiler follow-up as a targeted lowering bug:
     introduce a first-class tcgen completion wait that lowers to the generic
