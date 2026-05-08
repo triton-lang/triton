@@ -3,6 +3,8 @@
 #include <triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h>
 #include <triton/Tools/LayoutUtils.h>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
@@ -32,6 +34,14 @@ bool hasCGABroadcast(ttg::MemDescType memDescType) {
   return ttg::toLinearLayout(memDescType)
              .getFreeVariableMasks()
              .lookup(kBlock) != 0;
+}
+
+Value sextI16ToI32Indices(Value indices, OpBuilder &builder, Location loc) {
+  auto indicesType = cast<RankedTensorType>(indices.getType());
+  if (indicesType.getElementType().isInteger(32))
+    return indices;
+  return arith::ExtSIOp::create(
+      builder, loc, indicesType.clone(builder.getI32Type()), indices);
 }
 
 FailureOr<int> getTMASwizzleMode(Location loc, tt::TensorDescInterface ty) {
@@ -128,7 +138,6 @@ FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
                             OpBuilder &builder) {
   using namespace mlir;
-  MLIRContext *ctx = op.getContext();
   auto loc = op.getLoc();
   auto mkI32Constant = [&](int32_t val) {
     return arith::ConstantOp::create(builder, loc, builder.getI32Type(),

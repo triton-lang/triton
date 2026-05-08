@@ -7,6 +7,9 @@ It is mostly documented for Triton users.
 Developers interested in exploring Triton's backend, including MLIR code transformation and LLVM code generation,
 can refer to this `section <https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking>`_ to explore debugging options.
 
+For compiler-level instrumentation of floating-point computations, see
+:doc:`Floating-Point Sanitizer (FpSan) <fpsan>`.
+
 ------------------------------------
 Using Triton's Debugging Operations
 ------------------------------------

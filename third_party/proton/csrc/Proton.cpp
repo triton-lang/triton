@@ -36,7 +36,6 @@ std::map<std::string, MetricValueType> convertPythonMetrics(
 } // namespace
 
 static void initProton(pybind11::module &&m) {
-  using ret = pybind11::return_value_policy;
   using namespace pybind11::literals;
 
   // Accept raw integer pointers from Python (e.g., Tensor.data_ptr()) instead
@@ -182,11 +181,12 @@ static void initProton(pybind11::module &&m) {
         MetricKernelLaunchState metricKernelLaunchState{
             MetricKernelLaunchConfig{
                 reinterpret_cast<void *>(tensorMetricKernel),
-                tensorMetricKernelNumThreads, tensorMetricKernelSharedMemBytes},
+                reinterpret_cast<void *>(stream), tensorMetricKernelNumThreads,
+                tensorMetricKernelSharedMemBytes},
             MetricKernelLaunchConfig{
                 reinterpret_cast<void *>(scalarMetricKernel),
-                scalarMetricKernelNumThreads, scalarMetricKernelSharedMemBytes},
-            reinterpret_cast<void *>(stream)};
+                reinterpret_cast<void *>(stream), scalarMetricKernelNumThreads,
+                scalarMetricKernelSharedMemBytes}};
         SessionManager::instance().setMetricKernels(metricKernelLaunchState);
       },
       pybind11::arg("tensorMetricKernel"), pybind11::arg("scalarMetricKernel"),

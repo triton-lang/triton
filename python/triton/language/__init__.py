@@ -31,6 +31,7 @@ from .standard import (
 from .core import (
     PropagateNan,
     TRITON_MAX_TENSOR_NUMEL,
+    aggregate_replace,
     load_tensor_descriptor,
     store_tensor_descriptor,
     make_tensor_descriptor,

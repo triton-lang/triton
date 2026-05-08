@@ -26,6 +26,8 @@ struct LocalMemOpTile {
   // If laneAddr.size() < 3, we assume that the first
   // 3 - laneAddr.size() bases are registers
   llvm::SmallVector<int32_t> laneAddr;
+
+  llvm::SmallVector<int32_t> getLaneAddr(llvm::ArrayRef<int32_t> lane) const;
 };
 
 // Given a set of possible instructions given by
@@ -37,16 +39,25 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
                  llvm::ArrayRef<LocalMemOpTile> srcTiles,
                  llvm::ArrayRef<LocalMemOpTile> dstTiles, int32_t bitwidth);
 
+int32_t getVecBitwidthLdSt(const LinearLayout &src, const LinearLayout &dst,
+                           int32_t bitwidth);
+
 LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
-                                  const LinearLayout &dst, int32_t bitwidth);
+                                  const LinearLayout &dst, int32_t bitwidth,
+                                  int32_t numBanks = 32,
+                                  LocalMemOpTile srcTile = {},
+                                  LocalMemOpTile dstTile = {});
 
 std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
                                       const LinearLayout &dst,
                                       const LinearLayout &smem,
-                                      int32_t bitwidth);
+                                      int32_t bitwidth, int32_t numBanks = 32,
+                                      LocalMemOpTile srcTile = {},
+                                      LocalMemOpTile dstTile = {});
 
 int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
-                         int32_t bitwidth);
+                         int32_t bitwidth, int32_t numBanks = 32,
+                         LocalMemOpTile laneTile = {});
 
 std::pair<int, int> bankConflicts(llvm::ArrayRef<int32_t> tileSrc,
                                   llvm::ArrayRef<int32_t> tileDst,

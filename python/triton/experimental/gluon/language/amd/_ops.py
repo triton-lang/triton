@@ -52,7 +52,7 @@ def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, seman
     def _get_scale_shape(op_idx, operand, format, scale_factor):
         operand_shape = [s for s in operand.type.shape]
         scale_shape = operand_shape
-        unpack_factor = 2 if format.value == "e2m1" else 1
+        unpack_factor = 2 if format == "e2m1" else 1
         if op_idx == 0:
             k = scale_shape[-1] * unpack_factor
             scale_shape[-1] = k // scale_factor
@@ -65,12 +65,10 @@ def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, seman
     def _get_default_scale_dtype_and_unit_value(op_idx):
         default_value_by_dtype = {ttgl.uint8: 0x7F, ttgl.float8e4nv: 1.0}
 
-        a_scale_value = _unwrap_if_constexpr(a_scale)
-        b_scale_value = _unwrap_if_constexpr(b_scale)
-        if a_scale_value is None and b_scale_value is None:
+        if a_scale is None and b_scale is None:
             return ttgl.uint8, 0x7F
 
-        if a_format.value == b_format.value == "e2m1":
+        if a_format == b_format == "e2m1":
             # Fp4 x Fp4 requries to use the same scale dtype for both operands.
             other_scale = b_scale if op_idx == 0 else a_scale
             return other_scale.dtype, default_value_by_dtype[other_scale.dtype]
