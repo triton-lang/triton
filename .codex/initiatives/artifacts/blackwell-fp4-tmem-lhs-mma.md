@@ -1091,9 +1091,23 @@ across the important batch regime.
   - What remains proven is narrower: the emitted no-sync program has only
     replay-local and MMA-local barriers; it has no 256-thread replay+MMA
     rendezvous. Adding exactly that cross-partition `bar.sync 14,256` fixes the
-    stress test. The mechanism behind why the generic local-barrier +
-    arrive/wait protocol is insufficient is still open; do not claim a
-    replay-full generation hazard until that is separately proven.
+    stress test.
+  - Follow-up discriminator: the missing contract is a consumer acknowledgment,
+    not merely stronger local ordering. Adding only `tcgen05.fence::{before,
+    after}_thread_sync` around the existing replay-full edge still failed at
+    launch 522. Replacing the 256-thread rendezvous with a dedicated
+    `replay_seen_bar` ring, where MMA arrives only after observing
+    `replay_full_bar` and replay waits on `replay_seen_bar` before advancing its
+    cursor, passed 10,000 launches even after the extra tcgen fences were
+    removed. Therefore the existing `replay_full` / `replay_empty` ring is
+    missing a third edge:
+      `replay publishes tile -> MMA collectively observes ready epoch -> replay
+      may advance publication cursor`.
+    `replay_empty_bar` means the TMEM slot is reusable after MMA completion; it
+    is not the same acknowledgment as "the MMA partition has consumed this
+    publication epoch." The retained `bar.sync 14,256` supplies that missing
+    acknowledgment implicitly by preventing replay from advancing past publish
+    until the MMA partition reaches the matching handoff point.
   - Plan updates: keep the local inline generic wait as the application-level
     workaround, but treat the compiler follow-up as a targeted lowering bug:
     introduce a first-class tcgen completion wait that lowers to the generic
