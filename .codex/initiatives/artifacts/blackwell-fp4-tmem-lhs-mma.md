@@ -1,7 +1,7 @@
 ---
 owner: jeffniu22@gmail.com
 created: 2026-05-07T07:15:19Z
-updated: 2026-05-08T02:34:39Z
+updated: 2026-05-08T02:57:56Z
 ---
 
 # Blackwell FP4 Padded Weight Packing
@@ -310,6 +310,41 @@ across the important batch regime.
   accumulator orientation, which likely means a different way to consume the
   packed odd FP4 tile because today's TMEM replay machinery is specialized
   around FP4-as-LHS.
+- A follow-up large-M feasibility pass closed off two tempting shortcuts:
+  - `tcgen05_mma_scaled` documentation says RHS TMEM is accepted, but the
+    current verifier/effects/lowering only make `A` TMEM-capable; `B` is still
+    lowered through the shared-memory loader. A non-swapped path cannot replay
+    the odd tile through RHS TMEM without a larger compiler/ISA change.
+  - A `BLOCK_N=128` swapped experiment is now legal after making the replay
+    register layout shape-aware, but it is slower at 16k because halving N tile
+    width doubles the output tile count: `848.15` TFLOPS versus `975.59`
+    TFLOPS for the same-seed `BLOCK_N=256` path and `1,102.94` TFLOPS for the
+    reference in that run.
+- The retained 16k selector has been tightened further while preserving literal
+  zero spill: `X_NUM_BUFS=6` and `W_NUM_BUFS=3` improve the packed TMEM-copy
+  path from about `996` TFLOPS to about `1,034` TFLOPS in same-seed runs.
+  `MMA_REGS=40` briefly reached about `1,037` TFLOPS, but it reintroduced four
+  static local-memory ops, so the zero-spill selector keeps `MMA_REGS=24`.
+
+```text
+┌────────────────────────────┬──────────────────────┬──────────────────────┐
+│ Same-seed bs=16,384        │ Retained packed path │ reference_matmul     │
+├────────────────────────────┼──────────────────────┼──────────────────────┤
+│ TFLOPS                     │             1,034.01 │             1,060.89 │
+│ NCU duration               │            90.208 us │            74.144 us │
+│ Local spill requests       │                    0 │               62,573 │
+│ MMA instructions           │               97,336 │               48,668 │
+│ TMEM loads                 │              203,136 │                8,464 │
+│ TMEM stores                │              187,424 │                3,648 │
+│ Barrier stall              │                 3.35 │                 1.40 │
+│ Long scoreboard stall      │                 5.56 │                 4.51 │
+└────────────────────────────┴──────────────────────┴──────────────────────┘
+```
+
+- The current bottleneck to beating the reference is therefore no longer spill
+  traffic or register-unpack latency. It is the structural cost of the swapped
+  replay design at `BLOCK_M=128`: twice as many MMAs plus the extra TMEM copy /
+  load / store pipeline needed to materialize the odd packed tile.
 
 - The promoted TMEM-copy default passes exact reference checks at `bs=128`,
   `bs=1024`, `bs=8192`, and focused 16k retune checks, twenty repeated

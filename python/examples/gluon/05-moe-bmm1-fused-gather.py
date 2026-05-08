@@ -462,9 +462,9 @@ def mma_partition(p: PartitionArgs):
             [0, 0, 0, 8, 0, 0],
             [0, 0, 0, 0, 2, 0],
             [0, 0, 0, 0, 4, 0],
-            [0, 0, 0, 128, 0, 0],
             [0, 0, 0, 16, 0, 0],
-        ],
+        ]
+        + ([[0, 0, 0, 128, 0, 0]] if p.BLOCK_N >= 256 else []),
         lane_bases=[
             [0, 0, 0, 0, 0, 1],
             [0, 0, 0, 0, 1, 0],
@@ -718,9 +718,9 @@ def replay_partition(p: PartitionArgs):
             [0, 0, 0, 8, 0, 0],
             [0, 0, 0, 0, 2, 0],
             [0, 0, 0, 0, 4, 0],
-            [0, 0, 0, 128, 0, 0],
             [0, 0, 0, 16, 0, 0],
-        ],
+        ]
+        + ([[0, 0, 0, 128, 0, 0]] if p.BLOCK_N >= 256 else []),
         lane_bases=[
             [0, 0, 0, 0, 0, 1],
             [0, 0, 0, 0, 1, 0],
@@ -1414,6 +1414,8 @@ def select_kernel_config(slice_size: int) -> KernelConfig:
             BAND_N=10,
             FORCE_EPILOGUE_WARPS_N1=False,
             SWIGLU_SUBTILE_FACTOR=16,
+            X_NUM_BUFS=6,
+            W_NUM_BUFS=3,
             REPLAY_K_SUBTILE_FACTOR=4,
             LOAD_ACTIVATION_REGS=80,
             REPLAY_REGS=24,
