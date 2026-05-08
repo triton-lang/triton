@@ -211,11 +211,6 @@ void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
   PendingGraphQueue::SeqIdToStateMap seqIdToState;
   size_t phase = Data::kNoCompletePhase;
   for (const auto &[seqId, nodeId] : graphState.metricSeqIdToNodeId) {
-    auto nodeIter = graphState.nodeIdToState.find(nodeId);
-    if (nodeIter ==
-        graphState.nodeIdToState
-            .end()) // The node has been skipped during graph capture
-      continue;
     const auto &metricNodeState = graphState.metricNodeIdToState.at(nodeId);
     auto &pendingMetricNode = seqIdToState
                                   .emplace(seqId,
@@ -494,9 +489,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       const auto &name = threadState.scopeStack.back().name;
       if (name.empty())
         nodeState.status.setMissingName();
-      const bool isMetricKernelNode =
-          threadState.isMetricKernelLaunching &&
-          !threadState.metricKernelLaunchInfoQueue.empty();
+      const bool isMetricKernelNode = threadState.isMetricKernelLaunching;
       if (isMetricKernelNode) {
         nodeState.status.setMetricNode();
         auto metricKernelLaunchInfo =
@@ -517,40 +510,40 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         contexts.insert(contexts.end(), currentContexts.begin(),
                         currentContexts.end());
         if (isMetricKernelNode) {
-          if (threadState.isApiExternOp) { // API extern ops
-            contexts.push_back(std::string(GraphState::metricTag));
-          } else { // Triton ops
-            contexts.push_back(name);
-            contexts.push_back(std::string(GraphState::metricTag));
-          }
-        } else {
-          contexts.push_back(name);
-        }
-        auto staticEntry =
-            data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
-        nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
-        graphState.dataToEntryIdToNodeStates[data][staticEntry.id].insert(
-            &nodeState);
-        if (isMetricKernelNode) {
           auto flexibleMetricContexts = data->getContexts(false);
           std::vector<Context> flexibleMetricEntryContexts{
               Context(GraphState::captureTag)};
           flexibleMetricEntryContexts.insert(flexibleMetricEntryContexts.end(),
                                              flexibleMetricContexts.begin(),
                                              flexibleMetricContexts.end());
-          if (threadState.isApiExternOp) { // API extern ops
-            flexibleMetricEntryContexts.push_back(
-                std::string(GraphState::metricTag));
-          } else { // Triton ops
+          if (!threadState.isApiExternOp) { // Triton ops
+            contexts.push_back(name);
             flexibleMetricEntryContexts.push_back(name);
-            flexibleMetricEntryContexts.push_back(
-                std::string(GraphState::metricTag));
           }
+          contexts.push_back(std::string(GraphState::metricTag));
+          flexibleMetricEntryContexts.push_back(
+              std::string(GraphState::metricTag));
+
+          // For metrics nodes, timing info is attributed to a frame under
+          // a metadata state.
+          // Flexible metrics are attributed to the current GPU operation
+          auto staticEntry =
+              data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
+          nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
+          graphState.dataToEntryIdToNodeStates[data][staticEntry.id].insert(
+              &nodeState);
           auto flexibleMetricEntry =
               data->addOp(Data::kVirtualPhase, Data::kRootEntryId,
                           flexibleMetricEntryContexts);
           graphState.metricNodeIdToState.at(nodeId)
               .dataToEntryId.insert_or_assign(data, flexibleMetricEntry.id);
+        } else {
+          contexts.push_back(name);
+          auto staticEntry =
+              data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
+          nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
+          graphState.dataToEntryIdToNodeStates[data][staticEntry.id].insert(
+              &nodeState);
         }
       }
     } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED

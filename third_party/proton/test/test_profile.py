@@ -676,7 +676,10 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str, device: str):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
-def test_hook_launch_metadata_cudagraph_metric_work_grouping(tmp_path: pathlib.Path, device: str):
+def test_hook_cudagraph_triton_kernels(tmp_path: pathlib.Path, device: str):
+    """
+    Test triton kernels launched from metadata hooks and hook="triton"
+    """
     owner_name = "metadata_owner_kernel"
 
     @triton.jit
@@ -698,21 +701,17 @@ def test_hook_launch_metadata_cudagraph_metric_work_grouping(tmp_path: pathlib.P
 
     temp_file = tmp_path / "test_hook_metadata_metric_work_grouping.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
-    try:
+
+    metadata_owner_kernel[(1, )](x, y, metric_value, bytes_value, num_warps=1)
+    metric_value.zero_()
+
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
         metadata_owner_kernel[(1, )](x, y, metric_value, bytes_value, num_warps=1)
-        torch.cuda.synchronize()
-        metric_value.zero_()
-        torch.cuda.synchronize()
 
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            metadata_owner_kernel[(1, )](x, y, metric_value, bytes_value, num_warps=1)
-
-        with proton.scope("replay"):
-            graph.replay()
-        torch.cuda.synchronize()
-    finally:
-        proton.finalize(session)
+    with proton.scope("replay"):
+        graph.replay()
+    proton.finalize(session)
 
     with temp_file.open() as f:
         data = json.load(f)
