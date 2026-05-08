@@ -264,7 +264,7 @@ void TMemBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // common read/write framework express both load->mma and store-like->mma
     // dependencies without adding a separate RAR path just for TMEM.
     appendWriteSlices(mma.getD(), op, &curBlockInfo);
-    appendWriteSlices(mma.getA(), op, &curBlockInfo);
+    appendReadSlices(mma.getA(), op, &curBlockInfo);
   }
 
   if (blockInfo->isIntersected(curBlockInfo, filter, allocation)) {
