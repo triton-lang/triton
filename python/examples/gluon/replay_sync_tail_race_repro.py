@@ -1291,22 +1291,6 @@ class KernelConfig:
     def get_w_mx_tile_smem(self) -> int:
         return self.BLOCK_N * self.BLOCK_K // self.MXFP_BLOCK_SIZE * self.W_SCALE_NUM_BUFS
 
-
-def select_kernel_config(slice_size: int) -> KernelConfig:
-    if slice_size >= 512:
-        return KernelConfig(
-            BAND_N=10,
-            SWIGLU_SUBTILE_FACTOR=16,
-            X_NUM_BUFS=6,
-            W_NUM_BUFS=3,
-            REPLAY_K_SUBTILE_FACTOR=4,
-            LOAD_ACTIVATION_REGS=80,
-            REPLAY_REGS=24,
-            MMA_REGS=24,
-        )
-    return KernelConfig()
-
-
 def matmul(
     a: torch.Tensor,
     b: torch.Tensor | Tensor,
@@ -1337,7 +1321,7 @@ def matmul(
     _, _, n = b.shape
     m = gather_indx.shape[0]
 
-    p = p or select_kernel_config(a_ragged_metadata.expected_slice_size)
+    p = p or KernelConfig()
     assert isinstance(b, Tensor)
     assert isinstance(b.storage.layout, BlackwellMX4ValueShuffledLayout | BlackwellMX4ValuePackedShuffledLayout)
     assert b.storage.layout.block_k == p.BLOCK_K
@@ -1585,7 +1569,7 @@ def prepare_case(
     k, n = c.hidden_size, c.intermediate_size
     n_expts_local = c.num_experts // c.num_expert_shards
     ragged_metadata, gather_indx = init_routing_data(c, batch_size, local_rank, device, uniform_routing)
-    p = None if reference else (p or select_kernel_config(ragged_metadata.expected_slice_size))
+    p = None if reference else (p or KernelConfig())
     x = alloc_randn((batch_size, k), dtype=torch.float8_e4m3fn, device=device)
     w, w_scale = alloc_randn_fp4((n_expts_local, k, n), device=device, p=p)
     bias = alloc_randn((n_expts_local, n), dtype=torch.float32, device=device)
