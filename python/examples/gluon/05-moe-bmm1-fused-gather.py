@@ -434,6 +434,8 @@ def load_weight_scales(p: PartitionArgs):
 
 @gluon.jit
 def mma_partition(p: PartitionArgs):
+    gl.static_assert(not p.USE_2CTA or gl.num_warps() == 4, "2CTA replay path requires 4 MMA warps")
+
     # Consumers.
     x_idx = 0
     x_phase = 0

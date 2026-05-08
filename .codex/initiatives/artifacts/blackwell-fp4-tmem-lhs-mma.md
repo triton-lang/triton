@@ -909,6 +909,27 @@ across the important batch regime.
   - Plan updates: test deleting the explicit pre-MMA `gl.barrier()` calls with
     repeated correctness, ConSan, and same-input 16k timing before deciding
     whether to retain them.
+- `2026-05-08` Completed: validated which MMA-loop barriers are actually
+  removable and rejected the 1-warp MMA partition experiment.
+  - Artifacts: retained source barriers in
+    `python/examples/gluon/05-moe-bmm1-fused-gather.py`; 2CTA MMA-partition
+    invariant asserted in the same file.
+  - Validation: same-input repeated `bs=1024` exact checks; fresh-input repeated
+    checks to rule out mutable harness state; `TRITON_INSTRUMENTATION_MODE=consan`
+    smoke; exact `bs=16,384` checks; paired same-input `16k` timing.
+  - Learnings: the lowering-generated MMA barrier is not a drop-in replacement
+    for every source barrier. Removing all three pre-MMA source barriers fails
+    repeated same-input correctness. Removing only the second-tile barrier or
+    the odd-tail barrier also fails. The first-tile barrier survives the repeated
+    gate, but direct A/B timing shows no measurable upside, so the synchronized
+    source form stays intact. `MMA_WARPS=1` looked attractive and measured about
+    `0.59%` faster at `16k`, but repeated same-input validation was flaky once it
+    became the default; the partition still issues `tcgen05.cp ... warpx4`, and
+    the 2CTA branch has distributed replay work, so the four-warp MMA partition
+    remains the retained configuration.
+  - Plan updates: do not revisit the pre-MMA barriers or one-warp MMA partition
+    without a new synchronization mechanism or hardware-model evidence that
+    explains the repeated-run failures.
 
 ## Next Up
 
