@@ -28,14 +28,10 @@ BLOCK_K = gl.constexpr(128)
 K_TILES = gl.constexpr(3)
 OUT_PACKED_N = gl.constexpr(64)
 NUM_WARPS = 8
-LOAD_ACTIVATION_WARPS = gl.constexpr(4)
 LOAD_WEIGHT_WARPS = gl.constexpr(1)
-LOAD_WEIGHT_SCALES_WARPS = gl.constexpr(1)
 REPLAY_WARPS = gl.constexpr(4)
 MMA_WARPS = gl.constexpr(4)
-LOAD_ACTIVATION_REGS = gl.constexpr(32)
 LOAD_WEIGHT_REGS = gl.constexpr(24)
-LOAD_WEIGHT_SCALES_REGS = gl.constexpr(24)
 REPLAY_REGS = gl.constexpr(80)
 MMA_REGS = gl.constexpr(80)
 MMA_BLOCK_COL = gl.constexpr(128)
@@ -51,7 +47,6 @@ def alloc_barrier(count: gl.constexpr = 1):
 class PartitionArgs:
     x_desc: tma.tensor_descriptor
     w_desc: tma.tensor_descriptor
-    scale_desc: tma.tensor_descriptor
 
     out_ptr: gl.tensor
 
@@ -62,21 +57,13 @@ class PartitionArgs:
     w_buf: gl.shared_memory_descriptor
     w_empty_bar: gl.shared_memory_descriptor
     w_ready_bar: gl.shared_memory_descriptor
-    w_scale_buf: gl.shared_memory_descriptor
-    w_scale_empty_bar: gl.shared_memory_descriptor
-    w_scale_ready_bar: gl.shared_memory_descriptor
 
-    x_scale_tmem: blackwell.tensor_memory_descriptor
-    w_scale_tmem: blackwell.tensor_memory_descriptor
-    dense_replay_tmem: blackwell.tensor_memory_descriptor
     replay_tmem: blackwell.tensor_memory_descriptor
     replay_empty_bar: gl.shared_memory_descriptor
     replay_full_bar: gl.shared_memory_descriptor
     acc_buf: blackwell.tensor_memory_descriptor
     acc_empty_bar: gl.shared_memory_descriptor
     acc_ready_bar: gl.shared_memory_descriptor
-    dense_copy_done_bar: gl.shared_memory_descriptor
-    unpack_sync_bar: gl.shared_memory_descriptor
 
 
 @gluon.jit
@@ -126,39 +113,36 @@ def load_weights(p: PartitionArgs):
 
         phase = phase ^ 1
 
-
-@gluon.jit
-def load_weight_scales(p: PartitionArgs):
-    phase = 1
-    scale_idx = gl.program_id(0) * 2
-    for ki in range(K_TILES):
-        mbarrier.wait(p.w_scale_empty_bar, phase, pred=ki != 0)
-        mbarrier.expect(p.w_scale_ready_bar, p.scale_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(
-            p.scale_desc,
-            [0, scale_idx, ki, 0, 0],
-            p.w_scale_ready_bar,
-            p.w_scale_buf,
-        )
-        phase = phase ^ 1
-
-
 @gluon.jit
 def mma_partition(p: PartitionArgs):
-    x_phase = 0
-    w_phase = 0
-    mma_phase = 1
-
+    scale_mma_bar = alloc_barrier()
+    scale_k: gl.constexpr = BLOCK_K // MXFP_BLOCK_SIZE
+    x_scale_tmem = blackwell.allocate_tensor_memory(
+        gl.uint8,
+        [BLOCK_M, scale_k],
+        blackwell.TensorMemoryScalesLayout(),
+    )
+    w_scale_tmem = blackwell.allocate_tensor_memory(
+        gl.uint8,
+        [BLOCK_N, scale_k],
+        blackwell.TensorMemoryScalesLayout(),
+    )
+    x_scale_tmem.store(
+        gl.full((BLOCK_M, scale_k), 127, dtype=gl.uint8, layout=x_scale_tmem.get_reg_layout())
+    )
+    w_scale_tmem.store(
+        gl.full((BLOCK_N, scale_k), 127, dtype=gl.uint8, layout=w_scale_tmem.get_reg_layout())
+    )
     k_second_u8_layout: gl.constexpr = blackwell.TensorMemoryLayout(
         (MMA_BLOCK_COL, BLOCK_K),
         col_stride=1,
         fp4_padded=True,
     )
 
-    mbarrier.wait(p.acc_empty_bar, mma_phase)
+    mbarrier.wait(p.acc_empty_bar, 1)
 
-    mbarrier.wait(p.x_ready_bar, x_phase)
-    mbarrier.wait(p.w_ready_bar, w_phase)
+    mbarrier.wait(p.x_ready_bar, 0)
+    mbarrier.wait(p.w_ready_bar, 0)
 
     w_packed_pair = p.w_buf.reshape((BLOCK_N, BLOCK_K))
     fp4_padded_layout: gl.constexpr = gl.NVMMASharedLayout(
@@ -177,39 +161,31 @@ def mma_partition(p: PartitionArgs):
         w_pair_first,
         p.x_buf.permute((1, 0)),
         p.acc_buf,
-        p.w_scale_tmem,
-        p.x_scale_tmem,
+        w_scale_tmem,
+        x_scale_tmem,
         a_type="e2m1",
         b_type="e4m3",
         use_acc=False,
-        mbarriers=[p.x_empty_bar, p.w_scale_empty_bar, p.w_empty_bar],
+        mbarriers=[p.x_empty_bar, scale_mma_bar, p.w_empty_bar],
     )
 
     mbarrier.wait(p.replay_full_bar, 0)
-    mbarrier.arrive(p.unpack_sync_bar)
-    mbarrier.wait(p.unpack_sync_bar, 0)
 
-    w_phase = w_phase ^ 1
-    x_phase = x_phase ^ 1
-
-    mbarrier.wait(p.x_ready_bar, x_phase)
+    mbarrier.wait(p.x_ready_bar, 1)
     blackwell.tcgen05_mma_scaled(
         p.replay_tmem._reinterpret(gl.uint8, (BLOCK_N, BLOCK_K), k_second_u8_layout),
         p.x_buf.permute((1, 0)),
         p.acc_buf,
-        p.w_scale_tmem,
-        p.x_scale_tmem,
+        w_scale_tmem,
+        x_scale_tmem,
         a_type="e2m1",
         b_type="e4m3",
         use_acc=True,
-        mbarriers=[p.x_empty_bar, p.w_scale_empty_bar, p.replay_empty_bar],
+        mbarriers=[p.x_empty_bar, scale_mma_bar, p.replay_empty_bar],
     )
 
-    x_phase = x_phase ^ 1
-
-    mbarrier.wait(p.x_ready_bar, x_phase)
-
-    mbarrier.wait(p.w_ready_bar, w_phase)
+    mbarrier.wait(p.x_ready_bar, 0)
+    mbarrier.wait(p.w_ready_bar, 1)
 
     w_packed_pair = p.w_buf.reshape((BLOCK_N, BLOCK_K))
     w_pair_first = w_packed_pair._reinterpret(
@@ -222,12 +198,12 @@ def mma_partition(p: PartitionArgs):
         w_pair_first,
         p.x_buf.permute((1, 0)),
         p.acc_buf,
-        p.w_scale_tmem,
-        p.x_scale_tmem,
+        w_scale_tmem,
+        x_scale_tmem,
         a_type="e2m1",
         b_type="e4m3",
         use_acc=True,
-        mbarriers=[p.x_empty_bar, p.w_scale_empty_bar, p.w_empty_bar],
+        mbarriers=[p.x_empty_bar, scale_mma_bar, p.w_empty_bar],
     )
 
     blackwell.tcgen05_commit(p.w_empty_bar)
@@ -236,31 +212,35 @@ def mma_partition(p: PartitionArgs):
 
 @gluon.jit
 def replay_partition(p: PartitionArgs):
-    w_phase = 0
-
+    dense_copy_done_bar = alloc_barrier()
+    dense_replay_tmem = blackwell.allocate_tensor_memory(
+        gl.uint32,
+        [BLOCK_N, BLOCK_K // 4],
+        blackwell.TensorMemoryLayout((MMA_BLOCK_COL, BLOCK_K // 4), col_stride=1),
+    )
     dense_pair_layout: gl.constexpr = gl.NVMMASharedLayout(
         swizzle_byte_width=128,
         element_bitwidth=32,
         rank=2,
         fp4_padded=False,
     )
-    mbarrier.wait(p.w_ready_bar, w_phase)
+    mbarrier.wait(p.w_ready_bar, 0)
     mbarrier.wait(p.replay_empty_bar, 1)
     dense_pair_words = p.w_buf.reshape((BLOCK_N, BLOCK_K))._reinterpret(
         gl.uint32,
         (BLOCK_N, BLOCK_K // 4),
         dense_pair_layout,
     )
-    blackwell.tcgen05_copy(dense_pair_words, p.dense_replay_tmem)
-    blackwell.tcgen05_commit(p.dense_copy_done_bar)
-    mbarrier.wait(p.dense_copy_done_bar, 0)
+    blackwell.tcgen05_copy(dense_pair_words, dense_replay_tmem)
+    blackwell.tcgen05_commit(dense_copy_done_bar)
+    mbarrier.wait(dense_copy_done_bar, 0)
 
     blackwell.fence_async_shared()
     mbarrier.arrive(p.w_empty_bar)
 
     replay_cols: gl.constexpr = BLOCK_K // 4
     replay_segments: gl.constexpr = BLOCK_K // 16
-    dense_frag = p.dense_replay_tmem.slice(0, replay_cols)
+    dense_frag = dense_replay_tmem.slice(0, replay_cols)
     replay_frag = p.replay_tmem.slice(0, replay_cols)
     dense_words = dense_frag.load()
     dense_words = dense_words.reshape((BLOCK_N, replay_segments, 2, 2)).permute((0, 1, 3, 2))
@@ -292,7 +272,6 @@ def replay_partition(p: PartitionArgs):
 
 @gluon.jit
 def epilogue_partition(p: PartitionArgs):
-    phase = 0
     out_recip = 0.25
 
     num_warps: gl.constexpr = gl.num_warps()
@@ -310,7 +289,7 @@ def epilogue_partition(p: PartitionArgs):
     )
 
     out_off_n_packed = gl.program_id(0) * (BLOCK_N // REDUCTION_N // 4)
-    mbarrier.wait(p.acc_ready_bar, phase)
+    mbarrier.wait(p.acc_ready_bar, 0)
     acc_regs = p.acc_buf.load().permute((1, 0))
     mbarrier.arrive(p.acc_empty_bar)
     acc = gl.convert_layout(acc_regs, split_layout)
@@ -363,9 +342,6 @@ def ws_matmul_kernel(
 ):
     gl.static_assert(gl.num_ctas() == 1, "standalone repro is 1CTA-only")
 
-    scale_k: gl.constexpr = BLOCK_K // MXFP_BLOCK_SIZE
-    x_scale_layout: gl.constexpr = blackwell.TensorMemoryScalesLayout()
-    w_scale_layout: gl.constexpr = blackwell.TensorMemoryScalesLayout()
     acc_layout: gl.constexpr = blackwell.TensorMemoryLayout(
         [MMA_BLOCK_COL, BLOCK_M],
         col_stride=1,
@@ -374,11 +350,6 @@ def ws_matmul_kernel(
         (MMA_BLOCK_COL, BLOCK_K // 4),
         col_stride=1,
     )
-    dense_replay_layout: gl.constexpr = blackwell.TensorMemoryLayout(
-        (MMA_BLOCK_COL, BLOCK_K // 4),
-        col_stride=1,
-    )
-
     x_buf = gl.allocate_shared_memory(
         x_desc.dtype,
         [BLOCK_M, x_desc.block_type.shape[1]],
@@ -394,21 +365,7 @@ def ws_matmul_kernel(
     )
     w_empty_bar = alloc_barrier(count=2)
     w_ready_bar = alloc_barrier()
-    w_scale_buf = gl.allocate_shared_memory(
-        scale_desc.dtype,
-        scale_desc.block_type.shape,
-        scale_desc.layout,
-    )
-    w_scale_empty_bar = alloc_barrier()
-    w_scale_ready_bar = alloc_barrier()
 
-    x_scale_tmem = blackwell.allocate_tensor_memory(gl.uint8, [BLOCK_M, scale_k], x_scale_layout)
-    w_scale_tmem = blackwell.allocate_tensor_memory(gl.uint8, [BLOCK_N, scale_k], w_scale_layout)
-    dense_replay_tmem = blackwell.allocate_tensor_memory(
-        gl.uint32,
-        [BLOCK_N, BLOCK_K // 4],
-        dense_replay_layout,
-    )
     replay_tmem = blackwell.allocate_tensor_memory(
         gl.uint32,
         [BLOCK_N, BLOCK_K // 4],
@@ -425,22 +382,9 @@ def ws_matmul_kernel(
     acc_empty_bar = alloc_barrier()
     acc_ready_bar = alloc_barrier()
 
-    dense_copy_done_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(dense_copy_done_bar, count=1)
-    unpack_sync_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(unpack_sync_bar, count=1)
-
-    x_scale_tmem.store(
-        gl.full((BLOCK_M, scale_k), 127, dtype=gl.uint8, layout=x_scale_tmem.get_reg_layout())
-    )
-    w_scale_tmem.store(
-        gl.full((BLOCK_N, scale_k), 127, dtype=gl.uint8, layout=w_scale_tmem.get_reg_layout())
-    )
-
     p = PartitionArgs(
         x_desc=x_desc,
         w_desc=w_desc,
-        scale_desc=scale_desc,
         out_ptr=out_ptr,
         #
         x_buf=x_buf,
@@ -450,47 +394,46 @@ def ws_matmul_kernel(
         w_buf=w_buf,
         w_empty_bar=w_empty_bar,
         w_ready_bar=w_ready_bar,
-        w_scale_buf=w_scale_buf,
-        w_scale_empty_bar=w_scale_empty_bar,
-        w_scale_ready_bar=w_scale_ready_bar,
         #
-        x_scale_tmem=x_scale_tmem,
-        w_scale_tmem=w_scale_tmem,
-        dense_replay_tmem=dense_replay_tmem,
         replay_tmem=replay_tmem,
         replay_empty_bar=replay_empty_bar,
         replay_full_bar=replay_full_bar,
         acc_buf=acc_buf,
         acc_empty_bar=acc_empty_bar,
         acc_ready_bar=acc_ready_bar,
-        dense_copy_done_bar=dense_copy_done_bar,
-        unpack_sync_bar=unpack_sync_bar,
     )
 
+    scale_buf = gl.allocate_shared_memory(
+        scale_desc.dtype,
+        scale_desc.block_type.shape,
+        scale_desc.layout,
+    )
+    scale_ready_bar = alloc_barrier()
+    tma.async_copy_global_to_shared(
+        scale_desc,
+        [0, 0, 0, 0, 0],
+        scale_ready_bar,
+        scale_buf,
+    )
     gl.warp_specialize(
         [
-            (epilogue_partition, (p,)),
             (load_activations, (p,)),
             (load_weights, (p,)),
-            (load_weight_scales, (p,)),
             (replay_partition, (p,)),
             (mma_partition, (p,)),
         ],
         [
-            LOAD_ACTIVATION_WARPS,
             LOAD_WEIGHT_WARPS,
-            LOAD_WEIGHT_SCALES_WARPS,
             REPLAY_WARPS,
             MMA_WARPS,
         ],
         [
-            LOAD_ACTIVATION_REGS,
             LOAD_WEIGHT_REGS,
-            LOAD_WEIGHT_SCALES_REGS,
             REPLAY_REGS,
             MMA_REGS,
         ],
     )
+    epilogue_partition(p)
 
 # ===-----------------------------------------------------------------------===#
 # Benchmark and Testing Helpers

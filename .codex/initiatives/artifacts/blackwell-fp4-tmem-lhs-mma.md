@@ -1441,6 +1441,25 @@ across the important batch regime.
     arrivals, made the repro pass for `1000` launches. Replacing the packed-FP8
     epilogue with a direct raw-accumulator row store ran into Gluon indexing
     limits, so the packed store remains part of the smallest working source.
+  - Warp-specialization reduction checkpoint:
+    the current standalone repro no longer uses the scale copy or epilogue as
+    warp-specialized partitions. The one-off scale TMA issue is now inlined in
+    the kernel prelude, the FP8 epilogue runs after `gl.warp_specialize()`
+    returns, and the specialized tree itself is down to four functions:
+    default `load_activations`, plus `load_weights`, `replay_partition`, and
+    `mma_partition`. Several pieces of state that used to flow through
+    `PartitionArgs` are now partition-local instead: the scale-copy shared
+    buffer and ready barrier, the dummy MMA scale barrier, the dense replay
+    TMEM scratch, the dense-copy completion barrier, and both constant scale
+    TMEM descriptors. This smaller form still fails quickly
+    (`FAIL launch=1 maxdiff=1.3125`).
+  - New reduction boundaries:
+    some additional folds now have precise outcomes. A one-copy scale prelude
+    is sufficient as long as it exists before `warp_specialize()`. Merging that
+    copy into the weight-loader worker made the repro pass. Folding
+    `replay_partition` into the 1-warp weight-loader worker failed at compile
+    time because the TMEM load path requires at least four warps. Folding
+    replay into the default activation path triggered the 20-second hang guard.
 
 ## Next Up
 
