@@ -45,7 +45,8 @@ LogicalResult validateStridesAndSharedOrder(triton::MakeTensorDescOp op,
 
 // Collects all users of the value beyond the basic block boundaries
 // defining a given value.
-void collectUsers(Value value, llvm::SetVector<Operation *> &users) {
+[[maybe_unused]] void collectUsers(Value value,
+                                   llvm::SetVector<Operation *> &users) {
   for (OpOperand &use : value.getUses()) {
     Operation *userOp = use.getOwner();
     if (users.contains(userOp)) {

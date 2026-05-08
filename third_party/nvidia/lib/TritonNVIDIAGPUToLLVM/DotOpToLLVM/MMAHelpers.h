@@ -329,7 +329,7 @@ private:
   }
 };
 
-static Value getOffsetedBase(Value v, gpu::MemDescType memDescTy,
+inline Value getOffsetedBase(Value v, gpu::MemDescType memDescTy,
                              const TypeConverter *typeConverter,
                              ConversionPatternRewriter &rewriter,
                              Location loc) {
