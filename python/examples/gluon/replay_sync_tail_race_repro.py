@@ -489,8 +489,6 @@ def mma_partition(p: PartitionArgs):
             # lowers that as a single deferred barrier and it is not sufficient
             # for the repeated-run ring protocol below.
             gl.barrier()
-            if not p.REPLAY_VIA_TMEM_COPY:
-                mbarrier.arrive(p.replay_ready_bar)
 
             # w_packed_pair 512x128xi8, logical 512x256xfp4
             w_packed_pair = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))
