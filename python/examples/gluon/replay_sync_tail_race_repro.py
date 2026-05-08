@@ -634,31 +634,8 @@ def replay_partition(p: PartitionArgs):
     w_phase = 0
     replay_idx = 0
     replay_empty_phase = 1
-    replay_ready_phase = 0
     dense_copy_phase = 0
 
-    k_second_reg_layout: gl.constexpr = gl.DistributedLinearLayout(
-        reg_bases=[
-            [0, 0, 0, 8, 0, 0],
-            [0, 0, 0, 0, 2, 0],
-            [0, 0, 0, 0, 4, 0],
-            [0, 0, 0, 16, 0, 0],
-        ]
-        + ([[0, 0, 0, 128, 0, 0]] if p.BLOCK_N >= 256 else []),
-        lane_bases=[
-            [0, 0, 0, 0, 0, 1],
-            [0, 0, 0, 0, 1, 0],
-            [0, 0, 0, 1, 0, 0],
-            [0, 0, 0, 2, 0, 0],
-            [0, 0, 0, 4, 0, 0],
-        ],
-        warp_bases=[
-            [0, 0, 0, 32, 0, 0],
-            [0, 0, 0, 64, 0, 0],
-        ],
-        block_bases=[],
-        shape=[1, 1, 1, p.BLOCK_N, p.BLOCK_K // 16, 2],
-    )
     dense_pair_layout: gl.constexpr = gl.NVMMASharedLayout(
         swizzle_byte_width=128,
         element_bitwidth=32,
@@ -672,48 +649,6 @@ def replay_partition(p: PartitionArgs):
                 w_buf = p.w_bufs.index(w_idx)
                 mbarrier.wait(w_ready_bar, w_phase)
 
-                row_layout: gl.constexpr = gl.SliceLayout(
-                    0,
-                    gl.SliceLayout(
-                        1,
-                        gl.SliceLayout(
-                            2,
-                            gl.SliceLayout(
-                                4,
-                                gl.SliceLayout(5, k_second_reg_layout),
-                            ),
-                        ),
-                    ),
-                )
-                seg_layout: gl.constexpr = gl.SliceLayout(
-                    0,
-                    gl.SliceLayout(
-                        1,
-                        gl.SliceLayout(
-                            2,
-                            gl.SliceLayout(
-                                3,
-                                gl.SliceLayout(5, k_second_reg_layout),
-                            ),
-                        ),
-                    ),
-                )
-                replay_word_layout: gl.constexpr = gl.SliceLayout(
-                    0,
-                    gl.SliceLayout(
-                        1,
-                        gl.SliceLayout(
-                            2,
-                            gl.SliceLayout(
-                                3,
-                                gl.SliceLayout(4, k_second_reg_layout),
-                            ),
-                        ),
-                    ),
-                )
-                local_n = gl.arange(0, p.BLOCK_N, layout=row_layout)[None, None, None, :, None, None]
-                seg = gl.arange(0, p.BLOCK_K // 16, layout=seg_layout)[None, None, None, None, :, None]
-                replay_word = gl.arange(0, 2, layout=replay_word_layout)[None, None, None, None, None, :]
                 replay_tmem = p.replay_tmem.index(replay_idx)
                 replay_empty_bar = p.replay_empty_bars.index(replay_idx)
                 replay_full_bar = p.replay_full_bars.index(replay_idx)
