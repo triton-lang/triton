@@ -682,11 +682,10 @@ def replay_partition(p: PartitionArgs):
                 mbarrier.arrive(replay_full_bar)
                 replay_idx, replay_empty_phase = advance(replay_idx, replay_empty_phase, 2)
 
-            if p.K_TILES % 2 != 0:
-                # The tail tile has no replay work, but it still occupies one
-                # packed-weight ring slot. Keep this partition's cursor aligned
-                # with the MMA partition before the next output block.
-                w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+            # The tail tile has no replay work, but it still occupies one
+            # packed-weight ring slot. Keep this partition's cursor aligned
+            # with the MMA partition before the next output block.
+            w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
 
 
 @gluon.jit
