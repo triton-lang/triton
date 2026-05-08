@@ -175,29 +175,6 @@ def fp4_prmt_shuffle_elements(x):
 
 
 @gluon.jit
-def replay_mma_wait_relaxed_cluster(bar, phase, x):
-    return gl.inline_asm_elementwise(
-        """
-        {
-            .reg .pred complete;
-            .reg .b64 bar64;
-            cvt.u64.u32 bar64, $1;
-            cvta.shared.u64 bar64, bar64;
-        waitLoop:
-            mbarrier.try_wait.parity.relaxed.cluster.b64 complete, [bar64], $2;
-            @!complete bra.uni waitLoop;
-            mov.b32 $0, $3;
-        }
-        """,
-        "=r,r,r,r",
-        [bar.to_i32(), phase, x],
-        dtype=gl.int32,
-        is_pure=False,
-        pack=1,
-    )
-
-
-@gluon.jit
 def pack_fp8x4(values):
     lhs, rhs = gl.split(values.reshape((values.shape[0], values.shape[1] // 2, 2)))
     return pack_u16x2(lhs, rhs)
@@ -479,13 +456,6 @@ def mma_partition(p: PartitionArgs):
             w_buf = p.w_bufs.index(w_idx)
             mbarrier.wait(w_ready_bar, w_phase)
 
-            # Keep the single MMA issuer from releasing an input ring slot
-            # before every MMA warp has observed the ready epoch. MMAv5 lowering
-            # also inserts one local barrier before the issuer block, but ptxas
-            # lowers that as a single deferred barrier and it is not sufficient
-            # for the repeated-run ring protocol below.
-            gl.barrier()
-
             # w_packed_pair 512x128xi8, logical 512x256xfp4
             w_packed_pair = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))
             fp4_padded_layout: gl.constexpr = gl.NVMMASharedLayout(
@@ -539,9 +509,6 @@ def mma_partition(p: PartitionArgs):
             x_empty_bar = p.x_empty_bars.index(x_idx)
             x_buf = p.x_bufs.index(x_idx)
             mbarrier.wait(x_ready_bar, x_phase)
-            # This second-tile post-wait convergence is correctness-critical;
-            # without it, the issuer can release the next empty epoch early.
-            gl.barrier()
 
             replay_tmem = p.replay_tmem.index(replay_idx)
             replay_empty_bar = p.replay_empty_bars.index(replay_idx)
@@ -580,9 +547,6 @@ def mma_partition(p: PartitionArgs):
         w_empty_bar = p.w_empty_bars.index(w_idx)
         w_buf = p.w_bufs.index(w_idx)
         mbarrier.wait(w_ready_bar, w_phase)
-
-        # Preserve the same post-wait convergence for the odd-tail path.
-        gl.barrier()
 
         # w_packed_pair 512x128xi8, logical 512x256xfp4
         w_packed_pair = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))
@@ -656,7 +620,7 @@ def replay_partition(p: PartitionArgs):
                 )
                 blackwell.tcgen05_copy(dense_pair_words, dense_replay_tmem)
                 blackwell.tcgen05_commit(p.dense_copy_done_bar)
-                replay_mma_wait_relaxed_cluster(p.dense_copy_done_bar, dense_copy_phase, dense_copy_phase)
+                mbarrier.wait(p.dense_copy_done_bar, dense_copy_phase)
                 dense_copy_phase = dense_copy_phase ^ 1
 
                 # Once the async copy finishes, shared memory is no longer
@@ -1349,11 +1313,8 @@ def alloc_randn(shape: tuple[int, ...], dtype: torch.dtype, device: str) -> torc
     return torch.randn(shape, device=device, dtype=dtype)
 
 
-def alloc_randn_fp4(shape: tuple[int, ...], device: str, p: KernelConfig | None) -> tuple[Tensor, Tensor]:
-    if p is not None:
-        block_k, block_n, num_warps = p.BLOCK_K, p.BLOCK_N, p.NUM_WARPS
-    else:
-        block_k, block_n, num_warps = 128, 256, 8
+def alloc_randn_fp4(shape: tuple[int, ...], device: str, p: KernelConfig) -> tuple[Tensor, Tensor]:
+    block_k, block_n, num_warps = p.BLOCK_K, p.BLOCK_N, p.NUM_WARPS
 
     data = alloc_randn(shape, torch.bfloat16, device)
     data, scale = downcast_to_mxfp(data, FP4, axis=1)  # type: ignore[arg-type]
