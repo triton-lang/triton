@@ -63,7 +63,9 @@ template <typename AttrOrType>
 constexpr auto hasVerifier(AttrOrType t) -> decltype(t.verifyInvariants, true) {
   return true;
 }
-constexpr auto hasVerifier(...) { return false; }
+template <typename... ArgTs> constexpr auto hasVerifier(ArgTs...) {
+  return false;
+}
 
 // Print a diagnostic without its location. The frontend will attach the AST
 // location to the error message.
