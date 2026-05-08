@@ -192,6 +192,14 @@ def compute_num_stages(
         smem_capacity -= int(block_m * acc_block_n * out_itemsize)
     smem_capacity = max(smem_capacity, 0)
     max_stages = 5 if rhs_dtype == FP4 else 4  # maybe 5 everywhere; just haven't tested
+    b_mx_scale_layout = None if not isinstance(precision_config.b_mx_scale,
+                                               Tensor) else precision_config.b_mx_scale.storage.layout
+    if (is_persistent and rhs_dtype == FP4 and isinstance(b_mx_scale_layout, HopperMXScaleLayout)
+            and precision_config.a_mx_scale is not None and precision_config.c_mx_scale is not None):
+        # The Hopper-scale FP4 path with MX input and output needs enough
+        # extra epilogue/scale smem that a 5-stage persistent kernel can
+        # exceed H100's launch limit.
+        max_stages = 4
     num_stages = min(smem_capacity // int(stage_size), max_stages)
     # Keep one stage of headroom for persistent fp32 to avoid launch-time OOR.
     if is_persistent and (lhs_dtype == FP32 or rhs_dtype == FP32):

@@ -330,6 +330,10 @@ def make_default_opt_flags_nvidia(
     is_hopper_scale = isinstance(b_mx_scale_layout, HopperMXScaleLayout)
     if is_hopper_scale:
         occupancy_target = 16 // num_warps
+        if precision_config.a_mx_scale is not None and precision_config.c_mx_scale is not None:
+            # Hopper MXFP4 RHS plus MX input/output needs more than the
+            # 128-register cap implied by the default occupancy target.
+            occupancy_target = 1
     threads_per_warp = 32
     reg_per_sm = 64 * 1024
     max_reg_per_thread = 256

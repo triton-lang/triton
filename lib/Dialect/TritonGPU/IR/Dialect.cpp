@@ -4356,9 +4356,6 @@ bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
 }
 
 bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
-  Attribute enc = type.getEncoding();
-  MLIRContext *ctx = enc.getContext();
-
   LinearLayout actual = toLinearLayout(type);
 
   // Flatten actual outs in reverse order to produce a row-major flattening

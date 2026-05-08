@@ -291,11 +291,14 @@ def matmul(a, b, bias,
         dtype = FP4 if b.dtype == torch.uint8 else None
         b = wrap_torch_tensor(b, dtype=dtype)
     b_is_shuffled = isinstance(b.storage.layout, BlackwellMX4ValueShuffledLayout)
-    if b_has_mx and (torch.cuda.get_device_capability()[0] < 10 or b.storage.layout is not None and not isinstance(b.storage.layout, StridedLayout)):
-        if not b_is_shuffled:
-            assert b.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
     if b_scale is not None and not isinstance(b_scale, Tensor):
         b_scale = wrap_torch_tensor(b_scale)
+    b_scale_layout = None if b_scale is None else b_scale.storage.layout
+    if b_has_mx and (
+            b.storage.layout is not None and not isinstance(b.storage.layout, StridedLayout)
+            or isinstance(b_scale_layout, HopperMXScaleLayout)):
+        if not b_is_shuffled:
+            assert b.stride(-2) == 1, "`w` must be column-major with Hopper-swizzled MX scales or non-strided MX value layouts"
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
     if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     # unpack a scale

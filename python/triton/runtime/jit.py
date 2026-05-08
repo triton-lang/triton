@@ -95,12 +95,6 @@ class DependenciesFinder(ast.NodeVisitor):
     def ret(self):
         return self.hasher.hexdigest()
 
-    def _is_triton_builtin(self, node, func):
-        if inspect.isbuiltin(node.func):
-            return True
-        module = getattr(func, "__module__", "")
-        return module.startswith(TRITON_MODULE)
-
     def _update_hash(self, func):
         assert isinstance(func, JITCallable)
         # Merge our used_global_vals with those of the called function,

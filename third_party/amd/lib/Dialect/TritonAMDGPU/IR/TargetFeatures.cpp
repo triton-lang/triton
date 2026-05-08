@@ -173,25 +173,23 @@ TargetFeatures::queryLDSTransLoadParams(int bitWidth) const {
     return std::nullopt;
 
   unsigned numLanesInShuffleGroup = getWarpSize() / 4;
-  unsigned instBitWidth;
-  bool doubleB8Contiguity;
+
+  auto ldsTransParams = [&](unsigned instBitWidth,
+                            TileKind kind) -> LDSTransLoadParams {
+    return {numLanesInShuffleGroup, instBitWidth, instBitWidth / bitWidth,
+            kind};
+  };
 
   switch (version) {
   case V1:
-    instBitWidth = 64;
-    doubleB8Contiguity = false;
-    break;
+    return ldsTransParams(64, TileKind::Standard);
   case V2:
-    instBitWidth = (bitWidth == 16) ? 128 : 64;
-    doubleB8Contiguity = (bitWidth == 8);
-    break;
+    if (bitWidth == 8)
+      return ldsTransParams(64, TileKind::DoubleContiguity);
+    return ldsTransParams(128, TileKind::Standard);
   default:
     return std::nullopt;
   }
-
-  unsigned tileSize = instBitWidth / bitWidth;
-  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth, tileSize,
-                            doubleB8Contiguity};
 }
 
 bool TargetFeatures::supportsDirectToLdsScatter() const { return isGFX1250(); }

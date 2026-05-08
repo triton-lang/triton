@@ -1820,7 +1820,6 @@ struct BufferAtomicCASOpConversion
     }
 
     mlir::Operation *lastCASOp;
-    MLIRContext *ctx = rewriter.getContext();
     GCNBuilder waitcntBuilder;
 
     // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
@@ -2528,8 +2527,6 @@ struct TDMPrefetchConversion
 
     // Return offsets
     Type llvmResultStructTy = getTypeConverter()->convertType(op.getType(0));
-    auto structType = dyn_cast<LLVM::LLVMStructType>(
-        getTypeConverter()->convertType(op.getType(0)));
     Value resultStruct = packLLElements(loc, getTypeConverter(), offsets,
                                         rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});

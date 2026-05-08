@@ -422,12 +422,15 @@ def _matmul(
 
             if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
                 # Handshake with the swizzling code
-                tl.static_assert(x_format == "bf16")
                 tl.static_assert(w_format == "e2m1")
                 tl.static_assert(SWAP_XW)
                 wT = mxfp4_to_bf16_triton(w.T, w_scales, mx_axis=1)
                 tl.static_assert(wT.dtype == tl.bfloat16)
-                acc = tl.dot(wT, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                if is_x_microscaled:
+                    acc = tl.dot_scaled(wT, None, "bf16", x.T, x_scales, x_format, acc=acc, fast_math=True)
+                else:
+                    tl.static_assert(x_format == "bf16")
+                    acc = tl.dot(wT, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
             else:
                 rhs_k_pack: tl.constexpr = W_TRANSPOSE or not is_w_microscaled or W_K_DIVISOR != 2
                 if SWAP_XW:

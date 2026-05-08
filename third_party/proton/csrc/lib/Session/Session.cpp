@@ -88,15 +88,15 @@ Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
 }
 
 std::unique_ptr<Session> SessionManager::makeSession(
-    size_t id, const std::string &path, const std::string &profilerName,
+    const std::string &path, const std::string &profilerName,
     const std::string &contextSourceName, const std::string &dataName,
     const std::string &mode) {
   auto *profiler = makeProfiler(profilerName);
   profiler = validateAndSetProfilerMode(profiler, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
-  auto *session = new Session(id, path, profiler, std::move(contextSource),
-                              std::move(data));
+  auto *session =
+      new Session(path, profiler, std::move(contextSource), std::move(data));
   return std::unique_ptr<Session>(session);
 }
 
@@ -191,8 +191,8 @@ size_t SessionManager::addSession(const std::string &path,
     return sessionId;
   }
   auto sessionId = nextSessionId++;
-  auto newSession = makeSession(sessionId, path, profilerName,
-                                contextSourceName, dataName, mode);
+  auto newSession =
+      makeSession(path, profilerName, contextSourceName, dataName, mode);
   sessionPaths[path] = sessionId;
   sessions[sessionId] = std::move(newSession);
   return sessionId;

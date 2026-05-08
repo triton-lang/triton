@@ -25,6 +25,11 @@ enum class ISAFamily {
 
 class TargetFeatures {
 public:
+  enum class TileKind {
+    Standard,         // 16x16 tile layout.
+    DoubleContiguity, // 16x16 with doubled B8 contiguity requirement.
+  };
+
   struct LDSTransLoadParams {
     // Number of lanes that cooperate in the instruction.
     unsigned numLanesInShuffleGroup;
@@ -32,8 +37,8 @@ public:
     unsigned instBitWidth;
     // Number of elements that the instruction needs to be contiguous in LDS.
     unsigned tileSize;
-    // Whether B8 types require double contiguity on this target.
-    bool needsDoubleB8Contiguity;
+    // Distribution of base tile in the full instruction.
+    TileKind tileKind;
   };
 
   explicit TargetFeatures(std::optional<StringRef> arch);

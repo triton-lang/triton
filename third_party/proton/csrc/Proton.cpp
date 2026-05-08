@@ -36,7 +36,6 @@ std::map<std::string, MetricValueType> convertPythonMetrics(
 } // namespace
 
 static void initProton(pybind11::module &&m) {
-  using ret = pybind11::return_value_policy;
   using namespace pybind11::literals;
 
   // Accept raw integer pointers from Python (e.g., Tensor.data_ptr()) instead

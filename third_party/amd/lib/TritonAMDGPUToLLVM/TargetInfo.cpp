@@ -133,6 +133,16 @@ int TargetInfo::getSharedMemorySize() const {
   return targetFeatures.getSharedMemorySize();
 }
 
+int TargetInfo::getSharedMemoryBanks() const {
+  switch (getISAFamily()) {
+  case ISAFamily::GFX1250:
+  case ISAFamily::CDNA4:
+    return 64;
+  default:
+    return 32;
+  }
+}
+
 size_t TargetInfo::getSharedMemoryPartitionSize() const {
   return targetFeatures.getSharedMemoryPartitionSize();
 }
@@ -181,9 +191,12 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
-std::optional<TargetInfo::LDSTransLoadParams>
+SmallVector<TargetInfo::LDSTransLoadParams>
 TargetInfo::queryLDSTransLoadParams(int bitWidth) const {
-  return targetFeatures.queryLDSTransLoadParams(bitWidth);
+  auto ldsParams = targetFeatures.queryLDSTransLoadParams(bitWidth);
+  if (!ldsParams)
+    return {};
+  return {*ldsParams};
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -778,5 +791,26 @@ void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
 
 bool TargetInfo::supportDppBroadcast() const {
   return targetFeatures.supportDppBroadcast();
+}
+
+std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>
+TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA3:
+  case ISAFamily::RDNA1:
+  case ISAFamily::RDNA2:
+  case ISAFamily::RDNA3:
+    if (vecBitwidth == 128)
+      return {/*load tile*/ {{}, {0, 1, 4}}, /*store tile*/ {}};
+    break;
+  case ISAFamily::CDNA4:
+  case ISAFamily::GFX1250:
+    if (vecBitwidth == 128)
+      return {/*load tile*/ {{}, {0, 1, 3, 4}}, /*store tile*/ {}};
+    break;
+  default:
+    break;
+  }
+  return {{}, {}};
 }
 } // namespace mlir::triton::AMD

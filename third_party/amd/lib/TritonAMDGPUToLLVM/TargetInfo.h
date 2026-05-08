@@ -24,6 +24,8 @@ public:
 
   int getSharedMemorySize() const;
 
+  int getSharedMemoryBanks() const override;
+
   size_t getSharedMemoryPartitionSize() const override;
 
   bool supportMaximumMinimum() const override;
@@ -49,10 +51,13 @@ public:
                     Operation *localLoadOp = nullptr) const override;
 
   // Describes the parameters of ds_read_tr for a particular data type.
+  using TileKind = amdgpu::TargetFeatures::TileKind;
   using LDSTransLoadParams = amdgpu::TargetFeatures::LDSTransLoadParams;
   // Get the ds_read_tr parameters for the instruction that operates on the
-  // element granularty specified by bitWidth
-  std::optional<LDSTransLoadParams> queryLDSTransLoadParams(int bitWidth) const;
+  // element granularity specified by bitWidth. Returns candidates ordered from
+  // largest (most restrictive) to smallest, so the lowering can try the more
+  // profitable instruction first and fall back.
+  SmallVector<LDSTransLoadParams> queryLDSTransLoadParams(int bitWidth) const;
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
@@ -143,6 +148,12 @@ public:
 
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                              Operation *llLoadOp) const override;
+
+  // Returns the hardware-specific tiles for shared memory loads and stores.
+  // The returned pair is in the format {LoadTile, StoreTile}.
+  std::pair<mlir::triton::gpu::LocalMemOpTile,
+            mlir::triton::gpu::LocalMemOpTile>
+  getSharedLdStTiles(int32_t vecBitwidth) const override;
 
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
