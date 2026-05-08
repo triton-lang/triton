@@ -1116,6 +1116,39 @@ across the important batch regime.
     cluster-scoped form and add a regression around emitted PTX. Do not remove
     the replay-full rendezvous until the schedule is redesigned around a real
     cross-partition protocol rather than one-way mbarrier notification alone.
+- `2026-05-08` Completed: reduced a separate TMEM handoff compiler bug to four
+  loop iterations and ruled it out as the current replay-full explanation.
+  - Minimal scratch repro:
+    `/tmp/tmem_handoff_cse_repro.py`.
+    It has one producer partition, one consumer partition, a two-slot TMEM ring,
+    explicit `wait_barrier(..., deps=(slot,))` on both sides, and an inline
+    `bar.sync 14, 256` after each handoff. The expected lane-0 sequence is
+    `[1, 2, 3, 4]`; the compiled kernel returns `[1, 2, 1, 2]`.
+  - Generated evidence:
+    `/tmp/tmem_handoff_cse_repro_cache/FGVMDL7BPZK6DDJ25IBQGRQLMFUBVSQV3PP4KQ62ON7FNMBCLYLQ/kernel.{ttgir,llir}`.
+    TTGIR contains four `ttng.tmem_store` operations but only two
+    `ttng.tmem_load` operations; later stores reuse the first two loaded SSA
+    values. LLIR likewise contains eight `tcgen05.st` instructions but only two
+    `tcgen05.ld` instructions.
+  - Exact compiler issue for this repro: after static unrolling, the consumer
+    partition has repeated reads of the same two TMEM slices and no visible
+    TensorMemory write in its own region. `ttng.tmem_load` has a real
+    `MemRead<TensorMemory>` effect, but `ttng.wait_barrier` only declares
+    shared-memory effects; its `deps` operands are not represented as
+    TensorMemory effects for optimization. CSE therefore reuses the first load
+    from each slot across later barrier generations even though the producer
+    partition has overwritten the slots.
+  - Why this is separate from the live replay bug:
+    the failing MoE kernel's replay and MMA loops remain `scf.for` loops in
+    TTGIR, and MMA consumes `replay_tmem` through `ttng.tc_gen5_mma_scaled`
+    rather than `ttng.tmem_load`. Adding
+    `deps=(p.replay_tmem.index(replay_idx),)` to the live
+    `replay_full_bar` wait still failed at launch 310, so this optimization hole
+    does not explain the retained `bar.sync 14,256` workaround.
+  - Plan updates: keep the four-iteration handoff as the standalone compiler
+    reducer for TMEM-load CSE across warp-specialized partitions, and continue
+    reducing the live replay failure from the full three-party weight-ring
+    protocol instead of using the CSE repro as a proxy for it.
 
 ## Next Up
 
