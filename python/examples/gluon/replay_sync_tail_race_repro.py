@@ -8,7 +8,6 @@ import triton.experimental.gluon.language.nvidia.blackwell.tma as tma
 from triton.experimental.gluon.language.nvidia.blackwell import float2
 import triton.experimental.gluon.language.nvidia.hopper.mbarrier as mbarrier
 import triton.language.extra.libdevice as libdevice
-from triton_kernels.distributed import make_expt_dict_uniform
 from triton_kernels.matmul import (
     FlexCtx,
     FnSpecs,
@@ -32,7 +31,6 @@ from triton_kernels.tensor_details.layout import (
     make_default_matmul_mxfp4_w_scale_layout,
 )
 from triton_kernels.testing import alloc_rand
-from triton_kernels.topk import topk
 
 # ===-----------------------------------------------------------------------===#
 # Device Code
@@ -1293,19 +1291,16 @@ def make_prod_like_logits(
     batch_hot_experts: int = 4,
     batch_hot_boost: float = 0.6,
 ) -> torch.Tensor:
-    # Stable expert popularity: a few hot experts, long tail.
     ranks = torch.arange(1, num_experts + 1, device=device, dtype=torch.float32)
     ranked_probs = ranks.pow(-zipf_alpha)
     ranked_probs /= ranked_probs.sum()
 
-    # Randomize which expert ids are hot so shard/id layout is not special.
     perm = torch.randperm(num_experts, device=device)
     expert_probs = torch.empty_like(ranked_probs)
     expert_probs[perm] = ranked_probs
 
     logits = expert_probs.clamp_min(1e-12).log()[None, :].expand(batch_size, -1).clone()
 
-    # Token locality: each token belongs to a synthetic topic/cluster with preferred experts.
     cluster_size = min(num_experts, max(2 * experts_per_token, num_experts // 16))
     cluster_experts = torch.stack(
         [torch.multinomial(expert_probs, cluster_size, replacement=False) for _ in range(num_clusters)]
@@ -1314,65 +1309,137 @@ def make_prod_like_logits(
     rows = torch.arange(batch_size, device=device)[:, None]
     logits[rows, cluster_experts[token_cluster]] += cluster_boost
 
-    # Batch burstiness: a few experts are hotter for this batch.
     if batch_hot_experts > 0:
         hot = torch.multinomial(expert_probs, batch_hot_experts, replacement=False)
         logits[:, hot] += batch_hot_boost
 
-    # Gumbel noise makes top-k behave like weighted sampling without replacement.
     noise = -torch.empty_like(logits).exponential_().log()
     logits += gumbel_scale * noise
 
     return logits.to(dtype)
+
+
+FROZEN_SLICE_SIZES = [2, 11, 1, 2, 1, 0, 3, 7, 5, 13, 1, 0, 1, 0, 3, 4]
+
+# Frozen from the original failing top-k/routing setup. Only the first
+# sum(FROZEN_SLICE_SIZES)=54 rows are actually scheduled locally; keeping the
+# larger gather length is part of the trigger.
+FROZEN_GATHER_INDX = [
+    306, 151, 194, 322, 378, 425, 123, 193, 201, 330, 410, 481, 5, 18, 52, 85,
+    147, 152, 180, 205, 210, 237, 249, 410, 464, 486, 500, 42, 83, 86, 335, 305,
+    198, 299, 118, 361, 81, 26, 453, 4, 429, 306, 66, 170, 12, 131, 260, 344,
+    377, 379, 436, 342, 139, 83, 135, 187, 277, 366, 377, 383, 444, 452, 460, 1,
+    3, 34, 39, 40, 61, 62, 68, 71, 72, 74, 87, 110, 120, 122, 125, 129,
+    157, 171, 178, 182, 186, 191, 197, 202, 208, 212, 213, 215, 223, 231, 233, 241,
+    252, 274, 275, 276, 284, 294, 297, 315, 323, 325, 326, 328, 337, 343, 359, 362,
+    369, 370, 374, 381, 385, 393, 394, 409, 413, 416, 423, 448, 470, 475, 477, 493,
+    504, 511, 2, 29, 55, 133, 146, 186, 209, 265, 278, 305, 316, 417, 458, 498,
+    503, 26, 59, 112, 113, 114, 117, 121, 124, 152, 155, 190, 211, 227, 248, 256,
+    266, 269, 271, 273, 280, 281, 288, 298, 299, 303, 310, 329, 332, 333, 340, 341,
+    346, 354, 360, 365, 371, 380, 382, 384, 401, 411, 430, 438, 442, 446, 447, 449,
+    453, 463, 473, 484, 505, 507, 509, 510, 17, 21, 22, 27, 38, 45, 47, 49,
+    58, 70, 77, 80, 82, 95, 97, 98, 99, 106, 107, 108, 119, 127, 128, 137,
+    140, 144, 164, 169, 176, 198, 214, 224, 226, 229, 250, 257, 264, 270, 286, 291,
+    302, 317, 324, 336, 339, 345, 352, 356, 364, 373, 386, 389, 396, 397, 400, 404,
+    414, 419, 433, 434, 451, 465, 476, 488, 506, 13, 14, 15, 20, 24, 28, 31,
+    32, 36, 43, 53, 56, 67, 75, 84, 96, 103, 105, 115, 126, 132, 142, 143,
+    145, 148, 149, 150, 153, 159, 161, 168, 173, 174, 177, 184, 189, 196, 200, 203,
+    217, 219, 220, 221, 238, 244, 253, 259, 272, 277, 279, 282, 285, 289, 296, 307,
+    311, 312, 320, 331, 334, 338, 348, 349, 350, 351, 353, 355, 368, 372, 375, 376,
+    387, 398, 399, 402, 406, 420, 421, 427, 428, 431, 437, 454, 459, 466, 469, 474,
+    478, 479, 480, 487, 489, 497, 508, 25, 48, 60, 76, 89, 91, 92, 93, 94,
+    100, 104, 109, 116, 130, 136, 138, 141, 154, 163, 170, 172, 175, 188, 192, 194,
+    201, 206, 207, 210, 225, 228, 232, 234, 236, 239, 240, 242, 245, 246, 247, 251,
+    258, 263, 267, 283, 287, 290, 292, 293, 295, 300, 304, 308, 318, 319, 321, 327,
+    330, 335, 347, 357, 358, 367, 378, 388, 390, 391, 392, 395, 403, 407, 408, 412,
+    415, 422, 426, 432, 435, 440, 441, 443, 445, 450, 455, 456, 457, 462, 467, 471,
+    472, 481, 482, 483, 485, 486, 491, 494, 496, 499, 501, 502, 0, 6, 7, 8,
+    9, 10, 11, 16, 19, 23, 30, 33, 35, 37, 41, 44, 46, 50, 51, 54,
+    57, 63, 64, 65, 66, 69, 73, 78, 79, 88, 90, 101, 102, 111, 118, 123,
+    131, 134, 135, 147, 156, 158, 160, 162, 166, 167, 179, 181, 183, 185, 187, 193,
+    195, 199, 204, 205, 216, 218, 222, 230, 235, 237, 243, 254, 255, 260, 261, 262,
+    268, 301, 306, 309, 313, 314, 322, 342, 344, 361, 363, 366, 377, 379, 383, 393,
+    394, 405, 410, 411, 418, 424, 425, 436, 444, 452, 460, 461, 464, 468, 477, 484,
+    490, 492, 495, 500, 504, 505, 507, 509, 18, 52, 85, 147, 152, 180, 205, 210,
+    237, 249, 410, 464, 486, 500, 42, 83, 86, 335, 305, 198, 299, 118, 361, 81,
+    26, 453, 4, 429, 306, 66, 170, 12, 131, 260, 344, 377, 379, 436, 342, 139,
+    83, 135, 187, 277, 366, 377, 383, 444, 452, 460, 1, 3, 34, 39, 40, 61,
+    62, 68, 71, 72, 74, 87, 110, 120, 122, 125, 129, 157, 171, 178, 182, 186,
+    191, 197, 202, 208, 212, 213, 215, 223, 231, 233, 241, 252, 274, 275, 276, 284,
+    294, 297, 315, 323, 325, 326, 328, 337, 343, 359, 362, 369, 370, 374, 381, 385,
+    393, 394, 409, 413, 416, 423, 448, 470, 475, 477, 493, 504, 511, 2, 29, 55,
+    133, 146, 186, 209, 265, 278, 305, 316, 417, 458, 498, 503, 26, 59, 112, 113,
+    114, 117, 121, 124, 152, 155, 190, 211, 227, 248, 256, 266, 269, 271, 273, 280,
+    281, 288, 298, 299, 303, 310, 329, 332, 333, 340, 341, 346, 354, 360, 365, 371,
+    380, 382, 384, 401, 411, 430, 438, 442, 446, 447, 449, 453, 463, 473, 484, 505,
+    507, 509, 510, 17, 21, 22, 27, 38, 45, 47, 49, 58, 70, 77, 80, 82,
+    95, 97, 98, 99, 106, 107, 108, 119, 127, 128, 137, 140, 144, 164, 169, 176,
+    198, 214, 224, 226, 229, 250, 257, 264, 270, 286, 291, 302, 317, 324, 336, 339,
+    345, 352, 356, 364, 373, 386, 389, 396, 397, 400, 404, 414, 419, 433, 434, 451,
+    465, 476, 488, 506, 13, 14, 15, 20, 24, 28, 31, 32, 36, 43, 53, 56,
+    67, 75, 84, 96, 103, 105, 115, 126, 132, 142, 143, 145, 148, 149, 150, 153,
+    159, 161, 168, 173, 174, 177, 184, 189, 196, 200, 203, 217, 219, 220, 221, 238,
+    244, 253, 259, 272, 277, 279, 282, 285, 289, 296, 307, 311, 312, 320, 331, 334,
+    338, 348, 349, 350, 351, 353, 355, 368, 372, 375, 376, 387, 398, 399, 402, 406,
+    420, 421, 427, 428, 431, 437, 454, 459, 466, 469, 474, 478, 479, 480, 487, 489,
+    497, 508, 25, 48, 60, 76, 89, 91, 92, 93, 94, 100, 104, 109, 116, 130,
+    136, 138, 141, 154, 163, 170, 172, 175, 188, 192, 194, 201, 206, 207, 210, 225,
+    228, 232, 234, 236, 239, 240, 242, 245, 246, 247, 251, 258, 263, 267, 283, 287,
+    290, 292, 293, 295, 300, 304, 308, 318, 319, 321, 327, 330, 335, 347, 357, 358,
+    367, 378, 388, 390, 391, 392, 395, 403, 407, 408, 412, 415, 422, 426, 432, 435,
+    440, 441, 443, 445, 450, 455, 456, 457, 462, 467, 471, 472, 481, 482, 483, 485,
+    486, 491, 494, 496, 499, 501, 502, 0, 6, 7, 8, 9, 10, 11, 16, 19,
+    23, 30, 33, 35, 37, 41, 44, 46, 50, 51, 54, 57, 63, 64, 65, 66,
+    69, 73, 78, 79, 88, 90, 101, 102, 111, 118, 123, 131, 134, 135, 147, 156,
+    158, 160, 162, 166, 167, 179, 181, 183, 185, 187, 193, 195, 199, 204, 205, 216,
+    218, 222, 230, 235, 237, 243, 254, 255, 260, 261, 262, 268, 301, 306, 309, 313,
+    314, 322, 342, 344, 361, 363, 366, 377, 379, 383, 393, 394, 405, 410, 411, 418,
+    424, 425, 436, 444, 452, 460, 461, 464, 468, 477, 484, 490, 492, 495, 500, 504,
+    505, 507, 509, 126, 168, 490, 41, 142, 23, 31, 63, 100, 108, 120, 130, 144,
+    150, 165, 176, 200, 215, 217, 221, 252, 287, 310, 328, 340, 351, 353, 402, 415,
+    421, 430, 446, 495, 185, 47, 119, 192, 510, 161, 172, 280, 19, 290, 405, 456,
+    297, 412, 398, 40, 271, 173, 241, 376, 355, 284, 44, 64, 234, 351, 439, 466,
+    296, 322, 437,
+]
 
 def run_repro(max_launches: int = 1000):
     torch.cuda.set_device(0)
     device = "cuda:0"
     torch.manual_seed(0)
 
-    num_experts = 128
-    experts_per_token = 4
-    num_expert_shards = 8
     hidden_size = 17 * 128
     intermediate_size = 5760
     batch_size = 512
 
     p = KernelConfig()
-    local_rank = int(torch.randint(0, num_expert_shards, size=()).item())
-    n_expts_local = num_experts // num_expert_shards
+    n_expts_local = len(FROZEN_SLICE_SIZES)
 
-    expt_dist = make_expt_dict_uniform(num_expert_shards, num_experts)
-    logits = make_prod_like_logits(batch_size, num_experts, experts_per_token, device)
-    sparse_logits = topk(logits, experts_per_token, apply_softmax=True)
-    expt_hist = sparse_logits.mask_metadata.col_sum
-    local_expts = expt_dist[local_rank]
-    local_expts_hist = expt_hist[local_expts]
-    ragged_metadata = make_ragged_tensor_metadata(local_expts_hist, batch_size * experts_per_token)
-    ragged_metadata.expected_slice_size = batch_size * experts_per_token // num_experts
-    combine_indx = sparse_logits.mask_metadata.col_sorted_indx
-    gather_indx = torch.div(combine_indx, experts_per_token, rounding_mode="trunc")
+    # Preserve the original x/w/bias RNG stream while using frozen routing data.
+    torch.randint(0, 8, size=(), device=device)
+    _ = make_prod_like_logits(batch_size, 128, 4, device)
+
+    local_expts_hist = torch.tensor(FROZEN_SLICE_SIZES, dtype=torch.int32, device=device)
+    gather_indx = torch.tensor(FROZEN_GATHER_INDX, dtype=torch.int32, device=device)
+    ragged_metadata = make_ragged_tensor_metadata(local_expts_hist, gather_indx.numel())
+    ragged_metadata.expected_slice_size = 16
 
     x = alloc_randn((batch_size, hidden_size), dtype=torch.float8_e4m3fn, device=device)
     w, w_scale = alloc_randn_fp4((n_expts_local, hidden_size, intermediate_size), device=device, p=p)
     bias = alloc_randn((n_expts_local, intermediate_size), dtype=torch.float32, device=device)
 
-    swiglu_alpha = float(torch.rand((), device=device).item()) / 5 + 1.0
-    swiglu_limit = float(torch.rand((), device=device).item()) / 5 + 1.3
     fused_activation = FusedActivation(
         FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
-        (swiglu_alpha, swiglu_limit),
+        (1.1, 1.3),
     )
-    x_scale = (torch.rand((), device=device) + 0.5).reshape(1)
-    y_scale = (torch.rand((), device=device) + 3.5).reshape(1)
     precision = PrecisionConfig(
         flexpoint_saturate_inf=True,
         b_mx_scale=w_scale,
         b_microblock_size=MXFP_BLOCK_SIZE.value,
         out_dtype=torch.float8_e4m3fn,
         flex_ctx=FlexCtx(
-            lhs_data=InFlexData(dtype=torch.float8_e4m3fn, scale=x_scale),
+            lhs_data=InFlexData(dtype=torch.float8_e4m3fn, scale=torch.tensor([1.0], device=device)),
             rhs_data=InFlexData(),
-            out_data=OutFlexData(dtype=torch.float8_e4m3fn, expected_scale=y_scale),
+            out_data=OutFlexData(dtype=torch.float8_e4m3fn, expected_scale=torch.tensor([4.0], device=device)),
         ),
     )
     out_shape = (gather_indx.shape[0], bias.shape[1] // fused_activation.specs.reduction_n)

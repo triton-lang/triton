@@ -1318,6 +1318,32 @@ across the important batch regime.
     `init_routing_data` scaffolding and inlines the fixed repro setup directly
     into `run_repro()`. That head still failed with the focused command and
     most recently reported `FAIL launch=12 maxdiff=0.2734375`.
+  - Routing-freeze reduction:
+    the current reduction path no longer needs live MoE routing construction to
+    trigger the race. The repro now freezes the original failing local routing
+    payload as literals:
+    `FROZEN_SLICE_SIZES = [2, 11, 1, 2, 1, 0, 3, 7, 5, 13, 1, 0, 1, 0, 3, 4]`
+    and the full `2048`-entry gather vector from the same seed. The semantic
+    routing path (`make_expt_dict_uniform`, `topk`, local-expert histogram
+    construction) is gone from `run_repro()`.
+  - RNG-stream dependency:
+    freezing routing alone made the repro pass. The missing ingredient was not
+    the routing algorithm itself, but the RNG stream it consumed before
+    generating `x`, `w`, and `bias`. Restoring only a small RNG burn
+    (`torch.randint(0, 8, ...)` plus `make_prod_like_logits(...)`, whose output
+    is discarded) brought the mismatch back while keeping top-k and expert
+    mapping out of the active repro path.
+  - Reduced trigger shape:
+    the frozen local schedule sums to `54` rows, and `gather_len == 54`
+    repeatedly passed, while `gather_len > 54` could fail. That makes the
+    current best hypothesis sharper: the race needs the mismatch between the
+    logical gather/output length and the locally scheduled row count, not the
+    full live MoE routing machinery.
+  - Current reduced validation:
+    after the routing freeze plus RNG burn, the focused command
+    `PYTHONPATH=python:python/triton_kernels timeout 120s python3 python/examples/gluon/replay_sync_tail_race_repro.py`
+    failed twice in a row, most recently with `FAIL launch=17 maxdiff=0.3671875`
+    and `FAIL launch=75 maxdiff=0.3125`.
 
 ## Next Up
 
