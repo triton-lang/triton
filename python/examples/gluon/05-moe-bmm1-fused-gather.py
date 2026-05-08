@@ -164,6 +164,18 @@ def pack_u16x2(x0, x1):
 
 
 @gluon.jit
+def replay_mma_bar_sync(x):
+    return gl.inline_asm_elementwise(
+        "bar.sync 14, 256; mov.b32 $0, $1;",
+        "=r,r",
+        [x],
+        dtype=gl.int32,
+        is_pure=False,
+        pack=1,
+    )
+
+
+@gluon.jit
 def pack_fp8x4(values):
     lhs, rhs = gl.split(values.reshape((values.shape[0], values.shape[1] // 2, 2)))
     return pack_u16x2(lhs, rhs)
@@ -591,6 +603,7 @@ def mma_partition(p: PartitionArgs):
             else:
                 replay_full_bar = p.replay_full_bars.index(replay_idx)
                 mbarrier.wait(replay_full_bar, replay_full_phase)
+                replay_mma_bar_sync(replay_full_phase)
             mbarrier.arrive(p.unpack_sync_bar)
             mbarrier.wait(p.unpack_sync_bar, unpack_sync_phase)
             unpack_sync_phase = unpack_sync_phase ^ 1
@@ -862,6 +875,7 @@ def replay_partition(p: PartitionArgs):
                     k_second = gl.join(lo, hi).reshape([p.BLOCK_N, p.BLOCK_K // 4])
                     replay_tmem.store(k_second)
                 mbarrier.arrive(replay_full_bar)
+                replay_mma_bar_sync(replay_idx)
                 replay_idx, replay_empty_phase = advance(replay_idx, replay_empty_phase, 2)
 
             if p.K_TILES % 2 != 0:

@@ -991,60 +991,54 @@ across the important batch regime.
     Treat the replay publication barriers as partial mitigations, not a proven
     final fix. Do not use the second-tile MMA source barrier as evidence of an
     MMAv5 deferred-barrier requirement.
-- `2026-05-08` Completed: identified the compiler bug behind the replay-side
-  synchronization failure.
+- `2026-05-08` Completed: isolated the actual replay-side correctness edge and
+  disproved the earlier "tcgen fences alone fix it" theory.
   - Artifacts:
     `/tmp/replay_sync_trace_dump/4BIVUIDNA2MJRKKATUCSIPZ23DI3CLAZ4V57VZZVCYY6NFQAAHDQ/ws_matmul_kernel.{ttgir,llir,ptx,sass}`;
-    `/root/.triton/cache/A5ILLWSAG2Q5XKQHNJE23P4RUNYWGKKYDINQOOU6D2JTK2DZYFKQ/ws_matmul_kernel.{ttgir,ptx}`;
-    PTX ISA 9.2 sections `9.7.16.6.3` through `9.7.16.6.8`.
-  - Exact compiler bug: Triton has no representation or lowering path for a
-    **tcgen05 thread-sync handoff**. `ttng.wait_barrier` is a generic polling op:
-    its `deps` operands are not memory-effecting, no pass consumes them for
-    tcgen ordering, and `WaitBarrierOpConversion` lowers it to
-    `mbarrier.try_wait.parity.shared::cta`. `ttng.arrive_barrier` lowers to a
-    local barrier plus `mbarrier.arrive.shared::cta`. None of those paths emit
-    `tcgen05.fence::before_thread_sync` or
-    `tcgen05.fence::after_thread_sync`, and MMAv5 completion-barrier lowering
-    emits `tcgen05.commit` without expressing a thread-sync fence either.
-    NVIDIA's PTX 9.2 tcgen05 rules are stricter than generic mbarrier semantics:
-    cross-thread producer/consumer handoffs require the specialized tcgen05
-    fences around a `mbarrier.*.relaxed.cluster` synchronization edge. Triton
-    currently lowers tcgen handoffs as ordinary CTA barriers, so code that uses
-    TMEM across partitions can be miscompiled even when the high-level barrier
-    protocol looks correct.
-  - Evidence from the replay reproducer:
+    `/root/.triton/cache/N4N2HSZ54M2N6FK2VPBIVTZAUSG6YHWCJU4DB5JUDMZF3IO3YFZA/ws_matmul_kernel.{ttgir,llir,ptx}`;
+    PTX ISA 9.2 `bar{.cta}` synchronization semantics.
+  - Exact compiler gap: Triton can express the replay handoff's ordinary
+    `ttng.arrive_barrier` / `ttng.wait_barrier` pair, but it has no source-level
+    primitive or lowering path for the **cross-partition replay+MMA rendezvous**
+    that this schedule needs before MMA2 consumes the replay TMEM tile. In the
+    emitted PTX, replay publication is only
+    `tcgen05.wait::st; bar.sync 5, 128; mbarrier.arrive`, and the MMA side is
+    only `mbarrier.try_wait...` followed later by its own partition-local
+    `bar.sync 6, 128`. No instruction synchronizes the 128 replay threads with
+    the 128 MMA threads as one 256-thread producer/consumer group. The existing
+    `gl.barrier()` surface also lowers partition-locally, so it cannot express
+    this edge from Gluon today.
+  - The earlier specialized-fence hypothesis was too broad. Replacing the
+    replay-full path with `mbarrier.*.relaxed.cluster` plus
+    `tcgen05.fence::{before,after}_thread_sync` made failures rarer but did not
+    make the kernel deterministic, so those instructions are not sufficient for
+    this bug.
+  - Actual no-delay proof:
 
 ```text
 ┌──────────────────────────────────────────────┬──────────────────────────────┐
 │ Replay-full handoff variant                  │ Same-input bs=1,024 stress   │
 ├──────────────────────────────────────────────┼──────────────────────────────┤
-│ Generic CTA arrive/wait + tcgen fences       │ failed at launch 185         │
-│ relaxed.cluster wait only                    │ failed at launch 33          │
-│ relaxed.cluster arrive only                  │ failed at launch 4           │
-│ relaxed.cluster arrive/wait, no tcgen fences │ failed at launch 1,940       │
-│ relaxed.cluster arrive/wait + tcgen fences   │ 2 x 2,000 passes, then fail  │
-│ delay before replay-full publication         │ passed 5,000 launches        │
+│ Baseline handoff, no extra sync              │ failed at launch 62          │
+│ Inline `bar.sync 14, 256` on both sides      │ passed 10,000 launches        │
+│ Same inline sync restored after A/B removal  │ passed 5,000 launches         │
 └──────────────────────────────────────────────┴──────────────────────────────┘
 ```
 
-    The delay experiment is the discriminator: delaying **before** publication
-    makes the failure disappear, while delaying after publication does not fully
-    do so. That rules out the earlier "extra barrier merely needed for warp
-    convergence" explanation and shows the consumer is being allowed to observe
-    publication before TMEM contents are safe to consume. Replacing only one
-    side of the mbarrier edge with `relaxed.cluster` is insufficient, and using
-    both sides without the tcgen fences is also insufficient, matching the PTX
-    protocol rather than an arbitrary timing effect.
-  - Remaining kernel status: hand-patching the replay path with inline PTX makes
-    the failure much rarer but has not yet made the full kernel deterministic
-    under long stress. Later handoffs still flow through Triton's generic barrier
-    lowering, so the kernel remains a bad place to prove a one-off local fix.
-    The compiler fix needs to introduce a first-class tcgen thread-sync protocol
-    instead of asking user code to reconstruct it ad hoc with inline PTX.
-  - Plan updates: stop treating this as an application-local barrier-placement
-    bug. The next compiler task is to design the IR/lowering representation for
-    tcgen thread-sync edges, then add a focused regression that checks the
-    required fence + relaxed-cluster sequence in emitted PTX.
+    This is a real synchronization experiment, not a delay surrogate: the only
+    retained code change is the same named CTA barrier reached after replay
+    publication and after the MMA partition observes `replay_full_bar`.
+  - Secondary compiler finding from a scratch TMEM handoff reproducer:
+    repeated `ttng.tmem_load` operations can be CSE'd across intervening barrier
+    waits when the only producer lives in another warp-specialized partition.
+    That is separate from the retained kernel fix, but it confirms that
+    `ttng.wait_barrier` is not currently a strong enough dependency carrier for
+    all TMEM cross-partition protocols.
+  - Plan updates: treat the concrete replay bug as a missing cross-partition
+    synchronization primitive/lowering path, not as proof that all TMEM handoffs
+    need tcgen fences. The compiler follow-up is to add a first-class way to
+    express this rendezvous and a regression that checks the required shared
+    barrier appears in emitted PTX.
 
 ## Next Up
 
