@@ -41,6 +41,7 @@ add_triton_library(TritonAMDGPUToLLVM
     TritonGPUToLLVM
     TritonInstrumentToLLVM
     TritonAMDGPUIR
+    TritonAMDAnalysis
     LLVMCore
     LLVMPasses
     LLVMSupport

@@ -6,17 +6,18 @@ if(POLICY CMP0116)
   cmake_policy(SET CMP0116 OLD)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
-
-set(CMAKE_INCLUDE_CURRENT_DIR ON)
-
 project(triton CXX C)
 include(CTest)
 include(GNUInstallDirs)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-# Options
+################################################################################
+# Triton configuration
+################################################################################
+
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
 option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
@@ -174,7 +175,6 @@ if (TRITON_PARALLEL_LINK_JOBS)
     set(CMAKE_JOB_POOL_LINK link_job_pool)
 endif()
 
-
 # Ensure Python3 vars are set correctly
 # used conditionally in this file and by lit tests
 
@@ -213,10 +213,10 @@ else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS")
 endif()
 
-
-# #########
+################################################################################
 # LLVM
-# #########
+################################################################################
+
 if(NOT MLIR_DIR)
   set(MLIR_DIR ${LLVM_LIBRARY_DIR}/cmake/mlir)
 endif()
@@ -235,7 +235,10 @@ include(TableGen) # required by AddMLIR
 include(AddLLVM)
 include(AddMLIR)
 
+################################################################################
 # Utilities
+################################################################################
+
 function(add_triton_object name)
   cmake_parse_arguments(ARG "" "" "DEPENDS;LINK_LIBS" ${ARGN})
   add_library(${name} OBJECT)
@@ -243,9 +246,6 @@ function(add_triton_object name)
     PRIVATE ${ARG_UNPARSED_ARGUMENTS}
     INTERFACE $<TARGET_OBJECTS:${name}>
   )
-
-
-  # add_library(${name} OBJECT ${ARG_UNPARSED_ARGUMENTS})
   if(ARG_DEPENDS)
     add_dependencies(${name} ${ARG_DEPENDS})
   endif()
@@ -267,10 +267,13 @@ function(add_triton_plugin name)
   add_triton_object(${name} ${ARGN})
 endfunction()
 
+################################################################################
+# Compiler flags
+################################################################################
+
 # Disable warnings that show up in external code (gtest;pybind11)
 if(NOT MSVC)
   set(TRITON_DISABLE_EH_RTTI_FLAGS "$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti>")
-
   if(NOT TRITON_EXT_ENABLED)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
   else()
@@ -280,7 +283,6 @@ if(NOT MSVC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRITON_EXT_ENABLED=1")
   endif()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default ")
-
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4244 /wd4624 /wd4715 /wd4530")
 endif()
@@ -293,7 +295,6 @@ include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 include_directories(${PROJECT_SOURCE_DIR}/third_party)
 include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
 
-# link_directories(${LLVM_LIBRARY_DIR})
 add_subdirectory(include)
 add_subdirectory(lib)
 
@@ -304,9 +305,10 @@ if (NOT WIN32 AND NOT APPLE AND NOT BSD)
   link_libraries(stdc++fs)
 endif()
 
-# -----
+################################################################################
+# Python module
+################################################################################
 
-# ------
 if(TRITON_BUILD_PYTHON_MODULE)
   message(STATUS "Adding Python module")
   set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
@@ -372,13 +374,11 @@ if(TRITON_BUILD_PYTHON_MODULE)
     # LLVM
     LLVMPasses
     LLVMNVPTXCodeGen
-    # LLVMNVPTXAsmPrinter
     LLVMAMDGPUCodeGen
     LLVMAMDGPUAsmParser
 
     Python3::Module
     pybind11::headers
-
   )
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64
      CMAKE_SYSTEM_PROCESSOR MATCHES "arm64" OR # macOS arm64
@@ -424,7 +424,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
-
 
   # Do not propagate libraries that libtriton depends on. This ensures that
   # targets that link against libtriton do not accidentally link in their own
@@ -516,7 +515,9 @@ if(TRITON_BUILD_UT)
   )
 endif()
 
+################################################################################
 # Header installation
+################################################################################
 
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
   COMPONENT headers

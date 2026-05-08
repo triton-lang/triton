@@ -421,8 +421,9 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
     // 2× ensures the stride (in dwords) is an odd multiple of the combined
     // row-access width, distributing all 16 lanes' bank accesses across
     // disjoint banks and eliminating conflicts for tile widths >= 32.
-    if (auto ldsParams = targetInfo.queryLDSTransLoadParams(typeWidthInBit)) {
-      padAmount = 2 * ldsParams->instBitWidth / typeWidthInBit;
+    auto ldsParamsVec = targetInfo.queryLDSTransLoadParams(typeWidthInBit);
+    if (!ldsParamsVec.empty()) {
+      padAmount = 2 * ldsParamsVec[0].instBitWidth / typeWidthInBit;
     }
   } else {
     // Non-transposed path: each cycle 16 lanes at distinct nonK rows load

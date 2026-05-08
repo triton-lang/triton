@@ -155,6 +155,16 @@ int TargetInfo::getSharedMemorySize() const {
   }
 }
 
+int TargetInfo::getSharedMemoryBanks() const {
+  switch (getISAFamily()) {
+  case ISAFamily::GFX1250:
+  case ISAFamily::CDNA4:
+    return 64;
+  default:
+    return 32;
+  }
+}
+
 size_t TargetInfo::getSharedMemoryPartitionSize() const {
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:
@@ -210,7 +220,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
-std::optional<TargetInfo::LDSTransLoadParams>
+SmallVector<TargetInfo::LDSTransLoadParams>
 TargetInfo::queryLDSTransLoadParams(int bitWidth) const {
   auto isaFamily = getISAFamily();
   // Determine LDSTrans version: V1 (CDNA4), V2 (GFX1250)
@@ -222,28 +232,26 @@ TargetInfo::queryLDSTransLoadParams(int bitWidth) const {
   }
 
   if (version == NONE || !llvm::is_contained({16, 8, 4, 6}, bitWidth))
-    return std::nullopt;
+    return {};
 
   unsigned numLanesInShuffleGroup = getWarpSize() / 4;
-  unsigned instBitWidth;
-  bool doubleB8Contiguity;
+
+  auto ldsTransParams = [&](unsigned instBitWidth,
+                            TileKind kind) -> LDSTransLoadParams {
+    return {numLanesInShuffleGroup, instBitWidth, instBitWidth / bitWidth,
+            kind};
+  };
 
   switch (version) {
   case V1:
-    instBitWidth = 64;
-    doubleB8Contiguity = false;
-    break;
+    return {ldsTransParams(64, TileKind::Standard)};
   case V2:
-    instBitWidth = (bitWidth == 16) ? 128 : 64;
-    doubleB8Contiguity = (bitWidth == 8);
-    break;
+    if (bitWidth == 8)
+      return {ldsTransParams(64, TileKind::DoubleContiguity)};
+    return {ldsTransParams(128, TileKind::Standard)};
   default:
-    return std::nullopt;
+    return {};
   }
-
-  unsigned tileSize = instBitWidth / bitWidth;
-  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth, tileSize,
-                            doubleB8Contiguity};
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -910,5 +918,26 @@ bool TargetInfo::supportDppBroadcast() const {
   }
 
   return false;
+}
+
+std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>
+TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA3:
+  case ISAFamily::RDNA1:
+  case ISAFamily::RDNA2:
+  case ISAFamily::RDNA3:
+    if (vecBitwidth == 128)
+      return {/*load tile*/ {{}, {0, 1, 4}}, /*store tile*/ {}};
+    break;
+  case ISAFamily::CDNA4:
+  case ISAFamily::GFX1250:
+    if (vecBitwidth == 128)
+      return {/*load tile*/ {{}, {0, 1, 3, 4}}, /*store tile*/ {}};
+    break;
+  default:
+    break;
+  }
+  return {{}, {}};
 }
 } // namespace mlir::triton::AMD

@@ -223,6 +223,102 @@ SmallVector<Value> scalarizeTDMDescriptor(RewriterBase &rewriter, Location loc,
   return scalars;
 }
 
+void updateTensorDescriptor(RewriterBase &rewriter, Location loc,
+                            Type elementType, ArrayRef<int64_t> blockShape,
+                            Value &group0, Value &group1,
+                            ArrayRef<Value> addOffsets,
+                            ArrayRef<Value> setBounds, Value dest, Value pred,
+                            Value barrier) {
+  size_t numDims = blockShape.size();
+  assert(numDims == 2 && "updateTensorDescriptor currently supports 2D");
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value v16 = b.i32_val(16);
+
+  // ---- add_offsets: bump global_addr ----
+  if (!addOffsets.empty()) {
+    auto elementBitWidth = elementType.getIntOrFloatBitWidth();
+    Value elemSize = b.i64_val(elementBitWidth / 8);
+
+    // Decode current 48-bit global_addr from group0[2:3] (valid bit masked).
+    Value addrLo = vecGet(b, group0, 2);
+    Value addrHi = b.and_(vecGet(b, group0, 3), b.i32_val(0x7FFFFFFF));
+    Value addr = b.or_(b.zext(i64_ty, addrLo),
+                       b.shl(b.zext(i64_ty, addrHi), b.i64_val(32)));
+
+    // Byte delta:
+    //   addOffsets[1] (innermost, stride 1) +
+    //   addOffsets[0] * tensor_dim0_stride (from group1[5]),
+    // all scaled by element size.  Promote to i64 before the multiply so
+    // addOffsets[0] * stride0 doesn't overflow i32 for large tensors.
+    // Offsets are signed (advancing backward is allowed) so sext; stride is
+    // unsigned so zext.
+    Value stride0 = vecGet(b, group1, 5);
+    Value off0_64 = b.sext(i64_ty, addOffsets[0]);
+    Value off1_64 = b.sext(i64_ty, addOffsets[1]);
+    Value stride0_64 = b.zext(i64_ty, stride0);
+    Value deltaElem = b.add(off1_64, b.mul(off0_64, stride0_64));
+    Value byteDelta = b.mul(deltaElem, elemSize);
+    addr = b.add(addr, byteDelta);
+
+    // Re-pack, restoring the valid bit in group0[3] bit 31.
+    Value newLo = b.trunc(i32_ty, addr);
+    Value newHi = b.trunc(i32_ty, b.lshr(addr, b.i64_val(32)));
+    newHi = b.or_(newHi, b.i32_val(1 << 31));
+    group0 = vecSet(b, group0, 2, newLo);
+    group0 = vecSet(b, group0, 3, newHi);
+  }
+
+  // ---- set_bounds: absolute rewrite of tensor_dim ----
+  // tensor_dim_inner (setBounds[1] for 2D) spans
+  //   group1[1] hi-16 | group1[2] lo-16
+  // tensor_dim_outer (setBounds[0]) spans
+  //   group1[2] hi-16 | group1[3] lo-16
+  if (!setBounds.empty()) {
+    auto stampDim = [&](int loDword, int hiDword, Value newDim) {
+      // loDword: keep lo-16, replace hi-16 with (newDim & 0xFFFF) << 16
+      Value loHi = b.shl(b.and_(newDim, b.i32_val(0xFFFF)), v16);
+      Value g_lo = b.or_(
+          b.and_(vecGet(b, group1, loDword), b.i32_val(0x0000FFFF)), loHi);
+      group1 = vecSet(b, group1, loDword, g_lo);
+      // hiDword: keep hi-16, replace lo-16 with (newDim >> 16) & 0xFFFF
+      Value hiLo = b.and_(b.lshr(newDim, v16), b.i32_val(0xFFFF));
+      Value g_hi = b.or_(
+          b.and_(vecGet(b, group1, hiDword), b.i32_val(0xFFFF0000)), hiLo);
+      group1 = vecSet(b, group1, hiDword, g_hi);
+    };
+    stampDim(/*loDword=*/1, /*hiDword=*/2, setBounds[1]); // inner
+    stampDim(/*loDword=*/2, /*hiDword=*/3, setBounds[0]); // outer
+  }
+
+  // ---- dest: rewrite lds_addr in group0[1] ----
+  if (dest) {
+    Value ldsAddr = b.ptrtoint(i32_ty, dest);
+    group0 = vecSet(b, group0, 1, ldsAddr);
+  }
+
+  // ---- pred: rewrite group0[0] ----
+  if (pred) {
+    // Note: this clobbers any mode bits stored in group0[0] (gather/scatter
+    // mode bit in bit 31, index-size bit in bit 30).  TODO: Gather/scatter
+    // mutation is not yet supported here; a future revision should preserve
+    // them.
+    group0 = vecSet(b, group0, 0, pred);
+  }
+
+  // ---- barrier: enable bit (group1[0] bit 18) + addr (group1[1] lo-16) ----
+  if (barrier) {
+    Value g1_0 = vecGet(b, group1, 0);
+    Value g1_1 = vecGet(b, group1, 1);
+    g1_0 = b.or_(g1_0, b.shl(b.i32_val(1), b.i32_val(18)));
+    g1_1 = b.or_(b.and_(g1_1, b.i32_val(0xFFFF0000)),
+                 b.and_(b.lshr(b.ptrtoint(i32_ty, barrier), b.i32_val(3)),
+                        b.i32_val(0x0000FFFF)));
+    group1 = vecSet(b, group1, 0, g1_0);
+    group1 = vecSet(b, group1, 1, g1_1);
+  }
+}
+
 // Decode a full TDM descriptor from all 4 group vectors for 3D-5D tensors
 // Returns (base, tensorShape[], tensorStride[], blockShape[])
 std::tuple<Value, SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
