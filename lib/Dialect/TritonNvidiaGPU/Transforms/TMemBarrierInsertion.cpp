@@ -22,7 +22,7 @@ namespace {
 
 namespace ttg = triton::gpu;
 
-enum class TMemAccessKind { None, Load, Store, Alloc, MMA };
+enum class TMemAccessKind { None, Load, Store, MMA };
 
 // Keep row groups far apart so per-row column intervals do not alias after
 // flattening the physical 2D tensor-memory address space into 1D intervals.
@@ -30,27 +30,25 @@ static constexpr size_t kFlattenedRowStride = size_t{1} << 32;
 static constexpr int kAllocRowGranularity = 64;
 static constexpr int kRowOffsetGranularity = 16;
 
-static TMemAccessKind getTMemAccessKind(Operation *op) {
-  if (isa<TMEMLoadOp>(op))
-    return TMemAccessKind::Load;
-  if (isa<TMEMStoreOp>(op))
-    return TMemAccessKind::Store;
-  if (isa<TMEMAllocOp>(op))
-    return TMemAccessKind::Alloc;
-  if (isa<TCGen5MMAOp>(op))
-    return TMemAccessKind::MMA;
-  return TMemAccessKind::None;
-}
-
+// Fine grain modeling of TMEM ops as pipelining behavior is not fully
+// represented in ops attributes.
 static bool isWritingAlloc(Operation *op) {
   auto alloc = dyn_cast<TMEMAllocOp>(op);
   return alloc && alloc.getSrc();
 }
 
+static TMemAccessKind getTMemAccessKind(Operation *op) {
+  if (isa<TMEMLoadOp>(op))
+    return TMemAccessKind::Load;
+  if (isa<TMEMStoreOp>(op) || isWritingAlloc(op))
+    return TMemAccessKind::Store;
+  if (isa<TCGen5MMAOp>(op))
+    return TMemAccessKind::MMA;
+  return TMemAccessKind::None;
+}
+
 static bool isStoreLike(Operation *op) {
-  TMemAccessKind kind = getTMemAccessKind(op);
-  return kind == TMemAccessKind::Store ||
-         (kind == TMemAccessKind::Alloc && isWritingAlloc(op));
+  return getTMemAccessKind(op) == TMemAccessKind::Store;
 }
 
 static bool filterFn(Operation *lhs, Operation *rhs, bool /*lhsIsRead*/,
@@ -161,8 +159,8 @@ static SmallVector<AllocationSlice> getTMemSlices(Value value) {
 
   SmallVector<AllocationSlice> slices;
   if (unknown || allocs.empty()) {
-    slices.emplace_back(Interval<size_t>(
-        0, std::numeric_limits<size_t>::max()));
+    slices.emplace_back(
+        Interval<size_t>(0, std::numeric_limits<size_t>::max()));
     return slices;
   }
 
@@ -173,8 +171,8 @@ static SmallVector<AllocationSlice> getTMemSlices(Value value) {
         alloc->getAttrOfType<IntegerAttr>("tensor_memory_row_offset");
     if (!colAttr || !rowAttr) {
       slices.clear();
-      slices.emplace_back(Interval<size_t>(
-          0, std::numeric_limits<size_t>::max()));
+      slices.emplace_back(
+          Interval<size_t>(0, std::numeric_limits<size_t>::max()));
       return slices;
     }
 
@@ -184,26 +182,23 @@ static SmallVector<AllocationSlice> getTMemSlices(Value value) {
     if (rowOffset % kRowOffsetGranularity != 0 ||
         allocSize.numRows % kAllocRowGranularity != 0) {
       slices.clear();
-      slices.emplace_back(Interval<size_t>(
-          0, std::numeric_limits<size_t>::max()));
+      slices.emplace_back(
+          Interval<size_t>(0, std::numeric_limits<size_t>::max()));
       return slices;
     }
 
     int64_t rowGroup = rowOffset / kRowOffsetGranularity;
     int64_t numRowGroups = allocSize.numRows / kAllocRowGranularity;
     for (int64_t row = 0; row < numRowGroups; ++row) {
-      size_t start =
-          static_cast<size_t>(rowGroup + row) * kFlattenedRowStride +
-          static_cast<size_t>(colOffset);
-      slices.emplace_back(
-          Interval<size_t>(start, start + allocSize.numCols));
+      size_t start = static_cast<size_t>(rowGroup + row) * kFlattenedRowStride +
+                     static_cast<size_t>(colOffset);
+      slices.emplace_back(Interval<size_t>(start, start + allocSize.numCols));
     }
   }
   return slices;
 }
 
-static void appendReadSlices(Value value, Operation *op,
-                             BlockInfo *blockInfo) {
+static void appendReadSlices(Value value, Operation *op, BlockInfo *blockInfo) {
   if (!isTensorMemory(value))
     return;
   for (AllocationSlice slice : getTMemSlices(value))
@@ -231,8 +226,7 @@ public:
 
 private:
   void update(Operation *operation, BlockInfo *blockInfo,
-              FuncBlockInfoMapT *funcBlockInfoMap,
-              OpBuilder *builder) override;
+              FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder) override;
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
 };
