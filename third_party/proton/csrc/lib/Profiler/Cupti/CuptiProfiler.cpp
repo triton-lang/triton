@@ -546,9 +546,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
             flexibleMetricEntryContexts.push_back(
                 std::string(GraphState::metricTag));
           }
-          auto flexibleMetricEntry = data->addOp(
-              Data::kVirtualPhase, Data::kRootEntryId,
-              flexibleMetricEntryContexts);
+          auto flexibleMetricEntry =
+              data->addOp(Data::kVirtualPhase, Data::kRootEntryId,
+                          flexibleMetricEntryContexts);
           graphState.metricNodeIdToState.at(nodeId)
               .dataToEntryId.insert_or_assign(data, flexibleMetricEntry.id);
         }
