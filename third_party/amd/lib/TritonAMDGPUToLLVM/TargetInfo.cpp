@@ -155,6 +155,16 @@ int TargetInfo::getSharedMemorySize() const {
   }
 }
 
+int TargetInfo::getSharedMemoryBanks() const {
+  switch (getISAFamily()) {
+  case ISAFamily::GFX1250:
+  case ISAFamily::CDNA4:
+    return 64;
+  default:
+    return 32;
+  }
+}
+
 size_t TargetInfo::getSharedMemoryPartitionSize() const {
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:
@@ -908,5 +918,26 @@ bool TargetInfo::supportDppBroadcast() const {
   }
 
   return false;
+}
+
+std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>
+TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA3:
+  case ISAFamily::RDNA1:
+  case ISAFamily::RDNA2:
+  case ISAFamily::RDNA3:
+    if (vecBitwidth == 128)
+      return {/*load tile*/ {{}, {0, 1, 4}}, /*store tile*/ {}};
+    break;
+  case ISAFamily::CDNA4:
+  case ISAFamily::GFX1250:
+    if (vecBitwidth == 128)
+      return {/*load tile*/ {{}, {0, 1, 3, 4}}, /*store tile*/ {}};
+    break;
+  default:
+    break;
+  }
+  return {{}, {}};
 }
 } // namespace mlir::triton::AMD

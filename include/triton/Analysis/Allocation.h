@@ -2,6 +2,7 @@
 #define TRITON_ANALYSIS_ALLOCATION_H
 
 #include "triton/Analysis/Utility.h"
+#include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
@@ -21,10 +22,15 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,
-                                       int bitwidth);
+                                       int bitwidth, int numBanks = 32,
+                                       gpu::LocalMemOpTile srcTile = {},
+                                       gpu::LocalMemOpTile dstTile = {});
 
 unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
-                                       RankedTensorType dstTy);
+                                       RankedTensorType dstTy,
+                                       int numBanks = 32,
+                                       gpu::LocalMemOpTile srcTile = {},
+                                       gpu::LocalMemOpTile dstTile = {});
 
 } // namespace triton
 

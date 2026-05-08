@@ -103,7 +103,10 @@ struct ConvertTritonAMDGPUToLLVM
     TritonLLVMConversionTarget convTarget(*context);
 
     // Allocate shared memory and set barrier
-    ModuleAllocation allocation(mod, AMD::AMDAllocationAnalysisScratchSizeFn,
+    auto allocationFn = [&targetInfo](Operation *op) {
+      return AMD::AMDAllocationAnalysisScratchSizeFn(op, targetInfo);
+    };
+    ModuleAllocation allocation(mod, allocationFn,
                                 targetInfo.getSharedMemoryPartitionSize());
 
     if (targetInfo.requiresAliasInfoForAsyncOps())
