@@ -945,8 +945,10 @@ across the important batch regime.
     fence that current membar analysis can infer. In the failing second-tile
     path, `test-print-membar` leaves
     `ttng.wait_barrier %x_ready_bar -> ttng.tc_gen5_mma_scaled` adjacent when the
-    source `gl.barrier()` is removed; it only inserts barriers before waits for
-    normal memory hazards. LLIR still contains MMAv5 lowering’s one
+    source `gl.barrier()` is removed; `ttng.wait_barrier` is not a
+    `MemWaitOpTrait`, so the generic post-wait insertion rule in
+    `Membar.cpp` does not apply, and the pass only inserts barriers before waits
+    for ordinary shared-memory hazards here. LLIR still contains MMAv5 lowering’s one
     partition-local barrier before the single-issuer block, but SASS shows that
     as one `BAR.SYNC.DEFER_BLOCKING 0x6, 0x80`; the retained source form yields
     two back-to-back deferred barriers before the issuer path and is the form
