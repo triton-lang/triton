@@ -60,10 +60,10 @@ static bool filterFn(Operation *lhs, Operation *rhs, bool /*lhsIsRead*/,
   bool raw = isStoreLike(lhs) && rhsKind == TMemAccessKind::Load;
   bool waw = isStoreLike(lhs) && isStoreLike(rhs);
 
-  // MMA is special here: the tensor core consumes TMEM outside the ordinary
-  // register load/store path, so both load->mma and store->mma need explicit
-  // ordering even though the generic read/write framework does not model the
-  // former as a normal dependency.
+  // MMA is special case, we care about load->mma and store->mma dependencies
+  // but mma -> load/store doesn't require a barrier since it would need a
+  // mbarrier wait that will ensure the mma is finished before any thread can
+  // reach the load/store.
   bool loadToMma =
       lhsKind == TMemAccessKind::Load && rhsKind == TMemAccessKind::MMA;
   bool storeToMma = isStoreLike(lhs) && rhsKind == TMemAccessKind::MMA;
