@@ -1248,6 +1248,12 @@ across the important batch regime.
     question is whether the live corruption comes from tail-only cursor
     advancement, tail MMA completion, or the phase relationship created when the
     next block begins after an odd tail.
+  - Standalone handoff:
+    `python/examples/gluon/replay_sync_tail_race_repro.py` is now the smallest
+    faithful one-file repro kept in the repo. It is a reduced copy of the live
+    kernel with `replay_mma_bar_sync()` made a no-op locally and the
+    `17 * 128` / `bs=512` workload hardcoded in `run_repro()`. On the first run
+    after creation it failed at launch `2` with `maxdiff=0.21484375`.
 
 ## Next Up
 
