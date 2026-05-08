@@ -1346,11 +1346,20 @@ across the important batch regime.
     full `2048`-entry gather payload because it fails sooner (`FAIL launch=20`
     in the same harness), but the now-known smaller failing payload is only ten
     rows beyond the locally scheduled work.
+  - Device-path reduction checkpoint:
+    two whole device-side generality paths are now proven unnecessary and have
+    been removed from the standalone repro source. First, the failure survives
+    plain row-major `(pid_m, pid_n)` scheduling, so the banded-`N` scheduler
+    path is gone and `apply_block_schedule()` now uses only
+    `schedule_pid_m = block_id // GRID_N` and `pid_n = block_id % GRID_N`.
+    Second, the failure survives `SWIGLU_SUBTILE_FACTOR=1`, so the epilogue
+    subtiling helpers and loop are gone; the repro now emits one direct
+    epilogue store per accumulator tile.
   - Current reduced validation:
     after the routing freeze plus RNG burn, the focused command
     `PYTHONPATH=python:python/triton_kernels timeout 120s python3 python/examples/gluon/replay_sync_tail_race_repro.py`
-    failed twice in a row, most recently with `FAIL launch=17 maxdiff=0.3671875`
-    and `FAIL launch=75 maxdiff=0.3125`.
+    still fails, and after removing banded scheduling plus epilogue subtiling
+    it most recently reported `FAIL launch=1 maxdiff=0.25`.
 
 ## Next Up
 

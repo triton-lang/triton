@@ -50,34 +50,15 @@ def unpack_block_schedule(schedule: gl.tensor) -> tuple[gl.tensor, gl.tensor]:
 
 
 @gluon.jit
-def banded_row_major(block_id, grid_m, GRID_N: gl.constexpr, BAND_N: gl.constexpr):
-    if BAND_N >= GRID_N:
-        return block_id // GRID_N, block_id % GRID_N
-
-    full_band_tiles = grid_m * BAND_N
-    n_full_bands = GRID_N // BAND_N
-    full_band_work = n_full_bands * full_band_tiles
-
-    if block_id < full_band_work:
-        band_id = block_id // full_band_tiles
-        within_band = block_id % full_band_tiles
-        return within_band // BAND_N, band_id * BAND_N + (within_band % BAND_N)
-
-    tail_n = GRID_N - n_full_bands * BAND_N
-    tail_idx = block_id - full_band_work
-    return tail_idx // tail_n, n_full_bands * BAND_N + (tail_idx % tail_n)
-
-
-@gluon.jit
 def apply_block_schedule(
     block_id: gl.tensor,
     grid_m: gl.tensor,
     GRID_N: gl.constexpr,
     slice_offsets: gl.tensor,
     block_schedule: gl.tensor,
-    BAND_N: gl.constexpr,
 ) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
-    schedule_pid_m, pid_n = banded_row_major(block_id, grid_m, GRID_N, BAND_N=BAND_N)
+    schedule_pid_m = block_id // GRID_N
+    pid_n = block_id % GRID_N
 
     slice_idx, pid_m = unpack_block_schedule(gl.load(block_schedule + schedule_pid_m))
     slice_offset = gl.load(slice_offsets + slice_idx)
@@ -177,31 +158,6 @@ def pack_fp8x4(values):
     return pack_u16x2(lhs, rhs)
 
 
-@gluon.jit
-def _split_m(values):
-    return gl.split(values.reshape((2, values.shape[0] // 2, values.shape[1])).permute((1, 2, 0)))
-
-
-@gluon.jit
-def _split_m_float2(values):
-    lhs, rhs = _split_m(values.value)
-    return float2.Float2Tensor(lhs), float2.Float2Tensor(rhs)
-
-
-@gluon.jit
-def split_m_subtiles(values, subtile_factor: gl.constexpr):
-    # For epilogue subtiling.
-    subtiles = (values,)
-    for split_level in gl.static_range(5):
-        if (1 << split_level) < subtile_factor:
-            next_subtiles = ()
-            for subtile_idx in gl.static_range(1 << split_level):
-                lhs, rhs = _split_m_float2(subtiles[subtile_idx])
-                next_subtiles += (lhs, rhs)
-            subtiles = next_subtiles
-    return subtiles
-
-
 @gluon.aggregate
 class PartitionArgs:
     x_desc: tma.tensor_descriptor
@@ -269,9 +225,6 @@ class PartitionArgs:
     REDUCTION_N: gl.constexpr
     FLEXPOINT_SATURATE_INF: gl.constexpr
 
-    SWIGLU_SUBTILE_FACTOR: gl.constexpr
-    BAND_N: gl.constexpr
-
     @gluon.jit
     def apply_block_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
         return apply_block_schedule(
@@ -280,7 +233,6 @@ class PartitionArgs:
             GRID_N=self.GRID_N,
             slice_offsets=self.x_slice_offs,
             block_schedule=self.x_block_schedule,
-            BAND_N=self.BAND_N,
         )
 
 
@@ -694,9 +646,8 @@ def pack_fp8_out_fragment(out_packed, out_recip):
 
 @gluon.jit
 def get_store_layout(p: PartitionArgs):
-    frag_rows: gl.constexpr = p.BLOCK_M // p.SWIGLU_SUBTILE_FACTOR
     return gl.BlockedLayout(
-        [frag_rows // gl.num_warps(), 2],
+        [p.BLOCK_M // gl.num_warps(), 2],
         [1, 32],
         [gl.num_warps(), 1],
         [1, 0],
@@ -714,20 +665,17 @@ def epilogue_direct_store(
     slice_offset,
     store_layout: gl.constexpr,
 ):
-    frag_rows: gl.constexpr = p.BLOCK_M // p.SWIGLU_SUBTILE_FACTOR
-    acc_packed_subtiles = split_m_subtiles(acc_packed, p.SWIGLU_SUBTILE_FACTOR)
-    for frag_idx in gl.static_range(p.SWIGLU_SUBTILE_FACTOR):
-        gelu, linear = _swiglu_step1(acc_packed_subtiles[frag_idx], p.SWIGLU_LIMIT)
-        out_packed = _swiglu_step2(gelu, linear, p.SWIGLU_ALPHA)
-        packed_fp8 = gl.convert_layout(pack_fp8_out_fragment(out_packed, out_recip), store_layout)
-        store_packed_out(
-            p,
-            packed_fp8,
-            off_m + frag_idx * frag_rows,
-            out_off_n_packed,
-            shape_m,
-            slice_offset,
-        )
+    gelu, linear = _swiglu_step1(acc_packed, p.SWIGLU_LIMIT)
+    out_packed = _swiglu_step2(gelu, linear, p.SWIGLU_ALPHA)
+    packed_fp8 = gl.convert_layout(pack_fp8_out_fragment(out_packed, out_recip), store_layout)
+    store_packed_out(
+        p,
+        packed_fp8,
+        off_m,
+        out_off_n_packed,
+        shape_m,
+        slice_offset,
+    )
 
 
 @gluon.jit
@@ -865,8 +813,6 @@ def ws_matmul_kernel(
     REPLAY_REGS: gl.constexpr,
     MMA_REGS: gl.constexpr,
     #
-    SWIGLU_SUBTILE_FACTOR: gl.constexpr,
-    BAND_N: gl.constexpr,
     SCALE_SIZE_OUTER: gl.constexpr,
     SCALE_SIZE_INNER: gl.constexpr,
     MXFP_BLOCK_SIZE: gl.constexpr,
@@ -1008,9 +954,6 @@ def ws_matmul_kernel(
         SWIGLU_LIMIT=SWIGLU_LIMIT,
         REDUCTION_N=REDUCTION_N,
         FLEXPOINT_SATURATE_INF=FLEXPOINT_SATURATE_INF,
-        #
-        SWIGLU_SUBTILE_FACTOR=SWIGLU_SUBTILE_FACTOR,
-        BAND_N=BAND_N,
     )
 
     gl.warp_specialize(
@@ -1100,9 +1043,6 @@ class KernelConfig:
     LOAD_WEIGHT_SCALES_WARPS: int = 1
     REPLAY_WARPS: int = 4
     MMA_WARPS: int = 4
-
-    SWIGLU_SUBTILE_FACTOR: int = 8
-    BAND_N: int = 18
 
     LOAD_ACTIVATION_REGS: int = 32
     LOAD_WEIGHT_REGS: int = 24
@@ -1236,9 +1176,6 @@ def matmul(
         LOAD_WEIGHT_SCALES_REGS=p.LOAD_WEIGHT_SCALES_REGS,
         REPLAY_REGS=p.REPLAY_REGS,
         MMA_REGS=p.MMA_REGS,
-        #
-        SWIGLU_SUBTILE_FACTOR=p.SWIGLU_SUBTILE_FACTOR,
-        BAND_N=p.BAND_N,
         #
         SCALE_SIZE_OUTER=p.SCALE_SIZE_OUTER,
         SCALE_SIZE_INNER=p.SCALE_SIZE_INNER,
