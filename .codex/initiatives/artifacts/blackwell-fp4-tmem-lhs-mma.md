@@ -892,6 +892,23 @@ across the important batch regime.
     swapped replay design. The next material experiment should be a large-M
     non-swapped dataflow; because RHS TMEM is not implemented today, that likely
     means replaying the odd packed tile through shared memory instead.
+- `2026-05-08` Completed: checked the 1CTA MMA-loop barriers in lowered IR.
+  - Artifacts: `/tmp/mma24_dump/7ZPHMPMTAR4JDCNMH5TM5AELXQLJJS34SNHF54TV23SZ7ES62NTA/ws_matmul_kernel.llir`;
+    `third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/DotOpToLLVM/MMAv5.cpp`.
+  - Validation: mapped the explicit source barriers at lines `528`, `611`, and
+    `657` to LLIR debug locations `!185`, `!218`, and `!249`, then matched the
+    adjacent LLIR barriers at `!186`, `!219`, and `!250` to the following
+    `tcgen05_mma_scaled` calls.
+  - Learnings: when `tcgen05_mma_scaled` has completion barriers, MMAv5 lowering
+    emits its own partition-local CTA barrier before branching into the
+    single-issuer MMA block. In the current 1CTA path that produces two adjacent
+    `barrier.cta.sync.aligned.count 6, 128` instructions before each MMA: the
+    explicit `gl.barrier()` and the lowering-generated MMA barrier. The explicit
+    MMA-loop barriers are therefore a real redundancy candidate, not a required
+    property inferred only from source-level reasoning.
+  - Plan updates: test deleting the explicit pre-MMA `gl.barrier()` calls with
+    repeated correctness, ConSan, and same-input 16k timing before deciding
+    whether to retain them.
 
 ## Next Up
 
