@@ -718,60 +718,36 @@ def replay_partition(p: PartitionArgs):
                 replay_empty_bar = p.replay_empty_bars.index(replay_idx)
                 replay_full_bar = p.replay_full_bars.index(replay_idx)
                 mbarrier.wait(replay_empty_bar, replay_empty_phase)
-                if p.REPLAY_VIA_TMEM_COPY:
-                    dense_replay_tmem = p.dense_replay_tmem
-                    dense_pair_words = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))._reinterpret(
-                        gl.uint32,
-                        (p.BLOCK_N, p.BLOCK_K // 4),
-                        dense_pair_layout,
-                    )
-                    blackwell.tcgen05_copy(dense_pair_words, dense_replay_tmem)
-                    blackwell.tcgen05_commit(p.dense_copy_done_bar)
-                    replay_mma_wait_relaxed_cluster(p.dense_copy_done_bar, dense_copy_phase, dense_copy_phase)
-                    dense_copy_phase = dense_copy_phase ^ 1
+                dense_replay_tmem = p.dense_replay_tmem
+                dense_pair_words = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))._reinterpret(
+                    gl.uint32,
+                    (p.BLOCK_N, p.BLOCK_K // 4),
+                    dense_pair_layout,
+                )
+                blackwell.tcgen05_copy(dense_pair_words, dense_replay_tmem)
+                blackwell.tcgen05_commit(p.dense_copy_done_bar)
+                replay_mma_wait_relaxed_cluster(p.dense_copy_done_bar, dense_copy_phase, dense_copy_phase)
+                dense_copy_phase = dense_copy_phase ^ 1
 
-                    # Once the async copy finishes, shared memory is no longer
-                    # needed by the replay side. Release the slot before the
-                    # TMEM load/unpack work so the next TMA can overlap it.
-                    blackwell.fence_async_shared()
-                    mbarrier.arrive(w_empty_bar)
-                    w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+                # Once the async copy finishes, shared memory is no longer
+                # needed by the replay side. Release the slot before the
+                # TMEM load/unpack work so the next TMA can overlap it.
+                blackwell.fence_async_shared()
+                mbarrier.arrive(w_empty_bar)
+                w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
 
-                    replay_cols: gl.constexpr = p.BLOCK_K // 4 // p.REPLAY_K_SUBTILE_FACTOR
-                    replay_segments: gl.constexpr = p.BLOCK_K // 16 // p.REPLAY_K_SUBTILE_FACTOR
-                    for replay_frag_idx in gl.static_range(p.REPLAY_K_SUBTILE_FACTOR):
-                        dense_frag = dense_replay_tmem.slice(replay_frag_idx * replay_cols, replay_cols)
-                        replay_frag = replay_tmem.slice(replay_frag_idx * replay_cols, replay_cols)
-                        dense_words = dense_frag.load()
-                        dense_words = dense_words.reshape((p.BLOCK_N, replay_segments, 2, 2)).permute((0, 1, 3, 2))
-                        _, dense_words = gl.split(dense_words)
-                        dense_words = dense_words.reshape((1, 1, 1, p.BLOCK_N, replay_segments, 2))
-                        lo, hi = fp4_prmt_shuffle_elements(dense_words)
-                        k_second = gl.join(lo, hi).reshape([p.BLOCK_N, replay_cols])
-                        replay_frag.store(gl.convert_layout(k_second, replay_frag.get_reg_layout()))
-                else:
-                    mbarrier.wait(p.replay_ready_bar, replay_ready_phase)
-                    replay_ready_phase = replay_ready_phase ^ 1
-
-                    seg_base_word = local_n * (p.BLOCK_K // 4) + 4 * (seg ^ (local_n & 7))
-                    seg_base_addr = w_buf.to_i32() + 4 * seg_base_word + 0 * replay_word
-                    _, _, replay0, replay1 = gl.inline_asm_elementwise(
-                        "ld.shared.v4.b32 {$0, $1, $2, $3}, [$4];",
-                        "=r,=r,=r,=r,r",
-                        [seg_base_addr],
-                        dtype=(gl.uint32, gl.uint32, gl.uint32, gl.uint32),
-                        is_pure=True,
-                        pack=1,
-                    )
-                    k_second = gl.where(replay_word == 0, replay0, replay1)
-                    blackwell.fence_async_shared()
-                    mbarrier.arrive(w_empty_bar)
-                    w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
-
-                if not p.REPLAY_VIA_TMEM_COPY:
-                    lo, hi = fp4_prmt_shuffle_elements(k_second)
-                    k_second = gl.join(lo, hi).reshape([p.BLOCK_N, p.BLOCK_K // 4])
-                    replay_tmem.store(k_second)
+                replay_cols: gl.constexpr = p.BLOCK_K // 4 // p.REPLAY_K_SUBTILE_FACTOR
+                replay_segments: gl.constexpr = p.BLOCK_K // 16 // p.REPLAY_K_SUBTILE_FACTOR
+                for replay_frag_idx in gl.static_range(p.REPLAY_K_SUBTILE_FACTOR):
+                    dense_frag = dense_replay_tmem.slice(replay_frag_idx * replay_cols, replay_cols)
+                    replay_frag = replay_tmem.slice(replay_frag_idx * replay_cols, replay_cols)
+                    dense_words = dense_frag.load()
+                    dense_words = dense_words.reshape((p.BLOCK_N, replay_segments, 2, 2)).permute((0, 1, 3, 2))
+                    _, dense_words = gl.split(dense_words)
+                    dense_words = dense_words.reshape((1, 1, 1, p.BLOCK_N, replay_segments, 2))
+                    lo, hi = fp4_prmt_shuffle_elements(dense_words)
+                    k_second = gl.join(lo, hi).reshape([p.BLOCK_N, replay_cols])
+                    replay_frag.store(gl.convert_layout(k_second, replay_frag.get_reg_layout()))
                 mbarrier.arrive(replay_full_bar)
                 replay_idx, replay_empty_phase = advance(replay_idx, replay_empty_phase, 2)
 
