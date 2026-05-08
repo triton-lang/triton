@@ -41,19 +41,17 @@ def advance(idx: gl.tensor, phase: gl.tensor, num_bufs: gl.constexpr) -> tuple[g
 @gluon.jit
 def apply_block_schedule(
     block_id: gl.tensor,
-    GRID_N: gl.constexpr,
     block_pid_m: gl.tensor,
+    block_pid_n: gl.tensor,
     block_slice_idx: gl.tensor,
     block_slice_offs: gl.tensor,
     block_shape_m: gl.tensor,
 ) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
-    schedule_pid_m = block_id // GRID_N
-    pid_n = block_id % GRID_N
-
-    pid_m = gl.load(block_pid_m + schedule_pid_m)
-    slice_idx = gl.load(block_slice_idx + schedule_pid_m)
-    slice_offset = gl.load(block_slice_offs + schedule_pid_m)
-    shape_m = gl.load(block_shape_m + schedule_pid_m)
+    pid_m = gl.load(block_pid_m + block_id)
+    pid_n = gl.load(block_pid_n + block_id)
+    slice_idx = gl.load(block_slice_idx + block_id)
+    slice_offset = gl.load(block_slice_offs + block_id)
+    shape_m = gl.load(block_shape_m + block_id)
 
     return pid_m, pid_n, slice_idx, slice_offset, shape_m
 
@@ -157,10 +155,11 @@ class PartitionArgs:
     scale_desc: tma.tensor_descriptor
 
     out_ptr: gl.tensor
-    x_block_pid_m: gl.tensor
-    x_block_slice_idx: gl.tensor
-    x_block_slice_offs: gl.tensor
-    x_block_shape_m: gl.tensor
+    block_pid_m: gl.tensor
+    block_pid_n: gl.tensor
+    block_slice_idx: gl.tensor
+    block_slice_offs: gl.tensor
+    block_shape_m: gl.tensor
 
     x_bufs: gl.shared_memory_descriptor
     x_empty_bars: gl.shared_memory_descriptor
@@ -190,7 +189,6 @@ class PartitionArgs:
     dense_copy_done_bar: gl.shared_memory_descriptor
     unpack_sync_bar: gl.shared_memory_descriptor
 
-    GRID_N: gl.constexpr
     K_TILES: gl.constexpr
     SCALE_FLAT_N: gl.constexpr
     SCALE_BLOCK_N_DIV: gl.constexpr
@@ -210,11 +208,11 @@ class PartitionArgs:
     def apply_block_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
         return apply_block_schedule(
             block_id=block_id,
-            GRID_N=self.GRID_N,
-            block_pid_m=self.x_block_pid_m,
-            block_slice_idx=self.x_block_slice_idx,
-            block_slice_offs=self.x_block_slice_offs,
-            block_shape_m=self.x_block_shape_m,
+            block_pid_m=self.block_pid_m,
+            block_pid_n=self.block_pid_n,
+            block_slice_idx=self.block_slice_idx,
+            block_slice_offs=self.block_slice_offs,
+            block_shape_m=self.block_shape_m,
         )
 
 
@@ -700,10 +698,11 @@ def ws_matmul_kernel(
     scale_desc: tma.tensor_descriptor,
     out_ptr: gl.tensor,
     #
-    x_block_pid_m: gl.tensor,
-    x_block_slice_idx: gl.tensor,
-    x_block_slice_offs: gl.tensor,
-    x_block_shape_m: gl.tensor,
+    block_pid_m: gl.tensor,
+    block_pid_n: gl.tensor,
+    block_slice_idx: gl.tensor,
+    block_slice_offs: gl.tensor,
+    block_shape_m: gl.tensor,
     #
     N: gl.constexpr,
     K: gl.constexpr,
@@ -810,10 +809,11 @@ def ws_matmul_kernel(
         w_desc=w_desc,
         scale_desc=scale_desc,
         out_ptr=out_ptr,
-        x_block_pid_m=x_block_pid_m,
-        x_block_slice_idx=x_block_slice_idx,
-        x_block_slice_offs=x_block_slice_offs,
-        x_block_shape_m=x_block_shape_m,
+        block_pid_m=block_pid_m,
+        block_pid_n=block_pid_n,
+        block_slice_idx=block_slice_idx,
+        block_slice_offs=block_slice_offs,
+        block_shape_m=block_shape_m,
         #
         x_bufs=x_bufs,
         x_empty_bars=x_empty_bars,
@@ -843,7 +843,6 @@ def ws_matmul_kernel(
         dense_copy_done_bar=dense_copy_done_bar,
         unpack_sync_bar=unpack_sync_bar,
         #
-        GRID_N=grid_n,
         K_TILES=k_tiles,
         SCALE_FLAT_N=scale_flat_n,
         SCALE_BLOCK_N_DIV=scale_block_n_div,
@@ -990,6 +989,12 @@ def matmul(
     x_block_shape_m = a_ragged_metadata.slice_sizes[x_block_slice_idx.to(torch.int64)]
     grid_n = triton.cdiv(n, p.BLOCK_N)
     num_blocks = grid_m * grid_n
+    schedule_pid_m = torch.arange(num_blocks, device=c.device, dtype=torch.int64) // grid_n
+    block_pid_m = x_block_pid_m[schedule_pid_m]
+    block_pid_n = (torch.arange(num_blocks, device=c.device, dtype=torch.int32) % grid_n).to(torch.int32)
+    block_slice_idx = x_block_slice_idx[schedule_pid_m]
+    block_slice_offs = x_block_slice_offs[schedule_pid_m]
+    block_shape_m = x_block_shape_m[schedule_pid_m]
     sms = torch.cuda.get_device_properties(c.device).multi_processor_count
     sms *= p.OCCUPANCY
     launch_grid = max(1, min(sms, num_blocks))
@@ -1022,10 +1027,11 @@ def matmul(
         scale_desc=scale_desc,
         out_ptr=c,
         #
-        x_block_pid_m=x_block_pid_m,
-        x_block_slice_idx=x_block_slice_idx,
-        x_block_slice_offs=x_block_slice_offs,
-        x_block_shape_m=x_block_shape_m,
+        block_pid_m=block_pid_m,
+        block_pid_n=block_pid_n,
+        block_slice_idx=block_slice_idx,
+        block_slice_offs=block_slice_offs,
+        block_shape_m=block_shape_m,
         #
         N=n,
         K=k,

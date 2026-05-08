@@ -1377,6 +1377,14 @@ across the important batch regime.
     arrays directly into the kernel. The helper now just loads those four
     values plus `pid_n`, and the reduced repro still fails immediately
     (`FAIL launch=1 maxdiff=2.625` after the contiguous-store cut).
+  - Fully flattened block schedule:
+    the latest shrink removes the remaining `block_id // GRID_N` and
+    `block_id % GRID_N` arithmetic from the device. Host code now expands the
+    row schedule across all `pid_n` columns into per-`block_id` arrays
+    (`block_pid_m`, `block_pid_n`, `block_slice_idx`, `block_slice_offs`,
+    `block_shape_m`), so every partition just loads block metadata directly by
+    `block_id`. The repro still fails on the first relaunch
+    (`FAIL launch=1 maxdiff=2.5`).
 
 ## Next Up
 
