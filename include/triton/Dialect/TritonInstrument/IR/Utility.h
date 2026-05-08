@@ -148,6 +148,8 @@ struct AuxDataMap {
 
   // Shape notation:
   //   C = CTAs in the cluster.
+  //   Cbar, Cbuf, Cthr, Cmask = CTA dimensions qualifying barriers, buffers,
+  //       threads, and thread masks respectively. Each has extent C.
   //   B = tracked buffers for one memory type, power-of-two padded.
   //   K = tracked mbarriers, power-of-two padded.
   //   T = logical ConSan thread bit slots used by this module, power-of-two
@@ -168,27 +170,27 @@ struct AuxDataMap {
   // memory descriptors.
   RegionToValueMap barriers;
 
-  // scratch, <C x K x i64>
+  // scratch, <Cbar x K x i64>
   // Packed barrier lifecycle state. Zero means invalid/uninitialized. Bit 0 is
   // phase, bits [1..20] are the initial arrival count, bits [21..40] are the
   // current arrival count, and bits [41..61] hold a signed tx-count.
   RegionToValueMap barrierStates;
 
-  // scratch, <C x B x C x i64>
+  // scratch, <Cbuf x B x Cmask x i64>
   // Per-memory-type write frontier. Bit i means logical ConSan thread i can see
   // the latest write to the buffer row.
   RegionToValueMap writeVisibility[numMemTypes];
 
-  // scratch, <C x B x C x K x i8>
+  // scratch, <Cbuf x B x Cbar x K x i8>
   // Per-memory-type buffer/barrier map for writes that a barrier tracks.
   RegionToValueMap writeTracking[numMemTypes];
 
-  // scratch, <C x B x C x T x C x i64>
+  // scratch, <Cbuf x B x Cthr x T x Cmask x i64>
   // Per-memory-type read frontier. For each buffer and logical thread lane, the
   // i64 value is a bitmask of reads visible to that lane's thread.
   RegionToValueMap readVisibility[numMemTypes];
 
-  // scratch, <C x B x C x K x C x i64>
+  // scratch, <Cbuf x B x Cbar x K x Cmask x i64>
   // Per-memory-type buffer/barrier map for read visibility masks that a barrier
   // tracks.
   RegionToValueMap readTracking[numMemTypes];
@@ -211,7 +213,7 @@ struct AuxDataMap {
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
   RegionToValueMap lock;
 
-  // scratch, <C x K x C x i32>
+  // scratch, <Cbar x K x Cthr x i32>
   // Deadlock-detection bitfield. Each base thread uses two bits: waiting flag
   // and stored phase.
   RegionToValueMap waiting;
