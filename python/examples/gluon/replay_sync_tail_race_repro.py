@@ -299,7 +299,6 @@ class PartitionArgs:
 
     SWIGLU_SUBTILE_FACTOR: gl.constexpr
     BAND_N: gl.constexpr
-    FORCE_EPILOGUE_WARPS_N1: gl.constexpr
     REUSE_GATHER_INDICES: gl.constexpr
     INLINE_MMA_INPUT_RELEASE: gl.constexpr
     REPLAY_VIA_TMEM_COPY: gl.constexpr
@@ -935,7 +934,7 @@ def epilogue_partition(p: PartitionArgs):
     out_recip = 1.0 / gl.load(p.out_scale_ptr)
 
     num_warps: gl.constexpr = gl.num_warps()
-    warps_n: gl.constexpr = 1 if p.FORCE_EPILOGUE_WARPS_N1 else (2 if num_warps >= 8 and p.BLOCK_N >= 256 else 1)
+    warps_n: gl.constexpr = 1
     split_layout: gl.constexpr = gl.BlockedLayout(
         [1, 4],
         [1, 32],
@@ -1028,7 +1027,6 @@ def ws_matmul_kernel(
     #
     SWIGLU_SUBTILE_FACTOR: gl.constexpr,
     BAND_N: gl.constexpr,
-    FORCE_EPILOGUE_WARPS_N1: gl.constexpr,
     REUSE_GATHER_INDICES: gl.constexpr,
     INLINE_MMA_INPUT_RELEASE: gl.constexpr,
     REPLAY_VIA_TMEM_COPY: gl.constexpr,
@@ -1187,7 +1185,6 @@ def ws_matmul_kernel(
         #
         SWIGLU_SUBTILE_FACTOR=SWIGLU_SUBTILE_FACTOR,
         BAND_N=BAND_N,
-        FORCE_EPILOGUE_WARPS_N1=FORCE_EPILOGUE_WARPS_N1,
         REUSE_GATHER_INDICES=REUSE_GATHER_INDICES,
         INLINE_MMA_INPUT_RELEASE=INLINE_MMA_INPUT_RELEASE,
         REPLAY_VIA_TMEM_COPY=REPLAY_VIA_TMEM_COPY,
@@ -1293,7 +1290,6 @@ class KernelConfig:
     SWIGLU_SUBTILE_FACTOR: int = 8
     BAND_N: int = 18
 
-    FORCE_EPILOGUE_WARPS_N1: bool = True
     REUSE_GATHER_INDICES: bool = False
     INLINE_MMA_INPUT_RELEASE: bool = False
     REPLAY_VIA_TMEM_COPY: bool = True
@@ -1326,7 +1322,6 @@ def select_kernel_config(slice_size: int) -> KernelConfig:
     if slice_size >= 512:
         return KernelConfig(
             BAND_N=10,
-            FORCE_EPILOGUE_WARPS_N1=False,
             SWIGLU_SUBTILE_FACTOR=16,
             X_NUM_BUFS=6,
             W_NUM_BUFS=3,
@@ -1462,7 +1457,6 @@ def matmul(
         #
         SWIGLU_SUBTILE_FACTOR=p.SWIGLU_SUBTILE_FACTOR,
         BAND_N=p.BAND_N,
-        FORCE_EPILOGUE_WARPS_N1=p.FORCE_EPILOGUE_WARPS_N1,
         REUSE_GATHER_INDICES=p.REUSE_GATHER_INDICES,
         INLINE_MMA_INPUT_RELEASE=p.INLINE_MMA_INPUT_RELEASE,
         REPLAY_VIA_TMEM_COPY=p.REPLAY_VIA_TMEM_COPY,
