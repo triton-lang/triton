@@ -1416,6 +1416,13 @@ across the important batch regime.
     now the literal two-block grid that exercises the race. This much smaller
     source still fails with the focused command, most recently as
     `FAIL launch=6 maxdiff=0.625`.
+  - Fixed-constexpr reduction:
+    the next shrink proves the kernel does not need runtime constexpr plumbing
+    to reproduce. Buffer counts, tile sizes, replay geometry, and warp/register
+    partitioning now live as module-level `gl.constexpr` constants instead of
+    flowing through the kernel signature and `PartitionArgs`. The launch site
+    now passes only the three descriptors plus `out_ptr`, and the specialized
+    source still fails (`FAIL launch=22 maxdiff=0.625`).
 
 ## Next Up
 
