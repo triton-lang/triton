@@ -323,8 +323,32 @@ across the important batch regime.
 - The retained 16k selector has been tightened further while preserving literal
   zero spill: `X_NUM_BUFS=6` and `W_NUM_BUFS=3` improve the packed TMEM-copy
   path from about `996` TFLOPS to about `1,034` TFLOPS in same-seed runs.
-  `MMA_REGS=40` briefly reached about `1,037` TFLOPS, but it reintroduced four
-  static local-memory ops, so the zero-spill selector keeps `MMA_REGS=24`.
+  An early cross-process spot check made `MMA_REGS=40` look slightly faster, but
+  a controlled same-process, same-input paired comparison supersedes that result:
+  `MMA_REGS=24` is faster by about `0.58%`, and `40` reintroduces both static and
+  dynamic spill traffic.
+
+```text
+┌────────────────────────────┬──────────────────────┬──────────────────────┐
+│ Same-seed bs=16,384        │ MMA_REGS=24          │ MMA_REGS=40          │
+├────────────────────────────┼──────────────────────┼──────────────────────┤
+│ Paired TFLOPS mean         │             1,036.29 │             1,030.26 │
+│ Paired TFLOPS median       │             1,036.31 │             1,030.25 │
+│ NCU duration               │            90.560 us │            92.160 us │
+│ Local spill requests       │                    0 │                8,938 │
+│ Static LDL/STL ops         │                    0 │                    4 │
+│ Warp latency / issued inst │                13.25 │                13.20 │
+│ Long scoreboard stall      │                 5.56 │                 5.52 │
+│ Barrier stall              │                 3.34 │                 3.35 │
+└────────────────────────────┴──────────────────────┴──────────────────────┘
+```
+
+- The extra `16` registers only help the MMA partition marginally: NCU shows a
+  tiny reduction in average warp latency and long-scoreboard stall, but the
+  hot-loop instruction mix is otherwise unchanged while `40` adds `5,290`
+  dynamic local loads and `3,648` dynamic local stores. That small scheduler
+  improvement is not enough to pay for the spill path under paired measurement,
+  so the zero-spill selector keeps `MMA_REGS=24`.
 
 ```text
 ┌────────────────────────────┬──────────────────────┬──────────────────────┐
@@ -345,6 +369,30 @@ across the important batch regime.
   traffic or register-unpack latency. It is the structural cost of the swapped
   replay design at `BLOCK_M=128`: twice as many MMAs plus the extra TMEM copy /
   load / store pipeline needed to materialize the odd packed tile.
+- The deeper 16k profile reinforces that diagnosis. The retained packed path is
+  not saturating tensor execution; it spends more time with insufficiently
+  eligible warps because replay dependencies and barriers keep the hot path
+  waiting, despite issuing far more work than the reference:
+
+```text
+┌────────────────────────────┬──────────────────────┬──────────────────────┐
+│ Fresh full-profile metric  │ MMA_REGS=24          │ reference_matmul     │
+├────────────────────────────┼──────────────────────┼──────────────────────┤
+│ Executed instructions      │           25,025,663 │           13,838,894 │
+│ Issue active               │               45.25% │               31.23% │
+│ Eligible warps / cycle     │                 0.77 │                 0.45 │
+│ Tensor pipe active         │               13.85% │               15.72% │
+│ Memory-tensor active       │               16.38% │               16.27% │
+│ Long scoreboard stall      │                 5.56 │                 4.75 │
+│ Barrier stall              │                 3.34 │                 1.42 │
+└────────────────────────────┴──────────────────────┴──────────────────────┘
+```
+
+- Read together with the unchanged MMA / TMEM op counts, those counters point
+  at a latency-and-dependency bottleneck in the replayed swapped design, not a
+  register-count bottleneck inside the MMA partition. Raising `MMA_REGS` nudges
+  scheduler quality, but the material gap is still the extra replay pipeline and
+  doubled MMA/TMEM work versus the reference orientation.
 - A final low-risk 16k selector sweep found no further retained win:
   occupancy above `1` regressed sharply, repeated finalist runs kept
   `BAND_N=10` ahead of `8` and `20`, and the 1CTA `BLOCK_N=512` TMEM-copy shape
