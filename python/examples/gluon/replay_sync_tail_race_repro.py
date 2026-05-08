@@ -669,18 +669,17 @@ def replay_partition(p: PartitionArgs):
                 mbarrier.arrive(w_empty_bar)
                 w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
 
-                replay_cols: gl.constexpr = p.BLOCK_K // 4 // p.REPLAY_K_SUBTILE_FACTOR
-                replay_segments: gl.constexpr = p.BLOCK_K // 16 // p.REPLAY_K_SUBTILE_FACTOR
-                for replay_frag_idx in gl.static_range(p.REPLAY_K_SUBTILE_FACTOR):
-                    dense_frag = dense_replay_tmem.slice(replay_frag_idx * replay_cols, replay_cols)
-                    replay_frag = replay_tmem.slice(replay_frag_idx * replay_cols, replay_cols)
-                    dense_words = dense_frag.load()
-                    dense_words = dense_words.reshape((p.BLOCK_N, replay_segments, 2, 2)).permute((0, 1, 3, 2))
-                    _, dense_words = gl.split(dense_words)
-                    dense_words = dense_words.reshape((1, 1, 1, p.BLOCK_N, replay_segments, 2))
-                    lo, hi = fp4_prmt_shuffle_elements(dense_words)
-                    k_second = gl.join(lo, hi).reshape([p.BLOCK_N, replay_cols])
-                    replay_frag.store(gl.convert_layout(k_second, replay_frag.get_reg_layout()))
+                replay_cols: gl.constexpr = p.BLOCK_K // 4
+                replay_segments: gl.constexpr = p.BLOCK_K // 16
+                dense_frag = dense_replay_tmem.slice(0, replay_cols)
+                replay_frag = replay_tmem.slice(0, replay_cols)
+                dense_words = dense_frag.load()
+                dense_words = dense_words.reshape((p.BLOCK_N, replay_segments, 2, 2)).permute((0, 1, 3, 2))
+                _, dense_words = gl.split(dense_words)
+                dense_words = dense_words.reshape((1, 1, 1, p.BLOCK_N, replay_segments, 2))
+                lo, hi = fp4_prmt_shuffle_elements(dense_words)
+                k_second = gl.join(lo, hi).reshape([p.BLOCK_N, replay_cols])
+                replay_frag.store(gl.convert_layout(k_second, replay_frag.get_reg_layout()))
                 mbarrier.arrive(replay_full_bar)
                 replay_idx, replay_empty_phase = advance(replay_idx, replay_empty_phase, 2)
 
