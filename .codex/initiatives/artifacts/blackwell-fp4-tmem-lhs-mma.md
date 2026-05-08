@@ -930,6 +930,38 @@ across the important batch regime.
   - Plan updates: do not revisit the pre-MMA barriers or one-warp MMA partition
     without a new synchronization mechanism or hardware-model evidence that
     explains the repeated-run failures.
+- `2026-05-08` Completed: resolved why the second-tile / odd-tail MMA barriers
+  are required and why ConSan did not report the failure.
+  - Artifacts:
+    `/tmp/mma_barrier_baseline_dump/LUYWHSWYSDTU5CR6AQE2QF2WUVHZJPMPMZB3LZGRBO5H245KCMRA/ws_matmul_kernel.{ttgir,llir,sass}`;
+    `/tmp/mma_barrier_missing_mma2_dump/MFI3XZF22OQACHPFE64ISI6X7TE6LOQG6FVVK4SXEKZYPTU4J5OA/ws_matmul_kernel.{ttgir,llir,sass}`;
+    `/tmp/{base,miss}_{pre,post}_membar.ttgir`.
+  - Validation: compared source TTGIR, post-`test-print-membar` TTGIR, LLIR,
+    and SASS for the retained kernel versus the single-second-barrier removal
+    candidate; cross-checked ConSan’s thread and visibility model against
+    `include/triton/Dialect/TritonInstrument/IR/TritonInstrument.md` and
+    `lib/Dialect/TritonInstrument/Transforms/ConcurrencySanitizer.cpp`.
+  - Learnings: this is a post-wait ownership problem, not a missing data-race
+    fence that current membar analysis can infer. In the failing second-tile
+    path, `test-print-membar` leaves
+    `ttng.wait_barrier %x_ready_bar -> ttng.tc_gen5_mma_scaled` adjacent when the
+    source `gl.barrier()` is removed; it only inserts barriers before waits for
+    normal memory hazards. LLIR still contains MMAv5 lowering’s one
+    partition-local barrier before the single-issuer block, but SASS shows that
+    as one `BAR.SYNC.DEFER_BLOCKING 0x6, 0x80`; the retained source form yields
+    two back-to-back deferred barriers before the issuer path and is the form
+    that survives repeated-run correctness. The required invariant is that the
+    empty ring slot must not be released until every MMA warp carrying ring state
+    has observed the ready epoch. ConSan misses this because it models one
+    logical thread per warp-specialization partition, not the four individual
+    MMA warps; its visibility frontier can therefore declare the partition
+    synchronized even though one hardware warp can still be late in the wait
+    loop while the single issuer advances the ring.
+  - Plan updates: treat these source barriers as protocol barriers, not as
+    redundant fence cleanup. A future real fix would need either a compiler
+    primitive that expresses post-wait partition convergence for single-issuer
+    tensor-core ops or finer-grained sanitizer modeling of intra-partition warp
+    progress.
 
 ## Next Up
 

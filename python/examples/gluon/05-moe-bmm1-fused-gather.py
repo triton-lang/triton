@@ -526,7 +526,10 @@ def mma_partition(p: PartitionArgs):
                 mbarrier.wait(p.load_sync_bar, load_sync_phase)
                 load_sync_phase = load_sync_phase ^ 1
             # Keep the single MMA issuer from releasing an input ring slot
-            # before every MMA warp has observed the ready epoch.
+            # before every MMA warp has observed the ready epoch. MMAv5 lowering
+            # also inserts one local barrier before the issuer block, but ptxas
+            # lowers that as a single deferred barrier and it is not sufficient
+            # for the repeated-run ring protocol below.
             gl.barrier()
             if not p.REPLAY_VIA_TMEM_COPY:
                 mbarrier.arrive(p.replay_ready_bar)
@@ -610,6 +613,8 @@ def mma_partition(p: PartitionArgs):
             x_empty_bar = p.x_empty_bars.index(x_idx)
             x_buf = p.x_bufs.index(x_idx)
             mbarrier.wait(x_ready_bar, x_phase)
+            # This second-tile post-wait convergence is correctness-critical;
+            # without it, the issuer can release the next empty epoch early.
             gl.barrier()
 
             replay_tmem = p.replay_tmem.index(replay_idx)
@@ -656,6 +661,7 @@ def mma_partition(p: PartitionArgs):
                 mbarrier.arrive(p.load_sync_bar)
                 mbarrier.wait(p.load_sync_bar, load_sync_phase)
                 load_sync_phase = load_sync_phase ^ 1
+            # Preserve the same post-wait convergence for the odd-tail path.
             gl.barrier()
 
             # w_packed_pair 512x128xi8, logical 512x256xfp4
