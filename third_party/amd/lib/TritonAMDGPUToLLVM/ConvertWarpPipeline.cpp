@@ -139,8 +139,7 @@ private:
     // Set barrier before starting the loop. This resolves any outstanding
     // synchronization before beginning the specialized asymmetric
     // synchronization.
-    auto preBarrier = mlir::triton::gpu::BarrierOp::create(
-        b, loc, triton::gpu::AddrSpace::Local);
+    mlir::triton::gpu::BarrierOp::create(b, loc, triton::gpu::AddrSpace::Local);
 
     // Insert condbarrier::second_half before starting the loop
     // FIXME : correctly calculate numbers per the arch
