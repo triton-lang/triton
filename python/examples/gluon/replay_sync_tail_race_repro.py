@@ -299,7 +299,6 @@ class PartitionArgs:
 
     SWIGLU_SUBTILE_FACTOR: gl.constexpr
     BAND_N: gl.constexpr
-    INLINE_MMA_INPUT_RELEASE: gl.constexpr
     REPLAY_VIA_TMEM_COPY: gl.constexpr
     REPLAY_K_SUBTILE_FACTOR: gl.constexpr
 
@@ -1005,7 +1004,6 @@ def ws_matmul_kernel(
     #
     SWIGLU_SUBTILE_FACTOR: gl.constexpr,
     BAND_N: gl.constexpr,
-    INLINE_MMA_INPUT_RELEASE: gl.constexpr,
     REPLAY_VIA_TMEM_COPY: gl.constexpr,
     REPLAY_K_SUBTILE_FACTOR: gl.constexpr,
     SCALE_SIZE_OUTER: gl.constexpr,
@@ -1162,7 +1160,6 @@ def ws_matmul_kernel(
         #
         SWIGLU_SUBTILE_FACTOR=SWIGLU_SUBTILE_FACTOR,
         BAND_N=BAND_N,
-        INLINE_MMA_INPUT_RELEASE=INLINE_MMA_INPUT_RELEASE,
         REPLAY_VIA_TMEM_COPY=REPLAY_VIA_TMEM_COPY,
         REPLAY_K_SUBTILE_FACTOR=REPLAY_K_SUBTILE_FACTOR,
     )
@@ -1265,7 +1262,6 @@ class KernelConfig:
     SWIGLU_SUBTILE_FACTOR: int = 8
     BAND_N: int = 18
 
-    INLINE_MMA_INPUT_RELEASE: bool = False
     REPLAY_VIA_TMEM_COPY: bool = True
     REPLAY_K_SUBTILE_FACTOR: int = 1
 
@@ -1415,7 +1411,6 @@ def matmul(
         #
         SWIGLU_SUBTILE_FACTOR=p.SWIGLU_SUBTILE_FACTOR,
         BAND_N=p.BAND_N,
-        INLINE_MMA_INPUT_RELEASE=p.INLINE_MMA_INPUT_RELEASE,
         REPLAY_VIA_TMEM_COPY=p.REPLAY_VIA_TMEM_COPY,
         REPLAY_K_SUBTILE_FACTOR=p.REPLAY_K_SUBTILE_FACTOR,
         #
