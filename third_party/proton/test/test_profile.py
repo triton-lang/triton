@@ -458,7 +458,7 @@ def test_cudagraph_multi_stream(tmp_path: pathlib.Path, device: str):
     kernel_z_bytes = torch.tensor([kernel_z_metrics["bytes"]], device=device, dtype=torch.int64)
     gate = torch.ones((1, ), device=device, dtype=torch.int32)
 
-    temp_file = tmp_path / "test_hook_metadata_metric_order_repro.hatchet"
+    temp_file = tmp_path / "test_cudagraph_multi_stream.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
     try:
         kernel_x[(1, )](x, y, kernel_x_flops, kernel_x_bytes, delay_scratch, gate, num_warps=1)
@@ -563,7 +563,7 @@ def test_cpu_timed_scope(tmp_path: pathlib.Path, device: str):
 
 
 def test_get_data(tmp_path: pathlib.Path, device: str):
-    temp_file = tmp_path / "test_tree_json.hatchet"
+    temp_file = tmp_path / "test_get_data.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow")
 
     @triton.jit
@@ -696,7 +696,7 @@ def test_hook_launch(tmp_path: pathlib.Path, device: str):
 
     x = torch.tensor([2], device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
-    temp_file = tmp_path / "test_hook_triton.hatchet"
+    temp_file = tmp_path / "test_hook_launch.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton")
     with proton.scope("test0"):
         foo[(1, )](x, 1, y, num_warps=4)
@@ -738,7 +738,7 @@ def test_hook_launch_filter(tmp_path: pathlib.Path, device: str):
 
     x = torch.tensor([2], device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
-    temp_file = tmp_path / "test_hook_triton_filter.hatchet"
+    temp_file = tmp_path / "test_hook_launch_filter.hatchet"
 
     # Only allow kernels whose compiled name matches "foo" (via prefix regex).
     launch_hook = proton_launch.LaunchHook()
@@ -785,7 +785,7 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str, device: str):
 
     x = torch.tensor([2], device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
-    temp_file = tmp_path / "test_hook.hatchet"
+    temp_file = tmp_path / "test_hook_launch_context.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton", context=context)
     with proton.scope("test0"):
         foo[(1, )](x, 1, y, num_warps=4)
@@ -862,7 +862,7 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path, device: str):
     x_bar = torch.tensor([2], device=device, dtype=torch.float32)
     y_bar = torch.zeros_like(x_bar)
 
-    temp_file = tmp_path / "test_hook.hatchet"
+    temp_file = tmp_path / "test_hook_multiple_threads.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton")
 
     all_ids = set()
@@ -951,8 +951,8 @@ def test_deactivate(tmp_path: pathlib.Path, device: str):
 
 
 def test_multiple_sessions(tmp_path: pathlib.Path, device: str):
-    temp_file0 = tmp_path / "test_multiple_sessions0.hatchet"
-    temp_file1 = tmp_path / "test_multiple_sessions1.hatchet"
+    temp_file0 = tmp_path / "test_multiple_sessions_0.hatchet"
+    temp_file1 = tmp_path / "test_multiple_sessions_1.hatchet"
     session_id0 = proton.start(str(temp_file0.with_suffix("")))
     session_id1 = proton.start(str(temp_file1.with_suffix("")))
     with proton.scope("scope0"):
@@ -1008,8 +1008,8 @@ def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, devi
     foo[(1, )](x, y, z)
     bar[(1, )](x, y, z)
 
-    temp_file0 = tmp_path / "test_multiple_sessions_cudagraph_metric_kernels0.hatchet"
-    temp_file1 = tmp_path / "test_multiple_sessions_cudagraph_metric_kernels1.hatchet"
+    temp_file0 = tmp_path / "test_multiple_sessions_cudagraph_metric_kernels_0.hatchet"
+    temp_file1 = tmp_path / "test_multiple_sessions_cudagraph_metric_kernels_1.hatchet"
     session_id0 = proton.start(str(temp_file0.with_suffix("")), context="shadow", hook="triton")
     session_id1 = proton.start(str(temp_file1.with_suffix("")), context="shadow", hook="triton")
 
@@ -1352,7 +1352,7 @@ def test_multi_stream(profile_kind: str, suffix: str, tmp_path: pathlib.Path, de
 
 
 def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
-    temp_file = tmp_path / "test_scope_threads.hatchet"
+    temp_file = tmp_path / "test_scope_multiple_threads.hatchet"
     proton.start(str(temp_file.with_suffix("")))
 
     N = 50
@@ -1509,7 +1509,7 @@ def test_tensor_metrics_cudagraph_hook(tmp_path: pathlib.Path, device: str):
     metric_value = torch.tensor([0.0], device=device)
     bytes_value = torch.tensor([64], device=device, dtype=torch.int64)
 
-    temp_file = tmp_path / "test_hook_metadata_metric_work_grouping.hatchet"
+    temp_file = tmp_path / "test_tensor_metrics_cudagraph_hook.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
 
     metadata_owner_kernel[(1, )](x, y, metric_value, bytes_value, num_warps=1)
@@ -1819,7 +1819,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
     fresh_knobs.proton.profile_buffer_size = buffer_size
-    temp_file = tmp_path / f"test_periodic_flushing.{data_format}"
+    temp_file = tmp_path / f"test_periodic_flushing_cudagraph.{data_format}"
     session = proton.start(str(temp_file.with_suffix("")), mode=f"periodic_flushing:format={data_format}",
                            hook="triton")
 
