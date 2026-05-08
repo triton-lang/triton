@@ -1440,8 +1440,8 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str)
     foo_events = [event for event in replay_kernel_events if event["name"] == "foo"]
     metric_kernel_events = [event for event in replay_kernel_events if event["name"] == "<metric>"]
     metadata_kernel_events = [
-        event for event in replay_kernel_events if any(
-            frame == COMPUTE_METADATA_SCOPE_NAME for frame in event.get("args", {}).get("call_stack", []))
+        event for event in replay_kernel_events
+        if any(frame == COMPUTE_METADATA_SCOPE_NAME for frame in event.get("args", {}).get("call_stack", []))
     ]
 
     assert len(foo_events) == 3

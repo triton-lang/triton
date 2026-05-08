@@ -350,8 +350,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
           return;
         }
         std::function<void(size_t, json &, json &)> appendLinkedVirtualNode =
-            [&](size_t virtualNodeId, json &outNode,
-                json &parentMetricsJson) {
+            [&](size_t virtualNodeId, json &outNode, json &parentMetricsJson) {
               const auto &virtualNode = virtualTree->getNode(virtualNodeId);
               const auto metricsIt =
                   treeNode.metricSet.linkedMetrics.find(virtualNodeId);
