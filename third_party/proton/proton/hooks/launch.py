@@ -123,3 +123,4 @@ class LaunchHook(Hook):
         if not enabled.get():
             return
         libproton.exit_op(id.get(), op_name.get())
+        enabled.set(False)
