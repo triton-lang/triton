@@ -334,19 +334,19 @@ benchmark_multicta_softmax_f32()
 #
 # The outer-product layouts above describe the required data placement: LHS
 # `(1, 0)`, RHS `(0, 1)`, and accumulator/output `(1, 0)`. On top of that,
-# enabling 2CTA has two required code changes, plus a third in pipelined kernels:
+# enabling 2CTA has two required code changes, plus a third when waiting on MMA completion:
 # - select 2CTA mode on the accumulator with
 #   `TensorMemoryLayout(..., two_ctas=True)`;
-# - create any hand-off barrier waited on by the lead CTA with
+# - create any barrier that must be waited on before the lead CTA issues
+#   `tcgen05_mma` with
 #   `mbarrier.allocate_mbarrier(..., two_ctas=True)`;
-# - when a pipeline computes MMA completion counts, pass
+# - when initializing an mbarrier used to wait on MMA completion, pass
 #   `two_ctas=...` to `tcgen05_mma_barrier_count`.
 #
-# The hand-off barrier needs `two_ctas=True` so that the lead CTA waits for both
-# rows before issuing the collective op. In this single-tile example that is
-# `tma_bar`; in the pipelined matmul below it is the same reason that
-# `load_ready_bars`, `acc_empty_bars`, and `clc_consumed_bars` are created with
-# `two_ctas=two_ctas`. These are the same 2CTA sites used by
+# Such a pre-MMA barrier needs `two_ctas=True` so that the lead CTA waits for
+# both rows before issuing the collective op. In this single-tile example that is
+# `tma_bar`; in the pipelined matmul below the corresponding examples are
+# `load_ready_bars` and `acc_empty_bars`. These are the same 2CTA sites used by
 # `03-matmul-multicta.py`.
 #
 # The `mma_bar` itself does not need `two_ctas=True`: `tcgen05_mma` multicasts
@@ -482,10 +482,10 @@ cga_layout_b = get_cga_layout(cga_layout, 1, two_ctas=False)
 # After that, the pipelined matmul has three `multicast=True` sites:
 # - `tma.async_load(..., multicast=True)` sends the tile to every CTA in the
 #   broadcast group;
-# - `tcgen05_mma(..., multicast=True)` makes the MMA-to-producer hand-back
-#   collective before the next TMA overwrites the shared-memory tile;
+# - `tcgen05_mma(..., multicast=True)` multicasts its mbarrier arrival before
+#   the next TMA overwrites the shared-memory tile;
 # - `tcgen05_mma_barrier_count(..., multicast=True, ...)` initializes that
-#   hand-back barrier with the matching arrival count.
+#   mbarrier with the matching arrival count.
 #
 # The TMA synchronization pattern itself is otherwise the same as for a regular
 # load: initialize a barrier, `expect` the byte count, issue the TMA, then wait
