@@ -1,7 +1,7 @@
 ---
 owner: jeffniu22@gmail.com
 created: 2026-05-07T07:15:19Z
-updated: 2026-05-08T19:23:03Z
+updated: 2026-05-08T19:40:59Z
 ---
 
 # Blackwell FP4 Padded Weight Packing
@@ -1287,6 +1287,21 @@ across the important batch regime.
     This keeps the direct-wait behavior visible, but it no longer isolates the
     later mismatch race because it falls back into the separate dense-copy wait
     lowering problem first.
+  - Tree-pruned replay repro:
+    after restoring the fast-failing generic-wait baseline from
+    `07077510bf`, the file was reduced one node at a time with a stress run
+    after every edit and a commit after every retained step. The current head
+    keeps the mismatch while removing the fixed epilogue warp branch, gather
+    reuse branch, packed-weight config toggle, large-slice selector, dead
+    inline-release plumbing, the non-TMEM replay path and its LDS scaffolding,
+    the replay subtile-factor loop and plumbing, both odd-tail guards, and the
+    dead `mma_done_bar` field.
+  - Current retained checkpoint:
+    `957bdadfd8` still fails with the focused command
+    `PYTHONPATH=python:python/triton_kernels timeout 120s python3 python/examples/gluon/replay_sync_tail_race_repro.py`
+    and currently reports `FAIL launch=13 maxdiff=0.4609375`. The exact launch
+    count moves as codegen changes, so the validation gate for pruning is
+    “still mismatches quickly”, not a specific failing iteration.
 
 ## Next Up
 
