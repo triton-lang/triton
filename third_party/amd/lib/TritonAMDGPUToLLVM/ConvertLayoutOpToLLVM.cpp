@@ -273,10 +273,8 @@ class ConvertLayoutOpInThreadSwap
 
 public:
   ConvertLayoutOpInThreadSwap(LLVMTypeConverter &typeConverter,
-                              const TargetInfoBase &targetInfo,
-                              PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
-  }
+                              const TargetInfoBase &, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(typeConverter, benefit) {}
 
   struct ByteLocation {
     int regIdx;
@@ -720,9 +718,6 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto &amdTargInfo =
-        static_cast<const mlir::triton::AMD::TargetInfo &>(targetInfo);
-
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
@@ -768,9 +763,6 @@ public:
     transferWithVPerm(op, conversion, adaptor, rewriter);
     return success();
   }
-
-private:
-  const TargetInfoBase &targetInfo;
 };
 
 } // namespace

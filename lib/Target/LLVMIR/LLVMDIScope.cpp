@@ -44,7 +44,7 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
 
     // Filename, line and colmun to associate to the function.
     LLVM::DIFileAttr fileAttr;
-    int64_t line = 1, col = 1;
+    int64_t line = 1;
     FileLineColLoc fileLoc = extractFileLoc(loc);
     if (!fileLoc && compileUnitAttr) {
       fileAttr = compileUnitAttr.getFile();
@@ -52,7 +52,6 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
       fileAttr = LLVM::DIFileAttr::get(context, "<unknown>", "");
     } else {
       line = fileLoc.getLine();
-      col = fileLoc.getColumn();
       StringRef inputFilePath = fileLoc.getFilename().getValue();
       fileAttr = LLVM::DIFileAttr::get(
           context, llvm::sys::path::filename(inputFilePath),

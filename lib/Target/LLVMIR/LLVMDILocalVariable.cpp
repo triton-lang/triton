@@ -90,8 +90,8 @@ struct LLVMDILocalVariablePass
       // a subclass of mlir::Value, which is the value defined by this operation
       OpResult opResult = op->getResult(0);
       // create and insert this call-dbg-value intrinsic after the op
-      Operation *dbgOp = LLVM::DbgValueOp::create(builder, childLoc, opResult,
-                                                  diLocalVarAttr, diExprAttr);
+      LLVM::DbgValueOp::create(builder, childLoc, opResult, diLocalVarAttr,
+                               diExprAttr);
     }
   }
 
@@ -117,7 +117,7 @@ struct LLVMDILocalVariablePass
 
     // Filename, line and colmun to associate to the function.
     LLVM::DIFileAttr fileAttr;
-    int64_t line = 1, col = 1;
+    int64_t line = 1;
     FileLineColLoc fileLoc = extractFileLoc(loc);
     if (!fileLoc && compileUnitAttr) {
       fileAttr = compileUnitAttr.getFile();
@@ -125,7 +125,6 @@ struct LLVMDILocalVariablePass
       fileAttr = LLVM::DIFileAttr::get(context, "<unknown>", "");
     } else {
       line = fileLoc.getLine();
-      col = fileLoc.getColumn();
       StringRef inputFilePath = fileLoc.getFilename().getValue();
       fileAttr = LLVM::DIFileAttr::get(
           context, llvm::sys::path::filename(inputFilePath),
@@ -367,8 +366,6 @@ struct LLVMDILocalVariablePass
   LLVM::DISubprogramAttr diSubprogramAttr = {};
 
   void runOnOperation() override {
-    Operation *op = getOperation();
-
     getOperation()->walk<WalkOrder::PreOrder>([&](Operation *op) -> void {
       if (isa<LLVM::LLVMFuncOp>(op)) {
         auto funcOp = cast<LLVM::LLVMFuncOp>(op);
