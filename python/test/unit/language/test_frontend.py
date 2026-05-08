@@ -763,6 +763,18 @@ def test_aggregate_multilevel_inheritance():
     assert child.c.value == 3
 
 
+def test_aggregate_inheritance_requires_aggregate_base():
+
+    class Base:
+        pass
+
+    with pytest.raises(TypeError, match="Aggregates can only inherit from other aggregates"):
+
+        @triton.aggregate
+        class Child(Base):
+            x: tl.constexpr
+
+
 def test_aggregate_field_inheritance_with_methods():
     """Inherited methods work with inherited fields."""
 

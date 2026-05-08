@@ -1596,34 +1596,28 @@ _AGGREGATE_MISSING = object()
 
 
 def _resolve_aggregate_fields(cls):
-    """Assemble annotations and defaults from cls's own declarations + any
-    aggregate ancestors. Each aggregate's __annotations__ and __aggregate_defaults__
-    are already resolved when set on its aggregate_value wrapper, so we just merge.
-
-    typing.get_type_hints(cls) handles PEP 649 string-annotation resolution for cls's
-    own annotations. We don't read from non-aggregate bases (e.g. base_value), so
-    their stray annotations like type: base_type never enter the result.
-    """
     all_annotations = {}
     all_defaults = {}
-    # Inherit from aggregate ancestors in MRO order (oldest first → child overrides parent)
+    # Inherit from oldest first, so child overrides parent
     for base in reversed(cls.__mro__[1:]):
-        if not getattr(base, "__triton_aggregate__", False):
+        if base is base_value or base is object:
             continue
+        if not getattr(base, "__triton_aggregate__", False):
+            raise TypeError(f"Aggregates can only inherit from other aggregates, but got non-aggregate base: {base}")
         all_annotations.update(getattr(base, "__annotations__", {}))
-        all_defaults.update(getattr(base, "__aggregate_defaults__", None) or {})
+        all_defaults.update(getattr(base, "__aggregate_defaults__", {}))
 
     # Add cls's own fields, resolving string annotations via typing.get_type_hints.
     own_names = cls.__dict__.get("__annotations__", {})
-    if own_names:
-        hints = typing.get_type_hints(cls)
-        for name in own_names:
-            all_annotations[name] = hints[name]
-            if name in cls.__dict__:
-                val = cls.__dict__[name]
-                # Skip descriptors and methods — only plain values are defaults
-                if not callable(val) or isinstance(val, (constexpr, base_value)):
-                    all_defaults[name] = val
+    hints = typing.get_type_hints(cls)
+    for name in own_names:
+        all_annotations[name] = hints[name]
+        val = cls.__dict__.get(name, _AGGREGATE_MISSING)
+        if val is _AGGREGATE_MISSING:
+            continue
+        # Skip descriptors and methods - only plain values are defaults
+        if not callable(val) or isinstance(val, base_value):
+            all_defaults[name] = val
     return all_annotations, all_defaults
 
 
