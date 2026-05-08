@@ -1254,7 +1254,6 @@ class KernelConfig:
     W_NUM_BUFS: int = 2
     W_SCALE_NUM_BUFS: int = 4
     ACC_NUM_BUFS: int = 1
-    BITPACKED_K: bool = True
 
     NUM_WARPS: int = 8
     LOAD_ACTIVATION_WARPS: int = 4
@@ -1359,7 +1358,7 @@ def matmul(
     )
     w_desc = make_tensor_descriptor(
         b,
-        (1, p.BLOCK_K * (2 if p.BITPACKED_K else 1), p.BLOCK_N),
+        (1, p.BLOCK_K * 2, p.BLOCK_N),
         # Sharded weight tiles use the physical [1, 1, 1, N, K/2] MX4 shuffled block layout.
     )
     scale_desc = make_tensor_descriptor(
@@ -1490,17 +1489,14 @@ def alloc_randn(shape: tuple[int, ...], dtype: torch.dtype, device: str) -> torc
 
 def alloc_randn_fp4(shape: tuple[int, ...], device: str, p: KernelConfig | None) -> tuple[Tensor, Tensor]:
     if p is not None:
-        block_k, block_n, num_warps, bitpacked_k = p.BLOCK_K, p.BLOCK_N, p.NUM_WARPS, p.BITPACKED_K
+        block_k, block_n, num_warps = p.BLOCK_K, p.BLOCK_N, p.NUM_WARPS
     else:
-        block_k, block_n, num_warps, bitpacked_k = 128, 256, 8, False
+        block_k, block_n, num_warps = 128, 256, 8
 
     data = alloc_randn(shape, torch.bfloat16, device)
     data, scale = downcast_to_mxfp(data, FP4, axis=1)  # type: ignore[arg-type]
 
-    if bitpacked_k:
-        data_layout = BlackwellMX4ValuePackedShuffledLayout(block_k=block_k, block_n=block_n)
-    else:
-        data_layout = BlackwellMX4ValueShuffledLayout(block_k=block_k, block_n=block_n)
+    data_layout = BlackwellMX4ValuePackedShuffledLayout(block_k=block_k, block_n=block_n)
     scale_layout = make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=num_warps)
 
     data = convert_layout(wrap_torch_tensor(data, dtype=FP4), data_layout)
