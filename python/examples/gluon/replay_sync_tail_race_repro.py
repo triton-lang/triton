@@ -1074,13 +1074,6 @@ def make_tensor_descriptor(
             rank=rank,
             cga_layout=cga_layout,
         )
-    elif t.dtype == torch.float32:
-        assert rank == 2
-        layout = gl.NVMMASharedLayout.get_default_for(
-            layout_shape,
-            torch.float32,
-            cga_layout=cga_layout,
-        )
     else:
         assert t.dtype == torch.float8_e4m3fn
         layout = gl.NVMMASharedLayout(
@@ -1124,16 +1117,6 @@ class KernelConfig:
     MXFP_BLOCK_SIZE: int = 32
     SCALE_SIZE_OUTER: int = 128
     SCALE_SIZE_INNER: int = 4
-
-    def get_x_smem(self) -> int:
-        return self.BLOCK_M * self.BLOCK_K * self.X_NUM_BUFS
-
-    def get_w_tile_smem(self) -> int:
-        # fp4 padded to 1 byte per element.
-        return self.BLOCK_N * self.BLOCK_K * self.W_NUM_BUFS
-
-    def get_w_mx_tile_smem(self) -> int:
-        return self.BLOCK_N * self.BLOCK_K // self.MXFP_BLOCK_SIZE * self.W_SCALE_NUM_BUFS
 
 def matmul(
     a: torch.Tensor,
