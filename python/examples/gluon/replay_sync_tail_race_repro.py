@@ -1489,11 +1489,6 @@ def make_precision_config(prepared: PreparedCase) -> PrecisionConfig:
         ),
     )
 
-
-def make_output_buffer(prepared: PreparedCase) -> torch.Tensor:
-    return torch.zeros(prepared.out_shape, dtype=prepared.out_dtype, device=prepared.x.device)
-
-
 def run_kernel(
     prepared: PreparedCase,
     precision_config: PrecisionConfig,
@@ -1537,7 +1532,7 @@ def run_repro(max_launches: int = 1000):
         uniform_routing=False,
     )
     precision = make_precision_config(prepared)
-    out = make_output_buffer(prepared)
+    out = torch.zeros(prepared.out_shape, dtype=prepared.out_dtype, device=prepared.x.device)
 
     run_kernel(prepared, precision, out)
     torch.cuda.synchronize()
