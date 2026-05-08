@@ -1281,7 +1281,6 @@ class PreparedCase:
     fused_activation: FusedActivation
     x_scale: torch.Tensor
     y_scale: torch.Tensor
-    out_shape: tuple[int, int]
 
 
 def alloc_randn(shape: tuple[int, ...], dtype: torch.dtype, device: str) -> torch.Tensor:
@@ -1407,7 +1406,6 @@ def prepare_case(
         fused_activation=fused_activation,
         x_scale=x_scale,
         y_scale=y_scale,
-        out_shape=(batch_size * c.experts_per_token, n // fused_activation.specs.reduction_n),
     )
 
 
@@ -1442,7 +1440,8 @@ def run_repro(max_launches: int = 1000):
         uniform_routing=False,
     )
     precision = make_precision_config(prepared)
-    out = torch.zeros(prepared.out_shape, dtype=torch.float8_e4m3fn, device=prepared.x.device)
+    out_shape = (prepared.gather_indx.shape[0], prepared.bias.shape[1] // prepared.fused_activation.specs.reduction_n)
+    out = torch.zeros(out_shape, dtype=torch.float8_e4m3fn, device=prepared.x.device)
 
     matmul(
         a=prepared.x,
