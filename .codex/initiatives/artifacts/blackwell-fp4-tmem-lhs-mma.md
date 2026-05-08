@@ -1201,6 +1201,53 @@ across the important batch regime.
   - Plan updates: keep the live issue open, pursue a faithful smaller repro from
     the full three-party protocol, and do not promote delay-based explanations
     to root cause without a PTX-spec-backed synchronization proof.
+- `2026-05-08` Completed: found a substantially smaller real-kernel reproducer
+  and identified odd-tail shapes as a required ingredient for the remaining live
+  failure.
+  - Reduced live repro:
+    `/tmp/replay_sync_tail_repro.py`.
+    It uses the production kernel with
+    `MLPConfig(hidden_size=17 * 128, intermediate_size=5760)`,
+    `batch_size=512`, `seed=0`, and the retained generic
+    `dense_copy_done_bar` wait. With `replay_mma_bar_sync()` temporarily reduced
+    to a no-op, three fresh trials failed at launches `5`, `4`, and `1`.
+    Restoring the retained `bar.sync 14,256` made the same reduced workload pass
+    1,000 launches.
+  - The full-kernel shrink exposed two useful requirements that the earlier
+    scratch reducers missed:
+
+```text
+┌────────────────────────────────────────────┬──────────────────────────────┐
+│ No-replay-sync live workload               │ Same-input stress result     │
+├────────────────────────────────────────────┼──────────────────────────────┤
+│ GPT shape, bs=128                          │ passed 1,000 launches        │
+│ GPT shape, bs=256                          │ passed 1,000 launches        │
+│ GPT shape, bs=512                          │ failed at launch 112         │
+│ GPT shape, bs=1,024                        │ failed at launch 6           │
+│ 14 / 16 / 22 / 24 K tiles, bs=512         │ passed 1,000 launches        │
+│ 15 K tiles, bs=512                         │ failed at launch 453         │
+│ 17 K tiles, bs=512                         │ failed at launch 7           │
+│ 19 K tiles, bs=512                         │ failed at launch 209         │
+│ 23 K tiles, bs=512                         │ failed at launch 93          │
+└────────────────────────────────────────────┴──────────────────────────────┘
+```
+
+    The failure is not a single-tile steady-state bug: it needs enough outer
+    block progression, and odd-tail shapes are a strong trigger. That explains
+    why the earlier one-block replay-chain reducers were too small.
+  - Also corrected a misleading synthetic lead. In
+    `/tmp/tmem_replay_chain_repro.py`, the smallest old failing feature pair
+    (`w_pair_first_mma` passing vs. `w_pair_first_mma_use_acc` failing) stopped
+    failing once the reducer used the same generic-address
+    `relaxed.cluster` dense-copy wait as the live kernel. With that wait fixed,
+    both features passed 1,000 launches in `none`, `delay`, and `copy_delay`
+    modes. That split was only the already-known dense-copy wait bug, not the
+    remaining live issue.
+  - Plan updates: future synthetic reducers must preserve the odd-tail
+    block-boundary protocol in addition to the generic dense-copy wait. The next
+    question is whether the live corruption comes from tail-only cursor
+    advancement, tail MMA completion, or the phase relationship created when the
+    next block begins after an odd tail.
 
 ## Next Up
 
