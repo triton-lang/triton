@@ -1314,7 +1314,6 @@ def matmul(
 
 @dataclass(frozen=True, slots=True)
 class MLPConfig:
-    name: str
     num_experts: int
     experts_per_token: int
     num_expert_shards: int
@@ -1487,7 +1486,6 @@ def make_precision_config(prepared: PreparedCase) -> PrecisionConfig:
 def run_repro(max_launches: int = 1000):
     torch.cuda.set_device(0)
     config = MLPConfig(
-        name="replay-sync-tail-race-repro",
         num_experts=128,
         experts_per_token=4,
         num_expert_shards=8,
