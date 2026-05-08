@@ -517,7 +517,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
                                              flexibleMetricContexts.begin(),
                                              flexibleMetricContexts.end());
           if (!threadState.isApiExternOp) { // Triton ops
-            contexts.push_back(name);
             flexibleMetricEntryContexts.push_back(name);
           }
           contexts.push_back(std::string(GraphState::metricTag));
