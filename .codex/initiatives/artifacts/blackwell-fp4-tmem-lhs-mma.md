@@ -1,7 +1,7 @@
 ---
 owner: jeffniu22@gmail.com
 created: 2026-05-07T07:15:19Z
-updated: 2026-05-08T03:03:55Z
+updated: 2026-05-08T06:28:19Z
 ---
 
 # Blackwell FP4 Padded Weight Packing
@@ -964,6 +964,33 @@ across the important batch regime.
     primitive that expresses post-wait partition convergence for single-issuer
     tensor-core ops or finer-grained sanitizer modeling of intra-partition warp
     progress.
+- `2026-05-08` In progress: corrected the MMA-barrier diagnosis and narrowed the
+  remaining corruption to the 1CTA TMEM-copy replay route.
+  - Artifacts: repeated same-input launch sweeps on the original `bs=1024`
+    shape; source inspection of `replay_partition()` and the existing
+    `dense_replay_tmem` / `replay_tmem` handoff;
+    `/tmp/replay_sync_trace_dump/4BIVUIDNA2MJRKKATUCSIPZ23DI3CLAZ4V57VZZVCYY6NFQAAHDQ/ws_matmul_kernel.{ttgir,llir,sass}`.
+  - Validation: extending the earlier x20 smoke exposed rare tile-local drift in
+    the retained kernel itself. The current replay-side barrier set can pass one
+    500-launch same-input sweep, but another identical sweep still failed at
+    launch 386 with a tile-local mismatch; the LDS replay route
+    (`REPLAY_VIA_TMEM_COPY=False`) remained exact for 300 repeated launches.
+  - Learnings: the earlier “one MMA barrier is insufficient, two are required”
+    conclusion was a masking symptom, not the root cause. In lowering,
+    `ttng.wait_barrier` becomes a per-thread spin loop, while
+    `ttng.arrive_barrier` already injects a local barrier before the elected
+    arriver and TMEM stores already inject `tcgen05.wait::store` plus a local
+    barrier. The extra MMA-side barrier therefore changes timing around an
+    existing race; it does not explain the required protocol by itself. The
+    remaining confirmed failure class is specific to the TMEM-copy replay route,
+    where the single-buffered `dense_replay_tmem` handoff and distributed replay
+    work still have at least one missing intra-partition ordering edge. ConSan
+    misses this class because it models one logical thread per warp-specialized
+    partition rather than the individual replay warps.
+  - Plan updates: keep investigating replay-side handoff and reuse ordering.
+    Treat the replay publication barriers as partial mitigations, not a proven
+    final fix. Do not use the second-tile MMA source barrier as evidence of an
+    MMAv5 deferred-barrier requirement.
 
 ## Next Up
 
