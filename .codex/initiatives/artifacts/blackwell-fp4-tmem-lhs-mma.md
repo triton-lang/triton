@@ -393,6 +393,36 @@ across the important batch regime.
   register-count bottleneck inside the MMA partition. Raising `MMA_REGS` nudges
   scheduler quality, but the material gap is still the extra replay pipeline and
   doubled MMA/TMEM work versus the reference orientation.
+- A source-sampled stall pass says the in-register unpack arithmetic is not what
+  is starving the MMA partition today. The direct 1-CTA MMA wait on
+  `replay_full_bar` at the handoff before MMA2 accounts for only `38`
+  long-scoreboard samples. By contrast, the epilogue wait on `acc_ready_bar`
+  contributes `277 + 621` long-scoreboard samples, the activation producer's
+  ring wait contributes `278`, and the replay partition's own wait for the
+  TMEM dense-copy completion contributes `77`.
+
+```text
+┌────────────────────────────┬──────────────────────┬──────────────────────┐
+│ Source-sampled wait        │ Inferred role        │ Long-SB samples      │
+├────────────────────────────┼──────────────────────┼──────────────────────┤
+│ `[... + 0x32120]`          │ `acc_ready_bar`      │              277+621 │
+│ `[... + 0x32000]`          │ activation ring wait │                  278 │
+│ `[... + 0x32160]`          │ `dense_copy_done_bar`│                   77 │
+│ `[... + 0x320f0]`          │ `replay_full_bar`    │                   38 │
+└────────────────────────────┴──────────────────────┴──────────────────────┘
+```
+
+- That barrier-name mapping is inferred from the SASS sequence and the Python
+  allocation order around `mma_partition()` / `replay_partition()`. It is
+  consistent with the source structure: `replay_full_bar` is the MMA-side wait
+  before the second tile, `dense_copy_done_bar` precedes TMEM load + unpack, and
+  `acc_ready_bar` precedes the epilogue TMEM load.
+- The unpack instructions themselves do not show a meaningful sampled stall
+  signature: all `PRMT` rows together have `0` long-scoreboard and `0`
+  short-scoreboard samples, and all `LOP3` rows together have only `1`
+  long-scoreboard and `10` short-scoreboard samples. The current limiter is
+  broader dependency / synchronization latency around the replayed design, not
+  the bit-manipulation sequence by itself.
 - A final low-risk 16k selector sweep found no further retained win:
   occupancy above `1` regressed sharply, repeated finalist runs kept
   `BAND_N=10` ahead of `8` and `20`, and the 1CTA `BLOCK_N=512` TMEM-copy shape
