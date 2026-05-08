@@ -1,7 +1,7 @@
 ---
 owner: jeffniu22@gmail.com
 created: 2026-05-07T07:15:19Z
-updated: 2026-05-08T06:28:19Z
+updated: 2026-05-08T10:00:16Z
 ---
 
 # Blackwell FP4 Padded Weight Packing
@@ -1039,6 +1039,53 @@ across the important batch regime.
     need tcgen fences. The compiler follow-up is to add a first-class way to
     express this rendezvous and a regression that checks the required shared
     barrier appears in emitted PTX.
+- `2026-05-08` Completed: corrected the replay-root-cause diagnosis with a
+  spec-backed no-delay fix and separated two independent edges.
+  - Artifacts:
+    `/tmp/triton_dense_generic_exact_cache/*/ws_matmul_kernel.ptx`;
+    `/tmp/triton_dense_generic_no_before_cache/*/ws_matmul_kernel.ptx`;
+    `/tmp/triton_dense_generic_no_after_cache/*/ws_matmul_kernel.ptx`;
+    `/tmp/triton_dense_generic_no_replay_sync_cache/*/ws_matmul_kernel.ptx`;
+    `/tmp/triton_final_densewait_plus_replaysync_cache/*/ws_matmul_kernel.ptx`;
+    PTX ISA 9.2 sections `9.7.16.6.4.2`, `9.7.16.6.4.4`,
+    `9.7.16.6.4.5`, `9.7.16.12.1`, and `9.7.13.14`.
+  - Exact compiler bug: Triton's generic `ttng.wait_barrier` lowering is wrong
+    for the `dense_copy_done_bar` used after `tcgen05.cp`. The producer is a
+    `tcgen05.commit...mbarrier::arrive::one.shared::cluster`, but
+    `WaitBarrierOpConversion` lowers the consumer to
+    `mbarrier.try_wait.parity.shared::cta`. NVIDIA's tcgen memory-model examples
+    use a cluster-scoped generic-address wait
+    (`mbarrier.try_wait...relaxed.cluster [mbar]`), and the ordinary acquire wait
+    is not a substitute for async tcgen synchronization. Replacing only this one
+    dense-copy wait with a generic-address `relaxed.cluster` wait removed the
+    corruption for 10,000 same-input launches with no delay.
+  - Discriminating proof:
+
+```text
+┌────────────────────────────────────────────────────────────┬──────────────────────────────┐
+│ Variant                                                    │ Same-input bs=1,024 stress   │
+├────────────────────────────────────────────────────────────┼──────────────────────────────┤
+│ LDS replay path                                            │ passed 10,000 launches       │
+│ TMEM-copy path, Triton default dense-copy wait             │ failed at launch 69          │
+│ Delay after dense-copy wait                                │ passed 10,000 launches       │
+│ Generic `relaxed.cluster` dense-copy wait only             │ passed 10,000 launches       │
+│ Generic wait + old replay-full `bar.sync 14,256` retained  │ passed 10,000 launches       │
+└────────────────────────────────────────────────────────────┴──────────────────────────────┘
+```
+
+  - The replay-full path is a separate protocol edge, not the same compiler bug.
+    Removing the retained 256-thread replay+MMA rendezvous still failed at launch
+    167 even after the dense-copy wait was fixed. PTX `mbarrier.arrive` is a
+    one-way arrival operation, while `bar.sync` is a true collective rendezvous;
+    `arrive -> wait` tells MMA that replay published a tile, but it does not stop
+    replay from running ahead afterward. The retained `bar.sync 14,256` is
+    therefore a real schedule/protocol barrier, not just a timing delay.
+  - Plan updates: keep the local inline generic wait as the application-level
+    workaround, but treat the compiler follow-up as a targeted lowering bug:
+    introduce a first-class tcgen completion wait that lowers to the generic
+    cluster-scoped form and add a regression around emitted PTX. Do not remove
+    the replay-full rendezvous until the schedule is redesigned around a real
+    cross-partition protocol rather than one-way mbarrier notification alone.
 
 ## Next Up
 
@@ -1052,6 +1099,8 @@ across the important batch regime.
   packed-layout expectations, and binary profile artifacts.
 - [ ] Decide whether future 2CTA work needs compiler support for a real
   completion-ring abstraction instead of more user-space protocol sketches.
+- [ ] Add a compiler-level tcgen completion-wait primitive or lowering path that
+  emits the generic cluster-scoped wait form for `tcgen05.commit` barriers.
 
 ## Open Questions
 

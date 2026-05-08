@@ -176,6 +176,29 @@ def replay_mma_bar_sync(x):
 
 
 @gluon.jit
+def replay_mma_wait_relaxed_cluster(bar, phase, x):
+    return gl.inline_asm_elementwise(
+        """
+        {
+            .reg .pred complete;
+            .reg .b64 bar64;
+            cvt.u64.u32 bar64, $1;
+            cvta.shared.u64 bar64, bar64;
+        waitLoop:
+            mbarrier.try_wait.parity.relaxed.cluster.b64 complete, [bar64], $2;
+            @!complete bra.uni waitLoop;
+            mov.b32 $0, $3;
+        }
+        """,
+        "=r,r,r,r",
+        [bar.to_i32(), phase, x],
+        dtype=gl.int32,
+        is_pure=False,
+        pack=1,
+    )
+
+
+@gluon.jit
 def pack_fp8x4(values):
     lhs, rhs = gl.split(values.reshape((values.shape[0], values.shape[1] // 2, 2)))
     return pack_u16x2(lhs, rhs)
@@ -829,7 +852,7 @@ def replay_partition(p: PartitionArgs):
                     )
                     blackwell.tcgen05_copy(dense_pair_words, dense_replay_tmem)
                     blackwell.tcgen05_commit(p.dense_copy_done_bar)
-                    mbarrier.wait(p.dense_copy_done_bar, dense_copy_phase)
+                    replay_mma_wait_relaxed_cluster(p.dense_copy_done_bar, dense_copy_phase, dense_copy_phase)
                     dense_copy_phase = dense_copy_phase ^ 1
 
                     # Once the async copy finishes, shared memory is no longer
