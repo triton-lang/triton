@@ -54,8 +54,8 @@ public:
     if (withState && state.has_value()) {
       std::string_view rawName;
       if (splitMetadataScopeName(state->name, rawName)) {
-        contexts.emplace_back(std::string(rawName));
         contexts.emplace_back(std::string(kMetadataScopeName));
+        contexts.emplace_back(std::string(rawName));
       } else {
         contexts.push_back(state.value());
       }

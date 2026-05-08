@@ -658,8 +658,8 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str, device: str):
         parent_frame, parent_path = queue.pop(0)
         for child in parent_frame["children"]:
             if "reduce" in child["frame"]["name"]:
-                assert parent_frame["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME
-                assert parent_path[-2] != COMPUTE_METADATA_SCOPE_NAME
+                assert parent_frame["frame"]["name"] != COMPUTE_METADATA_SCOPE_NAME
+                assert parent_path[-2] == COMPUTE_METADATA_SCOPE_NAME
                 return
             queue.append((child, parent_path + [child["frame"]["name"]]))
 
@@ -711,8 +711,9 @@ def test_hook_launch_metadata_cudagraph_metric_work_grouping(tmp_path: pathlib.P
     capture_frame = _find_frame_by_name(replay_frame, "<captured_at>")
     assert capture_frame is not None
 
-    owner_frame = _find_frame_by_name(capture_frame, owner_name)
-    metadata_frame = _find_child_by_name(owner_frame, COMPUTE_METADATA_SCOPE_NAME) if owner_frame else None
+    owner_frame = _find_child_by_name(capture_frame, owner_name)
+    metadata_root_frame = _find_child_by_name(capture_frame, COMPUTE_METADATA_SCOPE_NAME)
+    metadata_frame = _find_child_by_name(metadata_root_frame, owner_name) if metadata_root_frame else None
     assert owner_frame is not None
     assert metadata_frame is not None
     assert owner_frame["metrics"]["flops"] == 8.0
@@ -1738,11 +1739,11 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
             scope_b_frame = child
         if child["frame"]["name"] == "scope_d":
             scope_d_frame = child
-    metadata_foo_frame = _find_frame_by_name(capture_at_frame, "foo")
-    assert metadata_foo_frame is not None
-    metadata_root_frame = _find_child_by_name(metadata_foo_frame, COMPUTE_METADATA_SCOPE_NAME)
+    metadata_root_frame = _find_child_by_name(capture_at_frame, COMPUTE_METADATA_SCOPE_NAME)
     assert metadata_root_frame is not None
-    assert _find_frame_by_name(metadata_root_frame, "<metric>") is not None
+    metadata_foo_frame = _find_child_by_name(metadata_root_frame, "foo")
+    assert metadata_foo_frame is not None
+    assert _find_frame_by_name(metadata_foo_frame, "<metric>") is not None
     assert foo_test_frame is not None
     assert foo_test_frame["metrics"]["bytes"] == 160
     assert foo_test_frame["metrics"]["flops"] == 40
