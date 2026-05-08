@@ -1385,6 +1385,28 @@ across the important batch regime.
     `block_shape_m`), so every partition just loads block metadata directly by
     `block_id`. The repro still fails on the first relaunch
     (`FAIL launch=1 maxdiff=2.5`).
+  - Direct block metadata:
+    the next shrink deletes the remaining schedule helper entirely. The active
+    kernel no longer reconstructs per-block row/output metadata from
+    `(pid_m, pid_n, slice_idx, slice_offset, shape_m)`. Host code now
+    precomputes direct per-block arrays for `block_scale_idx`,
+    `block_row_base`, `block_rows`, and `block_out_off_n_packed`, and the
+    activation, scale-load, and epilogue partitions load those values directly.
+    This version still fails immediately (`FAIL launch=1 maxdiff=2.4375`).
+  - Kernel-prelude and helper cleanup:
+    the repro no longer derives `k_tiles`, output packed width, or schedule
+    geometry inside the kernel entry; those values are now computed on the host
+    and passed directly. The activation issue helper and the single-use
+    epilogue helpers were also inlined, leaving the file with fewer JIT
+    functions and a shallower device call graph. The mismatch still reproduces
+    on the first relaunch (`FAIL launch=1 maxdiff=2.625`).
+  - Launch-path cleanup:
+    the standalone repro no longer carries the `KernelConfig` object. The file
+    now uses fixed module-level literals for the block geometry, buffering, and
+    warp/register partitioning, and `alloc_randn_fp4()` no longer takes a
+    config argument. After fixing the host-side `MXFP_BLOCK_SIZE` integer vs
+    constexpr type mixup, the reduced file still repros with
+    `FAIL launch=1 maxdiff=2.625`.
 
 ## Next Up
 

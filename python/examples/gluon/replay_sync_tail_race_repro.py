@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 import torch
 import triton
 import triton.experimental.gluon as gluon
@@ -29,6 +28,28 @@ from triton_kernels.testing import alloc_rand
 
 REDUCTION_N_VALUE = 2
 REDUCTION_N = gl.constexpr(REDUCTION_N_VALUE)
+BLOCK_M_VALUE = 128
+BLOCK_N_VALUE = 256
+BLOCK_K_VALUE = 128
+X_NUM_BUFS_VALUE = 4
+W_NUM_BUFS_VALUE = 2
+W_SCALE_NUM_BUFS_VALUE = 4
+ACC_NUM_BUFS_VALUE = 1
+NUM_WARPS_VALUE = 8
+LOAD_ACTIVATION_WARPS_VALUE = 4
+LOAD_WEIGHT_WARPS_VALUE = 1
+LOAD_WEIGHT_SCALES_WARPS_VALUE = 1
+REPLAY_WARPS_VALUE = 4
+MMA_WARPS_VALUE = 4
+LOAD_ACTIVATION_REGS_VALUE = 32
+LOAD_WEIGHT_REGS_VALUE = 24
+LOAD_WEIGHT_SCALES_REGS_VALUE = 24
+REPLAY_REGS_VALUE = 80
+MMA_REGS_VALUE = 80
+OCCUPANCY_VALUE = 1
+MXFP_BLOCK_SIZE_VALUE = 32
+SCALE_SIZE_OUTER_VALUE = 128
+SCALE_SIZE_INNER_VALUE = 4
 
 
 @gluon.jit
@@ -36,24 +57,6 @@ def advance(idx: gl.tensor, phase: gl.tensor, num_bufs: gl.constexpr) -> tuple[g
     next_idx = idx + 1
     wrap = next_idx == num_bufs
     return gl.where(wrap, 0, next_idx), gl.where(wrap, phase ^ 1, phase)
-
-
-@gluon.jit
-def apply_block_schedule(
-    block_id: gl.tensor,
-    block_pid_m: gl.tensor,
-    block_pid_n: gl.tensor,
-    block_slice_idx: gl.tensor,
-    block_slice_offs: gl.tensor,
-    block_shape_m: gl.tensor,
-) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
-    pid_m = gl.load(block_pid_m + block_id)
-    pid_n = gl.load(block_pid_n + block_id)
-    slice_idx = gl.load(block_slice_idx + block_id)
-    slice_offset = gl.load(block_slice_offs + block_id)
-    shape_m = gl.load(block_shape_m + block_id)
-
-    return pid_m, pid_n, slice_idx, slice_offset, shape_m
 
 
 @gluon.jit
@@ -155,11 +158,12 @@ class PartitionArgs:
     scale_desc: tma.tensor_descriptor
 
     out_ptr: gl.tensor
-    block_pid_m: gl.tensor
     block_pid_n: gl.tensor
     block_slice_idx: gl.tensor
-    block_slice_offs: gl.tensor
-    block_shape_m: gl.tensor
+    block_scale_idx: gl.tensor
+    block_row_base: gl.tensor
+    block_rows: gl.tensor
+    block_out_off_n_packed: gl.tensor
 
     x_bufs: gl.shared_memory_descriptor
     x_empty_bars: gl.shared_memory_descriptor
@@ -190,8 +194,6 @@ class PartitionArgs:
     unpack_sync_bar: gl.shared_memory_descriptor
 
     K_TILES: gl.constexpr
-    SCALE_FLAT_N: gl.constexpr
-    SCALE_BLOCK_N_DIV: gl.constexpr
     num_blocks: gl.tensor
 
     NUM_SMS: gl.constexpr
@@ -203,45 +205,6 @@ class PartitionArgs:
     MXFP_BLOCK_SIZE: gl.constexpr
     MMA_BLOCK_COL: gl.constexpr
     OUT_PACKED_N: gl.constexpr
-
-    @gluon.jit
-    def apply_block_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
-        return apply_block_schedule(
-            block_id=block_id,
-            block_pid_m=self.block_pid_m,
-            block_pid_n=self.block_pid_n,
-            block_slice_idx=self.block_slice_idx,
-            block_slice_offs=self.block_slice_offs,
-            block_shape_m=self.block_shape_m,
-        )
-
-
-@gluon.jit
-def issue_activation_tile(
-    p: PartitionArgs,
-    idx,
-    phase,
-    issued,
-    offs_x_m,
-    off_k_x,
-    tile_x_bytes: gl.constexpr,
-):
-    empty_bar = p.x_empty_bars.index(idx)
-    ready_bar = p.x_ready_bars.index(idx)
-    x_buf = p.x_bufs.index(idx)
-
-    mbarrier.wait(empty_bar, phase, pred=issued >= p.X_NUM_BUFS)
-    mbarrier.expect(ready_bar, tile_x_bytes)
-    tma.async_gather(
-        p.x_desc,
-        offs_x_m,
-        off_k_x,
-        ready_bar,
-        x_buf,
-    )
-
-    idx, phase = advance(idx, phase, p.X_NUM_BUFS)
-    return idx, phase, issued + 1
 
 
 @gluon.jit
@@ -257,16 +220,31 @@ def load_activations(p: PartitionArgs):
     issued = 0
 
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        pid_m, _, _, slice_offset, shape_m = p.apply_block_schedule(block_id)
-        off_m = pid_m * p.BLOCK_M
-        offs_m = off_m + gl.arange(0, p.BLOCK_M, layout=offs_layout)
+        row_base = gl.load(p.block_row_base + block_id)
+        rows = gl.load(p.block_rows + block_id)
+        offs_m = gl.arange(0, p.BLOCK_M, layout=offs_layout)
 
-        mask_m = offs_m < shape_m
-        offs_x_m = gl.where(mask_m, slice_offset + offs_m, p.x_desc.shape[0])
+        mask_m = offs_m < rows
+        offs_x_m = gl.where(mask_m, row_base + offs_m, p.x_desc.shape[0])
 
         for ki in range(p.K_TILES):
             off_k_x = ki * p.BLOCK_K
-            idx, phase, issued = issue_activation_tile(p, idx, phase, issued, offs_x_m, off_k_x, tile_x_bytes)
+            empty_bar = p.x_empty_bars.index(idx)
+            ready_bar = p.x_ready_bars.index(idx)
+            x_buf = p.x_bufs.index(idx)
+
+            mbarrier.wait(empty_bar, phase, pred=issued >= p.X_NUM_BUFS)
+            mbarrier.expect(ready_bar, tile_x_bytes)
+            tma.async_gather(
+                p.x_desc,
+                offs_x_m,
+                off_k_x,
+                ready_bar,
+                x_buf,
+            )
+
+            idx, phase = advance(idx, phase, p.X_NUM_BUFS)
+            issued += 1
 
 
 @gluon.jit
@@ -278,7 +256,8 @@ def load_weights(p: PartitionArgs):
     issued = 0
 
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        _, pid_n, slice_idx, _, _ = p.apply_block_schedule(block_id)
+        pid_n = gl.load(p.block_pid_n + block_id)
+        slice_idx = gl.load(p.block_slice_idx + block_id)
 
         for ki in range(0, p.K_TILES, 2):
             w_empty_bar = p.w_empty_bars.index(idx)
@@ -307,9 +286,7 @@ def load_weight_scales(p: PartitionArgs):
     issued = 0
 
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        _, pid_n, slice_idx, _, _ = p.apply_block_schedule(block_id)
-
-        scale_idx = slice_idx * p.SCALE_FLAT_N + pid_n * p.SCALE_BLOCK_N_DIV
+        scale_idx = gl.load(p.block_scale_idx + block_id)
         for ki in range(p.K_TILES):
             off_k_scale = ki * p.BLOCK_K // (p.MXFP_BLOCK_SIZE * p.SCALE_SIZE_INNER)
 
@@ -575,85 +552,6 @@ def replay_partition(p: PartitionArgs):
 
 
 @gluon.jit
-def store_packed_out(
-    p: PartitionArgs,
-    packed_out,
-    off_m,
-    out_off_n_packed,
-    shape_m,
-    slice_offset,
-):
-    values = pack_fp8x4(packed_out)
-    layout: gl.constexpr = values.type.layout
-    offs_m = off_m + gl.arange(0, values.shape[0], layout=gl.SliceLayout(1, layout))
-    offs_n = out_off_n_packed + gl.arange(0, values.shape[1], layout=gl.SliceLayout(0, layout))
-    mask_m = gl.expand_dims(offs_m < shape_m, 1)
-    mask_n = gl.expand_dims(offs_n < p.OUT_PACKED_N, 0)
-    mask = mask_m & mask_n
-    ptrs = p.out_ptr.cast(gl.pointer_type(gl.int32), bitcast=True)
-    ptrs = ptrs + gl.expand_dims(slice_offset + offs_m, 1) * p.OUT_PACKED_N
-    ptrs = ptrs + gl.expand_dims(offs_n, 0)
-    gl.store(ptrs, values, mask=mask)
-
-
-@gluon.jit
-def pack_fp8_out_fragment(out_packed, out_recip):
-    scaled_out_packed = out_packed * float2.full_like(out_packed, out_recip)
-    return pack_e4m3x2(scaled_out_packed)
-
-
-@gluon.jit
-def get_store_layout(p: PartitionArgs):
-    return gl.BlockedLayout(
-        [p.BLOCK_M // gl.num_warps(), 2],
-        [1, 32],
-        [gl.num_warps(), 1],
-        [1, 0],
-    )
-
-
-@gluon.jit
-def epilogue_direct_store(
-    p: PartitionArgs,
-    acc_packed,
-    out_recip,
-    off_m,
-    out_off_n_packed,
-    shape_m,
-    slice_offset,
-    store_layout: gl.constexpr,
-):
-    packed_fp8 = gl.convert_layout(pack_fp8_out_fragment(acc_packed, out_recip), store_layout)
-    store_packed_out(
-        p,
-        packed_fp8,
-        off_m,
-        out_off_n_packed,
-        shape_m,
-        slice_offset,
-    )
-
-
-@gluon.jit
-def load_accumulator_tile(
-    p: PartitionArgs,
-    idx,
-    phase,
-    split_layout: gl.constexpr,
-):
-    acc_empty_bar = p.acc_empty_bars.index(idx)
-    acc_ready_bar = p.acc_ready_bars.index(idx)
-    acc_buf = p.acc_bufs.index(idx)
-
-    mbarrier.wait(acc_ready_bar, phase)
-    acc_regs = acc_buf.load().permute((1, 0))
-    mbarrier.arrive(acc_empty_bar)
-    idx, phase = advance(idx, phase, p.ACC_NUM_BUFS)
-    acc = gl.convert_layout(acc_regs, split_layout)
-    return idx, phase, float2.pack(acc, axis=1)
-
-
-@gluon.jit
 def epilogue_partition(p: PartitionArgs):
     idx = 0
     phase = 0
@@ -667,28 +565,42 @@ def epilogue_partition(p: PartitionArgs):
         [num_warps, 1],
         [1, 0],
     )
-    store_layout: gl.constexpr = get_store_layout(p)
+    store_layout: gl.constexpr = gl.BlockedLayout(
+        [p.BLOCK_M // gl.num_warps(), 2],
+        [1, 32],
+        [gl.num_warps(), 1],
+        [1, 0],
+    )
 
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        pid_m, pid_n, _, slice_offset, shape_m = p.apply_block_schedule(block_id)
-        off_m = pid_m * p.BLOCK_M
-        out_off_n_packed = pid_n * (p.BLOCK_N // REDUCTION_N // 4)
-        idx, phase, acc_packed = load_accumulator_tile(
-            p,
-            idx,
-            phase,
-            split_layout,
-        )
-        epilogue_direct_store(
-            p,
-            acc_packed,
-            out_recip,
-            off_m,
-            out_off_n_packed,
-            shape_m,
-            slice_offset,
+        row_base = gl.load(p.block_row_base + block_id)
+        rows = gl.load(p.block_rows + block_id)
+        out_off_n_packed = gl.load(p.block_out_off_n_packed + block_id)
+        acc_empty_bar = p.acc_empty_bars.index(idx)
+        acc_ready_bar = p.acc_ready_bars.index(idx)
+        acc_buf = p.acc_bufs.index(idx)
+
+        mbarrier.wait(acc_ready_bar, phase)
+        acc_regs = acc_buf.load().permute((1, 0))
+        mbarrier.arrive(acc_empty_bar)
+        idx, phase = advance(idx, phase, p.ACC_NUM_BUFS)
+        acc = gl.convert_layout(acc_regs, split_layout)
+        acc_packed = float2.pack(acc, axis=1)
+
+        packed_fp8 = gl.convert_layout(
+            pack_e4m3x2(acc_packed * float2.full_like(acc_packed, out_recip)),
             store_layout,
         )
+        values = pack_fp8x4(packed_fp8)
+        layout: gl.constexpr = values.type.layout
+        offs_m = gl.arange(0, values.shape[0], layout=gl.SliceLayout(1, layout))
+        offs_n = out_off_n_packed + gl.arange(0, values.shape[1], layout=gl.SliceLayout(0, layout))
+        mask_m = gl.expand_dims(offs_m < rows, 1)
+        mask_n = gl.expand_dims(offs_n < p.OUT_PACKED_N, 0)
+        ptrs = p.out_ptr.cast(gl.pointer_type(gl.int32), bitcast=True)
+        ptrs = ptrs + gl.expand_dims(row_base + offs_m, 1) * p.OUT_PACKED_N
+        ptrs = ptrs + gl.expand_dims(offs_n, 0)
+        gl.store(ptrs, values, mask=mask_m & mask_n)
 
 
 @gluon.jit
@@ -698,19 +610,20 @@ def ws_matmul_kernel(
     scale_desc: tma.tensor_descriptor,
     out_ptr: gl.tensor,
     #
-    block_pid_m: gl.tensor,
     block_pid_n: gl.tensor,
     block_slice_idx: gl.tensor,
-    block_slice_offs: gl.tensor,
-    block_shape_m: gl.tensor,
+    block_scale_idx: gl.tensor,
+    block_row_base: gl.tensor,
+    block_rows: gl.tensor,
+    block_out_off_n_packed: gl.tensor,
     #
-    N: gl.constexpr,
-    K: gl.constexpr,
     num_blocks: gl.tensor,
     #
     BLOCK_M: gl.constexpr,
     BLOCK_N: gl.constexpr,
     BLOCK_K: gl.constexpr,
+    K_TILES: gl.constexpr,
+    OUT_PACKED_N: gl.constexpr,
     NUM_SMS: gl.constexpr,
     X_NUM_BUFS: gl.constexpr,
     W_NUM_BUFS: gl.constexpr,
@@ -734,12 +647,6 @@ def ws_matmul_kernel(
     MXFP_BLOCK_SIZE: gl.constexpr,
 ):
     gl.static_assert(gl.num_ctas() == 1, "standalone repro is 1CTA-only")
-
-    grid_n: gl.constexpr = triton.cdiv(N, BLOCK_N)
-    k_tiles: gl.constexpr = triton.cdiv(K, BLOCK_K)
-    scale_flat_n: gl.constexpr = N // SCALE_SIZE_OUTER
-    scale_block_n_div: gl.constexpr = BLOCK_N // SCALE_SIZE_OUTER
-    out_packed_n: gl.constexpr = N // 8
 
     scale_k: gl.constexpr = BLOCK_K // MXFP_BLOCK_SIZE
     x_scale_layout: gl.constexpr = blackwell.TensorMemoryScalesLayout()
@@ -809,11 +716,12 @@ def ws_matmul_kernel(
         w_desc=w_desc,
         scale_desc=scale_desc,
         out_ptr=out_ptr,
-        block_pid_m=block_pid_m,
         block_pid_n=block_pid_n,
         block_slice_idx=block_slice_idx,
-        block_slice_offs=block_slice_offs,
-        block_shape_m=block_shape_m,
+        block_scale_idx=block_scale_idx,
+        block_row_base=block_row_base,
+        block_rows=block_rows,
+        block_out_off_n_packed=block_out_off_n_packed,
         #
         x_bufs=x_bufs,
         x_empty_bars=x_empty_bars,
@@ -843,9 +751,7 @@ def ws_matmul_kernel(
         dense_copy_done_bar=dense_copy_done_bar,
         unpack_sync_bar=unpack_sync_bar,
         #
-        K_TILES=k_tiles,
-        SCALE_FLAT_N=scale_flat_n,
-        SCALE_BLOCK_N_DIV=scale_block_n_div,
+        K_TILES=K_TILES,
         num_blocks=num_blocks,
         #
         NUM_SMS=NUM_SMS,
@@ -856,7 +762,7 @@ def ws_matmul_kernel(
         SCALE_SIZE_INNER=SCALE_SIZE_INNER,
         MXFP_BLOCK_SIZE=MXFP_BLOCK_SIZE,
         MMA_BLOCK_COL=MMA_BLOCK_COL,
-        OUT_PACKED_N=out_packed_n,
+        OUT_PACKED_N=OUT_PACKED_N,
     )
 
     gl.warp_specialize(
@@ -928,37 +834,6 @@ def make_tensor_descriptor(
         )
     return TensorDescriptor(ptr, shape, strides, desc_block_shape, layout)
 
-
-@dataclass(frozen=True, slots=True)
-class KernelConfig:
-    BLOCK_M: int = 128
-    BLOCK_N: int = 256
-    BLOCK_K: int = 128
-
-    X_NUM_BUFS: int = 4
-    W_NUM_BUFS: int = 2
-    W_SCALE_NUM_BUFS: int = 4
-    ACC_NUM_BUFS: int = 1
-
-    NUM_WARPS: int = 8
-    LOAD_ACTIVATION_WARPS: int = 4
-    LOAD_WEIGHT_WARPS: int = 1
-    LOAD_WEIGHT_SCALES_WARPS: int = 1
-    REPLAY_WARPS: int = 4
-    MMA_WARPS: int = 4
-
-    LOAD_ACTIVATION_REGS: int = 32
-    LOAD_WEIGHT_REGS: int = 24
-    LOAD_WEIGHT_SCALES_REGS: int = 24
-    REPLAY_REGS: int = 80
-    MMA_REGS: int = 80
-    MAXNREG: int = None
-    OCCUPANCY: int = 1
-
-    MXFP_BLOCK_SIZE: int = 32
-    SCALE_SIZE_OUTER: int = 128
-    SCALE_SIZE_INNER: int = 4
-
 def matmul(
     a: torch.Tensor,
     b: torch.Tensor | Tensor,
@@ -972,50 +847,54 @@ def matmul(
     assert a.ndim == 2
     _, k = a.shape
     _, _, n = b.shape
-    m = c.shape[0]
 
-    p = KernelConfig()
     assert isinstance(b, Tensor)
     assert isinstance(b.storage.layout, BlackwellMX4ValuePackedShuffledLayout)
-    assert b.storage.layout.block_k == p.BLOCK_K
-    assert b.storage.layout.block_n == p.BLOCK_N
-    x_block_offs = a_ragged_metadata.block_offs(p.BLOCK_M)
-    x_block_schedule = a_ragged_metadata.block_schedule(p.BLOCK_M)
+    assert b.storage.layout.block_k == BLOCK_K_VALUE
+    assert b.storage.layout.block_n == BLOCK_N_VALUE
+    x_block_offs = a_ragged_metadata.block_offs(BLOCK_M_VALUE)
+    x_block_schedule = a_ragged_metadata.block_schedule(BLOCK_M_VALUE)
     grid_m = int(x_block_offs[-1].item())
     x_block_schedule = x_block_schedule[:grid_m]
     x_block_slice_idx = (x_block_schedule & 0xFFFF).to(torch.int32)
     x_block_pid_m = (x_block_schedule >> 16).to(torch.int32)
     x_block_slice_offs = a_ragged_metadata.slice_offs[x_block_slice_idx.to(torch.int64)]
     x_block_shape_m = a_ragged_metadata.slice_sizes[x_block_slice_idx.to(torch.int64)]
-    grid_n = triton.cdiv(n, p.BLOCK_N)
+    grid_n = triton.cdiv(n, BLOCK_N_VALUE)
+    k_tiles = triton.cdiv(k, BLOCK_K_VALUE)
+    out_packed_n = n // 8
     num_blocks = grid_m * grid_n
     schedule_pid_m = torch.arange(num_blocks, device=c.device, dtype=torch.int64) // grid_n
-    block_pid_m = x_block_pid_m[schedule_pid_m]
     block_pid_n = (torch.arange(num_blocks, device=c.device, dtype=torch.int32) % grid_n).to(torch.int32)
     block_slice_idx = x_block_slice_idx[schedule_pid_m]
-    block_slice_offs = x_block_slice_offs[schedule_pid_m]
-    block_shape_m = x_block_shape_m[schedule_pid_m]
+    block_scale_idx = (block_slice_idx * (n // SCALE_SIZE_OUTER_VALUE) + block_pid_n * (BLOCK_N_VALUE // SCALE_SIZE_OUTER_VALUE)).to(
+        torch.int32
+    )
+    block_off_m = (x_block_pid_m[schedule_pid_m] * BLOCK_M_VALUE).to(torch.int32)
+    block_row_base = (x_block_slice_offs[schedule_pid_m] + block_off_m).to(torch.int32)
+    block_rows = (x_block_shape_m[schedule_pid_m] - block_off_m).to(torch.int32)
+    block_out_off_n_packed = (block_pid_n * (BLOCK_N_VALUE // REDUCTION_N_VALUE // 4)).to(torch.int32)
     sms = torch.cuda.get_device_properties(c.device).multi_processor_count
-    sms *= p.OCCUPANCY
+    sms *= OCCUPANCY_VALUE
     launch_grid = max(1, min(sms, num_blocks))
     grid = (launch_grid,)
 
     x_desc = make_tensor_descriptor(
         a,
-        (1, p.BLOCK_K),
-        layout_block_shape=(p.BLOCK_M, p.BLOCK_K),
+        (1, BLOCK_K_VALUE),
+        layout_block_shape=(BLOCK_M_VALUE, BLOCK_K_VALUE),
     )
     w_desc = make_tensor_descriptor(
         b,
-        (1, p.BLOCK_K * 2, p.BLOCK_N),
+        (1, BLOCK_K_VALUE * 2, BLOCK_N_VALUE),
         # Sharded weight tiles use the physical [1, 1, 1, N, K/2] MX4 shuffled block layout.
     )
     scale_desc = make_tensor_descriptor(
         b_mx_scales,
         (
             1,
-            p.BLOCK_N // p.SCALE_SIZE_OUTER,
-            p.BLOCK_K // p.MXFP_BLOCK_SIZE // p.SCALE_SIZE_INNER,
+            BLOCK_N_VALUE // SCALE_SIZE_OUTER_VALUE,
+            BLOCK_K_VALUE // MXFP_BLOCK_SIZE_VALUE // SCALE_SIZE_INNER_VALUE,
             2,
             256,
         ),
@@ -1027,44 +906,45 @@ def matmul(
         scale_desc=scale_desc,
         out_ptr=c,
         #
-        block_pid_m=block_pid_m,
         block_pid_n=block_pid_n,
         block_slice_idx=block_slice_idx,
-        block_slice_offs=block_slice_offs,
-        block_shape_m=block_shape_m,
+        block_scale_idx=block_scale_idx,
+        block_row_base=block_row_base,
+        block_rows=block_rows,
+        block_out_off_n_packed=block_out_off_n_packed,
         #
-        N=n,
-        K=k,
         num_blocks=num_blocks,
         #
-        BLOCK_M=p.BLOCK_M,
-        BLOCK_N=p.BLOCK_N,
-        BLOCK_K=p.BLOCK_K,
+        BLOCK_M=BLOCK_M_VALUE,
+        BLOCK_N=BLOCK_N_VALUE,
+        BLOCK_K=BLOCK_K_VALUE,
+        K_TILES=k_tiles,
+        OUT_PACKED_N=out_packed_n,
         NUM_SMS=launch_grid,
-        X_NUM_BUFS=p.X_NUM_BUFS,
-        W_NUM_BUFS=p.W_NUM_BUFS,
-        W_SCALE_NUM_BUFS=p.W_SCALE_NUM_BUFS,
-        ACC_NUM_BUFS=p.ACC_NUM_BUFS,
+        X_NUM_BUFS=X_NUM_BUFS_VALUE,
+        W_NUM_BUFS=W_NUM_BUFS_VALUE,
+        W_SCALE_NUM_BUFS=W_SCALE_NUM_BUFS_VALUE,
+        ACC_NUM_BUFS=ACC_NUM_BUFS_VALUE,
         #
-        LOAD_ACTIVATION_WARPS=p.LOAD_ACTIVATION_WARPS,
-        LOAD_WEIGHT_WARPS=p.LOAD_WEIGHT_WARPS,
-        LOAD_WEIGHT_SCALES_WARPS=p.LOAD_WEIGHT_SCALES_WARPS,
-        REPLAY_WARPS=p.REPLAY_WARPS,
-        MMA_WARPS=p.MMA_WARPS,
+        LOAD_ACTIVATION_WARPS=LOAD_ACTIVATION_WARPS_VALUE,
+        LOAD_WEIGHT_WARPS=LOAD_WEIGHT_WARPS_VALUE,
+        LOAD_WEIGHT_SCALES_WARPS=LOAD_WEIGHT_SCALES_WARPS_VALUE,
+        REPLAY_WARPS=REPLAY_WARPS_VALUE,
+        MMA_WARPS=MMA_WARPS_VALUE,
         #
-        LOAD_ACTIVATION_REGS=p.LOAD_ACTIVATION_REGS,
-        LOAD_WEIGHT_REGS=p.LOAD_WEIGHT_REGS,
-        LOAD_WEIGHT_SCALES_REGS=p.LOAD_WEIGHT_SCALES_REGS,
-        REPLAY_REGS=p.REPLAY_REGS,
-        MMA_REGS=p.MMA_REGS,
+        LOAD_ACTIVATION_REGS=LOAD_ACTIVATION_REGS_VALUE,
+        LOAD_WEIGHT_REGS=LOAD_WEIGHT_REGS_VALUE,
+        LOAD_WEIGHT_SCALES_REGS=LOAD_WEIGHT_SCALES_REGS_VALUE,
+        REPLAY_REGS=REPLAY_REGS_VALUE,
+        MMA_REGS=MMA_REGS_VALUE,
         #
-        SCALE_SIZE_OUTER=p.SCALE_SIZE_OUTER,
-        SCALE_SIZE_INNER=p.SCALE_SIZE_INNER,
-        MXFP_BLOCK_SIZE=p.MXFP_BLOCK_SIZE,
+        SCALE_SIZE_OUTER=SCALE_SIZE_OUTER_VALUE,
+        SCALE_SIZE_INNER=SCALE_SIZE_INNER_VALUE,
+        MXFP_BLOCK_SIZE=MXFP_BLOCK_SIZE_VALUE,
         #
-        num_warps=p.NUM_WARPS,
+        num_warps=NUM_WARPS_VALUE,
         num_ctas=1,
-        maxnreg=p.MAXNREG,
+        maxnreg=None,
     )
 
     return c
@@ -1081,14 +961,12 @@ def alloc_randn(shape: tuple[int, ...], dtype: torch.dtype, device: str) -> torc
     return torch.randn(shape, device=device, dtype=dtype)
 
 
-def alloc_randn_fp4(shape: tuple[int, ...], device: str, p: KernelConfig) -> tuple[Tensor, Tensor]:
-    block_k, block_n, num_warps = p.BLOCK_K, p.BLOCK_N, p.NUM_WARPS
-
+def alloc_randn_fp4(shape: tuple[int, ...], device: str) -> tuple[Tensor, Tensor]:
     data = alloc_randn(shape, torch.bfloat16, device)
     data, scale = downcast_to_mxfp(data, FP4, axis=1)  # type: ignore[arg-type]
 
-    data_layout = BlackwellMX4ValuePackedShuffledLayout(block_k=block_k, block_n=block_n)
-    scale_layout = make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=num_warps)
+    data_layout = BlackwellMX4ValuePackedShuffledLayout(block_k=BLOCK_K_VALUE, block_n=BLOCK_N_VALUE)
+    scale_layout = make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=NUM_WARPS_VALUE)
 
     data = convert_layout(wrap_torch_tensor(data, dtype=FP4), data_layout)
     scale = convert_layout(wrap_torch_tensor(scale), scale_layout)
@@ -1153,7 +1031,6 @@ def run_repro(max_launches: int = 1000):
     intermediate_size = 5760
     batch_size = 512
 
-    p = KernelConfig()
     n_expts_local = len(FROZEN_SLICE_SIZES)
 
     # Preserve the original x/w RNG stream while using frozen routing metadata.
@@ -1165,7 +1042,7 @@ def run_repro(max_launches: int = 1000):
     ragged_metadata.expected_slice_size = 16
 
     x = alloc_randn((batch_size, hidden_size), dtype=torch.float8_e4m3fn, device=device)
-    w, w_scale = alloc_randn_fp4((n_expts_local, hidden_size, intermediate_size), device=device, p=p)
+    w, w_scale = alloc_randn_fp4((n_expts_local, hidden_size, intermediate_size), device=device)
 
     out_shape = (FROZEN_GATHER_LEN, intermediate_size // REDUCTION_N_VALUE)
     out = torch.zeros(out_shape, dtype=torch.float8_e4m3fn, device=device)
