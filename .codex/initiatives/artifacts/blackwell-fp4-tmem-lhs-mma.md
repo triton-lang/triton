@@ -1311,6 +1311,13 @@ across the important batch regime.
   - Latest saved repro head:
     `a824c5eaaa` still fails with the same focused command and most recently
     reported `FAIL launch=25 maxdiff=0.21484375`.
+  - Larger blast-radius follow-up:
+    a later host-side collapse kept the mismatch without needing to binary
+    search any of it back out. Commit `0751e0f528` deletes the standalone
+    `MLPConfig` / `PreparedCase` / `prepare_case` / `make_precision_config` /
+    `init_routing_data` scaffolding and inlines the fixed repro setup directly
+    into `run_repro()`. That head still failed with the focused command and
+    most recently reported `FAIL launch=12 maxdiff=0.2734375`.
 
 ## Next Up
 
