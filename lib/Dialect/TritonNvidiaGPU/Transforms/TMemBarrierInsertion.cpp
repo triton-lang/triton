@@ -47,18 +47,17 @@ static TMemAccessKind getTMemAccessKind(Operation *op) {
   return TMemAccessKind::None;
 }
 
-static bool isStoreLike(Operation *op) {
-  return getTMemAccessKind(op) == TMemAccessKind::Store;
-}
-
 static bool filterFn(Operation *lhs, Operation *rhs, bool /*lhsIsRead*/,
                      bool /*rhsIsRead*/, Allocation * /*allocation*/) {
   TMemAccessKind lhsKind = getTMemAccessKind(lhs);
   TMemAccessKind rhsKind = getTMemAccessKind(rhs);
 
-  bool war = lhsKind == TMemAccessKind::Load && isStoreLike(rhs);
-  bool raw = isStoreLike(lhs) && rhsKind == TMemAccessKind::Load;
-  bool waw = isStoreLike(lhs) && isStoreLike(rhs);
+  bool war =
+      lhsKind == TMemAccessKind::Load && rhsKind == TMemAccessKind::Store;
+  bool raw =
+      lhsKind == TMemAccessKind::Store && rhsKind == TMemAccessKind::Load;
+  bool waw =
+      lhsKind == TMemAccessKind::Store && rhsKind == TMemAccessKind::Store;
 
   // MMA is special case, we care about load->mma and store->mma dependencies
   // but mma -> load/store doesn't require a barrier since it would need a
@@ -66,7 +65,8 @@ static bool filterFn(Operation *lhs, Operation *rhs, bool /*lhsIsRead*/,
   // reach the load/store.
   bool loadToMma =
       lhsKind == TMemAccessKind::Load && rhsKind == TMemAccessKind::MMA;
-  bool storeToMma = isStoreLike(lhs) && rhsKind == TMemAccessKind::MMA;
+  bool storeToMma =
+      lhsKind == TMemAccessKind::Store && rhsKind == TMemAccessKind::MMA;
 
   bool requiresBarrier = war || raw || waw || loadToMma || storeToMma;
   return !requiresBarrier;
