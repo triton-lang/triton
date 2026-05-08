@@ -37,12 +37,16 @@ static bool isWritingAlloc(Operation *op) {
   return alloc && alloc.getSrc();
 }
 
+static bool isMMALikeOp(Operation *op) {
+  return isa<TCGen5MMAOp, TCGen5MMAScaledOp, TMEMCopyOp>(op);
+}
+
 static TMemAccessKind getTMemAccessKind(Operation *op) {
   if (isa<TMEMLoadOp>(op))
     return TMemAccessKind::Load;
   if (isa<TMEMStoreOp>(op) || isWritingAlloc(op))
     return TMemAccessKind::Store;
-  if (isa<TCGen5MMAOp>(op))
+  if (isMMALikeOp(op))
     return TMemAccessKind::MMA;
   return TMemAccessKind::None;
 }
@@ -59,10 +63,10 @@ static bool filterFn(Operation *lhs, Operation *rhs, bool /*lhsIsRead*/,
   bool waw =
       lhsKind == TMemAccessKind::Store && rhsKind == TMemAccessKind::Store;
 
-  // MMA is special case, we care about load->mma and store->mma dependencies
-  // but mma -> load/store doesn't require a barrier since it would need a
-  // mbarrier wait that will ensure the mma is finished before any thread can
-  // reach the load/store.
+  // MMAv5 ops and tmem_copy are special cases, we care about load->mma and
+  // store->mma dependencies but mma -> load/store doesn't require a barrier
+  // since it would need a mbarrier wait that will ensure the op is finished
+  // before any thread can reach the load/store.
   bool loadToMma =
       lhsKind == TMemAccessKind::Load && rhsKind == TMemAccessKind::MMA;
   bool storeToMma =
@@ -259,12 +263,15 @@ void TMemBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
   } else if (auto alloc = dyn_cast<TMEMAllocOp>(op)) {
     if (alloc.getSrc())
       appendWriteSlices(alloc.getResult(), op, &curBlockInfo);
-  } else if (auto mma = dyn_cast<TCGen5MMAOp>(op)) {
-    // Represent MMA operands as ordering sinks for this analysis. This lets the
-    // common read/write framework express both load->mma and store-like->mma
-    // dependencies without adding a separate RAR path just for TMEM.
-    appendWriteSlices(mma.getD(), op, &curBlockInfo);
+  } else if (auto mma = dyn_cast<MMAv5OpInterface>(op)) {
+    appendWriteSlices(mma.getAccumulator(), op, &curBlockInfo);
     appendReadSlices(mma.getA(), op, &curBlockInfo);
+    if (auto scaledMma = dyn_cast<TCGen5MMAScaledOp>(op)) {
+      appendReadSlices(scaledMma.getAScale(), op, &curBlockInfo);
+      appendReadSlices(scaledMma.getBScale(), op, &curBlockInfo);
+    }
+  } else if (auto copy = dyn_cast<TMEMCopyOp>(op)) {
+    appendWriteSlices(copy.getDst(), op, &curBlockInfo);
   }
 
   if (blockInfo->isIntersected(curBlockInfo, filter, allocation)) {
