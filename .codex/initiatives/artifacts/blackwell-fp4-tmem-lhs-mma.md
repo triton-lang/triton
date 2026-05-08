@@ -1251,9 +1251,28 @@ across the important batch regime.
   - Standalone handoff:
     `python/examples/gluon/replay_sync_tail_race_repro.py` is now the smallest
     faithful one-file repro kept in the repo. It is a reduced copy of the live
-    kernel with `replay_mma_bar_sync()` made a no-op locally and the
-    `17 * 128` / `bs=512` workload hardcoded in `run_repro()`. On the first run
-    after creation it failed at launch `2` with `maxdiff=0.21484375`.
+    1CTA kernel with the `17 * 128` / `bs=512` workload hardcoded in
+    `run_repro()`. After removing unrelated benchmark/test/demo code and all
+    reachable 2CTA branches, it still failed at launch `16` with
+    `maxdiff=0.40625`.
+  - Standalone 2x2 variant check:
+
+```text
+┌────────────────────────────────────────────┬──────────────────────────────┐
+│ Standalone variant                         │ Same-input stress result     │
+├────────────────────────────────────────────┼──────────────────────────────┤
+│ Generic dense-copy wait + no-op sync calls │ failed at launch 1           │
+│ Generic dense-copy wait + sync calls gone  │ failed at launch 2           │
+│ Standard `mbarrier.wait` + sync calls      │ failed at launch 12          │
+│ Standard `mbarrier.wait` + calls gone      │ failed at launch 1           │
+└────────────────────────────────────────────┴──────────────────────────────┘
+```
+
+    Removing the no-op `replay_mma_bar_sync()` calls does not remove the race.
+    Replacing the generic dense-copy wait with ordinary `mbarrier.wait` also
+    repros, but that reintroduces the already-proven separate dense-copy wait
+    lowering bug, so the kept standalone repro continues to use the generic wait
+    to isolate the remaining issue.
 
 ## Next Up
 
