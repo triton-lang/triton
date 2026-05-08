@@ -56,19 +56,8 @@ static bool filterFn(Operation *lhs, Operation *rhs, bool /*lhsIsRead*/,
   TMemAccessKind lhsKind = getTMemAccessKind(lhs);
   TMemAccessKind rhsKind = getTMemAccessKind(rhs);
 
-  // A TMEM load reads values back into registers. Reusing the same physical
-  // TMEM for a later store before all threads finished the load is a WAR
-  // hazard.
   bool war = lhsKind == TMemAccessKind::Load && isStoreLike(rhs);
-
-  // A TMEM store produces values in TMEM that a later load consumes. The
-  // tcgen05 store wait is not a CTA-wide handoff, so this RAW edge needs a
-  // barrier before the load.
   bool raw = isStoreLike(lhs) && rhsKind == TMemAccessKind::Load;
-
-  // Two stores to aliasing TMEM need a CTA-wide handoff before the physical
-  // storage is reused. This is a WAW hazard even when the logical allocations
-  // are distinct.
   bool waw = isStoreLike(lhs) && isStoreLike(rhs);
 
   // MMA is special here: the tensor core consumes TMEM outside the ordinary
