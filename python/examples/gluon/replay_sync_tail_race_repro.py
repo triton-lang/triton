@@ -299,7 +299,6 @@ class PartitionArgs:
 
     SWIGLU_SUBTILE_FACTOR: gl.constexpr
     BAND_N: gl.constexpr
-    REUSE_GATHER_INDICES: gl.constexpr
     INLINE_MMA_INPUT_RELEASE: gl.constexpr
     REPLAY_VIA_TMEM_COPY: gl.constexpr
     REPLAY_K_SUBTILE_FACTOR: gl.constexpr
@@ -356,39 +355,18 @@ def load_activations(p: PartitionArgs):
     phase = 1
     issued = 0
 
-    if p.REUSE_GATHER_INDICES:
-        cached_pid_m = gl.full((), -1, dtype=gl.int32)
-        cached_slice_idx = gl.full((), -1, dtype=gl.int32)
-        cached_shape_m = gl.full((), 0, dtype=gl.int32)
-        cached_offs_x_m = gl.full((p.BLOCK_M,), p.x_desc.shape[0], dtype=gl.int32, layout=offs_layout)
-
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
         pid_m, _, slice_idx, slice_offset = p.apply_block_schedule(block_id)
         off_m = pid_m * p.BLOCK_M
         offs_m = off_m + gl.arange(0, p.BLOCK_M, layout=offs_layout)
 
-        if p.REUSE_GATHER_INDICES:
-            reuse_gather = (pid_m == cached_pid_m) & (slice_idx == cached_slice_idx)
-            load_gather = ~reuse_gather
-            shape_m = gl.load(p.x_slice_sizes + slice_idx, mask=load_gather, other=cached_shape_m)
-            mask_m = (offs_m < shape_m) & load_gather
-            offs_x_m = gl.load(
-                p.gather_indx_ptr + slice_offset + offs_m,
-                mask=mask_m,
-                other=cached_offs_x_m,
-            )
-            cached_pid_m = pid_m
-            cached_slice_idx = slice_idx
-            cached_shape_m = shape_m
-            cached_offs_x_m = offs_x_m
-        else:
-            shape_m = gl.load(p.x_slice_sizes + slice_idx)
-            mask_m = offs_m < shape_m
-            offs_x_m = gl.load(
-                p.gather_indx_ptr + slice_offset + offs_m,
-                mask=mask_m,
-                other=p.x_desc.shape[0],
-            )
+        shape_m = gl.load(p.x_slice_sizes + slice_idx)
+        mask_m = offs_m < shape_m
+        offs_x_m = gl.load(
+            p.gather_indx_ptr + slice_offset + offs_m,
+            mask=mask_m,
+            other=p.x_desc.shape[0],
+        )
 
         for ki in range(p.K_TILES):
             off_k_x = ki * p.BLOCK_K
@@ -1027,7 +1005,6 @@ def ws_matmul_kernel(
     #
     SWIGLU_SUBTILE_FACTOR: gl.constexpr,
     BAND_N: gl.constexpr,
-    REUSE_GATHER_INDICES: gl.constexpr,
     INLINE_MMA_INPUT_RELEASE: gl.constexpr,
     REPLAY_VIA_TMEM_COPY: gl.constexpr,
     REPLAY_K_SUBTILE_FACTOR: gl.constexpr,
@@ -1185,7 +1162,6 @@ def ws_matmul_kernel(
         #
         SWIGLU_SUBTILE_FACTOR=SWIGLU_SUBTILE_FACTOR,
         BAND_N=BAND_N,
-        REUSE_GATHER_INDICES=REUSE_GATHER_INDICES,
         INLINE_MMA_INPUT_RELEASE=INLINE_MMA_INPUT_RELEASE,
         REPLAY_VIA_TMEM_COPY=REPLAY_VIA_TMEM_COPY,
         REPLAY_K_SUBTILE_FACTOR=REPLAY_K_SUBTILE_FACTOR,
@@ -1290,7 +1266,6 @@ class KernelConfig:
     SWIGLU_SUBTILE_FACTOR: int = 8
     BAND_N: int = 18
 
-    REUSE_GATHER_INDICES: bool = False
     INLINE_MMA_INPUT_RELEASE: bool = False
     REPLAY_VIA_TMEM_COPY: bool = True
     REPLAY_K_SUBTILE_FACTOR: int = 1
@@ -1457,7 +1432,6 @@ def matmul(
         #
         SWIGLU_SUBTILE_FACTOR=p.SWIGLU_SUBTILE_FACTOR,
         BAND_N=p.BAND_N,
-        REUSE_GATHER_INDICES=p.REUSE_GATHER_INDICES,
         INLINE_MMA_INPUT_RELEASE=p.INLINE_MMA_INPUT_RELEASE,
         REPLAY_VIA_TMEM_COPY=p.REPLAY_VIA_TMEM_COPY,
         REPLAY_K_SUBTILE_FACTOR=p.REPLAY_K_SUBTILE_FACTOR,
