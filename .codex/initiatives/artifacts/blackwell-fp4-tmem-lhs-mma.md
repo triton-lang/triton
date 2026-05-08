@@ -1302,6 +1302,15 @@ across the important batch regime.
     and currently reports `FAIL launch=13 maxdiff=0.4609375`. The exact launch
     count moves as codegen changes, so the validation gate for pruning is
     “still mismatches quickly”, not a specific failing iteration.
+  - Follow-on outer-helper pruning:
+    later commits kept reducing the same file without touching the core replay
+    protocol. The retained cuts removed the dead FP4-init fallback, the
+    `prepare_case` reference/config branches, the wrapper helpers around
+    `matmul`, fixed output dtype/shape fields in `PreparedCase`, the unused
+    `MLPConfig.name` field, and the dead float32 descriptor arm.
+  - Latest saved repro head:
+    `a824c5eaaa` still fails with the same focused command and most recently
+    reported `FAIL launch=25 maxdiff=0.21484375`.
 
 ## Next Up
 
