@@ -2055,8 +2055,8 @@ void FunctionBuilder::createTransferVisibleWritesCall(
       b, "transfer_visible_writes", args,
       /*assertInfo=*/std::nullopt,
       {barriersType, writeVisibilityType, writeTrackingType, (uint64_t)memType},
-      [writeVisibilityType,
-       writeTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      [writeVisibilityType, writeTrackingType](ImplicitLocOpBuilder &fb,
+                                               Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
