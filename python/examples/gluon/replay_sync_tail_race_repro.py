@@ -1326,8 +1326,6 @@ class MLPConfig:
 
 @dataclass(frozen=True, slots=True)
 class PreparedCase:
-    batch_size: int
-    local_rank: int
     x: torch.Tensor
     w: Tensor
     w_scale: Tensor
@@ -1458,8 +1456,6 @@ def prepare_case(
     x_scale = (torch.rand((), device=device) + 0.5).reshape(1)
     y_scale = (torch.rand((), device=device) + 3.5).reshape(1)
     return PreparedCase(
-        batch_size=batch_size,
-        local_rank=local_rank,
         x=x,
         w=w,
         w_scale=w_scale,
