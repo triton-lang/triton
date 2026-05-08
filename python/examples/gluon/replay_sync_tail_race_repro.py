@@ -1496,12 +1496,10 @@ def make_output_buffer(prepared: PreparedCase) -> torch.Tensor:
 
 def run_kernel(
     prepared: PreparedCase,
-    kernel,
     precision_config: PrecisionConfig,
     out: torch.Tensor,
-    p: KernelConfig | None = None,
 ) -> torch.Tensor:
-    kwargs = dict(
+    return matmul(
         a=prepared.x,
         b=prepared.w,
         bias=prepared.bias,
@@ -1511,9 +1509,6 @@ def run_kernel(
         c=out,
         fused_activation=prepared.fused_activation,
     )
-    if p is not None:
-        kwargs["p"] = p
-    return kernel(**kwargs)
 
 
 
@@ -1544,13 +1539,13 @@ def run_repro(max_launches: int = 1000):
     precision = make_precision_config(prepared)
     out = make_output_buffer(prepared)
 
-    run_kernel(prepared, matmul, precision, out)
+    run_kernel(prepared, precision, out)
     torch.cuda.synchronize()
     expected = out.clone()
 
     for launch in range(1, max_launches + 1):
         out.zero_()
-        run_kernel(prepared, matmul, precision, out)
+        run_kernel(prepared, precision, out)
         torch.cuda.synchronize()
         if not torch.equal(out, expected):
             maxdiff = (out.to(torch.float32) - expected.to(torch.float32)).abs().max().item()
