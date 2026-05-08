@@ -1092,22 +1092,24 @@ across the important batch regime.
     replay-local and MMA-local barriers; it has no 256-thread replay+MMA
     rendezvous. Adding exactly that cross-partition `bar.sync 14,256` fixes the
     stress test.
-  - Follow-up discriminator: the missing contract is a consumer acknowledgment,
-    not merely stronger local ordering. Adding only `tcgen05.fence::{before,
-    after}_thread_sync` around the existing replay-full edge still failed at
-    launch 522. Replacing the 256-thread rendezvous with a dedicated
-    `replay_seen_bar` ring, where MMA arrives only after observing
-    `replay_full_bar` and replay waits on `replay_seen_bar` before advancing its
-    cursor, passed 10,000 launches even after the extra tcgen fences were
-    removed. Therefore the existing `replay_full` / `replay_empty` ring is
-    missing a third edge:
-      `replay publishes tile -> MMA collectively observes ready epoch -> replay
-      may advance publication cursor`.
-    `replay_empty_bar` means the TMEM slot is reusable after MMA completion; it
-    is not the same acknowledgment as "the MMA partition has consumed this
-    publication epoch." The retained `bar.sync 14,256` supplies that missing
-    acknowledgment implicitly by preventing replay from advancing past publish
-    until the MMA partition reaches the matching handoff point.
+  - Follow-up correction: do not treat the successful diagnostic
+    `replay_seen_bar` experiment as proof that replay semantically needs a
+    consumer acknowledgment before advancing its cursor. LLIR shows that after
+    `mbarrier.arrive(replay_full_bar)`, replay only advances local indices; on
+    the next loop iteration it first waits on the next `replay_empty_bar` before
+    touching the next `replay_tmem` slot. The abstract `replay_full` /
+    `replay_empty` ring is therefore sufficient for slot ownership.
+  - What the diagnostics actually show is only that extra ordering/timing around
+    the handoff suppresses the corruption:
+      - `tcgen05.fence::{before,after}_thread_sync` around the existing
+        replay-full edge still failed at launch 522.
+      - A temporary `replay_seen_bar` wait passed 10,000 launches, but that wait
+        also delays replay before its next iteration and does not prove a needed
+        protocol edge.
+    The retained `bar.sync 14,256` is still an effective workaround, but the
+    precise reason remains open. Current evidence is more consistent with a
+    missing lower-level ordering requirement or compiler/hardware issue in the
+    TMEM handoff than with an abstract ring-buffer protocol bug.
   - Plan updates: keep the local inline generic wait as the application-level
     workaround, but treat the compiler follow-up as a targeted lowering bug:
     introduce a first-class tcgen completion wait that lowers to the generic
