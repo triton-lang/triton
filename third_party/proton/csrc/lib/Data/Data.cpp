@@ -5,8 +5,6 @@
 #include <iostream>
 #include <stdexcept>
 
-#include <shared_mutex>
-
 namespace proton {
 
 void DataEntry::upsertMetric(std::unique_ptr<Metric> metric) const {
@@ -69,50 +67,6 @@ void Data::initPhaseStore(PhaseStoreBase &store) {
   currentPhasePtr = phaseStore->createPtr(0);
   phaseStore->createPtr(kVirtualPhase);
   activePhases.insert(0);
-}
-
-void Data::renameContext(const std::string &oldName,
-                         const std::string &newName) {
-  std::unique_lock<std::shared_mutex> lock(contextRenameMutex);
-  auto renameIt = contextRenameMap.find(oldName);
-  if (oldName == newName) {
-    if (renameIt != contextRenameMap.end()) {
-      contextRenameMap.erase(renameIt);
-    }
-    return;
-  }
-  if (renameIt == contextRenameMap.end()) {
-    contextRenameMap.emplace(oldName, newName);
-  } else if (renameIt->second != newName) {
-    renameIt->second = newName;
-  }
-}
-
-std::string Data::getContextName(const Context &context) const {
-  std::shared_lock<std::shared_mutex> lock(contextRenameMutex);
-  if (contextRenameMap.empty()) {
-    return context.name;
-  }
-  auto renameIt = contextRenameMap.find(context.name);
-  if (renameIt != contextRenameMap.end()) {
-    return renameIt->second;
-  }
-  return context.name;
-}
-
-std::vector<Context>
-Data::getRenamedContexts(std::vector<Context> contexts) const {
-  std::shared_lock<std::shared_mutex> lock(contextRenameMutex);
-  if (contextRenameMap.empty()) {
-    return contexts;
-  }
-  for (auto &context : contexts) {
-    auto renameIt = contextRenameMap.find(context.name);
-    if (renameIt != contextRenameMap.end()) {
-      context.name = renameIt->second;
-    }
-  }
-  return contexts;
 }
 
 DataEntry Data::addOp(const std::string &opName) {

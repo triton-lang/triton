@@ -311,17 +311,6 @@ void SessionManager::setMetricKernels(
   });
 }
 
-void SessionManager::renameState(const std::string &oldName,
-                                 const std::string &newName) {
-  std::lock_guard<std::mutex> lock(mutex);
-  for (auto &[sessionId, active] : sessionActive) {
-    if (!active) {
-      continue;
-    }
-    sessions[sessionId]->data->renameContext(oldName, newName);
-  }
-}
-
 void SessionManager::setState(std::optional<Context> context) {
   std::lock_guard<std::mutex> lock(mutex);
   for (auto iter : contextSourceCounts) {

@@ -1,4 +1,5 @@
 #include "Data/TraceData.h"
+#include "Context/Context.h"
 #include "Profiler/Graph.h"
 #include "TraceDataIO/TraceWriter.h"
 #include "Utility/MsgPackWriter.h"
@@ -12,6 +13,7 @@
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 
 using json = nlohmann::json;
 
@@ -19,6 +21,11 @@ namespace proton {
 
 namespace {
 inline constexpr size_t kMaxActiveEventStackCacheObjects = 10;
+
+bool isMetadataContextName(std::string_view name) {
+  std::string_view rawName;
+  return name == kMetadataScopeName || splitMetadataScopeName(name, rawName);
+}
 
 thread_local std::unordered_map<const TraceData *, std::vector<size_t>>
     traceDataToActiveEventStack;
@@ -596,11 +603,6 @@ uint64_t getGraphLaneId(size_t streamId) { return kGraphLaneBase + streamId; }
 
 uint64_t getGpuLaneId(size_t streamId) { return kGpuLaneBase + streamId; }
 
-bool isMetadataContextName(const std::string &name) {
-  const std::string metadataPrefix = std::string(GraphState::metadataTag) + ":";
-  return name == GraphState::metadataTag || name.rfind(metadataPrefix, 0) == 0;
-}
-
 void appendThreadMetadata(json &traceEvents, uint64_t tid,
                           const std::string &name, uint64_t sortIndex) {
   json nameEvent;
@@ -971,8 +973,7 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
       for (auto targetEntryId : targetEntryIds) {
         // Linked target ids are event ids, so resolve through the event first.
         auto &targetEvent = virtualTrace->getEvent(targetEntryId);
-        auto contexts = getRenamedContexts(
-            virtualTrace->getContexts(targetEvent.contextId));
+        auto contexts = virtualTrace->getContexts(targetEvent.contextId);
         contexts.erase(contexts.begin());
         targetIdToVirtualContexts.emplace(targetEntryId, std::move(contexts));
       }
@@ -995,9 +996,8 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
     std::unordered_map<size_t, std::vector<Context>> contextIdToContexts(
         events.size());
     for (const auto &[_, event] : events) {
-      contextIdToContexts.try_emplace(
-          event.contextId,
-          getRenamedContexts(trace->getContexts(event.contextId)));
+      contextIdToContexts.try_emplace(event.contextId,
+                                      trace->getContexts(event.contextId));
     }
     bool hasKernelMetrics = false, hasCycleMetrics = false;
 

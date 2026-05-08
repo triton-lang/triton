@@ -131,8 +131,6 @@ public:
 
   void setMetricKernels(const MetricKernelLaunchState &metricKernelLaunchState);
 
-  void renameState(const std::string &oldName, const std::string &newName);
-
   void setState(std::optional<Context> context);
 
 private:

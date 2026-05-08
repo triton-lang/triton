@@ -653,20 +653,20 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str, device: str):
     with temp_file.open() as f:
         data = json.load(f)
     # bfs search until find the reduce kernel and then check its parent
-    queue = [data[0]]
+    queue = [(data[0], [data[0]["frame"]["name"]])]
     while len(queue) > 0:
-        parent_frame = queue.pop(0)
+        parent_frame, parent_path = queue.pop(0)
         for child in parent_frame["children"]:
             if "reduce" in child["frame"]["name"]:
-                assert parent_frame["frame"]["name"].startswith(COMPUTE_METADATA_SCOPE_NAME)
+                assert parent_frame["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME
+                assert parent_path[-2] != COMPUTE_METADATA_SCOPE_NAME
                 return
-            queue.append(child)
+            queue.append((child, parent_path + [child["frame"]["name"]]))
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
 def test_hook_launch_metadata_cudagraph_metric_work_grouping(tmp_path: pathlib.Path, device: str):
     owner_name = "metadata_owner_kernel"
-    metadata_scope_name = f"{COMPUTE_METADATA_SCOPE_NAME}:{owner_name}"
 
     @triton.jit
     def metadata_helper_kernel(metric_value):
@@ -712,7 +712,7 @@ def test_hook_launch_metadata_cudagraph_metric_work_grouping(tmp_path: pathlib.P
     assert capture_frame is not None
 
     owner_frame = _find_frame_by_name(capture_frame, owner_name)
-    metadata_frame = _find_frame_by_name(capture_frame, metadata_scope_name)
+    metadata_frame = _find_child_by_name(owner_frame, COMPUTE_METADATA_SCOPE_NAME) if owner_frame else None
     assert owner_frame is not None
     assert metadata_frame is not None
     assert owner_frame["metrics"]["flops"] == 8.0
@@ -1441,7 +1441,7 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str)
     metric_kernel_events = [event for event in replay_kernel_events if event["name"] == "<metric>"]
     metadata_kernel_events = [
         event for event in replay_kernel_events if any(
-            frame.startswith(COMPUTE_METADATA_SCOPE_NAME) for frame in event.get("args", {}).get("call_stack", []))
+            frame == COMPUTE_METADATA_SCOPE_NAME for frame in event.get("args", {}).get("call_stack", []))
     ]
 
     assert len(foo_events) == 3
@@ -1731,9 +1731,11 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
             scope_b_frame = child
         if child["frame"]["name"] == "scope_d":
             scope_d_frame = child
-    metadata_foo_test_frame = _find_frame_by_name(capture_at_frame, f"{COMPUTE_METADATA_SCOPE_NAME}:foo_test")
-    assert metadata_foo_test_frame is not None
-    assert _find_frame_by_name(metadata_foo_test_frame, "<metric>") is not None
+    metadata_foo_frame = _find_frame_by_name(capture_at_frame, "foo")
+    assert metadata_foo_frame is not None
+    metadata_root_frame = _find_child_by_name(metadata_foo_frame, COMPUTE_METADATA_SCOPE_NAME)
+    assert metadata_root_frame is not None
+    assert _find_frame_by_name(metadata_root_frame, "<metric>") is not None
     assert foo_test_frame is not None
     assert foo_test_frame["metrics"]["bytes"] == 160
     assert foo_test_frame["metrics"]["flops"] == 40

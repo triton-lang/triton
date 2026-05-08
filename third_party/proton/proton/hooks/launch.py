@@ -1,4 +1,4 @@
-from ..state import get_metadata_state_name, metadata_state
+from ..state import metadata_state
 from ..metric import transform_tensor_metrics, set_metric_kernels
 from triton.compiler import LazyDict
 from .hook import Hook
@@ -87,28 +87,21 @@ class LaunchHook(Hook):
     def enter(self, metadata: LazyDict) -> None:
         if enabled.get():
             return
-
-        # Reset all context vars
         enabled.set(True)
-        id.set(None)
-        op_name.set(None)
 
-        # Early return path 1: Skip metadata evaluation when the raw kernel name is enough to filter.
+        # Early return path 1: skip metadata evaluation when the raw kernel
+        # name is enough to filter.
         raw_kernel_name = metadata.data.get("name")
         if not self._matches_kernel_name(raw_kernel_name):
             enabled.set(False)
             return
 
-        # Evaluate metadata, invoking metadata kernels attached to a state.
-        # Note that the evaluated kernel name (lazy_metadata["name"]) may differ from the raw kernel name (metadata.data["name"]) and may
-        # depend on information returned by metadata kernels, so we rename it later.
-        raw_metadata_state = get_metadata_state_name(raw_kernel_name)
         with metadata_state(raw_kernel_name):
             lazy_metadata = metadata.get()
         kernel_name = lazy_metadata["name"]
-        libproton.rename_state(raw_metadata_state, get_metadata_state_name(kernel_name))
 
-        # Early return path 2: If the evaluated kernel name doesn't match filters, skip recording.
+        # Early return path 2: if the evaluated kernel name doesn't match
+        # filters, skip recording.
         if not self._matches_kernel_name(kernel_name):
             enabled.set(False)
             return

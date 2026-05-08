@@ -7,9 +7,25 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace proton {
+
+inline constexpr std::string_view kMetadataScopeName =
+    "__proton_launch_metadata";
+inline constexpr std::string_view kMetadataScopePrefix =
+    "__proton_launch_metadata:";
+
+inline bool splitMetadataScopeName(std::string_view name,
+                                   std::string_view &rawName) {
+  if (name.size() <= kMetadataScopePrefix.size() ||
+      name.substr(0, kMetadataScopePrefix.size()) != kMetadataScopePrefix) {
+    return false;
+  }
+  rawName = name.substr(kMetadataScopePrefix.size());
+  return true;
+}
 
 /// A context is a named object.
 struct Context {
@@ -36,7 +52,13 @@ public:
   std::vector<Context> getContexts() {
     auto contexts = getContextsImpl();
     if (state.has_value()) {
-      contexts.push_back(state.value());
+      std::string_view rawName;
+      if (splitMetadataScopeName(state->name, rawName)) {
+        contexts.emplace_back(std::string(rawName));
+        contexts.emplace_back(std::string(kMetadataScopeName));
+      } else {
+        contexts.push_back(state.value());
+      }
     }
     return contexts;
   }

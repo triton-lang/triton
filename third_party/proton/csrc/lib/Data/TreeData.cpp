@@ -224,7 +224,6 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
   output.push_back(json::object());
   jsonNodes[TreeData::Tree::TreeNode::RootId] = &(output.back());
   MetricSummary metricSummary;
-  const std::map<MetricKind, std::unique_ptr<Metric>> emptyMetrics;
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
   auto appendMetrics = [&](json &metricsJson,
                            const std::map<MetricKind, std::unique_ptr<Metric>>
@@ -325,10 +324,9 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               flexibleMetric.getValues()[0]);
         }
       };
-
   tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
       [&](TreeData::Tree::TreeNode &treeNode) {
-        const auto contextName = getContextName(treeNode);
+        const auto contextName = treeNode.name;
         auto contextId = treeNode.id;
         json *jsonNode = jsonNodes[contextId];
         (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
@@ -352,14 +350,15 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
           return;
         }
         std::function<void(size_t, json &, json &)> appendLinkedVirtualNode =
-            [&](size_t virtualNodeId, json &outNode, json &parentMetricsJson) {
+            [&](size_t virtualNodeId, json &outNode,
+                json &parentMetricsJson) {
               const auto &virtualNode = virtualTree->getNode(virtualNodeId);
               const auto metricsIt =
                   treeNode.metricSet.linkedMetrics.find(virtualNodeId);
               const auto flexibleIt =
                   treeNode.metricSet.linkedFlexibleMetrics.find(virtualNodeId);
               outNode = json::object();
-              outNode["frame"] = {{"name", getContextName(virtualNode)},
+              outNode["frame"] = {{"name", virtualNode.name},
                                   {"type", "function"}};
               outNode["metrics"] = json::object();
               if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
@@ -710,7 +709,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         writer.packStr("frame");
         writer.packMap(2);
         writer.packStr("name");
-        writer.packStr(getContextName(treeNode));
+        writer.packStr(treeNode.name);
         writer.packStr("type");
         writer.packStr("function");
 
@@ -738,7 +737,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
               writer.packStr("frame");
               writer.packMap(2);
               writer.packStr("name");
-              writer.packStr(getContextName(virtualNode));
+              writer.packStr(virtualNode.name);
               writer.packStr("type");
               writer.packStr("function");
 

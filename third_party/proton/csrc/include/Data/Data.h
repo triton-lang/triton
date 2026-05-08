@@ -102,8 +102,6 @@ public:
     return contextSource->getContexts();
   }
 
-  void renameContext(const std::string &oldName, const std::string &newName);
-
   /// Dump the data to the given output format.
   void dump(const std::string &outputFormat);
 
@@ -163,9 +161,6 @@ protected:
 
   void initPhaseStore(PhaseStoreBase &store);
 
-  std::string getContextName(const Context &context) const;
-  std::vector<Context> getRenamedContexts(std::vector<Context> contexts) const;
-
   template <typename T> T *currentPhasePtrAs() {
     return static_cast<T *>(currentPhasePtr);
   }
@@ -208,8 +203,6 @@ protected:
   ContextSource *contextSource{};
 
 private:
-  mutable std::shared_mutex contextRenameMutex;
-  std::unordered_map<std::string, std::string> contextRenameMap;
   PhaseStoreBase *phaseStore{};
   void *currentPhasePtr{};
 };

@@ -1,7 +1,7 @@
 import pytest
 import subprocess
 from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, read, format_frames, derive_metrics, filter_frames, parse, apply_diff_profile
-from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
+from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import numpy as np
 
 file_path = __file__
