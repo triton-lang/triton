@@ -629,6 +629,39 @@ struct MemDescReinterpretOpConversion
   }
 };
 
+struct MemDescToI32OpConversion
+    : public ConvertOpToLLVMPattern<MemDescToI32Op> {
+  using ConvertOpToLLVMPattern<MemDescToI32Op>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(MemDescToI32Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto srcTy = op.getSrc().getType();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto i32Ty = rewriter.getIntegerType(32);
+
+    Value result;
+    if (isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
+            srcTy.getMemorySpace())) {
+      result = b.ptrtoint(i32Ty, adaptor.getSrc());
+    } else {
+      assert(isa<SharedEncodingTrait>(srcTy.getEncoding()) &&
+             "Unsupported memory encoding");
+      Type srcElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+      auto smemObj = getSharedMemoryObjectFromStruct(
+          loc, adaptor.getSrc(), srcElemTy, rewriter);
+      auto offset = smemObj.getShmemOffset(loc, rewriter, srcTy);
+      auto elemSize = srcElemTy.getIntOrFloatBitWidth() / 8;
+      offset = b.mul(offset, b.i32_val(elemSize));
+      result = b.add(offset, b.ptrtoint(i32Ty, smemObj.getBase()));
+    }
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateViewOpToLLVMPatterns(
@@ -649,4 +682,5 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<MemDescSubsliceOpConversion, MemDescIndexOpConversion>(
       typeConverter, benefit);
   patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescToI32OpConversion>(typeConverter, benefit);
 }

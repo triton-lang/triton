@@ -423,6 +423,14 @@ class tensor_memory_descriptor(base_value):
         handle = _semantic.builder.create_memdesc_reinterpret(ty.to_ir(_semantic.builder), self.handle)
         return tensor_memory_descriptor(handle, **ty.__dict__)
 
+    @builtin
+    def to_i32(self, _semantic: GluonSemantic = None) -> ttgl.tensor:
+        """
+        Return the descriptor base address as a 32-bit integer suitable for
+        inline PTX operands.
+        """
+        return _semantic.memdesc_to_i32(self)
+
 
 @builtin
 def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None):

@@ -494,6 +494,10 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = self.builder.create_memdesc_reinterpret(ty.to_ir(self.builder), mem_desc.handle)
         return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
 
+    def memdesc_to_i32(self, mem_desc):
+        handle = self.builder.create_memdesc_to_i32(mem_desc.handle)
+        return self.tensor(handle, ttgl.int32)
+
     def wrap_tensor(self, x, scalar_ty, ret_shape, layout):
         if ret_shape:
             res_ty = ttgl.distributed_type(scalar_ty, ret_shape, layout)

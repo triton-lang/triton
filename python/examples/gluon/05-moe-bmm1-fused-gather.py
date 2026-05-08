@@ -229,12 +229,18 @@ class PartitionArgs:
 
     x_scale_tmem: blackwell.tensor_memory_descriptor
     w_scale_tmem: blackwell.tensor_memory_descriptor
+    dense_replay_tmem: blackwell.tensor_memory_descriptor
+    replay_tmem: blackwell.tensor_memory_descriptor
+    replay_empty_bars: gl.shared_memory_descriptor
+    replay_full_bars: gl.shared_memory_descriptor
     acc_bufs: blackwell.tensor_memory_descriptor
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
     ACC_NUM_BUFS: gl.constexpr
     mma_done_bar: gl.shared_memory_descriptor
     load_sync_bar: gl.shared_memory_descriptor
+    replay_ready_bar: gl.shared_memory_descriptor
+    dense_copy_done_bar: gl.shared_memory_descriptor
     unpack_sync_bar: gl.shared_memory_descriptor
 
     grid_m: gl.tensor
@@ -267,6 +273,8 @@ class PartitionArgs:
     FORCE_EPILOGUE_WARPS_N1: gl.constexpr
     REUSE_GATHER_INDICES: gl.constexpr
     INLINE_MMA_INPUT_RELEASE: gl.constexpr
+    REPLAY_VIA_TMEM_COPY: gl.constexpr
+    REPLAY_K_SUBTILE_FACTOR: gl.constexpr
 
     @gluon.jit
     def apply_block_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
@@ -433,30 +441,21 @@ def mma_partition(p: PartitionArgs):
     w_phase = 0
     scale_idx = 0
     scale_phase = 0
+    replay_idx = 0
     # Producer.
     mma_idx = 0
     mma_phase = 1
     mma_done_phase = 1
     load_sync_phase = 0
+    replay_full_phase = 0
     unpack_sync_phase = 0
 
-    k_second_tmem_layout: gl.constexpr = blackwell.TensorMemoryLayout(
-        (p.MMA_BLOCK_COL, p.BLOCK_K // 4),
-        col_stride=1,
-        cga_layout=((1, 0),),
-        two_ctas=True,
-    )
-    k_second_tmem = blackwell.allocate_tensor_memory(
-        gl.uint32,
-        (p.BLOCK_N, p.BLOCK_K // 4),
-        k_second_tmem_layout,
-    )
     k_second_layout: gl.constexpr = gl.NVMMASharedLayout(
         swizzle_byte_width=128,
         element_bitwidth=32,
         rank=5,
         fp4_padded=False,
-        cga_layout=((0, 0, 0, 1, 0),),
+        cga_layout=((0, 0, 0, 1, 0),) if p.USE_2CTA else (),
     )
     k_second_reg_layout: gl.constexpr = gl.DistributedLinearLayout(
         reg_bases=[
@@ -478,15 +477,17 @@ def mma_partition(p: PartitionArgs):
             [0, 0, 0, 64, 0, 0],
         ],
         block_bases=[
-            [0, 0, 0, 256, 0, 0],
-        ],
+            [0, 0, 0, p.BLOCK_N // 2, 0, 0],
+        ]
+        if p.USE_2CTA
+        else [],
         shape=[1, 1, 1, p.BLOCK_N, p.BLOCK_K // 16, 2],
     )
     k_second_u8_layout: gl.constexpr = blackwell.TensorMemoryLayout(
         (p.MMA_BLOCK_COL, p.BLOCK_K),
         col_stride=1,
-        cga_layout=((1, 0),),
-        two_ctas=True,
+        cga_layout=((1, 0),) if p.USE_2CTA else (),
+        two_ctas=p.USE_2CTA,
         fp4_padded=True,
     )
 
@@ -518,10 +519,15 @@ def mma_partition(p: PartitionArgs):
             w_buf = p.w_bufs.index(w_idx)
             mbarrier.wait(w_ready_bar, w_phase)
 
-            # CGA sync to leader.
-            mbarrier.arrive(p.load_sync_bar)
-            mbarrier.wait(p.load_sync_bar, load_sync_phase)
-            load_sync_phase = load_sync_phase ^ 1
+            if p.USE_2CTA:
+                mbarrier.arrive(p.load_sync_bar)
+                mbarrier.wait(p.load_sync_bar, load_sync_phase)
+                load_sync_phase = load_sync_phase ^ 1
+            # Keep the single MMA issuer from releasing an input ring slot
+            # before every MMA warp has observed the ready epoch.
+            gl.barrier()
+            if not p.REPLAY_VIA_TMEM_COPY:
+                mbarrier.arrive(p.replay_ready_bar)
 
             # w_packed_pair 512x128xi8, logical 512x256xfp4
             w_packed_pair = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))
@@ -530,7 +536,7 @@ def mma_partition(p: PartitionArgs):
                 element_bitwidth=8,
                 rank=2,
                 fp4_padded=True,
-                cga_layout=((1, 0),),
+                cga_layout=((1, 0),) if p.USE_2CTA else (),
             )
 
             w_pair_first = w_packed_pair._reinterpret(
@@ -548,37 +554,43 @@ def mma_partition(p: PartitionArgs):
                 a_type="e2m1",
                 b_type="e4m3",
                 use_acc=use_acc,
+                multicast=p.USE_2CTA,
                 mbarriers=[x_empty_bar, scale_empty_bar, w_empty_bar],
             )
 
             use_acc = True
 
-            k_second_view = w_buf._reinterpret(
-                gl.uint32,
-                [1, 1, 1, p.BLOCK_N, p.BLOCK_K // 4],
-                k_second_layout,
-            )
-            k_second_view = k_second_view.reshape((1, 1, 1, p.BLOCK_N, p.BLOCK_K // 16, 4))
-            k_second_view = k_second_view.slice(start=2, length=2, dim=5)
-            k_second = k_second_view.load(k_second_reg_layout)
+            if p.USE_2CTA:
+                replay_tmem = p.replay_tmem.index(replay_idx)
+                k_second_view = w_buf._reinterpret(
+                    gl.uint32,
+                    [1, 1, 1, p.BLOCK_N, p.BLOCK_K // 4],
+                    k_second_layout,
+                )
+                k_second_view = k_second_view.reshape((1, 1, 1, p.BLOCK_N, p.BLOCK_K // 16, 4))
+                k_second_view = k_second_view.slice(start=2, length=2, dim=5)
+                k_second = k_second_view.load(k_second_reg_layout)
 
-            # Fence against next TMA load into the same buffer.
-            blackwell.fence_async_shared()
-            mbarrier.arrive(w_empty_bar)
-            w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+                # Fence the local replay read before this CTA-local shared-memory
+                # replica is eligible for the next multicast TMA refill.
+                blackwell.fence_async_shared()
+                mbarrier.arrive(w_empty_bar)
 
-            lo, hi = fp4_prmt_shuffle_elements(k_second)
-            k_second = gl.join(lo, hi).reshape([p.BLOCK_N, p.BLOCK_K // 4])
+                lo, hi = fp4_prmt_shuffle_elements(k_second)
+                k_second = gl.join(lo, hi).reshape([p.BLOCK_N, p.BLOCK_K // 4])
 
-            mbarrier.wait(p.mma_done_bar, mma_done_phase)
-            mma_done_phase = mma_done_phase ^ 1
-
-            k_second_tmem.store(k_second)
-
+                mbarrier.wait(p.mma_done_bar, mma_done_phase)
+                mma_done_phase = mma_done_phase ^ 1
+                gl.barrier()
+                replay_tmem.store(k_second)
+            else:
+                replay_full_bar = p.replay_full_bars.index(replay_idx)
+                mbarrier.wait(replay_full_bar, replay_full_phase)
             mbarrier.arrive(p.unpack_sync_bar)
             mbarrier.wait(p.unpack_sync_bar, unpack_sync_phase)
             unpack_sync_phase = unpack_sync_phase ^ 1
 
+            w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
             scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
             x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
 
@@ -596,9 +608,12 @@ def mma_partition(p: PartitionArgs):
             x_empty_bar = p.x_empty_bars.index(x_idx)
             x_buf = p.x_bufs.index(x_idx)
             mbarrier.wait(x_ready_bar, x_phase)
+            gl.barrier()
 
+            replay_tmem = p.replay_tmem.index(replay_idx)
+            replay_empty_bar = p.replay_empty_bars.index(replay_idx)
             blackwell.tcgen05_mma_scaled(
-                k_second_tmem._reinterpret(gl.uint8, (p.BLOCK_N, p.BLOCK_K), k_second_u8_layout),
+                replay_tmem._reinterpret(gl.uint8, (p.BLOCK_N, p.BLOCK_K), k_second_u8_layout),
                 x_buf.permute((1, 0)),
                 acc_buf,
                 p.w_scale_tmem,
@@ -606,9 +621,11 @@ def mma_partition(p: PartitionArgs):
                 a_type="e2m1",
                 b_type="e4m3",
                 use_acc=use_acc,
-                mbarriers=[x_empty_bar, scale_empty_bar, p.mma_done_bar],
+                multicast=p.USE_2CTA,
+                mbarriers=[x_empty_bar, scale_empty_bar, replay_empty_bar],
             )
 
+            replay_idx, replay_full_phase = advance(replay_idx, replay_full_phase, 2)
             x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
             scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
 
@@ -633,10 +650,11 @@ def mma_partition(p: PartitionArgs):
             w_buf = p.w_bufs.index(w_idx)
             mbarrier.wait(w_ready_bar, w_phase)
 
-            # CGA sync to leader.
-            mbarrier.arrive(p.load_sync_bar)
-            mbarrier.wait(p.load_sync_bar, load_sync_phase)
-            load_sync_phase = load_sync_phase ^ 1
+            if p.USE_2CTA:
+                mbarrier.arrive(p.load_sync_bar)
+                mbarrier.wait(p.load_sync_bar, load_sync_phase)
+                load_sync_phase = load_sync_phase ^ 1
+            gl.barrier()
 
             # w_packed_pair 512x128xi8, logical 512x256xfp4
             w_packed_pair = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))
@@ -645,7 +663,7 @@ def mma_partition(p: PartitionArgs):
                 element_bitwidth=8,
                 rank=2,
                 fp4_padded=True,
-                cga_layout=((1, 0),),
+                cga_layout=((1, 0),) if p.USE_2CTA else (),
             )
 
             w_pair_first = w_packed_pair._reinterpret(
@@ -663,6 +681,7 @@ def mma_partition(p: PartitionArgs):
                 a_type="e2m1",
                 b_type="e4m3",
                 use_acc=use_acc,
+                multicast=p.USE_2CTA,
                 mbarriers=[x_empty_bar, scale_empty_bar, w_empty_bar],
             )
 
@@ -676,6 +695,172 @@ def mma_partition(p: PartitionArgs):
 
         blackwell.tcgen05_commit(acc_ready_bar)
         mma_idx, mma_phase = advance(mma_idx, mma_phase, p.ACC_NUM_BUFS)
+
+
+@gluon.jit
+def replay_partition(p: PartitionArgs):
+    w_idx = 0
+    w_phase = 0
+    replay_idx = 0
+    replay_empty_phase = 1
+    replay_ready_phase = 0
+    dense_copy_phase = 0
+
+    k_second_layout: gl.constexpr = gl.NVMMASharedLayout(
+        swizzle_byte_width=128,
+        element_bitwidth=32,
+        rank=5,
+        fp4_padded=False,
+        cga_layout=((0, 0, 0, 1, 0),) if p.USE_2CTA else (),
+    )
+    k_second_reg_layout: gl.constexpr = gl.DistributedLinearLayout(
+        reg_bases=[
+            [0, 0, 0, 8, 0, 0],
+            [0, 0, 0, 0, 2, 0],
+            [0, 0, 0, 0, 4, 0],
+            [0, 0, 0, 128, 0, 0],
+            [0, 0, 0, 16, 0, 0],
+        ],
+        lane_bases=[
+            [0, 0, 0, 0, 0, 1],
+            [0, 0, 0, 0, 1, 0],
+            [0, 0, 0, 1, 0, 0],
+            [0, 0, 0, 2, 0, 0],
+            [0, 0, 0, 4, 0, 0],
+        ],
+        warp_bases=[
+            [0, 0, 0, 32, 0, 0],
+            [0, 0, 0, 64, 0, 0],
+        ],
+        block_bases=[
+            [0, 0, 0, p.BLOCK_N // 2, 0, 0],
+        ]
+        if p.USE_2CTA
+        else [],
+        shape=[1, 1, 1, p.BLOCK_N, p.BLOCK_K // 16, 2],
+    )
+    dense_pair_layout: gl.constexpr = gl.NVMMASharedLayout(
+        swizzle_byte_width=128,
+        element_bitwidth=32,
+        rank=2,
+        fp4_padded=False,
+    )
+    if not p.USE_2CTA:
+        for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
+            for _ in range(p.K_TILES // 2):
+                w_ready_bar = p.w_ready_bars.index(w_idx)
+                w_empty_bar = p.w_empty_bars.index(w_idx)
+                w_buf = p.w_bufs.index(w_idx)
+                mbarrier.wait(w_ready_bar, w_phase)
+
+                row_layout: gl.constexpr = gl.SliceLayout(
+                    0,
+                    gl.SliceLayout(
+                        1,
+                        gl.SliceLayout(
+                            2,
+                            gl.SliceLayout(
+                                4,
+                                gl.SliceLayout(5, k_second_reg_layout),
+                            ),
+                        ),
+                    ),
+                )
+                seg_layout: gl.constexpr = gl.SliceLayout(
+                    0,
+                    gl.SliceLayout(
+                        1,
+                        gl.SliceLayout(
+                            2,
+                            gl.SliceLayout(
+                                3,
+                                gl.SliceLayout(5, k_second_reg_layout),
+                            ),
+                        ),
+                    ),
+                )
+                replay_word_layout: gl.constexpr = gl.SliceLayout(
+                    0,
+                    gl.SliceLayout(
+                        1,
+                        gl.SliceLayout(
+                            2,
+                            gl.SliceLayout(
+                                3,
+                                gl.SliceLayout(4, k_second_reg_layout),
+                            ),
+                        ),
+                    ),
+                )
+                local_n = gl.arange(0, p.BLOCK_N, layout=row_layout)[None, None, None, :, None, None]
+                seg = gl.arange(0, p.BLOCK_K // 16, layout=seg_layout)[None, None, None, None, :, None]
+                replay_word = gl.arange(0, 2, layout=replay_word_layout)[None, None, None, None, None, :]
+                replay_tmem = p.replay_tmem.index(replay_idx)
+                replay_empty_bar = p.replay_empty_bars.index(replay_idx)
+                replay_full_bar = p.replay_full_bars.index(replay_idx)
+                mbarrier.wait(replay_empty_bar, replay_empty_phase)
+                if p.REPLAY_VIA_TMEM_COPY:
+                    dense_replay_tmem = p.dense_replay_tmem
+                    dense_pair_words = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))._reinterpret(
+                        gl.uint32,
+                        (p.BLOCK_N, p.BLOCK_K // 4),
+                        dense_pair_layout,
+                    )
+                    blackwell.tcgen05_copy(dense_pair_words, dense_replay_tmem)
+                    blackwell.tcgen05_commit(p.dense_copy_done_bar)
+                    mbarrier.wait(p.dense_copy_done_bar, dense_copy_phase)
+                    dense_copy_phase = dense_copy_phase ^ 1
+
+                    # Once the async copy finishes, shared memory is no longer
+                    # needed by the replay side. Release the slot before the
+                    # TMEM load/unpack work so the next TMA can overlap it.
+                    blackwell.fence_async_shared()
+                    mbarrier.arrive(w_empty_bar)
+                    w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+
+                    replay_cols: gl.constexpr = p.BLOCK_K // 4 // p.REPLAY_K_SUBTILE_FACTOR
+                    replay_segments: gl.constexpr = p.BLOCK_K // 16 // p.REPLAY_K_SUBTILE_FACTOR
+                    for replay_frag_idx in gl.static_range(p.REPLAY_K_SUBTILE_FACTOR):
+                        dense_frag = dense_replay_tmem.slice(replay_frag_idx * replay_cols, replay_cols)
+                        replay_frag = replay_tmem.slice(replay_frag_idx * replay_cols, replay_cols)
+                        dense_words = dense_frag.load()
+                        dense_words = dense_words.reshape((p.BLOCK_N, replay_segments, 2, 2)).permute((0, 1, 3, 2))
+                        _, dense_words = gl.split(dense_words)
+                        dense_words = dense_words.reshape((1, 1, 1, p.BLOCK_N, replay_segments, 2))
+                        lo, hi = fp4_prmt_shuffle_elements(dense_words)
+                        k_second = gl.join(lo, hi).reshape([p.BLOCK_N, replay_cols])
+                        replay_frag.store(gl.convert_layout(k_second, replay_frag.get_reg_layout()))
+                else:
+                    mbarrier.wait(p.replay_ready_bar, replay_ready_phase)
+                    replay_ready_phase = replay_ready_phase ^ 1
+
+                    seg_base_word = local_n * (p.BLOCK_K // 4) + 4 * (seg ^ (local_n & 7))
+                    seg_base_addr = w_buf.to_i32() + 4 * seg_base_word + 0 * replay_word
+                    _, _, replay0, replay1 = gl.inline_asm_elementwise(
+                        "ld.shared.v4.b32 {$0, $1, $2, $3}, [$4];",
+                        "=r,=r,=r,=r,r",
+                        [seg_base_addr],
+                        dtype=(gl.uint32, gl.uint32, gl.uint32, gl.uint32),
+                        is_pure=True,
+                        pack=1,
+                    )
+                    k_second = gl.where(replay_word == 0, replay0, replay1)
+                    blackwell.fence_async_shared()
+                    mbarrier.arrive(w_empty_bar)
+                    w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+
+                if not p.REPLAY_VIA_TMEM_COPY:
+                    lo, hi = fp4_prmt_shuffle_elements(k_second)
+                    k_second = gl.join(lo, hi).reshape([p.BLOCK_N, p.BLOCK_K // 4])
+                    replay_tmem.store(k_second)
+                mbarrier.arrive(replay_full_bar)
+                replay_idx, replay_empty_phase = advance(replay_idx, replay_empty_phase, 2)
+
+            if p.K_TILES % 2 != 0:
+                # The tail tile has no replay work, but it still occupies one
+                # packed-weight ring slot. Keep this partition's cursor aligned
+                # with the MMA partition before the next output block.
+                w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
 
 
 @gluon.jit
@@ -891,11 +1076,13 @@ def ws_matmul_kernel(
     LOAD_ACTIVATION_WARPS: gl.constexpr,
     LOAD_WEIGHT_WARPS: gl.constexpr,
     LOAD_WEIGHT_SCALES_WARPS: gl.constexpr,
+    REPLAY_WARPS: gl.constexpr,
     MMA_WARPS: gl.constexpr,
     #
     LOAD_ACTIVATION_REGS: gl.constexpr,
     LOAD_WEIGHT_REGS: gl.constexpr,
     LOAD_WEIGHT_SCALES_REGS: gl.constexpr,
+    REPLAY_REGS: gl.constexpr,
     MMA_REGS: gl.constexpr,
     #
     SWIGLU_SUBTILE_FACTOR: gl.constexpr,
@@ -905,6 +1092,8 @@ def ws_matmul_kernel(
     FORCE_EPILOGUE_WARPS_N1: gl.constexpr,
     REUSE_GATHER_INDICES: gl.constexpr,
     INLINE_MMA_INPUT_RELEASE: gl.constexpr,
+    REPLAY_VIA_TMEM_COPY: gl.constexpr,
+    REPLAY_K_SUBTILE_FACTOR: gl.constexpr,
     SCALE_SIZE_OUTER: gl.constexpr,
     SCALE_SIZE_INNER: gl.constexpr,
     MXFP_BLOCK_SIZE: gl.constexpr,
@@ -935,6 +1124,22 @@ def ws_matmul_kernel(
         cga_layout=((1, 0),) if use_2cta else (),
         two_ctas=use_2cta,
     )
+    replay_layout: gl.constexpr = blackwell.TensorMemoryLayout(
+        (MMA_BLOCK_COL, BLOCK_K // 4),
+        col_stride=1,
+        cga_layout=((1, 0),) if use_2cta else (),
+        two_ctas=use_2cta,
+    )
+    dense_replay_is_full: gl.constexpr = REPLAY_VIA_TMEM_COPY or use_2cta
+    dense_replay_rows: gl.constexpr = BLOCK_N if dense_replay_is_full else 64
+    dense_replay_cols: gl.constexpr = BLOCK_K // 4 if dense_replay_is_full else 1
+    dense_replay_block_rows: gl.constexpr = MMA_BLOCK_COL if dense_replay_is_full else 64
+    dense_replay_layout: gl.constexpr = blackwell.TensorMemoryLayout(
+        (dense_replay_block_rows, dense_replay_cols),
+        col_stride=1,
+        cga_layout=((1, 0),) if use_2cta else (),
+        two_ctas=use_2cta,
+    )
 
     x_bufs = gl.allocate_shared_memory(
         x_desc.dtype,
@@ -959,6 +1164,14 @@ def ws_matmul_kernel(
 
     x_scale_tmem = blackwell.allocate_tensor_memory(gl.uint8, [BLOCK_M, scale_k], x_scale_layout)
     w_scale_tmem = blackwell.allocate_tensor_memory(gl.uint8, [BLOCK_N, scale_k], w_scale_layout)
+    dense_replay_tmem = blackwell.allocate_tensor_memory(
+        gl.uint32,
+        [dense_replay_rows, dense_replay_cols],
+        dense_replay_layout,
+    )
+    replay_tmem = blackwell.allocate_tensor_memory(gl.uint32, [2, BLOCK_N, BLOCK_K // 4], replay_layout)
+    replay_empty_bars = alloc_barrier_ring(2)
+    replay_full_bars = alloc_barrier_ring(2)
 
     acc_tmem = blackwell.allocate_tensor_memory(
         gl.float32,
@@ -969,9 +1182,13 @@ def ws_matmul_kernel(
 
     mma_done_bar = mbarrier.allocate_mbarrier()
     mbarrier.init(mma_done_bar, count=1)
-    load_sync_bar = mbarrier.allocate_mbarrier(two_ctas=True)
+    load_sync_bar = mbarrier.allocate_mbarrier(two_ctas=use_2cta)
     mbarrier.init(load_sync_bar, count=1)
-    unpack_sync_bar = mbarrier.allocate_mbarrier(two_ctas=True)
+    replay_ready_bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(replay_ready_bar, count=1)
+    dense_copy_done_bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(dense_copy_done_bar, count=1)
+    unpack_sync_bar = mbarrier.allocate_mbarrier(two_ctas=use_2cta)
     mbarrier.init(unpack_sync_bar, count=1)
 
     x_scale_tmem.store(gl.full((BLOCK_M, scale_k), 127, dtype=gl.uint8, layout=x_scale_tmem.get_reg_layout()))
@@ -1010,12 +1227,18 @@ def ws_matmul_kernel(
         #
         x_scale_tmem=x_scale_tmem,
         w_scale_tmem=w_scale_tmem,
+        dense_replay_tmem=dense_replay_tmem,
+        replay_tmem=replay_tmem,
+        replay_empty_bars=replay_empty_bars,
+        replay_full_bars=replay_full_bars,
         acc_bufs=acc_tmem,
         acc_empty_bars=acc_empty_bars,
         acc_ready_bars=acc_ready_bars,
         ACC_NUM_BUFS=ACC_NUM_BUFS,
         mma_done_bar=mma_done_bar,
         load_sync_bar=load_sync_bar,
+        replay_ready_bar=replay_ready_bar,
+        dense_copy_done_bar=dense_copy_done_bar,
         unpack_sync_bar=unpack_sync_bar,
         #
         grid_m=grid_m,
@@ -1048,6 +1271,8 @@ def ws_matmul_kernel(
         FORCE_EPILOGUE_WARPS_N1=FORCE_EPILOGUE_WARPS_N1,
         REUSE_GATHER_INDICES=REUSE_GATHER_INDICES,
         INLINE_MMA_INPUT_RELEASE=INLINE_MMA_INPUT_RELEASE,
+        REPLAY_VIA_TMEM_COPY=REPLAY_VIA_TMEM_COPY,
+        REPLAY_K_SUBTILE_FACTOR=REPLAY_K_SUBTILE_FACTOR,
     )
 
     gl.warp_specialize(
@@ -1056,10 +1281,11 @@ def ws_matmul_kernel(
             (load_activations, (p,)),
             (load_weights, (p,)),
             (load_weight_scales, (p,)),
+            (replay_partition, (p,)),
             (mma_partition, (p,)),
         ],
-        [LOAD_ACTIVATION_WARPS, LOAD_WEIGHT_WARPS, LOAD_WEIGHT_SCALES_WARPS, MMA_WARPS],
-        [LOAD_ACTIVATION_REGS, LOAD_WEIGHT_REGS, LOAD_WEIGHT_SCALES_REGS, MMA_REGS],
+        [LOAD_ACTIVATION_WARPS, LOAD_WEIGHT_WARPS, LOAD_WEIGHT_SCALES_WARPS, REPLAY_WARPS, MMA_WARPS],
+        [LOAD_ACTIVATION_REGS, LOAD_WEIGHT_REGS, LOAD_WEIGHT_SCALES_REGS, REPLAY_REGS, MMA_REGS],
     )
 
 
@@ -1129,24 +1355,25 @@ def make_tensor_descriptor(
 @dataclass(frozen=True, slots=True)
 class KernelConfig:
     BLOCK_M: int = 128
-    BLOCK_N: int = 512
+    BLOCK_N: int = 256
     BLOCK_K: int = 128
 
-    NUM_CTAS: int = 2
-    X_NUM_BUFS: int = 5
-    W_NUM_BUFS: int = 5
-    W_SCALE_NUM_BUFS: int = 10
+    NUM_CTAS: int = 1
+    X_NUM_BUFS: int = 4
+    W_NUM_BUFS: int = 2
+    W_SCALE_NUM_BUFS: int = 4
     ACC_NUM_BUFS: int = 1
     BITPACKED_K: bool = True
 
-    X_GATHER_MULTICAST: bool = True
-    W_TMA_MULTICAST: bool = True
-    W_SCALE_MULTICAST: bool = True
+    X_GATHER_MULTICAST: bool = False
+    W_TMA_MULTICAST: bool = False
+    W_SCALE_MULTICAST: bool = False
 
     NUM_WARPS: int = 8
     LOAD_ACTIVATION_WARPS: int = 4
     LOAD_WEIGHT_WARPS: int = 1
     LOAD_WEIGHT_SCALES_WARPS: int = 1
+    REPLAY_WARPS: int = 4
     MMA_WARPS: int = 4
 
     SWIGLU_SUBTILE_FACTOR: int = 8
@@ -1155,11 +1382,14 @@ class KernelConfig:
     FORCE_EPILOGUE_WARPS_N1: bool = True
     REUSE_GATHER_INDICES: bool = False
     INLINE_MMA_INPUT_RELEASE: bool = False
+    REPLAY_VIA_TMEM_COPY: bool = True
+    REPLAY_K_SUBTILE_FACTOR: int = 1
 
     LOAD_ACTIVATION_REGS: int = 32
     LOAD_WEIGHT_REGS: int = 24
     LOAD_WEIGHT_SCALES_REGS: int = 24
-    MMA_REGS: int = 96
+    REPLAY_REGS: int = 80
+    MMA_REGS: int = 80
     MAXNREG: int = None
     OCCUPANCY: int = 1
 
@@ -1179,7 +1409,16 @@ class KernelConfig:
 
 
 def select_kernel_config(slice_size: int) -> KernelConfig:
-    # FIXME: Need to retune.
+    if slice_size >= 512:
+        return KernelConfig(
+            BAND_N=10,
+            FORCE_EPILOGUE_WARPS_N1=False,
+            SWIGLU_SUBTILE_FACTOR=16,
+            REPLAY_K_SUBTILE_FACTOR=4,
+            LOAD_ACTIVATION_REGS=80,
+            REPLAY_REGS=24,
+            MMA_REGS=24,
+        )
     return KernelConfig()
 
 
@@ -1305,11 +1544,13 @@ def matmul(
         LOAD_ACTIVATION_WARPS=p.LOAD_ACTIVATION_WARPS,
         LOAD_WEIGHT_WARPS=p.LOAD_WEIGHT_WARPS,
         LOAD_WEIGHT_SCALES_WARPS=p.LOAD_WEIGHT_SCALES_WARPS,
+        REPLAY_WARPS=p.REPLAY_WARPS,
         MMA_WARPS=p.MMA_WARPS,
         #
         LOAD_ACTIVATION_REGS=p.LOAD_ACTIVATION_REGS,
         LOAD_WEIGHT_REGS=p.LOAD_WEIGHT_REGS,
         LOAD_WEIGHT_SCALES_REGS=p.LOAD_WEIGHT_SCALES_REGS,
+        REPLAY_REGS=p.REPLAY_REGS,
         MMA_REGS=p.MMA_REGS,
         #
         SWIGLU_SUBTILE_FACTOR=p.SWIGLU_SUBTILE_FACTOR,
@@ -1319,6 +1560,8 @@ def matmul(
         FORCE_EPILOGUE_WARPS_N1=p.FORCE_EPILOGUE_WARPS_N1,
         REUSE_GATHER_INDICES=p.REUSE_GATHER_INDICES,
         INLINE_MMA_INPUT_RELEASE=p.INLINE_MMA_INPUT_RELEASE,
+        REPLAY_VIA_TMEM_COPY=p.REPLAY_VIA_TMEM_COPY,
+        REPLAY_K_SUBTILE_FACTOR=p.REPLAY_K_SUBTILE_FACTOR,
         #
         SCALE_SIZE_OUTER=p.SCALE_SIZE_OUTER,
         SCALE_SIZE_INNER=p.SCALE_SIZE_INNER,
@@ -1462,7 +1705,13 @@ def init_routing_data(
 
 
 def prepare_case(
-    c: MLPConfig, batch_size: int, device: str, seed: int = 0, uniform_routing: bool = False, reference: bool = False
+    c: MLPConfig,
+    batch_size: int,
+    device: str,
+    seed: int = 0,
+    uniform_routing: bool = False,
+    reference: bool = False,
+    p: KernelConfig | None = None,
 ) -> PreparedCase:
     torch.manual_seed(seed)
 
@@ -1470,7 +1719,7 @@ def prepare_case(
     k, n = c.hidden_size, c.intermediate_size
     n_expts_local = c.num_experts // c.num_expert_shards
     ragged_metadata, gather_indx = init_routing_data(c, batch_size, local_rank, device, uniform_routing)
-    p = None if reference else select_kernel_config(ragged_metadata.expected_slice_size)
+    p = None if reference else (p or select_kernel_config(ragged_metadata.expected_slice_size))
     x = alloc_randn((batch_size, k), dtype=torch.float8_e4m3fn, device=device)
     w, w_scale = alloc_randn_fp4((n_expts_local, k, n), device=device, p=p)
     bias = alloc_randn((n_expts_local, n), dtype=torch.float32, device=device)
@@ -1519,8 +1768,14 @@ def make_output_buffer(prepared: PreparedCase) -> torch.Tensor:
     return torch.zeros(prepared.out_shape, dtype=prepared.out_dtype, device=prepared.x.device)
 
 
-def run_kernel(prepared: PreparedCase, kernel, precision_config: PrecisionConfig, out: torch.Tensor) -> torch.Tensor:
-    return kernel(
+def run_kernel(
+    prepared: PreparedCase,
+    kernel,
+    precision_config: PrecisionConfig,
+    out: torch.Tensor,
+    p: KernelConfig | None = None,
+) -> torch.Tensor:
+    kwargs = dict(
         a=prepared.x,
         b=prepared.w,
         bias=prepared.bias,
@@ -1530,6 +1785,9 @@ def run_kernel(prepared: PreparedCase, kernel, precision_config: PrecisionConfig
         c=out,
         fused_activation=prepared.fused_activation,
     )
+    if p is not None:
+        kwargs["p"] = p
+    return kernel(**kwargs)
 
 
 def run_provider(prepared: PreparedCase, provider: str) -> tuple[torch.Tensor, PrecisionConfig]:
@@ -1566,10 +1824,16 @@ def estimate_benchmark_work(c: MLPConfig, prepared: PreparedCase) -> tuple[int, 
     return flops, nbytes
 
 
-def benchmark_kernel(prepared: PreparedCase, kernel, flops: int, nbytes: int) -> tuple[float, float]:
+def benchmark_kernel(
+    prepared: PreparedCase,
+    kernel,
+    flops: int,
+    nbytes: int,
+    p: KernelConfig | None = None,
+) -> tuple[float, float]:
     precision_config = make_precision_config(prepared)
     out = make_output_buffer(prepared)
-    ms = do_bench_cudagraph(lambda: run_kernel(prepared, kernel, precision_config, out), rep=300)
+    ms = do_bench_cudagraph(lambda: run_kernel(prepared, kernel, precision_config, out, p=p), rep=300)
     seconds = ms * 1e-3
     return flops * 1e-12 / seconds, nbytes * 1e-12 / seconds
 

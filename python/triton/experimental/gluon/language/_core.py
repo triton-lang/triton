@@ -504,6 +504,14 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_reinterpret(self, dtype, shape, layout)
 
     @builtin
+    def to_i32(self, _semantic: GluonSemantic = None) -> tensor:
+        """
+        Return the descriptor base address as a 32-bit integer suitable for
+        inline PTX operands.
+        """
+        return _semantic.memdesc_to_i32(self)
+
+    @builtin
     def _keep_alive(self, _semantic: GluonSemantic = None) -> None:
         """
         Dummy use to keep the shared memory descriptor alive.

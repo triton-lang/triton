@@ -1038,6 +1038,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def memdesc_to_i32_kernel():
+    smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 32, rank=2)
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [32, 32], smem_layout)
+    smem.to_i32()
+
+    tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 128], col_stride=1)
+    tmem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.int32, [128, 128], tmem_layout)
+    tmem.to_i32()
+
+
+def test_memdesc_to_i32_constexpr():
+    expecttest.assert_expected_inline(
+        anonymize_ir(run_parser(memdesc_to_i32_kernel, target=BLACKWELL_TARGET).str_nodebug()), """\
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @memdesc_to_i32_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<32x32xi32, #shared, #smem, mutable>
+    %1 = ttg.memdesc_to_i32 %0 : !ttg.memdesc<32x32xi32, #shared, #smem, mutable>
+    %result = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable>
+    %2 = ttg.memdesc_to_i32 %result : !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
 def tmem_subslice_reg_layout_kernel():
     layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 256], col_stride=1, cga_layout=((1, 0), (2, 0)))
     tmem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.float32, [2, 512, 256], layout)

@@ -354,6 +354,20 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
   let hasVerifier = 1;
 }
 
+def TTG_MemDescToI32Op : TTG_Op<"memdesc_to_i32", [Pure]> {
+  let summary = "Convert a memdesc into its base pointer as i32";
+  let description = [{
+    Extract the base pointer from the given memdesc and return it as a 32-bit
+    integer. Shared-memory descriptors lower to their raw shared address;
+    tensor-memory descriptors lower to their TMEM address.
+  }];
+
+  let arguments = (ins TTG_MemDescType:$src);
+  let results = (outs I32:$result);
+
+  let assemblyFormat = [{$src attr-dict `:` qualified(type($src))}];
+}
+
 def TTG_LocalLoadOp : TTG_Op<"local_load", [LocalLoadTrait]> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 

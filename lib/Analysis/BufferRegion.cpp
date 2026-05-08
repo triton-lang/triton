@@ -278,6 +278,11 @@ LogicalResult BufferRegionAnalysis::visitOperation(
       return success();
     }
   }
+  if (isa<ttg::MemDescToI32Op>(op)) {
+    // Address extraction observes the memdesc value but does not access the
+    // underlying shared/TMEM allocation.
+    return success();
+  }
   // "Passthrough" ops that don't modify the buffer regions.
   if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp,
           ttg::MemDescReinterpretOp>(op)) {
