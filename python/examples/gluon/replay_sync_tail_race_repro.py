@@ -1029,12 +1029,8 @@ def ws_matmul_kernel(
         (MMA_BLOCK_COL, BLOCK_K // 4),
         col_stride=1,
     )
-    dense_replay_is_full: gl.constexpr = REPLAY_VIA_TMEM_COPY
-    dense_replay_rows: gl.constexpr = BLOCK_N if dense_replay_is_full else 64
-    dense_replay_cols: gl.constexpr = BLOCK_K // 4 if dense_replay_is_full else 1
-    dense_replay_block_rows: gl.constexpr = MMA_BLOCK_COL if dense_replay_is_full else 64
     dense_replay_layout: gl.constexpr = blackwell.TensorMemoryLayout(
-        (dense_replay_block_rows, dense_replay_cols),
+        (MMA_BLOCK_COL, BLOCK_K // 4),
         col_stride=1,
     )
 
@@ -1063,7 +1059,7 @@ def ws_matmul_kernel(
     w_scale_tmem = blackwell.allocate_tensor_memory(gl.uint8, [BLOCK_N, scale_k], w_scale_layout)
     dense_replay_tmem = blackwell.allocate_tensor_memory(
         gl.uint32,
-        [dense_replay_rows, dense_replay_cols],
+        [BLOCK_N, BLOCK_K // 4],
         dense_replay_layout,
     )
     replay_tmem = blackwell.allocate_tensor_memory(gl.uint32, [2, BLOCK_N, BLOCK_K // 4], replay_layout)
