@@ -562,64 +562,63 @@ def mma_partition(p: PartitionArgs):
             x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
             scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
 
-        if p.K_TILES % 2 != 0:
-            # First K tile. Wait for scales, weight, and act tile.
-            scale_ready_bar = p.w_scale_ready_bars.index(scale_idx)
-            scale_empty_bar = p.w_scale_empty_bars.index(scale_idx)
-            scale_buf = p.w_scale_bufs.index(scale_idx)
-            mbarrier.wait(scale_ready_bar, scale_phase)
-            blackwell.tcgen05_copy(
-                unswizzle_mx_scale(scale_buf, p.SCALE_SIZE_OUTER, p.SCALE_SIZE_INNER, p.MXFP_BLOCK_SIZE),
-                p.w_scale_tmem,
-            )
+        # First K tile. Wait for scales, weight, and act tile.
+        scale_ready_bar = p.w_scale_ready_bars.index(scale_idx)
+        scale_empty_bar = p.w_scale_empty_bars.index(scale_idx)
+        scale_buf = p.w_scale_bufs.index(scale_idx)
+        mbarrier.wait(scale_ready_bar, scale_phase)
+        blackwell.tcgen05_copy(
+            unswizzle_mx_scale(scale_buf, p.SCALE_SIZE_OUTER, p.SCALE_SIZE_INNER, p.MXFP_BLOCK_SIZE),
+            p.w_scale_tmem,
+        )
 
-            x_ready_bar = p.x_ready_bars.index(x_idx)
-            x_empty_bar = p.x_empty_bars.index(x_idx)
-            x_buf = p.x_bufs.index(x_idx)
-            mbarrier.wait(x_ready_bar, x_phase)
+        x_ready_bar = p.x_ready_bars.index(x_idx)
+        x_empty_bar = p.x_empty_bars.index(x_idx)
+        x_buf = p.x_bufs.index(x_idx)
+        mbarrier.wait(x_ready_bar, x_phase)
 
-            w_ready_bar = p.w_ready_bars.index(w_idx)
-            w_empty_bar = p.w_empty_bars.index(w_idx)
-            w_buf = p.w_bufs.index(w_idx)
-            mbarrier.wait(w_ready_bar, w_phase)
+        w_ready_bar = p.w_ready_bars.index(w_idx)
+        w_empty_bar = p.w_empty_bars.index(w_idx)
+        w_buf = p.w_bufs.index(w_idx)
+        mbarrier.wait(w_ready_bar, w_phase)
 
-            # Preserve the same post-wait convergence for the odd-tail path.
-            gl.barrier()
+        # Preserve the same post-wait convergence for the odd-tail path.
+        gl.barrier()
 
-            # w_packed_pair 512x128xi8, logical 512x256xfp4
-            w_packed_pair = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))
-            fp4_padded_layout: gl.constexpr = gl.NVMMASharedLayout(
-                swizzle_byte_width=128,
-                element_bitwidth=8,
-                rank=2,
-                fp4_padded=True,
-            )
+        # w_packed_pair 512x128xi8, logical 512x256xfp4
+        w_packed_pair = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))
+        fp4_padded_layout: gl.constexpr = gl.NVMMASharedLayout(
+            swizzle_byte_width=128,
+            element_bitwidth=8,
+            rank=2,
+            fp4_padded=True,
+        )
 
-            w_pair_first = w_packed_pair._reinterpret(
-                gl.uint8,
-                (p.BLOCK_N, p.BLOCK_K // 2),
-                fp4_padded_layout,
-            )
+        w_pair_first = w_packed_pair._reinterpret(
+            gl.uint8,
+            (p.BLOCK_N, p.BLOCK_K // 2),
+            fp4_padded_layout,
+        )
 
-            blackwell.tcgen05_mma_scaled(
-                w_pair_first,
-                x_buf.permute((1, 0)),
-                acc_buf,
-                p.w_scale_tmem,
-                p.x_scale_tmem,
-                a_type="e2m1",
-                b_type="e4m3",
-                use_acc=use_acc,
-                mbarriers=[x_empty_bar, scale_empty_bar, w_empty_bar],
-            )
+        blackwell.tcgen05_mma_scaled(
+            w_pair_first,
+            x_buf.permute((1, 0)),
+            acc_buf,
+            p.w_scale_tmem,
+            p.x_scale_tmem,
+            a_type="e2m1",
+            b_type="e4m3",
+            use_acc=use_acc,
+            mbarriers=[x_empty_bar, scale_empty_bar, w_empty_bar],
+        )
 
-            use_acc = True
+        use_acc = True
 
-            blackwell.tcgen05_commit(w_empty_bar)
-            w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+        blackwell.tcgen05_commit(w_empty_bar)
+        w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
 
-            scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
-            x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
+        scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
+        x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
 
         blackwell.tcgen05_commit(acc_ready_bar)
         mma_idx, mma_phase = advance(mma_idx, mma_phase, p.ACC_NUM_BUFS)
