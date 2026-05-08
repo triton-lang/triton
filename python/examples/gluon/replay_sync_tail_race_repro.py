@@ -28,7 +28,6 @@ from triton_kernels.tensor import (
 )
 from triton_kernels.tensor_details.dtype import UINT8
 from triton_kernels.tensor_details.layout import (
-    BlackwellMX4ValueShuffledLayout,
     BlackwellMX4ValuePackedShuffledLayout,
     make_default_matmul_mxfp4_w_scale_layout,
 )
@@ -1087,7 +1086,7 @@ def make_tensor_descriptor(
     layout_shape = list(layout_block_shape or block_shape)
 
     if isinstance(t, Tensor) and t.dtype == FP4:
-        assert isinstance(t.storage.layout, BlackwellMX4ValueShuffledLayout | BlackwellMX4ValuePackedShuffledLayout)
+        assert isinstance(t.storage.layout, BlackwellMX4ValuePackedShuffledLayout)
         assert layout_block_shape is None
         desc_block_shape = t.storage.layout.swizzle_block_shape(desc_block_shape)
         desc_block_shape[strides.index(1)] //= 2
@@ -1100,7 +1099,7 @@ def make_tensor_descriptor(
             swizzle_byte_width=128,
             element_bitwidth=8,
             rank=rank,
-            fp4_padded=not isinstance(t.storage.layout, BlackwellMX4ValuePackedShuffledLayout),
+            fp4_padded=False,
             cga_layout=cga_layout,
         )
     elif t.dtype == UINT8:
@@ -1203,7 +1202,7 @@ def matmul(
 
     p = KernelConfig()
     assert isinstance(b, Tensor)
-    assert isinstance(b.storage.layout, BlackwellMX4ValueShuffledLayout | BlackwellMX4ValuePackedShuffledLayout)
+    assert isinstance(b.storage.layout, BlackwellMX4ValuePackedShuffledLayout)
     assert b.storage.layout.block_k == p.BLOCK_K
     assert b.storage.layout.block_n == p.BLOCK_N
     x_block_offs = a_ragged_metadata.block_offs(p.BLOCK_M)
