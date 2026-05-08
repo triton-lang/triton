@@ -1181,7 +1181,6 @@ def matmul(
     precision_config: PrecisionConfig,
     c: torch.Tensor,
     fused_activation: FusedActivation,
-    p: KernelConfig | None = None,
 ):
     specs = fused_activation.specs
     assert specs.name == "swiglu"
@@ -1202,7 +1201,7 @@ def matmul(
     _, _, n = b.shape
     m = gather_indx.shape[0]
 
-    p = p or KernelConfig()
+    p = KernelConfig()
     assert isinstance(b, Tensor)
     assert isinstance(b.storage.layout, BlackwellMX4ValueShuffledLayout | BlackwellMX4ValuePackedShuffledLayout)
     assert b.storage.layout.block_k == p.BLOCK_K
