@@ -231,7 +231,6 @@ void updateTensorDescriptor(RewriterBase &rewriter, Location loc,
                             Value barrier) {
   size_t numDims = blockShape.size();
   assert(numDims == 2 && "updateTensorDescriptor currently supports 2D");
-  (void)numDims;
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value v16 = b.i32_val(16);
