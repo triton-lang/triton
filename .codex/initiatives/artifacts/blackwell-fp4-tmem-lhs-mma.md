@@ -1149,6 +1149,58 @@ across the important batch regime.
     reducer for TMEM-load CSE across warp-specialized partitions, and continue
     reducing the live replay failure from the full three-party weight-ring
     protocol instead of using the CSE repro as a proxy for it.
+- `2026-05-08` Completed: narrowed the remaining live replay failure to a
+  timing-sensitive consume-after-copy edge and disproved the current
+  replay-rendezvous explanation.
+  - Re-ran the live 1CTA kernel with the retained generic-address
+    `dense_copy_done_bar` wait but without the replay-full
+    `bar.sync 14,256`. Both-sided `nanosleep.u32 10000`, replay-side-only
+    sleep after publication, and MMA-side-only sleep after the full-barrier
+    wait each passed 10,000 same-input launches. That means the retained
+    cross-partition barrier is not yet proven necessary as synchronization; at
+    minimum it also supplies enough delay to hide the bug.
+  - Moving the same sleep earlier localized the sensitive window more tightly:
+    a single sleep immediately after
+    `replay_mma_wait_relaxed_cluster(p.dense_copy_done_bar, ...)` and before
+    the first `dense_replay_tmem.load()` also passed 10,000 launches with the
+    replay-full barrier removed.
+  - Actual synchronization substitutes at that localized point were not enough:
+
+```text
+┌────────────────────────────────────────────────────────────┬──────────────────────────────┐
+│ Variant                                                    │ Same-input bs=1,024 stress   │
+├────────────────────────────────────────────────────────────┼──────────────────────────────┤
+│ Sleep after dense-copy wait                                │ passed 10,000 launches       │
+│ `tcgen05.fence::after_thread_sync` only                    │ failed at launch 193         │
+│ Replay-local `bar.sync 15,128` only                        │ failed at launch 376         │
+│ Replay-local barrier + `after_thread_sync`                 │ failed at launch 147         │
+└────────────────────────────────────────────────────────────┴──────────────────────────────┘
+```
+
+  - Earlier full-path discriminators point the same way: all-producer
+    release/acquire publication on `replay_full_bar` failed at launch 471, and
+    an all-producer generic `relaxed.cluster` publication plus
+    `tcgen05.fence::{before,after}_thread_sync` failed at launch 52. The live
+    issue is therefore not explained by the first obvious PTX-level replacement
+    for `bar.sync 14,256`.
+  - Current strongest statement: immediate consumption of
+    `dense_replay_tmem` after the async dense copy completes is unstable in the
+    live three-party protocol, but the exact missing ordering edge is still not
+    identified. The evidence no longer supports claiming that replay must
+    rendezvous with MMA merely to advance local ring state.
+  - Current reducer status:
+    `/tmp/tmem_replay_chain_repro.py` preserves the dense-copy/unpack path but
+    passes without delay because it uses static dense inputs. A first
+    three-party reducer,
+    `/tmp/three_party_weight_ring_repro.py`, keeps producer/refill, first MMA,
+    replay copy/unpack, and second MMA structure, but all modes fail almost
+    immediately because the generic shared-store producer is not faithful to
+    the full kernel's TMA refill semantics. The next reduction step is a tiny
+    TMA-backed producer or another equally faithful way to preserve the real
+    weight-buffer handoff.
+  - Plan updates: keep the live issue open, pursue a faithful smaller repro from
+    the full three-party protocol, and do not promote delay-based explanations
+    to root cause without a PTX-spec-backed synchronization proof.
 
 ## Next Up
 
