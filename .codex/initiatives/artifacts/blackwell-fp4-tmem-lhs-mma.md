@@ -1075,11 +1075,23 @@ across the important batch regime.
 
   - The replay-full path is a separate protocol edge, not the same compiler bug.
     Removing the retained 256-thread replay+MMA rendezvous still failed at launch
-    167 even after the dense-copy wait was fixed. PTX `mbarrier.arrive` is a
-    one-way arrival operation, while `bar.sync` is a true collective rendezvous;
-    `arrive -> wait` tells MMA that replay published a tile, but it does not stop
-    replay from running ahead afterward. The retained `bar.sync 14,256` is
-    therefore a real schedule/protocol barrier, not just a timing delay.
+    167 even after the dense-copy wait was fixed. A follow-up discriminator ruled
+    out the looser "MMA only needs local convergence" explanation: replacing the
+    cross-partition rendezvous with an MMA-only `bar.sync 14,128` still failed at
+    launch 70.
+  - The direct overwrite story is wrong here. Source-level ownership is already
+    explicit: replay waits `replay_empty_bar` before touching `replay_tmem[idx]`
+    again, and the second MMA passes that same barrier as its completion signal.
+    The remaining conflict is on the `replay_full_bar` generation, not on the
+    TMEM payload slot. PTX says parity waits are valid only for the current or
+    immediately preceding mbarrier phase. The MMAv5 completion barrier can free
+    the slot after the issuer has launched/completed MMA2 even if another MMA
+    warp still carries the older local `replay_full_phase`; if replay republishes
+    the same ring entry before that late warp consumes the old generation, that
+    late parity wait no longer has a unique legal target. The retained
+    `bar.sync 14,256` is therefore a real cross-partition acknowledgment boundary:
+    replay may publish, but it cannot advance the full-barrier ring until every
+    replay and MMA thread has crossed the same generation boundary.
   - Plan updates: keep the local inline generic wait as the application-level
     workaround, but treat the compiler follow-up as a targeted lowering bug:
     introduce a first-class tcgen completion wait that lowers to the generic
