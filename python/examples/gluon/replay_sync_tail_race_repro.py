@@ -1295,30 +1295,6 @@ def matmul(
 # ===-----------------------------------------------------------------------===#
 
 
-@dataclass(frozen=True, slots=True)
-class MLPConfig:
-    num_experts: int
-    experts_per_token: int
-    num_expert_shards: int
-    hidden_size: int
-    intermediate_size: int
-
-
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedCase:
-    x: torch.Tensor
-    w: Tensor
-    w_scale: Tensor
-    bias: torch.Tensor
-    ragged_metadata: RaggedTensorMetadata
-    gather_indx: torch.Tensor
-    fused_activation: FusedActivation
-    x_scale: torch.Tensor
-    y_scale: torch.Tensor
-
-
 def alloc_randn(shape: tuple[int, ...], dtype: torch.dtype, device: str) -> torch.Tensor:
     if dtype.itemsize == 1:
         return alloc_rand(shape, device=device, dtype=dtype)
@@ -1388,43 +1364,36 @@ def make_prod_like_logits(
 
     return logits.to(dtype)
 
+def run_repro(max_launches: int = 1000):
+    torch.cuda.set_device(0)
+    device = "cuda:0"
+    torch.manual_seed(0)
 
-def init_routing_data(
-    c: MLPConfig, batch_size: int, local_rank: int, device: str, uniform_routing: bool
-) -> tuple[RaggedTensorMetadata, torch.Tensor]:
-    expt_dist = make_expt_dict_uniform(c.num_expert_shards, c.num_experts)
-    if uniform_routing:
-        logits = torch.randn((batch_size, c.num_experts), dtype=torch.float16, device=device)
-    else:
-        logits = make_prod_like_logits(batch_size, c.num_experts, c.experts_per_token, device)
-    sparse_logits = topk(logits, c.experts_per_token, apply_softmax=True)
+    num_experts = 128
+    experts_per_token = 4
+    num_expert_shards = 8
+    hidden_size = 17 * 128
+    intermediate_size = 5760
+    batch_size = 512
+
+    p = KernelConfig()
+    local_rank = int(torch.randint(0, num_expert_shards, size=()).item())
+    n_expts_local = num_experts // num_expert_shards
+
+    expt_dist = make_expt_dict_uniform(num_expert_shards, num_experts)
+    logits = make_prod_like_logits(batch_size, num_experts, experts_per_token, device)
+    sparse_logits = topk(logits, experts_per_token, apply_softmax=True)
     expt_hist = sparse_logits.mask_metadata.col_sum
     local_expts = expt_dist[local_rank]
     local_expts_hist = expt_hist[local_expts]
-    ragged_metadata = make_ragged_tensor_metadata(local_expts_hist, batch_size * c.experts_per_token)
-    ragged_metadata.expected_slice_size = batch_size * c.experts_per_token // c.num_experts
+    ragged_metadata = make_ragged_tensor_metadata(local_expts_hist, batch_size * experts_per_token)
+    ragged_metadata.expected_slice_size = batch_size * experts_per_token // num_experts
     combine_indx = sparse_logits.mask_metadata.col_sorted_indx
-    gather_indx = torch.div(combine_indx, c.experts_per_token, rounding_mode="trunc")
-    return ragged_metadata, gather_indx
+    gather_indx = torch.div(combine_indx, experts_per_token, rounding_mode="trunc")
 
-
-def prepare_case(
-    c: MLPConfig,
-    batch_size: int,
-    device: str,
-    seed: int = 0,
-    uniform_routing: bool = False,
-) -> PreparedCase:
-    torch.manual_seed(seed)
-
-    p = KernelConfig()
-    local_rank = int(torch.randint(0, c.num_expert_shards, size=()).item())
-    k, n = c.hidden_size, c.intermediate_size
-    n_expts_local = c.num_experts // c.num_expert_shards
-    ragged_metadata, gather_indx = init_routing_data(c, batch_size, local_rank, device, uniform_routing)
-    x = alloc_randn((batch_size, k), dtype=torch.float8_e4m3fn, device=device)
-    w, w_scale = alloc_randn_fp4((n_expts_local, k, n), device=device, p=p)
-    bias = alloc_randn((n_expts_local, n), dtype=torch.float32, device=device)
+    x = alloc_randn((batch_size, hidden_size), dtype=torch.float8_e4m3fn, device=device)
+    w, w_scale = alloc_randn_fp4((n_expts_local, hidden_size, intermediate_size), device=device, p=p)
+    bias = alloc_randn((n_expts_local, intermediate_size), dtype=torch.float32, device=device)
 
     swiglu_alpha = float(torch.rand((), device=device).item()) / 5 + 1.0
     swiglu_limit = float(torch.rand((), device=device).item()) / 5 + 1.3
@@ -1432,65 +1401,31 @@ def prepare_case(
         FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
         (swiglu_alpha, swiglu_limit),
     )
-
     x_scale = (torch.rand((), device=device) + 0.5).reshape(1)
     y_scale = (torch.rand((), device=device) + 3.5).reshape(1)
-    return PreparedCase(
-        x=x,
-        w=w,
-        w_scale=w_scale,
-        bias=bias,
-        ragged_metadata=ragged_metadata,
-        gather_indx=gather_indx,
-        fused_activation=fused_activation,
-        x_scale=x_scale,
-        y_scale=y_scale,
-    )
-
-
-def make_precision_config(prepared: PreparedCase) -> PrecisionConfig:
-    return PrecisionConfig(
+    precision = PrecisionConfig(
         flexpoint_saturate_inf=True,
-        b_mx_scale=prepared.w_scale,
+        b_mx_scale=w_scale,
         b_microblock_size=MXFP_BLOCK_SIZE.value,
         out_dtype=torch.float8_e4m3fn,
         flex_ctx=FlexCtx(
-            lhs_data=InFlexData(dtype=torch.float8_e4m3fn, scale=prepared.x_scale),
+            lhs_data=InFlexData(dtype=torch.float8_e4m3fn, scale=x_scale),
             rhs_data=InFlexData(),
-            out_data=OutFlexData(dtype=torch.float8_e4m3fn, expected_scale=prepared.y_scale),
+            out_data=OutFlexData(dtype=torch.float8_e4m3fn, expected_scale=y_scale),
         ),
     )
-
-
-def run_repro(max_launches: int = 1000):
-    torch.cuda.set_device(0)
-    config = MLPConfig(
-        num_experts=128,
-        experts_per_token=4,
-        num_expert_shards=8,
-        hidden_size=17 * 128,
-        intermediate_size=5760,
-    )
-    prepared = prepare_case(
-        config,
-        512,
-        device="cuda:0",
-        seed=0,
-        uniform_routing=False,
-    )
-    precision = make_precision_config(prepared)
-    out_shape = (prepared.gather_indx.shape[0], prepared.bias.shape[1] // prepared.fused_activation.specs.reduction_n)
-    out = torch.zeros(out_shape, dtype=torch.float8_e4m3fn, device=prepared.x.device)
+    out_shape = (gather_indx.shape[0], bias.shape[1] // fused_activation.specs.reduction_n)
+    out = torch.zeros(out_shape, dtype=torch.float8_e4m3fn, device=device)
 
     matmul(
-        a=prepared.x,
-        b=prepared.w,
-        bias=prepared.bias,
-        a_ragged_metadata=prepared.ragged_metadata,
-        gather_indx=prepared.gather_indx,
+        a=x,
+        b=w,
+        bias=bias,
+        a_ragged_metadata=ragged_metadata,
+        gather_indx=gather_indx,
         precision_config=precision,
         c=out,
-        fused_activation=prepared.fused_activation,
+        fused_activation=fused_activation,
     )
     torch.cuda.synchronize()
     expected = out.clone()
@@ -1498,14 +1433,14 @@ def run_repro(max_launches: int = 1000):
     for launch in range(1, max_launches + 1):
         out.zero_()
         matmul(
-            a=prepared.x,
-            b=prepared.w,
-            bias=prepared.bias,
-            a_ragged_metadata=prepared.ragged_metadata,
-            gather_indx=prepared.gather_indx,
+            a=x,
+            b=w,
+            bias=bias,
+            a_ragged_metadata=ragged_metadata,
+            gather_indx=gather_indx,
             precision_config=precision,
             c=out,
-            fused_activation=prepared.fused_activation,
+            fused_activation=fused_activation,
         )
         torch.cuda.synchronize()
         if not torch.equal(out, expected):
