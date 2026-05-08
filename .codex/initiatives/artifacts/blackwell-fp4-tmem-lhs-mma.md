@@ -1,7 +1,7 @@
 ---
 owner: jeffniu22@gmail.com
 created: 2026-05-07T07:15:19Z
-updated: 2026-05-08T02:57:56Z
+updated: 2026-05-08T03:03:55Z
 ---
 
 # Blackwell FP4 Padded Weight Packing
@@ -345,6 +345,10 @@ across the important batch regime.
   traffic or register-unpack latency. It is the structural cost of the swapped
   replay design at `BLOCK_M=128`: twice as many MMAs plus the extra TMEM copy /
   load / store pipeline needed to materialize the odd packed tile.
+- A final low-risk 16k selector sweep found no further retained win:
+  occupancy above `1` regressed sharply, repeated finalist runs kept
+  `BAND_N=10` ahead of `8` and `20`, and the 1CTA `BLOCK_N=512` TMEM-copy shape
+  is over the tensor-memory limit before it becomes a viable benchmark point.
 
 - The promoted TMEM-copy default passes exact reference checks at `bs=128`,
   `bs=1024`, `bs=8192`, and focused 16k retune checks, twenty repeated
@@ -788,6 +792,28 @@ across the important batch regime.
     because it raises MMA/TMEM work materially.
   - Plan updates: the retained `BLOCK_M=128` path is now zero-spill. The next
     high-value experiment remains the large-M non-swapped orientation.
+- `2026-05-08` Completed: narrowed the post-spill 16k gap and exhausted the
+  remaining low-risk 1CTA selector knobs.
+  - Artifacts: retained large-slice `X_NUM_BUFS=6` / `W_NUM_BUFS=3` selector in
+    `python/examples/gluon/05-moe-bmm1-fused-gather.py`;
+    `/tmp/bs16k_w3x6m24_profile.ncu-rep`;
+    `/tmp/bs16k_ref_fresh_profile.ncu-rep`.
+  - Validation: bounded one-shot `BLOCK_N=128` experiment after making the
+    replay load layout shape-aware; exact 16k reference comparisons; ten
+    repeated exact launches for the retained selector; zero static `LDL`/`STL`
+    SASS inspection; same-seed selector sweeps; filtered NCU candidate/reference
+    profiles.
+  - Learnings: extra buffering recovers roughly `38` TFLOPS while preserving
+    literal zero spill, but the reference gap remains because the retained path
+    still pays 2x MMA issue count and large odd-tile TMEM replay traffic.
+    `BLOCK_N=128` is correct but slower, `MMA_REGS=40` is slightly faster but
+    violates the zero-spill constraint, and `BLOCK_N=512` is not viable for the
+    1CTA TMEM-copy shape because its tensor-memory footprint exceeds hardware
+    capacity.
+  - Plan updates: stop spending time on launch-shape tuning for the current
+    swapped replay design. The next material experiment should be a large-M
+    non-swapped dataflow; because RHS TMEM is not implemented today, that likely
+    means replaying the odd packed tile through shared memory instead.
 
 ## Next Up
 
