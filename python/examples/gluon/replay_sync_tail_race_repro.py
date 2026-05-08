@@ -1282,7 +1282,6 @@ class PreparedCase:
     x_scale: torch.Tensor
     y_scale: torch.Tensor
     out_shape: tuple[int, int]
-    out_dtype: torch.dtype
 
 
 def alloc_randn(shape: tuple[int, ...], dtype: torch.dtype, device: str) -> torch.Tensor:
@@ -1409,7 +1408,6 @@ def prepare_case(
         x_scale=x_scale,
         y_scale=y_scale,
         out_shape=(batch_size * c.experts_per_token, n // fused_activation.specs.reduction_n),
-        out_dtype=torch.float8_e4m3fn,
     )
 
 
@@ -1418,11 +1416,11 @@ def make_precision_config(prepared: PreparedCase) -> PrecisionConfig:
         flexpoint_saturate_inf=True,
         b_mx_scale=prepared.w_scale,
         b_microblock_size=MXFP_BLOCK_SIZE.value,
-        out_dtype=prepared.out_dtype,
+        out_dtype=torch.float8_e4m3fn,
         flex_ctx=FlexCtx(
-            lhs_data=InFlexData(dtype=prepared.out_dtype, scale=prepared.x_scale),
+            lhs_data=InFlexData(dtype=torch.float8_e4m3fn, scale=prepared.x_scale),
             rhs_data=InFlexData(),
-            out_data=OutFlexData(dtype=prepared.out_dtype, expected_scale=prepared.y_scale),
+            out_data=OutFlexData(dtype=torch.float8_e4m3fn, expected_scale=prepared.y_scale),
         ),
     )
 
@@ -1444,7 +1442,7 @@ def run_repro(max_launches: int = 1000):
         uniform_routing=False,
     )
     precision = make_precision_config(prepared)
-    out = torch.zeros(prepared.out_shape, dtype=prepared.out_dtype, device=prepared.x.device)
+    out = torch.zeros(prepared.out_shape, dtype=torch.float8_e4m3fn, device=prepared.x.device)
 
     matmul(
         a=prepared.x,
