@@ -1407,6 +1407,15 @@ across the important batch regime.
     config argument. After fixing the host-side `MXFP_BLOCK_SIZE` integer vs
     constexpr type mixup, the reduced file still repros with
     `FAIL launch=1 maxdiff=2.625`.
+  - Single-row / single-slice reduction:
+    the active repro no longer needs any ragged schedule state at all. Host
+    code now runs a single-row `x` tile against a single logical weight slice,
+    the block metadata arrays are gone, and each partition derives its work
+    directly from `program_id(0)` plus fixed literals. The outer
+    `for block_id in range(...)` loops are gone as well because the launch is
+    now the literal two-block grid that exercises the race. This much smaller
+    source still fails with the focused command, most recently as
+    `FAIL launch=6 maxdiff=0.625`.
 
 ## Next Up
 

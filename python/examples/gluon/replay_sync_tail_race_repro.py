@@ -2,20 +2,17 @@ import torch
 import triton
 import triton.experimental.gluon as gluon
 import triton.experimental.gluon.language as gl
+from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 import triton.experimental.gluon.language.nvidia.blackwell as blackwell
 import triton.experimental.gluon.language.nvidia.blackwell.tma as tma
 from triton.experimental.gluon.language.nvidia.blackwell import float2
 import triton.experimental.gluon.language.nvidia.hopper.mbarrier as mbarrier
-from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp
+from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
 from triton_kernels.tensor import (
     FP4,
-    RaggedTensorMetadata,
-    Tensor,
     convert_layout,
-    make_ragged_tensor_metadata,
     wrap_torch_tensor,
 )
-from triton_kernels.tensor_details.dtype import UINT8
 from triton_kernels.tensor_details.layout import (
     BlackwellMX4ValuePackedShuffledLayout,
     make_default_matmul_mxfp4_w_scale_layout,
@@ -46,7 +43,6 @@ LOAD_WEIGHT_REGS_VALUE = 24
 LOAD_WEIGHT_SCALES_REGS_VALUE = 24
 REPLAY_REGS_VALUE = 80
 MMA_REGS_VALUE = 80
-OCCUPANCY_VALUE = 1
 MXFP_BLOCK_SIZE_VALUE = 32
 SCALE_SIZE_OUTER_VALUE = 128
 SCALE_SIZE_INNER_VALUE = 4
@@ -158,12 +154,6 @@ class PartitionArgs:
     scale_desc: tma.tensor_descriptor
 
     out_ptr: gl.tensor
-    block_pid_n: gl.tensor
-    block_slice_idx: gl.tensor
-    block_scale_idx: gl.tensor
-    block_row_base: gl.tensor
-    block_rows: gl.tensor
-    block_out_off_n_packed: gl.tensor
 
     x_bufs: gl.shared_memory_descriptor
     x_empty_bars: gl.shared_memory_descriptor
@@ -194,9 +184,6 @@ class PartitionArgs:
     unpack_sync_bar: gl.shared_memory_descriptor
 
     K_TILES: gl.constexpr
-    num_blocks: gl.tensor
-
-    NUM_SMS: gl.constexpr
     BLOCK_M: gl.constexpr
     BLOCK_N: gl.constexpr
     BLOCK_K: gl.constexpr
@@ -219,32 +206,29 @@ def load_activations(p: PartitionArgs):
     phase = 1
     issued = 0
 
-    for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        row_base = gl.load(p.block_row_base + block_id)
-        rows = gl.load(p.block_rows + block_id)
-        offs_m = gl.arange(0, p.BLOCK_M, layout=offs_layout)
+    offs_m = gl.arange(0, p.BLOCK_M, layout=offs_layout)
 
-        mask_m = offs_m < rows
-        offs_x_m = gl.where(mask_m, row_base + offs_m, p.x_desc.shape[0])
+    mask_m = offs_m < 1
+    offs_x_m = gl.where(mask_m, offs_m, p.x_desc.shape[0])
 
-        for ki in range(p.K_TILES):
-            off_k_x = ki * p.BLOCK_K
-            empty_bar = p.x_empty_bars.index(idx)
-            ready_bar = p.x_ready_bars.index(idx)
-            x_buf = p.x_bufs.index(idx)
+    for ki in range(p.K_TILES):
+        off_k_x = ki * p.BLOCK_K
+        empty_bar = p.x_empty_bars.index(idx)
+        ready_bar = p.x_ready_bars.index(idx)
+        x_buf = p.x_bufs.index(idx)
 
-            mbarrier.wait(empty_bar, phase, pred=issued >= p.X_NUM_BUFS)
-            mbarrier.expect(ready_bar, tile_x_bytes)
-            tma.async_gather(
-                p.x_desc,
-                offs_x_m,
-                off_k_x,
-                ready_bar,
-                x_buf,
-            )
+        mbarrier.wait(empty_bar, phase, pred=issued >= p.X_NUM_BUFS)
+        mbarrier.expect(ready_bar, tile_x_bytes)
+        tma.async_gather(
+            p.x_desc,
+            offs_x_m,
+            off_k_x,
+            ready_bar,
+            x_buf,
+        )
 
-            idx, phase = advance(idx, phase, p.X_NUM_BUFS)
-            issued += 1
+        idx, phase = advance(idx, phase, p.X_NUM_BUFS)
+        issued += 1
 
 
 @gluon.jit
@@ -255,26 +239,24 @@ def load_weights(p: PartitionArgs):
     phase = 1
     issued = 0
 
-    for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        pid_n = gl.load(p.block_pid_n + block_id)
-        slice_idx = gl.load(p.block_slice_idx + block_id)
+    pid_n = gl.program_id(0)
 
-        for ki in range(0, p.K_TILES, 2):
-            w_empty_bar = p.w_empty_bars.index(idx)
-            w_ready_bar = p.w_ready_bars.index(idx)
-            w_buf = p.w_bufs.index(idx)
+    for ki in range(0, p.K_TILES, 2):
+        w_empty_bar = p.w_empty_bars.index(idx)
+        w_ready_bar = p.w_ready_bars.index(idx)
+        w_buf = p.w_bufs.index(idx)
 
-            mbarrier.wait(w_empty_bar, phase, pred=issued >= p.W_NUM_BUFS)
-            mbarrier.expect(w_ready_bar, TILE_W_BYTES)
-            tma.async_copy_global_to_shared(
-                p.w_desc,
-                [slice_idx, ki // 2, pid_n, 0, 0],
-                w_ready_bar,
-                w_buf,
-            )
+        mbarrier.wait(w_empty_bar, phase, pred=issued >= p.W_NUM_BUFS)
+        mbarrier.expect(w_ready_bar, TILE_W_BYTES)
+        tma.async_copy_global_to_shared(
+            p.w_desc,
+            [0, ki // 2, pid_n, 0, 0],
+            w_ready_bar,
+            w_buf,
+        )
 
-            idx, phase = advance(idx, phase, p.W_NUM_BUFS)
-            issued += 1
+        idx, phase = advance(idx, phase, p.W_NUM_BUFS)
+        issued += 1
 
 
 @gluon.jit
@@ -285,26 +267,25 @@ def load_weight_scales(p: PartitionArgs):
     phase = 1
     issued = 0
 
-    for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        scale_idx = gl.load(p.block_scale_idx + block_id)
-        for ki in range(p.K_TILES):
-            off_k_scale = ki * p.BLOCK_K // (p.MXFP_BLOCK_SIZE * p.SCALE_SIZE_INNER)
+    scale_idx = gl.program_id(0) * (p.BLOCK_N // p.SCALE_SIZE_OUTER)
+    for ki in range(p.K_TILES):
+        off_k_scale = ki * p.BLOCK_K // (p.MXFP_BLOCK_SIZE * p.SCALE_SIZE_INNER)
 
-            scale_empty_bar = p.w_scale_empty_bars.index(idx)
-            scale_ready_bar = p.w_scale_ready_bars.index(idx)
-            scale_buf = p.w_scale_bufs.index(idx)
+        scale_empty_bar = p.w_scale_empty_bars.index(idx)
+        scale_ready_bar = p.w_scale_ready_bars.index(idx)
+        scale_buf = p.w_scale_bufs.index(idx)
 
-            mbarrier.wait(scale_empty_bar, phase, pred=issued >= p.W_SCALE_NUM_BUFS)
-            mbarrier.expect(scale_ready_bar, TILE_SCALE_BYTES)
-            tma.async_copy_global_to_shared(
-                p.scale_desc,
-                [0, scale_idx, off_k_scale, 0, 0],
-                scale_ready_bar,
-                scale_buf,
-            )
+        mbarrier.wait(scale_empty_bar, phase, pred=issued >= p.W_SCALE_NUM_BUFS)
+        mbarrier.expect(scale_ready_bar, TILE_SCALE_BYTES)
+        tma.async_copy_global_to_shared(
+            p.scale_desc,
+            [0, scale_idx, off_k_scale, 0, 0],
+            scale_ready_bar,
+            scale_buf,
+        )
 
-            idx, phase = advance(idx, phase, p.W_SCALE_NUM_BUFS)
-            issued += 1
+        idx, phase = advance(idx, phase, p.W_SCALE_NUM_BUFS)
+        issued += 1
 
 
 @gluon.jit
@@ -329,107 +310,13 @@ def mma_partition(p: PartitionArgs):
         fp4_padded=True,
     )
 
-    for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        acc_empty_bar = p.acc_empty_bars.index(mma_idx)
-        acc_ready_bar = p.acc_ready_bars.index(mma_idx)
-        acc_buf = p.acc_bufs.index(mma_idx)
-        mbarrier.wait(acc_empty_bar, mma_phase)
+    acc_empty_bar = p.acc_empty_bars.index(mma_idx)
+    acc_ready_bar = p.acc_ready_bars.index(mma_idx)
+    acc_buf = p.acc_bufs.index(mma_idx)
+    mbarrier.wait(acc_empty_bar, mma_phase)
 
-        use_acc = False
-        for _ in range(p.K_TILES // 2):
-            # First K tile. Wait for scales, weight, and act tile.
-            scale_ready_bar = p.w_scale_ready_bars.index(scale_idx)
-            scale_empty_bar = p.w_scale_empty_bars.index(scale_idx)
-            scale_buf = p.w_scale_bufs.index(scale_idx)
-            mbarrier.wait(scale_ready_bar, scale_phase)
-            blackwell.tcgen05_copy(
-                unswizzle_mx_scale(scale_buf, p.SCALE_SIZE_OUTER, p.SCALE_SIZE_INNER, p.MXFP_BLOCK_SIZE),
-                p.w_scale_tmem,
-            )
-
-            x_ready_bar = p.x_ready_bars.index(x_idx)
-            x_empty_bar = p.x_empty_bars.index(x_idx)
-            x_buf = p.x_bufs.index(x_idx)
-            mbarrier.wait(x_ready_bar, x_phase)
-
-            w_ready_bar = p.w_ready_bars.index(w_idx)
-            w_empty_bar = p.w_empty_bars.index(w_idx)
-            w_buf = p.w_bufs.index(w_idx)
-            mbarrier.wait(w_ready_bar, w_phase)
-
-            # w_packed_pair 512x128xi8, logical 512x256xfp4
-            w_packed_pair = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))
-            fp4_padded_layout: gl.constexpr = gl.NVMMASharedLayout(
-                swizzle_byte_width=128,
-                element_bitwidth=8,
-                rank=2,
-                fp4_padded=True,
-            )
-
-            w_pair_first = w_packed_pair._reinterpret(
-                gl.uint8,
-                (p.BLOCK_N, p.BLOCK_K // 2),
-                fp4_padded_layout,
-            )
-
-            blackwell.tcgen05_mma_scaled(
-                w_pair_first,
-                x_buf.permute((1, 0)),
-                acc_buf,
-                p.w_scale_tmem,
-                p.x_scale_tmem,
-                a_type="e2m1",
-                b_type="e4m3",
-                use_acc=use_acc,
-                mbarriers=[x_empty_bar, scale_empty_bar, w_empty_bar],
-            )
-
-            use_acc = True
-
-            replay_full_bar = p.replay_full_bars.index(replay_idx)
-            mbarrier.wait(replay_full_bar, replay_full_phase)
-            mbarrier.arrive(p.unpack_sync_bar)
-            mbarrier.wait(p.unpack_sync_bar, unpack_sync_phase)
-            unpack_sync_phase = unpack_sync_phase ^ 1
-
-            w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
-            scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
-            x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
-
-            # Second K tile. Wait for scales and act tile.
-            scale_ready_bar = p.w_scale_ready_bars.index(scale_idx)
-            scale_empty_bar = p.w_scale_empty_bars.index(scale_idx)
-            scale_buf = p.w_scale_bufs.index(scale_idx)
-            mbarrier.wait(scale_ready_bar, scale_phase)
-            blackwell.tcgen05_copy(
-                unswizzle_mx_scale(scale_buf, p.SCALE_SIZE_OUTER, p.SCALE_SIZE_INNER, p.MXFP_BLOCK_SIZE),
-                p.w_scale_tmem,
-            )
-
-            x_ready_bar = p.x_ready_bars.index(x_idx)
-            x_empty_bar = p.x_empty_bars.index(x_idx)
-            x_buf = p.x_bufs.index(x_idx)
-            mbarrier.wait(x_ready_bar, x_phase)
-
-            replay_tmem = p.replay_tmem.index(replay_idx)
-            replay_empty_bar = p.replay_empty_bars.index(replay_idx)
-            blackwell.tcgen05_mma_scaled(
-                replay_tmem._reinterpret(gl.uint8, (p.BLOCK_N, p.BLOCK_K), k_second_u8_layout),
-                x_buf.permute((1, 0)),
-                acc_buf,
-                p.w_scale_tmem,
-                p.x_scale_tmem,
-                a_type="e2m1",
-                b_type="e4m3",
-                use_acc=use_acc,
-                mbarriers=[x_empty_bar, scale_empty_bar, replay_empty_bar],
-            )
-
-            replay_idx, replay_full_phase = advance(replay_idx, replay_full_phase, 2)
-            x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
-            scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
-
-        # First K tile. Wait for scales, weight, and act tile.
+    use_acc = False
+    for _ in range(p.K_TILES // 2):
         scale_ready_bar = p.w_scale_ready_bars.index(scale_idx)
         scale_empty_bar = p.w_scale_empty_bars.index(scale_idx)
         scale_buf = p.w_scale_bufs.index(scale_idx)
@@ -449,7 +336,6 @@ def mma_partition(p: PartitionArgs):
         w_buf = p.w_bufs.index(w_idx)
         mbarrier.wait(w_ready_bar, w_phase)
 
-        # w_packed_pair 512x128xi8, logical 512x256xfp4
         w_packed_pair = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))
         fp4_padded_layout: gl.constexpr = gl.NVMMASharedLayout(
             swizzle_byte_width=128,
@@ -457,7 +343,6 @@ def mma_partition(p: PartitionArgs):
             rank=2,
             fp4_padded=True,
         )
-
         w_pair_first = w_packed_pair._reinterpret(
             gl.uint8,
             (p.BLOCK_N, p.BLOCK_K // 2),
@@ -475,17 +360,101 @@ def mma_partition(p: PartitionArgs):
             use_acc=use_acc,
             mbarriers=[x_empty_bar, scale_empty_bar, w_empty_bar],
         )
-
         use_acc = True
 
-        blackwell.tcgen05_commit(w_empty_bar)
-        w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+        replay_full_bar = p.replay_full_bars.index(replay_idx)
+        mbarrier.wait(replay_full_bar, replay_full_phase)
+        mbarrier.arrive(p.unpack_sync_bar)
+        mbarrier.wait(p.unpack_sync_bar, unpack_sync_phase)
+        unpack_sync_phase = unpack_sync_phase ^ 1
 
+        w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
         scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
         x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
 
-        blackwell.tcgen05_commit(acc_ready_bar)
-        mma_idx, mma_phase = advance(mma_idx, mma_phase, p.ACC_NUM_BUFS)
+        scale_ready_bar = p.w_scale_ready_bars.index(scale_idx)
+        scale_empty_bar = p.w_scale_empty_bars.index(scale_idx)
+        scale_buf = p.w_scale_bufs.index(scale_idx)
+        mbarrier.wait(scale_ready_bar, scale_phase)
+        blackwell.tcgen05_copy(
+            unswizzle_mx_scale(scale_buf, p.SCALE_SIZE_OUTER, p.SCALE_SIZE_INNER, p.MXFP_BLOCK_SIZE),
+            p.w_scale_tmem,
+        )
+
+        x_ready_bar = p.x_ready_bars.index(x_idx)
+        x_empty_bar = p.x_empty_bars.index(x_idx)
+        x_buf = p.x_bufs.index(x_idx)
+        mbarrier.wait(x_ready_bar, x_phase)
+
+        replay_tmem = p.replay_tmem.index(replay_idx)
+        replay_empty_bar = p.replay_empty_bars.index(replay_idx)
+        blackwell.tcgen05_mma_scaled(
+            replay_tmem._reinterpret(gl.uint8, (p.BLOCK_N, p.BLOCK_K), k_second_u8_layout),
+            x_buf.permute((1, 0)),
+            acc_buf,
+            p.w_scale_tmem,
+            p.x_scale_tmem,
+            a_type="e2m1",
+            b_type="e4m3",
+            use_acc=use_acc,
+            mbarriers=[x_empty_bar, scale_empty_bar, replay_empty_bar],
+        )
+
+        replay_idx, replay_full_phase = advance(replay_idx, replay_full_phase, 2)
+        x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
+        scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
+
+    scale_ready_bar = p.w_scale_ready_bars.index(scale_idx)
+    scale_empty_bar = p.w_scale_empty_bars.index(scale_idx)
+    scale_buf = p.w_scale_bufs.index(scale_idx)
+    mbarrier.wait(scale_ready_bar, scale_phase)
+    blackwell.tcgen05_copy(
+        unswizzle_mx_scale(scale_buf, p.SCALE_SIZE_OUTER, p.SCALE_SIZE_INNER, p.MXFP_BLOCK_SIZE),
+        p.w_scale_tmem,
+    )
+
+    x_ready_bar = p.x_ready_bars.index(x_idx)
+    x_empty_bar = p.x_empty_bars.index(x_idx)
+    x_buf = p.x_bufs.index(x_idx)
+    mbarrier.wait(x_ready_bar, x_phase)
+
+    w_ready_bar = p.w_ready_bars.index(w_idx)
+    w_empty_bar = p.w_empty_bars.index(w_idx)
+    w_buf = p.w_bufs.index(w_idx)
+    mbarrier.wait(w_ready_bar, w_phase)
+
+    w_packed_pair = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))
+    fp4_padded_layout: gl.constexpr = gl.NVMMASharedLayout(
+        swizzle_byte_width=128,
+        element_bitwidth=8,
+        rank=2,
+        fp4_padded=True,
+    )
+    w_pair_first = w_packed_pair._reinterpret(
+        gl.uint8,
+        (p.BLOCK_N, p.BLOCK_K // 2),
+        fp4_padded_layout,
+    )
+
+    blackwell.tcgen05_mma_scaled(
+        w_pair_first,
+        x_buf.permute((1, 0)),
+        acc_buf,
+        p.w_scale_tmem,
+        p.x_scale_tmem,
+        a_type="e2m1",
+        b_type="e4m3",
+        use_acc=use_acc,
+        mbarriers=[x_empty_bar, scale_empty_bar, w_empty_bar],
+    )
+
+    blackwell.tcgen05_commit(w_empty_bar)
+    w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+    scale_idx, scale_phase = advance(scale_idx, scale_phase, p.W_SCALE_NUM_BUFS)
+    x_idx, x_phase = advance(x_idx, x_phase, p.X_NUM_BUFS)
+
+    blackwell.tcgen05_commit(acc_ready_bar)
+    mma_idx, mma_phase = advance(mma_idx, mma_phase, p.ACC_NUM_BUFS)
 
 
 @gluon.jit
@@ -502,53 +471,46 @@ def replay_partition(p: PartitionArgs):
         rank=2,
         fp4_padded=False,
     )
-    for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-            for _ in range(p.K_TILES // 2):
-                w_ready_bar = p.w_ready_bars.index(w_idx)
-                w_empty_bar = p.w_empty_bars.index(w_idx)
-                w_buf = p.w_bufs.index(w_idx)
-                mbarrier.wait(w_ready_bar, w_phase)
+    for _ in range(p.K_TILES // 2):
+        w_ready_bar = p.w_ready_bars.index(w_idx)
+        w_empty_bar = p.w_empty_bars.index(w_idx)
+        w_buf = p.w_bufs.index(w_idx)
+        mbarrier.wait(w_ready_bar, w_phase)
 
-                replay_tmem = p.replay_tmem.index(replay_idx)
-                replay_empty_bar = p.replay_empty_bars.index(replay_idx)
-                replay_full_bar = p.replay_full_bars.index(replay_idx)
-                mbarrier.wait(replay_empty_bar, replay_empty_phase)
-                dense_replay_tmem = p.dense_replay_tmem
-                dense_pair_words = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))._reinterpret(
-                    gl.uint32,
-                    (p.BLOCK_N, p.BLOCK_K // 4),
-                    dense_pair_layout,
-                )
-                blackwell.tcgen05_copy(dense_pair_words, dense_replay_tmem)
-                blackwell.tcgen05_commit(p.dense_copy_done_bar)
-                mbarrier.wait(p.dense_copy_done_bar, dense_copy_phase)
-                dense_copy_phase = dense_copy_phase ^ 1
+        replay_tmem = p.replay_tmem.index(replay_idx)
+        replay_empty_bar = p.replay_empty_bars.index(replay_idx)
+        replay_full_bar = p.replay_full_bars.index(replay_idx)
+        mbarrier.wait(replay_empty_bar, replay_empty_phase)
+        dense_replay_tmem = p.dense_replay_tmem
+        dense_pair_words = w_buf.reshape((p.BLOCK_N, p.BLOCK_K))._reinterpret(
+            gl.uint32,
+            (p.BLOCK_N, p.BLOCK_K // 4),
+            dense_pair_layout,
+        )
+        blackwell.tcgen05_copy(dense_pair_words, dense_replay_tmem)
+        blackwell.tcgen05_commit(p.dense_copy_done_bar)
+        mbarrier.wait(p.dense_copy_done_bar, dense_copy_phase)
+        dense_copy_phase = dense_copy_phase ^ 1
 
-                # Once the async copy finishes, shared memory is no longer
-                # needed by the replay side. Release the slot before the
-                # TMEM load/unpack work so the next TMA can overlap it.
-                blackwell.fence_async_shared()
-                mbarrier.arrive(w_empty_bar)
-                w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+        blackwell.fence_async_shared()
+        mbarrier.arrive(w_empty_bar)
+        w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
 
-                replay_cols: gl.constexpr = p.BLOCK_K // 4
-                replay_segments: gl.constexpr = p.BLOCK_K // 16
-                dense_frag = dense_replay_tmem.slice(0, replay_cols)
-                replay_frag = replay_tmem.slice(0, replay_cols)
-                dense_words = dense_frag.load()
-                dense_words = dense_words.reshape((p.BLOCK_N, replay_segments, 2, 2)).permute((0, 1, 3, 2))
-                _, dense_words = gl.split(dense_words)
-                dense_words = dense_words.reshape((1, 1, 1, p.BLOCK_N, replay_segments, 2))
-                lo, hi = fp4_prmt_shuffle_elements(dense_words)
-                k_second = gl.join(lo, hi).reshape([p.BLOCK_N, replay_cols])
-                replay_frag.store(gl.convert_layout(k_second, replay_frag.get_reg_layout()))
-                mbarrier.arrive(replay_full_bar)
-                replay_idx, replay_empty_phase = advance(replay_idx, replay_empty_phase, 2)
+        replay_cols: gl.constexpr = p.BLOCK_K // 4
+        replay_segments: gl.constexpr = p.BLOCK_K // 16
+        dense_frag = dense_replay_tmem.slice(0, replay_cols)
+        replay_frag = replay_tmem.slice(0, replay_cols)
+        dense_words = dense_frag.load()
+        dense_words = dense_words.reshape((p.BLOCK_N, replay_segments, 2, 2)).permute((0, 1, 3, 2))
+        _, dense_words = gl.split(dense_words)
+        dense_words = dense_words.reshape((1, 1, 1, p.BLOCK_N, replay_segments, 2))
+        lo, hi = fp4_prmt_shuffle_elements(dense_words)
+        k_second = gl.join(lo, hi).reshape([p.BLOCK_N, replay_cols])
+        replay_frag.store(gl.convert_layout(k_second, replay_frag.get_reg_layout()))
+        mbarrier.arrive(replay_full_bar)
+        replay_idx, replay_empty_phase = advance(replay_idx, replay_empty_phase, 2)
 
-            # The tail tile has no replay work, but it still occupies one
-            # packed-weight ring slot. Keep this partition's cursor aligned
-            # with the MMA partition before the next output block.
-            w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
+    w_idx, w_phase = advance(w_idx, w_phase, p.W_NUM_BUFS)
 
 
 @gluon.jit
@@ -572,35 +534,32 @@ def epilogue_partition(p: PartitionArgs):
         [1, 0],
     )
 
-    for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        row_base = gl.load(p.block_row_base + block_id)
-        rows = gl.load(p.block_rows + block_id)
-        out_off_n_packed = gl.load(p.block_out_off_n_packed + block_id)
-        acc_empty_bar = p.acc_empty_bars.index(idx)
-        acc_ready_bar = p.acc_ready_bars.index(idx)
-        acc_buf = p.acc_bufs.index(idx)
+    out_off_n_packed = gl.program_id(0) * (p.BLOCK_N // REDUCTION_N // 4)
+    acc_empty_bar = p.acc_empty_bars.index(idx)
+    acc_ready_bar = p.acc_ready_bars.index(idx)
+    acc_buf = p.acc_bufs.index(idx)
 
-        mbarrier.wait(acc_ready_bar, phase)
-        acc_regs = acc_buf.load().permute((1, 0))
-        mbarrier.arrive(acc_empty_bar)
-        idx, phase = advance(idx, phase, p.ACC_NUM_BUFS)
-        acc = gl.convert_layout(acc_regs, split_layout)
-        acc_packed = float2.pack(acc, axis=1)
+    mbarrier.wait(acc_ready_bar, phase)
+    acc_regs = acc_buf.load().permute((1, 0))
+    mbarrier.arrive(acc_empty_bar)
+    idx, phase = advance(idx, phase, p.ACC_NUM_BUFS)
+    acc = gl.convert_layout(acc_regs, split_layout)
+    acc_packed = float2.pack(acc, axis=1)
 
-        packed_fp8 = gl.convert_layout(
-            pack_e4m3x2(acc_packed * float2.full_like(acc_packed, out_recip)),
-            store_layout,
-        )
-        values = pack_fp8x4(packed_fp8)
-        layout: gl.constexpr = values.type.layout
-        offs_m = gl.arange(0, values.shape[0], layout=gl.SliceLayout(1, layout))
-        offs_n = out_off_n_packed + gl.arange(0, values.shape[1], layout=gl.SliceLayout(0, layout))
-        mask_m = gl.expand_dims(offs_m < rows, 1)
-        mask_n = gl.expand_dims(offs_n < p.OUT_PACKED_N, 0)
-        ptrs = p.out_ptr.cast(gl.pointer_type(gl.int32), bitcast=True)
-        ptrs = ptrs + gl.expand_dims(row_base + offs_m, 1) * p.OUT_PACKED_N
-        ptrs = ptrs + gl.expand_dims(offs_n, 0)
-        gl.store(ptrs, values, mask=mask_m & mask_n)
+    packed_fp8 = gl.convert_layout(
+        pack_e4m3x2(acc_packed * float2.full_like(acc_packed, out_recip)),
+        store_layout,
+    )
+    values = pack_fp8x4(packed_fp8)
+    layout: gl.constexpr = values.type.layout
+    offs_m = gl.arange(0, values.shape[0], layout=gl.SliceLayout(1, layout))
+    offs_n = out_off_n_packed + gl.arange(0, values.shape[1], layout=gl.SliceLayout(0, layout))
+    mask_m = gl.expand_dims(offs_m < 1, 1)
+    mask_n = gl.expand_dims(offs_n < p.OUT_PACKED_N, 0)
+    ptrs = p.out_ptr.cast(gl.pointer_type(gl.int32), bitcast=True)
+    ptrs = ptrs + gl.expand_dims(offs_m, 1) * p.OUT_PACKED_N
+    ptrs = ptrs + gl.expand_dims(offs_n, 0)
+    gl.store(ptrs, values, mask=mask_m & mask_n)
 
 
 @gluon.jit
@@ -610,21 +569,11 @@ def ws_matmul_kernel(
     scale_desc: tma.tensor_descriptor,
     out_ptr: gl.tensor,
     #
-    block_pid_n: gl.tensor,
-    block_slice_idx: gl.tensor,
-    block_scale_idx: gl.tensor,
-    block_row_base: gl.tensor,
-    block_rows: gl.tensor,
-    block_out_off_n_packed: gl.tensor,
-    #
-    num_blocks: gl.tensor,
-    #
     BLOCK_M: gl.constexpr,
     BLOCK_N: gl.constexpr,
     BLOCK_K: gl.constexpr,
     K_TILES: gl.constexpr,
     OUT_PACKED_N: gl.constexpr,
-    NUM_SMS: gl.constexpr,
     X_NUM_BUFS: gl.constexpr,
     W_NUM_BUFS: gl.constexpr,
     W_SCALE_NUM_BUFS: gl.constexpr,
@@ -716,12 +665,6 @@ def ws_matmul_kernel(
         w_desc=w_desc,
         scale_desc=scale_desc,
         out_ptr=out_ptr,
-        block_pid_n=block_pid_n,
-        block_slice_idx=block_slice_idx,
-        block_scale_idx=block_scale_idx,
-        block_row_base=block_row_base,
-        block_rows=block_rows,
-        block_out_off_n_packed=block_out_off_n_packed,
         #
         x_bufs=x_bufs,
         x_empty_bars=x_empty_bars,
@@ -752,9 +695,6 @@ def ws_matmul_kernel(
         unpack_sync_bar=unpack_sync_bar,
         #
         K_TILES=K_TILES,
-        num_blocks=num_blocks,
-        #
-        NUM_SMS=NUM_SMS,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
@@ -778,294 +718,102 @@ def ws_matmul_kernel(
         [LOAD_ACTIVATION_REGS, LOAD_WEIGHT_REGS, LOAD_WEIGHT_SCALES_REGS, REPLAY_REGS, MMA_REGS],
     )
 
-
-# ===-----------------------------------------------------------------------===#
-# Host Code
-# ===-----------------------------------------------------------------------===#
-
-
-def make_tensor_descriptor(
-    t: torch.Tensor | Tensor,
-    block_shape: tuple[int, ...],
-    *,
-    layout_block_shape: tuple[int, ...] | None = None,
-    cga_layout: tuple[tuple[int, ...], ...] = (),
-):
-    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
-
-    ptr = t if isinstance(t, torch.Tensor) else t.storage.data
-    shape = list(ptr.shape)
-    strides = list(ptr.stride())
-    desc_block_shape = list(block_shape)
-    layout_shape = list(layout_block_shape or block_shape)
-
-    if isinstance(t, Tensor) and t.dtype == FP4:
-        assert isinstance(t.storage.layout, BlackwellMX4ValuePackedShuffledLayout)
-        assert layout_block_shape is None
-        desc_block_shape = t.storage.layout.swizzle_block_shape(desc_block_shape)
-        desc_block_shape[strides.index(1)] //= 2
-        layout_shape = desc_block_shape
-
-    rank = len(layout_shape)
-    if t.dtype == FP4:
-        assert rank == 5
-        layout = gl.NVMMASharedLayout(
-            swizzle_byte_width=128,
-            element_bitwidth=8,
-            rank=rank,
-            fp4_padded=False,
-            cga_layout=cga_layout,
-        )
-    elif t.dtype == UINT8:
-        assert rank == 5
-        layout = gl.NVMMASharedLayout(
-            swizzle_byte_width=0,
-            element_bitwidth=8,
-            rank=rank,
-            cga_layout=cga_layout,
-        )
-    else:
-        assert t.dtype == torch.float8_e4m3fn
-        layout = gl.NVMMASharedLayout(
-            swizzle_byte_width=layout_shape[-1],
-            element_bitwidth=8,
-            rank=rank,
-            cga_layout=cga_layout,
-        )
-    return TensorDescriptor(ptr, shape, strides, desc_block_shape, layout)
-
-def matmul(
-    a: torch.Tensor,
-    b: torch.Tensor | Tensor,
-    a_ragged_metadata: RaggedTensorMetadata,
-    b_mx_scales: torch.Tensor,
-    c: torch.Tensor,
-):
-    assert c.ndim == 2
-    assert c.is_contiguous()
-
-    assert a.ndim == 2
-    _, k = a.shape
-    _, _, n = b.shape
-
-    assert isinstance(b, Tensor)
-    assert isinstance(b.storage.layout, BlackwellMX4ValuePackedShuffledLayout)
-    assert b.storage.layout.block_k == BLOCK_K_VALUE
-    assert b.storage.layout.block_n == BLOCK_N_VALUE
-    x_block_offs = a_ragged_metadata.block_offs(BLOCK_M_VALUE)
-    x_block_schedule = a_ragged_metadata.block_schedule(BLOCK_M_VALUE)
-    grid_m = int(x_block_offs[-1].item())
-    x_block_schedule = x_block_schedule[:grid_m]
-    x_block_slice_idx = (x_block_schedule & 0xFFFF).to(torch.int32)
-    x_block_pid_m = (x_block_schedule >> 16).to(torch.int32)
-    x_block_slice_offs = a_ragged_metadata.slice_offs[x_block_slice_idx.to(torch.int64)]
-    x_block_shape_m = a_ragged_metadata.slice_sizes[x_block_slice_idx.to(torch.int64)]
-    grid_n = triton.cdiv(n, BLOCK_N_VALUE)
-    k_tiles = triton.cdiv(k, BLOCK_K_VALUE)
-    out_packed_n = n // 8
-    num_blocks = grid_m * grid_n
-    schedule_pid_m = torch.arange(num_blocks, device=c.device, dtype=torch.int64) // grid_n
-    block_pid_n = (torch.arange(num_blocks, device=c.device, dtype=torch.int32) % grid_n).to(torch.int32)
-    block_slice_idx = x_block_slice_idx[schedule_pid_m]
-    block_scale_idx = (block_slice_idx * (n // SCALE_SIZE_OUTER_VALUE) + block_pid_n * (BLOCK_N_VALUE // SCALE_SIZE_OUTER_VALUE)).to(
-        torch.int32
-    )
-    block_off_m = (x_block_pid_m[schedule_pid_m] * BLOCK_M_VALUE).to(torch.int32)
-    block_row_base = (x_block_slice_offs[schedule_pid_m] + block_off_m).to(torch.int32)
-    block_rows = (x_block_shape_m[schedule_pid_m] - block_off_m).to(torch.int32)
-    block_out_off_n_packed = (block_pid_n * (BLOCK_N_VALUE // REDUCTION_N_VALUE // 4)).to(torch.int32)
-    sms = torch.cuda.get_device_properties(c.device).multi_processor_count
-    sms *= OCCUPANCY_VALUE
-    launch_grid = max(1, min(sms, num_blocks))
-    grid = (launch_grid,)
-
-    x_desc = make_tensor_descriptor(
-        a,
-        (1, BLOCK_K_VALUE),
-        layout_block_shape=(BLOCK_M_VALUE, BLOCK_K_VALUE),
-    )
-    w_desc = make_tensor_descriptor(
-        b,
-        (1, BLOCK_K_VALUE * 2, BLOCK_N_VALUE),
-        # Sharded weight tiles use the physical [1, 1, 1, N, K/2] MX4 shuffled block layout.
-    )
-    scale_desc = make_tensor_descriptor(
-        b_mx_scales,
-        (
-            1,
-            BLOCK_N_VALUE // SCALE_SIZE_OUTER_VALUE,
-            BLOCK_K_VALUE // MXFP_BLOCK_SIZE_VALUE // SCALE_SIZE_INNER_VALUE,
-            2,
-            256,
-        ),
-        # Weight scale tiles use the physical [1, N//128, K//(32*4), 2, 256] layout.
-    )
-    ws_matmul_kernel[grid](
-        x_desc=x_desc,
-        w_desc=w_desc,
-        scale_desc=scale_desc,
-        out_ptr=c,
-        #
-        block_pid_n=block_pid_n,
-        block_slice_idx=block_slice_idx,
-        block_scale_idx=block_scale_idx,
-        block_row_base=block_row_base,
-        block_rows=block_rows,
-        block_out_off_n_packed=block_out_off_n_packed,
-        #
-        num_blocks=num_blocks,
-        #
-        BLOCK_M=BLOCK_M_VALUE,
-        BLOCK_N=BLOCK_N_VALUE,
-        BLOCK_K=BLOCK_K_VALUE,
-        K_TILES=k_tiles,
-        OUT_PACKED_N=out_packed_n,
-        NUM_SMS=launch_grid,
-        X_NUM_BUFS=X_NUM_BUFS_VALUE,
-        W_NUM_BUFS=W_NUM_BUFS_VALUE,
-        W_SCALE_NUM_BUFS=W_SCALE_NUM_BUFS_VALUE,
-        ACC_NUM_BUFS=ACC_NUM_BUFS_VALUE,
-        #
-        LOAD_ACTIVATION_WARPS=LOAD_ACTIVATION_WARPS_VALUE,
-        LOAD_WEIGHT_WARPS=LOAD_WEIGHT_WARPS_VALUE,
-        LOAD_WEIGHT_SCALES_WARPS=LOAD_WEIGHT_SCALES_WARPS_VALUE,
-        REPLAY_WARPS=REPLAY_WARPS_VALUE,
-        MMA_WARPS=MMA_WARPS_VALUE,
-        #
-        LOAD_ACTIVATION_REGS=LOAD_ACTIVATION_REGS_VALUE,
-        LOAD_WEIGHT_REGS=LOAD_WEIGHT_REGS_VALUE,
-        LOAD_WEIGHT_SCALES_REGS=LOAD_WEIGHT_SCALES_REGS_VALUE,
-        REPLAY_REGS=REPLAY_REGS_VALUE,
-        MMA_REGS=MMA_REGS_VALUE,
-        #
-        SCALE_SIZE_OUTER=SCALE_SIZE_OUTER_VALUE,
-        SCALE_SIZE_INNER=SCALE_SIZE_INNER_VALUE,
-        MXFP_BLOCK_SIZE=MXFP_BLOCK_SIZE_VALUE,
-        #
-        num_warps=NUM_WARPS_VALUE,
-        num_ctas=1,
-        maxnreg=None,
-    )
-
-    return c
-
-
 # ===-----------------------------------------------------------------------===#
 # Benchmark and Testing Helpers
 # ===-----------------------------------------------------------------------===#
-
-
-def alloc_randn(shape: tuple[int, ...], dtype: torch.dtype, device: str) -> torch.Tensor:
-    if dtype.itemsize == 1:
-        return alloc_rand(shape, device=device, dtype=dtype)
-    return torch.randn(shape, device=device, dtype=dtype)
-
-
-def alloc_randn_fp4(shape: tuple[int, ...], device: str) -> tuple[Tensor, Tensor]:
-    data = alloc_randn(shape, torch.bfloat16, device)
-    data, scale = downcast_to_mxfp(data, FP4, axis=1)  # type: ignore[arg-type]
-
-    data_layout = BlackwellMX4ValuePackedShuffledLayout(block_k=BLOCK_K_VALUE, block_n=BLOCK_N_VALUE)
-    scale_layout = make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=NUM_WARPS_VALUE)
-
-    data = convert_layout(wrap_torch_tensor(data, dtype=FP4), data_layout)
-    scale = convert_layout(wrap_torch_tensor(scale), scale_layout)
-    return data, scale
-
-
-def make_prod_like_logits(
-    batch_size: int,
-    num_experts: int,
-    experts_per_token: int,
-    device: str,
-    dtype: torch.dtype = torch.float16,
-    *,
-    zipf_alpha: float = 1.10,
-    num_clusters: int = 16,
-    cluster_boost: float = 1.25,
-    gumbel_scale: float = 0.75,
-    batch_hot_experts: int = 4,
-    batch_hot_boost: float = 0.6,
-) -> torch.Tensor:
-    ranks = torch.arange(1, num_experts + 1, device=device, dtype=torch.float32)
-    ranked_probs = ranks.pow(-zipf_alpha)
-    ranked_probs /= ranked_probs.sum()
-
-    perm = torch.randperm(num_experts, device=device)
-    expert_probs = torch.empty_like(ranked_probs)
-    expert_probs[perm] = ranked_probs
-
-    logits = expert_probs.clamp_min(1e-12).log()[None, :].expand(batch_size, -1).clone()
-
-    cluster_size = min(num_experts, max(2 * experts_per_token, num_experts // 16))
-    cluster_experts = torch.stack(
-        [torch.multinomial(expert_probs, cluster_size, replacement=False) for _ in range(num_clusters)]
-    )
-    token_cluster = torch.randint(num_clusters, (batch_size,), device=device)
-    rows = torch.arange(batch_size, device=device)[:, None]
-    logits[rows, cluster_experts[token_cluster]] += cluster_boost
-
-    if batch_hot_experts > 0:
-        hot = torch.multinomial(expert_probs, batch_hot_experts, replacement=False)
-        logits[:, hot] += batch_hot_boost
-
-    noise = -torch.empty_like(logits).exponential_().log()
-    logits += gumbel_scale * noise
-
-    return logits.to(dtype)
-
-
-FROZEN_SLICE_SIZES = [2, 11, 1, 2, 1, 0, 3, 7, 5, 13, 1, 0, 1, 0, 3, 4]
-
-# Frozen from the original failing top-k/routing setup. Only the first
-# sum(FROZEN_SLICE_SIZES)=54 rows are actually scheduled locally; keeping the
-# larger logical output length is part of the trigger.
-FROZEN_GATHER_LEN = 2048
 
 def run_repro(max_launches: int = 1000):
     torch.cuda.set_device(0)
     device = "cuda:0"
     torch.manual_seed(0)
 
-    hidden_size = 17 * 128
-    intermediate_size = 5760
-    batch_size = 512
-
-    n_expts_local = len(FROZEN_SLICE_SIZES)
-
-    # Preserve the original x/w RNG stream while using frozen routing metadata.
-    torch.randint(0, 8, size=(), device=device)
-    _ = make_prod_like_logits(batch_size, 128, 4, device)
-
-    local_expts_hist = torch.tensor(FROZEN_SLICE_SIZES, dtype=torch.int32, device=device)
-    ragged_metadata = make_ragged_tensor_metadata(local_expts_hist, FROZEN_GATHER_LEN)
-    ragged_metadata.expected_slice_size = 16
-
-    x = alloc_randn((batch_size, hidden_size), dtype=torch.float8_e4m3fn, device=device)
-    w, w_scale = alloc_randn_fp4((n_expts_local, hidden_size, intermediate_size), device=device)
-
-    out_shape = (FROZEN_GATHER_LEN, intermediate_size // REDUCTION_N_VALUE)
-    out = torch.zeros(out_shape, dtype=torch.float8_e4m3fn, device=device)
-
-    matmul(
-        a=x,
-        b=w,
-        a_ragged_metadata=ragged_metadata,
-        b_mx_scales=w_scale,
-        c=out,
+    x = alloc_rand((1, 384), device=device, dtype=torch.float8_e4m3fn)
+    w_data = torch.randn((1, 384, 512), device=device, dtype=torch.bfloat16)
+    w_data, w_scale = downcast_to_mxfp(w_data, FP4, axis=1)  # type: ignore[arg-type]
+    w = convert_layout(
+        wrap_torch_tensor(w_data, dtype=FP4),
+        BlackwellMX4ValuePackedShuffledLayout(block_k=BLOCK_K_VALUE, block_n=BLOCK_N_VALUE),
     )
+    w_scale = convert_layout(
+        wrap_torch_tensor(w_scale),
+        make_default_matmul_mxfp4_w_scale_layout(mx_axis=1, num_warps=NUM_WARPS_VALUE),
+    )
+
+    out = torch.zeros((1, 256), dtype=torch.float8_e4m3fn, device=device)
+    x_desc = TensorDescriptor(
+        x,
+        list(x.shape),
+        list(x.stride()),
+        [1, BLOCK_K_VALUE],
+        gl.NVMMASharedLayout(swizzle_byte_width=BLOCK_K_VALUE, element_bitwidth=8, rank=2),
+    )
+    w_ptr = w.storage.data
+    w_strides = list(w_ptr.stride())
+    w_block_shape = w.storage.layout.swizzle_block_shape([1, BLOCK_K_VALUE * 2, BLOCK_N_VALUE])
+    w_block_shape[w_strides.index(1)] //= 2
+    w_desc = TensorDescriptor(
+        w_ptr,
+        list(w_ptr.shape),
+        w_strides,
+        w_block_shape,
+        gl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=5, fp4_padded=False),
+    )
+    scale_ptr = w_scale.storage.data
+    scale_desc = TensorDescriptor(
+        scale_ptr,
+        list(scale_ptr.shape),
+        list(scale_ptr.stride()),
+        [
+            1,
+            BLOCK_N_VALUE // SCALE_SIZE_OUTER_VALUE,
+            BLOCK_K_VALUE // MXFP_BLOCK_SIZE_VALUE // SCALE_SIZE_INNER_VALUE,
+            2,
+            256,
+        ],
+        gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5),
+    )
+    kernel = ws_matmul_kernel[(2,)]
+
+    def run_kernel():
+        kernel(
+            x_desc=x_desc,
+            w_desc=w_desc,
+            scale_desc=scale_desc,
+            out_ptr=out,
+            BLOCK_M=BLOCK_M_VALUE,
+            BLOCK_N=BLOCK_N_VALUE,
+            BLOCK_K=BLOCK_K_VALUE,
+            K_TILES=3,
+            OUT_PACKED_N=64,
+            X_NUM_BUFS=X_NUM_BUFS_VALUE,
+            W_NUM_BUFS=W_NUM_BUFS_VALUE,
+            W_SCALE_NUM_BUFS=W_SCALE_NUM_BUFS_VALUE,
+            ACC_NUM_BUFS=ACC_NUM_BUFS_VALUE,
+            LOAD_ACTIVATION_WARPS=LOAD_ACTIVATION_WARPS_VALUE,
+            LOAD_WEIGHT_WARPS=LOAD_WEIGHT_WARPS_VALUE,
+            LOAD_WEIGHT_SCALES_WARPS=LOAD_WEIGHT_SCALES_WARPS_VALUE,
+            REPLAY_WARPS=REPLAY_WARPS_VALUE,
+            MMA_WARPS=MMA_WARPS_VALUE,
+            LOAD_ACTIVATION_REGS=LOAD_ACTIVATION_REGS_VALUE,
+            LOAD_WEIGHT_REGS=LOAD_WEIGHT_REGS_VALUE,
+            LOAD_WEIGHT_SCALES_REGS=LOAD_WEIGHT_SCALES_REGS_VALUE,
+            REPLAY_REGS=REPLAY_REGS_VALUE,
+            MMA_REGS=MMA_REGS_VALUE,
+            SCALE_SIZE_OUTER=SCALE_SIZE_OUTER_VALUE,
+            SCALE_SIZE_INNER=SCALE_SIZE_INNER_VALUE,
+            MXFP_BLOCK_SIZE=MXFP_BLOCK_SIZE_VALUE,
+            num_warps=NUM_WARPS_VALUE,
+            num_ctas=1,
+            maxnreg=None,
+        )
+
+    run_kernel()
     torch.cuda.synchronize()
     expected = out.clone()
 
     for launch in range(1, max_launches + 1):
         out.zero_()
-        matmul(
-            a=x,
-            b=w,
-            a_ragged_metadata=ragged_metadata,
-            b_mx_scales=w_scale,
-            c=out,
-        )
+        run_kernel()
         torch.cuda.synchronize()
         if not torch.equal(out, expected):
             maxdiff = (out.to(torch.float32) - expected.to(torch.float32)).abs().max().item()
