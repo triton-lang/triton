@@ -1360,6 +1360,23 @@ across the important batch regime.
     `PYTHONPATH=python:python/triton_kernels timeout 120s python3 python/examples/gluon/replay_sync_tail_race_repro.py`
     still fails, and after removing banded scheduling plus epilogue subtiling
     it most recently reported `FAIL launch=1 maxdiff=0.25`.
+  - Deeper device-path reduction:
+    the current repro no longer carries the frozen gather payload or the
+    original matmul wrapper contracts. The activation path now uses contiguous
+    `slice_offset + offs_m` rows instead of `gather_indx`, the host side keeps
+    only `FROZEN_GATHER_LEN = 2048`, and the kernel interface no longer takes a
+    gather pointer. The active epilogue also no longer threads bias, flex
+    scales, SwiGLU parameters, or an output descriptor; it directly loads the
+    accumulator tile, packs to FP8, and stores with a fixed contiguous packed
+    output stride. The host-side `PrecisionConfig` / `FusedActivation` wrappers
+    have been collapsed to direct `w_scale` plus fixed `reduction_n = 2`.
+  - Schedule metadata reduction:
+    the device scheduler no longer unpacks `RaggedTensorMetadata` on the fly.
+    Host code now trims the schedule to `grid_m`, precomputes per-block
+    `pid_m`, `slice_idx`, `slice_offset`, and `shape_m`, and passes those
+    arrays directly into the kernel. The helper now just loads those four
+    values plus `pid_n`, and the reduced repro still fails immediately
+    (`FAIL launch=1 maxdiff=2.625` after the contiguous-store cut).
 
 ## Next Up
 

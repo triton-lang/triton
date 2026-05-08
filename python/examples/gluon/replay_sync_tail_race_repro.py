@@ -7,16 +7,7 @@ import triton.experimental.gluon.language.nvidia.blackwell as blackwell
 import triton.experimental.gluon.language.nvidia.blackwell.tma as tma
 from triton.experimental.gluon.language.nvidia.blackwell import float2
 import triton.experimental.gluon.language.nvidia.hopper.mbarrier as mbarrier
-import triton.language.extra.libdevice as libdevice
-from triton_kernels.matmul import (
-    FlexCtx,
-    FnSpecs,
-    FusedActivation,
-    PrecisionConfig,
-)
-from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp
-from triton_kernels.swiglu import swiglu_fn
 from triton_kernels.tensor import (
     FP4,
     RaggedTensorMetadata,
@@ -36,6 +27,9 @@ from triton_kernels.testing import alloc_rand
 # Device Code
 # ===-----------------------------------------------------------------------===#
 
+REDUCTION_N_VALUE = 2
+REDUCTION_N = gl.constexpr(REDUCTION_N_VALUE)
+
 
 @gluon.jit
 def advance(idx: gl.tensor, phase: gl.tensor, num_bufs: gl.constexpr) -> tuple[gl.tensor, gl.tensor]:
@@ -45,25 +39,23 @@ def advance(idx: gl.tensor, phase: gl.tensor, num_bufs: gl.constexpr) -> tuple[g
 
 
 @gluon.jit
-def unpack_block_schedule(schedule: gl.tensor) -> tuple[gl.tensor, gl.tensor]:
-    return schedule & 0xFFFF, schedule >> 16
-
-
-@gluon.jit
 def apply_block_schedule(
     block_id: gl.tensor,
-    grid_m: gl.tensor,
     GRID_N: gl.constexpr,
-    slice_offsets: gl.tensor,
-    block_schedule: gl.tensor,
-) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
+    block_pid_m: gl.tensor,
+    block_slice_idx: gl.tensor,
+    block_slice_offs: gl.tensor,
+    block_shape_m: gl.tensor,
+) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
     schedule_pid_m = block_id // GRID_N
     pid_n = block_id % GRID_N
 
-    slice_idx, pid_m = unpack_block_schedule(gl.load(block_schedule + schedule_pid_m))
-    slice_offset = gl.load(slice_offsets + slice_idx)
+    pid_m = gl.load(block_pid_m + schedule_pid_m)
+    slice_idx = gl.load(block_slice_idx + schedule_pid_m)
+    slice_offset = gl.load(block_slice_offs + schedule_pid_m)
+    shape_m = gl.load(block_shape_m + schedule_pid_m)
 
-    return pid_m, pid_n, slice_idx, slice_offset
+    return pid_m, pid_n, slice_idx, slice_offset, shape_m
 
 
 @gluon.jit
@@ -163,18 +155,12 @@ class PartitionArgs:
     x_desc: tma.tensor_descriptor
     w_desc: tma.tensor_descriptor
     scale_desc: tma.tensor_descriptor
-    out_desc: tma.tensor_descriptor
-    x_scale_ptr: gl.tensor | gl.constexpr
-    w_scale_ptr: gl.tensor | gl.constexpr
-    out_scale_ptr: gl.tensor
 
     out_ptr: gl.tensor
-    bias_ptr: gl.tensor
-    bias_stride: gl.tensor
-    gather_indx_ptr: gl.tensor
-    x_slice_sizes: gl.tensor
-    x_slice_offs: gl.tensor
-    x_block_schedule: gl.tensor
+    x_block_pid_m: gl.tensor
+    x_block_slice_idx: gl.tensor
+    x_block_slice_offs: gl.tensor
+    x_block_shape_m: gl.tensor
 
     x_bufs: gl.shared_memory_descriptor
     x_empty_bars: gl.shared_memory_descriptor
@@ -204,7 +190,6 @@ class PartitionArgs:
     dense_copy_done_bar: gl.shared_memory_descriptor
     unpack_sync_bar: gl.shared_memory_descriptor
 
-    grid_m: gl.tensor
     GRID_N: gl.constexpr
     K_TILES: gl.constexpr
     SCALE_FLAT_N: gl.constexpr
@@ -219,20 +204,17 @@ class PartitionArgs:
     SCALE_SIZE_INNER: gl.constexpr
     MXFP_BLOCK_SIZE: gl.constexpr
     MMA_BLOCK_COL: gl.constexpr
-
-    SWIGLU_ALPHA: gl.constexpr
-    SWIGLU_LIMIT: gl.constexpr
-    REDUCTION_N: gl.constexpr
-    FLEXPOINT_SATURATE_INF: gl.constexpr
+    OUT_PACKED_N: gl.constexpr
 
     @gluon.jit
-    def apply_block_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
+    def apply_block_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
         return apply_block_schedule(
             block_id=block_id,
-            grid_m=self.grid_m,
             GRID_N=self.GRID_N,
-            slice_offsets=self.x_slice_offs,
-            block_schedule=self.x_block_schedule,
+            block_pid_m=self.x_block_pid_m,
+            block_slice_idx=self.x_block_slice_idx,
+            block_slice_offs=self.x_block_slice_offs,
+            block_shape_m=self.x_block_shape_m,
         )
 
 
@@ -277,17 +259,12 @@ def load_activations(p: PartitionArgs):
     issued = 0
 
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        pid_m, _, slice_idx, slice_offset = p.apply_block_schedule(block_id)
+        pid_m, _, _, slice_offset, shape_m = p.apply_block_schedule(block_id)
         off_m = pid_m * p.BLOCK_M
         offs_m = off_m + gl.arange(0, p.BLOCK_M, layout=offs_layout)
 
-        shape_m = gl.load(p.x_slice_sizes + slice_idx)
         mask_m = offs_m < shape_m
-        offs_x_m = gl.load(
-            p.gather_indx_ptr + slice_offset + offs_m,
-            mask=mask_m,
-            other=p.x_desc.shape[0],
-        )
+        offs_x_m = gl.where(mask_m, slice_offset + offs_m, p.x_desc.shape[0])
 
         for ki in range(p.K_TILES):
             off_k_x = ki * p.BLOCK_K
@@ -303,7 +280,7 @@ def load_weights(p: PartitionArgs):
     issued = 0
 
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        _, pid_n, slice_idx, _ = p.apply_block_schedule(block_id)
+        _, pid_n, slice_idx, _, _ = p.apply_block_schedule(block_id)
 
         for ki in range(0, p.K_TILES, 2):
             w_empty_bar = p.w_empty_bars.index(idx)
@@ -332,7 +309,7 @@ def load_weight_scales(p: PartitionArgs):
     issued = 0
 
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        _, pid_n, slice_idx, _ = p.apply_block_schedule(block_id)
+        _, pid_n, slice_idx, _, _ = p.apply_block_schedule(block_id)
 
         scale_idx = slice_idx * p.SCALE_FLAT_N + pid_n * p.SCALE_BLOCK_N_DIV
         for ki in range(p.K_TILES):
@@ -613,29 +590,12 @@ def store_packed_out(
     offs_m = off_m + gl.arange(0, values.shape[0], layout=gl.SliceLayout(1, layout))
     offs_n = out_off_n_packed + gl.arange(0, values.shape[1], layout=gl.SliceLayout(0, layout))
     mask_m = gl.expand_dims(offs_m < shape_m, 1)
-    mask_n = gl.expand_dims(offs_n < (p.out_desc.shape[1] + 3) // 4, 0)
+    mask_n = gl.expand_dims(offs_n < p.OUT_PACKED_N, 0)
     mask = mask_m & mask_n
     ptrs = p.out_ptr.cast(gl.pointer_type(gl.int32), bitcast=True)
-    ptrs = ptrs + gl.expand_dims(slice_offset + offs_m, 1) * (p.out_desc.strides[0] // 4)
-    ptrs = ptrs + gl.expand_dims(offs_n, 0) * p.out_desc.strides[1]
+    ptrs = ptrs + gl.expand_dims(slice_offset + offs_m, 1) * p.OUT_PACKED_N
+    ptrs = ptrs + gl.expand_dims(offs_n, 0)
     gl.store(ptrs, values, mask=mask)
-
-
-@gluon.jit
-def _swiglu_step1(acc_packed, limit):
-    gelu, linear = float2.unpack2(acc_packed)
-    gelu = gl.minimum(gelu.to(gl.float32), limit)
-    linear = gl.minimum(gl.maximum(linear.to(gl.float32), -limit), limit)
-    return gelu, linear
-
-
-@gluon.jit
-def _swiglu_step2(gelu, linear, alpha):
-    den = 1.0 + libdevice.exp(-alpha * gelu)
-    activated = gelu / den
-    activated_packed = float2.pack(activated, axis=1)
-    linear_packed = float2.pack(linear, axis=1)
-    return float2.fma(activated_packed, linear_packed, activated_packed)
 
 
 @gluon.jit
@@ -665,9 +625,7 @@ def epilogue_direct_store(
     slice_offset,
     store_layout: gl.constexpr,
 ):
-    gelu, linear = _swiglu_step1(acc_packed, p.SWIGLU_LIMIT)
-    out_packed = _swiglu_step2(gelu, linear, p.SWIGLU_ALPHA)
-    packed_fp8 = gl.convert_layout(pack_fp8_out_fragment(out_packed, out_recip), store_layout)
+    packed_fp8 = gl.convert_layout(pack_fp8_out_fragment(acc_packed, out_recip), store_layout)
     store_packed_out(
         p,
         packed_fp8,
@@ -679,36 +637,22 @@ def epilogue_direct_store(
 
 
 @gluon.jit
-def apply_bias_and_scale(
+def load_accumulator_tile(
     p: PartitionArgs,
     idx,
     phase,
-    pid_n,
-    slice_idx,
     split_layout: gl.constexpr,
-    bias_layout: gl.constexpr,
-    acc_scale,
 ):
-    off_n = pid_n * p.BLOCK_N
     acc_empty_bar = p.acc_empty_bars.index(idx)
     acc_ready_bar = p.acc_ready_bars.index(idx)
     acc_buf = p.acc_bufs.index(idx)
 
-    offs_bias_n = off_n + gl.arange(0, p.BLOCK_N, layout=bias_layout)
-    bias = gl.convert_layout(
-        gl.expand_dims(gl.load(p.bias_ptr + slice_idx * p.bias_stride + offs_bias_n), axis=0),
-        split_layout,
-    )
     mbarrier.wait(acc_ready_bar, phase)
     acc_regs = acc_buf.load().permute((1, 0))
     mbarrier.arrive(acc_empty_bar)
     idx, phase = advance(idx, phase, p.ACC_NUM_BUFS)
     acc = gl.convert_layout(acc_regs, split_layout)
-    acc_packed = float2.pack(acc, axis=1)
-    bias_packed = float2.pack(bias, axis=1)
-    bias_packed = float2.Float2Tensor(gl.convert_layout(bias_packed.value, acc_packed.value.type.layout))
-    acc_packed = float2.fma(acc_packed, float2.full_like(acc_packed, acc_scale), bias_packed)
-    return idx, phase, acc_packed
+    return idx, phase, float2.pack(acc, axis=1)
 
 
 @gluon.jit
@@ -716,36 +660,26 @@ def epilogue_partition(p: PartitionArgs):
     idx = 0
     phase = 0
 
-    x_scale = 1.0 if p.x_scale_ptr is None else gl.load(p.x_scale_ptr)
-    w_scale = 1.0 if p.w_scale_ptr is None else gl.load(p.w_scale_ptr)
-    acc_scale = x_scale * w_scale
-    out_recip = 1.0 / gl.load(p.out_scale_ptr)
+    out_recip = 0.25
 
     num_warps: gl.constexpr = gl.num_warps()
-    warps_n: gl.constexpr = 1
     split_layout: gl.constexpr = gl.BlockedLayout(
         [1, 4],
         [1, 32],
-        [num_warps // warps_n, warps_n],
+        [num_warps, 1],
         [1, 0],
     )
-    bias_layout: gl.constexpr = gl.SliceLayout(0, split_layout)
     store_layout: gl.constexpr = get_store_layout(p)
 
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
-        pid_m, pid_n, slice_idx, slice_offset = p.apply_block_schedule(block_id)
+        pid_m, pid_n, _, slice_offset, shape_m = p.apply_block_schedule(block_id)
         off_m = pid_m * p.BLOCK_M
-        shape_m = gl.load(p.x_slice_sizes + slice_idx)
-        out_off_n_packed = pid_n * (p.BLOCK_N // p.REDUCTION_N // 4)
-        idx, phase, acc_packed = apply_bias_and_scale(
+        out_off_n_packed = pid_n * (p.BLOCK_N // REDUCTION_N // 4)
+        idx, phase, acc_packed = load_accumulator_tile(
             p,
             idx,
             phase,
-            pid_n,
-            slice_idx,
             split_layout,
-            bias_layout,
-            acc_scale,
         )
         epilogue_direct_store(
             p,
@@ -764,33 +698,16 @@ def ws_matmul_kernel(
     x_desc: tma.tensor_descriptor,
     w_desc: tma.tensor_descriptor,
     scale_desc: tma.tensor_descriptor,
-    out_desc: tma.tensor_descriptor,
     out_ptr: gl.tensor,
     #
-    bias_ptr: gl.tensor,
-    bias_stride: gl.tensor,
+    x_block_pid_m: gl.tensor,
+    x_block_slice_idx: gl.tensor,
+    x_block_slice_offs: gl.tensor,
+    x_block_shape_m: gl.tensor,
     #
-    gather_indx_ptr: gl.tensor,
-    #
-    x_slice_sizes: gl.tensor,
-    x_slice_offs: gl.tensor,
-    x_block_offs: gl.tensor,
-    x_block_schedule: gl.tensor,
-    #
-    x_scale_ptr: gl.tensor,
-    w_scale_ptr: gl.tensor,
-    out_scale_ptr: gl.tensor,
-    #
-    M: gl.constexpr,
     N: gl.constexpr,
     K: gl.constexpr,
-    NUM_SLICES: gl.constexpr,
-    #
-    SWIGLU_ALPHA: gl.constexpr,
-    SWIGLU_LIMIT: gl.constexpr,
-    REDUCTION_N: gl.constexpr,
-    #
-    FLEXPOINT_SATURATE_INF: gl.constexpr,
+    num_blocks: gl.tensor,
     #
     BLOCK_M: gl.constexpr,
     BLOCK_N: gl.constexpr,
@@ -819,12 +736,11 @@ def ws_matmul_kernel(
 ):
     gl.static_assert(gl.num_ctas() == 1, "standalone repro is 1CTA-only")
 
-    grid_m = gl.load(x_block_offs + NUM_SLICES)
     grid_n: gl.constexpr = triton.cdiv(N, BLOCK_N)
     k_tiles: gl.constexpr = triton.cdiv(K, BLOCK_K)
     scale_flat_n: gl.constexpr = N // SCALE_SIZE_OUTER
     scale_block_n_div: gl.constexpr = BLOCK_N // SCALE_SIZE_OUTER
-    num_blocks = grid_m * grid_n
+    out_packed_n: gl.constexpr = N // 8
 
     scale_k: gl.constexpr = BLOCK_K // MXFP_BLOCK_SIZE
     x_scale_layout: gl.constexpr = blackwell.TensorMemoryScalesLayout()
@@ -893,18 +809,11 @@ def ws_matmul_kernel(
         x_desc=x_desc,
         w_desc=w_desc,
         scale_desc=scale_desc,
-        out_desc=out_desc,
-        x_scale_ptr=x_scale_ptr,
-        w_scale_ptr=w_scale_ptr,
-        out_scale_ptr=out_scale_ptr,
-        #
         out_ptr=out_ptr,
-        bias_ptr=bias_ptr,
-        bias_stride=bias_stride,
-        gather_indx_ptr=gather_indx_ptr,
-        x_slice_sizes=x_slice_sizes,
-        x_slice_offs=x_slice_offs,
-        x_block_schedule=x_block_schedule,
+        x_block_pid_m=x_block_pid_m,
+        x_block_slice_idx=x_block_slice_idx,
+        x_block_slice_offs=x_block_slice_offs,
+        x_block_shape_m=x_block_shape_m,
         #
         x_bufs=x_bufs,
         x_empty_bars=x_empty_bars,
@@ -934,7 +843,6 @@ def ws_matmul_kernel(
         dense_copy_done_bar=dense_copy_done_bar,
         unpack_sync_bar=unpack_sync_bar,
         #
-        grid_m=grid_m,
         GRID_N=grid_n,
         K_TILES=k_tiles,
         SCALE_FLAT_N=scale_flat_n,
@@ -949,11 +857,7 @@ def ws_matmul_kernel(
         SCALE_SIZE_INNER=SCALE_SIZE_INNER,
         MXFP_BLOCK_SIZE=MXFP_BLOCK_SIZE,
         MMA_BLOCK_COL=MMA_BLOCK_COL,
-        #
-        SWIGLU_ALPHA=SWIGLU_ALPHA,
-        SWIGLU_LIMIT=SWIGLU_LIMIT,
-        REDUCTION_N=REDUCTION_N,
-        FLEXPOINT_SATURATE_INF=FLEXPOINT_SATURATE_INF,
+        OUT_PACKED_N=out_packed_n,
     )
 
     gl.warp_specialize(
@@ -1059,31 +963,17 @@ class KernelConfig:
 def matmul(
     a: torch.Tensor,
     b: torch.Tensor | Tensor,
-    bias: torch.Tensor,
     a_ragged_metadata: RaggedTensorMetadata,
-    gather_indx: torch.Tensor,
-    precision_config: PrecisionConfig,
+    b_mx_scales: torch.Tensor,
     c: torch.Tensor,
-    fused_activation: FusedActivation,
 ):
-    specs = fused_activation.specs
-    assert specs.name == "swiglu"
-    reduction_n = specs.reduction_n
-    swiglu_alpha, swiglu_limit = fused_activation.fn_args
-
-    b_mx_scales = precision_config.b_mx_scale
-
-    out_dtype = precision_config.out_dtype
-    assert out_dtype is not None
-
     assert c.ndim == 2
-
-    flex_ctx = precision_config.flex_ctx
+    assert c.is_contiguous()
 
     assert a.ndim == 2
     _, k = a.shape
     _, _, n = b.shape
-    m = gather_indx.shape[0]
+    m = c.shape[0]
 
     p = KernelConfig()
     assert isinstance(b, Tensor)
@@ -1092,11 +982,17 @@ def matmul(
     assert b.storage.layout.block_n == p.BLOCK_N
     x_block_offs = a_ragged_metadata.block_offs(p.BLOCK_M)
     x_block_schedule = a_ragged_metadata.block_schedule(p.BLOCK_M)
-    expected_grid_m = a_ragged_metadata.n_blocks(a_ragged_metadata.n_slices, m, p.BLOCK_M)
+    grid_m = int(x_block_offs[-1].item())
+    x_block_schedule = x_block_schedule[:grid_m]
+    x_block_slice_idx = (x_block_schedule & 0xFFFF).to(torch.int32)
+    x_block_pid_m = (x_block_schedule >> 16).to(torch.int32)
+    x_block_slice_offs = a_ragged_metadata.slice_offs[x_block_slice_idx.to(torch.int64)]
+    x_block_shape_m = a_ragged_metadata.slice_sizes[x_block_slice_idx.to(torch.int64)]
     grid_n = triton.cdiv(n, p.BLOCK_N)
-    sms = torch.cuda.get_device_properties(bias.device).multi_processor_count
+    num_blocks = grid_m * grid_n
+    sms = torch.cuda.get_device_properties(c.device).multi_processor_count
     sms *= p.OCCUPANCY
-    launch_grid = max(1, min(sms, expected_grid_m * grid_n))
+    launch_grid = max(1, min(sms, num_blocks))
     grid = (launch_grid,)
 
     x_desc = make_tensor_descriptor(
@@ -1120,41 +1016,20 @@ def matmul(
         ),
         # Weight scale tiles use the physical [1, N//128, K//(32*4), 2, 256] layout.
     )
-    # The output descriptor is only used for shape/stride metadata during
-    # direct stores, so cap the layout width to a legal FP8 swizzle size.
-    out_desc = make_tensor_descriptor(c, (p.BLOCK_M, min(p.BLOCK_N // reduction_n, 128)))
-
     ws_matmul_kernel[grid](
         x_desc=x_desc,
         w_desc=w_desc,
         scale_desc=scale_desc,
-        out_desc=out_desc,
         out_ptr=c,
         #
-        bias_ptr=bias,
-        bias_stride=bias.stride(0),
+        x_block_pid_m=x_block_pid_m,
+        x_block_slice_idx=x_block_slice_idx,
+        x_block_slice_offs=x_block_slice_offs,
+        x_block_shape_m=x_block_shape_m,
         #
-        gather_indx_ptr=gather_indx,
-        #
-        x_slice_sizes=a_ragged_metadata.slice_sizes,
-        x_slice_offs=a_ragged_metadata.slice_offs,
-        x_block_offs=x_block_offs,
-        x_block_schedule=x_block_schedule,
-        #
-        x_scale_ptr=flex_ctx.lhs_data.scale,
-        w_scale_ptr=flex_ctx.rhs_data.scale,
-        out_scale_ptr=flex_ctx.out_data.expected_scale,
-        #
-        M=m,
         N=n,
         K=k,
-        NUM_SLICES=a_ragged_metadata.n_slices,
-        #
-        SWIGLU_ALPHA=swiglu_alpha,
-        SWIGLU_LIMIT=swiglu_limit,
-        REDUCTION_N=reduction_n,
-        #
-        FLEXPOINT_SATURATE_INF=precision_config.flexpoint_saturate_inf,
+        num_blocks=num_blocks,
         #
         BLOCK_M=p.BLOCK_M,
         BLOCK_N=p.BLOCK_N,
@@ -1260,84 +1135,8 @@ FROZEN_SLICE_SIZES = [2, 11, 1, 2, 1, 0, 3, 7, 5, 13, 1, 0, 1, 0, 3, 4]
 
 # Frozen from the original failing top-k/routing setup. Only the first
 # sum(FROZEN_SLICE_SIZES)=54 rows are actually scheduled locally; keeping the
-# larger gather length is part of the trigger.
-FROZEN_GATHER_INDX = [
-    306, 151, 194, 322, 378, 425, 123, 193, 201, 330, 410, 481, 5, 18, 52, 85,
-    147, 152, 180, 205, 210, 237, 249, 410, 464, 486, 500, 42, 83, 86, 335, 305,
-    198, 299, 118, 361, 81, 26, 453, 4, 429, 306, 66, 170, 12, 131, 260, 344,
-    377, 379, 436, 342, 139, 83, 135, 187, 277, 366, 377, 383, 444, 452, 460, 1,
-    3, 34, 39, 40, 61, 62, 68, 71, 72, 74, 87, 110, 120, 122, 125, 129,
-    157, 171, 178, 182, 186, 191, 197, 202, 208, 212, 213, 215, 223, 231, 233, 241,
-    252, 274, 275, 276, 284, 294, 297, 315, 323, 325, 326, 328, 337, 343, 359, 362,
-    369, 370, 374, 381, 385, 393, 394, 409, 413, 416, 423, 448, 470, 475, 477, 493,
-    504, 511, 2, 29, 55, 133, 146, 186, 209, 265, 278, 305, 316, 417, 458, 498,
-    503, 26, 59, 112, 113, 114, 117, 121, 124, 152, 155, 190, 211, 227, 248, 256,
-    266, 269, 271, 273, 280, 281, 288, 298, 299, 303, 310, 329, 332, 333, 340, 341,
-    346, 354, 360, 365, 371, 380, 382, 384, 401, 411, 430, 438, 442, 446, 447, 449,
-    453, 463, 473, 484, 505, 507, 509, 510, 17, 21, 22, 27, 38, 45, 47, 49,
-    58, 70, 77, 80, 82, 95, 97, 98, 99, 106, 107, 108, 119, 127, 128, 137,
-    140, 144, 164, 169, 176, 198, 214, 224, 226, 229, 250, 257, 264, 270, 286, 291,
-    302, 317, 324, 336, 339, 345, 352, 356, 364, 373, 386, 389, 396, 397, 400, 404,
-    414, 419, 433, 434, 451, 465, 476, 488, 506, 13, 14, 15, 20, 24, 28, 31,
-    32, 36, 43, 53, 56, 67, 75, 84, 96, 103, 105, 115, 126, 132, 142, 143,
-    145, 148, 149, 150, 153, 159, 161, 168, 173, 174, 177, 184, 189, 196, 200, 203,
-    217, 219, 220, 221, 238, 244, 253, 259, 272, 277, 279, 282, 285, 289, 296, 307,
-    311, 312, 320, 331, 334, 338, 348, 349, 350, 351, 353, 355, 368, 372, 375, 376,
-    387, 398, 399, 402, 406, 420, 421, 427, 428, 431, 437, 454, 459, 466, 469, 474,
-    478, 479, 480, 487, 489, 497, 508, 25, 48, 60, 76, 89, 91, 92, 93, 94,
-    100, 104, 109, 116, 130, 136, 138, 141, 154, 163, 170, 172, 175, 188, 192, 194,
-    201, 206, 207, 210, 225, 228, 232, 234, 236, 239, 240, 242, 245, 246, 247, 251,
-    258, 263, 267, 283, 287, 290, 292, 293, 295, 300, 304, 308, 318, 319, 321, 327,
-    330, 335, 347, 357, 358, 367, 378, 388, 390, 391, 392, 395, 403, 407, 408, 412,
-    415, 422, 426, 432, 435, 440, 441, 443, 445, 450, 455, 456, 457, 462, 467, 471,
-    472, 481, 482, 483, 485, 486, 491, 494, 496, 499, 501, 502, 0, 6, 7, 8,
-    9, 10, 11, 16, 19, 23, 30, 33, 35, 37, 41, 44, 46, 50, 51, 54,
-    57, 63, 64, 65, 66, 69, 73, 78, 79, 88, 90, 101, 102, 111, 118, 123,
-    131, 134, 135, 147, 156, 158, 160, 162, 166, 167, 179, 181, 183, 185, 187, 193,
-    195, 199, 204, 205, 216, 218, 222, 230, 235, 237, 243, 254, 255, 260, 261, 262,
-    268, 301, 306, 309, 313, 314, 322, 342, 344, 361, 363, 366, 377, 379, 383, 393,
-    394, 405, 410, 411, 418, 424, 425, 436, 444, 452, 460, 461, 464, 468, 477, 484,
-    490, 492, 495, 500, 504, 505, 507, 509, 18, 52, 85, 147, 152, 180, 205, 210,
-    237, 249, 410, 464, 486, 500, 42, 83, 86, 335, 305, 198, 299, 118, 361, 81,
-    26, 453, 4, 429, 306, 66, 170, 12, 131, 260, 344, 377, 379, 436, 342, 139,
-    83, 135, 187, 277, 366, 377, 383, 444, 452, 460, 1, 3, 34, 39, 40, 61,
-    62, 68, 71, 72, 74, 87, 110, 120, 122, 125, 129, 157, 171, 178, 182, 186,
-    191, 197, 202, 208, 212, 213, 215, 223, 231, 233, 241, 252, 274, 275, 276, 284,
-    294, 297, 315, 323, 325, 326, 328, 337, 343, 359, 362, 369, 370, 374, 381, 385,
-    393, 394, 409, 413, 416, 423, 448, 470, 475, 477, 493, 504, 511, 2, 29, 55,
-    133, 146, 186, 209, 265, 278, 305, 316, 417, 458, 498, 503, 26, 59, 112, 113,
-    114, 117, 121, 124, 152, 155, 190, 211, 227, 248, 256, 266, 269, 271, 273, 280,
-    281, 288, 298, 299, 303, 310, 329, 332, 333, 340, 341, 346, 354, 360, 365, 371,
-    380, 382, 384, 401, 411, 430, 438, 442, 446, 447, 449, 453, 463, 473, 484, 505,
-    507, 509, 510, 17, 21, 22, 27, 38, 45, 47, 49, 58, 70, 77, 80, 82,
-    95, 97, 98, 99, 106, 107, 108, 119, 127, 128, 137, 140, 144, 164, 169, 176,
-    198, 214, 224, 226, 229, 250, 257, 264, 270, 286, 291, 302, 317, 324, 336, 339,
-    345, 352, 356, 364, 373, 386, 389, 396, 397, 400, 404, 414, 419, 433, 434, 451,
-    465, 476, 488, 506, 13, 14, 15, 20, 24, 28, 31, 32, 36, 43, 53, 56,
-    67, 75, 84, 96, 103, 105, 115, 126, 132, 142, 143, 145, 148, 149, 150, 153,
-    159, 161, 168, 173, 174, 177, 184, 189, 196, 200, 203, 217, 219, 220, 221, 238,
-    244, 253, 259, 272, 277, 279, 282, 285, 289, 296, 307, 311, 312, 320, 331, 334,
-    338, 348, 349, 350, 351, 353, 355, 368, 372, 375, 376, 387, 398, 399, 402, 406,
-    420, 421, 427, 428, 431, 437, 454, 459, 466, 469, 474, 478, 479, 480, 487, 489,
-    497, 508, 25, 48, 60, 76, 89, 91, 92, 93, 94, 100, 104, 109, 116, 130,
-    136, 138, 141, 154, 163, 170, 172, 175, 188, 192, 194, 201, 206, 207, 210, 225,
-    228, 232, 234, 236, 239, 240, 242, 245, 246, 247, 251, 258, 263, 267, 283, 287,
-    290, 292, 293, 295, 300, 304, 308, 318, 319, 321, 327, 330, 335, 347, 357, 358,
-    367, 378, 388, 390, 391, 392, 395, 403, 407, 408, 412, 415, 422, 426, 432, 435,
-    440, 441, 443, 445, 450, 455, 456, 457, 462, 467, 471, 472, 481, 482, 483, 485,
-    486, 491, 494, 496, 499, 501, 502, 0, 6, 7, 8, 9, 10, 11, 16, 19,
-    23, 30, 33, 35, 37, 41, 44, 46, 50, 51, 54, 57, 63, 64, 65, 66,
-    69, 73, 78, 79, 88, 90, 101, 102, 111, 118, 123, 131, 134, 135, 147, 156,
-    158, 160, 162, 166, 167, 179, 181, 183, 185, 187, 193, 195, 199, 204, 205, 216,
-    218, 222, 230, 235, 237, 243, 254, 255, 260, 261, 262, 268, 301, 306, 309, 313,
-    314, 322, 342, 344, 361, 363, 366, 377, 379, 383, 393, 394, 405, 410, 411, 418,
-    424, 425, 436, 444, 452, 460, 461, 464, 468, 477, 484, 490, 492, 495, 500, 504,
-    505, 507, 509, 126, 168, 490, 41, 142, 23, 31, 63, 100, 108, 120, 130, 144,
-    150, 165, 176, 200, 215, 217, 221, 252, 287, 310, 328, 340, 351, 353, 402, 415,
-    421, 430, 446, 495, 185, 47, 119, 192, 510, 161, 172, 280, 19, 290, 405, 456,
-    297, 412, 398, 40, 271, 173, 241, 376, 355, 284, 44, 64, 234, 351, 439, 466,
-    296, 322, 437,
-]
+# larger logical output length is part of the trigger.
+FROZEN_GATHER_LEN = 2048
 
 def run_repro(max_launches: int = 1000):
     torch.cuda.set_device(0)
@@ -1351,46 +1150,26 @@ def run_repro(max_launches: int = 1000):
     p = KernelConfig()
     n_expts_local = len(FROZEN_SLICE_SIZES)
 
-    # Preserve the original x/w/bias RNG stream while using frozen routing data.
+    # Preserve the original x/w RNG stream while using frozen routing metadata.
     torch.randint(0, 8, size=(), device=device)
     _ = make_prod_like_logits(batch_size, 128, 4, device)
 
     local_expts_hist = torch.tensor(FROZEN_SLICE_SIZES, dtype=torch.int32, device=device)
-    gather_indx = torch.tensor(FROZEN_GATHER_INDX, dtype=torch.int32, device=device)
-    ragged_metadata = make_ragged_tensor_metadata(local_expts_hist, gather_indx.numel())
+    ragged_metadata = make_ragged_tensor_metadata(local_expts_hist, FROZEN_GATHER_LEN)
     ragged_metadata.expected_slice_size = 16
 
     x = alloc_randn((batch_size, hidden_size), dtype=torch.float8_e4m3fn, device=device)
     w, w_scale = alloc_randn_fp4((n_expts_local, hidden_size, intermediate_size), device=device, p=p)
-    bias = alloc_randn((n_expts_local, intermediate_size), dtype=torch.float32, device=device)
 
-    fused_activation = FusedActivation(
-        FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
-        (1.1, 1.3),
-    )
-    precision = PrecisionConfig(
-        flexpoint_saturate_inf=True,
-        b_mx_scale=w_scale,
-        b_microblock_size=MXFP_BLOCK_SIZE.value,
-        out_dtype=torch.float8_e4m3fn,
-        flex_ctx=FlexCtx(
-            lhs_data=InFlexData(dtype=torch.float8_e4m3fn, scale=torch.tensor([1.0], device=device)),
-            rhs_data=InFlexData(),
-            out_data=OutFlexData(dtype=torch.float8_e4m3fn, expected_scale=torch.tensor([4.0], device=device)),
-        ),
-    )
-    out_shape = (gather_indx.shape[0], bias.shape[1] // fused_activation.specs.reduction_n)
+    out_shape = (FROZEN_GATHER_LEN, intermediate_size // REDUCTION_N_VALUE)
     out = torch.zeros(out_shape, dtype=torch.float8_e4m3fn, device=device)
 
     matmul(
         a=x,
         b=w,
-        bias=bias,
         a_ragged_metadata=ragged_metadata,
-        gather_indx=gather_indx,
-        precision_config=precision,
+        b_mx_scales=w_scale,
         c=out,
-        fused_activation=fused_activation,
     )
     torch.cuda.synchronize()
     expected = out.clone()
@@ -1400,12 +1179,9 @@ def run_repro(max_launches: int = 1000):
         matmul(
             a=x,
             b=w,
-            bias=bias,
             a_ragged_metadata=ragged_metadata,
-            gather_indx=gather_indx,
-            precision_config=precision,
+            b_mx_scales=w_scale,
             c=out,
-            fused_activation=fused_activation,
         )
         torch.cuda.synchronize()
         if not torch.equal(out, expected):
