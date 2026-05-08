@@ -11,6 +11,7 @@ from typing import Optional
 op_name = ContextVar("op_name", default=None)
 id = ContextVar("id", default=None)
 enabled = ContextVar("enabled", default=False)
+in_hook = ContextVar("in_hook", default=False)
 
 
 class LaunchHook(Hook):
@@ -85,15 +86,17 @@ class LaunchHook(Hook):
         pass
 
     def enter(self, metadata: LazyDict) -> None:
-        if enabled.get():
+        if enabled.get() or in_hook.get():
             return
         enabled.set(True)
+        in_hook.set(True)
 
         # Early return path 1: skip metadata evaluation when the raw kernel
         # name is enough to filter.
         raw_kernel_name = metadata.data.get("name")
         if not self._matches_kernel_name(raw_kernel_name):
             enabled.set(False)
+            in_hook.set(False)
             return
 
         with metadata_state(raw_kernel_name):
@@ -104,6 +107,7 @@ class LaunchHook(Hook):
         # filters, skip recording.
         if not self._matches_kernel_name(kernel_name):
             enabled.set(False)
+            in_hook.set(False)
             return
 
         fn_metrics = LaunchHook._extract_metrics(lazy_metadata)
@@ -118,8 +122,11 @@ class LaunchHook(Hook):
             libproton.add_metrics(scope_id, scalar_metrics, tensor_metrics)
         id.set(scope_id)
         op_name.set(kernel_name)
+        in_hook.set(False)
 
     def exit(self, metadata: LazyDict) -> None:
+        if in_hook.get():
+            return
         if not enabled.get():
             return
         libproton.exit_op(id.get(), op_name.get())
