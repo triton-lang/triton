@@ -1,7 +1,7 @@
 ---
 owner: jeffniu22@gmail.com
 created: 2026-05-07T07:15:19Z
-updated: 2026-05-08T10:00:16Z
+updated: 2026-05-08T19:23:03Z
 ---
 
 # Blackwell FP4 Padded Weight Packing
@@ -1273,6 +1273,20 @@ across the important batch regime.
     repros, but that reintroduces the already-proven separate dense-copy wait
     lowering bug, so the kept standalone repro continues to use the generic wait
     to isolate the remaining issue.
+  - Latest standalone reduction:
+    `python/examples/gluon/replay_sync_tail_race_repro.py` is now specialized
+    to the fixed 1CTA path only. The known-false gather-reuse, direct-LDS replay,
+    selector, non-packed-weight, and large-slice branches are removed; the
+    known-true odd-tail, one-fragment replay, TMEM-copy, and `warps_n=1` paths
+    are literal code again.
+  - Per request, the standalone file now uses direct
+    `mbarrier.wait(p.dense_copy_done_bar, dense_copy_phase)` instead of the
+    generic inline wait. With that exact source, the focused command
+    `PYTHONPATH=python:python/triton_kernels timeout 120s python3 python/examples/gluon/replay_sync_tail_race_repro.py`
+    timed out with exit code `124` before printing either `PASS` or `FAIL`.
+    This keeps the direct-wait behavior visible, but it no longer isolates the
+    later mismatch race because it falls back into the separate dense-copy wait
+    lowering problem first.
 
 ## Next Up
 
