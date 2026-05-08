@@ -1450,30 +1450,6 @@ def make_precision_config(prepared: PreparedCase) -> PrecisionConfig:
         ),
     )
 
-def run_kernel(
-    prepared: PreparedCase,
-    precision_config: PrecisionConfig,
-    out: torch.Tensor,
-) -> torch.Tensor:
-    return matmul(
-        a=prepared.x,
-        b=prepared.w,
-        bias=prepared.bias,
-        a_ragged_metadata=prepared.ragged_metadata,
-        gather_indx=prepared.gather_indx,
-        precision_config=precision_config,
-        c=out,
-        fused_activation=prepared.fused_activation,
-    )
-
-
-
-
-
-
-
-
-
 
 def run_repro(max_launches: int = 1000):
     torch.cuda.set_device(0)
@@ -1495,13 +1471,31 @@ def run_repro(max_launches: int = 1000):
     precision = make_precision_config(prepared)
     out = torch.zeros(prepared.out_shape, dtype=prepared.out_dtype, device=prepared.x.device)
 
-    run_kernel(prepared, precision, out)
+    matmul(
+        a=prepared.x,
+        b=prepared.w,
+        bias=prepared.bias,
+        a_ragged_metadata=prepared.ragged_metadata,
+        gather_indx=prepared.gather_indx,
+        precision_config=precision,
+        c=out,
+        fused_activation=prepared.fused_activation,
+    )
     torch.cuda.synchronize()
     expected = out.clone()
 
     for launch in range(1, max_launches + 1):
         out.zero_()
-        run_kernel(prepared, precision, out)
+        matmul(
+            a=prepared.x,
+            b=prepared.w,
+            bias=prepared.bias,
+            a_ragged_metadata=prepared.ragged_metadata,
+            gather_indx=prepared.gather_indx,
+            precision_config=precision,
+            c=out,
+            fused_activation=prepared.fused_activation,
+        )
         torch.cuda.synchronize()
         if not torch.equal(out, expected):
             maxdiff = (out.to(torch.float32) - expected.to(torch.float32)).abs().max().item()
