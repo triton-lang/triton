@@ -298,7 +298,6 @@ class PartitionArgs:
 
     SWIGLU_SUBTILE_FACTOR: gl.constexpr
     BAND_N: gl.constexpr
-    REPLAY_K_SUBTILE_FACTOR: gl.constexpr
 
     @gluon.jit
     def apply_block_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
@@ -910,7 +909,6 @@ def ws_matmul_kernel(
     #
     SWIGLU_SUBTILE_FACTOR: gl.constexpr,
     BAND_N: gl.constexpr,
-    REPLAY_K_SUBTILE_FACTOR: gl.constexpr,
     SCALE_SIZE_OUTER: gl.constexpr,
     SCALE_SIZE_INNER: gl.constexpr,
     MXFP_BLOCK_SIZE: gl.constexpr,
@@ -1058,7 +1056,6 @@ def ws_matmul_kernel(
         #
         SWIGLU_SUBTILE_FACTOR=SWIGLU_SUBTILE_FACTOR,
         BAND_N=BAND_N,
-        REPLAY_K_SUBTILE_FACTOR=REPLAY_K_SUBTILE_FACTOR,
     )
 
     gl.warp_specialize(
@@ -1158,8 +1155,6 @@ class KernelConfig:
 
     SWIGLU_SUBTILE_FACTOR: int = 8
     BAND_N: int = 18
-
-    REPLAY_K_SUBTILE_FACTOR: int = 1
 
     LOAD_ACTIVATION_REGS: int = 32
     LOAD_WEIGHT_REGS: int = 24
@@ -1307,7 +1302,6 @@ def matmul(
         #
         SWIGLU_SUBTILE_FACTOR=p.SWIGLU_SUBTILE_FACTOR,
         BAND_N=p.BAND_N,
-        REPLAY_K_SUBTILE_FACTOR=p.REPLAY_K_SUBTILE_FACTOR,
         #
         SCALE_SIZE_OUTER=p.SCALE_SIZE_OUTER,
         SCALE_SIZE_INNER=p.SCALE_SIZE_INNER,
