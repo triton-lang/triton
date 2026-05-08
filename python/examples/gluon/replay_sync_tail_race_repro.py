@@ -272,7 +272,6 @@ class PartitionArgs:
     acc_ready_bars: gl.shared_memory_descriptor
     ACC_NUM_BUFS: gl.constexpr
     mma_done_bar: gl.shared_memory_descriptor
-    replay_ready_bar: gl.shared_memory_descriptor
     dense_copy_done_bar: gl.shared_memory_descriptor
     unpack_sync_bar: gl.shared_memory_descriptor
 
@@ -299,7 +298,6 @@ class PartitionArgs:
 
     SWIGLU_SUBTILE_FACTOR: gl.constexpr
     BAND_N: gl.constexpr
-    REPLAY_VIA_TMEM_COPY: gl.constexpr
     REPLAY_K_SUBTILE_FACTOR: gl.constexpr
 
     @gluon.jit
@@ -913,7 +911,6 @@ def ws_matmul_kernel(
     #
     SWIGLU_SUBTILE_FACTOR: gl.constexpr,
     BAND_N: gl.constexpr,
-    REPLAY_VIA_TMEM_COPY: gl.constexpr,
     REPLAY_K_SUBTILE_FACTOR: gl.constexpr,
     SCALE_SIZE_OUTER: gl.constexpr,
     SCALE_SIZE_INNER: gl.constexpr,
@@ -986,8 +983,6 @@ def ws_matmul_kernel(
 
     mma_done_bar = mbarrier.allocate_mbarrier()
     mbarrier.init(mma_done_bar, count=1)
-    replay_ready_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(replay_ready_bar, count=1)
     dense_copy_done_bar = mbarrier.allocate_mbarrier()
     mbarrier.init(dense_copy_done_bar, count=1)
     unpack_sync_bar = mbarrier.allocate_mbarrier()
@@ -1038,7 +1033,6 @@ def ws_matmul_kernel(
         acc_ready_bars=acc_ready_bars,
         ACC_NUM_BUFS=ACC_NUM_BUFS,
         mma_done_bar=mma_done_bar,
-        replay_ready_bar=replay_ready_bar,
         dense_copy_done_bar=dense_copy_done_bar,
         unpack_sync_bar=unpack_sync_bar,
         #
@@ -1065,7 +1059,6 @@ def ws_matmul_kernel(
         #
         SWIGLU_SUBTILE_FACTOR=SWIGLU_SUBTILE_FACTOR,
         BAND_N=BAND_N,
-        REPLAY_VIA_TMEM_COPY=REPLAY_VIA_TMEM_COPY,
         REPLAY_K_SUBTILE_FACTOR=REPLAY_K_SUBTILE_FACTOR,
     )
 
@@ -1167,7 +1160,6 @@ class KernelConfig:
     SWIGLU_SUBTILE_FACTOR: int = 8
     BAND_N: int = 18
 
-    REPLAY_VIA_TMEM_COPY: bool = True
     REPLAY_K_SUBTILE_FACTOR: int = 1
 
     LOAD_ACTIVATION_REGS: int = 32
@@ -1316,7 +1308,6 @@ def matmul(
         #
         SWIGLU_SUBTILE_FACTOR=p.SWIGLU_SUBTILE_FACTOR,
         BAND_N=p.BAND_N,
-        REPLAY_VIA_TMEM_COPY=p.REPLAY_VIA_TMEM_COPY,
         REPLAY_K_SUBTILE_FACTOR=p.REPLAY_K_SUBTILE_FACTOR,
         #
         SCALE_SIZE_OUTER=p.SCALE_SIZE_OUTER,
