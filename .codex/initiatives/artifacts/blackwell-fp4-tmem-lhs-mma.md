@@ -1339,6 +1339,13 @@ across the important batch regime.
     current best hypothesis sharper: the race needs the mismatch between the
     logical gather/output length and the locally scheduled row count, not the
     full live MoE routing machinery.
+  - Truncation boundary:
+    with the frozen-routing file and the preserved RNG burn, `gather_len=64`
+    was still sufficient to fail (`FAIL launch=54 maxdiff=0.41015625`) while
+    `gather_len=54` passed for `200` launches. The checked-in repro keeps the
+    full `2048`-entry gather payload because it fails sooner (`FAIL launch=20`
+    in the same harness), but the now-known smaller failing payload is only ten
+    rows beyond the locally scheduled work.
   - Current reduced validation:
     after the routing freeze plus RNG burn, the focused command
     `PYTHONPATH=python:python/triton_kernels timeout 120s python3 python/examples/gluon/replay_sync_tail_race_repro.py`
