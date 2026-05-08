@@ -271,7 +271,6 @@ class PartitionArgs:
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
     ACC_NUM_BUFS: gl.constexpr
-    mma_done_bar: gl.shared_memory_descriptor
     dense_copy_done_bar: gl.shared_memory_descriptor
     unpack_sync_bar: gl.shared_memory_descriptor
 
@@ -976,8 +975,6 @@ def ws_matmul_kernel(
     )
     acc_empty_bars, acc_ready_bars = alloc_ring_barriers(ACC_NUM_BUFS)
 
-    mma_done_bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(mma_done_bar, count=1)
     dense_copy_done_bar = mbarrier.allocate_mbarrier()
     mbarrier.init(dense_copy_done_bar, count=1)
     unpack_sync_bar = mbarrier.allocate_mbarrier()
@@ -1027,7 +1024,6 @@ def ws_matmul_kernel(
         acc_empty_bars=acc_empty_bars,
         acc_ready_bars=acc_ready_bars,
         ACC_NUM_BUFS=ACC_NUM_BUFS,
-        mma_done_bar=mma_done_bar,
         dense_copy_done_bar=dense_copy_done_bar,
         unpack_sync_bar=unpack_sync_bar,
         #
