@@ -216,7 +216,6 @@ void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
         graphState.nodeIdToState
             .end()) // The node has been skipped during graph capture
       continue;
-    auto &nodeState = nodeIter->second;
     const auto &metricNodeState = graphState.metricNodeIdToState.at(nodeId);
     auto &pendingMetricNode = seqIdToState
                                   .emplace(seqId,
@@ -226,13 +225,13 @@ void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
     for (const auto &[data, graphEntry] : externIdState.dataToGraphEntry) {
       phase = graphEntry.phase;
       auto entryId = Scope::DummyScopeId;
-      if (auto entryIdIter = nodeState.dataToEntryId.find(data);
-          entryIdIter != nodeState.dataToEntryId.end()) {
+      if (auto entryIdIter = metricNodeState.dataToEntryId.find(data);
+          entryIdIter != metricNodeState.dataToEntryId.end()) {
         entryId = entryIdIter->second;
       }
       // Otherwise, a DummyScopeId entry indicates that we'll call
       // upsertFlexibleMetric instead of upsertLinkedFlexibleMetric in
-      // queueGraphMetrics, so that the kernel metric can be attached to the
+      // queueGraphMetrics, so that the flexible metric can be attached to the
       // graph launch entry.
       pendingMetricNode.dataToEntry.emplace(
           data, DataEntry(entryId, phase, graphEntry.metricSet.get()));
@@ -532,6 +531,27 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
         graphState.dataToEntryIdToNodeStates[data][staticEntry.id].insert(
             &nodeState);
+        if (isMetricKernelNode) {
+          auto flexibleMetricContexts = data->getContexts(false);
+          std::vector<Context> flexibleMetricEntryContexts{
+              Context(GraphState::captureTag)};
+          flexibleMetricEntryContexts.insert(flexibleMetricEntryContexts.end(),
+                                             flexibleMetricContexts.begin(),
+                                             flexibleMetricContexts.end());
+          if (threadState.isApiExternOp) { // API extern ops
+            flexibleMetricEntryContexts.push_back(
+                std::string(GraphState::metricTag));
+          } else { // Triton ops
+            flexibleMetricEntryContexts.push_back(name);
+            flexibleMetricEntryContexts.push_back(
+                std::string(GraphState::metricTag));
+          }
+          auto flexibleMetricEntry = data->addOp(
+              Data::kVirtualPhase, Data::kRootEntryId,
+              flexibleMetricEntryContexts);
+          graphState.metricNodeIdToState.at(nodeId)
+              .dataToEntryId.insert_or_assign(data, flexibleMetricEntry.id);
+        }
       }
     } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
       // When a graph is cloned under the stream capture mode, graphId is the

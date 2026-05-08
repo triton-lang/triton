@@ -98,8 +98,8 @@ public:
   const std::string &getPath() const { return path; }
 
   /// Get the contexts associated with the data.
-  std::vector<Context> getContexts() const {
-    return contextSource->getContexts();
+  std::vector<Context> getContexts(bool withState = true) const {
+    return contextSource->getContexts(withState);
   }
 
   /// Dump the data to the given output format.

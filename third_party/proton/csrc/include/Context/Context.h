@@ -49,9 +49,9 @@ public:
   ContextSource() = default;
   virtual ~ContextSource() = default;
 
-  std::vector<Context> getContexts() {
+  std::vector<Context> getContexts(bool withState = true) {
     auto contexts = getContextsImpl();
-    if (state.has_value()) {
+    if (withState && state.has_value()) {
       std::string_view rawName;
       if (splitMetadataScopeName(state->name, rawName)) {
         contexts.emplace_back(std::string(rawName));

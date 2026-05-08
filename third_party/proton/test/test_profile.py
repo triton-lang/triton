@@ -1453,9 +1453,16 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str)
             }
     assert len(metric_kernel_events) == 1
     assert metric_kernel_events[0]["args"]["call_stack"] == [
-        "ROOT", "test0", "<captured_at>", "a", "b", "c", "<metric>"
+        "ROOT",
+        "test0",
+        "<captured_at>",
+        "a",
+        "b",
+        "c",
+        COMPUTE_METADATA_SCOPE_NAME,
+        "<metric>",
     ]
-    assert all(event["name"] not in {"foo", "<metric>"} for event in metadata_kernel_events)
+    assert all(event["name"] != "foo" for event in metadata_kernel_events)
 
     test0_scope = next(
         event for event in trace_events

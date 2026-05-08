@@ -74,6 +74,9 @@ struct GraphState {
     uint64_t seqId{};
     uint64_t metricId{};
     size_t numWords{};
+    // State-stripped static entries used for attributing flexible metrics
+    // written by metric kernels.
+    std::map<Data *, size_t> dataToEntryId;
   };
   // Metric nodes and their CPU-side metric state, ordered by node id.
   std::map<uint64_t, MetricNodeState> metricNodeIdToState;
