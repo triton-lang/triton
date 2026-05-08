@@ -221,12 +221,6 @@ static void appendWriteSlices(Value value, Operation *op,
     blockInfo->syncWriteSlices[slice].insert(op);
 }
 
-static bool containsLocalBarrier(Operation *op) {
-  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op))
-    return barrier.hasLocal();
-  return false;
-}
-
 class TMemBarrierAnalysis : public MembarOrFenceAnalysis {
 public:
   explicit TMemBarrierAnalysis(Allocation *allocation, MembarFilterFn filter)
@@ -248,7 +242,7 @@ void TMemBarrierAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 void TMemBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
                                  FuncBlockInfoMapT *funcBlockInfoMap,
                                  OpBuilder *builder) {
-  if (containsLocalBarrier(op)) {
+  if (mlir::containsLocalBarrier(op)) {
     blockInfo->sync();
     return;
   }
