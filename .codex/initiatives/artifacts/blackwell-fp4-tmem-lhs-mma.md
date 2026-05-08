@@ -1423,6 +1423,24 @@ across the important batch regime.
     flowing through the kernel signature and `PartitionArgs`. The launch site
     now passes only the three descriptors plus `out_ptr`, and the specialized
     source still fails (`FAIL launch=22 maxdiff=0.625`).
+  - Current lower bound:
+    the standalone repro is now down to a single-row, single-slice,
+    single-buffer setup for `x`, `w`, replay, and accumulator state. The MMA
+    side no longer consumes dynamic weight scales at all; `w_scale_tmem` is
+    filled once with a constant, while a separate one-warp scale partition
+    still issues the original TMA traffic into an unused shared buffer. A plain
+    dummy `uint8` tensor is enough for that scale descriptor, so the failing
+    case no longer depends on real MX scale values or the unswizzle helper.
+    The current source is `575` lines and still fails quickly, most recently as
+    `FAIL launch=4 maxdiff=1.3125`.
+  - Failed shrink boundaries:
+    several larger cuts no longer reproduce and therefore mark the current
+    boundary. Reducing `K_TILES` from `3` to `2` stopped producing a clean fail
+    signal within the 20-second guard. Deleting the scale-side TMA partition
+    entirely, or replacing it with only a dummy pacing partition and barrier
+    arrivals, made the repro pass for `1000` launches. Replacing the packed-FP8
+    epilogue with a direct raw-accumulator row store ran into Gluon indexing
+    limits, so the packed store remains part of the smallest working source.
 
 ## Next Up
 
