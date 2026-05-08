@@ -30,6 +30,7 @@ def _find_frame_by_name(frame, name):
         queue.extend(current["children"])
     return None
 
+
 @contextmanager
 def cuda_graph_without_gc(*args, **kwargs):
     # A loaded Triton CompiledKernel may be finalized by Python's cyclic GC.
@@ -722,8 +723,7 @@ def test_hook_cudagraph_triton_kernels(tmp_path: pathlib.Path, device: str):
     assert capture_frame is not None
 
     owner_frame = _find_frame_by_name(capture_frame, owner_name)
-    metadata_root_frame = _find_frame_by_name(capture_frame,
-                                              COMPUTE_METADATA_SCOPE_NAME)
+    metadata_root_frame = _find_frame_by_name(capture_frame, COMPUTE_METADATA_SCOPE_NAME)
     metadata_frame = None
     if metadata_root_frame is not None:
         metadata_frame = _find_frame_by_name(metadata_root_frame, owner_name)
@@ -1615,8 +1615,7 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
             scope_b_frame = child
         if child["frame"]["name"] == "scope_d":
             scope_d_frame = child
-    metadata_root_frame = _find_frame_by_name(capture_at_frame,
-                                              COMPUTE_METADATA_SCOPE_NAME)
+    metadata_root_frame = _find_frame_by_name(capture_at_frame, COMPUTE_METADATA_SCOPE_NAME)
     assert metadata_root_frame is not None
     metadata_foo_frame = _find_frame_by_name(metadata_root_frame, "foo")
     assert metadata_foo_frame is not None
