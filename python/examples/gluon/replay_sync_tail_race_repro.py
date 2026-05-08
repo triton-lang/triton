@@ -1438,7 +1438,6 @@ def prepare_case(
     device: str,
     seed: int = 0,
     uniform_routing: bool = False,
-    reference: bool = False,
     p: KernelConfig | None = None,
 ) -> PreparedCase:
     torch.manual_seed(seed)
@@ -1447,7 +1446,7 @@ def prepare_case(
     k, n = c.hidden_size, c.intermediate_size
     n_expts_local = c.num_experts // c.num_expert_shards
     ragged_metadata, gather_indx = init_routing_data(c, batch_size, local_rank, device, uniform_routing)
-    p = None if reference else (p or KernelConfig())
+    p = p or KernelConfig()
     x = alloc_randn((batch_size, k), dtype=torch.float8_e4m3fn, device=device)
     w, w_scale = alloc_randn_fp4((n_expts_local, k, n), device=device, p=p)
     bias = alloc_randn((n_expts_local, n), dtype=torch.float32, device=device)
