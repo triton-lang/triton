@@ -79,4 +79,35 @@ def TritonLoopAwareCSE : Pass<"triton-loop-aware-cse", "mlir::ModuleOp"> {
   }];
 }
 
+def TritonIndexSimplification : Pass<"triton-index-simplification", "mlir::ModuleOp"> {
+  let summary = "Z3-backed index arithmetic simplification";
+  let description = [{
+    Eliminates redundant modulo/division chains in Triton index expressions.
+
+    PyTorch Inductor generates POI kernels with multi-level mixed-radix index
+    expressions such as:
+
+      x0 + 512*(tmp4%614400) + 1228800*((x0 + 512*(tmp4%2400)) // 1228800)
+
+    where x0 = xindex%512 and tmp4 = xindex//512.  This expression equals
+    xindex but the redundant chain creates long instruction dependencies that
+    cause high VRF bank-conflict rates on some targets.
+
+    The pass runs in three phases:
+      Phase 1 — Pure algebraic patterns:
+        (x % N) // N  => 0
+        (a%M) + M*((a//M)%N)  => a%(M*N)   [mixed-radix identity]
+      Phase 2 — Z3-backed range proofs (requires libz3 at build time):
+        divsi(v, N) => 0  when Z3 proves v in [0, N)
+        remsi(v, N) => v  when Z3 proves v in [0, N)
+      Phase 3 — Re-apply algebraic patterns to exploit newly simplified ops.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::scf::SCFDialect"
+  ];
+}
+
 #endif
