@@ -1513,6 +1513,19 @@ across the important batch regime.
     Raw random `uint8` weights with a rank-2 TMA descriptor are sufficient, and
     the packed epilogue can store `int16` lanes directly instead of re-packing
     into `int32`.
+  - Current minimal core:
+    the repro now fails with one CTA, one `tcgen05.mma`, one masked `X` gather,
+    one direct nonzero `replay_tmem.store(...)`, and the packed FP8 epilogue.
+    Removed since the previous checkpoint: all warp specialization, the replay
+    worker, replay barriers, dummy prelude TMA, weight descriptor/setup, dense
+    `tcgen05.cp`, replay TMEM load/store roundtrip, register unpack, first dense
+    MMA, and the second N program. A zero replay TMEM fill passes, but the
+    literal value `1` still fails on the second launch.
+  - Fresh lower-bound checks:
+    direct register initialization of `x_buf` passes, so the masked TMA gather
+    remains live. Raw accumulator stores still pass, so the packed FP8 epilogue
+    remains live. Geometry floors are `BLOCK_M=16`, `BLOCK_N=128`,
+    `BLOCK_K=128`; `num_warps=4` is the legal floor for the TMEM register layout.
 
 ## Next Up
 
