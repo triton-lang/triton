@@ -7,18 +7,14 @@ import triton.experimental.gluon.language.nvidia.blackwell.tma as tma
 from triton.experimental.gluon.language.nvidia.blackwell import float2
 import triton.experimental.gluon.language.nvidia.hopper.mbarrier as mbarrier
 
-# ===-----------------------------------------------------------------------===#
-# Device Code
-# ===-----------------------------------------------------------------------===#
-
 BLOCK_M = gl.constexpr(16)
 BLOCK_N = gl.constexpr(128)
 BLOCK_K = gl.constexpr(128)
 
 @gluon.jit
-def alloc_barrier(count: gl.constexpr = 1):
+def alloc_barrier():
     bar = mbarrier.allocate_mbarrier()
-    mbarrier.init(bar, count=count)
+    mbarrier.init(bar, count=1)
     return bar
 
 @gluon.jit
@@ -27,9 +23,9 @@ def ws_matmul_kernel(
     out_ptr: gl.tensor,
 ):
     x_buf = gl.allocate_shared_memory(
-        x_desc.dtype,
-        [BLOCK_M, x_desc.block_type.shape[1]],
-        x_desc.layout,
+        gl.float8e4nv,
+        [BLOCK_M, BLOCK_K],
+        gl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2),
     )
     x_ready_bar = alloc_barrier()
 
@@ -50,9 +46,9 @@ def ws_matmul_kernel(
         parent=gl.BlockedLayout([1, 4], [32, 1], [1, gl.num_warps()], [1, 0]),
     )
     offs_m = gl.arange(0, BLOCK_M, layout=offs_layout)
-    offs_x_m = gl.where(offs_m < 1, offs_m, x_desc.shape[0])
+    offs_x_m = gl.where(offs_m < 1, offs_m, 1)
 
-    mbarrier.expect(x_ready_bar, x_desc.block_type.nbytes * BLOCK_M)
+    mbarrier.expect(x_ready_bar, BLOCK_M * BLOCK_K)
     tma.async_gather(x_desc, offs_x_m, 0, x_ready_bar, x_buf)
 
     replay_tmem.store(
@@ -128,15 +124,9 @@ def ws_matmul_kernel(
     ptrs = ptrs + gl.expand_dims(out_n, 0)
     gl.store(ptrs, packed_fp8)
 
-# ===-----------------------------------------------------------------------===#
-# Benchmark and Testing Helpers
-# ===-----------------------------------------------------------------------===#
-
 def run_repro():
-    device = "cuda:0"
-
-    x = torch.ones((1, 128), device=device, dtype=torch.float8_e4m3fn)
-    out = torch.empty((16, 32), dtype=torch.int16, device=device)
+    x = torch.ones((1, 128), device="cuda:0", dtype=torch.float8_e4m3fn)
+    out = torch.empty((16, 32), dtype=torch.int16, device="cuda:0")
     x_desc = TensorDescriptor(
         x,
         [1, 128],

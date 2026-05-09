@@ -1526,6 +1526,20 @@ across the important batch regime.
     remains live. Raw accumulator stores still pass, so the packed FP8 epilogue
     remains live. Geometry floors are `BLOCK_M=16`, `BLOCK_N=128`,
     `BLOCK_K=128`; `num_warps=4` is the legal floor for the TMEM register layout.
+  - Final minimized repro state:
+    the standalone file is now 158 lines. The failing kernel contains only:
+    one masked `tma.async_gather` into `x_buf`, one nonzero `replay_tmem.store`,
+    one scaled `tcgen05.mma`, one accumulator completion wait, and the full
+    packed-FP8 epilogue. The harness is one CTA, four warps, two launches, and
+    a self-compare. Current gate:
+    `PYTHONPATH=python:python/triton_kernels timeout 20s python3 python/examples/gluon/replay_sync_tail_race_repro.py`
+    -> `FAIL`.
+  - Final rejected reductions:
+    all of the following stop reproducing or become illegal: zeroing
+    `replay_tmem`; replacing the masked TMA gather with direct SMEM stores;
+    replacing the packed FP8 epilogue with raw FP32 stores or direct FP8 stores;
+    storing only the first output row or half of the packed columns; shrinking
+    below `BLOCK_M=16`, `BLOCK_N=128`, `BLOCK_K=128`, or `num_warps=4`.
 
 ## Next Up
 
