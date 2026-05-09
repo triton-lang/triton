@@ -1,7 +1,7 @@
 ---
 owner: jeffniu22@gmail.com
 created: 2026-05-07T07:15:19Z
-updated: 2026-05-08T19:40:59Z
+updated: 2026-05-09T19:11:07Z
 ---
 
 # Blackwell FP4 Padded Weight Packing
@@ -1514,19 +1514,18 @@ across the important batch regime.
     the packed epilogue can store `int16` lanes directly instead of re-packing
     into `int32`.
   - Correction after further minimization:
-    the post-`8c2b57b6de` shrink path was not a valid witness. `9db7959302`
-    replaced the real scale pipeline with a dummy scale TMA that has no
-    `mbarrier.expect`, is never waited, and whose barrier storage is later
-    reused for an MMA completion barrier. `b983fe67a5` then removed the bounded
-    epilogue while still launching two N programs: with `BLOCK_N=128`, each CTA
-    writes 64 packed `int16` lanes, `pid_n=1` starts at lane 32, and the row
-    stride is also 64. That creates overlapping stores and a tail overrun before
-    any later shrinking. The final `f59d0981f6` version compounded that by
-    shrinking the host output to `16x32`, so the second launch overwrote the
-    adjacent `expected = out.clone()` allocation and manufactured the observed
-    `2x32` mismatch. The repro source has been rewound to `8c2b57b6de`, the last
-    state before the malformed dummy TMA was introduced and while the original
-    masked epilogue was still present.
+    the last faithful reduced replay-tail witness is `957bdadfd8`, not
+    `8c2b57b6de`. `2437377370` switched the standalone file back from the
+    generic cluster-scoped dense-copy wait to ordinary `mbarrier.wait`, thereby
+    reintroducing the older dense-copy completion-wait bug. Later reductions
+    kept shrinking that different witness: `9db7959302` added a malformed dummy
+    scale TMA with no `mbarrier.expect`, `b983fe67a5` removed the bounded
+    epilogue while still launching two N programs, and `f59d0981f6` finally
+    shrank the host output to `16x32` while the kernel still stored 64 packed
+    lanes. The standalone file has now been rewound to `957bdadfd8`, which keeps
+    the generic dense-copy wait, still reproduces the replay-tail corruption,
+    and is repaired by reintroducing only the cross-partition
+    `bar.sync 14, 256` rendezvous.
   - Current minimal core:
     the repro now fails with one CTA, one `tcgen05.mma`, one masked `X` gather,
     one direct nonzero `replay_tmem.store(...)`, and the packed FP8 epilogue.
