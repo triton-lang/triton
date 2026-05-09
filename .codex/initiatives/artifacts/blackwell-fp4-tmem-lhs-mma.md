@@ -1472,6 +1472,12 @@ across the important batch regime.
   - Failed merged-load shape:
     a simpler merged form that loaded all `X` tiles first and only then started
     issuing `W` traffic did not hold; it tripped the 20-second hang guard.
+  - Odd-tail MMA removal:
+    the final dense-`W` MMA in `mma_partition` is not required for the race.
+    Removing the last `w_ready_bar` wait, the last dense `tcgen05.mma`, and the
+    trailing `tcgen05_commit(w_empty_bar)` still leaves a fast repro
+    (`FAIL launch=2 maxdiff=0.890625`). The current trigger only needs the
+    first dense MMA plus the replay MMA.
 
 ## Next Up
 

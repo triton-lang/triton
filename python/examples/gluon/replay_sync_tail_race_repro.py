@@ -179,29 +179,6 @@ def mma_partition(p: PartitionArgs):
         mbarriers=[p.x_empty_bar, scale_mma_bar, p.replay_empty_bar],
     )
 
-    mbarrier.wait(p.x_ready_bar, 0)
-    mbarrier.wait(p.w_ready_bar, 1)
-
-    w_packed_pair = p.w_buf.reshape((BLOCK_N, BLOCK_K))
-    w_pair_first = w_packed_pair._reinterpret(
-        gl.uint8,
-        (BLOCK_N, BLOCK_K // 2),
-        fp4_padded_layout,
-    )
-
-    blackwell.tcgen05_mma_scaled(
-        w_pair_first,
-        p.x_buf.permute((1, 0)),
-        p.acc_buf,
-        w_scale_tmem,
-        x_scale_tmem,
-        a_type="e2m1",
-        b_type="e4m3",
-        use_acc=True,
-        mbarriers=[p.x_empty_bar, scale_mma_bar, p.w_empty_bar],
-    )
-
-    blackwell.tcgen05_commit(p.w_empty_bar)
     blackwell.tcgen05_commit(p.acc_ready_bar)
 
 
