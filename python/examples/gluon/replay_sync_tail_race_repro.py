@@ -52,7 +52,6 @@ def unpack_block_schedule(schedule: gl.tensor) -> tuple[gl.tensor, gl.tensor]:
 @gluon.jit
 def apply_block_schedule(
     block_id: gl.tensor,
-    grid_m: gl.tensor,
     GRID_N: gl.constexpr,
     slice_offsets: gl.tensor,
     block_schedule: gl.tensor,
@@ -252,7 +251,6 @@ class PartitionArgs:
     def apply_block_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
         return apply_block_schedule(
             block_id=block_id,
-            grid_m=self.grid_m,
             GRID_N=self.GRID_N,
             slice_offsets=self.x_slice_offs,
             block_schedule=self.x_block_schedule,
