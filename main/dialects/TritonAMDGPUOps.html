@@ -238,8 +238,13 @@
 <li class="toctree-l4"><a class="reference internal" href="#id63">Results:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#amdg-wait-barrier-triton-amdgpu-waitbarrierop"><code class="docutils literal notranslate"><span class="pre">amdg.wait_barrier</span></code> (triton::amdgpu::WaitBarrierOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#amdg-update-tensor-descriptor-triton-amdgpu-updatetensordescriptorop"><code class="docutils literal notranslate"><span class="pre">amdg.update_tensor_descriptor</span></code> (triton::amdgpu::UpdateTensorDescriptorOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id64">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id65">Results:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#amdg-wait-barrier-triton-amdgpu-waitbarrierop"><code class="docutils literal notranslate"><span class="pre">amdg.wait_barrier</span></code> (triton::amdgpu::WaitBarrierOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id66">Operands:</a></li>
 </ul>
 </li>
 </ul>
@@ -1895,6 +1900,123 @@ However, they are dropped by the hardware in case the virtual address translatio
 </table>
 </section>
 </section>
+<section id="amdg-update-tensor-descriptor-triton-amdgpu-updatetensordescriptorop">
+<h2><code class="docutils literal notranslate"><span class="pre">amdg.update_tensor_descriptor</span></code> (triton::amdgpu::UpdateTensorDescriptorOp)<a class="headerlink" href="#amdg-update-tensor-descriptor-triton-amdgpu-updatetensordescriptorop" title="Link to this heading"></a></h2>
+<p><em>Update selected fields of a TDM descriptor; produce a new descriptor SSA value</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.update_tensor_descriptor` $desc
+              oilist(
+              `add_offsets` `=` `[` $add_offsets `]`
+              | `set_bounds` `=` `[` $set_bounds `]`
+              | `dest` `=` $dest `:` qualified(type($dest))
+              | `pred` `=` $pred
+              | `barrier` `=` $barrier `:` qualified(type($barrier))
+              )
+              attr-dict `:` qualified(type($desc))
+</pre></div>
+</div>
+<p>Returns a new TDM descriptor with selected fields rewritten.  Each
+parameter is independently optional; only the fields the caller names
+are written.  Everything else is inherited from the input descriptor.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>parameter</p></th>
+<th class="head"><p>kind</p></th>
+<th class="head"><p>effect on descriptor</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">add_offsets</span></code></p></td>
+<td><p>incremental</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">global_addr</span> <span class="pre">+=</span> <span class="pre">sum(add_offsets[i]</span> <span class="pre">*</span> <span class="pre">stride[i]</span> <span class="pre">*</span> <span class="pre">elem_size)</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">set_bounds</span></code></p></td>
+<td><p>rewrite</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tensor_dim[i]</span> <span class="pre">=</span> <span class="pre">set_bounds[i]</span></code> (absolute)</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">dest</span></code></p></td>
+<td><p>rewrite</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">lds_addr</span> <span class="pre">=</span> <span class="pre">dest</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">pred</span></code></p></td>
+<td><p>rewrite</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">pred</span> <span class="pre">=</span> <span class="pre">pred</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
+<td><p>rewrite</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">barrier_addr</span> <span class="pre">=</span> <span class="pre">barrier</span></code></p></td>
+</tr>
+</tbody>
+</table>
+<p><code class="docutils literal notranslate"><span class="pre">add_offsets</span></code> is incremental (deltas in element units) and does not
+touch <code class="docutils literal notranslate"><span class="pre">tensor_dim</span></code> — for OOB-correct loops, set <code class="docutils literal notranslate"><span class="pre">set_bounds</span></code> once
+outside the loop (interior tiles see a loop-invariant tensor_dim
+that hoists), or set <code class="docutils literal notranslate"><span class="pre">set_bounds</span></code> per iteration when OOB must fire.</p>
+<p>Examples:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>// K-loop interior: bump tile position only
+%d1 = amdg.update_tensor_descriptor %d, add_offsets=[%c0, %BLOCK_K]
+        : !tt.tensordesc&lt;64x64xf16, #shared&gt;
+
+// Prologue: position at first tile + wire LDS and barrier
+%d1 = amdg.update_tensor_descriptor %d,
+        add_offsets=[%pid_m_off, %c0],
+        dest=%a_shared, barrier=%a_bar
+        : !tt.tensordesc&lt;64x64xf16, #shared&gt;
+
+// Peel epilogue: install real OOB extent for the partial last tile
+%d1 = amdg.update_tensor_descriptor %d, set_bounds=[%m_remain, %k_remain]
+        : !tt.tensordesc&lt;64x64xf16, #shared&gt;
+</pre></div>
+</div>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
+<section id="id64">
+<h3>Operands:<a class="headerlink" href="#id64" title="Link to this heading"></a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">desc</span></code></p></td>
+<td><p>Tensor descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::TensorDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">add_offsets</span></code></p></td>
+<td><p>variadic of 32-bit signless integer</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">set_bounds</span></code></p></td>
+<td><p>variadic of 32-bit signless integer</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">dest</span></code></p></td>
+<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">pred</span></code></p></td>
+<td><p>32-bit signless integer</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
+<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id65">
+<h3>Results:<a class="headerlink" href="#id65" title="Link to this heading"></a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Result</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
+<td><p>Tensor descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::TensorDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
 <section id="amdg-wait-barrier-triton-amdgpu-waitbarrierop">
 <h2><code class="docutils literal notranslate"><span class="pre">amdg.wait_barrier</span></code> (triton::amdgpu::WaitBarrierOp)<a class="headerlink" href="#amdg-wait-barrier-triton-amdgpu-waitbarrierop" title="Link to this heading"></a></h2>
 <p><em>Wait until the mbarrier phase completes.</em></p>
@@ -1905,8 +2027,8 @@ However, they are dropped by the hardware in case the virtual address translatio
 <p>Blocks the program progress until the mbarrier object in <code class="docutils literal notranslate"><span class="pre">alloc</span></code> completes
 its current phase.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code></p>
-<section id="id64">
-<h3>Operands:<a class="headerlink" href="#id64" title="Link to this heading"></a></h3>
+<section id="id66">
+<h3>Operands:<a class="headerlink" href="#id66" title="Link to this heading"></a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>

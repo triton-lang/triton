@@ -406,6 +406,14 @@ to the lead CTA.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">mbarrier.arrive</span></code> every CTA in a group arrives on the lead CTA</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">mbarrier.wait</span></code> just the lead CTA waits for the barrier</p></li>
 </ul>
+<p>Barriers used across CTAs need one extra ordering rule: every relevant
+<code class="docutils literal notranslate"><span class="pre">mbarrier.init</span></code> must complete before any CTA uses that barrier. This applies
+both to barriers that are themselves cross-CTA and to per-CTA barriers consumed
+by multicast or 2CTA ops. The compiler inserts the required
+<code class="docutils literal notranslate"><span class="pre">fence.mbarrier_init.release.cluster</span></code> plus a relaxed cluster barrier after the
+top-level init sequence and before the first use. Since cluster barriers must
+execute outside <code class="docutils literal notranslate"><span class="pre">warp_specialize</span></code>, initialize these barriers in the top-level
+part of the kernel before entering warp specialization.</p>
 <p>Final note on synchronization.
 cluster.arrive / cluster.wait (i.e., CGA barriers, the cluster equivalent of bar.sync for CTAs) must be
 executed by all threads in the kernel. As a result, they cannot be used inside a warp_specialize block.</p>
@@ -425,22 +433,27 @@ RHS has its first basis equal to (0, 1).
 The accumulator is also shared as (1, 0)</p>
 <p>Same as for single-CTA, the blockM shape of <code class="docutils literal notranslate"><span class="pre">TensorMemoryLayout</span></code> is the shape
 of the instruction, which can be either 64 or 128.</p>
-<p>In Gluon, 2CTA mode is selected on the accumulator layout via
-<code class="docutils literal notranslate"><span class="pre">TensorMemoryLayout(...,</span> <span class="pre">two_ctas=True)</span></code>.</p>
-<p>If one tcgen05_mma instruction uses 2CTA mode, the kernel is declared as using
-2CTA mode. In this case, all the other tcgen05_mma instructions in the kernel
-must use 2CTA mode.</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">mma_bar</span></code> itself does not need <code class="docutils literal notranslate"><span class="pre">two_ctas=True</span></code>. It is a regular
-multi-CTA barrier, and <code class="docutils literal notranslate"><span class="pre">tcgen05_mma</span></code> will multicast its completion signal to
-the two CTAs in the pair. The TMA hand-off barrier <em>does</em> need
-<code class="docutils literal notranslate"><span class="pre">two_ctas=True</span></code>, because only the lead CTA waits before issuing the MMA.</p>
-<p>Once one <code class="docutils literal notranslate"><span class="pre">tcgen05_mma</span></code> in a kernel uses 2CTA mode, all of the <code class="docutils literal notranslate"><span class="pre">tcgen05_mma</span></code>
-instructions in that kernel must use 2CTA mode.</p>
-<p>The tcgen05_mma instruction is issued from the lead CTA in each pair. As such,
-when used in conjunction with TMA, the TMA barrier needs to be <code class="docutils literal notranslate"><span class="pre">two_ctas=True</span></code>.
-What this does is that it creates a barrier with cga_layout[0] = [0], which means
-that CTA0 will wait for both its data and the data from CTA1 to be loaded before
-issuing the MMA.</p>
+<p>The outer-product layouts above describe the required data placement: LHS
+<code class="docutils literal notranslate"><span class="pre">(1,</span> <span class="pre">0)</span></code>, RHS <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">1)</span></code>, and accumulator/output <code class="docutils literal notranslate"><span class="pre">(1,</span> <span class="pre">0)</span></code>. On top of that,
+enabling 2CTA has two required code changes, plus a third when waiting on MMA completion:</p>
+<ul class="simple">
+<li><p>select 2CTA mode on the accumulator with
+<code class="docutils literal notranslate"><span class="pre">TensorMemoryLayout(...,</span> <span class="pre">two_ctas=True)</span></code>;</p></li>
+<li><p>create any barrier that must be waited on before the lead CTA issues
+<code class="docutils literal notranslate"><span class="pre">tcgen05_mma</span></code> with
+<code class="docutils literal notranslate"><span class="pre">mbarrier.allocate_mbarrier(...,</span> <span class="pre">two_ctas=True)</span></code>;</p></li>
+<li><p>when initializing an mbarrier used to wait on MMA completion, pass
+<code class="docutils literal notranslate"><span class="pre">two_ctas=...</span></code> to <code class="docutils literal notranslate"><span class="pre">tcgen05_mma_barrier_count</span></code>.</p></li>
+</ul>
+<p>Such a pre-MMA barrier needs <code class="docutils literal notranslate"><span class="pre">two_ctas=True</span></code> so that the lead CTA waits for
+both rows before issuing the collective op. In this single-tile example that is
+<code class="docutils literal notranslate"><span class="pre">tma_bar</span></code>; in the pipelined matmul below the corresponding examples are
+<code class="docutils literal notranslate"><span class="pre">load_ready_bars</span></code> and <code class="docutils literal notranslate"><span class="pre">acc_empty_bars</span></code>. These are the same 2CTA sites used by
+<code class="docutils literal notranslate"><span class="pre">03-matmul-multicta.py</span></code>.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">mma_bar</span></code> itself does not need <code class="docutils literal notranslate"><span class="pre">two_ctas=True</span></code>: <code class="docutils literal notranslate"><span class="pre">tcgen05_mma</span></code> multicasts
+its completion signal to the two CTAs in the pair. Once one <code class="docutils literal notranslate"><span class="pre">tcgen05_mma</span></code> in
+a kernel uses 2CTA mode, all <code class="docutils literal notranslate"><span class="pre">tcgen05_mma</span></code> instructions in that kernel must
+use 2CTA mode.</p>
 <p>The kernel <code class="docutils literal notranslate"><span class="pre">two_cta_tcgen05_kernel</span></code> shows the 2CTA TCGen5MMA pattern on a single tile.</p>
 <p>It’s worth noting that the pattern changes a bit once the TMA has to wait on the tcgen05_mma
 We will cover this in the next section.</p>
@@ -510,12 +523,10 @@ We will cover this in the next section.</p>
     <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">),</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-1</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>There are a few things that change from the single-CTA case:</p>
-<ul class="simple">
-<li><p>The TMA barrier is <code class="docutils literal notranslate"><span class="pre">two_ctas=True</span></code>. This was covered in the previous section.
- - The <code class="docutils literal notranslate"><span class="pre">mbarrier.expect</span></code> is called with the total byte count per CTA, not the whole block.</p></li>
-<li><p>The tcgen05_mma TMEM layout is now <code class="docutils literal notranslate"><span class="pre">two_ctas=True</span></code></p></li>
-</ul>
+<p>Relative to the single-CTA case, the code below therefore changes the operand
+layouts, uses <code class="docutils literal notranslate"><span class="pre">two_ctas=True</span></code> on the accumulator layout, and uses
+<code class="docutils literal notranslate"><span class="pre">two_ctas=True</span></code> on the TMA hand-off barrier. The <code class="docutils literal notranslate"><span class="pre">mbarrier.expect</span></code> byte count
+remains per CTA, not for the whole pair.</p>
 <p>Note that there will be a few more changes once this is used in a for-loop and/or with TMA with multicast.
 More on this in the next section.</p>
 </section>
@@ -559,13 +570,19 @@ for A and B as follows:</p>
 for each.</p>
 <p>This means that some bases are zero for A and/or B, so different CTAs will load the same data.
 Multicast will allow these CTAs to hit the L2 cache efficiently.</p>
-<p>The synchronization pattern is the same as for a regular TMA load:</p>
+<p>The broadcast layouts above describe which CTAs should receive the same tile.
+After that, the pipelined matmul has three <code class="docutils literal notranslate"><span class="pre">multicast=True</span></code> sites:</p>
 <ul class="simple">
-<li><p>initialize a barrier,</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">expect</span></code> the byte count,</p></li>
-<li><p>issue the TMA with <code class="docutils literal notranslate"><span class="pre">multicast=True</span></code>,</p></li>
-<li><p>wait on the barrier.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tma.async_load(...,</span> <span class="pre">multicast=True)</span></code> sends the tile to every CTA in the
+broadcast group;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tcgen05_mma(...,</span> <span class="pre">multicast=True)</span></code> multicasts its mbarrier arrival before
+the next TMA overwrites the shared-memory tile;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tcgen05_mma_barrier_count(...,</span> <span class="pre">multicast=True,</span> <span class="pre">...)</span></code> initializes that
+mbarrier with the matching arrival count.</p></li>
 </ul>
+<p>The TMA synchronization pattern itself is otherwise the same as for a regular
+load: initialize a barrier, <code class="docutils literal notranslate"><span class="pre">expect</span></code> the byte count, issue the TMA, then wait
+on the barrier.</p>
 <p>The reason this works is that the TMA instruction broadcasts its arrival to
 every CTA in the multicast group atomically, so the wait side does not need a
 different API.</p>
@@ -1029,6 +1046,13 @@ kernel by adding a new partition that handles the CLC generation and broadcasts 
         <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span>
 
 
+<span class="c1"># The entry kernel allocates and initializes every barrier before</span>
+<span class="c1"># `gl.warp_specialize`. Some of these barriers are cross-CTA barriers, and some</span>
+<span class="c1"># otherwise per-CTA barriers are consumed by multicast or 2CTA operations. The</span>
+<span class="c1"># compiler inserts the required init fence and relaxed cluster barrier after</span>
+<span class="c1"># this top-level init sequence, before any partition can use the barriers.</span>
+<span class="c1"># Keeping the init sequence here also keeps that mandatory cluster sync outside</span>
+<span class="c1"># `warp_specialize`.</span>
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">matmul_multicta_kernel</span><span class="p">(</span>
     <span class="n">a_desc</span><span class="p">,</span>

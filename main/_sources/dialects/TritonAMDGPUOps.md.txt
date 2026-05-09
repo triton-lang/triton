@@ -1311,6 +1311,83 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::amd::L2C
 
 
 
+### `amdg.update_tensor_descriptor` (triton::amdgpu::UpdateTensorDescriptorOp)
+
+_Update selected fields of a TDM descriptor; produce a new descriptor SSA value_
+
+Syntax:
+
+```
+operation ::= `amdg.update_tensor_descriptor` $desc
+              oilist(
+              `add_offsets` `=` `[` $add_offsets `]`
+              | `set_bounds` `=` `[` $set_bounds `]`
+              | `dest` `=` $dest `:` qualified(type($dest))
+              | `pred` `=` $pred
+              | `barrier` `=` $barrier `:` qualified(type($barrier))
+              )
+              attr-dict `:` qualified(type($desc))
+```
+
+Returns a new TDM descriptor with selected fields rewritten.  Each
+parameter is independently optional; only the fields the caller names
+are written.  Everything else is inherited from the input descriptor.
+
+| parameter      | kind        | effect on descriptor                                            |
+|----------------|-------------|-----------------------------------------------------------------|
+| `add_offsets`  | incremental | `global_addr += sum(add_offsets[i] * stride[i] * elem_size)`    |
+| `set_bounds`   | rewrite     | `tensor_dim[i] = set_bounds[i]` (absolute)                      |
+| `dest`         | rewrite     | `lds_addr = dest`                                               |
+| `pred`         | rewrite     | `pred = pred`                                                   |
+| `barrier`      | rewrite     | `barrier_addr = barrier`                                        |
+
+`add_offsets` is incremental (deltas in element units) and does not
+touch `tensor_dim` — for OOB-correct loops, set `set_bounds` once
+outside the loop (interior tiles see a loop-invariant tensor_dim
+that hoists), or set `set_bounds` per iteration when OOB must fire.
+
+Examples:
+```
+// K-loop interior: bump tile position only
+%d1 = amdg.update_tensor_descriptor %d, add_offsets=[%c0, %BLOCK_K]
+        : !tt.tensordesc<64x64xf16, #shared>
+
+// Prologue: position at first tile + wire LDS and barrier
+%d1 = amdg.update_tensor_descriptor %d,
+        add_offsets=[%pid_m_off, %c0],
+        dest=%a_shared, barrier=%a_bar
+        : !tt.tensordesc<64x64xf16, #shared>
+
+// Peel epilogue: install real OOB extent for the partial last tile
+%d1 = amdg.update_tensor_descriptor %d, set_bounds=[%m_remain, %k_remain]
+        : !tt.tensordesc<64x64xf16, #shared>
+```
+
+Traits: `AlwaysSpeculatableImplTrait`, `AttrSizedOperandSegments`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
+| `add_offsets` | variadic of 32-bit signless integer |
+| `set_bounds` | variadic of 32-bit signless integer |
+| `dest` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `pred` | 32-bit signless integer |
+| `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
+
+
+
 ### `amdg.wait_barrier` (triton::amdgpu::WaitBarrierOp)
 
 _Wait until the mbarrier phase completes._
