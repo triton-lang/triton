@@ -1513,6 +1513,20 @@ across the important batch regime.
     Raw random `uint8` weights with a rank-2 TMA descriptor are sufficient, and
     the packed epilogue can store `int16` lanes directly instead of re-packing
     into `int32`.
+  - Correction after further minimization:
+    the post-`8c2b57b6de` shrink path was not a valid witness. `9db7959302`
+    replaced the real scale pipeline with a dummy scale TMA that has no
+    `mbarrier.expect`, is never waited, and whose barrier storage is later
+    reused for an MMA completion barrier. `b983fe67a5` then removed the bounded
+    epilogue while still launching two N programs: with `BLOCK_N=128`, each CTA
+    writes 64 packed `int16` lanes, `pid_n=1` starts at lane 32, and the row
+    stride is also 64. That creates overlapping stores and a tail overrun before
+    any later shrinking. The final `f59d0981f6` version compounded that by
+    shrinking the host output to `16x32`, so the second launch overwrote the
+    adjacent `expected = out.clone()` allocation and manufactured the observed
+    `2x32` mismatch. The repro source has been rewound to `8c2b57b6de`, the last
+    state before the malformed dummy TMA was introduced and while the original
+    masked epilogue was still present.
   - Current minimal core:
     the repro now fails with one CTA, one `tcgen05.mma`, one masked `X` gather,
     one direct nonzero `replay_tmem.store(...)`, and the packed FP8 epilogue.
