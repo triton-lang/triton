@@ -28,10 +28,8 @@ BLOCK_K = gl.constexpr(128)
 K_TILES = gl.constexpr(3)
 OUT_PACKED_N = gl.constexpr(64)
 NUM_WARPS = 8
-LOAD_WEIGHT_WARPS = gl.constexpr(1)
 REPLAY_WARPS = gl.constexpr(4)
 MMA_WARPS = gl.constexpr(4)
-LOAD_WEIGHT_REGS = gl.constexpr(24)
 REPLAY_REGS = gl.constexpr(80)
 MMA_REGS = gl.constexpr(80)
 MMA_BLOCK_COL = gl.constexpr(128)
@@ -72,13 +70,21 @@ def load_activations(p: PartitionArgs):
         dim=0,
         parent=gl.BlockedLayout([1, 4], [32, 1], [1, gl.num_warps()], [1, 0]),
     )
-
     phase = 1
+    pid_n = gl.program_id(0)
 
     offs_m = gl.arange(0, BLOCK_M, layout=offs_layout)
 
     mask_m = offs_m < 1
     offs_x_m = gl.where(mask_m, offs_m, p.x_desc.shape[0])
+
+    mbarrier.expect(p.w_ready_bar, p.w_desc.nbytes_per_cta)
+    tma.async_copy_global_to_shared(
+        p.w_desc,
+        [0, 0, pid_n, 0, 0],
+        p.w_ready_bar,
+        p.w_buf,
+    )
 
     for ki in range(K_TILES):
         off_k_x = ki * BLOCK_K
@@ -91,27 +97,16 @@ def load_activations(p: PartitionArgs):
             p.x_ready_bar,
             p.x_buf,
         )
-
         phase = phase ^ 1
 
-
-@gluon.jit
-def load_weights(p: PartitionArgs):
-    phase = 1
-
-    pid_n = gl.program_id(0)
-
-    for ki in range(0, K_TILES, 2):
-        mbarrier.wait(p.w_empty_bar, phase, pred=ki != 0)
-        mbarrier.expect(p.w_ready_bar, p.w_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(
-            p.w_desc,
-            [0, ki // 2, pid_n, 0, 0],
-            p.w_ready_bar,
-            p.w_buf,
-        )
-
-        phase = phase ^ 1
+    mbarrier.wait(p.w_empty_bar, 0)
+    mbarrier.expect(p.w_ready_bar, p.w_desc.nbytes_per_cta)
+    tma.async_copy_global_to_shared(
+        p.w_desc,
+        [0, 1, pid_n, 0, 0],
+        p.w_ready_bar,
+        p.w_buf,
+    )
 
 @gluon.jit
 def mma_partition(p: PartitionArgs):
@@ -418,17 +413,14 @@ def ws_matmul_kernel(
     gl.warp_specialize(
         [
             (load_activations, (p,)),
-            (load_weights, (p,)),
             (replay_partition, (p,)),
             (mma_partition, (p,)),
         ],
         [
-            LOAD_WEIGHT_WARPS,
             REPLAY_WARPS,
             MMA_WARPS,
         ],
         [
-            LOAD_WEIGHT_REGS,
             REPLAY_REGS,
             MMA_REGS,
         ],

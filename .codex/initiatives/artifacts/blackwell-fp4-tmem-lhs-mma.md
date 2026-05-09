@@ -1460,6 +1460,18 @@ across the important batch regime.
     `replay_partition` into the 1-warp weight-loader worker failed at compile
     time because the TMEM load path requires at least four warps. Folding
     replay into the default activation path triggered the 20-second hang guard.
+  - Load-partition merge:
+    the activation and weight load paths can share the same default partition
+    as long as their issue order still preserves overlap. The current lower
+    bound issues the first `W` TMA copy before the `X` gather loop, then issues
+    the second `W` copy only after waiting on `w_empty_bar` once replay has
+    released the buffer. That removes the dedicated 1-warp `load_weights`
+    worker from `gl.warp_specialize()`, leaving only the default merged load
+    partition plus `replay_partition` and `mma_partition` as active workers.
+    This smaller tree still fails immediately (`FAIL launch=1 maxdiff=1.3125`).
+  - Failed merged-load shape:
+    a simpler merged form that loaded all `X` tiles first and only then started
+    issuing `W` traffic did not hold; it tripped the 20-second hang guard.
 
 ## Next Up
 
