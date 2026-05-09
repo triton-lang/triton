@@ -2828,3 +2828,29 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.prof
     tt.return
   }
 }
+
+// -----
+
+// Test that local_alloc and local_load for sub-byte element types (i1) are
+// lowered correctly. With bytesPerElem = ceil(bitwidth, 8) = 1, each element
+// is stored/loaded as an i8 byte with correct non-zero byte offsets.
+#blocked0 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: test_bitwidth_smaller_than_i8
+  tt.func @test_bitwidth_smaller_than_i8(%arg0: tensor<128x1xi1, #blocked0>) {
+    // CHECK: nvvm.read.ptx.sreg.tid.x
+    // i1 elements are zero-extended to i8 and stored as vector<1xi8>.
+    // CHECK: %[[BYTE_OFF:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT: llvm.mul {{.*}}, %[[BYTE_OFF]] : i32
+    // CHECK: llvm.store {{.*}} vector<1xi8>
+    %0 = ttg.local_alloc %arg0 : (tensor<128x1xi1, #blocked0>) -> !ttg.memdesc<128x1xi1, #shared, #smem>
+    // i1 elements are loaded as i8 and truncated back to i1.
+    // CHECK: %[[BYTE_OFF:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT: llvm.mul {{.*}}, %[[BYTE_OFF]] : i32
+    // CHECK: llvm.load {{.*}} i8
+    %1 = ttg.local_load %0 : !ttg.memdesc<128x1xi1, #shared, #smem> -> tensor<128x1xi1, #blocked0>
+    tt.return
+  }
+}
