@@ -1499,6 +1499,20 @@ across the important batch regime.
     1,000 launches; the first program's packed epilogue work is part of the
     timing envelope even though the observed bad values land in the second
     output half.
+  - Latest lower-bound collapse:
+    the repro no longer needs warp specialization, separate load/replay workers,
+    the replay empty/full ring, or the dummy prelude TMA. Replay can run in the
+    same function as the loader, then call MMA sequentially, and the failure
+    still fires. Geometry also shrank to `BLOCK_M=16`, `BLOCK_N=128`,
+    `BLOCK_K=128`; the activation side needs only one masked gather, and the
+    replay path can dense-copy into `replay_tmem` then unpack/write back in
+    place. Current gate on this reduced witness:
+    `FAIL launch=1 maxdiff=25411`.
+  - Host-side collapse:
+    no MXFP wrapper or layout conversion is required for the witness anymore.
+    Raw random `uint8` weights with a rank-2 TMA descriptor are sufficient, and
+    the packed epilogue can store `int16` lanes directly instead of re-packing
+    into `int32`.
 
 ## Next Up
 
