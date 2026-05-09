@@ -242,3 +242,50 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// TDM stride slots are 48 bits wide. Verify that an i64 stride is split
+// into low-32 and high-16 pieces and not silently truncated to i32.
+#shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [64, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_load_64bit_stride
+  // CHECK-SAME: %{{.*}}: !llvm.ptr<1> {{.*}}, %[[STRIDE:.*]]: i64,
+  tt.func public @tdm_load_64bit_stride(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+                                        %stride0: i64, %shape0: i32, %shape1: i32) {
+    %c_stride1 = arith.constant 1 : i64
+    %c_offset = arith.constant 0 : i32
+    %c_pred = arith.constant 1 : i32
+    // CHECK: %[[HI64:.*]] = llvm.lshr %[[STRIDE]], %{{.*}} : i64
+    // CHECK: %[[HI32:.*]] = llvm.trunc %[[HI64]] : i64 to i32
+    // CHECK: llvm.insertelement %{{.*}}, %{{.*}} : vector<8xi32>
+    %0 = tt.make_tensor_descriptor %arg0, [%shape0, %shape1], [%stride0, %c_stride1] : <f16>, <64x64xf16, #shared>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset] into %1, pred = %c_pred : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Same as above but for 3D. 4D and 5D share the logic so a test would be redundant.
+#shared = #ttg.padded_shared<[16:+4] {order = [2, 1, 0], shape = [4, 16, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_load_64bit_stride_3d
+  // CHECK-SAME: %{{.*}}: !llvm.ptr<1> {{.*}}, %[[S0:.*]]: i64, %[[S1:.*]]: i64,
+  tt.func public @tdm_load_64bit_stride_3d(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+                                           %stride0: i64, %stride1: i64,
+                                           %shape0: i32, %shape1: i32, %shape2: i32) {
+    %c_stride2 = arith.constant 1 : i64
+    %c_offset = arith.constant 0 : i32
+    %c_pred = arith.constant 1 : i32
+    // CHECK-DAG: llvm.lshr %[[S0]], %{{.*}} : i64
+    // CHECK-DAG: llvm.lshr %[[S1]], %{{.*}} : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%shape0, %shape1, %shape2], [%stride0, %stride1, %c_stride2] : <f16>, <4x16x64xf16, #shared>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<4x16x64xf16, #shared, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset, %c_offset] into %1, pred = %c_pred : !tt.tensordesc<4x16x64xf16, #shared> -> !ttg.memdesc<4x16x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
