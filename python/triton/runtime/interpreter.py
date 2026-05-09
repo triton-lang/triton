@@ -298,6 +298,13 @@ class InterpreterBuilder:
             raise ValueError("z >= grid_dim[2]")
         self.grid_idx = (x, y, z)
 
+    def execute_kernel(self, fn, args, grid):
+        for x in range(grid[0]):
+            for y in range(grid[1]):
+                for z in range(grid[2]):
+                    self.set_grid_idx(x, y, z)
+                    fn(**args)
+
     def set_grid_dim(self, nx, ny, nz):
         self.grid_dim = (nx, ny, nz)
 
@@ -1290,11 +1297,7 @@ class GridExecutor:
             grid = grid + (1, ) * (3 - len(grid))
             interpreter_builder.set_grid_dim(*grid)
             try:
-                for x in range(grid[0]):
-                    for y in range(grid[1]):
-                        for z in range(grid[2]):
-                            interpreter_builder.set_grid_idx(x, y, z)
-                            self.fn(**args)
+                interpreter_builder.execute_kernel(self.fn, args, grid)
             except Exception as e:
                 if triton.knobs.compilation.front_end_debugging:
                     raise
