@@ -43,6 +43,28 @@ struct AllocateSharedMemoryNv
 
 namespace mlir::triton::nvidia_gpu {
 
+static unsigned
+getCrossCTAClusterReducePayloadBytes(triton::ReduceOp reduceOp) {
+  ReduceOpHelper helper(reduceOp);
+  auto *ctx = reduceOp.getContext();
+  auto regLl = ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(),
+                                                    reduceOp.getAxis());
+  unsigned regsPerThread = regLl.getInDimSize(StringAttr::get(ctx, "register"));
+  unsigned numThreads = gpu::lookupNumWarps(reduceOp) *
+                        gpu::TritonGPUDialect::getThreadsPerWarp(
+                            reduceOp->getParentOfType<ModuleOp>());
+
+  unsigned payloadBytes = 0;
+  for (Type elemTy : reduceOp.getElementTypes()) {
+    Type memTy = elemTy;
+    if (memTy.isIntOrFloat() && memTy.getIntOrFloatBitWidth() < 8)
+      memTy = IntegerType::get(ctx, 8);
+    payloadBytes +=
+        numThreads * regsPerThread * (getIntOrFloatOrPtrBitWidth(memTy) / 8);
+  }
+  return llvm::alignTo(payloadBytes, 16u);
+}
+
 static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
                                               RankedTensorType dstTy,
                                               TargetInfoBase &targetInfo) {
@@ -69,6 +91,15 @@ static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
 std::function<unsigned(Operation *)>
 getNvidiaAllocationAnalysisScratchSizeFn(TargetInfoBase &targetInfo) {
   auto allocation = [&targetInfo](Operation *op) -> unsigned {
+    if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
+      ReduceOpHelper helper(reduceOp);
+      unsigned bytes = helper.getScratchSizeInBytes();
+      if (!helper.isReduceWithinCTA()) {
+        bytes = getCrossCTAClusterReducePayloadBytes(reduceOp);
+        bytes = llvm::alignTo(bytes * 2, 8u) + 8u;
+      }
+      return bytes;
+    }
     if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
       auto srcTy = cvtOp.getSrc().getType();
       auto dstTy = cvtOp.getType();

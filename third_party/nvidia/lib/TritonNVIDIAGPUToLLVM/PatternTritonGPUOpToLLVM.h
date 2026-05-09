@@ -53,6 +53,11 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit);
 
+void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                    const TargetInfo &targetInfo,
+                                    RewritePatternSet &patterns,
+                                    PatternBenefit benefit);
+
 void populateTMAToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                const TargetInfo &targetInfo,
                                RewritePatternSet &patterns,

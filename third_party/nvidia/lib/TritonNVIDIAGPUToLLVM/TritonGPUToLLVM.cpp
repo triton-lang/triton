@@ -166,6 +166,8 @@ struct ConvertTritonGPUToLLVM
     populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
                                       computeCapability, patterns,
                                       axisInfoAnalysis, benefit);
+    mlir::triton::NVIDIA::populateReduceOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, benefit + 1);
     mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
                                                  targetInfo, benefit);
     mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,

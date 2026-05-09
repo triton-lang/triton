@@ -43,6 +43,37 @@ def _combine(a, b):
     return a + b
 
 
+@gluon.constexpr_function
+def _make_cga_bases_2d(cluster_size):
+    if cluster_size <= 1:
+        return []
+    n = cluster_size.bit_length() - 1
+    return [[1 << i, 0] for i in range(n)]
+
+
+@gluon.constexpr_function
+def _make_cga_bases_1d(cluster_size):
+    if cluster_size <= 1:
+        return []
+    n = cluster_size.bit_length() - 1
+    return [[1 << i] for i in range(n)]
+
+
+@gluon.jit
+def _cluster_reduce_vector_kernel(x_ptr, y_ptr, tile_size: ttgl.constexpr, cluster_size: ttgl.constexpr):
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    cga_bases: ttgl.constexpr = _make_cga_bases_2d(cluster_size)
+    layout_cga: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0], cga_bases)
+
+    rows = ttgl.arange(0, cluster_size, layout=ttgl.SliceLayout(dim=1, parent=layout_cga))[:, None]
+    cols = ttgl.arange(0, tile_size, layout=ttgl.SliceLayout(dim=0, parent=layout_cga))[None, :]
+    offs = rows * tile_size + cols
+
+    x = ttgl.load(x_ptr + offs).to(ttgl.float32)
+    reduced = ttgl.sum(x, axis=0)
+    ttgl.store(y_ptr + offs, reduced[None, :])
+
+
 @gluon.jit
 def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr):
     x_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
@@ -571,6 +602,39 @@ def test_reduce_funky_layout(src_layout, axis, device):
     # warp-sync
     if is_cuda() and axis_warps + axis_blocks == 0:
         assert pm.asm["ptx"].count("bar.sync") == 0
+
+
+@pytest.mark.parametrize("cluster_size", [2, 4, 8, 16])
+@pytest.mark.parametrize("tile_size", [64, 256, 1024])
+def test_cluster_reduce_bulk_copy_vector(cluster_size, tile_size, device):
+    if not is_cuda():
+        pytest.skip("requires CUDA")
+    if not is_hopper_or_newer():
+        pytest.skip("requires SM90+")
+
+    torch.manual_seed(0)
+    x = torch.randn(cluster_size * tile_size, dtype=torch.float16, device=device)
+    y = torch.zeros(cluster_size * tile_size, dtype=torch.float32, device=device)
+
+    pm = _cluster_reduce_vector_kernel[(1, )](
+        x,
+        y,
+        tile_size=tile_size,
+        cluster_size=cluster_size,
+        num_warps=4,
+        num_ctas=cluster_size,
+    )
+
+    torch.testing.assert_close(
+        y.view(cluster_size, tile_size)[0],
+        x.view(cluster_size, tile_size).float().sum(dim=0),
+        atol=1e-3,
+        rtol=1e-3,
+    )
+
+    ptx = pm.asm["ptx"]
+    assert "cp.async.bulk.shared::cluster.shared::cta" in ptx
+    assert "ld.shared::cluster" not in ptx
 
 
 def _reduce_linear_layouts():
