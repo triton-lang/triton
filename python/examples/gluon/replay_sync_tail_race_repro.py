@@ -1295,10 +1295,9 @@ def make_prod_like_logits(
 
 FROZEN_SLICE_SIZES = [2, 11, 1, 2, 1, 0, 3, 7, 5, 13, 1, 0, 1, 0, 3, 4]
 
-# Frozen from the original failing top-k/routing setup. Only the first
-# sum(FROZEN_SLICE_SIZES)=54 rows are actually scheduled locally; keeping the
-# larger logical output length is part of the trigger.
-FROZEN_GATHER_LEN = 2048
+# Frozen from the original failing top-k/routing setup. Only the scheduled
+# local rows matter for the current witness.
+FROZEN_GATHER_LEN = 54
 
 
 def run_repro(max_launches: int = 1000):
