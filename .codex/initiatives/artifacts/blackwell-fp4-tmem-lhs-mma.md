@@ -1478,6 +1478,14 @@ across the important batch regime.
     trailing `tcgen05_commit(w_empty_bar)` still leaves a fast repro
     (`FAIL launch=2 maxdiff=0.890625`). The current trigger only needs the
     first dense MMA plus the replay MMA.
+  - Epilogue removal attempt:
+    replacing the FP8 pack/store epilogue with a raw `float32` accumulator dump
+    does not preserve the repro once the output mapping is correct. A first
+    cut appeared to fail, but that version incorrectly aliased both `pid_n`
+    programs onto the same output region. After restoring the missing `pid_n`
+    offset, the raw dump path passed for 1,000 launches. Conclusion: the
+    current repro still needs the original packed epilogue; removing it hides
+    the race instead of isolating it.
 
 ## Next Up
 
