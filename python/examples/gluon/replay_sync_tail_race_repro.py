@@ -25,7 +25,7 @@ REDUCTION_N = gl.constexpr(2)
 BLOCK_M = gl.constexpr(128)
 BLOCK_N = gl.constexpr(256)
 BLOCK_K = gl.constexpr(128)
-K_TILES = gl.constexpr(3)
+K_TILES = gl.constexpr(2)
 OUT_PACKED_N = gl.constexpr(64)
 NUM_WARPS = 8
 REPLAY_WARPS = gl.constexpr(4)
@@ -53,14 +53,12 @@ class PartitionArgs:
     x_ready_bar: gl.shared_memory_descriptor
 
     w_buf: gl.shared_memory_descriptor
-    w_empty_bar: gl.shared_memory_descriptor
     w_ready_bar: gl.shared_memory_descriptor
 
     replay_tmem: blackwell.tensor_memory_descriptor
     replay_empty_bar: gl.shared_memory_descriptor
     replay_full_bar: gl.shared_memory_descriptor
     acc_buf: blackwell.tensor_memory_descriptor
-    acc_empty_bar: gl.shared_memory_descriptor
     acc_ready_bar: gl.shared_memory_descriptor
 
 
@@ -99,18 +97,10 @@ def load_activations(p: PartitionArgs):
         )
         phase = phase ^ 1
 
-    mbarrier.wait(p.w_empty_bar, 0)
-    mbarrier.expect(p.w_ready_bar, p.w_desc.nbytes_per_cta)
-    tma.async_copy_global_to_shared(
-        p.w_desc,
-        [0, 1, pid_n, 0, 0],
-        p.w_ready_bar,
-        p.w_buf,
-    )
-
 @gluon.jit
 def mma_partition(p: PartitionArgs):
     scale_mma_bar = alloc_barrier()
+    w_mma_bar = alloc_barrier()
     scale_k: gl.constexpr = BLOCK_K // MXFP_BLOCK_SIZE
     x_scale_tmem = blackwell.allocate_tensor_memory(
         gl.uint8,
@@ -133,8 +123,6 @@ def mma_partition(p: PartitionArgs):
         col_stride=1,
         fp4_padded=True,
     )
-
-    mbarrier.wait(p.acc_empty_bar, 1)
 
     mbarrier.wait(p.x_ready_bar, 0)
     mbarrier.wait(p.w_ready_bar, 0)
@@ -161,7 +149,7 @@ def mma_partition(p: PartitionArgs):
         a_type="e2m1",
         b_type="e4m3",
         use_acc=False,
-        mbarriers=[p.x_empty_bar, scale_mma_bar, p.w_empty_bar],
+        mbarriers=[p.x_empty_bar, scale_mma_bar, w_mma_bar],
     )
 
     mbarrier.wait(p.replay_full_bar, 0)
@@ -206,9 +194,6 @@ def replay_partition(p: PartitionArgs):
     blackwell.tcgen05_copy(dense_pair_words, dense_replay_tmem)
     blackwell.tcgen05_commit(dense_copy_done_bar)
     mbarrier.wait(dense_copy_done_bar, 0)
-
-    blackwell.fence_async_shared()
-    mbarrier.arrive(p.w_empty_bar)
 
     replay_cols: gl.constexpr = BLOCK_K // 4
     replay_segments: gl.constexpr = BLOCK_K // 16
@@ -263,7 +248,6 @@ def epilogue_partition(p: PartitionArgs):
     out_off_n_packed = gl.program_id(0) * (BLOCK_N // REDUCTION_N // 4)
     mbarrier.wait(p.acc_ready_bar, 0)
     acc_regs = p.acc_buf.load().permute((1, 0))
-    mbarrier.arrive(p.acc_empty_bar)
     acc = gl.convert_layout(acc_regs, split_layout)
     acc_packed = float2.pack(acc, axis=1)
     packed_fp8 = gl.convert_layout(
@@ -335,7 +319,6 @@ def ws_matmul_kernel(
         w_desc.block_type.shape,
         w_desc.layout,
     )
-    w_empty_bar = alloc_barrier(count=2)
     w_ready_bar = alloc_barrier()
 
     replay_tmem = blackwell.allocate_tensor_memory(
@@ -351,7 +334,6 @@ def ws_matmul_kernel(
         [BLOCK_N, BLOCK_M],
         acc_layout,
     )
-    acc_empty_bar = alloc_barrier()
     acc_ready_bar = alloc_barrier()
 
     p = PartitionArgs(
@@ -364,14 +346,12 @@ def ws_matmul_kernel(
         x_ready_bar=x_ready_bar,
         #
         w_buf=w_buf,
-        w_empty_bar=w_empty_bar,
         w_ready_bar=w_ready_bar,
         #
         replay_tmem=replay_tmem,
         replay_empty_bar=replay_empty_bar,
         replay_full_bar=replay_full_bar,
         acc_buf=acc_buf,
-        acc_empty_bar=acc_empty_bar,
         acc_ready_bar=acc_ready_bar,
     )
 
@@ -383,7 +363,7 @@ def ws_matmul_kernel(
     scale_ready_bar = alloc_barrier()
     tma.async_copy_global_to_shared(
         scale_desc,
-        [0, 0, 0, 0, 0],
+        [0, 0],
         scale_ready_bar,
         scale_buf,
     )
@@ -413,14 +393,14 @@ def run_repro(max_launches: int = 1000):
     device = "cuda:0"
     torch.manual_seed(0)
 
-    x = alloc_rand((1, 384), device=device, dtype=torch.float8_e4m3fn)
-    w_data = torch.randn((1, 384, 512), device=device, dtype=torch.bfloat16)
+    x = alloc_rand((1, 256), device=device, dtype=torch.float8_e4m3fn)
+    w_data = torch.randn((1, 256, 512), device=device, dtype=torch.bfloat16)
     w_data, _ = downcast_to_mxfp(w_data, FP4, axis=1)  # type: ignore[arg-type]
     w = convert_layout(
         wrap_torch_tensor(w_data, dtype=FP4),
         BlackwellMX4ValuePackedShuffledLayout(block_k=128, block_n=256),
     )
-    scale_data = torch.zeros((1, 4, 3, 2, 256), dtype=torch.uint8, device=device)
+    scale_data = torch.zeros((1, 16), dtype=torch.uint8, device=device)
 
     out = torch.zeros((1, 256), dtype=torch.float8_e4m3fn, device=device)
     x_desc = TensorDescriptor(
@@ -445,14 +425,8 @@ def run_repro(max_launches: int = 1000):
         scale_data,
         list(scale_data.shape),
         list(scale_data.stride()),
-        [
-            1,
-            2,
-            1,
-            2,
-            256,
-        ],
-        gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5),
+        [1, 16],
+        gl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=2),
     )
     kernel = ws_matmul_kernel[(2,)]
 

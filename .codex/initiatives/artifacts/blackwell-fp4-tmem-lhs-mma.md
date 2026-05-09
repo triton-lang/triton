@@ -1486,6 +1486,19 @@ across the important batch regime.
     offset, the raw dump path passed for 1,000 launches. Conclusion: the
     current repro still needs the original packed epilogue; removing it hides
     the race instead of isolating it.
+  - Latest accepted shrink batch:
+    the repro still fails after removing the third activation tile, the second
+    dense `W` TMA copy, the `acc_empty` ring, and the now-unused cross-partition
+    `w_empty` protocol. Host tensors can shrink to two K tiles, and the prelude
+    scale-side traffic can collapse to a minimal valid rank-2 TMA transfer over
+    a `1x16` dummy tensor. Current gate: `FAIL launch=1 maxdiff=0.890625`.
+  - Rejected shrink branches:
+    reducing the launch grid to one N program passed for 1,000 launches, so the
+    second program is still part of the trigger. Likewise, storing only the
+    visibly corrupt second program while leaving both programs alive passed for
+    1,000 launches; the first program's packed epilogue work is part of the
+    timing envelope even though the observed bad values land in the second
+    output half.
 
 ## Next Up
 
