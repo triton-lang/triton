@@ -202,7 +202,7 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
     for (auto &use : value.getUses()) {
       auto op = use.getOwner();
       auto key = std::make_pair(op, use.getOperandNumber());
-      if (operands.find(key) != operands.end()) {
+      if (operands.contains(key)) {
         auto inputPort = operands[key];
         Node::addEdge(outputPort, inputPort);
       }
@@ -303,7 +303,7 @@ SmallVector<Edge> getOutCrossingEdges(Partition *partition) {
 }
 
 void deserializeManualPartitions(Operation *region, Graph *graph) {
-  std::map<int, Partition *> manual_partitions;
+  DenseMap<int, Partition *> manual_partitions;
   graph->walk([&](Node *node) {
     if (node->isOp()) {
       auto op = node->getOp();
@@ -312,7 +312,7 @@ void deserializeManualPartitions(Operation *region, Graph *graph) {
             cast<DenseI32ArrayAttr>(op->getAttr(kPartitionAttrName))
                 .asArrayRef();
         for (auto id : partitionIds) {
-          if (manual_partitions.find(id) == manual_partitions.end()) {
+          if (!manual_partitions.contains(id)) {
             auto partition = graph->addPartition();
             partition->addFlag(Flags::MANUAL);
             manual_partitions[id] = partition;
@@ -528,6 +528,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        auto to = edge.getToNode();
        if (!isMMA(from)) {
          // skip if not from an MMA
+         return false;
        }
        if (!isIfResult(to))
          // skip if not to an if op result
@@ -1133,7 +1134,7 @@ void duplicateCheapOps(Graph *graph, std::string funcName,
         continue;
 
       auto update = [&]() {
-        std::map<Node *, Node *> parentMap;
+        DenseMap<Node *, Node *> parentMap;
 
         SmallVector<Node *> stack;
         stack.push_back(start);
@@ -1155,7 +1156,7 @@ void duplicateCheapOps(Graph *graph, std::string funcName,
                 } else if (child->getPartition() == startPartition) {
                   // found a path, set all nodes on the path to the partition
                   node->addPartition(startPartition);
-                  while (parentMap.find(node) != parentMap.end()) {
+                  while (parentMap.contains(node)) {
                     node = parentMap[node];
                     node->addPartition(startPartition);
                   }
