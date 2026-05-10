@@ -6,7 +6,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>

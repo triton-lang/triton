@@ -506,22 +506,23 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       }
       for (auto *data : profiler.dataSet) {
         auto currentContexts = data->getContexts();
-        std::vector<Context> contexts{Context(GraphState::captureTag)};
-        contexts.insert(contexts.end(), currentContexts.begin(),
-                        currentContexts.end());
+        std::vector<Context> contexts;
+        contexts.emplace_back(GraphState::captureTag);
+        for (const auto &context : currentContexts) {
+          contexts.push_back(context);
+        }
         if (isMetricKernelNode) {
           auto flexibleMetricContexts = data->getContexts(false);
-          std::vector<Context> flexibleMetricEntryContexts{
-              Context(GraphState::captureTag)};
-          flexibleMetricEntryContexts.insert(flexibleMetricEntryContexts.end(),
-                                             flexibleMetricContexts.begin(),
-                                             flexibleMetricContexts.end());
-          if (!threadState.isApiExternOp) { // Triton ops
-            flexibleMetricEntryContexts.push_back(name);
+          std::vector<Context> flexibleMetricEntryContexts;
+          flexibleMetricEntryContexts.emplace_back(GraphState::captureTag);
+          for (const auto &context : flexibleMetricContexts) {
+            flexibleMetricEntryContexts.push_back(context);
           }
-          contexts.push_back(std::string(GraphState::metricTag));
-          flexibleMetricEntryContexts.push_back(
-              std::string(GraphState::metricTag));
+          if (!threadState.isApiExternOp) { // Triton ops
+            flexibleMetricEntryContexts.emplace_back(name);
+          }
+          contexts.emplace_back(GraphState::metricTag);
+          flexibleMetricEntryContexts.emplace_back(GraphState::metricTag);
 
           // For metrics nodes, timing info is attributed to a frame under
           // a metadata state.
@@ -537,7 +538,7 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
           graphState.metricNodeIdToState.at(nodeId)
               .dataToEntryId.insert_or_assign(data, flexibleMetricEntry.id);
         } else {
-          contexts.push_back(name);
+          contexts.emplace_back(name);
           auto staticEntry =
               data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
           nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);

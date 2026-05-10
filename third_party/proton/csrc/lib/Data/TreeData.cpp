@@ -105,6 +105,8 @@ public:
         : id(id), Context(name) {}
     TreeNode(size_t id, size_t parentId, const std::string &name)
         : id(id), parentId(parentId), Context(name) {}
+    TreeNode(size_t id, size_t parentId, const Context &context)
+        : Context(context), parentId(parentId), id(id) {}
     virtual ~TreeNode() = default;
 
     void addChild(std::string_view childName, size_t id) {
@@ -145,8 +147,7 @@ public:
     if (existingChildId != TreeNode::DummyId)
       return existingChildId;
     auto id = nextContextId++;
-    auto [it, inserted] =
-        treeNodeMap.try_emplace(id, id, parentId, context.name);
+    auto [it, inserted] = treeNodeMap.try_emplace(id, id, parentId, context);
     parent.addChild(it->second.name, id);
     return id;
   }
@@ -197,7 +198,7 @@ public:
     cloned.nextContextId = nextContextId;
 
     for (const auto &[id, node] : treeNodeMap) {
-      cloned.treeNodeMap.try_emplace(id, id, node.parentId, node.name);
+      cloned.treeNodeMap.try_emplace(id, id, node.parentId, node);
     }
 
     for (const auto &[id, node] : treeNodeMap) {
@@ -849,7 +850,7 @@ void TreeData::enterScope(const Scope &scope) {
   if (contextSource != nullptr)
     contexts = contextSource->getContexts();
   else
-    contexts.push_back(scope.name);
+    contexts.emplace_back(scope.name);
   auto contextId = currentTree->addNode(contexts);
   scopeIdToContextId[scope.scopeId] = contextId;
 }
