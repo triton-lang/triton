@@ -921,7 +921,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK:   %[[OFFS:.*]] = arith.muli %[[IDX]], %[[_128]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
   // CHECK:   %[[DESC_PTR:.*]] = tt.addptr %[[GLOBAL_ALLOC]], %[[OFFS]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
   // CHECK:   ttng.tensormap_create %[[DESC_PTR]]{{.*}} loop.cluster = 0 : i32, loop.stage = 1 : i32
-  // CHECK:   ttng.tensormap_fenceproxy_acquire %[[DESC_PTR]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
+  // CHECK:   ttng.tensormap_fenceproxy_acquire %[[DESC_PTR]], %{{.*}} {loop.cluster = 0 : i32, loop.stage = 1 : i32}
   // CHECK:   %[[DESC:.*]] = ttng.reinterpret_tensor_descriptor %[[DESC_PTR]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
   // CHECK:   %[[IDX_P1:.*]] = arith.addi %[[IDX]], %[[ONE]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
   // CHECK:   %[[IDX_CMP:.*]] = arith.cmpi sge, %[[IDX_P1]], %[[ONE]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}

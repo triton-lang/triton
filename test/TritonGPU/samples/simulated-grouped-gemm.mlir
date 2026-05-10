@@ -77,8 +77,8 @@
 // CHECK:                 %[[VAL_74:.*]] = arith.muli %[[VAL_61]], %[[VAL_14]] : i32
 // CHECK:                 %[[VAL_75:.*]] = tt.addptr %[[VAL_46]], %[[VAL_74]] : !tt.ptr<i8>, i32
 // CHECK:                 %[[VAL_76:.*]] = arith.muli %[[VAL_30]], %[[VAL_6]] : i64
-// CHECK:                 ttng.tensormap_create %[[VAL_75]], %[[VAL_73]], {{\[}}%[[VAL_16]], %[[VAL_14]]], {{\[}}%[[VAL_5]], %[[VAL_3]]], {{\[}}%[[VAL_76]]], {{\[}}%[[VAL_9]], %[[VAL_9]]] {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
-// CHECK:                 ttng.tensormap_fenceproxy_acquire %[[VAL_75]] : !tt.ptr<i8>
+// CHECK:                 ttng.tensormap_create %[[VAL_75]], %[[VAL_73]], {{\[}}%[[VAL_16]], %[[VAL_14]]], {{\[}}%[[VAL_5]], %[[VAL_3]]], {{\[}}%[[VAL_76]]], {{\[}}%[[VAL_9]], %[[VAL_9]]], %{{.*}} {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32, i1) -> ()
+// CHECK:                 ttng.tensormap_fenceproxy_acquire %[[VAL_75]], %{{.*}} : !tt.ptr<i8>
 // CHECK:                 %[[VAL_77:.*]] = ttng.reinterpret_tensor_descriptor %[[VAL_75]] : !tt.ptr<i8> to !tt.tensordesc<128x64xf16, #[[$ATTR_2]]>
 // CHECK:                 %[[VAL_78:.*]] = arith.addi %[[VAL_61]], %[[VAL_9]] : i32
 // CHECK:                 %[[VAL_79:.*]] = arith.cmpi sge, %[[VAL_78]], %[[VAL_7]] : i32
@@ -87,8 +87,8 @@
 // CHECK:                 %[[VAL_82:.*]] = arith.muli %[[VAL_62]], %[[VAL_14]] : i32
 // CHECK:                 %[[VAL_83:.*]] = tt.addptr %[[VAL_47]], %[[VAL_82]] : !tt.ptr<i8>, i32
 // CHECK:                 %[[VAL_84:.*]] = arith.muli %[[VAL_30]], %[[VAL_6]] : i64
-// CHECK:                 ttng.tensormap_create %[[VAL_83]], %[[VAL_81]], {{\[}}%[[VAL_16]], %[[VAL_15]]], {{\[}}%[[VAL_5]], %[[VAL_4]]], {{\[}}%[[VAL_84]]], {{\[}}%[[VAL_9]], %[[VAL_9]]] {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
-// CHECK:                 ttng.tensormap_fenceproxy_acquire %[[VAL_83]] : !tt.ptr<i8>
+// CHECK:                 ttng.tensormap_create %[[VAL_83]], %[[VAL_81]], {{\[}}%[[VAL_16]], %[[VAL_15]]], {{\[}}%[[VAL_5]], %[[VAL_4]]], {{\[}}%[[VAL_84]]], {{\[}}%[[VAL_9]], %[[VAL_9]]], %{{.*}} {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32, i1) -> ()
+// CHECK:                 ttng.tensormap_fenceproxy_acquire %[[VAL_83]], %{{.*}} : !tt.ptr<i8>
 // CHECK:                 %[[VAL_85:.*]] = ttng.reinterpret_tensor_descriptor %[[VAL_83]] : !tt.ptr<i8> to !tt.tensordesc<256x64xf16, #[[$ATTR_2]]>
 // CHECK:                 %[[VAL_86:.*]] = arith.addi %[[VAL_62]], %[[VAL_9]] : i32
 // CHECK:                 %[[VAL_87:.*]] = arith.cmpi sge, %[[VAL_86]], %[[VAL_7]] : i32
@@ -97,8 +97,8 @@
 // CHECK:                 %[[VAL_90:.*]] = arith.muli %[[VAL_63]], %[[VAL_14]] : i32
 // CHECK:                 %[[VAL_91:.*]] = tt.addptr %[[VAL_48]], %[[VAL_90]] : !tt.ptr<i8>, i32
 // CHECK:                 %[[VAL_92:.*]] = arith.muli %[[VAL_33]], %[[VAL_6]] : i64
-// CHECK:                 ttng.tensormap_create %[[VAL_91]], %[[VAL_89]], {{\[}}%[[VAL_16]], %[[VAL_14]]], {{\[}}%[[VAL_4]], %[[VAL_3]]], {{\[}}%[[VAL_92]]], {{\[}}%[[VAL_9]], %[[VAL_9]]] {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32) -> ()
-// CHECK:                 ttng.tensormap_fenceproxy_acquire %[[VAL_91]] : !tt.ptr<i8>
+// CHECK:                 ttng.tensormap_create %[[VAL_91]], %[[VAL_89]], {{\[}}%[[VAL_16]], %[[VAL_14]]], {{\[}}%[[VAL_4]], %[[VAL_3]]], {{\[}}%[[VAL_92]]], {{\[}}%[[VAL_9]], %[[VAL_9]]], %{{.*}} {elem_type = 6 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<f16>, i32, i32, i32, i32, i64, i32, i32, i1) -> ()
+// CHECK:                 ttng.tensormap_fenceproxy_acquire %[[VAL_91]], %{{.*}} : !tt.ptr<i8>
 // CHECK:                 %[[VAL_93:.*]] = ttng.reinterpret_tensor_descriptor %[[VAL_91]] : !tt.ptr<i8> to !tt.tensordesc<128x256xf16, #[[$ATTR_2]]>
 // CHECK:                 %[[VAL_94:.*]] = arith.addi %[[VAL_63]], %[[VAL_9]] : i32
 // CHECK:                 %[[VAL_95:.*]] = arith.cmpi sge, %[[VAL_94]], %[[VAL_7]] : i32

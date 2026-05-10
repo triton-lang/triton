@@ -342,15 +342,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: default
     // CHECK: ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32}
     // CHECK: scf.for
-    // CHECK: ttng.tensormap_create
+    // CHECK: ttng.tensormap_create {{.*}}, %{{.*}}
     // CHECK: scf.for
     // CHECK: partition0
     // CHECK: partition1
     // CHECK: ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32}
     // CHECK: ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32}
     // CHECK: scf.for
-    // CHECK: ttng.tensormap_create
-    // CHECK: ttng.tensormap_create
+    // CHECK: ttng.tensormap_create {{.*}}, %{{.*}}
+    // CHECK: ttng.tensormap_create {{.*}}, %{{.*}}
     // CHECK: scf.for
     // CHECK: scf.for
     scf.for %g = %c0_i32 to %group_size step %c1_i32  : i32 {
