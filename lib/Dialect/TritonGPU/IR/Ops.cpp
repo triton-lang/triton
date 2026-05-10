@@ -656,6 +656,36 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
 LogicalResult MemDescReinterpretOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getResult().getType();
+
+  // Padded layout creates some "holes". The hole patterns of the source and
+  // the destination layouts must be equal.
+  auto srcEnc = srcTy.getEncoding();
+  auto dstEnc = dstTy.getEncoding();
+  if (isPaddedEncoding(srcEnc) != isPaddedEncoding(dstEnc))
+    return emitError(
+        "cannot reinterpret between padded and non-padded layouts");
+
+  if (isPaddedEncoding(srcEnc)) {
+    auto getPadPattern = [](MemDescType ty) {
+      auto enc = getPaddedEncoding(ty.getEncoding());
+      auto elmtSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
+      llvm::MapVector<int32_t, int32_t> pattern;
+
+      for (auto [interval, padding] :
+           llvm::zip_equal(enc.getIntervals(), enc.getPaddings())) {
+        pattern.insert({interval * elmtSize, padding * elmtSize});
+      }
+      return pattern;
+    };
+
+    auto srcPat = getPadPattern(srcTy);
+    auto dstPat = getPadPattern(dstTy);
+    if (srcPat.size() != dstPat.size() ||
+        !std::equal(srcPat.begin(), srcPat.end(), dstPat.begin())) {
+      return emitError("cannot reinterpret with different padding pattern");
+    }
+  }
+
   if (srcTy.getMemorySpace() != dstTy.getMemorySpace())
     return emitError("source and result must have the same memory space");
   if (srcTy.getMutableMemory() != dstTy.getMutableMemory())
