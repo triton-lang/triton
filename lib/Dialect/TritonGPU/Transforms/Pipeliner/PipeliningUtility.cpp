@@ -646,7 +646,11 @@ static LogicalResult rewriteTMABufferUpdates(
     if (failed(ttng::createTMADesc(nextBuf, makeDescOp, builder))) {
       return failure();
     }
-    ttng::TensormapFenceproxyAcquireOp::create(builder, nextBuf);
+    ttng::TensormapFenceproxyAcquireOp::create(
+        builder, builder.getLoc(), nextBuf,
+        arith::ConstantOp::create(builder, builder.getLoc(),
+                                  builder.getI1Type(),
+                                  builder.getBoolAttr(true)));
     Value nextDesc = ttng::ReinterpretTensorDescOp::create(
         builder, makeDescOp.getType(), nextBuf);
 

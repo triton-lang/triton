@@ -1521,6 +1521,26 @@ LogicalResult TensormapCreateOp::verify() {
   return success();
 }
 
+Value TensormapCreateOp::getPredicateOperand() { return getPred(); }
+
+void TensormapCreateOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+
+Type TensormapCreateOp::getPredicateOperandTypeLike() {
+  return getPred().getType();
+}
+
+Value TensormapFenceproxyAcquireOp::getPredicateOperand() { return getPred(); }
+
+void TensormapFenceproxyAcquireOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+
+Type TensormapFenceproxyAcquireOp::getPredicateOperandTypeLike() {
+  return getPred().getType();
+}
+
 // -- CLCTryCancelOp --
 static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
   auto int_ty = dyn_cast<IntegerType>(desc.getElementType());

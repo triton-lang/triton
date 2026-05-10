@@ -209,6 +209,9 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
 
   auto fillMode = (op.getPadding() == triton::PaddingOption::PAD_NAN) ? 1 : 0;
 
+  Value truePred = arith::ConstantOp::create(builder, loc, builder.getI1Type(),
+                                             builder.getBoolAttr(true));
+
   TensormapCreateOp::create(
       builder, loc,
       /*desc_ptr=*/tmaPtr,
@@ -220,7 +223,7 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
       /*elem_type*/ builder.getI32IntegerAttr(*elemTypeEnum),
       /*interleave_layout*/ builder.getI32IntegerAttr(0),
       /*swizzle_mode=*/builder.getI32IntegerAttr(swizzleMode),
-      /*fill_mode=*/builder.getI32IntegerAttr(fillMode));
+      /*fill_mode=*/builder.getI32IntegerAttr(fillMode), truePred);
   return success();
 }
 
