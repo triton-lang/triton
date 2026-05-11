@@ -674,12 +674,17 @@ LogicalResult MemDescReinterpretOp::verify() {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
     auto layout =
         toLinearLayout(ty.getAllocShape().take_back(rank), ty.getEncoding());
-    // Shared memory is allocated by offset and TMEM is allocated by column; the
-    // other physical dimensions do not increase or decrease the allocation.
+    int64_t numLayoutCopies = 1;
+    for (int64_t dim : ty.getAllocShape().drop_back(rank))
+      numLayoutCopies *= dim;
+    // Shared memory is allocated by offset and TMEM is allocated by column;
+    // prefix dimensions outside the layout-ranked suffix represent separate
+    // copies of that logical allocation.
     auto *ctx = ty.getContext();
     bool isSharedMemory = isa<SharedMemorySpaceAttr>(ty.getMemorySpace());
     auto dim = StringAttr::get(ctx, isSharedMemory ? "offset" : "col");
-    return layout.getInDimSize(dim) * ty.getElementTypeBitWidth();
+    return numLayoutCopies * layout.getInDimSize(dim) *
+           ty.getElementTypeBitWidth();
   };
   auto srcNumBits = getViewNumBits(srcTy);
   auto dstNumBits = getViewNumBits(dstTy);
