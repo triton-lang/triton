@@ -2565,6 +2565,156 @@ def test_shared_scatter(N, M):
 
 
 @gluon.jit
+def shared_gather_explicit_broadcast_kernel(
+    matrix_ptr,
+    output_ptr,
+    N: ttgl.constexpr,
+    M: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
+    y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
+    offsets = x[:, None] * M + y[None, :]
+    matrix_data = ttgl.load(matrix_ptr + offsets)
+
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [N, M], layout=shared_layout)
+    smem.store(matrix_data)
+
+    indices = y[None, :] + ttgl.zeros([N, M], ttgl.int32, layout=layout_2d)
+    gathered = smem.gather(indices, axis=1)
+    ttgl.store(output_ptr + offsets, gathered)
+
+
+def test_shared_gather_explicit_broadcast():
+    device = torch.device("cuda")
+    N, M = 16, 32
+    matrix = torch.arange(N * M, dtype=torch.float32, device=device).reshape(N, M)
+    output = torch.empty_like(matrix)
+
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                   warps_per_cta=[1, 1], order=[1, 0])
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    shared_gather_explicit_broadcast_kernel[(1, )](
+        matrix,
+        output,
+        N=N,
+        M=M,
+        layout_2d=layout_2d,
+        shared_layout=shared_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(output, matrix)
+
+
+@gluon.jit
+def shared_scatter_broadcast_kernel(
+    values_ptr,
+    output_ptr,
+    N: ttgl.constexpr,
+    M: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
+    y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
+    offsets = x[:, None] * M + y[None, :]
+
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [N, M], layout=shared_layout)
+    smem.store(ttgl.zeros([N, M], ttgl.float32, layout=layout_2d))
+
+    values = ttgl.load(values_ptr + x)[:, None]
+    indices = y[None, :]
+    smem.scatter(values, indices, axis=1)
+
+    result = smem.load(layout=layout_2d)
+    ttgl.store(output_ptr + offsets, result)
+
+
+def test_shared_scatter_broadcast():
+    device = torch.device("cuda")
+    N, M = 16, 32
+    values = torch.arange(N, dtype=torch.float32, device=device) + 100.0
+    output = torch.empty((N, M), dtype=torch.float32, device=device)
+    expected = values[:, None].expand(N, M).contiguous()
+
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                   warps_per_cta=[1, 1], order=[1, 0])
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    shared_scatter_broadcast_kernel[(1, )](
+        values,
+        output,
+        N=N,
+        M=M,
+        layout_2d=layout_2d,
+        shared_layout=shared_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(output, expected)
+
+
+@gluon.jit
+def shared_atomic_scatter_add_broadcast_kernel(
+    values_ptr,
+    old_ptr,
+    output_ptr,
+    N: ttgl.constexpr,
+    M: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
+    y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
+    offsets = x[:, None] * M + y[None, :]
+
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [N, M], layout=shared_layout)
+    smem.store(ttgl.zeros([N, M], ttgl.float32, layout=layout_2d))
+
+    values = ttgl.load(values_ptr + x)[:, None]
+    indices = y[None, :]
+    mask = (x >= 0)[:, None]
+    old = smem.atomic_scatter_add(values, indices, axis=1, mask=mask)
+    ttgl.store(old_ptr + offsets, old)
+
+    result = smem.load(layout=layout_2d)
+    ttgl.store(output_ptr + offsets, result)
+
+
+def test_shared_atomic_scatter_add_broadcast():
+    if is_hip_cdna() or is_hip_rdna():
+        pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
+
+    device = torch.device("cuda")
+    N, M = 16, 32
+    values = torch.arange(N, dtype=torch.float32, device=device) + 1.0
+    old = torch.empty((N, M), dtype=torch.float32, device=device)
+    output = torch.empty((N, M), dtype=torch.float32, device=device)
+    expected = values[:, None].expand(N, M).clone()
+
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                   warps_per_cta=[1, 1], order=[1, 0])
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    shared_atomic_scatter_add_broadcast_kernel[(1, )](
+        values,
+        old,
+        output,
+        N=N,
+        M=M,
+        layout_2d=layout_2d,
+        shared_layout=shared_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(old, torch.zeros_like(old), atol=0, rtol=0)
+    torch.testing.assert_close(output, expected, atol=0, rtol=0)
+
+
+@gluon.jit
 def shared_atomic_scatter_rmw_kernel(
     values_ptr,
     indices_ptr,

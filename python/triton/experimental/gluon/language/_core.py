@@ -246,8 +246,8 @@ def _add_atomic_scatter_docstring(kind: str) -> Callable[[T], T]:
     def _decorator(func: T) -> T:
         integer_only = kind in ("max", "min", "logical and", "logical or", "logical xor")
         value_kind = "integer values" if integer_only else "values"
-        value_type = ("Integer tensor with the same shape as :code:`indices`"
-                      if integer_only else "Tensor with the same shape as :code:`indices`")
+        value_type = ("Integer tensor broadcast-compatible with :code:`indices`"
+                      if integer_only else "Tensor broadcast-compatible with :code:`indices`")
         docstr = f"""
     Performs an atomic scatter {kind} on this shared-memory descriptor.
 
@@ -265,7 +265,8 @@ def _add_atomic_scatter_docstring(kind: str) -> Callable[[T], T]:
     :type indices: Integer tensor
     :param axis: The axis along which to update values
     :type axis: int
-    :param mask: Boolean tensor selecting which elements to update
+    :param mask: Boolean tensor broadcast-compatible with :code:`values` and :code:`indices`,
+        selecting which elements to update
     :type mask: Tensor, optional
 
     :note: This operation currently uses relaxed memory semantics. Users are responsible
@@ -358,6 +359,7 @@ class shared_memory_descriptor(base_value):
 
         Returns:
             tensor: Gluon tensor with the gathered elements (same shape as indices).
+                Use explicit tensor broadcasting on indices to gather a broadcasted result.
         """
         indices = _unwrap_if_constexpr(indices)
         axis = _unwrap_if_constexpr(axis)
@@ -373,7 +375,7 @@ class shared_memory_descriptor(base_value):
           dst[I[0], ..., indices[I], ..., I[n]] = values[I]
 
         Args:
-            values (tensor): Tensor with values to scatter (same shape as indices).
+            values (tensor): Tensor with values to scatter (broadcast-compatible with indices).
             indices (tensor): Tensor specifying which indices to scatter to along the axis.
             axis (int): The axis along which to scatter values.
         """

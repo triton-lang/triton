@@ -276,36 +276,68 @@ class GluonSemantic(TritonSemantic[TensorTy]):
                lambda: f"source dtype {value.dtype} and destination dtype {mem_desc.dtype} must match")
         self.builder.create_local_store(mem_desc.handle, value.handle)
 
-    def shared_gather(self, mem_desc, indices, axis):
+    def _check_int_indices_and_normalize_axis(self, indices, axis, rank, rank_msg_fn, axis_msg_fn, int_msg_fn,
+                                              allow_negative=False):
+        _check(isinstance(axis, int), lambda: f"expected 'axis' to be an int, but got a {type(axis)}")
+        _check(len(indices.shape) == rank, rank_msg_fn)
+        if allow_negative:
+            _check(-rank <= axis < rank, axis_msg_fn)
+            if axis < 0:
+                axis += rank
+        else:
+            _check(0 <= axis < rank, axis_msg_fn)
+        _check(indices.dtype.is_int(), int_msg_fn)
+        return axis
+
+    def _check_shared_indices_and_normalize_axis(self, mem_desc, indices, axis):
         _check(isinstance(indices, ttgl.tensor),
                lambda: f"expected 'indices' to be a tensor, but got a {type(indices)}")
-        _check(isinstance(axis, int), lambda: f"expected 'axis' to be an int, but got a {type(axis)}")
+        return self._check_int_indices_and_normalize_axis(
+            indices,
+            axis,
+            mem_desc.rank,
+            lambda: f"indices rank must match memdesc rank: got {len(indices.shape)} and {mem_desc.rank}",
+            lambda: f"axis {axis} is out of bounds for memdesc rank {mem_desc.rank}",
+            lambda: f"indices must have integer dtype, got {indices.dtype}",
+        )
+
+    def _check_shared_scatter_shape_and_layout(self, values, indices):
+        _check(values.shape == indices.shape,
+               lambda: f"values must have the same shape as indices: got {values.shape} and {indices.shape}")
+        _check(values.type.layout == indices.type.layout, lambda: "values must have the same layout as indices")
+
+    def _broadcast_shared_scatter_operands(self, mem_desc, values, indices, mask=None):
+        _check(isinstance(values, ttgl.tensor), lambda: f"expected 'values' to be a tensor, but got a {type(values)}")
         _check(
-            len(indices.shape) == mem_desc.rank,
-            lambda: f"indices rank must match memdesc rank: got {len(indices.shape)} and {mem_desc.rank}")
-        _check(0 <= axis < mem_desc.rank, lambda: f"axis {axis} is out of bounds for memdesc rank {mem_desc.rank}")
-        _check(indices.dtype.is_int(), lambda: f"indices must have integer dtype, got {indices.dtype}")
+            values.dtype == mem_desc.dtype,
+            lambda: f"values element type must match destination element type: got {values.dtype} and {mem_desc.dtype}")
+
+        if mask is None:
+            values, indices = self.broadcast_tensors(values, indices)
+            self._check_shared_scatter_shape_and_layout(values, indices)
+            return values, indices, None
+
+        if not isinstance(mask.type, ttgl.distributed_type):
+            mask = self.splat(mask, values.shape, values.type.layout)
+        _check(mask.dtype == ttgl.int1, lambda: f"mask must have boolean dtype, got {mask.dtype}")
+
+        values, indices, mask = self.broadcast_tensors(values, indices, mask)
+        self._check_shared_scatter_shape_and_layout(values, indices)
+        _check(mask.shape == values.shape,
+               lambda: f"mask must have the same shape as values: got {mask.shape} and {values.shape}")
+        _check(mask.type.layout == values.type.layout, lambda: "mask must have the same layout as values")
+        return values, indices, mask
+
+    def shared_gather(self, mem_desc, indices, axis):
+        axis = self._check_shared_indices_and_normalize_axis(mem_desc, indices, axis)
 
         ret_ty = ttgl.distributed_type(mem_desc.dtype, indices.shape, indices.type.layout)
         handle = self.builder.create_local_gather(ret_ty.to_ir(self.builder), mem_desc.handle, indices.handle, axis)
         return ttgl.tensor(handle, ret_ty)
 
     def shared_scatter(self, mem_desc, values, indices, axis):
-        _check(isinstance(indices, ttgl.tensor),
-               lambda: f"expected 'indices' to be a tensor, but got a {type(indices)}")
-        _check(isinstance(axis, int), lambda: f"expected 'axis' to be an int, but got a {type(axis)}")
-        _check(isinstance(values, ttgl.tensor), lambda: f"expected 'values' to be a tensor, but got a {type(values)}")
-        _check(
-            len(indices.shape) == mem_desc.rank,
-            lambda: f"indices rank must match memdesc rank: got {len(indices.shape)} and {mem_desc.rank}")
-        _check(0 <= axis < mem_desc.rank, lambda: f"axis {axis} is out of bounds for memdesc rank {mem_desc.rank}")
-        _check(indices.dtype.is_int(), lambda: f"indices must have integer dtype, got {indices.dtype}")
-        _check(values.shape == indices.shape,
-               lambda: f"values must have the same shape as indices: got {values.shape} and {indices.shape}")
-        _check(values.type.layout == indices.type.layout, lambda: "values must have the same layout as indices")
-        _check(
-            values.dtype == mem_desc.dtype,
-            lambda: f"values element type must match destination element type: got {values.dtype} and {mem_desc.dtype}")
+        axis = self._check_shared_indices_and_normalize_axis(mem_desc, indices, axis)
+        values, indices, _ = self._broadcast_shared_scatter_operands(mem_desc, values, indices)
 
         self.builder.create_local_scatter(mem_desc.handle, values.handle, indices.handle, axis)
 
@@ -335,28 +367,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         raise ValueError(f"unknown atomic scatter rmw op {op}")
 
     def shared_atomic_scatter_rmw(self, mem_desc, op, values, indices, axis, mask):
-        _check(isinstance(indices, ttgl.tensor),
-               lambda: f"expected 'indices' to be a tensor, but got a {type(indices)}")
-        _check(isinstance(axis, int), lambda: f"expected 'axis' to be an int, but got a {type(axis)}")
-        _check(isinstance(values, ttgl.tensor), lambda: f"expected 'values' to be a tensor, but got a {type(values)}")
-        _check(
-            len(indices.shape) == mem_desc.rank,
-            lambda: f"indices rank must match memdesc rank: got {len(indices.shape)} and {mem_desc.rank}")
-        _check(0 <= axis < mem_desc.rank, lambda: f"axis {axis} is out of bounds for memdesc rank {mem_desc.rank}")
-        _check(indices.dtype.is_int(), lambda: f"indices must have integer dtype, got {indices.dtype}")
-        _check(values.shape == indices.shape,
-               lambda: f"values must have the same shape as indices: got {values.shape} and {indices.shape}")
-        _check(values.type.layout == indices.type.layout, lambda: "values must have the same layout as indices")
-        _check(
-            values.dtype == mem_desc.dtype,
-            lambda: f"values element type must match destination element type: got {values.dtype} and {mem_desc.dtype}")
-        if mask is not None:
-            if not isinstance(mask.type, ttgl.distributed_type):
-                mask = self.splat(mask, values.shape, values.type.layout)
-            _check(mask.dtype == ttgl.int1, lambda: f"mask must have boolean dtype, got {mask.dtype}")
-            _check(mask.shape == values.shape,
-                   lambda: f"mask must have the same shape as values: got {mask.shape} and {values.shape}")
-            _check(mask.type.layout == values.type.layout, lambda: "mask must have the same layout as values")
+        axis = self._check_shared_indices_and_normalize_axis(mem_desc, indices, axis)
+        values, indices, mask = self._broadcast_shared_scatter_operands(mem_desc, values, indices, mask)
 
         mask_handle = mask.handle if mask is not None else None
         rmw_op = self._get_shared_atomic_scatter_rmw_op(op, values.dtype)
@@ -574,13 +586,16 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(isinstance(src.type, ttgl.distributed_type), lambda: f"expected distributed_type but got: {src.type!r}")
         _check(isinstance(index.type, ttgl.distributed_type),
                lambda: f"expected distributed_type but got: {index.type!r}")
-        _check(index.type.scalar.is_int(), lambda: f"expected integer scalar type but got: {index.type.scalar!r}")
-
         rank = len(src.type.shape)
-        _check(len(index.type.shape) == rank, lambda: "source and index tensors must have the same rank")
-        _check(-rank <= axis < rank, lambda: f"gather axis {axis} must be < source rank ({rank})")
-        if axis < 0:
-            axis += rank
+        axis = self._check_int_indices_and_normalize_axis(
+            index,
+            axis,
+            rank,
+            lambda: "source and index tensors must have the same rank",
+            lambda: f"gather axis {axis} must be < source rank ({rank})",
+            lambda: f"expected integer scalar type but got: {index.type.scalar!r}",
+            allow_negative=True,
+        )
 
         for d in range(rank):
             if d == axis:
