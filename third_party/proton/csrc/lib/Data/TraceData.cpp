@@ -973,8 +973,8 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
         // Linked target ids are event ids, so resolve through the event first.
         auto &targetEvent = virtualTrace->getEvent(targetEntryId);
         targetIdToVirtualContexts.emplace(
-            targetEntryId,
-            virtualTrace->getContexts(targetEvent.contextId, /*skipRoot=*/true));
+            targetEntryId, virtualTrace->getContexts(targetEvent.contextId,
+                                                     /*skipRoot=*/true));
       }
     });
   }
