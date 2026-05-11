@@ -349,12 +349,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 }
 
 // CHECK-LABEL: tt.func @descriptor_load_accumulator_predicated
-//      CHECK: scf.if {{.*}} -> (tensor<256x64xf32
-// CHECK-NEXT:   tt.descriptor_load
-// CHECK-NEXT:   tt.dot
-// CHECK-NEXT:   scf.yield
+// CHECK: scf.if {{.*}} -> (tensor<256x64xf32
+// CHECK-NEXT: tt.descriptor_load
+// CHECK-NEXT: tt.dot
+// CHECK-NEXT: scf.yield
 // CHECK-NEXT: } else {
-// CHECK-NEXT:   scf.yield
+// CHECK-NEXT: scf.yield
 
 // -----
 
@@ -387,7 +387,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 }
 
 // CHECK-LABEL: tt.func @descriptor_store_predicate
-//  CHECK-NOT: ttg.mask
-//      CHECK: scf.if %{{[0-9]+}} {
-// CHECK-NEXT:   tt.descriptor_store
+// CHECK-NOT: ttg.mask
+// CHECK: scf.if %{{[0-9]+}} {
+// CHECK-NEXT: tt.descriptor_store
 // CHECK-NEXT: }
