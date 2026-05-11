@@ -3268,6 +3268,21 @@ def get_test_dot_small_mn_mfma_cases():
             for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]]
 
 
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype,
+# out_dtype, kpack, mma_nonk_size
+def get_test_dot_kpack_kwidth_mfma_cases():
+    if not is_hip_cdna():
+        return []
+    return [
+        # Small K with kpack=2 forces the kPack guard for symmetric MFMA shapes.
+        (64, 64, 16, 4, False, False, 'None', 'ieee', 'float16', 'float32', 2, 16),
+        (64, 64, 16, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 2, 16),
+        # Asymmetric 64x4 / 4x64 MFMA shapes with kpack=2.
+        (64, 4, 32, 1, False, False, 'None', 'ieee', 'float32', 'float32', 2, None),
+        (4, 64, 32, 1, False, False, 'None', 'ieee', 'float32', 'float32', 2, None),
+    ]
+
+
 def get_test_dot_double_rate_cases():
     if not (is_hip_cdna() or is_hip_gfx1250()):
         return []
@@ -3319,6 +3334,7 @@ def get_test_small_dots_cases():
     get_test_dot_fp8_output_cases() + \
     get_test_dot_small_k_mfma_cases() + \
     get_test_dot_small_mn_mfma_cases() + \
+    get_test_dot_kpack_kwidth_mfma_cases() + \
     get_test_dot_small_mn_wmma_cases() + \
     get_test_dot_small_k_wmma_cases() + \
     get_test_dot_softmax() + \
