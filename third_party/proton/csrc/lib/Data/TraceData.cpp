@@ -134,6 +134,7 @@ public:
       reversedContexts.push_back(context);
     }
     std::vector<Context> contexts;
+    contexts.reserve(reversedContexts.size() - (skipRoot ? 1 : 0));
     for (auto iter = reversedContexts.rbegin(); iter != reversedContexts.rend();
          ++iter) {
       if (skipRoot && iter == reversedContexts.rbegin()) {
@@ -676,6 +677,7 @@ void reconstructGraphScopeEvents(
         continue;
       auto &openScopes = openGraphScopes[streamId];
       std::vector<Context> graphContexts;
+      graphContexts.reserve(kernelEvent.contexts.size());
       bool seenCaptureTag = false;
       bool isMetadataKernel = false;
       for (const auto &context : kernelEvent.contexts) {
@@ -1048,6 +1050,7 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
           // form the complete contexts for the linked metrics.
           auto contexts = baseContexts;
           auto &virtualContexts = targetIdToVirtualContexts[targetEntryId];
+          contexts.reserve(contexts.size() + virtualContexts.size());
           for (const auto &context : virtualContexts) {
             contexts.push_back(context);
           }

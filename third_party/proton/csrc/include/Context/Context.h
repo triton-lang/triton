@@ -73,10 +73,12 @@ public:
       };
       std::string_view rawName;
       if (splitMetadataStateName(state->name, rawName)) {
+        contexts.reserve(contexts.size() + 2);
         contexts.emplace_back(std::string(kMetadataScopeName),
                               /*isState=*/true);
         contexts.emplace_back(std::string(rawName));
       } else {
+        contexts.reserve(contexts.size() + 1);
         contexts.push_back(state.value());
       }
     }

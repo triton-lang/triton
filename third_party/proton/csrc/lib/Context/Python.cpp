@@ -74,6 +74,7 @@ std::vector<Context> PythonContextSource::getContextsImpl() {
     frame = newFrame;
   }
   std::vector<Context> contexts;
+  contexts.reserve(reversedContexts.size());
   for (auto iter = reversedContexts.rbegin(); iter != reversedContexts.rend();
        ++iter) {
     contexts.push_back(*iter);
