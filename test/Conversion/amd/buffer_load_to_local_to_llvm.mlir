@@ -186,11 +186,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   tt.func public @buffer_load_to_local_cache_mods(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg2: !ttg.memdesc<64xf32, #shared, #smem, mutable>) {
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
-    // The first constant 0 is the soffset slot (now wired to the split
-    // scalar; constant 0 here when no uniform leaf is present). The
-    // third constant 0 is the imm offset slot (always literal 0).
+    // Inside the predicated block, the lowering emits the OOB sentinel, then
+    // the soffset slot (constant 0 when no uniform leaf is present), then the
+    // per-lane select, then the aux and imm constants.
+    // COMMON: %[[OOB:.*]] = llvm.mlir.constant(-2147483648 : i32) : i32
+    // COMMON: %[[SOFFSET:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COMMON: %[[VOFFSET:.*]] = llvm.select
-    // COMMON-NEXT: %[[SOFFSET:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COMMON-NEXT: %[[aux_ca:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COMMON-NEXT: %[[IMM:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COMMON-NEXT: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, %[[VOFFSET]], %[[SOFFSET]], %[[IMM]], %[[aux_ca]]

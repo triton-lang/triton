@@ -925,8 +925,6 @@ struct TritonAMDGPUConvertToBufferOpsPass
               context, assumptions, axisInfoAnalysis, solver,
               this->analyzeSmallTensorOfst);
     }
-    patterns.add<SplitBufferLoadOffset, SplitBufferLoadToLocalOffset,
-                 SplitBufferStoreOffset>(context, solver.get());
 
     if (this->allowBufferAtomics && targetInfo.supportsBufferAtomicRMW())
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
@@ -937,6 +935,17 @@ struct TritonAMDGPUConvertToBufferOpsPass
         this->analyzeSmallTensorOfst);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
+      signalPassFailure();
+
+    // Lift wave-uniform addends of each AMD buffer op's `voffset`
+    // into its scalar `soffset` operand so uniform address movement is routed
+    // through the SGPR slot of the raw buffer intrinsic instead of consuming
+    // VGPRs and per-lane VALU adds. Running this after the conversion patterns
+    // above leaves only `amdgpu.buffer_*` shapes for these matchers to handle.
+    RewritePatternSet splitPatterns(context);
+    splitPatterns.add<SplitBufferLoadOffset, SplitBufferLoadToLocalOffset,
+                      SplitBufferStoreOffset>(context, solver.get());
+    if (applyPatternsGreedily(mod, std::move(splitPatterns)).failed())
       signalPassFailure();
   }
 };

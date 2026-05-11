@@ -283,7 +283,7 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   // 2. Convert the pre-split voffset/soffset element offsets to bytes. The
   // intrinsic computes `addr = base + voffset + soffset` per-lane.
   Value elemByteWidthVal = b.int_val(32, elementByteWidth);
-  Value sgprOffsetBytes;
+  Value sgprOffsetBytes = b.int_val(32, 0);
   if (sOffsetElems)
     sgprOffsetBytes = b.mul(elemByteWidthVal, sOffsetElems);
   Value vOffsetBytes = b.mul(elemByteWidthVal, vOffsetElems);
@@ -291,8 +291,6 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   // Keep masked lanes OOB in the voffset field itself because AMD buffer bounds
   // checks do not include soffset.
   Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBunds);
-  if (!sOffsetElems)
-    sgprOffsetBytes = b.int_val(32, 0);
 
   // 3. Create the cache modifiers word
   int32_t aux =
