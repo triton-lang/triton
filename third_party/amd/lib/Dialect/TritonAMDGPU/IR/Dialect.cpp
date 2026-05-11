@@ -469,8 +469,6 @@ LogicalResult ConcatOp::verify() {
     // 3.   find, which input tile holds the dst value
     auto multiDimOperandIdx = LLVM::AMD::multiDimElementwise<int32_t, int64_t>(
         elemCoordsArray, srcShape, std::divides<unsigned>());
-    auto linearOperandIdx =
-        mlir::LLVM::linearize(multiDimOperandIdx, srcToDstShape, defaultOrder);
 
     // 4.   subtract dst coordinates and start coordinates of the tile
 
@@ -505,8 +503,8 @@ LogicalResult BufferLoadToLocalOp::verify() {
   if (!mod)
     return success();
 
-  auto arch = mlir::getAMDArch(mod);
-  if (!arch || AMD::TargetInfo(arch->str()).supportsBufferLoadToLocal())
+  TargetFeatures features = TargetFeatures::fromModuleOp(mod);
+  if (features.getArch().empty() || features.supportsBufferLoadToLocal())
     return success();
   return emitError() << "BufferLoadToLocal unsupported on target architecture";
 }
@@ -909,6 +907,31 @@ LogicalResult AsyncTDMGatherOp::verify() {
           "incompatible with the warp-level TDM instruction. Change layout "
           "to broadcast the same indices to all lanes in a warp.");
   }
+
+  return success();
+}
+
+// -- UpdateTensorDescriptorOp --
+LogicalResult UpdateTensorDescriptorOp::verify() {
+  auto descTy = getDesc().getType();
+  size_t rank = descTy.getShape().size();
+
+  if (!getAddOffsets().empty() && getAddOffsets().size() != rank)
+    return emitOpError("expected ")
+           << rank << " add_offsets to match descriptor rank, got "
+           << getAddOffsets().size();
+
+  if (!getSetBounds().empty() && getSetBounds().size() != rank)
+    return emitOpError("expected ")
+           << rank << " set_bounds to match descriptor rank, got "
+           << getSetBounds().size();
+
+  // At least one mutation parameter must be provided -- a no-op update is
+  // either a user mistake or should be folded by canonicalizer.
+  if (getAddOffsets().empty() && getSetBounds().empty() && !getDest() &&
+      !getPred() && !getBarrier())
+    return emitOpError("must provide at least one of add_offsets, set_bounds, "
+                       "dest, pred, or barrier");
 
   return success();
 }

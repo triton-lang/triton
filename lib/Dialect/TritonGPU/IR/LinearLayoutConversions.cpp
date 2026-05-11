@@ -1428,7 +1428,6 @@ LinearLayout chooseScaledWmmaScaleLayout(
     MLIRContext *ctx, int dotOperandIdx, ArrayRef<int64_t> dotOperandShape,
     unsigned wmmaMDim, unsigned wmmaNDim, bool isTransposed,
     unsigned scaleFactor, LinearLayout ctaLayout, CGAEncodingAttr cgaLayout) {
-  using basisT = std::vector<std::vector<int32_t>>;
   unsigned rank = dotOperandShape.size();
   bool hasBatchDim = rank == 3;
   auto outDimNames = standardOutDimNames(ctx, rank);
@@ -1568,7 +1567,6 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          unsigned mfmaMDim,
                                          ArrayRef<unsigned> tilesPerWarp,
                                          ArrayRef<unsigned> warpsPerCTA) {
-  using basisT = std::vector<std::vector<int32_t>>;
   unsigned rank = dotOperandShape.size();
   auto order = mlir::triton::gpu::getMatrixOrder(rank, /*rowMajor=*/true);
   auto standardOutDims = standardOutDimNames(ctx, rank);

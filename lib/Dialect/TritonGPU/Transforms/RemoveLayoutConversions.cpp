@@ -1038,10 +1038,19 @@ int64_t getConvertCost(Value convertSrc, Attribute resultEncoding) {
   return 32 * convertLayoutBytes;
 }
 
+static unsigned getCostFactor(Value result, Attribute rematEncoding) {
+  auto tensorType = cast<RankedTensorType>(result.getType());
+  unsigned oldElemsPerThread = getUniqueElemsPerThread(tensorType);
+  unsigned newElemsPerThread =
+      getUniqueElemsPerThread(rematEncoding, tensorType.getShape());
+  return std::max(1u, newElemsPerThread / oldElemsPerThread);
+}
+
 /// Determine whether rematerializing \p slice is beneficial given that it will
 /// eliminate \p convertOp and require creating new convert ops with cost \p
 /// newCvtCost.
 bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
+                       const DenseMap<Value, Attribute> &layout,
                        int64_t newCvtCost) {
   // Identify all operations in the slice
   SetVector<Operation *> sliceOps;
@@ -1085,23 +1094,13 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
   // Evaluate single-use status for every operation in slice
   for (Operation *op : sliceOps) {
     auto dialect = op->getDialect();
-    // If all of the results of the op are only used within the slice, when we
-    // rematerialise, this operation does not get duplicated so it does not
-    // contribute to our cost model.
     bool isOpUsedOutsideSlice = llvm::any_of(op->getResults(), [&](Value v) {
       return nonSliceOnlyValues.contains(v);
     });
-    if (!isOpUsedOutsideSlice)
-      continue;
 
     if (isa<arith::ConstantOp>(op)) {
       // special-case: arith.constant has zero cost
       continue;
-    } else if (isa<LoadOp>(op) || isa<LocalLoadOp>(op)) {
-      // optimistically assume L1-cached:
-      for (Value result : op->getResults()) {
-        rematerialisationCost += 8 * getByteCount(result);
-      }
     } else if (isa<arith::ArithDialect, math::MathDialect>(dialect)) {
       // this is an arithmetic operation; we distinguish between cheap
       // operations (such as floating point add/mul which can be fused
@@ -1110,7 +1109,28 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
       // multiple instructions.
       int64_t multiplier = isExpensiveMathOp(op) ? 8 : 1;
       for (Value result : op->getResults()) {
-        rematerialisationCost += multiplier * getByteCount(result);
+        Attribute rematEncoding = layout.lookup(result);
+        int64_t cost = multiplier * getByteCount(result);
+        // If the new layout increases the amount of work that needs to happen
+        // on each thread, account for that.
+        unsigned factor = getCostFactor(result, rematEncoding);
+        if (!isOpUsedOutsideSlice)
+          factor -= 1;
+        rematerialisationCost += cost * factor;
+      }
+      continue;
+    }
+
+    // If all of the results of the op are only used within the slice, when we
+    // rematerialise, this operation does not get duplicated so it does not
+    // contribute to our cost model.
+    if (!isOpUsedOutsideSlice)
+      continue;
+
+    if (isa<LoadOp>(op) || isa<LocalLoadOp>(op)) {
+      // optimistically assume L1-cached:
+      for (Value result : op->getResults()) {
+        rematerialisationCost += 8 * getByteCount(result);
       }
     } else if (isa<ReduceOp>(op)) {
       // Reduce op introduce much cost.
@@ -1170,7 +1190,7 @@ bool LayoutRematerialization::backwardRematerialization(
   }
 
   // 2. Determine whether rematerialisation is beneficial.
-  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0)) {
+  if (!isRematBeneficial(convertOp, slice, layout, /*newCvtCost=*/0)) {
     LDBG("  skipped rematerialization due to higher cost");
     return false;
   }
@@ -1377,7 +1397,7 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     return false;
   int64_t newCvtCost =
       getConvertCost(extOrBroadcastOp->getOperand(0), srcEncoding);
-  if (!isRematBeneficial(convertOp, slice, newCvtCost))
+  if (!isRematBeneficial(convertOp, slice, layout, newCvtCost))
     return false;
   // Move the convert before the ext op and rewrite the slice.
   OpBuilder builder(extOrBroadcastOp);

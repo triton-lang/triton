@@ -1,14 +1,14 @@
 #include "TargetInfo.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
-using mlir::triton::AMD::DppCtrl;
+using mlir::LLVM::AMD::DppCtrl;
+using mlir::triton::amdgpu::ISAFamily;
 namespace mlir::triton::AMD {
 
 namespace {
@@ -120,54 +120,35 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
 } // namespace
 
 llvm::AMDGPU::IsaVersion TargetInfo::getIsaVersion() const {
-  return llvm::AMDGPU::getIsaVersion(arch);
+  return llvm::AMDGPU::getIsaVersion(getArch());
 }
 
 llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
-  return llvm::AMDGPU::parseArchAMDGCN(arch);
+  return llvm::AMDGPU::parseArchAMDGCN(getArch());
 }
 
-int TargetInfo::getWarpSize() const {
-  switch (getISAFamily()) {
-  case ISAFamily::GCN5_1:
-  case ISAFamily::CDNA1:
-  case ISAFamily::CDNA2:
-  case ISAFamily::CDNA3:
-  case ISAFamily::CDNA4:
-    return 64;
-  case ISAFamily::GFX1250:
-    return 32;
-  default:
-    break;
-  }
-  return 32;
-}
+int TargetInfo::getWarpSize() const { return targetFeatures.getWarpSize(); }
 
 int TargetInfo::getSharedMemorySize() const {
-  // Should return the maximum capacity in bytes
+  return targetFeatures.getSharedMemorySize();
+}
+
+int TargetInfo::getSharedMemoryBanks() const {
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:
-    return 320 * 1024;
   case ISAFamily::CDNA4:
-    return 160 * 1024;
+    return 64;
   default:
-    return 64 * 1024;
+    return 32;
   }
 }
 
 size_t TargetInfo::getSharedMemoryPartitionSize() const {
-  switch (getISAFamily()) {
-  case ISAFamily::GFX1250:
-    return 64 * 1024;
-  default:
-    // No partitioning on other targets
-    return 0;
-  }
+  return targetFeatures.getSharedMemoryPartitionSize();
 }
 
 bool TargetInfo::supportMaximumMinimum() const {
-  return getISAFamily() == ISAFamily::CDNA4 ||
-         getISAFamily() == ISAFamily::GFX1250;
+  return targetFeatures.supportMaximumMinimum();
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
@@ -210,40 +191,12 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
-std::optional<TargetInfo::LDSTransLoadParams>
+SmallVector<TargetInfo::LDSTransLoadParams>
 TargetInfo::queryLDSTransLoadParams(int bitWidth) const {
-  auto isaFamily = getISAFamily();
-  // Determine LDSTrans version: V1 (CDNA4), V2 (GFX1250)
-  enum { V1, V2, NONE } version = NONE;
-  if (isaFamily == AMD::ISAFamily::CDNA4) {
-    version = V1;
-  } else if (isaFamily == AMD::ISAFamily::GFX1250) {
-    version = V2;
-  }
-
-  if (version == NONE || !llvm::is_contained({16, 8, 4, 6}, bitWidth))
-    return std::nullopt;
-
-  unsigned numLanesInShuffleGroup = getWarpSize() / 4;
-  unsigned instBitWidth;
-  bool doubleB8Contiguity;
-
-  switch (version) {
-  case V1:
-    instBitWidth = 64;
-    doubleB8Contiguity = false;
-    break;
-  case V2:
-    instBitWidth = (bitWidth == 16) ? 128 : 64;
-    doubleB8Contiguity = (bitWidth == 8);
-    break;
-  default:
-    return std::nullopt;
-  }
-
-  unsigned tileSize = instBitWidth / bitWidth;
-  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth, tileSize,
-                            doubleB8Contiguity};
+  auto ldsParams = targetFeatures.queryLDSTransLoadParams(bitWidth);
+  if (!ldsParams)
+    return {};
+  return {*ldsParams};
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -750,18 +703,12 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
-bool TargetInfo::supportBitwidth16Elementwise() const { return true; }
+bool TargetInfo::supportBitwidth16Elementwise() const {
+  return targetFeatures.supportBitwidth16Elementwise();
+}
 
 bool TargetInfo::supportBitwidth32Elementwise() const {
-  switch (getISAFamily()) {
-  case ISAFamily::CDNA2:
-  case ISAFamily::CDNA3:
-  case ISAFamily::CDNA4:
-  case ISAFamily::GFX1250:
-    return true;
-  default:
-    return false;
-  }
+  return targetFeatures.supportBitwidth32Elementwise();
 }
 
 unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
@@ -774,119 +721,66 @@ unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
   return 2;
 }
 
-bool TargetInfo::supportsDirectToLDSScattering() const {
-  switch (getISAFamily()) {
-  case ISAFamily::GFX1250:
-    return true;
-  default:
-    return false;
-  }
+bool TargetInfo::supportsDirectToLdsScatter() const {
+  return targetFeatures.supportsDirectToLdsScatter();
 }
 
 bool TargetInfo::requiresAliasInfoForAsyncOps() const {
-  switch (getISAFamily()) {
-  case ISAFamily::CDNA3:
-  case ISAFamily::CDNA4:
-    return true;
-  default:
-    return false;
-  }
+  return targetFeatures.requiresAliasInfoForAsyncOps();
 }
 
 bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
-  switch (getISAFamily()) {
-  case ISAFamily::CDNA3:
-    // Disable 8 and 16 bits because they get extended to 32 bit.
-    return llvm::is_contained({32, /*16, 8*/}, bitWidth);
-  case ISAFamily::CDNA4:
-    // Disable 8, 16, 96 bits because they get extended to 32/128 bit.
-    return llvm::is_contained({128, /*96, */ 32, /*16, 8*/}, bitWidth);
-  case ISAFamily::GFX1250:
-    // Disable 8, 16 bits because they get extended to 32 bit and therefore
-    // overwrite. 96 is not a pow2 and generally not useful in Triton
-    return llvm::is_contained({128, 64, /*96, */ 32, /*16, 8*/}, bitWidth);
-  default:
-    break;
-  }
-
-  return false;
+  return targetFeatures.supportsDirectToLdsLoadBitWidth(bitWidth);
 }
 
 bool TargetInfo::supportsMultiCTALaunch() const {
-  return getISAFamily() == ISAFamily::GFX1250;
+  return targetFeatures.supportsMultiCTALaunch();
 }
 
-bool TargetInfo::supportsTDM() const {
-  return getISAFamily() == ISAFamily::GFX1250;
-}
+bool TargetInfo::supportsTDM() const { return targetFeatures.supportsTDM(); }
 
 bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
-  if (getISAFamily() == ISAFamily::GFX1250) {
-    return llvm::is_contained({32, 64, 128}, biwWidth);
-  }
-  return false;
+  return targetFeatures.supportsClusterLoadBitWidth(biwWidth);
 }
 
 bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
-  if (getISAFamily() == ISAFamily::GFX1250) {
-    return llvm::is_contained({128, 64, 32, 8}, bitWidth);
-  }
-  return false;
+  return targetFeatures.supportsDirectFromLdsStoreBitWidth(bitWidth);
 }
 
 bool TargetInfo::supportsBufferLoadToLocal() const {
-  return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
-                            getISAFamily());
+  return targetFeatures.supportsBufferLoadToLocal();
 }
 
 bool TargetInfo::useAsyncMarks() const {
-  return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
-                            getISAFamily());
+  return targetFeatures.useAsyncMarks();
 }
 
 bool TargetInfo::supportsBufferAtomicRMW() const {
-  return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4,
-                             ISAFamily::RDNA4, ISAFamily::GFX1250},
-                            getISAFamily());
+  return targetFeatures.supportsBufferAtomicRMW();
 }
 
 bool TargetInfo::supportsBufferAtomicFadd(mlir::Type elementType) const {
-  auto isaFamily = getISAFamily();
-  if (isaFamily == ISAFamily::CDNA3 && elementType.isBF16())
-    return false;
-  if (isaFamily == ISAFamily::RDNA4 && elementType.isF64())
-    return false;
-  return true;
+  return targetFeatures.supportsBufferAtomicFadd(elementType);
 }
 
 int32_t TargetInfo::getBufferAtomicCachePolicy(bool hasUsers) const {
-  const int sc0Bit = 0b1;          // TH_ATOMIC_RETURN (cpol bit 0)
-  const int scopeDevBit = 0b10000; // SCOPE_DEV = 2 << 3 (cpol bits [4:3])
-  int32_t aux = 0;
-  if (hasUsers)
-    aux |= sc0Bit;
-  if (getISAFamily() == ISAFamily::GFX1250)
-    aux |= scopeDevBit;
-  return aux;
+  return targetFeatures.getBufferAtomicCachePolicy(hasUsers);
 }
 
 bool TargetInfo::supportsWaveId() const {
-  return getISAFamily() == ISAFamily::RDNA4 ||
-         getISAFamily() == ISAFamily::GFX1250;
+  return targetFeatures.supportsWaveId();
 }
 
 bool TargetInfo::supportsPermlaneSwap() const {
-  return getISAFamily() == ISAFamily::CDNA4 ||
-         getISAFamily() == ISAFamily::GFX1250;
+  return targetFeatures.supportsPermlaneSwap();
 }
 
 bool TargetInfo::supportsCvtPkScalePk8() const {
-  return getISAFamily() == ISAFamily::GFX1250;
+  return targetFeatures.supportsCvtPkScalePk8();
 }
 
 bool TargetInfo::supportsHwScaledUpcast() const {
-  return getISAFamily() == ISAFamily::CDNA4 ||
-         getISAFamily() == ISAFamily::GFX1250;
+  return targetFeatures.supportsHwScaledUpcast();
 }
 
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
@@ -896,19 +790,27 @@ void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
 }
 
 bool TargetInfo::supportDppBroadcast() const {
+  return targetFeatures.supportDppBroadcast();
+}
+
+std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>
+TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
   switch (getISAFamily()) {
-  case ISAFamily::GCN5_1:
-  case ISAFamily::CDNA1:
-  case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:
+  case ISAFamily::RDNA1:
+  case ISAFamily::RDNA2:
+  case ISAFamily::RDNA3:
+    if (vecBitwidth == 128)
+      return {/*load tile*/ {{}, {0, 1, 4}}, /*store tile*/ {}};
+    break;
   case ISAFamily::CDNA4:
-    return true;
   case ISAFamily::GFX1250:
-    return false;
+    if (vecBitwidth == 128)
+      return {/*load tile*/ {{}, {0, 1, 3, 4}}, /*store tile*/ {}};
+    break;
   default:
     break;
   }
-
-  return false;
+  return {{}, {}};
 }
 } // namespace mlir::triton::AMD

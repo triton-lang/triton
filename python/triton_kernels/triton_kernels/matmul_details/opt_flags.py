@@ -209,6 +209,8 @@ def make_default_opt_flags_nvidia(
         slice_size = routing_data.expected_slice_size
     # pid swizzling
     group_m = 8
+    if lhs_dtype == FP4 and rhs_dtype == FP4:
+        group_m = 16
     xcd_swizzle = 1
     # block_m
     if constraints.get("block_m", None):
@@ -328,6 +330,10 @@ def make_default_opt_flags_nvidia(
     is_hopper_scale = isinstance(b_mx_scale_layout, HopperMXScaleLayout)
     if is_hopper_scale:
         occupancy_target = 16 // num_warps
+        if precision_config.a_mx_scale is not None and precision_config.c_mx_scale is not None:
+            # Hopper MXFP4 RHS plus MX input/output needs more than the
+            # 128-register cap implied by the default occupancy target.
+            occupancy_target = 1
     threads_per_warp = 32
     reg_per_sm = 64 * 1024
     max_reg_per_thread = 256
@@ -341,7 +347,7 @@ def make_default_opt_flags_nvidia(
     if constraints.get("epilogue_subtile", None) is not None:
         subtiles_to_check = [constraints["epilogue_subtile"]]
     else:
-        subtiles_to_check = [1, 2, 4]
+        subtiles_to_check = [1] if out_dtype == FP4 else [1, 2, 4]
     num_stages = -1
     for ep in subtiles_to_check:
         ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,

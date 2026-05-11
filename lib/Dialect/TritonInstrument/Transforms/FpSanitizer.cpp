@@ -27,6 +27,15 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
 
+Type getIntTypeLike(Type ty);
+bool isFloatLike(Type ty) { return isa<FloatType>(getElementTypeOrSelf(ty)); }
+bool isIntLike(Type ty) { return isa<IntegerType>(getElementTypeOrSelf(ty)); }
+
+bool isNumericLike(Type ty) {
+  Type elemTy = getElementTypeOrSelf(ty);
+  return isa<FloatType>(elemTy) || isa<IntegerType>(elemTy);
+}
+
 static bool isValueAvailableInScope(Value value, Region *scope) {
   if (!scope)
     return false;
@@ -104,6 +113,48 @@ struct ScratchState {
   DenseMap<Region *, ScratchInfo> byScope;
 };
 
+Type getScratchStorageElementType(Type elemTy) {
+  if (auto floatTy = dyn_cast<FloatType>(elemTy))
+    return IntegerType::get(elemTy.getContext(), floatTy.getWidth());
+  return elemTy;
+}
+
+RankedTensorType getScratchStorageType(RankedTensorType tensorTy) {
+  auto elemTy = getScratchStorageElementType(tensorTy.getElementType());
+  return tensorTy.clone(elemTy);
+}
+
+Value embedToInt(PatternRewriter &rewriter, Location loc, Value v) {
+  if (isa<IntegerType>(getElementTypeOrSelf(v.getType())))
+    return v;
+  return ExperimentalFPSanEmbedOp::create(rewriter, loc,
+                                          getIntTypeLike(v.getType()), v);
+}
+
+Value unembedToFloat(PatternRewriter &rewriter, Location loc, Value v,
+                     Type floatTy) {
+  return ExperimentalFPSanUnembedOp::create(rewriter, loc, floatTy, v);
+}
+
+Value loadFpSanScratchMemory(PatternRewriter &rewriter, Location loc,
+                             Value alloc, RankedTensorType tensorTy) {
+  auto storageTy = getScratchStorageType(tensorTy);
+  Value stored = createLoadScratchMemory(rewriter, loc, alloc, storageTy);
+  if (isFloatLike(tensorTy))
+    return unembedToFloat(rewriter, loc, stored, tensorTy);
+  return stored;
+}
+
+Operation *storeFpSanScratchMemory(PatternRewriter &rewriter, Location loc,
+                                   Value alloc, Value tensor,
+                                   RankedTensorType tensorTy) {
+  auto storageTy = getScratchStorageType(tensorTy);
+  Value stored = tensor;
+  if (isFloatLike(tensorTy))
+    stored = embedToInt(rewriter, loc, tensor);
+  return createStoreScratchMemory(rewriter, loc, alloc, stored, storageTy);
+}
+
 class TmemScratchManager {
 public:
   ttg::BlockedEncodingAttr getScratchEncoding(PatternRewriter &rewriter,
@@ -173,20 +224,19 @@ public:
       auto layout = getScratchEncoding(rewriter, memdesc, memTy);
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
                                             memTy.getElementType(), layout);
+      auto storageElemTy = getScratchStorageElementType(memTy.getElementType());
 
       int64_t elSize = memTy.getElementType().getIntOrFloatBitWidth() / 8;
       int64_t alignment = std::max<int64_t>(elSize, 16);
       int64_t sizeInBytes = product(memTy.getShape()) * elSize;
-      auto ptrTy = triton::getPointerType(memTy.getElementType());
+      auto ptrTy = triton::getPointerType(storageElemTy);
       auto allocOp = createThirdPartyScratchAlloc(rewriter, loc, ptrTy,
                                                   sizeInBytes, alignment);
-      allocOp->setDiscardableAttr("tt.divisibility",
-                                  rewriter.getI64IntegerAttr(alignment));
       Value ptr = allocOp.getResult();
 
       if (Value init = alloc.getSrc()) {
         auto initTy = cast<RankedTensorType>(init.getType());
-        if (!createStoreScratchMemory(rewriter, loc, ptr, init, initTy))
+        if (!storeFpSanScratchMemory(rewriter, loc, ptr, init, initTy))
           return std::nullopt;
       }
 
@@ -270,7 +320,8 @@ public:
       rewriter.setInsertionPoint(view);
       auto loc = view.getLoc();
       Value ptr = baseInfo->ptr;
-      auto ptrTy = triton::getPointerType(memTy.getElementType());
+      auto ptrTy = triton::getPointerType(
+          getScratchStorageElementType(memTy.getElementType()));
       if (ptr.getType() != ptrTy) {
         ptr = tt::BitcastOp::create(rewriter, loc, ptrTy, ptr);
       }
@@ -323,16 +374,15 @@ private:
 
 Value createScratchAndStore(PatternRewriter &rewriter, Location loc, Value val,
                             RankedTensorType tensorTy) {
+  auto storageTy = getScratchStorageType(tensorTy);
   int64_t elSize = tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
   int64_t alignment = std::max<int64_t>(elSize, 16);
   int64_t sizeInBytes = product(tensorTy.getShape()) * elSize;
-  auto ptrTy = triton::getPointerType(tensorTy.getElementType());
+  auto ptrTy = triton::getPointerType(storageTy.getElementType());
   auto allocOp = createThirdPartyScratchAlloc(rewriter, loc, ptrTy, sizeInBytes,
                                               alignment);
-  allocOp->setDiscardableAttr("tt.divisibility",
-                              rewriter.getI64IntegerAttr(alignment));
-  if (!createStoreScratchMemory(rewriter, loc, allocOp.getResult(), val,
-                                tensorTy))
+  if (!storeFpSanScratchMemory(rewriter, loc, allocOp.getResult(), val,
+                               tensorTy))
     return Value();
   return allocOp.getResult();
 }
@@ -361,14 +411,6 @@ Region *getScratchScopeRegion(Operation *anchor) {
 // Utility functions
 // ------------------------------------------------------------
 
-Type getElementType(Type ty) {
-  if (auto shaped = dyn_cast<ShapedType>(ty))
-    return shaped.getElementType();
-  return ty;
-}
-
-bool isFloatLike(Type ty) { return isa<FloatType>(getElementType(ty)); }
-
 LogicalResult emitFpSanUnsupported(Operation *op) {
   op->emitOpError() << "unsupported by fpsan";
   return failure();
@@ -386,7 +428,7 @@ LogicalResult emitFpSanInvariantError(Operation *op) {
 }
 
 Type getIntTypeLike(Type ty) {
-  auto elem = dyn_cast<FloatType>(getElementType(ty));
+  auto elem = dyn_cast<FloatType>(getElementTypeOrSelf(ty));
   if (!elem)
     return Type();
 
@@ -402,7 +444,7 @@ Type getIntTypeLike(Type ty) {
 }
 
 unsigned getIntBitwidth(Type ty) {
-  auto elem = cast<IntegerType>(getElementType(ty));
+  auto elem = cast<IntegerType>(getElementTypeOrSelf(ty));
   return elem.getWidth();
 }
 
@@ -467,7 +509,7 @@ Value castSignedIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
 
 Value castScalarIntToIntLike(PatternRewriter &rewriter, Location loc,
                              Value scalar, Type targetTy) {
-  auto elemTy = cast<IntegerType>(getElementType(targetTy));
+  auto elemTy = cast<IntegerType>(getElementTypeOrSelf(targetTy));
   if (scalar.getType() != elemTy)
     scalar = castSignedIntValueToType(rewriter, loc, scalar, elemTy);
   if (isa<ShapedType>(targetTy))
@@ -488,18 +530,6 @@ uint64_t invOddU64(uint64_t a) {
   for (unsigned correctBits = 2; correctBits < 64; correctBits *= 2)
     x *= 2 - a * x;
   return x;
-}
-
-Value embedToInt(PatternRewriter &rewriter, Location loc, Value v) {
-  if (isa<IntegerType>(getElementType(v.getType())))
-    return v;
-  return ExperimentalFPSanEmbedOp::create(rewriter, loc,
-                                          getIntTypeLike(v.getType()), v);
-}
-
-Value unembedToFloat(PatternRewriter &rewriter, Location loc, Value v,
-                     Type floatTy) {
-  return ExperimentalFPSanUnembedOp::create(rewriter, loc, floatTy, v);
 }
 
 Value embedFloatBitsToInt(PatternRewriter &rewriter, Location loc,
@@ -620,7 +650,7 @@ Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
 }
 
 Value fpsanExp2(PatternRewriter &rewriter, Location loc, Value input) {
-  auto elemTy = dyn_cast<FloatType>(getElementType(input.getType()));
+  auto elemTy = dyn_cast<FloatType>(getElementTypeOrSelf(input.getType()));
   if (!elemTy)
     return Value();
   return fpsanExp2FromInt(rewriter, loc, embedToInt(rewriter, loc, input),
@@ -628,7 +658,7 @@ Value fpsanExp2(PatternRewriter &rewriter, Location loc, Value input) {
 }
 
 Value fpsanExp(PatternRewriter &rewriter, Location loc, Value input) {
-  auto elemTy = dyn_cast<FloatType>(getElementType(input.getType()));
+  auto elemTy = dyn_cast<FloatType>(getElementTypeOrSelf(input.getType()));
   if (!elemTy)
     return Value();
 
@@ -703,7 +733,7 @@ FpSanCosSin fpsanCosSinPayload(PatternRewriter &rewriter, Location loc,
 }
 
 Value fpsanCos(PatternRewriter &rewriter, Location loc, Value input) {
-  if (!isa<FloatType>(getElementType(input.getType())))
+  if (!isFloatLike(input.getType()))
     return Value();
   auto cosSin =
       fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
@@ -711,31 +741,17 @@ Value fpsanCos(PatternRewriter &rewriter, Location loc, Value input) {
 }
 
 Value fpsanSin(PatternRewriter &rewriter, Location loc, Value input) {
-  if (!isa<FloatType>(getElementType(input.getType())))
+  if (!isFloatLike(input.getType()))
     return Value();
   auto cosSin =
       fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
   return unembedToFloat(rewriter, loc, cosSin.sin, input.getType());
 }
 
-bool isIntLike(Type ty) { return isa<IntegerType>(getElementType(ty)); }
-
-bool isNumericLike(Type ty) {
-  Type elemTy = getElementType(ty);
-  return isa<FloatType>(elemTy) || isa<IntegerType>(elemTy);
-}
-
 bool externHasNumericOperands(tt::ExternElementwiseOp op) {
   return llvm::all_of(op.getOperands(), [](Value operand) {
     return isNumericLike(operand.getType());
   });
-}
-
-bool externInvolvesFloatLike(tt::ExternElementwiseOp op) {
-  return isFloatLike(op.getType()) ||
-         llvm::any_of(op.getOperands(), [](Value operand) {
-           return isFloatLike(operand.getType());
-         });
 }
 
 Value castExternOperandToResultInt(PatternRewriter &rewriter, Location loc,
@@ -802,7 +818,7 @@ createOperandScratch(PatternRewriter &rewriter, Location loc,
     auto info = scratch.getOrCreate(memdesc, rewriter, scope);
     if (!info)
       return std::nullopt;
-    fullVal = createLoadScratchMemory(rewriter, loc, info->ptr, tensorTy);
+    fullVal = loadFpSanScratchMemory(rewriter, loc, info->ptr, tensorTy);
     if (!fullVal)
       return std::nullopt;
   } else {
@@ -813,13 +829,12 @@ createOperandScratch(PatternRewriter &rewriter, Location loc,
   int64_t elSize = memTy.getElementType().getIntOrFloatBitWidth() / 8;
   int64_t alignment = std::max<int64_t>(elSize, 16);
   int64_t sizeInBytes = product(memTy.getShape()) * elSize;
-  auto ptrTy = triton::getPointerType(memTy.getElementType());
+  auto ptrTy = triton::getPointerType(
+      getScratchStorageElementType(memTy.getElementType()));
   auto allocOp = createThirdPartyScratchAlloc(rewriter, loc, ptrTy, sizeInBytes,
                                               alignment);
-  allocOp->setDiscardableAttr("tt.divisibility",
-                              rewriter.getI64IntegerAttr(alignment));
   Value ptr = allocOp.getResult();
-  if (!createStoreScratchMemory(rewriter, loc, ptr, fullVal, tensorTy))
+  if (!storeFpSanScratchMemory(rewriter, loc, ptr, fullVal, tensorTy))
     return std::nullopt;
   return ScratchInfo{ptr, tensorTy};
 }
@@ -906,20 +921,18 @@ Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
   return ptrTensor;
 }
 
-Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
-                                   Value base, RankedTensorType resultTy,
-                                   int64_t stride1) {
-  return createPointerTensorStrided2D(rewriter, loc, base, resultTy,
-                                      /*stride0=*/1, stride1);
-}
-
 Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc, Value base,
                            RankedTensorType tensorTy, int64_t stride0,
                            int64_t stride1) {
-  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, tensorTy,
+  auto storageTy = getScratchStorageType(tensorTy);
+  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, storageTy,
                                                 stride0, stride1);
-  return tt::LoadOp::create(rewriter, loc, ptrTensor, CacheModifier::NONE,
-                            EvictionPolicy::NORMAL, false);
+  Value stored =
+      tt::LoadOp::create(rewriter, loc, ptrTensor, CacheModifier::NONE,
+                         EvictionPolicy::NORMAL, false);
+  if (isFloatLike(tensorTy))
+    return unembedToFloat(rewriter, loc, stored, tensorTy);
+  return stored;
 }
 
 Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc, Value base,
@@ -932,17 +945,14 @@ Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
                                  Value base, Value tensor,
                                  RankedTensorType tensorTy, int64_t stride0,
                                  int64_t stride1) {
-  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, tensorTy,
+  auto storageTy = getScratchStorageType(tensorTy);
+  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, storageTy,
                                                 stride0, stride1);
-  return tt::StoreOp::create(rewriter, loc, ptrTensor, tensor,
+  Value stored = tensor;
+  if (isFloatLike(tensorTy))
+    stored = embedToInt(rewriter, loc, tensor);
+  return tt::StoreOp::create(rewriter, loc, ptrTensor, stored,
                              CacheModifier::NONE, EvictionPolicy::NORMAL);
-}
-
-Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
-                                 Value base, Value tensor,
-                                 RankedTensorType tensorTy, int64_t stride1) {
-  return storeScratchStrided2D(rewriter, loc, base, tensor, tensorTy,
-                               /*stride0=*/1, stride1);
 }
 
 Value unpackPackedFp4Slice(PatternRewriter &rewriter, Location loc,
@@ -1671,7 +1681,7 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
     Value out = aTy.getRank() == 2
                     ? loadScratchStrided2D(rewriter, loc, dPtr, cTy,
                                            /*stride1=*/m)
-                    : createLoadScratchMemory(rewriter, loc, dPtr, cTy);
+                    : loadFpSanScratchMemory(rewriter, loc, dPtr, cTy);
     if (!out)
       return emitFpSanCodegenError(op.getOperation());
     rewriter.replaceOp(op, out);
@@ -1832,7 +1842,7 @@ struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
     auto resultTy = cast<RankedTensorType>(op.getResult().getType());
     if (!resultTy.getEncoding())
       return emitFpSanUnsupported(op.getOperation());
-    Value result = createLoadScratchMemory(rewriter, loc, info->ptr, resultTy);
+    Value result = loadFpSanScratchMemory(rewriter, loc, info->ptr, resultTy);
     if (!result)
       return emitFpSanCodegenError(op.getOperation());
 
@@ -1869,7 +1879,7 @@ struct TMEMStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     if (!srcTy.getEncoding())
       return emitFpSanUnsupported(op.getOperation());
-    if (!createStoreScratchMemory(rewriter, loc, info->ptr, op.getSrc(), srcTy))
+    if (!storeFpSanScratchMemory(rewriter, loc, info->ptr, op.getSrc(), srcTy))
       return emitFpSanCodegenError(op.getOperation());
 
     createGlobalScratchBarrier(rewriter, loc);
@@ -1911,7 +1921,7 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     Value srcReg =
         ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
             .getResult();
-    if (!createStoreScratchMemory(rewriter, loc, info->ptr, srcReg, srcRegTy))
+    if (!storeFpSanScratchMemory(rewriter, loc, info->ptr, srcReg, srcRegTy))
       return emitFpSanCodegenError(op.getOperation());
 
     createGlobalScratchBarrier(rewriter, loc);
