@@ -412,6 +412,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
     endforeach()
   endif()
 
+  # Hack: this is necessary to allow `gluon_ir.cc` to compile, as it depends
+  # directly on plugin headers (TODO).
+  include_directories(third_party/amd/include)
+
   set(TRITON_PYTHON_LIBRARIES
     Python3::Module
     pybind11::headers
