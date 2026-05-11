@@ -2784,53 +2784,77 @@ def _shared_atomic_scatter_rmw_cases():
                             torch_dtype,
                             gluon_dtype,
                             use_constant_values,
+                            False,
                             N,
                             M,
                             axis,
                             rhs_shape,
                             id=case_id,
                         ))
+    cases.append(
+        pytest.param(
+            "add",
+            0,
+            True,
+            torch.float32,
+            ttgl.float32,
+            False,
+            True,
+            16,
+            32,
+            1,
+            (16, 32),
+            id="add_masked_float32_loaded_values_axis1_broadcast",
+        ))
 
     return cases
 
 
 @pytest.mark.parametrize(
-    "op,init_value,use_mask,torch_dtype,gluon_dtype,use_constant_values,N,M,axis,rhs_shape",
+    "op,init_value,use_mask,torch_dtype,gluon_dtype,use_constant_values,use_broadcast_operands,N,M,axis,rhs_shape",
     _shared_atomic_scatter_rmw_cases(),
 )
-def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_dtype, use_constant_values, N, M, axis,
-                                   rhs_shape):
+def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_dtype, use_constant_values,
+                                   use_broadcast_operands, N, M, axis, rhs_shape):
     if is_hip_cdna() or is_hip_rdna():
         pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
 
     device = torch.device("cuda")
     rhs_n, rhs_m = rhs_shape
 
-    if use_constant_values:
+    if use_broadcast_operands:
+        values = torch.arange(rhs_n, dtype=torch.float32, device=device) + 1.0
+        expected_values = values[:, None].expand(rhs_shape).contiguous()
+        indices = torch.arange(rhs_m, dtype=torch.int32, device=device)[None, :].expand(rhs_shape).contiguous()
+        mask = torch.ones(rhs_shape, dtype=torch.bool, device=device)
+    elif use_constant_values:
         values = torch.ones(rhs_shape, dtype=torch_dtype, device=device)
+        expected_values = values
     else:
         values = torch.arange(rhs_n * rhs_m, dtype=torch.int32, device=device).reshape(rhs_shape)
         values = (values % 7 + 1).to(torch_dtype)
-    if op == "xchg":
-        # make xchg deterministic with broadcasting
-        if axis == 1:
-            base_indices = torch.arange(0, rhs_m, dtype=torch.int32, device=device)[None, :]
+        expected_values = values
+    if not use_broadcast_operands:
+        if op == "xchg":
+            # make xchg deterministic with broadcasting
+            if axis == 1:
+                base_indices = torch.arange(0, rhs_m, dtype=torch.int32, device=device)[None, :]
+            else:
+                base_indices = torch.arange(0, rhs_n, dtype=torch.int32, device=device)[:, None]
+            indices = base_indices.expand(rhs_n, rhs_m).contiguous()
         else:
-            base_indices = torch.arange(0, rhs_n, dtype=torch.int32, device=device)[:, None]
-        indices = base_indices.expand(rhs_n, rhs_m).contiguous()
-    else:
-        torch.manual_seed(23 if use_mask else 17)
-        upper = M if axis == 1 else N
-        indices = torch.randint(0, upper, rhs_shape, dtype=torch.int32, device=device)
+            torch.manual_seed(23 if use_mask else 17)
+            upper = M if axis == 1 else N
+            indices = torch.randint(0, upper, rhs_shape, dtype=torch.int32, device=device)
 
-    if use_mask:
-        mask = (torch.arange(rhs_n * rhs_m, device=device).reshape(rhs_n, rhs_m) % 3) != 0
-    else:
-        mask = torch.ones((rhs_n, rhs_m), dtype=torch.bool, device=device)
+        if use_mask:
+            mask = (torch.arange(rhs_n * rhs_m, device=device).reshape(rhs_n, rhs_m) % 3) != 0
+        else:
+            mask = torch.ones((rhs_n, rhs_m), dtype=torch.bool, device=device)
 
     old = torch.empty((rhs_n, rhs_m), dtype=torch_dtype, device=device)
     final = torch.empty((N, M), dtype=torch_dtype, device=device)
-    expected = _expected_shared_atomic_scatter_rmw(op, init_value, indices, values, mask, axis, (N, M))
+    expected = _expected_shared_atomic_scatter_rmw(op, init_value, indices, expected_values, mask, axis, (N, M))
 
     layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
                                    warps_per_cta=[4, 1], order=[1, 0])
@@ -2851,7 +2875,7 @@ def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_
         dtype=gluon_dtype,
         use_mask=use_mask,
         use_constant_values=use_constant_values,
-        use_broadcast_operands=False,
+        use_broadcast_operands=use_broadcast_operands,
         init_value=init_value,
         RHS_N=rhs_n,
         RHS_M=rhs_m,
@@ -2862,41 +2886,8 @@ def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_
     )
 
     torch.testing.assert_close(final, expected, atol=0, rtol=0)
-
-    if (op == "add" and use_mask and torch_dtype == torch.float32 and not use_constant_values and axis == 1 and N == 16
-            and M == 32):
-        broadcast_values = torch.arange(N, dtype=torch.float32, device=device) + 1.0
-        broadcast_old = torch.empty((N, M), dtype=torch.float32, device=device)
-        broadcast_final = torch.empty((N, M), dtype=torch.float32, device=device)
-        layout_broadcast = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
-                                              warps_per_cta=[4, 1], order=[1, 0])
-
-        shared_atomic_scatter_rmw_kernel[(1, )](
-            broadcast_values,
-            indices,
-            mask,
-            broadcast_old,
-            broadcast_final,
-            N=N,
-            M=M,
-            axis=axis,
-            op=op,
-            dtype=gluon_dtype,
-            use_mask=True,
-            use_constant_values=False,
-            use_broadcast_operands=True,
-            init_value=init_value,
-            RHS_N=N,
-            RHS_M=M,
-            layout_2d=layout_2d,
-            layout_rhs=layout_broadcast,
-            shared_layout=shared_layout,
-            num_warps=4,
-        )
-
-        expected_broadcast = broadcast_values[:, None].expand(N, M).clone()
-        torch.testing.assert_close(broadcast_old, torch.zeros_like(broadcast_old), atol=0, rtol=0)
-        torch.testing.assert_close(broadcast_final, expected_broadcast, atol=0, rtol=0)
+    if use_broadcast_operands:
+        torch.testing.assert_close(old, torch.zeros_like(old), atol=0, rtol=0)
 
 
 # ============================================================================
