@@ -470,7 +470,7 @@ def store_packed_out(
 def _swiglu_step1(acc_packed, limit):
     gelu, linear = float2.unpack2(acc_packed)
     gelu = gl.minimum(gelu.to(gl.float32), limit)
-    linear = gl.minimum(gl.maximum(linear.to(gl.float32), -limit), limit)
+    linear = gl.clamp(linear.to(gl.float32), -limit, limit)
     return gelu, linear
 
 

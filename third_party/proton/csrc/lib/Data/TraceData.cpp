@@ -1,4 +1,5 @@
 #include "Data/TraceData.h"
+#include "Context/Context.h"
 #include "Profiler/Graph.h"
 #include "TraceDataIO/TraceWriter.h"
 #include "Utility/MsgPackWriter.h"
@@ -43,6 +44,8 @@ public:
         : id(id), Context(name) {}
     TraceContext(size_t id, size_t parentId, const std::string &name)
         : id(id), parentId(parentId), Context(name) {}
+    TraceContext(size_t id, size_t parentId, const Context &context)
+        : Context(context), parentId(parentId), id(id) {}
     virtual ~TraceContext() = default;
 
     void addChild(const Context &context, size_t id) { children[context] = id; }
@@ -98,7 +101,7 @@ public:
       return traceContextMap[parentId].getChild(context);
     }
     auto id = nextTreeContextId++;
-    traceContextMap.try_emplace(id, id, parentId, context.name);
+    traceContextMap.try_emplace(id, id, parentId, context);
     traceContextMap[parentId].addChild(context, id);
     return id;
   }
@@ -112,25 +115,33 @@ public:
 
   size_t addContexts(const std::vector<Context> &indices) {
     auto parentId = TraceContext::RootId;
-    for (auto index : indices) {
+    for (const auto &index : indices) {
       parentId = addContext(index, parentId);
     }
     return parentId;
   }
 
-  std::vector<Context> getContexts(size_t contextId) {
-    std::vector<Context> contexts;
+  std::vector<Context> getContexts(size_t contextId, bool skipRoot = false) {
+    std::vector<const TraceContext *> reversedContexts;
     auto it = traceContextMap.find(contextId);
     if (it == traceContextMap.end()) {
       throw std::runtime_error("Context not found");
     }
-    std::reference_wrapper<TraceContext> context = it->second;
-    contexts.push_back(context.get());
-    while (context.get().parentId != TraceContext::DummyId) {
-      context = traceContextMap[context.get().parentId];
-      contexts.push_back(context.get());
+    auto *context = &it->second;
+    reversedContexts.push_back(context);
+    while (context->parentId != TraceContext::DummyId) {
+      context = &traceContextMap.at(context->parentId);
+      reversedContexts.push_back(context);
     }
-    std::reverse(contexts.begin(), contexts.end());
+    std::vector<Context> contexts;
+    contexts.reserve(reversedContexts.size() - (skipRoot ? 1 : 0));
+    for (auto iter = reversedContexts.rbegin(); iter != reversedContexts.rend();
+         ++iter) {
+      if (skipRoot && iter == reversedContexts.rbegin()) {
+        continue;
+      }
+      contexts.push_back(**iter);
+    }
     return contexts;
   }
 
@@ -171,7 +182,7 @@ void TraceData::enterScope(const Scope &scope) {
   if (contextSource != nullptr)
     contexts = contextSource->getContexts();
   else
-    contexts.push_back(scope.name);
+    contexts.emplace_back(scope.name);
   auto &activeEventStack = traceDataToActiveEventStack[this];
   size_t parentEventId = activeEventStack.empty() ? Trace::Event::DummyId
                                                   : activeEventStack.back();
@@ -666,11 +677,12 @@ void reconstructGraphScopeEvents(
         continue;
       auto &openScopes = openGraphScopes[streamId];
       std::vector<Context> graphContexts;
+      graphContexts.reserve(kernelEvent.contexts.size());
       bool seenCaptureTag = false;
       bool isMetadataKernel = false;
       for (const auto &context : kernelEvent.contexts) {
         if (context.name == GraphState::metricTag ||
-            context.name == GraphState::metadataTag) {
+            context.isMetadataState()) {
           isMetadataKernel = true;
           break;
         }
@@ -681,13 +693,13 @@ void reconstructGraphScopeEvents(
           graphContexts.push_back(context);
         }
       }
+      if (isMetadataKernel) {
+        continue;
+      }
       if (!seenCaptureTag) {
         throw std::runtime_error("Invalid graph contexts without capture tag");
       }
-      if (!isMetadataKernel) {
-        graphContexts
-            .pop_back(); // Remove kernel name context for non-metadata kernels
-      }
+      graphContexts.pop_back(); // Remove kernel name context
       auto startTimeNs = std::get<uint64_t>(
           kernelEvent.kernelMetric->getValue(KernelMetric::StartTime));
       auto endTimeNs = std::get<uint64_t>(
@@ -960,9 +972,9 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
       for (auto targetEntryId : targetEntryIds) {
         // Linked target ids are event ids, so resolve through the event first.
         auto &targetEvent = virtualTrace->getEvent(targetEntryId);
-        auto contexts = virtualTrace->getContexts(targetEvent.contextId);
-        contexts.erase(contexts.begin());
-        targetIdToVirtualContexts.emplace(targetEntryId, std::move(contexts));
+        targetIdToVirtualContexts.emplace(
+            targetEntryId, virtualTrace->getContexts(targetEvent.contextId,
+                                                     /*skipRoot=*/true));
       }
     });
   }
@@ -1001,12 +1013,6 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
             auto startTimeNs = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::StartTime));
             auto launchEventId = events.at(eventId).parentEventId;
-            if (isGraphLinked) {
-              // For graph-linked kernels, the parent maybe the <captured_at>
-              // tag. So we need to go one level up to find the actual launch
-              // event
-              launchEventId = events.at(launchEventId).parentEventId;
-            }
             kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
                                                 contexts, launchEventId,
                                                 isGraphLinked);
@@ -1044,8 +1050,10 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
           // form the complete contexts for the linked metrics.
           auto contexts = baseContexts;
           auto &virtualContexts = targetIdToVirtualContexts[targetEntryId];
-          contexts.insert(contexts.end(), virtualContexts.begin(),
-                          virtualContexts.end());
+          contexts.reserve(contexts.size() + virtualContexts.size());
+          for (const auto &context : virtualContexts) {
+            contexts.push_back(context);
+          }
           // Not all kernels are associated with a flexible metric
           const DataEntry::FlexibleMetricMap *flexibleMetrics = nullptr;
           auto iter = event.metricSet.linkedFlexibleMetrics.find(targetEntryId);
