@@ -529,6 +529,12 @@ class amd_knobs(base_knobs):
 
     scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
 
+    # Comma-separated LLVM cl::opt options for the AMDGPU codegen backend.
+    # Experimental: intended for development and debugging; may change or be
+    # removed without notice.
+    # Example: AMDGCN_LLVM_OPTIONS="amdgpu-early-inline-all,enable-misched=0"
+    llvm_options: env_opt_str = env_opt_str("AMDGCN_LLVM_OPTIONS")
+
     # Path to dump MIR files for debugging/analysis
     dump_mir: env_opt_str = env_opt_str("TRITON_DUMP_MIR")
     # Path to externally-provided MIR files to use instead of generated ones

@@ -28,6 +28,7 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
@@ -547,6 +548,29 @@ void init_triton_amd(py::module &&m) {
       if (arg.hasByRefAttr() || arg.hasNestAttr())
         continue;
       arg.addAttr(llvm::Attribute::InReg);
+    }
+  });
+
+  // Set LLVM cl::opt options for the AMDGPU codegen backend.
+  // Handles both bare boolean flags ("flag-name") and key=value pairs
+  // ("flag-name=value").
+  m.def("set_llvm_options", [](const std::vector<std::string> &flags) {
+    auto options = llvm::cl::getRegisteredOptions();
+    for (const auto &flag : flags) {
+      std::string key, val;
+      auto eq = flag.find('=');
+      if (eq != std::string::npos) {
+        key = flag.substr(0, eq);
+        val = flag.substr(eq + 1);
+      } else {
+        key = flag;
+        val = "true";
+      }
+      auto it = options.find(key);
+      if (it == options.end()) {
+        throw std::invalid_argument("Unknown LLVM option '" + key + "'");
+      }
+      it->second->addOccurrence(1, key, val);
     }
   });
 
