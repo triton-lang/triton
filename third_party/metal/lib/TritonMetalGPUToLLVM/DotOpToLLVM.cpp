@@ -2,7 +2,6 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
@@ -15,7 +14,7 @@ LogicalResult convertMetalFMADot(triton::DotOp op,
 LogicalResult convertSimdgroupMatmul(
     triton::DotOp op, triton::DotOp::Adaptor adaptor,
     const LLVMTypeConverter *typeConverter, ConversionPatternRewriter &rewriter,
-    const DenseMap<int, std::array<Operation *, 3>> &dotAllocOps,
+    const DenseMap<int, std::array<Operation *, 2>> &dotAllocOps,
     const mlir::triton::metal::TargetInfo &targetInfo);
 } // namespace mlir::triton::metal
 
@@ -23,7 +22,7 @@ namespace {
 struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   explicit DotOpConversion(
       LLVMTypeConverter &typeConverter,
-      const DenseMap<int, std::array<Operation *, 3>> &dotAllocOps,
+      const DenseMap<int, std::array<Operation *, 2>> &dotAllocOps,
       const mlir::triton::metal::TargetInfo &targetInfo, PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::DotOp>(typeConverter, benefit),
         dotAllocOps(dotAllocOps), targetInfo(targetInfo) {}
@@ -49,7 +48,7 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   }
 
 protected:
-  const DenseMap<int, std::array<Operation *, 3>> &dotAllocOps;
+  const DenseMap<int, std::array<Operation *, 2>> &dotAllocOps;
   const mlir::triton::metal::TargetInfo &targetInfo;
 };
 
@@ -59,7 +58,7 @@ namespace mlir::triton::metal {
 void populateDotOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    const DenseMap<int, std::array<Operation *, 3>> &dotAllocOps,
+    const DenseMap<int, std::array<Operation *, 2>> &dotAllocOps,
     const mlir::triton::metal::TargetInfo &targetInfo, PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, dotAllocOps, targetInfo,
                                 benefit);
