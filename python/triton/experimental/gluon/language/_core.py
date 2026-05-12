@@ -361,20 +361,12 @@ class shared_memory_descriptor(base_value):
         the gather axis is replaced by indices[I]:
           result[I] = src[I[0], ..., indices[I], ..., I[n]]
 
-        Broadcasting:
-            Gather does not implicitly broadcast multiple operands. The shape and layout of
-            indices directly determine the shape and layout of the result. To gather a
-            broadcasted result, explicitly construct a broadcasted indices tensor first.
-            For example, indices with shape [N, M] produces result [N, M]; indices with
-            shape [N, 1] produces result [N, 1].
-
         Args:
             indices (tensor): Tensor specifying which indices to gather along the axis.
             axis (int): The axis along which to gather values.
 
         Returns:
             tensor: Gluon tensor with the gathered elements (same shape as indices).
-                Use explicit tensor broadcasting on indices to gather a broadcasted result.
         """
         indices = _unwrap_if_constexpr(indices)
         axis = _unwrap_if_constexpr(axis)

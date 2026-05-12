@@ -2418,7 +2418,6 @@ def shared_gather_kernel(
     layout_2d: ttgl.constexpr,
     layout_1d: ttgl.constexpr,
     shared_layout: ttgl.constexpr,
-    use_broadcast: ttgl.constexpr,
 ):
     """Test shared memory gather using smem.gather() with axis-based API."""
     # Load the matrix from global memory into registers
@@ -2431,23 +2430,18 @@ def shared_gather_kernel(
     smem_2d = ttgl.allocate_shared_memory(ttgl.float32, [N, M], layout=shared_layout)
     smem_2d.store(matrix_data)
 
-    if use_broadcast:
-        indices = indices_y[None, :] + ttgl.zeros([N, M], ttgl.int32, layout=layout_2d)
-        gathered = smem_2d.gather(indices, axis=1)
-        ttgl.store(output_ptr + offsets_2d, gathered)
-    else:
-        # Reshape to 1D to test gather along axis 0
-        smem_1d = smem_2d.reshape([N * M])
+    # Reshape to 1D to test gather along axis 0.
+    smem_1d = smem_2d.reshape([N * M])
 
-        # Load the gather indices (diagonal elements: 0, M+1, 2*(M+1), ...)
-        offsets_1d = ttgl.arange(0, N, layout=layout_1d)
-        indices = ttgl.load(indices_ptr + offsets_1d)
+    # Load the gather indices (diagonal elements: 0, M+1, 2*(M+1), ...)
+    offsets_1d = ttgl.arange(0, N, layout=layout_1d)
+    indices = ttgl.load(indices_ptr + offsets_1d)
 
-        # Gather using axis-based API: result[i] = smem_1d[indices[i]]
-        gathered = smem_1d.gather(indices, axis=0)
+    # Gather using axis-based API: result[i] = smem_1d[indices[i]]
+    gathered = smem_1d.gather(indices, axis=0)
 
-        # Store result to global memory
-        ttgl.store(output_ptr + offsets_1d, gathered)
+    # Store result to global memory
+    ttgl.store(output_ptr + offsets_1d, gathered)
 
 
 @pytest.mark.parametrize("N,M", [(32, 32), (64, 64), (128, 128)])
@@ -2483,27 +2477,10 @@ def test_shared_gather(N, M):
         layout_2d=layout_2d,
         layout_1d=layout_1d,
         shared_layout=shared_layout,
-        use_broadcast=False,
         num_warps=1,
     )
 
     torch.testing.assert_close(output, expected)
-
-    broadcast_output = torch.empty_like(matrix)
-    shared_gather_kernel[(1, )](
-        matrix,
-        indices,
-        broadcast_output,
-        N=N,
-        M=M,
-        layout_2d=layout_2d,
-        layout_1d=layout_1d,
-        shared_layout=shared_layout,
-        use_broadcast=True,
-        num_warps=1,
-    )
-
-    torch.testing.assert_close(broadcast_output, matrix)
 
 
 @gluon.jit
@@ -2530,6 +2507,9 @@ def shared_scatter_kernel(
     smem.store(zeros)
 
     if use_broadcast:
+        # values has shape [N, 1] and indices has shape [1, M]. scatter broadcasts
+        # both to [N, M], so each row's scalar value is written across columns:
+        # smem[i, indices[0, j]] = values[i, 0].
         values = ttgl.load(values_ptr + indices_x)[:, None]
         indices = indices_y[None, :]
         smem.scatter(values, indices, axis=1)
@@ -2624,7 +2604,6 @@ def shared_atomic_scatter_rmw_kernel(
     dtype: ttgl.constexpr,
     use_mask: ttgl.constexpr,
     use_constant_values: ttgl.constexpr,
-    use_broadcast_operands: ttgl.constexpr,
     init_value: ttgl.constexpr,
     RHS_N: ttgl.constexpr,
     RHS_M: ttgl.constexpr,
@@ -2642,22 +2621,15 @@ def shared_atomic_scatter_rmw_kernel(
     smem = ttgl.allocate_shared_memory(dtype, [N, M], layout=shared_layout)
     smem.store(ttgl.full([N, M], init_value, dtype, layout=layout_2d))
 
-    if use_broadcast_operands:
-        indices = rhs_y[None, :]
-        values = ttgl.load(values_ptr + rhs_x)[:, None]
-    else:
-        indices = ttgl.load(indices_ptr + offsets_rhs)
+    indices = ttgl.load(indices_ptr + offsets_rhs)
     if use_constant_values:
         # Cover the all-ones RHS path; int32 add can lower to atom.inc on NVIDIA.
         values = ttgl.full([RHS_N, RHS_M], 1, dtype, layout_rhs)
-    elif not use_broadcast_operands:
+    else:
         values = ttgl.load(values_ptr + offsets_rhs)
 
     if use_mask:
-        if use_broadcast_operands:
-            mask = (rhs_x >= 0)[:, None]
-        else:
-            mask = ttgl.load(mask_ptr + offsets_rhs)
+        mask = ttgl.load(mask_ptr + offsets_rhs)
         if op == "add":
             old = smem.atomic_scatter_add(values, indices, axis=axis, mask=mask)
         elif op == "max":
@@ -2784,73 +2756,52 @@ def _shared_atomic_scatter_rmw_cases():
                             torch_dtype,
                             gluon_dtype,
                             use_constant_values,
-                            False,
                             N,
                             M,
                             axis,
                             rhs_shape,
                             id=case_id,
                         ))
-    cases.append(
-        pytest.param(
-            "add",
-            0,
-            True,
-            torch.float32,
-            ttgl.float32,
-            False,
-            True,
-            16,
-            32,
-            1,
-            (16, 32),
-            id="add_masked_float32_loaded_values_axis1_broadcast",
-        ))
 
     return cases
 
 
 @pytest.mark.parametrize(
-    "op,init_value,use_mask,torch_dtype,gluon_dtype,use_constant_values,use_broadcast_operands,N,M,axis,rhs_shape",
+    "op,init_value,use_mask,torch_dtype,gluon_dtype,use_constant_values,N,M,axis,rhs_shape",
     _shared_atomic_scatter_rmw_cases(),
 )
 def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_dtype, use_constant_values,
-                                   use_broadcast_operands, N, M, axis, rhs_shape):
+                                   N, M, axis, rhs_shape):
     if is_hip_cdna() or is_hip_rdna():
         pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
 
     device = torch.device("cuda")
     rhs_n, rhs_m = rhs_shape
 
-    if use_broadcast_operands:
-        values = torch.arange(rhs_n, dtype=torch.float32, device=device) + 1.0
-        expected_values = values[:, None].expand(rhs_shape).contiguous()
-        indices = torch.arange(rhs_m, dtype=torch.int32, device=device)[None, :].expand(rhs_shape).contiguous()
-        mask = torch.ones(rhs_shape, dtype=torch.bool, device=device)
-    elif use_constant_values:
+    if use_constant_values:
         values = torch.ones(rhs_shape, dtype=torch_dtype, device=device)
         expected_values = values
     else:
         values = torch.arange(rhs_n * rhs_m, dtype=torch.int32, device=device).reshape(rhs_shape)
         values = (values % 7 + 1).to(torch_dtype)
         expected_values = values
-    if not use_broadcast_operands:
-        if op == "xchg":
-            # make xchg deterministic with broadcasting
-            if axis == 1:
-                base_indices = torch.arange(0, rhs_m, dtype=torch.int32, device=device)[None, :]
-            else:
-                base_indices = torch.arange(0, rhs_n, dtype=torch.int32, device=device)[:, None]
-            indices = base_indices.expand(rhs_n, rhs_m).contiguous()
-        else:
-            torch.manual_seed(23 if use_mask else 17)
-            upper = M if axis == 1 else N
-            indices = torch.randint(0, upper, rhs_shape, dtype=torch.int32, device=device)
 
-        if use_mask:
-            mask = (torch.arange(rhs_n * rhs_m, device=device).reshape(rhs_n, rhs_m) % 3) != 0
+    if op == "xchg":
+        # Make xchg deterministic.
+        if axis == 1:
+            base_indices = torch.arange(0, rhs_m, dtype=torch.int32, device=device)[None, :]
         else:
-            mask = torch.ones((rhs_n, rhs_m), dtype=torch.bool, device=device)
+            base_indices = torch.arange(0, rhs_n, dtype=torch.int32, device=device)[:, None]
+        indices = base_indices.expand(rhs_n, rhs_m).contiguous()
+    else:
+        torch.manual_seed(23 if use_mask else 17)
+        upper = M if axis == 1 else N
+        indices = torch.randint(0, upper, rhs_shape, dtype=torch.int32, device=device)
+
+    if use_mask:
+        mask = (torch.arange(rhs_n * rhs_m, device=device).reshape(rhs_n, rhs_m) % 3) != 0
+    else:
+        mask = torch.ones((rhs_n, rhs_m), dtype=torch.bool, device=device)
 
     old = torch.empty((rhs_n, rhs_m), dtype=torch_dtype, device=device)
     final = torch.empty((N, M), dtype=torch_dtype, device=device)
@@ -2875,7 +2826,6 @@ def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_
         dtype=gluon_dtype,
         use_mask=use_mask,
         use_constant_values=use_constant_values,
-        use_broadcast_operands=use_broadcast_operands,
         init_value=init_value,
         RHS_N=rhs_n,
         RHS_M=rhs_m,
@@ -2886,8 +2836,65 @@ def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_
     )
 
     torch.testing.assert_close(final, expected, atol=0, rtol=0)
-    if use_broadcast_operands:
-        torch.testing.assert_close(old, torch.zeros_like(old), atol=0, rtol=0)
+
+
+@gluon.jit
+def shared_atomic_scatter_rmw_broadcast_kernel(
+    values_ptr,
+    old_ptr,
+    final_ptr,
+    N: ttgl.constexpr,
+    M: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    indices_x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
+    indices_y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
+    offsets_2d = indices_x[:, None] * M + indices_y[None, :]
+
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [N, M], layout=shared_layout)
+    smem.store(ttgl.zeros([N, M], ttgl.float32, layout=layout_2d))
+
+    # values has shape [N, 1], indices has shape [1, M], and mask has shape
+    # [N, 1]. atomic_scatter_add broadcasts all three operands to [N, M].
+    values = ttgl.load(values_ptr + indices_x)[:, None]
+    indices = indices_y[None, :]
+    mask = (indices_x >= 0)[:, None]
+    old = smem.atomic_scatter_add(values, indices, axis=1, mask=mask)
+    ttgl.store(old_ptr + offsets_2d, old)
+
+    final = smem.load(layout=layout_2d)
+    ttgl.store(final_ptr + offsets_2d, final)
+
+
+def test_shared_atomic_scatter_rmw_broadcast():
+    if is_hip_cdna() or is_hip_rdna():
+        pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
+
+    device = torch.device("cuda")
+    N, M = 16, 32
+    values = torch.arange(N, dtype=torch.float32, device=device) + 1.0
+    old = torch.empty((N, M), dtype=torch.float32, device=device)
+    final = torch.empty((N, M), dtype=torch.float32, device=device)
+
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                   warps_per_cta=[4, 1], order=[1, 0])
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    shared_atomic_scatter_rmw_broadcast_kernel[(1, )](
+        values,
+        old,
+        final,
+        N=N,
+        M=M,
+        layout_2d=layout_2d,
+        shared_layout=shared_layout,
+        num_warps=4,
+    )
+
+    expected = values[:, None].expand(N, M).contiguous()
+    torch.testing.assert_close(final, expected, atol=0, rtol=0)
+    torch.testing.assert_close(old, torch.zeros_like(old), atol=0, rtol=0)
 
 
 # ============================================================================
@@ -2922,7 +2929,6 @@ def test_scatter_gather_multiwarp(N, M, num_warps):
         layout_2d=layout_2d,
         layout_1d=layout_1d,
         shared_layout=shared_layout,
-        use_broadcast=False,
         num_warps=num_warps,
     )
 

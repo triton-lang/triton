@@ -287,12 +287,12 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(indices.dtype.is_int(), lambda: f"indices must have integer dtype, got {indices.dtype}")
         return axis
 
-    def _check_shared_scatter_shape_and_layout(self, values, indices):
-        _check(values.shape == indices.shape,
-               lambda: f"values must have the same shape as indices: got {values.shape} and {indices.shape}")
-        _check(values.type.layout == indices.type.layout, lambda: "values must have the same layout as indices")
-
     def _broadcast_shared_scatter_operands(self, mem_desc, values, indices, mask=None):
+        def check_shape_and_layout(values, indices):
+            _check(values.shape == indices.shape,
+                   lambda: f"values must have the same shape as indices: got {values.shape} and {indices.shape}")
+            _check(values.type.layout == indices.type.layout, lambda: "values must have the same layout as indices")
+
         _check(isinstance(values, ttgl.tensor), lambda: f"expected 'values' to be a tensor, but got a {type(values)}")
         _check(
             values.dtype == mem_desc.dtype,
@@ -300,7 +300,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         if mask is None:
             values, indices = self.broadcast_tensors(values, indices)
-            self._check_shared_scatter_shape_and_layout(values, indices)
+            check_shape_and_layout(values, indices)
             return values, indices, None
 
         if not isinstance(mask.type, ttgl.distributed_type):
@@ -308,10 +308,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(mask.dtype == ttgl.int1, lambda: f"mask must have boolean dtype, got {mask.dtype}")
 
         values, indices, mask = self.broadcast_tensors(values, indices, mask)
-        self._check_shared_scatter_shape_and_layout(values, indices)
-        _check(mask.shape == values.shape,
-               lambda: f"mask must have the same shape as values: got {mask.shape} and {values.shape}")
-        _check(mask.type.layout == values.type.layout, lambda: "mask must have the same layout as values")
+        check_shape_and_layout(values, indices)
+        check_shape_and_layout(values, mask)
         return values, indices, mask
 
     def shared_gather(self, mem_desc, indices, axis):
