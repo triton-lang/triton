@@ -90,8 +90,7 @@ class HIPOptions:
     schedule_hint: str = 'none'
 
     # Extra LLVM cl::opt options for the AMDGPU codegen backend (e.g. "option=value").
-    # Experimental: intended for development and debugging; may change or be
-    # removed without notice.
+    # For experimental usage and may change/removed without guarantees.
     # Set per-kernel via llvm_amdgpu_options=(...) or globally via AMDGCN_LLVM_OPTIONS.
     llvm_amdgpu_options: tuple = ()
 
