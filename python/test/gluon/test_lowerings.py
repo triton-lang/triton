@@ -5,6 +5,7 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
@@ -965,6 +966,57 @@ def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, d
     y = torch.zeros_like(x)
     kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout)
 
+    torch.testing.assert_close(y, x, rtol=0, atol=0)
+
+
+def _with_cga_layout(layout, cga_layout):
+    if isinstance(layout, ttgl.BlockedLayout):
+        return ttgl.BlockedLayout(layout.size_per_thread, layout.threads_per_warp, layout.warps_per_cta, layout.order,
+                                  cga_layout=cga_layout)
+    if isinstance(layout, ttgl.NVMMADistributedLayout):
+        return ttgl.NVMMADistributedLayout(layout.version, layout.warps_per_cta, layout.instr_shape,
+                                           cga_layout=cga_layout)
+    if isinstance(layout, ttgl.DotOperandLayout):
+        return ttgl.DotOperandLayout(parent=_with_cga_layout(layout.parent, cga_layout),
+                                     operand_index=layout.operand_index, k_width=layout.k_width)
+    if isinstance(layout, ttgl.SliceLayout):
+        parent_cga_layout = [basis[:layout.dim] + [0] + basis[layout.dim:] for basis in cga_layout]
+        return ttgl.SliceLayout(dim=layout.dim, parent=_with_cga_layout(layout.parent, parent_cga_layout))
+    raise AssertionError(f"Unsupported multi-CTA layout {type(layout)}")
+
+
+@pytest.mark.skipif(not is_cuda() or not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.parametrize("ctas_per_cga", [[4, 1], [2, 2]])
+@pytest.mark.parametrize("M, N", [[128, 128]])
+@pytest.mark.parametrize("dtype", ["float16"])
+@pytest.mark.parametrize("src_layout", _2d_layouts)
+@pytest.mark.parametrize("dst_layout", _2d_layouts)
+def test_convert2d_layouts_multi_cta(ctas_per_cga, M, N, dtype, src_layout, dst_layout, device):
+    cga_layout = make_cga_layout(ctas_per_cga, ctas_per_cga, [1, 0])
+    src_layout = _with_cga_layout(src_layout, cga_layout)
+    dst_layout = _with_cga_layout(dst_layout, cga_layout)
+    if str(src_layout) == str(dst_layout):
+        pytest.skip("Source and destination layouts are the same")
+    num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
+
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, M: ttgl.constexpr, N: ttgl.constexpr, src_layout: ttgl.constexpr,
+               dst_layout: ttgl.constexpr):
+        offs_m_src = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, src_layout))[:, None]
+        offs_n_src = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, src_layout))[None, :]
+        x = ttgl.load(x_ptr + offs_m_src * N + offs_n_src)
+
+        y = ttgl.convert_layout(x, layout=dst_layout)
+
+        offs_m_dst = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, dst_layout))[:, None]
+        offs_n_dst = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, dst_layout))[None, :]
+        ttgl.store(y_ptr + offs_m_dst * N + offs_n_dst, y)
+
+    torch.manual_seed(0)
+    torch_dtype = getattr(torch, dtype)
+    x = torch.randn((M, N), dtype=torch_dtype, device=device)
+    y = torch.zeros_like(x)
+    kernel[(1, )](x, y, M, N, src_layout, dst_layout, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
