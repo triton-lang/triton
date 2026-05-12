@@ -914,42 +914,51 @@ def _with_cga_layout(layout, cga_layout):
     raise AssertionError(f"Unsupported multi-CTA layout {type(layout)}")
 
 
-_single_cta_convert2d_layout_cases = [(None, interm_layout, src_layout, dst_layout)
+_single_cta_convert2d_layout_cases = [(None, None, interm_layout, src_layout, dst_layout)
                                       for interm_layout in _intermediate_layouts
                                       for src_layout in _2d_layouts
                                       for dst_layout in _2d_layouts]
 # Pair each layout with the next one so multi-CTA coverage stays small while every layout appears as source and dest.
 _multi_cta_2d_layout_pairs = list(zip(_2d_layouts, _2d_layouts[1:] + _2d_layouts[:1]))
-_multi_cta_convert2d_layout_cases = [(ctas_per_cga, None, src_layout, dst_layout)
-                                     for ctas_per_cga in ([4, 1], [2, 2])
+# Use different source/destination CGA shapes to cover CTA repartitioning during convert_layout.
+_multi_cta_cga_layout_pairs = [([1, 4], [2, 2]), ([4, 1], [2, 2])]
+_multi_cta_convert2d_layout_cases = [(src_ctas_per_cga, dst_ctas_per_cga, None, src_layout, dst_layout)
+                                     for src_ctas_per_cga, dst_ctas_per_cga in _multi_cta_cga_layout_pairs
                                      for src_layout, dst_layout in _multi_cta_2d_layout_pairs]
 _convert2d_layout_cases = _single_cta_convert2d_layout_cases + _multi_cta_convert2d_layout_cases
 
 
 @pytest.mark.parametrize("M, N", [[64, 1], [64, 64], [64, 128], [1, 64]])
 @pytest.mark.parametrize("dtype", ["float16"])
-@pytest.mark.parametrize("ctas_per_cga, interm_layout, src_layout, dst_layout", _convert2d_layout_cases)
-def test_convert2d_layouts(M, N, ctas_per_cga, interm_layout, src_layout, dst_layout, dtype, device):
-    cga_layout = []
+@pytest.mark.parametrize("src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout",
+                         _convert2d_layout_cases)
+def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout, dtype,
+                           device):
     num_ctas = 1
-    if ctas_per_cga is not None:
+    if src_ctas_per_cga is not None:
         if not is_cuda() or not is_hopper_or_newer():
             pytest.skip("num_ctas > 1 requires NVIDIA Hopper or newer")
-        if M % ctas_per_cga[0] != 0 or N % ctas_per_cga[1] != 0:
-            pytest.skip("Shape must be divisible by the CGA shape")
-        cga_layout = make_cga_layout(ctas_per_cga, ctas_per_cga, [1, 0])
-        num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
-        src_layout = _with_cga_layout(src_layout, cga_layout)
-        dst_layout = _with_cga_layout(dst_layout, cga_layout)
+        if M % src_ctas_per_cga[0] != 0 or N % src_ctas_per_cga[1] != 0:
+            pytest.skip("Shape must be divisible by the source CGA shape")
+        if M % dst_ctas_per_cga[0] != 0 or N % dst_ctas_per_cga[1] != 0:
+            pytest.skip("Shape must be divisible by the destination CGA shape")
+        if src_ctas_per_cga[0] * src_ctas_per_cga[1] != dst_ctas_per_cga[0] * dst_ctas_per_cga[1]:
+            pytest.skip("Source and destination CGA shapes must have the same number of CTAs")
+        src_cga_layout = make_cga_layout(src_ctas_per_cga, src_ctas_per_cga, [1, 0])
+        dst_cga_layout = make_cga_layout(dst_ctas_per_cga, dst_ctas_per_cga, [1, 0])
+        num_ctas = src_ctas_per_cga[0] * src_ctas_per_cga[1]
+        src_layout = _with_cga_layout(src_layout, src_cga_layout)
+        dst_layout = _with_cga_layout(dst_layout, dst_cga_layout)
+    else:
+        if dst_ctas_per_cga is not None:
+            pytest.skip("Destination CGA shape requires a source CGA shape")
 
     if str(src_layout) == str(dst_layout):
         pytest.skip("Source and destination layouts are the same")
 
     if interm_layout in ["padded_shared_layout_single_interval", "padded_shared_layout_multi_interval"]:
         int_pad_pairs = [[32, 8]] if "single" in interm_layout else [[64, 4], [128, 8]]
-        interm_layout = ttgl.PaddedSharedLayout.with_identity_for(int_pad_pairs, [M, N], [1, 0], cga_layout=cga_layout)
-    elif cga_layout and interm_layout is not None:
-        interm_layout = _with_cga_layout(interm_layout, cga_layout)
+        interm_layout = ttgl.PaddedSharedLayout.with_identity_for(int_pad_pairs, [M, N], [1, 0])
 
     def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 
