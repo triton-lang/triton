@@ -137,6 +137,11 @@ private:
                        [](unsigned char c) { return std::isdigit(c); });
   }
 
+  // Bridge rocprofiler-sdk's ROCR agent identity to the HIP device ordinals
+  // used by Proton metrics. Visibility filters are layered: for example,
+  // ROCR_VISIBLE_DEVICES can first create a reordered physical-agent list, and
+  // HIP_VISIBLE_DEVICES then indexes into that ROCR-visible list. HIP reports
+  // the selected device as ordinal 0, while rocprofiler records still identify the underlying agent.
   static std::optional<int32_t>
   getVisibleIndex(const std::string &envName, int32_t ordinal,
                   const rocprofiler_uuid_t &uuid) {
