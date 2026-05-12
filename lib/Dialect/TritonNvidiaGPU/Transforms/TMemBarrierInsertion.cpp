@@ -232,7 +232,8 @@ public:
 
 private:
   void update(Operation *operation, BlockInfo *blockInfo,
-              FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder) override;
+              FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder,
+              BufferIndexAnalysis * /*bufferIndexAnalysis*/) override;
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
 };
@@ -245,7 +246,8 @@ void TMemBarrierAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 
 void TMemBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
                                  FuncBlockInfoMapT *funcBlockInfoMap,
-                                 OpBuilder *builder) {
+                                 OpBuilder *builder,
+                                 BufferIndexAnalysis * /*bufferIndexAnalysis*/) {
   if (mlir::containsLocalBarrier(op)) {
     blockInfo->sync();
     return;
