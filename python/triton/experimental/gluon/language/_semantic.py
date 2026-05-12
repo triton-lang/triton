@@ -288,6 +288,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return axis
 
     def _broadcast_shared_scatter_operands(self, mem_desc, values, indices, mask=None):
+
         def check_shape_and_layout(values, indices):
             _check(values.shape == indices.shape,
                    lambda: f"values must have the same shape as indices: got {values.shape} and {indices.shape}")

@@ -240,6 +240,7 @@ class shared_memory_descriptor_type(base_type):
         alloc_shape_str = "_".join([str(s) for s in self.alloc_shape])
         return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{alloc_shape_str}ASMD"
 
+
 def _add_atomic_scatter_docstring(kind: str) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
