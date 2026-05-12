@@ -554,8 +554,6 @@ void init_triton_amd(py::module &&m) {
   // Set LLVM cl::opt options for the AMDGPU codegen backend.
   // Handles both bare boolean flags ("flag-name") and key=value pairs
   // ("flag-name=value").
-  // Options are set once and persist for the process lifetime; they are
-  // never restored, so that concurrent compilations see a consistent view.
   m.def("set_llvm_options", [](const std::vector<std::string> &flags) {
     auto options = llvm::cl::getRegisteredOptions();
     for (const auto &flag : flags) {
