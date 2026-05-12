@@ -240,7 +240,6 @@ class shared_memory_descriptor_type(base_type):
         alloc_shape_str = "_".join([str(s) for s in self.alloc_shape])
         return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{alloc_shape_str}ASMD"
 
-
 def _add_atomic_scatter_docstring(kind: str) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
@@ -256,6 +255,15 @@ def _add_atomic_scatter_docstring(kind: str) -> Callable[[T], T]:
       :code:`old = dst[I[0], ..., indices[I], ..., I[n]]`
       :code:`dst[I[0], ..., indices[I], ..., I[n]] = op(old, values[I])`
     where :code:`op` is {kind}.
+
+    :code:`values`, :code:`indices`, and optional :code:`mask` are broadcast to a
+    common tensor shape before the atomic operation. The returned tensor has that
+    broadcasted shape. For example, with :code:`axis=1`, :code:`values` of shape
+    :code:`[N, 1]`, and :code:`indices` of shape :code:`[1, M]`, the operation
+    behaves as if both operands had shape :code:`[N, M]`:
+      :code:`old[i, j] = dst[i, indices[0, j]]`
+      :code:`dst[i, indices[0, j]] = op(old[i, j], values[i, 0])`
+    A :code:`mask` of shape :code:`[N, 1]` would also broadcast over :code:`M`.
 
     Return the data stored at the scattered location before the atomic operation.
 
@@ -353,6 +361,13 @@ class shared_memory_descriptor(base_value):
         the gather axis is replaced by indices[I]:
           result[I] = src[I[0], ..., indices[I], ..., I[n]]
 
+        Broadcasting:
+            Gather does not implicitly broadcast multiple operands. The shape and layout of
+            indices directly determine the shape and layout of the result. To gather a
+            broadcasted result, explicitly construct a broadcasted indices tensor first.
+            For example, indices with shape [N, M] produces result [N, M]; indices with
+            shape [N, 1] produces result [N, 1].
+
         Args:
             indices (tensor): Tensor specifying which indices to gather along the axis.
             axis (int): The axis along which to gather values.
@@ -373,6 +388,12 @@ class shared_memory_descriptor(base_value):
         For each input position I, the operation writes to dst where the coordinate at
         the scatter axis is replaced by indices[I]:
           dst[I[0], ..., indices[I], ..., I[n]] = values[I]
+
+        Broadcasting:
+            values and indices are broadcast to a common tensor shape before the scatter.
+            For example, with axis=1, values of shape [N, 1] and indices of shape
+            [1, M] behave as if both operands had shape [N, M]:
+              dst[i, indices[0, j]] = values[i, 0]
 
         Args:
             values (tensor): Tensor with values to scatter (broadcast-compatible with indices).
