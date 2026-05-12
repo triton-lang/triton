@@ -2430,7 +2430,7 @@ def shared_gather_kernel(
     smem_2d = ttgl.allocate_shared_memory(ttgl.float32, [N, M], layout=shared_layout)
     smem_2d.store(matrix_data)
 
-    # Reshape to 1D to test gather along axis 0.
+    # Reshape to 1D to test gather along axis 0
     smem_1d = smem_2d.reshape([N * M])
 
     # Load the gather indices (diagonal elements: 0, M+1, 2*(M+1), ...)
