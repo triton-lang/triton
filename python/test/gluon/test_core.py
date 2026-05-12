@@ -2780,14 +2780,11 @@ def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_
 
     if use_constant_values:
         values = torch.ones(rhs_shape, dtype=torch_dtype, device=device)
-        expected_values = values
     else:
         values = torch.arange(rhs_n * rhs_m, dtype=torch.int32, device=device).reshape(rhs_shape)
         values = (values % 7 + 1).to(torch_dtype)
-        expected_values = values
-
     if op == "xchg":
-        # Make xchg deterministic.
+        # make xchg deterministic with broadcasting
         if axis == 1:
             base_indices = torch.arange(0, rhs_m, dtype=torch.int32, device=device)[None, :]
         else:
@@ -2805,7 +2802,7 @@ def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_
 
     old = torch.empty((rhs_n, rhs_m), dtype=torch_dtype, device=device)
     final = torch.empty((N, M), dtype=torch_dtype, device=device)
-    expected = _expected_shared_atomic_scatter_rmw(op, init_value, indices, expected_values, mask, axis, (N, M))
+    expected = _expected_shared_atomic_scatter_rmw(op, init_value, indices, values, mask, axis, (N, M))
 
     layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
                                    warps_per_cta=[4, 1], order=[1, 0])
