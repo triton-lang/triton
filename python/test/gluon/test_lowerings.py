@@ -915,14 +915,14 @@ def _with_cga_layout(layout, cga_layout):
 
 
 _single_cta_convert2d_layout_cases = [(None, interm_layout, src_layout, dst_layout)
-                                      for interm_layout in _intermediate_layouts for src_layout in _2d_layouts
+                                      for interm_layout in _intermediate_layouts
+                                      for src_layout in _2d_layouts
                                       for dst_layout in _2d_layouts]
 # Pair each layout with the next one so multi-CTA coverage stays small while every layout appears as source and dest.
 _multi_cta_2d_layout_pairs = list(zip(_2d_layouts, _2d_layouts[1:] + _2d_layouts[:1]))
-_multi_cta_convert2d_layout_cases = [
-    (ctas_per_cga, None, src_layout, dst_layout) for ctas_per_cga in ([4, 1], [2, 2])
-    for src_layout, dst_layout in _multi_cta_2d_layout_pairs
-]
+_multi_cta_convert2d_layout_cases = [(ctas_per_cga, None, src_layout, dst_layout)
+                                     for ctas_per_cga in ([4, 1], [2, 2])
+                                     for src_layout, dst_layout in _multi_cta_2d_layout_pairs]
 _convert2d_layout_cases = _single_cta_convert2d_layout_cases + _multi_cta_convert2d_layout_cases
 
 
@@ -947,8 +947,7 @@ def test_convert2d_layouts(M, N, ctas_per_cga, interm_layout, src_layout, dst_la
 
     if interm_layout in ["padded_shared_layout_single_interval", "padded_shared_layout_multi_interval"]:
         int_pad_pairs = [[32, 8]] if "single" in interm_layout else [[64, 4], [128, 8]]
-        interm_layout = ttgl.PaddedSharedLayout.with_identity_for(int_pad_pairs, [M, N], [1, 0],
-                                                                  cga_layout=cga_layout)
+        interm_layout = ttgl.PaddedSharedLayout.with_identity_for(int_pad_pairs, [M, N], [1, 0], cga_layout=cga_layout)
     elif cga_layout and interm_layout is not None:
         interm_layout = _with_cga_layout(interm_layout, cga_layout)
 
