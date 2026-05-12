@@ -2232,8 +2232,8 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
     message += " Operand: " + operandName.str();
   AssertInfo assertInfo{message, b.getI1Type()};
   Type aliasMatrixTypeBase;
-  auto buildVerifyWriteBody = [&writeVisibilityType, &aliasMatrixTypeBase](
-                                  bool useAlias) {
+  auto buildVerifyWriteBody = [&writeVisibilityType,
+                               &aliasMatrixTypeBase](bool useAlias) {
     return [=](ImplicitLocOpBuilder &fb, Block *entryBlock) {
       Value bufOffset = entryBlock->getArgument(0);
       Value lengthVal = entryBlock->getArgument(1);
