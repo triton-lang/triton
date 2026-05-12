@@ -2,6 +2,7 @@ import pytest
 import subprocess
 import json
 import pathlib
+import sys
 
 
 def test_help():
@@ -16,14 +17,12 @@ def test_exec(mode, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_exec.hatchet"
     name = str(temp_file.with_suffix(""))
     if mode == "script":
-        subprocess.check_call(["proton", "-n", name, "-b", "rocprofiler", helper_file, "test"],
-                              stdout=subprocess.DEVNULL)
+        subprocess.check_call(["proton", "-n", name, helper_file, "test"], stdout=subprocess.DEVNULL)
     elif mode == "python":
-        subprocess.check_call(
-            ["python3", "-m", "triton.profiler.proton", "-n", name, "-b", "rocprofiler", helper_file, "test"],
-            stdout=subprocess.DEVNULL)
+        subprocess.check_call([sys.executable, "-m", "triton.profiler.proton", "-n", name, helper_file, "test"],
+                              stdout=subprocess.DEVNULL)
     elif mode == "pytest":
-        subprocess.check_call(["proton", "-n", name, "-b", "rocprofiler", "pytest", "-k", "test_main", helper_file],
+        subprocess.check_call(["proton", "-n", name, "pytest", "-k", "test_main", helper_file],
                               stdout=subprocess.DEVNULL)
     with temp_file.open() as f:
         data = json.load(f, )

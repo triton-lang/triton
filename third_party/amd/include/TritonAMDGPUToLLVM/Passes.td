@@ -5,6 +5,12 @@ include "mlir/Pass/PassBase.td"
 
 def AllocateAMDGPUSharedMemory : Pass<"allocate-amdgpu-shared-memory", "mlir::ModuleOp"> {
   let summary = "Add metadata for shared memory allocation";
+  let constructor = "mlir::triton::createAllocateAMDGPUSharedMemoryPass(\"\")";
+
+  let options = [
+      Option<"arch", "arch", "std::string", /*default*/"\"\"",
+             "gfx target device architecture, e.g., gfx942">,
+  ];
 
   let description = [{
     This pass uses the `ModuleAllocation` analysis to:
@@ -109,17 +115,6 @@ def TritonAMDGPUConvertWarpSpecializeToLLVM : Pass<"triton-amdgpu-convert-warp-s
     Option<"gfxArch", "gfx-arch", "std::string", /*default*/"std::string{}",
            "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
   ];
-}
-
-def PrepareConSanCaptures : Pass<"prepare-consan-captures", "mlir::ModuleOp"> {
-  let summary = "Reserve shared memory for ConSan captures in WarpSpecializeOps";
-  let description = [{
-    Scans the module to estimate how many WarpSpecialize captures the
-    ConcurrencySanitizer pass will add, and sets a
-    `consan.extra_capture_bytes` attribute on each WarpSpecializeOp.
-    The AllocateAMDGPUSharedMemory pass reads this attribute to reserve
-    enough LDS for the expanded capture struct.
-  }];
 }
 
 #endif

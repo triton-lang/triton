@@ -479,6 +479,8 @@ class TritonSemantic(Generic[TensorTy]):
         input_sca_ty = input.type.scalar
         if input_sca_ty.is_ptr():
             raise ValueError("wrong type argument to unary minus (" + input_sca_ty.__repr__() + ")")
+        if input_sca_ty.is_floating():
+            return self.tensor(self.builder.create_fneg(input.handle), input.type)
         _0 = self.tensor(self.builder.get_null_value(input_sca_ty.to_ir(self.builder)), input_sca_ty)
         return self.sub(_0, input, True)
 
@@ -1537,18 +1539,13 @@ class TritonSemantic(Generic[TensorTy]):
     def deduce_scale_factor(self, lhs, lhs_scale, lhs_format, lhs_k_pack, rhs, rhs_scale, rhs_format, rhs_k_pack):
 
         def _to_scale_handle(scale):
-            if scale is None or isinstance(scale, tl.constexpr):
-                return None
-            elif isinstance(scale, tl.tensor) and scale.numel.value == 1:
-                return None
+            if isinstance(scale, tl.tensor) and scale.numel.value != 1:
+                return scale.handle
+            return None
 
-            return scale.handle
-
-        lhs_format_str = lhs_format.value if hasattr(lhs_format, 'value') else lhs_format
-        rhs_format_str = rhs_format.value if hasattr(rhs_format, 'value') else rhs_format
-        return ir.deduce_scale_factor(lhs.handle, _to_scale_handle(lhs_scale), self._str_to_fp_type(lhs_format_str),
+        return ir.deduce_scale_factor(lhs.handle, _to_scale_handle(lhs_scale), self._str_to_fp_type(lhs_format),
                                       lhs_k_pack, rhs.handle, _to_scale_handle(rhs_scale),
-                                      self._str_to_fp_type(rhs_format_str), rhs_k_pack)
+                                      self._str_to_fp_type(rhs_format), rhs_k_pack)
 
     def verify_scaled_shape(self, M, N, K, lhs_scale, rhs_scale, scale_factor):
         if lhs_scale is not None:
@@ -1570,8 +1567,6 @@ class TritonSemantic(Generic[TensorTy]):
         lhs_rank = len(lhs.shape)
         rhs_rank = len(rhs.shape)
         assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
-        lhs_format: str = lhs_format.value
-        rhs_format: str = rhs_format.value
         lhs_format_enum = self._str_to_fp_type(lhs_format)
         rhs_format_enum = self._str_to_fp_type(rhs_format)
         allowed_formats = {"e2m1", "e4m3", "e5m2", "bf16", "fp16"}

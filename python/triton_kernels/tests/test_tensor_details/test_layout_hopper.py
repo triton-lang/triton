@@ -1,7 +1,7 @@
 import pytest
 from triton._internal_testing import is_cuda
 from triton_kernels.tensor import wrap_torch_tensor, convert_layout, FP4
-from triton_kernels.tensor_details.layout import HopperMXScaleLayout, HopperMXValueLayout
+from triton_kernels.tensor_details.layout import HopperMXScaleLayout, HopperMXValueLayout, StridedLayout
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
@@ -42,6 +42,27 @@ def test_mxfp4_scale_roundtrip(shape, mx_axis, num_warps):
     transformation = layout.make_transformation(x.shape, is_fp4=False)
     res = transformation.unswizzle_data(transformation.swizzle_data(x))
     assert (res[:shape[0], :shape[1]] == x).all()
+
+
+@pytest.mark.parametrize(
+    ("shape", "mx_axis"),
+    [
+        ((0, 64), -2),
+        ((64, 0), -1),
+        ((2, 0), -2),
+        ((0, 2), -1),
+    ],
+)
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_mxfp4_scale_zero_sized_roundtrip(shape, mx_axis, num_warps):
+    x = torch.empty(shape, dtype=torch.uint8)
+    src = wrap_torch_tensor(x)
+    layout = HopperMXScaleLayout(mx_axis=mx_axis, num_warps=num_warps)
+
+    swizzled = convert_layout(src, layout)
+    roundtrip = convert_layout(swizzled, StridedLayout(mx_axis))
+
+    assert roundtrip.storage.data.shape == x.shape
 
 
 # ------------------------------------------------------------

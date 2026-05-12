@@ -1,6 +1,5 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/include/hipblas_instance.h"
 #include "amd/include/hipblas_types.h"
@@ -9,6 +8,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
+#include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -63,10 +63,17 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
           pm.addPass(createTritonAMDGPULowerInstructionSchedHintsPass(
               arch, numStages));
         });
-  ADD_PASS_WRAPPER_0("add_prepare_consan_captures",
-                     mlir::triton::createPrepareConSanCaptures);
-  ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
-                     mlir::triton::createAllocateAMDGPUSharedMemory);
+  m.def("add_prepare_consan_captures", [](mlir::PassManager &pm) {
+    mlir::triton::instrument::TritonInstrumentPrepareConSanCapturesOptions
+        options;
+    options.target = "amd";
+    pm.addPass(
+        mlir::triton::instrument::createTritonInstrumentPrepareConSanCaptures(
+            options));
+  });
+  ADD_PASS_OPTION_WRAPPER_1("add_allocate_shared_memory",
+                            mlir::triton::createAllocateAMDGPUSharedMemoryPass,
+                            const std::string &);
   ADD_PASS_OPTION_WRAPPER_3("add_accelerate_matmul",
                             mlir::createTritonAMDGPUAccelerateMatmul,
                             const std::string, int, int);

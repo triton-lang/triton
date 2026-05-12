@@ -54,11 +54,6 @@ class BuildHelperArgs:
     cupti_lib_blackwell_path: Optional[str]
 
 
-def _normalize_bool(value: str, default: str = "") -> bool:
-    effective_value = value if value is not None else default
-    return effective_value.upper() in ["ON", "1", "YES", "TRUE", "Y"]
-
-
 def _normalize_optional(value: str) -> Optional[str]:
     if value is None:
         return None

@@ -2,7 +2,6 @@ add_triton_library(TritonAMDGPUToLLVM
     AsyncUtility.cpp
     AtomicRMWOpsEmitter.cpp
     AllocateSharedMemory.cpp
-    PrepareConSanCaptures.cpp
     BufferOpsEmitter.cpp
     TensorPtrOpsToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
@@ -23,7 +22,6 @@ add_triton_library(TritonAMDGPUToLLVM
     BuiltinFuncToLLVM.cpp
     Utility.cpp
     TargetInfo.cpp
-    TargetUtils.cpp
     SPMDOpToLLVM.cpp
     SchedInstructions.cpp
     Fp4ToFpOpToLLVM.cpp
@@ -42,6 +40,7 @@ add_triton_library(TritonAMDGPUToLLVM
     TritonGPUToLLVM
     TritonInstrumentToLLVM
     TritonAMDGPUIR
+    TritonAMDAnalysis
     LLVMCore
     LLVMPasses
     LLVMSupport

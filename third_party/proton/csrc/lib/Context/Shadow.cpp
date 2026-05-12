@@ -7,7 +7,8 @@ namespace proton {
 
 void ShadowContextSource::initializeThreadContext() {
   if (!threadContextInitialized[this]) {
-    threadContextStack[this] = *mainContextStack;
+    threadContextStack.erase(this);
+    threadContextStack.emplace(this, *mainContextStack);
     threadContextInitialized[this] = true;
   }
 }

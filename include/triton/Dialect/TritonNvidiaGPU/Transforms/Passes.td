@@ -82,6 +82,21 @@ def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion
   ];
 }
 
+def TritonNvidiaGPUTMemBarrierInsertionPass : Pass<"triton-nvidia-gpu-tmem-barrier-insertion", "mlir::ModuleOp"> {
+  let summary = "Insert barriers to order tensor-memory reuse";
+
+  let description = [{
+    This pass inserts CTA barriers between tensor-memory accesses that reuse
+    aliasing physical tensor-memory storage and require ordering across logical
+    allocation lifetimes.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::ModuleOp"> {
   let summary = "lower to TMA load/store operations";
 

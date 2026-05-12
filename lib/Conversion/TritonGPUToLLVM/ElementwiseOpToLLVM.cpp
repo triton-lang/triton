@@ -9,17 +9,6 @@
 
 using namespace mlir::triton::gpu;
 
-namespace mlir::triton::gpu {
-
-Type getElementType(Value value) {
-  auto type = value.getType();
-  if (auto tensorType = dyn_cast<RankedTensorType>(type))
-    return tensorType.getElementType();
-  return type;
-}
-
-} // namespace mlir::triton::gpu
-
 namespace {
 
 int getNumElementsPerThreads(Type type,
@@ -233,7 +222,7 @@ struct ElementwiseInlineAsmOpConversion
     SmallVector<Value> packedOperands;
     unsigned numPackedElements = op.getPackedElement();
     for (int i = 0, e = op.getNumOperands(); i < e; i++) {
-      Type elemTy = getElementType(op.getOperand(i));
+      Type elemTy = getElementTypeOrSelf(op.getOperand(i));
       unsigned bitWidth =
           elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
       unsigned numElementPerReg = std::max(32 / bitWidth, 1u);
@@ -274,7 +263,7 @@ struct ElementwiseInlineAsmOpConversion
     // wrapped in a struct.
     SmallVector<Type> asmRetTypes;
     for (auto result : op.getResult()) {
-      auto ty = getTypeConverter()->convertType(getElementType(result));
+      auto ty = getTypeConverter()->convertType(getElementTypeOrSelf(result));
 
       // Pack return elements into 32-bits.
       unsigned bitWidth = getIntOrFloatOrPtrBitWidth(ty);
@@ -610,7 +599,6 @@ struct MapElementwiseOpConversion
     }
 
     auto &scalarOp = op.getScalarOp();
-    Region &parent = *rewriter.getBlock()->getParent();
 
     auto nOutputs = op.getNumResults();
     SmallVector<Value> scalarOutputs(nOutputs * nElems);
@@ -673,6 +661,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
+  POPULATE_UNARY_OP(arith::NegFOp, LLVM::FNegOp)
   POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
   POPULATE_UNARY_OP(math::CeilOp, math::CeilOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
