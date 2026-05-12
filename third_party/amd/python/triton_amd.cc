@@ -551,11 +551,11 @@ void init_triton_amd(py::module &&m) {
     }
   });
 
-  // Set LLVM cl::opt flags for the duration of a codegen call.
+  // Set LLVM cl::opt options for the AMDGPU codegen backend.
   // Handles both bare boolean flags ("flag-name") and key=value pairs
   // ("flag-name=value"). Returns the list of option names that were modified
-  // so they can be restored via restore_llvm_flags.
-  m.def("set_llvm_flags",
+  // so they can be restored via restore_llvm_options.
+  m.def("set_llvm_options",
         [](const std::vector<std::string> &flags) -> std::vector<std::string> {
           auto options = llvm::cl::getRegisteredOptions();
           std::vector<std::string> modified;
@@ -571,8 +571,7 @@ void init_triton_amd(py::module &&m) {
             }
             auto it = options.find(key);
             if (it == options.end()) {
-              llvm::errs() << "Warning: unknown LLVM option '" << key << "'\n";
-              continue;
+              throw std::invalid_argument("Unknown LLVM option '" + key + "'");
             }
             it->second->addOccurrence(1, key, val);
             modified.push_back(key);
@@ -580,8 +579,8 @@ void init_triton_amd(py::module &&m) {
           return modified;
         });
 
-  // Restore LLVM cl::opt flags to their compile-time defaults.
-  m.def("restore_llvm_flags", [](const std::vector<std::string> &modified) {
+  // Restore LLVM cl::opt options to their compile-time defaults.
+  m.def("restore_llvm_options", [](const std::vector<std::string> &modified) {
     auto options = llvm::cl::getRegisteredOptions();
     for (const auto &key : modified) {
       auto it = options.find(key);

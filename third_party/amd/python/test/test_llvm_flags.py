@@ -10,61 +10,61 @@ TTIR_PATH = str(Path(__file__).parent / "attn_fwd.ttir")
 # -- Unit tests for the C++ bindings (no GPU needed) --
 
 
-def test_set_and_restore_bool_flag():
-    """set_llvm_flags handles bare boolean flags and restore resets them."""
-    modified = amd.set_llvm_flags(["amdgpu-early-inline-all"])
+def test_set_and_restore_bool_option():
+    """set_llvm_options handles bare boolean flags and restore resets them."""
+    modified = amd.set_llvm_options(["amdgpu-early-inline-all"])
     assert modified == ["amdgpu-early-inline-all"]
-    amd.restore_llvm_flags(modified)
+    amd.restore_llvm_options(modified)
 
 
-def test_set_and_restore_value_flag():
-    """set_llvm_flags handles key=value flags and restore resets them."""
-    modified = amd.set_llvm_flags(["inline-threshold=500"])
+def test_set_and_restore_value_option():
+    """set_llvm_options handles key=value options and restore resets them."""
+    modified = amd.set_llvm_options(["inline-threshold=500"])
     assert modified == ["inline-threshold"]
-    amd.restore_llvm_flags(modified)
+    amd.restore_llvm_options(modified)
 
 
-def test_unknown_flag_skipped():
-    """Unknown flags are skipped and not included in the modified list."""
-    modified = amd.set_llvm_flags(["this-flag-does-not-exist=42"])
-    assert modified == []
+def test_unknown_option_raises():
+    """Unknown options raise std::invalid_argument."""
+    with pytest.raises(ValueError):
+        amd.set_llvm_options(["this-flag-does-not-exist=42"])
 
 
-def test_multiple_flags():
-    """Multiple flags can be set and restored in one call."""
+def test_multiple_options():
+    """Multiple options can be set and restored in one call."""
     flags = ["amdgpu-early-inline-all", "inline-threshold=500"]
-    modified = amd.set_llvm_flags(flags)
+    modified = amd.set_llvm_options(flags)
     assert len(modified) == 2
-    amd.restore_llvm_flags(modified)
+    amd.restore_llvm_options(modified)
 
 
 def test_restore_empty_list():
     """Restoring an empty list is a no-op."""
-    amd.restore_llvm_flags([])
+    amd.restore_llvm_options([])
 
 
-# -- Integration test: compile attn_fwd.ttir with llvm_flags (GPU needed) --
+# -- Integration test: compile attn_fwd.ttir with llvm_amdgpu_options (GPU needed) --
 
 
 @pytest.mark.skipif(current_target.backend != "hip", reason="requires HIP backend")
-def test_compile_accepts_llvm_flags():
-    """Compilation with llvm_flags succeeds and produces valid assembly."""
+def test_compile_accepts_llvm_amdgpu_options():
+    """Compilation with llvm_amdgpu_options succeeds and produces valid assembly."""
     kernel = triton.compile(
         TTIR_PATH,
         target=current_target,
-        options={"llvm_flags": ("enable-misched=0", )},
+        options={"llvm_amdgpu_options": ("enable-misched=0", )},
     )
     assert "attn_fwd" in kernel.asm["amdgcn"]
 
 
 @pytest.mark.skipif(current_target.backend != "hip", reason="requires HIP backend")
-def test_llvm_flags_change_codegen():
-    """llvm_flags produce different assembly than the default."""
+def test_llvm_amdgpu_options_change_codegen():
+    """llvm_amdgpu_options produce different assembly than the default."""
     baseline = triton.compile(TTIR_PATH, target=current_target)
-    with_flags = triton.compile(
+    with_options = triton.compile(
         TTIR_PATH,
         target=current_target,
-        options={"llvm_flags": ("enable-misched=0", )},
+        options={"llvm_amdgpu_options": ("enable-misched=0", )},
     )
-    assert baseline.asm["amdgcn"] != with_flags.asm["amdgcn"], \
-        "expected llvm_flags to change generated assembly"
+    assert baseline.asm["amdgcn"] != with_options.asm["amdgcn"], \
+        "expected llvm_amdgpu_options to change generated assembly"
