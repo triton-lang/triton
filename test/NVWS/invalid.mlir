@@ -21,7 +21,7 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @semaphore_create_leading_dims_mismatch(%d : !ttg.memdesc<1x1xi32, #shared0, #smem>, %e : !ttg.memdesc<2x1xi32, #shared0, #smem>) {
-    // expected-error @below {{Leading dims of sliced semaphore inputs don't match}}
+    // expected-error @below {{inconsistent semaphore buffer depths}}
     %sem = nvws.semaphore.create %d, %e true : !nvws.semaphore<[!ttg.memdesc<1x1xi32, #shared0, #smem>, !ttg.memdesc<2x1xi32, #shared0, #smem>]>
     tt.return
   }

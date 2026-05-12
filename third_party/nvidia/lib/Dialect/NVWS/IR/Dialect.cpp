@@ -28,6 +28,7 @@
 // clang-format off
 #include "Dialect/NVWS/IR/Dialect.h"
 #include "Dialect/NVWS/IR/Dialect.cpp.inc"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h" // required by `Types.cpp.inc`
 // clang-format on
 
@@ -35,22 +36,11 @@ using namespace mlir;
 using namespace mlir::triton::nvws;
 
 static int getSemaphoreDepthFromBaseType(Type type) {
-  if (auto memTy = dyn_cast<triton::gpu::MemDescType>(type)) {
-    if (isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
-            memTy.getEncoding()))
-      return 1;
-    auto shape = memTy.getShape();
-    if (shape.empty())
-      return -1;
-    return shape.front();
-  }
-  if (auto rankedTy = dyn_cast<RankedTensorType>(type)) {
-    auto shape = rankedTy.getShape();
-    if (shape.empty())
-      return -1;
-    return shape.front();
-  }
-  return -1;
+  auto memTy = cast<triton::gpu::MemDescType>(type);
+  if (isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+          memTy.getEncoding()))
+    return 1;
+  return memTy.getShape().front();
 }
 
 void mlir::triton::nvws::NVWSDialect::initialize() {
@@ -79,29 +69,12 @@ void mlir::triton::nvws::NVWSDialect::initialize() {
 LogicalResult
 SemaphoreType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
                       TypeArrayAttr baseType) {
-  int inferredNumStages = 1;
-  for (Type baseTy : baseType) {
-    int depth = getSemaphoreDepthFromBaseType(baseTy);
-    if (depth <= 1)
-      continue;
-    if (inferredNumStages == 1) {
-      inferredNumStages = depth;
-      continue;
-    }
-    if (inferredNumStages != depth) {
-      return emitError() << "inconsistent semaphore baseType depths: expected "
-                         << inferredNumStages << ", got " << depth;
-    }
-  }
+  auto depths = llvm::map_range(baseType, getSemaphoreDepthFromBaseType);
+  if (!llvm::all_equal(depths))
+    return emitError() << "inconsistent semaphore buffer depths";
   return success();
 }
 
 int SemaphoreType::getNumStages() const {
-  int inferredNumStages = 1;
-  for (Type baseTy : getBaseType()) {
-    int depth = getSemaphoreDepthFromBaseType(baseTy);
-    if (depth > inferredNumStages)
-      inferredNumStages = depth;
-  }
-  return inferredNumStages;
+  return getSemaphoreDepthFromBaseType(getBaseType().front());
 }
