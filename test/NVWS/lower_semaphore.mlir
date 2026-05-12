@@ -424,7 +424,6 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 #shared4 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem4 = #ttg.shared_memory
 !elt4 = tensor<1xi32, #blocked4>
-
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
   // CHECK-LABEL: @reuse_argument
   tt.func @reuse_argument(%arg0: i32, %arg1: i32, %arg2: i32) {
