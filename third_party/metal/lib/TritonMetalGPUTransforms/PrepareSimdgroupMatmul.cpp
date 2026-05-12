@@ -69,13 +69,25 @@ std::optional<unsigned> findTTDotInputArg(tt::LoadOp loadOp) {
 }
 
 std::pair<Value, tt::StoreOp> findTTStoreTilePtr(tt::DotOp dotOp) {
-  auto accumulator = dotOp.getResult();
-  auto accUsers = accumulator.getUsers();
+  // walk through convert_layout ops between dot and yield
+  Value accumulator = dotOp.getResult();
+  while (accumulator.hasOneUse()) {
+    auto *user = *accumulator.getUsers().begin();
+    if (auto convertLayout = dyn_cast<ttg::ConvertLayoutOp>(user))
+      accumulator = convertLayout.getResult();
+    else
+      break;
+  }
+
   scf::YieldOp yieldOp;
-  for (auto user : accUsers) {
+  for (auto *user : accumulator.getUsers()) {
     yieldOp = dyn_cast<scf::YieldOp>(user);
-    if (!yieldOp)
-      return {};
+    if (yieldOp)
+      break;
+  }
+
+  if (!yieldOp) {
+    return {};
   }
 
   auto forOp = dotOp->getParentOfType<scf::ForOp>();
