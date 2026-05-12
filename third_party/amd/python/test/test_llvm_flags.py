@@ -10,18 +10,14 @@ TTIR_PATH = str(Path(__file__).parent / "attn_fwd.ttir")
 # -- Unit tests for the C++ bindings (no GPU needed) --
 
 
-def test_set_and_restore_bool_option():
-    """set_llvm_options handles bare boolean flags and restore resets them."""
-    modified = amd.set_llvm_options(["amdgpu-early-inline-all"])
-    assert modified == ["amdgpu-early-inline-all"]
-    amd.restore_llvm_options(modified)
+def test_set_bool_option():
+    """set_llvm_options handles bare boolean flags."""
+    amd.set_llvm_options(["amdgpu-early-inline-all"])
 
 
-def test_set_and_restore_value_option():
-    """set_llvm_options handles key=value options and restore resets them."""
-    modified = amd.set_llvm_options(["inline-threshold=500"])
-    assert modified == ["inline-threshold"]
-    amd.restore_llvm_options(modified)
+def test_set_value_option():
+    """set_llvm_options handles key=value options."""
+    amd.set_llvm_options(["inline-threshold=500"])
 
 
 def test_unknown_option_raises():
@@ -31,16 +27,8 @@ def test_unknown_option_raises():
 
 
 def test_multiple_options():
-    """Multiple options can be set and restored in one call."""
-    flags = ["amdgpu-early-inline-all", "inline-threshold=500"]
-    modified = amd.set_llvm_options(flags)
-    assert len(modified) == 2
-    amd.restore_llvm_options(modified)
-
-
-def test_restore_empty_list():
-    """Restoring an empty list is a no-op."""
-    amd.restore_llvm_options([])
+    """Multiple options can be set in one call."""
+    amd.set_llvm_options(["amdgpu-early-inline-all", "inline-threshold=500"])
 
 
 # -- Integration test: compile attn_fwd.ttir with llvm_amdgpu_options (GPU needed) --

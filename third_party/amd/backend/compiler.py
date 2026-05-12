@@ -528,7 +528,8 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
-        modified = amd.set_llvm_options(list(options.llvm_amdgpu_options)) if options.llvm_amdgpu_options else []
+        if options.llvm_amdgpu_options:
+            amd.set_llvm_options(list(options.llvm_amdgpu_options))
         features = '-real-true16' if 'gfx11' in options.arch else ''
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
@@ -545,8 +546,6 @@ class HIPBackend(BaseBackend):
         else:
             amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags,
                                            options.enable_fp_fusion, False)
-        if modified:  # Reset options to defaults so they don't leak into other kernels.
-            amd.restore_llvm_options(modified)
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
