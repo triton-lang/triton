@@ -66,7 +66,7 @@ def SimdgroupStoreOp : TT_MetalGPU_Op<"simdgroup_store"> {
 
   let arguments = (ins
     Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>]>:$ptr,
-    TT_Type:$value,
+    TT_FpIntTensor:$value,
     I32:$stride,
     Optional<TT_BoolLike>:$mask
   );
