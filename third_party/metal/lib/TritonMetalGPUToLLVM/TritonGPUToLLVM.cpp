@@ -1,4 +1,5 @@
 #include "Analysis/MetalGPUAllocation.h"
+#include "Dialect/TritonMetalGPU/IR/Dialect.h"
 #include "MembarUtility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
@@ -49,6 +50,7 @@ public:
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
+    addIllegalDialect<triton::metalgpu::TritonMetalGPUDialect>();
     addIllegalDialect<triton::instrument::TritonInstrumentDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -88,9 +90,9 @@ struct UnrealizedCastToLoadPattern
   }
 };
 
-DenseMap<int, std::array<Operation *, 3>> getDotAllocOps(ModuleOp &mod) {
-  DenseMap<int, std::array<Operation *, 3>>
-      dotAllocOps; // dot_idx -> {allocA, allocB, allocC}
+DenseMap<int, std::array<Operation *, 2>> getDotAllocOps(ModuleOp &mod) {
+  DenseMap<int, std::array<Operation *, 2>>
+      dotAllocOps; // dot_idx -> {allocA, allocB}
   mod.walk([&](ttg::LocalAllocOp allocOp) {
     auto roleAttr = allocOp->getAttrOfType<StringAttr>("metal.dot_smem");
     auto idAttr = allocOp->getAttrOfType<IntegerAttr>("metal.dot_idx");
@@ -98,7 +100,7 @@ DenseMap<int, std::array<Operation *, 3>> getDotAllocOps(ModuleOp &mod) {
       return;
     int id = idAttr.getInt();
     StringRef role = roleAttr.getValue();
-    int idx = role == "A" ? 0 : role == "B" ? 1 : 2;
+    int idx = role == "A" ? 0 : 1;
     dotAllocOps[id][idx] = allocOp.getOperation();
   });
   return dotAllocOps;
@@ -176,9 +178,12 @@ struct ConvertTritonMetalGPUToLLVM
 
     mlir::triton::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
-    metal::populateDotOpToLLVMPatterns(typeConverter, patterns,
-                                       axisInfoAnalysis, dotAllocOps,
-                                       targetInfo, benefit);
+    metal::populateSimdgroupAsyncCopyOpToLLVMPatterns(typeConverter, patterns,
+                                                      targetInfo, benefit);
+    metal::populateSimdgroupMMAOpToLLVMPatterns(typeConverter, patterns,
+                                                targetInfo, benefit);
+    metal::populateSimdgroupStoreOpToLLVMPatterns(typeConverter, patterns,
+                                                  targetInfo, benefit);
     metal::populateElementwiseOpToLLVMPatterns(
         typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
     metal::populateLoadStoreOpToLLVMPatterns(
