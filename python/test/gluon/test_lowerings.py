@@ -895,18 +895,59 @@ _intermediate_layouts = _filter_layouts([
 ])
 
 
+def _with_cga_layout(layout, cga_layout):
+    if isinstance(layout, ttgl.BlockedLayout):
+        return ttgl.BlockedLayout(layout.size_per_thread, layout.threads_per_warp, layout.warps_per_cta, layout.order,
+                                  cga_layout=cga_layout)
+    if isinstance(layout, ttgl.NVMMADistributedLayout):
+        return ttgl.NVMMADistributedLayout(layout.version, layout.warps_per_cta, layout.instr_shape,
+                                           cga_layout=cga_layout)
+    if isinstance(layout, ttgl.DotOperandLayout):
+        return ttgl.DotOperandLayout(parent=_with_cga_layout(layout.parent, cga_layout),
+                                     operand_index=layout.operand_index, k_width=layout.k_width)
+    if isinstance(layout, ttgl.SliceLayout):
+        parent_cga_layout = [basis[:layout.dim] + [0] + basis[layout.dim:] for basis in cga_layout]
+        return ttgl.SliceLayout(dim=layout.dim, parent=_with_cga_layout(layout.parent, parent_cga_layout))
+    if isinstance(layout, ttgl.SwizzledSharedLayout):
+        return ttgl.SwizzledSharedLayout(layout.vec, layout.per_phase, layout.max_phase, layout.order,
+                                         cga_layout=cga_layout)
+    raise AssertionError(f"Unsupported multi-CTA layout {type(layout)}")
+
+
+_convert2d_layout_cases = [(None, interm_layout) for interm_layout in _intermediate_layouts]
+_convert2d_layout_cases += [
+    ([4, 1], None),
+    ([2, 2], None),
+]
+
+
 @pytest.mark.parametrize("M, N", [[64, 1], [64, 64], [64, 128], [1, 64]])
 @pytest.mark.parametrize("dtype", ["float16"])
 @pytest.mark.parametrize("src_layout", _2d_layouts)
-@pytest.mark.parametrize("interm_layout", _intermediate_layouts)
+@pytest.mark.parametrize("ctas_per_cga, interm_layout", _convert2d_layout_cases)
 @pytest.mark.parametrize("dst_layout", _2d_layouts)
-def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, device):
+def test_convert2d_layouts(M, N, src_layout, ctas_per_cga, interm_layout, dst_layout, dtype, device):
+    cga_layout = []
+    num_ctas = 1
+    if ctas_per_cga is not None:
+        if not is_cuda() or not is_hopper_or_newer():
+            pytest.skip("num_ctas > 1 requires NVIDIA Hopper or newer")
+        if M % ctas_per_cga[0] != 0 or N % ctas_per_cga[1] != 0:
+            pytest.skip("Shape must be divisible by the CGA shape")
+        cga_layout = make_cga_layout(ctas_per_cga, ctas_per_cga, [1, 0])
+        num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
+        src_layout = _with_cga_layout(src_layout, cga_layout)
+        dst_layout = _with_cga_layout(dst_layout, cga_layout)
+
     if str(src_layout) == str(dst_layout):
         pytest.skip("Source and destination layouts are the same")
 
     if interm_layout in ["padded_shared_layout_single_interval", "padded_shared_layout_multi_interval"]:
         int_pad_pairs = [[32, 8]] if "single" in interm_layout else [[64, 4], [128, 8]]
-        interm_layout = ttgl.PaddedSharedLayout.with_identity_for(int_pad_pairs, [M, N], [1, 0])
+        interm_layout = ttgl.PaddedSharedLayout.with_identity_for(int_pad_pairs, [M, N], [1, 0],
+                                                                  cga_layout=cga_layout)
+    elif cga_layout and interm_layout is not None:
+        interm_layout = _with_cga_layout(interm_layout, cga_layout)
 
     def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 
@@ -964,59 +1005,8 @@ def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, d
     torch_dtype = getattr(torch, dtype)
     x = torch.randn((M, N), dtype=torch_dtype, device=device)
     y = torch.zeros_like(x)
-    kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout)
+    kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout, num_ctas=num_ctas)
 
-    torch.testing.assert_close(y, x, rtol=0, atol=0)
-
-
-def _with_cga_layout(layout, cga_layout):
-    if isinstance(layout, ttgl.BlockedLayout):
-        return ttgl.BlockedLayout(layout.size_per_thread, layout.threads_per_warp, layout.warps_per_cta, layout.order,
-                                  cga_layout=cga_layout)
-    if isinstance(layout, ttgl.NVMMADistributedLayout):
-        return ttgl.NVMMADistributedLayout(layout.version, layout.warps_per_cta, layout.instr_shape,
-                                           cga_layout=cga_layout)
-    if isinstance(layout, ttgl.DotOperandLayout):
-        return ttgl.DotOperandLayout(parent=_with_cga_layout(layout.parent, cga_layout),
-                                     operand_index=layout.operand_index, k_width=layout.k_width)
-    if isinstance(layout, ttgl.SliceLayout):
-        parent_cga_layout = [basis[:layout.dim] + [0] + basis[layout.dim:] for basis in cga_layout]
-        return ttgl.SliceLayout(dim=layout.dim, parent=_with_cga_layout(layout.parent, parent_cga_layout))
-    raise AssertionError(f"Unsupported multi-CTA layout {type(layout)}")
-
-
-@pytest.mark.skipif(not is_cuda() or not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
-@pytest.mark.parametrize("ctas_per_cga", [[4, 1], [2, 2]])
-@pytest.mark.parametrize("M, N", [[128, 128]])
-@pytest.mark.parametrize("dtype", ["float16"])
-@pytest.mark.parametrize("src_layout", _2d_layouts)
-@pytest.mark.parametrize("dst_layout", _2d_layouts)
-def test_convert2d_layouts_multi_cta(ctas_per_cga, M, N, dtype, src_layout, dst_layout, device):
-    cga_layout = make_cga_layout(ctas_per_cga, ctas_per_cga, [1, 0])
-    src_layout = _with_cga_layout(src_layout, cga_layout)
-    dst_layout = _with_cga_layout(dst_layout, cga_layout)
-    if str(src_layout) == str(dst_layout):
-        pytest.skip("Source and destination layouts are the same")
-    num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
-
-    @gluon.jit
-    def kernel(x_ptr, y_ptr, M: ttgl.constexpr, N: ttgl.constexpr, src_layout: ttgl.constexpr,
-               dst_layout: ttgl.constexpr):
-        offs_m_src = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, src_layout))[:, None]
-        offs_n_src = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, src_layout))[None, :]
-        x = ttgl.load(x_ptr + offs_m_src * N + offs_n_src)
-
-        y = ttgl.convert_layout(x, layout=dst_layout)
-
-        offs_m_dst = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, dst_layout))[:, None]
-        offs_n_dst = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, dst_layout))[None, :]
-        ttgl.store(y_ptr + offs_m_dst * N + offs_n_dst, y)
-
-    torch.manual_seed(0)
-    torch_dtype = getattr(torch, dtype)
-    x = torch.randn((M, N), dtype=torch_dtype, device=device)
-    y = torch.zeros_like(x)
-    kernel[(1, )](x, y, M, N, src_layout, dst_layout, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
