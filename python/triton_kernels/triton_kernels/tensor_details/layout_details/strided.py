@@ -60,7 +60,7 @@ class StridedLayoutTransformation(LayoutTransformation):
     order: list[int]
 
     def swizzle_data(self, data):
-        assert data.stride(-1) == 1
+        assert data.numel() == 0 or data.stride(-1) == 1
         r = len(self.shape)
         if r == 0:
             return data

@@ -70,10 +70,6 @@ struct DataEntry {
   void upsertLinkedFlexibleMetric(const std::string &metricName,
                                   const MetricValueType &metricValue,
                                   size_t linkedId) const;
-
-  void upsertLinkedFlexibleMetrics(
-      const std::map<std::string, MetricValueType> &metrics,
-      size_t linkedId) const;
 };
 
 class Data : public ScopeInterface {
@@ -102,8 +98,8 @@ public:
   const std::string &getPath() const { return path; }
 
   /// Get the contexts associated with the data.
-  std::vector<Context> getContexts() const {
-    return contextSource->getContexts();
+  std::vector<Context> getContexts(bool withState = true) const {
+    return contextSource->getContexts(withState);
   }
 
   /// Dump the data to the given output format.

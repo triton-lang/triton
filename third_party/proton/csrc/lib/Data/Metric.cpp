@@ -6,12 +6,13 @@
 
 namespace proton {
 
-std::map<size_t, MetricBuffer::MetricDescriptor>
+std::map<uint64_t, MetricBuffer::MetricDescriptor>
     MetricBuffer::metricDescriptors;
-std::map<std::string, size_t> MetricBuffer::metricNameToId;
+std::map<std::string, uint64_t> MetricBuffer::metricNameToId;
 std::shared_mutex MetricBuffer::metricDescriptorMutex;
 
-std::atomic<size_t> MetricBuffer::metricId{0};
+std::atomic<uint64_t> MetricBuffer::metricId{0};
+std::atomic<uint64_t> MetricBuffer::metricSeqId{1};
 
 MetricBuffer::~MetricBuffer() {
   for (auto &[device, buffer] : deviceBuffers) {
@@ -30,11 +31,10 @@ MetricBuffer::~MetricBuffer() {
 void MetricBuffer::receive(
     const std::map<std::string, TensorMetric> &tensorMetrics,
     const std::map<std::string, MetricValueType> &scalarMetrics,
-    const MetricKernelLaunchState &metricKernelLaunchState) {
-  queueMetrics(tensorMetrics, metricKernelLaunchState.stream,
-               metricKernelLaunchState.tensor);
-  queueMetrics(scalarMetrics, metricKernelLaunchState.stream,
-               metricKernelLaunchState.scalar);
+    const MetricKernelLaunchState &metricKernelLaunchState,
+    const MetricKernelLaunchCallback &callback) {
+  queueMetrics(tensorMetrics, metricKernelLaunchState.tensor, callback);
+  queueMetrics(scalarMetrics, metricKernelLaunchState.scalar, callback);
 }
 
 MetricBuffer::MetricDescriptor
@@ -82,7 +82,7 @@ MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
     return descriptor;
   }
 
-  auto newMetricId = metricId.fetch_add(1);
+  uint64_t newMetricId = metricId.fetch_add(1);
   MetricDescriptor descriptor{newMetricId, typeIndex, size, name};
   metricDescriptors.emplace(newMetricId, descriptor);
   metricNameToId.emplace(name, newMetricId);
@@ -132,7 +132,7 @@ collectTensorMetrics(Runtime *runtime,
   return tensorMetricsHost;
 }
 
-void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
+void MetricBuffer::queue(uint64_t seqId, TensorMetric tensorMetric,
                          void *stream,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
@@ -143,7 +143,7 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&numWords),
-                          reinterpret_cast<void *>(&metricId),
+                          reinterpret_cast<void *>(&seqId),
                           reinterpret_cast<void *>(&tensorMetric.ptr),
                           reinterpret_cast<void *>(&metricValueSize),
                           reinterpret_cast<void *>(&globalScratchPtr),
@@ -154,7 +154,7 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
                         nullptr);
 }
 
-void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
+void MetricBuffer::queue(uint64_t seqId, MetricValueType scalarMetric,
                          void *stream,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
@@ -182,7 +182,7 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&numWords),
-                          reinterpret_cast<void *>(&metricId),
+                          reinterpret_cast<void *>(&seqId),
                           reinterpret_cast<void *>(&metricBits),
                           reinterpret_cast<void *>(&globalScratchPtr),
                           reinterpret_cast<void *>(&profileScratchPtr)};
