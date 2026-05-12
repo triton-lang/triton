@@ -913,6 +913,25 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
     _test_unary(dtype_x, expr, device=device, num_ctas=num_ctas)
 
 
+@triton.jit
+def _neg_signed_zero_kernel(x_ptr, y_ptr):
+    offsets = tl.arange(0, 2)
+    x = tl.load(x_ptr + offsets)
+    tl.store(y_ptr + offsets, -x)
+
+
+@pytest.mark.interpreter
+def test_neg_preserves_signed_zero(device):
+    x = np.array([0.0, -0.0], dtype=np.float32)
+    y = np.empty_like(x)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+
+    _neg_signed_zero_kernel[(1, )](x_tri, y_tri)
+
+    np.testing.assert_array_equal(np.signbit(to_numpy(y_tri)), np.array([True, False]))
+
+
 # ----------------
 # test math ops
 # ----------------
@@ -1310,6 +1329,30 @@ def test_noinline(mode, device):
     elif mode == "shared":
         ref = torch.full((16, 16), 16, device=device, dtype=torch.float32)
         assert torch.equal(z, ref + x + y)
+
+
+@triton.jit(noinline=True)
+def noinline_load_block_fn(ptr, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.arange(0, BLOCK_SIZE)
+    return tl.load(ptr + offsets)
+
+
+def test_noinline_returns_tensor(device):
+
+    @triton.jit
+    def kernel(X, Y, Z, BLOCK_SIZE: tl.constexpr):
+        x = noinline_load_block_fn(X, BLOCK_SIZE)
+        y = noinline_load_block_fn(Y, BLOCK_SIZE)
+        offsets = tl.arange(0, BLOCK_SIZE)
+        tl.store(Z + offsets, x + y)
+
+    BLOCK_SIZE = 128
+    torch.manual_seed(0)
+    x = torch.randn(BLOCK_SIZE, device=device, dtype=torch.float32)
+    y = torch.randn(BLOCK_SIZE, device=device, dtype=torch.float32)
+    z = torch.empty_like(x)
+    kernel[(1, )](x, y, z, BLOCK_SIZE=BLOCK_SIZE, num_warps=1)
+    assert torch.equal(z, x + y)
 
 
 # ---------------

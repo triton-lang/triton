@@ -1,4 +1,5 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TDMUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
@@ -44,6 +45,7 @@
 
 namespace tt = triton;
 namespace ttg = triton::gpu;
+using mlir::triton::amdgpu::TargetFeatures;
 
 namespace mlir {
 
@@ -60,7 +62,7 @@ int getNumberOfAsyncCopyInstructions(RankedTensorType globalType,
                                      ttg::MemDescType sharedType, Value mask,
                                      int ptrContig, int contigHint,
                                      ModuleAxisInfoAnalysis &axisInfo,
-                                     const AMD::TargetInfo &targetInfo,
+                                     const TargetFeatures &targetFeatures,
                                      bool isStore) {
   LinearLayout globalLayout = tt::gpu::toLinearLayout(globalType);
   triton::LinearLayout sharedLayout =
@@ -113,8 +115,8 @@ int getNumberOfAsyncCopyInstructions(RankedTensorType globalType,
   if (isStore) {
     int elemBitWidth = sharedType.getElementType().getIntOrFloatBitWidth();
     int vecBits = ptrContig * elemBitWidth;
-    if (!targetInfo.supportsDirectFromLdsStoreBitWidth(vecBits) &&
-        targetInfo.supportsDirectFromLdsStoreBitWidth(vecBits / 2)) {
+    if (!targetFeatures.supportsDirectFromLdsStoreBitWidth(vecBits) &&
+        targetFeatures.supportsDirectFromLdsStoreBitWidth(vecBits / 2)) {
       numInstructions *= 2;
     }
   }
@@ -126,15 +128,15 @@ int getNumberOfAsyncCopyInstructions(RankedTensorType globalType,
 // If emitRemarkOnNonAsyncOp is set for any non async op having a side effect on
 // GlobalMemory an performance remark will be emitted
 int getOpNumberOfAsyncCopyInstructions(Operation *op,
-                                       AMD::TargetInfo targetInfo,
+                                       const TargetFeatures &targetFeatures,
                                        ModuleAxisInfoAnalysis &axisInfo,
                                        bool emitRemarkOnNonAsyncOp) {
   if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
     int contig = LLVM::AMD::getVectorSize(copyOp.getSrc(), axisInfo);
     return getNumberOfAsyncCopyInstructions(
         copyOp.getSrc().getType(), copyOp.getResult().getType(),
-        copyOp.getMask(), contig, copyOp.getContiguity(), axisInfo, targetInfo,
-        /*isStore=*/false);
+        copyOp.getMask(), contig, copyOp.getContiguity(), axisInfo,
+        targetFeatures, /*isStore=*/false);
   } else if (auto bufferOp = dyn_cast<amdgpu::BufferLoadToLocalOp>(op)) {
     auto ptrType = cast<RankedTensorType>(LLVM::AMD::getPointerTypeWithShape(
         bufferOp.getPtr(), bufferOp.getOffsets()));
@@ -142,12 +144,14 @@ int getOpNumberOfAsyncCopyInstructions(Operation *op,
                                           bufferOp.getOffsets(), axisInfo);
     return getNumberOfAsyncCopyInstructions(
         ptrType, bufferOp.getDest().getType(), bufferOp.getMask(), contig,
-        bufferOp.getContiguity(), axisInfo, targetInfo, /*isStore=*/false);
+        bufferOp.getContiguity(), axisInfo, targetFeatures,
+        /*isStore=*/false);
   } else if (auto copyOp = dyn_cast<amdgpu::AsyncCopyLocalToGlobalOp>(op)) {
     int contig = LLVM::AMD::getVectorSize(copyOp.getDst(), axisInfo);
     return getNumberOfAsyncCopyInstructions(
         copyOp.getDst().getType(), copyOp.getSrc().getType(), copyOp.getMask(),
-        contig, copyOp.getContiguity(), axisInfo, targetInfo, /*isStore=*/true);
+        contig, copyOp.getContiguity(), axisInfo, targetFeatures,
+        /*isStore=*/true);
   } else if (emitRemarkOnNonAsyncOp) {
     SmallVector<mlir::MemoryEffects::EffectInstance> effects;
     if (auto memEffectIface = dyn_cast<MemoryEffectOpInterface>(op))
@@ -420,9 +424,8 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
   using Base::Base;
 
   void runOnOperation() override {
-    tt::AMD::TargetInfo targetInfo(gfxArch);
-    if (!isCDNA(targetInfo.getISAFamily()) &&
-        targetInfo.getISAFamily() != tt::AMD::ISAFamily::GFX1250) {
+    TargetFeatures targetFeatures{llvm::StringRef(gfxArch)};
+    if (!targetFeatures.isCDNA() && !targetFeatures.isGFX1250()) {
       return;
     }
 
@@ -432,7 +435,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
     // Triton no longer needs to walk the IR and count outstanding async
     // intrinsics. Keep the ttg.async_wait ops unchanged (they track
     // commit groups) and lower them directly to wait_asyncmark later.
-    if (!targetInfo.useAsyncMarks()) {
+    if (!targetFeatures.useAsyncMarks()) {
       // GFX1250 (and future arches without asyncmark) use instruction counting.
       SmallVector<ttg::AsyncWaitOp> waitOps;
       getOperation()->walk(
@@ -440,13 +443,13 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
 
       ModuleAxisInfoAnalysis axisInfo(m);
       DenseMap<Operation *, int> intrinsicCountCache;
-      auto countAsyncLoadInstructions = [&](Operation *op) {
+      auto countAsyncLoadInstructions = [&](Operation *op) -> int {
         auto found = intrinsicCountCache.find(op);
         if (found != intrinsicCountCache.end()) {
           return found->second;
         }
         auto v = getOpNumberOfAsyncCopyInstructions(
-            op, targetInfo, axisInfo,
+            op, targetFeatures, axisInfo,
             /*emitRemarkOnNonAsyncOp=*/false);
         intrinsicCountCache[op] = v;
         return v;

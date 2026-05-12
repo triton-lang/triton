@@ -1,7 +1,7 @@
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
-#include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -89,14 +89,12 @@ namespace mlir {
 llvm::MapVector<Operation *, std::pair<int, Operation *>>
 getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                  scf::ForOp &forOp, int numStages) {
-  auto arch = getAMDArch(forOp->getParentOfType<ModuleOp>());
-  triton::AMD::ISAFamily isaFamily = triton::AMD::ISAFamily::Unknown;
-  if (arch)
-    isaFamily = triton::AMD::deduceISAFamily(*arch);
+  auto targetFeatures = triton::amdgpu::TargetFeatures::fromModuleOp(
+      forOp->getParentOfType<ModuleOp>());
 
-  bool filterSmallVectors = isaFamily != triton::AMD::ISAFamily::CDNA4 &&
-                            !isRDNA(isaFamily) &&
-                            isaFamily != triton::AMD::ISAFamily::GFX1250;
+  bool filterSmallVectors = !targetFeatures.isCDNA4() &&
+                            !targetFeatures.isRDNA() &&
+                            !targetFeatures.isGFX1250();
 
   bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
   llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =
@@ -543,7 +541,7 @@ void pipelineLoop(scf::ForOp forOp, int numStages) {
     loadInfo.distToUse = distance;
     loadInfo.use = use;
 
-    auto useTDM = isa<tt::DescriptorLoadOp>(load);
+    auto useTDM = isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(load);
     if (useTDM) {
       loadToInfo[load] = loadInfo;
       continue;

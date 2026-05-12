@@ -45,6 +45,9 @@ std::unique_ptr<OperationPass<ModuleOp>>
 createTritonAMDGPULowerInstructionSchedHintsPass(StringRef gfxArch,
                                                  int32_t numStages);
 
+std::unique_ptr<OperationPass<ModuleOp>>
+createAllocateAMDGPUSharedMemoryPass(StringRef arch);
+
 #define GEN_PASS_REGISTRATION
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
 

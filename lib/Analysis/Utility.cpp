@@ -105,7 +105,8 @@ bool ReduceOpHelper::isAssociative() {
   return !hasNoAssociativeOp;
 }
 
-unsigned ReduceOpHelper::getScratchSizeInBytes() {
+unsigned ReduceOpHelper::getScratchSizeInBytes(
+    GetNumScratchElemsFn numScratchElemsGetter) {
   auto kLane = StringAttr::get(op.getContext(), "lane");
 
   auto isReduced = [axis = axis](const LinearLayout &layout) {
@@ -124,8 +125,13 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
     // BaseOffsets in the lowering.
     int bytes = 0;
     for (auto inputTy : op.getInputTypes()) {
-      auto nelem =
-          getNumScratchElemsSwizzledCvt(regLl, tmpLl, getBitwidth(inputTy));
+      unsigned nelem = 0;
+      if (numScratchElemsGetter) {
+        nelem = numScratchElemsGetter(regLl, tmpLl, getBitwidth(inputTy));
+      } else {
+        nelem =
+            getNumScratchElemsSwizzledCvt(regLl, tmpLl, getBitwidth(inputTy));
+      }
       bytes += nelem * (getBitwidth(inputTy) / 8);
     }
     bytesRegToTmp = std::max<unsigned>(bytesRegToTmp, bytes);
@@ -1162,6 +1168,9 @@ bool supportMMA(triton::DotOp op, int version) {
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
   auto aElemTy = op.getA().getType().getElementType();
   auto bElemTy = op.getB().getType().getElementType();
+  if (aElemTy.isF32() && bElemTy.isF32() &&
+      op.getInputPrecision() != InputPrecision::TF32)
+    return false;
   if (version == 5) {
     if (triton::tools::getBoolEnv("DISABLE_MMA_V5"))
       return false;
@@ -1227,7 +1236,8 @@ bool supportMMA(triton::DotOp op, int version) {
     }
   }
   if (aElemTy.isF32() && bElemTy.isF32()) {
-    return op.getInputPrecision() == InputPrecision::TF32 && version >= 2;
+    assert(op.getInputPrecision() == InputPrecision::TF32);
+    return version >= 2;
   }
   return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }

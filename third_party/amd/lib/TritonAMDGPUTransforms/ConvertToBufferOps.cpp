@@ -12,6 +12,7 @@
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Analysis/RangeAnalysis.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
@@ -27,6 +28,7 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using ::mlir::LLVM::AMD::getVectorSize;
+using mlir::triton::amdgpu::TargetFeatures;
 
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
@@ -338,10 +340,10 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
       DenseMap<Value, SetVector<Operation *>> &assumptions,
       ModuleAxisInfoAnalysis &axisAnalysisPass,
       std::shared_ptr<DataFlowSolver> solver,
-      const triton::AMD::TargetInfo &targetInfo, bool analyzeSmallTensorOfst_)
+      const TargetFeatures &targetFeatures, bool analyzeSmallTensorOfst_)
       : mlir::OpRewritePattern<triton::AtomicRMWOp>(context),
         assumptions(assumptions), axisAnalysisPass(axisAnalysisPass),
-        solver(std::move(solver)), targetInfo(targetInfo),
+        solver(std::move(solver)), targetFeatures(targetFeatures),
         analyzeSmallTensorOfst(analyzeSmallTensorOfst_) {}
 
   mlir::LogicalResult
@@ -395,7 +397,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     LDBG("RMW supported type");
 
     if (atomicRmwOp == RMWOp::FADD &&
-        !targetInfo.supportsBufferAtomicFadd(checkType)) {
+        !targetFeatures.supportsBufferAtomicFadd(checkType)) {
       return rewriter.notifyMatchFailure(
           op, "RMW FADD unsupported for this type on target");
     }
@@ -485,7 +487,7 @@ private:
   DenseMap<Value, SetVector<Operation *>> assumptions;
   ModuleAxisInfoAnalysis &axisAnalysisPass;
   std::shared_ptr<DataFlowSolver> solver;
-  triton::AMD::TargetInfo targetInfo;
+  TargetFeatures targetFeatures;
   bool analyzeSmallTensorOfst;
 };
 
@@ -636,7 +638,7 @@ struct TritonAMDGPUConvertToBufferOpsPass
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     ModuleOp mod = getOperation();
-    triton::AMD::TargetInfo targetInfo(gfxArch);
+    TargetFeatures targetFeatures{llvm::StringRef(gfxArch)};
 
     // Collect assumptions in the function
     DenseMap<Value, SetVector<Operation *>> assumptions =
@@ -655,16 +657,16 @@ struct TritonAMDGPUConvertToBufferOpsPass
                  ConvertTritonStoreToBufferStore>(context, assumptions,
                                                   axisInfoAnalysis, solver,
                                                   this->analyzeSmallTensorOfst);
-    if (targetInfo.supportsBufferLoadToLocal()) {
+    if (targetFeatures.supportsBufferLoadToLocal()) {
       patterns
           .add<ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>>(
               context, assumptions, axisInfoAnalysis, solver,
               this->analyzeSmallTensorOfst);
     }
 
-    if (this->allowBufferAtomics && targetInfo.supportsBufferAtomicRMW())
+    if (this->allowBufferAtomics && targetFeatures.supportsBufferAtomicRMW())
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
-          context, assumptions, axisInfoAnalysis, solver, targetInfo,
+          context, assumptions, axisInfoAnalysis, solver, targetFeatures,
           this->analyzeSmallTensorOfst);
     patterns.add<ConvertTritonAtomicCASOpToBufferAtomicCAS>(
         context, assumptions, axisInfoAnalysis, solver,

@@ -10,6 +10,7 @@
 #include <map>
 #include <numeric>
 #include <stdexcept>
+#include <utility>
 
 namespace proton {
 
@@ -155,16 +156,22 @@ void InstrumentationProfiler::initFunctionMetadata(
     scopeIdParentMap[scopeId] = parentId;
   }
   for (auto &[scopeId, name] : functionScopeIdNames[functionId]) {
-    std::vector<Context> contexts = {name};
+    std::vector<Context> reversedContexts;
+    reversedContexts.emplace_back(name);
     auto currentId = scopeId;
     while (scopeIdParentMap.count(currentId) > 0) {
       auto parentId = scopeIdParentMap[currentId];
       auto parentName = functionScopeIdNames[functionId].at(parentId);
-      contexts.emplace_back(parentName);
+      reversedContexts.emplace_back(parentName);
       currentId = parentId;
     }
-    std::reverse(contexts.begin(), contexts.end());
-    functionScopeIdContexts[functionId][scopeId] = contexts;
+    std::vector<Context> contexts;
+    contexts.reserve(reversedContexts.size());
+    for (auto iter = reversedContexts.rbegin(); iter != reversedContexts.rend();
+         ++iter) {
+      contexts.push_back(*iter);
+    }
+    functionScopeIdContexts[functionId].emplace(scopeId, std::move(contexts));
   }
   functionMetadata.emplace(functionId, InstrumentationMetadata(metadataPath));
 }

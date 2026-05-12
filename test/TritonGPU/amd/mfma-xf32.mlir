@@ -37,3 +37,20 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     tt.return
   }
 }
+
+// -----
+
+// CHECK-LABEL:mfma_f64_ignore_xf32
+
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 2], instrShape = [16, 16, 4], isTransposed = true, elementBitWidth = 64}>
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @mfma_f64_ignore_xf32(
+    %a: tensor<32x256xf64, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>,
+    %b: tensor<256x32xf64, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>) {
+    %zero_f64 = arith.constant dense<0.000000e+00> : tensor<32x32xf64, #mma>
+    // CHECK: rocdl.mfma.f64.16x16x4f64
+    %dot = tt.dot %a, %b, %zero_f64, inputPrecision = tf32 : tensor<32x256xf64, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<256x32xf64, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x32xf64, #mma>
+    tt.return
+  }
+}

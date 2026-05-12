@@ -10,6 +10,7 @@
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Types.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "third_party/amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -17,6 +18,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/GenericSwizzling.h"
@@ -711,13 +713,41 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttg::LocalScatterOp>(memDesc, values, indices,
                                               axisAttr);
            })
+      .def("create_local_atomic_scatter_rmw",
+           [](GluonOpBuilder &self, tt::RMWOp rmwOp, Value memDesc,
+              Value values, Value indices, std::optional<Value> mask,
+              int32_t axis) -> Value {
+             return self.create<ttg::LocalAtomicScatterRMWOp>(
+                 rmwOp, memDesc, values, indices, mask.value_or(Value()), axis);
+           })
       .def("get_shared_bank_conflicts",
            [](GluonOpBuilder &self, Attribute regLayoutAttr,
               Attribute sharedLayoutAttr, std::vector<int64_t> &shape,
               int bitwidth) -> int {
              auto regLayout = ttg::toLinearLayout(shape, regLayoutAttr);
              auto smemLayout = ttg::toLinearLayout(shape, sharedLayoutAttr);
-             return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth);
+             auto mod = self.getBuilder()
+                            .getInsertionBlock()
+                            ->getParentOp()
+                            ->getParentOfType<ModuleOp>();
+             auto arch = getAMDArch(mod);
+             if (!arch.has_value())
+               return ttg::bankConflictsMemDesc(regLayout, smemLayout,
+                                                bitwidth);
+             tt::AMD::TargetInfo targetInfo(arch->str());
+             int numBanks = targetInfo.getSharedMemoryBanks();
+             auto vecBitwidth = std::max<int32_t>(
+                 32, smemLayout.getInDimSize(StringAttr::get(
+                         smemLayout.getInDimNames().begin()->getContext(),
+                         "vector")) *
+                         bitwidth);
+             auto [dstTile, srcTile] =
+                 targetInfo.getSharedLdStTiles(vecBitwidth);
+             (void)srcTile;
+             assert(srcTile.laneAddr.empty() &&
+                    "srcTile.laneAddr should be empty");
+             return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
+                                              numBanks, dstTile);
            })
       .def("create_local_dealloc",
            [](GluonOpBuilder &self, Value memDesc) -> Operation * {
@@ -1058,6 +1088,14 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(
                  descPtr, indices, src, barrier, cacheModifier);
            })
+      .def("create_update_tensor_descriptor",
+           [](GluonOpBuilder &self, Value descPtr,
+              std::vector<Value> &addOffsets, std::vector<Value> &setBounds,
+              Value dest, Value pred, Value barrier) -> Value {
+             return self.create<ttag::UpdateTensorDescriptorOp>(
+                 descPtr.getType(), descPtr, ValueRange(addOffsets),
+                 ValueRange(setBounds), dest, pred, barrier);
+           })
       .def("create_async_tdm_scatter",
            [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,
               Value dstColOffset, Value src, Value barrier) {
@@ -1206,7 +1244,8 @@ void init_gluon_ir(py::module &&m) {
 
   m.def("get_amd_wmma_scale_layout",
         [](unsigned opIdx, std::vector<int64_t> &shape, unsigned wmmaMDim,
-           unsigned scaleFactor, std::vector<std::vector<int32_t>> &regBases,
+           unsigned wmmaNDim, bool isTransposed, unsigned scaleFactor,
+           std::vector<std::vector<int32_t>> &regBases,
            std::vector<std::vector<int32_t>> &warpBases,
            std::vector<std::vector<int32_t>> &cgaBases) -> py::object {
           DialectRegistry registry;
@@ -1224,7 +1263,8 @@ void init_gluon_ir(py::module &&m) {
                                tt::standardOutDimNames(&ctx, rank));
           auto cgaLayout = buildCgaLayoutAttr(&ctx, cgaBases, rank);
           auto ll = ttg::chooseScaledWmmaScaleLayout(
-              &ctx, opIdx, shape, wmmaMDim, scaleFactor, ctaLayout, cgaLayout);
+              &ctx, opIdx, shape, wmmaMDim, wmmaNDim, isTransposed, scaleFactor,
+              ctaLayout, cgaLayout);
           auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
           return layoutToGluon(attr);
         });

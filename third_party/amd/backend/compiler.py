@@ -25,7 +25,8 @@ def is_pingpong_schedule_enabled(arch, use_async_copy):
 
 
 def is_in_thread_transpose_enabled(arch):
-    return (arch == "gfx942") if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
+    return (arch == "gfx942" or "gfx120" in arch) \
+        if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
 
 
 def is_async_copy_enabled(arch):
@@ -341,8 +342,8 @@ class HIPBackend(BaseBackend):
 
         # Reserve LDS space for ConSan captures before allocation computes offsets.
         if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):
-            amd.passes.ttgpuir.add_prepare_consan_captures(pm)
-        amd.passes.ttgpuir.add_allocate_shared_memory(pm)
+            passes.ttgpuir.add_prepare_consan_captures(pm, "amd")
+        amd.passes.ttgpuir.add_allocate_shared_memory(pm, options.arch)
         # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after shared
         if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
@@ -478,7 +479,7 @@ class HIPBackend(BaseBackend):
             if len(paths) > 0:
                 llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion, True)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during

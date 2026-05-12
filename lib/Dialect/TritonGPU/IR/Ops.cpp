@@ -656,17 +656,37 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
 LogicalResult MemDescReinterpretOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getResult().getType();
-  auto kBlock = StringAttr::get(getContext(), "block");
-  auto getNumBroadcastCTADims = [kBlock](MemDescType ty) {
+  if (srcTy.getMemorySpace() != dstTy.getMemorySpace())
+    return emitError("source and result must have the same memory space");
+  if (srcTy.getMutableMemory() != dstTy.getMutableMemory())
+    return emitError("source and result must have the same mutability");
+  auto isSubview = [](MemDescType ty) {
+    auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
+    return ty.getShape().take_back(rank) != ty.getAllocShape().take_back(rank);
+  };
+  if (isSubview(srcTy) || isSubview(dstTy))
+    return emitError("source and result must not be subviews; reinterpret the "
+                     "parent descriptor and then take a subview");
+  assert((isa<SharedMemorySpaceAttr, nvidia_gpu::TensorMemorySpaceAttr>(
+              srcTy.getMemorySpace()) &&
+          "expected shared or tensor memory"));
+  auto getViewNumBits = [](MemDescType ty) {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
     auto layout =
         toLinearLayout(ty.getAllocShape().take_back(rank), ty.getEncoding());
-    auto freeVariableMask = layout.getFreeVariableMasks().lookup(kBlock);
-    return llvm::popcount<uint32_t>(freeVariableMask);
+    // Shared memory is allocated by offset and TMEM is allocated by column; the
+    // other physical dimensions do not increase or decrease the allocation.
+    auto *ctx = ty.getContext();
+    bool isSharedMemory = isa<SharedMemorySpaceAttr>(ty.getMemorySpace());
+    auto dim = StringAttr::get(ctx, isSharedMemory ? "offset" : "col");
+    return layout.getInDimSize(dim) * ty.getElementTypeBitWidth();
   };
-  if (getNumBroadcastCTADims(srcTy) != getNumBroadcastCTADims(dstTy))
-    return emitError(
-        "source and result must have the same number of broadcast CTA dims");
+  auto srcNumBits = getViewNumBits(srcTy);
+  auto dstNumBits = getViewNumBits(dstTy);
+  if (srcNumBits != dstNumBits)
+    return emitError() << "source and result must have the same logical "
+                          "storage size ("
+                       << srcNumBits << " vs " << dstNumBits << ")";
   return success();
 }
 
@@ -882,6 +902,65 @@ LogicalResult LocalScatterOp::verify() {
   return success();
 }
 
+// LocalAtomicScatterRMWOp
+LogicalResult LocalAtomicScatterRMWOp::verify() {
+  auto dstTy = getDst().getType();
+  auto valuesTy = cast<RankedTensorType>(getValues().getType());
+  auto indicesTy = cast<RankedTensorType>(getIndices().getType());
+  auto maskTy = getMask() ? cast<RankedTensorType>(getMask().getType())
+                          : RankedTensorType();
+  Type valuesEltTy = valuesTy.getElementType();
+  unsigned axis = getAxis();
+
+  if (!dstTy.getMutableMemory())
+    return emitOpError("Cannot store into immutable memory");
+
+  // Local atomic scatter RMW only supports shared-memory memdescs.
+  if (!isa<SharedEncodingTrait>(dstTy.getEncoding())) {
+    return emitError("destination must have shared memory encoding");
+  }
+
+  // Match Triton's existing atomic add type support.
+  if (!valuesEltTy.isIntOrFloat()) {
+    return emitError("values must have integer or floating element type");
+  }
+
+  // Verify indices tensor has integer element type
+  if (!indicesTy.getElementType().isInteger()) {
+    return emitError("indices must have integer element type");
+  }
+
+  if (failed(verifySharedMemoryRank(*this, valuesTy, dstTy, "values")))
+    return failure();
+
+  // Verify values, indices, and mask have the same shape/rank.
+  if (valuesTy.getShape() != indicesTy.getShape()) {
+    return emitError("values shape must match indices shape");
+  }
+  if (maskTy && valuesTy.getShape() != maskTy.getShape()) {
+    return emitError("values shape must match mask shape");
+  }
+
+  // Verify axis is valid
+  if (axis >= dstTy.getRank()) {
+    return emitError("axis ")
+           << axis << " is out of bounds for destination rank "
+           << dstTy.getRank();
+  }
+
+  // Verify values, indices, and result have the same layout
+  if (valuesTy.getEncoding() != indicesTy.getEncoding()) {
+    return emitError("values must have the same layout as indices");
+  }
+  if (maskTy && valuesTy.getEncoding() != maskTy.getEncoding()) {
+    return emitError("values must have the same layout as mask");
+  }
+  if (dstTy.getElementType() != valuesEltTy) {
+    return emitError("values element type must match destination element type");
+  }
+  return success();
+}
+
 // AsyncCopyGlobalToLocalOp
 LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   if (!getResult().getType().getMutableMemory())
@@ -1067,6 +1146,14 @@ LogicalResult MemDescSubsliceOp::verify() {
 
 RegionRange WarpSpecializeOp::getPartitionRegions() {
   return getPartitionOp().getPartitionRegions();
+}
+
+SmallVector<Region *> WarpSpecializeOp::getNonEmptyPartitionRegions() {
+  SmallVector<Region *> regions;
+  for (Region *region : getPartitionRegions())
+    if (!region->empty() && !region->front().without_terminator().empty())
+      regions.push_back(region);
+  return regions;
 }
 
 WarpSpecializePartitionsOp WarpSpecializeOp::getPartitionOp() {

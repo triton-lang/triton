@@ -395,21 +395,22 @@ class tensor_memory_descriptor(base_value):
         return ret
 
     @builtin
-    def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
+    def _reinterpret(self, dtype=None, shape=None, layout=None,
+                     _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
         """
         Reinterpret tensor memory descriptor with a new dtype, shape, and layout.
 
         Args:
-            dtype (dtype): The new data type.
-            shape (Sequence[int]): The new shape.
-            layout (TensorMemoryLayout): The new layout.
+            dtype (dtype): The new data type. Defaults to the descriptor dtype.
+            shape (Sequence[int]): The new shape. Defaults to the descriptor shape.
+            layout (TensorMemoryLayout): The new layout. Defaults to the descriptor layout.
 
         Returns:
             tensor_memory_descriptor: Descriptor with updated type and layout.
         """
-        dtype = _unwrap_if_constexpr(dtype)
-        shape = [_unwrap_if_constexpr(s) for s in shape]
-        layout = _unwrap_if_constexpr(layout)
+        dtype = self.dtype if dtype is None else _unwrap_if_constexpr(dtype)
+        shape = self.shape if shape is None else [_unwrap_if_constexpr(s) for s in shape]
+        layout = self.layout if layout is None else _unwrap_if_constexpr(layout)
 
         ty = tensor_memory_descriptor_type(dtype, shape, layout, shape)
         handle = _semantic.builder.create_memdesc_reinterpret(ty.to_ir(_semantic.builder), self.handle)
@@ -541,41 +542,37 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
 
 
 @constexpr_function
-def tcgen05_mma_barrier_count(smems, multicast):
+def tcgen05_mma_barrier_count(smems, multicast, two_ctas):
     """
     Calculate the number of CTAs that will commit the tcgen05 MMA instruction.
 
     Args:
         smems (Sequence[shared_memory_descriptor]): Shared memory descriptors used in the tcgen05 instruction.
         multicast (bool): Whether the tcgen05 instruction is multicast.
+        two_ctas (bool): Whether the tcgen05 instruction uses cta_group::2.
 
     Returns:
         int: The number of CTAs that will commit the tcgen05 MMA instruction.
     """
-    assert 0 <= len(smems) <= 2, "tcgen05_mma_barrier_count supports 0, 1, or 2 smem descriptors"
+    assert 0 <= len(smems) <= 4, "tcgen05_mma_barrier_count supports 0 to 4 descriptors"
     if not smems or not multicast:
         return 1
 
     def basis_is_zero(basis):
         return all(b == 0 for b in basis)
 
-    def num_broadcast_bits(smem):
-        return sum(basis_is_zero(basis) for basis in smem.layout.cga_layout)
+    num_cta_bits = len(smems[0].layout.cga_layout)
+    for desc in smems[1:]:
+        assert len(desc.layout.cga_layout) == num_cta_bits
 
-    if len(smems) == 1:
-        return 2**num_broadcast_bits(smems[0])
-
-    assert len(smems) == 2
-    num_broadcast_bits_a = num_broadcast_bits(smems[0])
-    num_broadcast_bits_b = num_broadcast_bits(smems[1])
-    # Assert that for every basis, at least one of them is non-zero
-    # so that the inclusion-exclusion principle below works
-    # This can be generalised if needed by substracting below 2**size_intersection
-    for i in range(len(smems[0].layout.cga_layout)):
-        assert not basis_is_zero(smems[0].layout.cga_layout[i]) or not basis_is_zero(smems[1].layout.cga_layout[i])
-
-    # Inclusion-exclusion
-    num_cta_commits = 2**num_broadcast_bits_a + 2**num_broadcast_bits_b - 1
+    num_cta_commits = 0
+    for cta in range(1 << num_cta_bits):
+        if two_ctas and cta & 1:
+            continue
+        for desc in smems:
+            if all(basis_is_zero(basis) or not (cta & (1 << i)) for i, basis in enumerate(desc.layout.cga_layout)):
+                num_cta_commits += 1
+                break
     return num_cta_commits
 
 

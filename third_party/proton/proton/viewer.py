@@ -10,7 +10,7 @@ except ImportError:
     raise ImportError("Failed to import hatchet. `pip install llnl-hatchet` to get the correct version.")
 import numpy as np
 from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
-from triton.profiler.hooks.launch import LaunchHook
+from triton.profiler.metric import FLOPS_WIDTHS
 from triton.profiler import specs
 
 
@@ -34,14 +34,15 @@ def match_available_metrics(metrics, inclusive_metrics, exclusive_metrics):
 
 def remove_frames(database: json):
     # We first fine frames that match either one of the two conditions:
-    # 1. The frame name is COMPUTE_METADATA_SCOPE_NAME
+    # 1. The frame name is a metadata frame
     # 2. The frame has no metrics and no children
     # Then we go up from the located nodes and remove the parents if all children were
     # metadata nodes
     def remove_frame_helper(node):
         if "frame" not in node:
             return node
-        if node["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME:
+        if node["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME or node["frame"]["name"].startswith(
+                f"{COMPUTE_METADATA_SCOPE_NAME}:"):
             return None
         if len(node["metrics"]) == 0 and len(node["children"]) == 0:
             return None
@@ -80,7 +81,7 @@ def get_min_time_flops(df, device_info):
             arch = device_info[device_type][device_index]["arch"]
             num_sms = device_info[device_type][device_index]["num_sms"]
             clock_rate = device_info[device_type][device_index]["clock_rate"]
-            for width in LaunchHook.flops_width:
+            for width in FLOPS_WIDTHS:
                 idx = df["device_id"] == device_index
                 device_frames = df[idx]
                 if f"flops{width}" not in device_frames.columns:
@@ -124,7 +125,7 @@ default_flop_factor_dict = {"flop/s": 1, "gflop/s": 1e9, "tflop/s": 1e12}
 derivable_metrics.update(
     {key: FactorDict("flops", default_flop_factor_dict)
      for key in default_flop_factor_dict.keys()})
-for width in LaunchHook.flops_width:
+for width in FLOPS_WIDTHS:
     factor_name = f"flops{width}"
     factor_dict = {f"flop{width}/s": 1, f"gflop{width}/s": 1e9, f"tflop{width}/s": 1e12}
     derivable_metrics.update({key: FactorDict(factor_name, factor_dict) for key in factor_dict.keys()})
