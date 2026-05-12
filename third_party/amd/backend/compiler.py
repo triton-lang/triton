@@ -89,11 +89,6 @@ class HIPOptions:
     # schedule_hint="attention,memory-bound-attention"
     schedule_hint: str = 'none'
 
-    # Extra LLVM cl::opt options for the AMDGPU codegen backend (e.g. "option=value").
-    # For experimental usage and may change/removed without guarantees.
-    # Set per-kernel via llvm_amdgpu_options=(...) or globally via AMDGCN_LLVM_OPTIONS.
-    llvm_amdgpu_options: tuple = ()
-
     def __post_init__(self):
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
@@ -106,11 +101,6 @@ class HIPOptions:
                 f"kpack is deprecated starting from gfx950 and will be removed in later releases. So for now kpack = {self.kpack} will be overwritten to 1 to make transitioning easier."
             )
             object.__setattr__(self, 'kpack', 1)
-
-        env_llvm_options = knobs.amd.llvm_options
-        if env_llvm_options:
-            object.__setattr__(self, 'llvm_amdgpu_options',
-                               tuple(env_llvm_options.split(",")) + self.llvm_amdgpu_options)
 
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
@@ -527,8 +517,8 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
-        if options.llvm_amdgpu_options:
-            amd.set_llvm_options(list(options.llvm_amdgpu_options))
+        if knobs.amd.llvm_options:
+            amd.set_llvm_options(knobs.amd.llvm_options.split(","))
         features = '-real-true16' if 'gfx11' in options.arch else ''
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash

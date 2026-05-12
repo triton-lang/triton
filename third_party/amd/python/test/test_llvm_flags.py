@@ -31,28 +31,18 @@ def test_multiple_options():
     amd.set_llvm_options(["amdgpu-early-inline-all", "inline-threshold=500"])
 
 
-# -- Integration test: compile attn_fwd.ttir with llvm_amdgpu_options (GPU needed) --
+# -- Integration test: compile with AMDGCN_LLVM_OPTIONS env var (GPU needed) --
 
 
 @pytest.mark.skipif(current_target.backend != "hip", reason="requires HIP backend")
-def test_compile_accepts_llvm_amdgpu_options():
-    """Compilation with llvm_amdgpu_options succeeds and produces valid assembly."""
-    kernel = triton.compile(
-        TTIR_PATH,
-        target=current_target,
-        options={"llvm_amdgpu_options": ("enable-misched=0", )},
-    )
-    assert "attn_fwd" in kernel.asm["amdgcn"]
+def test_llvm_amdgpu_options_change_codegen(monkeypatch):
+    """Setting AMDGCN_LLVM_OPTIONS env var produces different assembly."""
+    monkeypatch.setattr(triton.knobs.compilation, "always_compile", True)
 
-
-@pytest.mark.skipif(current_target.backend != "hip", reason="requires HIP backend")
-def test_llvm_amdgpu_options_change_codegen():
-    """llvm_amdgpu_options produce different assembly than the default."""
     baseline = triton.compile(TTIR_PATH, target=current_target)
-    with_options = triton.compile(
-        TTIR_PATH,
-        target=current_target,
-        options={"llvm_amdgpu_options": ("enable-misched=0", )},
-    )
+
+    monkeypatch.setenv("AMDGCN_LLVM_OPTIONS", "enable-misched=0")
+
+    with_options = triton.compile(TTIR_PATH, target=current_target)
     assert baseline.asm["amdgcn"] != with_options.asm["amdgcn"], \
-        "expected llvm_amdgpu_options to change generated assembly"
+        "expected AMDGCN_LLVM_OPTIONS to change generated assembly"
