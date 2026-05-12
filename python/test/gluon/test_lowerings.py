@@ -914,19 +914,22 @@ def _with_cga_layout(layout, cga_layout):
     raise AssertionError(f"Unsupported multi-CTA layout {type(layout)}")
 
 
-_convert2d_layout_cases = [(None, interm_layout) for interm_layout in _intermediate_layouts]
-_convert2d_layout_cases += [
-    ([4, 1], None),
-    ([2, 2], None),
+_single_cta_convert2d_layout_cases = [(None, interm_layout, src_layout, dst_layout)
+                                      for interm_layout in _intermediate_layouts for src_layout in _2d_layouts
+                                      for dst_layout in _2d_layouts]
+# Pair each layout with the next one so multi-CTA coverage stays small while every layout appears as source and dest.
+_multi_cta_2d_layout_pairs = list(zip(_2d_layouts, _2d_layouts[1:] + _2d_layouts[:1]))
+_multi_cta_convert2d_layout_cases = [
+    (ctas_per_cga, None, src_layout, dst_layout) for ctas_per_cga in ([4, 1], [2, 2])
+    for src_layout, dst_layout in _multi_cta_2d_layout_pairs
 ]
+_convert2d_layout_cases = _single_cta_convert2d_layout_cases + _multi_cta_convert2d_layout_cases
 
 
 @pytest.mark.parametrize("M, N", [[64, 1], [64, 64], [64, 128], [1, 64]])
 @pytest.mark.parametrize("dtype", ["float16"])
-@pytest.mark.parametrize("src_layout", _2d_layouts)
-@pytest.mark.parametrize("ctas_per_cga, interm_layout", _convert2d_layout_cases)
-@pytest.mark.parametrize("dst_layout", _2d_layouts)
-def test_convert2d_layouts(M, N, src_layout, ctas_per_cga, interm_layout, dst_layout, dtype, device):
+@pytest.mark.parametrize("ctas_per_cga, interm_layout, src_layout, dst_layout", _convert2d_layout_cases)
+def test_convert2d_layouts(M, N, ctas_per_cga, interm_layout, src_layout, dst_layout, dtype, device):
     cga_layout = []
     num_ctas = 1
     if ctas_per_cga is not None:
