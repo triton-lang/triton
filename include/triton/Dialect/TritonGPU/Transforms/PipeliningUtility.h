@@ -131,9 +131,17 @@ inline bool isTMALoad(Operation *op) {
 // Determine if the operation can be lowered to an async load.
 bool canBeAsyncLoad(Operation *op);
 
-// Look for consecutive wait ops and combine them into a single wait op.
+// Fold consecutive wait ops of the same kind into a single wait.
+// `isCounterBarrier` returns true on ops that act as a hard boundary while
+// scanning forward (typically the producers whose tokens a later wait
+// consumes). `createWait` builds the merged wait from the union of operand
+// tokens and the minimum `num`.
 void combineRedundantWaitOps(
-    llvm::SmallSetVector<gpu::AsyncWaitOp, 8> &waitOps);
+    llvm::SmallSetVector<Operation *, 8> &waitOps,
+    llvm::function_ref<bool(Operation * /*candidate*/)> isCounterBarrier,
+    llvm::function_ref<Operation *(OpBuilder &, Location,
+                                   ValueRange /*operands*/, unsigned /*num*/)>
+        createWait);
 
 // Get the type of the view of a multi-buffered tensor value.
 gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy,

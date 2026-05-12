@@ -656,17 +656,37 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
 LogicalResult MemDescReinterpretOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getResult().getType();
-  auto kBlock = StringAttr::get(getContext(), "block");
-  auto getNumBroadcastCTADims = [kBlock](MemDescType ty) {
+  if (srcTy.getMemorySpace() != dstTy.getMemorySpace())
+    return emitError("source and result must have the same memory space");
+  if (srcTy.getMutableMemory() != dstTy.getMutableMemory())
+    return emitError("source and result must have the same mutability");
+  auto isSubview = [](MemDescType ty) {
+    auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
+    return ty.getShape().take_back(rank) != ty.getAllocShape().take_back(rank);
+  };
+  if (isSubview(srcTy) || isSubview(dstTy))
+    return emitError("source and result must not be subviews; reinterpret the "
+                     "parent descriptor and then take a subview");
+  assert((isa<SharedMemorySpaceAttr, nvidia_gpu::TensorMemorySpaceAttr>(
+              srcTy.getMemorySpace()) &&
+          "expected shared or tensor memory"));
+  auto getViewNumBits = [](MemDescType ty) {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
     auto layout =
         toLinearLayout(ty.getAllocShape().take_back(rank), ty.getEncoding());
-    auto freeVariableMask = layout.getFreeVariableMasks().lookup(kBlock);
-    return llvm::popcount<uint32_t>(freeVariableMask);
+    // Shared memory is allocated by offset and TMEM is allocated by column; the
+    // other physical dimensions do not increase or decrease the allocation.
+    auto *ctx = ty.getContext();
+    bool isSharedMemory = isa<SharedMemorySpaceAttr>(ty.getMemorySpace());
+    auto dim = StringAttr::get(ctx, isSharedMemory ? "offset" : "col");
+    return layout.getInDimSize(dim) * ty.getElementTypeBitWidth();
   };
-  if (getNumBroadcastCTADims(srcTy) != getNumBroadcastCTADims(dstTy))
-    return emitError(
-        "source and result must have the same number of broadcast CTA dims");
+  auto srcNumBits = getViewNumBits(srcTy);
+  auto dstNumBits = getViewNumBits(dstTy);
+  if (srcNumBits != dstNumBits)
+    return emitError() << "source and result must have the same logical "
+                          "storage size ("
+                       << srcNumBits << " vs " << dstNumBits << ")";
   return success();
 }
 

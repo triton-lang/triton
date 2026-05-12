@@ -268,32 +268,32 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
                                  triton::gpu::AddrSpace::Local);
 }
 
+bool containsLocalBarrier(Operation *op) {
+  if (isa<gpu::BarrierOp>(op))
+    return true;
+  if (isa<ttng::ClusterBarrierOp>(op))
+    return true;
+  if (isa<ttng::ClusterWaitOp>(op))
+    return true;
+  if (isa<triton::gpu::WarpSpecializePartitionsOp>(op))
+    return true;
+  if (isa<ttng::ArriveBarrierOp>(op))
+    return true;
+  if (isa<ttng::BarrierExpectOp>(op))
+    return true;
+  if (isa<ttng::TCGen5CommitOp>(op))
+    return true;
+  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op))
+    return barrier.hasLocal();
+  return false;
+}
+
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder,
                             BufferIndexAnalysis *bufferIndexAnalysis) {
   assert(bufferIndexAnalysis &&
          "membar analysis requires buffer index analysis");
-
-  auto containsLocalBarrier = [](Operation *op) {
-    if (isa<gpu::BarrierOp>(op))
-      return true;
-    if (isa<ttng::ClusterBarrierOp>(op))
-      return true;
-    if (isa<ttng::ClusterWaitOp>(op))
-      return true;
-    if (isa<triton::gpu::WarpSpecializePartitionsOp>(op))
-      return true;
-    if (isa<ttng::ArriveBarrierOp>(op))
-      return true;
-    if (isa<ttng::BarrierExpectOp>(op))
-      return true;
-    if (isa<ttng::TCGen5CommitOp>(op))
-      return true;
-    if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op))
-      return barrier.hasLocal();
-    return false;
-  };
 
   if (containsLocalBarrier(op)) {
     // If the current op is a local barrier, we sync previous reads and writes

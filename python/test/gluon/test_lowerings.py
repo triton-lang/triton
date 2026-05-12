@@ -38,9 +38,41 @@ def _filter_layouts(layouts):
     return [l for l in layouts if _is_layout_applicable(l)]
 
 
+@gluon.constexpr_function
+def _make_cga_broadcast(rank: ttgl.constexpr, num_ctas: ttgl.constexpr):
+    if num_ctas == 1:
+        return []
+    n = num_ctas.bit_length() - 1
+    return [[0] * rank for _ in range(n)]
+
+
 @gluon.jit
 def _combine(a, b):
     return a + b
+
+
+@gluon.jit
+def convert_1d_to_2d_slice_cga_kernel(out, HEAD: ttgl.constexpr, NUM_CTAS: ttgl.constexpr):
+    layout_d: ttgl.constexpr = ttgl.BlockedLayout(
+        [1],
+        [32],
+        [ttgl.num_warps()],
+        [0],
+        _make_cga_broadcast(1, NUM_CTAS),
+    )
+    layout_nd: ttgl.constexpr = ttgl.BlockedLayout(
+        [1, 1],
+        [1, 32],
+        [ttgl.num_warps(), 1],
+        [1, 0],
+        _make_cga_broadcast(2, NUM_CTAS),
+    )
+
+    d = ttgl.arange(0, HEAD, layout=layout_d)
+    x = d.to(ttgl.float32)
+    dd = ttgl.arange(0, HEAD, layout=ttgl.SliceLayout(0, layout_nd))
+    y = ttgl.convert_layout(x, ttgl.SliceLayout(0, layout_nd))
+    ttgl.store(out + dd, y)
 
 
 @gluon.jit
@@ -128,6 +160,17 @@ def test_scan_blocked_broadcast_layout_multiblock(device):
     scan_kernel[(1, )](x, y, M, 1, src_layout, 0, num_warps=2)
 
     torch.testing.assert_close(y, torch.cumsum(x, dim=0))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("num_ctas", [2, 4, 8])
+def test_convert_1d_to_2d_slice_cga(num_ctas, device):
+    head = 64
+    out = torch.empty((head, ), device=device, dtype=torch.float32)
+
+    convert_1d_to_2d_slice_cga_kernel[(1, )](out, head, num_ctas, num_warps=2, num_ctas=num_ctas)
+
+    torch.testing.assert_close(out, torch.arange(head, device=device, dtype=torch.float32))
 
 
 def _swizzled_warp_layouts_1d():
