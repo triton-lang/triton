@@ -45,6 +45,7 @@ def SimdgroupAsyncCopyOp : TT_MetalGPU_Op<"simdgroup_async_copy"> {
   let summary = "async copy from global memory to threadgroup memory";
   let description = [{
     This op represents an async copy instruction from global memory to threadgroup memory of the input block.
+    Returns event handle (ptr<0>) that can be passed to SimdgroupWaitOp.
   }];
 
   let arguments = (ins
@@ -53,9 +54,31 @@ def SimdgroupAsyncCopyOp : TT_MetalGPU_Op<"simdgroup_async_copy"> {
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst
   );
 
+  let results = (outs LLVM_AnyPointer:$event);
+
+  let builders = [
+    OpBuilder<(ins "Value":$src, "Value":$stride, "Value":$dst), [{
+      build($_builder, $_state,
+            ::mlir::LLVM::LLVMPointerType::get($_builder.getContext(), 0),
+            src, stride, dst);
+    }]>
+  ];
+
   let assemblyFormat = [{
-    $src `,` $stride `,` $dst attr-dict `:` type($src) `->` qualified(type($dst))
+    $src `,` $stride `,` $dst attr-dict `:` functional-type(operands, results)
   }];
+}
+
+def SimdgroupWaitOp : TT_MetalGPU_Op<"simdgroup_wait"> {
+  let summary = "wait for simdgroup async copy events";
+  let description = [{
+    Waits for simdgroup async copy event handles to complete.
+    Lowers to an air.wait_simdgroup_events call covering all events.
+  }];
+
+  let arguments = (ins Variadic<LLVM_AnyPointer>:$events);
+
+  let assemblyFormat = [{ `(` $events `)` attr-dict `:` type($events) }];
 }
 
 def SimdgroupStoreOp : TT_MetalGPU_Op<"simdgroup_store"> {

@@ -268,8 +268,9 @@ struct DotOpToSimdgroupMMA : public OpRewritePattern<tt::DotOp> {
                            /*isVolatile=*/false);
     Value aStrideI32 =
         arith::TruncIOp::create(rewriter, loc, i32Ty, aStrideI64);
-    ttmetalgpu::SimdgroupAsyncCopyOp::create(rewriter, loc, aTilePtr,
-                                             aStrideI32, aAlloc.getResult());
+    Value aEvent = ttmetalgpu::SimdgroupAsyncCopyOp::create(
+                       rewriter, loc, aTilePtr, aStrideI32, aAlloc.getResult())
+                       .getEvent();
 
     rewriter.setInsertionPointAfter(bAlloc);
     Value bStrideI64 =
@@ -279,8 +280,13 @@ struct DotOpToSimdgroupMMA : public OpRewritePattern<tt::DotOp> {
                            /*isVolatile=*/false);
     Value bStrideI32 =
         arith::TruncIOp::create(rewriter, loc, i32Ty, bStrideI64);
-    ttmetalgpu::SimdgroupAsyncCopyOp::create(rewriter, loc, bTilePtr,
-                                             bStrideI32, bAlloc.getResult());
+    Value bEvent = ttmetalgpu::SimdgroupAsyncCopyOp::create(
+                       rewriter, loc, bTilePtr, bStrideI32, bAlloc.getResult())
+                       .getEvent();
+
+    // wait for async copies before MMA reads from smem
+    ttmetalgpu::SimdgroupWaitOp::create(rewriter, loc,
+                                        ValueRange{aEvent, bEvent});
 
     // replace dot op with custom mma op
     rewriter.setInsertionPoint(dotOp);

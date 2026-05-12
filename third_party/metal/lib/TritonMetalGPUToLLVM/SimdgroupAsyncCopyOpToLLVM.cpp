@@ -191,10 +191,11 @@ struct SimdgroupAsyncCopyOpConversion
       dstBase = LLVM::AddrSpaceCastOp::create(rewriter, loc, p3Ty, dstBase);
 
     Operation *parentOp = rewriter.getInsertionBlock()->getParentOp();
-    emitAirSimdgroupAsyncCopy2D(rewriter, loc, parentOp, dstBase, srcBase,
-                                adaptor.getStride(), tileShape, elemTy);
+    Value event =
+        emitAirSimdgroupAsyncCopy2D(rewriter, loc, parentOp, dstBase, srcBase,
+                                    adaptor.getStride(), tileShape, elemTy);
 
-    rewriter.eraseOp(op);
+    rewriter.replaceOp(op, event);
     return success();
   }
 

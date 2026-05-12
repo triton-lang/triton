@@ -46,7 +46,15 @@ void populateSimdgroupAsyncCopyOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const mlir::triton::metal::TargetInfo &targetInfo, PatternBenefit benefit);
 
+void populateSimdgroupWaitOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    const mlir::triton::metal::TargetInfo &targetInfo, PatternBenefit benefit);
+
 void populateSimdgroupMMAOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    const mlir::triton::metal::TargetInfo &targetInfo, PatternBenefit benefit);
+
+void populateSimdgroupStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const mlir::triton::metal::TargetInfo &targetInfo, PatternBenefit benefit);
 
