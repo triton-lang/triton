@@ -67,6 +67,13 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
   }
   if (isa<triton::amdgpu::AsyncTDMWait>(op))
     return op;
+  if (isa<tt::DescriptorStoreLikeOpInterface>(op)) {
+    auto loc = op->getLoc();
+    auto ifOp = scf::IfOp::create(rewriter, loc, pred,
+                                  /*withElseRegion=*/false);
+    op->moveBefore(ifOp.thenYield());
+    return ifOp;
+  }
   return tt::wrapInMaskOp(rewriter, op, pred);
 }
 

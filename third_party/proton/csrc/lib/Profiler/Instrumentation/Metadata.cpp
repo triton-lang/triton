@@ -1,6 +1,7 @@
 #include <fstream>
+#include <stdexcept>
 
-#include "Profiler/Instrumentation/Metadata.h"
+#include "Profiler/Instrumentation/InstrumentationMetadata.h"
 #include "nlohmann/json.hpp"
 
 using json = nlohmann::json;
