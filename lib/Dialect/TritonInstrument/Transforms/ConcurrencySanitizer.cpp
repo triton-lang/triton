@@ -1,6 +1,8 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Transforms/Passes.h"
+#include "triton/Analysis/BufferRegion.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -8,8 +10,11 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.h"
+#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 namespace mlir {
 namespace triton {
@@ -153,6 +158,139 @@ Value allCTAsMask(ImplicitLocOpBuilder &b) {
   return arith::ConstantIntOp::create(b, (1u << numCTAs) - 1, 32);
 }
 
+bool shouldInitializeAllocations() {
+  std::string envValue =
+      tt::tools::getStrEnv("TRITON_CONSAN_INIT_ALLOCATIONS");
+  if (envValue.empty())
+    return true;
+  if (auto enabled = tt::tools::isEnvValueBool(envValue))
+    return *enabled;
+  llvm::report_fatal_error(
+      "TRITON_CONSAN_INIT_ALLOCATIONS must be a boolean");
+}
+
+bool regionsOverlap(BufferRegion lhs, BufferRegion rhs) {
+  uint64_t lhsEnd = static_cast<uint64_t>(lhs.baseOffset) + lhs.length;
+  uint64_t rhsEnd = static_cast<uint64_t>(rhs.baseOffset) + rhs.length;
+  return lhs.baseOffset < rhsEnd && rhs.baseOffset < lhsEnd;
+}
+
+bool overlapsBarrierRegion(Value alloc, BufferRegionAnalysis &analysis,
+                           ArrayRef<BufferRegion> barrierRegions) {
+  const RegionInfo &allocRegions = analysis.getLatticeElement(alloc)->getValue();
+  for (const BufferRegion &allocRegion : allocRegions.regions) {
+    for (const BufferRegion &barrierRegion : barrierRegions) {
+      if (regionsOverlap(allocRegion, barrierRegion))
+        return true;
+    }
+  }
+  return false;
+}
+
+llvm::APInt getIntegerNaNPattern(unsigned bitWidth) {
+  switch (bitWidth) {
+  case 16:
+    return llvm::APFloat::getNaN(llvm::APFloat::IEEEhalf()).bitcastToAPInt();
+  case 32:
+    return llvm::APFloat::getNaN(llvm::APFloat::IEEEsingle())
+        .bitcastToAPInt();
+  case 64:
+    return llvm::APFloat::getNaN(llvm::APFloat::IEEEdouble())
+        .bitcastToAPInt();
+  default:
+    return llvm::APInt::getAllOnes(bitWidth);
+  }
+}
+
+Value createPoisonTensor(ImplicitLocOpBuilder &b, ttg::MemDescType memDescType) {
+  auto region = b.getInsertionBlock()->getParent();
+  Type elementType = memDescType.getElementType();
+  RankedTensorType poisonType;
+  if (isa<ttng::TensorMemorySpaceAttr>(memDescType.getMemorySpace())) {
+    auto encoding =
+        ttng::getDefaultLayoutForTmemLdSt(memDescType,
+                                          ttg::lookupNumWarps(region));
+    poisonType =
+        RankedTensorType::get(memDescType.getShape(), elementType, encoding);
+  } else {
+    auto encoding = ttg::getDefaultBlockedEncoding(
+        b.getContext(), memDescType.getShape(), ttg::lookupNumWarps(region),
+        ttg::lookupThreadsPerWarp(b), ttg::lookupNumCTAs(b));
+    encoding = ttg::BlockedEncodingAttr::get(
+        b.getContext(), encoding.getSizePerThread(),
+        encoding.getThreadsPerWarp(), encoding.getWarpsPerCTA(),
+        encoding.getOrder(), ttg::getCGALayout(memDescType.getEncoding()));
+    poisonType =
+        RankedTensorType::get(memDescType.getShape(), elementType, encoding);
+  }
+
+  DenseElementsAttr poison;
+  if (auto floatType = dyn_cast<FloatType>(elementType)) {
+    poison = DenseElementsAttr::get(
+        poisonType, llvm::APFloat::getNaN(floatType.getFloatSemantics()));
+  } else if (auto integerType = dyn_cast<IntegerType>(elementType)) {
+    poison = DenseElementsAttr::get(
+        poisonType, getIntegerNaNPattern(integerType.getWidth()));
+  } else {
+    llvm::report_fatal_error(
+        "ConSan allocation initialization expects integer or float elements");
+  }
+  return arith::ConstantOp::create(b, b.getLoc(), poisonType, poison);
+}
+
+Value createSingleBufferView(ImplicitLocOpBuilder &b, Value alloc,
+                             int64_t buffer) {
+  auto allocType = cast<ttg::MemDescType>(alloc.getType());
+  SmallVector<int64_t> shape(allocType.getShape().begin() + 1,
+                             allocType.getShape().end());
+  auto viewType = ttg::MemDescType::get(
+      shape, allocType.getElementType(), allocType.getEncoding(),
+      allocType.getMemorySpace(), allocType.getMutableMemory());
+  Value index = arith::ConstantIntOp::create(b, buffer, 32);
+  return ttg::MemDescIndexOp::create(b, b.getLoc(), viewType, alloc, index);
+}
+
+void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
+  auto allocType = cast<ttg::MemDescType>(alloc.getType());
+  SmallVector<Value> leaves;
+  unsigned storeRank = allocType.getRank();
+  if (isa<ttng::TensorMemorySpaceAttr>(allocType.getMemorySpace())) {
+    storeRank = 2;
+  } else {
+    auto encoding = dyn_cast<ttg::LayoutEncodingTrait>(allocType.getEncoding());
+    assert(encoding && "shared allocation must have a layout encoding");
+    storeRank = encoding.getRank();
+  }
+
+  if (allocType.getRank() == storeRank) {
+    leaves.push_back(alloc);
+  } else {
+    assert(allocType.getRank() == storeRank + 1 &&
+           "only single-dimension multibuffer allocations are supported");
+    for (int64_t buffer = 0; buffer < allocType.getDimSize(0); ++buffer)
+      leaves.push_back(createSingleBufferView(b, alloc, buffer));
+  }
+
+  for (Value leaf : leaves) {
+    Value poison = createPoisonTensor(b, cast<ttg::MemDescType>(leaf.getType()));
+    if (isa<ttng::TensorMemorySpaceAttr>(
+            cast<ttg::MemDescType>(leaf.getType()).getMemorySpace())) {
+      Value pred = arith::ConstantIntOp::create(b, 1, 1);
+      ttng::TMEMStoreOp::create(b, leaf, poison, pred);
+    } else {
+      ttg::LocalStoreOp::create(b, poison, leaf);
+    }
+  }
+}
+
+bool canInitializeAllocation(Value alloc) {
+  auto allocType = cast<ttg::MemDescType>(alloc.getType());
+  if (!isa<ttng::TensorMemorySpaceAttr>(allocType.getMemorySpace()))
+    return true;
+  unsigned numWarps = ttg::lookupNumWarps(alloc.getDefiningOp());
+  return numWarps >= 4 && llvm::isPowerOf2_32(numWarps);
+}
+
 uint16_t getBlockBroadcastMask(Value alloc) {
   auto allocTy = cast<ttg::MemDescType>(alloc.getType());
   auto kBlock = StringAttr::get(alloc.getContext(), "block");
@@ -291,16 +429,57 @@ public:
     if (failed(auxData.populateAndPassToWarpSpecialize(module, funcBuilder,
                                                        hooks)))
       return failure();
+    if (failed(collectAllocationsToInitialize()))
+      return failure();
 
     tt::FuncOp entryPoint = tti::getEntryPoint(module);
 
     ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
     b.setInsertionPointToStart(&entryPoint.getBody().front());
     instrumentMemoryOperations(b, funcBuilder);
+    initializeAllocations();
     return success();
   }
 
 private:
+  LogicalResult collectAllocationsToInitialize() {
+    if (!shouldInitializeAllocations())
+      return success();
+
+    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    BufferRegionAnalysis *analysis = solver->load<BufferRegionAnalysis>();
+    if (failed(solver->initializeAndRun(module)))
+      return failure();
+    analysis->calculateUsedBufferRegions(module);
+    SmallVector<BufferRegion> barrierRegions =
+        analysis->getAllUsedBufferRegions(
+            BufferRegionAnalysis::RegionType::BARRIER);
+
+    module.walk([&](Operation *op) {
+      if (auto alloc = dyn_cast<ttg::LocalAllocOp>(op)) {
+        if (!alloc.getSrc() &&
+            !overlapsBarrierRegion(alloc.getResult(), *analysis,
+                                   barrierRegions))
+          allocationsToInitialize.push_back(op);
+      }
+      if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(op)) {
+        if (!alloc.getSrc())
+          allocationsToInitialize.push_back(op);
+      }
+    });
+    return success();
+  }
+
+  void initializeAllocations() {
+    for (Operation *op : allocationsToInitialize) {
+      ImplicitLocOpBuilder b(op->getLoc(), op);
+      b.setInsertionPointAfter(op);
+      Value alloc = op->getResult(0);
+      if (canInitializeAllocation(alloc))
+        initializeAllocation(b, alloc);
+    }
+  }
+
   void instrumentMemoryOperations(ImplicitLocOpBuilder &b,
                                   tti::FunctionBuilder &funcBuilder) {
     module.walk([&](Operation *op) {
@@ -628,6 +807,7 @@ private:
 
   ModuleOp module;
   AuxDataMap auxData;
+  SmallVector<Operation *> allocationsToInitialize;
   const ConSanTargetHooks *hooks;
 };
 
