@@ -44,6 +44,7 @@ class BuildHelperArgs:
     llvm_syspath: Optional[str]
     json_syspath: Optional[str]
     ptxas_path: Optional[str]
+    ptxas_blackwell_path: Optional[str]
     cuobjdump_path: Optional[str]
     nvdisasm_path: Optional[str]
     cudacrt_path: Optional[str]
@@ -411,6 +412,17 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
         helper_args=helper_args,
     )
 
+    # We download a separate ptxas for blackwell, since there are some bugs when using it for hopper
+    download_and_copy(
+        name="nvcc",
+        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
+        dst_path="bin/ptxas-blackwell",
+        override_path=helper_args.ptxas_blackwell_path,
+        version=nvidia_toolchain_version["ptxas-blackwell"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+        helper_args=helper_args,
+    )
     download_and_copy(
         name="cuobjdump",
         src_func=lambda system, arch, version:
@@ -493,6 +505,11 @@ def add_common_args(parser: argparse.ArgumentParser):
     parser.add_argument("--llvm-syspath", default="", help="Path override for LLVM_SYSPATH")
     parser.add_argument("--json-syspath", default="", help="Path override for JSON_SYSPATH")
     parser.add_argument("--triton-ptxas-path", default="", help="Path override for TRITON_PTXAS_PATH")
+    parser.add_argument(
+        "--triton-ptxas-blackwell-path",
+        default="",
+        help="Path override for TRITON_PTXAS_BLACKWELL_PATH",
+    )
     parser.add_argument("--triton-cuobjdump-path", default="", help="Path override for TRITON_CUOBJDUMP_PATH")
     parser.add_argument("--triton-nvdisasm-path", default="", help="Path override for TRITON_NVDISASM_PATH")
     parser.add_argument("--triton-cudacrt-path", default="", help="Path override for TRITON_CUDACRT_PATH")
@@ -515,6 +532,7 @@ def normalize_parsed_args(parsed_args) -> BuildHelperArgs:
         llvm_syspath=_normalize_optional_path(parsed_args.llvm_syspath),
         json_syspath=_normalize_optional_path(parsed_args.json_syspath),
         ptxas_path=_normalize_optional_path(parsed_args.triton_ptxas_path),
+        ptxas_blackwell_path=_normalize_optional_path(parsed_args.triton_ptxas_blackwell_path),
         cuobjdump_path=_normalize_optional_path(parsed_args.triton_cuobjdump_path),
         nvdisasm_path=_normalize_optional_path(parsed_args.triton_nvdisasm_path),
         cudacrt_path=_normalize_optional_path(parsed_args.triton_cudacrt_path),
