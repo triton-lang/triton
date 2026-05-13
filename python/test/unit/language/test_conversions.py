@@ -278,12 +278,13 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     # On HIP, fp8e4nv upcasting to fp32 is only supported on CDNA4, and
     # fp8e4nv upcasting to bf16 and fp16 is only supported on CDNA3 and CDNA4.
     if is_cuda():
-        if ((src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9))
-            or src_dtype in ('float8e4b8', 'float8e5b16')):
+        if src_dtype in ('float8e4b8', 'float8e5b16'):
             # If the dtype should error out in the given device, we assert that and return
             with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
+        if src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9):
+            pytest.skip("fp8e4nv conversion is not supported on cc<8.9")
     elif is_hip():
         if src_dtype in FP8_DTYPES and is_hip_rdna3():
             pytest.skip(f"{src_dtype} is not supported on AMDGPU RDNA3")
