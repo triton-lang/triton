@@ -159,14 +159,12 @@ Value allCTAsMask(ImplicitLocOpBuilder &b) {
 }
 
 bool shouldInitializeAllocations() {
-  std::string envValue =
-      tt::tools::getStrEnv("TRITON_CONSAN_INIT_ALLOCATIONS");
+  std::string envValue = tt::tools::getStrEnv("TRITON_CONSAN_INIT_ALLOCATIONS");
   if (envValue.empty())
     return true;
   if (auto enabled = tt::tools::isEnvValueBool(envValue))
     return *enabled;
-  llvm::report_fatal_error(
-      "TRITON_CONSAN_INIT_ALLOCATIONS must be a boolean");
+  llvm::report_fatal_error("TRITON_CONSAN_INIT_ALLOCATIONS must be a boolean");
 }
 
 bool regionsOverlap(BufferRegion lhs, BufferRegion rhs) {
@@ -177,7 +175,8 @@ bool regionsOverlap(BufferRegion lhs, BufferRegion rhs) {
 
 bool overlapsBarrierRegion(Value alloc, BufferRegionAnalysis &analysis,
                            ArrayRef<BufferRegion> barrierRegions) {
-  const RegionInfo &allocRegions = analysis.getLatticeElement(alloc)->getValue();
+  const RegionInfo &allocRegions =
+      analysis.getLatticeElement(alloc)->getValue();
   for (const BufferRegion &allocRegion : allocRegions.regions) {
     for (const BufferRegion &barrierRegion : barrierRegions) {
       if (regionsOverlap(allocRegion, barrierRegion))
@@ -192,24 +191,22 @@ llvm::APInt getIntegerNaNPattern(unsigned bitWidth) {
   case 16:
     return llvm::APFloat::getNaN(llvm::APFloat::IEEEhalf()).bitcastToAPInt();
   case 32:
-    return llvm::APFloat::getNaN(llvm::APFloat::IEEEsingle())
-        .bitcastToAPInt();
+    return llvm::APFloat::getNaN(llvm::APFloat::IEEEsingle()).bitcastToAPInt();
   case 64:
-    return llvm::APFloat::getNaN(llvm::APFloat::IEEEdouble())
-        .bitcastToAPInt();
+    return llvm::APFloat::getNaN(llvm::APFloat::IEEEdouble()).bitcastToAPInt();
   default:
     return llvm::APInt::getAllOnes(bitWidth);
   }
 }
 
-Value createPoisonTensor(ImplicitLocOpBuilder &b, ttg::MemDescType memDescType) {
+Value createPoisonTensor(ImplicitLocOpBuilder &b,
+                         ttg::MemDescType memDescType) {
   auto region = b.getInsertionBlock()->getParent();
   Type elementType = memDescType.getElementType();
   RankedTensorType poisonType;
   if (isa<ttng::TensorMemorySpaceAttr>(memDescType.getMemorySpace())) {
-    auto encoding =
-        ttng::getDefaultLayoutForTmemLdSt(memDescType,
-                                          ttg::lookupNumWarps(region));
+    auto encoding = ttng::getDefaultLayoutForTmemLdSt(
+        memDescType, ttg::lookupNumWarps(region));
     poisonType =
         RankedTensorType::get(memDescType.getShape(), elementType, encoding);
   } else {
@@ -272,7 +269,8 @@ void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
   }
 
   for (Value leaf : leaves) {
-    Value poison = createPoisonTensor(b, cast<ttg::MemDescType>(leaf.getType()));
+    Value poison =
+        createPoisonTensor(b, cast<ttg::MemDescType>(leaf.getType()));
     if (isa<ttng::TensorMemorySpaceAttr>(
             cast<ttg::MemDescType>(leaf.getType()).getMemorySpace())) {
       Value pred = arith::ConstantIntOp::create(b, 1, 1);

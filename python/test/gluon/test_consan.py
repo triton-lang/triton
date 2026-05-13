@@ -165,15 +165,14 @@ def test_consan_initializes_allocations_with_nan(MEMORY_KIND, device, fresh_knob
     def kernel(output, MEMORY_KIND: ttgl.constexpr):
         block_m: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
         cga_layout: ttgl.constexpr = default_cga_layout(ttgl.num_ctas(), 2)
-        reg_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK],
-                                                        threads_per_warp=[32, 1], warps_per_cta=[4, 1],
-                                                        order=[0, 1], cga_layout=cga_layout)
+        reg_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                        warps_per_cta=[4, 1], order=[0, 1], cga_layout=cga_layout)
         offs_m = ttgl.arange(0, block_m, ttgl.SliceLayout(1, reg_layout))[:, None]
         offs_n = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, reg_layout))[None, :]
         offs = offs_m * XBLOCK + offs_n
         if MEMORY_KIND == "shared":
-            memory_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32,
-                                                                  rank=2, cga_layout=cga_layout)
+            memory_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2,
+                                                                   cga_layout=cga_layout)
             alloc = ttgl.allocate_shared_memory(ttgl.float32, [block_m, XBLOCK], memory_layout)
             value = alloc.load(reg_layout)
         else:
