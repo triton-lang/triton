@@ -142,8 +142,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @neg_op
   tt.func public @neg_op(%a: tensor<4xf32>) -> tensor<4xf32> {
-    // CHECK: %[[A:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
-    // CHECK: %[[ZERO:.*]] = arith.constant dense<0> : tensor<4xi32>
+    // CHECK-DAG: %[[A:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK-DAG: %[[ZERO:.*]] = arith.constant dense<0> : tensor<4xi32>
     // CHECK: %[[NEG:.*]] = arith.subi %[[ZERO]], %[[A]] : tensor<4xi32>
     // CHECK: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[NEG]] : (tensor<4xi32>) -> tensor<4xf32>
     // CHECK-NOT: arith.negf
