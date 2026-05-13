@@ -54,7 +54,7 @@ void InstrumentationProfiler::doSetMode(
   }
 
   const auto requestedDeviceName = proton::toLower(modeAndOptions[0]);
-  const auto &runtimes = getProtonRuntimes();
+  const auto runtimes = getRuntimeRegistrations();
   auto runtimeIt =
       std::find_if(runtimes.begin(), runtimes.end(),
                    [&](const RuntimeRegistration &registration) {

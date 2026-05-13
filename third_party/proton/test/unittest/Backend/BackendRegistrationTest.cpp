@@ -14,8 +14,8 @@ TEST(BackendRegistrationTest, testBackendRegistration) {
 
   ASSERT_TRUE(registration.getProfiler());
   EXPECT_EQ(registration.getProfiler()->getName(), "test_backend");
-  EXPECT_EQ(registration.getProfiler()->getCorrespondingTritonDriverBackend(),
-            "test_driver");
+  EXPECT_EQ(registration.getProfiler()->getTritonBackend(),
+            "test_triton_backend");
 
   ASSERT_TRUE(registration.getRuntime());
   EXPECT_EQ(registration.getRuntime()->getDeviceName(), "TEST_DEVICE");

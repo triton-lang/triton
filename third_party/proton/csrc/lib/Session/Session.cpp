@@ -18,7 +18,7 @@ namespace proton {
 namespace {
 
 Profiler *makeProfiler(const std::string &name) {
-  const auto &profilers = getProtonProfilers();
+  const auto profilers = getProfilerRegistrations();
   auto itr = std::find_if(profilers.begin(), profilers.end(),
                           [&](const ProfilerRegistration &entry) {
                             return proton::toLower(name) ==
@@ -61,31 +61,6 @@ void throwIfSessionNotInitialized(
 }
 
 } // namespace
-
-std::vector<std::string> getAvailableProfilers() {
-  const auto &profilers = getProtonProfilers();
-  std::vector<std::string> availableProfilers(profilers.size());
-  std::transform(
-      profilers.begin(), profilers.end(), availableProfilers.begin(),
-      [](const ProfilerRegistration &entry) { return entry.getName(); });
-  return availableProfilers;
-}
-
-std::optional<std::string>
-getProfilerForDriverBackend(const std::string &driverBackend) {
-  const auto &profilers = getProtonProfilers();
-  auto itr = std::find_if(
-      profilers.begin(), profilers.end(),
-      [&](const ProfilerRegistration &entry) {
-        return proton::toLower(driverBackend) ==
-               proton::toLower(
-                   entry.getCorrespondingTritonDriverBackend().value_or(""));
-      });
-  if (itr == profilers.end()) {
-    return {};
-  }
-  return itr->getName();
-}
 
 void Session::activate() {
   profiler->start();

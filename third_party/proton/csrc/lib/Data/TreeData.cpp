@@ -23,10 +23,6 @@ namespace proton {
 
 namespace {
 
-std::string getDeviceTypeName(size_t deviceType) {
-  return getDeviceTypeString(static_cast<DeviceType>(deviceType));
-}
-
 constexpr size_t kMaxRegisteredDeviceIds = 32;
 
 struct MetricSummary {
@@ -238,7 +234,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
             std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
         uint64_t deviceType = std::get<uint64_t>(
             kernelMetric->getValue(KernelMetric::DeviceType));
-        const auto &deviceTypeName = getDeviceTypeName(deviceType);
+        const auto &deviceTypeName =
+            getDeviceTypeString(static_cast<DeviceType>(deviceType));
         const auto &durationName =
             kernelMetric->getValueName(KernelMetric::Duration);
         const auto &invocationsName =
@@ -417,7 +414,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
       continue;
     }
 
-    const auto &deviceTypeName = getDeviceTypeName(deviceType);
+    const auto &deviceTypeName =
+        getDeviceTypeString(static_cast<DeviceType>(deviceType));
     deviceJson[deviceTypeName] = json::object();
 
     for (uint64_t deviceId = 0; deviceId < kMaxRegisteredDeviceIds;
@@ -589,7 +587,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
             std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
         uint64_t deviceType = std::get<uint64_t>(
             kernelMetric->getValue(KernelMetric::DeviceType));
-        const auto &deviceTypeName = getDeviceTypeName(deviceType);
+        const auto &deviceTypeName =
+            getDeviceTypeString(static_cast<DeviceType>(deviceType));
         writer.packStr(kernelMetricDurationName);
         writer.packUInt(duration);
         writer.packStr(kernelMetricInvocationsName);
@@ -810,7 +809,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       continue;
     }
 
-    const auto &deviceTypeName = getDeviceTypeName(deviceType);
+    const auto &deviceTypeName =
+        getDeviceTypeString(static_cast<DeviceType>(deviceType));
     writer.packStr(deviceTypeName);
 
     writer.packMap(countSetBits(mask));

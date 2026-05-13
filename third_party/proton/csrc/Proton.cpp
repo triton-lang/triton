@@ -8,6 +8,7 @@
 #include <variant>
 #include <vector>
 
+#include "Backend/Backend.h"
 #include "Session/Session.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
@@ -238,18 +239,19 @@ static void initProton(pybind11::module &&m) {
         return SessionManager::instance().isDataPhaseComplete(sessionId, phase);
       },
       pybind11::arg("sessionId"), pybind11::arg("phase"));
-  m.def("get_available_profilers", []() { return getAvailableProfilers(); });
+  m.def("get_available_profilers",
+        []() { return getRegisteredProfilerNames(); });
   m.def(
-      "select_profiler_from_driver",
-      [](const std::string &driver) {
-        const auto profiler = getProfilerForDriverBackend(driver);
+      "select_profiler_from_triton_backend",
+      [](const std::string &tritonBackend) {
+        const auto profiler = getProfilerForTritonBackend(tritonBackend);
         if (profiler.has_value()) {
           return profiler.value();
         }
-        throw pybind11::value_error("No profiler registered for driver " +
-                                    driver);
+        throw pybind11::value_error(
+            "No profiler registered for triton backend " + tritonBackend);
       },
-      pybind11::arg("driver"));
+      pybind11::arg("tritonBackend"));
 }
 
 PYBIND11_MODULE(libproton, m) {

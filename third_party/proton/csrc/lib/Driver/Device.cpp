@@ -11,7 +11,7 @@ namespace proton {
 namespace {
 
 const DeviceRegistration &getDeviceEntry(DeviceType type) {
-  const auto &devices = getProtonDevices();
+  const auto devices = getDeviceRegistrations();
   auto itr = std::find_if(devices.begin(), devices.end(),
                           [&](const DeviceRegistration &entry) {
                             return type == entry.getDeviceType();

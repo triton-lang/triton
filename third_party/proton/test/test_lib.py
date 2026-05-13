@@ -97,14 +97,14 @@ def test_tensor_metric_construction():
     assert metric.index == libproton.metric_type_double_index
 
 
-def test_select_profiling_backend_for_driver():
-    selected_profiler = libproton.select_profiler_from_driver("cuda")
+def test_select_profiling_backend_for_triton_backend():
+    selected_profiler = libproton.select_profiler_from_triton_backend("cuda")
     assert selected_profiler == "cupti"
-    selected_profiler = libproton.select_profiler_from_driver("hip")
+    selected_profiler = libproton.select_profiler_from_triton_backend("hip")
     assert selected_profiler == "roctracer"
 
-    with pytest.raises(ValueError, match="No profiler registered for driver invalid_driver_backend"):
-        libproton.select_profiler_from_driver("invalid_driver_backend")
+    with pytest.raises(ValueError, match="No profiler registered for triton backend invalid_triton_backend"):
+        libproton.select_profiler_from_triton_backend("invalid_triton_backend")
 
 
 def test_get_available_profiling_backends():

@@ -16,11 +16,6 @@
 
 namespace proton {
 
-std::vector<std::string> getAvailableProfilers();
-
-std::optional<std::string>
-getProfilerForDriverBackend(const std::string &driverBackend);
-
 class Profiler;
 class Data;
 
