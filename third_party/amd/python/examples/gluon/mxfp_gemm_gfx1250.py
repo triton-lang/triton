@@ -310,10 +310,9 @@ class MXFPGEMMProgramBase:
         cfg = self.cfg
         L2_PREFETCH_DISTANCE: gl.constexpr = cfg.L2_PREFETCH_DISTANCE
         NUM_BUFFERS: gl.constexpr = cfg.NUM_BUFFERS
-        if L2_PREFETCH_DISTANCE <= NUM_BUFFERS:
-            return
-        for i in gl.static_range(NUM_BUFFERS - L2_PREFETCH_DISTANCE):
-            self.issue_l2_prefetches(L2_PREFETCH_DISTANCE + NUM_BUFFERS + i, load_idx)
+
+        for i in gl.static_range(NUM_BUFFERS, NUM_BUFFERS + L2_PREFETCH_DISTANCE):
+            self.issue_l2_prefetches(i, load_idx)
 
     @gluon.jit
     def issue_local_loads(self, wmma_idx, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer):
