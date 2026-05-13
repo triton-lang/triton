@@ -1020,7 +1020,8 @@ def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layo
 
     torch.testing.assert_close(y, x, rtol=0, atol=0)
     if src_ctas_per_cga != dst_ctas_per_cga:
-        assert "st.shared::cluster" in compiled.asm["ptx"]
+        assert "ld.shared::cluster" in compiled.asm["ptx"]
+        assert "st.shared::cluster" not in compiled.asm["ptx"]
 
 
 # MMA layout pairs for MMA-to-MMA conversion tests
