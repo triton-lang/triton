@@ -198,8 +198,7 @@ class CUDABackend(BaseBackend):
 
         if "supported_fp8_dtypes" not in args:
             supported_fp8_dtypes = set(CUDAOptions.supported_fp8_dtypes)
-            if capability >= 89:
-                supported_fp8_dtypes.add("fp8e4nv")
+            supported_fp8_dtypes.add("fp8e4nv")
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "deprecated_fp8_dot_operand_dtypes" not in args:
