@@ -12,7 +12,6 @@ try:
         create_shared_layouts,
         create_tensor_descriptors,
         issue_loads,
-        issue_wmma,
         lds_load,
         issue_wmma_compute,
     )
@@ -22,7 +21,6 @@ except ImportError:
         create_shared_layouts,
         create_tensor_descriptors,
         issue_loads,
-        issue_wmma,
         lds_load,
         issue_wmma_compute,
     )
@@ -68,13 +66,13 @@ def gemm_tdm_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     consumer = 0
     accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=WMMA_LAYOUT)
 
-    # Triple buffering
-    # prefetch 2, the other one is overlapped.
-    for _ in ttgl.static_range(2):
+    # Prefetch NUM_BUFFERS - 1 tiles; the main loop produces one tile for
+    # each tile it consumes, and the epilogue drains the prefetched tail.
+    for _ in ttgl.static_range(NUM_BUFFERS - 1):
         producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B)
 
     # Wait for the first prefetch
-    ttgl.amd.gfx1250.tdm.async_wait(1 * 2)
+    ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 2) * 2)
     for _ in range(0, ttgl.cdiv(K, BLOCK_K) - (NUM_BUFFERS - 1)):
         with ttgl.amd.warp_pipeline_stage("stage0", priority=1):
             consumer, a, b = lds_load(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
@@ -87,10 +85,12 @@ def gemm_tdm_pipelined_warp_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
             accumulator = issue_wmma_compute(a, b, accumulator)
 
     for i in ttgl.static_range(NUM_BUFFERS - 1):
-        # Warp-pipeline ended, wait for the ones to be consumed here.
+        with ttgl.amd.warp_pipeline_stage("stage0_epilogue", priority=1):
+            consumer, a, b = lds_load(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
+                                      TRANSPOSE_B)
         ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 1 - i) * 2)
-        consumer, accumulator = issue_wmma(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
-                                           accumulator, (NUM_BUFFERS - 2 - i) * 2, NUM_BUFFERS, TRANSPOSE_B)
+        with ttgl.amd.warp_pipeline_stage("stage1_epilogue", priority=0):
+            accumulator = issue_wmma_compute(a, b, accumulator)
 
     offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
     offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))

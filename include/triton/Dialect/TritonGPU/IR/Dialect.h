@@ -134,6 +134,10 @@ unsigned getTotalElemsPerThread(Type type);
 
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
 
+// Get the number of elements in each thread, ignoring register broadcasting.
+unsigned getUniqueElemsPerThread(Type type);
+unsigned getUniqueElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
+
 SmallVector<unsigned> getElemsPerThread(Type type);
 
 FailureOr<RankedTensorType> inferFp4ToFpResultType(RankedTensorType srcType,
