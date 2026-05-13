@@ -16,6 +16,9 @@ import subprocess
 from pathlib import Path
 
 
+_MIN_DRIVER_VERSION_FOR_PTXAS_13 = 13000
+
+
 def min_dot_size(target: GPUTarget):
 
     def check_dot_compatibility(lhs_type, rhs_type) -> Tuple[int, int, int]:  # [m, n, k]
@@ -33,16 +36,22 @@ def min_dot_size(target: GPUTarget):
     return check_dot_compatibility
 
 
-def get_ptxas(arch: int) -> knobs.NvidiaTool:
+def _is_legacy_driver(target: GPUTarget) -> bool:
+    return target.driver is not None and target.driver < _MIN_DRIVER_VERSION_FOR_PTXAS_13
+
+
+def get_ptxas(legacy_driver: bool = False) -> knobs.NvidiaTool:
+    if legacy_driver:
+        return knobs.nvidia.ptxas_legacy
     return knobs.nvidia.ptxas
 
 
 @functools.lru_cache()
-def get_ptxas_version(arch: int = 80):
+def get_ptxas_version(legacy_driver: bool = False):
     mock_ver = knobs.nvidia.mock_ptx_version
     if mock_ver is not None:
         return mock_ver  # This is not really a version of ptxas, but it is good enough for testing
-    version = subprocess.check_output([get_ptxas(arch).path, "--version"]).decode("utf-8")
+    version = subprocess.check_output([get_ptxas(legacy_driver).path, "--version"]).decode("utf-8")
     return version
 
 
@@ -70,17 +79,17 @@ def ptx_get_version(cuda_version) -> int:
     raise RuntimeError("Triton only support CUDA 10.0 or higher, but got CUDA version: " + cuda_version)
 
 
-def get_ptx_version_from_options(options, arch: int):
+def get_ptx_version_from_options(options, legacy_driver: bool = False):
     ptx_version = options.ptx_version
     if ptx_version is None:
-        cuda_version = get_ptxas(arch).version
+        cuda_version = get_ptxas(legacy_driver).version
         ptx_version = ptx_get_version(cuda_version)
     return ptx_version
 
 
 @functools.lru_cache()
-def get_features(options, arch: int):
-    ptx_version = get_ptx_version_from_options(options, arch)
+def get_features(options, legacy_driver: bool = False):
+    ptx_version = get_ptx_version_from_options(options, legacy_driver)
 
     # PTX 8.6 is the max version supported by llvm 979132a0.
     #
@@ -362,7 +371,8 @@ class CUDABackend(BaseBackend):
         return mod
 
     def make_llir(self, src, metadata, options, capability):
-        ptx_version = get_ptx_version_from_options(options, self.target.arch)
+        legacy_driver = _is_legacy_driver(self.target)
+        ptx_version = get_ptx_version_from_options(options, legacy_driver)
 
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
@@ -431,7 +441,7 @@ class CUDABackend(BaseBackend):
                 "Address Sanitizer Error: Address sanitizer is currently only supported on the AMD backend")
         llvm_mod = llvm.to_module(mod, context)
         proc = sm_arch_from_capability(capability)
-        features = get_features(options, self.target.arch)
+        features = get_features(options, legacy_driver)
         triple = 'nvptx64-nvidia-cuda'
         nvidia.set_short_ptr()
         llvm.attach_datalayout(llvm_mod, triple, proc, features)
@@ -461,11 +471,12 @@ class CUDABackend(BaseBackend):
         return ret
 
     def make_ptx(self, src, metadata, opt, capability):
-        ptx_version = get_ptx_version_from_options(opt, self.target.arch)
+        legacy_driver = _is_legacy_driver(self.target)
+        ptx_version = get_ptx_version_from_options(opt, legacy_driver)
 
         triple = 'nvptx64-nvidia-cuda'
         proc = sm_arch_from_capability(capability)
-        features = get_features(opt, self.target.arch)
+        features = get_features(opt, legacy_driver)
         flags = ["nvptx-mad-wide-opt"]
         ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False)
         # Find kernel names (there should only be one)
@@ -487,7 +498,7 @@ class CUDABackend(BaseBackend):
         return ret
 
     def make_cubin(self, src, metadata, opt, capability):
-        ptxas = get_ptxas(self.target.arch).path
+        ptxas = get_ptxas(_is_legacy_driver(self.target)).path
         with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.ptx') as fsrc, \
             tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
             fsrc.write(src)
@@ -586,5 +597,5 @@ please share the reproducer above with Triton project.
 
     @functools.lru_cache()
     def hash(self):
-        version = get_ptxas_version(self.target.arch)
+        version = get_ptxas_version(_is_legacy_driver(self.target))
         return f'{version}-{self.target.arch}'

@@ -412,7 +412,7 @@ class CompiledKernel:
         metadata = json.loads(metadata_path.read_text())
         # JSON serialization dumps the target as a dict. Restore it to a GPUTarget.
         target = metadata['target']
-        metadata['target'] = GPUTarget(target['backend'], target['arch'], target['warp_size'])
+        metadata['target'] = GPUTarget(target['backend'], target['arch'], target['warp_size'], target.get('driver'))
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(metadata.keys())))
         self.metadata = KernelMetadata(**metadata)
         backend = make_backend(self.metadata.target)

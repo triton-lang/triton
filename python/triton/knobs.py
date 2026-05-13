@@ -500,6 +500,7 @@ class nvidia_knobs(base_knobs):
     cuobjdump: env_nvidia_tool = env_nvidia_tool("cuobjdump")
     nvdisasm: env_nvidia_tool = env_nvidia_tool("nvdisasm")
     ptxas: env_nvidia_tool = env_nvidia_tool("ptxas")
+    ptxas_legacy: env_nvidia_tool = env_nvidia_tool("ptxas-legacy")
 
     dump_nvptx: env_bool = env_bool("NVPTX_ENABLE_DUMP")
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")

@@ -410,6 +410,16 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
         f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
         helper_args=helper_args,
     )
+    download_and_copy(
+        name="nvcc",
+        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
+        dst_path="bin/ptxas-legacy",
+        override_path=helper_args.ptxas_path,
+        version=nvidia_toolchain_version["ptxas-legacy"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+        helper_args=helper_args,
+    )
 
     download_and_copy(
         name="cuobjdump",

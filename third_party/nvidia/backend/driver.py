@@ -121,6 +121,7 @@ class CudaUtils(object):
         self.set_current_device = mod.set_current_device
         self.get_default_stream = mod.get_default_stream
         self.get_device_capability = mod.get_device_capability
+        self.get_driver_version = mod.get_driver_version
         self.get_device_properties = mod.get_device_properties
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
         self.set_printf_fifo_size = mod.set_printf_fifo_size
@@ -368,7 +369,8 @@ class CudaDriver(GPUDriver):
         capability = self.get_device_capability(device)
         capability = capability[0] * 10 + capability[1]
         warp_size = 32
-        return GPUTarget("cuda", capability, warp_size)
+        driver_version = self.utils.get_driver_version()
+        return GPUTarget("cuda", capability, warp_size, driver_version)
 
     def get_active_torch_device(self):
         import torch

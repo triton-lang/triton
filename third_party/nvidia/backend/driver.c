@@ -185,6 +185,19 @@ cleanup:
   return NULL;
 }
 
+static PyObject *getDriverVersion(PyObject *self, PyObject *args) {
+  if (!PyArg_ParseTuple(args, "")) {
+    return NULL;
+  }
+
+  int version = 0;
+  CUDA_CHECK_AND_RETURN_NULL(cuDriverGetVersion(&version));
+  return PyLong_FromLong(version);
+
+cleanup:
+  return NULL;
+}
+
 static PyObject *getCurrentDevice(PyObject *self, PyObject *args) {
   if (!PyArg_ParseTuple(args, "")) {
     return NULL;
@@ -1485,6 +1498,8 @@ static PyMethodDef ModuleMethods[] = {
      "Unload provided module to free memory"},
     {"get_device_capability", getDeviceCapability, METH_VARARGS,
      "Get compute capability (major, minor) for a given device"},
+    {"get_driver_version", getDriverVersion, METH_VARARGS,
+     "Get CUDA driver version"},
     {"get_device_properties", getDeviceProperties, METH_VARARGS,
      "Get the properties for a given device"},
     {"get_current_device", getCurrentDevice, METH_VARARGS,

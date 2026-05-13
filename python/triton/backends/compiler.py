@@ -1,7 +1,7 @@
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Union
+from typing import Dict, Optional, Union
 from types import ModuleType
 
 
@@ -12,6 +12,8 @@ class GPUTarget(object):
     # Target architecture, e.g., 90 (for cuda compute capability), gfx940 (for hip)
     arch: Union[int, str]
     warp_size: int
+    # Driver version, e.g. 13000 for CUDA 13.0. None when not available.
+    driver: Optional[int] = None
 
 
 class Language(Enum):
