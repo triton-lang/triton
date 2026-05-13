@@ -126,49 +126,26 @@ struct SimdgroupAsyncCopyOpConversion
     // get layout from src tensor encoding
     auto srcEnc =
         cast<triton::gpu::BlockedEncodingAttr>(srcTensorTy.getEncoding());
-    auto spt = srcEnc.getSizePerThread(); // elements per thread per dim
-    // use BlockedEncodingAttr's own order/threadsPerWarp (thread layout
-    // within warp) instead of triton::gpu::getOrder() which goes through
-    // LinearEncoding and may return register-based order that differs
-    SmallVector<unsigned> order(srcEnc.getOrder());
-    SmallVector<unsigned> tpw(srcEnc.getThreadsPerWarp());
-    // order[0] is fastest-varying dim
-    unsigned innerDim = order[0];      // fastest dim (col for row-major src)
-    unsigned outerDim = order[1];      // slowest dim (row)
-    unsigned tpwInner = tpw[innerDim]; // threads along col
-    unsigned tpwOuter = tpw[outerDim]; // threads along row
-    unsigned sptInner = spt[innerDim]; // elems per thread along col
-    unsigned sptOuter = spt[outerDim]; // elems per thread along row
 
-    // get threadId (within entire grid) and simdgroupId (warp id within CTA)
+    // use emitIndices to get thread's element indices, handling all encoding
+    // layouts (warpsPerCTA distribution, order, etc.) correctly
+    auto indices = emitIndices(loc, rewriter, targetInfo, srcEnc, srcTensorTy,
+                               /*withCTAOffset=*/false);
+    // indices[0] gives the (row, col) of this thread's first element
+    Value threadRow = indices[0][0];
+    Value threadCol = indices[0][1];
+
     auto func = rewriter.getInsertionBlock()
                     ->getParent()
                     ->getParentOfType<LLVM::LLVMFuncOp>();
     unsigned numArgs = func.getNumArguments();
-    Value threadIdxInGridVal =
-        func.getArgument(numArgs - mlir::triton::metal::kThreadIdxFromEnd);
     Value simdgroupIdxInThreadgroupVal =
         func.getArgument(numArgs - mlir::triton::metal::kSimdgroupIdxFromEnd);
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto i32Ty = IntegerType::get(ctx, 32);
-    Value threadIdInGrid =
-        LLVM::TruncOp::create(rewriter, loc, i32Ty, threadIdxInGridVal);
     Value simdgroupIdInThreadgroup = LLVM::TruncOp::create(
         rewriter, loc, i32Ty, simdgroupIdxInThreadgroupVal);
-
-    // threadIdInSimdgroup = threadIdInGrid % (tpwInner * tpwOuter)
-    Value threadsPerWarpTotal = b.i32_val(tpwInner * tpwOuter);
-    Value threadIdInSimdgroup = b.urem(threadIdInGrid, threadsPerWarpTotal);
-
-    // decompose threadIdInSimdgroup into (row, col) coords in simdgroup tile
-    Value laneCol = b.urem(threadIdInSimdgroup, b.i32_val(tpwInner));
-    Value laneRow = b.udiv(threadIdInSimdgroup, b.i32_val(tpwInner));
-
-    Value threadRow =
-        b.add(b.mul(simdgroupIdInThreadgroup, b.i32_val(tpwOuter * sptOuter)),
-              b.mul(laneRow, b.i32_val(sptOuter)));
-    Value threadCol = b.mul(laneCol, b.i32_val(sptInner));
 
     Value stride = adaptor.getStride(); // i32, elements per row of src matrix
     Value threadOffset = b.add(b.mul(threadRow, stride), threadCol);
