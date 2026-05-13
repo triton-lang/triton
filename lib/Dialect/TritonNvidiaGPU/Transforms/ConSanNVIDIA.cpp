@@ -93,8 +93,6 @@ public:
     };
     if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op))
       mask = getBarrierMask(initOp.getAlloc());
-    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
-      mask = getBarrierMask(expectOp.getAlloc());
     if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op))
       mask = getBarrierMask(waitOp.getAlloc());
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))
@@ -131,13 +129,10 @@ public:
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = expectOp.getPred();
-      auto barrierTy = expectOp.getAlloc().getType();
-      int txCount = expectOp.getSize() * ttg::lookupNumCTAs(op) /
-                    barrierTy.getNumElements();
-      info->barriers.push_back({expectOp.getBarrier(), nullptr,
-                                /*count=*/1,
-                                MemEffectsOpInfo::BarrierTrackingMode::Frontier,
-                                /*txCount=*/txCount});
+      info->barriers.push_back(
+          {expectOp.getBarrier(), nullptr,
+           /*count=*/1, MemEffectsOpInfo::BarrierTrackingMode::Frontier,
+           /*txCount=*/static_cast<int>(expectOp.getSize())});
     }
     if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
       info.emplace();
@@ -242,8 +237,7 @@ public:
           {tryCancelOp.getMbarrier(), nullptr, /*count=*/0,
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
            /*txCount=*/
-           -static_cast<int>(tti::getMemDescLength(tryCancelOp.getResult())),
-           /*diagonalEffectRecipientCTAs=*/true});
+           -static_cast<int>(tti::getMemDescLength(tryCancelOp.getResult()))});
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         tryCancelOp.getResult());
     }

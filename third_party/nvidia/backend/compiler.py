@@ -377,6 +377,8 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_allocate_warp_groups(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
+        if "consan" in options.instrumentation_mode:
+            passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
@@ -384,6 +386,7 @@ class CUDABackend(BaseBackend):
         if CUDABackend.instrumentation:
             CUDABackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
+        nvidia.passes.ttnvgpuir.add_tmem_barrier_insertion(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version, "consan" in options.instrumentation_mode)
         passes.ttgpuir.add_canonicalize_llvm_ir(pm)
         passes.common.add_cse(pm)
@@ -511,9 +514,11 @@ class CUDABackend(BaseBackend):
             # Accept more ptxas options if provided
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
-            # Use -Ofc mid to compile ConSan code, if nothing else is specified.
-            if any(mode in knobs.compilation.instrumentation_mode for mode in ["consan", "fpsan"]):
-                ptx_extra_options += ["-Ofc", "mid"]
+            # -Ofc mid miscompiles some large ConSan kernels into invalid global
+            # accesses; -O1 keeps compile time reasonable without that ptxas bug.
+            if (not knobs.nvidia.disable_ptxas_opt
+                    and any(mode in knobs.compilation.instrumentation_mode for mode in ["consan", "fpsan"])):
+                ptx_extra_options += ["--opt-level", "1"]
 
             # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
             reg_alloc = ['--regAllocOptLevel=2']

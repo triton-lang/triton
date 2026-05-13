@@ -106,12 +106,10 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
 
           // init iter args
           {
-            size_t idx = 0;
-            for (auto operand : forOp.getInitArgs()) {
+            for (size_t idx = 0; idx < forOp.getInitArgs().size(); ++idx) {
               auto iter_arg_node = node->getDefines()[idx + 1];
               operands[std::make_pair(op, idx + 3)] =
                   InputPort(iter_arg_node, 0);
-              idx++;
             }
           }
 
@@ -229,8 +227,7 @@ SmallVector<OutputPort> initialDataValues(Graph *graph) {
         node->setDataValue(1);
         values.push_back({node, 1});
       }
-      // TODO: Support TCGen5MMAScaledOp
-      if (isa<nvidia_gpu::TCGen5MMAOp>(op)) {
+      if (isa<nvidia_gpu::TCGen5MMAOp, nvidia_gpu::TCGen5MMAScaledOp>(op)) {
         node->setDataValue(0);
         values.push_back({node, 0});
       }

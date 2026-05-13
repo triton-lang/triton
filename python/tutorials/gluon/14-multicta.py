@@ -300,6 +300,15 @@ benchmark_multicta_softmax_f32()
 # - `mbarrier.arrive` every CTA in a group arrives on the lead CTA
 # - `mbarrier.wait` just the lead CTA waits for the barrier
 #
+# Barriers used across CTAs need one extra ordering rule: every relevant
+# `mbarrier.init` must complete before any CTA uses that barrier. This applies
+# both to barriers that are themselves cross-CTA and to per-CTA barriers consumed
+# by multicast or 2CTA ops. The compiler inserts the required
+# `fence.mbarrier_init.release.cluster` plus a relaxed cluster barrier after the
+# top-level init sequence and before the first use. Since cluster barriers must
+# execute outside `warp_specialize`, initialize these barriers in the top-level
+# part of the kernel before entering warp specialization.
+#
 # Final note on synchronization.
 # cluster.arrive / cluster.wait (i.e., CGA barriers, the cluster equivalent of bar.sync for CTAs) must be
 # executed by all threads in the kernel. As a result, they cannot be used inside a warp_specialize block.
@@ -323,26 +332,27 @@ benchmark_multicta_softmax_f32()
 # Same as for single-CTA, the blockM shape of `TensorMemoryLayout` is the shape
 # of the instruction, which can be either 64 or 128.
 #
-# In Gluon, 2CTA mode is selected on the accumulator layout via
-# `TensorMemoryLayout(..., two_ctas=True)`.
+# The outer-product layouts above describe the required data placement: LHS
+# `(1, 0)`, RHS `(0, 1)`, and accumulator/output `(1, 0)`. On top of that,
+# enabling 2CTA has two required code changes, plus a third when waiting on MMA completion:
+# - select 2CTA mode on the accumulator with
+#   `TensorMemoryLayout(..., two_ctas=True)`;
+# - create any barrier that must be waited on before the lead CTA issues
+#   `tcgen05_mma` with
+#   `mbarrier.allocate_mbarrier(..., two_ctas=True)`;
+# - when initializing an mbarrier used to wait on MMA completion, pass
+#   `two_ctas=...` to `tcgen05_mma_barrier_count`.
 #
-# If one tcgen05_mma instruction uses 2CTA mode, the kernel is declared as using
-# 2CTA mode. In this case, all the other tcgen05_mma instructions in the kernel
-# must use 2CTA mode.
+# Such a pre-MMA barrier needs `two_ctas=True` so that the lead CTA waits for
+# both rows before issuing the collective op. In this single-tile example that is
+# `tma_bar`; in the pipelined matmul below the corresponding examples are
+# `load_ready_bars` and `acc_empty_bars`. These are the same 2CTA sites used by
+# `03-matmul-multicta.py`.
 #
-# The `mma_bar` itself does not need `two_ctas=True`. It is a regular
-# multi-CTA barrier, and `tcgen05_mma` will multicast its completion signal to
-# the two CTAs in the pair. The TMA hand-off barrier *does* need
-# `two_ctas=True`, because only the lead CTA waits before issuing the MMA.
-#
-# Once one `tcgen05_mma` in a kernel uses 2CTA mode, all of the `tcgen05_mma`
-# instructions in that kernel must use 2CTA mode.
-#
-# The tcgen05_mma instruction is issued from the lead CTA in each pair. As such,
-# when used in conjunction with TMA, the TMA barrier needs to be `two_ctas=True`.
-# What this does is that it creates a barrier with cga_layout[0] = [0], which means
-# that CTA0 will wait for both its data and the data from CTA1 to be loaded before
-# issuing the MMA.
+# The `mma_bar` itself does not need `two_ctas=True`: `tcgen05_mma` multicasts
+# its completion signal to the two CTAs in the pair. Once one `tcgen05_mma` in
+# a kernel uses 2CTA mode, all `tcgen05_mma` instructions in that kernel must
+# use 2CTA mode.
 #
 # The kernel `two_cta_tcgen05_kernel` shows the 2CTA TCGen5MMA pattern on a single tile.
 #
@@ -415,10 +425,10 @@ def test_two_cta_tcgen05():
 
 
 # %%
-# There are a few things that change from the single-CTA case:
-# - The TMA barrier is `two_ctas=True`. This was covered in the previous section.
-# - The `mbarrier.expect` is called with the total byte count per CTA, not the whole block.
-# - The tcgen05_mma TMEM layout is now `two_ctas=True`
+# Relative to the single-CTA case, the code below therefore changes the operand
+# layouts, uses `two_ctas=True` on the accumulator layout, and uses
+# `two_ctas=True` on the TMA hand-off barrier. The `mbarrier.expect` byte count
+# remains per CTA, not for the whole pair.
 #
 # Note that there will be a few more changes once this is used in a for-loop and/or with TMA with multicast.
 # More on this in the next section.
@@ -468,11 +478,18 @@ cga_layout_b = get_cga_layout(cga_layout, 1, two_ctas=False)
 # This means that some bases are zero for A and/or B, so different CTAs will load the same data.
 # Multicast will allow these CTAs to hit the L2 cache efficiently.
 #
-# The synchronization pattern is the same as for a regular TMA load:
-# - initialize a barrier,
-# - `expect` the byte count,
-# - issue the TMA with `multicast=True`,
-# - wait on the barrier.
+# The broadcast layouts above describe which CTAs should receive the same tile.
+# After that, the pipelined matmul has three `multicast=True` sites:
+# - `tma.async_load(..., multicast=True)` sends the tile to every CTA in the
+#   broadcast group;
+# - `tcgen05_mma(..., multicast=True)` multicasts its mbarrier arrival before
+#   the next TMA overwrites the shared-memory tile;
+# - `tcgen05_mma_barrier_count(..., multicast=True, ...)` initializes that
+#   mbarrier with the matching arrival count.
+#
+# The TMA synchronization pattern itself is otherwise the same as for a regular
+# load: initialize a barrier, `expect` the byte count, issue the TMA, then wait
+# on the barrier.
 #
 # The reason this works is that the TMA instruction broadcasts its arrival to
 # every CTA in the multicast group atomically, so the wait side does not need a
@@ -548,12 +565,13 @@ def tma_tcgen05_kernel(a_desc, b_desc, out_desc, NUM_K_TILES: gl.constexpr, acc_
     smem_a = gl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
     smem_b = gl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
 
+    acc_tmem = allocate_tensor_memory(gl.float32, [block_m, block_n], acc_tmem_layout)
     tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
     mma_bar = mbarrier.allocate_mbarrier()
     mbarrier.init(tma_bar, count=1)
-    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], multicast=True))
-
-    acc_tmem = allocate_tensor_memory(gl.float32, [block_m, block_n], acc_tmem_layout)
+    mbarrier.init(
+        mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], multicast=True,
+                                                 two_ctas=acc_tmem.type.layout.two_ctas))
 
     phase_tma = 0
     phase_mma = 0
@@ -945,6 +963,13 @@ def matmul_epilogue_partition(p):
         i += 1
 
 
+# The entry kernel allocates and initializes every barrier before
+# `gl.warp_specialize`. Some of these barriers are cross-CTA barriers, and some
+# otherwise per-CTA barriers are consumed by multicast or 2CTA operations. The
+# compiler inserts the required init fence and relaxed cluster barrier after
+# this top-level init sequence, before any partition can use the barriers.
+# Keeping the init sequence here also keeps that mandatory cluster sync outside
+# `warp_specialize`.
 @gluon.jit
 def matmul_multicta_kernel(
     a_desc,
@@ -972,14 +997,6 @@ def matmul_multicta_kernel(
     dtype: gl.constexpr = a_desc.dtype
     a_bufs = gl.allocate_shared_memory(dtype, [STAGES] + a_desc.block_shape, a_desc.layout)
     b_bufs = gl.allocate_shared_memory(dtype, [STAGES] + b_desc.block_shape, b_desc.layout)
-    mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count([a_bufs.index(0), b_bufs.index(0)], multicast=True)
-
-    load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES)
-    load_ready_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=two_ctas)
-    for i in gl.static_range(STAGES):
-        mbarrier.init(load_empty_bars.index(i), count=mma_barrier_count)
-        mbarrier.init(load_ready_bars.index(i), count=1)
-
     tmem_layout: gl.constexpr = TensorMemoryLayout(
         [BLOCK_SIZE_M, block_n // get_split_dim(CGA_LAYOUT, 1)],
         col_stride=1,
@@ -987,6 +1004,15 @@ def matmul_multicta_kernel(
         two_ctas=two_ctas,
     )
     acc_bufs = allocate_tensor_memory(gl.float32, [ACC_STAGES, block_m, block_n], tmem_layout)
+    mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count([a_bufs.index(0), b_bufs.index(0)], multicast=True,
+                                                                two_ctas=acc_bufs.index(0).type.layout.two_ctas)
+
+    load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES)
+    load_ready_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=two_ctas)
+    for i in gl.static_range(STAGES):
+        mbarrier.init(load_empty_bars.index(i), count=mma_barrier_count)
+        mbarrier.init(load_ready_bars.index(i), count=1)
+
     acc_empty_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=two_ctas)
     acc_ready_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     for i in gl.static_range(ACC_STAGES):

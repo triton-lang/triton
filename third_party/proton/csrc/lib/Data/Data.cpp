@@ -6,8 +6,6 @@
 #include <iostream>
 #include <stdexcept>
 
-#include <shared_mutex>
-
 namespace proton {
 
 void DataEntry::upsertMetric(std::unique_ptr<Metric> metric) const {
@@ -62,14 +60,6 @@ void DataEntry::upsertLinkedFlexibleMetric(const std::string &metricName,
                                     FlexibleMetric(metricName, metricValue));
   } else {
     it->second.updateValue(metricValue);
-  }
-}
-
-void DataEntry::upsertLinkedFlexibleMetrics(
-    const std::map<std::string, MetricValueType> &metrics,
-    size_t linkedId) const {
-  for (const auto &[metricName, metricValue] : metrics) {
-    upsertLinkedFlexibleMetric(metricName, metricValue, linkedId);
   }
 }
 

@@ -223,6 +223,102 @@ SmallVector<Value> scalarizeTDMDescriptor(RewriterBase &rewriter, Location loc,
   return scalars;
 }
 
+void updateTensorDescriptor(RewriterBase &rewriter, Location loc,
+                            Type elementType, ArrayRef<int64_t> blockShape,
+                            Value &group0, Value &group1,
+                            ArrayRef<Value> addOffsets,
+                            ArrayRef<Value> setBounds, Value dest, Value pred,
+                            Value barrier) {
+  size_t numDims = blockShape.size();
+  assert(numDims == 2 && "updateTensorDescriptor currently supports 2D");
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value v16 = b.i32_val(16);
+
+  // ---- add_offsets: bump global_addr ----
+  if (!addOffsets.empty()) {
+    auto elementBitWidth = elementType.getIntOrFloatBitWidth();
+    Value elemSize = b.i64_val(elementBitWidth / 8);
+
+    // Decode current 48-bit global_addr from group0[2:3] (valid bit masked).
+    Value addrLo = vecGet(b, group0, 2);
+    Value addrHi = b.and_(vecGet(b, group0, 3), b.i32_val(0x7FFFFFFF));
+    Value addr = b.or_(b.zext(i64_ty, addrLo),
+                       b.shl(b.zext(i64_ty, addrHi), b.i64_val(32)));
+
+    // Byte delta:
+    //   addOffsets[1] (innermost, stride 1) +
+    //   addOffsets[0] * tensor_dim0_stride (from group1[5]),
+    // all scaled by element size.  Promote to i64 before the multiply so
+    // addOffsets[0] * stride0 doesn't overflow i32 for large tensors.
+    // Offsets are signed (advancing backward is allowed) so sext; stride is
+    // unsigned so zext.
+    Value stride0 = vecGet(b, group1, 5);
+    Value off0_64 = b.sext(i64_ty, addOffsets[0]);
+    Value off1_64 = b.sext(i64_ty, addOffsets[1]);
+    Value stride0_64 = b.zext(i64_ty, stride0);
+    Value deltaElem = b.add(off1_64, b.mul(off0_64, stride0_64));
+    Value byteDelta = b.mul(deltaElem, elemSize);
+    addr = b.add(addr, byteDelta);
+
+    // Re-pack, restoring the valid bit in group0[3] bit 31.
+    Value newLo = b.trunc(i32_ty, addr);
+    Value newHi = b.trunc(i32_ty, b.lshr(addr, b.i64_val(32)));
+    newHi = b.or_(newHi, b.i32_val(1 << 31));
+    group0 = vecSet(b, group0, 2, newLo);
+    group0 = vecSet(b, group0, 3, newHi);
+  }
+
+  // ---- set_bounds: absolute rewrite of tensor_dim ----
+  // tensor_dim_inner (setBounds[1] for 2D) spans
+  //   group1[1] hi-16 | group1[2] lo-16
+  // tensor_dim_outer (setBounds[0]) spans
+  //   group1[2] hi-16 | group1[3] lo-16
+  if (!setBounds.empty()) {
+    auto stampDim = [&](int loDword, int hiDword, Value newDim) {
+      // loDword: keep lo-16, replace hi-16 with (newDim & 0xFFFF) << 16
+      Value loHi = b.shl(b.and_(newDim, b.i32_val(0xFFFF)), v16);
+      Value g_lo = b.or_(
+          b.and_(vecGet(b, group1, loDword), b.i32_val(0x0000FFFF)), loHi);
+      group1 = vecSet(b, group1, loDword, g_lo);
+      // hiDword: keep hi-16, replace lo-16 with (newDim >> 16) & 0xFFFF
+      Value hiLo = b.and_(b.lshr(newDim, v16), b.i32_val(0xFFFF));
+      Value g_hi = b.or_(
+          b.and_(vecGet(b, group1, hiDword), b.i32_val(0xFFFF0000)), hiLo);
+      group1 = vecSet(b, group1, hiDword, g_hi);
+    };
+    stampDim(/*loDword=*/1, /*hiDword=*/2, setBounds[1]); // inner
+    stampDim(/*loDword=*/2, /*hiDword=*/3, setBounds[0]); // outer
+  }
+
+  // ---- dest: rewrite lds_addr in group0[1] ----
+  if (dest) {
+    Value ldsAddr = b.ptrtoint(i32_ty, dest);
+    group0 = vecSet(b, group0, 1, ldsAddr);
+  }
+
+  // ---- pred: rewrite group0[0] ----
+  if (pred) {
+    // Note: this clobbers any mode bits stored in group0[0] (gather/scatter
+    // mode bit in bit 31, index-size bit in bit 30).  TODO: Gather/scatter
+    // mutation is not yet supported here; a future revision should preserve
+    // them.
+    group0 = vecSet(b, group0, 0, pred);
+  }
+
+  // ---- barrier: enable bit (group1[0] bit 18) + addr (group1[1] lo-16) ----
+  if (barrier) {
+    Value g1_0 = vecGet(b, group1, 0);
+    Value g1_1 = vecGet(b, group1, 1);
+    g1_0 = b.or_(g1_0, b.shl(b.i32_val(1), b.i32_val(18)));
+    g1_1 = b.or_(b.and_(g1_1, b.i32_val(0xFFFF0000)),
+                 b.and_(b.lshr(b.ptrtoint(i32_ty, barrier), b.i32_val(3)),
+                        b.i32_val(0x0000FFFF)));
+    group1 = vecSet(b, group1, 0, g1_0);
+    group1 = vecSet(b, group1, 1, g1_1);
+  }
+}
+
 // Decode a full TDM descriptor from all 4 group vectors for 3D-5D tensors
 // Returns (base, tensorShape[], tensorStride[], blockShape[])
 std::tuple<Value, SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
@@ -245,39 +341,48 @@ decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc, Value group0,
   SmallVector<Value> tensorStride(numDims);
   SmallVector<Value> blockShape(numDims);
 
+  // Helper: combine a 32-bit low part and a 16-bit high part into an i64.
+  auto combine48 = [&](Value lo32, Value hi16InDword) -> Value {
+    Value hi16 = b.and_(hi16InDword, b.i32_val(0xFFFF));
+    return b.or_(b.zext(i64_ty, lo32),
+                 b.shl(b.zext(i64_ty, hi16), b.i64_val(32)));
+  };
+
   // Decode dimensions from the end (inner dimensions first)
   tensorShape[numDims - 1] = decode48BitValue(rewriter, b, group1, 1);
 
   if (numDims >= 2) {
     tensorShape[numDims - 2] = decode48BitValue(rewriter, b, group1, 2);
 
-    // Strides are loaded in opposite order of shapes
-    // tensor_dim0_stride from group1[5]
-    tensorStride[numDims - 2] = vecGet(b, group1, 5);
+    // tensor_dim0_stride: group1[5][0:32] | group1[6][0:16] (48 bits)
+    tensorStride[numDims - 2] =
+        combine48(vecGet(b, group1, 5), vecGet(b, group1, 6));
 
-    // tensor_dim1_stride is encoded in group1[6] (48-bit value across group1[6]
-    // and group1[7])
+    // tensor_dim1_stride: group1[6][16:32] | group1[7][0:32] (48 bits)
     if (numDims >= 3) {
       Value stride1Low = b.and_(b.lshr(vecGet(b, group1, 6), b.i32_val(16)),
                                 b.i32_val(0xFFFF));
-      Value stride1High = b.and_(vecGet(b, group1, 7), b.i32_val(0xFFFF));
+      Value stride1High = vecGet(b, group1, 7);
       tensorStride[numDims - 3] =
-          b.or_(stride1Low, b.shl(stride1High, b.i32_val(16)));
+          b.or_(b.zext(i64_ty, stride1Low),
+                b.shl(b.zext(i64_ty, stride1High), b.i64_val(16)));
     }
   }
 
-  // tensor_dim2_stride from group2[2]
+  // tensor_dim2_stride: group2[2][0:32] | group2[3][0:16] (48 bits)
   if (numDims >= 4) {
-    tensorStride[numDims - 4] = vecGet(b, group2.value(), 2);
+    tensorStride[numDims - 4] =
+        combine48(vecGet(b, group2.value(), 2), vecGet(b, group2.value(), 3));
   }
 
-  // tensor_dim3_stride from group3[0]
+  // tensor_dim3_stride: group3[0][0:32] | group3[1][0:16] (48 bits)
   if (numDims == 5) {
-    tensorStride[numDims - 5] = vecGet(b, group3.value(), 0);
+    tensorStride[numDims - 5] =
+        combine48(vecGet(b, group3.value(), 0), vecGet(b, group3.value(), 1));
   }
 
   // The innermost dimension always has stride 1
-  tensorStride[numDims - 1] = b.i32_val(1);
+  tensorStride[numDims - 1] = b.i64_val(1);
 
   // Block shapes from group1
   blockShape[numDims - 1] =
@@ -339,9 +444,16 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   auto elementBitWidth = elementType.getIntOrFloatBitWidth();
   auto elementSizeInBytes = elementBitWidth / 8;
 
-  // Cast strides from i64 to i32
+  // Strides come in as i64; the descriptor's stride slots are 48 bits wide.
+  // Separate the low-32 and high-16 bits of the stride.
+  SmallVector<Value> tensorStrideLo32(numDims);
+  SmallVector<Value> tensorStrideHi16(numDims);
   for (size_t i = 0; i < numDims; ++i) {
-    tensorStride[i] = b.trunc(i32_ty, tensorStride[i]);
+    Value s = tensorStride[i];
+    assert(s.getType() == i64_ty && "Expected TDM stride to be i64.");
+    tensorStrideLo32[i] = b.trunc(i32_ty, s);
+    tensorStrideHi16[i] =
+        b.and_(b.trunc(i32_ty, b.lshr(s, b.i64_val(32))), b.i32_val(0xFFFF));
   }
 
   // Compute per-warp tile dimensions for the TDM descriptor.
@@ -462,13 +574,20 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
     group1 = vecSet(b, group1, 4, g1_4);
   }
 
-  // Handle strides
+  // Handle strides (each slot is 48 bits: low-32 + high-16).
   if (numDims >= 2) {
-    group1 = vecSet(b, group1, 5, tensorStride[numDims - 2]);
+    group1 = vecSet(b, group1, 5, tensorStrideLo32[numDims - 2]);
+    Value g1_6 = tensorStrideHi16[numDims - 2];
     if (numDims >= 3) {
-      group1 = vecSet(b, group1, 6, b.shl(tensorStride[numDims - 3], v16));
-      group1 = vecSet(b, group1, 7, b.lshr(tensorStride[numDims - 3], v16));
+      g1_6 = b.or_(
+          g1_6,
+          b.shl(b.and_(tensorStrideLo32[numDims - 3], b.i32_val(0xFFFF)), v16));
+      Value stride1Hi32 =
+          b.or_(b.lshr(tensorStrideLo32[numDims - 3], v16),
+                b.shl(tensorStrideHi16[numDims - 3], b.i32_val(16)));
+      group1 = vecSet(b, group1, 7, stride1Hi32);
     }
+    group1 = vecSet(b, group1, 6, g1_6);
   }
 
   if (numDims <= 2) {
@@ -528,15 +647,11 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
     // tensor_dim3 (4th dimension from the end)
     if (numDims >= 4) {
       group2 = vecSet(b, group2, 1, tensorShape[numDims - 4]);
-      // tensor_dim2_stride (48 bits: lower 32 bits in group2[2], upper 16 bits
-      // in group2[3])
-      group2 = vecSet(b, group2, 2, tensorStride[numDims - 4]);
-    }
-
-    // tile_dim3 (upper 16 bits of group2[3])
-    if (numDims >= 4) {
-      group2 =
-          vecSet(b, group2, 3, b.shl(b.i32_val(blockShape[numDims - 4]), v16));
+      // tensor_dim2_stride: group2[2][0:32] | group2[3][0:16] (48 bits)
+      group2 = vecSet(b, group2, 2, tensorStrideLo32[numDims - 4]);
+      Value g2_3 = b.or_(tensorStrideHi16[numDims - 4],
+                         b.shl(b.i32_val(blockShape[numDims - 4]), v16));
+      group2 = vecSet(b, group2, 3, g2_3);
     }
   }
 
@@ -582,10 +697,12 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   Value group3 = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
   if (numDims == 5) {
     // tensor_dim3_stride (4th dimension from the end) — 48 bits split across
-    // group3[0] and the lower 16 bits of group3[1].
-    group3 = vecSet(b, group3, 0, tensorStride[numDims - 5]);
-    // tensor_dim4 (5th dim) — upper 16 of group3[1] and lower 16 of group3[2].
-    group3 = vecSet(b, group3, 1, b.shl(tensorShape[numDims - 5], v16));
+    // group3[0] (low 32) and the lower 16 bits of group3[1] (high 16).
+    group3 = vecSet(b, group3, 0, tensorStrideLo32[numDims - 5]);
+    // group3[1] = stride_hi16 | (tensor_dim4_lo16 << 16)
+    Value g3_1 = b.or_(tensorStrideHi16[numDims - 5],
+                       b.shl(tensorShape[numDims - 5], v16));
+    group3 = vecSet(b, group3, 1, g3_1);
     // Compose group3[2] = tensor_dim4_hi16 | (tile_dim4 << 16) in one write.
     Value g3_2 = b.or_(b.lshr(tensorShape[numDims - 5], v16),
                        b.shl(b.i32_val(blockShape[numDims - 5]), v16));
@@ -654,9 +771,9 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
     offset[i] = b.add(offset[i], globalOffset[i]);
   }
 
-  Value baseOffset = b.i32_val(0);
+  Value baseOffset = b.i64_val(0);
   for (size_t i = 0; i < numDims; ++i) {
-    Value dimOffset = b.mul(offset[i], tensorStride[i]);
+    Value dimOffset = b.mul(b.zext(i64_ty, offset[i]), tensorStride[i]);
     baseOffset = b.add(baseOffset, dimOffset);
   }
   srcPtr = b.gep(globalPtrTy, elementType, srcPtr, baseOffset);
@@ -833,12 +950,15 @@ void fillTDMDescriptorForGatherScatter(
   auto kBlock = str_attr("block");
   auto cgaOffsets =
       applyLinearLayout(loc, rewriter, cgaLayout, {{kBlock, ctaId}});
-  Value cgaColOffset = b.mul(cgaOffsets[1].second, tensorStride[1]);
+  // tensorStride is i64 (48-bit slots); zext the i32 offsets before
+  // multiplying so we don't truncate to 32 bits.
+  Value cgaColOffset =
+      b.mul(b.zext(i64_ty, cgaOffsets[1].second), tensorStride[1]);
   globalPtr = b.gep(globalPtrTy, elementType, globalPtr, cgaColOffset);
 
   // For scatter, only apply column offset to global address
   // Row positions are specified by rowIndices
-  Value colOffset = b.mul(globalColOffset, tensorStride[1]);
+  Value colOffset = b.mul(b.zext(i64_ty, globalColOffset), tensorStride[1]);
   globalPtr = b.gep(globalPtrTy, elementType, globalPtr, colOffset);
 
   // Calculate LDS offset based on row offset only (column always starts at 0)
@@ -1018,8 +1138,8 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                       ArrayRef<Value> instrDstPtrs, Value pred,
                       Value multicastMask, Value barrier,
                       const triton::LinearLayout &instrSharedLayout,
-                      Value ctaId, bool isLoad,
-                      ArrayRef<unsigned> warpsPerCTA) {
+                      Value ctaId, bool isLoad, ArrayRef<unsigned> warpsPerCTA,
+                      int32_t auxBits) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
@@ -1041,7 +1161,7 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                                        : "llvm.amdgcn.tensor.store.from.lds";
     LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, intrinsicName, {},
-        {group0, group1, group2, group3, group4Zero, b.i32_val(0)});
+        {group0, group1, group2, group3, group4Zero, b.i32_val(auxBits)});
   } else {
     Value group0 = desc[0];
     Value group1 = desc[1];
@@ -1057,9 +1177,9 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
 
     const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
                                        : "llvm.amdgcn.tensor.store.from.lds";
-    LLVM::createLLVMIntrinsicCallOp(
-        rewriter, loc, intrinsicName, {},
-        {group0, group1, group2Zero, group3Zero, group4Zero, b.i32_val(0)});
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {},
+                                    {group0, group1, group2Zero, group3Zero,
+                                     group4Zero, b.i32_val(auxBits)});
   }
 }
 
@@ -1081,7 +1201,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value pred, Value multicastMask, Type elementType,
                       Value barrierPtr, bool isLoad,
                       const triton::LinearLayout &sharedLayout,
-                      Attribute encoding, Value ctaId) {
+                      Attribute encoding, Value ctaId, int32_t auxBits) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   size_t numDims = blockShape.size();
   assert(numDims <= 5);
@@ -1097,7 +1217,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
     emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
                      to_vector(blockShape), numWarps, padInterval, padAmount,
                      to_vector(offset), dstPtrs, pred, multicastMask,
-                     barrierPtr, sharedLayout, ctaId, isLoad, warpsPerCTA);
+                     barrierPtr, sharedLayout, ctaId, isLoad, warpsPerCTA,
+                     auxBits);
     return;
   }
 
@@ -1161,7 +1282,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
     emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
                      effectiveBlockShape, numWarps, padInterval, padAmount,
                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
-                     sliceLayout, ctaId, isLoad, warpsPerCTA);
+                     sliceLayout, ctaId, isLoad, warpsPerCTA, auxBits);
   }
 }
 
@@ -1320,7 +1441,8 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
   auto dot64 = [&](ArrayRef<Value> indices, ArrayRef<Value> strides) {
     Value ret = b.i64_val(0);
     for (auto [index, stride] : llvm::zip(indices, strides)) {
-      ret = b.add(ret, b.mul(b.zext(i64_ty, index), b.zext(i64_ty, stride)));
+      assert(stride.getType() == i64_ty && "Expected TDM stride to be i64.");
+      ret = b.add(ret, b.mul(b.zext(i64_ty, index), stride));
     }
     return ret;
   };
@@ -1331,7 +1453,7 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
 
   // Calculate the total tensor size for bounds checking.
   Value linearTensorSize =
-      b.mul(b.zext(i64_ty, tensorShape[0]), b.zext(i64_ty, tensorStride[0]));
+      b.mul(b.zext(i64_ty, tensorShape[0]), tensorStride[0]);
 
   // Calculate maximum allowed offset from tilePtr before going out of bounds
   Value maxOffsetFromTile = b.sub(linearTensorSize, tileOffset);
@@ -1358,7 +1480,7 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
 
   // Adjust the inner stride (always 1) to the number of elements per prefetch
   auto scaledStride = tensorStride;
-  scaledStride.back() = b.i32_val(elemPerPrefetch);
+  scaledStride.back() = b.i64_val(elemPerPrefetch);
 
   auto baseIndices = applyLinearLayout(loc, rewriter, ll,
                                        {{kRegister, b.i32_val(0)},

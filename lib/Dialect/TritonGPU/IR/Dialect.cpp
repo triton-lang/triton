@@ -130,6 +130,13 @@ unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
       .getTotalElemsPerThread(shape);
 }
 
+unsigned getUniqueElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
+  auto kReg = StringAttr::get(layout.getContext(), "register");
+  auto strippedLayout =
+      toLinearLayout(shape, layout).removeZeroBasesAlongDim(kReg);
+  return strippedLayout.getInDimSize(kReg);
+}
+
 SmallVector<unsigned> getElemsPerThread(Attribute layout,
                                         ArrayRef<int64_t> shape) {
   return toGenericLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
@@ -149,6 +156,14 @@ unsigned getTotalElemsPerThread(Type type) {
   auto tensorType = cast<RankedTensorType>(type);
   return getTotalElemsPerThread(tensorType.getEncoding(),
                                 tensorType.getShape());
+}
+
+unsigned getUniqueElemsPerThread(Type type) {
+  if (type.isIntOrIndexOrFloat() || isa<triton::PointerType>(type))
+    return 1;
+  auto tensorType = cast<RankedTensorType>(type);
+  return getUniqueElemsPerThread(tensorType.getEncoding(),
+                                 tensorType.getShape());
 }
 
 FailureOr<RankedTensorType>
@@ -485,26 +500,13 @@ static SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,
   return order.takeVector();
 }
 
-static int64_t getNumNonBroadcastRegisters(ArrayRef<int64_t> shape,
-                                           Attribute encoding) {
-  auto kReg = StringAttr::get(encoding.getContext(), "register");
-  auto strippedLayout =
-      toLinearLayout(shape, encoding).removeZeroBasesAlongDim(kReg);
-  return strippedLayout.getInDimSize(kReg);
-}
-
-static int64_t getNumNonBroadcastRegisters(RankedTensorType tensorType) {
-  return getNumNonBroadcastRegisters(tensorType.getShape(),
-                                     tensorType.getEncoding());
-}
-
 bool isLegalCatEncoding(CatOp cat, Attribute targetEncoding) {
   // Cat lowering concatenates the operands' unique register values. So the
   // number of unique register values in the result must be equal to those in
   // the operands.
-  int64_t operandRegs = getNumNonBroadcastRegisters(cat.getLhs().getType()) * 2;
+  int64_t operandRegs = getUniqueElemsPerThread(cat.getLhs().getType()) * 2;
   int64_t resultRegs =
-      getNumNonBroadcastRegisters(cat.getType().getShape(), targetEncoding);
+      getUniqueElemsPerThread(targetEncoding, cat.getType().getShape());
   return resultRegs == operandRegs;
 }
 
@@ -2679,6 +2681,23 @@ AMDWmmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
   return getOrderForDotOperand(opIdx, getRank(), /*kContig*/ true);
 }
 
+// Captures the operand-swap for asymmetric isTransposed WMMA
+unsigned AMDWmmaEncodingAttr::getOperandNonKDim(unsigned mDim, unsigned nDim,
+                                                bool isTransposed,
+                                                unsigned opIdx) {
+  // opIdx=0 -> mDim, opIdx=1 -> nDim. Flipped for asymmetric WMMA with
+  // isTransposed=true as we must swap the operands and per-operand layouts
+  // must match the swap.
+  bool isFlip = isTransposed && (mDim != nDim);
+  unsigned eff = isFlip ? (1 - opIdx) : opIdx;
+  return eff == 0 ? mDim : nDim;
+}
+
+unsigned AMDWmmaEncodingAttr::getOperandNonKDim(unsigned opIdx) const {
+  auto mnk = getInstrShape();
+  return getOperandNonKDim(mnk[0], mnk[1], getIsTransposed(), opIdx);
+}
+
 SwizzledSharedEncodingAttr AMDWmmaEncodingAttr::composeSharedLayoutForOperand(
     CGAEncodingAttr cgaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
     ArrayRef<unsigned> sharedOrder, unsigned kWidth, unsigned elemBitWidth,
@@ -3031,6 +3050,36 @@ struct TritonGPUInferLayoutInterface
           applyPermutation(invOrderUnsigned, enc.getOrder()), cgaLayout);
       return success();
     }
+
+    if (auto enc = dyn_cast<PartitionedSharedEncodingAttr>(operandEncoding)) {
+      // Recurse on the inner partition layout using the shape of a single
+      // logical piece (partitionDim is divided by numLogicalPieces, all other
+      // dimensions are unchanged). Rank, divisibility, and partitionDim bounds
+      // are invariants of a valid PartitionedSharedEncodingAttr enforced by
+      // its verifier. The recursive call will checkRank against the inner
+      // partitionLayout.
+      unsigned partitionDim = enc.getPartitionDim();
+      SmallVector<int64_t> partitionShape(shape.begin(), shape.end());
+      partitionShape[partitionDim] /= enc.getNumLogicalPieces();
+
+      Attribute innerResultEncoding;
+      if (failed(inferTransOpEncoding(enc.getPartitionLayout(), partitionShape,
+                                      order, innerResultEncoding, loc)))
+        return failure();
+
+      auto innerShared = dyn_cast<SharedEncodingTrait>(innerResultEncoding);
+      if (!innerShared) {
+        return emitOptionalError(loc, "transposed partition layout is not a "
+                                      "SharedEncodingTrait");
+      }
+
+      // After the permutation, the old partitionDim axis lives at the position
+      // j where order[j] == partitionDim, i.e. invOrder[partitionDim].
+      resultEncoding = PartitionedSharedEncodingAttr::get(
+          ctx, enc.getNumPartitions(), enc.getNumGroups(),
+          invOrder[partitionDim], innerShared);
+      return success();
+    }
     // Generic case
     auto padded = dyn_cast<PaddedSharedEncodingAttr>(operandEncoding);
 
@@ -3173,9 +3222,8 @@ struct TritonGPUInferLayoutInterface
 
   LogicalResult verifyCatOpEncodingCompatibility(Operation *op) const override {
     auto cat = cast<CatOp>(op);
-    int64_t operandRegs =
-        getNumNonBroadcastRegisters(cat.getLhs().getType()) * 2;
-    int64_t resultRegs = getNumNonBroadcastRegisters(cat.getType());
+    int64_t operandRegs = getUniqueElemsPerThread(cat.getLhs().getType()) * 2;
+    int64_t resultRegs = getUniqueElemsPerThread(cat.getType());
     if (resultRegs != operandRegs) {
       return op->emitError("tt.cat result encoding requires ")
              << resultRegs
@@ -3738,8 +3786,10 @@ struct TritonGPUVerifyTensorLayoutInterface
       return true;
     return isa<triton::MakeRangeOp, triton::SplatOp, triton::BroadcastOp,
                triton::LoadOp, triton::StoreOp, triton::JoinOp, triton::SplitOp,
-               triton::gpu::ConvertLayoutOp, triton::gpu::Fp4ToFpOp,
-               triton::gpu::LocalLoadOp, triton::gpu::LocalStoreOp>(op);
+               triton::DotOp, triton::DotScaledOp, triton::CallOp,
+               triton::ReturnOp, triton::FuncOp, triton::gpu::ConvertLayoutOp,
+               triton::gpu::Fp4ToFpOp, triton::gpu::LocalLoadOp,
+               triton::gpu::LocalStoreOp>(op);
   }
 
   LogicalResult verifyTensorLayout(
@@ -4307,9 +4357,6 @@ bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
 }
 
 bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
-  Attribute enc = type.getEncoding();
-  MLIRContext *ctx = enc.getContext();
-
   LinearLayout actual = toLinearLayout(type);
 
   // Flatten actual outs in reverse order to produce a row-major flattening
@@ -4360,10 +4407,13 @@ getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   // H, W). Supporting pixelsPerColumn > 1024 would require computing offsets
   // that depend on input tensor shape and padding, which is non-trivial.
   if (blockShape[otherDim] > otherDimMax) {
-    return emitError() << "im2col mode: pixelsPerColumn dimension "
-                       << blockShape[otherDim]
-                       << " exceeds the maximum supported value of "
-                       << otherDimMax;
+    if (emitError) {
+      emitError() << Twine("im2col mode: pixelsPerColumn dimension ") +
+                         Twine(blockShape[otherDim]) +
+                         " exceeds the maximum supported value of " +
+                         Twine(otherDimMax);
+    }
+    return failure();
   }
 
   // Clamp the contiguous dimension (channelsPerPixel) to max 256
@@ -4373,12 +4423,16 @@ getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   if (swizzleBytes != 0) {
     auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
     if (blockShape[contigDim] < contigDimSize) {
-      return emitError() << "im2col mode: block shape along the contiguous "
-                            "dimension "
-                         << contigDim
-                         << " is too small for the swizzle byte size "
-                         << swizzleBytes << ", got " << blockShape[contigDim]
-                         << " but expected at least " << contigDimSize;
+      if (emitError) {
+        emitError() << Twine("im2col mode: block shape along the contiguous "
+                             "dimension ") +
+                           Twine(contigDim) +
+                           " is too small for the swizzle byte size " +
+                           Twine(swizzleBytes) + ", got " +
+                           Twine(blockShape[contigDim]) +
+                           " but expected at least " + Twine(contigDimSize);
+      }
+      return failure();
     }
     blockShape[contigDim] = contigDimSize;
   }
@@ -4409,12 +4463,16 @@ getTMABlockShapeTiled(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   if (swizzleBytes != 0) {
     auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
     if (blockShape[contigDim] < contigDimSize) {
-      return emitError() << "block shape along the contiguous dimension "
-                         << contigDim
-                         << " is too small for the swizzle byte size "
-                         << swizzleBytes << " in an NVMMASharedLayout, got "
-                         << blockShape[contigDim] << " but expected at least "
-                         << contigDimSize;
+      if (emitError) {
+        emitError() << Twine("block shape along the contiguous dimension ") +
+                           Twine(contigDim) +
+                           " is too small for the swizzle byte size " +
+                           Twine(swizzleBytes) +
+                           " in an NVMMASharedLayout, got " +
+                           Twine(blockShape[contigDim]) +
+                           " but expected at least " + Twine(contigDimSize);
+      }
+      return failure();
     }
     blockShape[contigDim] = contigDimSize;
   }

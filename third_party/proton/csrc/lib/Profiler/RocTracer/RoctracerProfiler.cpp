@@ -303,6 +303,9 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       const char *kernelName = getKernelName(cid, data);
       threadState.enterOp(Scope(kernelName ? kernelName : ""));
       auto &dataToEntry = threadState.dataToEntry;
+      if (dataToEntry.empty()) {
+        return;
+      }
       size_t numInstances = 1;
       if (cid == HIP_API_ID_hipGraphLaunch) {
         pImpl->corrIdToIsHipGraph[data->correlation_id] = true;
@@ -388,7 +391,11 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
         break;
       }
       }
+      const bool deactivated = threadState.dataToEntry.empty();
       threadState.exitOp();
+      if (deactivated) {
+        return;
+      }
       // Track outstanding op for flush
       profiler.correlation.submit(data->correlation_id);
     }

@@ -7,7 +7,9 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::getShapePerCTA;
+using ::mlir::triton::gpu::isPermutationMatrixLayout;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
+using ::mlir::triton::gpu::toLinearLayout;
 
 LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
@@ -28,37 +30,43 @@ struct ScaledDotOpConversion
     : public ConvertOpToLLVMPattern<triton::DotScaledOp> {
   using ConvertOpToLLVMPattern<triton::DotScaledOp>::ConvertOpToLLVMPattern;
 
-  ScaledDotOpConversion(LLVMTypeConverter &converter, int computeCapability,
+  ScaledDotOpConversion(LLVMTypeConverter &converter, int,
                         PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::DotScaledOp>(converter, benefit),
-        computeCapability(computeCapability) {}
+      : ConvertOpToLLVMPattern<triton::DotScaledOp>(converter, benefit) {}
 
   LogicalResult
   matchAndRewrite(triton::DotScaledOp op, triton::DotScaledOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto rty = cast<RankedTensorType>(op.getResult().getType());
+    if (!isPermutationMatrixLayout(
+            toLinearLayout(rty.getShape(), rty.getEncoding())))
+      return rewriter.notifyMatchFailure(
+          op, "ScaledDotOp result encoding must have a permutation-matrix "
+              "linear layout");
     return convertMMADotScaled(op, adaptor, getTypeConverter(), rewriter);
   }
-
-private:
-  int computeCapability;
 };
 
 struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   using ConvertOpToLLVMPattern<triton::DotOp>::ConvertOpToLLVMPattern;
 
-  DotOpConversion(LLVMTypeConverter &converter, int computeCapability,
-                  PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::DotOp>(converter, benefit),
-        computeCapability(computeCapability) {}
+  DotOpConversion(LLVMTypeConverter &converter, int, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::DotOp>(converter, benefit) {}
 
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // D = A * B + C
-    Value D = op.getResult();
+    auto dType = op.getResult().getType();
+    auto dEncoding = dType.getEncoding();
 
-    NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(
-        cast<RankedTensorType>(D.getType()).getEncoding());
+    if (!isPermutationMatrixLayout(toLinearLayout(dType.getShape(), dEncoding)))
+      return rewriter.notifyMatchFailure(
+          op,
+          "DotOp result encoding must have a permutation-matrix linear layout");
+
+    NvidiaMmaEncodingAttr mmaLayout =
+        dyn_cast<NvidiaMmaEncodingAttr>(dEncoding);
     if (mmaLayout) {
       if (mmaLayout.getVersionMajor() == 2) {
         return convertMMA(op, adaptor, getTypeConverter(), rewriter,
@@ -69,16 +77,12 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
           "Unsupported MMA kind found when converting DotOp to LLVM.");
     }
 
-    if (isa<BlockedEncodingAttr>(
-            cast<RankedTensorType>(D.getType()).getEncoding()))
+    if (isa<BlockedEncodingAttr>(dEncoding))
       return convertFMADot(op, adaptor, getTypeConverter(), rewriter);
 
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
   }
-
-private:
-  int computeCapability;
 };
 
 struct WarpGroupDotOpConversion
