@@ -327,6 +327,11 @@ def insert_bitcast_for_global_smem_call(ir: str) -> str:
     constexpr_gep = re.compile(
         r"(ptr\s+addrspace\((\d+)\))\s+getelementptr inbounds\s+\((\w+),\s+\w+\s+addrspace\(\d+\)\*\s+@global_smem,\s+i64\s+(\d+)\)"
     )
+    # same pattern but if outer ptr already typed
+    # e.g. after rewrite_air_simdgroup_async_copy_ptrs converts ptr addrspace(3) to i8 addrspace(3)*
+    typed_constexpr_gep = re.compile(
+        r"(\w+\s+addrspace\((\d+)\)\*)\s+getelementptr inbounds\s+\((\w+),\s+\w+\s+addrspace\(\d+\)\*\s+@global_smem,\s+i64\s+(\d+)\)"
+    )
     simdgroup_func = re.compile(r"@(air\.simdgroup_matrix_8x8_(?:load|store)\.[^(]+)\(")
 
     # also matches simdgroup calls that pass @global_smem directly (no GEP offset)
@@ -351,12 +356,16 @@ def insert_bitcast_for_global_smem_call(ir: str) -> str:
                     return f"{llvm_type} addrspace({ptr_suffix_m.group(1)})*"
             return None
 
-        # case 1: constexpr GEP off @global_smem as call arg
+        # case 1: constexpr GEP off @global_smem as call arg (opaque or typed outer ptr)
         if "getelementptr inbounds" in line:
             m = constexpr_gep.search(line)
+            matched_gep_pat = constexpr_gep
+            if not m:
+                m = typed_constexpr_gep.search(line)
+                matched_gep_pat = typed_constexpr_gep
             if m:
                 addrspace = m.group(2)
-                elem_type = m.group(3)  # "i8"
+                elem_type = m.group(3)  # i8
                 offset = m.group(4)
 
                 cast_var = f"%smem_call_gep_cast_{cast_idx}"
@@ -380,7 +389,7 @@ def insert_bitcast_for_global_smem_call(ir: str) -> str:
                         arg_var = typed_var
                         arg_ptr_ty = typed_ptr
 
-                new_lines.append(constexpr_gep.sub(f"{arg_ptr_ty} {arg_var}", line, count=1))
+                new_lines.append(matched_gep_pat.sub(f"{arg_ptr_ty} {arg_var}", line, count=1))
                 continue
 
         # case 2: @global_smem passed directly as ptr addrspace(N) arg in simdgroup call
@@ -397,6 +406,28 @@ def insert_bitcast_for_global_smem_call(ir: str) -> str:
                     )
                     new_lines.append(direct_global_smem.sub(f"{typed_ptr} {cast_var}", line, count=1))
                     continue
+
+        # case 3: @global_smem already has a typed ptr
+        # e.g. after rewrite_air_simdgroup_async_copy_ptrs converts ptr addrspace(3) @global_smem to i8 addrspace(3)* @global_smem
+        typed_global_smem = re.search(r"(\w+)\s+addrspace\((\d+)\)\*\s+@global_smem", line)
+        if typed_global_smem:
+            elem_type = typed_global_smem.group(1)
+            addrspace = typed_global_smem.group(2)
+            typed_ptr = f"{elem_type} addrspace({addrspace})*"
+            cast_var = f"%smem_call_direct_cast_{cast_idx}"
+            cast_idx += 1
+            new_lines.append(
+                f"{indent}{cast_var} = bitcast {global_smem_type} addrspace({addrspace})* @global_smem to {typed_ptr}"
+            )
+            new_lines.append(
+                re.sub(
+                    rf"{re.escape(elem_type)}\s+addrspace\({re.escape(addrspace)}\)\*\s+@global_smem",
+                    f"{typed_ptr} {cast_var}",
+                    line,
+                    count=1,
+                )
+            )
+            continue
 
         new_lines.append(line)
 
