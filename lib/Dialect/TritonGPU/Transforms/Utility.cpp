@@ -28,16 +28,33 @@ namespace mlir {
 
 using namespace triton;
 
+// FP64 m16-family K-tile selector. Returns 0 on sm_80 (falls back to legacy
+// m8n8k4). Extend here for supporting K=8/16 — instrShape carries the
+// chosen K downstream.
+static unsigned pickFp64MmaK(int computeCapability) {
+  if (computeCapability < 90)
+    return 0;
+  return 4;
+}
+
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
-                                                Type eltType, int numWarps) {
+                                                Type eltType, int numWarps,
+                                                int computeCapability) {
   if (version == 1)
     return {16, 16};
   else if (version == 2) {
     auto rank = shape.size();
-    SmallVector<unsigned, 3> ret(rank, 1);
+    // FP64 sm_90+: m16n8kK with K stored as a trailing instrShape elt.
+    // FP64 sm_80:  legacy m8n8k4 (2-elt instrShape, K=4 implicit).
+    bool isF64 = eltType.isF64();
+    unsigned f64K = isF64 ? pickFp64MmaK(computeCapability) : 0;
+    bool isF64M16 = f64K != 0;
+    SmallVector<unsigned, 3> ret(rank + (isF64M16 ? 1u : 0u), 1);
     ret[rank - 1] = 8;
-    ret[rank - 2] = eltType.isF64() ? 8 : 16;
+    ret[rank - 2] = isF64 && !isF64M16 ? 8 : 16;
+    if (isF64M16)
+      ret[rank] = f64K;
     return ret;
   } else if (version == 3) {
     unsigned k = 256 / eltType.getIntOrFloatBitWidth();

@@ -2783,9 +2783,17 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
   }
   // warpSizeK * (warpRepK * VecBitWidth)
   auto tileBitWidthK = bitwidth == 64 ? (1 * 256) : (4 * 64);
+  // FP64: instrShape[M] disambiguates m16n8k4 (M=16) from legacy m8n8k4 (M=8).
+  unsigned mTile = 16;
+  if (bitwidth == 64) {
+    auto instrShape = getInstrShape();
+    unsigned r = shape.size();
+    if (instrShape[r - 2] == 8)
+      mTile = 8;
+  }
   if (opIdx == 0) {
     // m x k
-    tileSize.push_back(bitwidth == 64 ? 8 : 16);
+    tileSize.push_back(mTile);
     tileSize.push_back(tileBitWidthK / bitwidth);
   } else {
     // k x n
