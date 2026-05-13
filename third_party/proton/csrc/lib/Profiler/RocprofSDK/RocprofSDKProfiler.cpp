@@ -747,7 +747,6 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
   auto *impl = static_cast<RocprofSDKProfilerPimpl *>(profiler.pImpl.get());
   auto &correlation = profiler.correlation;
 
-  static thread_local std::map<Data *, size_t> dataFlushedPhases;
   uint64_t maxCorrelationId = 0;
   std::map<Data *, std::pair<size_t, size_t>> dataPhases;
 
@@ -773,11 +772,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
                         dataPhases, kernelName, record, streamId);
     impl->corrIdToStreamId.erase(record->correlation_id.internal);
   }
+  profiler.flushDataPhases(dataPhases, profiler.pendingGraphPool.get());
   if (maxCorrelationId > 0) {
     correlation.complete(maxCorrelationId);
   }
-  profiler.flushDataPhases(dataFlushedPhases, dataPhases,
-                           profiler.pendingGraphPool.get());
 }
 
 // ---- SDK tool init / fini (called by rocprofiler_force_configure) ----
