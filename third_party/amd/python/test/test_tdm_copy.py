@@ -199,9 +199,9 @@ def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
     """Compile-only: each `async_load` lowers to one `tensor_load_to_lds`."""
     NUM_WARPS = 8
     signature = {
-        "a_ptr": "*fp16",
-        "b_ptr": "*fp16",
-        "c_ptr": "*fp16",
+        "a_ptr": "*i32",
+        "b_ptr": "*i32",
+        "c_ptr": "*i32",
         "M": "i32",
         "N": "i32",
         "BLOCK_M": "constexpr",
@@ -242,16 +242,18 @@ _RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
     ids=[_param_id(p) for p in _HINT_PARAMS],
 )
 def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
-    """Runtime: c = a + b vs torch CPU reference."""
+    """Runtime: integer c = a + b vs torch CPU reference."""
     M, N = 256, 512
     NUM_WARPS = 8
 
     torch.manual_seed(0)
-    a_cpu = torch.rand((M, N), dtype=torch.float16)
-    b_cpu = torch.rand((M, N), dtype=torch.float16)
+    # FIXME: Switch to native GPU-side initialization once public PyTorch
+    # supports gfx1250 kernels.
+    a_cpu = torch.randint(0, 128, (M, N), dtype=torch.int32)
+    b_cpu = torch.randint(0, 128, (M, N), dtype=torch.int32)
     a = a_cpu.cuda()
     b = b_cpu.cuda()
-    c = torch.empty((M, N), dtype=torch.float16, device="cuda")
+    c = torch.empty((M, N), dtype=torch.int32, device="cuda")
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     vector_add_tdm_kernel[grid](
@@ -268,4 +270,4 @@ def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
     )
 
     expected = a_cpu + b_cpu
-    torch.testing.assert_close(c.cpu(), expected, atol=1e-3, rtol=1e-3)
+    assert torch.equal(c.cpu(), expected)
