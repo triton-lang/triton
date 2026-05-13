@@ -416,6 +416,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/llvm.cc
                   ${PYTHON_SRC_PATH}/specialize.cc)
 
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(triton PRIVATE -Wno-array-bounds)
+  endif()
+
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
 
