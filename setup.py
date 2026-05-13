@@ -357,7 +357,6 @@ class CMakeBuild(build_ext):
             "TRITON_CUPTI_LIB_BLACKWELL_PATH",
             "TRITON_NVDISASM_PATH",
             "TRITON_PTXAS_PATH",
-            "TRITON_PTXAS_BLACKWELL_PATH",
         ]
         cmake_args += [f"-D{option}={os.getenv(option)}" for option in passthrough_args if option in os.environ]
 
