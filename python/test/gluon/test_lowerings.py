@@ -1016,9 +1016,11 @@ def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layo
     torch_dtype = getattr(torch, dtype)
     x = torch.randn((M, N), dtype=torch_dtype, device=device)
     y = torch.zeros_like(x)
-    kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout, num_ctas=num_ctas)
+    compiled = kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout, num_ctas=num_ctas)
 
     torch.testing.assert_close(y, x, rtol=0, atol=0)
+    if src_ctas_per_cga != dst_ctas_per_cga:
+        assert "st.shared::cluster" in compiled.asm["ptx"]
 
 
 # MMA layout pairs for MMA-to-MMA conversion tests
