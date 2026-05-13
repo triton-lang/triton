@@ -116,10 +116,6 @@ public:
   /// Mark phases up to `phase` as complete.
   void completePhase(size_t phase);
 
-  /// Track phases already handled by profiler callbacks.
-  size_t getFlushedPhase() const;
-  void completeFlush(size_t phase);
-
   /// Atomically get current and complete phases.
   PhaseInfo getPhaseInfo() const;
 
@@ -200,7 +196,6 @@ protected:
 
   std::atomic<std::size_t> currentPhase{0};
   std::size_t completeUpToPhase{kNoCompletePhase};
-  std::size_t flushedUpToPhase{kNoCompletePhase};
   std::set<size_t> activePhases{};
 
   mutable std::shared_mutex mutex;

@@ -46,7 +46,7 @@ computeFlushRangesAndPeekPhases(
       if (flushedPhaseIt != dataFlushedPhases->end())
         flushedPhase = flushedPhaseIt->second;
     } else {
-      flushedPhase = data->getFlushedPhase();
+      flushedPhase = data->getPhaseInfo().completeUpTo;
     }
     if (flushedPhase == Data::kNoCompletePhase) {
       minPhaseToFlush = 0;
@@ -259,8 +259,6 @@ void flushDataPhasesImpl(
     const size_t maxPhaseToFlush = range.maxPhaseToFlush;
     if (dataFlushedPhases)
       (*dataFlushedPhases)[data] = maxPhaseToFlush;
-    else
-      data->completeFlush(maxPhaseToFlush);
     data->completePhase(maxPhaseToFlush);
 
     if (!periodicFlushEnabled)

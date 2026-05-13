@@ -122,17 +122,6 @@ void Data::completePhase(size_t phase) {
     completeUpToPhase = phase;
 }
 
-size_t Data::getFlushedPhase() const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
-  return flushedUpToPhase;
-}
-
-void Data::completeFlush(size_t phase) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
-  if (flushedUpToPhase == kNoCompletePhase || phase > flushedUpToPhase)
-    flushedUpToPhase = phase;
-}
-
 Data::PhaseInfo Data::getPhaseInfo() const {
   std::shared_lock<std::shared_mutex> lock(mutex);
   return PhaseInfo{currentPhase.load(std::memory_order_relaxed),
