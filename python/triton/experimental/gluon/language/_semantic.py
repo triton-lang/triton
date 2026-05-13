@@ -288,12 +288,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return axis
 
     def _broadcast_shared_scatter_operands(self, mem_desc, values, indices, mask=None):
-
-        def check_shape_and_layout(values, indices):
-            _check(values.shape == indices.shape,
-                   lambda: f"values must have the same shape as indices: got {values.shape} and {indices.shape}")
-            _check(values.type.layout == indices.type.layout, lambda: "values must have the same layout as indices")
-
         _check(isinstance(values, ttgl.tensor), lambda: f"expected 'values' to be a tensor, but got a {type(values)}")
         _check(
             values.dtype == mem_desc.dtype,
@@ -301,13 +295,11 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         if mask is None:
             values, indices = self.broadcast_tensors(values, indices)
-            check_shape_and_layout(values, indices)
             return values, indices, None
-        _check(mask.dtype == ttgl.int1, lambda: f"mask must have boolean dtype, got {mask.dtype}")
 
         values, indices, mask = self.broadcast_tensors(values, indices, mask)
-        check_shape_and_layout(values, indices)
-        check_shape_and_layout(values, mask)
+        _check(mask.dtype == ttgl.int1, lambda: f"mask must have boolean dtype, got {mask.dtype}")
+
         return values, indices, mask
 
     def shared_gather(self, mem_desc, indices, axis):
