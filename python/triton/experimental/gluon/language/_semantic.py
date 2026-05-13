@@ -303,9 +303,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             values, indices = self.broadcast_tensors(values, indices)
             check_shape_and_layout(values, indices)
             return values, indices, None
-
-        if not isinstance(mask.type, ttgl.distributed_type):
-            mask = self.splat(mask, values.shape, values.type.layout)
         _check(mask.dtype == ttgl.int1, lambda: f"mask must have boolean dtype, got {mask.dtype}")
 
         values, indices, mask = self.broadcast_tensors(values, indices, mask)
