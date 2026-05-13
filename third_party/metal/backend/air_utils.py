@@ -493,6 +493,191 @@ _AIR_ELEM_TYPE_MAP = {
 }
 
 
+def rewrite_simdgroup_event_type(ir: str) -> str:
+    """
+    Add %struct._simdgroup_event_t = type opaque
+    Rewrite air.simdgroup_async_copy_2d return type from ptr to %struct._simdgroup_event_t*
+
+    Before:
+        declare ptr @air.simdgroup_async_copy_2d.p3i8.p1i8(...)
+        %r = call ptr @air.simdgroup_async_copy_2d.p3i8.p1i8(...)
+
+    After:
+        %struct._simdgroup_event_t = type opaque
+        declare %struct._simdgroup_event_t* @air.simdgroup_async_copy_2d.p3i8.p1i8(...)
+        %r = call %struct._simdgroup_event_t* @air.simdgroup_async_copy_2d.p3i8.p1i8(...)
+    """
+    func_name = "air.simdgroup_async_copy_2d.p3i8.p1i8"
+    if f"@{func_name}" not in ir:
+        return ir
+
+    event_ty = "%struct._simdgroup_event_t"
+    event_ptr_ty = f"{event_ty}*"
+
+    # add opaque struct type declaration before first define/declare
+    if event_ty not in ir:
+        first_decl = re.search(r"^(declare|define)\b", ir, re.MULTILINE)
+        if first_decl:
+            insert_pos = first_decl.start()
+            ir = ir[:insert_pos] + f"{event_ty} = type opaque\n\n" + ir[insert_pos:]
+
+    # rewrite declaration: ptr @air.simdgroup_async_copy_2d... -> event*
+    ir = re.sub(
+        rf"\bptr\s+(@{re.escape(func_name)}\b)",
+        lambda m: f"{event_ptr_ty} {m.group(1)}",
+        ir,
+    )
+    # rewrite call return type: call ptr @air.simdgroup_async_copy_2d... -> call event*
+    ir = re.sub(
+        rf"\bcall\s+ptr\s+(@{re.escape(func_name)}\b)",
+        lambda m: f"call {event_ptr_ty} {m.group(1)}",
+        ir,
+    )
+
+    return ir
+
+
+def rewrite_simdgroup_wait_ptrs(ir: str) -> str:
+    """
+    Rewrite opaque ptrs in event alloca / wait pattern emitted by SimdgroupWaitOpToLLVM
+
+    Run after rewrite_simdgroup_event_type so async copy results are already typed as %struct._simdgroup_event_t*
+
+    Before:
+        %event_alloca = alloca [2 x ptr], align 8
+        %slot0 = getelementptr [2 x ptr], ptr %event_alloca, i64 0, i64 0
+        %slot1 = getelementptr [2 x ptr], ptr %event_alloca, i64 0, i64 1
+        %ev0   = call %struct._simdgroup_event_t* @air.simdgroup_async_copy_2d...
+        store ptr %ev0, ptr %slot0
+        %ev1   = call %struct._simdgroup_event_t* @air.simdgroup_async_copy_2d...
+        store ptr %ev1, ptr %slot1
+        %slot0w = getelementptr [2 x ptr], ptr %event_alloca, i64 0, i64 0
+        call void @air.wait_simdgroup_events(i32 2, ptr %slot0w)
+        declare void @air.wait_simdgroup_events(i32, ptr)
+
+    After:
+        %event_alloca = alloca [2 x %struct._simdgroup_event_t*], align 8
+        %slot0 = getelementptr inbounds [2 x %struct._simdgroup_event_t*], [2 x %struct._simdgroup_event_t*]* %event_alloca, i64 0, i64 0
+        %slot1 = getelementptr inbounds [2 x %struct._simdgroup_event_t*], [2 x %struct._simdgroup_event_t*]* %event_alloca, i64 0, i64 1
+        %ev0   = call %struct._simdgroup_event_t* @air.simdgroup_async_copy_2d...
+        store %struct._simdgroup_event_t* %ev0, %struct._simdgroup_event_t** %slot0
+        %ev1   = call %struct._simdgroup_event_t* @air.simdgroup_async_copy_2d...
+        store %struct._simdgroup_event_t* %ev1, %struct._simdgroup_event_t** %slot1
+        %slot0w = getelementptr inbounds [2 x %struct._simdgroup_event_t*], [2 x %struct._simdgroup_event_t*]* %event_alloca, i64 0, i64 0
+        call void @air.wait_simdgroup_events(i32 2, %struct._simdgroup_event_t** %slot0w)
+        declare void @air.wait_simdgroup_events(i32, %struct._simdgroup_event_t**)
+    """
+    if "@air.wait_simdgroup_events" not in ir:
+        return ir
+
+    event_ptr_ty = "%struct._simdgroup_event_t*"
+    event_ptr_ptr_ty = "%struct._simdgroup_event_t**"
+
+    # rewrite declaration
+    ir = re.sub(
+        r"(declare\s+void\s+@air\.wait_simdgroup_events\s*\()i32,\s+ptr(\))",
+        lambda m: f"{m.group(1)}i32, {event_ptr_ptr_ty}{m.group(2)}",
+        ir,
+    )
+
+    lines = ir.split("\n")
+
+    # collect vars that are %struct._simdgroup_event_t* (async copy results)
+    event_vars: set[str] = set()
+    for line in lines:
+        m = re.search(r"(%\w+)\s*=\s*call\s+%struct\._simdgroup_event_t\*", line)
+        if m:
+            event_vars.add(m.group(1))
+
+    # find alloca [N x ptr] vars
+    alloca_vars: dict[str, int] = {}  # var -> N
+    for line in lines:
+        m = re.search(r"(%\w+)\s*=\s*alloca\s+\[(\d+)\s+x\s+ptr\]", line)
+        if m:
+            alloca_vars[m.group(1)] = int(m.group(2))
+
+    # find geps from those alloca vars
+    gep_source: dict[str, str] = {}  # gep_var -> alloca_var
+    for line in lines:
+        m = re.search(
+            r"(%\w+)\s*=\s*getelementptr\s+(?:inbounds\s+)?\[(\d+)\s+x\s+ptr\],\s+ptr\s+(%\w+),\s+i\d+\s+0,\s+i\d+\s+\d+",
+            line,
+        )
+        if m and m.group(3) in alloca_vars:
+            gep_source[m.group(1)] = m.group(3)
+
+    # find event allocas via the wait call argument
+    event_alloca_vars: set[str] = set()
+    for line in lines:
+        m = re.search(
+            r"call\s+void\s+@air\.wait_simdgroup_events\s*\([^,]+,\s+ptr\s+(%\w+)",
+            line,
+        )
+        if m and m.group(1) in gep_source:
+            event_alloca_vars.add(gep_source[m.group(1)])
+
+    if not event_alloca_vars:
+        return ir
+
+    event_gep_vars: set[str] = {v for v, a in gep_source.items() if a in event_alloca_vars}
+
+    # rewrite alloca/gep/store/wait call
+    new_lines = []
+    for line in lines:
+        # alloca [N x ptr] -> [N x event_ptr_ty] for event allocas
+        def rewrite_alloca(m):
+            var, n, rest = m.group(1), m.group(2), m.group(3)
+            if var in event_alloca_vars:
+                return f"{var} = alloca [{n} x {event_ptr_ty}]{rest}"
+            return m.group(0)
+
+        line = re.sub(r"(%\w+)\s*=\s*alloca\s+\[(\d+)\s+x\s+ptr\](.*)", rewrite_alloca, line)
+
+        # getelementptr [N x ptr], ptr %alloca -> typed gep for event allocas
+        def rewrite_gep(m):
+            gep_var, n, alloca_var, rest = m.group(1), m.group(2), m.group(3), m.group(4)
+            if alloca_var in event_alloca_vars:
+                arr_ty = f"[{n} x {event_ptr_ty}]"
+                return f"{gep_var} = getelementptr inbounds {arr_ty}, {arr_ty}* {alloca_var}{rest}"
+            return m.group(0)
+
+        line = re.sub(
+            r"(%\w+)\s*=\s*getelementptr\s+(?:inbounds\s+)?\[(\d+)\s+x\s+ptr\],\s+ptr\s+(%\w+)(.*)",
+            rewrite_gep,
+            line,
+        )
+
+        # store ptr %event, ptr %slot -> typed store
+        def rewrite_store(m):
+            prefix, val_var, dst_var, rest = m.group(1), m.group(2), m.group(3), m.group(4)
+            if val_var in event_vars and dst_var in event_gep_vars:
+                return f"{prefix}store {event_ptr_ty} {val_var}, {event_ptr_ptr_ty} {dst_var}{rest}"
+            return m.group(0)
+
+        line = re.sub(
+            r"(\s*)store\s+ptr\s+(%\w+),\s+ptr\s+(%\w+)((?:,\s*align\s+\d+)?[^\n]*)",
+            rewrite_store,
+            line,
+        )
+
+        # call void @air.wait_simdgroup_events(i32 N, ptr %slot0)
+        def rewrite_wait(m):
+            n_arg, slot_var = m.group(1), m.group(2)
+            if slot_var in event_gep_vars:
+                return f"call void @air.wait_simdgroup_events(i32 {n_arg}, {event_ptr_ptr_ty} {slot_var})"
+            return m.group(0)
+
+        line = re.sub(
+            r"call\s+void\s+@air\.wait_simdgroup_events\s*\(i32\s+(\w+),\s+ptr\s+(%\w+)\)",
+            rewrite_wait,
+            line,
+        )
+
+        new_lines.append(line)
+
+    return "\n".join(new_lines)
+
+
 def rewrite_air_simdgroup_decl_ptrs(ir: str) -> str:
     """Rewrite opaque ptr to typed ptr in air.simdgroup_matrix_8x8_* declarations
 
