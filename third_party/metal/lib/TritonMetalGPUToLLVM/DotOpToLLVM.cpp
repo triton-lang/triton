@@ -34,14 +34,15 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     Value D = op.getResult();
     auto dEncoding = cast<RankedTensorType>(D.getType()).getEncoding();
 
-    if (isa<BlockedEncodingAttr>(dEncoding))
-      return metal::convertSimdgroupMatmul(op, adaptor, getTypeConverter(),
-                                           rewriter, dotAllocOps, targetInfo);
+    // if (isa<BlockedEncodingAttr>(dEncoding))
+    //   return metal::convertSimdgroupMatmul(op, adaptor, getTypeConverter(),
+    //                                        rewriter, dotAllocOps,
+    //                                        targetInfo);
 
-    // if (isa<BlockedEncodingAttr>(
-    //         cast<RankedTensorType>(D.getType()).getEncoding()))
-    //   return metal::convertMetalFMADot(op, adaptor, getTypeConverter(),
-    //                                    rewriter);
+    if (isa<BlockedEncodingAttr>(
+            cast<RankedTensorType>(D.getType()).getEncoding()))
+      return metal::convertMetalFMADot(op, adaptor, getTypeConverter(),
+                                       rewriter);
 
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");

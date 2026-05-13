@@ -126,12 +126,13 @@ struct SimdgroupAsyncCopyOpConversion
     // get layout from src tensor encoding
     auto srcEnc =
         cast<triton::gpu::BlockedEncodingAttr>(srcTensorTy.getEncoding());
-    SmallVector<unsigned> tpw = triton::gpu::getThreadsPerWarp(
-        srcTensorTy.getEncoding(), srcTensorTy.getShape());
-    SmallVector<unsigned> order =
-        triton::gpu::getOrder(srcEnc, srcTensorTy.getShape());
     auto spt = srcEnc.getSizePerThread(); // elements per thread per dim
-    // order[0] is the fastest-varying dim
+    // use BlockedEncodingAttr's own order/threadsPerWarp (thread layout
+    // within warp) instead of triton::gpu::getOrder() which goes through
+    // LinearEncoding and may return register-based order that differs
+    SmallVector<unsigned> order(srcEnc.getOrder());
+    SmallVector<unsigned> tpw(srcEnc.getThreadsPerWarp());
+    // order[0] is fastest-varying dim
     unsigned innerDim = order[0];      // fastest dim (col for row-major src)
     unsigned outerDim = order[1];      // slowest dim (row)
     unsigned tpwInner = tpw[innerDim]; // threads along col

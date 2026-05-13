@@ -125,14 +125,73 @@ struct SimdgroupStoreOpConversion
     unsigned numArgs = func.getNumArguments();
     Value simdgroupIdxInThreadgroupVal =
         func.getArgument(numArgs - mlir::triton::metal::kSimdgroupIdxFromEnd);
+    Value threadIdxInGridVal =
+        func.getArgument(numArgs - mlir::triton::metal::kThreadIdxFromEnd);
 
     unsigned accumAlign = 64 * (valueElemTy.getIntOrFloatBitWidth() / 8);
 
     // adaptor.getPtr() is struct<(ptr<1>)>
     // extract base ptr from struct
     auto p1Ty = LLVM::LLVMPointerType::get(ctx, 1);
-    Value ptrBase = LLVM::ExtractValueOp::create(
+    Value firstPtr = LLVM::ExtractValueOp::create(
         rewriter, loc, p1Ty, adaptor.getPtr(), ArrayRef<int64_t>{0});
+
+    // ptrBase is for element assigned to this thread
+    // walk back to tensor base ptr
+    Value destBase;
+    {
+      auto destTensorTy = cast<RankedTensorType>(op.getPtr().getType());
+      auto destPtrTy =
+          cast<mlir::triton::PointerType>(destTensorTy.getElementType());
+      Type destElemTy = destPtrTy.getPointeeType();
+      // get layout from dest tensor encoding
+      auto destEnc =
+          cast<triton::gpu::BlockedEncodingAttr>(destTensorTy.getEncoding());
+      auto spt = destEnc.getSizePerThread(); // elements per thread per dim
+
+      // use BlockedEncodingAttr's own order/threadsPerWarp (thread layout
+      // within warp) instead of triton::gpu::getOrder() which goes through
+      // LinearEncoding and may return register-based order that differs
+      SmallVector<unsigned> order(destEnc.getOrder());
+      SmallVector<unsigned> tpw(destEnc.getThreadsPerWarp());
+      // order[0] is fastest-varying dim for thread layout
+      unsigned innerDim = order[0];      // fastest dim (col for row-major dest)
+      unsigned outerDim = order[1];      // slowest dim (row)
+      unsigned tpwInner = tpw[innerDim]; // threads along col
+      unsigned tpwOuter = tpw[outerDim]; // threads along row
+      unsigned sptInner = spt[innerDim]; // elems per thread along col
+      unsigned sptOuter = spt[outerDim]; // elems per thread along row
+
+      auto i32Ty = IntegerType::get(ctx, 32);
+      Value threadIdInGrid =
+          LLVM::TruncOp::create(rewriter, loc, i32Ty, threadIdxInGridVal);
+      Value simdgroupIdInThreadgroup = LLVM::TruncOp::create(
+          rewriter, loc, i32Ty, simdgroupIdxInThreadgroupVal);
+
+      // threadIdInSimdgroup = threadIdInGrid % (tpwInner * tpwOuter)
+      Value threadsPerWarpTotal = b.i32_val(tpwInner * tpwOuter);
+      Value threadIdInSimdgroup = b.urem(threadIdInGrid, threadsPerWarpTotal);
+
+      // decompose threadIdInSimdgroup into (row, col) coords in simdgroup tile
+      Value laneCol = b.urem(threadIdInSimdgroup, b.i32_val(tpwInner));
+      Value laneRow = b.udiv(threadIdInSimdgroup, b.i32_val(tpwInner));
+
+      Value threadRow =
+          b.add(b.mul(simdgroupIdInThreadgroup, b.i32_val(tpwOuter * sptOuter)),
+                b.mul(laneRow, b.i32_val(sptOuter)));
+      Value threadCol = b.mul(laneCol, b.i32_val(sptInner));
+
+      Value stride =
+          adaptor.getStride(); // i32, elements per row of dest matrix
+      Value threadOffset = b.add(b.mul(threadRow, stride), threadCol);
+      Value negOffset = b.sub(b.i32_val(0), threadOffset);
+
+      // walk back to base ptr
+      if (firstPtr.getType() != p1Ty)
+        firstPtr = LLVM::AddrSpaceCastOp::create(rewriter, loc, p1Ty, firstPtr);
+      destBase = LLVM::GEPOp::create(rewriter, loc, p1Ty, destElemTy, firstPtr,
+                                     ValueRange{negOffset});
+    }
 
     // build accum array type
     // store may truncate afterward
@@ -189,7 +248,7 @@ struct SimdgroupStoreOpConversion
       Value acc =
           LLVM::LoadOp::create(rewriter, loc, vecOutTy, accPtr, accumAlign);
 
-      emitAirSimdgroupStore(rewriter, loc, parentOp, acc, ptrBase,
+      emitAirSimdgroupStore(rewriter, loc, parentOp, acc, destBase,
                             adaptor.getStride(), colVal, rowVal, accumElemTy,
                             valueElemTy);
 
