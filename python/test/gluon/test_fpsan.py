@@ -146,6 +146,11 @@ def _expected_sub_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     return _payload_u32_to_f32_bits_i32(x_u32 - y_u32)
 
 
+def _expected_neg_i32(x_i32: np.ndarray) -> np.ndarray:
+    x_u32 = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
+    return _payload_u32_to_f32_bits_i32(np.uint64(0) - x_u32)
+
+
 def _expected_mul_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     x_u32 = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
     y_u32 = _mix_f32_bits_to_payload_u32(y_i32).astype(np.uint64)
@@ -610,7 +615,10 @@ def _unary_math_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.c
     offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
     mask = offs < n_elements
     x = gl.load(x_ptr + offs, mask=mask, other=0.0)
-    z = getattr(gl, OP)(x)
+    if OP == "neg":
+        z = -x
+    else:
+        z = getattr(gl, OP)(x)
     gl.store(out_ptr + offs, z, mask=mask)
 
 
@@ -711,6 +719,7 @@ def _cossin_identity_kernel(x_ptr, y_ptr, lhs_ptr, rhs_ptr, n_elements, MODE: gl
     [
         "exp",
         "exp2",
+        "neg",
         "log",
         "log2",
         "cos",
@@ -752,6 +761,8 @@ def test_unary_math_identity(device, op, fresh_knobs):
         exp_bits = _expected_exp_i32(x_bits)
     elif op == "exp2":
         exp_bits = _expected_exp2_i32(x_bits)
+    elif op == "neg":
+        exp_bits = _expected_neg_i32(x_bits)
     elif op == "cos":
         exp_bits = _expected_cos_i32(x_bits)
     elif op == "sin":
