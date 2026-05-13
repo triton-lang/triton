@@ -12,6 +12,7 @@ try:
         create_shared_layouts,
         create_tensor_descriptors,
         issue_loads,
+        issue_wmma,
         lds_load,
         issue_wmma_compute,
     )
@@ -21,6 +22,7 @@ except ImportError:
         create_shared_layouts,
         create_tensor_descriptors,
         issue_loads,
+        issue_wmma,
         lds_load,
         issue_wmma_compute,
     )
