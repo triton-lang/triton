@@ -721,6 +721,174 @@ def rewrite_air_simdgroup_decl_ptrs(ir: str) -> str:
     return ir
 
 
+def rewrite_splat_vector_constants(ir: str) -> str:
+    """
+    Expand splat vector constants to full form
+
+    MLIR emits dense splat vectors as <T val> shorthand, but metal LLVM requires all elements to be listed
+
+    Before: <2 x i64> <i64 8>
+    After:  <2 x i64> <i64 8, i64 8>
+    """
+
+    def expand(m):
+        n = int(m.group(1))
+        elem_ty = m.group(2)
+        elem_val = m.group(3).strip()
+        if n <= 1:
+            return m.group(0)
+        return f"<{n} x {elem_ty}> <{', '.join([elem_val] * n)}>"
+
+    # match <N x T> <T val> where the inner braces contain single element (no comma)
+    return re.sub(r"<(\d+)\s+x\s+(\w+)>\s+<(\w+\s+[^,>]+)>", expand, ir)
+
+
+def rewrite_local_ptrs(ir: str) -> str:
+    """
+    Rewrite bare ptr (addrspace 0, stack allocations) to typed ptrs in gep, load, store instrs
+
+    Before:
+        %21 = getelementptr [1 x %"struct.metal::simdgroup_matrix"], ptr %19, i32 0, i32 0, i32 0
+        store <64 x float> %20, ptr %21, align 256
+        %201 = load <64 x float>, ptr %21, align 256
+    After:
+        %21 = getelementptr [1 x %"struct.metal::simdgroup_matrix"], [1 x %"struct.metal::simdgroup_matrix"]* %19, i32 0, i32 0, i32 0
+        store <64 x float> %20, <64 x float>* %21, align 256
+        %201 = load <64 x float>, <64 x float>* %21, align 256
+    """
+    # match arrays ([N x T]), vectors (<N x T>), quoted names (%"..."),
+    # plain named types (%name), or primitive keywords (float, i32, etc.)
+    _T = r'(?:\[[^\]]+\]|<[^>]+>|%"[^"]+"|%\w+|\w+)'
+
+    # getelementptr ELEM_TYPE, ptr %var -> getelementptr ELEM_TYPE, ELEM_TYPE* %var
+    ir = re.sub(
+        rf"(getelementptr(?:\s+inbounds)?\s+)({_T}),\s+ptr\s+(?=%)",
+        lambda m: f"{m.group(1)}{m.group(2)}, {m.group(2)}* ",
+        ir,
+    )
+
+    # load ELEM_TYPE, ptr %var -> load ELEM_TYPE, ELEM_TYPE* %var
+    ir = re.sub(
+        rf"(load\s+({_T})),\s+ptr\s+(?=%)",
+        lambda m: f"{m.group(1)}, {m.group(2)}* ",
+        ir,
+    )
+
+    # store ELEM_TYPE %val, ptr %var -> store ELEM_TYPE %val, ELEM_TYPE* %var
+    ir = re.sub(
+        rf"(store\s+({_T})\s+[^,\n]+),\s+ptr\s+(?=%)",
+        lambda m: f"{m.group(1)}, {m.group(2)}* ",
+        ir,
+    )
+
+    return ir
+
+
+def rewrite_air_simdgroup_async_copy_ptrs(ir: str) -> str:
+    """
+    Rewrite opaque ptr addrspace args in air.simdgroup_async_copy_2d declaration and calls
+
+    Ptr types in function name suffix:
+      .p<dst_as><dst_elem>.p<src_as><src_elem>
+    e.g. .p3i8.p1i8 -> dst: i8 addrspace(3)*, src: i8 addrspace(1)*
+
+    Before:
+        declare ... @air.simdgroup_async_copy_2d.p3i8.p1i8(
+            i64, i64, ptr addrspace(3), i64, i64, <2 x i64>,
+            ptr addrspace(1), i64, i64, <2 x i64>, <2 x i64>, i32)
+        call ... @air.simdgroup_async_copy_2d.p3i8.p1i8(
+            ..., ptr addrspace(3) %smem, ..., ptr addrspace(1) %glb, ...)
+    After:
+        declare ... @air.simdgroup_async_copy_2d.p3i8.p1i8(
+            i64, i64, i8 addrspace(3)*, i64, i64, <2 x i64>,
+            i8 addrspace(1)*, i64, i64, <2 x i64>, <2 x i64>, i32)
+        call ... @air.simdgroup_async_copy_2d.p3i8.p1i8(
+            ..., i8 addrspace(3)* %smem, ..., i8 addrspace(1)* %glb, ...)
+    """
+    func_pat = re.compile(r"@air\.simdgroup_async_copy_2d\.p(\d+)(\w+)\.p(\d+)(\w+)")
+
+    new_lines = []
+    for line in ir.split("\n"):
+        m = func_pat.search(line)
+        if not m:
+            new_lines.append(line)
+            continue
+
+        dst_as = m.group(1)
+        dst_ty = _AIR_ELEM_TYPE_MAP.get(m.group(2), m.group(2))
+        src_as = m.group(3)
+        src_ty = _AIR_ELEM_TYPE_MAP.get(m.group(4), m.group(4))
+
+        # replace ptr addrspace(dst) -> dst_ty addrspace(dst)*
+        line = re.sub(
+            rf"\bptr\s+addrspace\({re.escape(dst_as)}\)",
+            f"{dst_ty} addrspace({dst_as})*",
+            line,
+        )
+        # replace ptr addrspace(src) -> src_ty addrspace(src)*
+        line = re.sub(
+            rf"\bptr\s+addrspace\({re.escape(src_as)}\)",
+            f"{src_ty} addrspace({src_as})*",
+            line,
+        )
+        new_lines.append(line)
+
+    return "\n".join(new_lines)
+
+
+def rewrite_air_simdgroup_store_ptrs(ir: str) -> str:
+    """
+    Rewrite opaque ptr addrspace args in air.simdgroup_matrix_8x8_store declaration and calls
+
+    Element type comes from function name suffix (e.g. .p3f32 -> float)
+
+    Before:
+        declare void @air.simdgroup_matrix_8x8_store.v64f32.p3f32(
+            <64 x float>, ptr addrspace(1), i64, <2 x i64>, i1)
+        call void @air.simdgroup_matrix_8x8_store.v64f32.p3f32(
+            <64 x float> %v, ptr addrspace(1) %p, i64 %s, <2 x i64> %c, i1 false)
+    After:
+        declare void @air.simdgroup_matrix_8x8_store.v64f32.p3f32(
+            <64 x float>, float addrspace(1)*, i64, <2 x i64>, i1)
+        call void @air.simdgroup_matrix_8x8_store.v64f32.p3f32(
+            <64 x float> %v, float addrspace(1)* %p, i64 %s, <2 x i64> %c, i1 false)
+    """
+    # collect store function names and element types from suffix
+    store_elem: dict[str, str] = {}  # func_name -> llvm elem type
+    for m in re.finditer(
+        r"@(air\.simdgroup_matrix_8x8_store\.[^()\s]+)",
+        ir,
+    ):
+        func_name = m.group(1).strip()
+        if func_name in store_elem:
+            continue
+        # ptr suffix is the last .p<N><elem> segment
+        ptr_m = re.search(r"\.p\d+(\w+)$", func_name)
+        if not ptr_m:
+            continue
+        llvm_type = _AIR_ELEM_TYPE_MAP.get(ptr_m.group(1))
+        if llvm_type:
+            store_elem[func_name] = llvm_type
+
+    if not store_elem:
+        return ir
+
+    new_lines = []
+    for line in ir.split("\n"):
+        for func_name, elem_type in store_elem.items():
+            if f"@{func_name}" not in line:
+                continue
+            # replace ptr addrspace(N) with elem_type addrspace(N)* for any N
+            line = re.sub(
+                r"\bptr\s+addrspace\((\d+)\)",
+                lambda mo, et=elem_type: f"{et} addrspace({mo.group(1)})*",
+                line,
+            )
+        new_lines.append(line)
+
+    return "\n".join(new_lines)
+
+
 def rewrite_metadata(ir: str) -> str:
     # rewrite metadata func ptr reference
     # e.g. ptr @funcname → void (arg types)* @funcname
