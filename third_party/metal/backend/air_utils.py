@@ -891,7 +891,7 @@ def rewrite_air_simdgroup_store_ptrs(ir: str) -> str:
 
 def rewrite_metadata(ir: str) -> str:
     # rewrite metadata func ptr reference
-    # e.g. ptr @funcname → void (arg types)* @funcname
+    # e.g. ptr @funcname -> void (arg types)* @funcname
     func_match = re.search(r"define void @(\w+)\(", ir)
     if func_match:
         func_name = func_match.group(1)
@@ -1119,6 +1119,89 @@ def convert_opaque_ptrs_inttoptr(ir: str) -> str:
     return "\n".join(new_lines)
 
 
+def fix_async_copy_ptr_type_mismatches(ir: str) -> str:
+    """
+    Insert bitcasts before async copy calls where ptr arg's type differs from the call-site annotation
+
+    After typed-ptr rewrites, a var like %173 may be defined as
+    half addrspace(1)* but annotated in async copy call as i8 addrspace(1)*.
+    Metal's LLVM rejects this mismatch.
+
+    Before:
+        half addrspace(1)* %173 (definition)
+        call ... @air.simdgroup_async_copy_2d...(... i8 addrspace(1)* %173, ...)
+    After:
+        half addrspace(1)* %173 (definition)
+        %async_copy_ptr_cast_0 = bitcast half addrspace(1)* %173 to i8 addrspace(1)*
+        call ... @air.simdgroup_async_copy_2d...(... i8 addrspace(1)* %async_copy_ptr_cast_0, ...)
+    """
+    # var -> actual typed ptr type from definition sites
+    var_type: dict[str, str] = {}
+
+    for line in ir.split("\n"):
+        # %var = ... to ELEM addrspace(N)* (bitcast, inttoptr)
+        m = re.match(r"\s*(%\w+)\s*=\s*\S.*?\bto\s+(\w+\s+addrspace\(\d+\)\*)\s*$", line)
+        if m:
+            var_type[m.group(1)] = m.group(2)
+            continue
+
+        # %var = getelementptr [inbounds] ELEM, ELEM addrspace(N)* %base, ...
+        m = re.match(
+            r"\s*(%\w+)\s*=\s*getelementptr\b[^,\n]*,\s+(<\d+\s+x\s+\w+>|\w+)\s+addrspace\((\d+)\)\*",
+            line,
+        )
+        if m:
+            var_type[m.group(1)] = f"{m.group(2)} addrspace({m.group(3)})*"
+            continue
+
+        # %var = extractvalue { ..., ELEM addrspace(N)*, ... } %agg, IDX
+        m = re.match(r"\s*(%\w+)\s*=\s*extractvalue\s+(\{[^}]+\})\s+\S+,\s*(\d+)", line)
+        if m:
+            fields = [f.strip() for f in m.group(2).strip("{}").split(",")]
+            idx = int(m.group(3))
+            if idx < len(fields):
+                pm = re.search(r"(\w+\s+addrspace\(\d+\)\*)", fields[idx])
+                if pm:
+                    var_type[m.group(1)] = pm.group(1)
+            continue
+
+        # ELEM addrspace(N)* [attrs] %var (function args, phi, etc.)
+        for m in re.finditer(r"(\w+)\s+addrspace\((\d+)\)\*(?:\s+\w+)*\s+(%\w+)(?=\s*[,){\[]|\s*$)", line):
+            if m.group(3) not in var_type:
+                var_type[m.group(3)] = f"{m.group(1)} addrspace({m.group(2)})*"
+
+    func_pat = re.compile(r"@air\.simdgroup_async_copy_2d\.[^(]+")
+    cast_idx = 0
+    new_lines = []
+
+    for line in ir.split("\n"):
+        if not func_pat.search(line):
+            new_lines.append(line)
+            continue
+
+        indent = re.match(r"(\s*)", line).group(1)
+
+        # for each typed ptr arg, insert bitcast if var's definition type differs
+        changed = True
+        while changed:
+            changed = False
+            for arg_m in re.finditer(r"(\w+)\s+addrspace\((\d+)\)\*\s+(%\w+)", line):
+                annotated_ptr = f"{arg_m.group(1)} addrspace({arg_m.group(2)})*"
+                var = arg_m.group(3)
+                actual_type = var_type.get(var)
+                if actual_type and actual_type != annotated_ptr:
+                    cast_var = f"%async_copy_ptr_cast_{cast_idx}"
+                    cast_idx += 1
+                    new_lines.append(f"{indent}{cast_var} = bitcast {actual_type} {var} to {annotated_ptr}")
+                    line = line.replace(f"{annotated_ptr} {var}", f"{annotated_ptr} {cast_var}", 1)
+                    changed = True
+                    break  # restart finditer on the updated line
+
+        new_lines.append(line)
+
+    return "\n".join(new_lines)
+
+
 def convert_opaque_ptrs_to_typed(ir: str) -> str:
     """Convert opaque ptrs to typed ptrs
 
@@ -1148,11 +1231,31 @@ def convert_opaque_ptrs_to_typed(ir: str) -> str:
         # group(2): addr space
         ptr_type_dict[m.group(3)] = f"{m.group(1)} addrspace({m.group(2)})*"
 
-    # rewrite opaque ptrs in air.simdgroup_matrix_8x8_* declarations
+    # expand single-element splat vector constants (e.g. <2 x i64> <i64 8> -> <i64 8, i64 8>)
+    ir = rewrite_splat_vector_constants(ir)
+
+    # rewrite opaque ptrs in air.simdgroup_matrix_8x8_* load declarations
     ir = rewrite_air_simdgroup_decl_ptrs(ir)
+
+    # rewrite ptr addrspace args in store declarations/calls (addrspace from call
+    # site, elem type from function name suffix)
+    ir = rewrite_air_simdgroup_store_ptrs(ir)
+
+    # rewrite ptr addrspace args in async copy declarations/calls (both dst and
+    # src ptr types derived from function name suffix)
+    ir = rewrite_air_simdgroup_async_copy_ptrs(ir)
+
+    # add %struct._simdgroup_event_t type and rewrite async copy return type
+    ir = rewrite_simdgroup_event_type(ir)
+
+    # rewrite event alloca, gep, stores, and wait call to use typed ptrs
+    ir = rewrite_simdgroup_wait_ptrs(ir)
 
     # rewrite ptrs to include types
     ir = rewrite_ptrs(ir)
+
+    # rewrite bare ptr (addrspace 0) in GEP/load/store from local allocas
+    ir = rewrite_local_ptrs(ir)
 
     # materialize constant-expression GEPs off @global_smem into real instructions
     ir = insert_bitcast_for_global_smem_gep(ir)
@@ -1193,5 +1296,9 @@ def convert_opaque_ptrs_to_typed(ir: str) -> str:
     # TODO handle cases when loading vec from ptr that is not result of getelementptr?
     ir = modify_func_signature(ir, ptr_type_dict)
     ir = rewrite_metadata(ir)
+
+    # after all typed ptr rewrites, fix async copy calls where a var's
+    # defined type differs from the callsite annotation (e.g. half* vs i8*)
+    ir = fix_async_copy_ptr_type_mismatches(ir)
 
     return ir
