@@ -191,12 +191,37 @@ struct SimdgroupAsyncCopyOpConversion
     if (dstBase.getType() != p3Ty)
       dstBase = LLVM::AddrSpaceCastOp::create(rewriter, loc, p3Ty, dstBase);
 
+    // Guard: only simdgroup 0 performs async copy to avoid redundant
+    // transfers. Phi node merges real event (simdgroup 0) with a null
+    // placeholder (other simdgroups) so wait op receives an event.
+    auto p0Ty = LLVM::LLVMPointerType::get(ctx, 0);
+    Value isSimdgroup0 = b.icmp_eq(simdgroupIdInThreadgroup, b.i32_val(0));
+    auto *curBlock = rewriter.getInsertionBlock();
+    auto *afterBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+    afterBlock->addArgument(p0Ty, loc);
+    auto *thenBlock = rewriter.createBlock(afterBlock);
+    auto *elseBlock = rewriter.createBlock(afterBlock);
+
+    // branch based on simdgroup index
+    rewriter.setInsertionPointToEnd(curBlock);
+    LLVM::CondBrOp::create(rewriter, loc, isSimdgroup0, thenBlock, elseBlock);
+
+    // then block (simdgroup 0): perform async copy
+    rewriter.setInsertionPointToStart(thenBlock);
     Operation *parentOp = rewriter.getInsertionBlock()->getParentOp();
     Value event =
         emitAirSimdgroupAsyncCopy2D(rewriter, loc, parentOp, dstBase, srcBase,
                                     adaptor.getStride(), tileShape, elemTy);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{event}, afterBlock);
 
-    rewriter.replaceOp(op, event);
+    // else block (other simdgroups): pass null event
+    rewriter.setInsertionPointToStart(elseBlock);
+    Value nullEvent = LLVM::ZeroOp::create(rewriter, loc, p0Ty);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{nullEvent}, afterBlock);
+
+    // after block: phi merges real event and null
+    rewriter.setInsertionPointToStart(afterBlock);
+    rewriter.replaceOp(op, afterBlock->getArgument(0));
     return success();
   }
 

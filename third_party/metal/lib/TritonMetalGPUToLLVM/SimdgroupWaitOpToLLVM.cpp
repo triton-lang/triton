@@ -1,5 +1,6 @@
 #include "Dialect/TritonMetalGPU/IR/Dialect.h"
 #include "TargetInfo.h"
+#include "TritonMetalGPUToLLVM/MetalKernelArgs.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -40,10 +41,28 @@ struct SimdgroupWaitOpConversion
     auto voidTy = LLVM::LLVMVoidType::get(ctx);
     auto arrTy = LLVM::LLVMArrayType::get(p0Ty, N);
 
-    // alloca [N x ptr] at function entry block
+    // Guard: only simdgroup 0 performs wait, matches async copy guard
     auto func = rewriter.getInsertionBlock()
                     ->getParent()
                     ->getParentOfType<LLVM::LLVMFuncOp>();
+    unsigned numArgs = func.getNumArguments();
+    Value simdgroupIdxInThreadgroupVal =
+        func.getArgument(numArgs - mlir::triton::metal::kSimdgroupIdxFromEnd);
+    Value simdgroupIdInThreadgroup = LLVM::TruncOp::create(
+        rewriter, loc, i32Ty, simdgroupIdxInThreadgroupVal);
+    Value isSimdgroup0 = b.icmp_eq(simdgroupIdInThreadgroup, b.i32_val(0));
+
+    auto *curBlock = rewriter.getInsertionBlock();
+    auto *afterBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+    auto *thenBlock = rewriter.createBlock(afterBlock);
+
+    rewriter.setInsertionPointToEnd(curBlock);
+    LLVM::CondBrOp::create(rewriter, loc, isSimdgroup0, thenBlock, afterBlock);
+
+    // then block (simdgroup 0): perform wait
+    rewriter.setInsertionPointToStart(thenBlock);
+
+    // alloca [N x ptr] at function entry block
     Value eventAlloca;
     {
       OpBuilder::InsertionGuard guard(rewriter);
@@ -70,6 +89,21 @@ struct SimdgroupWaitOpConversion
         rewriter, parentOp, "air.wait_simdgroup_events", funcType);
     LLVM::createLLVMCallOp(rewriter, loc, waitFuncOp,
                            ValueRange{b.i32_val(N), slot0});
+
+    LLVM::BrOp::create(rewriter, loc, afterBlock);
+    rewriter.setInsertionPointToStart(afterBlock);
+
+    // threadgroup barrier: all simdgroups wait for copy to complete
+    // air.wg.barrier(2 /*memory_flags*/, 1 /*threadgroup_scope*/)
+    {
+      auto barrierFuncType =
+          LLVM::LLVMFunctionType::get(voidTy, {i32Ty, i32Ty});
+      Operation *barrierParentOp = rewriter.getInsertionBlock()->getParentOp();
+      auto barrierFuncOp = appendOrGetExternFuncOp(
+          rewriter, barrierParentOp, "air.wg.barrier", barrierFuncType);
+      LLVM::createLLVMCallOp(rewriter, loc, barrierFuncOp,
+                             ValueRange{b.i32_val(2), b.i32_val(1)});
+    }
 
     rewriter.eraseOp(op);
     return success();

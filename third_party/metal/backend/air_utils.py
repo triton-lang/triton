@@ -534,6 +534,24 @@ def rewrite_simdgroup_event_type(ir: str) -> str:
         ir,
     )
 
+    # rewrite phi ptr that merges event values (from simdgroup 0 guard)
+    # e.g. phi ptr [ null, %bb1 ], [ %event, %bb2 ] -> phi %struct._simdgroup_event_t* [...]
+    # detect event vars (results of async copy calls)
+    event_vars: set[str] = set()
+    for m in re.finditer(rf"(%\w+)\s*=\s*call\s+{re.escape(event_ptr_ty)}", ir):
+        event_vars.add(m.group(1))
+    if event_vars:
+        lines = ir.split("\n")
+        new_lines = []
+        for line in lines:
+            phi_m = re.match(r"(\s*%\w+\s*=\s*)phi\s+ptr\s+(.*)", line)
+            if phi_m:
+                incoming = re.findall(r"\[\s*(%\w+|null)\s*,", phi_m.group(2))
+                if any(v in event_vars for v in incoming):
+                    line = f"{phi_m.group(1)}phi {event_ptr_ty} {phi_m.group(2)}"
+            new_lines.append(line)
+        ir = "\n".join(new_lines)
+
     return ir
 
 
@@ -582,10 +600,13 @@ def rewrite_simdgroup_wait_ptrs(ir: str) -> str:
 
     lines = ir.split("\n")
 
-    # collect vars that are %struct._simdgroup_event_t* (async copy results)
+    # collect vars that are %struct._simdgroup_event_t* (async copy results or phi merges)
     event_vars: set[str] = set()
     for line in lines:
         m = re.search(r"(%\w+)\s*=\s*call\s+%struct\._simdgroup_event_t\*", line)
+        if m:
+            event_vars.add(m.group(1))
+        m = re.search(r"(%\w+)\s*=\s*phi\s+%struct\._simdgroup_event_t\*", line)
         if m:
             event_vars.add(m.group(1))
 
