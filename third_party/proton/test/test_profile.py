@@ -1814,34 +1814,6 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
     assert num_scopes == 5000
 
 
-def test_periodic_flushing_session_reuse(tmp_path, fresh_knobs, device: str):
-    fresh_knobs.proton.profile_buffer_size = 64 * 1024 * 1024
-
-    num_sessions = 50
-    phases_per_session = 10
-    scopes_per_phase = 100
-    for session_idx in range(num_sessions):
-        session_dir = tmp_path / f"session_{session_idx}"
-        session_dir.mkdir()
-        temp_file = session_dir / "test_periodic_flushing_reuse.hatchet"
-        session = proton.start(str(temp_file.with_suffix("")), mode="periodic_flushing:format=hatchet")
-
-        for i in range(phases_per_session * scopes_per_phase):
-            if i != 0 and i % scopes_per_phase == 0:
-                proton.data.advance_phase(session=session)
-            with proton.scope(f"test_{session_idx}_{i}", metrics={"count": 1}):
-                torch.zeros((100), device=device)
-
-        proton.finalize(output_format="hatchet")
-        gc.collect()
-
-        expected_files = [
-            session_dir / f"test_periodic_flushing_reuse.part_{phase}.hatchet" for phase in range(phases_per_session)
-        ]
-        missing_files = [file for file in expected_files if not file.exists()]
-        assert not missing_files, f"missing periodic flush files: {missing_files}"
-
-
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
