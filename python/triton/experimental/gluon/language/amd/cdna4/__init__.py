@@ -1,5 +1,7 @@
 from triton.runtime.jit import constexpr_function
 from triton._C.libtriton.gluon_ir import get_amd_mfma_scale_layout as _get_mfma_scale_layout
+from triton._C.libtriton.gluon_ir import (
+    compute_amd_efficient_padded_shared_layout as _compute_efficient_padded_shared_layout, )
 
 from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
 from ..._layouts import DotOperandLayout
@@ -10,7 +12,14 @@ from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
 
-__all__ = [*__cdna3_all, "async_copy", "mfma_scaled", "scaled_upcast", "get_mfma_scale_layout"]
+__all__ = [
+    *__cdna3_all,
+    "async_copy",
+    "mfma_scaled",
+    "scaled_upcast",
+    "get_mfma_scale_layout",
+    "compute_efficient_padded_shared_layout",
+]
 
 
 @builtin
@@ -99,6 +108,45 @@ def get_mfma_scale_layout(dot_operand_layout, shape, scale_factor=32):
     tiles_per_warp = parent.tiles_per_warp
     warps_per_cta = parent.warps_per_cta
     return _get_mfma_scale_layout_impl(op_idx, shape, mdim, tiles_per_warp, warps_per_cta)
+
+
+def _compute_efficient_padded_shared_layout_impl(*args, **kwargs):
+    return _compute_efficient_padded_shared_layout(*args, **kwargs)
+
+
+_compute_efficient_padded_shared_layout_impl.__triton_builtin__ = True
+
+
+@constexpr_function
+def compute_efficient_padded_shared_layout(op_idx, k_width, mfma_non_k_dim, k_dim, non_k_dim, elem_bytes,
+                                           is_k_contig=True):
+    """Compute a bank-conflict-aware PaddedSharedLayout for CDNA4 async copy.
+
+    Returns the same (interval, padding, basis ordering) that the AMD compiler
+    picks during LowerLoops for autotuned @triton.jit matmul kernels. Use this
+    so a Gluon kernel's shared-memory layout tracks what the compiler would
+    have chosen for the same shape and dtype.
+
+    Args:
+        op_idx (int): 0 for operand A, 1 for operand B.
+        k_width (int): Elements per K-iteration per thread. Must be in {4, 8, 16}.
+        mfma_non_k_dim (int): Non-K dimension of the MFMA instruction.
+            Must be in {16, 32}.
+        k_dim (int): Tile size along the K dimension.
+        non_k_dim (int): Tile size along the non-K dimension (BM for A, BN for B).
+        elem_bytes (int): Bytes per element. Must be in {1, 2}; corresponds to
+            fp8 (1) or fp16/bf16 (2).
+        is_k_contig (bool): True if K is the contiguous (fast) dimension in the
+            shared memory layout. Defaults to True.
+
+    Returns:
+        PaddedSharedLayout sized for ``[non_k_dim, k_dim]`` (operand A) or
+        ``[k_dim, non_k_dim]`` (operand B), or None if any input violates the
+        algorithm's constraints. Callers should fall back to a hand-coded
+        layout when None is returned.
+    """
+    return _compute_efficient_padded_shared_layout_impl(op_idx, k_width, mfma_non_k_dim, k_dim, non_k_dim, elem_bytes,
+                                                        is_k_contig)
 
 
 """

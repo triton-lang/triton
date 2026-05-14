@@ -11,6 +11,7 @@
 #include "mlir/IR/Types.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
+#include "third_party/amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -1245,6 +1246,40 @@ void init_gluon_ir(py::module &&m) {
           auto ll = ttg::chooseScaledMfmaScaleLayout(
               &ctx, opIdx, shape, mfmaMDim, tilesPerWarp, warpsPerCTA);
           auto attr = ttg::LinearEncodingAttr::get(&ctx, std::move(ll));
+          return layoutToGluon(attr);
+        });
+
+  m.def("compute_amd_efficient_padded_shared_layout",
+        [](unsigned opIdx, unsigned kWidth, unsigned mfmaNonKDim, unsigned kDim,
+           unsigned nonKDim, unsigned elemBytes, bool isKContig) -> py::object {
+          DialectRegistry registry;
+          registry.insert<triton::TritonDialect, ttg::TritonGPUDialect,
+                          ttng::TritonNvidiaGPUDialect, gluon::GluonDialect>();
+          MLIRContext ctx(MLIRContext::Threading::DISABLED);
+          ctx.appendDialectRegistry(registry);
+          ctx.loadAllAvailableDialects();
+
+          auto plain = computePaddedLayoutCDNA4Bases(
+              opIdx, kWidth, mfmaNonKDim, kDim, nonKDim, elemBytes, isKContig,
+              /*warpSize=*/64);
+          if (!plain.valid)
+            return py::none();
+
+          SmallVector<int64_t> shape =
+              opIdx == 0
+                  ? SmallVector<int64_t>{(int64_t)nonKDim, (int64_t)kDim}
+                  : SmallVector<int64_t>{(int64_t)kDim, (int64_t)nonKDim};
+
+          auto kOffset = mlir::StringAttr::get(&ctx, "offset");
+          auto outDims = tt::standardOutDimNames(&ctx, /*rank=*/2);
+          tt::LinearLayout offsetLL({{kOffset, plain.bases}}, outDims);
+          // CDNA4 (and earlier CDNA) supports 1 CTA per CGA
+          auto cga = buildCgaLayoutAttr(&ctx, /*cgaBases=*/{}, /*rank=*/2);
+          auto fullLL = ttg::combineCtaCgaWithShape(offsetLL, cga, shape);
+
+          auto attr = ttg::PaddedSharedEncodingAttr::get(
+              &ctx, /*intervals=*/{plain.interval},
+              /*paddings=*/{plain.padding}, std::move(fullLL));
           return layoutToGluon(attr);
         });
 
