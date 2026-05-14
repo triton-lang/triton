@@ -1,8 +1,6 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Transforms/Passes.h"
-#include "triton/Analysis/BufferRegion.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -161,25 +159,6 @@ bool shouldInitializeAllocations() {
   if (auto enabled = tt::tools::isEnvValueBool(envValue))
     return *enabled;
   llvm::report_fatal_error("TRITON_CONSAN_INIT_ALLOCATIONS must be a boolean");
-}
-
-bool regionsOverlap(BufferRegion lhs, BufferRegion rhs) {
-  uint64_t lhsEnd = static_cast<uint64_t>(lhs.baseOffset) + lhs.length;
-  uint64_t rhsEnd = static_cast<uint64_t>(rhs.baseOffset) + rhs.length;
-  return lhs.baseOffset < rhsEnd && rhs.baseOffset < lhsEnd;
-}
-
-bool overlapsBarrierRegion(Value alloc, BufferRegionAnalysis &analysis,
-                           ArrayRef<BufferRegion> barrierRegions) {
-  const RegionInfo &allocRegions =
-      analysis.getLatticeElement(alloc)->getValue();
-  for (const BufferRegion &allocRegion : allocRegions.regions) {
-    for (const BufferRegion &barrierRegion : barrierRegions) {
-      if (regionsOverlap(allocRegion, barrierRegion))
-        return true;
-    }
-  }
-  return false;
 }
 
 llvm::APInt getIntegerNaNPattern(unsigned bitWidth) {
@@ -423,8 +402,6 @@ public:
     if (failed(auxData.populateAndPassToWarpSpecialize(module, funcBuilder,
                                                        hooks)))
       return failure();
-    if (failed(collectAllocationsToInitialize()))
-      return failure();
 
     tt::FuncOp entryPoint = tti::getEntryPoint(module);
 
@@ -436,24 +413,14 @@ public:
   }
 
 private:
-  LogicalResult collectAllocationsToInitialize() {
+  void initializeAllocations() {
     if (!shouldInitializeAllocations())
-      return success();
+      return;
 
-    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-    BufferRegionAnalysis *analysis = solver->load<BufferRegionAnalysis>();
-    if (failed(solver->initializeAndRun(module)))
-      return failure();
-    analysis->calculateUsedBufferRegions(module);
-    SmallVector<BufferRegion> barrierRegions =
-        analysis->getAllUsedBufferRegions(
-            BufferRegionAnalysis::RegionType::BARRIER);
-
+    SmallVector<Operation *> allocationsToInitialize;
     module.walk([&](Operation *op) {
       if (auto alloc = dyn_cast<ttg::LocalAllocOp>(op)) {
-        if (!alloc.getSrc() &&
-            !overlapsBarrierRegion(alloc.getResult(), *analysis,
-                                   barrierRegions))
+        if (!alloc.getSrc())
           allocationsToInitialize.push_back(op);
       }
       if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(op)) {
@@ -461,10 +428,7 @@ private:
           allocationsToInitialize.push_back(op);
       }
     });
-    return success();
-  }
 
-  void initializeAllocations() {
     for (Operation *op : allocationsToInitialize) {
       ImplicitLocOpBuilder b(op->getLoc(), op);
       b.setInsertionPointAfter(op);
@@ -801,7 +765,6 @@ private:
 
   ModuleOp module;
   AuxDataMap auxData;
-  SmallVector<Operation *> allocationsToInitialize;
   const ConSanTargetHooks *hooks;
 };
 
