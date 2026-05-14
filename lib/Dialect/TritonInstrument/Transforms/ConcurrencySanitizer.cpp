@@ -164,7 +164,8 @@ bool shouldInitializeAllocations() {
 llvm::APInt getIntegerNaNPattern(unsigned bitWidth) {
   switch (bitWidth) {
   case 16:
-    return llvm::APFloat::getNaN(llvm::APFloat::IEEEhalf()).bitcastToAPInt();
+    // 0x7FC0 is a NaN in both bfloat16 and float16 interpretations.
+    return llvm::APInt(16, 0x7FC0);
   case 32:
     return llvm::APFloat::getNaN(llvm::APFloat::IEEEsingle()).bitcastToAPInt();
   case 64:
