@@ -569,3 +569,37 @@ def test_set_idle_sms():
     flags = make_opt_flags(FP32, FP32, FP32, PrecisionConfig(), \
                            1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
     assert flags.idle_sms == num_idle_sms
+
+
+@pytest.mark.parametrize("is_persistent", [False, True])
+def test_mxfloat8_act_bfloat16_weight_matmul(is_persistent, device, opt_flags_scope):
+    _test_op(
+        m=64,
+        n=96,
+        k=128,
+        split_k=1,
+        do_gather=False,
+        do_scatter=False,
+        inner_expt_opt=None,
+        do_gamma=False,
+        is_persistent=is_persistent,
+        num_warps=4 if is_hopper() else None,
+        n_slices=1,
+        mode="plain",
+        act_dtype_str="mxfloat8_e4m3fn",
+        weight_dtype_str="bfloat16",
+        output_dtype_str=None,
+        block_m=16,
+        b_hbm_swizzling=False,
+        shuffle_mxfp4_w_layout=False,
+        a_hbm_swizzling=False,
+        colmajor_mxfp_weight=True,
+        epilogue_subtile=None,
+        a_transpose=False,
+        b_transpose=False,
+        c_transpose=False,
+        swiglu_opts=None,
+        c_hbm_swizzling=False,
+        device=device,
+        opt_flags_scope=opt_flags_scope,
+    )

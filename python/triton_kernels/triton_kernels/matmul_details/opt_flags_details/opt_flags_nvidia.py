@@ -134,6 +134,10 @@ def compute_num_stages(
         # for x.shape = [2048, >=4096] bf16 x [32, >=4096, >=4096] float8_e4m3fn
         # block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True -> leading to num_stages=4
         weight_size = 2
+    if has_native_mxfp and precision_config.a_mx_scale is not None and rhs_dtype in [FP16, BF16]:
+        # For mxfp x fp16/bf16, we upcast activations on the fly, so size
+        # smem_capacity accordingly.
+        act_size = 2
 
     stage_size = block_m * block_k * act_size + block_k * block_n * weight_size
     device_props = torch.cuda.get_device_properties(0)

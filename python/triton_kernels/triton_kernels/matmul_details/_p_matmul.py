@@ -137,6 +137,8 @@ def _p_matmul(
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
+    if is_x_microscaled or is_w_microscaled:
+        MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
     if is_w_microscaled:
         tl.static_assert(MX_BLOCK_SIZE == NVFP_BLOCK_SIZE or MX_BLOCK_SIZE == MXFP_BLOCK_SIZE,
                          "Unsupported microscale factor")
@@ -151,7 +153,6 @@ def _p_matmul(
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
 
         # We have pack 2 fp4 values in a byte
-        MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
         if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
             tl.static_assert(is_w_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
             # We have pack 2 fp4 values in a byte but we divide the dimension by 2
@@ -176,6 +177,9 @@ def _p_matmul(
             PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
             PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_K_DIVISOR
     else:
+        W_K_DIVISOR: tl.constexpr = 1
+        W_K_MULTIPLIER: tl.constexpr = 1
+        W_N_DIVISOR: tl.constexpr = 1
         PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
         PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N
         tl.static_assert(SWIZZLE_MX_SCALE == "STRIDED")
@@ -417,9 +421,11 @@ def _p_matmul(
                 else:
                     w_scales = WMxScale.load([off_w_z, off_k_mx, off_n])
                     w_scales = tl.reshape(w_scales, *w_scales.shape[1:]).T
+            else:
+                w_scales: tl.constexpr = None
 
             # --- update accumulator ---
-            if is_w_microscaled:
+            if is_x_microscaled or is_w_microscaled:
                 if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
                     tl.static_assert(w_format == "e2m1")
                     tl.static_assert(SWAP_XW)
