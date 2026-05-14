@@ -2565,7 +2565,7 @@ def test_shared_scatter(N, M):
 
 
 @gluon.jit
-def shared_atomic_scatter_add_dead_kernel(out, N: ttgl.constexpr, layout: ttgl.constexpr,
+def shared_atomic_scatter_rmw_dead_kernel(out, N: ttgl.constexpr, layout: ttgl.constexpr,
                                          shared_layout: ttgl.constexpr):
     offsets = ttgl.arange(0, N, layout=layout)
     smem = ttgl.allocate_shared_memory(ttgl.int32, [N], layout=shared_layout)
@@ -2576,7 +2576,7 @@ def shared_atomic_scatter_add_dead_kernel(out, N: ttgl.constexpr, layout: ttgl.c
     ttgl.store(out + offsets, final)
 
 
-def test_shared_atomic_scatter_add_dead_result():
+def test_shared_atomic_scatter_rmw_dead_result():
     if is_hip_cdna() or is_hip_rdna():
         pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
 
