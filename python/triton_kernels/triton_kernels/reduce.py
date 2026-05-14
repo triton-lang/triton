@@ -1,3 +1,4 @@
+# fmt: off
 from dataclasses import dataclass
 from contextlib import contextmanager
 from contextvars import ContextVar
