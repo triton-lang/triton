@@ -17,7 +17,7 @@ const DeviceRegistration &getDeviceEntry(DeviceType type) {
                             return type == entry.getDeviceType();
                           });
   if (itr == devices.end()) {
-    throw std::runtime_error("DeviceType not supported");
+    throw makeInvalidArgument("DeviceType not supported");
   }
   return *itr;
 }

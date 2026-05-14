@@ -866,3 +866,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %d : tensor<128x256xf64, #blocked>
   }
 }
+
+// -----
+
+// Verify TF32 dot with N=8, K=8 (native WGMMA tile) selects MMAv3 on sm90.
+// CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8, 8]}>
+#blocked_tf32_n8 = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tf32_n8k8_sm90
+  tt.func public @tf32_n8k8_sm90(
+      %a: tensor<64x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked_tf32_n8}>>,
+      %b: tensor<8x8xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked_tf32_n8}>>) -> tensor<64x8xf32, #blocked_tf32_n8> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x8xf32, #blocked_tf32_n8>
+    // CHECK: ttng.warp_group_dot {{.*}} -> tensor<64x8xf32, #[[$MMA]]>
+    %d = tt.dot %a, %b, %cst, inputPrecision = tf32 : tensor<64x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked_tf32_n8}>> * tensor<8x8xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked_tf32_n8}>> -> tensor<64x8xf32, #blocked_tf32_n8>
+    tt.return %d : tensor<64x8xf32, #blocked_tf32_n8>
+  }
+}
+
+// -----
+
+// Verify FP16 dot with N=8, K=16 (native WGMMA tile) selects MMAv3 on sm90.
+// CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8, 16]}>
+#blocked_fp16_n8 = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: fp16_n8k16_sm90
+  tt.func public @fp16_n8k16_sm90(
+      %a: tensor<64x16xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked_fp16_n8}>>,
+      %b: tensor<16x8xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked_fp16_n8}>>) -> tensor<64x8xf32, #blocked_fp16_n8> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x8xf32, #blocked_fp16_n8>
+    // CHECK: ttng.warp_group_dot {{.*}} -> tensor<64x8xf32, #[[$MMA]]>
+    %d = tt.dot %a, %b, %cst : tensor<64x16xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked_fp16_n8}>> * tensor<16x8xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked_fp16_n8}>> -> tensor<64x8xf32, #blocked_fp16_n8>
+    tt.return %d : tensor<64x8xf32, #blocked_fp16_n8>
+  }
+}

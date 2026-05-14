@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 
 #include "Utility/Env.h"
+#include "Utility/Errors.h"
 #include <stdexcept>
 #include <string>
 
@@ -113,15 +114,14 @@ public:
       }
     }
     if (*lib == nullptr) {
-      throw std::runtime_error("Could not load `" + std::string(name) + "`");
+      throw makeRuntimeError("Could not load `" + std::string(name) + "`");
     }
   }
 
   static void check(typename ExternLib::RetType ret, const char *functionName) {
     if (ret != ExternLib::success) {
-      throw std::runtime_error("Failed to execute " +
-                               std::string(functionName) + " with error " +
-                               std::to_string(ret));
+      throw makeRuntimeError("Failed to execute " + std::string(functionName) +
+                             " with error " + std::to_string(ret));
     }
   }
 
@@ -132,8 +132,8 @@ public:
     if (handler == nullptr) {
       handler = reinterpret_cast<FnT>(dlsym(ExternLib::lib, functionName));
       if (handler == nullptr) {
-        throw std::runtime_error("Failed to load " +
-                                 std::string(ExternLib::name));
+        throw makeRuntimeError("Failed to load " +
+                               std::string(ExternLib::name));
       }
     }
     auto ret = handler(args...);

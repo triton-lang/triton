@@ -206,4 +206,42 @@ def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryE
   }];
 }
 
+
+// ===== FPSan ops =====
+
+
+def TTI_ExperimentalFPSanEmbedOp : TTI_Op<"experimental_fpsan_embed", [
+  Pure,
+  Elementwise,
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding
+]> {
+  let summary = "Embed float value in the fpsan integer ring";
+  let arguments = (ins TT_FloatLike:$val);
+  let results = (outs TT_IntLike:$result);
+  let assemblyFormat = [{
+    $val attr-dict `:` functional-type(operands, $result)
+  }];
+
+  let hasCanonicalizer = true;
+  let hasFolder = true;
+}
+
+def TTI_ExperimentalFPSanUnembedOp : TTI_Op<"experimental_fpsan_unembed", [
+  Pure,
+  Elementwise,
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding
+]> {
+  let summary = "Unembed fpsan integer payload as a float value";
+  let arguments = (ins TT_IntLike:$val);
+  let results = (outs TT_FloatLike:$result);
+  let assemblyFormat = [{
+    $val attr-dict `:` functional-type(operands, $result)
+  }];
+
+  let hasCanonicalizer = true;
+  let hasFolder = true;
+}
+
 #endif // TRITONINSTRUMENT_OPS

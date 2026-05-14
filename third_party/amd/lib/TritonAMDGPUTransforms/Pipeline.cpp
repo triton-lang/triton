@@ -1,4 +1,4 @@
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/Passes.h" // IWYU pragma: keep
 #include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -33,6 +33,24 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
     scf::YieldOp::create(ifOpBuilder, loc, dotOp->getOperand(2));
     return ifOp;
   }
+  if (isa<tt::DescriptorLoadLikeOpInterface>(op)) {
+    auto loc = op->getLoc();
+    auto ifOp = scf::IfOp::create(rewriter, loc, op->getResultTypes(), pred,
+                                  /*withElseRegion=*/true);
+    auto thenB = ifOp.getThenBodyBuilder();
+    auto yield = scf::YieldOp::create(thenB, loc, op->getResults());
+    op->moveBefore(yield);
+
+    auto elseB = ifOp.getElseBodyBuilder();
+    SmallVector<Value> zeroValues;
+    zeroValues.reserve(op->getNumResults());
+    for (Type resultType : op->getResultTypes()) {
+      zeroValues.push_back(
+          arith::ConstantOp::create(elseB, loc, elseB.getZeroAttr(resultType)));
+    }
+    scf::YieldOp::create(elseB, loc, zeroValues);
+    return ifOp;
+  }
   // TDM ops with I32 predicates need explicit type conversion since the
   // generic PredicatedOpInterface path produces I1 masks.
   if (isa<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp,
@@ -49,6 +67,13 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
   }
   if (isa<triton::amdgpu::AsyncTDMWait>(op))
     return op;
+  if (isa<tt::DescriptorStoreLikeOpInterface>(op)) {
+    auto loc = op->getLoc();
+    auto ifOp = scf::IfOp::create(rewriter, loc, pred,
+                                  /*withElseRegion=*/false);
+    op->moveBefore(ifOp.thenYield());
+    return ifOp;
+  }
   return tt::wrapInMaskOp(rewriter, op, pred);
 }
 
@@ -155,17 +180,14 @@ struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
     expandLoops(moduleOp);
 
     if (useAsyncCopy) {
-      auto arch = getAMDArch(moduleOp);
-      auto family =
-          arch ? tt::AMD::deduceISAFamily(*arch) : tt::AMD::ISAFamily::Unknown;
+      auto targetFeatures = tt::amdgpu::TargetFeatures::fromModuleOp(moduleOp);
       // Only asyncmark targets (CDNA3/CDNA4) need updateWaits here: their
       // lowering reads ttg.async_wait's `num` directly into wait.asyncmark(N),
       // and PR #9883 made UpdateAsyncWaitCount a no-op on those archs, so
       // without this call the pipeliner-authored num=0 would serialize the
       // SWP. Every other family keeps the prior combineRedundantWaitOps-only
       // path: their num is re-derived downstream by UpdateAsyncWaitCount.
-      if (family == tt::AMD::ISAFamily::CDNA3 ||
-          family == tt::AMD::ISAFamily::CDNA4) {
+      if (targetFeatures.isCDNA3() || targetFeatures.isCDNA4()) {
         mlir::triton::updateWaits(moduleOp);
       }
     }

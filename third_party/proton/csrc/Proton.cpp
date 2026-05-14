@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "Backend/Backend.h"
+#include "Context/Context.h"
 #include "Session/Session.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
@@ -40,7 +41,6 @@ std::map<std::string, MetricValueType> convertPythonMetrics(
 } // namespace
 
 static void initProton(pybind11::module &&m) {
-  using ret = pybind11::return_value_policy;
   using namespace pybind11::literals;
 
   // Accept raw integer pointers from Python (e.g., Tensor.data_ptr()) instead
@@ -72,6 +72,8 @@ static void initProton(pybind11::module &&m) {
   auto metricTypeVectorDoubleIndex =
       pybind11::cast(variant_index_v<std::vector<double>, MetricValueType>);
 
+  m.attr("metadata_scope_name") = std::string(kMetadataScopeName);
+  m.attr("metadata_scope_prefix") = std::string(kMetadataScopePrefix);
   m.attr("metric_type_int64_index") = metricTypeInt64Index;
   m.attr("metric_type_double_index") = metricTypeDoubleIndex;
   m.attr("metric_type_vector_int64_index") = metricTypeVectorInt64Index;

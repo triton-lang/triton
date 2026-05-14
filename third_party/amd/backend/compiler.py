@@ -343,7 +343,7 @@ class HIPBackend(BaseBackend):
         # Reserve LDS space for ConSan captures before allocation computes offsets.
         if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):
             passes.ttgpuir.add_prepare_consan_captures(pm, "amd")
-        amd.passes.ttgpuir.add_allocate_shared_memory(pm)
+        amd.passes.ttgpuir.add_allocate_shared_memory(pm, options.arch)
         # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after shared
         if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
@@ -479,7 +479,7 @@ class HIPBackend(BaseBackend):
             if len(paths) > 0:
                 llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion, True)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
@@ -517,7 +517,7 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
-        features = '-real-true16' if 'gfx11' in options.arch else ''
+        features = ''
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
         _ = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
@@ -543,8 +543,6 @@ class HIPBackend(BaseBackend):
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
-        if 'gfx11' in options.arch:
-            target_features += ',-real-true16'
         hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:

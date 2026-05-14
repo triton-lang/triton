@@ -178,17 +178,6 @@ distributeTDMWarpsAlignToPartition(ArrayRef<int64_t> blockShape, int numWarps,
   return {distributeTDMWarps(blockShape, numWarps), 1};
 }
 
-SmallVector<Value> TDMDescriptor::getAllGroups() const {
-  SmallVector<Value> result;
-  result.push_back(group0);
-  result.push_back(group1);
-  if (group2.has_value())
-    result.push_back(group2.value());
-  if (group3.has_value())
-    result.push_back(group3.value());
-  return result;
-}
-
 SmallVector<Value> unpackTDMDescriptor(RewriterBase &rewriter, Location loc,
                                        Value descStruct) {
   auto scalars = unpackLLElements(loc, descStruct, rewriter);
@@ -223,19 +212,117 @@ SmallVector<Value> scalarizeTDMDescriptor(RewriterBase &rewriter, Location loc,
   return scalars;
 }
 
-// Decode a full TDM descriptor from all 4 group vectors for 3D-5D tensors
-// Returns (base, tensorShape[], tensorStride[], blockShape[])
-std::tuple<Value, SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
-decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc, Value group0,
-                        Value group1, std::optional<Value> group2,
-                        std::optional<Value> group3, size_t numDims) {
+void updateTensorDescriptor(RewriterBase &rewriter, Location loc,
+                            Type elementType, ArrayRef<int64_t> blockShape,
+                            Value &group0, Value &group1,
+                            ArrayRef<Value> addOffsets,
+                            ArrayRef<Value> setBounds, Value dest, Value pred,
+                            Value barrier) {
+  size_t numDims = blockShape.size();
+  assert(numDims == 2 && "updateTensorDescriptor currently supports 2D");
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value v16 = b.i32_val(16);
+
+  // ---- add_offsets: bump global_addr ----
+  if (!addOffsets.empty()) {
+    auto elementBitWidth = elementType.getIntOrFloatBitWidth();
+    Value elemSize = b.i64_val(elementBitWidth / 8);
+
+    // Decode current 48-bit global_addr from group0[2:3] (valid bit masked).
+    Value addrLo = vecGet(b, group0, 2);
+    Value addrHi = b.and_(vecGet(b, group0, 3), b.i32_val(0x7FFFFFFF));
+    Value addr = b.or_(b.zext(i64_ty, addrLo),
+                       b.shl(b.zext(i64_ty, addrHi), b.i64_val(32)));
+
+    // Byte delta:
+    //   addOffsets[1] (innermost, stride 1) +
+    //   addOffsets[0] * tensor_dim0_stride (from group1[5]),
+    // all scaled by element size.  Promote to i64 before the multiply so
+    // addOffsets[0] * stride0 doesn't overflow i32 for large tensors.
+    // Offsets are signed (advancing backward is allowed) so sext; stride is
+    // unsigned so zext.
+    Value stride0 = vecGet(b, group1, 5);
+    Value off0_64 = b.sext(i64_ty, addOffsets[0]);
+    Value off1_64 = b.sext(i64_ty, addOffsets[1]);
+    Value stride0_64 = b.zext(i64_ty, stride0);
+    Value deltaElem = b.add(off1_64, b.mul(off0_64, stride0_64));
+    Value byteDelta = b.mul(deltaElem, elemSize);
+    addr = b.add(addr, byteDelta);
+
+    // Re-pack, restoring the valid bit in group0[3] bit 31.
+    Value newLo = b.trunc(i32_ty, addr);
+    Value newHi = b.trunc(i32_ty, b.lshr(addr, b.i64_val(32)));
+    newHi = b.or_(newHi, b.i32_val(1 << 31));
+    group0 = vecSet(b, group0, 2, newLo);
+    group0 = vecSet(b, group0, 3, newHi);
+  }
+
+  // ---- set_bounds: absolute rewrite of tensor_dim ----
+  // tensor_dim_inner (setBounds[1] for 2D) spans
+  //   group1[1] hi-16 | group1[2] lo-16
+  // tensor_dim_outer (setBounds[0]) spans
+  //   group1[2] hi-16 | group1[3] lo-16
+  if (!setBounds.empty()) {
+    auto stampDim = [&](int loDword, int hiDword, Value newDim) {
+      // loDword: keep lo-16, replace hi-16 with (newDim & 0xFFFF) << 16
+      Value loHi = b.shl(b.and_(newDim, b.i32_val(0xFFFF)), v16);
+      Value g_lo = b.or_(
+          b.and_(vecGet(b, group1, loDword), b.i32_val(0x0000FFFF)), loHi);
+      group1 = vecSet(b, group1, loDword, g_lo);
+      // hiDword: keep hi-16, replace lo-16 with (newDim >> 16) & 0xFFFF
+      Value hiLo = b.and_(b.lshr(newDim, v16), b.i32_val(0xFFFF));
+      Value g_hi = b.or_(
+          b.and_(vecGet(b, group1, hiDword), b.i32_val(0xFFFF0000)), hiLo);
+      group1 = vecSet(b, group1, hiDword, g_hi);
+    };
+    stampDim(/*loDword=*/1, /*hiDword=*/2, setBounds[1]); // inner
+    stampDim(/*loDword=*/2, /*hiDword=*/3, setBounds[0]); // outer
+  }
+
+  // ---- dest: rewrite lds_addr in group0[1] ----
+  if (dest) {
+    Value ldsAddr = b.ptrtoint(i32_ty, dest);
+    group0 = vecSet(b, group0, 1, ldsAddr);
+  }
+
+  // ---- pred: rewrite group0[0] ----
+  if (pred) {
+    // Note: this clobbers any mode bits stored in group0[0] (gather/scatter
+    // mode bit in bit 31, index-size bit in bit 30).  TODO: Gather/scatter
+    // mutation is not yet supported here; a future revision should preserve
+    // them.
+    group0 = vecSet(b, group0, 0, pred);
+  }
+
+  // ---- barrier: enable bit (group1[0] bit 18) + addr (group1[1] lo-16) ----
+  if (barrier) {
+    Value g1_0 = vecGet(b, group1, 0);
+    Value g1_1 = vecGet(b, group1, 1);
+    g1_0 = b.or_(g1_0, b.shl(b.i32_val(1), b.i32_val(18)));
+    g1_1 = b.or_(b.and_(g1_1, b.i32_val(0xFFFF0000)),
+                 b.and_(b.lshr(b.ptrtoint(i32_ty, barrier), b.i32_val(3)),
+                        b.i32_val(0x0000FFFF)));
+    group1 = vecSet(b, group1, 0, g1_0);
+    group1 = vecSet(b, group1, 1, g1_1);
+  }
+}
+
+// Decode a full TDM descriptor for 1D-5D tensors.  Returns (base,
+// tensorShape[], tensorStride[]).  `groups` is 2 (1D-2D) or 4 (3D-5D) entries.
+// Block shape is intentionally NOT decoded: every TDM lowering path rewrites
+// tile_dim* against its own warp distribution, so reading them back here
+// would only generate dead IR.
+std::tuple<Value, SmallVector<Value>, SmallVector<Value>>
+decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc,
+                        ArrayRef<Value> groups, size_t numDims) {
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type globalPtrTy = ptr_ty(ctx, 1);
 
   // Decode base address from group0
-  Value globalAddrLow = vecGet(b, group0, 2);
-  Value globalAddrHigh = b.and_(vecGet(b, group0, 3), b.i32_val(0x7FFFFFFF));
+  Value globalAddrLow = vecGet(b, groups[0], 2);
+  Value globalAddrHigh = b.and_(vecGet(b, groups[0], 3), b.i32_val(0x7FFFFFFF));
   globalAddrLow = b.zext(i64_ty, globalAddrLow);
   globalAddrHigh = b.shl(b.zext(i64_ty, globalAddrHigh), b.i64_val(32));
   Value globalAddr = b.or_(globalAddrLow, globalAddrHigh);
@@ -243,93 +330,82 @@ decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc, Value group0,
 
   SmallVector<Value> tensorShape(numDims);
   SmallVector<Value> tensorStride(numDims);
-  SmallVector<Value> blockShape(numDims);
+
+  // Helper: combine a 32-bit low part and a 16-bit high part into an i64.
+  auto combine48 = [&](Value lo32, Value hi16InDword) -> Value {
+    Value hi16 = b.and_(hi16InDword, b.i32_val(0xFFFF));
+    return b.or_(b.zext(i64_ty, lo32),
+                 b.shl(b.zext(i64_ty, hi16), b.i64_val(32)));
+  };
 
   // Decode dimensions from the end (inner dimensions first)
-  tensorShape[numDims - 1] = decode48BitValue(rewriter, b, group1, 1);
+  tensorShape[numDims - 1] = decode48BitValue(rewriter, b, groups[1], 1);
 
   if (numDims >= 2) {
-    tensorShape[numDims - 2] = decode48BitValue(rewriter, b, group1, 2);
+    tensorShape[numDims - 2] = decode48BitValue(rewriter, b, groups[1], 2);
 
-    // Strides are loaded in opposite order of shapes
-    // tensor_dim0_stride from group1[5]
-    tensorStride[numDims - 2] = vecGet(b, group1, 5);
+    // tensor_dim0_stride: group1[5][0:32] | group1[6][0:16] (48 bits)
+    tensorStride[numDims - 2] =
+        combine48(vecGet(b, groups[1], 5), vecGet(b, groups[1], 6));
 
-    // tensor_dim1_stride is encoded in group1[6] (48-bit value across group1[6]
-    // and group1[7])
+    // tensor_dim1_stride: group1[6][16:32] | group1[7][0:32] (48 bits)
     if (numDims >= 3) {
-      Value stride1Low = b.and_(b.lshr(vecGet(b, group1, 6), b.i32_val(16)),
+      Value stride1Low = b.and_(b.lshr(vecGet(b, groups[1], 6), b.i32_val(16)),
                                 b.i32_val(0xFFFF));
-      Value stride1High = b.and_(vecGet(b, group1, 7), b.i32_val(0xFFFF));
+      Value stride1High = vecGet(b, groups[1], 7);
       tensorStride[numDims - 3] =
-          b.or_(stride1Low, b.shl(stride1High, b.i32_val(16)));
+          b.or_(b.zext(i64_ty, stride1Low),
+                b.shl(b.zext(i64_ty, stride1High), b.i64_val(16)));
     }
   }
 
-  // tensor_dim2_stride from group2[2]
+  // tensor_dim2_stride: group2[2][0:32] | group2[3][0:16] (48 bits)
   if (numDims >= 4) {
-    tensorStride[numDims - 4] = vecGet(b, group2.value(), 2);
+    tensorStride[numDims - 4] =
+        combine48(vecGet(b, groups[2], 2), vecGet(b, groups[2], 3));
   }
 
-  // tensor_dim3_stride from group3[0]
+  // tensor_dim3_stride: group3[0][0:32] | group3[1][0:16] (48 bits)
   if (numDims == 5) {
-    tensorStride[numDims - 5] = vecGet(b, group3.value(), 0);
+    tensorStride[numDims - 5] =
+        combine48(vecGet(b, groups[3], 0), vecGet(b, groups[3], 1));
   }
 
   // The innermost dimension always has stride 1
-  tensorStride[numDims - 1] = b.i32_val(1);
-
-  // Block shapes from group1
-  blockShape[numDims - 1] =
-      b.and_(b.lshr(vecGet(b, group1, 3), b.i32_val(16)), b.i32_val(0xFFFF));
-  if (numDims >= 2) {
-    blockShape[numDims - 2] = b.and_(vecGet(b, group1, 4), b.i32_val(0xFFFF));
-  }
+  tensorStride[numDims - 1] = b.i64_val(1);
 
   // 3rd dimension from group2 if present
   if (numDims >= 3) {
-    tensorShape[numDims - 3] = vecGet(b, group2.value(), 0);
-    blockShape[numDims - 3] =
-        b.and_(b.lshr(vecGet(b, group1, 4), b.i32_val(16)), b.i32_val(0xFFFF));
+    tensorShape[numDims - 3] = vecGet(b, groups[2], 0);
   }
 
   // 4th dimension from group2/group3 if present
   if (numDims >= 4) {
-    tensorShape[numDims - 4] = vecGet(b, group2.value(), 1);
-    blockShape[numDims - 4] = b.and_(
-        b.lshr(vecGet(b, group2.value(), 3), b.i32_val(16)), b.i32_val(0xFFFF));
+    tensorShape[numDims - 4] = vecGet(b, groups[2], 1);
   }
 
   // 5th dimension from group3 if present
   if (numDims == 5) {
     // tensor_dim4 is encoded across group3[1] and group3[2]
-    Value tensorDim4Low = b.and_(
-        b.lshr(vecGet(b, group3.value(), 1), b.i32_val(16)), b.i32_val(0xFFFF));
-    Value tensorDim4High =
-        b.and_(vecGet(b, group3.value(), 2), b.i32_val(0xFFFF));
+    Value tensorDim4Low = b.and_(b.lshr(vecGet(b, groups[3], 1), b.i32_val(16)),
+                                 b.i32_val(0xFFFF));
+    Value tensorDim4High = b.and_(vecGet(b, groups[3], 2), b.i32_val(0xFFFF));
     tensorShape[0] = b.or_(tensorDim4Low, b.shl(tensorDim4High, b.i32_val(16)));
-
-    blockShape[0] = b.and_(b.lshr(vecGet(b, group3.value(), 2), b.i32_val(16)),
-                           b.i32_val(0xFFFF));
   }
 
-  return {srcPtr, tensorShape, tensorStride, blockShape};
+  return {srcPtr, tensorShape, tensorStride};
 }
 
-TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
-                                  const LLVMTypeConverter *typeConverter,
-                                  Type elementType,
-                                  SmallVector<int64_t> blockShape, int numWarps,
-                                  unsigned padInterval, unsigned padAmount,
-                                  SmallVector<Value> tensorShape,
-                                  SmallVector<Value> tensorStride, Value srcPtr,
-                                  Attribute sharedEncoding) {
-  size_t numDims = tensorShape.size();
-  assert(numDims >= 1 && numDims <= 5 && tensorStride.size() == numDims &&
+SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
+                                       const LLVMTypeConverter *typeConverter,
+                                       Type elementType, size_t numDims,
+                                       unsigned padInterval, unsigned padAmount,
+                                       SmallVector<Value> tensorShape,
+                                       SmallVector<Value> tensorStride,
+                                       Value srcPtr) {
+  assert(numDims >= 1 && numDims <= 5 && tensorShape.size() == numDims &&
+         tensorStride.size() == numDims &&
          "TDM only supported for 1D-5D tensors.");
-  assert(blockShape.size() == tensorStride.size() &&
-         blockShape.size() == numDims &&
-         "Block/tensor/stride dim count must all be equal.");
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   // Define common values for better readability
@@ -339,28 +415,22 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   auto elementBitWidth = elementType.getIntOrFloatBitWidth();
   auto elementSizeInBytes = elementBitWidth / 8;
 
-  // Cast strides from i64 to i32
+  // Strides come in as i64; the descriptor's stride slots are 48 bits wide.
+  // Separate the low-32 and high-16 bits of the stride.
+  SmallVector<Value> tensorStrideLo32(numDims);
+  SmallVector<Value> tensorStrideHi16(numDims);
   for (size_t i = 0; i < numDims; ++i) {
-    tensorStride[i] = b.trunc(i32_ty, tensorStride[i]);
+    Value s = tensorStride[i];
+    assert(s.getType() == i64_ty && "Expected TDM stride to be i64.");
+    tensorStrideLo32[i] = b.trunc(i32_ty, s);
+    tensorStrideHi16[i] =
+        b.and_(b.trunc(i32_ty, b.lshr(s, b.i64_val(32))), b.i32_val(0xFFFF));
   }
 
-  // Compute per-warp tile dimensions for the TDM descriptor.
-  // With partitioned layouts, the warp distribution is adjusted so each warp's
-  // chunk stays within a single partition piece.  When multi-instr is needed,
-  // the effective extent along partitionDim is the slice extent
-  // (warps * pieceSize), not the full block extent.
-  {
-    auto [warpsPerCTA, numInstr] = distributeTDMWarpsAlignToPartition(
-        blockShape, numWarps, sharedEncoding);
-    if (auto partitionedEnc =
-            dyn_cast<PartitionedSharedEncodingAttr>(sharedEncoding);
-        partitionedEnc && numInstr > 1)
-      blockShape[partitionedEnc.getPartitionDim()] /= numInstr;
-
-    for (size_t i = 0; i < numDims; ++i) {
-      blockShape[i] = llvm::divideCeil(blockShape[i], warpsPerCTA[i]);
-    }
-  }
+  // This base descriptor records only tensor metadata.  Per-op hardware fields
+  // (pred, LDS address, barrier, tile_dim*) are materialized by
+  // fillTDMDescriptor / fillTDMDescriptorForGatherScatter, where the
+  // destination, predicate, and warp distribution are known.
 
   // group0 (128 bits / 4 dwords) effective bit encoding:
   // [1:0]:     pred (to be filled later)
@@ -450,29 +520,29 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   }
   group1 = vecSet(b, group1, 2, g1_2);
 
-  // Block shapes
-  g1_3 = b.or_(g1_3, b.i32_val(blockShape[numDims - 1] << 16));
+  // tile_dim0/1/2 (group1[3]<31:16>, group1[4]) are intentionally left as
+  // zero here and filled in by fillTDMDescriptor / fillTDMDescriptorForGather
+  // Scatter, which know the per-op warp distribution.
   group1 = vecSet(b, group1, 3, g1_3);
-  if (numDims >= 2) {
-    Value g1_4 = b.i32_val(blockShape[numDims - 2] & 0xFFFF);
-    // tile_dim2 (upper 16 bits of group1[4])
-    if (numDims >= 3) {
-      g1_4 = b.or_(g1_4, b.i32_val(blockShape[numDims - 3] << 16));
-    }
-    group1 = vecSet(b, group1, 4, g1_4);
-  }
 
-  // Handle strides
+  // Handle strides (each slot is 48 bits: low-32 + high-16).
   if (numDims >= 2) {
-    group1 = vecSet(b, group1, 5, tensorStride[numDims - 2]);
+    group1 = vecSet(b, group1, 5, tensorStrideLo32[numDims - 2]);
+    Value g1_6 = tensorStrideHi16[numDims - 2];
     if (numDims >= 3) {
-      group1 = vecSet(b, group1, 6, b.shl(tensorStride[numDims - 3], v16));
-      group1 = vecSet(b, group1, 7, b.lshr(tensorStride[numDims - 3], v16));
+      g1_6 = b.or_(
+          g1_6,
+          b.shl(b.and_(tensorStrideLo32[numDims - 3], b.i32_val(0xFFFF)), v16));
+      Value stride1Hi32 =
+          b.or_(b.lshr(tensorStrideLo32[numDims - 3], v16),
+                b.shl(tensorStrideHi16[numDims - 3], b.i32_val(16)));
+      group1 = vecSet(b, group1, 7, stride1Hi32);
     }
+    group1 = vecSet(b, group1, 6, g1_6);
   }
 
   if (numDims <= 2) {
-    return TDMDescriptor{group0, group1, std::nullopt, std::nullopt};
+    return {group0, group1};
   }
 
   /* For 3D-5D tensors, fill group2 and group3
@@ -528,16 +598,13 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
     // tensor_dim3 (4th dimension from the end)
     if (numDims >= 4) {
       group2 = vecSet(b, group2, 1, tensorShape[numDims - 4]);
-      // tensor_dim2_stride (48 bits: lower 32 bits in group2[2], upper 16 bits
-      // in group2[3])
-      group2 = vecSet(b, group2, 2, tensorStride[numDims - 4]);
+      // tensor_dim2_stride: group2[2][0:32] | group2[3][0:16] (48 bits)
+      group2 = vecSet(b, group2, 2, tensorStrideLo32[numDims - 4]);
+      group2 = vecSet(b, group2, 3, tensorStrideHi16[numDims - 4]);
     }
 
-    // tile_dim3 (upper 16 bits of group2[3])
-    if (numDims >= 4) {
-      group2 =
-          vecSet(b, group2, 3, b.shl(b.i32_val(blockShape[numDims - 4]), v16));
-    }
+    // tile_dim3 (upper 16 bits of group2[3]) is filled in later by the
+    // per-op descriptor filler.
   }
 
   /* group3 bit-field definition
@@ -582,34 +649,41 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
   Value group3 = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
   if (numDims == 5) {
     // tensor_dim3_stride (4th dimension from the end) — 48 bits split across
-    // group3[0] and the lower 16 bits of group3[1].
-    group3 = vecSet(b, group3, 0, tensorStride[numDims - 5]);
-    // tensor_dim4 (5th dim) — upper 16 of group3[1] and lower 16 of group3[2].
-    group3 = vecSet(b, group3, 1, b.shl(tensorShape[numDims - 5], v16));
-    // Compose group3[2] = tensor_dim4_hi16 | (tile_dim4 << 16) in one write.
-    Value g3_2 = b.or_(b.lshr(tensorShape[numDims - 5], v16),
-                       b.shl(b.i32_val(blockShape[numDims - 5]), v16));
-    group3 = vecSet(b, group3, 2, g3_2);
+    // group3[0] (low 32) and the lower 16 bits of group3[1] (high 16).
+    group3 = vecSet(b, group3, 0, tensorStrideLo32[numDims - 5]);
+    // group3[1] = stride_hi16 | (tensor_dim4_lo16 << 16)
+    Value g3_1 = b.or_(tensorStrideHi16[numDims - 5],
+                       b.shl(tensorShape[numDims - 5], v16));
+    group3 = vecSet(b, group3, 1, g3_1);
+    // Lower 16 of group3[2] is the high half of tensor_dim4; upper 16
+    // (tile_dim4) is filled later by the per-op descriptor filler.
+    group3 = vecSet(b, group3, 2, b.lshr(tensorShape[numDims - 5], v16));
   }
 
-  return TDMDescriptor{group0, group1, group2, group3};
+  return {group0, group1, group2, group3};
 }
 
-// Fill TDM descriptor for regular load/store operations (1D-5D tensors)
+// Fill a TDM descriptor for regular load/store (1D-5D).  With `warpUsedHint`
+// (axis-aligned, see TritonAMDGPUOps.td), tile_dim* are re-encoded against
+// K-based `warpsPerCTA` and `warpId` is XOR-anchored by `lsb(hint)`; without
+// a hint, basis defaults to {0..log2K-1}.
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> shapePerCTA, int numWarps,
-                       unsigned padInterval, unsigned padAmount, Value &group0,
-                       Value &group1,
-                       std::optional<std::reference_wrapper<Value>> group2,
-                       std::optional<std::reference_wrapper<Value>> group3,
-                       SmallVector<Value> offset, ArrayRef<Value> dstPtrs,
-                       Value pred, Value multicastMask, Value barrierPtr,
+                       unsigned padInterval, unsigned padAmount,
+                       MutableArrayRef<Value> groups, SmallVector<Value> offset,
+                       ArrayRef<Value> dstPtrs, Value pred, Value multicastMask,
+                       Value barrierPtr,
                        const triton::LinearLayout &sharedLayout, Value ctaId,
-                       bool isStore, ArrayRef<unsigned> warpsPerCTA) {
+                       bool isStore, ArrayRef<unsigned> warpsPerCTA,
+                       std::optional<uint32_t> warpUsedHint) {
   size_t numDims = offset.size();
   assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors.");
   assert(!dstPtrs.empty() && "dstPtrs cannot be empty");
+  assert(warpsPerCTA.size() == numDims &&
+         "warpsPerCTA must have one entry per tensor dim");
+  assert((numDims <= 2 ? groups.size() == 2 : groups.size() == 4) &&
+         "groups must hold 2 (1D-2D) or 4 (3D-5D) vector entries");
 
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -617,15 +691,15 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   Type globalPtrTy = ptr_ty(ctx, 1);
   Type sharedPtrTy = ptr_ty(ctx, 3);
 
-  // Decode the full TDM descriptor to get all values
-  auto [srcPtr, tensorShape, tensorStride, decodedBlockShape] =
-      decodeTDMDescriptorFull(
-          rewriter, loc, group0, group1,
-          group2.has_value() ? std::optional<Value>(group2.value().get())
-                             : std::nullopt,
-          group3.has_value() ? std::optional<Value>(group3.value().get())
-                             : std::nullopt,
-          numDims);
+  // Tile dimensions are owned by this filler (computed below from
+  // shapePerCTA / warpsPerCTA), so the decoder skips them.
+  auto [srcPtr, tensorShape, tensorStride] =
+      decodeTDMDescriptorFull(rewriter, loc, groups, numDims);
+
+  // Per-warp tile shape; smaller-K hints scale this up so CTA coverage holds.
+  SmallVector<int64_t> tileShape(numDims);
+  for (size_t i = 0; i < numDims; ++i)
+    tileShape[i] = shapePerCTA[i] / static_cast<int64_t>(warpsPerCTA[i]);
 
   auto kMessage = str_attr("message");
   auto kWarp = str_attr("warp");
@@ -638,14 +712,23 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        .getCGALayout()
                        .getLinearLayout();
 
-  auto tdmLayout =
-      triton::gpu::getTDMLinearLayout(shapePerCTA, warpsPerCTA, cgaLayout);
+  auto tdmLayout = triton::gpu::getTDMLinearLayout(
+      shapePerCTA, warpsPerCTA, cgaLayout, numWarps, warpUsedHint);
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
+  // XOR warpId by i0 = lsb(hint) so the smallest active warp gets tile
+  // offset 0; the rest follow via the warp sublayout.
+  Value warpIdShifted = warpId;
+  if (warpUsedHint) {
+    uint32_t i0 = llvm::countr_zero(*warpUsedHint);
+    if (i0 != 0)
+      warpIdShifted = b.xor_(warpId, b.i32_val(i0));
+  }
+
   auto warpOffset = applyLinearLayout(
       loc, rewriter, tdmLayout,
-      {{kMessage, b.i32_val(0)}, {kWarp, warpId}, {kBlock, ctaId}});
+      {{kMessage, b.i32_val(0)}, {kWarp, warpIdShifted}, {kBlock, ctaId}});
 
   // Extract per-dimension offsets and update input offsets
   SmallVector<Value> globalOffset(numDims);
@@ -654,9 +737,9 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
     offset[i] = b.add(offset[i], globalOffset[i]);
   }
 
-  Value baseOffset = b.i32_val(0);
+  Value baseOffset = b.i64_val(0);
   for (size_t i = 0; i < numDims; ++i) {
-    Value dimOffset = b.mul(offset[i], tensorStride[i]);
+    Value dimOffset = b.mul(b.zext(i64_ty, offset[i]), tensorStride[i]);
     baseOffset = b.add(baseOffset, dimOffset);
   }
   srcPtr = b.gep(globalPtrTy, elementType, srcPtr, baseOffset);
@@ -664,7 +747,7 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   auto tdmToShared = tdmLayout.invertAndCompose(sharedLayout);
   auto sharedOffsets = applyLinearLayout(
       loc, rewriter, tdmToShared,
-      {{kMessage, b.i32_val(0)}, {kWarp, warpId}, {kBlock, ctaId}});
+      {{kMessage, b.i32_val(0)}, {kWarp, warpIdShifted}, {kBlock, ctaId}});
 
   // Extract the offset and partition index from the result
   Value dstOffset = b.i32_val(0);
@@ -719,24 +802,37 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   // This leverages HW OOB checking to skip padding elements while
   // preserving the original tensor shape if smaller. Note that the pre
   // conditions are checked in the verifier already
-  bool adjustedBlockShape = false;
+  int64_t encodedTileDim0 = tileShape[numDims - 1];
   if (isStore && padInterval > 0 && padAmount > 0) {
-    adjustedBlockShape = true;
-    Value originalTileDim0 = decodedBlockShape[numDims - 1];
-
-    // Adjust block shape (tile dimension) to include padding
-    decodedBlockShape[numDims - 1] =
-        b.add(originalTileDim0, b.i32_val(padAmount));
+    int64_t originalTileDim0 = tileShape[numDims - 1];
+    encodedTileDim0 = originalTileDim0 + padAmount;
 
     // Adjust tensor dimension to be min(tensor_dim0, original_tile_dim0)
-    Value cmp = b.icmp_ult(tensorShape[numDims - 1], originalTileDim0);
+    Value origTileVal = b.i32_val(originalTileDim0);
+    Value cmp = b.icmp_ult(tensorShape[numDims - 1], origTileVal);
     tensorShape[numDims - 1] =
-        b.select(cmp, tensorShape[numDims - 1], originalTileDim0);
+        b.select(cmp, tensorShape[numDims - 1], origTileVal);
   }
 
   // Update group0 with addresses
   Value globalAddr = b.ptrtoint(i64_ty, srcPtr);
   Value ldsAddr = b.ptrtoint(i32_ty, dstPtr);
+
+  // Predicate off redundant warps: `((warpId ^ i0) & warpFreeMask) == 0`.
+  // `warpFreeMask` covers positions NOT in basisBits (or, without a hint,
+  // bits above log2(K)).
+  {
+    auto freeMasks = tdmLayout.getFreeVariableMasks();
+    int32_t warpFreeMask = freeMasks.lookup(kWarp);
+    if (warpFreeMask != 0) {
+      Value isActive = b.icmp_eq(b.and_(warpIdShifted, b.i32_val(warpFreeMask)),
+                                 b.i32_val(0));
+      Value layoutPred = b.select(isActive, b.i32_val(1), b.i32_val(0));
+      pred = b.and_(pred, layoutPred);
+    }
+  }
+  Value &group0 = groups[0];
+  Value &group1 = groups[1];
   group0 = vecSet(b, group0, 0, pred);
   group0 = vecSet(b, group0, 1, ldsAddr);
   group0 = vecSet(b, group0, 2, b.trunc(i32_ty, globalAddr));
@@ -772,33 +868,43 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   group1 = vecSet(b, group1, 0, g1_0);
   group1 = vecSet(b, group1, 1, g1_1);
 
-  if (adjustedBlockShape) {
-    // Re-encode the adjusted tile_dim0 (block shape) into upper 16 bits of
-    // group1[3]. This is the same for 1D-5D tensors.
-    g1_3 = b.and_(g1_3, b.i32_val(0xFFFF));
-    g1_3 = b.or_(g1_3, b.shl(decodedBlockShape[numDims - 1], b.i32_val(16)));
-  }
+  // Re-encode tile_dim0..4 against the caller's `warpsPerCTA`
+  // (createTDMDescriptor assumed all numWarps).  Bit positions match the
+  // chart in createTDMDescriptor:
+  //   tile_dim0 -> group1[3]<31:16>, tile_dim1/2 -> group1[4]<15:0>/<31:16>,
+  //   tile_dim3 -> group2[3]<31:16>, tile_dim4 -> group3[2]<31:16>
+  g1_3 = b.and_(g1_3, b.i32_val(0xFFFF));
+  g1_3 = b.or_(g1_3, b.i32_val(encodedTileDim0 << 16));
   group1 = vecSet(b, group1, 3, g1_3);
+  if (numDims >= 2) {
+    Value g1_4 = b.i32_val(tileShape[numDims - 2] & 0xFFFF);
+    if (numDims >= 3)
+      g1_4 = b.or_(g1_4, b.i32_val(tileShape[numDims - 3] << 16));
+    group1 = vecSet(b, group1, 4, g1_4);
+  }
+  if (numDims >= 4) {
+    Value g2_3 = b.and_(vecGet(b, groups[2], 3), b.i32_val(0xFFFF));
+    g2_3 = b.or_(g2_3, b.i32_val(tileShape[numDims - 4] << 16));
+    groups[2] = vecSet(b, groups[2], 3, g2_3);
+  }
+  if (numDims == 5) {
+    Value g3_2 = b.and_(vecGet(b, groups[3], 2), b.i32_val(0xFFFF));
+    g3_2 = b.or_(g3_2, b.i32_val(tileShape[numDims - 5] << 16));
+    groups[3] = vecSet(b, groups[3], 2, g3_2);
+  }
 
   // Update group2/group3 for higher dimensions
-  if (numDims >= 3) {
-    Value &g2 = group2.value().get();
-    g2 = vecSet(b, g2, 0, tensorShape[numDims - 3]);
-  }
-
-  if (numDims >= 4) {
-    Value &g2 = group2.value().get();
-    g2 = vecSet(b, g2, 1, tensorShape[numDims - 4]);
-  }
-
+  if (numDims >= 3)
+    groups[2] = vecSet(b, groups[2], 0, tensorShape[numDims - 3]);
+  if (numDims >= 4)
+    groups[2] = vecSet(b, groups[2], 1, tensorShape[numDims - 4]);
   if (numDims == 5) {
-    Value &g3 = group3.value().get();
-    Value g3_1 = b.and_(vecGet(b, g3, 1), b.i32_val(0xFFFF));
+    Value g3_1 = b.and_(vecGet(b, groups[3], 1), b.i32_val(0xFFFF));
     g3_1 = b.or_(g3_1, b.shl(tensorShape[0], b.i32_val(16)));
-    g3 = vecSet(b, g3, 1, g3_1);
-    Value g3_2 = b.and_(vecGet(b, g3, 2), b.i32_val(0xFFFF << 16));
+    groups[3] = vecSet(b, groups[3], 1, g3_1);
+    Value g3_2 = b.and_(vecGet(b, groups[3], 2), b.i32_val(0xFFFF << 16));
     g3_2 = b.or_(g3_2, b.lshr(tensorShape[0], b.i32_val(16)));
-    g3 = vecSet(b, g3, 2, g3_2);
+    groups[3] = vecSet(b, groups[3], 2, g3_2);
   }
 }
 
@@ -821,24 +927,25 @@ void fillTDMDescriptorForGatherScatter(
   Type globalPtrTy = ptr_ty(ctx, 1);
   Type sharedPtrTy = ptr_ty(ctx, 3);
 
-  // Decode descriptor to get tensor info
-  auto [globalPtr, tensorShape, tensorStride, decodedBlockShape] =
-      decodeTDMDescriptorFull(rewriter, loc, group0, group1,
-                              std::optional<Value>(group2),
-                              std::optional<Value>(group3),
-                              /*numDims=*/2);
+  // Decode descriptor to get tensor info (only group0/1 used for 2D).
+  Value descGroups[2] = {group0, group1};
+  auto [globalPtr, tensorShape, tensorStride] =
+      decodeTDMDescriptorFull(rewriter, loc, descGroups, /*numDims=*/2);
 
   // Apply CTA column offset to the base pointer.
   // Row positions are specified by rowIndices, so only column offset applies.
   auto kBlock = str_attr("block");
   auto cgaOffsets =
       applyLinearLayout(loc, rewriter, cgaLayout, {{kBlock, ctaId}});
-  Value cgaColOffset = b.mul(cgaOffsets[1].second, tensorStride[1]);
+  // tensorStride is i64 (48-bit slots); zext the i32 offsets before
+  // multiplying so we don't truncate to 32 bits.
+  Value cgaColOffset =
+      b.mul(b.zext(i64_ty, cgaOffsets[1].second), tensorStride[1]);
   globalPtr = b.gep(globalPtrTy, elementType, globalPtr, cgaColOffset);
 
   // For scatter, only apply column offset to global address
   // Row positions are specified by rowIndices
-  Value colOffset = b.mul(globalColOffset, tensorStride[1]);
+  Value colOffset = b.mul(b.zext(i64_ty, globalColOffset), tensorStride[1]);
   globalPtr = b.gep(globalPtrTy, elementType, globalPtr, colOffset);
 
   // Calculate LDS offset based on row offset only (column always starts at 0)
@@ -917,9 +1024,10 @@ void fillTDMDescriptorForGatherScatter(
   g1_4 = b.or_(g1_4, b.i32_val(numIndices & 0xFFFF));
   group1 = vecSet(b, group1, 4, g1_4);
 
-  // Fix tile_dim0 for gather/scatter: createTDMDescriptor divides the column
-  // dimension across warps for regular load/store, but gather and scatter use
-  // row indices and need the full undivided column width.
+  // Encode tile_dim0 for gather/scatter as the full undivided column width:
+  // gather/scatter is row-indexed across all warps, so each TDM instruction
+  // covers the full row.  createTDMDescriptor leaves the upper 16 bits of
+  // group1[3] zero, so a plain OR is sufficient.
   if (blockShape.size() >= 2) {
     int64_t tileDim0 = blockShape.back();
 
@@ -1019,48 +1127,28 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                       Value multicastMask, Value barrier,
                       const triton::LinearLayout &instrSharedLayout,
                       Value ctaId, bool isLoad, ArrayRef<unsigned> warpsPerCTA,
-                      int32_t auxBits) {
+                      int32_t auxBits,
+                      std::optional<uint32_t> warpUsedHint = std::nullopt) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
-  Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
 
-  if (numDims > 2) {
-    Value group0 = desc[0];
-    Value group1 = desc[1];
-    Value group2 = desc[2];
-    Value group3 = desc[3];
+  SmallVector<Value, 4> groups(desc.begin(),
+                               desc.begin() + (numDims > 2 ? 4 : 2));
+  fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
+                    effectiveBlockShape, numWarps, padInterval, padAmount,
+                    groups, globalOffset, instrDstPtrs, pred, multicastMask,
+                    barrier, instrSharedLayout, ctaId, !isLoad, warpsPerCTA,
+                    warpUsedHint);
 
-    fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      effectiveBlockShape, numWarps, padInterval, padAmount,
-                      group0, group1, std::ref(group2), std::ref(group3),
-                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
-                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA);
-
-    const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
-                                       : "llvm.amdgcn.tensor.store.from.lds";
-    LLVM::createLLVMIntrinsicCallOp(
-        rewriter, loc, intrinsicName, {},
-        {group0, group1, group2, group3, group4Zero, b.i32_val(auxBits)});
-  } else {
-    Value group0 = desc[0];
-    Value group1 = desc[1];
-
-    fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
-                      effectiveBlockShape, numWarps, padInterval, padAmount,
-                      group0, group1, std::nullopt, std::nullopt, globalOffset,
-                      instrDstPtrs, pred, multicastMask, barrier,
-                      instrSharedLayout, ctaId, !isLoad, warpsPerCTA);
-
-    Value group2Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
-    Value group3Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
-
-    const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
-                                       : "llvm.amdgcn.tensor.store.from.lds";
-    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {},
-                                    {group0, group1, group2Zero, group3Zero,
-                                     group4Zero, b.i32_val(auxBits)});
-  }
+  // Pad to 4 vector groups (intrinsic always takes 4 group operands).
+  while (groups.size() < 4)
+    groups.push_back(LLVM::ZeroOp::create(rewriter, loc, v4i32Ty));
+  groups.push_back(LLVM::ZeroOp::create(rewriter, loc, v8i32Ty)); // group4
+  groups.push_back(b.i32_val(auxBits));
+  const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
+                                     : "llvm.amdgcn.tensor.store.from.lds";
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {}, groups);
 }
 
 } // namespace
@@ -1081,16 +1169,25 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value pred, Value multicastMask, Type elementType,
                       Value barrierPtr, bool isLoad,
                       const triton::LinearLayout &sharedLayout,
-                      Attribute encoding, Value ctaId, int32_t auxBits) {
+                      Attribute encoding, Value ctaId, int32_t auxBits,
+                      std::optional<uint32_t> warpUsedHint) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   size_t numDims = blockShape.size();
   assert(numDims <= 5);
 
   auto partitionedEnc = dyn_cast<PartitionedSharedEncodingAttr>(encoding);
 
-  // Compute warp distribution -- partition-aligned when needed.
+  // With a hint, derive the distribution from K = popcount(hint) instead
+  // of numWarps; verifier guarantees single-instruction emission (incl.
+  // partitioned encodings).  Inactive warps become HW no-ops via
+  // fillTDMDescriptor's free-variable-mask predication (XOR-anchored at i0).
+  int effectiveWarps = warpUsedHint ? llvm::popcount(*warpUsedHint) : numWarps;
+
   auto [warpsPerCTA, numTDMInstructions] =
-      distributeTDMWarpsAlignToPartition(blockShape, numWarps, encoding);
+      distributeTDMWarpsAlignToPartition(blockShape, effectiveWarps, encoding);
+  assert((!warpUsedHint || numTDMInstructions == 1) &&
+         "verifier should guarantee single-instruction emission for the "
+         "hinted path");
 
   // Fast path: single instruction covers the entire block.
   if (numTDMInstructions == 1) {
@@ -1098,7 +1195,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                      to_vector(blockShape), numWarps, padInterval, padAmount,
                      to_vector(offset), dstPtrs, pred, multicastMask,
                      barrierPtr, sharedLayout, ctaId, isLoad, warpsPerCTA,
-                     auxBits);
+                     auxBits, warpUsedHint);
     return;
   }
 
@@ -1305,23 +1402,15 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
   Type globalPtrTy = ptr_ty(loc.getContext(), 1);
 
   // Decode TDM descriptor to get the base pointer, shape, and strides.
-  // desc now has 2 (2D) or 4 (3D-5D) vector entries.
-  Value group0 = desc[0];
-  Value group1 = desc[1];
-  std::optional<Value> group2;
-  std::optional<Value> group3;
-  if (numDims > 2) {
-    group2 = desc[2];
-    group3 = desc[3];
-  }
-  auto [basePtr, tensorShape, tensorStride, decodedBlockShape] =
-      mlir::LLVM::AMD::decodeTDMDescriptorFull(rewriter, loc, group0, group1,
-                                               group2, group3, numDims);
+  // desc has 2 (2D) or 4 (3D-5D) vector entries.
+  auto [basePtr, tensorShape, tensorStride] =
+      mlir::LLVM::AMD::decodeTDMDescriptorFull(rewriter, loc, desc, numDims);
 
   auto dot64 = [&](ArrayRef<Value> indices, ArrayRef<Value> strides) {
     Value ret = b.i64_val(0);
     for (auto [index, stride] : llvm::zip(indices, strides)) {
-      ret = b.add(ret, b.mul(b.zext(i64_ty, index), b.zext(i64_ty, stride)));
+      assert(stride.getType() == i64_ty && "Expected TDM stride to be i64.");
+      ret = b.add(ret, b.mul(b.zext(i64_ty, index), stride));
     }
     return ret;
   };
@@ -1332,7 +1421,7 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
 
   // Calculate the total tensor size for bounds checking.
   Value linearTensorSize =
-      b.mul(b.zext(i64_ty, tensorShape[0]), b.zext(i64_ty, tensorStride[0]));
+      b.mul(b.zext(i64_ty, tensorShape[0]), tensorStride[0]);
 
   // Calculate maximum allowed offset from tilePtr before going out of bounds
   Value maxOffsetFromTile = b.sub(linearTensorSize, tileOffset);
@@ -1359,7 +1448,7 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
 
   // Adjust the inner stride (always 1) to the number of elements per prefetch
   auto scaledStride = tensorStride;
-  scaledStride.back() = b.i32_val(elemPerPrefetch);
+  scaledStride.back() = b.i64_val(elemPerPrefetch);
 
   auto baseIndices = applyLinearLayout(loc, rewriter, ll,
                                        {{kRegister, b.i32_val(0)},
