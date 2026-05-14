@@ -2566,7 +2566,7 @@ def test_shared_scatter(N, M):
 
 @gluon.jit
 def shared_atomic_scatter_rmw_dead_kernel(out, N: ttgl.constexpr, layout: ttgl.constexpr,
-                                         shared_layout: ttgl.constexpr):
+                                          shared_layout: ttgl.constexpr):
     offsets = ttgl.arange(0, N, layout=layout)
     smem = ttgl.allocate_shared_memory(ttgl.int32, [N], layout=shared_layout)
     smem.store(ttgl.full([N], 0, ttgl.int32, layout=layout))
@@ -2582,12 +2582,10 @@ def test_shared_atomic_scatter_rmw_dead_result():
 
     N = 128
     out = torch.empty((N, ), dtype=torch.int32, device="cuda")
-    layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
-                                order=[0])
+    layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4], order=[0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
 
-    shared_atomic_scatter_rmw_dead_kernel[(1, )](out, N=N, layout=layout, shared_layout=shared_layout,
-                                                num_warps=4)
+    shared_atomic_scatter_rmw_dead_kernel[(1, )](out, N=N, layout=layout, shared_layout=shared_layout, num_warps=4)
     torch.testing.assert_close(out, torch.full_like(out, 2))
 
 
