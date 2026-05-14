@@ -246,8 +246,8 @@ def _add_atomic_scatter_docstring(kind: str) -> Callable[[T], T]:
     def _decorator(func: T) -> T:
         integer_only = kind in ("max", "min", "logical and", "logical or", "logical xor")
         value_kind = "integer values" if integer_only else "values"
-        value_type = ("Integer tensor with the same shape as :code:`indices`"
-                      if integer_only else "Tensor with the same shape as :code:`indices`")
+        value_type = ("Integer tensor broadcast-compatible with :code:`indices`"
+                      if integer_only else "Tensor broadcast-compatible with :code:`indices`")
         docstr = f"""
     Performs an atomic scatter {kind} on this shared-memory descriptor.
 
@@ -257,6 +257,15 @@ def _add_atomic_scatter_docstring(kind: str) -> Callable[[T], T]:
       :code:`dst[I[0], ..., indices[I], ..., I[n]] = op(old, values[I])`
     where :code:`op` is {kind}.
 
+    :code:`values`, :code:`indices`, and optional :code:`mask` are broadcast to a
+    common tensor shape before the atomic operation. The returned tensor has that
+    broadcasted shape. For example, with :code:`axis=1`, :code:`values` of shape
+    :code:`[N, 1]`, and :code:`indices` of shape :code:`[1, M]`, the operation
+    behaves as if both operands had shape :code:`[N, M]`:
+      :code:`old[i, j] = dst[i, indices[0, j]]`
+      :code:`dst[i, indices[0, j]] = op(old[i, j], values[i, 0])`
+    A :code:`mask` of shape :code:`[N, 1]` would also broadcast over :code:`M`.
+
     Return the data stored at the scattered location before the atomic operation.
 
     :param values: The {value_kind} with which to perform the atomic operation
@@ -265,7 +274,8 @@ def _add_atomic_scatter_docstring(kind: str) -> Callable[[T], T]:
     :type indices: Integer tensor
     :param axis: The axis along which to update values
     :type axis: int
-    :param mask: Boolean tensor selecting which elements to update
+    :param mask: Boolean tensor broadcast-compatible with :code:`values` and :code:`indices`,
+        selecting which elements to update
     :type mask: Tensor, optional
 
     :note: This operation currently uses relaxed memory semantics. Users are responsible
@@ -372,8 +382,14 @@ class shared_memory_descriptor(base_value):
         the scatter axis is replaced by indices[I]:
           dst[I[0], ..., indices[I], ..., I[n]] = values[I]
 
+        Broadcasting:
+            values and indices are broadcast to a common tensor shape before the scatter.
+            For example, with axis=1, values of shape [N, 1] and indices of shape
+            [1, M] behave as if both operands had shape [N, M]:
+              dst[i, indices[0, j]] = values[i, 0]
+
         Args:
-            values (tensor): Tensor with values to scatter (same shape as indices).
+            values (tensor): Tensor with values to scatter (broadcast-compatible with indices).
             indices (tensor): Tensor specifying which indices to scatter to along the axis.
             axis (int): The axis along which to scatter values.
         """

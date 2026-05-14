@@ -249,6 +249,98 @@ def _umulhi_64(a, b):
     return (int(a) * int(b)) >> 64
 
 
+def _e8m0_to_f32(scale):
+    assert scale.dtype in (np.uint8, np.int8)
+    scale = scale.astype(np.uint8)
+    scale = scale.astype(np.int32)
+    scale = scale << 23
+    scale = scale.view(np.float32)
+    return scale
+
+
+def _e2m1_to_f32(value):
+    assert value.dtype == np.uint8
+
+    low = value & np.uint8(0x0F)
+    high = value >> np.uint8(4)
+
+    unpacked_shape = value.shape[:-1] + (value.shape[-1] * 2, )
+    unpacked_val = np.empty(unpacked_shape, dtype=np.uint8)
+    unpacked_val[..., 0::2] = low
+    unpacked_val[..., 1::2] = high
+
+    # 0->0, 1->0.5, 2->1, 3->1.5, 4->2, 5->3, 6->4, 7->6 (from Onnx)
+    positive_e2m1_lut = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], dtype=np.float32)
+    abs_values = positive_e2m1_lut[(unpacked_val & np.uint8(0x07))]
+    signs = (unpacked_val & np.uint8(0x08)) != 0
+    return np.where(signs, -abs_values, abs_values)
+
+
+def _mxfp_value_handle_to_float32(value_handle):
+    if value_handle.dtype == tl.uint8:
+        value_float = _e2m1_to_f32(value_handle.data)
+    else:
+        # Decode fp8 values through float16 first, then widen to float32.
+        # This preserves the same intermediate rounding used by the reference
+        # path, which is especially visible for float8e5m2.
+        value_float = _convert_float(
+            value_handle.data,
+            value_handle.dtype,
+            tl.float16,
+            _ir.ROUNDING_MODE.RTNE,
+        ).view(np.float16).astype(np.float32)
+
+    # Handle inf/nan for e5m2/e4m3
+    if value_handle.dtype == tl.float8e5:
+        pos_inf_mask = value_handle.data == np.uint8(0x7C)
+        value_float = np.where(pos_inf_mask, np.float32('inf'), value_float)
+
+        neg_inf_mask = value_handle.data == np.uint8(0xFC)
+        value_float = np.where(neg_inf_mask, -np.float32('inf'), value_float)
+
+        nan_mask = np.logical_and((value_handle.data & np.uint8(0x7C)) == np.uint8(0x7C),
+                                  (value_handle.data & np.uint8(3)) != np.uint8(0))
+        value_float = np.where(nan_mask, np.float32('nan'), value_float)
+    elif value_handle.dtype == tl.float8e4nv:
+        nan_mask = value_handle.data & np.uint8(0x7F) == np.uint8(0x7F)
+        value_float = np.where(nan_mask, np.float32('nan'), value_float)
+
+    return value_float
+
+
+def _unpack_e2m1(data, axis):
+    # E2M1 stores two logical 4-bit values per byte; unpack on the physical
+    # axis that carries the packed logical matrix dimension.
+    data = np.moveaxis(data, axis, -1)
+    unpacked = _e2m1_to_f32(data)
+    return np.moveaxis(unpacked, -1, axis)
+
+
+def _prepare_dot_scaled_operand(value_handle, scale_handle, format_enum, k_pack, is_rhs):
+    if format_enum == _ir.ScaleDotElemTypeTY.E2M1:
+        if is_rhs:
+            unpack_axis = -2 if k_pack else -1
+        else:
+            unpack_axis = -1 if k_pack else -2
+        value = _unpack_e2m1(value_handle.data, unpack_axis)
+    else:
+        value = _mxfp_value_handle_to_float32(value_handle)
+
+    if scale_handle is None:
+        return value
+
+    scale = _e8m0_to_f32(scale_handle.data)
+
+    if is_rhs:
+        # rhs is in [K, N] layout, but rhs_scale is supplied as [N, K / group].
+        scale = np.repeat(scale, value.shape[-2] // scale.shape[-1], axis=-1)
+        scale = np.swapaxes(scale, -1, -2)
+    else:
+        scale = np.repeat(scale, value.shape[-1] // scale.shape[-1], axis=-1)
+
+    return value * scale
+
+
 np_erf_fp32 = np.vectorize(_erf, otypes=[np.float32])
 np_erf_fp64 = np.vectorize(_erf, otypes=[np.float64])
 np_umulhi_u64 = np.vectorize(_umulhi_64, otypes=[np.uint64])
@@ -771,6 +863,17 @@ class InterpreterBuilder:
             return TensorHandle(np.full(1, True, dtype=np_type), type.scalar)
         else:
             raise TypeError(f"unsupported type {type}")
+
+    def create_dot_scaled(self, lhs: TensorHandle, lhs_scale_handle: Optional[TensorHandle],
+                          lhs_format_enum: _ir.ScaleDotElemTypeTY, rhs: TensorHandle,
+                          rhs_scale_handle: Optional[TensorHandle], rhs_format_enum: _ir.ScaleDotElemTypeTY,
+                          fast_math: bool, lhs_k_pack: bool, rhs_k_pack: bool,
+                          acc_handle: TensorHandle) -> TensorHandle:
+        lhs_data = _prepare_dot_scaled_operand(lhs, lhs_scale_handle, lhs_format_enum, lhs_k_pack, is_rhs=False)
+        rhs_data = _prepare_dot_scaled_operand(rhs, rhs_scale_handle, rhs_format_enum, rhs_k_pack, is_rhs=True)
+
+        result = np.matmul(lhs_data, rhs_data) + acc_handle.data
+        return TensorHandle(result, tl.float32)
 
 
 _MISSING = object()
