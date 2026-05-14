@@ -4,6 +4,7 @@ from functools import partial
 import pytest
 import torch
 import triton
+import triton.language as tl
 from triton_kernels.numerics_details.mxfp import (
     MXFP_BLOCK_SIZE,
     NVFP_BLOCK_SIZE,
@@ -14,12 +15,72 @@ from triton_kernels.numerics_details.mxfp import (
     upcast_from_mxfp,
     upcast_from_mxfp_torch,
 )
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile
 from triton_kernels.target_info import is_cuda
 from triton_kernels.testing import assert_close, assert_equal
 
 
 def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
     return torch.uint8 if dtype_str == "float4_e2m1" else getattr(torch, dtype_str)
+
+
+@triton.jit
+def _upcast_mxfp4_tile_kernel(
+    out,
+    tensor,
+    scale,
+    stride_out_m,
+    stride_out_k,
+    stride_tensor_m,
+    stride_tensor_k,
+    stride_scale_m,
+    stride_scale_k,
+    BLOCK_M: tl.constexpr,
+    PACKED_K: tl.constexpr,
+    SCALE_K: tl.constexpr,
+    dst_dtype: tl.constexpr,
+):
+    offs_m = tl.arange(0, BLOCK_M)[:, None]
+    offs_packed_k = tl.arange(0, PACKED_K)[None, :]
+    tensor = tl.load(tensor + offs_m * stride_tensor_m + offs_packed_k * stride_tensor_k)
+
+    offs_scale_k = tl.arange(0, SCALE_K)[None, :]
+    scale = tl.load(scale + offs_m * stride_scale_m + offs_scale_k * stride_scale_k)
+
+    out_tile = upcast_mxfp4_tile(tensor, scale, dst_dtype)
+    offs_k = tl.arange(0, PACKED_K * 2)[None, :]
+    tl.store(out + offs_m * stride_out_m + offs_k * stride_out_k, out_tile)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
+@pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16"])
+def test_mxfp4_tile_upcast_matches_reference(dst_dtype, device):
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+    dst_dtype = dtype_str_to_torch(dst_dtype)
+    rows, k = 64, 128
+    block_scales = torch.tensor([0.125, 1.0, 8.0, 64.0], dtype=dst_dtype, device=device)
+    block_scales = block_scales.repeat_interleave(MXFP_BLOCK_SIZE.value)
+    x = torch.randn((rows, k), dtype=dst_dtype, device=device) * block_scales
+    tensor, scale = downcast_to_mxfp(x, torch.uint8, axis=-1)
+
+    ref = upcast_from_mxfp(tensor, scale, dst_dtype, axis=-1)
+    out = torch.empty_like(ref)
+    tile_dtype = tl.float16 if dst_dtype == torch.float16 else tl.bfloat16
+    _upcast_mxfp4_tile_kernel[(1, )](
+        out,
+        tensor,
+        scale,
+        *out.stride(),
+        *tensor.stride(),
+        *scale.stride(),
+        rows,
+        tensor.shape[-1],
+        scale.shape[-1],
+        tile_dtype,
+    )
+
+    assert_equal(ref, out)
 
 
 @pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
