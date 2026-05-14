@@ -147,17 +147,13 @@ DotCTASplit getDotCTASplit(int64_t m, int64_t n, unsigned numCTAs) {
 void planDot(triton::DotOp dot) {
   MLIRContext *ctx = dot.getContext();
 
-  auto aTy = dyn_cast<RankedTensorType>(dot.getA().getType());
-  auto bTy = dyn_cast<RankedTensorType>(dot.getB().getType());
-  auto dTy = dyn_cast<RankedTensorType>(dot.getD().getType());
-  if (!aTy || !bTy || !dTy)
-    return;
+  auto aTy = cast<RankedTensorType>(dot.getA().getType());
+  auto bTy = cast<RankedTensorType>(dot.getB().getType());
+  auto dTy = cast<RankedTensorType>(dot.getD().getType());
 
-  auto aLayout = dyn_cast<ttg::DotOperandEncodingAttr>(aTy.getEncoding());
-  auto bLayout = dyn_cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
-  auto dLayout = dyn_cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
-  if (!aLayout || !bLayout || !dLayout)
-    return;
+  auto aLayout = cast<ttg::DotOperandEncodingAttr>(aTy.getEncoding());
+  auto bLayout = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
+  auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
 
   DotCTASplit split =
       getDotCTASplit(dTy.getShape()[0], dTy.getShape()[1],
@@ -183,14 +179,14 @@ void planDot(triton::DotOp dot) {
 }
 
 ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
-                                        RankedTensorType srcTy,
-                                        unsigned numCTAs) {
+                                        RankedTensorType srcTy) {
   unsigned rank = srcTy.getRank();
   auto order = ttg::getOrder(srcTy);
   auto sizePerThread = ttg::getContigPerThread(srcTy);
+  auto srcLayout = cast<ttg::DistributedEncodingTrait>(srcTy.getEncoding());
 
   SmallVector<unsigned> ctasPerCGA(rank, 0);
-  unsigned remainingCTAs = numCTAs;
+  unsigned remainingCTAs = ttg::getNumCTAs(srcLayout);
   for (int i = rank - 1; i >= 0; --i) {
     unsigned dim = order[i];
     if (dim == reduce.getAxis()) {
@@ -220,31 +216,23 @@ ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
     ctaSplitNum[order[rank - 1]] = ctasPerCGA[order[rank - 1]];
   }
 
-  auto srcLayout = cast<ttg::DistributedEncodingTrait>(srcTy.getEncoding());
   auto ctaOrder = ttg::getCTAOrder(srcLayout);
   return ttg::CGAEncodingAttr::fromSplitParams(
       reduce.getContext(), ctasPerCGA, ctaSplitNum, ctaOrder);
 }
 
-void planReduce(triton::ReduceOp reduce, unsigned numCTAs) {
-  if (reduce.getNumOperands() == 0)
-    return;
-
+void planReduce(triton::ReduceOp reduce) {
   MLIRContext *ctx = reduce.getContext();
   Value src = reduce.getOperand(0);
-  auto srcTy = dyn_cast<RankedTensorType>(src.getType());
-  if (!srcTy || srcTy.getRank() == 0)
-    return;
+  auto srcTy = cast<RankedTensorType>(src.getType());
 
-  auto srcLayout = dyn_cast<ttg::DistributedEncodingTrait>(srcTy.getEncoding());
-  if (!srcLayout)
-    return;
+  auto srcLayout = cast<ttg::DistributedEncodingTrait>(srcTy.getEncoding());
 
   OpBuilder builder(reduce);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
   int numWarps = ttg::lookupNumWarps(reduce);
 
-  auto cgaLayout = getReduceCGALayout(reduce, srcTy, numCTAs);
+  auto cgaLayout = getReduceCGALayout(reduce, srcTy);
   auto newSrcLayout = cloneWithCGALayout(srcLayout, srcTy.getShape(), numWarps,
                                          threadsPerWarp, cgaLayout);
 
@@ -266,8 +254,12 @@ struct PlanCTAPass : public impl::TritonGPUPlanCTAPassBase<PlanCTAPass> {
     if (numCTAs == 1)
       return;
 
-    mod.walk([](triton::DotOp dot) { planDot(dot); });
-    mod.walk([&](triton::ReduceOp reduce) { planReduce(reduce, numCTAs); });
+    mod.walk([&](Operation *op) {
+      if (auto dot = dyn_cast<triton::DotOp>(op))
+        planDot(dot);
+      if (auto reduce = dyn_cast<triton::ReduceOp>(op))
+        planReduce(reduce);
+    });
   }
 };
 
