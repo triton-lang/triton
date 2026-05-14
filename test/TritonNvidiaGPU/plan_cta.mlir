@@ -46,3 +46,29 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#dot_default_2cta = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#dot_a_2cta = #ttg.dot_op<{opIdx = 0, parent = #dot_default_2cta}>
+#dot_b_2cta = #ttg.dot_op<{opIdx = 1, parent = #dot_default_2cta}>
+
+// CHECK-DAG: #[[DOT_DEFAULT_2CTA:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
+// CHECK-DAG: #[[DOT_OPT_2CTA:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @dot_split_m_2cta
+  // CHECK: ttg.convert_layout %{{.*}} : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[DOT_DEFAULT_2CTA]]}>> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[DOT_OPT_2CTA]]}>>
+  // CHECK: ttg.convert_layout %{{.*}} : tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[DOT_DEFAULT_2CTA]]}>> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[DOT_OPT_2CTA]]}>>
+  // CHECK: %[[D:.*]] = ttg.convert_layout %{{.*}} : tensor<128x128xf32, #[[DOT_DEFAULT_2CTA]]> -> tensor<128x128xf32, #[[DOT_OPT_2CTA]]>
+  // CHECK: %[[DOT:.*]] = tt.dot %{{.*}}, %{{.*}}, %[[D]] : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[DOT_OPT_2CTA]]}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[DOT_OPT_2CTA]]}>> -> tensor<128x128xf32, #[[DOT_OPT_2CTA]]>
+  // CHECK: ttg.convert_layout %[[DOT]] : tensor<128x128xf32, #[[DOT_OPT_2CTA]]> -> tensor<128x128xf32, #[[DOT_DEFAULT_2CTA]]>
+  tt.func @dot_split_m_2cta(%ptr: !tt.ptr<f32>) {
+    %a = arith.constant dense<1.000000e+00> : tensor<128x32xf16, #dot_a_2cta>
+    %b = arith.constant dense<2.000000e+00> : tensor<32x128xf16, #dot_b_2cta>
+    %c = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #dot_default_2cta>
+    %dot = tt.dot %a, %b, %c : tensor<128x32xf16, #dot_a_2cta> * tensor<32x128xf16, #dot_b_2cta> -> tensor<128x128xf32, #dot_default_2cta>
+    %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x128x!tt.ptr<f32>, #dot_default_2cta>
+    tt.store %ptrs, %dot : tensor<128x128x!tt.ptr<f32>, #dot_default_2cta>
+    tt.return
+  }
+}
