@@ -23,11 +23,10 @@ def test_compute_efficient_padded_shared_layout_roundtrip(BM, BK, k_width, elem_
     @gluon.jit
     def kernel(in_ptr, out_ptr,  #
                BM: ttgl.constexpr, BK: ttgl.constexpr, k_width: ttgl.constexpr, elem_bytes: ttgl.constexpr,
-               op_idx: ttgl.constexpr):
+               op_idx: ttgl.constexpr, blocked: ttgl.constexpr):
         shared: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
             op_idx=op_idx, k_width=k_width, mfma_non_k_dim=16, k_dim=BK, non_k_dim=BM, elem_bytes=elem_bytes,
             is_k_contig=True)
-        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [THREADS_PER_WARP // 8, 8], [4, 1], [1, 0])
 
         smem = ttgl.allocate_shared_memory(in_ptr.dtype.element_ty, [BM, BK], shared)
         offs_m = ttgl.arange(0, BM, layout=ttgl.SliceLayout(1, blocked))[:, None]
@@ -40,10 +39,11 @@ def test_compute_efficient_padded_shared_layout_roundtrip(BM, BK, k_width, elem_
         data = smem.load(blocked)
         ttgl.amd.cdna4.buffer_store(stored_value=data, ptr=out_ptr, offsets=offs)
 
+    blocked = ttgl.BlockedLayout([1, 8], [THREADS_PER_WARP // 8, 8], [4, 1], [1, 0])
     dtype = torch.float8_e4m3fnuz if elem_bytes == 1 else torch.float16
     inp = torch.randn(BM, BK, device="cuda", dtype=torch.float32).to(dtype)
     out = torch.empty_like(inp)
-    kernel[(1, )](inp, out, BM, BK, k_width, elem_bytes, op_idx, num_warps=4)
+    kernel[(1, )](inp, out, BM, BK, k_width, elem_bytes, op_idx, blocked, num_warps=4)
     torch.testing.assert_close(out, inp, rtol=0, atol=0)
 
 
