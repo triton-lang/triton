@@ -2208,7 +2208,7 @@ void FunctionBuilder::createTransferVisibleReadsCall(
 void FunctionBuilder::createVerifyWriteVisibilityCall(
     ImplicitLocOpBuilder &b, Value buf, uint32_t length, int thread,
     StringRef operandName, Value pred, MemType memType, Operation *insertPoint,
-    Value effectCTAs, bool allowNoWrite) {
+    Value effectCTAs) {
   if (auxData.buffers[(int)memType].empty() ||
       auxData.writeVisibility[(int)memType].empty() ||
       (auxData.hasNonTrivialAliasing[(int)memType] &&
@@ -2230,13 +2230,10 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
   std::string message = "Buffer being accessed has outstanding writes.";
   if (!operandName.empty())
     message += " Operand: " + operandName.str();
-  std::string uninitializedMessage = "Buffer being read before any write.";
-  if (!operandName.empty())
-    uninitializedMessage += " Operand: " + operandName.str();
   AssertInfo assertInfo{message, b.getI1Type()};
   Type aliasMatrixTypeBase;
-  auto buildVerifyWriteBody = [&writeVisibilityType, &aliasMatrixTypeBase](
-                                  bool useAlias, bool allowNoWrite) {
+  auto buildVerifyWriteBody = [&writeVisibilityType,
+                               &aliasMatrixTypeBase](bool useAlias) {
     return [=](ImplicitLocOpBuilder &fb, Block *entryBlock) {
       Value bufOffset = entryBlock->getArgument(0);
       Value lengthVal = entryBlock->getArgument(1);
@@ -2278,35 +2275,14 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
           arith::AndIOp::create(fb, bufVisibility, bufferThreadBit);
       bufferHasVisibility = arith::CmpIOp::create(
           fb, arith::CmpIPredicate::eq, bufferHasVisibility, bufferThreadBit);
-      Value result;
-      if (!allowNoWrite) {
-        Value rowOne = tti::createConstIntTensor(
-            fb, fb.getLoc(), 1, cast<RankedTensorType>(buffersEqBuf.getType()));
-        Value rowInitialized =
-            arith::XOrIOp::create(fb, noOneIsWriting, rowOne);
-        Value initializedRows =
-            arith::AndIOp::create(fb, rowInitialized, buffersEqBuf);
-        // Alias rows are alternatives within a CTA, but every selected CTA must
-        // have at least one initialized row.
-        Value initializedCTAs =
-            reduce<arith::OrIOp>(fb, initializedRows, /*axis=*/1);
-        Value selectedCTAs = reduce<arith::OrIOp>(fb, buffersEqBuf, /*axis=*/1);
-        Value ctaOne = tti::createConstIntTensor(
-            fb, fb.getLoc(), 1, cast<RankedTensorType>(selectedCTAs.getType()));
-        Value unmatchedCTAs = arith::XOrIOp::create(fb, selectedCTAs, ctaOne);
-        Value initializedOrUnmatched =
-            arith::OrIOp::create(fb, initializedCTAs, unmatchedCTAs);
-        result = reduceAll<arith::AndIOp>(fb, initializedOrUnmatched);
-      } else {
-        Value writeVisible =
-            arith::OrIOp::create(fb, noOneIsWriting, bufferHasVisibility);
-        result = reduceAll<arith::AndIOp>(fb, writeVisible);
-      }
+      Value writeVisible =
+          arith::OrIOp::create(fb, noOneIsWriting, bufferHasVisibility);
+      Value allWritesVisible = reduceAll<arith::AndIOp>(fb, writeVisible);
 
       Value vTrue = arith::ConstantOp::create(
-          fb, result.getType(), fb.getIntegerAttr(fb.getI1Type(), 1));
+          fb, allWritesVisible.getType(), fb.getIntegerAttr(fb.getI1Type(), 1));
       Value predicatedWriteVisible =
-          arith::SelectOp::create(fb, pred, result, vTrue);
+          arith::SelectOp::create(fb, pred, allWritesVisible, vTrue);
       triton::ReturnOp::create(fb, predicatedWriteVisible);
     };
   };
@@ -2319,33 +2295,18 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
     SmallVector<Value> args = {bufOffset,  lengthVal,     pred,
                                threadVal,  buffersVal,    writeVisibilityVal,
                                effectCTAs, aliasMatrixVal};
-    if (!allowNoWrite) {
-      AssertInfo initializedAssertInfo{uninitializedMessage, b.getI1Type()};
-      createCallToCachedFunction(
-          b, "verify_write_initialized", args, initializedAssertInfo,
-          {buffersType, writeVisibilityType, aliasMatrixType,
-           (uint64_t)memType},
-          buildVerifyWriteBody(/*useAlias=*/true, /*allowNoWrite=*/false));
-    }
     createCallToCachedFunction(
         b, "verify_write_visibility", args, assertInfo,
         {buffersType, writeVisibilityType, aliasMatrixType, (uint64_t)memType},
-        buildVerifyWriteBody(/*useAlias=*/true, /*allowNoWrite=*/true));
+        buildVerifyWriteBody(/*useAlias=*/true));
   } else {
     SmallVector<Value> args = {bufOffset, lengthVal,  pred,
                                threadVal, buffersVal, writeVisibilityVal,
                                effectCTAs};
-    if (!allowNoWrite) {
-      AssertInfo initializedAssertInfo{uninitializedMessage, b.getI1Type()};
-      createCallToCachedFunction(
-          b, "verify_write_initialized_noalias", args, initializedAssertInfo,
-          {buffersType, writeVisibilityType, (uint64_t)memType},
-          buildVerifyWriteBody(/*useAlias=*/false, /*allowNoWrite=*/false));
-    }
     createCallToCachedFunction(
         b, "verify_write_visibility_noalias", args, assertInfo,
         {buffersType, writeVisibilityType, (uint64_t)memType},
-        buildVerifyWriteBody(/*useAlias=*/false, /*allowNoWrite=*/true));
+        buildVerifyWriteBody(/*useAlias=*/false));
   }
 }
 

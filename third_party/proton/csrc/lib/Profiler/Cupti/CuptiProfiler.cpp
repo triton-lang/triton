@@ -9,6 +9,7 @@
 #include "Profiler/Graph.h"
 #include "Runtime/CudaRuntime.h"
 #include "Utility/Env.h"
+#include "Utility/Errors.h"
 #include "Utility/Map.h"
 #include "Utility/String.h"
 #include "Utility/Vector.h"
@@ -125,7 +126,7 @@ uint32_t processActivityKernel(
       const GraphState::NodeState &nodeState = nodeIdToState->at(
           kernel->graphNodeId); // nodeIdToState must have the nodeId
       if (nodeState.status.isMissingName()) {
-        throw std::runtime_error("Kernel name is missing for a graph node.");
+        throw makeLogicError("Kernel name is missing for a graph node.");
       }
       const bool isMetricKernel = nodeState.status.isMetricNode();
       for (auto &[data, entry] : externState.dataToGraphEntry) {
@@ -418,7 +419,7 @@ void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
       getIntEnv("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024);
   *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, envBufferSize));
   if (*buffer == nullptr) {
-    throw std::runtime_error("[PROTON] aligned_alloc failed");
+    throw makeRuntimeError("aligned_alloc failed");
   }
   *bufferSize = envBufferSize;
   *maxNumRecords = 0;
@@ -448,7 +449,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
     } else {
-      throw std::runtime_error("[PROTON] cupti::activityGetNextRecord failed");
+      throw makeRuntimeError("cupti::activityGetNextRecord failed");
     }
   } while (true);
 
@@ -851,8 +852,7 @@ void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
                                     periodicFlushingFormat, modeAndOptions,
                                     "CuptiProfiler");
   } else if (!mode.empty()) {
-    throw std::invalid_argument("[PROTON] CuptiProfiler: unsupported mode: " +
-                                mode);
+    throw makeInvalidArgument("CuptiProfiler: unsupported mode: " + mode);
   }
 }
 

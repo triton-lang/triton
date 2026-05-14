@@ -159,6 +159,27 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
 // -----
 
+#shared1d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#shared2d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: memdesc_reinterpret_layout_rank_increase
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_reinterpret_layout_rank_increase(%arg0 : !ttg.memdesc<32x2xi32, #shared1d, #smem, mutable>) {
+    %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<32x2xi32, #shared1d, #smem, mutable> -> !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: memdesc_reinterpret_layout_rank_decrease
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_reinterpret_layout_rank_decrease(%arg0 : !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable>) {
+    %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable> -> !ttg.memdesc<32x2xi32, #shared1d, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK: #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = {{\[\[1, 0, 0, 0, 0\]\]}}}>
 #shared_rank_5 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0, 0, 0, 0]]}>
 #smem = #ttg.shared_memory
