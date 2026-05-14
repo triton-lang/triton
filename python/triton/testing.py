@@ -112,7 +112,12 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     import torch
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
-    with torch.cuda.stream(torch.cuda.Stream()):
+    old_stream = torch.cuda.current_stream()
+    new_stream = torch.cuda.Stream()
+
+    with torch.cuda.stream(new_stream):
+        # NOTE: must ensure the data on the old stream is ready
+        new_stream.wait_stream(old_stream)
         # warmup
         fn()
         if grad_to_none is not None:
@@ -191,7 +196,13 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
 
     import torch
 
-    with torch.cuda.stream(torch.cuda.Stream()):
+    old_stream = torch.cuda.current_stream()
+    new_stream = torch.cuda.Stream()
+
+    with torch.cuda.stream(new_stream):
+        # NOTE: must ensure the data on the old stream is ready
+        new_stream.wait_stream(old_stream)
+        # warmup
         fn()
         if grad_to_none is not None:
             for x in grad_to_none:
