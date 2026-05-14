@@ -2681,7 +2681,7 @@ tt.func private @memdesc_reinterpret(%arg0: !ttg.memdesc<4x1024xi64, #shared0, #
   // CHECK: [[BASE_PTR:%.*]] = llvm.extractvalue %arg0[0]
   // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK: [[PTR:%.*]] = llvm.getelementptr [[BASE_PTR]][[[C0]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i64
-  ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<4x1024xi64, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<4x4x2048xi32, #shared1, #ttg.shared_memory, mutable>
+  ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<4x1024xi64, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<4x1x2048xi32, #shared1, #ttg.shared_memory, mutable>
   // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK: [[S0:%.*]] = llvm.mlir.undef
   // CHECK: [[S1:%.*]] = llvm.insertvalue [[PTR]], [[S0]][0]

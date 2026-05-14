@@ -1331,6 +1331,30 @@ def test_noinline(mode, device):
         assert torch.equal(z, ref + x + y)
 
 
+@triton.jit(noinline=True)
+def noinline_load_block_fn(ptr, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.arange(0, BLOCK_SIZE)
+    return tl.load(ptr + offsets)
+
+
+def test_noinline_returns_tensor(device):
+
+    @triton.jit
+    def kernel(X, Y, Z, BLOCK_SIZE: tl.constexpr):
+        x = noinline_load_block_fn(X, BLOCK_SIZE)
+        y = noinline_load_block_fn(Y, BLOCK_SIZE)
+        offsets = tl.arange(0, BLOCK_SIZE)
+        tl.store(Z + offsets, x + y)
+
+    BLOCK_SIZE = 128
+    torch.manual_seed(0)
+    x = torch.randn(BLOCK_SIZE, device=device, dtype=torch.float32)
+    y = torch.randn(BLOCK_SIZE, device=device, dtype=torch.float32)
+    z = torch.empty_like(x)
+    kernel[(1, )](x, y, z, BLOCK_SIZE=BLOCK_SIZE, num_warps=1)
+    assert torch.equal(z, x + y)
+
+
 # ---------------
 # test atomics
 # ---------------
@@ -3303,7 +3327,10 @@ def get_test_small_dots_cases():
     if not is_cuda():
         return []
     return [(2, 4, 32, 1, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
-            (1, 2, 32, 1, False, False, 'None', 'ieee', 'float8e5', 'float32', 1, None)]
+            (1, 2, 32, 1, False, False, 'None', 'ieee', 'float8e5', 'float32', 1, None),
+            # N=8: TF32 K=8 (wgmma.m64n8k8, sm90+) and FP16 K=16 (wgmma.m64n8k16)
+            (64, 8, 8, 4, False, False, 'None', 'tf32', 'float32', 'float32', 1, None),
+            (64, 8, 16, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None)]
 
 
 @pytest.mark.interpreter
@@ -3334,7 +3361,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             pytest.skip(f"input_precision {input_precision} is not supported in the interpreter")
     else:
         if not is_hip() and K < 16:
-            if in_dtype != 'float64':
+            tf32_n8 = (in_dtype == 'float32' and N == 8 and K == 8 and input_precision == 'tf32')
+            if in_dtype != 'float64' and not tf32_n8:
                 pytest.skip("small dots are supported only on HIP at the moment")
         if is_cuda():
             capability = torch.cuda.get_device_capability()
@@ -3536,12 +3564,15 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
 
-    if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
-        # XXX: skip small sizes because they are not vectorized
+    # XXX: skip small sizes because they are not vectorized; with runtime
+    # strides, v4 needs the contiguous dim >= 16 (K for loads, N for stores).
+    enough_work = (M * N // (num_warps * 32) >= 4) and (K > 16 or N > 16 or M > 16)
+    if enough_work and K >= 16:
         if 'float64' in in_dtype:
             assert 'ld.global.v2.b64' in ptx
         else:
             assert 'ld.global.v4' in ptx
+    if enough_work and N >= 16:
         if 'float8' in in_dtype:
             assert 'st.global.v2' in ptx
         elif 'float64' in in_dtype:

@@ -1197,7 +1197,7 @@ bool supportMMA(triton::DotOp op, int version) {
     if (k < 256 / aElemTy.getIntOrFloatBitWidth())
       return false;
     if (!(retShapePerCTA[rank - 2] % 64 == 0 &&
-          retShapePerCTA[rank - 1] % 16 == 0))
+          retShapePerCTA[rank - 1] % 8 == 0))
       return false;
     if (aElemTy.isF64() || bElemTy.isF64() ||
         retType.getElementType().isF64()) {
@@ -1222,7 +1222,7 @@ bool supportMMA(triton::DotOp op, int version) {
     if (rank == 3)
       return false;
     if (!(numWarps % 4 == 0 && retShapePerCTA[rank - 2] % 64 == 0 &&
-          retShapePerCTA[rank - 1] % 16 == 0 &&
+          retShapePerCTA[rank - 1] % 8 == 0 &&
           (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy) ||
            aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
            aElemTy.isF32()))) {

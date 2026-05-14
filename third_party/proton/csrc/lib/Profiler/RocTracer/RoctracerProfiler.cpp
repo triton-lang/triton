@@ -6,6 +6,7 @@
 #include "Driver/GPU/RoctracerApi.h"
 #include "Runtime/HipRuntime.h"
 #include "Utility/Env.h"
+#include "Utility/Errors.h"
 
 #include "Driver/GPU/RoctxTypes.h"
 #include "hip/amd_detail/hip_runtime_prof.h"
@@ -502,8 +503,7 @@ void RoctracerProfiler::doSetMode(
                                     periodicFlushingFormat, modeAndOptions,
                                     "RoctracerProfiler");
   } else if (!mode.empty()) {
-    throw std::invalid_argument(
-        "[PROTON] RoctracerProfiler: unsupported mode: " + mode);
+    throw makeInvalidArgument("RoctracerProfiler: unsupported mode: " + mode);
   }
 }
 
