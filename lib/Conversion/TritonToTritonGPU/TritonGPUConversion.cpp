@@ -1,7 +1,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 
-#include <algorithm>
-#include <numeric>
+#include <array>
 
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/IRMapping.h"
@@ -12,36 +11,6 @@
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
-
-static CGAEncodingAttr getDefaultCGALayout(MLIRContext *context, int rank,
-                                           int numCTAs) {
-  SmallVector<unsigned> CTAsPerCGA(rank, 1);
-  SmallVector<unsigned> CTASplitNum(rank, 1);
-  SmallVector<unsigned> CTAOrder(rank);
-  std::iota(CTAOrder.begin(), CTAOrder.end(), 0);
-
-  if (rank > 0) {
-    CTAsPerCGA[rank - 1] = numCTAs;
-    CTASplitNum[rank - 1] = numCTAs;
-  }
-
-  return CGAEncodingAttr::fromSplitParams(context, CTAsPerCGA, CTASplitNum,
-                                          CTAOrder);
-}
-
-static BlockedEncodingAttr
-getDefaultConversionBlockedEncoding(MLIRContext *context,
-                                    ArrayRef<int64_t> shape, int numWarps,
-                                    int threadsPerWarp, int numCTAs) {
-  int rank = shape.size();
-  SmallVector<unsigned> order(rank);
-  std::iota(order.begin(), order.end(), 0);
-  std::reverse(order.begin(), order.end());
-  SmallVector<unsigned> sizePerThread(rank, 1);
-  auto CGALayout = getDefaultCGALayout(context, rank, numCTAs);
-  return BlockedEncodingAttr::get(context, shape, sizePerThread, order,
-                                  numWarps, threadsPerWarp, CGALayout);
-}
 
 //
 // TypeConverter
@@ -62,9 +31,8 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
       return tensorType;
     ArrayRef<int64_t> shape = tensorType.getShape();
     triton::gpu::BlockedEncodingAttr encoding =
-        getDefaultConversionBlockedEncoding(
-            this->context, shape, this->numWarps, this->threadsPerWarp,
-            this->numCTAs);
+        getDefaultBlockedEncoding(this->context, shape, this->numWarps,
+                                  this->threadsPerWarp, this->numCTAs);
     return tensorType.cloneWithEncoding(encoding);
   });
 
