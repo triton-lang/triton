@@ -28,11 +28,9 @@ def TritonGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> 
   let summary = "plan CTA";
 
   let description = [{
-    This pass computes and applies "optimized" CTA tilings to DotOp, ReduceOp
-    and StoreLikeOps operations.
+    This pass computes and applies optimized CTA tilings to DotOp and ReduceOp
+    operations, inserting explicit layout conversions at the boundary.
   }];
-
-  let constructor = "mlir::triton::nvidia_gpu::createTritonNvidiaGPUPlanCTAPass()";
 
   let dependentDialects = [
     "mlir::triton::gpu::TritonGPUDialect",
