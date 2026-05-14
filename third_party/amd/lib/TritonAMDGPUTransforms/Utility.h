@@ -76,10 +76,10 @@ struct PaddedLayoutCDNA4Bases {
 // Returns valid=false if any constraint violates; bases otherwise reflect the
 // 16-row staggered, bank-conflict-aware mapping that
 // composePaddedLayoutForAsyncCopyCDNA4 produces.
-PaddedLayoutCDNA4Bases computePaddedLayoutCDNA4Bases(
-    int opIdx, int kWidth, int mfmaNonKDim,
-    int kDim, int nonKDim, int elemByteWidth,
-    bool isKContig, unsigned warpSize);
+PaddedLayoutCDNA4Bases
+computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
+                              int nonKDim, int elemByteWidth, bool isKContig,
+                              unsigned warpSize);
 
 triton::gpu::SharedEncodingTrait
 getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,

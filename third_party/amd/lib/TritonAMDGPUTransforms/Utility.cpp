@@ -149,11 +149,12 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 // r29, pad, r2,  r6, r10, r14, r18, r22
 // r26, r30, pad, r3 ....
 // Plain-types helper extracted from composePaddedLayoutForAsyncCopyCDNA4.
-// All MLIR-type validation lives in the caller; this is pure math + bitfiddling.
-PaddedLayoutCDNA4Bases computePaddedLayoutCDNA4Bases(
-    int opIdx, int kWidth, int mfmaNonKDim,
-    int kDim, int nonKDim, int elemByteWidth,
-    bool isKContig, unsigned warpSize) {
+// All MLIR-type validation lives in the caller; this is pure math +
+// bitfiddling.
+PaddedLayoutCDNA4Bases
+computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
+                              int nonKDim, int elemByteWidth, bool isKContig,
+                              unsigned warpSize) {
   PaddedLayoutCDNA4Bases out;
 
   // Validate constraints (mirrors MLIR-side guards in the wrapper)
@@ -306,8 +307,7 @@ PaddedLayoutCDNA4Bases computePaddedLayoutCDNA4Bases(
   // Swap bases to match dst dimension order. Original logic uses kDimIndex
   // (operandIdx == 0 ? 1 : 0); we re-derive: swap iff
   //   (isKContig && opIdx == 0) || (!isKContig && opIdx == 1)
-  bool needsSwap =
-      (isKContig && opIdx == 0) || (!isKContig && opIdx == 1);
+  bool needsSwap = (isKContig && opIdx == 0) || (!isKContig && opIdx == 1);
   if (needsSwap) {
     for (auto &p : bases)
       std::swap(p[0], p[1]);

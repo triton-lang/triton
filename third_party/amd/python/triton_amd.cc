@@ -1,10 +1,10 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "lib/TritonAMDGPUTransforms/Utility.h"
 #include "amd/include/hipblas_instance.h"
 #include "amd/include/hipblas_types.h"
 #include "lib/TritonAMDGPUToLLVM/TargetInfo.h"
+#include "lib/TritonAMDGPUTransforms/Utility.h"
 #include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
@@ -361,31 +361,32 @@ void init_triton_amd(py::module &&m) {
       (unsigned)llvm::CallingConv::AMDGPU_KERNEL;
 
   // Expose the CDNA4 padded layout helper so Gluon kernels can use the same
-  // bank-conflict-aware shared layout that LowerLoops picks for autotuned kernels.
-  // Returns None if the inputs violate hardware constraints.
-  m.def("compute_padded_layout_cdna4",
-        [](int opIdx, int kWidth, int mfmaNonKDim, int kDim, int nonKDim,
-           int elemBytes, bool isKContig, int warpSize) -> py::object {
-          auto out = computePaddedLayoutCDNA4Bases(
-              opIdx, kWidth, mfmaNonKDim, kDim, nonKDim, elemBytes, isKContig,
-              (unsigned)warpSize);
-          if (!out.valid)
-            return py::none();
-          py::dict d;
-          d["interval"] = out.interval;
-          d["padding"] = out.padding;
-          py::list bases;
-          for (auto &b : out.bases)
-            bases.append(py::cast(b));
-          d["bases"] = bases;
-          return d;
-        },
-        py::arg("op_idx"), py::arg("k_width"), py::arg("mfma_non_k_dim"),
-        py::arg("k_dim"), py::arg("non_k_dim"), py::arg("elem_bytes"),
-        py::arg("is_k_contig"), py::arg("warp_size") = 64,
-        "Compute the optimal CDNA4 PaddedSharedLayout bases for direct "
-        "GMEM→LDS load. Returns dict {interval, padding, bases} "
-        "or None if inputs are invalid.");
+  // bank-conflict-aware shared layout that LowerLoops picks for autotuned
+  // kernels. Returns None if the inputs violate hardware constraints.
+  m.def(
+      "compute_padded_layout_cdna4",
+      [](int opIdx, int kWidth, int mfmaNonKDim, int kDim, int nonKDim,
+         int elemBytes, bool isKContig, int warpSize) -> py::object {
+        auto out = computePaddedLayoutCDNA4Bases(opIdx, kWidth, mfmaNonKDim,
+                                                 kDim, nonKDim, elemBytes,
+                                                 isKContig, (unsigned)warpSize);
+        if (!out.valid)
+          return py::none();
+        py::dict d;
+        d["interval"] = out.interval;
+        d["padding"] = out.padding;
+        py::list bases;
+        for (auto &b : out.bases)
+          bases.append(py::cast(b));
+        d["bases"] = bases;
+        return d;
+      },
+      py::arg("op_idx"), py::arg("k_width"), py::arg("mfma_non_k_dim"),
+      py::arg("k_dim"), py::arg("non_k_dim"), py::arg("elem_bytes"),
+      py::arg("is_k_contig"), py::arg("warp_size") = 64,
+      "Compute the optimal CDNA4 PaddedSharedLayout bases for direct "
+      "GMEM→LDS load. Returns dict {interval, padding, bases} "
+      "or None if inputs are invalid.");
 
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
