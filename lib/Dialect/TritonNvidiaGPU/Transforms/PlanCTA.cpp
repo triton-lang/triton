@@ -45,8 +45,9 @@ namespace nvidia_gpu {
 namespace {
 
 // Default CTA layouts are assigned during Triton-to-TritonGPU conversion. This
-// pass only gives Dot/Reduce ops their preferred CTA layout and materializes the
-// boundary with ttg.convert_layout; RemoveLayoutConversions cleans up later.
+// pass only gives Dot/Reduce ops their preferred CTA layout and materializes
+// the boundary with ttg.convert_layout; RemoveLayoutConversions cleans up
+// later.
 struct DotCTASplit {
   unsigned m;
   unsigned n;
@@ -118,8 +119,9 @@ void convertOpResultsFromLayouts(Operation *op,
     if (result.use_empty())
       continue;
 
-    auto convert = ttg::ConvertLayoutOp::create(builder, loc, originalTy, result)
-                       .getResult();
+    auto convert =
+        ttg::ConvertLayoutOp::create(builder, loc, originalTy, result)
+            .getResult();
     result.replaceAllUsesExcept(convert, convert.getDefiningOp());
   }
 }
@@ -127,9 +129,7 @@ void convertOpResultsFromLayouts(Operation *op,
 DotCTASplit getDotCTASplit(int64_t m, int64_t n, unsigned numCTAs) {
   constexpr unsigned kPreferredChunkSize = 128;
   constexpr unsigned kMinChunkSize = 64;
-  auto isLegalChunkSize = [](unsigned chunk) {
-    return chunk >= kMinChunkSize;
-  };
+  auto isLegalChunkSize = [](unsigned chunk) { return chunk >= kMinChunkSize; };
 
   unsigned splitM = 1;
   unsigned splitN = numCTAs;
@@ -155,9 +155,8 @@ void planDot(triton::DotOp dot) {
   auto bLayout = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
   auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
 
-  DotCTASplit split =
-      getDotCTASplit(dTy.getShape()[0], dTy.getShape()[1],
-                     ttg::getNumCTAs(dLayout));
+  DotCTASplit split = getDotCTASplit(dTy.getShape()[0], dTy.getShape()[1],
+                                     ttg::getNumCTAs(dLayout));
 
   OpBuilder builder(dot);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
@@ -217,8 +216,8 @@ ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
   }
 
   auto ctaOrder = ttg::getCTAOrder(srcLayout);
-  return ttg::CGAEncodingAttr::fromSplitParams(
-      reduce.getContext(), ctasPerCGA, ctaSplitNum, ctaOrder);
+  return ttg::CGAEncodingAttr::fromSplitParams(reduce.getContext(), ctasPerCGA,
+                                               ctaSplitNum, ctaOrder);
 }
 
 void planReduce(triton::ReduceOp reduce) {
@@ -239,8 +238,8 @@ void planReduce(triton::ReduceOp reduce) {
   SmallVector<Attribute> operandLayouts(reduce.getNumOperands(), newSrcLayout);
   Attribute resultLayout;
   if (srcTy.getRank() > 1)
-    resultLayout = ttg::SliceEncodingAttr::get(ctx, reduce.getAxis(),
-                                               newSrcLayout);
+    resultLayout =
+        ttg::SliceEncodingAttr::get(ctx, reduce.getAxis(), newSrcLayout);
   SmallVector<Attribute> resultLayouts(reduce.getNumResults(), resultLayout);
 
   convertOpOperandsToLayouts(reduce.getOperation(), operandLayouts);
