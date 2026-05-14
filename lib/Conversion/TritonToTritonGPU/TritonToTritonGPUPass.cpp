@@ -32,22 +32,6 @@ static void addNamedAttrs(Operation *op, DictionaryAttr dictAttrs) {
       op->setAttr(attr.getName(), attr.getValue());
 }
 
-static CGAEncodingAttr getDefaultCGALayout(MLIRContext *context, int rank,
-                                           int numCTAs) {
-  SmallVector<unsigned> CTAsPerCGA(rank, 1);
-  SmallVector<unsigned> CTASplitNum(rank, 1);
-  SmallVector<unsigned> CTAOrder(rank);
-  std::iota(CTAOrder.begin(), CTAOrder.end(), 0);
-
-  if (rank > 0) {
-    CTAsPerCGA[rank - 1] = numCTAs;
-    CTASplitNum[rank - 1] = numCTAs;
-  }
-
-  return CGAEncodingAttr::fromSplitParams(context, CTAsPerCGA, CTASplitNum,
-                                          CTAOrder);
-}
-
 template <class Op> struct GenericOpPattern : public OpConversionPattern<Op> {
   using OpConversionPattern<Op>::OpConversionPattern;
 
@@ -240,8 +224,7 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
       retOrder[i] = rank - 1 - i;
     Attribute dEncoding = triton::gpu::BlockedEncodingAttr::get(
         getContext(), origShape, retSizePerThread, retOrder, numWarps,
-        threadsPerWarp,
-        getDefaultCGALayout(getContext(), rank, numCTAs));
+        threadsPerWarp, numCTAs);
     RankedTensorType retType = origType.cloneWithEncoding(dEncoding);
     // a & b must be of smem layout
     auto aType = cast<RankedTensorType>(adaptor.getA().getType());

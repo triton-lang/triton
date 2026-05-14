@@ -871,21 +871,15 @@ for
                      "unsigned":$numThreadsPerWarp,
                      "unsigned":$numCTAs), [{
       unsigned rank = sizePerThread.size();
-      SmallVector<unsigned, 4> CTAsPerCGA(rank);
-      SmallVector<unsigned, 4> CTASplitNum(rank);
-      ArrayRef<unsigned> CTAOrder = order;
+      SmallVector<unsigned, 4> CTAsPerCGA(rank, 1);
+      SmallVector<unsigned, 4> CTASplitNum(rank, 1);
+      SmallVector<unsigned, 4> CTAOrder(rank);
+      std::iota(CTAOrder.begin(), CTAOrder.end(), 0);
 
-      unsigned remainingCTAs = numCTAs;
-
-      // starting from the most strided dimension
-      for (int d = rank - 1; d >= 0; --d) {
-        unsigned i = order[d];
-        CTAsPerCGA[i] = std::clamp<unsigned>(remainingCTAs, 1, std::max<unsigned>(1, shape[i] / sizePerThread[i]));
-        CTASplitNum[i] = CTAsPerCGA[i];
-        remainingCTAs /= CTAsPerCGA[i];
+      if (rank > 0) {
+        CTAsPerCGA[rank - 1] = numCTAs;
+        CTASplitNum[rank - 1] = numCTAs;
       }
-
-      CTAsPerCGA[rank - 1] *= remainingCTAs; // wrap at CTA level
 
       CGAEncodingAttr CGALayout = CGAEncodingAttr::fromSplitParams(context, CTAsPerCGA, CTASplitNum, CTAOrder);
       return get(context, shape, sizePerThread, order, numWarps, numThreadsPerWarp, CGALayout);
