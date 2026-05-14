@@ -2919,7 +2919,6 @@ def test_shared_atomic_scatter_rmw_dead_result():
     torch.testing.assert_close(out, torch.full_like(out, 2))
 
 
-
 # ============================================================================
 # Multi-warp Tests
 # ============================================================================
