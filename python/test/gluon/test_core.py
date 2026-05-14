@@ -2586,7 +2586,7 @@ def test_shared_atomic_scatter_rmw_dead_result():
                                 order=[0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
 
-    shared_atomic_scatter_add_dead_kernel[(1, )](out, N=N, layout=layout, shared_layout=shared_layout,
+    shared_atomic_scatter_rmw_dead_kernel[(1, )](out, N=N, layout=layout, shared_layout=shared_layout,
                                                 num_warps=4)
     torch.testing.assert_close(out, torch.full_like(out, 2))
 
