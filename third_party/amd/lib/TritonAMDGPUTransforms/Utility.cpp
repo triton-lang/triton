@@ -148,16 +148,12 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 // pad,  r1, r5,  r9, r13, r17, r21, r25
 // r29, pad, r2,  r6, r10, r14, r18, r22
 // r26, r30, pad, r3 ....
-// Plain-types helper extracted from composePaddedLayoutForAsyncCopyCDNA4.
-// All MLIR-type validation lives in the caller; this is pure math +
-// bitfiddling.
 PaddedLayoutCDNA4Bases
 computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
                               int nonKDim, int elemByteWidth, bool isKContig,
                               unsigned warpSize) {
   PaddedLayoutCDNA4Bases out;
 
-  // Validate constraints (mirrors MLIR-side guards in the wrapper)
   if (opIdx >= 2)
     return out;
   if (!llvm::is_contained({16, 32}, mfmaNonKDim))
@@ -244,8 +240,7 @@ computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
     wrap = bestWrap;
   }
 
-  // We create linear bases mapping from [contigDim, nonContigDim] -> offset.
-  // Stored as 2-element arrays so the result is plain-types friendly.
+  // Linear bases map [contigDim, nonContigDim] -> offset.
   std::vector<std::vector<int>> bases;
 
   // Keep contigSize numbers of elements contiguous in shared memory
@@ -304,9 +299,7 @@ computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
     std::swap(bases[offsetIndex], bases[row16Index]);
   }
 
-  // Swap bases to match dst dimension order. Original logic uses kDimIndex
-  // (operandIdx == 0 ? 1 : 0); we re-derive: swap iff
-  //   (isKContig && opIdx == 0) || (!isKContig && opIdx == 1)
+  // Swap bases to match dst dimension order.
   bool needsSwap = (isKContig && opIdx == 0) || (!isKContig && opIdx == 1);
   if (needsSwap) {
     for (auto &p : bases)
@@ -320,8 +313,6 @@ computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
   return out;
 }
 
-// MLIR wrapper: extracts plain types, calls the helper, then constructs the
-// PaddedSharedEncodingAttr / LinearLayout. Same external signature as before.
 static ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     ttg::DotOperandEncodingAttr dotOpEnc, ttg::TensorOrMemDesc srcTy,
     ArrayRef<unsigned> sharedOrder, bool useAsyncCopy, unsigned warpSize) {

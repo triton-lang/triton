@@ -120,30 +120,22 @@ _compute_efficient_padded_shared_layout_impl.__triton_builtin__ = True
 @constexpr_function
 def compute_efficient_padded_shared_layout(op_idx, k_width, mfma_non_k_dim, k_dim, non_k_dim, elem_bytes,
                                            is_k_contig=True):
-    """Compute a bank-conflict-aware PaddedSharedLayout for CDNA4 async copy.
-
-    Returns the same (interval, padding, basis ordering) that the AMD compiler
-    picks during LowerLoops for autotuned @triton.jit matmul kernels. Use this
-    so a Gluon kernel's shared-memory layout tracks what the compiler would
-    have chosen for the same shape and dtype.
+    """Bank-conflict-aware PaddedSharedLayout matching what LowerLoops picks
+    for the equivalent autotuned @triton.jit matmul.
 
     Args:
         op_idx (int): 0 for operand A, 1 for operand B.
         k_width (int): Elements per K-iteration per thread. Must be in {4, 8, 16}.
-        mfma_non_k_dim (int): Non-K dimension of the MFMA instruction.
-            Must be in {16, 32}.
-        k_dim (int): Tile size along the K dimension.
-        non_k_dim (int): Tile size along the non-K dimension (BM for A, BN for B).
-        elem_bytes (int): Bytes per element. Must be in {1, 2}; corresponds to
-            fp8 (1) or fp16/bf16 (2).
-        is_k_contig (bool): True if K is the contiguous (fast) dimension in the
-            shared memory layout. Defaults to True.
-
-    Returns:
-        PaddedSharedLayout sized for ``[non_k_dim, k_dim]`` (operand A) or
-        ``[k_dim, non_k_dim]`` (operand B), or None if any input violates the
-        algorithm's constraints. Callers should fall back to a hand-coded
-        layout when None is returned.
+        mfma_non_k_dim (int): MFMA instruction non-K dim. Must be in {16, 32}.
+        k_dim (int): Tile size along K.
+        non_k_dim (int): Tile size along the non-K dim (BM for A, BN for B).
+        elem_bytes (int): Bytes per element. Must be in {1, 2}. fp8 and fp4
+            both pass 1 (matching how the autotuner treats sub-byte dtypes);
+            fp16 / bf16 pass 2.
+        is_k_contig (bool): K is the contiguous dim in shared memory.
+    Return:
+        layout (PaddedSharedLayout): or None if any input is out of the
+            supported set.
     """
     return _compute_efficient_padded_shared_layout_impl(op_idx, k_width, mfma_non_k_dim, k_dim, non_k_dim, elem_bytes,
                                                         is_k_contig)

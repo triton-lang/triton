@@ -40,42 +40,16 @@ composePaddedLayout(const triton::amdgpu::TargetFeatures &targetFeatures,
                     triton::gpu::DotOperandEncodingAttr dotOpEnc = {},
                     bool useAsyncCopy = false);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Plain-types CDNA4 padded layout computation
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// Extracts the bank-conflict-aware padded layout algorithm from
-// composePaddedLayoutForAsyncCopyCDNA4 into a function callable WITHOUT MLIR
-// types. This makes it usable from:
-//   - Python (Gluon kernels need the same optimal layout)
-//   - Unit tests / standalone validation
-//
-// All MLIR work (LinearLayout / PaddedSharedEncodingAttr construction) happens
-// at the call site, not here.
 struct PaddedLayoutCDNA4Bases {
   bool valid = false;
   unsigned interval = 0;
   unsigned padding = 0;
-  // Linear bases in the same format as LinearLayout expects.
-  // Bases are already in caller dimension order (swap applied internally).
   std::vector<std::vector<int>> bases;
 };
 
-// Compute the optimal CDNA4 padded layout bases without any MLIR types.
-//
-// Inputs:
-//   opIdx              0 (operand A) or 1 (operand B). Selects mfmaNonKDim
-//                      from instrShape.
-//   kWidth             elements per k-iter per thread (4, 8, or 16)
-//   mfmaNonKDim        16 or 32 (the non-K dim of the MFMA instr)
-//   kDim, nonKDim      tile dims along K and non-K
-//   elemByteWidth      bytes per element (1 or 2)
-//   isKContig          true if K is the contiguous (fast) dim in shared layout
-//   warpSize           wave size (64 on gfx950)
-//
-// Returns valid=false if any constraint violates; bases otherwise reflect the
-// 16-row staggered, bank-conflict-aware mapping that
-// composePaddedLayoutForAsyncCopyCDNA4 produces.
+// Plain-types core of composePaddedLayoutForAsyncCopyCDNA4. Returns valid=false
+// when (opIdx, kWidth, mfmaNonKDim, elemByteWidth) are outside the supported
+// set; bases are emitted in caller dimension order.
 PaddedLayoutCDNA4Bases
 computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
                               int nonKDim, int elemByteWidth, bool isKContig,
