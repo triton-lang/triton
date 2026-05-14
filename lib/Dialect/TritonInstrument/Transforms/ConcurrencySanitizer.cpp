@@ -262,7 +262,7 @@ bool canInitializeAllocation(Value alloc) {
   if (!isa<ttng::TensorMemorySpaceAttr>(allocType.getMemorySpace()))
     return true;
   unsigned numWarps = ttg::lookupNumWarps(alloc.getDefiningOp());
-  return numWarps >= 4 && llvm::isPowerOf2_32(numWarps);
+  return numWarps % 4 == 0;
 }
 
 uint16_t getBlockBroadcastMask(Value alloc) {
