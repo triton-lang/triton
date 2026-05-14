@@ -130,6 +130,13 @@ unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
       .getTotalElemsPerThread(shape);
 }
 
+unsigned getUniqueElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
+  auto kReg = StringAttr::get(layout.getContext(), "register");
+  auto strippedLayout =
+      toLinearLayout(shape, layout).removeZeroBasesAlongDim(kReg);
+  return strippedLayout.getInDimSize(kReg);
+}
+
 SmallVector<unsigned> getElemsPerThread(Attribute layout,
                                         ArrayRef<int64_t> shape) {
   return toGenericLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
@@ -149,6 +156,14 @@ unsigned getTotalElemsPerThread(Type type) {
   auto tensorType = cast<RankedTensorType>(type);
   return getTotalElemsPerThread(tensorType.getEncoding(),
                                 tensorType.getShape());
+}
+
+unsigned getUniqueElemsPerThread(Type type) {
+  if (type.isIntOrIndexOrFloat() || isa<triton::PointerType>(type))
+    return 1;
+  auto tensorType = cast<RankedTensorType>(type);
+  return getUniqueElemsPerThread(tensorType.getEncoding(),
+                                 tensorType.getShape());
 }
 
 FailureOr<RankedTensorType>
@@ -485,26 +500,13 @@ static SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,
   return order.takeVector();
 }
 
-static int64_t getNumNonBroadcastRegisters(ArrayRef<int64_t> shape,
-                                           Attribute encoding) {
-  auto kReg = StringAttr::get(encoding.getContext(), "register");
-  auto strippedLayout =
-      toLinearLayout(shape, encoding).removeZeroBasesAlongDim(kReg);
-  return strippedLayout.getInDimSize(kReg);
-}
-
-static int64_t getNumNonBroadcastRegisters(RankedTensorType tensorType) {
-  return getNumNonBroadcastRegisters(tensorType.getShape(),
-                                     tensorType.getEncoding());
-}
-
 bool isLegalCatEncoding(CatOp cat, Attribute targetEncoding) {
   // Cat lowering concatenates the operands' unique register values. So the
   // number of unique register values in the result must be equal to those in
   // the operands.
-  int64_t operandRegs = getNumNonBroadcastRegisters(cat.getLhs().getType()) * 2;
+  int64_t operandRegs = getUniqueElemsPerThread(cat.getLhs().getType()) * 2;
   int64_t resultRegs =
-      getNumNonBroadcastRegisters(cat.getType().getShape(), targetEncoding);
+      getUniqueElemsPerThread(targetEncoding, cat.getType().getShape());
   return resultRegs == operandRegs;
 }
 
@@ -3220,9 +3222,8 @@ struct TritonGPUInferLayoutInterface
 
   LogicalResult verifyCatOpEncodingCompatibility(Operation *op) const override {
     auto cat = cast<CatOp>(op);
-    int64_t operandRegs =
-        getNumNonBroadcastRegisters(cat.getLhs().getType()) * 2;
-    int64_t resultRegs = getNumNonBroadcastRegisters(cat.getType());
+    int64_t operandRegs = getUniqueElemsPerThread(cat.getLhs().getType()) * 2;
+    int64_t resultRegs = getUniqueElemsPerThread(cat.getType());
     if (resultRegs != operandRegs) {
       return op->emitError("tt.cat result encoding requires ")
              << resultRegs

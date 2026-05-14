@@ -3,7 +3,7 @@
 
 #include "Context/Context.h"
 #include "Device.h"
-#include "Metadata.h"
+#include "Profiler/Instrumentation/InstrumentationMetadata.h"
 #include "Profiler/Profiler.h"
 #include "Runtime/Runtime.h"
 #include "TraceDataIO/Parser.h"

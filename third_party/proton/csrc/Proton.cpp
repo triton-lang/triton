@@ -3,9 +3,11 @@
 #include <cstdint>
 #include <map>
 #include <stdexcept>
+#include <string>
 #include <variant>
 #include <vector>
 
+#include "Context/Context.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
@@ -67,6 +69,8 @@ static void initProton(pybind11::module &&m) {
   auto metricTypeVectorDoubleIndex =
       pybind11::cast(variant_index_v<std::vector<double>, MetricValueType>);
 
+  m.attr("metadata_scope_name") = std::string(kMetadataScopeName);
+  m.attr("metadata_scope_prefix") = std::string(kMetadataScopePrefix);
   m.attr("metric_type_int64_index") = metricTypeInt64Index;
   m.attr("metric_type_double_index") = metricTypeDoubleIndex;
   m.attr("metric_type_vector_int64_index") = metricTypeVectorInt64Index;

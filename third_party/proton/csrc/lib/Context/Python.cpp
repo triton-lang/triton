@@ -1,8 +1,8 @@
 #include "Context/Python.h"
 #include "Utility/String.h"
 #include "pybind11/pybind11.h"
-#include <algorithm>
 #include <string>
+#include <utility>
 
 namespace proton {
 
@@ -61,19 +61,24 @@ std::vector<Context> PythonContextSource::getContextsImpl() {
   PyFrameObject *frame = PyEval_GetFrame();
   Py_XINCREF(frame);
 
-  std::vector<Context> contexts;
+  std::vector<Context> reversedContexts;
   while (frame != nullptr) {
     PyCodeObject *f_code = getFrameCodeObject(frame);
     size_t lineno = PyFrame_GetLineNumber(frame);
     std::string file = unpackPyobject(f_code->co_filename);
     std::string function = unpackPyobject(f_code->co_name);
     auto pythonFrame = formatFileLineFunction(file, lineno, function);
-    contexts.push_back(Context(pythonFrame));
+    reversedContexts.emplace_back(std::move(pythonFrame));
     auto newFrame = getFrameBack(frame);
     Py_DECREF(frame);
     frame = newFrame;
   }
-  std::reverse(contexts.begin(), contexts.end());
+  std::vector<Context> contexts;
+  contexts.reserve(reversedContexts.size());
+  for (auto iter = reversedContexts.rbegin(); iter != reversedContexts.rend();
+       ++iter) {
+    contexts.push_back(*iter);
+  }
   return contexts;
 }
 
