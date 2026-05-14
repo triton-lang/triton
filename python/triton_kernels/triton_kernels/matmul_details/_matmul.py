@@ -11,6 +11,7 @@ from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_m
 from triton_kernels.tensor_details.layout_details.gfx1250_scale import unswizzle_mx_scale_gfx1250
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile
 from triton_kernels.target_info import cuda_capability_geq
 from ._common import (
     compute_offsets,
@@ -423,7 +424,14 @@ def _matmul(
             else:
                 w_scales: tl.constexpr = None
 
-            if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+            if is_x_fp4 and not is_w_microscaled and not cuda_capability_geq(10, 0):
+                tl.static_assert(w_format == "fp16" or w_format == "bf16")
+                x_dense = upcast_mxfp4_tile(x, x_scales, w.dtype)
+                if SWAP_XW:
+                    acc = tl.dot(w.T, x_dense.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                else:
+                    acc = tl.dot(x_dense, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+            elif SWIZZLE_MX_VALUE == "HOPPER_VALUE":
                 # Handshake with the swizzling code
                 tl.static_assert(w_format == "e2m1")
                 tl.static_assert(SWAP_XW)

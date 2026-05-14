@@ -303,9 +303,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("MXFP8/NVFP4 tensors use fp8e4nv, which is not supported on A100")
         if b_dtype.is_any_float8 and device_capability < 9:
             pytest.skip("Float8 not tested on A100")
-        if (device_capability < 10 and a_dtype.name == "mxfloat4_e2m1"
-                and weight_dtype_str in {"bfloat16", "float16"}):
-            pytest.skip("MXFP4 x dense FP16/BF16 is only tested on Blackwell")
         if act_dtype_str == "float16" and b_dtype.has_mx_scale and device_capability >= 10:
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if b_dtype.has_mx_scale and a_dtype.has_global_scale and device_capability < 10:
