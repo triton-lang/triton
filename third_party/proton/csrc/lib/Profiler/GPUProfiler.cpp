@@ -21,7 +21,6 @@ struct FlushRange {
 
 std::pair<std::vector<FlushRange>, std::set<size_t>>
 computeFlushRangesAndPeekPhases(
-    std::map<Data *, size_t> *dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
         &dataPhases,
@@ -40,14 +39,7 @@ computeFlushRangesAndPeekPhases(
     const size_t endPhaseToFlush = phase.second - 1;
 
     size_t minPhaseToFlush = 0;
-    auto flushedPhase = Data::kNoCompletePhase;
-    if (dataFlushedPhases) {
-      auto flushedPhaseIt = dataFlushedPhases->find(data);
-      if (flushedPhaseIt != dataFlushedPhases->end())
-        flushedPhase = flushedPhaseIt->second;
-    } else {
-      flushedPhase = data->getPhaseInfo().completeUpTo;
-    }
+    const auto flushedPhase = data->getPhaseInfo().completeUpTo;
     if (flushedPhase == Data::kNoCompletePhase) {
       minPhaseToFlush = 0;
     } else {
@@ -218,15 +210,14 @@ void updateDataPhases(std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
 
 void flushDataPhasesImpl(
     const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
-    std::map<Data *, size_t> *dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
         &dataPhases,
     PendingGraphPool *pendingGraphPool) {
   static const bool timingEnabled =
       getBoolEnv("PROTON_DATA_FLUSH_TIMING", false);
-  auto [flushRanges, phasesToPeek] = computeFlushRangesAndPeekPhases(
-      dataFlushedPhases, dataPhases, pendingGraphPool != nullptr);
+  auto [flushRanges, phasesToPeek] =
+      computeFlushRangesAndPeekPhases(dataPhases, pendingGraphPool != nullptr);
   if (pendingGraphPool) {
     using Clock = std::chrono::steady_clock;
     uint64_t totalPeekUs = 0;
@@ -257,8 +248,6 @@ void flushDataPhasesImpl(
     auto *data = range.data;
     const size_t minPhaseToFlush = range.minPhaseToFlush;
     const size_t maxPhaseToFlush = range.maxPhaseToFlush;
-    if (dataFlushedPhases)
-      (*dataFlushedPhases)[data] = maxPhaseToFlush;
     data->completePhase(maxPhaseToFlush);
 
     if (!periodicFlushEnabled)
