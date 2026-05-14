@@ -127,21 +127,19 @@ void convertOpResultsFromLayouts(Operation *op,
 }
 
 DotCTASplit getDotCTASplit(int64_t m, int64_t n, unsigned numCTAs) {
-  constexpr unsigned kPreferredChunkSize = 128;
   constexpr unsigned kMinChunkSize = 64;
-  auto isLegalChunkSize = [](unsigned chunk) { return chunk >= kMinChunkSize; };
 
-  unsigned splitM = 1;
-  unsigned splitN = numCTAs;
-  for (unsigned chunkM = kPreferredChunkSize; isLegalChunkSize(chunkM);
-       chunkM /= 2) {
-    splitM = std::clamp<unsigned>(m / chunkM, 1, numCTAs);
-    splitN = numCTAs / splitM;
-    if (isLegalChunkSize(n / splitN))
-      break;
+  unsigned maxSplitM = std::clamp<unsigned>(m / kMinChunkSize, 1, numCTAs);
+  for (unsigned splitM = maxSplitM; splitM >= 1; --splitM) {
+    if (numCTAs % splitM != 0)
+      continue;
+
+    unsigned splitN = numCTAs / splitM;
+    if (n / splitN >= kMinChunkSize)
+      return {splitM, splitN};
   }
 
-  return {splitM, splitN};
+  return {1, numCTAs};
 }
 
 void planDot(triton::DotOp dot) {
