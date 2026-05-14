@@ -86,7 +86,7 @@
 <li class="toctree-l2"><a class="reference internal" href="#what-fpsan-preserves">What FpSan Preserves</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#what-fpsan-does-not-preserve">What FpSan Does Not Preserve</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#common-arithmetic-ops">Common Arithmetic Ops</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="#add-sub-mul">Add, Sub, Mul</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#add-sub-neg-mul">Add, Sub, Neg, Mul</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#min-and-max">Min and Max</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#division">Division</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#remainder">Remainder</a></li>
@@ -217,7 +217,8 @@ stable:</p>
 <p>FpSan preserves exact identities in the payload algebra selected by each
 rewrite. The most important ones are:</p>
 <ul class="simple">
-<li><p>ring identities for add, subtract, multiply, FMA, and dot-like accumulation</p></li>
+<li><p>ring identities for add, subtract, unary negation, multiply, FMA, and
+dot-like accumulation</p></li>
 <li><p>selected exponential identities for <code class="docutils literal notranslate"><span class="pre">exp</span></code> and <code class="docutils literal notranslate"><span class="pre">exp2</span></code> (see below for details)</p></li>
 <li><p>trigonometric identities for <code class="docutils literal notranslate"><span class="pre">sin</span></code> and <code class="docutils literal notranslate"><span class="pre">cos</span></code></p></li>
 <li><p>payload equality through casts, loads, stores, and copies</p></li>
@@ -249,23 +250,27 @@ family?”</p>
 </section>
 <section id="common-arithmetic-ops">
 <h2>Common Arithmetic Ops<a class="headerlink" href="#common-arithmetic-ops" title="Link to this heading"></a></h2>
-<section id="add-sub-mul">
-<h3>Add, Sub, Mul<a class="headerlink" href="#add-sub-mul" title="Link to this heading"></a></h3>
+<section id="add-sub-neg-mul">
+<h3>Add, Sub, Neg, Mul<a class="headerlink" href="#add-sub-neg-mul" title="Link to this heading"></a></h3>
 <p>Supported operations:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">+</span> <span class="pre">y</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">-</span> <span class="pre">y</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-x</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">*</span> <span class="pre">y</span></code></p></li>
 </ul>
 <p>Rewrite:</p>
 <ul class="simple">
-<li><p>add, subtract, or multiply the embedded payloads, then unembed the result</p></li>
+<li><p>add, subtract, negate, or multiply the embedded payloads, then unembed the
+result</p></li>
 </ul>
 <p>Exact preserved properties:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">+</span> <span class="pre">0</span> <span class="pre">=</span> <span class="pre">x</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">-</span> <span class="pre">0</span> <span class="pre">=</span> <span class="pre">x</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">-</span> <span class="pre">x</span> <span class="pre">=</span> <span class="pre">0</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">+</span> <span class="pre">(-x)</span> <span class="pre">=</span> <span class="pre">0</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-(-x)</span> <span class="pre">=</span> <span class="pre">x</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">*</span> <span class="pre">1</span> <span class="pre">=</span> <span class="pre">x</span></code></p></li>
 <li><p>associativity and commutativity of add and mul</p></li>
 <li><p>distributivity of mul over add</p></li>

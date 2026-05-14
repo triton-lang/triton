@@ -64,7 +64,9 @@
 <li class="toctree-l1 current"><a class="current reference internal" href="#">triton.testing</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="generated/triton.testing.Benchmark.html">triton.testing.Benchmark</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/triton.testing.do_bench.html">triton.testing.do_bench</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/triton.testing.do_bench_proton.html">triton.testing.do_bench_proton</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/triton.testing.do_bench_cudagraph.html">triton.testing.do_bench_cudagraph</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/triton.testing.do_bench_cudagraph_proton.html">triton.testing.do_bench_cudagraph_proton</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/triton.testing.perf_report.html">triton.testing.perf_report</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/triton.testing.assert_close.html">triton.testing.assert_close</a></li>
 </ul>
@@ -124,8 +126,14 @@
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.testing.do_bench.html#triton.testing.do_bench" title="triton.testing.do_bench"><code class="xref py py-obj docutils literal notranslate"><span class="pre">do_bench</span></code></a></p></td>
 <td><p>Benchmark the runtime of the provided function.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.testing.do_bench_cudagraph.html#triton.testing.do_bench_cudagraph" title="triton.testing.do_bench_cudagraph"><code class="xref py py-obj docutils literal notranslate"><span class="pre">do_bench_cudagraph</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.testing.do_bench_proton.html#triton.testing.do_bench_proton" title="triton.testing.do_bench_proton"><code class="xref py py-obj docutils literal notranslate"><span class="pre">do_bench_proton</span></code></a></p></td>
+<td><p>Benchmark the runtime of kernels invoked by the provided function using the Proton profiler.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.testing.do_bench_cudagraph.html#triton.testing.do_bench_cudagraph" title="triton.testing.do_bench_cudagraph"><code class="xref py py-obj docutils literal notranslate"><span class="pre">do_bench_cudagraph</span></code></a></p></td>
 <td><p>Benchmark the runtime of the provided function.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.testing.do_bench_cudagraph_proton.html#triton.testing.do_bench_cudagraph_proton" title="triton.testing.do_bench_cudagraph_proton"><code class="xref py py-obj docutils literal notranslate"><span class="pre">do_bench_cudagraph_proton</span></code></a></p></td>
+<td><p>Benchmark the runtime of kernels invoked by the provided function using the Proton profiler and CUDA graphs.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.testing.perf_report.html#triton.testing.perf_report" title="triton.testing.perf_report"><code class="xref py py-obj docutils literal notranslate"><span class="pre">perf_report</span></code></a></p></td>
 <td><p>Mark a function for benchmarking.</p></td>

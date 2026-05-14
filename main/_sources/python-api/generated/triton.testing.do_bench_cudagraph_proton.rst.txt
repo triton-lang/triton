@@ -1,0 +1,6 @@
+﻿triton.testing.do\_bench\_cudagraph\_proton
+===========================================
+
+.. currentmodule:: triton.testing
+
+.. autofunction:: do_bench_cudagraph_proton

@@ -1,0 +1,6 @@
+﻿triton.testing.do\_bench\_proton
+================================
+
+.. currentmodule:: triton.testing
+
+.. autofunction:: do_bench_proton

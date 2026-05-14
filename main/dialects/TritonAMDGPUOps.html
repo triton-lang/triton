@@ -454,6 +454,28 @@ false will disable the copy. This operation does not support shared memory
 swizzling.
 The operation can also take an optional 64bit LDS barrier address, in which case
 it sends an “LDS atomic arrive” to signal its completion.</p>
+<p><code class="docutils literal notranslate"><span class="pre">warp_used_hint</span></code> is an optional i32 bitmask performance hint for
+partial TDM copy: bit <code class="docutils literal notranslate"><span class="pre">n</span></code> (LSB = warp 0) means warp <code class="docutils literal notranslate"><span class="pre">n</span></code> issues the
+instruction; bits above <code class="docutils literal notranslate"><span class="pre">num_warps</span> <span class="pre">-</span> <span class="pre">1</span></code> must be zero.  Same data
+lands in shared memory either way – only emission changes:
+<code class="docutils literal notranslate"><span class="pre">K</span> <span class="pre">=</span> <span class="pre">popcount(hint)</span></code> warps cover the block, the rest are pred-off.</p>
+<p>For “all warps participate”, omit the attribute (preferred) or pass
+a full bitmask <code class="docutils literal notranslate"><span class="pre">K</span> <span class="pre">=</span> <span class="pre">num_warps</span></code>; an explicit <code class="docutils literal notranslate"><span class="pre">warp_used_hint</span> <span class="pre">=</span> <span class="pre">0</span></code> is
+rejected by the verifier.</p>
+<p>Restriction: the hint must be <em>axis-aligned</em>.  Pin some warpId bit
+positions to fixed values and leave the others free; the active
+warps are exactly those with the pinned bits set accordingly.
+K = <code class="docutils literal notranslate"><span class="pre">popcount(hint)</span></code> is therefore a power of two (= 2^(number of
+free bits)).  Legal: <code class="docutils literal notranslate"><span class="pre">0x0F</span></code> (warps 0..3), <code class="docutils literal notranslate"><span class="pre">0xF0</span></code> (warps 4..7),
+<code class="docutils literal notranslate"><span class="pre">0x55</span></code> / <code class="docutils literal notranslate"><span class="pre">0xAA</span></code> / <code class="docutils literal notranslate"><span class="pre">0xCC</span></code> (stride-by-<code class="docutils literal notranslate"><span class="pre">2^j</span></code>).  Rejected: non
+axis-aligned patterns like <code class="docutils literal notranslate"><span class="pre">0x69</span></code> or <code class="docutils literal notranslate"><span class="pre">0x1B</span></code>.</p>
+<p>Why this shape: power-of-two K keeps the per-warp tile recalc
+(<code class="docutils literal notranslate"><span class="pre">block</span> <span class="pre">/</span> <span class="pre">K</span></code>) integer-clean, and the bit-pinning shape lets the
+per-warp offset and active-mask predicate fall out of the same
+<code class="docutils literal notranslate"><span class="pre">getFreeVariableMasks</span></code> LL machinery the no-hint path uses.</p>
+<p>PartitionedSharedEncoding additionally requires <code class="docutils literal notranslate"><span class="pre">K</span> <span class="pre">=</span> <span class="pre">popcount(hint)</span></code>
+to be a multiple of <code class="docutils literal notranslate"><span class="pre">numLogicalPieces</span></code> (the hinted path doesn’t
+support multi-instruction slicing).</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TDMOpInterface</span></code></p>
 <section id="id5">
@@ -461,6 +483,7 @@ it sends an “LDS atomic arrive” to signal its completion.</p>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>warp_used_hint</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 </section>
 <section id="id6">
