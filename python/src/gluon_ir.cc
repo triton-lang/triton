@@ -1262,7 +1262,7 @@ void init_gluon_ir(py::module &&m) {
           auto plain = computePaddedLayoutCDNA4Bases(
               opIdx, kWidth, mfmaNonKDim, kDim, nonKDim, elemBytes, isKContig,
               /*warpSize=*/64);
-          if (!plain.valid)
+          if (!plain)
             return py::none();
 
           SmallVector<int64_t> shape =
@@ -1272,14 +1272,14 @@ void init_gluon_ir(py::module &&m) {
 
           auto kOffset = mlir::StringAttr::get(&ctx, "offset");
           auto outDims = tt::standardOutDimNames(&ctx, /*rank=*/2);
-          tt::LinearLayout offsetLL({{kOffset, plain.bases}}, outDims);
+          tt::LinearLayout offsetLL({{kOffset, plain->bases}}, outDims);
           // CDNA4 (and earlier CDNA) supports 1 CTA per CGA
           auto cga = buildCgaLayoutAttr(&ctx, /*cgaBases=*/{}, /*rank=*/2);
           auto fullLL = ttg::combineCtaCgaWithShape(offsetLL, cga, shape);
 
           auto attr = ttg::PaddedSharedEncodingAttr::get(
-              &ctx, /*intervals=*/{plain.interval},
-              /*paddings=*/{plain.padding}, std::move(fullLL));
+              &ctx, /*intervals=*/{plain->interval},
+              /*paddings=*/{plain->padding}, std::move(fullLL));
           return layoutToGluon(attr);
         });
 

@@ -148,22 +148,20 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 // pad,  r1, r5,  r9, r13, r17, r21, r25
 // r29, pad, r2,  r6, r10, r14, r18, r22
 // r26, r30, pad, r3 ....
-PaddedLayoutCDNA4Bases
+std::optional<PaddedLayoutCDNA4Bases>
 computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
                               int nonKDim, int elemByteWidth, bool isKContig,
                               unsigned warpSize) {
-  PaddedLayoutCDNA4Bases out;
-
   if (opIdx >= 2)
-    return out;
+    return std::nullopt;
   if (!llvm::is_contained({16, 32}, mfmaNonKDim))
-    return out;
+    return std::nullopt;
   if (!llvm::is_contained({4, 8, 16}, kWidth))
-    return out;
+    return std::nullopt;
   if (!llvm::is_contained({1, 2}, elemByteWidth))
-    return out;
+    return std::nullopt;
   if (kDim <= 0 || nonKDim <= 0)
-    return out;
+    return std::nullopt;
 
   unsigned kWidthBytes = (unsigned)kWidth * (unsigned)elemByteWidth;
   // TODO: if the actual vecSize is smaller than 16 bytes we can do better by
@@ -208,7 +206,7 @@ computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
   unsigned wrap = std::min(contigDim, elemPerBankRow) / padding;
   // wrap == 0 means padding > contigDim, which is not a valid configuration
   if (wrap == 0)
-    return out; // valid=false
+    return std::nullopt;
 
   // The staggering of rows only works if we have enough (wrap) rows to stagger.
   // If we have less rows we get bank conflicts. For each pow2 too small we will
@@ -222,14 +220,14 @@ computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
   // ds_read_b64(_tr) we tolerate 2-way because swizzling will produce the same
   // number of conflicts.
   if ((useDsReadB128 && xWayConflicts > 1) || xWayConflicts > 2)
-    return out;
+    return std::nullopt;
 
   if (xWayConflicts > 1) {
     // We need to adjust the warp to allow for bank conflicts and to produce a
     // valid layout
     wrap /= (1 << (xWayConflicts - 1));
     if (wrap == 0)
-      return out;
+      return std::nullopt;
   }
 
   // Use 16 rows wrap if block large enough
@@ -306,7 +304,7 @@ computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
       std::swap(p[0], p[1]);
   }
 
-  out.valid = true;
+  PaddedLayoutCDNA4Bases out;
   out.interval = paddingInterval;
   out.padding = padding;
   out.bases = std::move(bases);
@@ -345,20 +343,20 @@ static ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   auto plain = computePaddedLayoutCDNA4Bases(
       (int)operandIdx, (int)kWidth, (int)mfmaNonKDim, (int)kDim, (int)nonKDim,
       (int)elemByteWidth, isKContig, warpSize);
-  if (!plain.valid)
+  if (!plain)
     return {};
 
   auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
   triton::LinearLayout linearComponent(
       {
-          {StringAttr::get(ctx, "offset"), plain.bases},
+          {StringAttr::get(ctx, "offset"), plain->bases},
       },
       triton::standardOutDimNames(ctx, rank));
   linearComponent = triton::gpu::combineCtaCgaWithShape(
       linearComponent, cgaLayout, srcTy.getShape());
 
   return ttg::PaddedSharedEncodingAttr::get(
-      ctx, {{plain.interval, plain.padding}}, std::move(linearComponent));
+      ctx, {{plain->interval, plain->padding}}, std::move(linearComponent));
 }
 
 // LDS padding strategy for TDM (descriptor) loads.

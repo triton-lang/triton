@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
+#include <optional>
 
 using namespace mlir;
 
@@ -41,16 +42,15 @@ composePaddedLayout(const triton::amdgpu::TargetFeatures &targetFeatures,
                     bool useAsyncCopy = false);
 
 struct PaddedLayoutCDNA4Bases {
-  bool valid = false;
   unsigned interval = 0;
   unsigned padding = 0;
   std::vector<std::vector<int>> bases;
 };
 
-// Plain-types core of composePaddedLayoutForAsyncCopyCDNA4. Returns valid=false
+// Plain-types core of composePaddedLayoutForAsyncCopyCDNA4. Returns nullopt
 // when (opIdx, kWidth, mfmaNonKDim, elemByteWidth) are outside the supported
 // set; bases are emitted in caller dimension order.
-PaddedLayoutCDNA4Bases
+std::optional<PaddedLayoutCDNA4Bases>
 computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
                               int nonKDim, int elemByteWidth, bool isKContig,
                               unsigned warpSize);
