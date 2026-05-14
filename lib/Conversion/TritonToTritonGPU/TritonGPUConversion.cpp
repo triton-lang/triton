@@ -1,6 +1,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 
-#include <array>
+#include <algorithm>
+#include <numeric>
 
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/IRMapping.h"

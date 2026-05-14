@@ -12,8 +12,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 
-#include <numeric>
-
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONTOTRITONGPU
 #include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"

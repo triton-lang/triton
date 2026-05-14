@@ -657,22 +657,10 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
   std::iota(order.begin(), order.end(), 0);
   std::reverse(order.begin(), order.end());
   llvm::SmallVector<unsigned> sizePerThread(rank, 1);
-  llvm::SmallVector<unsigned> CTAsPerCGA(rank, 1);
-  llvm::SmallVector<unsigned> CTASplitNum(rank, 1);
-  llvm::SmallVector<unsigned> CTAOrder(rank);
-  std::iota(CTAOrder.begin(), CTAOrder.end(), 0);
-
-  if (rank > 0) {
-    CTAsPerCGA[rank - 1] = numCTAs;
-    CTASplitNum[rank - 1] = numCTAs;
-  }
-
-  auto CGALayout = triton::gpu::CGAEncodingAttr::fromSplitParams(
-      context, CTAsPerCGA, CTASplitNum, CTAOrder);
   triton::gpu::BlockedEncodingAttr encoding =
       triton::gpu::BlockedEncodingAttr::get(context, shape, sizePerThread,
                                             order, numWarps, threadsPerWarp,
-                                            CGALayout);
+                                            numCTAs);
   return encoding;
 }
 
