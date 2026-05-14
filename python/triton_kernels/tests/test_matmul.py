@@ -182,6 +182,8 @@ def _build_test_op_cases():
         Case(300, 400, 416, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
         Case(300, 400, 416, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", b_hbm_swizzling=True),
         Case(300, 400, 416, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
+        Case(64, 128, 96, "ragged", "mxfloat8_e4m3fn", "bfloat16"),
+        Case(64, 128, 96, "batched", "mxfloat8_e4m3fn", "bfloat16"),
         Case(1024, 1024, 1024, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True),
         Case(256, 256, 256, "plain", "mxfloat4_e2m1", "mxfloat4_e2m1", "bfloat16"),
         Case(256, 256, 256, "plain", "mxfloat4_e2m1", "mxfloat4_e2m1", "bfloat16", b_hbm_swizzling=True),
@@ -569,37 +571,3 @@ def test_set_idle_sms():
     flags = make_opt_flags(FP32, FP32, FP32, PrecisionConfig(), \
                            1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
     assert flags.idle_sms == num_idle_sms
-
-
-@pytest.mark.parametrize("is_persistent", [False, True])
-def test_mxfloat8_act_bfloat16_weight_matmul(is_persistent, device, opt_flags_scope):
-    _test_op(
-        m=64,
-        n=96,
-        k=128,
-        split_k=1,
-        do_gather=False,
-        do_scatter=False,
-        inner_expt_opt=None,
-        do_gamma=False,
-        is_persistent=is_persistent,
-        num_warps=4 if is_hopper() else None,
-        n_slices=1,
-        mode="plain",
-        act_dtype_str="mxfloat8_e4m3fn",
-        weight_dtype_str="bfloat16",
-        output_dtype_str=None,
-        block_m=16,
-        b_hbm_swizzling=False,
-        shuffle_mxfp4_w_layout=False,
-        a_hbm_swizzling=False,
-        colmajor_mxfp_weight=True,
-        epilogue_subtile=None,
-        a_transpose=False,
-        b_transpose=False,
-        c_transpose=False,
-        swiglu_opts=None,
-        c_hbm_swizzling=False,
-        device=device,
-        opt_flags_scope=opt_flags_scope,
-    )
