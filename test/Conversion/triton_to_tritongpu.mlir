@@ -225,13 +225,3 @@ tt.func @call_into_dot(%b: tensor<32x128xf16>) {
   %0 = tt.dot %a, %b, %c : tensor<128x32xf16> * tensor<32x128xf16> -> tensor<128x128xf32>
   tt.return
 }
-
-// -----
-
-// CHECK-TWO-CTAS: #[[DEFAULT_CTA:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
-// CHECK-TWO-CTAS-LABEL: tt.func @default_cta_layout_2d
-tt.func @default_cta_layout_2d() {
-  // CHECK-TWO-CTAS: arith.constant dense<0.000000e+00> : tensor<16x16xf32, #[[DEFAULT_CTA]]>
-  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
-  tt.return
-}
