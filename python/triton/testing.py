@@ -194,7 +194,7 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
     import torch
 
     with torch.cuda.stream(torch.cuda.Stream()):
-        # NOTE: must ensure the data on the old stream is ready
+        # NOTE: must ensure the data is ready
         torch.cuda.synchronize()
         # warmup
         fn()
