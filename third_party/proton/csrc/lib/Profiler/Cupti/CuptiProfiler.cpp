@@ -35,41 +35,133 @@ thread_local GPUProfiler<CuptiProfiler>::ThreadState
 
 namespace {
 
+struct KernelActivityRecord {
+  uint64_t start{0};
+  uint64_t end{0};
+  uint32_t deviceId{0};
+  uint64_t streamId{0};
+  uint64_t correlationId{0};
+  uint32_t graphId{0};
+  uint64_t graphNodeId{0};
+  const char *name{""};
+};
+
+#if CUPTI_API_VERSION >= 130200
+template <typename T>
+bool readActivityField(const CUpti_ActivityRecordLayout *layout,
+                       const uint8_t *recordData, int fieldId, T &value) {
+  if (layout == nullptr) {
+    return false;
+  }
+  for (size_t i = 0; i < layout->numFields; ++i) {
+    const auto &entry = layout->pEntries[i];
+    if (entry.fieldId == fieldId) {
+      std::memcpy(std::addressof(value), recordData + entry.offset,
+                  sizeof(value));
+      return true;
+    }
+  }
+  return false;
+}
+
+KernelActivityRecord
+convertCustomKernelActivity(const CUpti_Activity *activity,
+                            const CUpti_ActivityRecordLayout *layout) {
+  KernelActivityRecord kernel;
+  const auto *recordData = reinterpret_cast<const uint8_t *>(activity);
+  bool success = true;
+  success &=
+      readActivityField(layout, recordData, KERNEL_FIELD_START, kernel.start);
+  success &=
+      readActivityField(layout, recordData, KERNEL_FIELD_END, kernel.end);
+  success &= readActivityField(layout, recordData, KERNEL_FIELD_DEVICE_ID,
+                               kernel.deviceId);
+  success &= readActivityField(layout, recordData, KERNEL_FIELD_STREAM_ID,
+                               kernel.streamId);
+  success &= readActivityField(layout, recordData, KERNEL_FIELD_CORRELATION_ID,
+                               kernel.correlationId);
+  success &= readActivityField(layout, recordData, KERNEL_FIELD_GRAPH_ID,
+                               kernel.graphId);
+  success &= readActivityField(layout, recordData, KERNEL_FIELD_GRAPH_NODE_ID,
+                               kernel.graphNodeId);
+  success &=
+      readActivityField(layout, recordData, KERNEL_FIELD_NAME, kernel.name);
+  if (!success) {
+    throw std::runtime_error(
+        "[PROTON] Missing required CUPTI kernel activity field");
+  }
+  if (kernel.name == nullptr) {
+    kernel.name = "";
+  }
+  return kernel;
+}
+#endif
+
+KernelActivityRecord
+convertKernelActivity(CUpti_Activity *activity
+#if CUPTI_API_VERSION >= 130200
+                      ,
+                      const CUpti_ActivityRecordLayout *layout = nullptr
+#endif
+) {
+#if CUPTI_API_VERSION >= 130200
+  if (layout != nullptr) {
+    return convertCustomKernelActivity(activity, layout);
+  }
+#endif
+  auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
+  return KernelActivityRecord{
+      static_cast<uint64_t>(kernel->start),
+      static_cast<uint64_t>(kernel->end),
+      static_cast<uint32_t>(kernel->deviceId),
+      static_cast<uint64_t>(kernel->streamId),
+      static_cast<uint64_t>(kernel->correlationId),
+      static_cast<uint32_t>(kernel->graphId),
+      static_cast<uint64_t>(kernel->graphNodeId),
+      kernel->name ? kernel->name : "",
+  };
+}
+
 std::unique_ptr<Metric>
-convertKernelActivityToMetric(CUpti_Activity *activity,
+convertKernelActivityToMetric(const KernelActivityRecord &kernel,
                               bool isMetricKernel = false) {
   std::unique_ptr<Metric> metric;
-  auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
-  if (kernel->start < kernel->end) {
-    metric =
-        std::make_unique<KernelMetric>(static_cast<uint64_t>(kernel->start),
-                                       static_cast<uint64_t>(kernel->end), 1,
-                                       static_cast<uint64_t>(kernel->deviceId),
-                                       static_cast<uint64_t>(DeviceType::CUDA),
-                                       static_cast<uint64_t>(kernel->streamId),
-                                       static_cast<uint64_t>(isMetricKernel));
+  if (kernel.start < kernel.end) {
+    metric = std::make_unique<KernelMetric>(
+        kernel.start, kernel.end, 1, static_cast<uint64_t>(kernel.deviceId),
+        static_cast<uint64_t>(DeviceType::CUDA), kernel.streamId,
+        static_cast<uint64_t>(isMetricKernel));
   } // else: not a valid kernel activity
   return metric;
 }
 
-uint32_t processActivityKernel(
+uint64_t processActivityKernel(
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
         &externIdToStateCache,
     std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
-    CUpti_Activity *activity) {
-  // Support CUDA >= 11.0
-  auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
-  auto correlationId = kernel->correlationId;
+    CUpti_Activity *activity
+#if CUPTI_API_VERSION >= 130200
+    ,
+    const CUpti_ActivityRecordLayout *layout = nullptr
+#endif
+) {
+  auto kernel = convertKernelActivity(activity
+#if CUPTI_API_VERSION >= 130200
+                                      ,
+                                      layout
+#endif
+  );
+  auto correlationId = kernel.correlationId;
   size_t externId = 0;
   if (!/*not valid*/ corrIdToExternId.withRead(
           correlationId, [&externId](size_t value) { externId = value; })) {
     corrIdToExternId.erase(correlationId);
     return correlationId;
   }
-  if (kernel->graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
-                              // actually it refers to graphExecId
+  if (kernel.graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
+                             // actually it refers to graphExecId
     // Non-graph kernels
     bool isMissingName = false;
     DataToEntryMap dataToEntry;
@@ -80,16 +172,16 @@ uint32_t processActivityKernel(
                              });
     if (!isMissingName) {
       for (auto &[data, entry] : dataToEntry) {
-        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+        if (auto kernelMetric = convertKernelActivityToMetric(kernel)) {
           entry.upsertMetric(std::move(kernelMetric));
           detail::updateDataPhases(dataPhases, data, entry.phase);
         }
       }
     } else {
       for (auto &[data, entry] : dataToEntry) {
-        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+        if (auto kernelMetric = convertKernelActivityToMetric(kernel)) {
           auto childEntry =
-              data->addOp(entry.phase, entry.id, {Context(kernel->name)});
+              data->addOp(entry.phase, entry.id, {Context(kernel.name)});
           childEntry.upsertMetric(std::move(kernelMetric));
           detail::updateDataPhases(dataPhases, data, entry.phase);
         }
@@ -123,8 +215,9 @@ uint32_t processActivityKernel(
     // We have a graph creation captured
     auto *nodeIdToState = externState.nodeIdToState;
     if (nodeIdToState) {
-      const GraphState::NodeState &nodeState = nodeIdToState->at(
-          kernel->graphNodeId); // nodeIdToState must have the nodeId
+      const GraphState::NodeState &nodeState =
+          nodeIdToState->at(kernel.graphNodeId); // nodeIdToState must have the
+                                                 // nodeId
       if (nodeState.status.isMissingName()) {
         throw makeLogicError("Kernel name is missing for a graph node.");
       }
@@ -134,7 +227,7 @@ uint32_t processActivityKernel(
         if (targetEntryIdIter != nodeState.dataToEntryId.end()) {
           auto targetEntryId = targetEntryIdIter->second;
           if (auto kernelMetric =
-                  convertKernelActivityToMetric(activity, isMetricKernel)) {
+                  convertKernelActivityToMetric(kernel, isMetricKernel)) {
             entry.upsertLinkedMetric(std::move(kernelMetric), targetEntryId);
             detail::updateDataPhases(dataPhases, data, entry.phase);
           }
@@ -146,9 +239,9 @@ uint32_t processActivityKernel(
       // Since we don't have per-node info, we just attach the kernel metric to
       // the graph launch entry without creating a child entry for the node.
       for (auto &[data, entry] : externState.dataToEntry) {
-        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+        if (auto kernelMetric = convertKernelActivityToMetric(kernel)) {
           auto childEntry =
-              data->addOp(entry.phase, entry.id, {Context(kernel->name)});
+              data->addOp(entry.phase, entry.id, {Context(kernel.name)});
           childEntry.upsertMetric(std::move(kernelMetric));
           detail::updateDataPhases(dataPhases, data, childEntry.phase);
         }
@@ -167,20 +260,30 @@ uint32_t processActivityKernel(
   return correlationId;
 }
 
-uint32_t processActivity(
+uint64_t processActivity(
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
         &externIdToStateCache,
     std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
-    CUpti_Activity *activity) {
-  auto correlationId = 0;
+    CUpti_Activity *activity
+#if CUPTI_API_VERSION >= 130200
+    ,
+    const CUpti_ActivityRecordLayout *layout = nullptr
+#endif
+) {
+  uint64_t correlationId = 0;
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
     correlationId =
         processActivityKernel(corrIdToExternId, externIdToState,
-                              externIdToStateCache, dataPhases, activity);
+                              externIdToStateCache, dataPhases, activity
+#if CUPTI_API_VERSION >= 130200
+                              ,
+                              layout
+#endif
+        );
     break;
   }
   default:
@@ -376,10 +479,28 @@ struct CuptiProfiler::CuptiProfilerPimpl
   void doFlush() override;
   void doStop() override;
 
+  static void allocBufferImpl(uint8_t **buffer, size_t *bufferSize,
+                              size_t *maxNumRecords);
+  static void
+  completeBufferImpl(uint8_t *buffer, size_t validSize
+#if CUPTI_API_VERSION >= 130200
+                     ,
+                     const CUpti_BufferCallbackCompleteInfo *bufferCompleteInfo
+#endif
+  );
+
   static void allocBuffer(uint8_t **buffer, size_t *bufferSize,
                           size_t *maxNumRecords);
   static void completeBuffer(CUcontext context, uint32_t streamId,
                              uint8_t *buffer, size_t size, size_t validSize);
+#if CUPTI_API_VERSION >= 130200
+  static void allocBufferV2(uint8_t **buffer, size_t *bufferSize,
+                            size_t *maxNumRecords,
+                            CUpti_BufferCallbackRequestInfo *bufferRequestInfo);
+  static void
+  completeBufferV2(uint8_t *buffer, size_t size, size_t validSize,
+                   CUpti_BufferCallbackCompleteInfo *bufferCompleteInfo);
+#endif
   static void callbackFn(void *userData, CUpti_CallbackDomain domain,
                          CUpti_CallbackId cbId, const void *cbData);
 
@@ -391,8 +512,11 @@ struct CuptiProfiler::CuptiProfilerPimpl
   CuptiPCSampling pcSampling;
 
   ThreadSafeMap<uint32_t, GraphState> graphStates;
+  bool userDefinedActivityRecordsEnabled{false};
 
 private:
+  void enableKernelActivity(CUpti_ActivityKind activityKind);
+  void disableKernelActivity(CUpti_ActivityKind activityKind);
   void handleGraphResourceCallbacks(CuptiProfiler &profiler,
                                     CUpti_CallbackId cbId,
                                     CUpti_GraphData *graphData);
@@ -412,9 +536,9 @@ private:
                           const void *cbData);
 };
 
-void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
-                                                    size_t *bufferSize,
-                                                    size_t *maxNumRecords) {
+void CuptiProfiler::CuptiProfilerPimpl::allocBufferImpl(uint8_t **buffer,
+                                                        size_t *bufferSize,
+                                                        size_t *maxNumRecords) {
   const auto envBufferSize =
       getIntEnv("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024);
   *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, envBufferSize));
@@ -425,13 +549,31 @@ void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
   *maxNumRecords = 0;
 }
 
-void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
-                                                       uint32_t streamId,
-                                                       uint8_t *buffer,
-                                                       size_t size,
-                                                       size_t validSize) {
+void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
+                                                    size_t *bufferSize,
+                                                    size_t *maxNumRecords) {
+  allocBufferImpl(buffer, bufferSize, maxNumRecords);
+}
+
+#if CUPTI_API_VERSION >= 130200
+void CuptiProfiler::CuptiProfilerPimpl::allocBufferV2(
+    uint8_t **buffer, size_t *bufferSize, size_t *maxNumRecords,
+    CUpti_BufferCallbackRequestInfo *bufferRequestInfo) {
+  (void)bufferRequestInfo;
+  allocBufferImpl(buffer, bufferSize, maxNumRecords);
+}
+#endif
+
+void CuptiProfiler::CuptiProfilerPimpl::completeBufferImpl(
+    uint8_t *buffer, size_t validSize
+#if CUPTI_API_VERSION >= 130200
+    ,
+    const CUpti_BufferCallbackCompleteInfo *bufferCompleteInfo
+#endif
+) {
   CuptiProfiler &profiler = threadState.profiler;
-  uint32_t maxCorrelationId = 0;
+  auto *pImpl = dynamic_cast<CuptiProfilerPimpl *>(profiler.pImpl.get());
+  uint64_t maxCorrelationId = 0;
   static thread_local std::map<Data *, size_t> dataFlushedPhases;
   std::map<Data *, std::pair<size_t, size_t>> dataPhases;
   CUptiResult status;
@@ -441,10 +583,23 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   do {
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
     if (status == CUPTI_SUCCESS) {
+#if CUPTI_API_VERSION >= 130200
+      const CUpti_ActivityRecordLayout *layout = nullptr;
+      if (pImpl->userDefinedActivityRecordsEnabled &&
+          bufferCompleteInfo != nullptr &&
+          bufferCompleteInfo->ppRecordLayouts != nullptr) {
+        layout = bufferCompleteInfo->ppRecordLayouts[activity->kind];
+      }
+      auto correlationId =
+          processActivity(profiler.correlation.corrIdToExternId,
+                          profiler.correlation.externIdToState,
+                          externIdToStateCache, dataPhases, activity, layout);
+#else
       auto correlationId =
           processActivity(profiler.correlation.corrIdToExternId,
                           profiler.correlation.externIdToState,
                           externIdToStateCache, dataPhases, activity);
+#endif
       maxCorrelationId = std::max(maxCorrelationId, correlationId);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
@@ -458,6 +613,69 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   profiler.correlation.complete(maxCorrelationId);
   profiler.flushDataPhases(dataFlushedPhases, dataPhases,
                            profiler.pendingGraphPool.get());
+}
+
+void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
+                                                       uint32_t streamId,
+                                                       uint8_t *buffer,
+                                                       size_t size,
+                                                       size_t validSize) {
+  (void)ctx;
+  (void)streamId;
+  (void)size;
+  completeBufferImpl(buffer, validSize
+#if CUPTI_API_VERSION >= 130200
+                     ,
+                     nullptr
+#endif
+  );
+}
+
+#if CUPTI_API_VERSION >= 130200
+void CuptiProfiler::CuptiProfilerPimpl::completeBufferV2(
+    uint8_t *buffer, size_t size, size_t validSize,
+    CUpti_BufferCallbackCompleteInfo *bufferCompleteInfo) {
+  (void)size;
+  completeBufferImpl(buffer, validSize, bufferCompleteInfo);
+}
+#endif
+
+void CuptiProfiler::CuptiProfilerPimpl::enableKernelActivity(
+    CUpti_ActivityKind activityKind) {
+#if CUPTI_API_VERSION >= 130200
+  if (userDefinedActivityRecordsEnabled) {
+    static std::array<int, 9> namedKernelFields = {
+        KERNEL_FIELD_KIND,      KERNEL_FIELD_START,
+        KERNEL_FIELD_END,       KERNEL_FIELD_DEVICE_ID,
+        KERNEL_FIELD_STREAM_ID, KERNEL_FIELD_CORRELATION_ID,
+        KERNEL_FIELD_GRAPH_ID,  KERNEL_FIELD_GRAPH_NODE_ID,
+        KERNEL_FIELD_NAME,
+    };
+    auto &selectedFields = namedKernelFields;
+    CUpti_ActivityFieldSelection fieldSelection{};
+    fieldSelection.structSize = sizeof(fieldSelection);
+    fieldSelection.pFieldIds = selectedFields.data();
+    fieldSelection.numFields = selectedFields.size();
+
+    CUpti_ActivityConfig activityConfig{};
+    activityConfig.structSize = sizeof(activityConfig);
+    activityConfig.fieldSelection = fieldSelection;
+    cupti::activityEnableV2<true>(subscriber, activityKind, &activityConfig);
+    return;
+  }
+#endif
+  cupti::activityEnable<true>(activityKind);
+}
+
+void CuptiProfiler::CuptiProfilerPimpl::disableKernelActivity(
+    CUpti_ActivityKind activityKind) {
+#if CUPTI_API_VERSION >= 130200
+  if (userDefinedActivityRecordsEnabled) {
+    cupti::activityDisableV2<true>(subscriber, activityKind, nullptr);
+    return;
+  }
+#endif
+  cupti::activityDisable<true>(activityKind);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
@@ -764,16 +982,36 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
 
 void CuptiProfiler::CuptiProfilerPimpl::doStart() {
   cupti::subscribe<true>(&subscriber, callbackFn, nullptr);
+#if CUPTI_API_VERSION >= 130200
+  uint32_t cuptiVersion = 0;
+  cupti::getVersion<true>(&cuptiVersion);
+  userDefinedActivityRecordsEnabled = cuptiVersion >= 130200;
+  if (userDefinedActivityRecordsEnabled) {
+    size_t valueSize = sizeof(uint8_t);
+    uint8_t enabled = 1;
+    cupti::activitySetAttribute<true>(CUPTI_ACTIVITY_ATTR_USER_DEFINED_RECORDS,
+                                      &valueSize, &enabled);
+  }
+#endif
   if (profiler.pcSamplingEnabled) {
     setResourceCallbacks(subscriber, /*enable=*/true);
     // Continuous PC sampling is not compatible with concurrent kernel profiling
-    cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
+    enableKernelActivity(CUPTI_ACTIVITY_KIND_KERNEL);
   } else {
-    cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
+    enableKernelActivity(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
     if (getBoolEnv("TRITON_ENABLE_HW_TRACE", false))
       cupti::activityEnableHWTrace<true>(/*enable=*/1);
   }
+#if CUPTI_API_VERSION >= 130200
+  if (userDefinedActivityRecordsEnabled) {
+    cupti::activityRegisterCallbacksV2<true>(subscriber, allocBufferV2,
+                                             completeBufferV2);
+  } else {
+    cupti::activityRegisterCallbacks<true>(allocBuffer, completeBuffer);
+  }
+#else
   cupti::activityRegisterCallbacks<true>(allocBuffer, completeBuffer);
+#endif
   setGraphCallbacks(subscriber, /*enable=*/true);
   setLaunchCallbacks(subscriber, /*enable=*/true);
   if (getBoolEnv("TRITON_ENABLE_NVTX", true)) {
@@ -818,9 +1056,9 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
     if (cuContext)
       pcSampling.finalize(cuContext);
     setResourceCallbacks(subscriber, /*enable=*/false);
-    cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
+    disableKernelActivity(CUPTI_ACTIVITY_KIND_KERNEL);
   } else {
-    cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
+    disableKernelActivity(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
     if (getBoolEnv("TRITON_ENABLE_HW_TRACE", false))
       cupti::activityEnableHWTrace<true>(/*enable=*/0);
   }
