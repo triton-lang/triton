@@ -833,6 +833,13 @@ class TritonSemantic(Generic[TensorTy]):
             assert self.builder.codegen_fns.get(
                 "convert_custom_types") is not None, "target doesn't provide conversion for this type."
             return self.builder.codegen_fns["convert_custom_types"](input, dst_ty, fp_downcast_rounding, _semantic=self)
+        # Pre-sm89 software fallback for fp8e4nv: the NVIDIA backend registers
+        # a codegen_fn that raises a clean compile-time error rather than
+        # letting the MLIR-to-LLVM lowering pass abort via report_fatal_error.
+        if (src_sca_ty.is_fp8e4nv() or dst_sca_ty.is_fp8e4nv()):
+            _fn = self.builder.codegen_fns.get("convert_fp8e4nv_pre_sm89")
+            if _fn is not None:
+                return _fn(input, dst_ty, fp_downcast_rounding, _semantic=self)
         # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
         # and non-default rounding modes for downcasting
         if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
@@ -1444,8 +1451,9 @@ class TritonSemantic(Generic[TensorTy]):
 
         uses_fp8e4b8 = lhs.dtype.is_fp8e4b8() or rhs.dtype.is_fp8e4b8()
         uses_fp8e5b16 = lhs.dtype.is_fp8e5b16() or rhs.dtype.is_fp8e5b16()
-        if uses_fp8e4b8 or uses_fp8e5b16:
-            type_name = "fp8e4b8" if uses_fp8e4b8 else "fp8e5b16"
+        uses_fp8e4nv = lhs.dtype.is_fp8e4nv() or rhs.dtype.is_fp8e4nv()
+        if uses_fp8e4b8 or uses_fp8e5b16 or uses_fp8e4nv:
+            type_name = "fp8e4b8" if uses_fp8e4b8 else ("fp8e5b16" if uses_fp8e5b16 else "fp8e4nv")
             if type_name in self.builder.options.deprecated_fp8_dot_operand_dtypes:
                 arch = self.builder.options.arch
                 warnings.warn(

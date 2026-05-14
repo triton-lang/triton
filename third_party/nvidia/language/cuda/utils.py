@@ -107,3 +107,24 @@ def convert_custom_float8_sm80(arg, dst_ty, fp_downcast_rounding=None, _semantic
 @core.builtin
 def convert_custom_float8_sm70(arg, dst_ty, fp_downcast_rounding=None, _semantic=None):
     return convert_custom_float8(arg, dst_ty, fp_downcast_rounding, has_minx2=False, _semantic=_semantic)
+
+
+@core.builtin
+def convert_fp8e4nv_pre_sm89(arg, dst_ty, fp_downcast_rounding=None, _semantic=None):
+    """Raises a clean compile-time error for fp8e4nv casts on pre-sm89.
+
+    fp8e4nv is in supported_fp8_dtypes for all capabilities so that kernel
+    signatures with *fp8e4nv pointers can compile (load/store/pass-through).
+    However, no software PTX path exists for fp8e4nv conversion on cc<89, so
+    casts to/from fp8e4nv must be rejected with a clean message rather than
+    surfacing the deeper C++ llvm::report_fatal_error from MLIR-to-LLVM
+    lowering. Registered as codegen_fns["convert_fp8e4nv_pre_sm89"] when
+    capability < 89.
+    """
+    supported = _semantic.builder.options.supported_fp8_dtypes
+    raise ValueError(
+        f"type fp8e4nv not supported in this architecture for compute "
+        f"(no native or software conversion below compute capability 89). "
+        f"The supported fp8 dtypes are {supported}. "
+        f"Pre-sm89 kernels may pass fp8e4nv pointers opaquely "
+        f"(load/store/pass-through) but cannot convert to/from fp8e4nv.")

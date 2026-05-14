@@ -284,7 +284,13 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
         if src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9):
-            pytest.skip("fp8e4nv conversion is not supported on cc<8.9")
+            # fp8e4nv signatures/loads/stores compile on pre-sm89 (supported_fp8_dtypes
+            # always includes it), but the actual cast must fail with a clean
+            # compile-time error -- verified via the NVIDIA backend's
+            # convert_fp8e4nv_pre_sm89 codegen_fn.
+            with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
+                upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), 4, 3, 7, 0x7e, device=device)
+            return
     elif is_hip():
         if src_dtype in FP8_DTYPES and is_hip_rdna3():
             pytest.skip(f"{src_dtype} is not supported on AMDGPU RDNA3")

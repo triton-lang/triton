@@ -204,6 +204,8 @@ class CUDABackend(BaseBackend):
         if "deprecated_fp8_dot_operand_dtypes" not in args:
             if capability >= 90:
                 args["deprecated_fp8_dot_operand_dtypes"] = ("fp8e4b15", )
+            elif capability < 89:
+                args["deprecated_fp8_dot_operand_dtypes"] = ("fp8e4nv", )
 
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
@@ -227,6 +229,14 @@ class CUDABackend(BaseBackend):
             cuda.convert_custom_float8_sm80 if capability >= 80 else cuda.convert_custom_float8_sm70, "min_dot_size":
             min_dot_size(self.target)
         }
+        # Pre-sm89 has no native fp8e4nv hardware and no integer-only PTX path.
+        # fp8e4nv is in supported_fp8_dtypes for all capabilities so opaque
+        # signature use (load/store/pass-through) compiles; this codegen_fn
+        # raises a clean compile-time error when semantic.cast() would
+        # otherwise produce an MLIR fp_to_fp that the C++ lowering rejects
+        # with llvm::report_fatal_error.
+        if capability < 89:
+            codegen_fns["convert_fp8e4nv_pre_sm89"] = cuda.convert_fp8e4nv_pre_sm89
         return codegen_fns
 
     def get_module_map(self) -> Dict[str, ModuleType]:
