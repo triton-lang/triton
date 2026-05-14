@@ -75,9 +75,8 @@ class Autotuner(KernelInterface):
         elif len(self.restore_value) > 0:
 
             def _post_hook(kwargs, exception):
-                for name in self.restore_value:
-                    if name in self.restore_copies:
-                        kwargs[name].copy_(self.restore_copies[name])
+                for name, value in self.restore_copies.items():
+                    kwargs[name].copy_(value)
                 self.restore_copies = {}
 
             self.post_hook = _post_hook
