@@ -483,6 +483,16 @@ public:
 
   size_t getCapacity() const { return capacity; }
 
+  size_t getWriteOffsetBytes(void *device) {
+    std::lock_guard<std::mutex> lock(bufferMutex);
+    auto it = deviceBuffers.find(device);
+    if (it == deviceBuffers.end() || it->second.hostOffset == nullptr) {
+      return 0;
+    }
+    const size_t capacityWords = capacity / sizeof(uint64_t);
+    return ((*it->second.hostOffset) % capacityWords) * sizeof(uint64_t);
+  }
+
   MetricDescriptor &getMetricDescriptor(uint64_t id) {
     std::shared_lock<std::shared_mutex> lock(metricDescriptorMutex);
     auto it = metricDescriptors.find(id);
