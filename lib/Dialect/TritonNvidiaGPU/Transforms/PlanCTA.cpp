@@ -121,12 +121,11 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
     if (Value other = scalarLoad.getOther())
       newOther = convertValueToLayout(loadBuilder, scalarLoad.getLoc(), other,
                                       newLoadLayout);
-    Operation *newLoad =
-        triton::LoadOp::create(loadBuilder, scalarLoad.getLoc(), newTy, newPtr,
-                               newMask, newOther, scalarLoad.getCache(),
-                               scalarLoad.getEvict(),
-                               scalarLoad.getIsVolatile())
-            .getOperation();
+    Operation *newLoad = triton::LoadOp::create(
+                             loadBuilder, scalarLoad.getLoc(), newTy, newPtr,
+                             newMask, newOther, scalarLoad.getCache(),
+                             scalarLoad.getEvict(), scalarLoad.getIsVolatile())
+                             .getOperation();
     newLoad->setAttrs(loadOp->getAttrs());
     return convertValueToLayout(builder, loc, newLoad->getResult(0), layout);
   }
