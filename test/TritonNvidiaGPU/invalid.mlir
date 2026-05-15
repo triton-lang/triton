@@ -302,6 +302,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#lhs_tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 16, colStride = 1>
+#acc_tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 256, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tcgen5_lhs_tmem_split_n(
+      %a: !ttg.memdesc<64x16xf16, #lhs_tmem, #ttng.tensor_memory>,
+      %b: !ttg.memdesc<16x512xf16, #shared, #ttg.shared_memory>,
+      %c: !ttg.memdesc<64x512xf32, #acc_tmem, #ttng.tensor_memory, mutable>,
+      %accUse: i1, %pred: i1) {
+    // expected-error @below {{does not support a 64-row TMEM LHS when the accumulator blockN is smaller than the result N dimension per CTA}}
+    ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred :
+       !ttg.memdesc<64x16xf16, #lhs_tmem, #ttng.tensor_memory>,
+       !ttg.memdesc<16x512xf16, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<64x512xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16, CGALayout = [[0, 0]]}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16, CGALayout = [[0, 1]]}>
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>

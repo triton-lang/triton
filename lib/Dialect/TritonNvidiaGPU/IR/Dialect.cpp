@@ -464,12 +464,27 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
     return enc && getTmemAllocSizes(memdesc).numRows != 64 &&
            enc.getBlockM() == 64;
   };
+  auto isSplitN64RowTMemLHS = [](MemDescType lhs, MemDescType acc) {
+    auto lhsEnc = dyn_cast<TensorMemoryEncodingAttr>(lhs.getEncoding());
+    auto accEnc = dyn_cast<TensorMemoryEncodingAttr>(acc.getEncoding());
+    if (!lhsEnc || !accEnc)
+      return false;
+    auto accShapePerCTA = ttg::getShapePerCTA(acc);
+    return getTmemAllocSizes(lhs).numRows == 64 &&
+           accEnc.getBlockN() < accShapePerCTA[1];
+  };
 
   auto itf = cast<MMAv5OpInterface>(op);
   if (isInterleaved(itf.getA().getType()) &&
       isInterleaved(itf.getAccumulator().getType())) {
     return op->emitOpError(
         "does not support blockM=64 with interleaved blocks in TMEM layout");
+  }
+  if (isSplitN64RowTMemLHS(itf.getA().getType(),
+                           itf.getAccumulator().getType())) {
+    return op->emitOpError(
+        "does not support a 64-row TMEM LHS when the accumulator blockN is "
+        "smaller than the result N dimension per CTA");
   }
   return success();
 }
