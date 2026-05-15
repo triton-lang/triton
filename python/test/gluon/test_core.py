@@ -376,6 +376,22 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
     ttgl.store(out_ptrs, out)
 
 
+@gluon.jit
+def tma_wrong_barrier_cga_layout_kernel(a_desc, b_desc, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                        acc_tmem_layout: ttgl.constexpr):
+    smem_a = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
+    smem_b = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
+    acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_tmem_layout)
+
+    bad_barrier_layout: ttgl.constexpr = mbarrier.MBarrierLayout(cga_layout=((0, ), (0, )))
+    bad_tma_bar = ttgl.allocate_shared_memory(ttgl.int64, [1], bad_barrier_layout)
+    mbarrier.init(bad_tma_bar, count=1)
+    mbarrier.expect(bad_tma_bar, a_desc.nbytes_per_cta)
+    tma.async_load(a_desc, [0, 0], bad_tma_bar, smem_a)
+
+    tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=False)
+
+
 def make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, two_cta_dim):
     ctas_per_cga = list(ctas_per_cga)
     cta_split = list(cta_split)
@@ -458,6 +474,45 @@ def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
     # but we do a commit.multicast::cluster so let's grep that one instead
     assert ("multicast::cluster" in compiled.asm["ptx"])
     torch.testing.assert_close(out, torch.matmul(a.to(out.dtype), b.to(out.dtype)))
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tma_rejects_wrong_barrier_cga_layout_in_two_cta_kernel(capfd):
+    ctas_per_cga = [2, 2]
+    ctas_per_cga_b = [1, 4]
+    block_m = 128 * ctas_per_cga[0]
+    block_n = 64 * ctas_per_cga_b[1]
+    block_k = 32
+    cga_layout_a = make_2cta_cga_layout(ctas_per_cga, [ctas_per_cga[0], 1], [1, 0], 0)
+    cga_layout_b = make_2cta_cga_layout(ctas_per_cga_b, [1, ctas_per_cga_b[1]], [1, 0], 1)
+    cga_layout_c = make_2cta_cga_layout(ctas_per_cga, ctas_per_cga, [1, 0], 0)
+
+    a = torch.empty((block_m, block_k), dtype=torch.float16, device="cuda")
+    b = torch.empty((block_k, block_n), dtype=torch.float16, device="cuda")
+    a_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_k], ttgl.float16, cga_layout=cga_layout_a)
+    b_layout = ttgl.NVMMASharedLayout.get_default_for([block_k, block_n], ttgl.float16, cga_layout=cga_layout_b)
+    a_desc = TensorDescriptor.from_tensor(a, [block_m, block_k], a_layout)
+    b_desc = TensorDescriptor.from_tensor(b, [block_k, block_n], b_layout)
+    acc_tmem_layout = TensorMemoryLayout(
+        block=(128, block_n // ctas_per_cga[1]),
+        col_stride=1,
+        two_ctas=True,
+        cga_layout=cga_layout_c,
+    )
+
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        tma_wrong_barrier_cga_layout_kernel.warmup(
+            a_desc,
+            b_desc,
+            block_m,
+            block_n,
+            acc_tmem_layout,
+            grid=(1, ),
+            num_warps=4,
+            num_ctas=4,
+        )
+    captured = capfd.readouterr()
+    assert "TMA barrier cga_layout must be [[1], [2]] or [[0], [1]], got [[0], [0]]" in (captured.out + captured.err)
 
 
 @gluon.jit

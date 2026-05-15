@@ -207,7 +207,9 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
     Args:
         tensor_desc: Tensor descriptor (tiled)
         coord: Coordinates in the source tensor
-        barrier: Barrier for synchronization
+        barrier: Barrier for synchronization. In a two-CTA kernel, use a
+            two-CTA barrier when this TMA load feeds a tcgen05 op; otherwise
+            use a barrier allocated with ``two_ctas=False``.
         result: Destination memory descriptor
         pred: Predicate for conditional execution
         multicast: Enable multicast
@@ -242,7 +244,9 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
             - For 3D tensors: 1 offset
             - For 4D tensors: 2 offsets
             - For 5D tensors: 3 offsets
-        barrier: Barrier for synchronization
+        barrier: Barrier for synchronization. In a two-CTA kernel, use a
+            two-CTA barrier when this TMA load feeds a tcgen05 op; otherwise
+            use a barrier allocated with ``two_ctas=False``.
         result: Destination memory descriptor
         pred: Predicate for conditional execution
         multicast: Enable multicast

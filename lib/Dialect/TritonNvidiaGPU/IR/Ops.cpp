@@ -333,17 +333,29 @@ static LogicalResult verifyTMABarrierLayout(Operation *op, Value barrier) {
 
   auto ctx = op->getContext();
   int numCTAs = gpu::lookupNumCTAs(op);
-  CGAEncodingAttr expectedCGALayout;
+  auto barrierTy = cast<MemDescType>(barrier.getType());
+  auto actualCGALayout = getCGALayout(barrierTy.getEncoding());
+  auto oneCTACGALayout = CGAEncodingAttr::get1DLayout(ctx, numCTAs);
+  if (actualCGALayout == oneCTACGALayout)
+    return success();
+
   if (twoCTAsAttr.getValue()) {
     auto kBlock = StringAttr::get(ctx, "block");
     auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
     auto layout = LinearLayout::zeros1D(2, kBlock, dim) *
                   LinearLayout::identity1D(numCTAs / 2, kBlock, dim);
-    expectedCGALayout = CGAEncodingAttr::get(ctx, std::move(layout));
-  } else {
-    expectedCGALayout = CGAEncodingAttr::get1DLayout(ctx, numCTAs);
+    auto twoCTACGALayout = CGAEncodingAttr::get(ctx, std::move(layout));
+    if (actualCGALayout == twoCTACGALayout)
+      return success();
+    return op->emitOpError() << "TMA barrier cga_layout must be "
+                             << formatCGALayout(oneCTACGALayout) << " or "
+                             << formatCGALayout(twoCTACGALayout) << ", got "
+                             << formatCGALayout(actualCGALayout);
   }
-  return verifyBarrierCGALayout(op, barrier, expectedCGALayout, "TMA barrier");
+
+  return op->emitOpError() << "TMA barrier cga_layout must be "
+                           << formatCGALayout(oneCTACGALayout) << ", got "
+                           << formatCGALayout(actualCGALayout);
 }
 
 static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
