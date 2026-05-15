@@ -238,8 +238,8 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
       secondHalfOffset = (row << 16) | col;
       if (*secondHalfOffset == 0) {
         // Workaround for ptxas bug, we cannot use secondHalfOffset = 0 to write
-        // only 16 elements. For unpacked scale stores, write a padded 32-row
-        // message instead of using an adjacent half-warp-pair offset.
+        // only 16 elements. For unpacked scale stores, write the padded half at
+        // row +16 in the same column instead of using an adjacent column offset.
         if (!isScales) {
           if (emitError) {
             emitError()
@@ -248,22 +248,17 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
           return failure();
         }
         if (unpacked) {
-          secondHalfOffset = std::nullopt;
-          msgInfo = {TMemAccessAtom::I32x32b, reps, perm, numRegsPerMessage};
+          secondHalfOffset = 16 << 16;
         } else {
           secondHalfOffset = 1;
-          msgInfo = {TMemAccessAtom::I16x32bx2, reps, perm, numRegsPerMessage};
         }
-      } else {
-        msgInfo = {TMemAccessAtom::I16x32bx2, reps, perm, numRegsPerMessage};
       }
       // We "quotient it out", meaning we remove the last basis from reps
       auto basis = reps.getBases();
       basis[kLane][4] = {0, 0};
       reps = LinearLayout(std::move(basis), reps.getOutDims(),
                           /*isSurjective=*/false);
-      if (msgInfo)
-        msgInfo->reps = reps;
+      msgInfo = {TMemAccessAtom::I16x32bx2, reps, perm, numRegsPerMessage};
     }
   }
 

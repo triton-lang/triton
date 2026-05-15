@@ -1060,12 +1060,10 @@ tt.func private @load_store_16x32bx1_broadcast(%arg0: !ttg.memdesc<16x8xi8, #tme
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 
 module attributes {"ttg.num-warps" = 4 : i32} {
-// CHECK-LABEL: @load_store_16x2_scales_uses_padded_32x32b
-tt.func private @load_store_16x2_scales_uses_padded_32x32b(%arg0: !ttg.memdesc<16x2xi8, #tmem_scales, #ttng.tensor_memory, mutable>, %arg1: tensor<16x2xi8, #linear>) {
+// CHECK-LABEL: @load_store_16x2_scales_uses_row16_second_half
+tt.func private @load_store_16x2_scales_uses_row16_second_half(%arg0: !ttg.memdesc<16x2xi8, #tmem_scales, #ttng.tensor_memory, mutable>, %arg1: tensor<16x2xi8, #linear>) {
   %true = arith.constant true
-  // CHECK-NOT: 16x32bx2
-  // CHECK: @$0 tcgen05.st.sync.aligned.32x32b.x1.unpack::16b.b32 [$1 + 0], {$2}
-  // CHECK-NOT: 16x32bx2
+  // CHECK: @$0 tcgen05.st.sync.aligned.16x32bx2.x1.unpack::16b.b32 [$1 + 0], 1048576, {$2}
   // CHECK: llvm.return
   ttng.tmem_store %arg1, %arg0, %true : tensor<16x2xi8, #linear> -> !ttg.memdesc<16x2xi8, #tmem_scales, #ttng.tensor_memory, mutable>
   tt.return
