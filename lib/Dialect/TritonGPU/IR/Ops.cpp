@@ -1115,14 +1115,11 @@ LogicalResult MemDescSubsliceOp::verify() {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
 
-  // If any block basis is fully broadcasted, multiple CTAs can alias the same
-  // output tile region. Subslice on such layouts is unsupported.
   auto kBlock = mlir::StringAttr::get(ctx, "block");
-  if (ll.getFreeVariableMasks()[kBlock] != 0) {
-    return emitError("We don't support splitting with broadcasted CTA outputs");
-  }
-
-  auto llInv = ll.invert();
+  // Broadcasted CTA bases make the shared layout non-injective, but they don't
+  // matter for recovering the unique offset / non-broadcast CTA components of a
+  // split. Strip those zero bases before inverting.
+  auto llInv = ll.removeZeroBasesAlongDim(kBlock).invert();
   for (auto dim : splitDims) {
     auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
     llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;

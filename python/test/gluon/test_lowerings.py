@@ -1901,6 +1901,59 @@ def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, shared_layout_cfg, dev
     torch.testing.assert_close(out, out_ref, rtol=0, atol=0)
 
 
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
+def test_memdesc_subslice_multi_cta_broadcasted_cga(device):
+    M, N = 64, 64
+    SLICE_M = 32
+    cga_layout = _make_cga_broadcast(2, 2)
+    blocked_layout = ttgl.BlockedLayout(
+        size_per_thread=[1, 8],
+        threads_per_warp=[THREADS_PER_WARP // 4, 4],
+        warps_per_cta=[4, 1],
+        order=[1, 0],
+        cga_layout=cga_layout,
+    )
+    shared_layout = ttgl.SwizzledSharedLayout(
+        vec=1,
+        per_phase=1,
+        max_phase=1,
+        order=[1, 0],
+        cga_layout=cga_layout,
+    )
+
+    @gluon.jit
+    def kernel(
+        in_ptr,
+        out_ptr,
+        M: ttgl.constexpr,
+        N: ttgl.constexpr,
+        SLICE_M: ttgl.constexpr,
+        blocked_layout: ttgl.constexpr,
+        shared_layout: ttgl.constexpr,
+    ):
+        offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, blocked_layout))[:, None]
+        offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, blocked_layout))[None, :]
+        vals = ttgl.load(in_ptr + offs_m * N + offs_n)
+
+        smem = ttgl.allocate_shared_memory(vals.dtype, (M, N), shared_layout, value=vals)
+        ttgl.barrier(cluster=True)
+
+        tile = smem.slice(0, SLICE_M, dim=0)
+        tile_vals = tile.load(blocked_layout)
+
+        tile_offs_m = ttgl.arange(0, SLICE_M, layout=ttgl.SliceLayout(1, blocked_layout))[:, None]
+        tile_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, blocked_layout))[None, :]
+        ttgl.store(out_ptr + tile_offs_m * N + tile_offs_n, tile_vals)
+
+    inp = torch.arange(0, M * N, device=device, dtype=torch.int32).reshape((M, N))
+    out = torch.zeros_like(inp)
+    kernel[(1, )](inp, out, M, N, SLICE_M, blocked_layout, shared_layout, num_warps=4, num_ctas=2)
+
+    out_ref = torch.zeros_like(inp)
+    out_ref[:SLICE_M, :] = inp[:SLICE_M, :]
+    torch.testing.assert_close(out, out_ref, rtol=0, atol=0)
+
+
 @pytest.mark.skipif(is_cuda(), reason="PartitionedSharedLayout is not supported in NV backend")
 @pytest.mark.parametrize("M, K", [(64, 32), (128, 64)])
 @pytest.mark.parametrize("num_partitions", [2, 4])
