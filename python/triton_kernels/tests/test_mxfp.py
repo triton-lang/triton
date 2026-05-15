@@ -53,7 +53,7 @@ def _upcast_mxfp4_tile_kernel(
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
-@pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16"])
+@pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
 def test_mxfp4_tile_upcast_matches_reference(dst_dtype, device):
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
@@ -66,7 +66,11 @@ def test_mxfp4_tile_upcast_matches_reference(dst_dtype, device):
 
     ref = upcast_from_mxfp(tensor, scale, dst_dtype, axis=-1)
     out = torch.empty_like(ref)
-    tile_dtype = tl.float16 if dst_dtype == torch.float16 else tl.bfloat16
+    tile_dtype = {
+        torch.float16: tl.float16,
+        torch.bfloat16: tl.bfloat16,
+        torch.float32: tl.float32,
+    }[dst_dtype]
     _upcast_mxfp4_tile_kernel[(1, )](
         out,
         tensor,

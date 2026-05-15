@@ -11,19 +11,16 @@ def upcast_mxfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
     tl.static_assert(len(scale.shape) == 2)
     tl.static_assert(tensor.dtype == tl.uint8)
     tl.static_assert(dst_dtype == tl.float16 or dst_dtype == tl.bfloat16 or dst_dtype == tl.float32)
-    tl.static_assert(scale.dtype == tl.uint8 or scale.dtype == tl.float8e4nv)
+    tl.static_assert(scale.dtype == tl.uint8)
     tl.static_assert(tensor.shape[0] == scale.shape[0])
     tl.static_assert(tensor.shape[1] * 2 == scale.shape[1] * MXFP_BLOCK_SIZE)
 
-    scale_is_ocp: tl.constexpr = scale.dtype == tl.uint8
-    if scale_is_ocp and dst_dtype == tl.bfloat16:
+    if dst_dtype == tl.bfloat16:
         dst_scale = (scale.to(tl.uint16) << 7).to(dst_dtype, bitcast=True)
-    elif scale_is_ocp:
+    else:
         dst_scale = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
         if dst_dtype == tl.float16:
             dst_scale = dst_scale.to(tl.float16)
-    else:
-        dst_scale = scale.to(dst_dtype)
 
     intermediate_dtype: tl.constexpr = tl.bfloat16 if dst_dtype == tl.float32 else dst_dtype
     if cuda_capability_geq(10, 0):
@@ -79,8 +76,7 @@ def upcast_mxfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
         tl.static_assert(dst_dtype == tl.float16)
         max_fin = 65504
     out_tensor = tl.clamp(out_tensor, min=-max_fin, max=max_fin)
-    if scale_is_ocp:
-        out_tensor = tl.where(scale == 0xFF, float("nan"), out_tensor)
+    out_tensor = tl.where(scale == 0xFF, float("nan"), out_tensor)
     return out_tensor.to(dst_dtype).reshape([tensor.shape[0], tensor.shape[1] * 2])
 
 
