@@ -555,7 +555,7 @@ SmallVector<Value> computeLocalPtrs(Location loc,
                           : toLinearLayout(memDescTy);
   auto kBlock = str_attr("block");
   LinearLayout invSharedLayout =
-      sharedLayout.removeZeroBasesAlongDim(kBlock).invert();
+      sharedLayout.removeZeroBasesAlongDim(kBlock).pseudoinvert();
 
   // Get layout dimension names for all dims
   SmallVector<StringAttr> allDims;
@@ -1274,7 +1274,7 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
   auto dimNames = standardOutDimNames(ctx, shape.size());
   // Map from dimNames to offset, block
   auto kBlock = str_attr("block");
-  auto invLl = totalLl.removeZeroBasesAlongDim(kBlock).invert();
+  auto invLl = totalLl.removeZeroBasesAlongDim(kBlock).pseudoinvert();
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
   for (auto dim : standardOutDimNames(srcTy.getContext(), shape.size())) {
     logicalOffsets.push_back({dim, 0});
@@ -1324,9 +1324,10 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
   auto kBlock = str_attr("block");
   // Broadcasted block bases do not affect the logical offset within shared
   // memory, but they make the full layout non-injective. Strip them before
-  // inverting, then discard the block component of the pseudoinverse result.
+  // taking the pseudoinverse, then discard the block component of the result.
   auto offset = applyLinearLayout(loc, rewriter,
-                                  ll.removeZeroBasesAlongDim(kBlock).invert(),
+                                  ll.removeZeroBasesAlongDim(kBlock)
+                                      .pseudoinvert(),
                                   logicalOffsets)[0]
                     .second;
   return offset;

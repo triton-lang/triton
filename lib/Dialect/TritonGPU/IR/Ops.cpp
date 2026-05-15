@@ -1118,8 +1118,8 @@ LogicalResult MemDescSubsliceOp::verify() {
   auto kBlock = mlir::StringAttr::get(ctx, "block");
   // Broadcasted CTA bases make the shared layout non-injective, but they don't
   // matter for recovering the unique offset / non-broadcast CTA components of a
-  // split. Strip those zero bases before inverting.
-  auto llInv = ll.removeZeroBasesAlongDim(kBlock).invert();
+  // split. Strip those zero bases before taking the pseudoinverse.
+  auto llInv = ll.removeZeroBasesAlongDim(kBlock).pseudoinvert();
   for (auto dim : splitDims) {
     auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
     llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
