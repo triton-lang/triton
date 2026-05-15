@@ -76,12 +76,15 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 #load_src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#load_src_b = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
 #dot_default_load = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
 #dot_a_load = #ttg.dot_op<{opIdx = 0, parent = #dot_default_load}>
 #dot_b_load = #ttg.dot_op<{opIdx = 1, parent = #dot_default_load}>
 
 // CHECK-DAG: #[[LOAD_ORIG:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
 // CHECK-DAG: #[[LOAD_PLANNED:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 0\]\]}}}>
+// CHECK-DAG: #[[LOAD_B_ORIG:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
+// CHECK-DAG: #[[LOAD_B_PLANNED:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
 // CHECK-DAG: #[[DOT_DEFAULT_LOAD:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
 // CHECK-DAG: #[[DOT_OPT_LOAD:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
@@ -89,17 +92,23 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[ORIG_LOAD:.*]] = tt.load %{{.*}} : tensor<128x32x!tt.ptr<f16>, #[[LOAD_ORIG]]>
   // CHECK: %[[PTRS:.*]] = ttg.convert_layout %{{.*}} : tensor<128x32x!tt.ptr<f16>, #[[LOAD_ORIG]]> -> tensor<128x32x!tt.ptr<f16>, #[[LOAD_PLANNED]]>
   // CHECK: %[[LOAD:.*]] = tt.load %[[PTRS]] : tensor<128x32x!tt.ptr<f16>, #[[LOAD_PLANNED]]>
+  // CHECK: %[[B_PTRS:.*]] = ttg.convert_layout %{{.*}} : tensor<32x128x!tt.ptr<f16>, #[[LOAD_B_ORIG]]> -> tensor<32x128x!tt.ptr<f16>, #[[LOAD_B_PLANNED]]>
+  // CHECK: %[[B_LOAD:.*]] = tt.load %[[B_PTRS]] : tensor<32x128x!tt.ptr<f16>, #[[LOAD_B_PLANNED]]>
   // CHECK: tt.store %{{.*}}, %[[ORIG_LOAD]] : tensor<128x32x!tt.ptr<f16>, #[[LOAD_ORIG]]>
   // CHECK: ttg.convert_layout %[[LOAD]] : tensor<128x32xf16, #[[LOAD_PLANNED]]> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[DOT_OPT_LOAD]]}>>
+  // CHECK: ttg.convert_layout %[[B_LOAD]] : tensor<32x128xf16, #[[LOAD_B_PLANNED]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[DOT_OPT_LOAD]]}>>
   tt.func @dot_clones_load_source(
     %ptrs: tensor<128x32x!tt.ptr<f16>, #load_src>,
     %out: tensor<128x32x!tt.ptr<f16>, #load_src>,
-    %b: tensor<32x128xf16, #dot_b_load>,
+    %b_ptrs: tensor<32x128x!tt.ptr<f16>, #load_src_b>,
     %c: tensor<128x128xf32, #dot_default_load>) {
     %a = tt.load %ptrs : tensor<128x32x!tt.ptr<f16>, #load_src>
+    %b = tt.load %b_ptrs : tensor<32x128x!tt.ptr<f16>, #load_src_b>
     tt.store %out, %a : tensor<128x32x!tt.ptr<f16>, #load_src>
-    %ad = ttg.convert_layout %a : tensor<128x32xf16, #load_src> -> tensor<128x32xf16, #dot_a_load>
-    %dot = tt.dot %ad, %b, %c : tensor<128x32xf16, #dot_a_load> * tensor<32x128xf16, #dot_b_load> -> tensor<128x128xf32, #dot_default_load>
+    %a_blocked = ttg.convert_layout %a : tensor<128x32xf16, #load_src> -> tensor<128x32xf16, #dot_default_load>
+    %ad = ttg.convert_layout %a_blocked : tensor<128x32xf16, #dot_default_load> -> tensor<128x32xf16, #dot_a_load>
+    %bd = ttg.convert_layout %b : tensor<32x128xf16, #load_src_b> -> tensor<32x128xf16, #dot_b_load>
+    %dot = tt.dot %ad, %bd, %c : tensor<128x32xf16, #dot_a_load> * tensor<32x128xf16, #dot_b_load> -> tensor<128x128xf32, #dot_default_load>
     tt.return
   }
 }
