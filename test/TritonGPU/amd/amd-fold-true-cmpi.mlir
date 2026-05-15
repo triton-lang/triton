@@ -17,7 +17,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // -----
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module {
   tt.func @assumepid(%arg0: !tt.ptr<f32>) -> tensor<1024xf32> {
     %c0 = arith.constant 0 : i32
     %c1024_i32 = arith.constant 1024 : i32
@@ -36,16 +36,44 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @assumepid(
 // CHECK-SAME:                       %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<1024xf32> {
-// CHECK:           %[[VAL_1:.*]] = arith.constant true
-// CHECK:           %[[VAL_2:.*]] = arith.constant 1024 : i32
-// CHECK:           %[[VAL_3:.*]] = tt.get_program_id x : i32
-// CHECK:           llvm.intr.assume %[[VAL_1]] : i1
-// CHECK:           llvm.intr.assume %[[VAL_1]] : i1
-// CHECK:           %[[VAL_4:.*]] = arith.muli %[[VAL_3]], %[[VAL_2]] : i32
-// CHECK:           %[[VAL_5:.*]] = tt.addptr %[[VAL_0]], %[[VAL_4]] : !tt.ptr<f32>, i32
-// CHECK:           %[[VAL_6:.*]] = tt.splat %[[VAL_5]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
-// CHECK:           %[[VAL_7:.*]] = tt.load %[[VAL_6]] : tensor<1024x!tt.ptr<f32>>
-// CHECK:           tt.return %[[VAL_7]] : tensor<1024xf32>
+// CHECK:           %[[C0:.*]] = arith.constant 0 : i32
+// CHECK:           %[[C1024:.*]] = arith.constant 1024 : i32
+// CHECK:           %[[PID:.*]] = tt.get_program_id x : i32
+// CHECK:           %[[CMPLE:.*]] = arith.cmpi sle, %[[PID]], %[[C1024]] : i32
+// CHECK:           llvm.intr.assume %[[CMPLE]] : i1
+// CHECK:           %[[CMPGE:.*]] = arith.cmpi sge, %[[PID]], %[[C0]] : i32
+// CHECK:           llvm.intr.assume %[[CMPGE]] : i1
+// CHECK:           %[[OFFSET:.*]] = arith.muli %[[PID]], %[[C1024]] : i32
+// CHECK:           %[[PTR:.*]] = tt.addptr %[[VAL_0]], %[[OFFSET]] : !tt.ptr<f32>, i32
+// CHECK:           %[[SPLAT:.*]] = tt.splat %[[PTR]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[LOAD:.*]] = tt.load %[[SPLAT]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:           tt.return %[[LOAD]] : tensor<1024xf32>
+// CHECK:         }
+
+// -----
+
+module {
+  tt.func @assume_and_return_use(%arg0: !tt.ptr<f32>) -> i1 {
+    %c0 = arith.constant 0 : i32
+    %c1024_i32 = arith.constant 1024 : i32
+    %pid = tt.get_program_id x : i32
+    %cmpsle = arith.cmpi sle, %pid, %c1024_i32 : i32
+    llvm.intr.assume %cmpsle : i1
+    %cmpsge = arith.cmpi sge, %pid, %c0 : i32
+    llvm.intr.assume %cmpsge : i1
+    tt.return %cmpsle: i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @assume_and_return_use(
+// CHECK-SAME:    %[[VAL_0:.*]]: !tt.ptr<f32>) -> i1 {
+// CHECK:           %[[TRUE:.*]] = arith.constant true
+// CHECK:           %[[C1024:.*]] = arith.constant 1024 : i32
+// CHECK:           %[[PID:.*]] = tt.get_program_id x : i32
+// CHECK:           %[[CMPLE:.*]] = arith.cmpi sle, %[[PID]], %[[C1024]] : i32
+// CHECK:           llvm.intr.assume %[[CMPLE]] : i1
+// CHECK:           llvm.intr.assume
+// CHECK:           tt.return %[[TRUE]] : i1
 // CHECK:         }
 
 // -----
@@ -147,14 +175,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_33:.*]]:6 = scf.for
 // CHECK:             scf.yield
 // CHECK:           }
-// CHECK-NEXT:      %[[VAL_54:.*]] = ttg.local_load %[[VAL_55:.*]]#4 : !ttg.memdesc<128x32xf16, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$ATTR_2]], kWidth = 2}>>
+// CHECK:           %[[VAL_54:.*]] = ttg.local_load %[[VAL_55:.*]]#4 : !ttg.memdesc<128x32xf16, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$ATTR_2]], kWidth = 2}>>
 // CHECK-NEXT:      %[[VAL_56:.*]] = ttg.local_load %[[VAL_55]]#5 : !ttg.memdesc<32x128xf16, #[[$ATTR_4]], #[[$ATTR_5]], mutable> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$ATTR_2]], kWidth = 2}>>
 // CHECK-NEXT:      %[[VAL_57:.*]] = arith.mulf %[[VAL_56]], %[[VAL_8]] : tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$ATTR_2]], kWidth = 2}>>
-// CHECK-NEXT:      llvm.intr.assume %[[VAL_7]] : i1
-// CHECK-NEXT:      %[[VAL_58:.*]] = tt.dot %[[VAL_54]], %[[VAL_57]], %[[VAL_55]]#2 : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$ATTR_2]], kWidth = 2}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$ATTR_2]], kWidth = 2}>> -> tensor<128x128xf32, #[[$ATTR_2]]>
-// CHECK-NEXT:      ttg.local_dealloc %[[VAL_23]] : !ttg.memdesc<1x128x32xf16, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
+// CHECK-NEXT:      %[[ASSUME_CMP:.*]] = arith.cmpi sge
+// CHECK-NEXT:      llvm.intr.assume %[[ASSUME_CMP]] : i1
+// CHECK:           %[[VAL_58:.*]] = tt.dot %[[VAL_54]], %[[VAL_57]], %[[VAL_55]]#2 : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$ATTR_2]], kWidth = 2}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$ATTR_2]], kWidth = 2}>> -> tensor<128x128xf32, #[[$ATTR_2]]>
+// CHECK:           ttg.local_dealloc %[[VAL_23]] : !ttg.memdesc<1x128x32xf16, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK-NEXT:      ttg.local_dealloc %[[VAL_24]] : !ttg.memdesc<1x32x128xf16, #[[$ATTR_4]], #[[$ATTR_5]], mutable>
-// CHECK-NEXT:      tt.return %[[VAL_58]] : tensor<128x128xf32, #[[$ATTR_2]]>
+// CHECK-NEXT:      tt.return %{{.*}} : tensor<128x128xf32, #[[$ATTR_2]]>
 // CHECK-NEXT:      }
 
 // -----
