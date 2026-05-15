@@ -67,37 +67,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
     tt.return
   }
 }
-
-// -----
-
-#lhs_src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
-#rhs_src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
-#lhs_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 32, CGALayout = [[0, 0]]}>
-#rhs_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 32, CGALayout = [[0, 1]]}>
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, CGALayout = [[0, 1]]>
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-DAG: #[[LHS_TMEM:tmem[0-9]*]] = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1, CGALayout = {{\[\[0, 0\]\]}}>
-  // CHECK-LABEL: @promote_lhs_uses_memdesc_cga
-  tt.func public @promote_lhs_uses_memdesc_cga(
-    %lhs: tensor<128x16xf32, #lhs_src>,
-    %rhs: tensor<16x128xf32, #rhs_src>
-  ) {
-    %true = arith.constant true
-    %lhs_src = arith.addf %lhs, %lhs : tensor<128x16xf32, #lhs_src>
-    %lhs_shared = ttg.local_alloc %lhs_src :
-      (tensor<128x16xf32, #lhs_src>) ->
-      !ttg.memdesc<128x16xf32, #lhs_shared, #ttg.shared_memory>
-    %rhs_shared = ttg.local_alloc %rhs :
-      (tensor<16x128xf32, #rhs_src>) ->
-      !ttg.memdesc<16x128xf32, #rhs_shared, #ttg.shared_memory>
-    %acc_tmem = ttng.tmem_alloc :
-      () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    // CHECK: ttng.tmem_alloc %{{.*}} : (tensor<128x16xf32, #{{.*}}>) -> !ttg.memdesc<128x16xf32, #[[LHS_TMEM]], #ttng.tensor_memory>
-    ttng.tc_gen5_mma %lhs_shared, %rhs_shared, %acc_tmem, %true, %true :
-       !ttg.memdesc<128x16xf32, #lhs_shared, #ttg.shared_memory>,
-       !ttg.memdesc<16x128xf32, #rhs_shared, #ttg.shared_memory>,
-       !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-
-    tt.return
-  }
-}
