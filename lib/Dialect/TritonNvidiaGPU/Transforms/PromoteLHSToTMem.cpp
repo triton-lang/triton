@@ -44,7 +44,7 @@ public:
     auto srcLayout = srcType.getEncoding();
     auto accTMemEncoding = dyn_cast<TensorMemoryEncodingAttr>(
         tcGen5MMAOp.getD().getType().getEncoding());
-    auto cgaLayout = triton::gpu::getCGALayout(srcLayout);
+    auto cgaLayout = triton::gpu::getCGALayout(lhs.getType().getEncoding());
     // TMem encoding for A operand is the same as for D (Acc), but packed for
     // bitwidth=16
     unsigned elemBitWidth =
