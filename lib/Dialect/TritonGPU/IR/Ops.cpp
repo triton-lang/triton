@@ -1115,11 +1115,7 @@ LogicalResult MemDescSubsliceOp::verify() {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
 
-  auto kBlock = mlir::StringAttr::get(ctx, "block");
-  // Broadcasted CTA bases make the shared layout non-injective, but they don't
-  // matter for recovering the unique offset / non-broadcast CTA components of a
-  // split. Strip those zero bases before taking the pseudoinverse.
-  auto llInv = ll.removeZeroBasesAlongDim(kBlock).pseudoinvert();
+  auto llInv = ll.pseudoinvert();
   for (auto dim : splitDims) {
     auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
     llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
