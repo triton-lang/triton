@@ -372,27 +372,27 @@ LogicalResult DotScaledOp::verify() {
   return success();
 }
 
-LogicalResult DotScaledOp::deduceScaleFactor(
-    Value lhs, Value lhsScale, ScaleDotElemType lhsFormat, bool lhsKPack,
-    Value rhs, Value rhsScale, ScaleDotElemType rhsFormat, bool rhsKPack,
-    int32_t &scaleFactor, std::string &errMsg) {
-  auto deduceByShape = [&errMsg](Value operand, Value scale, int opIdx,
-                                 ScaleDotElemType format,
+LogicalResult deduceScaleFactor(ArrayRef<int64_t> lhsShape,
+                                std::optional<ArrayRef<int64_t>> lhsScaleShape,
+                                ScaleDotElemType lhsFormat, bool lhsKPack,
+                                ArrayRef<int64_t> rhsShape,
+                                std::optional<ArrayRef<int64_t>> rhsScaleShape,
+                                ScaleDotElemType rhsFormat, bool rhsKPack,
+                                int32_t &scaleFactor, std::string &errMsg) {
+  auto deduceByShape = [&errMsg](ArrayRef<int64_t> operandShape,
+                                 std::optional<ArrayRef<int64_t>> scaleShape,
+                                 int opIdx, ScaleDotElemType format,
                                  bool kPack) -> int32_t {
-    if (!scale)
+    if (!scaleShape)
       return 0;
-    auto scaleTy = cast<RankedTensorType>(scale.getType());
-    if (scaleTy.getNumElements() == 1)
+    if (llvm::product_of(*scaleShape) == 1)
       return 0;
-
-    auto operandShape = cast<RankedTensorType>(operand.getType()).getShape();
-    auto scaleShape = scaleTy.getShape();
 
     int64_t unpackFactor = (format == ScaleDotElemType::E2M1 && kPack) ? 2 : 1;
     int64_t kdim = operandShape[opIdx == 0 ? operandShape.size() - 1
                                            : operandShape.size() - 2] *
                    unpackFactor;
-    int32_t scaleFactor = kdim / scaleShape[scaleShape.size() - 1];
+    int32_t scaleFactor = kdim / (*scaleShape)[scaleShape->size() - 1];
     if (scaleFactor != 16 && scaleFactor != 32) {
       std::ostringstream oss;
       oss << "scale factor must be 16 or 32. Got " << scaleFactor;
@@ -403,10 +403,12 @@ LogicalResult DotScaledOp::deduceScaleFactor(
   };
 
   errMsg.clear();
-  int32_t scaleFactorA = deduceByShape(lhs, lhsScale, 0, lhsFormat, lhsKPack);
+  int32_t scaleFactorA =
+      deduceByShape(lhsShape, lhsScaleShape, 0, lhsFormat, lhsKPack);
   if (!errMsg.empty())
     return failure();
-  int32_t scaleFactorB = deduceByShape(rhs, rhsScale, 1, rhsFormat, rhsKPack);
+  int32_t scaleFactorB =
+      deduceByShape(rhsShape, rhsScaleShape, 1, rhsFormat, rhsKPack);
   if (!errMsg.empty())
     return failure();
 
@@ -427,6 +429,26 @@ LogicalResult DotScaledOp::deduceScaleFactor(
   }
   scaleFactor = scaleFactorA != 0 ? scaleFactorA : scaleFactorB;
   return success();
+}
+
+LogicalResult DotScaledOp::deduceScaleFactor(
+    Value lhs, Value lhsScale, ScaleDotElemType lhsFormat, bool lhsKPack,
+    Value rhs, Value rhsScale, ScaleDotElemType rhsFormat, bool rhsKPack,
+    int32_t &scaleFactor, std::string &errMsg) {
+  auto getScaleShape = [](Value scale) -> std::optional<ArrayRef<int64_t>> {
+    if (!scale) {
+      return std::nullopt;
+    } else {
+      return cast<RankedTensorType>(scale.getType()).getShape();
+    }
+  };
+
+  auto lhsShape = cast<RankedTensorType>(lhs.getType()).getShape();
+  auto rhsShape = cast<RankedTensorType>(rhs.getType()).getShape();
+
+  return triton::deduceScaleFactor(lhsShape, getScaleShape(lhsScale), lhsFormat,
+                                   lhsKPack, rhsShape, getScaleShape(rhsScale),
+                                   rhsFormat, rhsKPack, scaleFactor, errMsg);
 }
 
 int32_t DotScaledOp::deduceScaleFactor() {
