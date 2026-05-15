@@ -86,15 +86,62 @@ Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
   return ttg::ConvertLayoutOp::create(builder, loc, newTy, value);
 }
 
+Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
+                          Attribute layout, int numWarps,
+                          int threadsPerWarp) {
+  Value loadValue = value;
+  if (auto cvtOp = value.getDefiningOp<ttg::ConvertLayoutOp>())
+    loadValue = cvtOp.getSrc();
+
+  auto loadOp = loadValue.getDefiningOp<triton::LoadOp>();
+  if (!loadOp)
+    return value;
+
+  auto oldTy = cast<RankedTensorType>(loadValue.getType());
+  auto oldLayout = cast<ttg::DistributedEncodingTrait>(oldTy.getEncoding());
+
+  auto cgaLayout = ttg::getCGALayout(layout);
+  auto newLoadLayout = cloneWithCGALayout(
+      oldLayout, oldTy.getShape(), numWarps, threadsPerWarp, cgaLayout);
+  if (oldTy.getEncoding() == newLoadLayout)
+    return value;
+
+  auto newTy = oldTy.cloneWithEncoding(newLoadLayout);
+
+  OpBuilder loadBuilder(loadOp);
+  loadBuilder.setInsertionPointAfter(loadOp);
+  Value newPtr = convertValueToLayout(loadBuilder, loadOp.getLoc(),
+                                      loadOp.getPtr(), newLoadLayout);
+  Value newMask;
+  if (Value mask = loadOp.getMask())
+    newMask =
+        convertValueToLayout(loadBuilder, loadOp.getLoc(), mask, newLoadLayout);
+  Value newOther;
+  if (Value other = loadOp.getOther())
+    newOther = convertValueToLayout(loadBuilder, loadOp.getLoc(), other,
+                                    newLoadLayout);
+  auto newLoad = triton::LoadOp::create(
+      loadBuilder, loadOp.getLoc(), newTy, newPtr, newMask, newOther,
+      loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+  newLoad->setAttrs(loadOp->getAttrs());
+
+  return convertValueToLayout(builder, loc, newLoad, layout);
+}
+
 void convertOpOperandsToLayouts(Operation *op,
-                                llvm::ArrayRef<Attribute> operandLayouts) {
+                                llvm::ArrayRef<Attribute> operandLayouts,
+                                int numWarps, int threadsPerWarp) {
   assert(op->getNumOperands() == operandLayouts.size() &&
          "operand layout count mismatch");
 
   OpBuilder builder(op);
   Location loc = op->getLoc();
-  for (auto [operand, layout] : llvm::zip(op->getOpOperands(), operandLayouts))
-    operand.set(convertValueToLayout(builder, loc, operand.get(), layout));
+  for (auto [operand, layout] :
+       llvm::zip(op->getOpOperands(), operandLayouts)) {
+    Value value = cloneLoadWithLayout(builder, loc, operand.get(), layout,
+                                      numWarps, threadsPerWarp);
+    operand.set(convertValueToLayout(builder, loc, value, layout));
+  }
 }
 
 void convertOpResultsFromLayouts(Operation *op,
@@ -173,7 +220,8 @@ void planDot(triton::DotOp dot) {
       ctx, bLayout.getOpIdx(), newDLayout, bLayout.getKWidth());
 
   convertOpOperandsToLayouts(dot.getOperation(),
-                             {newALayout, newBLayout, newDLayout});
+                             {newALayout, newBLayout, newDLayout}, numWarps,
+                             threadsPerWarp);
   convertOpResultsFromLayouts(dot.getOperation(), {newDLayout});
 }
 
@@ -242,7 +290,8 @@ void planReduce(triton::ReduceOp reduce) {
         ttg::SliceEncodingAttr::get(ctx, reduce.getAxis(), newSrcLayout);
   SmallVector<Attribute> resultLayouts(reduce.getNumResults(), resultLayout);
 
-  convertOpOperandsToLayouts(reduce.getOperation(), operandLayouts);
+  convertOpOperandsToLayouts(reduce.getOperation(), operandLayouts, numWarps,
+                             threadsPerWarp);
   convertOpResultsFromLayouts(reduce.getOperation(), resultLayouts);
 }
 
