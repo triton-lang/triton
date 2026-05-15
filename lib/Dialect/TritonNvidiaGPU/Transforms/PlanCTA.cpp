@@ -110,7 +110,6 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
 
   OpBuilder loadBuilder(loadOp);
   loadBuilder.setInsertionPointAfter(loadOp);
-  Operation *newLoad;
   if (auto scalarLoad = dyn_cast<triton::LoadOp>(loadOp)) {
     Value newPtr = convertValueToLayout(loadBuilder, scalarLoad.getLoc(),
                                         scalarLoad.getPtr(), newLoadLayout);
@@ -122,18 +121,23 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
     if (Value other = scalarLoad.getOther())
       newOther = convertValueToLayout(loadBuilder, scalarLoad.getLoc(), other,
                                       newLoadLayout);
-    newLoad = triton::LoadOp::create(
-                  loadBuilder, scalarLoad.getLoc(), newTy, newPtr, newMask,
-                  newOther, scalarLoad.getCache(), scalarLoad.getEvict(),
-                  scalarLoad.getIsVolatile())
-                  .getOperation();
+    Operation *newLoad =
+        triton::LoadOp::create(loadBuilder, scalarLoad.getLoc(), newTy, newPtr,
+                               newMask, newOther, scalarLoad.getCache(),
+                               scalarLoad.getEvict(),
+                               scalarLoad.getIsVolatile())
+            .getOperation();
     newLoad->setAttrs(loadOp->getAttrs());
-  } else {
-    newLoad = loadBuilder.clone(*loadOp);
-    newLoad->getResult(0).setType(newTy);
+    return convertValueToLayout(builder, loc, newLoad->getResult(0), layout);
   }
 
-  return convertValueToLayout(builder, loc, newLoad->getResult(0), layout);
+  OpResult result = loadOp->getResult(0);
+  result.setType(newTy);
+  auto convert =
+      ttg::ConvertLayoutOp::create(loadBuilder, loadOp->getLoc(), oldTy, result)
+          .getResult();
+  result.replaceAllUsesExcept(convert, convert.getDefiningOp());
+  return convertValueToLayout(builder, loc, result, layout);
 }
 
 void convertOpOperandsToLayouts(Operation *op,
