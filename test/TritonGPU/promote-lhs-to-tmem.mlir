@@ -7,6 +7,7 @@
 #blocked4 = #ttg.blocked<{sizePerThread = [4, 16], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked5 = #ttg.blocked<{sizePerThread = [4, 64], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 #tmem1 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 256, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
@@ -162,13 +163,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.tc_gen5_mma %[[A_SMEM]]
   tt.func public @dont_promote_lhs_when_acc_blockn_is_smaller_than_n(%A_ptr: tensor<64x16x!tt.ptr<f16>, #blocked3>, %B_ptr: tensor<16x512x!tt.ptr<f16>, #blocked4>) {
     %true = arith.constant true
-    %cst = arith.constant dense<0.000000e+00> : tensor<64x512xf32, #blocked5>
+    %false = arith.constant false
     %A = tt.load %A_ptr : tensor<64x16x!tt.ptr<f16>, #blocked3>
     %B = tt.load %B_ptr : tensor<16x512x!tt.ptr<f16>, #blocked4>
-    %A_sh = ttg.local_alloc %A : (tensor<64x16xf16, #blocked3>) -> !ttg.memdesc<64x16xf16, #shared, #ttg.shared_memory, mutable>
-    %B_sh = ttg.local_alloc %B : (tensor<16x512xf16, #blocked4>) -> !ttg.memdesc<16x512xf16, #shared, #ttg.shared_memory, mutable>
-    %acc_tm = ttng.tmem_alloc %cst : (tensor<64x512xf32, #blocked5>) -> !ttg.memdesc<64x512xf32, #tmem1, #ttng.tensor_memory, mutable>
-    ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm, %true, %true : !ttg.memdesc<64x16xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<16x512xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<64x512xf32, #tmem1, #ttng.tensor_memory, mutable>
+    %A_sh = ttg.local_alloc %A : (tensor<64x16xf16, #blocked3>) -> !ttg.memdesc<64x16xf16, #shared1, #ttg.shared_memory, mutable>
+    %B_sh = ttg.local_alloc %B : (tensor<16x512xf16, #blocked4>) -> !ttg.memdesc<16x512xf16, #shared1, #ttg.shared_memory, mutable>
+    %acc_tm = ttng.tmem_alloc : () -> !ttg.memdesc<64x512xf32, #tmem1, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm, %false, %true : !ttg.memdesc<64x16xf16, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<16x512xf16, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<64x512xf32, #tmem1, #ttng.tensor_memory, mutable>
     tt.return
   }
 }
