@@ -151,6 +151,20 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
       loadOp->getLoc(), sharedEnc, distance);
 }
 
+static Value convertValueCGALayout(OpBuilder &builder, Value value,
+                                   ttg::CGAEncodingAttr cgaLayout) {
+  auto type = cast<RankedTensorType>(value.getType());
+  auto layout = cast<ttg::BlockedEncodingAttr>(type.getEncoding());
+  if (layout.getCGALayout() == cgaLayout)
+    return value;
+  auto newLayout = ttg::BlockedEncodingAttr::get(
+      layout.getContext(), layout.getSizePerThread(),
+      layout.getThreadsPerWarp(), layout.getWarpsPerCTA(), layout.getOrder(),
+      cgaLayout);
+  auto newType = type.cloneWithEncoding(newLayout);
+  return ttg::ConvertLayoutOp::create(builder, value.getLoc(), newType, value);
+}
+
 void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
                      Value insertIdx, Value extractIdx, int contiguity,
                      CoarseSchedule &schedule) {
@@ -168,6 +182,13 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
 
   // Create async copy
   Value view = createSingleBufferView(builder, alloc, insertIdx);
+  auto viewType = cast<ttg::MemDescType>(view.getType());
+  auto cgaLayout = ttg::getCGALayout(viewType.getEncoding());
+  src = convertValueCGALayout(builder, src, cgaLayout);
+  if (mask)
+    mask = convertValueCGALayout(builder, mask, cgaLayout);
+  if (other)
+    other = convertValueCGALayout(builder, other, cgaLayout);
   Operation *copy = ttg::AsyncCopyGlobalToLocalOp::create(
       builder, src, view, mask, other, loadOp.getCache(), loadOp.getEvict(),
       loadOp.getIsVolatile(), contiguity);
