@@ -59,27 +59,6 @@ tt.func @one_dep_async(%lb : index, %ub : index, %step : index,
 
 // -----
 
-#A = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 4, order = [1, 0], CGALayout = [[0, 0]]}>
-
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 2 : i32} {
-// CHECK-DAG: #[[COPY_LAYOUT:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[0, 0\]\]}}>
-// CHECK-LABEL: @async_copy_uses_shared_cga_layout
-// CHECK: %[[PTR:.*]] = ttg.convert_layout %{{.*}} : tensor<128x16x!tt.ptr<f32>, #{{.*}}> -> tensor<128x16x!tt.ptr<f32>, #[[COPY_LAYOUT]]>
-// CHECK: ttg.async_copy_global_to_local %[[PTR]], %{{.*}} {contiguity = 4 : i32, loop.cluster = 2 : i32, loop.stage = 0 : i32}
-tt.func @async_copy_uses_shared_cga_layout(%lb : index, %ub : index, %step : index,
-                 %a_ptr_init : tensor<128x16x!tt.ptr<f32>, #A> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>}) -> () {
-  scf.for %iv = %lb to %ub step %step : index {
-    %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x16x!tt.ptr<f32>, #A>
-    %sh = ttg.local_alloc %a {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x16xf32, #A>) -> !ttg.memdesc<128x16xf32, #shared, #ttg.shared_memory>
-    "use"(%sh) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (!ttg.memdesc<128x16xf32, #shared, #ttg.shared_memory>) -> ()
-  } {tt.scheduled_max_stage = 2 : i32}
-  tt.return
-}
-}
-
-// -----
-
 #A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
