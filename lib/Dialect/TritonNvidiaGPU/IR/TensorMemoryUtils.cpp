@@ -238,8 +238,10 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
       secondHalfOffset = (row << 16) | col;
       if (*secondHalfOffset == 0) {
         // Workaround for ptxas bug, we cannot use secondHalfOffset = 0 to write
-        // only 16 elements. For unpacked scale stores, write the padded half at
-        // row +16 in the same column instead of using an adjacent column offset.
+        // only 16 elements. For unpacked scale stores, each source register
+        // spans two TMEM columns, so place the padded half at the next
+        // two-column group. Scale TMEM allocations reserve at least four
+        // columns for this padding.
         if (!isScales) {
           if (emitError) {
             emitError()
@@ -247,11 +249,7 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
           }
           return failure();
         }
-        if (unpacked) {
-          secondHalfOffset = 16 << 16;
-        } else {
-          secondHalfOffset = 1;
-        }
+        secondHalfOffset = unpacked ? 2 : 1;
       }
       // We "quotient it out", meaning we remove the last basis from reps
       auto basis = reps.getBases();
