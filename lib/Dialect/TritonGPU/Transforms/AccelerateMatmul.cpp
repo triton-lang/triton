@@ -436,8 +436,7 @@ public:
       }
       auto bCGALayout =
           getCGALayout(cast<RankedTensorType>(b.getType()).getEncoding());
-      b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose,
-                                    bCGALayout,
+      b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose, bCGALayout,
                                     /*isMMAv5Fp4Padded=*/false,
                                     /*forceTranspose=*/false, dotOp);
 
@@ -808,14 +807,14 @@ public:
     // For mixed-precision fp4 operands, set allowTranspose = false, to force
     // the packed axis, K, to be contiguous in SMEM
     MLIRContext *context = dotOp->getContext();
-    auto aCGALayout = DotOperandEncodingAttr::get(
-                          context, 0, oldRetType.getEncoding(),
-                          getElementTypeOrSelf(a))
-                          .getCGALayout();
-    auto bCGALayout = DotOperandEncodingAttr::get(
-                          context, 1, oldRetType.getEncoding(),
-                          getElementTypeOrSelf(b))
-                          .getCGALayout();
+    auto aCGALayout =
+        DotOperandEncodingAttr::get(context, 0, oldRetType.getEncoding(),
+                                    getElementTypeOrSelf(a))
+            .getCGALayout();
+    auto bCGALayout =
+        DotOperandEncodingAttr::get(context, 1, oldRetType.getEncoding(),
+                                    getElementTypeOrSelf(b))
+            .getCGALayout();
     a = getSharedMemoryMMAOperand(a, rewriter, 0,
                                   /*allowTranspose=*/!isAFP4, aCGALayout,
                                   /*isMMAv5Fp4Padded=*/isMMAv5Fp4PaddedLhs,
