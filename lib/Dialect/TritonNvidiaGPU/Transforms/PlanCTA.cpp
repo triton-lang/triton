@@ -92,8 +92,9 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
   while (auto cvtOp = loadValue.getDefiningOp<ttg::ConvertLayoutOp>())
     loadValue = cvtOp.getSrc();
 
-  auto loadOp = loadValue.getDefiningOp<triton::LoadOp>();
-  if (!loadOp)
+  Operation *loadOp = loadValue.getDefiningOp();
+  if (!isa_and_nonnull<triton::LoadOp, triton::DescriptorLoadLikeOpInterface>(
+          loadOp))
     return value;
 
   auto oldTy = cast<RankedTensorType>(loadValue.getType());
@@ -109,22 +110,31 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
 
   OpBuilder loadBuilder(loadOp);
   loadBuilder.setInsertionPointAfter(loadOp);
-  Value newPtr = convertValueToLayout(loadBuilder, loadOp.getLoc(),
-                                      loadOp.getPtr(), newLoadLayout);
-  Value newMask;
-  if (Value mask = loadOp.getMask())
-    newMask =
-        convertValueToLayout(loadBuilder, loadOp.getLoc(), mask, newLoadLayout);
-  Value newOther;
-  if (Value other = loadOp.getOther())
-    newOther = convertValueToLayout(loadBuilder, loadOp.getLoc(), other,
-                                    newLoadLayout);
-  auto newLoad = triton::LoadOp::create(
-      loadBuilder, loadOp.getLoc(), newTy, newPtr, newMask, newOther,
-      loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
-  newLoad->setAttrs(loadOp->getAttrs());
+  Operation *newLoad;
+  if (auto scalarLoad = dyn_cast<triton::LoadOp>(loadOp)) {
+    Value newPtr = convertValueToLayout(loadBuilder, scalarLoad.getLoc(),
+                                        scalarLoad.getPtr(), newLoadLayout);
+    Value newMask;
+    if (Value mask = scalarLoad.getMask())
+      newMask = convertValueToLayout(loadBuilder, scalarLoad.getLoc(), mask,
+                                     newLoadLayout);
+    Value newOther;
+    if (Value other = scalarLoad.getOther())
+      newOther = convertValueToLayout(loadBuilder, scalarLoad.getLoc(), other,
+                                      newLoadLayout);
+    newLoad =
+        triton::LoadOp::create(loadBuilder, scalarLoad.getLoc(), newTy, newPtr,
+                               newMask, newOther, scalarLoad.getCache(),
+                               scalarLoad.getEvict(),
+                               scalarLoad.getIsVolatile())
+            .getOperation();
+    newLoad->setAttrs(loadOp->getAttrs());
+  } else {
+    newLoad = loadBuilder.clone(*loadOp);
+    newLoad->getResult(0).setType(newTy);
+  }
 
-  return convertValueToLayout(builder, loc, newLoad, layout);
+  return convertValueToLayout(builder, loc, newLoad->getResult(0), layout);
 }
 
 void convertOpOperandsToLayouts(Operation *op,
