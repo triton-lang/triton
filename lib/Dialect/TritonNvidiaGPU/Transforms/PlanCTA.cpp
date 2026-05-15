@@ -90,7 +90,7 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
                           Attribute layout, int numWarps,
                           int threadsPerWarp) {
   Value loadValue = value;
-  if (auto cvtOp = value.getDefiningOp<ttg::ConvertLayoutOp>())
+  while (auto cvtOp = loadValue.getDefiningOp<ttg::ConvertLayoutOp>())
     loadValue = cvtOp.getSrc();
 
   auto loadOp = loadValue.getDefiningOp<triton::LoadOp>();
