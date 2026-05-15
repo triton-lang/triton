@@ -1325,11 +1325,11 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
   // Broadcasted block bases do not affect the logical offset within shared
   // memory, but they make the full layout non-injective. Strip them before
   // taking the pseudoinverse, then discard the block component of the result.
-  auto offset = applyLinearLayout(loc, rewriter,
-                                  ll.removeZeroBasesAlongDim(kBlock)
-                                      .pseudoinvert(),
-                                  logicalOffsets)[0]
-                    .second;
+  auto offset =
+      applyLinearLayout(loc, rewriter,
+                        ll.removeZeroBasesAlongDim(kBlock).pseudoinvert(),
+                        logicalOffsets)[0]
+          .second;
   return offset;
 }
 
