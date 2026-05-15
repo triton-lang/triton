@@ -177,7 +177,8 @@ warpsPerTileV3(DotOpInterface dotOp, const ArrayRef<int64_t> shape,
 // given value.
 static Value
 getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
-                          bool allowTranspose, bool isMMAv5Fp4Padded = false,
+                          bool allowTranspose, CGAEncodingAttr CGALayout,
+                          bool isMMAv5Fp4Padded = false,
                           bool forceTranspose = false,
                           Operation *op = nullptr /*only for diagnostic*/) {
   OpBuilder::InsertionGuard g(rewriter);
@@ -214,7 +215,6 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
 
   Attribute SharedMemorySpace =
       SharedMemorySpaceAttr::get(argType.getContext());
-  auto CGALayout = getCGALayout(argType.getEncoding());
   auto newLayout = NVMMASharedEncodingAttr::get(
       argType.getContext(), argType.getShape(), newOrder, CGALayout,
       argType.getElementType(), isMMAv5Fp4Padded);
@@ -427,11 +427,17 @@ public:
         a = convertDotOperandForMMA(a, 0, bitwidth, mmaResult.newRetType,
                                     rewriter);
       } else {
+        auto aCGALayout =
+            getCGALayout(cast<RankedTensorType>(a.getType()).getEncoding());
         a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose,
+                                      aCGALayout,
                                       /*isMMAv5Fp4Padded=*/false,
                                       /*forceTranspose=*/false, dotOp);
       }
+      auto bCGALayout =
+          getCGALayout(cast<RankedTensorType>(b.getType()).getEncoding());
       b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose,
+                                    bCGALayout,
                                     /*isMMAv5Fp4Padded=*/false,
                                     /*forceTranspose=*/false, dotOp);
 
@@ -551,8 +557,12 @@ public:
     // atomicity. As we currently don't support this layout we disallow
     // transpose for TF32 inputs.
     bool allowTranspose = !dotOp.getA().getType().getElementType().isF32();
-    a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
-    b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose);
+    auto aCGALayout =
+        getCGALayout(cast<RankedTensorType>(a.getType()).getEncoding());
+    auto bCGALayout =
+        getCGALayout(cast<RankedTensorType>(b.getType()).getEncoding());
+    a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose, aCGALayout);
+    b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose, bCGALayout);
     MLIRContext *context = dotOp->getContext();
     auto instrShape = mmaVersionToInstrShape(
         versionMajor, retShapePerCTA, oldAType.getElementType(), numWarps);
@@ -797,18 +807,26 @@ public:
     bool isMMAv5Fp4PaddedRhs = IsBMixedPrecFp4 || !dotOp.getRhsKPack();
     // For mixed-precision fp4 operands, set allowTranspose = false, to force
     // the packed axis, K, to be contiguous in SMEM
+    MLIRContext *context = dotOp->getContext();
+    auto aCGALayout = DotOperandEncodingAttr::get(
+                          context, 0, oldRetType.getEncoding(),
+                          getElementTypeOrSelf(a))
+                          .getCGALayout();
+    auto bCGALayout = DotOperandEncodingAttr::get(
+                          context, 1, oldRetType.getEncoding(),
+                          getElementTypeOrSelf(b))
+                          .getCGALayout();
     a = getSharedMemoryMMAOperand(a, rewriter, 0,
-                                  /*allowTranspose=*/!isAFP4,
+                                  /*allowTranspose=*/!isAFP4, aCGALayout,
                                   /*isMMAv5Fp4Padded=*/isMMAv5Fp4PaddedLhs,
                                   /*forceTranspose=*/!dotOp.getLhsKPack(),
                                   dotOp);
     b = getSharedMemoryMMAOperand(b, rewriter, 1,
-                                  /*allowTranspose=*/!isBFP4,
+                                  /*allowTranspose=*/!isBFP4, bCGALayout,
                                   /*isMMAv5Fp4Padded=*/isMMAv5Fp4PaddedRhs,
                                   /*forceTranspose=*/!dotOp.getRhsKPack(),
                                   dotOp);
 
-    MLIRContext *context = dotOp->getContext();
     unsigned m = 128;
     unsigned n = retShapePerCTA[1] >= 256 ? 256 : retShapePerCTA[1];
 

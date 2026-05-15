@@ -222,6 +222,27 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+#src_a = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#src_b = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#acc = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: wgmma_uses_dot_operand_cga_layout
+  tt.func @wgmma_uses_dot_operand_cga_layout(
+    %a: tensor<128x16xf32, #src_a>,
+    %b: tensor<16x128xf32, #src_b>,
+    %c: tensor<128x128xf32, #acc>) -> tensor<128x128xf32, #acc> {
+    %ad = ttg.convert_layout %a : tensor<128x16xf32, #src_a> -> tensor<128x16xf32, #ttg.dot_op<{opIdx = 0, parent = #acc}>>
+    %bd = ttg.convert_layout %b : tensor<16x128xf32, #src_b> -> tensor<16x128xf32, #ttg.dot_op<{opIdx = 1, parent = #acc}>>
+    // CHECK-DAG: ttg.local_alloc %{{.*}} : (tensor<128x16xf32, #{{.*}}>) -> !ttg.memdesc<128x16xf32, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 32, CGALayout = {{\[\[0, 0\]\]}}}>, #smem>
+    // CHECK-DAG: ttg.local_alloc %{{.*}} : (tensor<16x128xf32, #{{.*}}>) -> !ttg.memdesc<16x128xf32, #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 32, CGALayout = {{\[\[0, 1\]\]}}}>, #smem>
+    // CHECK: ttng.warp_group_dot
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x16xf32, #ttg.dot_op<{opIdx = 0, parent = #acc}>> * tensor<16x128xf32, #ttg.dot_op<{opIdx = 1, parent = #acc}>> -> tensor<128x128xf32, #acc>
+    tt.return %d : tensor<128x128xf32, #acc>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
