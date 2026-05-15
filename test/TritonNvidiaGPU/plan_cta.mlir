@@ -54,7 +54,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #dot_b_2cta = #ttg.dot_op<{opIdx = 1, parent = #dot_default_2cta}>
 
 // CHECK-DAG: #[[DOT_DEFAULT_2CTA:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
-// CHECK-DAG: #[[DOT_OPT_2CTA:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
+// CHECK-DAG: #[[DOT_OPT_2CTA:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func @dot_split_m_2cta
   // CHECK: ttg.convert_layout %{{.*}} : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[DOT_DEFAULT_2CTA]]}>> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[DOT_OPT_2CTA]]}>>
