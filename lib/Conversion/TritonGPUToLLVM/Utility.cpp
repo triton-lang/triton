@@ -1318,6 +1318,9 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
     logicalOffsets.push_back({dim, offset});
   }
 
+  // We don't allow for non-trivial block dimensions in the shared memory
+  // layout. We have in practice that offsetAndBlock[1].second is zero, but we
+  // cannot assert that without constant propagation so we just discard it.
   auto offset =
       applyLinearLayout(loc, rewriter, ll.pseudoinvert(), logicalOffsets)[0]
           .second;
