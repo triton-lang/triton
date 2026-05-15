@@ -404,6 +404,32 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+// Verify that m/n-packed fp4 operands decompose by unpacking lhs along M and rhs along N.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: dot_scaled_fp4_packed_mn_decomposes
+  tt.func @dot_scaled_fp4_packed_mn_decomposes(
+    %a: tensor<64x64xi8, #blocked2>,
+    %scale_a: tensor<128x2xi8, #blocked1>,
+    %b: tensor<64x64xi8, #blocked>,
+    %scale_b: tensor<128x2xi8, #blocked1>,
+    %c: tensor<128x128xf32, #blocked>
+    ) -> tensor<128x128xf32, #blocked> {
+    // CHECK-NOT: tt.dot_scaled
+    // CHECK: ttg.fp4_to_fp {{.*}} {axis = 0 : i32}
+    // CHECK-NOT: tt.dot_scaled
+    // CHECK: ttg.fp4_to_fp {{.*}} {axis = 1 : i32}
+    // CHECK-NOT: tt.dot_scaled
+    // CHECK: ttng.warp_group_dot
+    %result = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %c lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = false, rhs_k_pack = false} : tensor<64x64xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<64x64xi8, #blocked>, tensor<128x2xi8, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.return %result : tensor<128x128xf32, #blocked>
+  }
+}
+
+// -----
+
 // Mixed dtype matmul with upcasting on the left is transposed and uses MMAv3
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>

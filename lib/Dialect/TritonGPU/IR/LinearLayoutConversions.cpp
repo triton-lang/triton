@@ -1682,6 +1682,15 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   auto mfmaOutDims = llvm::to_vector(mfmaLL.getOutDimNames());
   StringAttr dimM = mfmaOutDims[0];
   StringAttr dimN = mfmaOutDims[1];
+  unsigned destIdxInBases = isMfma32 ? 3 : 4;
+  // The column swap below exchanges N-dim basis bit 2 with bit
+  // `destIdxInBases`. The target bit only exists when the N dimension has at
+  // least `1 << (destIdxInBases + 1)` columns: 16 for mfma32x32 and 32 for
+  // mfma16x16. Smaller N dimensions produce fewer basis vectors, so the swap
+  // would otherwise index past the end of `dimNBases`.
+  if (mfmaLL.getOutDimSizeLog2(dimN) <= destIdxInBases)
+    return {};
+
   auto swapLL = LinearLayout::empty();
   // The rows are kept as is with an identity linear layout.
   swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
@@ -1777,7 +1786,6 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   the original mfma16 LL.
             clang-format on
   */
-  auto destIdxInBases = isMfma32 ? 3 : 4;
   std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
   std::generate(dimNBases.begin(), dimNBases.end(),
                 [i = 0]() mutable { return std::vector<int32_t>{1 << i++}; });
