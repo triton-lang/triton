@@ -308,6 +308,14 @@ allocateTMem(Operation *parentOp,
       if (isa<TensorMemoryEncodingAttr>(mmaOp.getA().getType().getEncoding())) {
         TMemAllocation allocSize = getTmemAllocSizes(mmaOp.getA().getType());
         if (allocSize.numRows == 64) {
+          auto accType = mmaOp.getAccumulator().getType();
+          auto accEncoding =
+              cast<TensorMemoryEncodingAttr>(accType.getEncoding());
+          auto accShapePerCTA = ttg::getShapePerCTA(accType);
+          assert(accEncoding.getBlockN() == accShapePerCTA[1] &&
+                 "64-row TMEM LHS requires the accumulator row index to match "
+                 "the lhs row index, so the accumulator cannot be split across "
+                 "multiple row groups along N");
           // HW restriction, the A alloc and accumulator needs to be in the same
           // rows.
           SmallVector<Operation *> lhsAllocs = getAlloc(mmaOp.getA());

@@ -469,6 +469,9 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
     auto accEnc = dyn_cast<TensorMemoryEncodingAttr>(acc.getEncoding());
     if (!lhsEnc || !accEnc)
       return false;
+    // For 64-row TMEM LHS allocations, the lhs row index and accumulator row
+    // index must match for each emitted MMA, so the accumulator cannot be
+    // split across multiple row groups along N.
     auto accShapePerCTA = getShapePerCTA(acc);
     return getTmemAllocSizes(lhs).numRows == 64 &&
            accEnc.getBlockN() < accShapePerCTA[1];
