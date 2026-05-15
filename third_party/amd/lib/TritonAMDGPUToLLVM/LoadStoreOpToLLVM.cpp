@@ -27,8 +27,8 @@ using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::LLVM::AMD::getVectorSize;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
-using ::mlir::triton::AMD::ISAFamily;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
+using triton::amdgpu::ISAFamily;
 
 namespace {
 
@@ -483,7 +483,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
     // For loads on GFX9 (no scattering support), the address should be the
     // start address (scalar) of the warp
-    if (isLoad && !targetInfo.supportsDirectToLDSScattering()) {
+    if (isLoad && !targetInfo.supportsDirectToLdsScatter()) {
       laneId = b.i32_val(0);
     }
 
@@ -505,7 +505,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     Value ldsAddr = shmemAddr;
     // When scattering is unsupported, shmemAddr is the warp base address.
     // Use shmemAddr + lane_id [+ swizzleOffset] to compute each lane's address.
-    if (!targetInfo.supportsDirectToLDSScattering()) {
+    if (!targetInfo.supportsDirectToLdsScatter()) {
       ldsAddr = b.gep(ptrTy, vecTy, shmemAddr, laneId);
       if (requiresSrcPtrSwizzling)
         ldsAddr = b.gep(ptrTy, vecTy, ldsAddr, swizzleLaneOffset);
@@ -762,9 +762,9 @@ struct BufferLoadToLocalOpConversion
     SmallVector<Value> swizzledLaneOffsets;
 
     auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
-    bool requiresSrcPtrSwizzling =
-        !targetInfo.supportsDirectToLDSScattering() && maybeSwizzledEnc &&
-        maybeSwizzledEnc.getMaxPhase() != 1;
+    bool requiresSrcPtrSwizzling = !targetInfo.supportsDirectToLdsScatter() &&
+                                   maybeSwizzledEnc &&
+                                   maybeSwizzledEnc.getMaxPhase() != 1;
     if (requiresSrcPtrSwizzling) {
       // TODO (alex): this is only correct as long as the lds view is a
       // contiguous block. So this can break if we slice along the 2 minor
@@ -904,9 +904,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto flatDstTy = dstTy;
     SmallVector<Value> swizzledLaneOffsets;
     auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
-    bool requiresSrcPtrSwizzling =
-        !targetInfo.supportsDirectToLDSScattering() && maybeSwizzledEnc &&
-        maybeSwizzledEnc.getMaxPhase() != 1;
+    bool requiresSrcPtrSwizzling = !targetInfo.supportsDirectToLdsScatter() &&
+                                   maybeSwizzledEnc &&
+                                   maybeSwizzledEnc.getMaxPhase() != 1;
     if (requiresSrcPtrSwizzling) {
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
           op->getContext(), maybeSwizzledEnc.getVec(), 1, 1,
@@ -954,7 +954,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       // Predicate load based on threadPred && swizzledMask
       auto cond = b.and_(threadPred, maybeSwizzledMaskElem);
 
-      if (targetInfo.supportsDirectToLDSScattering()) {
+      if (targetInfo.supportsDirectToLdsScatter()) {
         // On architectures supporting per lane LDS addresses we can mask by
         // setting the shared address to out of range. The HW will drop the load
         // before fetching the data from global memory.
@@ -1261,6 +1261,10 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto shapePerCTA =
         triton::gpu::getShapePerCTA(encoding, tensorDescTy.getShape());
 
+    std::optional<uint32_t> warpUsedHint;
+    if (auto hintAttr = op.getWarpUsedHintAttr())
+      warpUsedHint = static_cast<uint32_t>(hintAttr.getInt());
+
     auto cacheMod = op.getCache();
     auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
         cacheMod, /*isLoad*/ true, targetInfo);
@@ -1269,7 +1273,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, dstPtrs, op.getPred(), multicastMask,
         elementType, barrierPtr, /*isLoad=*/true, sharedLayout, encoding, ctaId,
-        auxBits);
+        auxBits, warpUsedHint);
 
     rewriter.eraseOp(op);
     return success();
@@ -1820,7 +1824,6 @@ struct BufferAtomicCASOpConversion
     }
 
     mlir::Operation *lastCASOp;
-    MLIRContext *ctx = rewriter.getContext();
     GCNBuilder waitcntBuilder;
 
     // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
@@ -2528,8 +2531,6 @@ struct TDMPrefetchConversion
 
     // Return offsets
     Type llvmResultStructTy = getTypeConverter()->convertType(op.getType(0));
-    auto structType = dyn_cast<LLVM::LLVMStructType>(
-        getTypeConverter()->convertType(op.getType(0)));
     Value resultStruct = packLLElements(loc, getTypeConverter(), offsets,
                                         rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});

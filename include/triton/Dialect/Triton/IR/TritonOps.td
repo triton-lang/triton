@@ -77,6 +77,7 @@ def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
     let results = (outs TT_Type:$result);
 
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+    let hasFolder = 1;
     let hasVerifier = 1;
 }
 

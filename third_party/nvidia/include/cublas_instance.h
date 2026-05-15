@@ -209,8 +209,7 @@ private:
     cublasOperation_t transa = CUBLAS_OP_T;
     cublasOperation_t transb = CUBLAS_OP_N;
 
-    cublasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL,
-                           Ddesc = NULL;
+    cublasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL;
 
     // Use FP32 compute and accumulation
     cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
@@ -266,8 +265,6 @@ private:
     successOrExit(cublasLtMatrixLayoutCreate(&Adesc, dataType, k, m, k));
     successOrExit(cublasLtMatrixLayoutCreate(&Bdesc, dataType, k, n, k));
     successOrExit(cublasLtMatrixLayoutCreate(&Cdesc, CUDA_R_16F, m, n, m));
-    Ddesc = Cdesc;
-
     float alpha = 1.0f;
     float beta = 0.0f; // No bias
 

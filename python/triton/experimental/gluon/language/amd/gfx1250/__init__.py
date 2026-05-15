@@ -65,42 +65,44 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
         acc (tensor): Accumulator tensor.
     """
     _verify_wmma(3, a, b, acc)
-    if a_format.value == "e2m1":
+    a_format = _unwrap_if_constexpr(a_format)
+    b_format = _unwrap_if_constexpr(b_format)
+    a_scale = _unwrap_if_constexpr(a_scale)
+    b_scale = _unwrap_if_constexpr(b_scale)
+
+    if a_format == "e2m1":
         wmma_layout = a.type.layout.parent
         assert isinstance(wmma_layout, AMDWMMALayout) and wmma_layout.instr_shape in [[16, 16, 64], [32, 16, 64]], \
             "e2m1 format expects instr_shape to be [16, 16, 64] or [32, 16, 64]"
-    if b_format.value == "e2m1":
+    if b_format == "e2m1":
         wmma_layout = b.type.layout.parent
         assert isinstance(wmma_layout, AMDWMMALayout) and wmma_layout.instr_shape in [[16, 16, 64], [32, 16, 64]], \
             "e2m1 format expects instr_shape to be [16, 16, 64] or [32, 16, 64]"
     acc_shapes = [[16, 16, 128]]
-    if a_format.value == "e2m1" and b_format.value == "e2m1":
+    if a_format == "e2m1" and b_format == "e2m1":
         acc_shapes.append([32, 16, 128])
 
     acc_layout = acc.type.layout
     assert isinstance(acc_layout, AMDWMMALayout) and acc_layout.instr_shape in acc_shapes, \
         f"accumulator tensor's layout must be one of {acc_shapes}"
 
-    assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
-    assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
+    assert a_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format}"
+    assert b_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format}"
 
     scale_dtype_to_format = {float8e4nv: "e4m3"}
 
     # E8M0 scale has various representation in frontend.
     scale_dtype_to_format.update({x: "e8m0" for x in (int8, uint8)})
 
-    a_scale_value = _unwrap_if_constexpr(a_scale)
-    b_scale_value = _unwrap_if_constexpr(b_scale)
-
-    if isinstance(a_scale_value, tensor) and isinstance(b_scale_value, tensor):
+    if isinstance(a_scale, tensor) and isinstance(b_scale, tensor):
         assert a_scale.dtype in scale_dtype_to_format, f"Unsupported a_scale dtype: {a_scale.dtype}"
         assert b_scale.dtype in scale_dtype_to_format, f"Unsupported b_scale dtype: {b_scale.dtype}"
 
         a_scale_format = scale_dtype_to_format[a_scale.dtype]
         b_scale_format = scale_dtype_to_format[b_scale.dtype]
 
-        assert (a_format.value, b_format.value, a_scale_format, b_scale_format) in _valid_dtype_combinations, \
-            f"Unsupported dtype combination: {a_format.value}, {b_format.value}, {a_scale_format}, {b_scale_format}."
+        assert (a_format, b_format, a_scale_format, b_scale_format) in _valid_dtype_combinations, \
+            f"Unsupported dtype combination: {a_format}, {b_format}, {a_scale_format}, {b_scale_format}."
 
     return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_wmma_scale_layout, _semantic)
 

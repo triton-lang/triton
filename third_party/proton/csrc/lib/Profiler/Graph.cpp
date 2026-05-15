@@ -2,9 +2,12 @@
 
 #include "Data/Data.h"
 #include "Runtime/Runtime.h"
+#include "Utility/Errors.h"
 
 #include <cstring>
+#include <optional>
 #include <stdexcept>
+#include <vector>
 
 namespace proton {
 
@@ -14,101 +17,102 @@ constexpr size_t bytesForWords(size_t numWords) {
 }
 
 void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
-                       const PendingGraphQueue &queue) {
-  const auto &pendingGraphs = queue.pendingGraphs;
+                       PendingGraphQueue &queue) {
   const size_t capacityWords = metricBuffer.getCapacity() / sizeof(uint64_t);
-  size_t wordOffset = queue.startBufferOffset / sizeof(uint64_t);
+  const uint64_t scanStartWordOffset =
+      queue.startBufferOffset / sizeof(uint64_t);
+  const uint64_t endWordOffset = scanStartWordOffset + queue.numWords;
   auto readWord = [&](size_t offset) -> uint64_t {
     return hostBasePtr[offset % capacityWords];
   };
 
-  for (const auto &pendingGraph : pendingGraphs) {
-    for (size_t i = 0; i < pendingGraph.numNodes; ++i) {
-      const uint64_t metricId = readWord(wordOffset);
-      wordOffset = (wordOffset + 1) % capacityWords;
+  for (uint64_t wordOffset = scanStartWordOffset; wordOffset < endWordOffset;) {
+    const uint64_t seqId = readWord(wordOffset);
+    wordOffset += 1;
 
-      auto metricDesc = metricBuffer.getMetricDescriptor(metricId);
-      const auto &metricName = metricDesc.name;
-      const auto metricTypeIndex = metricDesc.typeIndex;
+    auto seqIdIt = queue.seqIdToState.find(seqId);
+    auto &metricNodeState = seqIdIt->second;
 
-      MetricValueType metricValueVariant{};
-      switch (metricTypeIndex) {
-      case variant_index_v<uint64_t, MetricValueType>: {
-        const uint64_t bits = readWord(wordOffset);
-        uint64_t typedValue{};
-        std::memcpy(&typedValue, &bits, sizeof(typedValue));
-        metricValueVariant = typedValue;
-        break;
-      }
-      case variant_index_v<int64_t, MetricValueType>: {
-        const uint64_t bits = readWord(wordOffset);
-        int64_t typedValue{};
-        std::memcpy(&typedValue, &bits, sizeof(typedValue));
-        metricValueVariant = typedValue;
-        break;
-      }
-      case variant_index_v<double, MetricValueType>: {
-        const uint64_t bits = readWord(wordOffset);
-        double typedValue{};
-        std::memcpy(&typedValue, &bits, sizeof(typedValue));
-        metricValueVariant = typedValue;
-        break;
-      }
-      case variant_index_v<std::vector<uint64_t>, MetricValueType>: {
-        std::vector<uint64_t> values(metricDesc.size);
-        for (size_t j = 0; j < metricDesc.size; ++j) {
-          values[j] = readWord(wordOffset + j);
-        }
-        metricValueVariant = std::move(values);
-        break;
-      }
-      case variant_index_v<std::vector<int64_t>, MetricValueType>: {
-        std::vector<int64_t> values(metricDesc.size);
-        for (size_t j = 0; j < metricDesc.size; ++j) {
-          const uint64_t bits = readWord(wordOffset + j);
-          std::memcpy(&values[j], &bits, sizeof(bits));
-        }
-        metricValueVariant = std::move(values);
-        break;
-      }
-      case variant_index_v<std::vector<double>, MetricValueType>: {
-        std::vector<double> values(metricDesc.size);
-        for (size_t j = 0; j < metricDesc.size; ++j) {
-          const uint64_t bits = readWord(wordOffset + j);
-          std::memcpy(&values[j], &bits, sizeof(bits));
-        }
-        metricValueVariant = std::move(values);
-        break;
-      }
-      default:
-        throw std::runtime_error("[PROTON] Unsupported metric type index: " +
-                                 std::to_string(metricTypeIndex));
-        break;
-      }
+    auto metricDesc =
+        metricBuffer.getMetricDescriptor(metricNodeState.metricId);
+    const auto &metricName = metricDesc.name;
+    const auto metricTypeIndex = metricDesc.typeIndex;
 
-      wordOffset = (wordOffset + metricDesc.size) % capacityWords;
+    MetricValueType metricValueVariant{};
+    switch (metricTypeIndex) {
+    case variant_index_v<uint64_t, MetricValueType>: {
+      const uint64_t bits = readWord(wordOffset);
+      uint64_t typedValue{};
+      std::memcpy(&typedValue, &bits, sizeof(typedValue));
+      metricValueVariant = typedValue;
+      break;
+    }
+    case variant_index_v<int64_t, MetricValueType>: {
+      const uint64_t bits = readWord(wordOffset);
+      int64_t typedValue{};
+      std::memcpy(&typedValue, &bits, sizeof(typedValue));
+      metricValueVariant = typedValue;
+      break;
+    }
+    case variant_index_v<double, MetricValueType>: {
+      const uint64_t bits = readWord(wordOffset);
+      double typedValue{};
+      std::memcpy(&typedValue, &bits, sizeof(typedValue));
+      metricValueVariant = typedValue;
+      break;
+    }
+    case variant_index_v<std::vector<uint64_t>, MetricValueType>: {
+      std::vector<uint64_t> values(metricDesc.size);
+      for (size_t j = 0; j < metricDesc.size; ++j) {
+        values[j] = readWord(wordOffset + j);
+      }
+      metricValueVariant = std::move(values);
+      break;
+    }
+    case variant_index_v<std::vector<int64_t>, MetricValueType>: {
+      std::vector<int64_t> values(metricDesc.size);
+      for (size_t j = 0; j < metricDesc.size; ++j) {
+        const uint64_t bits = readWord(wordOffset + j);
+        std::memcpy(&values[j], &bits, sizeof(bits));
+      }
+      metricValueVariant = std::move(values);
+      break;
+    }
+    case variant_index_v<std::vector<double>, MetricValueType>: {
+      std::vector<double> values(metricDesc.size);
+      for (size_t j = 0; j < metricDesc.size; ++j) {
+        const uint64_t bits = readWord(wordOffset + j);
+        std::memcpy(&values[j], &bits, sizeof(bits));
+      }
+      metricValueVariant = std::move(values);
+      break;
+    }
+    default:
+      throw std::runtime_error("[PROTON] Unsupported metric type index: " +
+                               std::to_string(metricTypeIndex));
+      break;
+    }
 
-      for (auto &[data, entries] : pendingGraph.dataToEntries) {
-        auto &dataEntry = entries[i];
-        if (dataEntry.id != Scope::DummyScopeId) {
-          dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
-                                               dataEntry.id);
-        } else {
-          dataEntry.upsertFlexibleMetric(metricName, metricValueVariant);
-        }
+    wordOffset += metricDesc.size;
+
+    for (auto &[data, dataEntry] : metricNodeState.dataToEntry) {
+      if (dataEntry.id != Scope::DummyScopeId) {
+        dataEntry.upsertLinkedFlexibleMetric(metricName, metricValueVariant,
+                                             dataEntry.id);
+      } else {
+        dataEntry.upsertFlexibleMetric(metricName, metricValueVariant);
       }
     }
   }
 }
 } // namespace
 
-void PendingGraphPool::push(
-    size_t phase, const std::map<Data *, std::vector<DataEntry>> &dataToEntries,
-    size_t numNodes, size_t numWords) {
+void PendingGraphPool::push(size_t phase, size_t numWords,
+                            PendingGraphQueue::SeqIdToStateMap &&seqIdToState) {
   const size_t requiredBytes = bytesForWords(numWords);
   void *device = runtime->getDevice();
   std::shared_ptr<Slot> slot;
-  auto startBufferOffset = 0;
+  size_t startBufferOffset = 0;
   {
     std::lock_guard<std::mutex> lock(mutex);
     auto &devicePool = pool[device];
@@ -121,9 +125,9 @@ void PendingGraphPool::push(
   {
     std::lock_guard<std::mutex> slotLock(slot->mutex);
     if (slot->queue == std::nullopt) {
-      slot->queue = PendingGraphQueue(startBufferOffset, phase, device);
+      slot->queue = PendingGraphQueue(startBufferOffset);
     }
-    slot->queue->push(numNodes, numWords, dataToEntries);
+    slot->queue->push(numWords, std::move(seqIdToState));
   }
   {
     std::lock_guard<std::mutex> lock(mutex);
@@ -146,24 +150,25 @@ void PendingGraphPool::peek(size_t phase) {
         slots.emplace_back(device, slotIt->second);
       }
     }
-    for (auto &[device, slotPtr] : slots) {
+    for (auto &[device, _] : slots) {
       pool[device].erase(phase);
     }
   }
+
   std::vector<std::pair<void *, size_t>> deviceNumWords;
-  for (auto &[device, slotPtr] : slots) {
-    std::lock_guard<std::mutex> slotLock(slotPtr->mutex);
-    if (!slotPtr->queue.has_value())
+  for (auto &[device, slot] : slots) {
+    std::lock_guard<std::mutex> slotLock(slot->mutex);
+    if (!slot->queue.has_value())
       continue;
-    auto &queue = slotPtr->queue.value();
-    auto numWords = queue.numWords;
+    auto &queue = *slot->queue;
     metricBuffer->peek(static_cast<Device *>(device), [&](uint8_t *hostPtr) {
       emitMetricRecords(*metricBuffer, reinterpret_cast<uint64_t *>(hostPtr),
                         queue);
     });
-    deviceNumWords.emplace_back(device, numWords);
-    slotPtr->queue.reset();
+    deviceNumWords.emplace_back(device, queue.numWords);
+    slot->queue.reset();
   }
+
   {
     std::lock_guard<std::mutex> lock(mutex);
     for (auto &[device, numWords] : deviceNumWords) {
@@ -205,10 +210,10 @@ bool PendingGraphPool::flushAll() {
           std::lock_guard<std::mutex> lock(slot->mutex);
           if (!slot->queue.has_value())
             continue;
-          deviceNumWords.emplace_back(device, slot->queue->numWords);
+          auto &queue = *slot->queue;
+          deviceNumWords.emplace_back(device, queue.numWords);
           emitMetricRecords(*metricBuffer,
-                            reinterpret_cast<uint64_t *>(hostPtr),
-                            *slot->queue);
+                            reinterpret_cast<uint64_t *>(hostPtr), queue);
           slot->queue.reset();
         }
       },
