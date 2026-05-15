@@ -87,8 +87,7 @@ Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
 }
 
 Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
-                          Attribute layout, int numWarps,
-                          int threadsPerWarp) {
+                          Attribute layout, int numWarps, int threadsPerWarp) {
   Value loadValue = value;
   while (auto cvtOp = loadValue.getDefiningOp<ttg::ConvertLayoutOp>())
     loadValue = cvtOp.getSrc();
@@ -101,8 +100,8 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
   auto oldLayout = cast<ttg::DistributedEncodingTrait>(oldTy.getEncoding());
 
   auto cgaLayout = ttg::getCGALayout(layout);
-  auto newLoadLayout = cloneWithCGALayout(
-      oldLayout, oldTy.getShape(), numWarps, threadsPerWarp, cgaLayout);
+  auto newLoadLayout = cloneWithCGALayout(oldLayout, oldTy.getShape(), numWarps,
+                                          threadsPerWarp, cgaLayout);
   if (oldTy.getEncoding() == newLoadLayout)
     return value;
 
