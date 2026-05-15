@@ -469,7 +469,7 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
     auto accEnc = dyn_cast<TensorMemoryEncodingAttr>(acc.getEncoding());
     if (!lhsEnc || !accEnc)
       return false;
-    auto accShapePerCTA = ttg::getShapePerCTA(acc);
+    auto accShapePerCTA = getShapePerCTA(acc);
     return getTmemAllocSizes(lhs).numRows == 64 &&
            accEnc.getBlockN() < accShapePerCTA[1];
   };
