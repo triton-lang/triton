@@ -44,6 +44,9 @@ def plus_a_reduce(x, a):
     (512, 512, 512, None),
     (512, 512, 512, "plus_ten"),
     (4, 4, 4, None),
+    (3, 15, 25, None),
+    (5, 9999, 2345, None),
+    (15, 345, 789, None),
 ])
 @pytest.mark.parametrize("dtype_str", [
     "float16",
@@ -136,5 +139,7 @@ def bench_reduce(B: int = 4, M: int = 4096, N: int = 4096, *, dim: int = 0, dtyp
 
 # bench_reduce(B=4, M=8192, N=8192, dim=0, dtype=torch.float16, mask_mode="none")
 # bench_reduce(B=8192, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_n")
+# bench_reduce(B=16384, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_n")
+# bench_reduce(B=65536, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_n")
 # bench_reduce(B=8192, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_m")
 # bench_reduce(B=8192, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_b")
