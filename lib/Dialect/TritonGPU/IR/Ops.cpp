@@ -674,12 +674,17 @@ LogicalResult MemDescReinterpretOp::verify() {
     auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
     auto layout =
         toLinearLayout(ty.getAllocShape().take_back(rank), ty.getEncoding());
-    // Shared memory is allocated by offset and TMEM is allocated by column; the
-    // other physical dimensions do not increase or decrease the allocation.
+    int64_t numLayoutCopies = 1;
+    for (int64_t dim : ty.getAllocShape().drop_back(rank))
+      numLayoutCopies *= dim;
+    // Shared memory is allocated by offset and TMEM is allocated by column;
+    // prefix dimensions outside the layout-ranked suffix represent separate
+    // copies of that logical allocation.
     auto *ctx = ty.getContext();
     bool isSharedMemory = isa<SharedMemorySpaceAttr>(ty.getMemorySpace());
     auto dim = StringAttr::get(ctx, isSharedMemory ? "offset" : "col");
-    return layout.getInDimSize(dim) * ty.getElementTypeBitWidth();
+    return numLayoutCopies * layout.getInDimSize(dim) *
+           ty.getElementTypeBitWidth();
   };
   auto srcNumBits = getViewNumBits(srcTy);
   auto dstNumBits = getViewNumBits(dstTy);
@@ -1110,14 +1115,7 @@ LogicalResult MemDescSubsliceOp::verify() {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
 
-  // If any block basis is fully broadcasted, multiple CTAs can alias the same
-  // output tile region. Subslice on such layouts is unsupported.
-  auto kBlock = mlir::StringAttr::get(ctx, "block");
-  if (ll.getFreeVariableMasks()[kBlock] != 0) {
-    return emitError("We don't support splitting with broadcasted CTA outputs");
-  }
-
-  auto llInv = ll.invert();
+  auto llInv = ll.pseudoinvert();
   for (auto dim : splitDims) {
     auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
     llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;

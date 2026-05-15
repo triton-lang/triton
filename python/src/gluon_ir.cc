@@ -1078,9 +1078,15 @@ void init_gluon_ir(py::module &&m) {
       .def("create_async_tdm_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
               Value result, Value pred, Value barrier,
-              tt::CacheModifier cacheModifier) {
+              tt::CacheModifier cacheModifier,
+              std::optional<uint32_t> warpUsedHint) {
+             IntegerAttr hintAttr;
+             if (warpUsedHint.has_value())
+               hintAttr = self.getBuilder().getI32IntegerAttr(
+                   static_cast<int32_t>(*warpUsedHint));
              self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(
-                 descPtr, indices, result, pred, barrier, cacheModifier);
+                 descPtr, indices, result, pred, barrier, cacheModifier,
+                 hintAttr);
            })
       .def("create_async_tdm_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,

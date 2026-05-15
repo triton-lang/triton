@@ -2280,10 +2280,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: test_local_atomic_inc_dead
   // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
   // CHECK-SAME: red.shared.cta.relaxed.inc.u32
+  // CHECK-SAME: "r,b"
   tt.func public @test_local_atomic_inc_dead(%arg0: tensor<1xi32, #blocked>) {
     %c1 = arith.constant dense<1> : tensor<1xi32, #blocked>
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
     %1 = ttg.local_atomic_scatter_rmw add, %0[%arg0], %c1 {axis = 0 : i32} : (!ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked>) -> tensor<1xi32, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: test_local_atomic_add_dead
+  // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
+  // CHECK-SAME: red.shared.cta.relaxed.add.u32
+  // CHECK-SAME: "r,r,b"
+  tt.func public @test_local_atomic_add_dead(%arg0: tensor<1xi32, #blocked>) {
+    %c2 = arith.constant dense<2> : tensor<1xi32, #blocked>
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
+    %1 = ttg.local_atomic_scatter_rmw add, %0[%arg0], %c2 {axis = 0 : i32} : (!ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked>) -> tensor<1xi32, #blocked>
     tt.return
   }
 }
@@ -2681,7 +2693,7 @@ tt.func private @memdesc_reinterpret(%arg0: !ttg.memdesc<4x1024xi64, #shared0, #
   // CHECK: [[BASE_PTR:%.*]] = llvm.extractvalue %arg0[0]
   // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK: [[PTR:%.*]] = llvm.getelementptr [[BASE_PTR]][[[C0]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i64
-  ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<4x1024xi64, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<4x4x2048xi32, #shared1, #ttg.shared_memory, mutable>
+  ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<4x1024xi64, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<4x1x2048xi32, #shared1, #ttg.shared_memory, mutable>
   // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK: [[S0:%.*]] = llvm.mlir.undef
   // CHECK: [[S1:%.*]] = llvm.insertvalue [[PTR]], [[S0]][0]
