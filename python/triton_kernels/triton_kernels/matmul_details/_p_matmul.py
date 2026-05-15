@@ -359,7 +359,7 @@ def _p_matmul(
                     # already divided by W_K_DIVISOR (2 for mxfp4 where 2 fp4
                     # values are packed per Byte along K)
                     off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_K_DIVISOR)
-                    if EVEN_K:
+                    if EVEN_K and SPLIT_K == 1:
                         mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
                     else:
                         mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
