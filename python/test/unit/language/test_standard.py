@@ -183,3 +183,135 @@ def test_unsqueeze(dim, device):
     expected = torch.arange(0, 8, device=device, dtype=torch.int32)
     expected = expected.reshape(2, 4).unsqueeze(dim).reshape(-1)
     assert (out == expected).all()
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
+def test_max_propagate_nan(propagate_nan, device):
+
+    @triton.jit
+    def max_kernel(in_ptr, out_ptr, propagate_nan: tl.constexpr):
+        a = tl.load(in_ptr + tl.arange(0, 8)[:, None] * 8 + tl.arange(0, 8)[None, :])
+        a = tl.max(a, 0, propagate_nan=propagate_nan)
+        tl.store(out_ptr + tl.arange(0, 8), a)
+
+    a = torch.randn((8, 8), device=device)
+    a[1, 2] = torch.nan
+    a[4, 6] = torch.nan
+
+    std = a.clone()
+    nan_cols = torch.isnan(std).any(dim=0)
+    std[torch.isnan(std)] = -torch.inf
+    std = std.max(0)[0]
+    if propagate_nan == tl.PropagateNan.ALL:
+        std[nan_cols] = torch.nan
+
+    ans = torch.zeros((8, ), dtype=torch.float32, device=device)
+    max_kernel[1, 1, 1](a, ans, propagate_nan)
+    torch.testing.assert_close(std, ans, equal_nan=True)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
+def test_min_propagate_nan(propagate_nan, device):
+
+    @triton.jit
+    def min_kernel(in_ptr, out_ptr, propagate_nan: tl.constexpr):
+        a = tl.load(in_ptr + tl.arange(0, 8)[:, None] * 8 + tl.arange(0, 8)[None, :])
+        a = tl.min(a, 0, propagate_nan=propagate_nan)
+        tl.store(out_ptr + tl.arange(0, 8), a)
+
+    a = torch.randn((8, 8), device=device)
+    a[1, 2] = torch.nan
+    a[4, 6] = torch.nan
+
+    std = a.clone()
+    nan_cols = torch.isnan(std).any(dim=0)
+    std[torch.isnan(std)] = torch.inf
+    std = std.min(0)[0]
+    if propagate_nan == tl.PropagateNan.ALL:
+        std[nan_cols] = torch.nan
+
+    ans = torch.zeros((8, ), dtype=torch.float32, device=device)
+    min_kernel[1, 1, 1](a, ans, propagate_nan)
+    torch.testing.assert_close(std, ans, equal_nan=True)
+
+
+def _reference_reduce_with_indices(x, op, propagate_nan, tie_break_left):
+    values = []
+    indices = []
+    fill_value = -torch.inf if op == "max" else torch.inf
+
+    for column in x.T:
+        nan_indices = torch.nonzero(torch.isnan(column), as_tuple=False).flatten()
+        if propagate_nan == tl.PropagateNan.ALL and len(nan_indices) > 0:
+            values.append(torch.tensor(torch.nan, device=x.device, dtype=x.dtype))
+            indices.append(nan_indices[0 if tie_break_left else -1])
+            continue
+
+        clean = column.clone()
+        clean[torch.isnan(clean)] = fill_value
+        if op == "max":
+            value, index = torch.max(clean, dim=0)
+        else:
+            value, index = torch.min(clean, dim=0)
+        values.append(value)
+        indices.append(index)
+
+    return torch.stack(values), torch.stack(indices).to(torch.int32)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("op", ["max", "min"])
+@pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
+@pytest.mark.parametrize("tie_break_left", [True, False])
+def test_reduce_return_indices_propagate_nan(op, propagate_nan, tie_break_left, device):
+
+    @triton.jit
+    def reduce_kernel(in_ptr, out_val_ptr, out_idx_ptr, propagate_nan: tl.constexpr, tie_break_left: tl.constexpr,
+                      op: tl.constexpr):
+        a = tl.load(in_ptr + tl.arange(0, 4)[:, None] * 4 + tl.arange(0, 4)[None, :])
+        if op == "max":
+            values, indices = tl.max(a, 0, return_indices=True, return_indices_tie_break_left=tie_break_left,
+                                     propagate_nan=propagate_nan)
+        else:
+            values, indices = tl.min(a, 0, return_indices=True, return_indices_tie_break_left=tie_break_left,
+                                     propagate_nan=propagate_nan)
+        offs = tl.arange(0, 4)
+        tl.store(out_val_ptr + offs, values)
+        tl.store(out_idx_ptr + offs, indices)
+
+    x = torch.tensor([[1.0, 5.0, 9.0, 0.0], [torch.nan, -1.0, 3.0, 4.0], [3.0, 2.0, torch.nan, torch.nan],
+                      [2.0, torch.nan, 7.0, 6.0]], device=device)
+
+    expected_values, expected_indices = _reference_reduce_with_indices(x, op, propagate_nan, tie_break_left)
+    actual_values = torch.empty((4, ), dtype=torch.float32, device=device)
+    actual_indices = torch.empty((4, ), dtype=torch.int32, device=device)
+
+    reduce_kernel[(1, )](x, actual_values, actual_indices, propagate_nan, tie_break_left, op)
+    torch.testing.assert_close(expected_values, actual_values, equal_nan=True)
+    torch.testing.assert_close(expected_indices, actual_indices)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("op", ["max", "min"])
+def test_reduce_return_indices_propagate_nan_tie_break_left(op, device):
+
+    @triton.jit
+    def reduce_kernel(in_ptr, out_idx_ptr, op: tl.constexpr):
+        a = tl.load(in_ptr + tl.arange(0, 4)[:, None] * 4 + tl.arange(0, 4)[None, :])
+        if op == "max":
+            _, indices = tl.max(a, 0, return_indices=True, return_indices_tie_break_left=True,
+                                propagate_nan=tl.PropagateNan.ALL)
+        else:
+            _, indices = tl.min(a, 0, return_indices=True, return_indices_tie_break_left=True,
+                                propagate_nan=tl.PropagateNan.ALL)
+        tl.store(out_idx_ptr + tl.arange(0, 4), indices)
+
+    x = torch.tensor([[1.0, torch.nan, 9.0, 0.0], [torch.nan, -1.0, torch.nan, 4.0], [3.0, torch.nan, 5.0, torch.nan],
+                      [2.0, 7.0, torch.nan, 6.0]], device=device)
+    expected_indices = torch.tensor([1, 0, 1, 2], dtype=torch.int32, device=device)
+    actual_indices = torch.empty((4, ), dtype=torch.int32, device=device)
+
+    reduce_kernel[(1, )](x, actual_indices, op)
+    torch.testing.assert_close(expected_indices, actual_indices)
