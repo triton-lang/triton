@@ -119,24 +119,10 @@ void PendingGraphPool::push(size_t phase, size_t numWords,
   {
     std::lock_guard<std::mutex> lock(mutex);
     auto &devicePool = pool[device];
-    const bool hasPendingGraphs = !devicePool.empty();
     auto [poolIt, inserted] = devicePool.try_emplace(phase);
     if (inserted)
       poolIt->second = std::make_shared<Slot>();
-    auto offsetIt = deviceBufferOffset.find(device);
-    if (!hasPendingGraphs) {
-      const auto liveOffset = metricBuffer->getWriteOffsetBytes(device);
-      if (offsetIt == deviceBufferOffset.end()) {
-        offsetIt = deviceBufferOffset.emplace(device, liveOffset).first;
-      } else {
-        offsetIt->second = liveOffset;
-      }
-    } else if (offsetIt == deviceBufferOffset.end()) {
-      offsetIt = deviceBufferOffset
-                     .emplace(device, metricBuffer->getWriteOffsetBytes(device))
-                     .first;
-    }
-    startBufferOffset = offsetIt->second;
+    startBufferOffset = deviceBufferOffset.try_emplace(device, 0).first->second;
     slot = poolIt->second;
   }
   {
