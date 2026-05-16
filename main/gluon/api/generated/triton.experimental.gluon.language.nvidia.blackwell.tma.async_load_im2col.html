@@ -150,7 +150,9 @@
 - For 3D tensors: 1 offset
 - For 4D tensors: 2 offsets
 - For 5D tensors: 3 offsets</p></li>
-<li><p><strong>barrier</strong> – Barrier for synchronization</p></li>
+<li><p><strong>barrier</strong> – Barrier for synchronization. In a two-CTA kernel, use a
+two-CTA barrier when this TMA load feeds a tcgen05 op; otherwise
+use a barrier allocated with <code class="docutils literal notranslate"><span class="pre">two_ctas=False</span></code>.</p></li>
 <li><p><strong>result</strong> – Destination memory descriptor</p></li>
 <li><p><strong>pred</strong> – Predicate for conditional execution</p></li>
 <li><p><strong>multicast</strong> – Enable multicast</p></li>

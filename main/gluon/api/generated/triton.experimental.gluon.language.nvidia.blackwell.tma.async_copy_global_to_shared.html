@@ -146,7 +146,9 @@
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>tensor_desc</strong> – Tensor descriptor (tiled)</p></li>
 <li><p><strong>coord</strong> – Coordinates in the source tensor</p></li>
-<li><p><strong>barrier</strong> – Barrier for synchronization</p></li>
+<li><p><strong>barrier</strong> – Barrier for synchronization. In a two-CTA kernel, use a
+two-CTA barrier when this TMA load feeds a tcgen05 op; otherwise
+use a barrier allocated with <code class="docutils literal notranslate"><span class="pre">two_ctas=False</span></code>.</p></li>
 <li><p><strong>result</strong> – Destination memory descriptor</p></li>
 <li><p><strong>pred</strong> – Predicate for conditional execution</p></li>
 <li><p><strong>multicast</strong> – Enable multicast</p></li>
