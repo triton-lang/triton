@@ -478,16 +478,17 @@ def _reciprocal_involution_kernel(x_ptr, out_ptr, n_elements, BLOCK: gl.constexp
     gl.store(out_ptr + offs, z, mask=mask)
 
 
-@triton.jit
-def _underflow_where_upper_triangle_kernel(x_ptr, out_ptr, N: tl.constexpr):
-    row = tl.arange(0, N)[:, None]
-    col = tl.arange(0, N)[None, :]
+@gluon.jit
+def _underflow_where_upper_triangle_kernel(x_ptr, out_ptr, N: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [4, 1], [1, 0])
+    row = gl.arange(0, N, layout=gl.SliceLayout(1, layout))[:, None]
+    col = gl.arange(0, N, layout=gl.SliceLayout(0, layout))[None, :]
     upper_triangle = col > row
-    x = tl.load(x_ptr + row * N + col)
-    x = tl.where(upper_triangle, x - 1.0e30, x)
-    y = tl.exp(x)
-    y = tl.underflow_where(y, upper_triangle)
-    tl.store(out_ptr + row * N + col, y)
+    x = gl.load(x_ptr + row * N + col)
+    x = gl.where(upper_triangle, x - 1.0e30, x)
+    y = gl.exp(x)
+    y = gl.underflow_where(y, upper_triangle)
+    gl.store(out_ptr + row * N + col, y)
 
 
 def test_underflow_where_upper_triangle_exp(device, fresh_knobs):
@@ -501,10 +502,10 @@ def test_underflow_where_upper_triangle_exp(device, fresh_knobs):
     upper_triangle = torch.triu(torch.ones_like(x, dtype=torch.bool), diagonal=1)
 
     fresh_knobs.compilation.instrumentation_mode = ""
-    _underflow_where_upper_triangle_kernel[(1, )](x, regular_out, N=N)
+    _underflow_where_upper_triangle_kernel[(1, )](x, regular_out, N=N, THREADS_PER_WARP=THREADS_PER_WARP)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
-    _underflow_where_upper_triangle_kernel[(1, )](x, fpsan_out, N=N)
+    _underflow_where_upper_triangle_kernel[(1, )](x, fpsan_out, N=N, THREADS_PER_WARP=THREADS_PER_WARP)
 
     assert torch.equal(regular_out[upper_triangle], torch.zeros_like(regular_out[upper_triangle]))
     assert torch.equal(fpsan_out[upper_triangle], torch.zeros_like(fpsan_out[upper_triangle]))

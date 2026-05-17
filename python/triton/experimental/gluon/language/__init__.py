@@ -86,6 +86,7 @@ from ._core import (
     barrier,
     to_linear_layout,
     to_tensor,
+    underflow_where,
     warp_specialize,
     where,
 )
