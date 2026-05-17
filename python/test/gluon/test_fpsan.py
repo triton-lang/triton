@@ -478,6 +478,39 @@ def _reciprocal_involution_kernel(x_ptr, out_ptr, n_elements, BLOCK: gl.constexp
     gl.store(out_ptr + offs, z, mask=mask)
 
 
+@triton.jit
+def _underflow_where_upper_triangle_kernel(x_ptr, out_ptr, N: tl.constexpr):
+    row = tl.arange(0, N)[:, None]
+    col = tl.arange(0, N)[None, :]
+    upper_triangle = col > row
+    x = tl.load(x_ptr + row * N + col)
+    x = tl.where(upper_triangle, x - 1.0e30, x)
+    y = tl.exp(x)
+    y = tl.underflow_where(y, upper_triangle)
+    tl.store(out_ptr + row * N + col, y)
+
+
+def test_underflow_where_upper_triangle_exp(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    N = 32
+    torch.manual_seed(0)
+    x = torch.randn((N, N), dtype=torch.float32, device="cuda")
+    regular_out = torch.empty_like(x)
+    fpsan_out = torch.empty_like(x)
+    upper_triangle = torch.triu(torch.ones_like(x, dtype=torch.bool), diagonal=1)
+
+    fresh_knobs.compilation.instrumentation_mode = ""
+    _underflow_where_upper_triangle_kernel[(1, )](x, regular_out, N=N)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    _underflow_where_upper_triangle_kernel[(1, )](x, fpsan_out, N=N)
+
+    assert torch.equal(regular_out[upper_triangle], torch.zeros_like(regular_out[upper_triangle]))
+    assert torch.equal(fpsan_out[upper_triangle], torch.zeros_like(fpsan_out[upper_triangle]))
+    assert not torch.equal(regular_out, fpsan_out)
+
+
 @pytest.mark.parametrize("op", ["mul_one", "add_zero"])
 def test_constant_identity_noop(device, op, fresh_knobs):
     _require_cuda_backend(device)
