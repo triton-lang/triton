@@ -21,6 +21,35 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
+def test_compile_only_underflow_where() -> None:
+
+    @triton.jit
+    def underflow_where_kernel(x_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + offsets)
+        y = tl.underflow_where(x, offsets < 8)
+        tl.store(out_ptr + offsets, y)
+
+    src = triton.compiler.ASTSource(
+        fn=underflow_where_kernel,
+        signature={"x_ptr": "*fp32", "out_ptr": "*fp32", "BLOCK_SIZE": "constexpr"},
+        constexprs={"BLOCK_SIZE": 16},
+    )
+    target = GPUTarget("cuda", 100, 32)
+
+    regular = triton.compile(src, target=target)
+    assert "arith.select" not in regular.asm["ttir"]
+    assert "tt.assert" not in regular.asm["ttir"]
+
+    debug = triton.compile(src, target=target, options={"debug": True})
+    assert "arith.select" not in debug.asm["ttir"]
+    assert "tt.assert" in debug.asm["ttir"]
+
+    fpsan = triton.compile(src, target=target, options={"instrumentation_mode": "fpsan"})
+    assert "arith.select" in fpsan.asm["ttir"]
+    assert "tt.assert" not in fpsan.asm["ttir"]
+
+
 def test_compile_only_dot() -> None:
 
     @triton.jit

@@ -51,6 +51,25 @@ def test_device_assert_barrier(monkeypatch, device):
     getattr(torch, device).synchronize()
 
 
+@pytest.mark.forked
+def test_underflow_where_device_assert(monkeypatch, device):
+    monkeypatch.setenv("TRITON_DEBUG", "1")
+    triton.knobs.refresh_knobs()
+    x = torch.ones([16], dtype=torch.float32, device=device)
+    out = torch.empty_like(x)
+
+    @triton.jit
+    def _kernel(x_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        y = tl.load(x_ptr + offsets)
+        y = tl.underflow_where(y, offsets == 0)
+        tl.store(out_ptr + offsets, y)
+
+    with pytest.raises(RuntimeError):
+        _kernel[(1, )](x, out, BLOCK_SIZE=16)
+        getattr(torch, device).synchronize()
+
+
 @pytest.mark.parametrize("cond", [False, True])
 def test_static_assert(cond):
 
