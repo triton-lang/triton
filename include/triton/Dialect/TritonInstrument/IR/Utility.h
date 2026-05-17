@@ -213,10 +213,10 @@ struct AuxDataMap {
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
   RegionToValueMap lock;
 
-  // Consan inserts this startup barrier only to finish shared state
-  // initialization before any instrumented operation can run. It is not a
-  // user-visible publication point.
-  Operation *lockInitClusterBarrier = nullptr;
+  // Consan inserts internal cluster barriers for its own protocols. They must
+  // keep their synchronization semantics, but they are not user-visible
+  // publication points.
+  SmallVector<Operation *> nonPublishingClusterBarriers;
 
   // scratch, <Cbar x K x Cthr x i32>
   // Deadlock-detection bitfield. Each base thread uses two bits: waiting flag
