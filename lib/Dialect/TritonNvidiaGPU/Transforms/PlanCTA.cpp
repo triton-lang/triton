@@ -93,8 +93,7 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
     loadValue = cvtOp.getSrc();
 
   Operation *loadOp = loadValue.getDefiningOp();
-  if (!isa_and_nonnull<triton::LoadOp, triton::DescriptorLoadLikeOpInterface>(
-          loadOp))
+  if (!isa<triton::LoadOp, triton::DescriptorLoadLikeOpInterface>(loadOp))
     return value;
 
   auto oldTy = cast<RankedTensorType>(loadValue.getType());
@@ -130,13 +129,14 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
     return convertValueToLayout(builder, loc, newLoad->getResult(0), layout);
   }
 
-  OpResult result = loadOp->getResult(0);
-  result.setType(newTy);
-  auto convert =
-      ttg::ConvertLayoutOp::create(loadBuilder, loadOp->getLoc(), oldTy, result)
-          .getResult();
-  result.replaceAllUsesExcept(convert, convert.getDefiningOp());
-  return convertValueToLayout(builder, loc, result, layout);
+  if (auto descriptorLoad =
+          dyn_cast<triton::DescriptorLoadLikeOpInterface>(loadOp)) {
+    Operation *newLoad = loadBuilder.clone(*loadOp);
+    newLoad->getResult(0).setType(newTy);
+    return convertValueToLayout(builder, loc, newLoad->getResult(0), layout);
+  }
+
+  llvm_unreachable("expected a load-like op");
 }
 
 void convertOpOperandsToLayouts(Operation *op,
