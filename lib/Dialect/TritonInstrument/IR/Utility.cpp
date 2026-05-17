@@ -638,7 +638,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
       arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
   ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
   if (numCTAs > 1) {
-    ClusterBarrierOp::create(b, b.getLoc());
+    lockInitClusterBarrier = ClusterBarrierOp::create(b, b.getLoc());
   } else {
     BarrierOp::create(b, b.getLoc(), AddrSpace::Local);
   }

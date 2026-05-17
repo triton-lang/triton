@@ -543,7 +543,8 @@ private:
         }
       }
       if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
-        if (!clusterBarrier.getRelaxed()) {
+        if (!clusterBarrier.getRelaxed() &&
+            op != auxData.lockInitClusterBarrier) {
           b.setInsertionPointAfter(op);
           for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM})
             funcBuilder.createPublishClusterVisibilityCall(b, nullptr, memType,
