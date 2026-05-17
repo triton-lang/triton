@@ -2656,8 +2656,8 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
             arith::AndIOp::create(fb, readVisibility, readBaseMask), zeroReads);
         Value syncReads =
             arith::SelectOp::create(fb, hasBaseRead, readVisibility, zeroReads);
-        Value readsForCluster = reduce<arith::OrIOp>(fb, syncReads, {2, 4});
-        readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1, 3},
+        Value readsForCluster = reduce<arith::OrIOp>(fb, syncReads, {2, 3, 4});
+        readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1},
                                               readVisibilityType);
         Value newReadVisibility =
             arith::OrIOp::create(fb, readVisibility, readsForCluster);
