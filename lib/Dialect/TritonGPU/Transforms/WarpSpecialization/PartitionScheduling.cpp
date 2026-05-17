@@ -1151,7 +1151,7 @@ void duplicateCheapOps(Graph *graph, std::string funcName,
                 if (child->getPartitions().size() != 1 || !isCandidate(child)) {
                   // do nothing
                 } else if (child->getPartition() == partition) {
-                  parentMap.emplace(child, node);
+                  parentMap.try_emplace(child, node);
                   stack.push_back(child);
                 } else if (child->getPartition() == startPartition) {
                   // found a path, set all nodes on the path to the partition
