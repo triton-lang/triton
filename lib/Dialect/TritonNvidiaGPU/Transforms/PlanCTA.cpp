@@ -93,7 +93,8 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
     loadValue = cvtOp.getSrc();
 
   Operation *loadOp = loadValue.getDefiningOp();
-  if (!isa<triton::LoadOp, triton::DescriptorLoadLikeOpInterface>(loadOp))
+  if (!isa_and_nonnull<triton::LoadOp, triton::DescriptorLoadLikeOpInterface>(
+          loadOp))
     return value;
 
   auto oldTy = cast<RankedTensorType>(loadValue.getType());
