@@ -183,7 +183,8 @@ struct OptimizeCTALocalityPass
       return;
 
     SmallVector<ttg::ConvertLayoutOp> converts;
-    mod.walk([&](ttg::ConvertLayoutOp convert) { converts.push_back(convert); });
+    mod.walk(
+        [&](ttg::ConvertLayoutOp convert) { converts.push_back(convert); });
 
     llvm::SetVector<Operation *> opsToErase;
     for (ttg::ConvertLayoutOp convert : converts)
