@@ -7,6 +7,7 @@
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "Profiler/Profiler.h"
+#include "Profiler/RocprofSDK/RocprofSDKProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
 #include "Utility/Errors.h"
 #include "Utility/String.h"

@@ -9,8 +9,8 @@ set(PROTON_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/common")
 if(NOT CUPTI_INCLUDE_DIR)
   message(FATAL_ERROR "CUPTI include directory not defined")
 endif()
-if(NOT ROCTRACER_INCLUDE_DIR)
-  message(FATAL_ERROR "ROCTRACER include directory not defined")
+if(NOT ROCM_INCLUDE_DIR)
+  message(FATAL_ERROR "ROCM include directory not defined")
 endif()
 if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
@@ -32,7 +32,7 @@ function(add_proton_library name)
   # Use system to skip warnings caused by legacy clang compilers
   target_include_directories(${name}
     SYSTEM PRIVATE
-      "${ROCTRACER_INCLUDE_DIR}"
+      "${ROCM_INCLUDE_DIR}"
   )
 
   target_include_directories(${name}

@@ -18,6 +18,10 @@ constexpr size_t bytesForWords(size_t numWords) {
 
 void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
                        PendingGraphQueue &queue) {
+  if (queue.seqIdToState.empty()) // Profiler was deactivated while graph launch
+                                  // was in progress
+    return;
+
   const size_t capacityWords = metricBuffer.getCapacity() / sizeof(uint64_t);
   const uint64_t scanStartWordOffset =
       queue.startBufferOffset / sizeof(uint64_t);
