@@ -650,22 +650,6 @@ void LayoutPropagation::rewriteOp(Operation *op) {
   }
 }
 
-bool canBeRemat(Operation *op) {
-  if (isa<LoadOp, StoreOp>(op))
-    return !isExpensiveLoadOrStore(op);
-  if (isa<AtomicRMWOp, AtomicCASOp, DotOp>(op))
-    return false;
-  if (auto gather = dyn_cast<GatherOp>(op))
-    return !gather.getEfficientLayout();
-  if (auto reshape = dyn_cast<ReshapeOp>(op))
-    return !reshape.getEfficientLayout();
-
-  if (isa<scf::WhileOp, scf::ConditionOp>(op))
-    return false;
-
-  return true;
-}
-
 void LayoutRematerialization::updateRematMapping(
     SmallVector<std::tuple<Value, Value>> &values) {
   for (auto [old, newV] : values) {
@@ -924,7 +908,7 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
   // Check if all the operations in the slice can be rematerialized.
   for (Value v : slice) {
     if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRemat(op))
+      if (!canBeRematerialized(op))
         return failure();
     }
   }

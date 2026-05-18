@@ -685,6 +685,22 @@ bool canUseResultEncoding(Operation *op, Attribute targetEncoding) {
              triton::gpu::LocalStoreOp>(op);
 }
 
+bool canBeRematerialized(Operation *op) {
+  if (isa<LoadOp, StoreOp>(op))
+    return !isExpensiveLoadOrStore(op);
+  if (isa<AtomicRMWOp, AtomicCASOp, DotOp>(op))
+    return false;
+  if (auto gather = dyn_cast<GatherOp>(op))
+    return !gather.getEfficientLayout();
+  if (auto reshape = dyn_cast<ReshapeOp>(op))
+    return !reshape.getEfficientLayout();
+
+  if (isa<scf::WhileOp, scf::ConditionOp>(op))
+    return false;
+
+  return true;
+}
+
 scf::ForOp replaceForOpWithNewSignature(
     OpBuilder &rewriter, scf::ForOp loop, ValueRange newIterOperands,
     SmallVectorImpl<std::tuple<Value, Value>> &replacements) {
