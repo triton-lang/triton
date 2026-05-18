@@ -38,6 +38,21 @@ def TritonGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> 
   ];
 }
 
+def TritonNvidiaGPUOptimizeCTALocalityPass : Pass<"triton-nvidia-gpu-optimize-cta-locality", "mlir::ModuleOp"> {
+  let summary = "Optimize CTA locality";
+
+  let description = [{
+    This pass removes cross-CTA layout conversions by propagating their source
+    values to same-block uses. A following RemoveLayoutConversions pass can then
+    clean up any redundant layout conversions.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 def TritonGPUFenceInsertion : Pass<"triton-nvidia-gpu-fence-insertion", "mlir::ModuleOp"> {
   let summary = "Insert fences across generic and async proxy.";
 
