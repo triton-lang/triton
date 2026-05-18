@@ -9,8 +9,9 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tt.func @propagate_same_layout_group
   // CHECK-SAME: %arg0: tensor<128x128xf32, #[[$GROUP_PLANNED:[a-zA-Z0-9_]+]]>
   // CHECK-SAME: %arg1: tensor<128x128xf32, #[[$GROUP_PLANNED]]>
-  // CHECK-NOT: ttg.convert_layout
-  // CHECK: arith.addf %arg0, %arg1 : tensor<128x128xf32, #[[$GROUP_PLANNED]]>
+  // CHECK: ttg.convert_layout %arg0 : tensor<128x128xf32, #[[$GROUP_PLANNED]]> -> tensor<128x128xf32, #[[$GROUP_ORIG:[a-zA-Z0-9_]+]]>
+  // CHECK: ttg.convert_layout %arg1 : tensor<128x128xf32, #[[$GROUP_PLANNED]]> -> tensor<128x128xf32, #[[$GROUP_ORIG]]>
+  // CHECK: arith.addf {{.*}} : tensor<128x128xf32, #[[$GROUP_ORIG]]>
   tt.func @propagate_same_layout_group(
     %a: tensor<128x128xf32, #planned>,
     %b: tensor<128x128xf32, #planned>) {
@@ -24,8 +25,12 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-SAME: %arg0: tensor<128x128x!tt.ptr<f32>, #[[$PLANNED:[a-zA-Z0-9_]+]]>
   // CHECK-SAME: %arg1: tensor<128x128xi1, #[[$PLANNED]]>
   // CHECK: %[[DOT:.*]] = tt.dot {{.*}} -> tensor<128x128xf32, #[[$PLANNED]]>
-  // CHECK-NOT: ttg.convert_layout
-  // CHECK: tt.store %arg0, %[[DOT]], %arg1 : tensor<128x128x!tt.ptr<f32>, #[[$PLANNED]]>
+  // CHECK: %[[MASK_ORIG:.*]] = ttg.convert_layout %arg1 : tensor<128x128xi1, #[[$PLANNED]]> -> tensor<128x128xi1, #[[$ORIG:[a-zA-Z0-9_]+]]>
+  // CHECK: %[[DOT_ORIG:.*]] = ttg.convert_layout %[[DOT]] : tensor<128x128xf32, #[[$PLANNED]]> -> tensor<128x128xf32, #[[$ORIG]]>
+  // CHECK: %[[PTRS_TARGET:.*]] = ttg.convert_layout %arg0 : tensor<128x128x!tt.ptr<f32>, #[[$PLANNED]]> -> tensor<128x128x!tt.ptr<f32>, #[[$TARGET:[a-zA-Z0-9_]+]]>
+  // CHECK: %[[DOT_TARGET:.*]] = ttg.convert_layout %[[DOT_ORIG]] : tensor<128x128xf32, #[[$ORIG]]> -> tensor<128x128xf32, #[[$TARGET]]>
+  // CHECK: %[[MASK_TARGET:.*]] = ttg.convert_layout %[[MASK_ORIG]] : tensor<128x128xi1, #[[$ORIG]]> -> tensor<128x128xi1, #[[$TARGET]]>
+  // CHECK: tt.store %[[PTRS_TARGET]], %[[DOT_TARGET]], %[[MASK_TARGET]] : tensor<128x128x!tt.ptr<f32>, #[[$TARGET]]>
   tt.func @store_dot_result(
     %ptrs: tensor<128x128x!tt.ptr<f32>, #planned>,
     %mask: tensor<128x128xi1, #planned>,
@@ -44,9 +49,12 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-SAME: %arg0: !tt.ptr<f32>
   // CHECK-SAME: %arg1: tensor<128x128xi1, #[[$SPLAT_PLANNED:[a-zA-Z0-9_]+]]>
   // CHECK: %[[DOT:.*]] = tt.dot {{.*}} -> tensor<128x128xf32, #[[$SPLAT_PLANNED]]>
-  // CHECK: %[[PTRS:.*]] = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x128x!tt.ptr<f32>, #[[$SPLAT_PLANNED]]>
-  // CHECK-NOT: ttg.convert_layout
-  // CHECK: tt.store %[[PTRS]], %[[DOT]], %arg1 : tensor<128x128x!tt.ptr<f32>, #[[$SPLAT_PLANNED]]>
+  // CHECK: %[[PTRS_ORIG:.*]] = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x128x!tt.ptr<f32>, #[[$SPLAT_ORIG:[a-zA-Z0-9_]+]]>
+  // CHECK: %[[DOT_ORIG:.*]] = ttg.convert_layout %[[DOT]] : tensor<128x128xf32, #[[$SPLAT_PLANNED]]> -> tensor<128x128xf32, #[[$SPLAT_ORIG]]>
+  // CHECK: %[[PTRS_TARGET:.*]] = ttg.convert_layout %[[PTRS_ORIG]] : tensor<128x128x!tt.ptr<f32>, #[[$SPLAT_ORIG]]> -> tensor<128x128x!tt.ptr<f32>, #[[$SPLAT_TARGET:[a-zA-Z0-9_]+]]>
+  // CHECK: %[[DOT_TARGET:.*]] = ttg.convert_layout %[[DOT_ORIG]] : tensor<128x128xf32, #[[$SPLAT_ORIG]]> -> tensor<128x128xf32, #[[$SPLAT_TARGET]]>
+  // CHECK: %[[MASK_TARGET:.*]] = ttg.convert_layout %arg1 : tensor<128x128xi1, #[[$SPLAT_PLANNED]]> -> tensor<128x128xi1, #[[$SPLAT_TARGET]]>
+  // CHECK: tt.store %[[PTRS_TARGET]], %[[DOT_TARGET]], %[[MASK_TARGET]] : tensor<128x128x!tt.ptr<f32>, #[[$SPLAT_TARGET]]>
   tt.func @store_dot_with_splat_ptr(
     %ptr: !tt.ptr<f32>,
     %mask: tensor<128x128xi1, #planned>,
@@ -72,8 +80,8 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func @descriptor_store_dot_result
   // CHECK: %[[DOT:.*]] = tt.dot {{.*}} -> tensor<128x128xf32, #[[$DESC_PLANNED:[a-zA-Z0-9_]+]]>
-  // CHECK-NOT: ttg.convert_layout %[[DOT]]
-  // CHECK: tt.descriptor_store %{{.*}}[%{{.*}}, %{{.*}}], %[[DOT]] : !tt.tensordesc<128x128xf32>, tensor<128x128xf32, #[[$DESC_PLANNED]]>
+  // CHECK: %[[DOT_TARGET:.*]] = ttg.convert_layout %[[DOT]] : tensor<128x128xf32, #[[$DESC_PLANNED]]> -> tensor<128x128xf32, #[[$DESC_TARGET:[a-zA-Z0-9_]+]]>
+  // CHECK: tt.descriptor_store %{{.*}}[%{{.*}}, %{{.*}}], %[[DOT_TARGET]] : !tt.tensordesc<128x128xf32>, tensor<128x128xf32, #[[$DESC_TARGET]]>
   tt.func @descriptor_store_dot_result(
     %desc: !tt.tensordesc<128x128xf32>,
     %i: i32,
@@ -101,8 +109,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-SAME: %arg1: tensor<128x!tt.ptr<f32>, #[[$REDUCE_OUT_PLANNED:.*]]>
   // CHECK: %[[RED:.*]] = "tt.reduce"(%arg0) <{axis = 1 : i32}>
   // CHECK: }) : (tensor<128x64xf32, #[[$REDUCE_SRC_PLANNED]]>) -> tensor<128xf32, #[[$REDUCE_OUT_PLANNED]]>
-  // CHECK-NOT: ttg.convert_layout
-  // CHECK: tt.store %arg1, %[[RED]] : tensor<128x!tt.ptr<f32>, #[[$REDUCE_OUT_PLANNED]]>
+  // CHECK: %[[RED_ORIG:.*]] = ttg.convert_layout %[[RED]] : tensor<128xf32, #[[$REDUCE_OUT_PLANNED]]> -> tensor<128xf32, #[[$REDUCE_OUT_ORIG:.*]]>
+  // CHECK: %[[RED_PLANNED:.*]] = ttg.convert_layout %[[RED_ORIG]] : tensor<128xf32, #[[$REDUCE_OUT_ORIG]]> -> tensor<128xf32, #[[$REDUCE_OUT_PLANNED]]>
+  // CHECK: tt.store %arg1, %[[RED_PLANNED]] : tensor<128x!tt.ptr<f32>, #[[$REDUCE_OUT_PLANNED]]>
   tt.func @store_reduce_result(
     %src: tensor<128x64xf32, #src_planned>,
     %out: tensor<128x!tt.ptr<f32>, #out_planned>) {

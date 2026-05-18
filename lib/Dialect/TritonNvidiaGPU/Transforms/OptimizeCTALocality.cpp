@@ -2,13 +2,12 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Triton/IR/Traits.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/SmallPtrSet.h"
 
 namespace ttg = mlir::triton::gpu;
 
@@ -35,123 +34,116 @@ bool isCrossCTAConversion(ttg::ConvertLayoutOp convert) {
   return conversion.hasInDim(kBlock);
 }
 
-bool hasLayout(Value value, Attribute layout, int64_t rank) {
-  auto ty = dyn_cast<RankedTensorType>(value.getType());
-  return ty && ty.getRank() == rank && ty.getEncoding() == layout;
+Attribute cloneWithCGALayout(Attribute layout, ttg::CGAEncodingAttr cgaLayout) {
+  if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
+    if (blockedLayout.getOrder().size() != cgaLayout.getRank())
+      return {};
+    return ttg::BlockedEncodingAttr::get(
+        layout.getContext(), blockedLayout.getSizePerThread(),
+        blockedLayout.getThreadsPerWarp(), blockedLayout.getWarpsPerCTA(),
+        blockedLayout.getOrder(), cgaLayout);
+  }
+
+  if (auto sliceLayout = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
+    Attribute parentLayout =
+        cloneWithCGALayout(sliceLayout.getParent(), cgaLayout);
+    if (!parentLayout)
+      return {};
+    return ttg::SliceEncodingAttr::get(
+        layout.getContext(), sliceLayout.getDim(),
+        cast<ttg::DistributedEncodingTrait>(parentLayout));
+  }
+
+  return {};
 }
 
-bool allUsesAreInBlock(Value value, Block *block) {
-  return llvm::all_of(value.getUses(), [&](OpOperand &use) {
-    return use.getOwner()->getBlock() == block;
+ttg::CGAEncodingAttr getSourceCGALayoutForDestination(Attribute srcLayout,
+                                                      Attribute dstLayout) {
+  if (auto dstSlice = dyn_cast<ttg::SliceEncodingAttr>(dstLayout)) {
+    auto srcSlice = dyn_cast<ttg::SliceEncodingAttr>(srcLayout);
+    if (!srcSlice || srcSlice.getDim() != dstSlice.getDim())
+      return {};
+    return ttg::getCGALayout(srcSlice.getParent());
+  }
+  return ttg::getCGALayout(srcLayout);
+}
+
+bool canRematerializeConvert(OpOperand &operand, Attribute layout) {
+  llvm::SetVector<Value> slice;
+  llvm::DenseMap<Value, Attribute> layouts;
+  if (failed(getConvertBackwardSlice(operand, slice, layout, layouts)))
+    return false;
+
+  return llvm::all_of(slice, [](Value value) {
+    Operation *op = value.getDefiningOp();
+    return !op || canBeRematerialized(op);
   });
 }
 
-struct PropagationPlan {
-  Attribute oldLayout;
-  Attribute newLayout;
-  int64_t rank;
-  Block *block;
-  llvm::DenseMap<Value, Value> replacements;
-  llvm::SetVector<Value> valuesToRetype;
-  SmallVector<Operation *> worklist;
+Value convertValue(OpBuilder &builder, Location loc, Value value,
+                   Attribute layout) {
+  auto ty = cast<RankedTensorType>(value.getType());
+  if (ty.getEncoding() == layout)
+    return value;
+  return ttg::ConvertLayoutOp::create(builder, loc,
+                                      ty.cloneWithEncoding(layout), value);
+}
 
-  PropagationPlan(Attribute oldLayout, Attribute newLayout, int64_t rank,
-                  Block *block)
-      : oldLayout(oldLayout), newLayout(newLayout), rank(rank), block(block) {}
-
-  bool addValue(Value value) {
-    if (!hasLayout(value, oldLayout, rank) || replacements.contains(value) ||
-        valuesToRetype.contains(value))
-      return true;
-
-    if (isa<BlockArgument>(value))
-      return false;
-
-    Operation *defOp = value.getDefiningOp();
-    if (!defOp || defOp->getBlock() != block)
-      return false;
-
-    if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(defOp)) {
-      if (!isCrossCTAConversion(convert) ||
-          !hasLayout(convert.getSrc(), newLayout, rank))
-        return false;
-      replacements[value] = convert.getSrc();
-      return true;
-    }
-
-    if (!allUsesAreInBlock(value, block))
-      return false;
-
-    valuesToRetype.insert(value);
-    worklist.push_back(defOp);
-    for (OpOperand &use : value.getUses())
-      worklist.push_back(use.getOwner());
-    return true;
-  }
-
-  bool addOp(Operation *op) {
-    if (!op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() &&
-        !op->hasTrait<OpTrait::SameLoadStoreOperandsEncoding>() &&
-        !op->hasTrait<OpTrait::SameLoadStoreOperandsAndResultEncoding>() &&
-        !op->hasTrait<OpTrait::Elementwise>())
-      return true;
-
-    for (OpOperand &operand : op->getOpOperands())
-      if (!addValue(operand.get()))
-        return false;
-    for (Value result : op->getResults())
-      if (!addValue(result))
-        return false;
-    return true;
-  }
-
-  bool propagate() {
-    llvm::SmallPtrSet<Operation *, 16> visited;
-    while (!worklist.empty()) {
-      Operation *op = worklist.pop_back_val();
-      if (op->getBlock() != block || isa<ttg::ConvertLayoutOp>(op) ||
-          !visited.insert(op).second)
-        continue;
-      if (!addOp(op))
-        return false;
-    }
-    return true;
-  }
-
-  void apply(llvm::SetVector<Operation *> &opsToErase) {
-    for (Value value : valuesToRetype) {
-      auto ty = cast<RankedTensorType>(value.getType());
-      value.setType(ty.cloneWithEncoding(newLayout));
-    }
-
-    for (auto [oldValue, newValue] : replacements) {
-      oldValue.replaceUsesWithIf(newValue, [&](OpOperand &use) {
-        return use.getOwner()->getBlock() == block;
-      });
-      if (auto convert = oldValue.getDefiningOp<ttg::ConvertLayoutOp>())
-        if (convert->use_empty())
-          opsToErase.insert(convert);
-    }
-  }
-};
-
-void propagateConvertLayout(ttg::ConvertLayoutOp convert,
-                            llvm::SetVector<Operation *> &opsToErase) {
-  if (!isCrossCTAConversion(convert))
-    return;
+bool rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
+  Operation *op = use.getOwner();
+  if (!op->getResults().empty())
+    return false;
 
   auto srcTy = cast<RankedTensorType>(convert.getSrc().getType());
   auto dstTy = cast<RankedTensorType>(convert.getType());
-  Block *block = convert->getBlock();
-  PropagationPlan plan(dstTy.getEncoding(), srcTy.getEncoding(),
-                       srcTy.getRank(), block);
-  plan.replacements[convert.getResult()] = convert.getSrc();
-  for (OpOperand &use : convert.getResult().getUses())
-    if (use.getOwner()->getBlock() == block)
-      plan.worklist.push_back(use.getOwner());
+  int64_t rank = srcTy.getRank();
+  ttg::CGAEncodingAttr cgaLayout =
+      getSourceCGALayoutForDestination(srcTy.getEncoding(), dstTy.getEncoding());
+  if (!cgaLayout)
+    return false;
+  Attribute targetLayout = cloneWithCGALayout(dstTy.getEncoding(), cgaLayout);
+  if (!targetLayout)
+    return false;
 
-  if (plan.propagate())
-    plan.apply(opsToErase);
+  for (OpOperand &operand : op->getOpOperands()) {
+    if (&operand == &use)
+      continue;
+    auto operandTy = dyn_cast<RankedTensorType>(operand.get().getType());
+    if (!operandTy)
+      continue;
+    if (operandTy.getRank() != rank)
+      return false;
+    if (!canRematerializeConvert(operand, targetLayout))
+      return false;
+  }
+
+  OpBuilder builder(op);
+  Location loc = op->getLoc();
+  for (OpOperand &operand : op->getOpOperands()) {
+    if (&operand == &use) {
+      operand.set(convertValue(builder, loc, convert.getSrc(), targetLayout));
+    } else if (isa<RankedTensorType>(operand.get().getType())) {
+      operand.set(convertValue(builder, loc, operand.get(), targetLayout));
+    }
+  }
+  return true;
+}
+
+void optimizeConvertLayout(ttg::ConvertLayoutOp convert,
+                           llvm::SetVector<Operation *> &opsToErase) {
+  if (!isCrossCTAConversion(convert))
+    return;
+
+  SmallVector<OpOperand *> uses;
+  for (OpOperand &use : convert.getResult().getUses())
+    uses.push_back(&use);
+
+  for (OpOperand *use : uses) {
+    (void)rewriteUser(convert, *use);
+  }
+
+  if (convert->use_empty())
+    opsToErase.insert(convert);
 }
 
 struct OptimizeCTALocalityPass
@@ -168,7 +160,7 @@ struct OptimizeCTALocalityPass
 
     llvm::SetVector<Operation *> opsToErase;
     for (ttg::ConvertLayoutOp convert : converts)
-      propagateConvertLayout(convert, opsToErase);
+      optimizeConvertLayout(convert, opsToErase);
     for (Operation *op : opsToErase)
       op->erase();
   }
