@@ -97,8 +97,8 @@ bool rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
   auto srcTy = cast<RankedTensorType>(convert.getSrc().getType());
   auto dstTy = cast<RankedTensorType>(convert.getType());
   int64_t rank = srcTy.getRank();
-  ttg::CGAEncodingAttr cgaLayout =
-      getSourceCGALayoutForDestination(srcTy.getEncoding(), dstTy.getEncoding());
+  ttg::CGAEncodingAttr cgaLayout = getSourceCGALayoutForDestination(
+      srcTy.getEncoding(), dstTy.getEncoding());
   if (!cgaLayout)
     return false;
   Attribute targetLayout = cloneWithCGALayout(dstTy.getEncoding(), cgaLayout);
