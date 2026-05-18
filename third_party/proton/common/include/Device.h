@@ -28,7 +28,7 @@ struct Device {
 
 Device getDevice(DeviceType type, uint64_t index);
 
-const std::string &getDeviceTypeString(DeviceType type);
+const std::string getDeviceTypeString(DeviceType type);
 
 }; // namespace proton
 
