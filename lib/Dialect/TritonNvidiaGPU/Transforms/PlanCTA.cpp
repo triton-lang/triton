@@ -89,6 +89,20 @@ Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
 Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
                           Attribute layout, int numWarps, int threadsPerWarp) {
   Value loadValue = value;
+  // If the operand is already a convert-layout chain rooted at a load:
+  //
+  //   %old_load = tt.load %old_ptr : ... #blocked_old
+  //   %old_dot_operand = ttg.convert_layout %old_load : #blocked_old -> #dot_old
+  //
+  // create a sibling load using the planned CTA layout:
+  //
+  //   %new_ptr = ttg.convert_layout %old_ptr : #blocked_old -> #blocked_new
+  //   %new_load = tt.load %new_ptr : ... #blocked_new
+  //   %new_dot_operand = ttg.convert_layout %new_load : #blocked_new -> #dot_new
+  //
+  // This avoids inserting a cross-CTA conversion on the loaded value and leaves
+  // the original load available for any other users if any.
+  // TODO: Match more flexible producer patterns between the load and consumer.
   while (auto cvtOp = loadValue.getDefiningOp<ttg::ConvertLayoutOp>())
     loadValue = cvtOp.getSrc();
 
@@ -110,31 +124,34 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
 
   OpBuilder loadBuilder(loadOp);
   loadBuilder.setInsertionPointAfter(loadOp);
+
+  auto convertLoadOperand = [&](Value operand) -> Value {
+    if (!operand)
+      return {};
+    return convertValueToLayout(loadBuilder, loadOp->getLoc(), operand,
+                                newLoadLayout);
+  };
+  auto convertLoadedValue = [&](Value loaded) {
+    return convertValueToLayout(builder, loc, loaded, layout);
+  };
+
   if (auto scalarLoad = dyn_cast<triton::LoadOp>(loadOp)) {
-    Value newPtr = convertValueToLayout(loadBuilder, scalarLoad.getLoc(),
-                                        scalarLoad.getPtr(), newLoadLayout);
-    Value newMask;
-    if (Value mask = scalarLoad.getMask())
-      newMask = convertValueToLayout(loadBuilder, scalarLoad.getLoc(), mask,
-                                     newLoadLayout);
-    Value newOther;
-    if (Value other = scalarLoad.getOther())
-      newOther = convertValueToLayout(loadBuilder, scalarLoad.getLoc(), other,
-                                      newLoadLayout);
+    Value newPtr = convertLoadOperand(scalarLoad.getPtr());
+    Value newMask = convertLoadOperand(scalarLoad.getMask());
+    Value newOther = convertLoadOperand(scalarLoad.getOther());
     Operation *newLoad = triton::LoadOp::create(
                              loadBuilder, scalarLoad.getLoc(), newTy, newPtr,
                              newMask, newOther, scalarLoad.getCache(),
                              scalarLoad.getEvict(), scalarLoad.getIsVolatile())
                              .getOperation();
     newLoad->setAttrs(loadOp->getAttrs());
-    return convertValueToLayout(builder, loc, newLoad->getResult(0), layout);
+    return convertLoadedValue(newLoad->getResult(0));
   }
 
-  if (auto descriptorLoad =
-          dyn_cast<triton::DescriptorLoadLikeOpInterface>(loadOp)) {
+  if (isa<triton::DescriptorLoadLikeOpInterface>(loadOp)) {
     Operation *newLoad = loadBuilder.clone(*loadOp);
     newLoad->getResult(0).setType(newTy);
-    return convertValueToLayout(builder, loc, newLoad->getResult(0), layout);
+    return convertLoadedValue(newLoad->getResult(0));
   }
 
   llvm_unreachable("expected a load-like op");
@@ -143,9 +160,6 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
 void convertOpOperandsToLayouts(Operation *op,
                                 llvm::ArrayRef<Attribute> operandLayouts,
                                 int numWarps, int threadsPerWarp) {
-  assert(op->getNumOperands() == operandLayouts.size() &&
-         "operand layout count mismatch");
-
   OpBuilder builder(op);
   Location loc = op->getLoc();
   for (auto [operand, layout] :
@@ -158,30 +172,18 @@ void convertOpOperandsToLayouts(Operation *op,
 
 void convertOpResultsFromLayouts(Operation *op,
                                  llvm::ArrayRef<Attribute> resultLayouts) {
-  assert(op->getNumResults() == resultLayouts.size() &&
-         "result layout count mismatch");
-
   OpBuilder builder(op->getContext());
   builder.setInsertionPointAfter(op);
   Location loc = op->getLoc();
   for (auto [result, resultLayout] :
        llvm::zip(op->getResults(), resultLayouts)) {
-    if (!resultLayout)
-      continue;
-
     auto originalTy = dyn_cast<RankedTensorType>(result.getType());
-    if (!originalTy || originalTy.getEncoding() == resultLayout)
+    if (!originalTy)
       continue;
-
-    auto plannedTy = originalTy.cloneWithEncoding(resultLayout);
-    result.setType(plannedTy);
-    if (result.use_empty())
-      continue;
-
-    auto convert =
-        ttg::ConvertLayoutOp::create(builder, loc, originalTy, result)
-            .getResult();
-    result.replaceAllUsesExcept(convert, convert.getDefiningOp());
+    result.setType(originalTy.cloneWithEncoding(resultLayout));
+    Value converted =
+        convertValueToLayout(builder, loc, result, originalTy.getEncoding());
+    result.replaceAllUsesExcept(converted, converted.getDefiningOp());
   }
 }
 
@@ -192,6 +194,9 @@ DotCTASplit getDotCTASplit(int64_t m, int64_t n, unsigned numCTAs) {
 
   unsigned splitM = 1;
   unsigned splitN = numCTAs;
+  // Prefer a larger M chunk, up to 128 elements, by assigning splitM first.
+  // splitN gets the remaining CTAs as long as each N chunk has at least 64
+  // elements.
   for (unsigned chunkM = kPreferredChunkSize; isLegalChunkSize(chunkM);
        chunkM /= 2) {
     splitM = std::clamp<unsigned>(m / chunkM, 1, numCTAs);
