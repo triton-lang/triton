@@ -20,15 +20,13 @@ namespace nvidia_gpu {
 
 namespace {
 
+// AssignCTALayouts chooses preferred CTA layouts for Dot/Reduce ops and
+// materializes the boundary with ttg.convert_layout. This pass looks for
+// cross-CTA conversions that feed side-effecting users, such as stores, and
+// moves those users to a layout in the same CTA group as the conversion source.
 bool isCrossCTAConversion(ttg::ConvertLayoutOp convert) {
-  auto srcTy = dyn_cast<RankedTensorType>(convert.getSrc().getType());
-  auto dstTy = dyn_cast<RankedTensorType>(convert.getType());
-  if (!srcTy || !dstTy || !srcTy.getEncoding() || !dstTy.getEncoding())
-    return false;
-  if (isa<ttg::DotOperandEncodingAttr>(srcTy.getEncoding()) ||
-      isa<ttg::DotOperandEncodingAttr>(dstTy.getEncoding()))
-    return false;
-
+  auto srcTy = cast<RankedTensorType>(convert.getSrc().getType());
+  auto dstTy = cast<RankedTensorType>(convert.getType());
   LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
   auto kBlock = StringAttr::get(convert.getContext(), "block");
   return conversion.hasInDim(kBlock);
@@ -59,16 +57,20 @@ Attribute cloneWithCGALayout(Attribute layout, ttg::CGAEncodingAttr cgaLayout) {
 
 ttg::CGAEncodingAttr getSourceCGALayoutForDestination(Attribute srcLayout,
                                                       Attribute dstLayout) {
+  // For a slice result, use the parent CGA layout. The target layout is cloned
+  // from the destination layout below, so this keeps slice users in the same
+  // rank/layout family while changing only the CTA grouping.
   if (auto dstSlice = dyn_cast<ttg::SliceEncodingAttr>(dstLayout)) {
     auto srcSlice = dyn_cast<ttg::SliceEncodingAttr>(srcLayout);
-    if (!srcSlice || srcSlice.getDim() != dstSlice.getDim())
-      return {};
     return ttg::getCGALayout(srcSlice.getParent());
   }
   return ttg::getCGALayout(srcLayout);
 }
 
 bool canRematerializeConvert(OpOperand &operand, Attribute layout) {
+  // Rewriting a user may require extra conversions on its other tensor
+  // operands. Only do that when layout propagation can rematerialize the
+  // producer slice in the target layout.
   llvm::SetVector<Value> slice;
   llvm::DenseMap<Value, Attribute> layouts;
   if (failed(getConvertBackwardSlice(operand, slice, layout, layouts)))
@@ -89,32 +91,36 @@ Value convertValue(OpBuilder &builder, Location loc, Value value,
                                       ty.cloneWithEncoding(layout), value);
 }
 
-bool rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
+// If a cross-CTA conversion feeds a side-effecting op, move all tensor operands
+// of that op to a CTA layout compatible with the conversion source:
+//
+//   %v1 = ttg.convert_layout %v0 : #planned -> #orig
+//   tt.store %ptr_orig, %v1, %mask_orig : ... #orig
+//
+// becomes:
+//
+//   %v2 = ttg.convert_layout %v0 : #planned -> #target
+//   %ptr_target = ttg.convert_layout %ptr_orig : #orig -> #target
+//   %mask_target = ttg.convert_layout %mask_orig : #orig -> #target
+//   tt.store %ptr_target, %v2, %mask_target : ... #target
+void rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
   Operation *op = use.getOwner();
   if (!op->getResults().empty())
-    return false;
+    return;
 
   auto srcTy = cast<RankedTensorType>(convert.getSrc().getType());
   auto dstTy = cast<RankedTensorType>(convert.getType());
-  int64_t rank = srcTy.getRank();
   ttg::CGAEncodingAttr cgaLayout = getSourceCGALayoutForDestination(
       srcTy.getEncoding(), dstTy.getEncoding());
-  if (!cgaLayout)
-    return false;
   Attribute targetLayout = cloneWithCGALayout(dstTy.getEncoding(), cgaLayout);
-  if (!targetLayout)
-    return false;
 
   for (OpOperand &operand : op->getOpOperands()) {
     if (&operand == &use)
       continue;
-    auto operandTy = dyn_cast<RankedTensorType>(operand.get().getType());
-    if (!operandTy)
+    if (!isa<RankedTensorType>(operand.get().getType()))
       continue;
-    if (operandTy.getRank() != rank)
-      return false;
     if (!canRematerializeConvert(operand, targetLayout))
-      return false;
+      return;
   }
 
   OpBuilder builder(op);
@@ -126,24 +132,23 @@ bool rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
       operand.set(convertValue(builder, loc, operand.get(), targetLayout));
     }
   }
-  return true;
 }
 
-void optimizeConvertLayout(ttg::ConvertLayoutOp convert,
-                           llvm::SetVector<Operation *> &opsToErase) {
+void optimizeConvertLayout(ttg::ConvertLayoutOp convert) {
   if (!isCrossCTAConversion(convert))
     return;
 
+  // Rewrite a snapshot of uses because rewriteUser mutates operand lists and
+  // may erase the current use of convert.
   SmallVector<OpOperand *> uses;
   for (OpOperand &use : convert.getResult().getUses())
     uses.push_back(&use);
 
-  for (OpOperand *use : uses) {
-    (void)rewriteUser(convert, *use);
-  }
+  for (OpOperand *use : uses)
+    rewriteUser(convert, *use);
 
   if (convert->use_empty())
-    opsToErase.insert(convert);
+    convert.erase();
 }
 
 struct OptimizeCTALocalityPass
@@ -158,11 +163,8 @@ struct OptimizeCTALocalityPass
     mod.walk(
         [&](ttg::ConvertLayoutOp convert) { converts.push_back(convert); });
 
-    llvm::SetVector<Operation *> opsToErase;
     for (ttg::ConvertLayoutOp convert : converts)
-      optimizeConvertLayout(convert, opsToErase);
-    for (Operation *op : opsToErase)
-      op->erase();
+      optimizeConvertLayout(convert);
   }
 };
 

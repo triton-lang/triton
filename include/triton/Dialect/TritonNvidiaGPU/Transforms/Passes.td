@@ -24,11 +24,11 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonNvidiaGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> {
-  let summary = "plan CTA";
+def TritonNvidiaGPUAssignCTALayoutsPass : Pass<"triton-nvidia-gpu-assign-cta-layouts", "mlir::ModuleOp"> {
+  let summary = "Assign CTA layouts";
 
   let description = [{
-    This pass computes and applies optimized CTA tilings to DotOp and ReduceOp
+    This pass computes and assigns optimized CTA layouts to DotOp and ReduceOp
     operations, inserting explicit layout conversions at the boundary.
   }];
 
