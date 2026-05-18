@@ -182,6 +182,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
   ADD_PASS_WRAPPER_0("add_plan_cta", ttng::createTritonGPUPlanCTAPass);
   ADD_PASS_WRAPPER_0("add_to_clc", ttng::createTritonNvidiaGPUToCLCPass);
   ADD_PASS_WRAPPER_0("add_lower_clc", ttng::createTritonNvidiaGPULowerCLCPass);
+  ADD_PASS_WRAPPER_0("add_optimize_cta_locality",
+                     ttng::createTritonNvidiaGPUOptimizeCTALocalityPass);
   ADD_PASS_WRAPPER_1("add_fence_insertion",
                      createTritonGPUFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_1("add_proxy_fence_insertion",
