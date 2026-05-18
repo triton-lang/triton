@@ -24,7 +24,7 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> {
+def TritonNvidiaGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> {
   let summary = "plan CTA";
 
   let description = [{

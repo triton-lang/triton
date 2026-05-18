@@ -39,7 +39,7 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-#define GEN_PASS_DEF_TRITONGPUPLANCTAPASS
+#define GEN_PASS_DEF_TRITONNVIDIAGPUPLANCTAPASS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 namespace {
@@ -307,7 +307,7 @@ void planReduce(triton::ReduceOp reduce) {
   convertOpResultsFromLayouts(reduce.getOperation(), resultLayouts);
 }
 
-struct PlanCTAPass : public impl::TritonGPUPlanCTAPassBase<PlanCTAPass> {
+struct PlanCTAPass : public impl::TritonNvidiaGPUPlanCTAPassBase<PlanCTAPass> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     unsigned numCTAs = ttg::TritonGPUDialect::getNumCTAs(mod);
