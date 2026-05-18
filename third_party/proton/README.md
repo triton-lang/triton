@@ -431,7 +431,7 @@ if proton.data.is_phase_complete(session_id, phase_id):
 ## Third party backends
 
 Developers of out-of-tree Triton backends can also provide Proton support.
-This can be done by providing subclasses of certain Proton classes and implementing the virtual methods. 
+This can be done by providing subclasses of certain Proton classes and implementing the virtual methods.
 These implementations can then be linked into the Proton build using the provided CMake helper functions.
 
 ### Example third party backend
@@ -467,15 +467,15 @@ add_proton_backend_external_lib(MyProfilingApi)
 ...
 ```
 
-The registration source file `MyBackendSourceFile.cpp` is responsible for providing the `registerProtonBackend` hook in the 
+The registration source file `MyBackendSourceFile.cpp` is responsible for providing the `registerProtonBackend` hook in the
 namespace passed to `add_proton_backend`.
-This hook will be called at runtime and provide access to the backends implementations. 
+This hook will be called at runtime and provide access to the backends implementations.
 Each member of a `proton::BackendRegistration` is
 optional allowing backends to register partial support.
 
 ```c++
 namespace MyBackendNamespace {
-    
+
 proton::BackendRegistration registerProtonBackend() {
   return {
       proton::ProfilerRegistration{
@@ -494,7 +494,7 @@ proton::BackendRegistration registerProtonBackend() {
 
 The backend should then provide implementation of any Proton extension points it is registering support for.
 This is a minimal dummy implementation of a profiler using a custom profiling api, refer to existing implementors of
-the respective extension point for information on what your implementation should look like. 
+the respective extension point for information on what your implementation should look like.
 
 ```c++
 class MyProfilerImplementation : public GPUProfiler<MyProfilerImplementation> {
@@ -504,7 +504,7 @@ class MyProfilerImplementation : public GPUProfiler<MyProfilerImplementation> {
 
 ```c++
 void MyProfilerImplementation::MyProfilerImplementationPimpl::doStart() {
-    // Any setup required for profiling, make use of MyProfilingApi which was linked to 
+    // Any setup required for profiling, make use of MyProfilingApi which was linked to
     // the libproton build using the cmake add_proton_backend_external_lib function earlier.
     MyProfilingApi::registerCallback(callback_function)
 }
