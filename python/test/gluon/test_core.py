@@ -376,6 +376,22 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
     ttgl.store(out_ptrs, out)
 
 
+@gluon.jit
+def tma_wrong_barrier_cga_layout_kernel(a_desc, b_desc, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                        acc_tmem_layout: ttgl.constexpr):
+    smem_a = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
+    smem_b = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
+    acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_tmem_layout)
+
+    bad_barrier_layout: ttgl.constexpr = mbarrier.MBarrierLayout(cga_layout=((0, ), (0, )))
+    bad_tma_bar = ttgl.allocate_shared_memory(ttgl.int64, [1], bad_barrier_layout)
+    mbarrier.init(bad_tma_bar, count=1)
+    mbarrier.expect(bad_tma_bar, a_desc.nbytes_per_cta)
+    tma.async_load(a_desc, [0, 0], bad_tma_bar, smem_a)
+
+    tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=False)
+
+
 def make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, two_cta_dim):
     ctas_per_cga = list(ctas_per_cga)
     cta_split = list(cta_split)
@@ -458,6 +474,45 @@ def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
     # but we do a commit.multicast::cluster so let's grep that one instead
     assert ("multicast::cluster" in compiled.asm["ptx"])
     torch.testing.assert_close(out, torch.matmul(a.to(out.dtype), b.to(out.dtype)))
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tma_rejects_wrong_barrier_cga_layout_in_two_cta_kernel(capfd):
+    ctas_per_cga = [2, 2]
+    ctas_per_cga_b = [1, 4]
+    block_m = 128 * ctas_per_cga[0]
+    block_n = 64 * ctas_per_cga_b[1]
+    block_k = 32
+    cga_layout_a = make_2cta_cga_layout(ctas_per_cga, [ctas_per_cga[0], 1], [1, 0], 0)
+    cga_layout_b = make_2cta_cga_layout(ctas_per_cga_b, [1, ctas_per_cga_b[1]], [1, 0], 1)
+    cga_layout_c = make_2cta_cga_layout(ctas_per_cga, ctas_per_cga, [1, 0], 0)
+
+    a = torch.empty((block_m, block_k), dtype=torch.float16, device="cuda")
+    b = torch.empty((block_k, block_n), dtype=torch.float16, device="cuda")
+    a_layout = ttgl.NVMMASharedLayout.get_default_for([block_m, block_k], ttgl.float16, cga_layout=cga_layout_a)
+    b_layout = ttgl.NVMMASharedLayout.get_default_for([block_k, block_n], ttgl.float16, cga_layout=cga_layout_b)
+    a_desc = TensorDescriptor.from_tensor(a, [block_m, block_k], a_layout)
+    b_desc = TensorDescriptor.from_tensor(b, [block_k, block_n], b_layout)
+    acc_tmem_layout = TensorMemoryLayout(
+        block=(128, block_n // ctas_per_cga[1]),
+        col_stride=1,
+        two_ctas=True,
+        cga_layout=cga_layout_c,
+    )
+
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        tma_wrong_barrier_cga_layout_kernel.warmup(
+            a_desc,
+            b_desc,
+            block_m,
+            block_n,
+            acc_tmem_layout,
+            grid=(1, ),
+            num_warps=4,
+            num_ctas=4,
+        )
+    captured = capfd.readouterr()
+    assert "TMA barrier cga_layout must be [[1], [2]] or [[0], [1]], got [[0], [0]]" in (captured.out + captured.err)
 
 
 @gluon.jit
@@ -2493,6 +2548,7 @@ def shared_scatter_kernel(
     layout_2d: ttgl.constexpr,
     layout_1d: ttgl.constexpr,
     shared_layout: ttgl.constexpr,
+    use_broadcast: ttgl.constexpr,
 ):
     """Test shared memory scatter using smem.scatter() with axis-based API."""
     # Allocate 2D shared memory initialized to zero
@@ -2505,16 +2561,24 @@ def shared_scatter_kernel(
     zeros = ttgl.zeros([N, M], ttgl.float32, layout=layout_2d)
     smem.store(zeros)
 
-    # Reshape to 1D to test scatter along axis 0
-    smem_1d = smem.reshape([N * M])
+    if use_broadcast:
+        # values has shape [N, 1] and indices has shape [1, M]. scatter broadcasts
+        # both to [N, M], so each row's scalar value is written across columns:
+        # smem[i, indices[0, j]] = values[i, 0].
+        values = ttgl.load(values_ptr + indices_x)[:, None]
+        indices = indices_y[None, :]
+        smem.scatter(values, indices, axis=1)
+    else:
+        # Reshape to 1D to test scatter along axis 0
+        smem_1d = smem.reshape([N * M])
 
-    # Load the scatter indices and values (diagonal elements: 0, M+1, 2*(M+1), ...)
-    offsets_1d = ttgl.arange(0, N, layout=layout_1d)
-    indices = ttgl.load(indices_ptr + offsets_1d)
-    values = ttgl.load(values_ptr + offsets_1d)
+        # Load the scatter indices and values (diagonal elements: 0, M+1, 2*(M+1), ...)
+        offsets_1d = ttgl.arange(0, N, layout=layout_1d)
+        indices = ttgl.load(indices_ptr + offsets_1d)
+        values = ttgl.load(values_ptr + offsets_1d)
 
-    # Scatter using axis-based API: smem_1d[indices[i]] = values[i]
-    smem_1d.scatter(values, indices, axis=0)
+        # Scatter using axis-based API: smem_1d[indices[i]] = values[i]
+        smem_1d.scatter(values, indices, axis=0)
 
     # Read back the full matrix from shared memory
     matrix_data = smem.load(layout=layout_2d)
@@ -2558,10 +2622,27 @@ def test_shared_scatter(N, M):
         layout_2d=layout_2d,
         layout_1d=layout_1d,
         shared_layout=shared_layout,
+        use_broadcast=False,
         num_warps=1,
     )
 
     torch.testing.assert_close(output, expected)
+
+    broadcast_output = torch.empty((N, M), dtype=torch.float32, device=device)
+    shared_scatter_kernel[(1, )](
+        indices,
+        values,
+        broadcast_output,
+        N=N,
+        M=M,
+        layout_2d=layout_2d,
+        layout_1d=layout_1d,
+        shared_layout=shared_layout,
+        use_broadcast=True,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(broadcast_output, values[:, None].expand(N, M).contiguous())
 
 
 @gluon.jit
@@ -2809,6 +2890,65 @@ def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_
     torch.testing.assert_close(final, expected, atol=0, rtol=0)
 
 
+@gluon.jit
+def shared_atomic_scatter_rmw_broadcast_kernel(
+    values_ptr,
+    old_ptr,
+    final_ptr,
+    N: ttgl.constexpr,
+    M: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    indices_x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
+    indices_y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
+    offsets_2d = indices_x[:, None] * M + indices_y[None, :]
+
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [N, M], layout=shared_layout)
+    smem.store(ttgl.zeros([N, M], ttgl.float32, layout=layout_2d))
+
+    # values has shape [N, 1], indices has shape [1, M], and mask has shape
+    # [N, 1]. atomic_scatter_add broadcasts all three operands to [N, M].
+    values = ttgl.load(values_ptr + indices_x)[:, None]
+    indices = indices_y[None, :]
+    mask = (indices_x >= 0)[:, None]
+    old = smem.atomic_scatter_add(values, indices, axis=1, mask=mask)
+    ttgl.store(old_ptr + offsets_2d, old)
+
+    final = smem.load(layout=layout_2d)
+    ttgl.store(final_ptr + offsets_2d, final)
+
+
+def test_shared_atomic_scatter_rmw_broadcast():
+    if is_hip_cdna() or is_hip_rdna():
+        pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
+
+    device = torch.device("cuda")
+    N, M = 16, 32
+    values = torch.arange(N, dtype=torch.float32, device=device) + 1.0
+    old = torch.empty((N, M), dtype=torch.float32, device=device)
+    final = torch.empty((N, M), dtype=torch.float32, device=device)
+
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                   warps_per_cta=[4, 1], order=[1, 0])
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    shared_atomic_scatter_rmw_broadcast_kernel[(1, )](
+        values,
+        old,
+        final,
+        N=N,
+        M=M,
+        layout_2d=layout_2d,
+        shared_layout=shared_layout,
+        num_warps=4,
+    )
+
+    expected = values[:, None].expand(N, M).contiguous()
+    torch.testing.assert_close(final, expected, atol=0, rtol=0)
+    torch.testing.assert_close(old, torch.zeros_like(old), atol=0, rtol=0)
+
+
 # ============================================================================
 # Multi-warp Tests
 # ============================================================================
@@ -2863,6 +3003,7 @@ def test_scatter_gather_multiwarp(N, M, num_warps):
         layout_2d=layout_2d,
         layout_1d=layout_1d,
         shared_layout=shared_layout,
+        use_broadcast=False,
         num_warps=num_warps,
     )
 

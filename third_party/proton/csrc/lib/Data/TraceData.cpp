@@ -2,6 +2,7 @@
 #include "Context/Context.h"
 #include "Profiler/Graph.h"
 #include "TraceDataIO/TraceWriter.h"
+#include "Utility/Errors.h"
 #include "Utility/MsgPackWriter.h"
 #include "nlohmann/json.hpp"
 
@@ -125,7 +126,7 @@ public:
     std::vector<const TraceContext *> reversedContexts;
     auto it = traceContextMap.find(contextId);
     if (it == traceContextMap.end()) {
-      throw std::runtime_error("Context not found");
+      throw makeOutOfRange("Context not found");
     }
     auto *context = &it->second;
     reversedContexts.push_back(context);
@@ -157,7 +158,7 @@ public:
   Event &getEvent(size_t eventId) {
     auto it = traceEvents.find(eventId);
     if (it == traceEvents.end()) {
-      throw std::runtime_error("Event not found");
+      throw makeOutOfRange("Event not found");
     }
     return it->second;
   }
@@ -697,7 +698,7 @@ void reconstructGraphScopeEvents(
         continue;
       }
       if (!seenCaptureTag) {
-        throw std::runtime_error("Invalid graph contexts without capture tag");
+        throw makeLogicError("Invalid graph contexts without capture tag");
       }
       graphContexts.pop_back(); // Remove kernel name context
       auto startTimeNs = std::get<uint64_t>(
@@ -883,7 +884,7 @@ void dumpCpuToGpuFlowEvents(
       auto launchEventIt =
           launchEventIdToCpuScopeEvent.find(event.launchEventId);
       if (launchEventIt == launchEventIdToCpuScopeEvent.end()) {
-        throw std::runtime_error(
+        throw makeOutOfRange(
             "Cannot find CPU scope event for kernel launch event id: " +
             std::to_string(event.launchEventId));
       }
@@ -1064,7 +1065,7 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
                             /*isGraphLinked=*/true);
         }
         if (hasKernelMetrics && hasCycleMetrics) {
-          throw std::runtime_error("only one active metric type is supported");
+          throw makeLogicError("only one active metric type is supported");
         }
       }
     }
@@ -1113,7 +1114,7 @@ void TraceData::doDump(std::ostream &os, OutputFormat outputFormat,
   if (outputFormat == OutputFormat::ChromeTrace) {
     dumpChromeTrace(os, phase);
   } else {
-    throw std::logic_error("Output format not supported");
+    throw makeInvalidArgument("Output format not supported");
   }
 }
 

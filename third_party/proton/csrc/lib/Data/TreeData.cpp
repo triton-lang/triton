@@ -2,6 +2,7 @@
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Device.h"
+#include "Utility/Errors.h"
 #include "Utility/MsgPackWriter.h"
 #include <array>
 #include <cstdint>
@@ -44,14 +45,13 @@ struct MetricSummary {
 
   void updateDeviceIdMask(uint64_t deviceType, uint64_t deviceId) {
     if (deviceType >= static_cast<uint64_t>(DeviceType::COUNT)) {
-      throw std::runtime_error("[PROTON] Invalid deviceType " +
-                               std::to_string(deviceType));
+      throw makeOutOfRange("Invalid deviceType " + std::to_string(deviceType));
     }
     if (deviceId >= kMaxRegisteredDeviceIds) {
-      throw std::runtime_error("[PROTON] DeviceId " + std::to_string(deviceId) +
-                               " exceeds MaxRegisteredDeviceIds " +
-                               std::to_string(kMaxRegisteredDeviceIds) +
-                               " for deviceType " + std::to_string(deviceType));
+      throw makeOutOfRange("DeviceId " + std::to_string(deviceId) +
+                           " exceeds MaxRegisteredDeviceIds " +
+                           std::to_string(kMaxRegisteredDeviceIds) +
+                           " for deviceType " + std::to_string(deviceType));
     }
     deviceIdMasks[static_cast<size_t>(deviceType)] |=
         (1u << static_cast<uint32_t>(deviceId));
@@ -81,7 +81,7 @@ struct MetricSummary {
       } else if (metricKind == MetricKind::Flexible) {
         // Flexible metrics are tracked in a separate map.
       } else {
-        throw std::runtime_error("MetricKind not supported");
+        throw makeLogicError("MetricKind not supported");
       }
     }
   }
@@ -292,7 +292,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
       } else if (metricKind == MetricKind::Flexible) {
         // Flexible metrics are handled in a different way
       } else {
-        throw std::runtime_error("MetricKind not supported");
+        throw makeLogicError("MetricKind not supported");
       }
     }
   };
@@ -547,7 +547,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       } else if (metricKind == MetricKind::Flexible) {
         // Flexible metrics are tracked in a separate map.
       } else {
-        throw std::runtime_error("MetricKind not supported");
+        throw makeLogicError("MetricKind not supported");
       }
     }
     if (isRoot) {
@@ -642,7 +642,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         writer.packStr(cycleMetricDeviceTypeName);
         writer.packStr(std::to_string(deviceType));
       } else {
-        throw std::runtime_error("MetricKind not supported");
+        throw makeLogicError("MetricKind not supported");
       }
     }
     if (isRoot) {
@@ -925,7 +925,7 @@ void TreeData::doDump(std::ostream &os, OutputFormat outputFormat,
   } else if (outputFormat == OutputFormat::HatchetMsgPack) {
     dumpHatchetMsgPack(os, phase);
   } else {
-    throw std::logic_error("Output format not supported");
+    throw makeInvalidArgument("Output format not supported");
   }
 }
 

@@ -205,3 +205,115 @@ jobs:
         run: |
           rm -rf ~/.triton/cache
           rm -rf ~/.ccache
+
+  proton-tests-amd-rocm712:
+    if: ${{ always() && github.repository == 'triton-lang/triton' }}
+    needs: integration-tests-amd
+    name: proton-tests-amd (gfx950-rocm712)
+    runs-on: ["amd-gfx950"]
+    timeout-minutes: 25
+    env:
+      TRITON_BUILD_WITH_CCACHE: "true"
+      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+      TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+      TRITON_DISABLE_LINE_INFO: 1
+      PROTON_SKIP_PC_SAMPLING_TEST: 1
+      PYTHON: "python3"
+      CCACHE_COMPRESS: "true"
+      PIP_BREAK_SYSTEM_PACKAGES: 1
+    container:
+      image: rocm/vllm:rocm7.12.0_gfx950-dcgpu_ubuntu24.04_py3.12_pytorch_2.9.1_vllm_0.16.0
+      options: >-
+        --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+        --env-file /etc/podinfo/gha-gpu-isolation-settings
+        --volume /home/runner/.triton:/github/home/.triton
+        --volume /triton-data:/triton-data
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: 'true'
+      - name: Compute cache keys
+        id: cache-key
+        run: |
+          llvm_file="cmake/llvm-hash.txt"
+          nvidia_file="cmake/nvidia-toolchain-version.json"
+          json_file="cmake/json-version.txt"
+
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+            echo "Error: Required dependency files are missing."
+            exit 1
+          fi
+
+          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
+        shell: bash
+      - name: Cache build dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
+      - name: Install dependencies
+        run: |
+          for i in 1 2 3; do
+            apt-get -o Acquire::Retries=5 update && break
+            echo "apt-get update attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          apt-get install -y clang lld ccache
+          command -v clang && command -v lld && command -v ccache
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
+      - name: Update compiler to Clang
+        run: |
+          export CC=/usr/bin/clang
+          export CXX=/usr/bin/clang++
+      - name: Install Triton
+        run: |
+          echo "PATH is '$PATH'"
+          pip uninstall -y triton pytorch-triton-rocm
+
+          ccache --zero-stats
+          pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
+          pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
+          make dev-install
+      - name: Print ccache stats
+        run: ccache --print-stats
+      - name: Run Proton tests
+        run: |
+          unset HIP_VISIBLE_DEVICES
+          unset ROCR_VISIBLE_DEVICES
+          ROCM_SDK_LIB="$(python3 -c 'import _rocm_sdk_core, os; print(os.path.join(os.path.dirname(_rocm_sdk_core.__file__), "lib"))')"
+          echo "ROCM_SDK_LIB=$ROCM_SDK_LIB"
+          for base in libamdhip64 librocprofiler-sdk librocprofiler-sdk-attach; do
+            if [ ! -e "$ROCM_SDK_LIB/${base}.so" ]; then
+              versioned="$(ls "$ROCM_SDK_LIB"/${base}.so.* 2>/dev/null | sort -V | head -1 || true)"
+              if [ -n "$versioned" ]; then
+                ln -sf "$(basename "$versioned")" "$ROCM_SDK_LIB/${base}.so"
+                echo "linked $ROCM_SDK_LIB/${base}.so -> $(basename "$versioned")"
+              fi
+            fi
+          done
+          export LD_LIBRARY_PATH="$ROCM_SDK_LIB:$LD_LIBRARY_PATH"
+          make test-proton
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
+      - name: Clean up caches
+        if: always()
+        run: |
+          rm -rf ~/.triton/cache
+          rm -rf ~/.ccache
