@@ -226,6 +226,10 @@ private:
     assert(addrToOffset.getInDimSizeLog2(kAddr) >= 3 &&
            addrToOffset.getInDimSizeLog2(kAddr) <= 6);
 
+    // ds_read_tr* shuffles data across lanes so the lane issuing the load
+    // matches the kAddr decomposition of fullTile. Using addrToOffset's
+    // kAddr bases as the kLane bases of this layout lets us use laneId
+    // to get the LDS offset each lane should read.
     LinearLayout addrLayout =
         LinearLayout({{kLane, addrToOffset.getBases().lookup(kAddr)},
                       {kWarp, reps.getBases().lookup(kWarp)}},
@@ -251,6 +255,19 @@ private:
         if (partitionLayout.getBasis(kReg, pos, kPartition) != 0)
           return failure();
       }
+
+      // partitionLayout's kLane is the destination lane which is the lane that
+      // owns the loaded data in the destination tensor. The laneId is the
+      // source lane issuing the load. For ds_read_tr* the hardware shuffles
+      // data across lanes, so the two differ: we need to remap.
+      auto laneRemap = LinearLayout::identity1D(
+                           partitionLayout.getInDimSize(kReg), kReg, kReg) *
+                       fullTile.invert()
+                           .sublayout({kAddr}, {kLane})
+                           .renameInDim(kAddr, kLane) *
+                       LinearLayout::identity1D(
+                           partitionLayout.getInDimSize(kWarp), kWarp, kWarp);
+      partitionLayout = laneRemap.compose(partitionLayout);
     }
 
     // Perform computation in bytes, LLVM optimises this better
