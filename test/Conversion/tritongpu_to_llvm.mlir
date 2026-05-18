@@ -1917,7 +1917,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %1 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>, #blocked>
     %2 = tt.addptr %1, %0 : tensor<512x!tt.ptr<i8>, #blocked>, tensor<512xi32, #blocked>
     %3 = tt.load %2 : tensor<512x!tt.ptr<i8>, #blocked>
-// CHECK: %{{.*}} = llvm.inline_asm asm_dialect = att "shl.b32 $0, $0, 3;", "=r,r" %{{.*}} : (vector<4xi8>) -> vector<4xi8>
+// CHECK: %{{.*}} = llvm.inline_asm asm_dialect = att "shl.b32 $0, $0, 3;", "=r,r" %{{.*}} : (i32) -> i32
     %4 = tt.elementwise_inline_asm "shl.b32 $0, $0, 3;" {constraints = "=r,r", packed_element = 4 : i32, pure = true} %3 : tensor<512xi8, #blocked> -> tensor<512xi8, #blocked>
     %5 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>, #blocked>
     %6 = tt.addptr %5, %0 : tensor<512x!tt.ptr<i8>, #blocked>, tensor<512xi32, #blocked>
@@ -1936,7 +1936,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %1 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>, #blocked>
     %2 = tt.addptr %1, %0 : tensor<512x!tt.ptr<i8>, #blocked>, tensor<512xi32, #blocked>
     %3 = tt.load %2 : tensor<512x!tt.ptr<i8>, #blocked>
-// CHECK: %{{.*}} = llvm.inline_asm asm_dialect = att "shl.b16 $0, $0, 3;", "=h,h" %{{.*}} : (vector<2xi8>) -> vector<2xi8>
+// CHECK: %{{.*}} = llvm.inline_asm asm_dialect = att "shl.b16 $0, $0, 3;", "=h,h" %{{.*}} : (i16) -> i16
     %4 = tt.elementwise_inline_asm "shl.b16 $0, $0, 3;" {constraints = "=h,h", packed_element = 2 : i32, pure = true} %3 : tensor<512xi8, #blocked> -> tensor<512xi8, #blocked>
     %5 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>, #blocked>
     %6 = tt.addptr %5, %0 : tensor<512x!tt.ptr<i8>, #blocked>, tensor<512xi32, #blocked>
@@ -2407,7 +2407,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // check specifically for the case where asm has two results, pack > 1, and the result bitwidth is < 32
   tt.func public @inline_asm_pack(%80: tensor<64x64xi8, #blocked>) {
-    // CHECK: llvm.inline_asm asm_dialect {{.*}} (vector<4xi8>) -> !llvm.struct<(vector<2xbf16>, vector<2xbf16>, vector<2xbf16>, vector<2xbf16>)>
+    // CHECK: llvm.inline_asm asm_dialect {{.*}} (i32) -> !llvm.struct<(i32, i32, i32, i32)>
     %83:2 = tt.elementwise_inline_asm "" {constraints = "=r,=r,=r,=r,r", packed_element = 4 : i32, pure = true} %80 : tensor<64x64xi8, #blocked> -> tensor<64x64xbf16, #blocked>, tensor<64x64xbf16, #blocked>
     tt.return
   }

@@ -782,7 +782,8 @@ class InterpreterBuilder:
     def create_extern_elementwise(self, libName, libPath, symbol, argList, retType, isPure):
         raise NotImplementedError("extern_elementwise not supported in interpreter mode")
 
-    def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
+    def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack, operandVecSizes=None,
+                          resultVecSizes=None):
         raise NotImplementedError("inline_asm not supported in interpreter mode")
 
     def create_print(self, prefix, hex, values, isSigned):

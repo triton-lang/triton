@@ -1476,6 +1476,48 @@ LogicalResult ElementwiseInlineAsmOp::verify() {
              << getPackedElement();
     }
   }
+  auto getNumPackedValues = [&](Type type, StringRef attrName,
+                                int64_t &numValues) -> LogicalResult {
+    Type elemTy = getElementTypeOrSelf(type);
+    unsigned bitWidth =
+        elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
+    unsigned numElemsPerReg = std::min(
+        std::max(32 / bitWidth, 1u), static_cast<unsigned>(getPackedElement()));
+    if (getPackedElement() % numElemsPerReg != 0)
+      return emitError(attrName)
+             << " requires packed_element to be divisible by the number of "
+                "elements per packed asm value";
+    numValues = getPackedElement() / numElemsPerReg;
+    return success();
+  };
+  auto verifyVecSizes = [&](std::optional<ArrayRef<int32_t>> vecSizes,
+                            TypeRange types, StringRef attrName,
+                            StringRef valueKind) -> LogicalResult {
+    if (!vecSizes)
+      return success();
+    if (vecSizes->size() != types.size())
+      return emitError(attrName) << " must have one element per " << valueKind;
+    for (auto [i, size] : llvm::enumerate(*vecSizes)) {
+      if (size <= 0)
+        return emitError(attrName)
+               << " element #" << i << " must be greater than zero";
+      int64_t numValues;
+      if (failed(getNumPackedValues(types[i], attrName, numValues)))
+        return failure();
+      if (numValues % size != 0)
+        return emitError(attrName)
+               << " element #" << i
+               << " must evenly divide the packed asm values for " << valueKind
+               << " #" << i;
+    }
+    return success();
+  };
+  if (failed(verifyVecSizes(getOperandVecSizes(), getOperandTypes(),
+                            "operand_vec_sizes", "operand")))
+    return failure();
+  if (failed(verifyVecSizes(getResultVecSizes(), getResultTypes(),
+                            "result_vec_sizes", "result")))
+    return failure();
   return success();
 }
 

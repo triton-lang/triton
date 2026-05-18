@@ -876,8 +876,27 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
     elems it receives is unspecified.
   }];
 
-  let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure, I32Attr:$packed_element, Variadic<AnyTypeOf<[TT_Type]>>:$args);
+  let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure,
+                   I32Attr:$packed_element,
+                   OptionalAttr<DenseI32ArrayAttr>:$operand_vec_sizes,
+                   OptionalAttr<DenseI32ArrayAttr>:$result_vec_sizes,
+                   Variadic<AnyTypeOf<[TT_Type]>>:$args);
   let results = (outs Variadic<TT_Type>:$result);
+
+  let builders = [
+    OpBuilder<(ins "TypeRange":$resultTypes, "StringRef":$asmString,
+                   "StringRef":$constraints, "bool":$pure,
+                   "int32_t":$packedElement,
+                   CArg<"ValueRange", "{}">:$args), [{
+      $_state.addTypes(resultTypes);
+      $_state.addAttribute("asm_string", $_builder.getStringAttr(asmString));
+      $_state.addAttribute("constraints", $_builder.getStringAttr(constraints));
+      $_state.addAttribute("pure", $_builder.getBoolAttr(pure));
+      $_state.addAttribute("packed_element",
+                           $_builder.getI32IntegerAttr(packedElement));
+      $_state.addOperands(args);
+    }]>
+  ];
 
   let assemblyFormat = [{
     $asm_string attr-dict ($args^ `:` type($args))? `->` type($result)

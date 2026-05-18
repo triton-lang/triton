@@ -213,7 +213,9 @@ struct ElementwiseInlineAsmOpConversion
   using Adaptor = typename Base::OpAdaptor;
   typedef typename Base::OpAdaptor OpAdaptor;
 
-  // If operand size is smaller than 32 bits, pack in groups of 32 bits.
+  // Build the asm operands for one packed invocation. Each operand contributes
+  // consecutive packed values; sub-32-bit elements are combined and bitcast
+  // to integer types before optional operand_vec_sizes vectorization.
   SmallVector<Value> packOperands(ElementwiseInlineAsmOp op,
                                   MultipleOperandsRange operands,
                                   ConversionPatternRewriter &rewriter,
@@ -221,24 +223,48 @@ struct ElementwiseInlineAsmOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     SmallVector<Value> packedOperands;
     unsigned numPackedElements = op.getPackedElement();
-    for (int i = 0, e = op.getNumOperands(); i < e; i++) {
-      Type elemTy = getElementTypeOrSelf(op.getOperand(i));
+
+    auto getNumElementPerReg = [&](int operandIdx) {
+      Type elemTy = getElementTypeOrSelf(op.getOperand(operandIdx));
       unsigned bitWidth =
           elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
       unsigned numElementPerReg = std::max(32 / bitWidth, 1u);
-      numElementPerReg = std::min(numElementPerReg, numPackedElements);
-      for (int j = 0; j < numPackedElements; j += numElementPerReg) {
-        if (numElementPerReg == 1) {
-          packedOperands.push_back(operands[j][i]);
+      return std::min(numElementPerReg, numPackedElements);
+    };
+    auto packOperand = [&](int operandIdx, int elemIdx) {
+      Type elemTy = getElementTypeOrSelf(op.getOperand(operandIdx));
+      unsigned bitWidth =
+          elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
+      unsigned numElementPerReg = getNumElementPerReg(operandIdx);
+      Value value = operands[elemIdx][operandIdx];
+      if (numElementPerReg > 1) {
+        Type ty =
+            vec_ty(getTypeConverter()->convertType(elemTy), numElementPerReg);
+        value = b.undef(ty);
+        for (int k = 0; k < numElementPerReg; k++)
+          value = b.insert_element(value, operands[elemIdx + k][operandIdx],
+                                   b.i32_val(k));
+        value = b.bitcast(value, int_ty(bitWidth * numElementPerReg));
+      }
+      return value;
+    };
+
+    std::optional<ArrayRef<int32_t>> vecSizes = op.getOperandVecSizes();
+    for (int i = 0, e = op.getNumOperands(); i < e; i++) {
+      unsigned numElementPerReg = getNumElementPerReg(i);
+      int32_t vecSize = vecSizes ? (*vecSizes)[i] : 1;
+      for (int j = 0; j < numPackedElements; j += numElementPerReg * vecSize) {
+        Value value = packOperand(i, j);
+        if (vecSize == 1) {
+          packedOperands.push_back(value);
           continue;
         }
-        Type t =
-            vec_ty(getTypeConverter()->convertType(elemTy), numElementPerReg);
-        Value packed = b.undef(t);
-        for (int k = 0; k < numElementPerReg; k++) {
-          packed = b.insert_element(packed, operands[j + k][i], b.i32_val(k));
-        }
-        packedOperands.push_back(packed);
+        Type ty = vec_ty(value.getType(), vecSize);
+        value = b.insert_element(b.undef(ty), value, b.i32_val(0));
+        for (int k = 1; k < vecSize; k++)
+          value = b.insert_element(
+              value, packOperand(i, j + k * numElementPerReg), b.i32_val(k));
+        packedOperands.push_back(value);
       }
     }
     return packedOperands;
@@ -255,26 +281,28 @@ struct ElementwiseInlineAsmOpConversion
       llvm::report_fatal_error("Inline asm op has more packed elements than "
                                "number of elements per thread.");
 
-    // Pack elems smaller than 32 bits into 32-bit registers.
     SmallVector<Value> packedOperands =
         packOperands(op, operands, rewriter, loc);
 
     // Types returned by the LLVM asm op.  If there's more than one, they'll be
     // wrapped in a struct.
     SmallVector<Type> asmRetTypes;
-    for (auto result : op.getResult()) {
+    std::optional<ArrayRef<int32_t>> resultVecSizes = op.getResultVecSizes();
+    for (auto [resultIdx, result] : llvm::enumerate(op.getResult())) {
       auto ty = getTypeConverter()->convertType(getElementTypeOrSelf(result));
 
-      // Pack return elements into 32-bits.
+      // Pack return elements up to 32 bits.
       unsigned bitWidth = getIntOrFloatOrPtrBitWidth(ty);
       unsigned numElemsPerReg =
           std::min(std::max(32 / bitWidth, 1u), op.getPackedElement());
       assert(op.getPackedElement() % numElemsPerReg == 0);
       if (numElemsPerReg > 1) {
-        ty = vec_ty(ty, numElemsPerReg);
+        ty = int_ty(bitWidth * numElemsPerReg);
       }
-      for (unsigned i = 0; i < op.getPackedElement() / numElemsPerReg; i++) {
-        asmRetTypes.push_back(ty);
+      int32_t vecSize = resultVecSizes ? (*resultVecSizes)[resultIdx] : 1;
+      for (unsigned i = 0; i < op.getPackedElement() / numElemsPerReg;
+           i += vecSize) {
+        asmRetTypes.push_back(vecSize == 1 ? ty : vec_ty(ty, vecSize));
       }
     }
     Type asmRetType =
@@ -293,25 +321,35 @@ struct ElementwiseInlineAsmOpConversion
                            /*operand_attrs=*/ArrayAttr())
                            ->getResult(0);
 
-    // asmResults is a flat struct; pack its values into
-    // [return_value][op.getPackedElement()].
+    // asmResults can be a scalar, a vector, or a struct mixing both. We unpack
+    // into per-result element lists ret[resultIdx][elementIdx].
     SmallVector<SmallVector<Value>> ret(op->getNumResults());
     int structIdx = 0;
     for (int i = 0; i < op->getNumResults(); i++) {
-      for (int j = 0; j < op.getPackedElement(); j++) {
-        Value val;
-        if (asmRetTypes.size() > 1) {
-          val = b.extract_val(asmResults, structIdx++);
-        } else {
-          val = asmResults;
-        }
-        if (auto vectorTy = dyn_cast<VectorType>(val.getType())) {
-          for (int k = 0; k < vectorTy.getNumElements(); k++) {
-            ret[i].push_back(b.extract_element(val, b.i32_val(k)));
+      Type elemTy = getTypeConverter()->convertType(
+          getElementTypeOrSelf(op->getResult(i)));
+      unsigned bitWidth = getIntOrFloatOrPtrBitWidth(elemTy);
+      unsigned numElemsPerReg =
+          std::min(std::max(32 / bitWidth, 1u), op.getPackedElement());
+      Type packedTy =
+          numElemsPerReg == 1 ? elemTy : vec_ty(elemTy, numElemsPerReg);
+      int32_t vecSize = resultVecSizes ? (*resultVecSizes)[i] : 1;
+      for (int j = 0; j < op.getPackedElement();
+           j += numElemsPerReg * vecSize) {
+        Value val = asmRetTypes.size() > 1
+                        ? b.extract_val(asmResults, structIdx++)
+                        : asmResults;
+        for (int k = 0; k < vecSize; k++) {
+          Value packed =
+              vecSize == 1 ? val : b.extract_element(val, b.i32_val(k));
+          if (numElemsPerReg == 1) {
+            ret[i].push_back(packed);
+            continue;
           }
-          j += vectorTy.getNumElements() - 1;
-        } else {
-          ret[i].push_back(val);
+          if (packed.getType() != packedTy)
+            packed = b.bitcast(packed, packedTy);
+          for (int l = 0; l < numElemsPerReg; l++)
+            ret[i].push_back(b.extract_element(packed, b.i32_val(l)));
         }
       }
     }
