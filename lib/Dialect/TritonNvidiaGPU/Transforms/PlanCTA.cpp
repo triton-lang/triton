@@ -92,13 +92,15 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
   // If the operand is already a convert-layout chain rooted at a load:
   //
   //   %old_load = tt.load %old_ptr : ... #blocked_old
-  //   %old_dot_operand = ttg.convert_layout %old_load : #blocked_old -> #dot_old
+  //   %old_dot_operand = ttg.convert_layout %old_load : #blocked_old ->
+  //   #dot_old
   //
   // create a sibling load using the planned CTA layout:
   //
   //   %new_ptr = ttg.convert_layout %old_ptr : #blocked_old -> #blocked_new
   //   %new_load = tt.load %new_ptr : ... #blocked_new
-  //   %new_dot_operand = ttg.convert_layout %new_load : #blocked_new -> #dot_new
+  //   %new_dot_operand = ttg.convert_layout %new_load : #blocked_new ->
+  //   #dot_new
   //
   // This avoids inserting a cross-CTA conversion on the loaded value and leaves
   // the original load available for any other users if any.
