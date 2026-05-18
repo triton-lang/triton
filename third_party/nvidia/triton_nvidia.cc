@@ -157,7 +157,8 @@ createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
 }
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
-  ADD_PASS_WRAPPER_0("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass);
+  ADD_PASS_WRAPPER_0("add_assign_cta_layouts",
+                     ttng::createTritonNvidiaGPUAssignCTALayoutsPass);
   ADD_PASS_WRAPPER_0("add_optimize_cta_locality",
                      ttng::createTritonNvidiaGPUOptimizeCTALocalityPass);
   ADD_PASS_WRAPPER_1("add_fence_insertion",

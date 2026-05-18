@@ -270,7 +270,7 @@ class CUDABackend(BaseBackend):
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         passes.ttgpuir.add_f32_dot_tc(pm, emuTF32)
-        nvidia.passes.ttnvgpuir.add_plan_cta(pm)
+        nvidia.passes.ttnvgpuir.add_assign_cta_layouts(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         nvidia.passes.ttnvgpuir.add_optimize_cta_locality(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)

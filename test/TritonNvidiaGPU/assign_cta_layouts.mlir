@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-plan-cta | FileCheck %s
+// RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-assign-cta-layouts | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [0]]}>
 
