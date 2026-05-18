@@ -3,6 +3,7 @@
 #include "Driver/GPU/HipApi.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
+#include "Profiler/RocprofSDK/RocprofSDKProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
 #include "Runtime/CudaRuntime.h"
 #include "Runtime/HipRuntime.h"
@@ -13,7 +14,8 @@ namespace proton {
 const std::vector<ProfilerRegistration> getProfilerRegistrations() {
   std::vector<ProfilerRegistration> registeredProfilers = {
       {"cupti", "cuda", []() { return &CuptiProfiler::instance(); }},
-      {"roctracer", "hip", []() { return &RoctracerProfiler::instance(); }},
+      {"rocprofiler", "hip", []() { return &RocprofSDKProfiler::instance(); }},
+      {"roctracer", {}, []() { return &RoctracerProfiler::instance(); }},
       {"instrumentation",
        {},
        []() { return &InstrumentationProfiler::instance(); }},
