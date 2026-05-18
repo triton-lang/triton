@@ -135,6 +135,9 @@ bool isExpensiveLoadOrStore(Operation *op);
 // Return true if the op can use the target encoding for its result.
 bool canUseResultEncoding(Operation *op, Attribute targetEncoding);
 
+// Return true if the op can be rematerialized in a different layout.
+bool canBeRematerialized(Operation *op);
+
 // Replace ForOp with a new ForOp with extra operands. The YieldOp is not
 // updated and needs to be updated separately for the loop to be correct.
 scf::ForOp replaceForOpWithNewSignature(
