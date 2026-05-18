@@ -53,7 +53,7 @@ module {
 // -----
 
 module {
-  tt.func @assume_and_return_use(%arg0: !tt.ptr<f32>) -> i1 {
+  tt.func @assume_and_return_use() -> i1 {
     %c0 = arith.constant 0 : i32
     %c1024_i32 = arith.constant 1024 : i32
     %pid = tt.get_program_id x : i32
@@ -65,14 +65,40 @@ module {
   }
 }
 
-// CHECK-LABEL:   tt.func @assume_and_return_use(
-// CHECK-SAME:    %[[VAL_0:.*]]: !tt.ptr<f32>) -> i1 {
-// CHECK:           %[[TRUE:.*]] = arith.constant true
-// CHECK:           %[[C1024:.*]] = arith.constant 1024 : i32
+// CHECK-LABEL:   tt.func @assume_and_return_use() -> i1 {
+// CHECK-DAG:       %[[C0:.*]] = arith.constant 0 : i32
+// CHECK-DAG:       %[[C1024:.*]] = arith.constant 1024 : i32
+// CHECK-DAG:       %[[TRUE:.*]] = arith.constant true
 // CHECK:           %[[PID:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[CMPLE:.*]] = arith.cmpi sle, %[[PID]], %[[C1024]] : i32
 // CHECK:           llvm.intr.assume %[[CMPLE]] : i1
-// CHECK:           llvm.intr.assume
+// CHECK:           %[[CMPGE:.*]] = arith.cmpi sge, %[[PID]], %[[C0]] : i32
+// CHECK:           llvm.intr.assume %[[CMPGE]] : i1
+// CHECK:           tt.return %[[TRUE]] : i1
+// CHECK:         }
+
+// -----
+
+// `%arg0` has no intrinsic range information — MLIR can only prove the cmp
+// true because `collectAssumptions` seeds the lattice from the assume itself.
+// The `tt.return` use witnesses the fold actually firing (constant `true`),
+// while the assume keeps the original compare so the `arg0 <= 1024` fact
+// survives to LLVM.
+module {
+  tt.func @assume_user_fact(%arg0: i32) -> i1 {
+    %c1024_i32 = arith.constant 1024 : i32
+    %cmpsle = arith.cmpi sle, %arg0, %c1024_i32 : i32
+    llvm.intr.assume %cmpsle : i1
+    tt.return %cmpsle: i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @assume_user_fact(
+// CHECK-SAME:                       %[[ARG0:.*]]: i32) -> i1 {
+// CHECK-DAG:       %[[C1024:.*]] = arith.constant 1024 : i32
+// CHECK-DAG:       %[[TRUE:.*]] = arith.constant true
+// CHECK:           %[[CMPLE:.*]] = arith.cmpi sle, %[[ARG0]], %[[C1024]] : i32
+// CHECK:           llvm.intr.assume %[[CMPLE]] : i1
 // CHECK:           tt.return %[[TRUE]] : i1
 // CHECK:         }
 
