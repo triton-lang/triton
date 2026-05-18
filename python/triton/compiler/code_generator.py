@@ -721,6 +721,11 @@ class CodeGenerator(ast.NodeVisitor):
                 return _apply_to_tuple_values(value, _sanitize_value)
             native_nontensor_types = (language.dtype, language.tuple)
             value = _unwrap_if_constexpr(value)
+            # Unwrapped Python tuple from constexpr arg: convert to language.tuple with constexpr elements.
+            # Recurse for nested tuples.
+            if isinstance(value, builtins.tuple) and not is_namedtuple(type(value)):
+                return language.tuple(
+                    [_sanitize_value(constexpr(v)) if isinstance(v, builtins.tuple) else constexpr(v) for v in value])
             if value is not None and \
                 not _is_triton_value(value) and \
                 not isinstance(value, native_nontensor_types):
