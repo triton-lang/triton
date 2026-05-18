@@ -1218,10 +1218,13 @@ struct AsyncTMACopyGlobalToLocalOpConversion
           LLVM::NVIDIA::getLeaderAddress(loc, rewriter, barrierPtr, barrierTy);
     }
 
-    // Don't set cta_group::1 as it doesn't exist pre-Blackwell
     std::string ctaGroup;
     if (getModuleTwoCTAs(op)) {
-      ctaGroup = "cta_group::2.";
+      auto oneCTACGALayout = ttg::CGAEncodingAttr::get1DLayout(
+          op->getContext(), ttg::lookupNumCTAs(op));
+      bool oneCTABarrier =
+          getCGALayout(barrierTy.getEncoding()) == oneCTACGALayout;
+      ctaGroup = oneCTABarrier ? "cta_group::1." : "cta_group::2.";
     }
 
     // The bounding box inner dimension must be less than or equal to the
@@ -1645,8 +1648,13 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
   }
 
   std::string ctaGroup;
-  if (getModuleTwoCTAs(op))
-    ctaGroup = ".cta_group::2";
+  if (getModuleTwoCTAs(op)) {
+    auto oneCTACGALayout = ttg::CGAEncodingAttr::get1DLayout(
+        op->getContext(), ttg::lookupNumCTAs(op));
+    bool oneCTABarrier =
+        getCGALayout(barrierTy.getEncoding()) == oneCTACGALayout;
+    ctaGroup = oneCTABarrier ? ".cta_group::1" : ".cta_group::2";
+  }
 
   // Callback to generate the gather4 instruction.
   auto callback = [&](Value pred, Value shMemPtr, Value yOffset,

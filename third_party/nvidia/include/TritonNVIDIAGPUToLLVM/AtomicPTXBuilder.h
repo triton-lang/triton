@@ -61,14 +61,16 @@ emitPtxAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
       getPtxRegisterSizeCode(valueElemNBits * packed, /*isFloat=*/false);
 
   PTXBuilder::Operand *dstOpr = nullptr;
-  if (vec > 1) {
-    dstOpr = ptxBuilderAtomicRMW.newListOperand();
-    for (unsigned ii = 0; ii < vec; ++ii) {
-      dstOpr->listAppend(
-          ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true));
+  if (!isRed) {
+    if (vec > 1) {
+      dstOpr = ptxBuilderAtomicRMW.newListOperand();
+      for (unsigned ii = 0; ii < vec; ++ii) {
+        dstOpr->listAppend(
+            ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true));
+      }
+    } else {
+      dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true);
     }
-  } else {
-    dstOpr = ptxBuilderAtomicRMW.newOperand("=" + tyId, /*init=*/true);
   }
 
   auto *ptrOpr = ptxBuilderAtomicRMW.newAddrOperand(ptr, isGlobal ? "l" : "r");

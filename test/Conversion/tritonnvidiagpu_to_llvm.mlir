@@ -184,15 +184,30 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
 
 // -----
 
+#shared0_cta = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#shared1_cga = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true} {
+  // CHECK-LABEL: tma_copy_single_cta_barrier_in_two_cta_kernel
+  // CHECK: cp.async.bulk.tensor.2d.cta_group::1.shared::cta.global.mbarrier::complete_tx::bytes
+  // CHECK-NOT: cp.async.bulk.tensor.2d.cta_group::2
+  tt.func @tma_copy_single_cta_barrier_in_two_cta_kernel(%tma: !tt.tensordesc<128x128xf32, #shared1_cga>, %alloc: !ttg.memdesc<128x128xf32, #shared1_cga, #smem, mutable>, %x: i32, %barrier: !ttg.memdesc<2xi64, #shared0_cta, #smem>, %pred: i1) {
+    ttng.async_tma_copy_global_to_local %tma[%x, %x] %alloc, %barrier, %pred : !tt.tensordesc<128x128xf32, #shared1_cga>, !ttg.memdesc<2xi64, #shared0_cta, #smem> -> !ttg.memdesc<128x128xf32, #shared1_cga, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked_offsets = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
 #shared0_cluster = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #shared1_split = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true} {
   // CHECK-LABEL: tma_gather_barrier_mask_nonzero
   // Gather uses shared::cluster when barrier mask is non-zero
-  // CHECK: cp.async.bulk.tensor.2d.tile::gather4.shared::cluster.global.mbarrier::complete_tx::bytes
-  // CHECK-NOT: cp.async.bulk.tensor.2d.tile::gather4.shared::cta.global.mbarrier
+  // CHECK: cp.async.bulk.tensor.2d.tile::gather4.cta_group::2.shared::cluster.global.mbarrier::complete_tx::bytes
+  // CHECK-NOT: cp.async.bulk.tensor.2d.tile::gather4.cta_group::1
   tt.func @tma_gather_barrier_mask_nonzero(%tma: !tt.tensordesc<1x128xbf16, #shared1_split>, %alloc: !ttg.memdesc<32x128xbf16, #shared1_split, #smem, mutable>, %x_offsets: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked_offsets}>>, %y: i32, %barrier: !ttg.memdesc<1xi64, #shared0_cluster, #smem>, %pred: i1) {
     ttng.async_tma_gather %tma[%x_offsets, %y] %alloc, %barrier, %pred : !tt.tensordesc<1x128xbf16, #shared1_split>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked_offsets}>>, i32, !ttg.memdesc<1xi64, #shared0_cluster, #smem>, !ttg.memdesc<32x128xbf16, #shared1_split, #smem, mutable>, i1
     tt.return

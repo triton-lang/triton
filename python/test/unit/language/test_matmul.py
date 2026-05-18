@@ -1002,10 +1002,10 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
             pytest.skip("Packing along M/N with BLOCK_M < 128 is not supported on CUDA")
         if scale_type == "float8_e4m3fn" and not pack_along_k:
             pytest.skip("Packing along K is required for float8_e4m3fn")
-        if torch.cuda.get_device_capability()[0] != 10 and torch.cuda.get_device_capability()[0] != 12:
-            pytest.skip("Requires compute capability == 10 or 12")
-        if torch.cuda.get_device_capability()[0] == 12 and pack_along_k is False:
-            pytest.skip("Packing along M, N is not supported on SM120")
+        if scale_type == "float8_e4m3fn" and torch.cuda.get_device_capability()[0] < 9:
+            pytest.skip("fp8e4nv not supported on Ampere or older")
+        if BLOCK_N == 256 and BLOCK_K == 256 and torch.cuda.get_device_capability()[0] < 9:
+            pytest.skip("Insufficient SMEM Ampere or older")
         if not (with_a_scale and with_b_scale):
             pytest.skip("None aScale/bScale is only tested on AMD backend for now")
     elif is_hip():
@@ -1066,7 +1066,7 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
                                      **kernel_kwargs)
     torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
     nvfp4_fallback = BLOCK_M < 128
-    if is_cuda() and not nvfp4_fallback:
+    if is_cuda() and torch.cuda.get_device_capability()[0] in (10, 12) and not nvfp4_fallback:
         ptx = k.asm["ptx"]
         if pack_along_k:
             assert "kind::mxf4" in ptx

@@ -21,7 +21,6 @@ struct FlushRange {
 
 std::pair<std::vector<FlushRange>, std::set<size_t>>
 computeFlushRangesAndPeekPhases(
-    std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
         &dataPhases,
@@ -35,17 +34,15 @@ computeFlushRangesAndPeekPhases(
       continue;
     }
 
-    auto flushedPhaseIt = dataFlushedPhases.find(data);
     // phase.second at maximum is the current phase, which cannot be a
     // "complete" phase yet. So we flush up to phase.second - 1.
     const size_t endPhaseToFlush = phase.second - 1;
 
     size_t minPhaseToFlush = 0;
-    if (flushedPhaseIt == dataFlushedPhases.end() ||
-        flushedPhaseIt->second == Data::kNoCompletePhase) {
+    const auto flushedPhase = data->getPhaseInfo().completeUpTo;
+    if (flushedPhase == Data::kNoCompletePhase) {
       minPhaseToFlush = 0;
     } else {
-      const auto flushedPhase = flushedPhaseIt->second;
       if (endPhaseToFlush <= flushedPhase) {
         continue;
       }
@@ -213,15 +210,14 @@ void updateDataPhases(std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
 
 void flushDataPhasesImpl(
     const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
-    std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
         &dataPhases,
     PendingGraphPool *pendingGraphPool) {
   static const bool timingEnabled =
       getBoolEnv("PROTON_DATA_FLUSH_TIMING", false);
-  auto [flushRanges, phasesToPeek] = computeFlushRangesAndPeekPhases(
-      dataFlushedPhases, dataPhases, pendingGraphPool != nullptr);
+  auto [flushRanges, phasesToPeek] =
+      computeFlushRangesAndPeekPhases(dataPhases, pendingGraphPool != nullptr);
   if (pendingGraphPool) {
     using Clock = std::chrono::steady_clock;
     uint64_t totalPeekUs = 0;
@@ -252,7 +248,6 @@ void flushDataPhasesImpl(
     auto *data = range.data;
     const size_t minPhaseToFlush = range.minPhaseToFlush;
     const size_t maxPhaseToFlush = range.maxPhaseToFlush;
-    dataFlushedPhases[data] = maxPhaseToFlush;
     data->completePhase(maxPhaseToFlush);
 
     if (!periodicFlushEnabled)

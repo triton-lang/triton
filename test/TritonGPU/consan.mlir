@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s
+// RUN: env TRITON_CONSAN_INIT_ALLOCATIONS=0 triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s --check-prefix=NO-INIT
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
@@ -1562,6 +1563,78 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       ttg.local_load %arg1 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
       ttg.warp_return
     } : (!ttg.memdesc<32xf32, #shared, #smem, mutable>, !ttg.memdesc<32xf32, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared, #smem, mutable>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @initialize_uninitialized_allocs
+  // NO-INIT-LABEL: @initialize_uninitialized_allocs
+  tt.func public @initialize_uninitialized_allocs() {
+    // CHECK: %[[SMEM:.*]] = ttg.local_alloc
+    // CHECK: %[[SMEM_POISON:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32
+    // CHECK: ttg.local_store %[[SMEM_POISON]], %[[SMEM]]
+    // CHECK: %[[TMEM:.*]] = ttng.tmem_alloc
+    // CHECK: %[[TMEM_POISON:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32
+    // CHECK: %[[TRUE:.*]] = arith.constant true
+    // CHECK: ttng.tmem_store %[[TMEM_POISON]], %[[TMEM]], %[[TRUE]]
+    // NO-INIT-NOT: ttg.local_store
+    // NO-INIT-NOT: ttng.tmem_store
+    %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
+    %tmem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    // NO-INIT: tt.return
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 256 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @initialize_multibuffer_allocs
+  tt.func public @initialize_multibuffer_allocs() {
+    // CHECK: %[[SMEM:.*]] = ttg.local_alloc
+    // CHECK: %[[SMEM_0:.*]] = ttg.memdesc_index %[[SMEM]]
+    // CHECK: %[[SMEM_1:.*]] = ttg.memdesc_index %[[SMEM]]
+    // CHECK: ttg.local_store {{.*}}, %[[SMEM_0]]
+    // CHECK: ttg.local_store {{.*}}, %[[SMEM_1]]
+    // CHECK: %[[TMEM:.*]] = ttng.tmem_alloc
+    // CHECK: %[[TMEM_0:.*]] = ttg.memdesc_index %[[TMEM]]
+    // CHECK: %[[TMEM_1:.*]] = ttg.memdesc_index %[[TMEM]]
+    // CHECK: ttng.tmem_store {{.*}}, %[[TMEM_0]],
+    // CHECK: ttng.tmem_store {{.*}}, %[[TMEM_1]],
+    %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xf32, #shared, #smem, mutable>
+    %tmem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @skip_source_backed_allocs
+  tt.func public @skip_source_backed_allocs(%src: tensor<128x128xf32, #blocked>) {
+    // CHECK: ttg.local_alloc %{{.*}}
+    // CHECK-NOT: ttg.local_store
+    // CHECK: ttng.tmem_alloc %{{.*}}
+    // CHECK-NOT: ttng.tmem_store
+    %smem = ttg.local_alloc %src {allocation.offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
+    %tmem = ttng.tmem_alloc %src {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     tt.return
   }
 }

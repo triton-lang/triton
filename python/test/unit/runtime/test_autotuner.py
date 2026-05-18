@@ -84,6 +84,69 @@ def test_restore(pass_kwargs_to_kernel, device):
     triton.testing.assert_close(src, torch.ones_like(src))
 
 
+@pytest.mark.parametrize('src_is_none', [False, True])
+@pytest.mark.parametrize('pass_kwargs_to_kernel', [False, True])
+def test_reset_to_zero(pass_kwargs_to_kernel, src_is_none, device):
+    # Kernels often take optional tensor args (e.g. an extra buffer used only
+    # when a constexpr flag is set), and idiomatically pass None when the arg
+    # is unused. Such an arg may still be listed for reset_to_zero because some
+    # call sites do mutate it. The autotuner's default pre-hook must skip None.
+    N = 1024
+    dst = torch.full((N, ), 2.0, device=device)
+    src = None if src_is_none else dst
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
+
+    @triton.autotune(configs=configs, key=['N'], reset_to_zero=['src'], do_bench=do_bench)
+    @triton.jit
+    def _kernel(src, dst, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < N
+        if src is not None:
+            tl.store(src + offsets, tl.full([BLOCK_SIZE], 1, dtype=src.dtype.element_ty), mask=mask)
+        else:
+            tl.store(dst + offsets, tl.full([BLOCK_SIZE], 1, dtype=dst.dtype.element_ty), mask=mask)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    if pass_kwargs_to_kernel:
+        _kernel[grid](src=src, dst=dst, N=N)
+    else:
+        _kernel[grid](src, dst, N)
+    triton.testing.assert_close(dst, torch.ones_like(dst))
+
+
+@pytest.mark.parametrize('pass_kwargs_to_kernel', [False, True])
+def test_restore_with_none(pass_kwargs_to_kernel, device):
+    # Kernels often take optional tensor args (e.g. an extra buffer used only
+    # when a constexpr flag is set), and idiomatically pass None when the arg
+    # is unused. Such an arg may still be listed in restore_value because some
+    # call sites do mutate it. The autotuner's default pre/post hooks must
+    # skip None entries instead of crashing with
+    # "AttributeError: 'NoneType' object has no attribute 'clone'".
+    N = 1024
+    src = None
+    dst = torch.full((N, ), 2.0, device=device)
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
+
+    @triton.autotune(configs=configs, key=['N'], restore_value=['src'], do_bench=do_bench)
+    @triton.jit
+    def _kernel(src, dst, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < N
+        if src is not None:
+            tl.store(src + offsets, tl.full([BLOCK_SIZE], 1, dtype=src.dtype.element_ty), mask=mask)
+        else:
+            tl.store(dst + offsets, tl.full([BLOCK_SIZE], 1, dtype=dst.dtype.element_ty), mask=mask)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    if pass_kwargs_to_kernel:
+        _kernel[grid](src=src, dst=dst, N=N)
+    else:
+        _kernel[grid](src, dst, N)
+    triton.testing.assert_close(dst, torch.ones_like(dst))
+
+
 @pytest.mark.skipif(is_hip_cdna2(), reason="Hit LLVM assertion in splitLiveThroughBlock")
 def test_hooks(device):
     # Autotuner's pre- and post- hooks should be called the same number of times
