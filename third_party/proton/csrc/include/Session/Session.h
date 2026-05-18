@@ -2,7 +2,6 @@
 #define PROTON_SESSION_SESSION_H_
 
 #include "Context/Context.h"
-#include "Data/Data.h"
 #include "Data/Metric.h"
 #include "Utility/Singleton.h"
 #include <algorithm>
