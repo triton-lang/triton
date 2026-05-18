@@ -117,3 +117,29 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#orig = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
+#planned = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [1, 0]]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #planned}>
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @skip_convert_from_dot_operand
+  // CHECK: ttg.convert_layout %arg0 : tensor<128x32xf16, {{#ttg\.dot_op<.*>}}> -> tensor<128x32xf16, #[[$ORIG:[a-zA-Z0-9_]+]]>
+  // CHECK: ttg.convert_layout %{{.*}} : tensor<128x32xf16, #[[$ORIG]]> -> tensor<128x32xf16, {{#ttg\.dot_op<.*>}}>
+  tt.func @skip_convert_from_dot_operand(%a: tensor<128x32xf16, #dot_a>) {
+    %a_orig = ttg.convert_layout %a : tensor<128x32xf16, #dot_a> -> tensor<128x32xf16, #orig>
+    %a_dot = ttg.convert_layout %a_orig : tensor<128x32xf16, #orig> -> tensor<128x32xf16, #dot_a>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func @skip_convert_to_dot_operand
+  // CHECK: ttg.convert_layout %arg0 : tensor<128x32xf16, #[[$PLANNED:[a-zA-Z0-9_]+]]> -> tensor<128x32xf16, {{#ttg\.dot_op<.*>}}>
+  // CHECK: ttg.convert_layout %{{.*}} : tensor<128x32xf16, {{#ttg\.dot_op<.*>}}> -> tensor<128x32xf16, #[[$ORIG_2:[a-zA-Z0-9_]+]]>
+  tt.func @skip_convert_to_dot_operand(%a: tensor<128x32xf16, #planned>) {
+    %a_dot = ttg.convert_layout %a : tensor<128x32xf16, #planned> -> tensor<128x32xf16, #dot_a>
+    %a_orig = ttg.convert_layout %a_dot : tensor<128x32xf16, #dot_a> -> tensor<128x32xf16, #orig>
+    tt.return
+  }
+}
