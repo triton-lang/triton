@@ -35,9 +35,7 @@ def _run_device_assert_barrier(device):
     getattr(torch, device).synchronize()
 
 
-@pytest.mark.forked
-def test_expect_zero_device_assert(monkeypatch, device):
-    monkeypatch.setenv("TRITON_DEBUG", "1")
+def _run_expect_zero_device_assert(device):
     triton.knobs.refresh_knobs()
     x = torch.ones([16], dtype=torch.float32, device=device)
     out = torch.empty_like(x)
@@ -49,9 +47,13 @@ def test_expect_zero_device_assert(monkeypatch, device):
         y = tl.expect_zero(y, offsets == 0)
         tl.store(out_ptr + offsets, y)
 
-    with pytest.raises(RuntimeError):
-        _kernel[(1, )](x, out, BLOCK_SIZE=16)
-        getattr(torch, device).synchronize()
+    _kernel[(1, )](x, out, BLOCK_SIZE=16)
+    getattr(torch, device).synchronize()
+
+
+def test_expect_zero_device_assert(device):
+    result = run_in_process(_run_expect_zero_device_assert, (device, ), env={"TRITON_DEBUG": "1"})
+    assert isinstance(result.exc, RuntimeError)
 
 
 @pytest.mark.parametrize('cond', [True, False])
