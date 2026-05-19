@@ -51,14 +51,6 @@ Attribute cloneWithCGALayout(Attribute layout, ttg::CGAEncodingAttr cgaLayout) {
   llvm::report_fatal_error("cloneWithCGALayout not implemented for layout");
 }
 
-ttg::CGAEncodingAttr getSourceCGALayoutForDestination(Attribute srcLayout,
-                                                      Attribute dstLayout) {
-  if (auto dstSlice = dyn_cast<ttg::SliceEncodingAttr>(dstLayout)) {
-    auto srcSlice = dyn_cast<ttg::SliceEncodingAttr>(srcLayout);
-    return ttg::getCGALayout(srcSlice.getParent());
-  }
-  return ttg::getCGALayout(srcLayout);
-}
 
 Value convertValue(OpBuilder &builder, Location loc, Value value,
                    Attribute layout) {
@@ -91,8 +83,13 @@ void rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
 
   auto srcTy = cast<RankedTensorType>(convert.getSrc().getType());
   auto dstTy = cast<RankedTensorType>(convert.getType());
-  ttg::CGAEncodingAttr cgaLayout = getSourceCGALayoutForDestination(
-      srcTy.getEncoding(), dstTy.getEncoding());
+
+  auto getRootCGALayout = [](Attribute layout) -> ttg::CGAEncodingAttr {
+    if (auto slice = dyn_cast<ttg::SliceEncodingAttr>(layout))
+      return getRootCGALayout(slice.getParent());
+    return ttg::getCGALayout(layout);
+  };
+  ttg::CGAEncodingAttr cgaLayout = getRootCGALayout(srcTy.getEncoding());
   Attribute targetLayout = cloneWithCGALayout(dstTy.getEncoding(), cgaLayout);
 
   for (OpOperand &operand : op->getOpOperands()) {
