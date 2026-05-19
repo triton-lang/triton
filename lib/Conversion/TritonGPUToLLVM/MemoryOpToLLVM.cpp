@@ -59,11 +59,6 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
                           : toLinearLayout(memDescTy);
   auto cvt = regLayout.invertAndCompose(sharedLayout);
 
-  auto kBlock = str_attr("block");
-  // We could support it by removing this check if we ever want to
-  if (!cvt.isTrivialOver({kBlock})) {
-    return failure();
-  }
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
                  rewriter, targetInfo);
 
@@ -190,12 +185,6 @@ public:
                             ? paddedLinearLayout(memDescTy)
                             : toLinearLayout(memDescTy);
     auto cvt = regLayout.invertAndCompose(sharedLayout);
-
-    auto kBlock = str_attr("block");
-    // We could support it by removing this check if we ever want to
-    if (!cvt.isTrivialOver({kBlock})) {
-      return failure();
-    }
 
     auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
                                   smemObj, rewriter, targetInfo, op);

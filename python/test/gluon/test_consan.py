@@ -521,6 +521,45 @@ def test_async_tma_multicast_kernel_local_store_race(device, run_wrapper, monkey
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+def test_cluster_barrier_does_not_publish_later_read(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_cluster_barrier_does_not_publish_later_read, (device, False, monkeypatch))
+        assert_expected_cuda_failure(result.exc)
+        assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(input_desc):
+        cga_layout: ttgl.constexpr = multicast_cga_layout(ttgl.num_ctas(), 2)
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
+                                                            warps_per_cta=[4, 1], order=[0, 1], cga_layout=cga_layout)
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
+        sink = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK, XBLOCK], input_desc.layout)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+
+        ttgl.barrier(cluster=True)
+        val = smem.load(blocked_layout)
+        # Keep the post-barrier read live long enough to exercise delayed publication from another CTA.
+        for i in ttgl.static_range(2):
+            sink.index(i).store(val)
+
+        mbarrier.expect(bar, input_desc.nbytes_per_cta)
+        tma.async_load(input_desc, [0, 0], bar, smem, multicast=True)
+        mbarrier.wait(bar, 0, deps=[smem])
+
+    input = torch.randn((XBLOCK.value, XBLOCK.value), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
+                                           cga_layout=multicast_cga_layout(4, 2))
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK.value, XBLOCK.value], shared_layout)
+    kernel[(1, )](input_desc, num_warps=4, num_ctas=4)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_tma_kernel_2bufs_1bar(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:

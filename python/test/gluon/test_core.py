@@ -89,6 +89,61 @@ def test_copy_kernel_multi_cta():
 
 
 @gluon.jit
+def local_store_transposed_cga_kernel(inp, out, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
+    src_layout: ttgl.constexpr = ttgl.BlockedLayout(
+        size_per_thread=[1, BLOCK_N],
+        threads_per_warp=[32, 1],
+        warps_per_cta=[4, 1],
+        order=[0, 1],
+        cga_layout=((1, 0), ),
+    )
+    dst_layout: ttgl.constexpr = ttgl.BlockedLayout(
+        size_per_thread=[1, BLOCK_M // 4],
+        threads_per_warp=[8, 4],
+        warps_per_cta=[4, 1],
+        order=[1, 0],
+        cga_layout=((0, 1), ),
+    )
+    smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(
+        vec=1,
+        per_phase=1,
+        max_phase=1,
+        order=[1, 0],
+        cga_layout=((1, 0), ),
+    )
+
+    src_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, src_layout))[:, None]
+    src_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, src_layout))[None, :]
+    src_ptrs = inp + src_m * BLOCK_N + src_n
+    value = ttgl.load(src_ptrs)
+    transposed = value.trans()
+
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [BLOCK_N, BLOCK_M], smem_layout)
+    smem.store(transposed)
+    ttgl.barrier(cluster=True)
+
+    dst_n = ttgl.arange(0, BLOCK_N)[:, None]
+    dst_m = ttgl.arange(0, BLOCK_M)[None, :]
+    result = smem.load(dst_layout)
+    dst_ptrs = out + dst_n * BLOCK_M + dst_m
+    ttgl.store(ttgl.set_auto_layout(dst_ptrs, dst_layout), result)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_local_store_transposed_cga_to_non_transposed_alloc():
+    block_m = 256
+    block_n = 64
+    inp = torch.arange(block_m * block_n, device="cuda", dtype=torch.float32).reshape(block_m, block_n)
+    out = torch.empty((block_n, block_m), device="cuda", dtype=torch.float32)
+
+    compiled = local_store_transposed_cga_kernel[(1, )](inp, out, block_m, block_n, num_warps=4, num_ctas=2)
+    ptx = compiled.asm["ptx"]
+    assert "st.shared::cluster" in ptx
+    assert "ld.shared::cluster" in ptx
+    torch.testing.assert_close(out, inp.T, atol=0, rtol=0)
+
+
+@gluon.jit
 def tma_kernel(desc):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
     value = ttgl.full(desc.block_shape, 0, desc.dtype, layout)

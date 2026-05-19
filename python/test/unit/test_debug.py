@@ -2,16 +2,10 @@ import pytest
 import torch
 import triton.language as tl
 import triton
+from triton._internal_testing import run_in_process
 
 
-@pytest.mark.parametrize('cond', [True, False])
-@pytest.mark.parametrize('mask', [True, False, None])
-@pytest.mark.parametrize('opt_flag', [True, False, None])
-@pytest.mark.parametrize('env_var', [True, False])
-@pytest.mark.parametrize('jit_flag', [True, False])
-@pytest.mark.forked
-def test_device_assert(monkeypatch, cond, mask, opt_flag, env_var, jit_flag, device):
-    monkeypatch.setenv("TRITON_DEBUG", str(int(env_var)))
+def _run_device_assert(cond, mask, opt_flag, jit_flag, device):
     triton.knobs.refresh_knobs()
     torch.zeros([1], dtype=torch.int32, device=device)
 
@@ -19,25 +13,15 @@ def test_device_assert(monkeypatch, cond, mask, opt_flag, env_var, jit_flag, dev
     def _kernel(COND: tl.constexpr, MASK: tl.constexpr):
         tl.device_assert(COND, 'test', mask=MASK)
 
-    is_debug = env_var or (opt_flag if opt_flag is not None else jit_flag)
-
     kwargs = {}
     if opt_flag is not None:
         kwargs["debug"] = opt_flag
-
-    if not cond and is_debug and mask is not False:
-        with pytest.raises(RuntimeError):
-            _kernel[(1, )](cond, mask, **kwargs)
-            getattr(torch, device).synchronize()
-        return
 
     _kernel[(1, )](cond, mask, **kwargs)
     getattr(torch, device).synchronize()
 
 
-@pytest.mark.forked
-def test_device_assert_barrier(monkeypatch, device):
-    monkeypatch.setenv("TRITON_DEBUG", "1")
+def _run_device_assert_barrier(device):
     triton.knobs.refresh_knobs()
     tensor = torch.zeros([16], dtype=torch.int32, device=device)
 
@@ -70,6 +54,28 @@ def test_expect_zero_device_assert(monkeypatch, device):
         getattr(torch, device).synchronize()
 
 
+@pytest.mark.parametrize('cond', [True, False])
+@pytest.mark.parametrize('mask', [True, False, None])
+@pytest.mark.parametrize('opt_flag', [True, False, None])
+@pytest.mark.parametrize('env_var', [True, False])
+@pytest.mark.parametrize('jit_flag', [True, False])
+def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
+    is_debug = env_var or (opt_flag if opt_flag is not None else jit_flag)
+    result = run_in_process(_run_device_assert, (cond, mask, opt_flag, jit_flag, device),
+                            env={"TRITON_DEBUG": str(int(env_var))})
+
+    if not cond and is_debug and mask is not False:
+        assert isinstance(result.exc, RuntimeError)
+        return
+
+    assert result.exc is None, result.exc
+
+
+def test_device_assert_barrier(device):
+    result = run_in_process(_run_device_assert_barrier, (device, ), env={"TRITON_DEBUG": "1"})
+    assert result.exc is None, result.exc
+
+
 @pytest.mark.parametrize("cond", [False, True])
 def test_static_assert(cond):
 
@@ -85,19 +91,45 @@ def test_static_assert(cond):
     _kernel[(1, )](cond)
 
 
-def _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, tri_func, ref_func, device):
+def _run_overflow(x, y, x_dtype, y_dtype, debug, op, device):
+    if op == "add":
+
+        @triton.jit
+        def tri_func(X, Y, Z):
+            tl.store(Z, tl.load(X) + tl.load(Y))
+
+        ref_func = lambda lhs, rhs: lhs + rhs
+    elif op == "mul":
+
+        @triton.jit
+        def tri_func(X, Y, Z):
+            tl.store(Z, tl.load(X) * tl.load(Y))
+
+        ref_func = lambda lhs, rhs: lhs * rhs
+    else:
+        assert op == "sub"
+
+        @triton.jit
+        def tri_func(X, Y, Z):
+            tl.store(Z, tl.load(X) - tl.load(Y))
+
+        ref_func = lambda lhs, rhs: lhs - rhs
+
     x = torch.tensor([x], dtype=getattr(torch, x_dtype), device=device)
     y = torch.tensor([y], dtype=getattr(torch, y_dtype), device=device)
     z = torch.empty_like(x)
+    tri_func[(1, )](x, y, z, debug=debug)
+    getattr(torch, device).synchronize()
+    assert int(z) == int(ref_func(x, y))
+
+
+def _assert_overflow_result(result, debug, should_overflow):
     if should_overflow and debug:
-        with pytest.raises(RuntimeError) as exc_info:
-            tri_func[(1, )](x, y, z, debug=debug)
-            getattr(torch, device).synchronize()
-        assert "device-side assert" in str(exc_info.value)
-    else:
-        tri_func[(1, )](x, y, z, debug=debug)
-        getattr(torch, device).synchronize()
-        assert int(z) == int(ref_func(x, y))
+        assert isinstance(result.exc, RuntimeError)
+        assert "device-side assert" in str(result.exc)
+        return
+
+    assert result.exc is None, result.exc
 
 
 # integer overflow sanitization
@@ -114,14 +146,9 @@ def _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, tri_func, ref
     (-2**15, -1, 'int16', 'int16', True, True),
     (2**15 - 1, 1, 'int16', 'int16', True, True),
 ])
-@pytest.mark.forked
 def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
-
-    @triton.jit
-    def _kernel_add(X, Y, Z):
-        tl.store(Z, tl.load(X) + tl.load(Y))
-
-    _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, _kernel_add, lambda x, y: x + y, device)
+    result = run_in_process(_run_overflow, (x, y, x_dtype, y_dtype, debug, "add", device))
+    _assert_overflow_result(result, debug, should_overflow)
 
 
 # mul overflow
@@ -135,14 +162,9 @@ def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
     (-2**31, 1, 'int32', 'int32', True, False),
     (-2**30, 2, 'int32', 'int32', True, False),
 ])
-@pytest.mark.forked
 def test_sanitize_int_mul_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
-
-    @triton.jit
-    def _kernel_mul(X, Y, Z):
-        tl.store(Z, tl.load(X) * tl.load(Y))
-
-    _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, _kernel_mul, lambda x, y: x * y, device)
+    result = run_in_process(_run_overflow, (x, y, x_dtype, y_dtype, debug, "mul", device))
+    _assert_overflow_result(result, debug, should_overflow)
 
 
 # sub overflow
@@ -155,11 +177,6 @@ def test_sanitize_int_mul_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
     (2**31 - 1, 1, 'int32', 'int32', True, False),
     (-2**31, -1, 'int32', 'int32', True, False),
 ])
-@pytest.mark.forked
 def test_sanitize_int_sub_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
-
-    @triton.jit
-    def _kernel_sub(X, Y, Z):
-        tl.store(Z, tl.load(X) - tl.load(Y))
-
-    _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, _kernel_sub, lambda x, y: x - y, device)
+    result = run_in_process(_run_overflow, (x, y, x_dtype, y_dtype, debug, "sub", device))
+    _assert_overflow_result(result, debug, should_overflow)
