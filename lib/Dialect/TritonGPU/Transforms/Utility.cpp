@@ -682,7 +682,7 @@ bool canUseResultEncoding(Operation *op, Attribute targetEncoding) {
              triton::gpu::LocalStoreOp>(op);
 }
 
-bool canBeRematerialized(Operation *op) {
+static bool canBeRematerialized(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
     return !isExpensiveLoadOrStore(op);
   if (isa<AtomicRMWOp, AtomicCASOp, DotOpInterface>(op))

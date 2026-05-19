@@ -67,21 +67,6 @@ ttg::CGAEncodingAttr getSourceCGALayoutForDestination(Attribute srcLayout,
   return ttg::getCGALayout(srcLayout);
 }
 
-bool canRematerializeConvert(OpOperand &operand, Attribute layout) {
-  // Rewriting a user may require extra conversions on its other tensor
-  // operands. Only do that when layout propagation can rematerialize the
-  // producer slice in the target layout.
-  llvm::SetVector<Value> slice;
-  llvm::DenseMap<Value, Attribute> layouts;
-  if (failed(getConvertBackwardSlice(operand, slice, layout, layouts)))
-    return false;
-
-  return llvm::all_of(slice, [](Value value) {
-    Operation *op = value.getDefiningOp();
-    return !op || canBeRematerialized(op);
-  });
-}
-
 Value convertValue(OpBuilder &builder, Location loc, Value value,
                    Attribute layout) {
   auto ty = cast<RankedTensorType>(value.getType());
@@ -119,7 +104,12 @@ void rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
       continue;
     if (!isa<RankedTensorType>(operand.get().getType()))
       continue;
-    if (!canRematerializeConvert(operand, targetLayout))
+    // Rewriting a user may require extra conversions on its other tensor
+    // operands. Only do that when layout propagation can rematerialize the
+    // producer slice in the target layout.
+    llvm::SetVector<Value> slice;
+    llvm::DenseMap<Value, Attribute> layouts;
+    if (failed(getRematerializableSlice(operand, slice, targetLayout, layouts)))
       return;
   }
 
