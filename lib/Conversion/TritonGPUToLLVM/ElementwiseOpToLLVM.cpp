@@ -259,11 +259,14 @@ struct ElementwiseInlineAsmOpConversion
           packedOperands.push_back(value);
           continue;
         }
-        Type ty = vec_ty(value.getType(), vecSize);
+        Type asmValueTy = value.getType();
+        Type ty = vec_ty(asmValueTy, vecSize);
         value = b.insert_element(b.undef(ty), value, b.i32_val(0));
         for (int k = 1; k < vecSize; k++)
           value = b.insert_element(
               value, packOperand(i, j + k * numElementPerReg), b.i32_val(k));
+        unsigned bitWidth = getIntOrFloatOrPtrBitWidth(asmValueTy);
+        value = b.bitcast(value, int_ty(bitWidth * vecSize));
         packedOperands.push_back(value);
       }
     }
@@ -302,7 +305,12 @@ struct ElementwiseInlineAsmOpConversion
       int32_t vecSize = resultVecSizes ? (*resultVecSizes)[resultIdx] : 1;
       for (unsigned i = 0; i < op.getPackedElement() / numElemsPerReg;
            i += vecSize) {
-        asmRetTypes.push_back(vecSize == 1 ? ty : vec_ty(ty, vecSize));
+        Type retTy = ty;
+        if (vecSize != 1) {
+          unsigned bitWidth = getIntOrFloatOrPtrBitWidth(ty);
+          retTy = int_ty(bitWidth * vecSize);
+        }
+        asmRetTypes.push_back(retTy);
       }
     }
     Type asmRetType =
@@ -321,8 +329,8 @@ struct ElementwiseInlineAsmOpConversion
                            /*operand_attrs=*/ArrayAttr())
                            ->getResult(0);
 
-    // asmResults can be a scalar, a vector, or a struct mixing both. We unpack
-    // into per-result element lists ret[resultIdx][elementIdx].
+    // asmResults is may be struct of possibly bitcasted requested types. We
+    // unpack into per-result element lists ret[resultIdx][elementIdx].
     SmallVector<SmallVector<Value>> ret(op->getNumResults());
     int structIdx = 0;
     for (int i = 0; i < op->getNumResults(); i++) {
@@ -331,6 +339,8 @@ struct ElementwiseInlineAsmOpConversion
       unsigned bitWidth = getIntOrFloatOrPtrBitWidth(elemTy);
       unsigned numElemsPerReg =
           std::min(std::max(32 / bitWidth, 1u), op.getPackedElement());
+      Type asmValueTy =
+          numElemsPerReg == 1 ? elemTy : int_ty(bitWidth * numElemsPerReg);
       Type packedTy =
           numElemsPerReg == 1 ? elemTy : vec_ty(elemTy, numElemsPerReg);
       int32_t vecSize = resultVecSizes ? (*resultVecSizes)[i] : 1;
@@ -339,6 +349,10 @@ struct ElementwiseInlineAsmOpConversion
         Value val = asmRetTypes.size() > 1
                         ? b.extract_val(asmResults, structIdx++)
                         : asmResults;
+        if (vecSize != 1) {
+          Type vecTy = vec_ty(asmValueTy, vecSize);
+          val = b.bitcast(val, vecTy);
+        }
         for (int k = 0; k < vecSize; k++) {
           Value packed =
               vecSize == 1 ? val : b.extract_element(val, b.i32_val(k));

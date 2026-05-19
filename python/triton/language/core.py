@@ -3526,7 +3526,7 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
                 tl.store(C + tl.arange(0, BLOCK), c)
                 tl.store(D + tl.arange(0, BLOCK), d)
 
-        Example using AMDGPU assembly with vector operands andresults:
+        Example using AMDGPU assembly with vector operands and results:
 
         .. code-block:: python
 

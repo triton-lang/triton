@@ -120,14 +120,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   tt.func @inline_asm_vec_sizes(
       %arg0: tensor<32xi32, #blocked>,
       %arg1: tensor<32xi32, #blocked>) -> tensor<32xi32, #blocked> {
-    // GFX1250: llvm.inline_asm asm_dialect = att "test $0, $1, $2, $3", "=v,v,v,v" %{{.*}}, %{{.*}}, %{{.*}} : (vector<4xi32>, vector<2xi32>, vector<2xi32>) -> vector<4xi32>
+    // GFX1250: llvm.inline_asm asm_dialect = att "test $0, $1, $2, $3", "=v,v,v,v" %{{.*}}, %{{.*}}, %{{.*}} : (i128, i64, i64) -> i128
     %0 = tt.elementwise_inline_asm "test $0, $1, $2, $3" {constraints = "=v,v,v,v", operand_vec_sizes = array<i32: 4, 2>, packed_element = 4 : i32, pure = true, result_vec_sizes = array<i32: 4>} %arg0, %arg1 : tensor<32xi32, #blocked>, tensor<32xi32, #blocked> -> tensor<32xi32, #blocked>
     tt.return %0 : tensor<32xi32, #blocked>
   }
 
   // GFX1250-LABEL: inline_asm_vec_sizes_i8_carriers
   tt.func @inline_asm_vec_sizes_i8_carriers(%arg0: tensor<512xi8, #linear>) -> tensor<512xi8, #linear> {
-    // GFX1250: llvm.inline_asm asm_dialect = att "test $0, $1", "=v,v" %{{.*}} : (vector<4xi32>) -> vector<4xi32>
+    // GFX1250: llvm.inline_asm asm_dialect = att "test $0, $1", "=v,v" %{{.*}} : (i128) -> i128
     %0 = tt.elementwise_inline_asm "test $0, $1" {constraints = "=v,v", operand_vec_sizes = array<i32: 4>, packed_element = 16 : i32, pure = true, result_vec_sizes = array<i32: 4>} %arg0 : tensor<512xi8, #linear> -> tensor<512xi8, #linear>
     tt.return %0 : tensor<512xi8, #linear>
   }
