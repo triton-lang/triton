@@ -53,8 +53,9 @@ struct PaddedLayoutInfo {
 // Returns nullopt when (opIdx, kWidth, mfmaNonKDim, elemByteWidth) are
 // outside the supported set.
 std::optional<PaddedLayoutInfo>
-computePaddedLayoutCDNA4(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
-                         int nonKDim, int elemByteWidth, bool isKContig,
+computePaddedLayoutCDNA4(unsigned opIdx, unsigned kWidth, unsigned mfmaNonKDim,
+                         unsigned kDim, unsigned nonKDim,
+                         unsigned elemByteWidth, bool isKContig,
                          unsigned warpSize);
 
 triton::gpu::SharedEncodingTrait

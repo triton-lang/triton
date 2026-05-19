@@ -149,9 +149,12 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 // r29, pad, r2,  r6, r10, r14, r18, r22
 // r26, r30, pad, r3 ....
 std::optional<PaddedLayoutInfo>
-computePaddedLayoutCDNA4(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
-                         int nonKDim, int elemByteWidth, bool isKContig,
+computePaddedLayoutCDNA4(unsigned opIdx, unsigned kWidth, unsigned mfmaNonKDim,
+                         unsigned kDim, unsigned nonKDim,
+                         unsigned elemByteWidth, bool isKContig,
                          unsigned warpSize) {
+  assert(kDim > 0 && nonKDim > 0 && "tile dims must be positive");
+
   if (opIdx >= 2)
     return std::nullopt;
   if (!llvm::is_contained({16, 32}, mfmaNonKDim))
@@ -160,18 +163,16 @@ computePaddedLayoutCDNA4(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
     return std::nullopt;
   if (!llvm::is_contained({1, 2}, elemByteWidth))
     return std::nullopt;
-  if (kDim <= 0 || nonKDim <= 0)
-    return std::nullopt;
 
-  unsigned kWidthBytes = (unsigned)kWidth * (unsigned)elemByteWidth;
+  unsigned kWidthBytes = kWidth * elemByteWidth;
   // TODO: if the actual vecSize is smaller than 16 bytes we can do better by
   // using smaller padding intervals
   unsigned vecSize = 16 / elemByteWidth;
   unsigned elemsPer8Bytes = 8 / elemByteWidth;
 
   // Determine row(contig) size
-  unsigned contigDim = isKContig ? (unsigned)kDim : (unsigned)nonKDim;
-  unsigned nonContigDim = isKContig ? (unsigned)nonKDim : (unsigned)kDim;
+  unsigned contigDim = isKContig ? kDim : nonKDim;
+  unsigned nonContigDim = isKContig ? nonKDim : kDim;
 
   // padding to avoid bank conflict
   // The bank conflict pattern depends on the ds_load instruction:
@@ -242,7 +243,7 @@ computePaddedLayoutCDNA4(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
   std::vector<std::vector<int>> bases;
 
   // Keep contigSize numbers of elements contiguous in shared memory
-  for (int elemLog2 = 0; elemLog2 < (int)llvm::Log2_32(contigDim); elemLog2++)
+  for (int elemLog2 = 0; elemLog2 < llvm::Log2_32(contigDim); elemLog2++)
     bases.push_back({1 << elemLog2, 0});
 
   // Add rows strided which has the same start offset
@@ -254,11 +255,11 @@ computePaddedLayoutCDNA4(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
     bases.push_back({0, 1 << rowBase});
 
   // Add rows [0, wrap]
-  for (int rowLog2 = 0; rowLog2 < (int)llvm::Log2_32(wrap); rowLog2++)
+  for (int rowLog2 = 0; rowLog2 < llvm::Log2_32(wrap); rowLog2++)
     bases.push_back({0, 1 << rowLog2});
 
   // Add remaining rows
-  for (; rowBase < (int)llvm::Log2_32(nonContigDim); rowBase++)
+  for (; rowBase < llvm::Log2_32(nonContigDim); rowBase++)
     bases.push_back({0, 1 << rowBase});
 
   // Fixup: One ds_read_tr loads 8 bytes so kWidthBytes > 8 will load strided.
@@ -269,9 +270,9 @@ computePaddedLayoutCDNA4(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
     unsigned baseIdxGroup0 = 0;
     unsigned baseIdxGroup1 = 0;
     for (unsigned i = 0; i < bases.size(); i++) {
-      if (bases[i][1] == (int)(16 / elemByteWidth))
+      if (bases[i][1] == 16 / elemByteWidth)
         baseIdxGroup1 = i;
-      if (bases[i][1] == (int)(8 / elemByteWidth))
+      if (bases[i][1] == 8 / elemByteWidth)
         baseIdxGroup0 = i;
     }
     assert(baseIdxGroup0 != 0 && baseIdxGroup1 != 0);
@@ -280,8 +281,8 @@ computePaddedLayoutCDNA4(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
 
   // Fixup for KContig and mfma32 when reordered rows can not fit in 64banks
   if (useDsReadB128 && mfmaNonKDim == 32 && useBestWrap &&
-      kDim < (int)(256 / elemByteWidth)) {
-    bool useWideLayout = kWidth == (int)(16 / elemByteWidth);
+      kDim < (256 / elemByteWidth)) {
+    bool useWideLayout = kWidth == (16 / elemByteWidth);
 
     // For narrow layouts we need to shift every 16th row to the other half of
     // shared memory banks to read from all banks. For the wide layout we need
@@ -292,8 +293,8 @@ computePaddedLayoutCDNA4(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
     int offsetBytes = useWideLayout ? 256 : 128;
     int offsetIndex = llvm::Log2_32(offsetBytes);
     int row16Index = llvm::Log2_32(contigDim);
-    assert((size_t)row16Index < bases.size());
-    assert((size_t)offsetIndex < bases.size());
+    assert(row16Index < bases.size());
+    assert(offsetIndex < bases.size());
     std::swap(bases[offsetIndex], bases[row16Index]);
   }
 
@@ -335,14 +336,14 @@ static ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   auto operandIdx = dotOpEnc.getOpIdx();
   auto kWidth = dotOpEnc.getKWidth();
   int kDimIndex = operandIdx == 0 ? 1 : 0;
-  bool isKContig = sharedOrder[0] == (unsigned)kDimIndex;
+  bool isKContig = sharedOrder[0] == kDimIndex;
   auto mfmaNonKDim = mfmaEnc.getInstrShape()[operandIdx];
   auto kDim = shape[kDimIndex];
   auto nonKDim = shape[(kDimIndex + 1) % 2];
 
-  auto plain = computePaddedLayoutCDNA4(
-      (int)operandIdx, (int)kWidth, (int)mfmaNonKDim, (int)kDim, (int)nonKDim,
-      (int)elemByteWidth, isKContig, warpSize);
+  auto plain =
+      computePaddedLayoutCDNA4(operandIdx, kWidth, mfmaNonKDim, kDim, nonKDim,
+                               elemByteWidth, isKContig, warpSize);
   if (!plain)
     return {};
 
