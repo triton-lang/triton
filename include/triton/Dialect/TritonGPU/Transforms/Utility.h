@@ -7,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <algorithm>
+#include <functional>
 #include <numeric>
 
 namespace mlir {
@@ -184,6 +185,15 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
 /// The slice is returned in \p slice, and the desired layout of each value in
 /// the slice is stored in \p layouts.
 LogicalResult getConvertBackwardSlice(
+    OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
+    DenseMap<Value, Attribute> &layout,
+    std::function<bool(Operation *)> stopPropagation = nullptr,
+    std::function<Value(OpOperand &, Attribute)> getExistingConversion =
+        nullptr);
+
+/// Like getConvertBackwardSlice, but requires the resulting slice to be
+/// non-empty and fully rematerializable.
+LogicalResult getRematerializableSlice(
     OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation = nullptr,

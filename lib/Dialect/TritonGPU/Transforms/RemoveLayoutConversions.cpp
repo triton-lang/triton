@@ -23,6 +23,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <deque>
+#include <functional>
 
 namespace mlir::triton::gpu {
 
@@ -176,6 +177,9 @@ public:
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
+  Value getExistingConversion(
+      OpOperand &value, Attribute encoding,
+      DenseMap<std::pair<Value, Attribute>, Value> &existingRemats) const;
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
   // Existing tuples of (value, layout) that needs to be updated when recreating
   // scf ops. This prevents keeping track of Values that have been delete when
@@ -851,41 +855,46 @@ void LayoutRematerialization::rewriteSlice(
   rewriteSlice(slice, layout, existingRemats, convertOp, mapping);
 }
 
+Value LayoutRematerialization::getExistingConversion(
+    OpOperand &value, Attribute encoding,
+    DenseMap<std::pair<Value, Attribute>, Value> &existingRemats) const {
+  Value remat = getRematValue(value.get(), encoding);
+  if (!remat)
+    return Value();
+  // `value` can be replaced with an existing rematerialization if it
+  // dominates the current use of value.
+  Operation *user = value.getOwner();
+  if (domInfo.properlyDominates(remat, user)) {
+    existingRemats.try_emplace({value.get(), encoding}, remat);
+    return remat;
+  }
+  // FIXME: If the current user is a conversion, then we know it will become
+  // a no-op when its operand is replaced with `remat`, but we need to check
+  // that its users are all dominated by `remat` so the IR is valid.
+  // if (isa<ConvertLayoutOp>(user) && remat.getDefiningOp() &&
+  //     domInfo.properlyDominates(user, remat.getDefiningOp())) {
+  //   for (Operation *op : user->getUsers()) {
+  //     if (!domInfo.dominates(remat, op))
+  //       return Value();
+  //   }
+  //   return remat;
+  // }
+
+  // There is an existing rematerialization, but it doesn't dominate all the
+  // uses we care about, so ensure it isn't used.
+  existingRemats[{value.get(), encoding}] = Value();
+  return Value();
+}
+
 LogicalResult LayoutRematerialization::getConvertBackwardSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
     DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
     std::function<bool(Operation *)> stopPropagation) {
-  // Allow re-using existing conversions for a value if it dominates the use.
-  auto getExistingConversion = [&](OpOperand &value, Attribute encoding) {
-    Value remat = getRematValue(value.get(), encoding);
-    if (!remat)
-      return Value();
-    // `value` can be replaced with an existing rematerialization if it
-    // dominates the current use of value.
-    Operation *user = value.getOwner();
-    if (domInfo.properlyDominates(remat, user)) {
-      existingRemats.try_emplace({value.get(), encoding}, remat);
-      return remat;
-    }
-    // FIXME: If the current user is a conversion, then we know it will become
-    // a no-op when its operand is replaced with `remat`, but we need to check
-    // that its users are all dominated by `remat` so the IR is valid.
-    // if (isa<ConvertLayoutOp>(user) && remat.getDefiningOp() &&
-    //     domInfo.properlyDominates(user, remat.getDefiningOp())) {
-    //   for (Operation *op : user->getUsers()) {
-    //     if (!domInfo.dominates(remat, op))
-    //       return Value();
-    //   }
-    //   return remat;
-    // }
-
-    // There is an existing rematerialization, but it doesn't dominate all the
-    // uses we care about, so ensure it isn't used.
-    existingRemats[{value.get(), encoding}] = Value();
-    return Value();
-  };
-
+  auto getExistingConversion =
+      std::bind(&LayoutRematerialization::getExistingConversion, this,
+                std::placeholders::_1, std::placeholders::_2,
+                std::ref(existingRemats));
   return mlir::getConvertBackwardSlice(root, slice, rootEncoding, layout,
                                        stopPropagation, getExistingConversion);
 }
@@ -895,27 +904,17 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
     DenseMap<Value, Attribute> &layoutArg,
     DenseMap<std::pair<Value, Attribute>, Value> &existingRematsArg,
     std::function<bool(Operation *)> stopPropagation) {
-  // Operate on copies of the input, we do not want to modify them unless we
-  // have succeeded.
-  auto slice = sliceArg;
-  auto layout = layoutArg;
   auto existingRemats = existingRematsArg;
-  LogicalResult result = getConvertBackwardSlice(
-      root, rootEncoding, slice, layout, existingRemats, stopPropagation);
-  if (result.failed() || slice.empty())
-    return failure();
-
-  // Check if all the operations in the slice can be rematerialized.
-  for (Value v : slice) {
-    if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRematerialized(op))
-        return failure();
-    }
-  }
-  sliceArg = std::move(slice);
-  layoutArg = std::move(layout);
-  existingRematsArg = std::move(existingRemats);
-  return success();
+  auto getExistingConversion =
+      std::bind(&LayoutRematerialization::getExistingConversion, this,
+                std::placeholders::_1, std::placeholders::_2,
+                std::ref(existingRemats));
+  LogicalResult result = mlir::getRematerializableSlice(
+      root, sliceArg, rootEncoding, layoutArg, stopPropagation,
+      getExistingConversion);
+  if (succeeded(result))
+    existingRematsArg = std::move(existingRemats);
+  return result;
 }
 
 bool LayoutRematerialization::backwardRematerialization() {
