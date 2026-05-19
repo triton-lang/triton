@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Tuple, TYPE_CHECKING
+from typing import List, Tuple, TYPE_CHECKING, Optional
 from dataclasses import dataclass
 from triton.language.core import base_type, base_value
 import triton.experimental.gluon.language._core as ttgl
@@ -94,29 +94,48 @@ class tensor_descriptor_im2col_type(_tensor_descriptor_type_base):
     """Type for im2col tensor descriptors (convolution-friendly access patterns)."""
     _type_name: str = "tensor_descriptor_im2col"
     _mangle_prefix: str = "TDI"
+    element_strides: Optional[List[int]] = None
+    pixel_box_lower_corner: Optional[List[int]] = None
+    pixel_box_upper_corner: Optional[List[int]] = None
 
     def _to_ir(self, builder: ir.builder) -> ir.type:
         is_signed = self.block_type.element_ty.is_int_signed()
-        return builder.get_tensor_descriptor_im2col_layout_type(self.block_type.to_ir(builder), is_signed,
-                                                                self.layout._to_ir(builder))
+        return builder.get_tensor_descriptor_im2col_layout_type(
+            self.block_type.to_ir(builder),
+            is_signed,
+            self.layout._to_ir(builder),
+            self.element_strides,
+            self.pixel_box_lower_corner,
+            self.pixel_box_upper_corner,
+        )
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
         handle = handles[cursor]
         cursor += 1
         shape, cursor = self.shape_type._unflatten_ir(handles, cursor)
         strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
-        value = tensor_descriptor_im2col(handle, shape, strides, self.block_type, layout=self.layout)
+        value = tensor_descriptor_im2col(
+            handle,
+            shape,
+            strides,
+            self.block_type,
+            layout=self.layout,
+            element_strides=self.element_strides,
+            pixel_box_lower_corner=self.pixel_box_lower_corner,
+            pixel_box_upper_corner=self.pixel_box_upper_corner,
+        )
         return value, cursor
 
 
 class _tensor_descriptor_value_base(base_value):
 
     def __init__(self, handle, shape: List[ttgl.tensor], strides: List[ttgl.tensor], block_type: ttgl.block_type,
-                 layout: NVMMASharedLayout, type_cls):
+                 layout: NVMMASharedLayout, type_cls, **type_kwargs):
         self.handle = handle
         self.shape = ttgl.tuple(shape)
         self.strides = ttgl.tuple(strides)
-        self.type = type_cls(block_type, shape_type=self.shape.type, strides_type=self.strides.type, layout=layout)
+        self.type = type_cls(block_type, shape_type=self.shape.type, strides_type=self.strides.type, layout=layout,
+                             **type_kwargs)
 
     def _set_name(self, builder: ir.builder, name: str) -> None:
         self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
@@ -159,8 +178,19 @@ class tensor_descriptor(_tensor_descriptor_value_base):
 class tensor_descriptor_im2col(_tensor_descriptor_value_base):
 
     def __init__(self, handle, shape: List[ttgl.tensor], strides: List[ttgl.tensor], block_type: ttgl.block_type,
-                 layout: NVMMASharedLayout):
-        super().__init__(handle, shape, strides, block_type, layout, tensor_descriptor_im2col_type)
+                 layout: NVMMASharedLayout, element_strides=None, pixel_box_lower_corner=None,
+                 pixel_box_upper_corner=None):
+        super().__init__(
+            handle,
+            shape,
+            strides,
+            block_type,
+            layout,
+            tensor_descriptor_im2col_type,
+            element_strides=element_strides,
+            pixel_box_lower_corner=pixel_box_lower_corner,
+            pixel_box_upper_corner=pixel_box_upper_corner,
+        )
 
 
 def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=None):
@@ -197,6 +227,18 @@ def _convert_im2col_offsets(offsets, _semantic):
         else:
             raise ValueError(f"Unsupported offset type: {type(offset)}")
     return offsets_ir
+
+
+def _descriptor_shape_dependency_zero(tensor_desc, _semantic):
+    # LLVM lowering reads descriptor shape block arguments to derive im2col
+    # output extents. Thread a no-op dependency through the coordinates so those
+    # shape values remain live until the TMA lowering runs. Use rem instead of a
+    # trivially-foldable expression such as dim - dim.
+    shape_zero = ttgl.to_tensor(0, _semantic=_semantic)
+    for dim in tensor_desc.shape:
+        dim = ttgl.to_tensor(dim, _semantic=_semantic)
+        shape_zero = shape_zero.__add__(dim.__mod__(dim, _semantic=_semantic), _semantic=_semantic)
+    return shape_zero
 
 
 @builtin
@@ -239,7 +281,7 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
 
     Args:
         tensor_desc: Tensor descriptor (im2col)
-        coord: Coordinates in the source tensor
+        coord: Physical coordinates in the source tensor
         offsets: Im2col offsets (must be i16 values)
             - For 3D tensors: 1 offset
             - For 4D tensors: 2 offsets
@@ -254,9 +296,14 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_load", "innermost coordinate", _semantic=_semantic)
 
-    coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
     multicast = _unwrap_if_constexpr(multicast)
+
+    if len(coord) != len(tensor_desc.shape):
+        raise ValueError("async_load_im2col expects physical tensor coordinates")
+    shape_zero = _descriptor_shape_dependency_zero(tensor_desc, _semantic)
+    coord = [ttgl.to_tensor(c, _semantic=_semantic).__add__(shape_zero, _semantic=_semantic) for c in coord]
+    coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     offsets_ir = _convert_im2col_offsets(offsets, _semantic)
 
     _semantic.builder.create_async_tma_copy_global_to_local(

@@ -310,13 +310,20 @@ def str_to_ty(name, c):
         dtype, rest = inner.split("[", maxsplit=1)
         block_shape, rest = rest.split("]", maxsplit=1)
         block_shape = [int(s.strip()) for s in block_shape.rstrip("]").split(",")]
-        # For im2col, parse optional input_rank=N (e.g., ",input_rank=4,layout")
+        # For im2col, parse optional input_rank=N and static im2col metadata.
         tensor_rank = None
+        im2col_metadata = {}
+        import ast as _ast
         import re as _re
         rank_match = _re.search(r",input_rank=(\d+)", rest)
         if rank_match:
             tensor_rank = int(rank_match.group(1))
             rest = rest[:rank_match.start()] + rest[rank_match.end():]
+        for _name in ("element_strides", "pixel_box_lower_corner", "pixel_box_upper_corner"):
+            _match = _re.search(rf",{_name}=(\[[^\]]*\])", rest)
+            if _match:
+                im2col_metadata[_name] = _ast.literal_eval(_match.group(1))
+                rest = rest[:_match.start()] + rest[_match.end():]
         layout_str = rest.lstrip(",")
         is_gluon = len(layout_str)
         dtype = str_to_ty(dtype, None)
@@ -337,7 +344,8 @@ def str_to_ty(name, c):
                      SwizzledSharedLayout=SwizzledSharedLayout))
             if isinstance(layout, NVMMASharedLayout):
                 if is_im2col:
-                    return nvidia_tensor_descriptor_im2col_type(block, shape_type, stride_type, layout)
+                    return nvidia_tensor_descriptor_im2col_type(block, shape_type, stride_type, layout,
+                                                                **im2col_metadata)
                 return nvidia_tensor_descriptor_type(block, shape_type, stride_type, layout)
             else:
                 return amd_tensor_descriptor_type(block, shape_type, stride_type, layout)

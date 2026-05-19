@@ -494,8 +494,44 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
 //===----------------------------------------------------------------------===//
 // TensorDescIm2ColType Printer/Parser
 //===----------------------------------------------------------------------===//
-// Format: !ttng.tensordesc_im2col<64x128xf16>
-//         !ttng.tensordesc_im2col<64x128xf16, #shared>
+// Format: !ttng.tensordesc_im2col<64x128xf16,
+//             element_strides = [1, 1, 1, 1], pixel_box_lower_corner = [-1,
+//             -1], pixel_box_upper_corner = [-1, -1]>
+//         !ttng.tensordesc_im2col<64x128xf16, #shared,
+//             element_strides = [1, 1, 1, 1], pixel_box_lower_corner = [-1,
+//             -1], pixel_box_upper_corner = [-1, -1]>
+namespace {
+ParseResult parseI64ArrayAttr(AsmParser &parser, Attribute &attr) {
+  if (failed(parser.parseEqual()))
+    return failure();
+
+  SmallVector<int64_t> values;
+  if (failed(parser.parseLSquare()))
+    return failure();
+  if (failed(parser.parseOptionalRSquare())) {
+    do {
+      int64_t value;
+      if (failed(parser.parseInteger(value)))
+        return failure();
+      values.push_back(value);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (failed(parser.parseRSquare()))
+      return failure();
+  }
+  attr = DenseI64ArrayAttr::get(parser.getContext(), values);
+  return success();
+}
+
+void printI64ArrayAttr(AsmPrinter &printer, StringRef name, Attribute attr) {
+  if (!attr)
+    return;
+  auto arrayAttr = cast<DenseI64ArrayAttr>(attr);
+  printer << ", " << name << " = [";
+  llvm::interleaveComma(arrayAttr.asArrayRef(), printer);
+  printer << "]";
+}
+} // namespace
+
 Type TensorDescIm2ColType::parse(AsmParser &parser) {
   if (failed(parser.parseLess()))
     return Type();
@@ -509,17 +545,49 @@ Type TensorDescIm2ColType::parse(AsmParser &parser) {
     return Type();
 
   Attribute sharedLayout;
+  Attribute elementStrides;
+  Attribute pixelBoxLowerCorner;
+  Attribute pixelBoxUpperCorner;
+
+  auto parseMetadata = [&]() -> std::optional<ParseResult> {
+    if (succeeded(parser.parseOptionalKeyword("element_strides")))
+      return parseI64ArrayAttr(parser, elementStrides);
+    if (succeeded(parser.parseOptionalKeyword("pixel_box_lower_corner")))
+      return parseI64ArrayAttr(parser, pixelBoxLowerCorner);
+    if (succeeded(parser.parseOptionalKeyword("pixel_box_upper_corner")))
+      return parseI64ArrayAttr(parser, pixelBoxUpperCorner);
+    return std::nullopt;
+  };
+
   if (succeeded(parser.parseOptionalComma())) {
-    if (failed(parser.parseAttribute(sharedLayout)))
+    auto metadata = parseMetadata();
+    if (!metadata.has_value()) {
+      if (failed(parser.parseAttribute(sharedLayout)))
+        return Type();
+    } else if (failed(*metadata)) {
       return Type();
+    }
+    while (succeeded(parser.parseOptionalComma())) {
+      metadata = parseMetadata();
+      if (!metadata.has_value() || failed(*metadata))
+        return Type();
+    }
   }
 
   if (failed(parser.parseGreater()))
     return Type();
 
+  if (!elementStrides || !pixelBoxLowerCorner || !pixelBoxUpperCorner) {
+    parser.emitError(parser.getCurrentLocation())
+        << "TensorDescIm2ColType requires element_strides, "
+           "pixel_box_lower_corner, and pixel_box_upper_corner";
+    return Type();
+  }
+
   Location loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
-  return TensorDescIm2ColType::getChecked(loc, parser.getContext(), shape,
-                                          elementType, sharedLayout);
+  return TensorDescIm2ColType::getChecked(
+      loc, parser.getContext(), shape, elementType, sharedLayout,
+      elementStrides, pixelBoxLowerCorner, pixelBoxUpperCorner);
 }
 
 void TensorDescIm2ColType::print(AsmPrinter &printer) const {
@@ -529,20 +597,53 @@ void TensorDescIm2ColType::print(AsmPrinter &printer) const {
   printer << getElementType();
   if (getSharedLayout())
     printer << ", " << getSharedLayout();
+  printI64ArrayAttr(printer, "element_strides", getElementStrides());
+  printI64ArrayAttr(printer, "pixel_box_lower_corner",
+                    getPixelBoxLowerCorner());
+  printI64ArrayAttr(printer, "pixel_box_upper_corner",
+                    getPixelBoxUpperCorner());
   printer << ">";
 }
 
 //===----------------------------------------------------------------------===//
 // TensorDescIm2ColType Verifier
 //===----------------------------------------------------------------------===//
-LogicalResult
-TensorDescIm2ColType::verify(function_ref<InFlightDiagnostic()> emitError,
-                             ArrayRef<int64_t> shape, Type elementType,
-                             Attribute sharedLayout) {
+LogicalResult TensorDescIm2ColType::verify(
+    function_ref<InFlightDiagnostic()> emitError, ArrayRef<int64_t> shape,
+    Type elementType, Attribute sharedLayout, Attribute elementStrides,
+    Attribute pixelBoxLowerCorner, Attribute pixelBoxUpperCorner) {
   if (shape.size() != 2) {
     return emitError()
            << "TensorDescIm2ColType requires rank-2 shape, got rank "
            << shape.size();
+  }
+
+  if (!elementStrides || !pixelBoxLowerCorner || !pixelBoxUpperCorner)
+    return emitError() << "TensorDescIm2ColType requires element_strides, "
+                          "pixel_box_lower_corner, and "
+                          "pixel_box_upper_corner";
+
+  auto strides = dyn_cast<DenseI64ArrayAttr>(elementStrides);
+  auto lower = dyn_cast<DenseI64ArrayAttr>(pixelBoxLowerCorner);
+  auto upper = dyn_cast<DenseI64ArrayAttr>(pixelBoxUpperCorner);
+  if (!strides)
+    return emitError() << "element_strides must be an i64 array";
+  ArrayRef<int64_t> strideValues = strides.asArrayRef();
+  if (strideValues.size() < 3 || strideValues.size() > 5)
+    return emitError() << "element_strides must have length 3, 4, or 5, got "
+                       << strideValues.size();
+  size_t spatialRank = strideValues.size() - 2;
+  if (!lower || lower.asArrayRef().size() != spatialRank)
+    return emitError()
+           << "pixel_box_lower_corner must be an i64 array of length "
+           << spatialRank;
+  if (!upper || upper.asArrayRef().size() != spatialRank)
+    return emitError()
+           << "pixel_box_upper_corner must be an i64 array of length "
+           << spatialRank;
+  for (int64_t stride : strideValues) {
+    if (stride <= 0)
+      return emitError() << "element_strides values must be positive";
   }
   return success();
 }

@@ -18,6 +18,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tensor_memory_descriptor,
     tcgen05_mma,
     tcgen05_commit,
+    tcgen05_mma_barrier_count,
 )
 
 
@@ -45,14 +46,18 @@ _conv_common = _load_conv_common()
 # ===-----------------------------------------------------------------------===#
 
 Counter = _conv_common.Counter
+ClcTileScheduler = _conv_common.ClcTileScheduler
 GL_GEMM_DTYPE = _conv_common.GL_GEMM_DTYPE
-PersistentTileScheduler = _conv_common.PersistentTileScheduler
 TORCH_GEMM_DTYPE = _conv_common.TORCH_GEMM_DTYPE
-init_mbarrier_ring = _conv_common.init_mbarrier_ring
+clc_tile_scheduler_partition = _conv_common.clc_tile_scheduler_partition
+get_gluon_dtype_for_tensor = _conv_common.get_gluon_dtype_for_tensor
+get_operand_cga_layout = _conv_common.get_operand_cga_layout
+get_transposed_cga_layout = _conv_common.get_transposed_cga_layout
 invalidate_mbarrier_ring = _conv_common.invalidate_mbarrier_ring
 is_blackwell = _conv_common.is_blackwell
 maybe_pad_ci_for_tma = _conv_common.maybe_pad_channel_dims_for_tma
 normalize_2d = _conv_common.normalize_2d
+validate_2cta_m_split = _conv_common.validate_2cta_m_split
 
 # ===-----------------------------------------------------------------------===#
 # Wgrad GEMM mapping
@@ -68,8 +73,7 @@ normalize_2d = _conv_common.normalize_2d
 #   BLOCK_K = tile over spatial       (reduction)
 #
 # Logical tile space: cdiv(Co, BLOCK_M) * R * S * cdiv(Ci, BLOCK_N), optionally
-# multiplied by split-K. The launch uses a persistent scheduler and runs only
-# `min(num_sms, logical_tiles)` CTAs.
+# multiplied by split-K.
 #
 # Loads per K iteration:
 #   A = grad_out tile: TMA tiled on (M_spatial, Co),
@@ -89,6 +93,7 @@ class WgradConfig:
     N: gl.tensor
     Ci: gl.tensor
     Co: gl.tensor
+    store_co: gl.tensor
     R: gl.tensor
     S: gl.tensor
     out_h: gl.tensor
@@ -201,6 +206,7 @@ class PartitionArgs:
     config: WgradConfig
     in_desc: tma.tensor_descriptor_im2col
     grad_out_desc: tma.tensor_descriptor
+    grad_weight_desc: tma.tensor_descriptor
     grad_weight_ptr: gl.tensor
     grad_weight_stride_0: gl.tensor
     a_bufs: gl.shared_memory_descriptor
@@ -210,6 +216,21 @@ class PartitionArgs:
     acc_bufs: tensor_memory_descriptor
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
+    clc_result_buffers: gl.shared_memory_descriptor
+    clc_barriers: gl.shared_memory_descriptor
+    clc_tile_id_buffers: gl.shared_memory_descriptor
+    clc_tile_ready_bars: gl.shared_memory_descriptor
+    clc_consumed_bars: gl.shared_memory_descriptor
+
+    @gluon.jit
+    def get_clc_consumer(self):
+        return ClcTileScheduler.initialize(
+            self.clc_result_buffers,
+            self.clc_barriers,
+            self.clc_tile_id_buffers,
+            self.clc_tile_ready_bars,
+            self.clc_consumed_bars,
+        )
 
 
 # ===-----------------------------------------------------------------------===#
@@ -225,25 +246,28 @@ def load_partition(p):
     empty_bars = p.load_empty_bars
     ready_bars = p.load_ready_bars
     state = Counter.create(1, empty_bars.shape[0])
-    scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
+    scheduler = p.get_clc_consumer()
 
-    for idx in range(scheduler.get_num_tiles()):
-        prog = config.get_program(scheduler.get_tile_id(idx))
+    i = 0
+    while scheduler.has_work:
+        prog = config.get_program(scheduler.tile_id)
         co_offset = prog.get_co_offset()
         ci_offset = prog.get_ci_offset()
 
         for local_k in range(prog.k_iters_this_split):
             m_global, batch, out_y, out_x = prog.get_spatial_offsets(local_k)
+            a_stage = p.a_bufs.index(state.index)
+            b_stage = p.b_bufs.index(state.index)
             ready_bar = ready_bars.index(state.index)
-            mbarrier.wait(empty_bars.index(state.index), state.phase)
-            mbarrier.expect(ready_bar, p.grad_out_desc.block_type.nbytes + p.in_desc.block_type.nbytes)
+            mbarrier.wait(empty_bars.index(state.index), state.phase, deps=[a_stage, b_stage])
+            mbarrier.expect(ready_bar, p.grad_out_desc.nbytes_per_cta + p.in_desc.nbytes_per_cta)
 
             # A = grad_output: (M_spatial, Co), block [BLOCK_K, BLOCK_M]
             tma.async_load(
                 p.grad_out_desc,
                 [m_global, co_offset],
                 ready_bar,
-                p.a_bufs.index(state.index),
+                a_stage,
             )
 
             # B = im2col(input): [N, H, W, Ci], block [BLOCK_K, BLOCK_N]
@@ -257,21 +281,25 @@ def load_partition(p):
                 ],
                 [prog.iter_r.to(tl.int16), prog.iter_s.to(tl.int16)],
                 ready_bar,
-                p.b_bufs.index(state.index),
+                b_stage,
             )
             state = state.next()
+        scheduler = scheduler.step(i)
+        i += 1
 
 
 @gluon.jit
 def mma_partition(p):
     """MMA partition: accumulate all split-K work items assigned to this CTA."""
     config = p.config
+    TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
     load_state = Counter.create(0, p.load_empty_bars.shape[0])
     acc_state = Counter.create(1, p.acc_empty_bars.shape[0])
-    scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
+    scheduler = p.get_clc_consumer()
 
-    for idx in range(scheduler.get_num_tiles()):
-        prog = config.get_program(scheduler.get_tile_id(idx))
+    i = 0
+    while scheduler.has_work:
+        prog = config.get_program(scheduler.tile_id)
 
         mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase)
         acc_buf = p.acc_bufs.index(acc_state.index)
@@ -284,13 +312,16 @@ def mma_partition(p):
                 p.b_bufs.index(load_state.index),
                 acc_buf,
                 use_acc=use_acc,
+                multicast=TWO_CTAS,
+                mbarriers=[p.load_empty_bars.index(load_state.index)],
             )
-            tcgen05_commit(p.load_empty_bars.index(load_state.index))
             load_state = load_state.next()
             use_acc = True
 
         tcgen05_commit(p.acc_ready_bars.index(acc_state.index))
         acc_state = acc_state.next()
+        scheduler = scheduler.step(i)
+        i += 1
 
 
 @gluon.jit
@@ -300,30 +331,71 @@ def epilogue_partition(p):
     active_split_k = config.get_active_split_k()
     BLOCK_M: gl.constexpr = config.BLOCK_M
     BLOCK_N: gl.constexpr = config.BLOCK_N
+    TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
-    scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
 
-    for idx in range(scheduler.get_num_tiles()):
-        prog = config.get_program(scheduler.get_tile_id(idx))
-        co_offset = prog.get_co_offset()
-        ci_offset = prog.get_ci_offset()
-        weight_k_offset = prog.get_weight_k_offset()
+    if TWO_CTAS:
+        EPILOGUE_BLOCK_N: gl.constexpr = p.grad_weight_desc.block_shape[1]
+        gl.static_assert(BLOCK_N % EPILOGUE_BLOCK_N == 0)
+        SUBTILE_FACTOR: gl.constexpr = BLOCK_N // EPILOGUE_BLOCK_N
+        acc_smems = gl.allocate_shared_memory(
+            p.grad_weight_desc.dtype,
+            [1, BLOCK_M, EPILOGUE_BLOCK_N],
+            p.grad_weight_desc.layout,
+        )
+        scheduler = p.get_clc_consumer()
+        i = 0
+        while scheduler.has_work:
+            prog = config.get_program(scheduler.tile_id)
+            split_co_offset = gl.where(active_split_k > 1, prog.split_k_idx * config.store_co, gl.to_tensor(0))
+            off_m = split_co_offset + prog.get_co_offset()
+            off_n = prog.get_weight_k_offset()
 
-        mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
-        acc = p.acc_bufs.index(acc_state.index).load()
-        result = gl.convert_layout(acc, gl.CoalescedLayout())
-        mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
-        acc_state = acc_state.next()
+            mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
+            acc_buf = p.acc_bufs.index(acc_state.index)
+            for s in gl.static_range(SUBTILE_FACTOR):
+                acc_sub = acc_buf.slice(EPILOGUE_BLOCK_N * s, EPILOGUE_BLOCK_N)
+                acc_smem = acc_smems.index(0)
+                acc_tile = acc_sub.load().to(p.grad_weight_desc.dtype)
+                tma.store_wait(0)
+                acc_smem.store(acc_tile)
+                tma.async_copy_shared_to_global(
+                    p.grad_weight_desc,
+                    [off_m, off_n + EPILOGUE_BLOCK_N * s],
+                    acc_smem,
+                )
 
-        split_co_offset = gl.where(active_split_k > 1, prog.split_k_idx * config.Co, gl.to_tensor(0))
-        offs_m = co_offset + gl.arange(0, BLOCK_M)
-        offs_n = weight_k_offset + gl.arange(0, BLOCK_N)
+            mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
+            acc_state = acc_state.next()
+            scheduler = scheduler.step(i)
+            i += 1
+        tma.store_wait(0)
+    else:
+        scheduler = p.get_clc_consumer()
+        i = 0
+        while scheduler.has_work:
+            prog = config.get_program(scheduler.tile_id)
+            co_offset = prog.get_co_offset()
+            ci_offset = prog.get_ci_offset()
+            weight_k_offset = prog.get_weight_k_offset()
 
-        ci_valid = (ci_offset + gl.arange(0, BLOCK_N)) < config.Ci
-        mask = (offs_m[:, None] < config.Co) & (offs_n[None, :] < config.K_GEMM) & ci_valid[None, :]
-        store_rows = split_co_offset + offs_m
-        offsets = store_rows[:, None] * p.grad_weight_stride_0 + offs_n[None, :]
-        gl.store(p.grad_weight_ptr + offsets, result, mask=mask)
+            mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
+            acc = p.acc_bufs.index(acc_state.index).load()
+            result = gl.convert_layout(acc, gl.CoalescedLayout())
+            mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
+            acc_state = acc_state.next()
+
+            split_co_offset = gl.where(active_split_k > 1, prog.split_k_idx * config.store_co, gl.to_tensor(0))
+            offs_m = co_offset + gl.arange(0, BLOCK_M)
+            offs_n = weight_k_offset + gl.arange(0, BLOCK_N)
+
+            ci_valid = (ci_offset + gl.arange(0, BLOCK_N)) < config.Ci
+            mask = (offs_m[:, None] < config.Co) & (offs_n[None, :] < config.K_GEMM) & ci_valid[None, :]
+            store_rows = split_co_offset + offs_m
+            offsets = store_rows[:, None] * p.grad_weight_stride_0 + offs_n[None, :]
+            gl.store(p.grad_weight_ptr + offsets, result, mask=mask)
+            scheduler = scheduler.step(i)
+            i += 1
 
     invalidate_mbarrier_ring(p.load_empty_bars)
     invalidate_mbarrier_ring(p.load_ready_bars)
@@ -350,6 +422,7 @@ def epilogue_partition(p):
 def conv2d_wgrad_kernel(
     in_desc,
     grad_out_desc,
+    grad_weight_desc,
     grad_weight,
     N,
     Ci,
@@ -363,6 +436,7 @@ def conv2d_wgrad_kernel(
     pad_h,
     pad_w,
     K_GEMM,
+    store_co,
     grad_weight_stride_0,
     BLOCK_M: gl.constexpr,
     BLOCK_N: gl.constexpr,
@@ -370,6 +444,8 @@ def conv2d_wgrad_kernel(
     SPLIT_K: gl.constexpr,
     num_buffers: gl.constexpr,
     num_acc_buffers: gl.constexpr,
+    EPILOGUE_BLOCK_N: gl.constexpr,
+    CGA_LAYOUT: gl.constexpr,
     num_warps: gl.constexpr,
 ):
     """Warp-specialized wgrad kernel: grad_W = grad_out^T @ im2col(input).
@@ -379,11 +455,13 @@ def conv2d_wgrad_kernel(
         N = Ci tile at fixed (r,s)   (output cols)
         K = N_batch * out_h * out_w  (spatial reduction, split across SPLIT_K CTAs)
     """
+    TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
     M_spatial = N * out_h * out_w
     config = WgradConfig(
         N,
         Ci,
         Co,
+        store_co,
         R,
         S,
         gl.to_tensor(out_h),
@@ -404,31 +482,61 @@ def conv2d_wgrad_kernel(
 
     # a_bufs: grad_output tiles [BLOCK_K, BLOCK_M] (spatial × Co)
     # TMA loads from (M_spatial, Co), permuted to [BLOCK_M, BLOCK_K] at MMA call.
-    a_smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_M], GL_GEMM_DTYPE)
+    a_cga_layout: gl.constexpr = get_transposed_cga_layout(get_operand_cga_layout(CGA_LAYOUT, 0))
+    a_smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_M], GL_GEMM_DTYPE,
+                                                                       cga_layout=a_cga_layout)
     # b_bufs: im2col input tiles [BLOCK_K, BLOCK_N] (spatial × Ci)
-    b_smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], GL_GEMM_DTYPE)
+    b_smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], GL_GEMM_DTYPE,
+                                                                       cga_layout=get_operand_cga_layout(CGA_LAYOUT, 1))
 
     a_bufs = gl.allocate_shared_memory(GL_GEMM_DTYPE, [num_buffers, BLOCK_K, BLOCK_M], a_smem_layout)
     b_bufs = gl.allocate_shared_memory(GL_GEMM_DTYPE, [num_buffers, BLOCK_K, BLOCK_N], b_smem_layout)
 
-    load_empty_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
-    load_ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
-    init_mbarrier_ring(load_empty_bars)
-    init_mbarrier_ring(load_ready_bars)
+    mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count(
+        [a_bufs.index(0).permute((1, 0)), b_bufs.index(0)],
+        multicast=TWO_CTAS,
+        two_ctas=TWO_CTAS,
+    )
+    load_empty_bars = mbarrier.allocate_mbarrier(batch=num_buffers)
+    load_ready_bars = mbarrier.allocate_mbarrier(batch=num_buffers, two_ctas=TWO_CTAS)
+    for i in gl.static_range(num_buffers):
+        mbarrier.init(load_empty_bars.index(i), count=mma_barrier_count)
+        mbarrier.init(load_ready_bars.index(i), count=1)
 
     TMEM_BLOCK_M: gl.constexpr = 64 if BLOCK_M == 64 else 128
-    tmem_layout: gl.constexpr = TensorMemoryLayout(block=(TMEM_BLOCK_M, BLOCK_N), col_stride=1)
+    tmem_layout: gl.constexpr = TensorMemoryLayout(
+        block=(TMEM_BLOCK_M, BLOCK_N),
+        col_stride=1,
+        cga_layout=CGA_LAYOUT,
+        two_ctas=TWO_CTAS,
+    )
     acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
 
-    acc_empty_bars = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], mbarrier.MBarrierLayout())
-    acc_ready_bars = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], mbarrier.MBarrierLayout())
-    init_mbarrier_ring(acc_empty_bars)
-    init_mbarrier_ring(acc_ready_bars)
+    acc_empty_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=TWO_CTAS)
+    acc_ready_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
+    for i in gl.static_range(num_acc_buffers):
+        mbarrier.init(acc_empty_bars.index(i), count=1)
+        mbarrier.init(acc_ready_bars.index(i), count=1)
+
+    N_CONSUMERS: gl.constexpr = 3
+    clc_barriers = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
+    clc_tile_ready_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
+    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=TWO_CTAS)
+    for i in gl.static_range(num_acc_buffers):
+        mbarrier.init(clc_barriers.index(i), count=1)
+        mbarrier.init(clc_tile_ready_bars.index(i), count=1)
+        mbarrier.init(clc_consumed_bars.index(i), count=N_CONSUMERS)
+
+    cga_layout_clc: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
+    clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout_clc)
+    clc_result_buffers = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 2], clc_layout)
+    clc_tile_id_buffers = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], clc_layout)
 
     p = PartitionArgs(
         config,
         in_desc,
         grad_out_desc,
+        grad_weight_desc,
         grad_weight,
         gl.to_tensor(grad_weight_stride_0),
         a_bufs,
@@ -438,13 +546,19 @@ def conv2d_wgrad_kernel(
         acc_bufs,
         acc_empty_bars,
         acc_ready_bars,
+        clc_result_buffers,
+        clc_barriers,
+        clc_tile_id_buffers,
+        clc_tile_ready_bars,
+        clc_consumed_bars,
     )
 
     gl.warp_specialize([
         (epilogue_partition, (p, )),
         (mma_partition, (p, )),
         (load_partition, (p, )),
-    ], [1, 1], [24, 24])
+        (clc_tile_scheduler_partition, (p, )),
+    ], [1, 1, 1], [24, 24, 24])
 
 
 # ===-----------------------------------------------------------------------===#
@@ -452,8 +566,8 @@ def conv2d_wgrad_kernel(
 # ===-----------------------------------------------------------------------===#
 
 
-def conv2d_wgrad_get_configs(pre_hook=None):
-    return [
+def conv2d_wgrad_get_configs(pre_hook=None, include_2cta=False, block_n_values=(128, )):
+    configs = [
         triton.Config(
             {
                 "BLOCK_M": block_m,
@@ -462,8 +576,11 @@ def conv2d_wgrad_get_configs(pre_hook=None):
                 "SPLIT_K": split_k,
                 "num_buffers": num_buffers,
                 "num_acc_buffers": num_acc_buffers,
+                "EPILOGUE_BLOCK_N": block_n,
+                "CGA_LAYOUT": cga_layout,
             },
             num_warps=num_warps,
+            num_ctas=2**len(cga_layout),
             pre_hook=pre_hook,
         )
         for block_m in (64, 128)
@@ -472,8 +589,32 @@ def conv2d_wgrad_get_configs(pre_hook=None):
         for split_k in (1, 2, 4, 8, 16, 32)
         for num_buffers in (3, 4)
         for num_acc_buffers in (2, )
+        for cga_layout in ((), )
         for num_warps in (4, )
     ]
+    if include_2cta:
+        configs.extend([
+            triton.Config(
+                {
+                    "BLOCK_M": 256,
+                    "BLOCK_N": block_n,
+                    "BLOCK_K": block_k,
+                    "SPLIT_K": split_k,
+                    "num_buffers": num_buffers,
+                    "num_acc_buffers": 2,
+                    "EPILOGUE_BLOCK_N": epilogue_block_n,
+                    "CGA_LAYOUT": ((1, 0), ),
+                },
+                num_warps=4,
+                num_ctas=2,
+                pre_hook=pre_hook,
+            )
+            for block_n in block_n_values
+            for block_k in (64, 128)
+            for split_k in (1, 2, 4, 8, 16, 32)
+            for epilogue_block_n in (32, 64, 128) if block_n % epilogue_block_n == 0 for num_buffers in (3, 4, 5)
+        ])
+    return configs
 
 
 # ===-----------------------------------------------------------------------===#
@@ -520,20 +661,20 @@ def _allocate_wgrad_output(device, Co, K_GEMM):
 
 
 def _make_wgrad_descriptors(input_nhwc, grad_output_nhwc, Co, out_h, out_w, stride_h, stride_w, pad_h, pad_w,
-                            input_block_shape, grad_out_block_shape):
+                            input_block_shape, grad_out_block_shape, cga_layout=()):
     """Create TMA descriptors for wgrad im2col and grad_output."""
     # TMA im2col descriptor for the activation tensor [N, H, W, Ci] in NHWC.
     _, H, W, _ = input_nhwc.shape
     upper_h = (out_h - 1) * stride_h + 1 - H - pad_h
     upper_w = (out_w - 1) * stride_w + 1 - W - pad_w
 
-    input_layout = gl.NVMMASharedLayout.get_default_for(input_block_shape, GL_GEMM_DTYPE)
-    in_desc = TensorDescriptorIm2Col(
-        base=input_nhwc,
-        shape=list(input_nhwc.shape),
-        strides=list(input_nhwc.stride()),
-        block_shape=input_block_shape,
-        layout=input_layout,
+    validate_2cta_m_split(cga_layout)
+    input_layout = gl.NVMMASharedLayout.get_default_for(input_block_shape, GL_GEMM_DTYPE,
+                                                        cga_layout=get_operand_cga_layout(cga_layout, 1))
+    in_desc = TensorDescriptorIm2Col.from_tensor(
+        input_nhwc,
+        input_block_shape,
+        input_layout,
         padding="zero",
         element_strides=[1, stride_h, stride_w, 1],
         pixel_box_lower_corner=[-pad_h, -pad_w],
@@ -543,13 +684,22 @@ def _make_wgrad_descriptors(input_nhwc, grad_output_nhwc, Co, out_h, out_w, stri
     # TMA tiled descriptor for grad_output reshaped as (M_spatial, Co).
     M_spatial = input_nhwc.shape[0] * out_h * out_w
     grad_out_2d = grad_output_nhwc.reshape(M_spatial, Co)
-    grad_out_layout = gl.NVMMASharedLayout.get_default_for(grad_out_block_shape, GL_GEMM_DTYPE)
+    grad_out_cga_layout = get_transposed_cga_layout(get_operand_cga_layout(cga_layout, 0))
+    grad_out_layout = gl.NVMMASharedLayout.get_default_for(grad_out_block_shape, GL_GEMM_DTYPE,
+                                                           cga_layout=grad_out_cga_layout)
     grad_out_desc = TensorDescriptor.from_tensor(grad_out_2d, grad_out_block_shape, grad_out_layout)
 
     return in_desc, grad_out_desc
 
 
-def _make_grid(num_sms, M_spatial, Co, Ci, R, S):
+def _make_wgrad_output_descriptor(grad_weight_flat, output_block_shape, cga_layout=()):
+    validate_2cta_m_split(cga_layout)
+    output_dtype = get_gluon_dtype_for_tensor(grad_weight_flat)
+    output_layout = gl.NVMMASharedLayout.get_default_for(output_block_shape, output_dtype, cga_layout=cga_layout)
+    return TensorDescriptor.from_tensor(grad_weight_flat, output_block_shape, output_layout)
+
+
+def _make_grid(M_spatial, Co, Ci, R, S):
 
     def grid(meta):
         co_blocks = triton.cdiv(Co, meta["BLOCK_M"])
@@ -558,7 +708,7 @@ def _make_grid(num_sms, M_spatial, Co, Ci, R, S):
         k_iters_per_split = triton.cdiv(total_k_iters, meta["SPLIT_K"])
         active_split_k = triton.cdiv(total_k_iters, k_iters_per_split)
         total_tiles = co_blocks * R * S * ci_blocks * active_split_k
-        return (min(num_sms, total_tiles), )
+        return (total_tiles, )
 
     return grid
 
@@ -583,6 +733,12 @@ def _get_safe_wgrad_active_split_k(M_spatial, Co, K_GEMM, kernel_meta):
 
 def _allocate_wgrad_split_k_workspace(device, active_split_k, Co, K_GEMM):
     return torch.empty((active_split_k * Co, K_GEMM), device=device, dtype=torch.float32)
+
+
+def _wgrad_store_co(Co, kernel_meta):
+    if kernel_meta.get("CGA_LAYOUT", ()):
+        return triton.cdiv(Co, kernel_meta["BLOCK_M"]) * kernel_meta["BLOCK_M"]
+    return Co
 
 
 _wgrad_autotune_cache = {}
@@ -637,16 +793,17 @@ def _make_wgrad_runner(
     pad_h,
     pad_w,
     K_GEMM,
-    num_sms,
     kernel_meta,
 ):
     M_spatial = N * out_h * out_w
     active_split_k = _get_safe_wgrad_active_split_k(M_spatial, Co, K_GEMM, kernel_meta)
     uses_split_k_workspace = active_split_k > 1
+    store_co = _wgrad_store_co(Co, kernel_meta)
     launch_output = grad_weight_flat
     if uses_split_k_workspace:
-        launch_output = _allocate_wgrad_split_k_workspace(input_nhwc.device, active_split_k, Co, K_GEMM)
+        launch_output = _allocate_wgrad_split_k_workspace(input_nhwc.device, active_split_k, store_co, K_GEMM)
 
+    cga_layout = kernel_meta.get("CGA_LAYOUT", ())
     in_desc, grad_out_desc = _make_wgrad_descriptors(
         input_nhwc,
         grad_output_nhwc,
@@ -659,8 +816,14 @@ def _make_wgrad_runner(
         pad_w,
         [kernel_meta["BLOCK_K"], kernel_meta["BLOCK_N"]],
         [kernel_meta["BLOCK_K"], kernel_meta["BLOCK_M"]],
+        cga_layout,
     )
-    grid = _make_grid(num_sms, M_spatial, Co, Ci, R, S)
+    grad_weight_desc = _make_wgrad_output_descriptor(
+        launch_output,
+        [kernel_meta["BLOCK_M"], kernel_meta["EPILOGUE_BLOCK_N"]],
+        cga_layout,
+    )
+    grid = _make_grid(M_spatial, Co, Ci, R, S)
 
     def run():
         _launch_wgrad(
@@ -668,6 +831,7 @@ def _make_wgrad_runner(
             grid,
             in_desc=in_desc,
             grad_out_desc=grad_out_desc,
+            grad_weight_desc=grad_weight_desc,
             grad_weight=launch_output,
             N=N,
             Ci=Ci,
@@ -681,10 +845,11 @@ def _make_wgrad_runner(
             pad_h=pad_h,
             pad_w=pad_w,
             K_GEMM=K_GEMM,
+            store_co=store_co,
             kernel_meta=kernel_meta,
         )
         if uses_split_k_workspace:
-            _reduce_wgrad_split_k_partials(launch_output, grad_weight_flat, Co, K_GEMM, active_split_k)
+            _reduce_wgrad_split_k_partials(launch_output, grad_weight_flat, Co, K_GEMM, active_split_k, store_co)
 
     return run
 
@@ -705,11 +870,11 @@ def _benchmark_wgrad_config(
     pad_h,
     pad_w,
     K_GEMM,
-    num_sms,
     kernel_meta,
 ):
     try:
-        grad_weight_flat = torch.empty((Co, K_GEMM), device=input_nhwc.device, dtype=torch.float32)
+        grad_weight_flat = torch.empty((_wgrad_store_co(Co, kernel_meta), K_GEMM), device=input_nhwc.device,
+                                       dtype=torch.float32)
         run = _make_wgrad_runner(
             input_nhwc,
             grad_output_nhwc,
@@ -726,7 +891,6 @@ def _benchmark_wgrad_config(
             pad_h=pad_h,
             pad_w=pad_w,
             K_GEMM=K_GEMM,
-            num_sms=num_sms,
             kernel_meta=kernel_meta,
         )
         run()
@@ -734,6 +898,26 @@ def _benchmark_wgrad_config(
         return triton.testing.do_bench(run)
     except Exception:
         return float("inf")
+
+
+def _supports_wgrad_2cta_config(Ci, R, S, kernel_meta):
+    cga_layout = kernel_meta.get("CGA_LAYOUT", ())
+    if not cga_layout:
+        return True
+    return ((R * S == 1 or Ci % kernel_meta["BLOCK_N"] == 0))
+
+
+def _has_sufficient_wgrad_parallelism(M_spatial, Co, Ci, R, S, num_sms, kernel_meta):
+    active_split_k = _get_active_split_k(M_spatial, kernel_meta["BLOCK_K"], kernel_meta["SPLIT_K"])
+    if active_split_k > 1:
+        return True
+
+    # Wgrad has a small output tile space; avoid autotuning unsplit configs
+    # that launch fewer persistent work items than SMs.
+    co_blocks = triton.cdiv(Co, kernel_meta["BLOCK_M"])
+    ci_blocks = triton.cdiv(Ci, kernel_meta["BLOCK_N"])
+    output_tiles = co_blocks * R * S * ci_blocks
+    return output_tiles >= num_sms
 
 
 def _select_wgrad_kernel_meta(
@@ -762,8 +946,12 @@ def _select_wgrad_kernel_meta(
 
     best_ms = float("inf")
     best_kernel_meta = None
-    for config in conv2d_wgrad_get_configs():
+    for config in conv2d_wgrad_get_configs(include_2cta=True, block_n_values=(128, 256)):
         kernel_meta = config.all_kwargs()
+        if not _supports_wgrad_2cta_config(Ci, R, S, kernel_meta):
+            continue
+        if not _has_sufficient_wgrad_parallelism(N * out_h * out_w, Co, Ci, R, S, num_sms, kernel_meta):
+            continue
         ms = _benchmark_wgrad_config(
             input_nhwc,
             grad_output_nhwc,
@@ -779,7 +967,6 @@ def _select_wgrad_kernel_meta(
             pad_h=pad_h,
             pad_w=pad_w,
             K_GEMM=K_GEMM,
-            num_sms=num_sms,
             kernel_meta=kernel_meta,
         )
         if ms < best_ms:
@@ -799,6 +986,7 @@ def reduce_split_k_partials_kernel(
     grad_weight_ptr,
     partial_stride_0,
     grad_weight_stride_0,
+    partial_split_stride_m,
     Co,
     K_GEMM,
     ACTIVE_SPLIT_K: tl.constexpr,
@@ -814,7 +1002,7 @@ def reduce_split_k_partials_kernel(
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for split_k_idx in range(ACTIVE_SPLIT_K):
-        partial_rows = split_k_idx * Co + offs_m
+        partial_rows = split_k_idx * partial_split_stride_m + offs_m
         partial_offsets = partial_rows[:, None] * partial_stride_0 + offs_n[None, :]
         acc += tl.load(partial_ptr + partial_offsets, mask=mask, other=0.0)
 
@@ -822,7 +1010,7 @@ def reduce_split_k_partials_kernel(
     tl.store(grad_weight_ptr + grad_weight_offsets, acc, mask=mask)
 
 
-def _reduce_wgrad_split_k_partials(partials, grad_weight_flat, Co, K_GEMM, active_split_k):
+def _reduce_wgrad_split_k_partials(partials, grad_weight_flat, Co, K_GEMM, active_split_k, partial_split_stride_m):
     BLOCK_M = 64
     BLOCK_N = 64
     grid = (triton.cdiv(Co, BLOCK_M), triton.cdiv(K_GEMM, BLOCK_N))
@@ -831,6 +1019,7 @@ def _reduce_wgrad_split_k_partials(partials, grad_weight_flat, Co, K_GEMM, activ
         grad_weight_flat,
         partials.stride(0),
         grad_weight_flat.stride(0),
+        partial_split_stride_m,
         Co,
         K_GEMM,
         ACTIVE_SPLIT_K=active_split_k,
@@ -846,6 +1035,7 @@ def _launch_wgrad(
     *,
     in_desc,
     grad_out_desc,
+    grad_weight_desc,
     grad_weight,
     N,
     Ci,
@@ -859,6 +1049,7 @@ def _launch_wgrad(
     pad_h,
     pad_w,
     K_GEMM,
+    store_co,
     kernel_meta=None,
 ):
     if kernel_meta is None:
@@ -867,6 +1058,7 @@ def _launch_wgrad(
     kernel[grid](
         in_desc,
         grad_out_desc,
+        grad_weight_desc,
         grad_weight,
         N,
         Ci,
@@ -880,12 +1072,14 @@ def _launch_wgrad(
         pad_h,
         pad_w,
         K_GEMM,
+        store_co,
         grad_weight.stride(0),
         **kernel_meta,
     )
 
 
 def _finalize_wgrad_output(grad_weight_flat, Co, R, S, Ci, Ci_orig):
+    grad_weight_flat = grad_weight_flat[:Co, :]
     result = grad_weight_flat.reshape(Co, R, S, Ci).to(TORCH_GEMM_DTYPE)
     if Ci != Ci_orig:
         result = result[:, :, :, :Ci_orig].contiguous()
@@ -901,8 +1095,6 @@ def conv2d_wgrad(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0):
     (input_nhwc, grad_output_nhwc, Ci_orig, N, Ci, Co,
      out_h, out_w, stride_h, stride_w, pad_h, pad_w, K_GEMM) = \
         _prepare_wgrad_problem(input_nhwc, grad_output_nhwc, R, S, stride, padding)
-    grad_weight_flat = _allocate_wgrad_output(input_nhwc.device, Co, K_GEMM)
-
     num_sms = torch.cuda.get_device_properties(input_nhwc.device).multi_processor_count
 
     kernel_meta = _select_wgrad_kernel_meta(
@@ -922,6 +1114,7 @@ def conv2d_wgrad(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0):
         K_GEMM=K_GEMM,
         num_sms=num_sms,
     )
+    grad_weight_flat = _allocate_wgrad_output(input_nhwc.device, _wgrad_store_co(Co, kernel_meta), K_GEMM)
     run = _make_wgrad_runner(
         input_nhwc,
         grad_output_nhwc,
@@ -938,7 +1131,6 @@ def conv2d_wgrad(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0):
         pad_h=pad_h,
         pad_w=pad_w,
         K_GEMM=K_GEMM,
-        num_sms=num_sms,
         kernel_meta=kernel_meta,
     )
     run()
@@ -946,20 +1138,37 @@ def conv2d_wgrad(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0):
     return _finalize_wgrad_output(grad_weight_flat, Co, R, S, Ci, Ci_orig)
 
 
-def _make_wgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps):
-    # Keep the fixed path on a tile shape that is also covered by autotune configs.
+def _make_wgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps, *, use_2cta=False):
+    if use_2cta:
+        cga_layout = ((1, 0), )
+        return {
+            "BLOCK_M": 256,
+            "BLOCK_N": 256,
+            "BLOCK_K": 64,
+            "SPLIT_K": SPLIT_K,
+            "num_buffers": 2 if num_buffers is None else min(num_buffers, 2),
+            "num_acc_buffers": 2,
+            "EPILOGUE_BLOCK_N": 64,
+            "CGA_LAYOUT": cga_layout,
+            "num_warps": num_warps,
+            "num_ctas": 2**len(cga_layout),
+        }
+
     return {
         "BLOCK_M": 128,
         "BLOCK_N": 256,
         "BLOCK_K": 64,
         "SPLIT_K": SPLIT_K,
-        "num_buffers": num_buffers,
+        "num_buffers": 2 if num_buffers is None else num_buffers,
         "num_acc_buffers": 2,
+        "EPILOGUE_BLOCK_N": 256,
+        "CGA_LAYOUT": (),
         "num_warps": num_warps,
     }
 
 
-def conv2d_wgrad_fixed(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0, num_buffers=2, num_warps=4, SPLIT_K=1):
+def conv2d_wgrad_fixed(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0, num_buffers=None, num_warps=4,
+                       SPLIT_K=1):
     """Fixed-config wgrad entrypoint used for CI and debugging.
 
     Runs the kernel with a fixed supported tile shape instead of autotuning,
@@ -968,10 +1177,11 @@ def conv2d_wgrad_fixed(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0, 
     (input_nhwc, grad_output_nhwc, Ci_orig, N, Ci, Co,
      out_h, out_w, stride_h, stride_w, pad_h, pad_w, K_GEMM) = \
         _prepare_wgrad_problem(input_nhwc, grad_output_nhwc, R, S, stride, padding)
-    grad_weight_flat = _allocate_wgrad_output(input_nhwc.device, Co, K_GEMM)
 
-    num_sms = torch.cuda.get_device_properties(input_nhwc.device).multi_processor_count
-    kernel_meta = _make_wgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps)
+    use_2cta = SPLIT_K == 1 and K_GEMM % 64 == 0 and (R * S == 1 or Ci % 256 == 0)
+    store_co = triton.cdiv(Co, 256) * 256 if use_2cta else Co
+    grad_weight_flat = _allocate_wgrad_output(input_nhwc.device, store_co, K_GEMM)
+    kernel_meta = _make_wgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps, use_2cta=use_2cta)
     run = _make_wgrad_runner(
         input_nhwc,
         grad_output_nhwc,
@@ -988,7 +1198,6 @@ def conv2d_wgrad_fixed(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0, 
         pad_h=pad_h,
         pad_w=pad_w,
         K_GEMM=K_GEMM,
-        num_sms=num_sms,
         kernel_meta=kernel_meta,
     )
     run()
@@ -1026,14 +1235,22 @@ def _assert_wgrad_correct(wgrad_fn, N, Ci, H, W, Co, R, S, stride, padding, **kw
     torch.testing.assert_close(triton_grad_w, ref_grad_w_nhwc, atol=1, rtol=0.01)
 
 
+WGRAD_2CTA_PARAMS = [
+    pytest.param(conv2d_wgrad_fixed, 1, 512, 32, 32, 384, 3, 3, 1, 1, id="2cta_n1_ci512_co384_r3s3"),
+    pytest.param(conv2d_wgrad_fixed, 128, 512, 8, 8, 384, 3, 3, 1, 1, id="2cta_n128_ci512_co384_r3s3"),
+    pytest.param(conv2d_wgrad_fixed, 1, 384, 32, 32, 384, 1, 1, 1, 0, id="2cta_1x1_ci384_co384"),
+]
+
+
 @pytest.mark.parametrize("wgrad_fn,N,Ci,H,W,Co,R,S,stride,padding", [
-    *[(conv2d_wgrad_fixed, N, Ci, H, W, Co, R, S, stride, padding)
-      for N in (1, 128)
-      for H, W in ((64, 64), (64, 32))
-      for Ci, Co in ((128, 128), (384, 384), (128, 384))
-      for R, S in ((1, 1), (2, 2), (3, 3), (1, 3))
-      for stride in (1, 2, 3)
-      for padding in (0, 1)], (conv2d_wgrad_fixed, 16, 5, 32, 32, 96, 3, 3, 1, 1),  # padded channels
+    *WGRAD_2CTA_PARAMS, *[(conv2d_wgrad_fixed, N, Ci, H, W, Co, R, S, stride, padding)
+                          for N in (1, 128)
+                          for H, W in ((64, 64), (64, 32))
+                          for Ci, Co in ((128, 128), (384, 384), (128, 384))
+                          for R, S in ((1, 1), (2, 2), (3, 3), (1, 3))
+                          for stride in (1, 2, 3)
+                          for padding in (0, 1)],
+    (conv2d_wgrad_fixed, 16, 5, 32, 32, 96, 3, 3, 1, 1),  # padded channels
     (conv2d_wgrad_fixed, 16, 96, 1, 8, 128, 1, 2, (1, 2), 0),  # asymmetric stride
     (conv2d_wgrad_fixed, 16, 512, 2, 2, 768, 2, 2, (2, 2), 0),  # small spatial
 ])

@@ -39,8 +39,9 @@ class TTNG_TypeDef<string name, string _mnemonic, list<Trait> traits = []>
 // TensorDescIm2ColType
 //===----------------------------------------------------------------------===//
 
-def TTNG_TensorDescIm2ColType : TTNG_TypeDef<"TensorDescIm2Col", "tensordesc_im2col",
-                                              [TT_TensorDescInterface]> {
+def TTNG_TensorDescIm2ColType
+    : TTNG_TypeDef<"TensorDescIm2Col", "tensordesc_im2col",
+                   [TT_TensorDescInterface]> {
   let summary = "Im2col tensor descriptor type for NVIDIA TMA operations";
 
   let description = [{
@@ -66,7 +67,10 @@ def TTNG_TensorDescIm2ColType : TTNG_TypeDef<"TensorDescIm2Col", "tensordesc_im2
   let parameters = (ins
     ArrayRefParameter<"int64_t">:$shape,
     "Type":$elementType,
-    OptionalParameter<"Attribute">:$sharedLayout
+    OptionalParameter<"Attribute">:$sharedLayout,
+    "Attribute":$elementStrides,
+    "Attribute":$pixelBoxLowerCorner,
+    "Attribute":$pixelBoxUpperCorner
   );
 
   let builders = [
@@ -74,13 +78,18 @@ def TTNG_TensorDescIm2ColType : TTNG_TypeDef<"TensorDescIm2Col", "tensordesc_im2
       "llvm::ArrayRef<int64_t>":$shape,
       "Type":$elementType,
       "Attribute":$sharedLayout,
+      "Attribute":$elementStrides,
+      "Attribute":$pixelBoxLowerCorner,
+      "Attribute":$pixelBoxUpperCorner,
       "bool":$isSigned
     ), [{
       if (auto intTy = llvm::dyn_cast<IntegerType>(elementType)) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
         elementType = IntegerType::get(elementType.getContext(), intTy.getWidth(), sem);
       }
-      return $_get(elementType.getContext(), shape, elementType, sharedLayout);
+      return $_get(elementType.getContext(), shape, elementType, sharedLayout,
+                   elementStrides, pixelBoxLowerCorner,
+                   pixelBoxUpperCorner);
     }]>
   ];
 

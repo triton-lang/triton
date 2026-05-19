@@ -98,7 +98,9 @@ def test_expand_signature_with_aggregate_tensordesc():
     signature = (
         "i32",
         ("tensordesc<fp16[16,32]>", "i64"),
-        "tensordesc_im2col<fp32[1,16],input_rank=4,'layout'>",
+        "tensordesc_im2col<fp32[1,16],input_rank=4,"
+        "element_strides=[1, 1, 1, 1],pixel_box_lower_corner=[0, 0],"
+        "pixel_box_upper_corner=[0, 0],'layout'>",
     )
     expanded = expand_signature(signature, [], "nvTmaDesc")
 

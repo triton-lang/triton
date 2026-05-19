@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Types.h"
@@ -58,6 +59,15 @@ getCgaLayoutBases(ttg::CGAEncodingAttr layout) {
   auto it = basesMap.find(block);
   assert(it != basesMap.end());
   return it->second;
+}
+
+Attribute requiredI64ArrayAttr(MLIRContext *ctx, py::object value,
+                               StringRef name) {
+  std::string message =
+      name.str() + " is required for tensor_descriptor_im2col";
+  if (value.is_none())
+    throw py::value_error(message);
+  return DenseI64ArrayAttr::get(ctx, value.cast<std::vector<int64_t>>());
 }
 
 // Helper to check if an MLIR type or attribute has a verifier method.
@@ -609,10 +619,18 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("get_tensor_descriptor_im2col_layout_type",
            [](GluonOpBuilder &self, Type blockType, bool isSigned,
-              Attribute layout) -> Type {
+              Attribute layout, py::object elementStrides,
+              py::object pixelBoxLowerCorner,
+              py::object pixelBoxUpperCorner) -> Type {
              auto blockTy = cast<RankedTensorType>(blockType);
+             auto ctx = self.getContext();
              return triton::nvidia_gpu::TensorDescIm2ColType::get(
                  blockTy.getShape(), blockTy.getElementType(), layout,
+                 requiredI64ArrayAttr(ctx, elementStrides, "element_strides"),
+                 requiredI64ArrayAttr(ctx, pixelBoxLowerCorner,
+                                      "pixel_box_lower_corner"),
+                 requiredI64ArrayAttr(ctx, pixelBoxUpperCorner,
+                                      "pixel_box_upper_corner"),
                  isSigned);
            })
       .def("is_convert_layout_trivial",

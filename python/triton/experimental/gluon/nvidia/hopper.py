@@ -112,7 +112,7 @@ class TensorDescriptorIm2Col:
     layout: NVMMASharedLayout
     padding: str = "zero"
     round_f32_to_tf32: bool = False
-    element_strides: Optional[List[int]] = None  # Element strides per dimension (optional)
+    element_strides: Optional[List[int]] = None  # Element strides per dimension
     pixel_box_lower_corner: Optional[List[int]] = None  # Im2col: box start offsets (DHW)
     pixel_box_upper_corner: Optional[List[int]] = None  # Im2col: box end offsets (DHW)
 
@@ -127,13 +127,13 @@ class TensorDescriptorIm2Col:
             self.round_f32_to_tf32,
             self.block_shape,
         )
-        # Validate element_strides if provided
-        if self.element_strides is not None:
-            assert len(self.element_strides
-                       ) == rank, f"element_strides length mismatch: expected {rank}, got {len(self.element_strides)}"
-            for i, s in enumerate(self.element_strides):
-                assert 0 < s <= 8, f"element_strides[{i}] must be in (0, 8], got {s}"
-            assert self.element_strides[-1] == 1, f"element_strides[-1] must be 1, got {self.element_strides[-1]}"
+        if self.element_strides is None:
+            self.element_strides = [1] * rank
+        assert len(self.element_strides
+                   ) == rank, f"element_strides length mismatch: expected {rank}, got {len(self.element_strides)}"
+        for i, s in enumerate(self.element_strides):
+            assert 0 < s <= 8, f"element_strides[{i}] must be in (0, 8], got {s}"
+        assert self.element_strides[-1] == 1, f"element_strides[-1] must be 1, got {self.element_strides[-1]}"
 
         assert rank in [3, 4, 5], f"im2col mode requires rank 3, 4, or 5, got {rank}"
         spatial_rank = rank - 2
@@ -165,7 +165,10 @@ class TensorDescriptorIm2Col:
         """Generate a type string matching MLIR types (!ttng.tensordesc or !ttng.tensordesc_im2col)."""
         dtype_str = canonicalize_dtype(self.base.dtype)
         block_shape_str = ','.join(map(str, self.block_shape))
-        return f"tensordesc_im2col<{dtype_str}[{block_shape_str}],{repr(self.layout)}>"
+        metadata = f",element_strides={list(self.element_strides)}"
+        metadata += f",pixel_box_lower_corner={list(self.pixel_box_lower_corner)}"
+        metadata += f",pixel_box_upper_corner={list(self.pixel_box_upper_corner)}"
+        return f"tensordesc_im2col<{dtype_str}[{block_shape_str}],input_rank={len(self.shape)}{metadata},{repr(self.layout)}>"
 
     @staticmethod
     def from_tensor(tensor: Any, block_shape: List[int], layout: NVMMASharedLayout, padding="zero",
@@ -180,7 +183,7 @@ class TensorDescriptorIm2Col:
             layout: NVMMASharedLayout for shared memory
             padding: "zero" (default) or "nan" for out-of-bounds padding
             round_f32_to_tf32: Round float32 to TF32 precision (default False)
-            element_strides: Element strides per dimension (optional, each in range (0, 8])
+            element_strides: Element strides per dimension (defaults to [1] * rank; each in range (0, 8])
             pixel_box_lower_corner: Im2col mode - box start offsets (DHW dimensions)
             pixel_box_upper_corner: Im2col mode - box end offsets (DHW dimensions)
         """
