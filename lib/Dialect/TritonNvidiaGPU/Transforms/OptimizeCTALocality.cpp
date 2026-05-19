@@ -127,6 +127,9 @@ void optimizeConvertLayout(ttg::ConvertLayoutOp convert) {
 
   for (OpOperand *use : uses)
     rewriteUser(convert, *use);
+
+  if (convert.getResult().use_empty())
+    convert.erase();
 }
 
 struct OptimizeCTALocalityPass
