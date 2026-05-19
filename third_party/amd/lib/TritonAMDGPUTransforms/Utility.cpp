@@ -148,21 +148,55 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 // pad,  r1, r5,  r9, r13, r17, r21, r25
 // r29, pad, r2,  r6, r10, r14, r18, r22
 // r26, r30, pad, r3 ....
-std::optional<PaddedLayoutInfo>
-computePaddedLayoutCDNA4(unsigned opIdx, unsigned kWidth, unsigned mfmaNonKDim,
-                         unsigned kDim, unsigned nonKDim,
-                         unsigned elemByteWidth, bool isKContig,
-                         unsigned warpSize) {
-  assert(kDim > 0 && nonKDim > 0 && "tile dims must be positive");
+ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
+    ttg::DotOperandEncodingAttr dotOpEnc, ttg::TensorOrMemDesc srcTy,
+    ArrayRef<unsigned> sharedOrder, bool useAsyncCopy, unsigned warpSize) {
+  auto *ctx = srcTy.getContext();
 
-  if (opIdx >= 2)
-    return std::nullopt;
-  if (!llvm::is_contained({16, 32}, mfmaNonKDim))
-    return std::nullopt;
-  if (!llvm::is_contained({4, 8, 16}, kWidth))
-    return std::nullopt;
-  if (!llvm::is_contained({1, 2}, elemByteWidth))
-    return std::nullopt;
+  // NYI: padded layouts for tt.load/local_write which is more flexible
+  if (!useAsyncCopy) {
+    return {};
+  }
+
+  auto mfmaEnc = dyn_cast<ttg::AMDMfmaEncodingAttr>(dotOpEnc.getParent());
+  if (!mfmaEnc) {
+    return {};
+  }
+
+  auto shape = srcTy.getShape();
+  int rank = shape.size();
+
+  if (rank != 2) {
+    return {};
+  }
+
+  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
+  unsigned elemByteWidth = std::max(bitWidth / 8u, 1u);
+
+  if (!llvm::is_contained({1, 2}, elemByteWidth)) {
+    return {};
+  }
+
+  auto operandIdx = dotOpEnc.getOpIdx();
+  auto kWidth = dotOpEnc.getKWidth();
+  int kDimIndex = operandIdx == 0 ? 1 : 0;
+  bool isKContig = sharedOrder[0] == kDimIndex;
+  auto mfmaNonKDim = mfmaEnc.getInstrShape()[operandIdx];
+  auto kDim = shape[kDimIndex];
+  auto nonKDim = shape[(kDimIndex + 1) % 2];
+
+  // NYI: padding for scales
+  if (operandIdx >= 2) {
+    return {};
+  }
+
+  if (!llvm::is_contained({16, 32}, mfmaNonKDim)) {
+    return {};
+  }
+
+  if (!llvm::is_contained({4, 8, 16}, kWidth)) {
+    return {};
+  }
 
   unsigned kWidthBytes = kWidth * elemByteWidth;
   // TODO: if the actual vecSize is smaller than 16 bytes we can do better by
@@ -206,8 +240,9 @@ computePaddedLayoutCDNA4(unsigned opIdx, unsigned kWidth, unsigned mfmaNonKDim,
   unsigned contigLanes = contigDim / vecSize;
   unsigned wrap = std::min(contigDim, elemPerBankRow) / padding;
   // wrap == 0 means padding > contigDim, which is not a valid configuration
-  if (wrap == 0)
-    return std::nullopt;
+  if (wrap == 0) {
+    return {};
+  }
 
   // The staggering of rows only works if we have enough (wrap) rows to stagger.
   // If we have less rows we get bank conflicts. For each pow2 too small we will
@@ -220,15 +255,17 @@ computePaddedLayoutCDNA4(unsigned opIdx, unsigned kWidth, unsigned mfmaNonKDim,
   // Heuristic, for ds_read_b128 we do not tolerate any conflicts but for
   // ds_read_b64(_tr) we tolerate 2-way because swizzling will produce the same
   // number of conflicts.
-  if ((useDsReadB128 && xWayConflicts > 1) || xWayConflicts > 2)
-    return std::nullopt;
+  if ((useDsReadB128 && xWayConflicts > 1) || xWayConflicts > 2) {
+    return {};
+  }
 
   if (xWayConflicts > 1) {
     // We need to adjust the warp to allow for bank conflicts and to produce a
     // valid layout
     wrap /= (1 << (xWayConflicts - 1));
-    if (wrap == 0)
-      return std::nullopt;
+    if (wrap == 0) {
+      return {};
+    }
   }
 
   // Use 16 rows wrap if block large enough
@@ -239,7 +276,7 @@ computePaddedLayoutCDNA4(unsigned opIdx, unsigned kWidth, unsigned mfmaNonKDim,
     wrap = bestWrap;
   }
 
-  // Linear bases map [contigDim, nonContigDim] -> offset.
+  // We create linear bases mapping from [contigDim, nonContigDim] -> offset,
   std::vector<std::vector<int>> bases;
 
   // Keep contigSize numbers of elements contiguous in shared memory
@@ -298,66 +335,23 @@ computePaddedLayoutCDNA4(unsigned opIdx, unsigned kWidth, unsigned mfmaNonKDim,
     std::swap(bases[offsetIndex], bases[row16Index]);
   }
 
-  // Swap bases to match dst dimension order.
-  bool needsSwap = (isKContig && opIdx == 0) || (!isKContig && opIdx == 1);
-  if (needsSwap) {
+  // Swap bases to match srcTy dimension order
+  if ((isKContig && kDimIndex == 1) || (!isKContig && kDimIndex == 0)) {
     for (auto &p : bases)
       std::swap(p[0], p[1]);
   }
 
-  PaddedLayoutInfo out;
-  out.interval = paddingInterval;
-  out.padding = padding;
-  out.bases = std::move(bases);
-  return out;
-}
-
-static ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
-    ttg::DotOperandEncodingAttr dotOpEnc, ttg::TensorOrMemDesc srcTy,
-    ArrayRef<unsigned> sharedOrder, bool useAsyncCopy, unsigned warpSize) {
-  auto *ctx = srcTy.getContext();
-
-  // NYI: padded layouts for tt.load/local_write which is more flexible
-  if (!useAsyncCopy)
-    return {};
-
-  auto mfmaEnc = dyn_cast<ttg::AMDMfmaEncodingAttr>(dotOpEnc.getParent());
-  if (!mfmaEnc)
-    return {};
-
-  auto shape = srcTy.getShape();
-  int rank = shape.size();
-  if (rank != 2)
-    return {};
-
-  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
-  unsigned elemByteWidth = std::max(bitWidth / 8u, 1u);
-
-  auto operandIdx = dotOpEnc.getOpIdx();
-  auto kWidth = dotOpEnc.getKWidth();
-  int kDimIndex = operandIdx == 0 ? 1 : 0;
-  bool isKContig = sharedOrder[0] == kDimIndex;
-  auto mfmaNonKDim = mfmaEnc.getInstrShape()[operandIdx];
-  auto kDim = shape[kDimIndex];
-  auto nonKDim = shape[(kDimIndex + 1) % 2];
-
-  auto plain =
-      computePaddedLayoutCDNA4(operandIdx, kWidth, mfmaNonKDim, kDim, nonKDim,
-                               elemByteWidth, isKContig, warpSize);
-  if (!plain)
-    return {};
-
   auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
   triton::LinearLayout linearComponent(
       {
-          {StringAttr::get(ctx, "offset"), plain->bases},
+          {StringAttr::get(ctx, "offset"), bases},
       },
       triton::standardOutDimNames(ctx, rank));
   linearComponent = triton::gpu::combineCtaCgaWithShape(
       linearComponent, cgaLayout, srcTy.getShape());
 
-  return ttg::PaddedSharedEncodingAttr::get(
-      ctx, {{plain->interval, plain->padding}}, std::move(linearComponent));
+  return ttg::PaddedSharedEncodingAttr::get(ctx, {{paddingInterval, padding}},
+                                            std::move(linearComponent));
 }
 
 // LDS padding strategy for TDM (descriptor) loads.

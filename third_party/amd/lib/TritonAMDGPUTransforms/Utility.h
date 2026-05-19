@@ -8,7 +8,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
-#include <optional>
 
 using namespace mlir;
 
@@ -41,22 +40,12 @@ composePaddedLayout(const triton::amdgpu::TargetFeatures &targetFeatures,
                     triton::gpu::DotOperandEncodingAttr dotOpEnc = {},
                     bool useAsyncCopy = false);
 
-struct PaddedLayoutInfo {
-  unsigned interval = 0;
-  unsigned padding = 0;
-  std::vector<std::vector<int>> bases;
-};
-
-// Compute the bank-conflict-aware interval, padding, and offset bases for a
-// CDNA4 padded shared-memory layout that backs an MFMA dot operand of the
-// given shape and dtype. Bases are emitted in caller dimension order.
-// Returns nullopt when (opIdx, kWidth, mfmaNonKDim, elemByteWidth) are
-// outside the supported set.
-std::optional<PaddedLayoutInfo>
-computePaddedLayoutCDNA4(unsigned opIdx, unsigned kWidth, unsigned mfmaNonKDim,
-                         unsigned kDim, unsigned nonKDim,
-                         unsigned elemByteWidth, bool isKContig,
-                         unsigned warpSize);
+// Returns null when inputs are outside the supported MFMA / kWidth /
+// elem-bitwidth set.
+triton::gpu::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
+    triton::gpu::DotOperandEncodingAttr dotOpEnc,
+    triton::gpu::TensorOrMemDesc srcTy, ArrayRef<unsigned> sharedOrder,
+    bool useAsyncCopy, unsigned warpSize);
 
 triton::gpu::SharedEncodingTrait
 getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
