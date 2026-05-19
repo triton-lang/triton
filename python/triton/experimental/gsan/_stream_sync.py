@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import triton
 import triton.language as tl
 
-from ._allocator import get_runtime_state_layout
+from ._allocator import get_device_rank, get_runtime_state_layout
 from ._utils import uint8_cuda_tensor_from_ptr
 
 
@@ -111,7 +111,7 @@ def synchronize_launch_stream(device: int) -> None:
 
     This makes all reads and writes transitively visible to other threads.
     """
-    layout = _runtime_state_layout(device, device)
+    layout = _runtime_state_layout(get_device_rank(device), device)
     BLOCK_SIZE = 128
     grid = (triton.cdiv(layout.num_threads, BLOCK_SIZE), 1, 1)
     kernel = _compiled_sync_kernel(
@@ -142,7 +142,7 @@ def synchronize_process_group_barrier(device: int, peer_devices: tuple[int, ...]
     if not peer_devices:
         return
 
-    local_layout = _runtime_state_layout(device, device)
+    local_layout = _runtime_state_layout(get_device_rank(device), device)
     peer_regions = []
     for peer_device in peer_devices:
         peer_layout = _runtime_state_layout(peer_device, device)
