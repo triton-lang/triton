@@ -266,6 +266,64 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+    // CHECK-LABEL: buffer_atomic_rmw_smax_i32
+    // CHECK-NOT: llvm.amdgcn.raw.ptr.buffer.atomic.max"
+    // CHECK-NOT: llvm.amdgcn.raw.ptr.buffer.atomic.fmax
+    // CHECK-NOT: llvm.amdgcn.raw.ptr.buffer.atomic.umax
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.smax"({{.*}}) : (i32, !llvm.ptr<8>, i32, i32, i32) -> i32
+    tt.func public @buffer_atomic_rmw_smax_i32(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xi32, #blocked0>) {
+        %ret = amdg.buffer_atomic_rmw max, acq_rel, gpu, %values, %arg0[%offsets] : tensor<256xi32, #blocked0>
+        tt.return
+    }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+    // CHECK-LABEL: buffer_atomic_rmw_smin_i32
+    // CHECK-NOT: llvm.amdgcn.raw.ptr.buffer.atomic.min"
+    // CHECK-NOT: llvm.amdgcn.raw.ptr.buffer.atomic.fmin
+    // CHECK-NOT: llvm.amdgcn.raw.ptr.buffer.atomic.umin
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.smin"({{.*}}) : (i32, !llvm.ptr<8>, i32, i32, i32) -> i32
+    tt.func public @buffer_atomic_rmw_smin_i32(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xi32, #blocked0>) {
+        %ret = amdg.buffer_atomic_rmw min, acq_rel, gpu, %values, %arg0[%offsets] : tensor<256xi32, #blocked0>
+        tt.return
+    }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+    // CHECK-LABEL: buffer_atomic_rmw_umax_i32
+    // CHECK-NOT: llvm.amdgcn.raw.ptr.buffer.atomic.smax
+    // CHECK-NOT: llvm.amdgcn.raw.ptr.buffer.atomic.fmax
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.umax"({{.*}}) : (i32, !llvm.ptr<8>, i32, i32, i32) -> i32
+    tt.func public @buffer_atomic_rmw_umax_i32(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xi32, #blocked0>) {
+        %ret = amdg.buffer_atomic_rmw umax, acq_rel, gpu, %values, %arg0[%offsets] : tensor<256xi32, #blocked0>
+        tt.return
+    }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+    // CHECK-LABEL: buffer_atomic_rmw_umin_i32
+    // CHECK-NOT: llvm.amdgcn.raw.ptr.buffer.atomic.smin
+    // CHECK-NOT: llvm.amdgcn.raw.ptr.buffer.atomic.fmin
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.umin"({{.*}}) : (i32, !llvm.ptr<8>, i32, i32, i32) -> i32
+    tt.func public @buffer_atomic_rmw_umin_i32(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xi32, #blocked0>) {
+        %ret = amdg.buffer_atomic_rmw umin, acq_rel, gpu, %values, %arg0[%offsets] : tensor<256xi32, #blocked0>
+        tt.return
+    }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
     // CHECK-LABEL: buffer_load_layout_vectorization
