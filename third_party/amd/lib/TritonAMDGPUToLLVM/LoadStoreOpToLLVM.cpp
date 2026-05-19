@@ -809,14 +809,11 @@ struct BufferLoadToLocalOpConversion
     bool isThreadPredWarpUniform =
         isRedundantThreadPredWarpUniform(freeVarMasks, rewriter.getContext());
 
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-    auto emitBufferLoadLds =
-        [this, &op, &b, &bufferEmitter, &rsrcDesc, laneId = laneId, threadPred,
-         isThreadPredWarpUniform, offsetTy, otherTy, hasOther,
-         requiresSrcPtrSwizzling](RewriterBase &rewriter, Location loc,
-                                  ArrayRef<Value> loadVals, Value shmemAddr,
-                                  int startIdx, VectorType vecTy,
-                                  Value multicastMask) -> SmallVector<Value> {
+    auto laneId = getLaneId(rewriter, loc);
+    auto emitBufferLoadLds = [&](RewriterBase &rewriter, Location loc,
+                                 ArrayRef<Value> loadVals, Value shmemAddr,
+                                 int startIdx, VectorType vecTy,
+                                 Value multicastMask) -> SmallVector<Value> {
       auto [offsetElem, maskElem, otherElems, swizzleLaneOffset] =
           unzipAsyncCopyValues(rewriter, loc, startIdx, loadVals, offsetTy,
                                otherTy, hasOther, vecTy.getNumElements());
@@ -967,13 +964,11 @@ struct AsyncCopyGlobalToLocalOpConversion
     bool threadPredIsWarpUniform =
         isRedundantThreadPredWarpUniform(freeVarMasks, rewriter.getContext());
 
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-    auto emitGlobalLoadLds =
-        [this, &op, &b, laneId = laneId, threadPred, srcPtrTy, otherTy, hasMask,
-         hasOther, requiresSrcPtrSwizzling, threadPredIsWarpUniform](
-            RewriterBase &rewriter, Location loc, ArrayRef<Value> loadValues,
-            Value shmemAddr, int startIdx, VectorType vecTy,
-            Value multicastMask) -> SmallVector<Value> {
+    auto laneId = getLaneId(rewriter, loc);
+    auto emitGlobalLoadLds = [&](RewriterBase &rewriter, Location loc,
+                                 ArrayRef<Value> loadValues, Value shmemAddr,
+                                 int startIdx, VectorType vecTy,
+                                 Value multicastMask) -> SmallVector<Value> {
       auto [srcElem, maskElem, otherElems, swizzleLaneOffset] =
           unzipAsyncCopyValues(rewriter, loc, startIdx, loadValues, srcPtrTy,
                                otherTy, hasOther, vecTy.getNumElements());
