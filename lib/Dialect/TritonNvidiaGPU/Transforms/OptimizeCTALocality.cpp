@@ -34,8 +34,6 @@ bool isCrossCTAConversion(ttg::ConvertLayoutOp convert) {
 
 Attribute cloneWithCGALayout(Attribute layout, ttg::CGAEncodingAttr cgaLayout) {
   if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
-    if (blockedLayout.getOrder().size() != cgaLayout.getRank())
-      return {};
     return ttg::BlockedEncodingAttr::get(
         layout.getContext(), blockedLayout.getSizePerThread(),
         blockedLayout.getThreadsPerWarp(), blockedLayout.getWarpsPerCTA(),
@@ -45,21 +43,16 @@ Attribute cloneWithCGALayout(Attribute layout, ttg::CGAEncodingAttr cgaLayout) {
   if (auto sliceLayout = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
     Attribute parentLayout =
         cloneWithCGALayout(sliceLayout.getParent(), cgaLayout);
-    if (!parentLayout)
-      return {};
     return ttg::SliceEncodingAttr::get(
         layout.getContext(), sliceLayout.getDim(),
         cast<ttg::DistributedEncodingTrait>(parentLayout));
   }
 
-  return {};
+  llvm::report_fatal_error("cloneWithCGALayout not implemented for layout");
 }
 
 ttg::CGAEncodingAttr getSourceCGALayoutForDestination(Attribute srcLayout,
                                                       Attribute dstLayout) {
-  // For a slice result, use the parent CGA layout. The target layout is cloned
-  // from the destination layout below, so this keeps slice users in the same
-  // rank/layout family while changing only the CTA grouping.
   if (auto dstSlice = dyn_cast<ttg::SliceEncodingAttr>(dstLayout)) {
     auto srcSlice = dyn_cast<ttg::SliceEncodingAttr>(srcLayout);
     return ttg::getCGALayout(srcSlice.getParent());
@@ -76,8 +69,8 @@ Value convertValue(OpBuilder &builder, Location loc, Value value,
                                       ty.cloneWithEncoding(layout), value);
 }
 
-// If a cross-CTA conversion feeds a side-effecting op, move all tensor operands
-// of that op to a CTA layout compatible with the conversion source:
+// Convert the CGA layouts of tensor operands to ones the same as the
+// conversion source:
 //
 //   %v1 = ttg.convert_layout %v0 : #planned -> #orig
 //   tt.store %ptr_orig, %v1, %mask_orig : ... #orig
@@ -88,6 +81,9 @@ Value convertValue(OpBuilder &builder, Location loc, Value value,
 //   %ptr_target = ttg.convert_layout %ptr_orig : #orig -> #target
 //   %mask_target = ttg.convert_layout %mask_orig : #orig -> #target
 //   tt.store %ptr_target, %v2, %mask_target : ... #target
+//
+// Will not insert conversions if any operands cannot be rematerialized in the
+// target layout.
 void rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
   Operation *op = use.getOwner();
   if (!op->getResults().empty())
@@ -128,17 +124,12 @@ void optimizeConvertLayout(ttg::ConvertLayoutOp convert) {
   if (!isCrossCTAConversion(convert))
     return;
 
-  // Rewrite a snapshot of uses because rewriteUser mutates operand lists and
-  // may erase the current use of convert.
   SmallVector<OpOperand *> uses;
   for (OpOperand &use : convert.getResult().getUses())
     uses.push_back(&use);
 
   for (OpOperand *use : uses)
     rewriteUser(convert, *use);
-
-  if (convert->use_empty())
-    convert.erase();
 }
 
 struct OptimizeCTALocalityPass
