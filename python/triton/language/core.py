@@ -3526,6 +3526,43 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
                 tl.store(C + tl.arange(0, BLOCK), c)
                 tl.store(D + tl.arange(0, BLOCK), d)
 
+        Example using AMDGPU assembly with vector operands andresults:
+
+        .. code-block:: python
+
+            @triton.jit
+            def kernel(idx_ptr, lut_ptr, out_ptr, BLOCK: tl.constexpr):
+                offsets = tl.arange(0, BLOCK)
+
+                # Each uint8 index element contains two packed u4 indices.
+                idx = tl.load(idx_ptr + offsets)
+
+                # The LUT halves are scalar values that broadcast across the
+                # packed asm call.
+                lut0 = tl.load(lut_ptr + 0)
+                lut1 = tl.load(lut_ptr + 1)
+
+                out = tl.inline_asm_elementwise(
+                    asm="v_perm_pk16_b8_u4 $0, $1, $9, $17",
+                    constraints=(
+                        "=v,"
+                        "s,s,s,s,s,s,s,s,"
+                        "s,s,s,s,s,s,s,s,"
+                        "v"
+                    ),
+                    args=[lut0, lut1, idx],
+                    dtype=tl.uint16,
+                    is_pure=True,
+                    pack=8,
+                    # LUT operands stay scalar.  The packed index values are
+                    # passed as one adjacent register pair.
+                    operand_vec_sizes=[1, 1, 2],
+                    # The instruction returns one group of four adjacent registers,
+                    # unpacked back to eight uint16 tensor elements.
+                    result_vec_sizes=[4],
+                )
+                tl.store(out_ptr + offsets, out)
+
         :param asm: assembly to run.  Must match target's assembly format.
         :param constraints: asm constraints in
             `LLVM format <https://llvm.org/docs/LangRef.html#inline-asm-constraint-string>`_
