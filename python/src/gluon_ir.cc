@@ -1259,27 +1259,42 @@ void init_gluon_ir(py::module &&m) {
           ctx.appendDialectRegistry(registry);
           ctx.loadAllAvailableDialects();
 
-          auto plain = computePaddedLayoutCDNA4(
-              opIdx, kWidth, mfmaNonKDim, kDim, nonKDim, elemBytes, isKContig,
-              /*warpSize=*/64);
-          if (!plain)
+          if (elemBytes != 1 && elemBytes != 2)
+            return py::none();
+          auto elemTy = mlir::IntegerType::get(&ctx, elemBytes * 8);
+
+          SmallVector<unsigned, 3> instrShape = {mfmaNonKDim, mfmaNonKDim,
+                                                 mfmaNonKDim};
+          auto trivialCga =
+              buildCgaLayoutAttr(&ctx, /*cgaBases=*/{}, /*rank=*/2);
+          auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+              &ctx, /*version=*/4, /*warpsPerCTA=*/{1, 1}, instrShape,
+              /*isTransposed=*/true, trivialCga,
+              /*tilesPerWarp=*/{1, 1}, /*elementBitWidth=*/32);
+          if (!mfmaEnc)
+            return py::none();
+          auto dotOpEnc =
+              ttg::DotOperandEncodingAttr::get(&ctx, opIdx, mfmaEnc, kWidth);
+          if (!dotOpEnc)
             return py::none();
 
-          SmallVector<int64_t> shape =
+          SmallVector<int64_t, 2> shape =
               opIdx == 0
-                  ? SmallVector<int64_t>{(int64_t)nonKDim, (int64_t)kDim}
-                  : SmallVector<int64_t>{(int64_t)kDim, (int64_t)nonKDim};
+                  ? SmallVector<int64_t, 2>{(int64_t)nonKDim, (int64_t)kDim}
+                  : SmallVector<int64_t, 2>{(int64_t)kDim, (int64_t)nonKDim};
+          auto srcTy = RankedTensorType::get(shape, elemTy, dotOpEnc);
 
-          auto kOffset = mlir::StringAttr::get(&ctx, "offset");
-          auto outDims = tt::standardOutDimNames(&ctx, /*rank=*/2);
-          tt::LinearLayout offsetLL({{kOffset, plain->bases}}, outDims);
-          // CDNA4 (and earlier CDNA) supports 1 CTA per CGA
-          auto cga = buildCgaLayoutAttr(&ctx, /*cgaBases=*/{}, /*rank=*/2);
-          auto fullLL = ttg::combineCtaCgaWithShape(offsetLL, cga, shape);
+          // sharedOrder[0] is the fast dim; for K-contig that's the K axis.
+          unsigned kDimIndex = opIdx == 0 ? 1u : 0u;
+          SmallVector<unsigned, 2> sharedOrder =
+              isKContig ? SmallVector<unsigned, 2>{kDimIndex, 1u - kDimIndex}
+                        : SmallVector<unsigned, 2>{1u - kDimIndex, kDimIndex};
 
-          auto attr = ttg::PaddedSharedEncodingAttr::get(
-              &ctx, /*intervals=*/{plain->interval},
-              /*paddings=*/{plain->padding}, std::move(fullLL));
+          auto attr = composePaddedLayoutForAsyncCopyCDNA4(
+              dotOpEnc, cast<ttg::TensorOrMemDesc>(Type(srcTy)), sharedOrder,
+              /*useAsyncCopy=*/true, /*warpSize=*/64);
+          if (!attr)
+            return py::none();
           return layoutToGluon(attr);
         });
 
