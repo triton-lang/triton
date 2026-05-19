@@ -193,7 +193,7 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
   // RMWOp::MAX / MIN stringify to "max" / "min", which are not real AMDGPU
   // buffer-atomic intrinsic suffixes. The valid suffixes are
   // .{s,u,f}{max,min}. RMWOp::UMAX and RMWOp::UMIN already stringify to
-  // "umax" / "umin" and need no override. 
+  // "umax" / "umin" and need no override.
   if (rmwType == RMWOp::MAX || rmwType == RMWOp::MIN) {
     StringRef prefix = isa<FloatType>(getElementTypeOrSelf(type)) ? "f" : "s";
     rmwOpStr = (prefix + rmwOpStr).str();
