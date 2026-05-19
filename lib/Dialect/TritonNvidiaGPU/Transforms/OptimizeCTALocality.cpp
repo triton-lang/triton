@@ -51,7 +51,6 @@ Attribute cloneWithCGALayout(Attribute layout, ttg::CGAEncodingAttr cgaLayout) {
   llvm::report_fatal_error("cloneWithCGALayout not implemented for layout");
 }
 
-
 Value convertValue(OpBuilder &builder, Location loc, Value value,
                    Attribute layout) {
   auto ty = cast<RankedTensorType>(value.getType());
