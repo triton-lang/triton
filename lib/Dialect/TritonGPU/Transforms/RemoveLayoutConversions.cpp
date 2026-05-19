@@ -891,10 +891,9 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
     DenseMap<Value, Attribute> &layout,
     DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
     std::function<bool(Operation *)> stopPropagation) {
-  auto getExistingConversion =
-      std::bind(&LayoutRematerialization::getExistingConversion, this,
-                std::placeholders::_1, std::placeholders::_2,
-                std::ref(existingRemats));
+  auto getExistingConversion = std::bind(
+      &LayoutRematerialization::getExistingConversion, this,
+      std::placeholders::_1, std::placeholders::_2, std::ref(existingRemats));
   return mlir::getConvertBackwardSlice(root, slice, rootEncoding, layout,
                                        stopPropagation, getExistingConversion);
 }
@@ -905,13 +904,12 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
     DenseMap<std::pair<Value, Attribute>, Value> &existingRematsArg,
     std::function<bool(Operation *)> stopPropagation) {
   auto existingRemats = existingRematsArg;
-  auto getExistingConversion =
-      std::bind(&LayoutRematerialization::getExistingConversion, this,
-                std::placeholders::_1, std::placeholders::_2,
-                std::ref(existingRemats));
-  LogicalResult result = mlir::getRematerializableSlice(
-      root, sliceArg, rootEncoding, layoutArg, stopPropagation,
-      getExistingConversion);
+  auto getExistingConversion = std::bind(
+      &LayoutRematerialization::getExistingConversion, this,
+      std::placeholders::_1, std::placeholders::_2, std::ref(existingRemats));
+  LogicalResult result =
+      mlir::getRematerializableSlice(root, sliceArg, rootEncoding, layoutArg,
+                                     stopPropagation, getExistingConversion);
   if (succeeded(result))
     existingRematsArg = std::move(existingRemats);
   return result;
