@@ -1030,6 +1030,33 @@ LogicalResult getConvertBackwardSlice(
   return success();
 }
 
+LogicalResult getRematerializableSlice(
+    OpOperand &root, SetVector<Value> &sliceArg, Attribute rootEncoding,
+    DenseMap<Value, Attribute> &layoutArg,
+    std::function<bool(Operation *)> stopPropagation,
+    std::function<Value(OpOperand &, Attribute)> getExistingConversion) {
+  // Operate on copies of the input, we do not want to modify them unless we
+  // have succeeded.
+  auto slice = sliceArg;
+  auto layout = layoutArg;
+  LogicalResult result =
+      getConvertBackwardSlice(root, slice, rootEncoding, layout,
+                              stopPropagation, getExistingConversion);
+  if (result.failed() || slice.empty())
+    return failure();
+
+  // Check if all the operations in the slice can be rematerialized.
+  for (Value v : slice) {
+    if (Operation *op = v.getDefiningOp()) {
+      if (!canBeRematerialized(op))
+        return failure();
+    }
+  }
+  sliceArg = std::move(slice);
+  layoutArg = std::move(layout);
+  return success();
+}
+
 // TODO(thomas): this is duplicated with what is in GPUToLLVM
 //  Convert an \param index to a multi-dim coordinate given \param shape and
 //  \param order.
