@@ -121,8 +121,8 @@ _compute_efficient_padded_shared_layout_impl.__triton_builtin__ = True
 @constexpr_function
 def compute_efficient_padded_shared_layout(op_idx, k_width, mfma_non_k_dim, k_dim, non_k_dim, elem_bytes,
                                            is_k_contig=True):
-    """Bank-conflict-aware PaddedSharedLayout matching what LowerLoops picks
-    for the equivalent autotuned @triton.jit matmul.
+    """Compute an efficient padded shared layout for the given parameters
+    that avoids bank conflicts as much as possible.
 
     Args:
         op_idx (int): 0 for operand A, 1 for operand B.
@@ -131,8 +131,7 @@ def compute_efficient_padded_shared_layout(op_idx, k_width, mfma_non_k_dim, k_di
         k_dim (int): Tile size along K.
         non_k_dim (int): Tile size along the non-K dim (BM for A, BN for B).
         elem_bytes (int): Bytes per element. Must be in {1, 2}. fp8 and fp4
-            both pass 1 (matching how the autotuner treats sub-byte dtypes);
-            fp16 / bf16 pass 2.
+            both pass 1; fp16 and bf16 pass 2.
         is_k_contig (bool): K is the contiguous dim in shared memory.
     Return:
         layout (PaddedSharedLayout): or None if any input is out of the
