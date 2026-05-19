@@ -102,7 +102,7 @@ def local_store_transposed_cga_kernel(inp, out, BLOCK_M: ttgl.constexpr, BLOCK_N
         threads_per_warp=[8, 4],
         warps_per_cta=[4, 1],
         order=[1, 0],
-        cga_layout=((1, 0), ),
+        cga_layout=((0, 1), ),
     )
     smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(
         vec=1,
@@ -136,7 +136,10 @@ def test_local_store_transposed_cga_to_non_transposed_alloc():
     inp = torch.arange(block_m * block_n, device="cuda", dtype=torch.float32).reshape(block_m, block_n)
     out = torch.empty((block_n, block_m), device="cuda", dtype=torch.float32)
 
-    local_store_transposed_cga_kernel[(1, )](inp, out, block_m, block_n, num_warps=4, num_ctas=2)
+    compiled = local_store_transposed_cga_kernel[(1, )](inp, out, block_m, block_n, num_warps=4, num_ctas=2)
+    ptx = compiled.asm["ptx"]
+    assert "st.shared::cluster" in ptx
+    assert "ld.shared::cluster" in ptx
     torch.testing.assert_close(out, inp.T, atol=0, rtol=0)
 
 
