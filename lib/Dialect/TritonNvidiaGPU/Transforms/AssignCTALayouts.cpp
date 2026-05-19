@@ -151,7 +151,7 @@ void convertOpResultsFromLayouts(Operation *op,
   Location loc = op->getLoc();
   for (auto [result, resultLayout] :
        llvm::zip(op->getResults(), resultLayouts)) {
-    if (originalTy = dyn_cast<RankedTensorType>(result.getType())) {
+    if (auto originalTy = dyn_cast<RankedTensorType>(result.getType())) {
       result.setType(originalTy.cloneWithEncoding(resultLayout));
       Value converted =
           convertValueToLayout(builder, loc, result, originalTy.getEncoding());
