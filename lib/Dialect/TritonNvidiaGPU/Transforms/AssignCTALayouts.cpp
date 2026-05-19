@@ -52,9 +52,6 @@ cloneWithCGALayout(ttg::DistributedEncodingTrait layout,
 
 Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
                            Attribute layout) {
-  if (!layout)
-    return value;
-
   auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy || tensorTy.getEncoding() == layout)
     return value;
@@ -96,7 +93,7 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
   auto cgaLayout = ttg::getCGALayout(layout);
   auto newLoadLayout = cloneWithCGALayout(oldLayout, oldTy.getShape(), numWarps,
                                           threadsPerWarp, cgaLayout);
-  if (oldTy.getEncoding() == newLoadLayout)
+  if (oldLayout == newLoadLayout)
     return value;
 
   auto newTy = oldTy.cloneWithEncoding(newLoadLayout);
@@ -132,8 +129,6 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
     newLoad->getResult(0).setType(newTy);
     return convertLoadedValue(newLoad->getResult(0));
   }
-
-  llvm_unreachable("expected a load-like op");
 }
 
 void convertOpOperandsToLayouts(Operation *op,
@@ -156,13 +151,12 @@ void convertOpResultsFromLayouts(Operation *op,
   Location loc = op->getLoc();
   for (auto [result, resultLayout] :
        llvm::zip(op->getResults(), resultLayouts)) {
-    auto originalTy = dyn_cast<RankedTensorType>(result.getType());
-    if (!originalTy)
-      continue;
-    result.setType(originalTy.cloneWithEncoding(resultLayout));
-    Value converted =
-        convertValueToLayout(builder, loc, result, originalTy.getEncoding());
-    result.replaceAllUsesExcept(converted, converted.getDefiningOp());
+    if (originalTy = dyn_cast<RankedTensorType>(result.getType())) {
+      result.setType(originalTy.cloneWithEncoding(resultLayout));
+      Value converted =
+          convertValueToLayout(builder, loc, result, originalTy.getEncoding());
+      result.replaceAllUsesExcept(converted, converted.getDefiningOp());
+    }
   }
 }
 
@@ -230,6 +224,9 @@ ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
 
   SmallVector<unsigned> ctasPerCGA(rank, 0);
   unsigned remainingCTAs = ttg::getNumCTAs(srcLayout);
+  // Keep the reduced dimension within a single CTA so reductions do not cross
+  // CTAs. Assign CTAs to the remaining dimensions in layout order, bounded by
+  // how many elements each CTA can cover in that dimension.
   for (int i = rank - 1; i >= 0; --i) {
     unsigned dim = order[i];
     if (dim == reduce.getAxis()) {
@@ -243,6 +240,7 @@ ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
     remainingCTAs /= ctasPerCGA[dim];
   }
 
+  // Put any leftover CTAs on the fastest non-reduced dimension.
   bool assignedRemainingCTAs = false;
   for (int i = rank - 1; i >= 0; --i) {
     unsigned dim = order[i];
@@ -254,6 +252,9 @@ ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
   }
 
   SmallVector<unsigned> ctaSplitNum = ctasPerCGA;
+  // If numCTAs > 1 and the only dimension is the reduced dimension, the loops
+  // above leave all CTAs unassigned. Put the remaining CTAs on that dimension
+  // so that they all collaborate in the reduction.
   if (!assignedRemainingCTAs && remainingCTAs > 0) {
     ctasPerCGA[order[rank - 1]] *= remainingCTAs;
     ctaSplitNum[order[rank - 1]] = ctasPerCGA[order[rank - 1]];
