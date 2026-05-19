@@ -28,8 +28,8 @@ def TritonNvidiaGPUAssignCTALayoutsPass : Pass<"triton-nvidia-gpu-assign-cta-lay
   let summary = "Assign CTA layouts";
 
   let description = [{
-    This pass computes and assigns optimized CTA layouts to DotOp and ReduceOp
-    operations, inserting explicit layout conversions at the boundary.
+    This pass computes and assigns optimized CTA layouts to anchor ops such as DotOp and ReduceOp
+    operations.
   }];
 
   let dependentDialects = [
@@ -42,9 +42,7 @@ def TritonNvidiaGPUOptimizeCTALocalityPass : Pass<"triton-nvidia-gpu-optimize-ct
   let summary = "Optimize CTA locality";
 
   let description = [{
-    This pass removes cross-CTA layout conversions by propagating their source
-    values to same-block uses. A following RemoveLayoutConversions pass can then
-    clean up any redundant layout conversions.
+    This pass removes cross-CTA layout conversions by making their source and destination the same CGA layout.
   }];
 
   let dependentDialects = [
