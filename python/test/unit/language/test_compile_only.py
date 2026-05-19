@@ -21,17 +21,17 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
-def test_compile_only_underflow_where() -> None:
+def test_compile_only_expect_zero() -> None:
 
     @triton.jit
-    def underflow_where_kernel(x_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
+    def expect_zero_kernel(x_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
         offsets = tl.arange(0, BLOCK_SIZE)
         x = tl.load(x_ptr + offsets)
-        y = tl.underflow_where(x, offsets < 8)
+        y = tl.expect_zero(x, offsets < 8)
         tl.store(out_ptr + offsets, y)
 
     src = triton.compiler.ASTSource(
-        fn=underflow_where_kernel,
+        fn=expect_zero_kernel,
         signature={"x_ptr": "*fp32", "out_ptr": "*fp32", "BLOCK_SIZE": "constexpr"},
         constexprs={"BLOCK_SIZE": 16},
     )

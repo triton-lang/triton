@@ -2855,7 +2855,7 @@ def where(condition, x, y, _semantic=None):
 
 
 @builtin
-def underflow_where(x, mask, _semantic=None):
+def expect_zero(x, mask, _semantic=None):
     """
     Mark values that are expected to have underflowed to zero.
 
@@ -2876,7 +2876,7 @@ def underflow_where(x, mask, _semantic=None):
         x_tensor = _semantic.to_tensor(x)
         zero = _semantic.to_tensor(0)
         cond = _semantic.or_(_semantic.equal(x_tensor, zero), _semantic.not_(mask))
-        _semantic.device_assert(cond, "underflow_where expected x == 0 where mask is true", None)
+        _semantic.device_assert(cond, "expect_zero expected x == 0 where mask is true", None)
     return x
 
 
