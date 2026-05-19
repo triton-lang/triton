@@ -129,6 +129,8 @@ Value cloneLoadWithLayout(OpBuilder &builder, Location loc, Value value,
     newLoad->getResult(0).setType(newTy);
     return convertLoadedValue(newLoad->getResult(0));
   }
+
+  llvm_unreachable("expected scalar or descriptor load");
 }
 
 void convertOpOperandsToLayouts(Operation *op,
