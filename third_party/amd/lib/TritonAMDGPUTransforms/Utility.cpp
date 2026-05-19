@@ -148,10 +148,10 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 // pad,  r1, r5,  r9, r13, r17, r21, r25
 // r29, pad, r2,  r6, r10, r14, r18, r22
 // r26, r30, pad, r3 ....
-std::optional<PaddedLayoutCDNA4Bases>
-computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
-                              int nonKDim, int elemByteWidth, bool isKContig,
-                              unsigned warpSize) {
+std::optional<PaddedLayoutInfo>
+computePaddedLayoutCDNA4(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
+                         int nonKDim, int elemByteWidth, bool isKContig,
+                         unsigned warpSize) {
   if (opIdx >= 2)
     return std::nullopt;
   if (!llvm::is_contained({16, 32}, mfmaNonKDim))
@@ -304,7 +304,7 @@ computePaddedLayoutCDNA4Bases(int opIdx, int kWidth, int mfmaNonKDim, int kDim,
       std::swap(p[0], p[1]);
   }
 
-  PaddedLayoutCDNA4Bases out;
+  PaddedLayoutInfo out;
   out.interval = paddingInterval;
   out.padding = padding;
   out.bases = std::move(bases);
@@ -340,7 +340,7 @@ static ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   auto kDim = shape[kDimIndex];
   auto nonKDim = shape[(kDimIndex + 1) % 2];
 
-  auto plain = computePaddedLayoutCDNA4Bases(
+  auto plain = computePaddedLayoutCDNA4(
       (int)operandIdx, (int)kWidth, (int)mfmaNonKDim, (int)kDim, (int)nonKDim,
       (int)elemByteWidth, isKContig, warpSize);
   if (!plain)

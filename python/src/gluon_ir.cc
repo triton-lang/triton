@@ -1259,7 +1259,7 @@ void init_gluon_ir(py::module &&m) {
           ctx.appendDialectRegistry(registry);
           ctx.loadAllAvailableDialects();
 
-          auto plain = computePaddedLayoutCDNA4Bases(
+          auto plain = computePaddedLayoutCDNA4(
               opIdx, kWidth, mfmaNonKDim, kDim, nonKDim, elemBytes, isKContig,
               /*warpSize=*/64);
           if (!plain)
