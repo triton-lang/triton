@@ -40,8 +40,8 @@ composePaddedLayout(const triton::amdgpu::TargetFeatures &targetFeatures,
                     triton::gpu::DotOperandEncodingAttr dotOpEnc = {},
                     bool useAsyncCopy = false);
 
-// Returns null when inputs are outside the supported MFMA / kWidth /
-// elem-bitwidth set.
+// Returns null when useAsyncCopy is false or when the operand's MFMA shape,
+// kWidth, or element bitwidth fall outside the supported set.
 triton::gpu::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     triton::gpu::DotOperandEncodingAttr dotOpEnc,
     triton::gpu::TensorOrMemDesc srcTy, ArrayRef<unsigned> sharedOrder,
