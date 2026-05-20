@@ -4,7 +4,7 @@ import pytest
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
 from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
 
@@ -516,6 +516,65 @@ def test_local_load_store_generic_linear(src_layout, shared_kind, device):
     kernel[(1, )](x, y, shape, src_layout, shared_layout, num_warps=num_warps)
 
     torch.testing.assert_close(y, x)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_local_store_tmem_32x32b_2cta_splitm_to_splitk(device):
+    src_shape = (256, 128)
+    dst_shape = (128, 256)
+    src_layout = ttgl.DistributedLinearLayout(
+        reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64]],
+        lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+        warp_bases=[[32, 0], [64, 0]],
+        block_bases=[[128, 0]],
+        shape=list(src_shape),
+    )
+    dst_layout = ttgl.DistributedLinearLayout(
+        reg_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]],
+        lane_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]],
+        warp_bases=[[0, 32], [0, 64]],
+        block_bases=[[0, 128]],
+        shape=list(dst_shape),
+    )
+    shared_layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=64,
+        transposed=True,
+        element_bitwidth=16,
+        rank=2,
+        cga_layout=[[0, 1]],
+    )
+
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, src_shape: ttgl.constexpr, dst_shape: ttgl.constexpr,
+               src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr,
+               shared_layout: ttgl.constexpr):
+        M: ttgl.constexpr = src_shape[0]
+        K: ttgl.constexpr = src_shape[1]
+        src_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, src_layout))[:, None]
+        src_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, src_layout))[None, :]
+        src_offs = src_offs_m * K + src_offs_k
+
+        x = ttgl.load(x_ptr + src_offs)
+        x = ttgl.permute(x, [1, 0])
+        smem = ttgl.allocate_shared_memory(x.dtype, dst_shape, shared_layout)
+        smem.store(x)
+        ttgl.barrier(cluster=True)
+        y = smem.load(dst_layout)
+
+        dst_m: ttgl.constexpr = dst_shape[0]
+        dst_k: ttgl.constexpr = dst_shape[1]
+        dst_offs_m = ttgl.arange(0, dst_m, layout=ttgl.SliceLayout(1, dst_layout))[:, None]
+        dst_offs_k = ttgl.arange(0, dst_k, layout=ttgl.SliceLayout(0, dst_layout))[None, :]
+        dst_offs = dst_offs_m * dst_k + dst_offs_k
+        ttgl.store(y_ptr + dst_offs, y)
+
+    torch.manual_seed(0)
+    x = torch.randn(src_shape, dtype=torch.float16, device=device)
+    y = torch.empty(dst_shape, dtype=torch.float16, device=device)
+
+    kernel[(1, )](x, y, src_shape, dst_shape, src_layout, dst_layout, shared_layout, num_warps=4, num_ctas=2)
+
+    torch.testing.assert_close(y, x.T, rtol=0, atol=0)
 
 
 def _funky_reduce_layouts():

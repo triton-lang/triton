@@ -952,6 +952,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = [[128, 0]]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @stmatrix_b16_trans_linear_2cta_splitm_to_splitk
+  // CHECK: nvvm.stmatrix
+  tt.func public @stmatrix_b16_trans_linear_2cta_splitm_to_splitk(%data: tensor<256x64xf16, #linear>) {
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
+    ttg.local_store %data, %0 : tensor<256x64xf16, #linear> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #bm64_bn128 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1>
 #bm64_bn64 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 
