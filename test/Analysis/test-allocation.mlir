@@ -35,6 +35,9 @@
 #PARTITIONED_SHARED_SWIZZLE = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #A_SHARED}>
 #PARTITIONED_SHARED_PADDED = #ttg.partitioned_shared<{numPartitions = 4, numGroups = 1, partitionDim = 1, partitionLayout = #PADDED_SHARED_0_16x32}>
 
+// Shared encoding with vec=1 for testing sub-byte element types
+#SHARED_VEC1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
@@ -1081,6 +1084,17 @@ tt.func @partitioned_shared_padded_alloc() {
   // expected-remark @below {{offset = 2112, size = 1052}}
   // expected-remark @below {{offset = 3168, size = 1052}}
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<64x32xf16, #PARTITIONED_SHARED_PADDED, #ttg.shared_memory, mutable>
+  tt.return
+}
+
+// Regression test for sub-byte element types (i1): bytes per element must use
+// ceil(bitwidth, 8) = 1, not bitwidth/8 = 0, to avoid a zero-size allocation.
+// 32x16 = 512 elements, ceil(1 bit / 8 bits per byte) = 1 byte/elem -> size = 512.
+// expected-remark @below {{sub_byte_elem_type_alloc}}
+// expected-remark @below {{size = 512}}
+tt.func @sub_byte_elem_type_alloc() {
+  // expected-remark @below {{offset = 0, size = 512}}
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<32x16xi1, #SHARED_VEC1, #ttg.shared_memory, mutable>
   tt.return
 }
 }

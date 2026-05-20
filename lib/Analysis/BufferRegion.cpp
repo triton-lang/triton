@@ -42,7 +42,10 @@ unsigned getMemDescSize(ttg::MemDescType ty) {
   }
   assert(isa<ttg::SharedMemorySpaceAttr>(ty.getMemorySpace()) &&
          "Unsupported memory space");
-  unsigned elSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
+  // Use ceil(bitwidth, 8) for sub-byte element types (e.g. i1, i4) to avoid
+  // 0-byte element sizes, consistent with the lowering in lowerLdSt.
+  unsigned elSize =
+      mlir::ceil<unsigned>(ty.getElementType().getIntOrFloatBitWidth(), 8u);
   return product(ttg::getShapePerCTA(ty)) * elSize;
 }
 

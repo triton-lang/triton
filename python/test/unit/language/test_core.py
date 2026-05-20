@@ -1,6 +1,7 @@
 # ruff: noqa: F821,F841
 import contextlib
 import itertools
+import pathlib
 import re
 from typing import Optional
 import math
@@ -7015,3 +7016,56 @@ def test_libdevice_rint(dtype_str, device):
     rint_kernel[(triton.cdiv(numel, BLOCK_SIZE), )](res_out, x_tri, numel, BLOCK_SIZE)
     ref_out = np.rint(x_np)
     np.testing.assert_allclose(to_numpy(res_out), ref_out, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("blocked", [
+    # row-major: threads laid out along the first dimension
+    "#ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>",
+    # column-major: threads laid out along the second dimension
+    "#ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>",
+])
+def test_local_alloc_sub_byte_element_type(device, tmp_path: pathlib.Path, blocked):
+    # Regression test for https://github.com/triton-lang/triton/pull/10285.
+    # Previously, local_alloc for sub-byte element types (e.g. i1) would compute
+    # an allocation size of 0 (bitwidth/8 = 1/8 = 0), while the lowering used
+    # ceil(bitwidth, 8) = 1 byte per element, causing a size mismatch.
+    # This test verifies that local_alloc and local_load work end-to-end for i1
+    # with two different blocked layouts.
+    ir = f"""
+    #blocked = {blocked}
+    #shared = #ttg.swizzled_shared<{{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}}>
+    #smem = #ttg.shared_memory
+    module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}} {{
+      tt.func public @test_local_alloc_i1(%arg0: !tt.ptr<i8> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i8> {{tt.divisibility = 16 : i32}}) {{
+        %range = tt.make_range {{end = 128 : i32, start = 0 : i32}} : tensor<128xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>>
+        %range2d = tt.expand_dims %range {{axis = 1 : i32}} : tensor<128xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<128x1xi32, #blocked>
+        %ptr0 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<128x1x!tt.ptr<i8>, #blocked>
+        %addr0 = tt.addptr %ptr0, %range2d : tensor<128x1x!tt.ptr<i8>, #blocked>, tensor<128x1xi32, #blocked>
+        %vals_i8 = tt.load %addr0 : tensor<128x1x!tt.ptr<i8>, #blocked>
+        %zero_i8 = arith.constant dense<0> : tensor<128x1xi8, #blocked>
+        %vals_i1 = arith.cmpi ne, %vals_i8, %zero_i8 : tensor<128x1xi8, #blocked>
+        %smem = ttg.local_alloc %vals_i1 : (tensor<128x1xi1, #blocked>) -> !ttg.memdesc<128x1xi1, #shared, #smem>
+        %loaded_i1 = ttg.local_load %smem : !ttg.memdesc<128x1xi1, #shared, #smem> -> tensor<128x1xi1, #blocked>
+        %loaded_i8 = arith.extui %loaded_i1 : tensor<128x1xi1, #blocked> to tensor<128x1xi8, #blocked>
+        %ptr1 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<128x1x!tt.ptr<i8>, #blocked>
+        %addr1 = tt.addptr %ptr1, %range2d : tensor<128x1x!tt.ptr<i8>, #blocked>, tensor<128x1xi32, #blocked>
+        tt.store %addr1, %loaded_i8 : tensor<128x1x!tt.ptr<i8>, #blocked>
+        tt.return
+      }}
+    }}
+    """
+
+    # Input: mix of zero and non-zero values to exercise both i1 paths.
+    x = torch.tensor([i % 3 - 1 for i in range(128)], dtype=torch.int8, device=device).reshape(128, 1)
+    z = torch.zeros(128, 1, dtype=torch.int8, device=device)
+
+    temp_file = tmp_path / "test_local_alloc_i1.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
+
+    # The kernel reads i8, casts to i1 (!=0), stores/loads via shared memory,
+    # then zero-extends back to i8 and writes out. Expected: 1 if input != 0 else 0.
+    expected = (x != 0).to(torch.int8)
+    assert torch.equal(z, expected)
