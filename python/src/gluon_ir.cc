@@ -1256,7 +1256,7 @@ void init_gluon_ir(py::module &&m) {
            std::vector<unsigned> &mfmaTilesPerWarp,
            unsigned mfmaElementBitWidth,
            std::vector<std::vector<int32_t>> &mfmaCgaBases,
-           std::vector<int64_t> &shape, unsigned elemBytes,
+           std::vector<int64_t> &shape, unsigned elemBitWidth,
            bool isKContig) -> py::object {
           DialectRegistry registry;
           registry.insert<triton::TritonDialect, ttg::TritonGPUDialect,
@@ -1265,9 +1265,9 @@ void init_gluon_ir(py::module &&m) {
           ctx.appendDialectRegistry(registry);
           ctx.loadAllAvailableDialects();
 
-          if (elemBytes != 1 && elemBytes != 2)
+          if (elemBitWidth != 4 && elemBitWidth != 8 && elemBitWidth != 16)
             return py::none();
-          auto elemTy = mlir::IntegerType::get(&ctx, elemBytes * 8);
+          auto elemTy = mlir::IntegerType::get(&ctx, elemBitWidth);
 
           auto mfmaCga =
               buildCgaLayoutAttr(&ctx, mfmaCgaBases, mfmaWarpsPerCTA.size());

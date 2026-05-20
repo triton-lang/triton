@@ -131,18 +131,22 @@ def compute_efficient_padded_shared_layout(dot_operand_layout, shape, dtype, is_
             ``[BM, BK]`` for operand A or ``[BK, BN]`` for operand B.
         dtype (dtype): Element type of the tensor that will live in this
             shared memory allocation (e.g. ``ttgl.float16``, ``ttgl.float8e4nv``).
-            Only types with bitwidth in {4, 8, 16} are supported.
+            Only types with bitwidth in {4, 8, 16} are supported. For packed
+            fp4 (two values per byte), pass ``ttgl.uint8`` — at the LDS level
+            4-bit shares the 8-bit padding pattern.
         is_k_contig (bool): K is the contiguous dim in shared memory.
     Return:
-        layout (PaddedSharedLayout): or None if any input is out of the
-            supported set.
+        layout (PaddedSharedLayout): or None if the input falls outside the
+            supported set. Common reasons for None: ``k_width`` not in
+            {4, 8, 16}; element bitwidth not in {4, 8, 16}; MFMA instruction
+            shape or kWidth combination not handled by the underlying
+            algorithm.
     """
     parent = dot_operand_layout.parent
     assert isinstance(parent, AMDMFMALayout), \
         "Expected dot operand's parent to be an AMDMFMALayout"
     assert parent.version == 4, \
         "compute_efficient_padded_shared_layout only supports MFMA v4 (CDNA4)"
-    elem_bytes = max(dtype.primitive_bitwidth // 8, 1)
     return _compute_efficient_padded_shared_layout_impl(
         dot_operand_layout.operand_index,
         dot_operand_layout.k_width,
@@ -154,7 +158,7 @@ def compute_efficient_padded_shared_layout(dot_operand_layout, shape, dtype, is_
         parent.element_bitwidth,
         list(parent.cga_layout),
         list(shape),
-        elem_bytes,
+        dtype.primitive_bitwidth,
         is_k_contig,
     )
 

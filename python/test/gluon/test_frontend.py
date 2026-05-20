@@ -4406,5 +4406,5 @@ def test_compute_efficient_padded_shared_layout_invalid_returns_none():
     bad_kwidth_dot_op = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=2)
     assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(bad_kwidth_dot_op, [128, 64], ttgl.float16) is None
 
-    # fp32 has bitwidth 32 (=> elem_bytes 4), outside {1, 2}.
+    # fp32 has bitwidth 32, outside the supported {4, 8, 16}.
     assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(dot_op, [128, 64], ttgl.float32) is None
