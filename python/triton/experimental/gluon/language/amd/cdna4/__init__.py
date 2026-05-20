@@ -119,32 +119,37 @@ _compute_efficient_padded_shared_layout_impl.__triton_builtin__ = True
 
 
 @constexpr_function
-def compute_efficient_padded_shared_layout(dot_operand_layout, shape, elem_bytes, is_k_contig=True):
+def compute_efficient_padded_shared_layout(dot_operand_layout, shape, dtype, is_k_contig=True):
     """Compute an efficient padded shared layout for the given parameters
     that avoids bank conflicts as much as possible.
 
     Args:
-        dot_operand_layout (DotOperandLayout): The dot operand layout
-            (must have an AMDMFMALayout parent). Provides op_idx, k_width,
-            and the MFMA non-K dim.
-        shape (List[int]): Tile shape — ``[BM, BK]`` for operand A or
-            ``[BK, BN]`` for operand B.
-        elem_bytes (int): Bytes per element. Must be in {1, 2}. fp8 and fp4
-            both pass 1; fp16 and bf16 pass 2.
+        dot_operand_layout (DotOperandLayout): The layout for the dot operand
+            that will be copied to shared memory with padding. Must have an
+            AMDMFMALayout v4 (CDNA4) parent.
+        shape (List[int]): Shared memory tile shape for the dot operand —
+            ``[BM, BK]`` for operand A or ``[BK, BN]`` for operand B.
+        dtype (dtype): Element type of the tensor that will live in this
+            shared memory allocation (e.g. ``ttgl.float16``, ``ttgl.float8e4nv``).
+            Only types with bitwidth in {4, 8, 16} are supported.
         is_k_contig (bool): K is the contiguous dim in shared memory.
     Return:
         layout (PaddedSharedLayout): or None if any input is out of the
             supported set.
     """
+    parent = dot_operand_layout.parent
+    assert isinstance(parent, AMDMFMALayout), \
+        "Expected dot operand's parent to be an AMDMFMALayout"
+    assert parent.version == 4, \
+        "compute_efficient_padded_shared_layout only supports MFMA v4 (CDNA4)"
     op_idx = dot_operand_layout.operand_index
     k_width = dot_operand_layout.k_width
-    parent = dot_operand_layout.parent
-    assert isinstance(parent, AMDMFMALayout), "Expected parent to be an instance of AMDMFMALayout"
     mfma_non_k_dim = parent.instr_shape[op_idx]
     if op_idx == 0:
         non_k_dim, k_dim = shape
     else:
         k_dim, non_k_dim = shape
+    elem_bytes = max(dtype.primitive_bitwidth // 8, 1)
     return _compute_efficient_padded_shared_layout_impl(op_idx, k_width, mfma_non_k_dim, k_dim, non_k_dim, elem_bytes,
                                                         is_k_contig)
 

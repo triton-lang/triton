@@ -4356,7 +4356,7 @@ def test_compute_efficient_padded_shared_layout_op_a_fp16():
                                                              warps_per_cta=[2, 2])
         dot_op_a: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=8)
         shared_a: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
-            dot_op_a, [128, 64], elem_bytes=2)
+            dot_op_a, [128, 64], ttgl.float16)
         ttgl.allocate_shared_memory(ttgl.float16, [128, 64], shared_a)
 
     module = run_parser(kernel, *make_args(num_warps=4), target=HIP_TARGET_CDNA4)
@@ -4381,7 +4381,7 @@ def test_compute_efficient_padded_shared_layout_op_b_fp8():
                                                              warps_per_cta=[2, 2])
         dot_op_b: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=16)
         shared_b: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
-            dot_op_b, [128, 128], elem_bytes=1)
+            dot_op_b, [128, 128], ttgl.float8e4nv)
         ttgl.allocate_shared_memory(ttgl.float8e4nv, [128, 128], shared_b)
 
     module = run_parser(kernel, *make_args(num_warps=4), target=HIP_TARGET_CDNA4)
@@ -4404,7 +4404,7 @@ def test_compute_efficient_padded_shared_layout_invalid_returns_none():
 
     # k_width=2 is outside {4, 8, 16}.
     bad_kwidth_dot_op = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=2)
-    assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(bad_kwidth_dot_op, [128, 64], elem_bytes=2) is None
+    assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(bad_kwidth_dot_op, [128, 64], ttgl.float16) is None
 
-    # elem_bytes=4 (e.g. fp32) is outside {1, 2}.
-    assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(dot_op, [128, 64], elem_bytes=4) is None
+    # fp32 has bitwidth 32 (=> elem_bytes 4), outside {1, 2}.
+    assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(dot_op, [128, 64], ttgl.float32) is None
