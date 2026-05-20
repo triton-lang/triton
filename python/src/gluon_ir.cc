@@ -1250,8 +1250,14 @@ void init_gluon_ir(py::module &&m) {
         });
 
   m.def("compute_amd_efficient_padded_shared_layout",
-        [](unsigned opIdx, unsigned kWidth, unsigned mfmaNonKDim, unsigned kDim,
-           unsigned nonKDim, unsigned elemBytes, bool isKContig) -> py::object {
+        [](unsigned opIdx, unsigned kWidth, unsigned mfmaVersion,
+           std::vector<unsigned> &mfmaWarpsPerCTA,
+           std::vector<unsigned> &mfmaInstrShape, bool mfmaTransposed,
+           std::vector<unsigned> &mfmaTilesPerWarp,
+           unsigned mfmaElementBitWidth,
+           std::vector<std::vector<int32_t>> &mfmaCgaBases,
+           std::vector<int64_t> &shape, unsigned elemBytes,
+           bool isKContig) -> py::object {
           DialectRegistry registry;
           registry.insert<triton::TritonDialect, ttg::TritonGPUDialect,
                           ttng::TritonNvidiaGPUDialect, gluon::GluonDialect>();
@@ -1263,14 +1269,11 @@ void init_gluon_ir(py::module &&m) {
             return py::none();
           auto elemTy = mlir::IntegerType::get(&ctx, elemBytes * 8);
 
-          SmallVector<unsigned, 3> instrShape = {mfmaNonKDim, mfmaNonKDim,
-                                                 mfmaNonKDim};
-          auto trivialCga =
-              buildCgaLayoutAttr(&ctx, /*cgaBases=*/{}, /*rank=*/2);
+          auto mfmaCga =
+              buildCgaLayoutAttr(&ctx, mfmaCgaBases, mfmaWarpsPerCTA.size());
           auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-              &ctx, /*version=*/4, /*warpsPerCTA=*/{1, 1}, instrShape,
-              /*isTransposed=*/true, trivialCga,
-              /*tilesPerWarp=*/{1, 1}, /*elementBitWidth=*/32);
+              &ctx, mfmaVersion, mfmaWarpsPerCTA, mfmaInstrShape,
+              mfmaTransposed, mfmaCga, mfmaTilesPerWarp, mfmaElementBitWidth);
           if (!mfmaEnc)
             return py::none();
           auto dotOpEnc =
@@ -1278,10 +1281,6 @@ void init_gluon_ir(py::module &&m) {
           if (!dotOpEnc)
             return py::none();
 
-          SmallVector<int64_t, 2> shape =
-              opIdx == 0
-                  ? SmallVector<int64_t, 2>{(int64_t)nonKDim, (int64_t)kDim}
-                  : SmallVector<int64_t, 2>{(int64_t)kDim, (int64_t)nonKDim};
           auto srcTy = RankedTensorType::get(shape, elemTy, dotOpEnc);
 
           // sharedOrder[0] is the fast dim; for K-contig that's the K axis.

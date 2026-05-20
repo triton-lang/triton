@@ -142,16 +142,21 @@ def compute_efficient_padded_shared_layout(dot_operand_layout, shape, dtype, is_
         "Expected dot operand's parent to be an AMDMFMALayout"
     assert parent.version == 4, \
         "compute_efficient_padded_shared_layout only supports MFMA v4 (CDNA4)"
-    op_idx = dot_operand_layout.operand_index
-    k_width = dot_operand_layout.k_width
-    mfma_non_k_dim = parent.instr_shape[op_idx]
-    if op_idx == 0:
-        non_k_dim, k_dim = shape
-    else:
-        k_dim, non_k_dim = shape
     elem_bytes = max(dtype.primitive_bitwidth // 8, 1)
-    return _compute_efficient_padded_shared_layout_impl(op_idx, k_width, mfma_non_k_dim, k_dim, non_k_dim, elem_bytes,
-                                                        is_k_contig)
+    return _compute_efficient_padded_shared_layout_impl(
+        dot_operand_layout.operand_index,
+        dot_operand_layout.k_width,
+        parent.version,
+        list(parent.warps_per_cta),
+        list(parent.instr_shape),
+        parent.transposed,
+        list(parent.tiles_per_warp),
+        parent.element_bitwidth,
+        list(parent.cga_layout),
+        list(shape),
+        elem_bytes,
+        is_k_contig,
+    )
 
 
 """
