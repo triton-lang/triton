@@ -1713,6 +1713,142 @@ def test_block_m_64_mma():
     torch.testing.assert_close(d_ref, d_tri, rtol=0.08, atol=0)
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_m_split_load():
+    # Exercises TMemSplitMLoadPattern: load a 2-block TMEM allocation, split it
+    # along M via reshape -> permute -> split, and store the two halves. The
+    # optimization should rewrite this to two M-direction tmem_subslice + load
+    # pairs at M offsets 0 and BLOCK_M.
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr):
+        BLOCK_M: ttgl.constexpr = 128
+        N: ttgl.constexpr = 128
+        SRC_M: ttgl.constexpr = 2 * BLOCK_M
+
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, N), col_stride=1)
+        tmem = allocate_tensor_memory(ttgl.float32, (SRC_M, N), layout=tmem_layout)
+
+        out_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 2], [1, 0])
+
+        in_offsets = ttgl.arange(0, SRC_M)[:, None] * N + ttgl.arange(0, N)[None, :]
+        in_offsets = ttgl.set_auto_layout(in_offsets, tmem.get_reg_layout())
+        x = ttgl.load(in_ptr + in_offsets)
+        tmem.store(x)
+
+        y = tmem.load()
+        a, b = y.reshape((2, BLOCK_M, N)).permute(1, 2, 0).split()
+
+        half_offsets = ttgl.arange(0, BLOCK_M)[:, None] * N + ttgl.arange(0, N)[None, :]
+        half_offsets = ttgl.set_auto_layout(half_offsets, out_layout)
+        ttgl.store(out_ptr + half_offsets, ttgl.convert_layout(a, out_layout))
+        ttgl.store(out_ptr + half_offsets + BLOCK_M * N, ttgl.convert_layout(b, out_layout))
+
+    torch.manual_seed(0)
+    src = torch.randn((256, 128), dtype=torch.float32, device="cuda")
+    out_tri = torch.empty_like(src)
+
+    compiled = kernel[(1, )](src, out_tri, num_warps=8)
+
+    ttgir = compiled.asm["ttgir"]
+    # The rewrite should produce a tmem_subslice with M offset = 128, and the
+    # original reshape/trans/split chain should be gone.
+    assert "tmem_subslice" in ttgir and "{M = 128 : i32" in ttgir, \
+        "TMemSplitMLoadPattern did not fire"
+    assert "tt.split" not in ttgir, "split was not eliminated by the rewrite"
+
+    torch.testing.assert_close(out_tri, src, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_m_join_store():
+    # Exercises TMemStoreJoinMPattern: join two halves with permute -> reshape
+    # and store into a 2-block TMEM allocation. The optimization should rewrite
+    # to two M-direction tmem_subslice + store pairs.
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, out_ptr):
+        BLOCK_M: ttgl.constexpr = 128
+        N: ttgl.constexpr = 128
+        DST_M: ttgl.constexpr = 2 * BLOCK_M
+
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, N), col_stride=1)
+        tmem = allocate_tensor_memory(ttgl.float32, (DST_M, N), layout=tmem_layout)
+
+        in_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 2], [1, 0])
+        half_offsets = ttgl.arange(0, BLOCK_M)[:, None] * N + ttgl.arange(0, N)[None, :]
+        half_offsets = ttgl.set_auto_layout(half_offsets, in_layout)
+
+        a = ttgl.load(a_ptr + half_offsets)
+        b = ttgl.load(b_ptr + half_offsets)
+
+        joined = ttgl.join(a, b).permute(2, 0, 1).reshape((DST_M, N))
+        tmem.store(ttgl.convert_layout(joined, tmem.get_reg_layout()))
+
+        y = tmem.load()
+        out_offsets = ttgl.arange(0, DST_M)[:, None] * N + ttgl.arange(0, N)[None, :]
+        out_offsets = ttgl.set_auto_layout(out_offsets, tmem.get_reg_layout())
+        ttgl.store(out_ptr + out_offsets, y)
+
+    torch.manual_seed(0)
+    a = torch.randn((128, 128), dtype=torch.float32, device="cuda")
+    b = torch.randn((128, 128), dtype=torch.float32, device="cuda")
+    out_tri = torch.empty((256, 128), dtype=torch.float32, device="cuda")
+
+    compiled = kernel[(1, )](a, b, out_tri, num_warps=8)
+
+    ttgir = compiled.asm["ttgir"]
+    assert "tmem_subslice" in ttgir and "{M = 128 : i32" in ttgir, \
+        "TMemStoreJoinMPattern did not fire"
+    assert "tt.join" not in ttgir, "join was not eliminated by the rewrite"
+
+    expected = torch.cat([a, b], dim=0)
+    torch.testing.assert_close(out_tri, expected, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_m_split_load_blockm64():
+    # Same as test_tmem_m_split_load but with blockM=64. The two halves of M
+    # land on single-block boundaries (M offsets 0 and 64).
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr):
+        BLOCK_M: ttgl.constexpr = 64
+        N: ttgl.constexpr = 128
+        SRC_M: ttgl.constexpr = 2 * BLOCK_M
+
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, N), col_stride=1)
+        tmem = allocate_tensor_memory(ttgl.float32, (SRC_M, N), layout=tmem_layout)
+
+        out_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+
+        in_offsets = ttgl.arange(0, SRC_M)[:, None] * N + ttgl.arange(0, N)[None, :]
+        in_offsets = ttgl.set_auto_layout(in_offsets, tmem.get_reg_layout())
+        x = ttgl.load(in_ptr + in_offsets)
+        tmem.store(x)
+
+        y = tmem.load()
+        a, b = y.reshape((2, BLOCK_M, N)).permute(1, 2, 0).split()
+
+        half_offsets = ttgl.arange(0, BLOCK_M)[:, None] * N + ttgl.arange(0, N)[None, :]
+        half_offsets = ttgl.set_auto_layout(half_offsets, out_layout)
+        ttgl.store(out_ptr + half_offsets, ttgl.convert_layout(a, out_layout))
+        ttgl.store(out_ptr + half_offsets + BLOCK_M * N, ttgl.convert_layout(b, out_layout))
+
+    torch.manual_seed(0)
+    src = torch.randn((128, 128), dtype=torch.float32, device="cuda")
+    out_tri = torch.empty_like(src)
+
+    compiled = kernel[(1, )](src, out_tri, num_warps=4)
+
+    ttgir = compiled.asm["ttgir"]
+    assert "tmem_subslice" in ttgir and "{M = 64 : i32" in ttgir, \
+        "TMemSplitMLoadPattern did not fire (blockM=64)"
+    assert "tt.split" not in ttgir, "split was not eliminated by the rewrite"
+
+    torch.testing.assert_close(out_tri, src, atol=0, rtol=0)
+
+
 def test_slice_reinterpret():
     BLOCK = ttgl.constexpr(2048)
     SPLIT_BLOCK = ttgl.constexpr(BLOCK // 2)
