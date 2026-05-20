@@ -28,6 +28,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -49,6 +50,8 @@ constexpr size_t BufferSize = 64 * 1024 * 1024;
 constexpr const char *UnknownKernelName = "<unknown>";
 
 struct RocprofSDKProfilerPimpl;
+using ExternIdToGraphNodeCursorMap =
+    ThreadSafeMap<size_t, size_t, std::unordered_map<size_t, size_t>>;
 
 // ---- SDK runtime state (singleton, outlives any profiler instance) ----
 
@@ -361,6 +364,67 @@ bool isKernelLaunchOperation(rocprofiler_tracing_operation_t op) {
   }
 }
 
+void rebuildGraphStatePointers(GraphState &graphState) {
+  graphState.dataToEntryIdToNodeStates.clear();
+  for (auto &[nodeId, nodeState] : graphState.nodeIdToState) {
+    for (const auto &[data, entryId] : nodeState.dataToEntryId) {
+      graphState.dataToEntryIdToNodeStates[data][entryId].insert(&nodeState);
+    }
+  }
+}
+
+GraphState copyGraphState(const GraphState &source) {
+  GraphState graphState;
+  graphState.nodeIdToState = source.nodeIdToState;
+  graphState.metricNodeIdToState = source.metricNodeIdToState;
+  graphState.metricSeqIdToNodeId = source.metricSeqIdToNodeId;
+  graphState.captureStatusChecked = source.captureStatusChecked;
+  graphState.numMetricWords = source.numMetricWords;
+  return graphState;
+}
+
+void addCapturedGraphNode(const DataToEntryMap &dataToEntry,
+                          GraphState &graphState, const std::string &name) {
+  auto nodeId = static_cast<uint64_t>(graphState.nodeIdToState.size());
+  auto &nodeState = graphState.nodeIdToState[nodeId];
+  nodeState.nodeId = nodeId;
+  if (name.empty())
+    nodeState.status.setMissingName();
+
+  for (auto &[data, entry] : dataToEntry) {
+    auto currentContexts = data->getContexts();
+    std::vector<Context> contexts;
+    contexts.emplace_back(GraphState::captureTag);
+    for (const auto &context : currentContexts) {
+      contexts.push_back(context);
+    }
+    contexts.emplace_back(name);
+    auto staticEntry =
+        data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
+    nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
+    graphState.dataToEntryIdToNodeStates[data][staticEntry.id].insert(
+        &nodeState);
+  }
+}
+
+RocprofSDKProfiler::ExternIdState *
+buildGraphNodeEntries(const DataToEntryMap &dataToEntry, GraphState &graphState,
+                      RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
+                      size_t externId) {
+  if (dataToEntry.empty())
+    return nullptr;
+
+  auto &externIdState = externIdToState[externId];
+  for (auto &[data, entry] : dataToEntry) {
+    auto nodeStateIt = graphState.dataToEntryIdToNodeStates.find(data);
+    if (nodeStateIt == graphState.dataToEntryIdToNodeStates.end())
+      continue;
+    externIdState.dataToGraphEntry.insert({data, entry});
+  }
+  externIdState.nodeIdToState = &graphState.nodeIdToState;
+  return &externIdState;
+}
+
 // ---- Kernel dispatch processing (matches main's GPUProfiler interface) ----
 
 void processKernelRecord(
@@ -369,6 +433,7 @@ void processKernelRecord(
     RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
     ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
         &corrIdToIsHipGraph,
+    ExternIdToGraphNodeCursorMap &graphLaunchToNextNodeIndex,
     std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
     const std::string &kernelName,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record,
@@ -401,12 +466,31 @@ void processKernelRecord(
       }
     }
   } else {
-    for (auto [data, entry] : state.dataToEntry) {
-      if (auto metric = convertDispatchToMetric(record, streamId)) {
-        auto childEntry =
-            data->addOp(entry.phase, entry.id, {Context(kernelName)});
-        childEntry.upsertMetric(std::move(metric));
-        detail::updateDataPhases(dataPhases, data, entry.phase);
+    auto *nodeIdToState = state.nodeIdToState;
+    size_t nextGraphNodeIndex = 0;
+    const bool hasGraphNodeCursor = graphLaunchToNextNodeIndex.withWrite(
+        externId, [&](size_t &cursor) { nextGraphNodeIndex = cursor++; });
+    if (nodeIdToState && hasGraphNodeCursor &&
+        nextGraphNodeIndex < nodeIdToState->size()) {
+      const auto nodeIt = std::next(nodeIdToState->begin(), nextGraphNodeIndex);
+      const auto &nodeState = nodeIt->second;
+      for (auto &[data, entry] : state.dataToGraphEntry) {
+        auto targetEntryIdIt = nodeState.dataToEntryId.find(data);
+        if (targetEntryIdIt == nodeState.dataToEntryId.end())
+          continue;
+        if (auto metric = convertDispatchToMetric(record, streamId)) {
+          entry.upsertLinkedMetric(std::move(metric), targetEntryIdIt->second);
+          detail::updateDataPhases(dataPhases, data, entry.phase);
+        }
+      }
+    } else {
+      for (auto [data, entry] : state.dataToEntry) {
+        if (auto metric = convertDispatchToMetric(record, streamId)) {
+          auto childEntry =
+              data->addOp(entry.phase, entry.id, {Context(kernelName)});
+          childEntry.upsertMetric(std::move(metric));
+          detail::updateDataPhases(dataPhases, data, entry.phase);
+        }
       }
     }
   }
@@ -415,6 +499,7 @@ void processKernelRecord(
   if (state.numNodes == 0) {
     corrIdToExternId.erase(record->correlation_id.internal);
     corrIdToIsHipGraph.erase(record->correlation_id.internal);
+    graphLaunchToNextNodeIndex.erase(externId);
     externIdToState.erase(externId);
   }
 }
@@ -477,12 +562,22 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
   ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
       corrIdToIsHipGraph;
 
+  ExternIdToGraphNodeCursorMap graphLaunchToNextNodeIndex;
+
   ThreadSafeMap<hipGraphExec_t, hipGraph_t,
                 std::unordered_map<hipGraphExec_t, hipGraph_t>>
       graphExecToGraph;
 
   ThreadSafeMap<hipGraph_t, uint32_t, std::unordered_map<hipGraph_t, uint32_t>>
       graphToNumInstances;
+
+  ThreadSafeMap<hipGraph_t, GraphState,
+                std::unordered_map<hipGraph_t, GraphState>>
+      graphStates;
+
+  ThreadSafeMap<hipStream_t, GraphState,
+                std::unordered_map<hipStream_t, GraphState>>
+      streamToGraphState;
 
   ThreadSafeMap<hipStream_t, uint32_t,
                 std::unordered_map<hipStream_t, uint32_t>>
@@ -503,6 +598,18 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
   ThreadSafeMap<uint64_t, uint64_t, std::unordered_map<uint64_t, uint64_t>>
       corrIdToStreamId;
 };
+
+bool isCapturedKernelLaunch(
+    RocprofSDKProfiler::RocprofSDKProfilerPimpl *impl,
+    rocprofiler_tracing_operation_t operation,
+    const rocprofiler_callback_tracing_hip_api_data_t *payload) {
+  if (operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch ||
+      impl->activeCaptureCount.load(std::memory_order_acquire) == 0)
+    return false;
+  auto stream =
+      reinterpret_cast<hipStream_t>(extractStreamId(operation, payload));
+  return impl->streamToCapture.contain(stream);
+}
 
 // ---- HIP Runtime API callback (correlation tracking) ----
 
@@ -528,6 +635,15 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
     threadState.enterOp(
         Scope(resolvedName ? std::string(resolvedName) : std::string()));
     auto &dataToEntry = threadState.dataToEntry;
+    if (isCapturedKernelLaunch(impl, operation, payload)) {
+      auto stream =
+          reinterpret_cast<hipStream_t>(extractStreamId(operation, payload));
+      const auto &name = threadState.scopeStack.back().name;
+      impl->streamToGraphState.upsert(stream, [&](GraphState &graphState) {
+        addCapturedGraphNode(dataToEntry, graphState, name);
+      });
+      return;
+    }
     size_t numInstances = 1;
     if (operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch) {
       impl->corrIdToIsHipGraph[record.correlation_id.internal] = true;
@@ -536,7 +652,18 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
       auto graphExec = payload->args.hipGraphLaunch.graphExec;
       if (impl->graphExecToGraph.contain(graphExec)) {
         auto graph = impl->graphExecToGraph[graphExec];
-        if (impl->graphToNumInstances.contain(graph)) {
+        if (impl->graphStates.withWrite(graph, [&](GraphState &graphState) {
+              if (!graphState.captureStatusChecked)
+                numInstances = graphState.nodeIdToState.size();
+              auto *externIdState = buildGraphNodeEntries(
+                  dataToEntry, graphState, profiler.correlation.externIdToState,
+                  threadState.scopeStack.back().scopeId);
+              if (externIdState)
+                impl->graphLaunchToNextNodeIndex[threadState.scopeStack.back()
+                                                     .scopeId] = 0;
+              foundGraph = true;
+            })) {
+        } else if (impl->graphToNumInstances.contain(graph)) {
           numInstances = impl->graphToNumInstances[graph];
           foundGraph = true;
         }
@@ -567,6 +694,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
     auto stream = payload->args.hipStreamBeginCapture.stream;
     impl->streamToCaptureCount[stream] = 0;
     impl->streamToCapture[stream] = true;
+    impl->streamToGraphState[stream] = GraphState{};
     impl->activeCaptureCount.fetch_add(1, std::memory_order_release);
     break;
   }
@@ -577,6 +705,17 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
                             ? impl->streamToCaptureCount[stream]
                             : 0;
     impl->graphToNumInstances[graph] = captured;
+    std::optional<GraphState> capturedGraphState;
+    impl->streamToGraphState.withRead(stream, [&](const GraphState &state) {
+      capturedGraphState = copyGraphState(state);
+    });
+    if (capturedGraphState) {
+      impl->graphStates.upsert(graph, [&](GraphState &graphState) {
+        graphState = *capturedGraphState;
+        rebuildGraphStatePointers(graphState);
+      });
+    }
+    impl->streamToGraphState.erase(stream);
     impl->streamToCapture.erase(stream);
     impl->streamToCaptureCount.erase(stream);
     impl->activeCaptureCount.fetch_sub(1, std::memory_order_release);
@@ -602,6 +741,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphDestroy: {
     auto graph = payload->args.hipGraphDestroy.graph;
     impl->graphToNumInstances.erase(graph);
+    impl->graphStates.erase(graph);
     break;
   }
   default:
@@ -639,12 +779,14 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
     default:
       break;
     }
-    if (stream && impl->streamToCapture.contain(stream))
+    if (impl->streamToCapture.contain(stream))
       impl->streamToCaptureCount[stream]++;
   }
 
   if (isKernelOp) {
     threadState.exitOp();
+    if (isCapturedKernelLaunch(impl, operation, payload))
+      return;
     profiler.correlation.submit(record.correlation_id.internal);
   }
 }
@@ -769,7 +911,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         [&](const uint64_t &sid) { streamId = sid; });
     processKernelRecord(profiler, correlation.corrIdToExternId,
                         correlation.externIdToState, impl->corrIdToIsHipGraph,
-                        dataPhases, kernelName, record, streamId);
+                        impl->graphLaunchToNextNodeIndex, dataPhases,
+                        kernelName, record, streamId);
     impl->corrIdToStreamId.erase(record->correlation_id.internal);
   }
   profiler.flushDataPhases(dataPhases, profiler.pendingGraphPool.get());
