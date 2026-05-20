@@ -5,7 +5,6 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia.hopper import mbarrier
-from triton.experimental.gluon.language.nvidia.blackwell import clc
 
 TORCH_GEMM_DTYPE = torch.bfloat16
 GL_GEMM_DTYPE = gl.bfloat16
@@ -125,98 +124,33 @@ class Counter:
 
 
 @gluon.aggregate
-class ClcTileScheduler:
-    has_work: gl.tensor
-    tile_id: gl.tensor
-    clc_result_buffers: gl.shared_memory_descriptor
-    clc_barriers: gl.shared_memory_descriptor
-    clc_tile_id_buffers: gl.shared_memory_descriptor
-    clc_tile_ready_bars: gl.shared_memory_descriptor
-    clc_consumed_bars: gl.shared_memory_descriptor
-    counter: Counter
-    consumed_counter: Counter
+class PersistentTileScheduler:
+    pid_start: gl.tensor
+    pid_end: gl.tensor
 
     @gluon.jit
-    def initialize(clc_result_buffers, clc_barriers, clc_tile_id_buffers, clc_tile_ready_bars, clc_consumed_bars):
-        return ClcTileScheduler(
-            gl.to_tensor(True),
-            gl.program_id(axis=0),
-            clc_result_buffers,
-            clc_barriers,
-            clc_tile_id_buffers,
-            clc_tile_ready_bars,
-            clc_consumed_bars,
-            Counter.create(0, clc_barriers.shape[0]),
-            Counter.create(0, clc_barriers.shape[0]),
-        )
+    def initialize(num_tiles):
+        kernel_id = gl.program_id(axis=0)
+        num_kernels = gl.num_programs(axis=0)
+        pid_per_kernel = gl.cdiv(num_tiles, num_kernels)
+        pid_start = kernel_id * pid_per_kernel
+        pid_end = gl.minimum(pid_start + pid_per_kernel, num_tiles)
+        return PersistentTileScheduler(pid_start, pid_end)
 
     @gluon.jit
-    def step(self, iteration):
-        consumed_counter = self.consumed_counter
-        if iteration > 0:
-            mbarrier.arrive(self.clc_consumed_bars.index(consumed_counter.index))
-            consumed_counter = consumed_counter.next()
+    def get_num_tiles(self):
+        return self.pid_end - self.pid_start
 
-        counter = self.counter
-        barrier = self.clc_barriers.index(counter.index)
-        result = self.clc_result_buffers.index(counter.index)
-        mbarrier.wait(barrier, counter.phase)
-        clc_res = clc.load_result(result)
-        mbarrier.wait(self.clc_tile_ready_bars.index(counter.index), counter.phase)
-
-        tile_slot = self.clc_tile_id_buffers.index(counter.index)
-        planar_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0],
-                                                       [[0]] * (gl.num_ctas().bit_length() - 1))
-        tile_id = tile_slot.load(planar_layout).reshape([]).to(gl.int32)
-        has_work = clc_res.is_canceled()
-        return ClcTileScheduler(
-            has_work,
-            tile_id,
-            self.clc_result_buffers,
-            self.clc_barriers,
-            self.clc_tile_id_buffers,
-            self.clc_tile_ready_bars,
-            self.clc_consumed_bars,
-            counter.next(),
-            consumed_counter,
-        )
+    @gluon.jit
+    def get_tile_id(self, idx):
+        return self.pid_start + idx
 
 
 @gluon.jit
-def clc_tile_scheduler_partition(p):
-    """Cancel future CTAs and publish their tile IDs to consumer partitions."""
-    has_work = gl.to_tensor(True)
-    state = Counter.create(0, p.clc_barriers.shape[0])
-    consumed_state = Counter.create(1, p.clc_barriers.shape[0])
-    num_slots: gl.constexpr = p.clc_barriers.shape[0]
-    i = 0
-    while has_work:
-        mbarrier.wait(
-            p.clc_consumed_bars.index(consumed_state.index),
-            consumed_state.phase,
-            pred=(i >= num_slots),
-        )
-        barrier = p.clc_barriers.index(state.index)
-        result = p.clc_result_buffers.index(state.index)
-        # clc.try_cancel returns a b128 payload.
-        mbarrier.expect(barrier, 16)
-        clc.try_cancel(result, barrier)
-        mbarrier.wait(barrier, state.phase)
-
-        clc_res = clc.load_result(result)
-        has_work = clc_res.is_canceled()
-        tile_id = gl.to_tensor(0)
-        if has_work:
-            tile_id = clc_res.program_id(0)
-
-        tile_slot = p.clc_tile_id_buffers.index(state.index)
-        planar_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0],
-                                                       [[0]] * (gl.num_ctas().bit_length() - 1))
-        tile_slot.store(gl.full([1], tile_id.to(gl.int64), gl.int64, layout=planar_layout))
-        mbarrier.arrive(p.clc_tile_ready_bars.index(state.index))
-        state = state.next()
-        consumed_state = consumed_state.next()
-        i += 1
+def init_mbarrier_ring(bars):
+    num_bars: gl.constexpr = bars.type.shape[0]
+    for i in gl.static_range(num_bars):
+        mbarrier.init(bars.index(i), count=1)
 
 
 @gluon.jit
@@ -227,15 +161,15 @@ def invalidate_mbarrier_ring(bars):
 
 
 __all__ = [
-    "ClcTileScheduler",
     "Counter",
     "GL_GEMM_DTYPE",
+    "PersistentTileScheduler",
     "TORCH_GEMM_DTYPE",
-    "clc_tile_scheduler_partition",
     "ensure_tma_compatible_strides",
     "get_gluon_dtype_for_tensor",
     "get_operand_cga_layout",
     "get_transposed_cga_layout",
+    "init_mbarrier_ring",
     "invalidate_mbarrier_ring",
     "is_blackwell",
     "is_cuda",

@@ -46,10 +46,9 @@ _conv_common = _load_conv_common()
 # ===-----------------------------------------------------------------------===#
 
 Counter = _conv_common.Counter
-ClcTileScheduler = _conv_common.ClcTileScheduler
 GL_GEMM_DTYPE = _conv_common.GL_GEMM_DTYPE
+PersistentTileScheduler = _conv_common.PersistentTileScheduler
 TORCH_GEMM_DTYPE = _conv_common.TORCH_GEMM_DTYPE
-clc_tile_scheduler_partition = _conv_common.clc_tile_scheduler_partition
 get_operand_cga_layout = _conv_common.get_operand_cga_layout
 get_transposed_cga_layout = _conv_common.get_transposed_cga_layout
 invalidate_mbarrier_ring = _conv_common.invalidate_mbarrier_ring
@@ -164,21 +163,6 @@ class PartitionArgs:
     acc_bufs: tensor_memory_descriptor
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
-    clc_result_buffers: gl.shared_memory_descriptor
-    clc_barriers: gl.shared_memory_descriptor
-    clc_tile_id_buffers: gl.shared_memory_descriptor
-    clc_tile_ready_bars: gl.shared_memory_descriptor
-    clc_consumed_bars: gl.shared_memory_descriptor
-
-    @gluon.jit
-    def get_clc_consumer(self):
-        return ClcTileScheduler.initialize(
-            self.clc_result_buffers,
-            self.clc_barriers,
-            self.clc_tile_id_buffers,
-            self.clc_tile_ready_bars,
-            self.clc_consumed_bars,
-        )
 
 
 # ===-----------------------------------------------------------------------===#
@@ -199,10 +183,9 @@ def load_partition(p):
     num_rs = config.R * config.S
     num_k_iter = config.get_num_k_iterations()
 
-    scheduler = p.get_clc_consumer()
-    i = 0
-    while scheduler.has_work:
-        prog = config.get_program(scheduler.tile_id)
+    scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
+    for idx in range(scheduler.get_num_tiles()):
+        prog = config.get_program(scheduler.get_tile_id(idx))
         batch_id, out_y, out_x = prog.get_m_offsets()
 
         for k_iter in range(num_k_iter):
@@ -238,8 +221,6 @@ def load_partition(p):
                 b_stage,
             )
             state = state.next()
-        scheduler = scheduler.step(i)
-        i += 1
 
 
 @gluon.jit
@@ -252,9 +233,8 @@ def mma_partition(p):
     load_state = Counter.create(0, p.load_empty_bars.shape[0])
     acc_state = Counter.create(1, p.acc_empty_bars.shape[0])
 
-    scheduler = p.get_clc_consumer()
-    i = 0
-    while scheduler.has_work:
+    scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
+    for _ in range(scheduler.get_num_tiles()):
         mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase)
         acc_buf = p.acc_bufs.index(acc_state.index)
         use_acc = False
@@ -274,8 +254,6 @@ def mma_partition(p):
 
         tcgen05_commit(p.acc_ready_bars.index(acc_state.index))
         acc_state = acc_state.next()
-        scheduler = scheduler.step(i)
-        i += 1
 
 
 @gluon.jit
@@ -287,6 +265,8 @@ def epilogue_partition(p):
     TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
 
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
+    scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
+
     if TWO_CTAS:
         EPILOGUE_BLOCK_N: gl.constexpr = p.output_desc.block_shape[1]
         gl.static_assert(BLOCK_N % EPILOGUE_BLOCK_N == 0)
@@ -298,10 +278,8 @@ def epilogue_partition(p):
             p.output_desc.layout,
         )
         sub_state = Counter.create(0, SUBTILE_STAGES)
-        scheduler = p.get_clc_consumer()
-        i = 0
-        while scheduler.has_work:
-            prog = config.get_program(scheduler.tile_id)
+        for idx in range(scheduler.get_num_tiles()):
+            prog = config.get_program(scheduler.get_tile_id(idx))
             off_m = prog.pid_m * BLOCK_M
             off_n = prog.pid_n * BLOCK_N
 
@@ -318,16 +296,12 @@ def epilogue_partition(p):
 
             mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
             acc_state = acc_state.next()
-            scheduler = scheduler.step(i)
-            i += 1
         tma.store_wait(0)
     else:
         M_GEMM = config.M_GEMM
         N_GEMM = config.Co
-        scheduler = p.get_clc_consumer()
-        i = 0
-        while scheduler.has_work:
-            prog = config.get_program(scheduler.tile_id)
+        for idx in range(scheduler.get_num_tiles()):
+            prog = config.get_program(scheduler.get_tile_id(idx))
 
             mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
             acc = p.acc_bufs.index(acc_state.index).load()
@@ -346,8 +320,6 @@ def epilogue_partition(p):
                          c_out_x[:, None] * config.output_stride_w + offs_n[None, :])
             c_mask = (offs_m[:, None] < M_GEMM) & (offs_n[None, :] < N_GEMM)
             gl.store(p.output_ptr + c_offsets, result, mask=c_mask)
-            scheduler = scheduler.step(i)
-            i += 1
 
     invalidate_mbarrier_ring(p.load_empty_bars)
     invalidate_mbarrier_ring(p.load_ready_bars)
@@ -468,20 +440,6 @@ def conv2d_fprop_kernel(
         mbarrier.init(acc_empty_bars.index(i), count=1)
         mbarrier.init(acc_ready_bars.index(i), count=1)
 
-    N_CONSUMERS: gl.constexpr = 3
-    clc_barriers = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
-    clc_tile_ready_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
-    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=TWO_CTAS)
-    for i in gl.static_range(num_acc_buffers):
-        mbarrier.init(clc_barriers.index(i), count=1)
-        mbarrier.init(clc_tile_ready_bars.index(i), count=1)
-        mbarrier.init(clc_consumed_bars.index(i), count=N_CONSUMERS)
-
-    cga_layout_clc: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
-    clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout_clc)
-    clc_result_buffers = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 2], clc_layout)
-    clc_tile_id_buffers = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], clc_layout)
-
     p = PartitionArgs(
         config,
         in_desc,
@@ -495,19 +453,13 @@ def conv2d_fprop_kernel(
         acc_bufs,
         acc_empty_bars,
         acc_ready_bars,
-        clc_result_buffers,
-        clc_barriers,
-        clc_tile_id_buffers,
-        clc_tile_ready_bars,
-        clc_consumed_bars,
     )
 
     gl.warp_specialize([
         (epilogue_partition, (p, )),
         (mma_partition, (p, )),
         (load_partition, (p, )),
-        (clc_tile_scheduler_partition, (p, )),
-    ], [1, 1, 1], [24, 24, 24])
+    ], [1, 1], [24, 24])
 
 
 def conv2d_fprop_get_configs(pre_hook=None, include_2cta=False, block_n_values=(128, )):
@@ -689,11 +641,11 @@ def _make_conv_fprop_descriptors(input_tensor, weight_tensor, output_matrix, out
     return in_desc, weight_desc, output_desc
 
 
-def _make_grid(M_GEMM, N_GEMM):
+def _make_grid(num_sms, M_GEMM, N_GEMM):
 
     def grid(meta):
         num_tiles = triton.cdiv(M_GEMM, meta["BLOCK_M"]) * triton.cdiv(N_GEMM, meta["BLOCK_N"])
-        return (num_tiles, )
+        return (min(num_sms, num_tiles), )
 
     return grid
 
@@ -764,6 +716,7 @@ def conv2d_fprop(input_tensor, weight_tensor, stride=1, padding=0, **kwargs):
 
     M_GEMM = N * out_h * out_w
     N_GEMM = Co
+    num_sms = torch.cuda.get_device_properties(input_tensor.device).multi_processor_count
     output_matrix = output.view(-1, Co)
 
     dummy_block_shape = [1, 1]
@@ -790,7 +743,7 @@ def conv2d_fprop(input_tensor, weight_tensor, stride=1, padding=0, **kwargs):
 
     _launch_conv(
         kernel,
-        _make_grid(M_GEMM, N_GEMM),
+        _make_grid(num_sms, M_GEMM, N_GEMM),
         in_desc=in_desc,
         weight_desc=weight_desc,
         output_desc=output_desc,
@@ -862,6 +815,7 @@ def _run_conv2d_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, nu
 
     M_GEMM = N * out_h * out_w
     N_GEMM = Co
+    num_sms = torch.cuda.get_device_properties(input_tensor.device).multi_processor_count
     output_matrix = output.view(-1, Co)
 
     in_desc, weight_desc, output_desc = _make_conv_fprop_descriptors(
@@ -882,7 +836,7 @@ def _run_conv2d_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, nu
 
     _launch_conv(
         conv2d_fprop_kernel,
-        _make_grid(M_GEMM, N_GEMM),
+        _make_grid(num_sms, M_GEMM, N_GEMM),
         in_desc=in_desc,
         weight_desc=weight_desc,
         output_desc=output_desc,

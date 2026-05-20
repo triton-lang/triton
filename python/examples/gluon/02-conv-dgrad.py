@@ -46,10 +46,9 @@ _conv_common = _load_conv_common()
 # ===-----------------------------------------------------------------------===#
 
 Counter = _conv_common.Counter
-ClcTileScheduler = _conv_common.ClcTileScheduler
 GL_GEMM_DTYPE = _conv_common.GL_GEMM_DTYPE
+PersistentTileScheduler = _conv_common.PersistentTileScheduler
 TORCH_GEMM_DTYPE = _conv_common.TORCH_GEMM_DTYPE
-clc_tile_scheduler_partition = _conv_common.clc_tile_scheduler_partition
 ensure_tma_compatible_strides = _conv_common.ensure_tma_compatible_strides
 get_gluon_dtype_for_tensor = _conv_common.get_gluon_dtype_for_tensor
 get_operand_cga_layout = _conv_common.get_operand_cga_layout
@@ -222,21 +221,6 @@ class PartitionArgs:
     acc_bufs: tensor_memory_descriptor
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
-    clc_result_buffers: gl.shared_memory_descriptor
-    clc_barriers: gl.shared_memory_descriptor
-    clc_tile_id_buffers: gl.shared_memory_descriptor
-    clc_tile_ready_bars: gl.shared_memory_descriptor
-    clc_consumed_bars: gl.shared_memory_descriptor
-
-    @gluon.jit
-    def get_clc_consumer(self):
-        return ClcTileScheduler.initialize(
-            self.clc_result_buffers,
-            self.clc_barriers,
-            self.clc_tile_id_buffers,
-            self.clc_tile_ready_bars,
-            self.clc_consumed_bars,
-        )
 
 
 # ===-----------------------------------------------------------------------===#
@@ -253,10 +237,10 @@ def load_partition(p):
     empty_bars = p.load_empty_bars
     ready_bars = p.load_ready_bars
     state = Counter.create(1, empty_bars.shape[0])
-    scheduler = p.get_clc_consumer()
-    i = 0
-    while scheduler.has_work:
-        prog = config.get_program(scheduler.tile_id)
+    scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
+
+    for idx in range(scheduler.get_num_tiles()):
+        prog = config.get_program(scheduler.get_tile_id(idx))
         batch_id, out_y, out_x = prog.get_m_offsets()
         ci_offset = prog.get_ci_offset()
 
@@ -288,8 +272,6 @@ def load_partition(p):
                 b_stage,
             )
             state = state.next()
-        scheduler = scheduler.step(i)
-        i += 1
 
 
 @gluon.jit
@@ -299,10 +281,10 @@ def mma_partition(p):
     TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
     load_state = Counter.create(0, p.load_empty_bars.shape[0])
     acc_state = Counter.create(1, p.acc_empty_bars.shape[0])
-    scheduler = p.get_clc_consumer()
-    i = 0
-    while scheduler.has_work:
-        prog = config.get_program(scheduler.tile_id)
+    scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
+
+    for idx in range(scheduler.get_num_tiles()):
+        prog = config.get_program(scheduler.get_tile_id(idx))
 
         mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase)
         acc_buf = p.acc_bufs.index(acc_state.index)
@@ -323,8 +305,6 @@ def mma_partition(p):
 
         tcgen05_commit(p.acc_ready_bars.index(acc_state.index))
         acc_state = acc_state.next()
-        scheduler = scheduler.step(i)
-        i += 1
 
 
 @gluon.jit
@@ -337,6 +317,7 @@ def epilogue_partition(p):
     M_GEMM = config.M_GEMM
     N_GEMM = config.Ci
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
+    scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
 
     if TWO_CTAS:
         EPILOGUE_BLOCK_N: gl.constexpr = p.output_desc.block_shape[1]
@@ -347,10 +328,8 @@ def epilogue_partition(p):
             [1, BLOCK_M, EPILOGUE_BLOCK_N],
             p.output_desc.layout,
         )
-        scheduler = p.get_clc_consumer()
-        i = 0
-        while scheduler.has_work:
-            prog = config.get_program(scheduler.tile_id)
+        for idx in range(scheduler.get_num_tiles()):
+            prog = config.get_program(scheduler.get_tile_id(idx))
             off_m = prog.pid_m * BLOCK_M
             if p.store_split_k_partials:
                 off_m = off_m + prog.split_k_idx * M_GEMM
@@ -368,14 +347,10 @@ def epilogue_partition(p):
 
             mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
             acc_state = acc_state.next()
-            scheduler = scheduler.step(i)
-            i += 1
         tma.store_wait(0)
     else:
-        scheduler = p.get_clc_consumer()
-        i = 0
-        while scheduler.has_work:
-            prog = config.get_program(scheduler.tile_id)
+        for idx in range(scheduler.get_num_tiles()):
+            prog = config.get_program(scheduler.get_tile_id(idx))
 
             mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
             acc = p.acc_bufs.index(acc_state.index).load()
@@ -405,8 +380,6 @@ def epilogue_partition(p):
                 gl.store(p.output_ptr + split_offsets, result, mask=c_mask)
             else:
                 gl.store(p.output_ptr + c_offsets, result.to(GL_GEMM_DTYPE), mask=c_mask)
-            scheduler = scheduler.step(i)
-            i += 1
 
     invalidate_mbarrier_ring(p.load_empty_bars)
     invalidate_mbarrier_ring(p.load_ready_bars)
@@ -551,20 +524,6 @@ def conv2d_dgrad_kernel(
         mbarrier.init(acc_empty_bars.index(i), count=1)
         mbarrier.init(acc_ready_bars.index(i), count=1)
 
-    N_CONSUMERS: gl.constexpr = 3
-    clc_barriers = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
-    clc_tile_ready_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
-    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=TWO_CTAS)
-    for i in gl.static_range(num_acc_buffers):
-        mbarrier.init(clc_barriers.index(i), count=1)
-        mbarrier.init(clc_tile_ready_bars.index(i), count=1)
-        mbarrier.init(clc_consumed_bars.index(i), count=N_CONSUMERS)
-
-    cga_layout_clc: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
-    clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout_clc)
-    clc_result_buffers = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 2], clc_layout)
-    clc_tile_id_buffers = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], clc_layout)
-
     p = PartitionArgs(
         config,
         grad_y_desc,
@@ -579,19 +538,13 @@ def conv2d_dgrad_kernel(
         acc_bufs,
         acc_empty_bars,
         acc_ready_bars,
-        clc_result_buffers,
-        clc_barriers,
-        clc_tile_id_buffers,
-        clc_tile_ready_bars,
-        clc_consumed_bars,
     )
 
     gl.warp_specialize([
         (epilogue_partition, (p, )),
         (mma_partition, (p, )),
         (load_partition, (p, )),
-        (clc_tile_scheduler_partition, (p, )),
-    ], [1, 1, 1], [24, 24, 24])
+    ], [1, 1], [24, 24])
 
 
 # ===-----------------------------------------------------------------------===#
@@ -779,7 +732,7 @@ def _make_dgrad_output_descriptor(output, output_block_shape, cga_layout=()):
     return TensorDescriptor.from_tensor(output_matrix, output_block_shape, output_layout)
 
 
-def _make_grid(M_GEMM, Ci, Co, R_eff, S_eff):
+def _make_grid(num_sms, M_GEMM, Ci, Co, R_eff, S_eff):
 
     def grid(meta):
         total_mn_tiles = triton.cdiv(M_GEMM, meta["BLOCK_M"]) * triton.cdiv(Ci, meta["BLOCK_N"])
@@ -787,7 +740,7 @@ def _make_grid(M_GEMM, Ci, Co, R_eff, S_eff):
         k_iters_per_split = triton.cdiv(total_k_iters, meta["SPLIT_K"])
         active_split_k = triton.cdiv(total_k_iters, k_iters_per_split)
         total_tiles = total_mn_tiles * active_split_k
-        return (total_tiles, )
+        return (min(num_sms, total_tiles), )
 
     return grid
 
@@ -952,6 +905,7 @@ def _launch_dgrad_subproblems(
     weight_block_shape,
     input_block_shape,
     output_block_shape,
+    num_sms,
     kernel_meta=None,
 ):
     if kernel_meta is None:
@@ -978,7 +932,7 @@ def _launch_dgrad_subproblems(
             cga_layout,
         )
 
-        kernel[_make_grid(M_GEMM, Ci, Co, R_eff_val, S_eff_val)](
+        kernel[_make_grid(num_sms, M_GEMM, Ci, Co, R_eff_val, S_eff_val)](
             grad_y_desc=grad_y_desc,
             weight_desc=weight_desc,
             output_desc=output_desc,
@@ -1035,6 +989,7 @@ def _make_dgrad_runner(
     stride_h,
     stride_w,
     subproblem_specs,
+    num_sms,
     kernel_meta,
 ):
     max_active_split_k = _get_safe_dgrad_max_active_split_k(Co, subproblem_specs, N, H_in, W_in, Ci, kernel_meta)
@@ -1074,6 +1029,7 @@ def _make_dgrad_runner(
             weight_block_shape=[kernel_meta["BLOCK_N"], kernel_meta["BLOCK_K"]],
             input_block_shape=[kernel_meta["BLOCK_M"], kernel_meta["BLOCK_K"]],
             output_block_shape=[kernel_meta["BLOCK_M"], kernel_meta["EPILOGUE_BLOCK_N"]],
+            num_sms=num_sms,
             kernel_meta={
                 **kernel_meta,
                 "STORE_SPLIT_K_PARTIALS": uses_split_k_workspace,
@@ -1102,6 +1058,7 @@ def _benchmark_dgrad_config(
     stride_h,
     stride_w,
     subproblem_specs,
+    num_sms,
     kernel_meta,
 ):
     try:
@@ -1121,6 +1078,7 @@ def _benchmark_dgrad_config(
             stride_h=stride_h,
             stride_w=stride_w,
             subproblem_specs=subproblem_specs,
+            num_sms=num_sms,
             kernel_meta=kernel_meta,
         )
         run()
@@ -1200,6 +1158,7 @@ def _select_dgrad_kernel_meta(
             stride_h=stride_h,
             stride_w=stride_w,
             subproblem_specs=subproblem_specs,
+            num_sms=num_sms,
             kernel_meta=kernel_meta,
         )
         if ms < best_ms:
@@ -1260,6 +1219,7 @@ def conv2d_dgrad(grad_output_nhwc, weight_nhwc, H_in, W_in, stride=1, padding=0)
         stride_h=stride_h,
         stride_w=stride_w,
         subproblem_specs=subproblem_specs,
+        num_sms=num_sms,
         kernel_meta=kernel_meta,
     )
     run()
@@ -1314,6 +1274,7 @@ def conv2d_dgrad_fixed(grad_output_nhwc, weight_nhwc, H_in, W_in, stride=1, padd
     use_2cta = (stride_h == 1 and stride_w == 1 and SPLIT_K == 1 and M_GEMM % 256 == 0 and Ci % 128 == 0
                 and Co % 128 == 0)
     kernel_meta = _make_dgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps, use_2cta=use_2cta)
+    num_sms = torch.cuda.get_device_properties(grad_output_nhwc.device).multi_processor_count
     run, output = _make_dgrad_runner(
         grad_output_nhwc,
         W_rot_flat,
@@ -1330,6 +1291,7 @@ def conv2d_dgrad_fixed(grad_output_nhwc, weight_nhwc, H_in, W_in, stride=1, padd
         stride_h=stride_h,
         stride_w=stride_w,
         subproblem_specs=subproblem_specs,
+        num_sms=num_sms,
         kernel_meta=kernel_meta,
     )
     run()

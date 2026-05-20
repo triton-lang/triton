@@ -46,10 +46,9 @@ _conv_common = _load_conv_common()
 # ===-----------------------------------------------------------------------===#
 
 Counter = _conv_common.Counter
-ClcTileScheduler = _conv_common.ClcTileScheduler
 GL_GEMM_DTYPE = _conv_common.GL_GEMM_DTYPE
+PersistentTileScheduler = _conv_common.PersistentTileScheduler
 TORCH_GEMM_DTYPE = _conv_common.TORCH_GEMM_DTYPE
-clc_tile_scheduler_partition = _conv_common.clc_tile_scheduler_partition
 get_gluon_dtype_for_tensor = _conv_common.get_gluon_dtype_for_tensor
 get_operand_cga_layout = _conv_common.get_operand_cga_layout
 get_transposed_cga_layout = _conv_common.get_transposed_cga_layout
@@ -216,21 +215,6 @@ class PartitionArgs:
     acc_bufs: tensor_memory_descriptor
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
-    clc_result_buffers: gl.shared_memory_descriptor
-    clc_barriers: gl.shared_memory_descriptor
-    clc_tile_id_buffers: gl.shared_memory_descriptor
-    clc_tile_ready_bars: gl.shared_memory_descriptor
-    clc_consumed_bars: gl.shared_memory_descriptor
-
-    @gluon.jit
-    def get_clc_consumer(self):
-        return ClcTileScheduler.initialize(
-            self.clc_result_buffers,
-            self.clc_barriers,
-            self.clc_tile_id_buffers,
-            self.clc_tile_ready_bars,
-            self.clc_consumed_bars,
-        )
 
 
 # ===-----------------------------------------------------------------------===#
@@ -246,11 +230,10 @@ def load_partition(p):
     empty_bars = p.load_empty_bars
     ready_bars = p.load_ready_bars
     state = Counter.create(1, empty_bars.shape[0])
-    scheduler = p.get_clc_consumer()
+    scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
 
-    i = 0
-    while scheduler.has_work:
-        prog = config.get_program(scheduler.tile_id)
+    for idx in range(scheduler.get_num_tiles()):
+        prog = config.get_program(scheduler.get_tile_id(idx))
         co_offset = prog.get_co_offset()
         ci_offset = prog.get_ci_offset()
 
@@ -284,8 +267,6 @@ def load_partition(p):
                 b_stage,
             )
             state = state.next()
-        scheduler = scheduler.step(i)
-        i += 1
 
 
 @gluon.jit
@@ -295,11 +276,10 @@ def mma_partition(p):
     TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
     load_state = Counter.create(0, p.load_empty_bars.shape[0])
     acc_state = Counter.create(1, p.acc_empty_bars.shape[0])
-    scheduler = p.get_clc_consumer()
+    scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
 
-    i = 0
-    while scheduler.has_work:
-        prog = config.get_program(scheduler.tile_id)
+    for idx in range(scheduler.get_num_tiles()):
+        prog = config.get_program(scheduler.get_tile_id(idx))
 
         mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase)
         acc_buf = p.acc_bufs.index(acc_state.index)
@@ -320,8 +300,6 @@ def mma_partition(p):
 
         tcgen05_commit(p.acc_ready_bars.index(acc_state.index))
         acc_state = acc_state.next()
-        scheduler = scheduler.step(i)
-        i += 1
 
 
 @gluon.jit
@@ -333,6 +311,7 @@ def epilogue_partition(p):
     BLOCK_N: gl.constexpr = config.BLOCK_N
     TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
+    scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
 
     if TWO_CTAS:
         EPILOGUE_BLOCK_N: gl.constexpr = p.grad_weight_desc.block_shape[1]
@@ -343,10 +322,8 @@ def epilogue_partition(p):
             [1, BLOCK_M, EPILOGUE_BLOCK_N],
             p.grad_weight_desc.layout,
         )
-        scheduler = p.get_clc_consumer()
-        i = 0
-        while scheduler.has_work:
-            prog = config.get_program(scheduler.tile_id)
+        for idx in range(scheduler.get_num_tiles()):
+            prog = config.get_program(scheduler.get_tile_id(idx))
             split_co_offset = gl.where(active_split_k > 1, prog.split_k_idx * config.store_co, gl.to_tensor(0))
             off_m = split_co_offset + prog.get_co_offset()
             off_n = prog.get_weight_k_offset()
@@ -367,14 +344,10 @@ def epilogue_partition(p):
 
             mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
             acc_state = acc_state.next()
-            scheduler = scheduler.step(i)
-            i += 1
         tma.store_wait(0)
     else:
-        scheduler = p.get_clc_consumer()
-        i = 0
-        while scheduler.has_work:
-            prog = config.get_program(scheduler.tile_id)
+        for idx in range(scheduler.get_num_tiles()):
+            prog = config.get_program(scheduler.get_tile_id(idx))
             co_offset = prog.get_co_offset()
             ci_offset = prog.get_ci_offset()
             weight_k_offset = prog.get_weight_k_offset()
@@ -394,8 +367,6 @@ def epilogue_partition(p):
             store_rows = split_co_offset + offs_m
             offsets = store_rows[:, None] * p.grad_weight_stride_0 + offs_n[None, :]
             gl.store(p.grad_weight_ptr + offsets, result, mask=mask)
-            scheduler = scheduler.step(i)
-            i += 1
 
     invalidate_mbarrier_ring(p.load_empty_bars)
     invalidate_mbarrier_ring(p.load_ready_bars)
@@ -518,20 +489,6 @@ def conv2d_wgrad_kernel(
         mbarrier.init(acc_empty_bars.index(i), count=1)
         mbarrier.init(acc_ready_bars.index(i), count=1)
 
-    N_CONSUMERS: gl.constexpr = 3
-    clc_barriers = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
-    clc_tile_ready_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
-    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=TWO_CTAS)
-    for i in gl.static_range(num_acc_buffers):
-        mbarrier.init(clc_barriers.index(i), count=1)
-        mbarrier.init(clc_tile_ready_bars.index(i), count=1)
-        mbarrier.init(clc_consumed_bars.index(i), count=N_CONSUMERS)
-
-    cga_layout_clc: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
-    clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout_clc)
-    clc_result_buffers = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 2], clc_layout)
-    clc_tile_id_buffers = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], clc_layout)
-
     p = PartitionArgs(
         config,
         in_desc,
@@ -546,19 +503,13 @@ def conv2d_wgrad_kernel(
         acc_bufs,
         acc_empty_bars,
         acc_ready_bars,
-        clc_result_buffers,
-        clc_barriers,
-        clc_tile_id_buffers,
-        clc_tile_ready_bars,
-        clc_consumed_bars,
     )
 
     gl.warp_specialize([
         (epilogue_partition, (p, )),
         (mma_partition, (p, )),
         (load_partition, (p, )),
-        (clc_tile_scheduler_partition, (p, )),
-    ], [1, 1, 1], [24, 24, 24])
+    ], [1, 1], [24, 24])
 
 
 # ===-----------------------------------------------------------------------===#
@@ -699,7 +650,7 @@ def _make_wgrad_output_descriptor(grad_weight_flat, output_block_shape, cga_layo
     return TensorDescriptor.from_tensor(grad_weight_flat, output_block_shape, output_layout)
 
 
-def _make_grid(M_spatial, Co, Ci, R, S):
+def _make_grid(num_sms, M_spatial, Co, Ci, R, S):
 
     def grid(meta):
         co_blocks = triton.cdiv(Co, meta["BLOCK_M"])
@@ -708,7 +659,7 @@ def _make_grid(M_spatial, Co, Ci, R, S):
         k_iters_per_split = triton.cdiv(total_k_iters, meta["SPLIT_K"])
         active_split_k = triton.cdiv(total_k_iters, k_iters_per_split)
         total_tiles = co_blocks * R * S * ci_blocks * active_split_k
-        return (total_tiles, )
+        return (min(num_sms, total_tiles), )
 
     return grid
 
@@ -793,6 +744,7 @@ def _make_wgrad_runner(
     pad_h,
     pad_w,
     K_GEMM,
+    num_sms,
     kernel_meta,
 ):
     M_spatial = N * out_h * out_w
@@ -823,7 +775,7 @@ def _make_wgrad_runner(
         [kernel_meta["BLOCK_M"], kernel_meta["EPILOGUE_BLOCK_N"]],
         cga_layout,
     )
-    grid = _make_grid(M_spatial, Co, Ci, R, S)
+    grid = _make_grid(num_sms, M_spatial, Co, Ci, R, S)
 
     def run():
         _launch_wgrad(
@@ -870,6 +822,7 @@ def _benchmark_wgrad_config(
     pad_h,
     pad_w,
     K_GEMM,
+    num_sms,
     kernel_meta,
 ):
     try:
@@ -891,6 +844,7 @@ def _benchmark_wgrad_config(
             pad_h=pad_h,
             pad_w=pad_w,
             K_GEMM=K_GEMM,
+            num_sms=num_sms,
             kernel_meta=kernel_meta,
         )
         run()
@@ -967,6 +921,7 @@ def _select_wgrad_kernel_meta(
             pad_h=pad_h,
             pad_w=pad_w,
             K_GEMM=K_GEMM,
+            num_sms=num_sms,
             kernel_meta=kernel_meta,
         )
         if ms < best_ms:
@@ -1131,6 +1086,7 @@ def conv2d_wgrad(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0):
         pad_h=pad_h,
         pad_w=pad_w,
         K_GEMM=K_GEMM,
+        num_sms=num_sms,
         kernel_meta=kernel_meta,
     )
     run()
@@ -1182,6 +1138,7 @@ def conv2d_wgrad_fixed(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0, 
     store_co = triton.cdiv(Co, 256) * 256 if use_2cta else Co
     grad_weight_flat = _allocate_wgrad_output(input_nhwc.device, store_co, K_GEMM)
     kernel_meta = _make_wgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps, use_2cta=use_2cta)
+    num_sms = torch.cuda.get_device_properties(input_nhwc.device).multi_processor_count
     run = _make_wgrad_runner(
         input_nhwc,
         grad_output_nhwc,
@@ -1198,6 +1155,7 @@ def conv2d_wgrad_fixed(input_nhwc, grad_output_nhwc, R, S, stride=1, padding=0, 
         pad_h=pad_h,
         pad_w=pad_w,
         K_GEMM=K_GEMM,
+        num_sms=num_sms,
         kernel_meta=kernel_meta,
     )
     run()
