@@ -262,64 +262,32 @@ def epilogue_partition(p):
     config = p.config
     BLOCK_M: gl.constexpr = config.BLOCK_M
     BLOCK_N: gl.constexpr = config.BLOCK_N
-    TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
 
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
     scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
 
-    if TWO_CTAS:
-        EPILOGUE_BLOCK_N: gl.constexpr = p.output_desc.block_shape[1]
-        gl.static_assert(BLOCK_N % EPILOGUE_BLOCK_N == 0)
-        SUBTILE_FACTOR: gl.constexpr = BLOCK_N // EPILOGUE_BLOCK_N
-        SUBTILE_STAGES: gl.constexpr = 1 if SUBTILE_FACTOR == 1 else 2
-        acc_smems = gl.allocate_shared_memory(
-            p.output_desc.dtype,
-            [SUBTILE_STAGES, BLOCK_M, EPILOGUE_BLOCK_N],
-            p.output_desc.layout,
-        )
-        sub_state = Counter.create(0, SUBTILE_STAGES)
-        for idx in range(scheduler.get_num_tiles()):
-            prog = config.get_program(scheduler.get_tile_id(idx))
-            off_m = prog.pid_m * BLOCK_M
-            off_n = prog.pid_n * BLOCK_N
+    M_GEMM = config.M_GEMM
+    N_GEMM = config.Co
+    for idx in range(scheduler.get_num_tiles()):
+        prog = config.get_program(scheduler.get_tile_id(idx))
 
-            mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
-            acc_buf = p.acc_bufs.index(acc_state.index)
-            for s in gl.static_range(SUBTILE_FACTOR):
-                acc_sub = acc_buf.slice(EPILOGUE_BLOCK_N * s, EPILOGUE_BLOCK_N)
-                acc_smem = acc_smems.index(sub_state.index)
-                acc_tile = acc_sub.load().to(p.output_desc.dtype)
-                tma.store_wait(pendings=SUBTILE_STAGES - 1)
-                acc_smem.store(acc_tile)
-                tma.async_copy_shared_to_global(p.output_desc, [off_m, off_n + EPILOGUE_BLOCK_N * s], acc_smem)
-                sub_state = sub_state.next()
+        mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
+        acc = p.acc_bufs.index(acc_state.index).load()
+        result = gl.convert_layout(acc.to(GL_GEMM_DTYPE), gl.CoalescedLayout())
+        mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
+        acc_state = acc_state.next()
 
-            mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
-            acc_state = acc_state.next()
-        tma.store_wait(0)
-    else:
-        M_GEMM = config.M_GEMM
-        N_GEMM = config.Co
-        for idx in range(scheduler.get_num_tiles()):
-            prog = config.get_program(scheduler.get_tile_id(idx))
+        offs_m = prog.pid_m * BLOCK_M + gl.arange(0, BLOCK_M)
+        offs_n = prog.pid_n * BLOCK_N + gl.arange(0, BLOCK_N)
 
-            mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
-            acc = p.acc_bufs.index(acc_state.index).load()
-            result = gl.convert_layout(acc.to(GL_GEMM_DTYPE), gl.CoalescedLayout())
-            mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
-            acc_state = acc_state.next()
+        c_out_x = offs_m % config.out_w
+        c_out_y = (offs_m // config.out_w) % config.out_h
+        c_batch = (offs_m // config.out_w) // config.out_h
 
-            offs_m = prog.pid_m * BLOCK_M + gl.arange(0, BLOCK_M)
-            offs_n = prog.pid_n * BLOCK_N + gl.arange(0, BLOCK_N)
-
-            c_out_x = offs_m % config.out_w
-            c_out_y = (offs_m // config.out_w) % config.out_h
-            c_batch = (offs_m // config.out_w) // config.out_h
-
-            c_offsets = (c_batch[:, None] * config.output_stride_n + c_out_y[:, None] * config.output_stride_h +
-                         c_out_x[:, None] * config.output_stride_w + offs_n[None, :])
-            c_mask = (offs_m[:, None] < M_GEMM) & (offs_n[None, :] < N_GEMM)
-            gl.store(p.output_ptr + c_offsets, result, mask=c_mask)
+        c_offsets = (c_batch[:, None] * config.output_stride_n + c_out_y[:, None] * config.output_stride_h +
+                     c_out_x[:, None] * config.output_stride_w + offs_n[None, :])
+        c_mask = (offs_m[:, None] < M_GEMM) & (offs_n[None, :] < N_GEMM)
+        gl.store(p.output_ptr + c_offsets, result, mask=c_mask)
 
     invalidate_mbarrier_ring(p.load_empty_bars)
     invalidate_mbarrier_ring(p.load_ready_bars)

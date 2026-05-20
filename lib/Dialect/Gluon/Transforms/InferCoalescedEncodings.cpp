@@ -27,10 +27,27 @@ namespace {
 
 ttg::CGAEncodingAttr getDefaultCGALayout(RankedTensorType refTensorType,
                                          int numCTAs) {
-  // TODO support numCTAs > 1
-  assert(numCTAs == 1 && "only numCTAs == 1 is supported for now");
-  return ttg::CGAEncodingAttr::get1CTALayout(refTensorType.getContext(),
-                                             refTensorType.getShape().size());
+  auto ctx = refTensorType.getContext();
+  int rank = refTensorType.getShape().size();
+  if (numCTAs == 1)
+    return ttg::CGAEncodingAttr::get1CTALayout(ctx, rank);
+
+  assert(rank > 0 && "multi-CTA coalesced layout requires ranked tensors");
+
+  // CoalescedLayout is an abstract request to infer a concrete memory layout.
+  // For multi-CTA tensors, use the same conservative default as the 2CTA
+  // matmul/conv epilogues: split the first logical tensor dimension across the
+  // cluster and keep the remaining dimensions local to each CTA.
+  SmallVector<unsigned> ctasPerCGA(rank, 1);
+  SmallVector<unsigned> ctaSplitNum(rank, 1);
+  SmallVector<unsigned> ctaOrder;
+  ctaOrder.reserve(rank);
+  for (int i = 0; i < rank; ++i)
+    ctaOrder.push_back(i);
+  ctasPerCGA[0] = numCTAs;
+  ctaSplitNum[0] = numCTAs;
+  return ttg::CGAEncodingAttr::fromSplitParams(ctx, ctasPerCGA, ctaSplitNum,
+                                               ctaOrder);
 }
 
 bool isCoalescedEncodingTensorType(Type ty) {

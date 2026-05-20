@@ -313,73 +313,42 @@ def epilogue_partition(p):
     config = p.config
     BLOCK_M: gl.constexpr = config.BLOCK_M
     BLOCK_N: gl.constexpr = config.BLOCK_N
-    TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
     M_GEMM = config.M_GEMM
     N_GEMM = config.Ci
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
     scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
 
-    if TWO_CTAS:
-        EPILOGUE_BLOCK_N: gl.constexpr = p.output_desc.block_shape[1]
-        gl.static_assert(BLOCK_N % EPILOGUE_BLOCK_N == 0)
-        SUBTILE_FACTOR: gl.constexpr = BLOCK_N // EPILOGUE_BLOCK_N
-        acc_smems = gl.allocate_shared_memory(
-            p.output_desc.dtype,
-            [1, BLOCK_M, EPILOGUE_BLOCK_N],
-            p.output_desc.layout,
-        )
-        for idx in range(scheduler.get_num_tiles()):
-            prog = config.get_program(scheduler.get_tile_id(idx))
-            off_m = prog.pid_m * BLOCK_M
-            if p.store_split_k_partials:
-                off_m = off_m + prog.split_k_idx * M_GEMM
-            off_n = prog.get_ci_offset()
+    for idx in range(scheduler.get_num_tiles()):
+        prog = config.get_program(scheduler.get_tile_id(idx))
 
-            mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
-            acc_buf = p.acc_bufs.index(acc_state.index)
-            for s in gl.static_range(SUBTILE_FACTOR):
-                acc_sub = acc_buf.slice(EPILOGUE_BLOCK_N * s, EPILOGUE_BLOCK_N)
-                acc_smem = acc_smems.index(0)
-                acc_tile = acc_sub.load().to(p.output_desc.dtype)
-                tma.store_wait(0)
-                acc_smem.store(acc_tile)
-                tma.async_copy_shared_to_global(p.output_desc, [off_m, off_n + EPILOGUE_BLOCK_N * s], acc_smem)
+        mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
+        acc = p.acc_bufs.index(acc_state.index).load()
+        mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
+        acc_state = acc_state.next()
 
-            mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
-            acc_state = acc_state.next()
-        tma.store_wait(0)
-    else:
-        for idx in range(scheduler.get_num_tiles()):
-            prog = config.get_program(scheduler.get_tile_id(idx))
+        offs_m = prog.pid_m * BLOCK_M + gl.arange(0, BLOCK_M)
+        offs_n = prog.get_ci_offset() + gl.arange(0, BLOCK_N)
 
-            mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
-            acc = p.acc_bufs.index(acc_state.index).load()
-            mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
-            acc_state = acc_state.next()
+        c_out_x = offs_m % config.W_sub
+        c_out_y = (offs_m // config.W_sub) % config.H_sub
+        c_batch = (offs_m // config.W_sub) // config.H_sub
 
-            offs_m = prog.pid_m * BLOCK_M + gl.arange(0, BLOCK_M)
-            offs_n = prog.get_ci_offset() + gl.arange(0, BLOCK_N)
+        h = config.sub_a + c_out_y * config.conv_stride_h
+        w = config.sub_b + c_out_x * config.conv_stride_w
 
-            c_out_x = offs_m % config.W_sub
-            c_out_y = (offs_m // config.W_sub) % config.H_sub
-            c_batch = (offs_m // config.W_sub) // config.H_sub
+        c_offsets = (c_batch[:, None] * config.output_stride_n + h[:, None] * config.output_stride_h +
+                     w[:, None] * config.output_stride_w + offs_n[None, :])
+        c_mask = ((offs_m[:, None] < M_GEMM) & (offs_n[None, :] < N_GEMM) & (h[:, None] < config.H_full) &
+                  (w[:, None] < config.W_full))
 
-            h = config.sub_a + c_out_y * config.conv_stride_h
-            w = config.sub_b + c_out_x * config.conv_stride_w
-
-            c_offsets = (c_batch[:, None] * config.output_stride_n + h[:, None] * config.output_stride_h +
-                         w[:, None] * config.output_stride_w + offs_n[None, :])
-            c_mask = ((offs_m[:, None] < M_GEMM) & (offs_n[None, :] < N_GEMM) & (h[:, None] < config.H_full) &
-                      (w[:, None] < config.W_full))
-
-            result = gl.convert_layout(acc, gl.CoalescedLayout())
-            if p.store_split_k_partials:
-                split_batch = prog.split_k_idx * config.N + c_batch
-                split_offsets = (split_batch[:, None] * config.output_stride_n + h[:, None] * config.output_stride_h +
-                                 w[:, None] * config.output_stride_w + offs_n[None, :])
-                gl.store(p.output_ptr + split_offsets, result, mask=c_mask)
-            else:
-                gl.store(p.output_ptr + c_offsets, result.to(GL_GEMM_DTYPE), mask=c_mask)
+        result = gl.convert_layout(acc, gl.CoalescedLayout())
+        if p.store_split_k_partials:
+            split_batch = prog.split_k_idx * config.N + c_batch
+            split_offsets = (split_batch[:, None] * config.output_stride_n + h[:, None] * config.output_stride_h +
+                             w[:, None] * config.output_stride_w + offs_n[None, :])
+            gl.store(p.output_ptr + split_offsets, result, mask=c_mask)
+        else:
+            gl.store(p.output_ptr + c_offsets, result.to(GL_GEMM_DTYPE), mask=c_mask)
 
     invalidate_mbarrier_ring(p.load_empty_bars)
     invalidate_mbarrier_ring(p.load_ready_bars)

@@ -309,64 +309,30 @@ def epilogue_partition(p):
     active_split_k = config.get_active_split_k()
     BLOCK_M: gl.constexpr = config.BLOCK_M
     BLOCK_N: gl.constexpr = config.BLOCK_N
-    TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
     scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
 
-    if TWO_CTAS:
-        EPILOGUE_BLOCK_N: gl.constexpr = p.grad_weight_desc.block_shape[1]
-        gl.static_assert(BLOCK_N % EPILOGUE_BLOCK_N == 0)
-        SUBTILE_FACTOR: gl.constexpr = BLOCK_N // EPILOGUE_BLOCK_N
-        acc_smems = gl.allocate_shared_memory(
-            p.grad_weight_desc.dtype,
-            [1, BLOCK_M, EPILOGUE_BLOCK_N],
-            p.grad_weight_desc.layout,
-        )
-        for idx in range(scheduler.get_num_tiles()):
-            prog = config.get_program(scheduler.get_tile_id(idx))
-            split_co_offset = gl.where(active_split_k > 1, prog.split_k_idx * config.store_co, gl.to_tensor(0))
-            off_m = split_co_offset + prog.get_co_offset()
-            off_n = prog.get_weight_k_offset()
+    for idx in range(scheduler.get_num_tiles()):
+        prog = config.get_program(scheduler.get_tile_id(idx))
+        co_offset = prog.get_co_offset()
+        ci_offset = prog.get_ci_offset()
+        weight_k_offset = prog.get_weight_k_offset()
 
-            mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
-            acc_buf = p.acc_bufs.index(acc_state.index)
-            for s in gl.static_range(SUBTILE_FACTOR):
-                acc_sub = acc_buf.slice(EPILOGUE_BLOCK_N * s, EPILOGUE_BLOCK_N)
-                acc_smem = acc_smems.index(0)
-                acc_tile = acc_sub.load().to(p.grad_weight_desc.dtype)
-                tma.store_wait(0)
-                acc_smem.store(acc_tile)
-                tma.async_copy_shared_to_global(
-                    p.grad_weight_desc,
-                    [off_m, off_n + EPILOGUE_BLOCK_N * s],
-                    acc_smem,
-                )
+        mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
+        acc = p.acc_bufs.index(acc_state.index).load()
+        result = gl.convert_layout(acc, gl.CoalescedLayout())
+        mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
+        acc_state = acc_state.next()
 
-            mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
-            acc_state = acc_state.next()
-        tma.store_wait(0)
-    else:
-        for idx in range(scheduler.get_num_tiles()):
-            prog = config.get_program(scheduler.get_tile_id(idx))
-            co_offset = prog.get_co_offset()
-            ci_offset = prog.get_ci_offset()
-            weight_k_offset = prog.get_weight_k_offset()
+        split_co_offset = gl.where(active_split_k > 1, prog.split_k_idx * config.store_co, gl.to_tensor(0))
+        offs_m = co_offset + gl.arange(0, BLOCK_M)
+        offs_n = weight_k_offset + gl.arange(0, BLOCK_N)
 
-            mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
-            acc = p.acc_bufs.index(acc_state.index).load()
-            result = gl.convert_layout(acc, gl.CoalescedLayout())
-            mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
-            acc_state = acc_state.next()
-
-            split_co_offset = gl.where(active_split_k > 1, prog.split_k_idx * config.store_co, gl.to_tensor(0))
-            offs_m = co_offset + gl.arange(0, BLOCK_M)
-            offs_n = weight_k_offset + gl.arange(0, BLOCK_N)
-
-            ci_valid = (ci_offset + gl.arange(0, BLOCK_N)) < config.Ci
-            mask = (offs_m[:, None] < config.Co) & (offs_n[None, :] < config.K_GEMM) & ci_valid[None, :]
-            store_rows = split_co_offset + offs_m
-            offsets = store_rows[:, None] * p.grad_weight_stride_0 + offs_n[None, :]
-            gl.store(p.grad_weight_ptr + offsets, result, mask=mask)
+        ci_valid = (ci_offset + gl.arange(0, BLOCK_N)) < config.Ci
+        mask = (offs_m[:, None] < config.Co) & (offs_n[None, :] < config.K_GEMM) & ci_valid[None, :]
+        store_rows = split_co_offset + offs_m
+        offsets = store_rows[:, None] * p.grad_weight_stride_0 + offs_n[None, :]
+        gl.store(p.grad_weight_ptr + offsets, result, mask=mask)
 
     invalidate_mbarrier_ring(p.load_empty_bars)
     invalidate_mbarrier_ring(p.load_ready_bars)
