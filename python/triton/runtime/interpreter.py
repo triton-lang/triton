@@ -582,11 +582,11 @@ class InterpreterBuilder:
     create_minsi = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
     create_minui = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
     create_minimumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
-    create_minnumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
+    create_minnumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmin)
     create_maxsi = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
     create_maxui = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
     create_maximumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
-    create_maxnumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
+    create_maxnumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmax)
     create_icmpSLE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less_equal)
     create_icmpSLT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less)
     create_icmpSGE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater_equal)
@@ -650,7 +650,12 @@ class InterpreterBuilder:
 
         return TensorHandle(output, tl_dtype)
 
-    create_clampf = lambda self, arg, lo, hi, propagate_nans: self.ternary_op(arg, lo, hi, np.clip)
+    def create_clampf(self, arg, lo, hi, propagate_nans):
+        if propagate_nans == _ir.PROPAGATE_NAN.NONE:
+            return self.binary_op(self.binary_op(arg, lo, np.fmax), hi, np.fmin)
+        else:
+            return self.ternary_op(arg, lo, hi, np.clip)
+
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
     def create_fma(self, x, y, z):
@@ -1057,9 +1062,9 @@ class ReduceOps(ReduceScanOpInterface):
 
     def apply_impl(self, input):
         if self.combine_fn == tl.standard._argmin_combine_tie_break_left:
-            return self.min_max(input[0], val_reduce_op=np.min, idx_reduce_op=np.argmin)
+            return self.min_max(input[0], val_reduce_op=np.nanmin, idx_reduce_op=np.nanargmin)
         elif self.combine_fn == tl.standard._argmax_combine_tie_break_left:
-            return self.min_max(input[0], val_reduce_op=np.max, idx_reduce_op=np.argmax)
+            return self.min_max(input[0], val_reduce_op=np.nanmax, idx_reduce_op=np.nanargmax)
         elif self.combine_fn == tl.standard._elementwise_max:
             return self.min_max(input[0], val_reduce_op=np.nanmax, idx_reduce_op=None)
         elif self.combine_fn == tl.standard._elementwise_min:

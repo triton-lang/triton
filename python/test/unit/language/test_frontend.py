@@ -361,6 +361,60 @@ def test_constexpr_function_from_python():
     assert constexpr_function(7) == 8
 
 
+@filecheck_test
+@triton.jit
+def test_named_expr():
+    # CHECK-LABEL: test_named_expr
+    x = (y := 0)
+    # CHECK: %c0_i32 = arith.constant 0 : i32
+    # CHECK-NEXT: call @{{.*}}anchor{{.*}}(%c0_i32)
+    anchor(x)
+    # CHECK-NEXT: call @{{.*}}anchor{{.*}}(%c0_i32)
+    anchor(y)
+
+
+def test_tuple_assignment_respects_prior_constexpr_annotation():
+
+    @triton.jit
+    def kernel():
+        y: tl.constexpr
+        x, y = 0, 0
+        tl.static_assert(x.dtype == tl.int32)
+        tl.static_assert(y.type == tl.constexpr_type(0))
+
+    run_parser(kernel)
+
+
+def test_named_expr_respects_prior_constexpr_annotation():
+
+    @triton.jit
+    def kernel():
+        x: tl.constexpr
+        if (x := constexpr_function(10)) != 10:
+            tl.static_assert(isinstance(x.type, tl.constexpr_type))
+        else:
+            tl.static_assert(False)
+
+    run_parser(kernel)
+
+
+@filecheck_test
+@triton.jit
+def test_named_expr_without_prior_annotation_decays():
+    # CHECK-LABEL: test_named_expr_without_prior_annotation_decays
+    # CHECK: [[COND:%.*]] = arith.cmpi ne, %c11_i32, %c10_i32 : i32
+    # CHECK: scf.if [[COND]] {
+    # CHECK:   tt.call @{{.*}}anchor{{.*}}(%c11_i32) : (i32) -> ()
+    # CHECK: } else {
+    # CHECK:   [[ADD:%.*]] = arith.addi %c11_i32, %c1_i32_0 : i32
+    # CHECK:   tt.call @{{.*}}anchor{{.*}}([[ADD]]) : (i32) -> ()
+    # CHECK: }
+    if (x := constexpr_function(10)) != 10:
+        anchor(x)
+    else:
+        anchor(x + 1)
+
+
 @triton.jit
 def swap(pair):
     return pair.second, pair.first

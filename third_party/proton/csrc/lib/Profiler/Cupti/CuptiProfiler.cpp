@@ -189,9 +189,14 @@ uint32_t processActivity(
   return correlationId;
 }
 
-void buildGraphNodeEntries(const DataToEntryMap &dataToEntry,
-                           GraphState &graphState,
-                           CuptiProfiler::ExternIdState &externIdState) {
+CuptiProfiler::ExternIdState *
+buildGraphNodeEntries(const DataToEntryMap &dataToEntry, GraphState &graphState,
+                      CuptiProfiler::ExternIdToStateMap &externIdToState,
+                      size_t externId) {
+  if (dataToEntry.empty())
+    return nullptr;
+
+  auto &externIdState = externIdToState[externId];
   for (auto &[data, entry] : dataToEntry) {
     auto nodeStateIt = graphState.dataToEntryIdToNodeStates.find(data);
     if (nodeStateIt == graphState.dataToEntryIdToNodeStates.end())
@@ -200,12 +205,13 @@ void buildGraphNodeEntries(const DataToEntryMap &dataToEntry,
     externIdState.dataToGraphEntry.insert({data, entry});
   }
   externIdState.nodeIdToState = &graphState.nodeIdToState;
+  return &externIdState;
 }
 
 void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
                        const CUpti_CallbackData *callbackData,
                        const GraphState &graphState,
-                       CuptiProfiler::ExternIdState &externIdState) {
+                       const CuptiProfiler::ExternIdState *externIdState) {
   if (graphState.metricSeqIdToNodeId.empty()) {
     return;
   }
@@ -213,29 +219,32 @@ void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
   size_t phase = Data::kNoCompletePhase;
   for (const auto &[seqId, nodeId] : graphState.metricSeqIdToNodeId) {
     const auto &metricNodeState = graphState.metricNodeIdToState.at(nodeId);
-    auto &pendingMetricNode = seqIdToState
-                                  .emplace(seqId,
-                                           PendingGraphQueue::MetricNodeState{
-                                               metricNodeState.metricId, {}})
-                                  .first->second;
-    for (const auto &[data, graphEntry] : externIdState.dataToGraphEntry) {
-      phase = graphEntry.phase;
-      auto entryId = Scope::DummyScopeId;
-      if (auto entryIdIter = metricNodeState.dataToEntryId.find(data);
-          entryIdIter != metricNodeState.dataToEntryId.end()) {
-        entryId = entryIdIter->second;
+    if (externIdState) {
+      for (const auto &[data, graphEntry] : externIdState->dataToGraphEntry) {
+        phase = graphEntry.phase;
+        auto &pendingMetricNode =
+            seqIdToState
+                .emplace(seqId,
+                         PendingGraphQueue::MetricNodeState{
+                             metricNodeState.metricId, {}})
+                .first->second;
+        auto entryId = Scope::DummyScopeId;
+        if (auto entryIdIter = metricNodeState.dataToEntryId.find(data);
+            entryIdIter != metricNodeState.dataToEntryId.end()) {
+          entryId = entryIdIter->second;
+        }
+        // Otherwise, a DummyScopeId entry indicates that we'll call
+        // upsertFlexibleMetric instead of upsertLinkedFlexibleMetric in
+        // queueGraphMetrics, so that the flexible metric can be attached to the
+        // graph launch entry.
+        pendingMetricNode.dataToEntry.emplace(
+            data, DataEntry(entryId, phase, graphEntry.metricSet.get()));
       }
-      // Otherwise, a DummyScopeId entry indicates that we'll call
-      // upsertFlexibleMetric instead of upsertLinkedFlexibleMetric in
-      // queueGraphMetrics, so that the flexible metric can be attached to the
-      // graph launch entry.
-      pendingMetricNode.dataToEntry.emplace(
-          data, DataEntry(entryId, phase, graphEntry.metricSet.get()));
     }
   }
   // Whether a data is active or not, the GPU will write the metric data into
   // the metric buffer if there is a metric node. So we need the complete number
-  // of metrics of a graph
+  // of metrics of a graph.
   if (callbackData->context != nullptr)
     pendingGraphPool->flushIfNeeded(graphState.numMetricWords);
   pendingGraphPool->push(phase, graphState.numMetricWords,
@@ -645,8 +654,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
   auto &dataToEntry = threadState.dataToEntry;
   if (threadState.isStreamCapturing) // Do not correlate stream captured kernels
     return;
-  if (dataToEntry.empty()) // Profiler is deactivated
-    return;
 
   const auto &scope = threadState.scopeStack.back();
   if (isGraphLaunch(cbId)) {
@@ -670,7 +677,6 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
                 << std::endl;
     } else if (findGraph && !graphStates[graphExecId].captureStatusChecked) {
       auto &graphState = graphStates[graphExecId];
-      auto &externIdState = profiler.correlation.externIdToState[scope.scopeId];
       static const bool timingEnabled =
           getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
       using Clock = std::chrono::steady_clock;
@@ -678,7 +684,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       if (timingEnabled)
         t0 = Clock::now();
 
-      buildGraphNodeEntries(dataToEntry, graphState, externIdState);
+      auto *externIdState = buildGraphNodeEntries(
+          dataToEntry, graphState, profiler.correlation.externIdToState,
+          scope.scopeId);
 
       if (timingEnabled) {
         auto t1 = Clock::now();
@@ -703,6 +711,9 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
       }
     }
   }
+
+  if (dataToEntry.empty()) // Profiler is deactivated
+    return;
 
   profiler.correlation.correlate(callbackData->correlationId, scope.scopeId,
                                  numNodes, scope.name.empty(), dataToEntry);

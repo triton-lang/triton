@@ -2379,6 +2379,55 @@ def test_max_min_with_nan(device):
     assert y[0] == float('-inf')
 
 
+@pytest.mark.interpreter
+def test_argmax_argmin_with_nan(device):
+    # In triton, argmax/argmin should also follow the "nan ignore" style,
+    # consistent with tl.max/tl.min. NaN should be skipped, returning the
+    # index of the largest/smallest finite value.
+    @triton.jit
+    def argmax_kernel(x_ptr, val_ptr, idx_ptr, N: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        mask = offsets < N
+        x = tl.load(x_ptr + offsets, mask=mask, other=-float("inf"))
+        val = tl.max(x, axis=0)
+        idx = tl.argmax(x, axis=0)
+        tl.store(val_ptr, val)
+        tl.store(idx_ptr, idx)
+
+    @triton.jit
+    def argmin_kernel(x_ptr, val_ptr, idx_ptr, N: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        mask = offsets < N
+        x = tl.load(x_ptr + offsets, mask=mask, other=float("inf"))
+        val = tl.min(x, axis=0)
+        idx = tl.argmin(x, axis=0)
+        tl.store(val_ptr, val)
+        tl.store(idx_ptr, idx)
+
+    # argmax: [nan, 6, 8] -> max=8.0, argmax=2
+    x = torch.tensor([float("nan"), 6.0, 8.0], dtype=torch.float32, device=device)
+    val = torch.empty((), dtype=torch.float32, device=device)
+    idx = torch.empty((), dtype=torch.int32, device=device)
+    argmax_kernel[(1, )](x, val, idx, N=3, BLOCK=4)
+    assert val.item() == 8.0, f"expected 8.0, got {val.item()}"
+    assert idx.item() == 2, f"expected 2, got {idx.item()}"
+
+    # argmin: [nan, 6, 8] -> min=6.0, argmin=1
+    val.zero_()
+    idx.zero_()
+    argmin_kernel[(1, )](x, val, idx, N=3, BLOCK=4)
+    assert val.item() == 6.0, f"expected 6.0, got {val.item()}"
+    assert idx.item() == 1, f"expected 1, got {idx.item()}"
+
+    # argmax: NaN at end [3, 5, nan] -> max=5.0, argmax=1
+    x_nan_end = torch.tensor([3.0, 5.0, float("nan")], dtype=torch.float32, device=device)
+    val.zero_()
+    idx.zero_()
+    argmax_kernel[(1, )](x_nan_end, val, idx, N=3, BLOCK=4)
+    assert val.item() == 5.0, f"expected 5.0, got {val.item()}"
+    assert idx.item() == 1, f"expected 1, got {idx.item()}"
+
+
 def get_reduced_dtype(dtype_str, op):
     if op in ('argmin', 'argmax'):
         return 'int32'
@@ -6081,6 +6130,7 @@ def test_num_ctas_pre_sm90(device, fresh_knobs):
 # -----------------------
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", ['float16', 'float32'])
 @pytest.mark.parametrize("propagate_nan", ['NONE', 'ALL'])
 @pytest.mark.parametrize("func", ['minimum', 'maximum', 'clamp'])

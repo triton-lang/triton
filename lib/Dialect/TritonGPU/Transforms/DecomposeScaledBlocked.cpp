@@ -30,9 +30,6 @@ DecomposeScaledBlocked::matchAndRewrite(DotScaledOp scaledDotOp,
           scaledDotOp.getResult().getType().getEncoding()))
     return failure();
 
-  // TODO: add support for m/n packed formats.
-  if (!scaledDotOp.getLhsKPack() || !scaledDotOp.getRhsKPack())
-    return failure();
   // Types
   auto computeType = getComputeType(scaledDotOp.getAElemType(),
                                     scaledDotOp.getBElemType(), rewriter);
@@ -206,8 +203,10 @@ DecomposeScaledBlocked::scaleArg(PatternRewriter &rewriter,
 
   // 0) Upcast value to computeType (fp16/bf16)
   if (isFp4) {
-    // We always pack along the fastest moving dimension, kDim
-    v = Fp4ToFpOp::create(rewriter, loc, v, computeType, kDim);
+    bool kPack =
+        opIdx == 0 ? scaledDotOp.getLhsKPack() : scaledDotOp.getRhsKPack();
+    int packedDim = kPack ? kDim : (opIdx == 0 ? rank - 2 : rank - 1);
+    v = Fp4ToFpOp::create(rewriter, loc, v, computeType, packedDim);
   } else {
     auto vType16 = v.getType().clone(computeType);
     v = cast<TypedValue<RankedTensorType>>(
