@@ -84,10 +84,6 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   if (ll.getBasis(kRow, llvm::Log2_32(16)) == ArrayRef{0, 0}) {
     nRow /= 2;
   }
-  // Scale stores may need a padded half when lowered to 16-row TMEM messages.
-  // Unpacked store further doubles the padding requirement.
-  if (isa<TensorMemoryScalesEncodingAttr>(memDescType.getEncoding()))
-    nCol = std::max(nCol, 4);
   // If multibuffering is present, we need to allocate more cols
   if (memDescType.getRank() > 2) {
     assert(memDescType.getRank() == 3);

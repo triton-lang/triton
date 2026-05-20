@@ -464,23 +464,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
-
-// -----
-
-#tmem_scales = #ttng.tensor_memory_scales_encoding<>
-#linear_scale = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
-  tt.func public @tensor_memory_scale_alloc_pads_to_four_columns(%arg: tensor<16x2xi8, #linear_scale>) {
-    %true = arith.constant true
-    %tm = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<16x2xi8, #tmem_scales, #ttng.tensor_memory, mutable>
-    // expected-remark @below {{Buffers: [0, 4]}}
-    ttng.tmem_store %arg, %tm, %true : tensor<16x2xi8, #linear_scale> -> !ttg.memdesc<16x2xi8, #tmem_scales, #ttng.tensor_memory, mutable>
-    tt.return
-  }
-
-  // expected-remark @below {{All Tensor Regions: [0, 4]}}
-  tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
-    tt.return
-  }
-}
