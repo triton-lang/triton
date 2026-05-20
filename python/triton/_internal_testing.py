@@ -133,6 +133,21 @@ def hip_supports_bf16xX():
     return True
 
 
+def hip_supports_float8_uz():
+    """
+    Returns true if current architecture supports float8e4b8 and float8e5b16(aka E4M3FNUZ and E5M2FNUZ)
+    """
+    return is_hip_cdna3()
+
+
+def hip_supports_cast_inf_clamping():
+    return not (is_hip_rdna4() or is_hip_gfx1250())
+
+
+def hip_supports_descriptor_scatter():
+    return is_hip_gfx1250()
+
+
 def hip_supports_f8e4m3fn_cast():
     return is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx1250()
 
@@ -161,14 +176,6 @@ def hip_supports_scaled_dot():
     return is_hip_cdna() or is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250()
 
 
-def hip_supports_mxfp_dot():
-    return is_hip_cdna4() or is_hip_gfx1250()
-
-
-def hip_supports_mn_pack_scales():
-    return is_hip_cdna4()
-
-
 def hip_wmma_version():
     if is_hip_rdna3():
         return 1
@@ -176,7 +183,19 @@ def hip_wmma_version():
         return 2
     if is_hip_gfx1250():
         return 3
-    return 0
+
+
+def get_arch():
+    target = get_current_target()
+    return "" if target is None else str(target.arch)
+
+
+def hip_supports_mxfp_dot():
+    return is_hip_cdna4() or is_hip_gfx1250()
+
+
+def hip_supports_mn_pack_scales():
+    return is_hip_cdna4()
 
 
 def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, high=None):

@@ -37,6 +37,7 @@ from triton._internal_testing import (
     is_hip_rdna4,
     is_hip_gfx1250,
     hip_supports_bf16xX,
+    hip_supports_float8_uz,
     hip_supports_f8e4m3fn_cast,
     hip_supports_vdot,
     hip_supports_f8e5,
@@ -44,8 +45,9 @@ from triton._internal_testing import (
     hip_supports_f8e4m3,
     hip_supports_kpack,
     hip_supports_scaled_dot,
-    hip_supports_mxfp_dot,
     hip_wmma_version,
+    get_arch,
+    hip_supports_mxfp_dot,
     is_xpu,
     torch_float8_dtypes,
     torch_dtypes,
@@ -1973,10 +1975,12 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         check_type_supported(dtype_z, device)
 
     if is_hip():
-        if (dtype_x == 'float8_e4m3fn' or dtype_z == 'float8_e4m3fn') and not hip_supports_f8e4m3fn_cast():
-            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA3 and above.')
-        if (sorted([dtype_x, dtype_z]) == ['bfloat16', 'float8_e4m3fn']) and is_hip_cdna3():
-            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA4 and above.')
+        if (dtype_x == 'float8_e4m3fn' or dtype_z == 'float8_e4m3fn'):
+            if not hip_supports_f8e4m3fn_cast():
+                pytest.skip(f'test_cast{(dtype_x, dtype_z)} is not supported on {get_arch()} architecture.')
+            # following checks bfloat16<->float8_e4m3fn cast cases
+            if ('bfloat16' in [dtype_x, dtype_z]) and is_hip_cdna3():
+                pytest.skip(f'test_cast{(dtype_x, dtype_z)} is not supported on HIP CDNA3.')
 
     torch.manual_seed(0)
     # This is tricky because numpy doesn't have bfloat, and torch doesn't have uints.
@@ -3524,7 +3528,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             if (in_dtype == "float8e5" and not hip_supports_f8e5()) or (in_dtype == "float8e4nv"
                                                                         and not hip_supports_f8e4nv()):
                 pytest.skip(f"{in_dtype} only supported on CDNA4, RDNA4 and above")
-            if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
+            if in_dtype in ("float8e5b16", "float8e4b8") and not hip_supports_float8_uz():
                 pytest.skip(f"{in_dtype} only supported on CDNA3")
             if input_precision in ("bf16x3", "bf16x6") and not hip_supports_bf16xX():
                 pytest.skip(f"{input_precision} not fully supported on gfx1250")
@@ -3765,7 +3769,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                    r'cvt\.rn\.f16x2\.f32')
         assert re.search(pattern, ptx, flags=re.DOTALL)
 
-
 @pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
                          [(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, 4, mma, kpack)
@@ -3788,13 +3791,11 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         is_SM120 = cc >= (12, 0)
     if is_hip():
         if not hip_supports_scaled_dot():
-            pytest.skip("scaled_dot only implemented for HIP CDNA, RDNA3, RDNA4 and above")
+            pytest.skip(f"scaled_dot is not supported on {get_arch()} architecture")
         if "e4m3" in (mxfp_type, normal_type):
             if not hip_supports_f8e4m3():
-                pytest.skip(
-                    f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, RDNA3, RDNA4, and above"
-                )
-        if mma == 16 and K == 64 and not (is_hip_rdna4() or is_hip_rdna3()):
+                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) is not supported on {get_arch()} architecture")
+        if mma == 16 and K == 64 and is_hip_cdna():
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
     @triton.jit
@@ -6067,11 +6068,11 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     elif is_hip():
         num_stages = 2
-        if in_type_str in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
+        if in_type_str in ("float8e5b16", "float8e4b8") and not hip_supports_float8_uz():
             pytest.skip(f"{in_type_str} only supported on CDNA3")
         if (in_type_str == "float8e4nv" and not hip_supports_f8e4nv()) or (in_type_str == "float8e5"
                                                                            and not hip_supports_f8e5()):
-            pytest.skip(f"{in_type_str} only supported on CDNA4, RDNA4 and above")
+            pytest.skip(f"{in_type_str} is not supported on {get_arch()} architecture")
 
     check_type_supported(in_type_str, device)
     A = numpy_random((M, K), dtype_str=in_type_str)
