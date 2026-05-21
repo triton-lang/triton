@@ -4346,3 +4346,65 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+def test_compute_efficient_padded_shared_layout_op_a_fp16():
+
+    @gluon.jit
+    def kernel():
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 32], transposed=True,
+                                                             warps_per_cta=[2, 2])
+        dot_op_a: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=8)
+        shared_a: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
+            dot_op_a, [128, 64], ttgl.float16)
+        ttgl.allocate_shared_memory(ttgl.float16, [128, 64], shared_a)
+
+    module = run_parser(kernel, *make_args(num_warps=4), target=HIP_TARGET_CDNA4)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#shared = #ttg.padded_shared<[512:+16] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [16, 0], [32, 0], [64, 0], [1, 0], [2, 0], [4, 0], [8, 0]], block = []}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+""")
+
+
+def test_compute_efficient_padded_shared_layout_op_b_fp8():
+
+    @gluon.jit
+    def kernel():
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
+                                                             warps_per_cta=[2, 2])
+        dot_op_b: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=16)
+        shared_b: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
+            dot_op_b, [128, 128], ttgl.float8e4nv)
+        ttgl.allocate_shared_memory(ttgl.float8e4nv, [128, 128], shared_b)
+
+    module = run_parser(kernel, *make_args(num_warps=4), target=HIP_TARGET_CDNA4)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#shared = #ttg.padded_shared<[1024:+32] {offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0], [0, 16], [0, 32], [0, 64], [0, 1], [0, 2], [0, 4], [0, 8]], block = []}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf8E4M3FN, #shared, #smem, mutable>
+    tt.return
+  }
+}
+""")
+
+
+def test_compute_efficient_padded_shared_layout_invalid_returns_none():
+    mfma_layout = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 32], transposed=True, warps_per_cta=[2, 2])
+    dot_op = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=8)
+
+    # k_width=2 is outside {4, 8, 16}.
+    bad_kwidth_dot_op = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=2)
+    assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(bad_kwidth_dot_op, [128, 64], ttgl.float16) is None
+
+    # fp32 has bitwidth 32, outside the supported {4, 8, 16}.
+    assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(dot_op, [128, 64], ttgl.float32) is None

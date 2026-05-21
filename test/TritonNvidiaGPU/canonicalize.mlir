@@ -20,4 +20,11 @@ tt.func @reinterpret_fold(%arg0: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_m
   tt.return %0 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>
 }
 
+// CHECK-LABEL: @preserve_ld_acquire
+llvm.func @preserve_ld_acquire(%arg0: !llvm.ptr<1>) {
+  // CHECK: nvg.ld_acquire acquire, gpu, %arg0 : (!llvm.ptr<1>) -> i32
+  %0 = nvg.ld_acquire acquire, gpu, %arg0 : (!llvm.ptr<1>) -> i32
+  llvm.return
+}
+
 }  // end module
