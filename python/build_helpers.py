@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import io
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
+import tempfile
 import time
 import urllib.request
 import zipfile
@@ -59,6 +61,11 @@ def _normalize_optional(value: str) -> Optional[str]:
         return None
     value = value.strip()
     return value if value else None
+
+
+# Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
+def check_env_flag(name: str, default: str = "") -> bool:
+    return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
 
 
 def _normalize_optional_path(value: str) -> Optional[str]:
@@ -170,7 +177,7 @@ def _download_file(url: str, label: str):
     return file_bytes
 
 
-def _download_and_extract(url, download_dir, label):
+def _download_and_extract(url, download_dir, label, expected_sha256=None):
     label = f"downloading {label}"
     os.makedirs(download_dir, exist_ok=True)
     with contextlib.ExitStack() as stack:
@@ -180,10 +187,27 @@ def _download_and_extract(url, download_dir, label):
             file = stack.enter_context(zipfile.ZipFile(file_bytes, "r"))
             file.extractall(path=download_dir)
         else:
-            # tar files can be streamed directly into untar
             response = stack.enter_context(open_url(url))
             progress_reader = DownloadProgressReader(response, label)
-            file = stack.enter_context(tarfile.open(fileobj=progress_reader, mode="r|*"))
+            tar_fileobj = progress_reader
+            if expected_sha256 is not None:
+                tar_fileobj = stack.enter_context(tempfile.TemporaryFile())
+                digest = hashlib.sha256()
+                while chunk := progress_reader.read(io.DEFAULT_BUFFER_SIZE):
+                    tar_fileobj.write(chunk)
+                    digest.update(chunk)
+                actual_sha256 = digest.hexdigest()
+                if actual_sha256 != expected_sha256:
+                    message = (
+                        f"LLVM download from {url} failed checksum validation. "
+                        f"Expected SHA256 {expected_sha256}, got {actual_sha256}."
+                    )
+                    if check_env_flag("TRITON_UNSAFE_DISABLE_SHA_CHECK"):
+                        print(f"WARNING: {message}", file=sys.stderr)
+                    else:
+                        raise RuntimeError(message)
+                tar_fileobj.seek(0)
+            file = stack.enter_context(tarfile.open(fileobj=tar_fileobj, mode="r|*"))
             # Use extractall without filter for Python version < 3.12 compatibility
             if hasattr(tarfile, "data_filter"):
                 file.extractall(path=download_dir, filter="data")
@@ -217,6 +241,7 @@ class Package:
     lib_flag: str
     syspath_var_name: str
     sym_name: Optional[str] = None
+    sha256sum: Optional[str] = None
 
 
 def get_json_package_info():
@@ -272,14 +297,26 @@ def get_llvm_package_info(helper_args: BuildHelperArgs):
             f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
         )
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
-    llvm_hash_path = os.path.join(get_base_dir(), "cmake", "llvm-hash.txt")
-    with open(llvm_hash_path, "r") as llvm_hash_file:
-        rev = llvm_hash_file.read(8)
-    name = f"llvm-{rev}-{system_suffix}"
+    llvm_info_path = os.path.join(get_base_dir(), "cmake", "llvm-info.json")
+    with open(llvm_info_path, "r") as llvm_info_file:
+        llvm_info = json.load(llvm_info_file)
+    rev = llvm_info["llvm_hash"][:8]
+    build_number = llvm_info["build_number"]
+    name = f"llvm-{rev}-{system_suffix}-{build_number}"
     # Create a stable symlink that doesn't include revision
     sym_name = f"llvm-{system_suffix}"
     url = f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{name}.tar.gz"
-    return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH", sym_name=sym_name)
+    sha256sum = llvm_info["sha256sum"][system_suffix]
+    return Package(
+        "llvm",
+        name,
+        url,
+        "LLVM_INCLUDE_DIRS",
+        "LLVM_LIBRARY_DIR",
+        "LLVM_SYSPATH",
+        sym_name=sym_name,
+        sha256sum=sha256sum,
+    )
 
 
 def _get_syspath_override(package_syspath_var_name: str, helper_args: BuildHelperArgs) -> Optional[str]:
@@ -308,7 +345,7 @@ def _get_thirdparty_package_cmake_vars(package: Package, helper_args: BuildHelpe
     if not helper_args.offline_build and not input_defined and not input_compatible:
         with contextlib.suppress(Exception):
             shutil.rmtree(package_root_dir)
-        _download_and_extract(package.url, package_root_dir, package.name)
+        _download_and_extract(package.url, package_root_dir, package.name, package.sha256sum)
         # write version url to package_dir
         with open(os.path.join(package_dir, "version.txt"), "w") as file:
             file.write(package.url)
