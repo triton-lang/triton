@@ -2854,6 +2854,32 @@ def where(condition, x, y, _semantic=None):
     return _semantic.where(condition, x, y)
 
 
+@builtin
+def expect_zero(x, mask, _semantic=None):
+    """
+    Mark values that are expected to have underflowed to zero.
+
+    In regular compilation this preserves :code:`x`. Debug builds assert that
+    :code:`x` is zero wherever :code:`mask` is true. Under FPSAN this becomes
+    :code:`where(mask, 0, x)` so sanitized execution observes the intended
+    floating-point underflow.
+
+    :param x: values to preserve outside FPSAN mode.
+    :param mask: positions where :code:`x` is expected to be zero.
+    """
+    x = _unwrap_if_constexpr(x)
+    mask = _semantic.to_tensor(mask)
+    instrumentation_mode = getattr(_semantic.builder.options, "instrumentation_mode", "")
+    if "fpsan" in instrumentation_mode:
+        return _semantic.where(mask, 0, x)
+    if _semantic.builder.options.debug:
+        x_tensor = _semantic.to_tensor(x)
+        zero = _semantic.to_tensor(0)
+        cond = _semantic.or_(_semantic.equal(x_tensor, zero), _semantic.not_(mask))
+        _semantic.device_assert(cond, "expect_zero expected x == 0 where mask is true", None)
+    return x
+
+
 # -----------------------
 # Math
 # -----------------------
