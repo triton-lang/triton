@@ -136,6 +136,8 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
         for i in range(10):
             with proton.scope(f"iter_{i}"):
                 fn()
+        with proton.scope("iter_without_kernel"):
+            pass
 
     with proton.scope("test0"):
         g.replay()
@@ -149,6 +151,8 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
         for i in range(10):
             with proton.scope(f"new_iter_{i}"):
                 fn()
+        with proton.scope("new_iter_without_kernel"):
+            pass
 
     with proton.scope("test2"):
         g.replay()
@@ -177,22 +181,34 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
         assert test0_frame["children"][0]["metrics"]["time (ns)"] > 0
     else:
         # cuda backend supports "<captured_at>" annotation
+        def has_metric_payload(frame):
+            return bool(frame["metrics"]) or any(
+                has_metric_payload(child) for child in frame["children"]
+            )
+
         for test_frame in [test0_frame, test1_frame, test2_frame]:
-            child = _find_frame_by_name(test_frame, "<captured_at>")
-            assert child is not None
-            # check all iterations
-            total_iters = 0
-            for child in child["children"]:
-                iter_frame = "iter" if test_frame != test2_frame else "new_iter"
-                if iter_frame in child["frame"]["name"]:  # TODO(Keren): remove empty frames
-                    if "time (ns)" in child["children"][0]["metrics"]:
-                        total_iters += 1
-            # 0...9 iterations
-            assert total_iters == 10
+            capture_frame = _find_frame_by_name(test_frame, "<captured_at>")
+            assert capture_frame is not None
+            iter_prefix = "new_iter" if test_frame == test2_frame else "iter"
+            expected_iter_names = {
+                f"{iter_prefix}_{i}" for i in range(10)
+            }
+            empty_iter_name = f"{iter_prefix}_without_kernel"
+            capture_children = capture_frame["children"]
+            capture_child_names = {
+                child["frame"]["name"] for child in capture_children
+            }
+
+            assert empty_iter_name not in capture_child_names
+            assert expected_iter_names <= capture_child_names
+            for child in capture_children:
+                assert has_metric_payload(child)
+                if child["frame"]["name"] in expected_iter_names:
+                    assert child["children"][0]["metrics"]["time (ns)"] > 0
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
-def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, device: str):
+def test_cudagraph_deactivate_graph(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -218,7 +234,7 @@ def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, 
     profiled_kernel[(1, )](x, y)
     torch.cuda.synchronize()
 
-    temp_file = tmp_path / "test_cudagraph_metric_queue_handles_inactive_replay.hatchet"
+    temp_file = tmp_path / "test_cudagraph_deactivate_graph.hatchet"
     session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
     try:
         inactive_graph = torch.cuda.CUDAGraph()
@@ -258,6 +274,74 @@ def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, 
         assert "sum_metric" not in inactive_frame["metrics"]
     assert profiled_frame is not None
     assert profiled_frame["metrics"]["sum_metric"] == float(x.numel())
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph deactivation")
+def test_cudagraph_deactivate_within_graph(tmp_path, device: str):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    @triton.jit
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    def fn(session):
+        with proton.scope("scope_a"):
+            a = torch.ones((2, 2), device=device)
+        proton.deactivate(session)
+        with proton.scope("scope_b"):
+            b = torch.ones((2, 2), device=device)
+        proton.activate(session)
+        with proton.scope("scope_c"):
+            c = a + b
+        foo[(1, )](a, b, c)
+
+    temp_file = tmp_path / "test_cudagraph_deactivate_within_graph.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
+
+    # warmup
+    fn(session)
+
+    # no kernels
+    g = torch.cuda.CUDAGraph()
+    with cuda_graph_without_gc(g):
+        for i in range(10):
+            with proton.scope(f"iter_{i}"):
+                fn(session)
+
+    with proton.scope("test0"):
+        g.replay()
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    # scope a and c should be recorded, b should be skipped
+    children = data[0]["children"]
+    test0_frame = None
+    for child in children:
+        if child["frame"]["name"] == "test0":
+            test0_frame = child
+            break
+    assert test0_frame is not None
+    capture_frame = _find_frame_by_name(test0_frame, "<captured_at>")
+    assert capture_frame is not None
+    iter_frame = _find_frame_by_name(capture_frame, "iter_0")
+    assert iter_frame is not None
+    scope_a_frame = None
+    scope_b_frame = None
+    scope_c_frame = None
+    for child in iter_frame["children"]:
+        if child["frame"]["name"] == "scope_a":
+            scope_a_frame = child
+        if child["frame"]["name"] == "scope_b":
+            scope_b_frame = child
+        if child["frame"]["name"] == "scope_c":
+            scope_c_frame = child
+    assert scope_a_frame is not None
+    assert scope_b_frame is None
+    assert scope_c_frame is not None
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
@@ -314,137 +398,6 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
 
     assert has_positive_time_metric(replay0_frame)
     assert has_positive_time_metric(replay1_frame)
-
-
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph deactivation")
-def test_cudagraph_deactivate(tmp_path, device: str):
-    stream = torch.cuda.Stream()
-    torch.cuda.set_stream(stream)
-
-    @triton.jit
-    def foo(x, y, z):
-        tl.store(z, tl.load(y) + tl.load(x))
-
-    def fn(session):
-        with proton.scope("scope_a"):
-            a = torch.ones((2, 2), device=device)
-        proton.deactivate(session)
-        with proton.scope("scope_b"):
-            b = torch.ones((2, 2), device=device)
-        proton.activate(session)
-        with proton.scope("scope_c"):
-            c = a + b
-        foo[(1, )](a, b, c)
-
-    temp_file = tmp_path / "test_cudagraph_deactivate.hatchet"
-    session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
-
-    # warmup
-    fn(session)
-
-    # no kernels
-    g = torch.cuda.CUDAGraph()
-    with cuda_graph_without_gc(g):
-        for i in range(10):
-            with proton.scope(f"iter_{i}"):
-                fn(session)
-
-    with proton.scope("test0"):
-        g.replay()
-
-    proton.finalize()
-
-    with temp_file.open() as f:
-        data = json.load(f)
-
-    # scope a and c should be recorded, b should be skipped
-    children = data[0]["children"]
-    test0_frame = None
-    for child in children:
-        if child["frame"]["name"] == "test0":
-            test0_frame = child
-            break
-    assert test0_frame is not None
-    capture_frame = _find_frame_by_name(test0_frame, "<captured_at>")
-    assert capture_frame is not None
-    iter_frame = _find_frame_by_name(capture_frame, "iter_0")
-    assert iter_frame is not None
-    scope_a_frame = None
-    scope_b_frame = None
-    scope_c_frame = None
-    for child in iter_frame["children"]:
-        if child["frame"]["name"] == "scope_a":
-            scope_a_frame = child
-        if child["frame"]["name"] == "scope_b":
-            scope_b_frame = child
-        if child["frame"]["name"] == "scope_c":
-            scope_c_frame = child
-    assert scope_a_frame is not None
-    assert scope_b_frame is None
-    assert scope_c_frame is not None
-
-
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
-@pytest.mark.parametrize("data_format", ["hatchet", "hatchet_msgpack"])
-def test_cudagraph_filters_unlinked_virtual_scopes(tmp_path: pathlib.Path, data_format: str, device: str):
-    stream = torch.cuda.Stream()
-    torch.cuda.set_stream(stream)
-
-    @triton.jit
-    def foo(x, y, z):
-        tl.store(z, tl.load(y) + tl.load(x))
-
-    a = torch.ones((2, 2), device=device)
-    b = torch.ones((2, 2), device=device)
-    c = torch.empty_like(a)
-
-    temp_file = tmp_path / f"test_cudagraph_filters_unlinked_virtual_scopes.{data_format}"
-    proton.start(str(temp_file.with_suffix("")), context="shadow")
-
-    # Warmup to avoid one-time setup effects in replay output.
-    foo[(1, )](a, b, c)
-
-    g = torch.cuda.CUDAGraph()
-    with cuda_graph_without_gc(g):
-        with proton.scope("iter_with_kernel"):
-            foo[(1, )](a, b, c)
-        with proton.scope("iter_without_kernel"):
-            pass
-
-    with proton.scope("replay"):
-        g.replay()
-
-    proton.finalize(output_format=data_format)
-
-    if data_format == "hatchet_msgpack":
-        import msgpack
-
-        with temp_file.open("rb") as f:
-            data = msgpack.load(f, raw=False, strict_map_key=False)
-    else:
-        with temp_file.open() as f:
-            data = json.load(f)
-
-    replay_frame = next(
-        (child for child in data[0]["children"] if child["frame"]["name"] == "replay"),
-        None,
-    )
-    assert replay_frame is not None
-    capture_frame = _find_frame_by_name(replay_frame, "<captured_at>")
-    assert capture_frame is not None
-
-    capture_children = capture_frame["children"]
-    capture_child_names = {child["frame"]["name"] for child in capture_children}
-    assert "iter_with_kernel" in capture_child_names
-    assert "iter_without_kernel" not in capture_child_names
-
-    iter_with_kernel_frame = next(
-        (child for child in capture_children if child["frame"]["name"] == "iter_with_kernel"),
-        None,
-    )
-    assert iter_with_kernel_frame is not None
-    assert len(iter_with_kernel_frame["children"]) > 0
-    assert iter_with_kernel_frame["children"][0]["metrics"]["time (ns)"] > 0
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
