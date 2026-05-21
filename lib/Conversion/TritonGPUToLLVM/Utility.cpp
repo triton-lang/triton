@@ -693,18 +693,37 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                       VectorType vecTy,
                       std::optional<Value> ctaId) -> SmallVector<Value> {
     auto length = vecTy.getNumElements();
+    Type elemTy = vecTy.getElementType();
+    unsigned elemBitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
     if (isStore) {
-      Value valsVec =
-          packLLVector(loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
+      SmallVector<Value> storeVals;
+      for (const Value &v : ArrayRef<Value>(vals).slice(idx, length)) {
+        if (elemBitwidth < 8) {
+          storeVals.push_back(
+              b.zext(int_ty(8), b.bitcast(v, int_ty(elemBitwidth))));
+        } else {
+          storeVals.push_back(v);
+        }
+      }
+      Value valsVec = packLLVector(loc, storeVals, rewriter);
+
       targetInfo.storeDShared(rewriter, loc, shmemAddr, ctaId, valsVec,
                               /*pred=*/b.true_val());
       return {};
     } else {
       assert(vals.empty());
-      Value valsVec =
-          targetInfo.loadDShared(rewriter, loc, shmemAddr, ctaId, vecTy,
-                                 /*pred=*/b.true_val(), localLoadOp);
-      return unpackLLVector(loc, valsVec, rewriter);
+      Value valsVec = targetInfo.loadDShared(
+          rewriter, loc, shmemAddr, ctaId,
+          elemBitwidth < 8 ? vec_ty(i8_ty, length) : vecTy,
+          /*pred=*/b.true_val(), localLoadOp);
+
+      SmallVector<Value> vals = unpackLLVector(loc, valsVec, rewriter);
+      if (elemBitwidth < 8) {
+        for (Value &v : vals) {
+          v = b.bitcast(b.trunc(int_ty(elemBitwidth), v), elemTy);
+        }
+      }
+      return vals;
     }
   };
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
