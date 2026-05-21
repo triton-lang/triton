@@ -247,6 +247,9 @@ void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
   for (Value leaf : leaves) {
     Value poison =
         createPoisonTensor(b, cast<ttg::MemDescType>(leaf.getType()));
+    // Synchronize warps, so in case of re-used memory we won't start poisoning
+    // memory that is still being used.
+    ttg::BarrierOp::create(b, b.getLoc(), ttg::AddrSpace::Local);
     if (isa<ttng::TensorMemorySpaceAttr>(
             cast<ttg::MemDescType>(leaf.getType()).getMemorySpace())) {
       Value pred = arith::ConstantIntOp::create(b, 1, 1);
