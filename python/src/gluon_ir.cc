@@ -11,6 +11,7 @@
 #include "mlir/IR/Types.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
+#include "third_party/amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -1245,6 +1246,54 @@ void init_gluon_ir(py::module &&m) {
           auto ll = ttg::chooseScaledMfmaScaleLayout(
               &ctx, opIdx, shape, mfmaMDim, tilesPerWarp, warpsPerCTA);
           auto attr = ttg::LinearEncodingAttr::get(&ctx, std::move(ll));
+          return layoutToGluon(attr);
+        });
+
+  m.def("compute_amd_efficient_padded_shared_layout",
+        [](unsigned opIdx, unsigned kWidth, unsigned mfmaVersion,
+           std::vector<unsigned> &mfmaWarpsPerCTA,
+           std::vector<unsigned> &mfmaInstrShape, bool mfmaTransposed,
+           std::vector<unsigned> &mfmaTilesPerWarp,
+           unsigned mfmaElementBitWidth,
+           std::vector<std::vector<int32_t>> &mfmaCgaBases,
+           std::vector<int64_t> &shape, unsigned elemBitWidth,
+           bool isKContig) -> py::object {
+          DialectRegistry registry;
+          registry.insert<triton::TritonDialect, ttg::TritonGPUDialect,
+                          ttng::TritonNvidiaGPUDialect, gluon::GluonDialect>();
+          MLIRContext ctx(MLIRContext::Threading::DISABLED);
+          ctx.appendDialectRegistry(registry);
+          ctx.loadAllAvailableDialects();
+
+          if (elemBitWidth != 4 && elemBitWidth != 8 && elemBitWidth != 16)
+            return py::none();
+          auto elemTy = mlir::IntegerType::get(&ctx, elemBitWidth);
+
+          auto mfmaCga =
+              buildCgaLayoutAttr(&ctx, mfmaCgaBases, mfmaWarpsPerCTA.size());
+          auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+              &ctx, mfmaVersion, mfmaWarpsPerCTA, mfmaInstrShape,
+              mfmaTransposed, mfmaCga, mfmaTilesPerWarp, mfmaElementBitWidth);
+          if (!mfmaEnc)
+            return py::none();
+          auto dotOpEnc =
+              ttg::DotOperandEncodingAttr::get(&ctx, opIdx, mfmaEnc, kWidth);
+          if (!dotOpEnc)
+            return py::none();
+
+          auto srcTy = RankedTensorType::get(shape, elemTy, dotOpEnc);
+
+          // sharedOrder[0] is the fast dim; for K-contig that's the K axis.
+          unsigned kDimIndex = opIdx == 0 ? 1u : 0u;
+          SmallVector<unsigned, 2> sharedOrder =
+              isKContig ? SmallVector<unsigned, 2>{kDimIndex, 1u - kDimIndex}
+                        : SmallVector<unsigned, 2>{1u - kDimIndex, kDimIndex};
+
+          auto attr = composePaddedLayoutForAsyncCopyCDNA4(
+              dotOpEnc, cast<ttg::TensorOrMemDesc>(Type(srcTy)), sharedOrder,
+              /*useAsyncCopy=*/true, /*warpSize=*/64);
+          if (!attr)
+            return py::none();
           return layoutToGluon(attr);
         });
 
