@@ -950,6 +950,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 }
 
+// -----
+
 #bm64_bn128 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1>
 #bm64_bn64 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 
