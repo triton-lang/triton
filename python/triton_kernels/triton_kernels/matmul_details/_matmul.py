@@ -245,6 +245,10 @@ def _matmul(
 
     if RAGGED_DIMENSION == "K":
         K_W = tl.multiple_of(tl.load(WSliceOffs + pid_s + 1), W_SLICE_SIZES_DIVISIBILITY)
+        if PACKED_BLOCK_K_W > BLOCK_K:
+            K_W = K_W * (PACKED_BLOCK_K_W // BLOCK_K)
+        else:
+            K_W = K_W // (BLOCK_K // PACKED_BLOCK_K_W)
         K_X = tl.multiple_of(tl.load(XSliceOffs + pid_s + 1), X_SLICE_SIZES_DIVISIBILITY)
     else:
         if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
@@ -252,11 +256,11 @@ def _matmul(
             K_W = tl.cdiv(K, 64) * 64
         else:
             K_W = K
+        if PACKED_BLOCK_K_W > BLOCK_K:
+            K_W = K_W * (PACKED_BLOCK_K_W // BLOCK_K)
+        else:
+            K_W = K_W // (BLOCK_K // PACKED_BLOCK_K_W)
         K_X = K
-    if PACKED_BLOCK_K_W > BLOCK_K:
-        K_W = K_W * (PACKED_BLOCK_K_W // BLOCK_K)
-    else:
-        K_W = K_W // (BLOCK_K // PACKED_BLOCK_K_W)
 
     loop_k = tl.multiple_of(tl.load(XSliceSizes + pid_s), X_SLICE_SIZES_DIVISIBILITY) if RAGGED_DIMENSION == "K" else K - off_k_x
     k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
