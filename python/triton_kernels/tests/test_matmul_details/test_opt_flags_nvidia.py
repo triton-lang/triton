@@ -104,6 +104,36 @@ def test_matmul_hopper_mxfp4_rhs_scale_padding_is_masked(device, constraints):
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
+def test_matmul_hopper_mxfp4_rhs_value_padding_is_loaded(device):
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("requires CUDA")
+    if torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip("requires Hopper")
+
+    torch.manual_seed(0)
+    # Hopper MXFP4 value swizzling pads K to 64 rows before packing. K=32
+    # exercises the tail of that physical tile without involving Blackwell
+    # layouts, which use a different value/scale swizzle.
+    m, k, n = 64, 32, 256
+    a = torch.randn((m, k), device=device, dtype=torch.bfloat16)
+    weight_fp = torch.randn((k, n), device=device, dtype=torch.bfloat16)
+    weight_val, weight_scale = downcast_to_mxfp(weight_fp, torch.uint8, axis=-2)
+
+    value_layout = layout.make_default_matmul_mxfp4_w_layout(mx_axis=-2)
+    scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=-2, num_warps=8)
+    b = convert_layout(wrap_torch_tensor(weight_val, dtype=FP4), value_layout)
+    b_scale = convert_layout(wrap_torch_tensor(weight_scale, dtype=UINT8), scale_layout)
+    precision_config = PrecisionConfig(
+        b_mx_scale=b_scale,
+        b_microblock_size=MXFP_BLOCK_SIZE.value,
+        out_dtype=a.dtype,
+    )
+
+    tri_y = matmul(a, b, None, precision_config=precision_config)
+    ref_y = matmul_torch(a, b, None, precision_config=precision_config)
+    assert_close(ref_y, tri_y, maxtol=3e-2, rmstol=None)
+
+
 @pytest.mark.parametrize("n, expected", [(64, 128), (200, 256)])
 def test_compute_block_n_blackwell_scale_aligns_to_128(n, expected):
     precision_config = PrecisionConfig(
