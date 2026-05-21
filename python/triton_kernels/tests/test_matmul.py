@@ -140,6 +140,8 @@ def _build_test_op_cases():
         Case(1024, 1000, 2048, "ragged", "float32", "float32", b_transpose=True)
     ])
     # bfloat16 x mx
+    # Hopper MXFP4 value swizzling pads K to 64 rows, so keep one sub-tile K case.
+    test_cases.append(Case(64, 256, 32, "plain", "bfloat16", "mxfloat4_e2m1", b_hbm_swizzling=True))
     for shape in [odd_shape2, even_shape]:
         test_cases.extend([
             Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1"),
