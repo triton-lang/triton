@@ -126,8 +126,7 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth,
   auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
   if (!removeBroadcastSrc.isIdentity()) {
     auto prmtCvt = removeBroadcastSrc.apply(cvt);
-    auto info =
-        lowerTMemLdSt(prmtCvt, maxnreg, bitwidth, emitError, unpacked);
+    auto info = lowerTMemLdSt(prmtCvt, maxnreg, bitwidth, emitError, unpacked);
     if (failed(info))
       return failure();
     info->broadcast = std::move(removeBroadcastSrc);
@@ -186,8 +185,7 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth,
     if (unpacked) {
       quot = LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth) * quot;
     }
-    auto info =
-        lowerTMemLdSt(quot, maxnreg, newBitwidth, emitError, unpacked);
+    auto info = lowerTMemLdSt(quot, maxnreg, newBitwidth, emitError, unpacked);
     if (failed(info))
       return failure();
     if (bestContig > 1) {
