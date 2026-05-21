@@ -81,11 +81,15 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     if (is_persistent and k is not None and k >= 256
             and is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)):
         block_k = max(block_k, 256)
-    has_mx_weight_scale = precision_config is not None and precision_config.b_mx_scale is not None
-    if has_native_mxfp and is_persistent and has_mx_weight_scale:
-        # If both inputs are fp4, allow larger block_k.
-        max_block_k = 256 if lhs_dtype == FP4 and rhs_dtype == FP4 else 128
-        block_k = min(block_k, max_block_k)
+    if precision_config is not None and precision_config.b_mx_scale is not None:
+        if has_native_mxfp and is_persistent:
+            # If both inputs are fp4, allow larger block_k.
+            max_block_k = 256 if lhs_dtype == FP4 and rhs_dtype == FP4 else 128
+            block_k = min(block_k, max_block_k)
+        if (isinstance(precision_config.b_mx_scale, Tensor)
+                and isinstance(precision_config.b_mx_scale.storage.layout, BlackwellMXScaleLayout)):
+            # Blackwell scale swizzling loads four K-scale columns at a time.
+            block_k = max(block_k, 4 * MXFP_BLOCK_SIZE.value)
     if has_y_acc_in and lhs_width == rhs_width == 16 and not target_info.cuda_capability_geq(10, 0):
         block_k = min(block_k, 32)
     return block_k
