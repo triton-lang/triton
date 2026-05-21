@@ -1,5 +1,7 @@
 project(Proton LANGUAGES CXX)
 
+include(Backend.cmake)
+
 set(PROTON_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csrc")
 set(PROTON_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/common")
 
@@ -55,6 +57,12 @@ add_subdirectory("${PROTON_SRC_DIR}")
 # ============ Add subdirectory with proton tests ============
 add_subdirectory(test)
 
+# ============ Discover any Triton backends registering Proton backends ============
+discover_proton_backends()
+
+# ============ Codegen the templates allowing for Proton backend registration ============
+codegen_proton_backend_templates()
+
 # ============ Possibly handle macOS specifics ============
 if(APPLE)
   set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
@@ -82,3 +90,6 @@ target_link_libraries(proton PRIVATE Python3::Module)
 if(PROTON_PYTHON_LDFLAGS)
   target_link_options(proton PRIVATE ${PROTON_PYTHON_LDFLAGS})
 endif()
+
+# ============ Link any external libs required by Proton backends ============
+link_proton_backend_external_libs()
