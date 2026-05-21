@@ -1,0 +1,13 @@
+{
+  "llvm_hash": "87717bf9f81f7b29466c5d9a30a3453bdfc93941",
+  "build_number": 1,
+  "sha256sum": {
+    "almalinux-arm64": "83acad6d0bb6a540700e0bdf2d7ebfa71df1b5b7df29d007c3b4724e3228d493",
+    "almalinux-x64": "3010e7959f02032a16b3229b3a2079cd470cf4429b370dea5aa17d2482a5b4d1",
+    "macos-arm64": "c2e4219f2e04f21ee07832ae319b69726acf3ee496edb8d1786d2095d06ce004",
+    "macos-x64": "8c939eace38bbd0ce303ef01e6a3112d37740f2283b1209de10d59680df4ebd4",
+    "ubuntu-arm64": "cb35d89c202748a2d09c28f72c481b1e15b7f9407a16b348e6a04bf4e8c00116",
+    "ubuntu-x64": "7889df00f0dbbceb8e45774362b0478590029400a3abd58bdabba83d92fb2bbe",
+    "windows-x64": "9b2acb214d635bde0a5500a95186f99540e6aa5ac36f58a5a843f4fdb22a6a8a"
+  }
+}
