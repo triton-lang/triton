@@ -341,7 +341,7 @@ def epilogue_partition(p):
         c_mask = ((offs_m[:, None] < M_GEMM) & (offs_n[None, :] < N_GEMM) & (h[:, None] < config.H_full) &
                   (w[:, None] < config.W_full))
 
-        result = gl.convert_layout(acc, gl.CoalescedLayout())
+        result = acc
         if p.store_split_k_partials:
             split_batch = prog.split_k_idx * config.N + c_batch
             split_offsets = (split_batch[:, None] * config.output_stride_n + h[:, None] * config.output_stride_h +

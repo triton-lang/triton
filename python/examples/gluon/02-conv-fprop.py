@@ -273,7 +273,7 @@ def epilogue_partition(p):
 
         mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
         acc = p.acc_bufs.index(acc_state.index).load()
-        result = gl.convert_layout(acc.to(GL_GEMM_DTYPE), gl.CoalescedLayout())
+        result = acc.to(GL_GEMM_DTYPE)
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
         acc_state = acc_state.next()
 
