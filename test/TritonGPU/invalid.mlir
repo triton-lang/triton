@@ -1,5 +1,15 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+tt.func public @local_alloc_i1() {
+    // expected-error @+1 {{element type bit width must be a multiple of 8}}
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<8xi1, #shared, #smem, mutable>
+    tt.return
+}
+
+// -----
+
 // expected-error @+1 {{After removing broadcast bases the CGA encoding must be a permutation matrix}}
 #blocked_bad_cga = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1], CGALayout = [[1, 0], [1, 0]]}>
 module {
