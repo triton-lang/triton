@@ -1582,9 +1582,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func public @initialize_uninitialized_allocs() {
     // CHECK: %[[SMEM:.*]] = ttg.local_alloc
     // CHECK: %[[SMEM_POISON:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32
+    // CHECK: ttg.barrier local
     // CHECK: ttg.local_store %[[SMEM_POISON]], %[[SMEM]]
     // CHECK: %[[TMEM:.*]] = ttng.tmem_alloc
     // CHECK: %[[TMEM_POISON:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32
+    // CHECK: ttg.barrier local
     // CHECK: %[[TRUE:.*]] = arith.constant true
     // CHECK: ttng.tmem_store %[[TMEM_POISON]], %[[TMEM]], %[[TRUE]]
     // NO-INIT-NOT: ttg.local_store
@@ -1608,12 +1610,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: %[[SMEM:.*]] = ttg.local_alloc
     // CHECK: %[[SMEM_0:.*]] = ttg.memdesc_index %[[SMEM]]
     // CHECK: %[[SMEM_1:.*]] = ttg.memdesc_index %[[SMEM]]
+    // CHECK: ttg.barrier local
     // CHECK: ttg.local_store {{.*}}, %[[SMEM_0]]
+    // CHECK: ttg.barrier local
     // CHECK: ttg.local_store {{.*}}, %[[SMEM_1]]
     // CHECK: %[[TMEM:.*]] = ttng.tmem_alloc
     // CHECK: %[[TMEM_0:.*]] = ttg.memdesc_index %[[TMEM]]
     // CHECK: %[[TMEM_1:.*]] = ttg.memdesc_index %[[TMEM]]
+    // CHECK: ttg.barrier local
     // CHECK: ttng.tmem_store {{.*}}, %[[TMEM_0]],
+    // CHECK: ttg.barrier local
     // CHECK: ttng.tmem_store {{.*}}, %[[TMEM_1]],
     %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xf32, #shared, #smem, mutable>
     %tmem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
