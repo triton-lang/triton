@@ -117,7 +117,7 @@ int getContextualMaxNReg(Operation *op) {
 }
 
 FailureOr<TMemLdStEncodingInfo>
-lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
+lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth,
               std::function<InFlightDiagnostic()> emitError,
               bool unpacked = false) {
   // We will fill in the returned value recursively (if it exists)
@@ -126,8 +126,7 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
   auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
   if (!removeBroadcastSrc.isIdentity()) {
     auto prmtCvt = removeBroadcastSrc.apply(cvt);
-    auto info = lowerTMemLdSt(prmtCvt, maxnreg, bitwidth, isScales, emitError,
-                              unpacked);
+    auto info = lowerTMemLdSt(prmtCvt, maxnreg, bitwidth, emitError, unpacked);
     if (failed(info))
       return failure();
     info->broadcast = std::move(removeBroadcastSrc);
@@ -186,8 +185,7 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
     if (unpacked) {
       quot = LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth) * quot;
     }
-    auto info = lowerTMemLdSt(quot, maxnreg, newBitwidth, isScales, emitError,
-                              unpacked);
+    auto info = lowerTMemLdSt(quot, maxnreg, newBitwidth, emitError, unpacked);
     if (failed(info))
       return failure();
     if (bestContig > 1) {
@@ -300,9 +298,8 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   cvt = LinearLayout(std::move(bases), cvt.getOutDims(),
                      /*isSurjective=*/cvt.isSurjective());
 
-  bool isScales = isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding());
   int bitwidth = memTy.getElementTypeBitWidth();
-  return lowerTMemLdSt(cvt, maxnreg, bitwidth, isScales, emitError);
+  return lowerTMemLdSt(cvt, maxnreg, bitwidth, emitError);
 }
 
 } // namespace mlir::triton::nvidia_gpu
