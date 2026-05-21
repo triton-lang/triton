@@ -541,7 +541,7 @@ def test_local_store_tmem_32x32b_2cta_splitm_to_splitk(device):
         transposed=True,
         element_bitwidth=16,
         rank=2,
-        cga_layout=[[0, 1]],
+        cga_layout=[[1, 0]],
     )
 
     @gluon.jit

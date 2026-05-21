@@ -956,11 +956,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 16, CGALayout = [[0, 1]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @stmatrix_b16_trans_linear_2cta_splitm_to_splitk
-  // CHECK: nvvm.stmatrix
-  tt.func public @stmatrix_b16_trans_linear_2cta_splitm_to_splitk(%data: tensor<256x64xf16, #linear>) {
+  // CHECK-LABEL: @local_store_b16_trans_linear_2cta_splitm_to_splitk
+  // CHECK: llvm.store
+  tt.func public @local_store_b16_trans_linear_2cta_splitm_to_splitk(%data: tensor<256x64xf16, #linear>) {
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
     ttg.local_store %data, %0 : tensor<256x64xf16, #linear> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#linear = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], warp = [[0, 32], [0, 64]], block = [[0, 128]]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @local_ldst_b16_trans_linear_2cta_splitk_to_splitm
+  // CHECK: llvm.store
+  // CHECK: llvm.load
+  tt.func public @local_ldst_b16_trans_linear_2cta_splitk_to_splitm(%data: tensor<128x256xf16, #linear>) {
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x256xf16, #shared, #smem, mutable>
+    ttg.local_store %data, %alloc : tensor<128x256xf16, #linear> -> !ttg.memdesc<128x256xf16, #shared, #smem, mutable>
+    %loaded = ttg.local_load %alloc : !ttg.memdesc<128x256xf16, #shared, #smem, mutable> -> tensor<128x256xf16, #linear>
     tt.return
   }
 }
