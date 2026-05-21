@@ -60,6 +60,8 @@ def compute_block_n(n: int, arch, precision_config):
 def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in):
     lhs_width = lhs_dtype.bitwidth
     rhs_width = rhs_dtype.bitwidth
+    b_mx_scale = None if precision_config is None else precision_config.b_mx_scale
+    b_scale_layout = None if not isinstance(b_mx_scale, Tensor) else b_mx_scale.storage.layout
     # block_k needs to match the cacheline size (1024 bits)
     block_k = int(1024 // min(lhs_width, rhs_width))
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
@@ -71,11 +73,14 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     elif k is not None:  # cover small k case
         min_block_k = 32 if is_persistent or lhs_width != 16 or rhs_width != 16 else 16
         block_k = max(min_block_k, min(triton.next_power_of_2(k), block_k))
-    has_mx_weight_scale = precision_config is not None and precision_config.b_mx_scale is not None
+    has_mx_weight_scale = b_mx_scale is not None
     if has_native_mxfp and is_persistent and has_mx_weight_scale:
         # If both inputs are fp4, allow larger block_k.
         max_block_k = 256 if lhs_dtype == FP4 and rhs_dtype == FP4 else 128
         block_k = min(block_k, max_block_k)
+    if isinstance(b_scale_layout, BlackwellMXScaleLayout):
+        # Blackwell scale swizzling loads four K-scale columns at a time.
+        block_k = max(block_k, 4 * MXFP_BLOCK_SIZE.value)
     if has_y_acc_in and lhs_width == rhs_width == 16 and not target_info.cuda_capability_geq(10, 0):
         block_k = min(block_k, 32)
     return block_k

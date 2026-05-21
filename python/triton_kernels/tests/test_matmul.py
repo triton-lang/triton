@@ -153,6 +153,7 @@ def _build_test_op_cases():
             Case(*shape, "ragged", "bfloat16", "mxfloat8_e4m3fn"),
             Case(*shape, "ragged", "bfloat16", "mxfloat8_e4m3fn", b_hbm_swizzling=True)
         ])
+    test_cases.append(Case(64, 256, 32, "plain", "bfloat16", "mxfloat4_e2m1", b_hbm_swizzling=True))
     # float8 x mxfloat
     test_cases.extend([
         Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", b_hbm_swizzling=True),
