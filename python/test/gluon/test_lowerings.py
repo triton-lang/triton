@@ -4,7 +4,7 @@ import pytest
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
 from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
 
@@ -518,7 +518,7 @@ def test_local_load_store_generic_linear(src_layout, shared_kind, device):
     torch.testing.assert_close(y, x)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_local_store_tmem_32x32b_2cta_splitm_to_splitk(device):
     src_shape = (256, 128)
     dst_shape = (128, 256)
