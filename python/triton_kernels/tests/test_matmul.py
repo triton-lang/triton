@@ -183,6 +183,22 @@ def _build_test_op_cases():
         Case(300, 400, 416, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
         Case(300, 400, 416, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", b_hbm_swizzling=True),
         Case(300, 400, 416, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
+        Case(64, 128, 96, "ragged", "mxfloat8_e4m3fn", "bfloat16", "bfloat16"),
+        Case(64, 128, 96, "batched", "mxfloat8_e4m3fn", "bfloat16", "bfloat16"),
+        Case(1024, 1024, 1024, "batched", "mxfloat8_e4m3fn", "bfloat16", "bfloat16", split_k=9),
+        Case(64, 128, 96, "ragged", "mxfloat8_e4m3fn", "float16", "bfloat16"),
+        Case(64, 128, 96, "batched", "mxfloat8_e4m3fn", "float16", "bfloat16"),
+        Case(1024, 1024, 1024, "batched", "mxfloat8_e4m3fn", "float16", "bfloat16", split_k=9),
+        Case(64, 128, 96, "ragged", "mxfloat8_e4m3fn", "bfloat16", "bfloat16", a_hbm_swizzling=True),
+        Case(64, 128, 96, "ragged", "mxfloat8_e4m3fn", "float16", "bfloat16", a_hbm_swizzling=True),
+        Case(64, 128, 96, "ragged", "mxfloat4_e2m1", "bfloat16", "bfloat16"),
+        Case(64, 128, 96, "batched", "mxfloat4_e2m1", "bfloat16", "bfloat16"),
+        Case(1024, 1024, 1024, "batched", "mxfloat4_e2m1", "bfloat16", "bfloat16", split_k=9),
+        Case(64, 128, 96, "ragged", "mxfloat4_e2m1", "float16", "bfloat16"),
+        Case(64, 128, 96, "batched", "mxfloat4_e2m1", "float16", "bfloat16"),
+        Case(1024, 1024, 1024, "batched", "mxfloat4_e2m1", "float16", "bfloat16", split_k=9),
+        Case(64, 128, 96, "ragged", "mxfloat4_e2m1", "bfloat16", "bfloat16", a_hbm_swizzling=True),
+        Case(64, 128, 96, "ragged", "mxfloat4_e2m1", "float16", "bfloat16", a_hbm_swizzling=True),
         Case(1024, 1024, 1024, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True),
         Case(256, 256, 256, "plain", "mxfloat4_e2m1", "mxfloat4_e2m1", "bfloat16"),
         Case(256, 256, 256, "plain", "mxfloat4_e2m1", "mxfloat4_e2m1", "bfloat16", b_hbm_swizzling=True),
@@ -305,6 +321,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("NYI: float8 x mxfloat8 not tested on AMD GPU")
         if a_dtype.has_mx_scale and b_dtype.has_mx_scale:
             pytest.skip("NYI: mx x mx not tested on AMD GPU")
+        if a_dtype.name == "mxfloat4_e2m1" and weight_dtype_str in {"bfloat16", "float16"}:
+            pytest.skip("NYI: MXFP4 x dense FP16/BF16 not tested on AMD GPU")
         if is_persistent:
             pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
         # FIXME: this works on nvidia; looks like some sort of bug on AMD?

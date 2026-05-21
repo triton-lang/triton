@@ -13,6 +13,13 @@ def is_x_scale_swizzled(precision_config):
             and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout))
 
 
+def is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype):
+    return (target_info.cuda_capability_geq(10, 0) and precision_config is not None
+            and precision_config.a_mx_scale is not None and precision_config.a_microblock_size == int(MXFP_BLOCK_SIZE)
+            and precision_config.b_mx_scale is None and precision_config.c_mx_scale is None and lhs_dtype.bitwidth <= 8
+            and rhs_dtype in [FP16, BF16])
+
+
 def compute_swap_xw(precision_config, block_m, is_persistent, lhs_dtype, rhs_dtype):
     if target_info.cuda_capability_geq(10, 0):
         if lhs_dtype == FP4 and rhs_dtype == FP4:
@@ -71,6 +78,9 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     elif k is not None:  # cover small k case
         min_block_k = 32 if is_persistent or lhs_width != 16 or rhs_width != 16 else 16
         block_k = max(min_block_k, min(triton.next_power_of_2(k), block_k))
+    if (is_persistent and k is not None and k >= 256
+            and is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)):
+        block_k = max(block_k, 256)
     if precision_config is not None and precision_config.b_mx_scale is not None:
         if has_native_mxfp and is_persistent:
             # If both inputs are fp4, allow larger block_k.
@@ -140,6 +150,10 @@ def compute_num_stages(
         # for x.shape = [2048, >=4096] bf16 x [32, >=4096, >=4096] float8_e4m3fn
         # block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True -> leading to num_stages=4
         weight_size = 2
+    if has_native_mxfp and precision_config.a_mx_scale is not None and rhs_dtype in [FP16, BF16]:
+        # For mxfp x fp16/bf16, we upcast activations on the fly, so size
+        # smem_capacity accordingly.
+        act_size = 2
 
     stage_size = block_m * block_k * act_size + block_k * block_n * weight_size
     device_props = torch.cuda.get_device_properties(0)
