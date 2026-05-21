@@ -182,22 +182,16 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
     else:
         # cuda backend supports "<captured_at>" annotation
         def has_metric_payload(frame):
-            return bool(frame["metrics"]) or any(
-                has_metric_payload(child) for child in frame["children"]
-            )
+            return bool(frame["metrics"]) or any(has_metric_payload(child) for child in frame["children"])
 
         for test_frame in [test0_frame, test1_frame, test2_frame]:
             capture_frame = _find_frame_by_name(test_frame, "<captured_at>")
             assert capture_frame is not None
             iter_prefix = "new_iter" if test_frame == test2_frame else "iter"
-            expected_iter_names = {
-                f"{iter_prefix}_{i}" for i in range(10)
-            }
+            expected_iter_names = {f"{iter_prefix}_{i}" for i in range(10)}
             empty_iter_name = f"{iter_prefix}_without_kernel"
             capture_children = capture_frame["children"]
-            capture_child_names = {
-                child["frame"]["name"] for child in capture_children
-            }
+            capture_child_names = {child["frame"]["name"] for child in capture_children}
 
             assert empty_iter_name not in capture_child_names
             assert expected_iter_names <= capture_child_names
