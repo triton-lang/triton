@@ -2446,7 +2446,15 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     :param rhs: The second tensor to be multiplied.
     :type rhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
     :param rhs_scale: Scale factor for rhs tensor. Shape should be [N, K//group_size] where rhs is [K, N].
-                      Important: Do NOT transpose rhs_scale
+                      Important: Do NOT transpose rhs_scale.
+
+                      .. versionchanged:: 3.6.0
+                         The expected shape of ``rhs_scale`` changed from
+                         ``[K // group_size, N]`` (used in 3.4.x and earlier) to
+                         ``[N, K // group_size]``. Code that worked on 3.4.x will
+                         silently produce incorrect results on 3.6.0 unless the
+                         scale tensor is reshaped accordingly. See
+                         `issue #10007 <https://github.com/triton-lang/triton/issues/10007>`_.
     :type rhs_scale: e8m0 type represented as an uint8 tensor, or None.
     :param rhs_format: format of the rhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type rhs_format: str
