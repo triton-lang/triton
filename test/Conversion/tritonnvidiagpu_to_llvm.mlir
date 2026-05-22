@@ -228,7 +228,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @tma_copy_global_to_local_im2col(%tma: !ttng.tensordesc_im2col<16x64xf32, #shared1>, %n: i32, %h: i32, %w: i32, %c: i32, %alloc: !ttg.memdesc<16x64xf32, #shared1, #smem, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0, #smem>, %pred: i1) {
     %off_w = arith.constant 1 : i16
     %off_h = arith.constant 2 : i16
-    ttng.async_tma_copy_global_to_local %tma[%x, %x, %x, %x] im2col_shape = [%x, %x, %x, %x] element_strides = [%x, %x, %x, %x] pixel_box_lower_corner = [%x, %x] pixel_box_upper_corner = [%x, %x] offsets = [%off_w, %off_h] %alloc, %barrier, %pred : !ttng.tensordesc_im2col<16x64xf32, #shared1>, !ttg.memdesc<1xi64, #shared0, #smem> -> !ttg.memdesc<16x64xf32, #shared1, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %tma[%x, %x, %x, %x] im2col_shape = [%n, %h, %w, %c] element_strides = [%x, %x, %x, %x] pixel_box_lower_corner = [%x, %x] pixel_box_upper_corner = [%x, %x] offsets = [%off_w, %off_h] %alloc, %barrier, %pred : !ttng.tensordesc_im2col<16x64xf32, #shared1>, !ttg.memdesc<1xi64, #shared0, #smem> -> !ttg.memdesc<16x64xf32, #shared1, #smem, mutable>
     tt.return
   }
 }
@@ -263,7 +263,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @tma_copy_global_to_local_im2col_multi_msg(%tma: !ttng.tensordesc_im2col<64x1024xf32, #shared2>, %n: i32, %h: i32, %w: i32, %c: i32, %alloc: !ttg.memdesc<64x1024xf32, #shared2, #smem, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0, #smem>, %pred: i1) {
     %off_w = arith.constant 1 : i16
     %off_h = arith.constant 2 : i16
-    ttng.async_tma_copy_global_to_local %tma[%x, %x, %x, %x] im2col_shape = [%x, %x, %x, %x] element_strides = [%x, %x, %x, %x] pixel_box_lower_corner = [%x, %x] pixel_box_upper_corner = [%x, %x] offsets = [%off_w, %off_h] %alloc, %barrier, %pred : !ttng.tensordesc_im2col<64x1024xf32, #shared2>, !ttg.memdesc<1xi64, #shared0, #smem> -> !ttg.memdesc<64x1024xf32, #shared2, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %tma[%x, %x, %x, %x] im2col_shape = [%n, %h, %w, %c] element_strides = [%x, %x, %x, %x] pixel_box_lower_corner = [%x, %x] pixel_box_upper_corner = [%x, %x] offsets = [%off_w, %off_h] %alloc, %barrier, %pred : !ttng.tensordesc_im2col<64x1024xf32, #shared2>, !ttg.memdesc<1xi64, #shared0, #smem> -> !ttg.memdesc<64x1024xf32, #shared2, #smem, mutable>
     tt.return
   }
 }
@@ -298,7 +298,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @tma_copy_global_to_local_im2col_multi_msg_swizzle(%tma: !ttng.tensordesc_im2col<64x256xf16, #shared_swz>, %n: i32, %h: i32, %w: i32, %c: i32, %alloc: !ttg.memdesc<64x256xf16, #shared_swz, #smem_swz, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0_swz, #smem_swz>, %pred: i1) {
     %off_w = arith.constant 1 : i16
     %off_h = arith.constant 2 : i16
-    ttng.async_tma_copy_global_to_local %tma[%x, %x, %x, %x] im2col_shape = [%x, %x, %x, %x] element_strides = [%x, %x, %x, %x] pixel_box_lower_corner = [%x, %x] pixel_box_upper_corner = [%x, %x] offsets = [%off_w, %off_h] %alloc, %barrier, %pred : !ttng.tensordesc_im2col<64x256xf16, #shared_swz>, !ttg.memdesc<1xi64, #shared0_swz, #smem_swz> -> !ttg.memdesc<64x256xf16, #shared_swz, #smem_swz, mutable>
+    ttng.async_tma_copy_global_to_local %tma[%x, %x, %x, %x] im2col_shape = [%n, %h, %w, %c] element_strides = [%x, %x, %x, %x] pixel_box_lower_corner = [%x, %x] pixel_box_upper_corner = [%x, %x] offsets = [%off_w, %off_h] %alloc, %barrier, %pred : !ttng.tensordesc_im2col<64x256xf16, #shared_swz>, !ttg.memdesc<1xi64, #shared0_swz, #smem_swz> -> !ttg.memdesc<64x256xf16, #shared_swz, #smem_swz, mutable>
     tt.return
   }
 }

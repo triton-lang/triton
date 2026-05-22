@@ -225,7 +225,7 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
     return {};
   desc_cstr += block_shape_cstr;
 
-  // For im2col mode, append input tensor rank and im2col descriptor metadata.
+  // For im2col mode, append only the input tensor rank.
   // Format:
   // tensordesc_im2col<dtype[block_shape],input_rank=N,layout>
   // The im2col load operation carries runtime remap metadata explicitly.
