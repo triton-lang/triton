@@ -244,20 +244,27 @@ void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
       leaves.push_back(createSingleBufferView(b, alloc, buffer));
   }
 
+  bool isTensorMemory =
+      isa<ttng::TensorMemorySpaceAttr>(allocType.getMemorySpace());
+  ttg::AddrSpace barrierSpace =
+      isTensorMemory
+          ? (ttg::AddrSpace::TensorRead | ttg::AddrSpace::TensorWrite)
+          : ttg::AddrSpace::Local;
+  // Synchronize warps, so in case of re-used memory we won't start poisoning
+  // memory that is still being used, and finish poisoning before the kernel's
+  // first real use of the allocation.
+  ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
   for (Value leaf : leaves) {
-    Value poison =
-        createPoisonTensor(b, cast<ttg::MemDescType>(leaf.getType()));
-    // Synchronize warps, so in case of re-used memory we won't start poisoning
-    // memory that is still being used.
-    ttg::BarrierOp::create(b, b.getLoc(), ttg::AddrSpace::Local);
-    if (isa<ttng::TensorMemorySpaceAttr>(
-            cast<ttg::MemDescType>(leaf.getType()).getMemorySpace())) {
+    auto leafType = cast<ttg::MemDescType>(leaf.getType());
+    Value poison = createPoisonTensor(b, leafType);
+    if (isTensorMemory) {
       Value pred = arith::ConstantIntOp::create(b, 1, 1);
       ttng::TMEMStoreOp::create(b, leaf, poison, pred);
     } else {
       ttg::LocalStoreOp::create(b, poison, leaf);
     }
   }
+  ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
 }
 
 bool canInitializeAllocation(Value alloc) {
