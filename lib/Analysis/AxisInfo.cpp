@@ -960,17 +960,12 @@ public:
                                   rhsInfo.getConstancy(d), condConstancy[d]));
           contiguity.push_back(gcd(lhsInfo.getContiguity(d),
                                    rhsInfo.getContiguity(d), condConstancy[d]));
-          // When condConstancy reduces output contiguity below either input's
-          // contiguity, output "group leaders" include positions that were
-          // non-leaders in lhs/rhs; the value at such a position p is
-          // divisible only by gcd(d_src, p) <= gcd(d_src, outContig). Clamp
-          // divisibility by output contiguity to keep this sound.
-          // getDivisibilityFromContiguity itself does not see condConstancy.
-          int64_t div = getDivisibilityFromContiguity(lhsInfo, rhsInfo, d);
-          if (contiguity.back() < lhsInfo.getContiguity(d) ||
-              contiguity.back() < rhsInfo.getContiguity(d))
-            div = gcd(div, contiguity.back());
-          divisibility.push_back(div);
+          // getDivisibilityFromContiguity does not see condConstancy; clamp
+          // by the just-computed output contiguity so the result remains
+          // sound when condConstancy reduces it below the input contiguities.
+          divisibility.push_back(
+              gcd(getDivisibilityFromContiguity(lhsInfo, rhsInfo, d),
+                  contiguity.back()));
         }
       }
       if (lhsInfo.getConstantValue().has_value() &&
