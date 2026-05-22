@@ -3,6 +3,7 @@
 #include "Data/Metric.h"
 #include "Device.h"
 #include "DeviceType.h"
+#include "Profiler/Graph.h"
 #include "Utility/Errors.h"
 #include "Utility/MsgPackWriter.h"
 #include <array>
@@ -340,12 +341,23 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               flexibleMetric.getValues()[0]);
         }
       };
+  auto appendPromotedFlexibleMetrics =
+      [&](const auto &children, json &metricsJson,
+          const DataEntry::LinkedFlexibleMetricMap &linkedFlexibleMetrics) {
+        for (const auto &child : children) {
+          auto it = linkedFlexibleMetrics.find(child.id);
+          if (it != linkedFlexibleMetrics.end()) {
+            appendFlexibleMetrics(metricsJson, it->second);
+          }
+        }
+      };
   tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
       [&](TreeData::Tree::TreeNode &treeNode) {
         const auto &contextName = treeNode.name;
         auto contextId = treeNode.id;
         json *jsonNode = jsonNodes[contextId];
-        (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
+        (*jsonNode)["frame"] = {{"name", GraphState::getDisplayName(contextName)},
+                                {"type", "function"}};
         (*jsonNode)["metrics"] = json::object();
         auto &metricsJson = (*jsonNode)["metrics"];
         appendMetrics(metricsJson, treeNode.metricSet.metrics);
@@ -365,16 +377,35 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         if (!hasLinkedTargets) {
           return;
         }
-        std::function<bool(size_t, json &, json &)> appendLinkedVirtualNode =
+        std::set<size_t> linkedVirtualNodeIds;
+        auto addLinkedVirtualAncestors = [&](size_t virtualNodeId,
+                                             bool includeSelf) {
+          if (!includeSelf) {
+            virtualNodeId = virtualTree->getNode(virtualNodeId).parentId;
+          }
+          while (virtualNodeId != Tree::TreeNode::RootId) {
+            linkedVirtualNodeIds.insert(virtualNodeId);
+            virtualNodeId = virtualTree->getNode(virtualNodeId).parentId;
+          }
+        };
+        for (const auto &[virtualNodeId, _] : treeNode.metricSet.linkedMetrics) {
+          addLinkedVirtualAncestors(virtualNodeId, /*includeSelf=*/true);
+        }
+        for (const auto &[virtualNodeId, _] :
+             treeNode.metricSet.linkedFlexibleMetrics) {
+          addLinkedVirtualAncestors(virtualNodeId, /*includeSelf=*/false);
+        }
+        std::function<void(size_t, json &, json &)> appendLinkedVirtualNode =
             [&](size_t virtualNodeId, json &outNode,
-                json &parentMetricsJson) -> bool {
+                json &parentMetricsJson) {
               const auto &virtualNode = virtualTree->getNode(virtualNodeId);
               const auto metricsIt =
                   treeNode.metricSet.linkedMetrics.find(virtualNodeId);
               const auto flexibleIt =
                   treeNode.metricSet.linkedFlexibleMetrics.find(virtualNodeId);
               outNode = json::object();
-              outNode["frame"] = {{"name", virtualNode.name},
+              outNode["frame"] = {{"name", GraphState::getDisplayName(
+                                               virtualNode.name)},
                                   {"type", "function"}};
               outNode["metrics"] = json::object();
               if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
@@ -386,26 +417,29 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
                   treeNode.metricSet.linkedFlexibleMetrics.end()) {
                 appendFlexibleMetrics(parentMetricsJson, flexibleIt->second);
               }
+              appendPromotedFlexibleMetrics(
+                  virtualNode.children, outNode["metrics"],
+                  treeNode.metricSet.linkedFlexibleMetrics);
               outNode["children"] = json::array();
               auto &linkedChildren = outNode["children"];
               linkedChildren.get_ref<json::array_t &>().reserve(
                   virtualNode.children.size());
               for (const auto &child : virtualNode.children) {
-                json linkedChildNode;
-                if (appendLinkedVirtualNode(child.id, linkedChildNode,
-                                            outNode["metrics"])) {
-                  linkedChildren.push_back(std::move(linkedChildNode));
+                if (linkedVirtualNodeIds.find(child.id) !=
+                    linkedVirtualNodeIds.end()) {
+                  linkedChildren.push_back(json::object());
+                  appendLinkedVirtualNode(child.id, linkedChildren.back(),
+                                          outNode["metrics"]);
                 }
               }
-              return !outNode["metrics"].empty() ||
-                     !outNode["children"].empty();
             };
 
         for (const auto &virtualChild : virtualRootNode.children) {
-          json linkedRootChildNode;
-          if (appendLinkedVirtualNode(virtualChild.id, linkedRootChildNode,
-                                      metricsJson)) {
-            childrenArray.push_back(std::move(linkedRootChildNode));
+          if (linkedVirtualNodeIds.find(virtualChild.id) !=
+              linkedVirtualNodeIds.end()) {
+            childrenArray.push_back(json::object());
+            appendLinkedVirtualNode(virtualChild.id, childrenArray.back(),
+                                    metricsJson);
           }
         }
       });
@@ -693,7 +727,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         writer.packFixStrLiteral("frame");
         writer.packMap(2);
         writer.packFixStrLiteral("name");
-        writer.packStr(treeNode.name);
+        writer.packStr(GraphState::getDisplayName(treeNode.name));
         writer.packFixStrLiteral("type");
         writer.packFixStrLiteral("function");
 
@@ -712,34 +746,34 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         const bool hasLinkedTargets =
             !treeNode.metricSet.linkedMetrics.empty() ||
             !treeNode.metricSet.linkedFlexibleMetrics.empty();
+        std::set<size_t> linkedVirtualNodeIds;
+        if (hasLinkedTargets) {
+          auto addLinkedVirtualAncestors = [&](size_t virtualNodeId,
+                                               bool includeSelf) {
+            if (!includeSelf) {
+              virtualNodeId = virtualTree->getNode(virtualNodeId).parentId;
+            }
+            while (virtualNodeId != Tree::TreeNode::RootId) {
+              linkedVirtualNodeIds.insert(virtualNodeId);
+              virtualNodeId = virtualTree->getNode(virtualNodeId).parentId;
+            }
+          };
+          for (const auto &[virtualNodeId, _] :
+               treeNode.metricSet.linkedMetrics) {
+            addLinkedVirtualAncestors(virtualNodeId, /*includeSelf=*/true);
+          }
+          for (const auto &[virtualNodeId, _] :
+               treeNode.metricSet.linkedFlexibleMetrics) {
+            addLinkedVirtualAncestors(virtualNodeId, /*includeSelf=*/false);
+          }
+        }
 
-        auto hasLinkedVirtualNode = [&](auto &&hasLinkedVirtualNode,
-                                        size_t virtualNodeId) -> bool {
-              const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-              const auto metricsIt =
-                  treeNode.metricSet.linkedMetrics.find(virtualNodeId);
-              if (metricsIt != treeNode.metricSet.linkedMetrics.end() &&
-                  countMetricEntries(metricsIt->second, /*isRoot=*/false) >
-                      0) {
-                return true;
-              }
-              if (countPromotedFlexibleMetricEntries(
-                      virtualNode.children,
-                      treeNode.metricSet.linkedFlexibleMetrics) > 0) {
-                return true;
-              }
-              for (const auto &child : virtualNode.children) {
-                if (hasLinkedVirtualNode(hasLinkedVirtualNode, child.id)) {
-                  return true;
-                }
-              }
-              return false;
-            };
         auto countLinkedVirtualChildren =
             [&](const auto &children) -> uint32_t {
           uint32_t childCount = 0;
           for (const auto &child : children) {
-            if (hasLinkedVirtualNode(hasLinkedVirtualNode, child.id)) {
+            if (linkedVirtualNodeIds.find(child.id) !=
+                linkedVirtualNodeIds.end()) {
               ++childCount;
             }
           }
@@ -765,7 +799,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
                 writer.packFixStrLiteral("frame");
                 writer.packMap(2);
                 writer.packFixStrLiteral("name");
-                writer.packStr(virtualNode.name);
+                writer.packStr(GraphState::getDisplayName(virtualNode.name));
                 writer.packFixStrLiteral("type");
                 writer.packFixStrLiteral("function");
 
@@ -783,7 +817,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
               writer.packFixStrLiteral("frame");
               writer.packMap(2);
               writer.packFixStrLiteral("name");
-              writer.packStr(virtualNode.name);
+              writer.packStr(GraphState::getDisplayName(virtualNode.name));
               writer.packFixStrLiteral("type");
               writer.packFixStrLiteral("function");
 
@@ -810,7 +844,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
               writer.packArray(
                   countLinkedVirtualChildren(virtualNode.children));
               for (const auto &child : virtualNode.children) {
-                if (hasLinkedVirtualNode(hasLinkedVirtualNode, child.id)) {
+                if (linkedVirtualNodeIds.find(child.id) !=
+                    linkedVirtualNodeIds.end()) {
                   packLinkedVirtualNode(packLinkedVirtualNode, child.id);
                 }
               }
@@ -828,7 +863,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         }
         if (hasLinkedTargets) {
           for (const auto &virtualChild : virtualRootNode.children) {
-            if (hasLinkedVirtualNode(hasLinkedVirtualNode, virtualChild.id)) {
+            if (linkedVirtualNodeIds.find(virtualChild.id) !=
+                linkedVirtualNodeIds.end()) {
               packLinkedVirtualNode(packLinkedVirtualNode, virtualChild.id);
             }
           }
