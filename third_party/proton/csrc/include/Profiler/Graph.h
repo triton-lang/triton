@@ -9,10 +9,8 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <set>
 #include <shared_mutex>
-#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -48,38 +46,8 @@ struct GraphState {
   static constexpr const char *captureTag = "<captured_at>";
   static constexpr const char *metricTag = "<metric>";
 
-  static std::string makeCaptureTag(uint32_t graphId) {
-    return std::string(captureTag) + std::to_string(graphId);
-  }
-
   static bool isCaptureTag(std::string_view name) {
-    constexpr std::string_view prefix = captureTag;
-    if (name.size() < prefix.size() ||
-        name.substr(0, prefix.size()) != prefix) {
-      return false;
-    }
-    for (size_t i = prefix.size(); i < name.size(); ++i) {
-      if (name[i] < '0' || name[i] > '9') {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  static std::optional<uint32_t> getCaptureGraphId(std::string_view name) {
-    constexpr std::string_view prefix = captureTag;
-    if (name.size() <= prefix.size() ||
-        name.substr(0, prefix.size()) != prefix) {
-      return std::nullopt;
-    }
-    uint32_t graphId = 0;
-    for (size_t i = prefix.size(); i < name.size(); ++i) {
-      if (name[i] < '0' || name[i] > '9') {
-        return std::nullopt;
-      }
-      graphId = graphId * 10 + static_cast<uint32_t>(name[i] - '0');
-    }
-    return graphId;
+    return name == std::string_view(captureTag);
   }
 
   static std::string_view getDisplayName(std::string_view name) {

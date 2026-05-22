@@ -514,16 +514,15 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
       }
       for (auto *data : profiler.dataSet) {
         auto currentContexts = data->getContexts();
-        auto graphCaptureTag = GraphState::makeCaptureTag(graphId);
         std::vector<Context> contexts;
-        contexts.emplace_back(graphCaptureTag);
+        contexts.emplace_back(GraphState::captureTag);
         for (const auto &context : currentContexts) {
           contexts.push_back(context);
         }
         if (isMetricKernelNode) {
           auto flexibleMetricContexts = data->getContexts(false);
           std::vector<Context> flexibleMetricEntryContexts;
-          flexibleMetricEntryContexts.emplace_back(graphCaptureTag);
+          flexibleMetricEntryContexts.emplace_back(GraphState::captureTag);
           for (const auto &context : flexibleMetricContexts) {
             flexibleMetricEntryContexts.push_back(context);
           }
