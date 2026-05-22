@@ -144,6 +144,7 @@ static_print = builtin(tl_core.static_print)
 store = builtin(tl_core.store)
 sub = builtin(tl_core.sub)
 to_tensor = builtin(tl_core.to_tensor)
+expect_zero = builtin(tl_core.expect_zero)
 where = builtin(tl_core.where)
 
 
