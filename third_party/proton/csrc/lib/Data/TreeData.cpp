@@ -769,35 +769,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,
                                          size_t virtualNodeId) -> void {
               const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-              const KernelMetric *onlyKernelMetric = nullptr;
-              const auto onlyMetricIt =
-                  treeNode.metricSet.linkedMetrics.find(virtualNodeId);
-              if (onlyMetricIt != treeNode.metricSet.linkedMetrics.end() &&
-                  onlyMetricIt->second.size() == 1 &&
-                  onlyMetricIt->second.begin()->first == MetricKind::Kernel) {
-                onlyKernelMetric = static_cast<KernelMetric *>(
-                    onlyMetricIt->second.begin()->second.get());
-              }
-              if (virtualNode.children.empty() &&
-                  onlyKernelMetric != nullptr) {
-                writer.packMap(3);
-
-                writer.packFixStrLiteral("frame");
-                writer.packMap(2);
-                writer.packFixStrLiteral("name");
-                writer.packStr(GraphState::getDisplayName(virtualNode.name));
-                writer.packFixStrLiteral("type");
-                writer.packFixStrLiteral("function");
-
-                writer.packFixStrLiteral("metrics");
-                writer.packMap(kernelTotalCount);
-                packKernelMetricValues(onlyKernelMetric);
-
-                writer.packFixStrLiteral("children");
-                writer.packArray(0);
-                return;
-              }
-
               writer.packMap(3);
 
               writer.packFixStrLiteral("frame");
