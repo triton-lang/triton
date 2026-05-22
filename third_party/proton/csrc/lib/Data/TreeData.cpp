@@ -95,6 +95,8 @@ public:
       size_t id = DummyId;
     };
 
+    // Keep a linear child list for small fanouts to avoid hash table overhead.
+    // Build the lookup index only once repeated child scans become expensive.
     static constexpr size_t kChildIndexThreshold = 8;
 
     TreeNode() = default;
@@ -258,19 +260,15 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
     metricSummary.updateDeviceIdMask(deviceType, deviceId);
     const auto &deviceTypeName =
         getDeviceTypeString(static_cast<DeviceType>(deviceType));
-    const auto durationName =
-        KernelMetric::getValueName(KernelMetric::Duration);
-    const auto invocationsName =
-        KernelMetric::getValueName(KernelMetric::Invocations);
-    const auto deviceIdName = KernelMetric::getValueName(KernelMetric::DeviceId);
-    const auto deviceTypeNameKey =
-        KernelMetric::getValueName(KernelMetric::DeviceType);
     const auto deviceIdStr = std::to_string(deviceId);
 
-    metricsJson[std::string(durationName)] = duration;
-    metricsJson[std::string(invocationsName)] = invocations;
-    metricsJson[std::string(deviceIdName)] = deviceIdStr;
-    metricsJson[std::string(deviceTypeNameKey)] = deviceTypeName;
+    metricsJson[KernelMetric::getValueName(KernelMetric::Duration)] = duration;
+    metricsJson[KernelMetric::getValueName(KernelMetric::Invocations)] =
+        invocations;
+    metricsJson[KernelMetric::getValueName(KernelMetric::DeviceId)] =
+        deviceIdStr;
+    metricsJson[KernelMetric::getValueName(KernelMetric::DeviceType)] =
+        deviceTypeName;
   };
   auto appendMetrics = [&](json &metricsJson,
                            const std::map<MetricKind, std::unique_ptr<Metric>>
@@ -283,9 +281,10 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
       } else if (metricKind == MetricKind::PCSampling) {
         auto *pcSamplingMetric = static_cast<PCSamplingMetric *>(metric.get());
         for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
-          const auto valueName = pcSamplingMetric->getValueName(i);
+          const auto valueName = PCSamplingMetric::getValueName(
+              static_cast<PCSamplingMetric::PCSamplingMetricKind>(i));
           std::visit(
-              [&](auto &&value) { metricsJson[std::string(valueName)] = value; },
+              [&](auto &&value) { metricsJson[valueName] = value; },
               pcSamplingMetric->getValues()[i]);
         }
       } else if (metricKind == MetricKind::Cycle) {
@@ -298,19 +297,17 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
             std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceId));
         uint64_t deviceType =
             std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceType));
-        const auto durationName = CycleMetric::getValueName(CycleMetric::Duration);
-        const auto normalizedDurationName =
-            CycleMetric::getValueName(CycleMetric::NormalizedDuration);
-        const auto deviceIdName = CycleMetric::getValueName(CycleMetric::DeviceId);
-        const auto deviceTypeName =
-            CycleMetric::getValueName(CycleMetric::DeviceType);
         const auto deviceIdStr = std::to_string(deviceId);
         const auto deviceTypeStr = std::to_string(deviceType);
 
-        metricsJson[std::string(durationName)] = duration;
-        metricsJson[std::string(normalizedDurationName)] = normalizedDuration;
-        metricsJson[std::string(deviceIdName)] = deviceIdStr;
-        metricsJson[std::string(deviceTypeName)] = deviceTypeStr;
+        metricsJson[CycleMetric::getValueName(CycleMetric::Duration)] =
+            duration;
+        metricsJson[CycleMetric::getValueName(
+            CycleMetric::NormalizedDuration)] = normalizedDuration;
+        metricsJson[CycleMetric::getValueName(CycleMetric::DeviceId)] =
+            deviceIdStr;
+        metricsJson[CycleMetric::getValueName(CycleMetric::DeviceType)] =
+            deviceTypeStr;
       } else if (metricKind == MetricKind::Flexible) {
         // Flexible metrics are handled in a different way
       } else {
@@ -330,13 +327,12 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
                               std::is_same_v<T, int64_t> ||
                               std::is_same_v<T, double> ||
                               std::is_same_v<T, std::string>) {
-                  metricsJson[std::string(valueName)] = v;
+                  metricsJson[valueName] = v;
                 } else if constexpr (std::is_same_v<T, std::vector<uint64_t>> ||
                                      std::is_same_v<T, std::vector<int64_t>> ||
                                      std::is_same_v<T, std::vector<double>>) {
-                  metricsJson[std::string(valueName)] = json::array();
-                  auto &arr = metricsJson[std::string(valueName)];
-                  arr.get_ref<json::array_t &>().reserve(v.size());
+                  auto &arr = metricsJson[valueName] = json::array();
+                  arr.template get_ref<json::array_t &>().reserve(v.size());
                   for (const auto &value : v) {
                     arr.push_back(value);
                   }
@@ -419,25 +415,22 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
 
   if (metricSummary.hasKernelMetric) {
     output[TreeData::Tree::TreeNode::RootId]["metrics"]
-          [std::string(KernelMetric::getValueName(
-              KernelMetric::Invocations))] = 0;
+          [KernelMetric::getValueName(KernelMetric::Invocations)] = 0;
     output[TreeData::Tree::TreeNode::RootId]["metrics"]
-          [std::string(KernelMetric::getValueName(KernelMetric::Duration))] =
-              0;
+          [KernelMetric::getValueName(KernelMetric::Duration)] = 0;
   }
   if (metricSummary.hasCycleMetric) {
     output[TreeData::Tree::TreeNode::RootId]["metrics"]
-          [std::string(CycleMetric::getValueName(CycleMetric::Duration))] = 0;
+          [CycleMetric::getValueName(CycleMetric::Duration)] = 0;
     output[TreeData::Tree::TreeNode::RootId]["metrics"]
-          [std::string(CycleMetric::getValueName(
-              CycleMetric::NormalizedDuration))] = 0;
+          [CycleMetric::getValueName(CycleMetric::NormalizedDuration)] = 0;
   }
   if (metricSummary.hasPCSamplingMetric) {
-    PCSamplingMetric pcSamplingMetric;
     for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
-      const auto valueName = pcSamplingMetric.getValueName(i);
+      const auto valueName = PCSamplingMetric::getValueName(
+          static_cast<PCSamplingMetric::PCSamplingMetricKind>(i));
       output[TreeData::Tree::TreeNode::RootId]["metrics"]
-            [std::string(valueName)] = 0;
+            [valueName] = 0;
     }
   }
 
@@ -772,139 +765,16 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
               }
               return false;
             };
-        auto isGeneratedNumericScope = [](std::string_view name) {
-          constexpr std::string_view prefix = "scope_";
-          if (name.size() <= prefix.size() ||
-              name.substr(0, prefix.size()) != prefix) {
-            return false;
-          }
-          for (size_t i = prefix.size(); i < name.size(); ++i) {
-            if (name[i] < '0' || name[i] > '9') {
-              return false;
-            }
-          }
-          return true;
-        };
-        auto shouldCollapseLinkedVirtualNode =
-            [&](const TreeData::Tree::TreeNode &virtualNode) {
-              if (!isGeneratedNumericScope(virtualNode.name) ||
-                  virtualNode.children.empty()) {
-                return false;
-              }
-              if (treeNode.metricSet.linkedMetrics.find(virtualNode.id) !=
-                  treeNode.metricSet.linkedMetrics.end()) {
-                return false;
-              }
-              return countPromotedFlexibleMetricEntries(
-                         virtualNode.children,
-                         treeNode.metricSet.linkedFlexibleMetrics) == 0;
-            };
-        auto countLinkedVirtualChildrenExpanded =
-            [&](auto &&countLinkedVirtualChildrenExpanded,
-                const auto &children) -> uint32_t {
+        auto countLinkedVirtualChildren =
+            [&](const auto &children) -> uint32_t {
           uint32_t childCount = 0;
           for (const auto &child : children) {
-            if (!hasLinkedVirtualNode(hasLinkedVirtualNode, child.id)) {
-              continue;
-            }
-            const auto &virtualNode = virtualTree->getNode(child.id);
-            if (shouldCollapseLinkedVirtualNode(virtualNode)) {
-              childCount += countLinkedVirtualChildrenExpanded(
-                  countLinkedVirtualChildrenExpanded, virtualNode.children);
-            } else {
+            if (hasLinkedVirtualNode(hasLinkedVirtualNode, child.id)) {
               ++childCount;
             }
           }
           return childCount;
         };
-
-        struct AggregatedKernelMetric {
-          std::string_view name;
-          uint64_t duration = 0;
-          uint64_t invocations = 0;
-          uint64_t deviceId = 0;
-          uint64_t deviceType = 0;
-        };
-        auto tryPackAggregatedCollapsedChildren =
-            [&](const TreeData::Tree::TreeNode &virtualNode) {
-              if (virtualNode.children.size() < 64) {
-                return false;
-              }
-              std::vector<AggregatedKernelMetric> aggregatedMetrics;
-              std::unordered_map<std::string_view, size_t> nameToIndex;
-              aggregatedMetrics.reserve(8);
-              nameToIndex.reserve(8);
-
-              for (const auto &child : virtualNode.children) {
-                if (!hasLinkedVirtualNode(hasLinkedVirtualNode, child.id)) {
-                  continue;
-                }
-                const auto &childNode = virtualTree->getNode(child.id);
-                if (!shouldCollapseLinkedVirtualNode(childNode)) {
-                  return false;
-                }
-                for (const auto &grandchild : childNode.children) {
-                  if (!hasLinkedVirtualNode(hasLinkedVirtualNode,
-                                            grandchild.id)) {
-                    continue;
-                  }
-                  const auto &grandchildNode =
-                      virtualTree->getNode(grandchild.id);
-                  if (!grandchildNode.children.empty()) {
-                    return false;
-                  }
-                  const auto *kernelMetric =
-                      getOnlyLinkedKernelMetric(grandchild.id);
-                  if (kernelMetric == nullptr) {
-                    return false;
-                  }
-                  auto name = std::string_view(grandchildNode.name);
-                  auto [it, inserted] =
-                      nameToIndex.emplace(name, aggregatedMetrics.size());
-                  if (inserted) {
-                    AggregatedKernelMetric aggregate;
-                    aggregate.name = name;
-                    aggregate.deviceId = std::get<uint64_t>(
-                        kernelMetric->getValue(KernelMetric::DeviceId));
-                    aggregate.deviceType = std::get<uint64_t>(
-                        kernelMetric->getValue(KernelMetric::DeviceType));
-                    aggregatedMetrics.push_back(aggregate);
-                  }
-                  auto &aggregate = aggregatedMetrics[it->second];
-                  aggregate.duration += std::get<uint64_t>(
-                      kernelMetric->getValue(KernelMetric::Duration));
-                  aggregate.invocations += std::get<uint64_t>(
-                      kernelMetric->getValue(KernelMetric::Invocations));
-                }
-              }
-
-              if (aggregatedMetrics.empty()) {
-                return false;
-              }
-
-              writer.packArray(
-                  static_cast<uint32_t>(aggregatedMetrics.size()));
-              for (const auto &aggregate : aggregatedMetrics) {
-                writer.packMap(3);
-                writer.packFixStrLiteral("frame");
-                writer.packMap(2);
-                writer.packFixStrLiteral("name");
-                writer.packStr(aggregate.name);
-                writer.packFixStrLiteral("type");
-                writer.packFixStrLiteral("function");
-
-                writer.packFixStrLiteral("metrics");
-                writer.packMap(kernelTotalCount);
-                packKernelMetricFields(aggregate.duration,
-                                       aggregate.invocations,
-                                       aggregate.deviceId,
-                                       aggregate.deviceType);
-
-                writer.packFixStrLiteral("children");
-                writer.packArray(0);
-              }
-              return true;
-            };
 
         auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,
                                          size_t virtualNodeId) -> void {
@@ -960,33 +830,18 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
                   treeNode.metricSet.linkedFlexibleMetrics);
 
               writer.packFixStrLiteral("children");
-              if (!tryPackAggregatedCollapsedChildren(virtualNode)) {
-                writer.packArray(countLinkedVirtualChildrenExpanded(
-                    countLinkedVirtualChildrenExpanded, virtualNode.children));
-                for (const auto &child : virtualNode.children) {
-                  if (hasLinkedVirtualNode(hasLinkedVirtualNode, child.id)) {
-                    const auto &childNode = virtualTree->getNode(child.id);
-                    if (shouldCollapseLinkedVirtualNode(childNode)) {
-                      for (const auto &grandchild : childNode.children) {
-                        if (hasLinkedVirtualNode(hasLinkedVirtualNode,
-                                                 grandchild.id)) {
-                          packLinkedVirtualNode(packLinkedVirtualNode,
-                                                grandchild.id);
-                        }
-                      }
-                    } else {
-                      packLinkedVirtualNode(packLinkedVirtualNode, child.id);
-                    }
-                  }
+              writer.packArray(
+                  countLinkedVirtualChildren(virtualNode.children));
+              for (const auto &child : virtualNode.children) {
+                if (hasLinkedVirtualNode(hasLinkedVirtualNode, child.id)) {
+                  packLinkedVirtualNode(packLinkedVirtualNode, child.id);
                 }
               }
             };
 
         uint32_t linkedChildCount =
             hasLinkedTargets
-                ? countLinkedVirtualChildrenExpanded(
-                      countLinkedVirtualChildrenExpanded,
-                      virtualRootNode.children)
+                ? countLinkedVirtualChildren(virtualRootNode.children)
                 : 0;
         writer.packFixStrLiteral("children");
         writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
@@ -997,19 +852,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         if (hasLinkedTargets) {
           for (const auto &virtualChild : virtualRootNode.children) {
             if (hasLinkedVirtualNode(hasLinkedVirtualNode, virtualChild.id)) {
-              const auto &virtualChildNode =
-                  virtualTree->getNode(virtualChild.id);
-              if (shouldCollapseLinkedVirtualNode(virtualChildNode)) {
-                for (const auto &grandchild : virtualChildNode.children) {
-                  if (hasLinkedVirtualNode(hasLinkedVirtualNode,
-                                           grandchild.id)) {
-                    packLinkedVirtualNode(packLinkedVirtualNode,
-                                          grandchild.id);
-                  }
-                }
-              } else {
-                packLinkedVirtualNode(packLinkedVirtualNode, virtualChild.id);
-              }
+              packLinkedVirtualNode(packLinkedVirtualNode, virtualChild.id);
             }
           }
         }
