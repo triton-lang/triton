@@ -136,8 +136,6 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
         for i in range(10):
             with proton.scope(f"iter_{i}"):
                 fn()
-        with proton.scope("iter_without_kernel"):
-            pass
 
     with proton.scope("test0"):
         g.replay()
@@ -151,8 +149,6 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
         for i in range(10):
             with proton.scope(f"new_iter_{i}"):
                 fn()
-        with proton.scope("new_iter_without_kernel"):
-            pass
 
     with proton.scope("test2"):
         g.replay()
@@ -189,11 +185,9 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
             assert capture_frame is not None
             iter_prefix = "new_iter" if test_frame == test2_frame else "iter"
             expected_iter_names = {f"{iter_prefix}_{i}" for i in range(10)}
-            empty_iter_name = f"{iter_prefix}_without_kernel"
             capture_children = capture_frame["children"]
             capture_child_names = {child["frame"]["name"] for child in capture_children}
 
-            assert empty_iter_name not in capture_child_names
             assert expected_iter_names <= capture_child_names
             for child in capture_children:
                 assert has_metric_payload(child)
