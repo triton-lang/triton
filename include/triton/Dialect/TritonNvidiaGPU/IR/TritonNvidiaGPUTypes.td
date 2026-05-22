@@ -67,10 +67,7 @@ def TTNG_TensorDescIm2ColType
   let parameters = (ins
     ArrayRefParameter<"int64_t">:$shape,
     "Type":$elementType,
-    OptionalParameter<"Attribute">:$sharedLayout,
-    "Attribute":$elementStrides,
-    "Attribute":$pixelBoxLowerCorner,
-    "Attribute":$pixelBoxUpperCorner
+    OptionalParameter<"Attribute">:$sharedLayout
   );
 
   let builders = [
@@ -78,18 +75,13 @@ def TTNG_TensorDescIm2ColType
       "llvm::ArrayRef<int64_t>":$shape,
       "Type":$elementType,
       "Attribute":$sharedLayout,
-      "Attribute":$elementStrides,
-      "Attribute":$pixelBoxLowerCorner,
-      "Attribute":$pixelBoxUpperCorner,
       "bool":$isSigned
     ), [{
       if (auto intTy = llvm::dyn_cast<IntegerType>(elementType)) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
         elementType = IntegerType::get(elementType.getContext(), intTy.getWidth(), sem);
       }
-      return $_get(elementType.getContext(), shape, elementType, sharedLayout,
-                   elementStrides, pixelBoxLowerCorner,
-                   pixelBoxUpperCorner);
+      return $_get(elementType.getContext(), shape, elementType, sharedLayout);
     }]>
   ];
 

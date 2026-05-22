@@ -79,14 +79,11 @@ def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
         inner = canonicalize_dtype(arg.base.dtype)
         is_im2col = arg.__class__.__name__ == "TensorDescriptorIm2Col"
         type_name = "tensordesc_im2col" if is_im2col else "tensordesc"
-        # For im2col mode, include the original tensor rank and static im2col
-        # metadata in the signature.
+        # For im2col mode, include only the original tensor rank. Strides and
+        # pixel-box metadata are runtime operands on async_load_im2col.
         rank_suffix = ""
         if is_im2col:
-            rank_suffix = (f",input_rank={len(arg.shape)}"
-                           f",element_strides={list(arg.element_strides)}"
-                           f",pixel_box_lower_corner={list(arg.pixel_box_lower_corner)}"
-                           f",pixel_box_upper_corner={list(arg.pixel_box_upper_corner)}")
+            rank_suffix = f",input_rank={len(arg.shape)}"
         return (f"{type_name}<{inner}{list(arg.block_shape)}{rank_suffix},{arg.layout!r}>", None)
     else:
         raise TypeError("Unsupported type: %s" % type(arg))

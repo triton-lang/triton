@@ -132,20 +132,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tma_load_im2col_3d
   // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}] {{.*}} : !ttng.tensordesc_im2col
-  tt.func public @tma_load_im2col_3d(%desc: !ttng.tensordesc_im2col<64x128xf16, #nvmma_128, element_strides = [1, 1, 1], pixel_box_lower_corner = [0], pixel_box_upper_corner = [0]>) {
+  tt.func public @tma_load_im2col_3d(%desc: !ttng.tensordesc_im2col<64x128xf16, #nvmma_128>) {
     %true = arith.constant true
     %c0 = arith.constant 0 : i32
     %off = arith.constant 1 : i16
     %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared3, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared3, #smem, mutable>
-    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0] offsets = [%off] %buf, %bar, %true : !ttng.tensordesc_im2col<64x128xf16, #nvmma_128, element_strides = [1, 1, 1], pixel_box_lower_corner = [0], pixel_box_upper_corner = [0]>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0] offsets = [%off] %buf, %bar, %true : !ttng.tensordesc_im2col<64x128xf16, #nvmma_128>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
     tt.return
   }
 
   // CHECK-LABEL: @tma_load_im2col_4d
   // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}, {{.*}}] {{.*}} : !ttng.tensordesc_im2col
-  tt.func public @tma_load_im2col_4d(%desc: !ttng.tensordesc_im2col<64x128xf16, #nvmma_128, element_strides = [1, 1, 1, 1], pixel_box_lower_corner = [0, 0], pixel_box_upper_corner = [0, 0]>) {
+  tt.func public @tma_load_im2col_4d(%desc: !ttng.tensordesc_im2col<64x128xf16, #nvmma_128>) {
     %true = arith.constant true
     %c0 = arith.constant 0 : i32
     %off1 = arith.constant 1 : i16
@@ -153,13 +153,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared3, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared3, #smem, mutable>
-    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0] offsets = [%off1, %off2] %buf, %bar, %true : !ttng.tensordesc_im2col<64x128xf16, #nvmma_128, element_strides = [1, 1, 1, 1], pixel_box_lower_corner = [0, 0], pixel_box_upper_corner = [0, 0]>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0] offsets = [%off1, %off2] %buf, %bar, %true : !ttng.tensordesc_im2col<64x128xf16, #nvmma_128>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
     tt.return
   }
 
   // CHECK-LABEL: @tma_load_im2col_5d
   // CHECK: ttng.async_tma_copy_global_to_local {{.*}} offsets = [{{.*}}, {{.*}}, {{.*}}] {{.*}} : !ttng.tensordesc_im2col
-  tt.func public @tma_load_im2col_5d(%desc: !ttng.tensordesc_im2col<64x128xf16, #nvmma_128, element_strides = [1, 1, 1, 1, 1], pixel_box_lower_corner = [0, 0, 0], pixel_box_upper_corner = [0, 0, 0]>) {
+  tt.func public @tma_load_im2col_5d(%desc: !ttng.tensordesc_im2col<64x128xf16, #nvmma_128>) {
     %true = arith.constant true
     %c0 = arith.constant 0 : i32
     %off1 = arith.constant 1 : i16
@@ -168,7 +168,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared3, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared3, #smem, mutable>
-    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0] offsets = [%off1, %off2, %off3] %buf, %bar, %true : !ttng.tensordesc_im2col<64x128xf16, #nvmma_128, element_strides = [1, 1, 1, 1, 1], pixel_box_lower_corner = [0, 0, 0], pixel_box_upper_corner = [0, 0, 0]>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0] offsets = [%off1, %off2, %off3] %buf, %bar, %true : !ttng.tensordesc_im2col<64x128xf16, #nvmma_128>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma_128, #smem, mutable>
     tt.return
   }
 
@@ -186,19 +186,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   }
 
   // CHECK-LABEL: @tensordesc_im2col
-  // CHECK-SAME: !ttng.tensordesc_im2col<64x128xf16, {{.*}}element_strides = [1, 1, 1, 1]{{.*}}>
-  tt.func public @tensordesc_im2col(%desc: !ttng.tensordesc_im2col<64x128xf16, #nvmma_128, element_strides = [1, 1, 1, 1], pixel_box_lower_corner = [0, 0], pixel_box_upper_corner = [0, 0]>) {
+  // CHECK-SAME: !ttng.tensordesc_im2col<64x128xf16, #{{[A-Za-z0-9_]+}}>
+  tt.func public @tensordesc_im2col(%desc: !ttng.tensordesc_im2col<64x128xf16, #nvmma_128>) {
     // CHECK: tt.return
     tt.return
   }
 
   // CHECK-LABEL: @tma_load_im2col_metadata_compact
-  // CHECK-SAME: !ttng.tensordesc_im2col<256x128xbf16, {{.*}}element_strides = [1, 1, 1, 1], pixel_box_lower_corner = [-1, -1], pixel_box_upper_corner = [-1, -1]{{.*}}>
+  // CHECK-SAME: !ttng.tensordesc_im2col<256x128xbf16, #{{[A-Za-z0-9_]+}}>
   // CHECK-NOT: conv_output_shape
   // CHECK-NOT: input_channel_dim
-  // CHECK: ttng.async_tma_copy_global_to_local {{.*}}[{{.*}}] offsets = [{{.*}}, {{.*}}] {{.*}} : !ttng.tensordesc_im2col<256x128xbf16, {{.*}}pixel_box_upper_corner = [-1, -1]{{.*}}>
+  // CHECK: ttng.async_tma_copy_global_to_local {{.*}}[{{.*}}] offsets = [{{.*}}, {{.*}}] {{.*}} : !ttng.tensordesc_im2col<256x128xbf16, #{{[A-Za-z0-9_]+}}>
   // CHECK-NOT: input_channels
-  tt.func public @tma_load_im2col_metadata_compact(%desc: !ttng.tensordesc_im2col<256x128xbf16, #nvmma_128, element_strides = [1, 1, 1, 1], pixel_box_lower_corner = [-1, -1], pixel_box_upper_corner = [-1, -1]>) {
+  tt.func public @tma_load_im2col_metadata_compact(%desc: !ttng.tensordesc_im2col<256x128xbf16, #nvmma_128>) {
     %true = arith.constant true
     %c0 = arith.constant 0 : i32
     %off1 = arith.constant 1 : i16
@@ -206,7 +206,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %buf = ttg.local_alloc : () -> !ttg.memdesc<256x128xbf16, #nvmma_128, #smem, mutable>
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared3, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared3, #smem, mutable>
-    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0] offsets = [%off1, %off2] %buf, %bar, %true : !ttng.tensordesc_im2col<256x128xbf16, #nvmma_128, element_strides = [1, 1, 1, 1], pixel_box_lower_corner = [-1, -1], pixel_box_upper_corner = [-1, -1]>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<256x128xbf16, #nvmma_128, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0, %c0] offsets = [%off1, %off2] %buf, %bar, %true : !ttng.tensordesc_im2col<256x128xbf16, #nvmma_128>, !ttg.memdesc<1xi64, #shared3, #smem, mutable> -> !ttg.memdesc<256x128xbf16, #nvmma_128, #smem, mutable>
     tt.return
   }
 }

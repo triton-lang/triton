@@ -1136,18 +1136,16 @@ getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
 }
 
 struct Im2ColMetadata {
-  // The type metadata is only used to recover the source rank. Runtime operands
-  // carry the actual shape, strides, and pixel-box values used for remapping.
-  ArrayRef<int64_t> elementStrides;
+  // The actual shape, strides, and pixel-box values are runtime operands. The
+  // source rank is structural and is derived from the im2col offset count.
+  int64_t physicalRank = 0;
 
-  int64_t getSpatialRank() const { return elementStrides.size() - 2; }
+  int64_t getSpatialRank() const { return physicalRank - 2; }
 };
 
-static Im2ColMetadata getIm2ColMetadata(ttng::TensorDescIm2ColType type) {
-  ArrayRef<int64_t> elementStrides =
-      cast<DenseI64ArrayAttr>(type.getElementStrides()).asArrayRef();
-  assert(elementStrides.size() >= 3 && "im2col metadata was not verified");
-  return {elementStrides};
+static Im2ColMetadata getIm2ColMetadata(ttng::AsyncTMACopyGlobalToLocalOp op) {
+  int64_t spatialRank = op.getOffsets().size();
+  return {/*physicalRank=*/spatialRank + 2};
 }
 
 static FailureOr<Value> getI32RuntimeMetadata(
@@ -1175,7 +1173,7 @@ struct RuntimeIm2ColMetadata {
 static FailureOr<RuntimeIm2ColMetadata> getRuntimeIm2ColMetadata(
     ttng::AsyncTMACopyGlobalToLocalOp op, ConversionPatternRewriter &rewriter,
     TritonLLVMOpBuilder &b, const Im2ColMetadata &metadata, ValueRange coords) {
-  int64_t physicalRank = metadata.elementStrides.size();
+  int64_t physicalRank = metadata.physicalRank;
   int64_t spatialRank = metadata.getSpatialRank();
   int64_t runtimeMetadataSize =
       physicalRank + physicalRank + spatialRank + spatialRank;
@@ -1336,11 +1334,10 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     // Determine the TMA mode based on the descriptor type
     auto descType = op.getDesc().getType();
-    auto im2ColDescType = dyn_cast<ttng::TensorDescIm2ColType>(descType);
-    bool isIm2Col = static_cast<bool>(im2ColDescType);
+    bool isIm2Col = isa<ttng::TensorDescIm2ColType>(descType);
     Im2ColMetadata im2ColMetadata;
     if (isIm2Col)
-      im2ColMetadata = getIm2ColMetadata(im2ColDescType);
+      im2ColMetadata = getIm2ColMetadata(op);
     ttg::TMAMode tmaMode =
         isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
 

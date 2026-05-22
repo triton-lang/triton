@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Tuple, TYPE_CHECKING, Optional
+from typing import List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 from triton.language.core import base_type, base_value
 import triton.experimental.gluon.language._core as ttgl
@@ -94,9 +94,6 @@ class tensor_descriptor_im2col_type(_tensor_descriptor_type_base):
     """Type for im2col tensor descriptors (convolution-friendly access patterns)."""
     _type_name: str = "tensor_descriptor_im2col"
     _mangle_prefix: str = "TDI"
-    element_strides: Optional[List[int]] = None
-    pixel_box_lower_corner: Optional[List[int]] = None
-    pixel_box_upper_corner: Optional[List[int]] = None
 
     def _to_ir(self, builder: ir.builder) -> ir.type:
         is_signed = self.block_type.element_ty.is_int_signed()
@@ -104,9 +101,6 @@ class tensor_descriptor_im2col_type(_tensor_descriptor_type_base):
             self.block_type.to_ir(builder),
             is_signed,
             self.layout._to_ir(builder),
-            self.element_strides,
-            self.pixel_box_lower_corner,
-            self.pixel_box_upper_corner,
         )
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
@@ -114,16 +108,7 @@ class tensor_descriptor_im2col_type(_tensor_descriptor_type_base):
         cursor += 1
         shape, cursor = self.shape_type._unflatten_ir(handles, cursor)
         strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
-        value = tensor_descriptor_im2col(
-            handle,
-            shape,
-            strides,
-            self.block_type,
-            layout=self.layout,
-            element_strides=self.element_strides,
-            pixel_box_lower_corner=self.pixel_box_lower_corner,
-            pixel_box_upper_corner=self.pixel_box_upper_corner,
-        )
+        value = tensor_descriptor_im2col(handle, shape, strides, self.block_type, layout=self.layout)
         return value, cursor
 
 
@@ -178,19 +163,8 @@ class tensor_descriptor(_tensor_descriptor_value_base):
 class tensor_descriptor_im2col(_tensor_descriptor_value_base):
 
     def __init__(self, handle, shape: List[ttgl.tensor], strides: List[ttgl.tensor], block_type: ttgl.block_type,
-                 layout: NVMMASharedLayout, element_strides=None, pixel_box_lower_corner=None,
-                 pixel_box_upper_corner=None):
-        super().__init__(
-            handle,
-            shape,
-            strides,
-            block_type,
-            layout,
-            tensor_descriptor_im2col_type,
-            element_strides=element_strides,
-            pixel_box_lower_corner=pixel_box_lower_corner,
-            pixel_box_upper_corner=pixel_box_upper_corner,
-        )
+                 layout: NVMMASharedLayout):
+        super().__init__(handle, shape, strides, block_type, layout, tensor_descriptor_im2col_type)
 
 
 def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=None):

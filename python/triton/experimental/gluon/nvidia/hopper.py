@@ -165,10 +165,7 @@ class TensorDescriptorIm2Col:
         """Generate a type string matching MLIR types (!ttng.tensordesc or !ttng.tensordesc_im2col)."""
         dtype_str = canonicalize_dtype(self.base.dtype)
         block_shape_str = ','.join(map(str, self.block_shape))
-        metadata = f",element_strides={list(self.element_strides)}"
-        metadata += f",pixel_box_lower_corner={list(self.pixel_box_lower_corner)}"
-        metadata += f",pixel_box_upper_corner={list(self.pixel_box_upper_corner)}"
-        return f"tensordesc_im2col<{dtype_str}[{block_shape_str}],input_rank={len(self.shape)}{metadata},{repr(self.layout)}>"
+        return f"tensordesc_im2col<{dtype_str}[{block_shape_str}],input_rank={len(self.shape)},{repr(self.layout)}>"
 
     @staticmethod
     def from_tensor(tensor: Any, block_shape: List[int], layout: NVMMASharedLayout, padding="zero",
