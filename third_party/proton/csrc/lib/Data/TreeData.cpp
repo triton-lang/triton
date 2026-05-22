@@ -369,16 +369,6 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               flexibleMetric.getValues()[0]);
         }
       };
-  auto appendPromotedFlexibleMetrics =
-      [&](const auto &children, json &metricsJson,
-          const DataEntry::LinkedFlexibleMetricMap &linkedFlexibleMetrics) {
-        for (const auto &child : children) {
-          auto it = linkedFlexibleMetrics.find(child.id);
-          if (it != linkedFlexibleMetrics.end()) {
-            appendFlexibleMetrics(metricsJson, it->second);
-          }
-        }
-      };
   tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
       [&](TreeData::Tree::TreeNode &treeNode) {
         const auto &contextName = treeNode.name;
@@ -424,9 +414,6 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
                   treeNode.metricSet.linkedFlexibleMetrics.end()) {
                 appendFlexibleMetrics(parentMetricsJson, flexibleIt->second);
               }
-              appendPromotedFlexibleMetrics(
-                  virtualNode.children, outNode["metrics"],
-                  treeNode.metricSet.linkedFlexibleMetrics);
               outNode["children"] = json::array();
               auto &linkedChildren = outNode["children"];
               linkedChildren.get_ref<json::array_t &>().reserve(
