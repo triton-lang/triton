@@ -1,6 +1,10 @@
 #include "Utility/MsgPackWriter.h"
 
+#include "Utility/Errors.h"
+
+#include <charconv>
 #include <cstring>
+#include <system_error>
 #include <limits>
 #include <type_traits>
 #include <utility>
@@ -88,7 +92,18 @@ void MsgPackWriter::packStr(std::string_view value) {
     out.push_back(0xdb);
     writeBE(out, static_cast<uint32_t>(size));
   }
-  out.insert(out.end(), value.begin(), value.end());
+  const auto offset = out.size();
+  out.resize(offset + size);
+  std::memcpy(out.data() + offset, value.data(), size);
+}
+
+void MsgPackWriter::packUIntString(uint64_t value) {
+  char buffer[std::numeric_limits<uint64_t>::digits10 + 1];
+  auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
+  if (ec != std::errc()) {
+    throw makeLogicError("Failed to encode integer as string");
+  }
+  packStr(std::string_view(buffer, static_cast<size_t>(ptr - buffer)));
 }
 
 void MsgPackWriter::packArray(uint32_t size) {
