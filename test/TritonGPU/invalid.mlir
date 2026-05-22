@@ -1,5 +1,15 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+tt.func public @local_alloc_i1() {
+    // expected-error @+1 {{element type bit width must be a multiple of 8}}
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<8xi1, #shared, #smem, mutable>
+    tt.return
+}
+
+// -----
+
 // expected-error @+1 {{After removing broadcast bases the CGA encoding must be a permutation matrix}}
 #blocked_bad_cga = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1], CGALayout = [[1, 0], [1, 0]]}>
 module {
@@ -243,6 +253,34 @@ module attributes {"ttg.num-warps" = 1 : i32} {
   tt.func @convert_dot(%A: tensor<16x16xf32, #dot_operand_a>, %B: tensor<16x16xf16, #dot_operand_b>, %C: tensor<16x16xf32, #mma0>) {
     // expected-error@+1 {{element types of operands A and B must have same bit width}}
     %D = tt.dot %A, %B, %C : tensor<16x16xf32, #dot_operand_a> * tensor<16x16xf16, #dot_operand_b> -> tensor<16x16xf32, #mma0>
+    tt.return
+  }
+}
+
+// -----
+#shared = #ttg.padded_shared<[128:+8] {order = [1, 0], shape = [16, 128]}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 17376 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  tt.func public @memdesc_reinterpret_between_padded_nonpadded() {
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x16x128xf16, #shared, #smem, mutable>
+    // expected-error @+1 {{reinterpret between padded and non-padded}}
+    %1 = ttg.memdesc_reinterpret %0 : !ttg.memdesc<2x16x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x16xbf16, #shared1, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
+#shared = #ttg.padded_shared<[128:+8,256:+4] {order = [1, 0], shape = [16, 128]}>
+#shared2 = #ttg.padded_shared<[128:+8] {order = [1, 0], shape = [16, 128]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 17376 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  tt.func public @memdesc_reinterpret_different_padding() {
+    %cst = arith.constant dense<0.000000e+00> : tensor<16x16xbf16, #mma>
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x16x128xf16, #shared, #smem, mutable>
+    // expected-error @+1 {{cannot reinterpret with different padding pattern}}
+    %1 = ttg.memdesc_reinterpret %0 : !ttg.memdesc<2x16x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<2x16x128xf16, #shared2, #smem, mutable>
     tt.return
   }
 }
