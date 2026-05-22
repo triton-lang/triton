@@ -154,7 +154,6 @@ class PartitionArgs:
     config: ConvConfig
     in_desc: tma.tensor_descriptor_im2col
     weight_desc: tma.tensor_descriptor
-    output_desc: tma.tensor_descriptor
     output_ptr: gl.tensor
     a_bufs: gl.shared_memory_descriptor
     b_bufs: gl.shared_memory_descriptor
@@ -320,7 +319,6 @@ def epilogue_partition(p):
 def conv2d_fprop_kernel(
     in_desc,
     weight_desc,
-    output_desc,
     output,
     N,
     H,
@@ -344,7 +342,6 @@ def conv2d_fprop_kernel(
     GROUP_SIZE_M: gl.constexpr,
     num_buffers: gl.constexpr,
     num_acc_buffers: gl.constexpr,
-    EPILOGUE_BLOCK_N: gl.constexpr,
     CGA_LAYOUT: gl.constexpr,
     num_warps: gl.constexpr,
 ):
@@ -420,7 +417,6 @@ def conv2d_fprop_kernel(
         config,
         in_desc,
         weight_desc,
-        output_desc,
         output,
         a_bufs,
         b_bufs,
@@ -448,7 +444,6 @@ def conv2d_fprop_get_configs(pre_hook=None, include_2cta=False, block_n_values=(
                 "GROUP_SIZE_M": group_size_m,
                 "num_buffers": num_buffers,
                 "num_acc_buffers": num_acc_buffers,
-                "EPILOGUE_BLOCK_N": block_n,
                 "CGA_LAYOUT": cga_layout,
             },
             num_warps=num_warps,
@@ -474,17 +469,12 @@ def conv2d_fprop_get_configs(pre_hook=None, include_2cta=False, block_n_values=(
                     "GROUP_SIZE_M": 4,
                     "num_buffers": num_buffers,
                     "num_acc_buffers": 2,
-                    "EPILOGUE_BLOCK_N": epilogue_block_n,
                     "CGA_LAYOUT": ((1, 0), ),
                 },
                 num_warps=4,
                 num_ctas=2,
                 pre_hook=pre_hook,
-            )
-            for block_n in block_n_values
-            for block_k in (64, 128)
-            for epilogue_block_n in (block_n, )
-            for num_buffers in (3, 4, 5)
+            ) for block_n in block_n_values for block_k in (64, 128) for num_buffers in (3, 4, 5)
         ])
     return configs
 
@@ -492,7 +482,6 @@ def conv2d_fprop_get_configs(pre_hook=None, include_2cta=False, block_n_values=(
 def conv2d_fprop_tma_set_block_size_hook(nargs):
     in_block_shape = [nargs["BLOCK_M"], nargs["BLOCK_K"]]
     weight_block_shape = [nargs["BLOCK_N"], nargs["BLOCK_K"]]
-    output_block_shape = [nargs["BLOCK_M"], nargs["EPILOGUE_BLOCK_N"]]
     cga_layout = nargs["CGA_LAYOUT"]
     validate_2cta_m_split(cga_layout)
 
@@ -505,10 +494,6 @@ def conv2d_fprop_tma_set_block_size_hook(nargs):
     nargs["weight_desc"].layout = gl.NVMMASharedLayout.get_default_for(weight_block_shape, GL_GEMM_DTYPE,
                                                                        cga_layout=weight_cga_layout)
 
-    nargs["output_desc"].block_shape = output_block_shape
-    nargs["output_desc"].layout = gl.NVMMASharedLayout.get_default_for(output_block_shape, GL_GEMM_DTYPE,
-                                                                       cga_layout=cga_layout)
-
 
 # Key on the effective implicit-GEMM/convolution geometry instead of the full
 # raw input shape. `out_h/out_w` already encode the impact of H/W/padding on
@@ -519,9 +504,8 @@ conv2d_fprop_autotuned_kernel = triton.autotune(
     key=["out_h", "out_w", "stride_h", "stride_w"],
 )(conv2d_fprop_kernel)
 
-# The 2CTA epilogue stores through TMA, so it is only safe when every output
-# tile is fully covered. This mixed autotune compares the normal single-CTA
-# configs with 2CTA configs, and the host calls it only for full-tile shapes.
+# This mixed autotune compares the normal single-CTA configs with 2CTA configs.
+# The host keeps the conservative full-tile guard used by the 2CTA load path.
 conv2d_fprop_autotuned_kernel_with_2cta = triton.autotune(
     configs=conv2d_fprop_get_configs(pre_hook=conv2d_fprop_tma_set_block_size_hook, include_2cta=True),
     key=["N", "Co", "out_h", "out_w", "stride_h", "stride_w"],
@@ -573,9 +557,9 @@ def _prepare_conv_fprop_inputs(input_tensor, weight_tensor, stride, padding):
     return input_tensor, weight_tensor, output, N, H, W, Ci, Co, R, S, out_h, out_w, stride_h, stride_w, pad_h, pad_w
 
 
-def _make_conv_fprop_descriptors(input_tensor, weight_tensor, output_matrix, out_h, out_w, stride_h, stride_w, pad_h,
-                                 pad_w, input_block_shape, weight_block_shape, output_block_shape, cga_layout=()):
-    # TMA im2col descriptor for input: [N, H, W, Ci] in NHWC
+def _make_conv_fprop_descriptors(input_tensor, weight_tensor, out_h, out_w, stride_h, stride_w, pad_h, pad_w,
+                                 input_block_shape, weight_block_shape, cga_layout=()):
+    # TMA im2col descriptor for input: [N, H, W, Ci] in NHWC.
     #
     # The pixel_box defines the access boundary per batch:
     #   Lower = pixel_box_lower_corner + offsets
@@ -612,9 +596,7 @@ def _make_conv_fprop_descriptors(input_tensor, weight_tensor, output_matrix, out
                                                          cga_layout=weight_cga_layout)
     weight_desc = TensorDescriptor.from_tensor(weight_reshaped, weight_block_shape, weight_layout)
 
-    output_layout = gl.NVMMASharedLayout.get_default_for(output_block_shape, GL_GEMM_DTYPE, cga_layout=cga_layout)
-    output_desc = TensorDescriptor.from_tensor(output_matrix, output_block_shape, output_layout)
-    return in_desc, weight_desc, output_desc
+    return in_desc, weight_desc
 
 
 def _make_grid(num_sms, M_GEMM, N_GEMM):
@@ -632,7 +614,6 @@ def _launch_conv(
     *,
     in_desc,
     weight_desc,
-    output_desc,
     output,
     N,
     H,
@@ -655,7 +636,6 @@ def _launch_conv(
     kernel[grid](
         in_desc,
         weight_desc,
-        output_desc,
         output,
         N,
         H,
@@ -693,20 +673,17 @@ def conv2d_fprop(input_tensor, weight_tensor, stride=1, padding=0, **kwargs):
     M_GEMM = N * out_h * out_w
     N_GEMM = Co
     num_sms = torch.cuda.get_device_properties(input_tensor.device).multi_processor_count
-    output_matrix = output.view(-1, Co)
 
     dummy_block_shape = [1, 1]
-    in_desc, weight_desc, output_desc = _make_conv_fprop_descriptors(
+    in_desc, weight_desc = _make_conv_fprop_descriptors(
         input_tensor,
         weight_tensor,
-        output_matrix,
         out_h,
         out_w,
         stride_h,
         stride_w,
         pad_h,
         pad_w,
-        dummy_block_shape,
         dummy_block_shape,
         dummy_block_shape,
     )
@@ -722,7 +699,6 @@ def conv2d_fprop(input_tensor, weight_tensor, stride=1, padding=0, **kwargs):
         _make_grid(num_sms, M_GEMM, N_GEMM),
         in_desc=in_desc,
         weight_desc=weight_desc,
-        output_desc=output_desc,
         output=output,
         N=N,
         H=H,
@@ -755,7 +731,6 @@ def _make_conv2d_fprop_fixed_kernel_meta(num_buffers, num_warps, *, use_2cta=Fal
             "GROUP_SIZE_M": 4,
             "num_buffers": 4 if num_buffers is None else min(num_buffers, 4),
             "num_acc_buffers": 2,
-            "EPILOGUE_BLOCK_N": 128,
             "CGA_LAYOUT": cga_layout,
             "num_warps": num_warps,
             "num_ctas": 2**len(cga_layout),
@@ -768,7 +743,6 @@ def _make_conv2d_fprop_fixed_kernel_meta(num_buffers, num_warps, *, use_2cta=Fal
         "GROUP_SIZE_M": 4,
         "num_buffers": 3 if num_buffers is None else num_buffers,
         "num_acc_buffers": 2,
-        "EPILOGUE_BLOCK_N": 128,
         "CGA_LAYOUT": (),
         "num_warps": num_warps,
     }
@@ -787,17 +761,14 @@ def _run_conv2d_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, nu
     BLOCK_M = kernel_meta["BLOCK_M"]
     BLOCK_N = kernel_meta["BLOCK_N"]
     BLOCK_K = kernel_meta["BLOCK_K"]
-    EPILOGUE_BLOCK_N = kernel_meta["EPILOGUE_BLOCK_N"]
 
     M_GEMM = N * out_h * out_w
     N_GEMM = Co
     num_sms = torch.cuda.get_device_properties(input_tensor.device).multi_processor_count
-    output_matrix = output.view(-1, Co)
 
-    in_desc, weight_desc, output_desc = _make_conv_fprop_descriptors(
+    in_desc, weight_desc = _make_conv_fprop_descriptors(
         input_tensor,
         weight_tensor,
-        output_matrix,
         out_h,
         out_w,
         stride_h,
@@ -806,7 +777,6 @@ def _run_conv2d_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, nu
         pad_w,
         [BLOCK_M, BLOCK_K],
         [BLOCK_N, BLOCK_K],
-        [BLOCK_M, EPILOGUE_BLOCK_N],
         kernel_meta["CGA_LAYOUT"],
     )
 
@@ -815,7 +785,6 @@ def _run_conv2d_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, nu
         _make_grid(num_sms, M_GEMM, N_GEMM),
         in_desc=in_desc,
         weight_desc=weight_desc,
-        output_desc=output_desc,
         output=output,
         N=N,
         H=H,
@@ -840,8 +809,8 @@ def conv2d_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_buf
     """Fixed-config fprop entrypoint used for CI and debugging.
 
     Uses the regular fprop kernel with a 2CTA M-split tile when the output
-    matrix shape is fully covered by TMA-store tiles. Small or partial-tile
-    cases use the same kernel in single-CTA mode with scalar stores.
+    matrix shape satisfies the current 2CTA coverage guard. Small or partial
+    cases use the same kernel in single-CTA mode.
     """
     stride_h, stride_w = normalize_2d(stride, "stride")
     pad_h, pad_w = normalize_2d(padding, "padding")

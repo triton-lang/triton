@@ -50,7 +50,6 @@ GL_GEMM_DTYPE = _conv_common.GL_GEMM_DTYPE
 PersistentTileScheduler = _conv_common.PersistentTileScheduler
 TORCH_GEMM_DTYPE = _conv_common.TORCH_GEMM_DTYPE
 ensure_tma_compatible_strides = _conv_common.ensure_tma_compatible_strides
-get_gluon_dtype_for_tensor = _conv_common.get_gluon_dtype_for_tensor
 get_operand_cga_layout = _conv_common.get_operand_cga_layout
 get_transposed_cga_layout = _conv_common.get_transposed_cga_layout
 invalidate_mbarrier_ring = _conv_common.invalidate_mbarrier_ring
@@ -211,7 +210,6 @@ class PartitionArgs:
     config: DgradConfig
     grad_y_desc: tma.tensor_descriptor_im2col
     weight_desc: tma.tensor_descriptor
-    output_desc: tma.tensor_descriptor
     output_ptr: gl.tensor
     store_split_k_partials: gl.constexpr
     a_bufs: gl.shared_memory_descriptor
@@ -390,7 +388,6 @@ def epilogue_partition(p):
 def conv2d_dgrad_kernel(
     grad_y_desc,
     weight_desc,
-    output_desc,
     output,
     N,
     Co,
@@ -421,7 +418,6 @@ def conv2d_dgrad_kernel(
     SPLIT_K: gl.constexpr,
     num_buffers: gl.constexpr,
     num_acc_buffers: gl.constexpr,
-    EPILOGUE_BLOCK_N: gl.constexpr,
     CGA_LAYOUT: gl.constexpr,
     num_warps: gl.constexpr,
 ):
@@ -505,7 +501,6 @@ def conv2d_dgrad_kernel(
         config,
         grad_y_desc,
         weight_desc,
-        output_desc,
         output,
         STORE_SPLIT_K_PARTIALS,
         a_bufs,
@@ -540,7 +535,6 @@ def conv2d_dgrad_get_configs(include_2cta=False, block_n_values=(128, )):
                 "SPLIT_K": split_k,
                 "num_buffers": num_buffers,
                 "num_acc_buffers": num_acc_buffers,
-                "EPILOGUE_BLOCK_N": block_n,
                 "CGA_LAYOUT": cga_layout,
             },
             num_warps=num_warps,
@@ -567,7 +561,6 @@ def conv2d_dgrad_get_configs(include_2cta=False, block_n_values=(128, )):
                     "SPLIT_K": split_k,
                     "num_buffers": num_buffers,
                     "num_acc_buffers": 2,
-                    "EPILOGUE_BLOCK_N": epilogue_block_n,
                     "CGA_LAYOUT": ((1, 0), ),
                 },
                 num_warps=4,
@@ -576,7 +569,7 @@ def conv2d_dgrad_get_configs(include_2cta=False, block_n_values=(128, )):
             for block_n in block_n_values
             for block_k in (64, 128)
             for split_k in (1, 2, 4, 8)
-            for epilogue_block_n in (32, 64, 128) if block_n % epilogue_block_n == 0 for num_buffers in (3, 4, 5)
+            for num_buffers in (3, 4, 5)
         ])
     return configs
 
@@ -699,14 +692,6 @@ def _make_dgrad_grad_y_descriptor(grad_output_nhwc, H_sub, W_sub, out_h, out_w, 
         pixel_box_lower_corner=[lower_h, lower_w],
         pixel_box_upper_corner=[upper_h, upper_w],
     )
-
-
-def _make_dgrad_output_descriptor(output, output_block_shape, cga_layout=()):
-    validate_2cta_m_split(cga_layout)
-    output_matrix = output.reshape(-1, output.shape[-1])
-    output_dtype = get_gluon_dtype_for_tensor(output)
-    output_layout = gl.NVMMASharedLayout.get_default_for(output_block_shape, output_dtype, cga_layout=cga_layout)
-    return TensorDescriptor.from_tensor(output_matrix, output_block_shape, output_layout)
 
 
 def _make_grid(num_sms, M_GEMM, Ci, Co, R_eff, S_eff):
@@ -881,7 +866,6 @@ def _launch_dgrad_subproblems(
     subproblem_specs,
     weight_block_shape,
     input_block_shape,
-    output_block_shape,
     num_sms,
     kernel_meta=None,
 ):
@@ -892,10 +876,6 @@ def _launch_dgrad_subproblems(
     M_GEMM = N * H_sub * W_sub
     cga_layout = kernel_meta.get("CGA_LAYOUT", ())
     weight_desc = _make_dgrad_weight_descriptor(W_rot_flat, weight_block_shape, cga_layout)
-    output_desc = weight_desc
-    if cga_layout:
-        output_desc = _make_dgrad_output_descriptor(output, output_block_shape, cga_layout)
-
     for a, b, r0_val, s0_val, R_eff_val, S_eff_val, offset_a, offset_b in subproblem_specs:
         grad_y_desc = _make_dgrad_grad_y_descriptor(
             grad_output_nhwc,
@@ -912,7 +892,6 @@ def _launch_dgrad_subproblems(
         kernel[_make_grid(num_sms, M_GEMM, Ci, Co, R_eff_val, S_eff_val)](
             grad_y_desc=grad_y_desc,
             weight_desc=weight_desc,
-            output_desc=output_desc,
             output=output,
             N=N,
             Co=Co,
@@ -1005,7 +984,6 @@ def _make_dgrad_runner(
             subproblem_specs=subproblem_specs,
             weight_block_shape=[kernel_meta["BLOCK_N"], kernel_meta["BLOCK_K"]],
             input_block_shape=[kernel_meta["BLOCK_M"], kernel_meta["BLOCK_K"]],
-            output_block_shape=[kernel_meta["BLOCK_M"], kernel_meta["EPILOGUE_BLOCK_N"]],
             num_sms=num_sms,
             kernel_meta={
                 **kernel_meta,
@@ -1215,7 +1193,6 @@ def _make_dgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps, *, use_2cta=F
             "SPLIT_K": SPLIT_K,
             "num_buffers": 4 if num_buffers is None else min(num_buffers, 4),
             "num_acc_buffers": 2,
-            "EPILOGUE_BLOCK_N": 128,
             "CGA_LAYOUT": cga_layout,
             "num_warps": num_warps,
             "num_ctas": 2**len(cga_layout),
@@ -1229,7 +1206,6 @@ def _make_dgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps, *, use_2cta=F
         "SPLIT_K": SPLIT_K,
         "num_buffers": 2 if num_buffers is None else num_buffers,
         "num_acc_buffers": 2,
-        "EPILOGUE_BLOCK_N": 256,
         "CGA_LAYOUT": (),
         "num_warps": num_warps,
     }

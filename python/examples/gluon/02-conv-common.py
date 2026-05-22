@@ -95,14 +95,6 @@ def validate_2cta_m_split(cga_layout):
         raise ValueError(f"Only single-CTA or 2-CTA M-split layouts are supported, got {cga_layout!r}")
 
 
-def get_gluon_dtype_for_tensor(tensor):
-    if tensor.dtype == torch.bfloat16:
-        return GL_GEMM_DTYPE
-    if tensor.dtype == torch.float32:
-        return gl.float32
-    raise ValueError(f"Unsupported tensor descriptor dtype: {tensor.dtype}")
-
-
 @gluon.aggregate
 class Counter:
     index: gl.tensor
@@ -147,13 +139,6 @@ class PersistentTileScheduler:
 
 
 @gluon.jit
-def init_mbarrier_ring(bars):
-    num_bars: gl.constexpr = bars.type.shape[0]
-    for i in gl.static_range(num_bars):
-        mbarrier.init(bars.index(i), count=1)
-
-
-@gluon.jit
 def invalidate_mbarrier_ring(bars):
     num_bars: gl.constexpr = bars.type.shape[0]
     for i in gl.static_range(num_bars):
@@ -166,10 +151,8 @@ __all__ = [
     "PersistentTileScheduler",
     "TORCH_GEMM_DTYPE",
     "ensure_tma_compatible_strides",
-    "get_gluon_dtype_for_tensor",
     "get_operand_cga_layout",
     "get_transposed_cga_layout",
-    "init_mbarrier_ring",
     "invalidate_mbarrier_ring",
     "is_blackwell",
     "is_cuda",

@@ -52,7 +52,12 @@ Access Boundary:
     [0, 0] to [H-1, W-1], TMA fills with the padding value.
 
 async_copy_global_to_shared_im2col:
-    async_copy_global_to_shared_im2col(tensor_desc, coord, offsets, barrier, result)
+    async_copy_global_to_shared_im2col(
+        tensor_desc, coord, offsets, barrier, result,
+        im2col_shape=tensor_desc.shape,
+        element_strides=[1, stride_h, stride_w, 1],
+        pixel_box_lower_corner=[-pad_h, -pad_w],
+        pixel_box_upper_corner=[upper_h, upper_w])
     - coord: [batch_idx, start_h, start_w, channel_start] start coords
     - offsets: [h_offset, w_offset] spatial offsets (i16)
 
@@ -225,7 +230,7 @@ if __name__ == "__main__" and not t7.is_hopper_or_newer():
 #         | e  f  h  i |
 #
 #       In the real kernel, this is executed in the K-loop as one
-#       async_copy_global_to_shared_im2col per (r, s, ci_block).
+#       async_load_im2col per (r, s, ci_block).
 #
 # %%
 # Shared Kernel for All Examples

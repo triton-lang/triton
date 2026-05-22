@@ -49,7 +49,6 @@ Counter = _conv_common.Counter
 GL_GEMM_DTYPE = _conv_common.GL_GEMM_DTYPE
 PersistentTileScheduler = _conv_common.PersistentTileScheduler
 TORCH_GEMM_DTYPE = _conv_common.TORCH_GEMM_DTYPE
-get_gluon_dtype_for_tensor = _conv_common.get_gluon_dtype_for_tensor
 get_operand_cga_layout = _conv_common.get_operand_cga_layout
 get_transposed_cga_layout = _conv_common.get_transposed_cga_layout
 invalidate_mbarrier_ring = _conv_common.invalidate_mbarrier_ring
@@ -205,7 +204,6 @@ class PartitionArgs:
     config: WgradConfig
     in_desc: tma.tensor_descriptor_im2col
     grad_out_desc: tma.tensor_descriptor
-    grad_weight_desc: tma.tensor_descriptor
     grad_weight_ptr: gl.tensor
     grad_weight_stride_0: gl.tensor
     a_bufs: gl.shared_memory_descriptor
@@ -367,7 +365,6 @@ def epilogue_partition(p):
 def conv2d_wgrad_kernel(
     in_desc,
     grad_out_desc,
-    grad_weight_desc,
     grad_weight,
     N,
     Ci,
@@ -389,7 +386,6 @@ def conv2d_wgrad_kernel(
     SPLIT_K: gl.constexpr,
     num_buffers: gl.constexpr,
     num_acc_buffers: gl.constexpr,
-    EPILOGUE_BLOCK_N: gl.constexpr,
     CGA_LAYOUT: gl.constexpr,
     num_warps: gl.constexpr,
 ):
@@ -467,7 +463,6 @@ def conv2d_wgrad_kernel(
         config,
         in_desc,
         grad_out_desc,
-        grad_weight_desc,
         grad_weight,
         gl.to_tensor(grad_weight_stride_0),
         a_bufs,
@@ -501,7 +496,6 @@ def conv2d_wgrad_get_configs(pre_hook=None, include_2cta=False, block_n_values=(
                 "SPLIT_K": split_k,
                 "num_buffers": num_buffers,
                 "num_acc_buffers": num_acc_buffers,
-                "EPILOGUE_BLOCK_N": block_n,
                 "CGA_LAYOUT": cga_layout,
             },
             num_warps=num_warps,
@@ -527,7 +521,6 @@ def conv2d_wgrad_get_configs(pre_hook=None, include_2cta=False, block_n_values=(
                     "SPLIT_K": split_k,
                     "num_buffers": num_buffers,
                     "num_acc_buffers": 2,
-                    "EPILOGUE_BLOCK_N": epilogue_block_n,
                     "CGA_LAYOUT": ((1, 0), ),
                 },
                 num_warps=4,
@@ -537,7 +530,7 @@ def conv2d_wgrad_get_configs(pre_hook=None, include_2cta=False, block_n_values=(
             for block_n in block_n_values
             for block_k in (64, 128)
             for split_k in (1, 2, 4, 8, 16, 32)
-            for epilogue_block_n in (32, 64, 128) if block_n % epilogue_block_n == 0 for num_buffers in (3, 4, 5)
+            for num_buffers in (3, 4, 5)
         ])
     return configs
 
@@ -615,13 +608,6 @@ def _make_wgrad_descriptors(input_nhwc, grad_output_nhwc, Co, out_h, out_w, stri
     grad_out_desc = TensorDescriptor.from_tensor(grad_out_2d, grad_out_block_shape, grad_out_layout)
 
     return in_desc, grad_out_desc
-
-
-def _make_wgrad_output_descriptor(grad_weight_flat, output_block_shape, cga_layout=()):
-    validate_2cta_m_split(cga_layout)
-    output_dtype = get_gluon_dtype_for_tensor(grad_weight_flat)
-    output_layout = gl.NVMMASharedLayout.get_default_for(output_block_shape, output_dtype, cga_layout=cga_layout)
-    return TensorDescriptor.from_tensor(grad_weight_flat, output_block_shape, output_layout)
 
 
 def _make_grid(num_sms, M_spatial, Co, Ci, R, S):
@@ -744,11 +730,6 @@ def _make_wgrad_runner(
         [kernel_meta["BLOCK_K"], kernel_meta["BLOCK_M"]],
         cga_layout,
     )
-    grad_weight_desc = _make_wgrad_output_descriptor(
-        launch_output,
-        [kernel_meta["BLOCK_M"], kernel_meta["EPILOGUE_BLOCK_N"]],
-        cga_layout,
-    )
     grid = _make_grid(num_sms, M_spatial, Co, Ci, R, S)
 
     def run():
@@ -757,7 +738,6 @@ def _make_wgrad_runner(
             grid,
             in_desc=in_desc,
             grad_out_desc=grad_out_desc,
-            grad_weight_desc=grad_weight_desc,
             grad_weight=launch_output,
             N=N,
             Ci=Ci,
@@ -964,7 +944,6 @@ def _launch_wgrad(
     *,
     in_desc,
     grad_out_desc,
-    grad_weight_desc,
     grad_weight,
     N,
     Ci,
@@ -987,7 +966,6 @@ def _launch_wgrad(
     kernel[grid](
         in_desc,
         grad_out_desc,
-        grad_weight_desc,
         grad_weight,
         N,
         Ci,
@@ -1078,7 +1056,6 @@ def _make_wgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps, *, use_2cta=F
             "SPLIT_K": SPLIT_K,
             "num_buffers": 2 if num_buffers is None else min(num_buffers, 2),
             "num_acc_buffers": 2,
-            "EPILOGUE_BLOCK_N": 64,
             "CGA_LAYOUT": cga_layout,
             "num_warps": num_warps,
             "num_ctas": 2**len(cga_layout),
@@ -1091,7 +1068,6 @@ def _make_wgrad_fixed_kernel_meta(SPLIT_K, num_buffers, num_warps, *, use_2cta=F
         "SPLIT_K": SPLIT_K,
         "num_buffers": 2 if num_buffers is None else num_buffers,
         "num_acc_buffers": 2,
-        "EPILOGUE_BLOCK_N": 256,
         "CGA_LAYOUT": (),
         "num_warps": num_warps,
     }
