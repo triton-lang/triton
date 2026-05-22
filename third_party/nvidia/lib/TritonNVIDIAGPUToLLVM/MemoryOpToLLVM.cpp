@@ -322,13 +322,28 @@ static Value normalizeAsyncSharedStoreValue(Value value, Type valueTy,
   return value;
 }
 
+static Value packAsyncSharedStoreValue(Location loc, ArrayRef<Value> values,
+                                       Type elemTy, unsigned storeBitwidth,
+                                       TritonLLVMOpBuilder &b,
+                                       ConversionPatternRewriter &rewriter) {
+  unsigned elemBitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
+  assert(values.size() == storeBitwidth / elemBitwidth);
+  if (values.size() == 1)
+    return normalizeAsyncSharedStoreValue(values.front(), elemTy, storeBitwidth,
+                                          b);
+
+  Value packed = packLLVector(loc, values, rewriter);
+  return b.bitcast(packed,
+                   IntegerType::get(elemTy.getContext(), storeBitwidth));
+}
+
 static Value mapSharedToCluster(Location loc, Value ptr, Value ctaId,
                                 ConversionPatternRewriter &rewriter) {
   auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
   assert(ptrTy.getAddressSpace() == 3 &&
          "st.async.shared expects a shared-memory pointer");
-  return NVVM::MapaOp::create(rewriter, loc,
-                              ptr_ty(rewriter.getContext(), 7), ptr, ctaId);
+  return NVVM::MapaOp::create(rewriter, loc, ptr_ty(rewriter.getContext(), 7),
+                              ptr, ctaId);
 }
 
 static void emitAsyncSharedStore(Location loc, ArrayRef<Value> vals, Value dst,
@@ -338,14 +353,14 @@ static void emitAsyncSharedStore(Location loc, ArrayRef<Value> vals, Value dst,
   Type elemTy = vecTy.getElementType();
   unsigned vec = vecTy.getNumElements();
   unsigned elemBitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
-  assert((elemBitwidth == 32 || elemBitwidth == 64) &&
-         "st.async.shared only supports 32-bit and 64-bit elements");
+  assert((elemBitwidth == 8 || elemBitwidth == 16 || elemBitwidth == 32 ||
+          elemBitwidth == 64) &&
+         "st.async.shared only supports packable elements");
 
   if (vec * elemBitwidth > 128) {
     assert(vec % (128 / elemBitwidth) == 0);
     int maxVec = 128 / elemBitwidth;
-    auto splitVecTy =
-        VectorType::get({static_cast<int64_t>(maxVec)}, elemTy);
+    auto splitVecTy = VectorType::get({static_cast<int64_t>(maxVec)}, elemTy);
     for (int i = 0; i < vec / maxVec; i++) {
       auto newDst = b.gep(dst.getType(), elemTy, dst, b.i32_val(i * maxVec),
                           LLVM::GEPNoWrapFlags::inbounds);
@@ -354,29 +369,38 @@ static void emitAsyncSharedStore(Location loc, ArrayRef<Value> vals, Value dst,
     }
     return;
   }
-  assert(1 <= vec && vec <= 4);
+  assert(vec * elemBitwidth >= 32 &&
+         "st.async.shared requires at least a 32-bit store");
+
+  unsigned storeBitwidth = elemBitwidth < 32 ? 32u : elemBitwidth;
+  unsigned elemsPerStore = storeBitwidth / elemBitwidth;
+  assert(vec % elemsPerStore == 0);
+  unsigned storeVec = vec / elemsPerStore;
+  assert(1 <= storeVec && storeVec <= 4);
 
   PTXBuilder builder;
   auto st = builder.create("st.async")
                 ->o("weak")
                 .o("shared::cluster")
                 .o("mbarrier::complete_tx::bytes")
-                .v(vec, /*predicate=*/vec > 1)
-                .b(elemBitwidth);
+                .v(storeVec, /*predicate=*/storeVec > 1)
+                .b(storeBitwidth);
   auto *dstOpr = builder.newAddrOperand(dst, "r");
   auto *mbarrierOpr = builder.newAddrOperand(mbarrier, "r");
-  auto constraint = getAsyncSharedStoreConstraint(elemBitwidth);
+  auto constraint = getAsyncSharedStoreConstraint(storeBitwidth);
   PTXBuilder::Operand *valueOpr;
-  if (vec == 1) {
+  if (storeVec == 1) {
     valueOpr = builder.newOperand(
-        normalizeAsyncSharedStoreValue(vals.front(), elemTy, elemBitwidth, b),
+        packAsyncSharedStoreValue(loc, vals.slice(0, elemsPerStore), elemTy,
+                                  storeBitwidth, b, rewriter),
         constraint);
   } else {
     SmallVector<std::pair<Value, std::string>> vecVals;
-    vecVals.reserve(vec);
-    for (Value value : vals) {
-      vecVals.push_back({normalizeAsyncSharedStoreValue(
-                             value, elemTy, elemBitwidth, b),
+    vecVals.reserve(storeVec);
+    for (unsigned i = 0; i < storeVec; i++) {
+      vecVals.push_back({packAsyncSharedStoreValue(
+                             loc, vals.slice(i * elemsPerStore, elemsPerStore),
+                             elemTy, storeBitwidth, b, rewriter),
                          constraint});
     }
     valueOpr = builder.newListOperand(vecVals);
@@ -385,11 +409,13 @@ static void emitAsyncSharedStore(Location loc, ArrayRef<Value> vals, Value dst,
   builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-static void lowerAsyncSharedStore(
-    Location loc, MLIRContext *ctx, LinearLayout cvt, ArrayRef<Value> vals,
-    Type llvmElemTy, MemDescType dstTy, SharedMemoryObject dstMemObj,
-    Value mbarrierPtr, ConversionPatternRewriter &rewriter,
-    const NVIDIA::TargetInfo &targetInfo) {
+static void lowerAsyncSharedStore(Location loc, MLIRContext *ctx,
+                                  LinearLayout cvt, ArrayRef<Value> vals,
+                                  Type llvmElemTy, MemDescType dstTy,
+                                  SharedMemoryObject dstMemObj,
+                                  Value mbarrierPtr,
+                                  ConversionPatternRewriter &rewriter,
+                                  const NVIDIA::TargetInfo &targetInfo) {
   auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
   if (!removeBroadcastSrc.isIdentity()) {
     auto prmtCvt = removeBroadcastSrc.apply(cvt);
@@ -420,9 +446,8 @@ static void lowerAsyncSharedStore(
     Value dst = mapSharedToCluster(storeLoc, shmemAddr, targetCTAId, rewriter);
     Value mbarrier =
         mapSharedToCluster(storeLoc, mbarrierPtr, targetCTAId, rewriter);
-    emitAsyncSharedStore(storeLoc,
-                         values.slice(idx, vecTy.getNumElements()), dst,
-                         mbarrier, vecTy, rewriter);
+    emitAsyncSharedStore(storeLoc, values.slice(idx, vecTy.getNumElements()),
+                         dst, mbarrier, vecTy, rewriter);
     return {};
   };
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
@@ -465,8 +490,8 @@ struct AsyncSharedStoreOpConversion
                             : toLinearLayout(dstTy);
     auto cvt = regLayout.invertAndCompose(sharedLayout);
     auto values = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    lowerAsyncSharedStore(loc, op.getContext(), cvt, values, llvmElemTy,
-                          dstTy, dstMemObj, mbarrierMemObj.getBase(), rewriter,
+    lowerAsyncSharedStore(loc, op.getContext(), cvt, values, llvmElemTy, dstTy,
+                          dstMemObj, mbarrierMemObj.getBase(), rewriter,
                           targetInfo);
     rewriter.eraseOp(op);
     return success();

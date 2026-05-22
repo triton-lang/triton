@@ -27,6 +27,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
@@ -39,6 +40,7 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace mlir::triton::gpu;
@@ -262,6 +264,7 @@ static LogicalResult verifyCompletionBarrierLayout(Operation *op,
 
 // -- AsyncSharedStoreOp --
 LogicalResult AsyncSharedStoreOp::verify() {
+  // PTX defines weak shared::cluster st.async as UB for a one-CTA cluster.
   if (gpu::lookupNumCTAs(getOperation()) < 2)
     return emitOpError("requires at least two CTAs in the cluster");
   if (!getDst().getType().getMutableMemory())
@@ -274,9 +277,26 @@ LogicalResult AsyncSharedStoreOp::verify() {
   if (failed(verifyCompletionBarrierLayout(getOperation(), getMbarrier())))
     return failure();
 
-  unsigned bitwidth = getSrc().getType().getElementTypeBitWidth();
-  if (bitwidth != 32 && bitwidth != 64)
-    return emitOpError("requires 32-bit or 64-bit element types");
+  auto srcTy = getSrc().getType();
+  auto dstTy = getDst().getType();
+  unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
+  if (bitwidth < 8 || bitwidth > 64 || !llvm::isPowerOf2_32(bitwidth))
+    return emitOpError("requires 8-, 16-, 32-, or 64-bit element types");
+
+  auto regLayout = toLinearLayout(srcTy);
+  auto sharedLayout = isPaddedEncoding(dstTy.getEncoding())
+                          ? paddedLinearLayout(dstTy)
+                          : toLinearLayout(dstTy);
+  auto cvt = regLayout.invertAndCompose(sharedLayout);
+  std::optional<int> maybeMaxVecElems;
+  if (isPaddedEncoding(dstTy.getEncoding()))
+    maybeMaxVecElems = getMinInterval(dstTy.getEncoding());
+  auto vectorization =
+      largestVectorisation(getContext(), cvt, bitwidth, maybeMaxVecElems);
+  unsigned elemsPerVec = vectorization.first;
+  if (elemsPerVec * bitwidth < 32)
+    return emitOpError("requires a layout vectorizing stores to at least 32 "
+                       "bits");
   return success();
 }
 

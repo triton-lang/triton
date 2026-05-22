@@ -56,8 +56,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #barrier_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @async_shared_store_requires_wide_elements(%src: tensor<128xf16, #blocked_f16>, %dst: !ttg.memdesc<128xf16, #shared_f16, #smem, mutable>, %bar: !ttg.memdesc<2xi64, #barrier_shared, #smem, mutable>) {
-    // expected-error @+1 {{requires 32-bit or 64-bit element types}}
+  tt.func public @async_shared_store_requires_packable_layout(%src: tensor<128xf16, #blocked_f16>, %dst: !ttg.memdesc<128xf16, #shared_f16, #smem, mutable>, %bar: !ttg.memdesc<2xi64, #barrier_shared, #smem, mutable>) {
+    // expected-error @+1 {{requires a layout vectorizing stores to at least 32 bits}}
     ttng.async_shared_store %src, %dst, %bar : tensor<128xf16, #blocked_f16> -> !ttg.memdesc<128xf16, #shared_f16, #smem, mutable>, !ttg.memdesc<2xi64, #barrier_shared, #smem, mutable>
     tt.return
   }
