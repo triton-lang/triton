@@ -425,8 +425,10 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     - tt.tensordesc: TILED mode - Regular tiled tensor memory access
       - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-tiled-mode
     - ttng.tensordesc_im2col: IM2COL mode - Im2col mode for convolution-friendly access patterns
-      - In IM2COL mode, 'coord' is the coordinates in the input tensor
-        - For example, for a 4D tensor (NHWC), 'coord' is [batch_idx, channel_idx, h, w]
+      - In IM2COL mode, 'coord' is the physical coordinates in the input tensor.
+      - In IM2COL mode, runtime descriptor metadata is carried in dedicated
+        im2col operand groups: im2col_shape, element_strides,
+        pixel_box_lower_corner, and pixel_box_upper_corner.
       - In IM2COL mode, additional `offsets` must be provided (uint16 values)
         - For 3D tensors (NWC): 1 offset (offset_w)
         - For 4D tensors (NHWC): 2 offsets (offset_w, offset_h)
@@ -440,6 +442,10 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
   let arguments = (ins
     Arg<TT_AnyTensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
+    Variadic<I32>:$im2colShape,
+    Variadic<I32>:$im2colElementStrides,
+    Variadic<I32>:$im2colPixelBoxLowerCorner,
+    Variadic<I32>:$im2colPixelBoxUpperCorner,
     Variadic<I16>:$offsets,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
@@ -461,13 +467,24 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
       multicast &= ::mlir::triton::nvidia_gpu::hasCGABroadcast(
                                    ::mlir::cast<::mlir::triton::gpu::MemDescType>(
                                        result.getType()));
-      build($_builder, $_state, desc, coord, /*offsets=*/ValueRange{}, barrier,
-            result, pred, multicast, cache, evict, isVolatile);
+      build($_builder, $_state, desc, coord,
+            /*im2colShape=*/ValueRange{},
+            /*im2colElementStrides=*/ValueRange{},
+            /*im2colPixelBoxLowerCorner=*/ValueRange{},
+            /*im2colPixelBoxUpperCorner=*/ValueRange{},
+            /*offsets=*/ValueRange{}, barrier, result, pred, multicast, cache,
+            evict, isVolatile);
     }]>
   ];
 
   let assemblyFormat = [{
-    $desc `[` $coord `]` (`offsets` `=` `[` $offsets^ `]`)? $result `,` $barrier `,` $pred
+    $desc `[` $coord `]`
+    (`im2col_shape` `=` `[` $im2colShape^ `]`)?
+    (`element_strides` `=` `[` $im2colElementStrides^ `]`)?
+    (`pixel_box_lower_corner` `=` `[` $im2colPixelBoxLowerCorner^ `]`)?
+    (`pixel_box_upper_corner` `=` `[` $im2colPixelBoxUpperCorner^ `]`)?
+    (`offsets` `=` `[` $offsets^ `]`)?
+    $result `,` $barrier `,` $pred
     oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
     attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
   }];

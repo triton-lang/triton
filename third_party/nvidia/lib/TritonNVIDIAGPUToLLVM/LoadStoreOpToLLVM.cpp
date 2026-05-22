@@ -1172,53 +1172,46 @@ struct RuntimeIm2ColMetadata {
 
 static FailureOr<RuntimeIm2ColMetadata> getRuntimeIm2ColMetadata(
     ttng::AsyncTMACopyGlobalToLocalOp op, ConversionPatternRewriter &rewriter,
-    TritonLLVMOpBuilder &b, const Im2ColMetadata &metadata, ValueRange coords) {
+    TritonLLVMOpBuilder &b, const Im2ColMetadata &metadata,
+    ValueRange physicalCoords, ValueRange inputShape, ValueRange elementStrides,
+    ValueRange lowerCorner, ValueRange upperCorner) {
   int64_t physicalRank = metadata.physicalRank;
   int64_t spatialRank = metadata.getSpatialRank();
-  int64_t runtimeMetadataSize =
-      physicalRank + physicalRank + spatialRank + spatialRank;
-  int64_t expectedCoordCount = physicalRank + runtimeMetadataSize;
 
-  if (static_cast<int64_t>(coords.size()) != expectedCoordCount)
+  if (static_cast<int64_t>(physicalCoords.size()) != physicalRank)
     return op.emitError("im2col lowering requires ")
-           << expectedCoordCount
-           << " coordinates: physical coords plus runtime shape, "
-              "element_strides, pixel_box_lower_corner, and "
-              "pixel_box_upper_corner metadata; got "
-           << coords.size();
+           << physicalRank << " physical coordinates; got "
+           << physicalCoords.size();
 
   RuntimeIm2ColMetadata result;
-  result.physicalCoords.append(coords.begin(), coords.begin() + physicalRank);
+  result.physicalCoords.append(physicalCoords.begin(), physicalCoords.end());
 
-  int64_t cursor = physicalRank;
-  for (int64_t i = 0; i < physicalRank; ++i) {
-    auto value =
-        getI32RuntimeMetadata(rewriter, b, op, coords[cursor++], "input shape");
-    if (failed(value))
-      return failure();
-    result.inputShape.push_back(*value);
-  }
-  for (int64_t i = 0; i < physicalRank; ++i) {
-    auto value = getI32RuntimeMetadata(rewriter, b, op, coords[cursor++],
-                                       "element_strides");
-    if (failed(value))
-      return failure();
-    result.elementStrides.push_back(*value);
-  }
-  for (int64_t i = 0; i < spatialRank; ++i) {
-    auto value = getI32RuntimeMetadata(rewriter, b, op, coords[cursor++],
-                                       "pixel_box_lower_corner");
-    if (failed(value))
-      return failure();
-    result.lowerCorner.push_back(*value);
-  }
-  for (int64_t i = 0; i < spatialRank; ++i) {
-    auto value = getI32RuntimeMetadata(rewriter, b, op, coords[cursor++],
-                                       "pixel_box_upper_corner");
-    if (failed(value))
-      return failure();
-    result.upperCorner.push_back(*value);
-  }
+  auto appendMetadata = [&](ValueRange values, int64_t expected, StringRef name,
+                            SmallVectorImpl<Value> &out) -> LogicalResult {
+    if (static_cast<int64_t>(values.size()) != expected)
+      return op.emitError("im2col lowering requires ")
+             << expected << " " << name << " operands; got " << values.size();
+    for (Value value : values) {
+      auto converted = getI32RuntimeMetadata(rewriter, b, op, value, name);
+      if (failed(converted))
+        return failure();
+      out.push_back(*converted);
+    }
+    return success();
+  };
+
+  if (failed(appendMetadata(inputShape, physicalRank, "input shape",
+                            result.inputShape)))
+    return failure();
+  if (failed(appendMetadata(elementStrides, physicalRank, "element_strides",
+                            result.elementStrides)))
+    return failure();
+  if (failed(appendMetadata(lowerCorner, spatialRank, "pixel_box_lower_corner",
+                            result.lowerCorner)))
+    return failure();
+  if (failed(appendMetadata(upperCorner, spatialRank, "pixel_box_upper_corner",
+                            result.upperCorner)))
+    return failure();
   return result;
 }
 
@@ -1453,7 +1446,10 @@ struct AsyncTMACopyGlobalToLocalOpConversion
                                    adaptor.getCoord().end());
       if (isIm2Col) {
         auto runtimeMetadata = getRuntimeIm2ColMetadata(
-            op, rewriter, b, im2ColMetadata, adaptor.getCoord());
+            op, rewriter, b, im2ColMetadata, adaptor.getCoord(),
+            adaptor.getIm2colShape(), adaptor.getIm2colElementStrides(),
+            adaptor.getIm2colPixelBoxLowerCorner(),
+            adaptor.getIm2colPixelBoxUpperCorner());
         if (failed(runtimeMetadata))
           return failure();
         auto outputShape = getOutputShapeFromRuntimeMetadata(b, im2ColMetadata,

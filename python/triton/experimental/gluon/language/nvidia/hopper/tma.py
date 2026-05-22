@@ -233,6 +233,10 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
         pred.handle,
         multicast,
         None,
+        None,
+        None,
+        None,
+        None,
     )
 
 
@@ -281,11 +285,15 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
     if len(pixel_box_lower_corner) != spatial_rank or len(pixel_box_upper_corner) != spatial_rank:
         raise ValueError("runtime im2col pixel-box corner length mismatch")
 
-    coord = [ttgl.to_tensor(c, _semantic=_semantic) for c in coord]
-    runtime_metadata = []
-    for values in (im2col_shape, element_strides, pixel_box_lower_corner, pixel_box_upper_corner):
-        runtime_metadata.extend(ttgl.to_tensor(v, _semantic=_semantic) for v in values)
-    coord = _semantic._convert_to_ir_values(coord + runtime_metadata, require_i64=False)
+    def convert_i32_metadata(values):
+        values = [ttgl.to_tensor(v, _semantic=_semantic) for v in values]
+        return _semantic._convert_to_ir_values(values, require_i64=False)
+
+    coord = convert_i32_metadata(coord)
+    im2col_shape_ir = convert_i32_metadata(im2col_shape)
+    element_strides_ir = convert_i32_metadata(element_strides)
+    pixel_box_lower_corner_ir = convert_i32_metadata(pixel_box_lower_corner)
+    pixel_box_upper_corner_ir = convert_i32_metadata(pixel_box_upper_corner)
     offsets_ir = _convert_im2col_offsets(offsets, _semantic)
 
     _semantic.builder.create_async_tma_copy_global_to_local(
@@ -296,6 +304,10 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
         pred.handle,
         multicast,
         offsets_ir,
+        im2col_shape_ir,
+        element_strides_ir,
+        pixel_box_lower_corner_ir,
+        pixel_box_upper_corner_ir,
     )
 
 
