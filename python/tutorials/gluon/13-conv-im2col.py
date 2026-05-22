@@ -237,7 +237,8 @@ if __name__ == "__main__" and not t7.is_hopper_or_newer():
 
 @gluon.jit
 def tma_im2col_kernel(in_desc, out_desc, coord_n: int, coord_h: int, coord_w: int, coord_c: int, offset_h: tl.constexpr,
-                      offset_w: tl.constexpr):
+                      offset_w: tl.constexpr, lower_h: tl.constexpr, lower_w: tl.constexpr, upper_h: tl.constexpr,
+                      upper_w: tl.constexpr):
     """Generic im2col kernel with configurable coordinates and offsets."""
     smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
 
@@ -252,6 +253,10 @@ def tma_im2col_kernel(in_desc, out_desc, coord_n: int, coord_h: int, coord_w: in
         [offset_h, offset_w],
         bar,
         smem,
+        im2col_shape=in_desc.shape,
+        element_strides=[1, 1, 1, 1],
+        pixel_box_lower_corner=[lower_h, lower_w],
+        pixel_box_upper_corner=[upper_h, upper_w],
     )
 
     mbarrier.wait(bar, phase=0)
@@ -290,7 +295,8 @@ def run_tma_im2col(title, pixel_box_lower_corner, pixel_box_upper_corner, coord,
     )
     out_desc = TensorDescriptor.from_tensor(out, block_shape, layout)
 
-    tma_im2col_kernel[(1, )](in_desc, out_desc, *coord, *offsets, num_warps=1)
+    tma_im2col_kernel[(1, )](in_desc, out_desc, *coord, *offsets, *pixel_box_lower_corner, *pixel_box_upper_corner,
+                             num_warps=1)
 
     print(title)
     print("\nLoaded data (pixel_id, value):")
@@ -600,7 +606,7 @@ def run_tma_im2col_multi_batch():
 
     # coord=[0, 1, 3, 0] - start from batch 0, H=1, W=3, C=0
     # This is pixel index 1*4 + 3 = 7 in batch 0
-    tma_im2col_kernel[(1, )](in_desc, out_desc, 0, 1, 3, 0, 0, 0, num_warps=1)
+    tma_im2col_kernel[(1, )](in_desc, out_desc, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, num_warps=1)
 
     print("Example 4: Loading across multiple batches")
     print("Input shape: [2, 4, 4, 32] (2 batches of 4x4 images)")
@@ -729,7 +735,7 @@ def run_tma_im2col_multi_batch_padded():
     out_desc = TensorDescriptor.from_tensor(out, block_shape, layout)
 
     # coord=[0, 1, 2, 0] - start from batch 0, H=1, W=2, C=0
-    tma_im2col_kernel[(1, )](in_desc, out_desc, 0, 1, 2, 0, 0, 0, num_warps=1)
+    tma_im2col_kernel[(1, )](in_desc, out_desc, 0, 1, 2, 0, 0, 0, -1, -1, -1, -1, num_warps=1)
 
     print("Example 5: Multi-batch with padded access boundary")
     print("Input shape: [2, 4, 4, 32], pixel_box_lower_corner=[-1,-1], "
@@ -1010,6 +1016,14 @@ def conv2d_im2col_kernel(
             [r.to(tl.int16), s.to(tl.int16)],
             tma_bar,
             a_smem,
+            im2col_shape=in_desc.shape,
+            element_strides=[1, stride_h, stride_w, 1],
+            pixel_box_lower_corner=[ttgl.full((), 0, ttgl.int32) - pad_h,
+                                    ttgl.full((), 0, ttgl.int32) - pad_w],
+            pixel_box_upper_corner=[
+                (out_h - 1) * stride_h + 1 - in_desc.shape[1] - pad_h,
+                (out_w - 1) * stride_w + 1 - in_desc.shape[2] - pad_w,
+            ],
         )
         # B = load_weight[co_start:…, k_offset:k_offset+BLOCK_K].  Uses Ci (not
         # ci_num_blocks*BLOCK_K) as the per-(r,s) stride so offsets stay aligned with the

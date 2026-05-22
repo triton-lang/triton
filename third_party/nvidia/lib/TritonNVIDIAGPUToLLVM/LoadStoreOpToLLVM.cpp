@@ -1136,9 +1136,9 @@ getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
 }
 
 struct Im2ColMetadata {
+  // The type metadata is only used to recover the source rank. Runtime operands
+  // carry the actual shape, strides, and pixel-box values used for remapping.
   ArrayRef<int64_t> elementStrides;
-  ArrayRef<int64_t> lowerCorner;
-  ArrayRef<int64_t> upperCorner;
 
   int64_t getSpatialRank() const { return elementStrides.size() - 2; }
 };
@@ -1147,99 +1147,97 @@ static Im2ColMetadata getIm2ColMetadata(ttng::TensorDescIm2ColType type) {
   ArrayRef<int64_t> elementStrides =
       cast<DenseI64ArrayAttr>(type.getElementStrides()).asArrayRef();
   assert(elementStrides.size() >= 3 && "im2col metadata was not verified");
-  return {elementStrides,
-          cast<DenseI64ArrayAttr>(type.getPixelBoxLowerCorner()).asArrayRef(),
-          cast<DenseI64ArrayAttr>(type.getPixelBoxUpperCorner()).asArrayRef()};
+  return {elementStrides};
 }
 
-static BlockArgument getDescriptorBlockArgument(Value desc) {
-  Value current = desc;
-  while (auto castOp = current.getDefiningOp<UnrealizedConversionCastOp>()) {
-    if (castOp.getInputs().size() != 1)
-      break;
-    current = castOp.getInputs()[0];
-  }
-  if (auto descArg = dyn_cast<BlockArgument>(current))
-    return descArg;
-
-  return BlockArgument();
-}
-
-static Value getDescriptorShapeDim(ttng::AsyncTMACopyGlobalToLocalOp op,
-                                   int64_t fullShapeDim, int spatialRank) {
-  if (fullShapeDim < 0)
-    return Value();
-
-  auto descArg = getDescriptorBlockArgument(op.getDesc());
-  if (!descArg)
-    return Value();
-
-  Block *block = descArg.getOwner();
-  SmallVector<Value, 5> shapeArgs;
-  for (unsigned i = descArg.getArgNumber() + 1; i < block->getNumArguments();
-       ++i) {
-    Value arg = block->getArgument(i);
-    if (!isa<IntegerType>(arg.getType()))
-      break;
-    shapeArgs.push_back(arg);
-  }
-
-  int64_t compactRank = spatialRank + 1;
-  int64_t fullRank = spatialRank + 2;
-  int64_t shapeIndex = -1;
-  if (static_cast<int64_t>(shapeArgs.size()) >= fullRank) {
-    // Full descriptor shape: [N, spatial..., C].
-    shapeIndex = fullShapeDim;
-  } else if (static_cast<int64_t>(shapeArgs.size()) >= compactRank &&
-             fullShapeDim > 0) {
-    // Warp-specialization may keep only the used dims: [spatial..., C].
-    shapeIndex = fullShapeDim - 1;
-  }
-
-  if (shapeIndex < 0 || shapeIndex >= static_cast<int64_t>(shapeArgs.size()))
-    return Value();
-  return shapeArgs[shapeIndex];
-}
-
-static FailureOr<Value> remapI32Metadata(ConversionPatternRewriter &rewriter,
-                                         TritonLLVMOpBuilder &b,
-                                         ttng::AsyncTMACopyGlobalToLocalOp op,
-                                         Value value, StringRef name) {
-  Value remapped = rewriter.getRemappedValue(value);
-  if (!remapped)
-    return op.emitError("failed to remap descriptor ") << name << " metadata";
-
-  Type ty = remapped.getType();
+static FailureOr<Value> getI32RuntimeMetadata(
+    ConversionPatternRewriter &rewriter, TritonLLVMOpBuilder &b,
+    ttng::AsyncTMACopyGlobalToLocalOp op, Value value, StringRef name) {
+  Type ty = value.getType();
   if (ty.isInteger(32))
-    return remapped;
+    return value;
   if (ty.isInteger(64)) {
-    Value truncated = b.trunc(i32_ty, remapped);
+    Value truncated = b.trunc(i32_ty, value);
     return truncated;
   }
-  return op.emitError("descriptor ") << name << " metadata must be i32 or i64";
+  return op.emitError("runtime im2col ")
+         << name << " metadata must be i32 or i64";
 }
 
-static FailureOr<SmallVector<Value, 3>> getOutputShapeFromDescriptor(
-    ConversionPatternRewriter &rewriter, TritonLLVMOpBuilder &b,
-    ttng::AsyncTMACopyGlobalToLocalOp op, const Im2ColMetadata &metadata) {
+struct RuntimeIm2ColMetadata {
+  SmallVector<Value, 5> physicalCoords;
+  SmallVector<Value, 5> inputShape;
+  SmallVector<Value, 5> elementStrides;
+  SmallVector<Value, 3> lowerCorner;
+  SmallVector<Value, 3> upperCorner;
+};
+
+static FailureOr<RuntimeIm2ColMetadata> getRuntimeIm2ColMetadata(
+    ttng::AsyncTMACopyGlobalToLocalOp op, ConversionPatternRewriter &rewriter,
+    TritonLLVMOpBuilder &b, const Im2ColMetadata &metadata, ValueRange coords) {
+  int64_t physicalRank = metadata.elementStrides.size();
+  int64_t spatialRank = metadata.getSpatialRank();
+  int64_t runtimeMetadataSize =
+      physicalRank + physicalRank + spatialRank + spatialRank;
+  int64_t expectedCoordCount = physicalRank + runtimeMetadataSize;
+
+  if (static_cast<int64_t>(coords.size()) != expectedCoordCount)
+    return op.emitError("im2col lowering requires ")
+           << expectedCoordCount
+           << " coordinates: physical coords plus runtime shape, "
+              "element_strides, pixel_box_lower_corner, and "
+              "pixel_box_upper_corner metadata; got "
+           << coords.size();
+
+  RuntimeIm2ColMetadata result;
+  result.physicalCoords.append(coords.begin(), coords.begin() + physicalRank);
+
+  int64_t cursor = physicalRank;
+  for (int64_t i = 0; i < physicalRank; ++i) {
+    auto value =
+        getI32RuntimeMetadata(rewriter, b, op, coords[cursor++], "input shape");
+    if (failed(value))
+      return failure();
+    result.inputShape.push_back(*value);
+  }
+  for (int64_t i = 0; i < physicalRank; ++i) {
+    auto value = getI32RuntimeMetadata(rewriter, b, op, coords[cursor++],
+                                       "element_strides");
+    if (failed(value))
+      return failure();
+    result.elementStrides.push_back(*value);
+  }
+  for (int64_t i = 0; i < spatialRank; ++i) {
+    auto value = getI32RuntimeMetadata(rewriter, b, op, coords[cursor++],
+                                       "pixel_box_lower_corner");
+    if (failed(value))
+      return failure();
+    result.lowerCorner.push_back(*value);
+  }
+  for (int64_t i = 0; i < spatialRank; ++i) {
+    auto value = getI32RuntimeMetadata(rewriter, b, op, coords[cursor++],
+                                       "pixel_box_upper_corner");
+    if (failed(value))
+      return failure();
+    result.upperCorner.push_back(*value);
+  }
+  return result;
+}
+
+static SmallVector<Value, 3> getOutputShapeFromRuntimeMetadata(
+    TritonLLVMOpBuilder &b, const Im2ColMetadata &metadata,
+    const RuntimeIm2ColMetadata &runtimeMetadata) {
   int64_t spatialRank = metadata.getSpatialRank();
 
   SmallVector<Value, 3> outputShapeVals;
   outputShapeVals.reserve(spatialRank);
   for (int i = 0; i < spatialRank; ++i) {
-    Value inputDimSource = getDescriptorShapeDim(op, i + 1, spatialRank);
-    if (!inputDimSource)
-      return op.emitError(
-          "im2col lowering could not find descriptor input spatial metadata");
-    auto inputDim = remapI32Metadata(rewriter, b, op, inputDimSource,
-                                     "input spatial shape");
-    if (failed(inputDim))
-      return failure();
-    Value numerator = b.add(*inputDim, b.i32_val(metadata.upperCorner[i] - 1 -
-                                                 metadata.lowerCorner[i]));
-    outputShapeVals.push_back(
-        b.add(b.udiv(numerator, b.i32_val(metadata.elementStrides[i + 1])),
-              b.i32_val(1)));
+    Value inputDim = runtimeMetadata.inputShape[i + 1];
+    Value stride = runtimeMetadata.elementStrides[i + 1];
+    Value lower = runtimeMetadata.lowerCorner[i];
+    Value upper = runtimeMetadata.upperCorner[i];
+    Value numerator = b.add(inputDim, b.sub(b.sub(upper, b.i32_val(1)), lower));
+    outputShapeVals.push_back(b.add(b.udiv(numerator, stride), b.i32_val(1)));
   }
   return outputShapeVals;
 }
@@ -1261,6 +1259,7 @@ static SmallVector<Value, 5> getIm2ColPhysicalLoweredCoords(
     ConversionPatternRewriter &rewriter, TritonLLVMOpBuilder &b,
     const Im2ColMetadata &metadata, ValueRange args,
     ArrayRef<Value> outputShapeVals,
+    const RuntimeIm2ColMetadata &runtimeMetadata,
     ArrayRef<std::pair<StringAttr, Value>> tileOffsets) {
   int64_t spatialRank = metadata.getSpatialRank();
   assert(args.size() == static_cast<size_t>(spatialRank + 2) &&
@@ -1272,8 +1271,8 @@ static SmallVector<Value, 5> getIm2ColPhysicalLoweredCoords(
   padVals.reserve(spatialRank);
   for (int i = 0; i < spatialRank; ++i) {
     // element_strides includes N and C; spatial dimensions are in between.
-    strideVals.push_back(b.i32_val(metadata.elementStrides[i + 1]));
-    padVals.push_back(b.i32_val(-metadata.lowerCorner[i]));
+    strideVals.push_back(runtimeMetadata.elementStrides[i + 1]);
+    padVals.push_back(b.sub(b.i32_val(0), runtimeMetadata.lowerCorner[i]));
   }
 
   Value outputPixels = b.i32_val(1);
@@ -1456,13 +1455,15 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       SmallVector<Value> tmaCoords(adaptor.getCoord().begin(),
                                    adaptor.getCoord().end());
       if (isIm2Col) {
-        auto outputShape =
-            getOutputShapeFromDescriptor(rewriter, b, op, im2ColMetadata);
-        if (failed(outputShape))
+        auto runtimeMetadata = getRuntimeIm2ColMetadata(
+            op, rewriter, b, im2ColMetadata, adaptor.getCoord());
+        if (failed(runtimeMetadata))
           return failure();
-        tmaCoords = getIm2ColPhysicalLoweredCoords(rewriter, b, im2ColMetadata,
-                                                   adaptor.getCoord(),
-                                                   *outputShape, offsets);
+        auto outputShape = getOutputShapeFromRuntimeMetadata(b, im2ColMetadata,
+                                                             *runtimeMetadata);
+        tmaCoords = getIm2ColPhysicalLoweredCoords(
+            rewriter, b, im2ColMetadata, (*runtimeMetadata).physicalCoords,
+            outputShape, *runtimeMetadata, offsets);
         im2colOffsets = adaptor.getOffsets();
       }
 

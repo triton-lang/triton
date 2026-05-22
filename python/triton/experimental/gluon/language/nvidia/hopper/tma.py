@@ -229,18 +229,6 @@ def _convert_im2col_offsets(offsets, _semantic):
     return offsets_ir
 
 
-def _descriptor_shape_dependency_zero(tensor_desc, _semantic):
-    # LLVM lowering reads descriptor shape block arguments to derive im2col
-    # output extents. Thread a no-op dependency through the coordinates so those
-    # shape values remain live until the TMA lowering runs. Use rem instead of a
-    # trivially-foldable expression such as dim - dim.
-    shape_zero = ttgl.to_tensor(0, _semantic=_semantic)
-    for dim in tensor_desc.shape:
-        dim = ttgl.to_tensor(dim, _semantic=_semantic)
-        shape_zero = shape_zero.__add__(dim.__mod__(dim, _semantic=_semantic), _semantic=_semantic)
-    return shape_zero
-
-
 @builtin
 def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, _semantic=None):
     """
@@ -275,7 +263,8 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
 
 
 @builtin
-def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, multicast=False, _semantic=None):
+def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, multicast=False, im2col_shape=None,
+                      element_strides=None, pixel_box_lower_corner=None, pixel_box_upper_corner=None, _semantic=None):
     """
     Load data from global memory to shared memory using TMA in im2col mode.
 
@@ -292,6 +281,11 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
         result: Destination memory descriptor
         pred: Predicate for conditional execution
         multicast: Enable multicast
+        im2col_shape: Runtime full source tensor shape metadata. Defaults to
+            ``tensor_desc.shape``.
+        element_strides: Required runtime element strides metadata.
+        pixel_box_lower_corner: Required runtime pixel-box lower corner metadata.
+        pixel_box_upper_corner: Required runtime pixel-box upper corner metadata.
     """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_load", "innermost coordinate", _semantic=_semantic)
@@ -301,9 +295,23 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
 
     if len(coord) != len(tensor_desc.shape):
         raise ValueError("async_load_im2col expects physical tensor coordinates")
-    shape_zero = _descriptor_shape_dependency_zero(tensor_desc, _semantic)
-    coord = [ttgl.to_tensor(c, _semantic=_semantic).__add__(shape_zero, _semantic=_semantic) for c in coord]
-    coord = _semantic._convert_to_ir_values(coord, require_i64=False)
+    if element_strides is None or pixel_box_lower_corner is None or pixel_box_upper_corner is None:
+        raise ValueError("async_load_im2col requires runtime element_strides and both pixel-box corners")
+    if im2col_shape is None:
+        im2col_shape = tensor_desc.shape
+    if len(im2col_shape) != len(tensor_desc.shape):
+        raise ValueError("runtime im2col shape metadata length mismatch")
+    if len(element_strides) != len(tensor_desc.shape):
+        raise ValueError("runtime im2col element_strides length mismatch")
+    spatial_rank = len(tensor_desc.shape) - 2
+    if len(pixel_box_lower_corner) != spatial_rank or len(pixel_box_upper_corner) != spatial_rank:
+        raise ValueError("runtime im2col pixel-box corner length mismatch")
+
+    coord = [ttgl.to_tensor(c, _semantic=_semantic) for c in coord]
+    runtime_metadata = []
+    for values in (im2col_shape, element_strides, pixel_box_lower_corner, pixel_box_upper_corner):
+        runtime_metadata.extend(ttgl.to_tensor(v, _semantic=_semantic) for v in values)
+    coord = _semantic._convert_to_ir_values(coord + runtime_metadata, require_i64=False)
     offsets_ir = _convert_im2col_offsets(offsets, _semantic)
 
     _semantic.builder.create_async_tma_copy_global_to_local(

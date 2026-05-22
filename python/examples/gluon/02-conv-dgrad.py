@@ -263,6 +263,14 @@ def load_partition(p):
                 [iter_r.to(tl.int16), iter_s.to(tl.int16)],
                 ready_bar,
                 a_stage,
+                im2col_shape=p.grad_y_desc.shape,
+                element_strides=[1, 1, 1, 1],
+                pixel_box_lower_corner=[gl.to_tensor(0) - config.pad_h,
+                                        gl.to_tensor(0) - config.pad_w],
+                pixel_box_upper_corner=[
+                    config.H_sub - config.pad_h - p.grad_y_desc.shape[1],
+                    config.W_sub - config.pad_w - p.grad_y_desc.shape[2],
+                ],
             )
 
             tma.async_load(

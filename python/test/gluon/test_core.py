@@ -175,7 +175,17 @@ def tma_im2col_kernel(in_desc, out_desc):
     bar = mbarrier.allocate_mbarrier()
     mbarrier.init(bar, count=1)
     mbarrier.expect(bar, in_desc.block_type.nbytes)
-    tma.async_load_im2col(in_desc, [0, 0, 0, 0], [0, 0], bar, smem)
+    tma.async_load_im2col(
+        in_desc,
+        [0, 0, 0, 0],
+        [0, 0],
+        bar,
+        smem,
+        im2col_shape=in_desc.shape,
+        element_strides=[1, 1, 1, 1],
+        pixel_box_lower_corner=[0, 0],
+        pixel_box_upper_corner=[0, 0],
+    )
     mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
     tma.async_copy_shared_to_global(out_desc, [0, 0], smem)

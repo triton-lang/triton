@@ -460,22 +460,35 @@ static bool isIm2ColDescriptor(Type descType) {
   return isa<TensorDescIm2ColType>(descType);
 }
 
-static LogicalResult verifyAsyncTMACoords(Operation *op, ValueRange coords,
-                                          TensorDescInterface desc,
-                                          bool isIm2Col) {
+static LogicalResult verifyAsyncTMACoords(Operation *op, Type descType,
+                                          ValueRange coords, bool isIm2Col) {
+  auto desc = cast<TensorDescInterface>(descType);
   unsigned blockRank = desc.getShape().size();
 
   if (isIm2Col) {
-    // For IM2COL mode, coordinates are for the full tensor (3D-5D)
-    // not the 2D block shape
-    if (coords.size() < 3)
+    // For IM2COL mode, the first operands are physical coordinates for the
+    // source tensor (3D-5D). They are followed by runtime metadata:
+    // [shape, element_strides, pixel_box_lower, pixel_box_upper].
+    auto im2colType = cast<TensorDescIm2ColType>(descType);
+    auto elementStrides =
+        cast<DenseI64ArrayAttr>(im2colType.getElementStrides()).asArrayRef();
+    size_t physicalRank = elementStrides.size();
+    size_t spatialRank = physicalRank - 2;
+    size_t metadataOperands =
+        physicalRank + physicalRank + spatialRank + spatialRank;
+    size_t expectedCoords = physicalRank + metadataOperands;
+
+    if (physicalRank < 3 || physicalRank > 5)
       return op->emitOpError(
-                 "IM2COL mode requires at least 3D coordinates, but got ")
-             << coords.size() << "D";
-    if (coords.size() > 5)
-      return op->emitOpError(
-                 "IM2COL mode supports at most 5D coordinates, but got ")
-             << coords.size() << "D";
+                 "IM2COL mode requires descriptor rank between 3 and 5, got ")
+             << physicalRank << "D";
+
+    if (coords.size() != expectedCoords) {
+      return op->emitOpError("IM2COL mode expected ")
+             << expectedCoords
+             << " coordinates including runtime metadata, but got "
+             << coords.size();
+    }
   } else {
     // For TILED mode, coordinates must match the block rank
     if (coords.size() != blockRank) {
@@ -488,20 +501,25 @@ static LogicalResult verifyAsyncTMACoords(Operation *op, ValueRange coords,
   return success();
 }
 
-static LogicalResult verifyTMAMode(Operation *op, bool isIm2Col,
-                                   ValueRange coords, ValueRange offsets) {
+static LogicalResult verifyTMAMode(Operation *op, bool isIm2Col, Type descType,
+                                   ValueRange offsets) {
   if (isIm2Col) {
     if (offsets.empty())
       return op->emitOpError("IM2COL mode requires offsets to be provided");
 
-    // For IM2COL mode, the number of offsets should be coord.size() - 2
+    auto im2colType = cast<TensorDescIm2ColType>(descType);
+    size_t physicalRank =
+        cast<DenseI64ArrayAttr>(im2colType.getElementStrides()).size();
+
+    // For IM2COL mode, the number of offsets should be physicalRank - 2
     // 4D tensors (4 coords) need 2 offsets, 5D tensors (5 coords) need 3
-    // offsets
-    size_t expectedOffsets = coords.size() - 2;
+    // offsets. Runtime metadata operands are appended after the physical
+    // coordinates and do not change the offset count.
+    size_t expectedOffsets = physicalRank - 2;
     if (offsets.size() != expectedOffsets) {
       return op->emitOpError("IM2COL mode with ")
-             << coords.size() << "D coordinates requires " << expectedOffsets
-             << " offsets, but got " << offsets.size();
+             << physicalRank << "D physical coordinates requires "
+             << expectedOffsets << " offsets, but got " << offsets.size();
     }
   } else {
     // TILED mode should not have offsets
@@ -541,7 +559,7 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   bool isIm2Col = isIm2ColDescriptor(descType);
   auto descInterface = cast<TensorDescInterface>(descType);
 
-  if (failed(verifyAsyncTMACoords(*this, getCoord(), descInterface, isIm2Col)))
+  if (failed(verifyAsyncTMACoords(*this, descType, getCoord(), isIm2Col)))
     return failure();
   auto resultType = getResult().getType();
   if (failed(verifyDescriptorLoadStoreOp(*this, descType, resultType)))
@@ -549,7 +567,7 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   if (failed(verifyAsyncTMALoadOp(*this, descInterface, getBarrier(),
                                   getResult().getType())))
     return failure();
-  if (failed(verifyTMAMode(*this, isIm2Col, getCoord(), getOffsets())))
+  if (failed(verifyTMAMode(*this, isIm2Col, descType, getOffsets())))
     return failure();
   if (getMulticast() && !hasCGABroadcast(resultType))
     return emitOpError(
@@ -570,7 +588,7 @@ Type AsyncTMACopyGlobalToLocalOp::getPredicateOperandTypeLike() {
 // -- AsyncTMACopyLocalToGlobalOp --
 LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
   // Store ops only support TILED mode
-  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc().getType(),
+  if (failed(verifyAsyncTMACoords(*this, getDesc().getType(), getCoord(),
                                   /*isIm2Col=*/false)))
     return failure();
   MemDescType srcType = getSrc().getType();
@@ -582,7 +600,7 @@ LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
 // -- AsyncTMAReduceOp --
 LogicalResult AsyncTMAReduceOp::verify() {
   // Reduce ops only support TILED mode
-  if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc().getType(),
+  if (failed(verifyAsyncTMACoords(*this, getDesc().getType(), getCoord(),
                                   /*isIm2Col=*/false)))
     return failure();
   MemDescType srcType = getSrc().getType();

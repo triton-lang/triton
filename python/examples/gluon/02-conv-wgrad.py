@@ -265,6 +265,14 @@ def load_partition(p):
                 [prog.iter_r.to(tl.int16), prog.iter_s.to(tl.int16)],
                 ready_bar,
                 b_stage,
+                im2col_shape=p.in_desc.shape,
+                element_strides=[1, config.stride_h, config.stride_w, 1],
+                pixel_box_lower_corner=[gl.to_tensor(0) - config.pad_h,
+                                        gl.to_tensor(0) - config.pad_w],
+                pixel_box_upper_corner=[
+                    (config.out_h - 1) * config.stride_h + 1 - p.in_desc.shape[1] - config.pad_h,
+                    (config.out_w - 1) * config.stride_w + 1 - p.in_desc.shape[2] - config.pad_w,
+                ],
             )
             state = state.next()
 

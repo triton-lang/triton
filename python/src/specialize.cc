@@ -254,13 +254,13 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
     return {};
   desc_cstr += block_shape_cstr;
 
-  // For im2col mode, append input tensor rank and static im2col metadata.
+  // For im2col mode, append input tensor rank and im2col descriptor metadata.
   // Format:
   // tensordesc_im2col<dtype[block_shape],input_rank=N,
   //   element_strides=[...],pixel_box_lower_corner=[...],
   //   pixel_box_upper_corner=[...],layout>
-  // The driver uses input_rank for runtime shape/strides. The compiler uses the
-  // static im2col metadata for multi-CTA coordinate remapping.
+  // The driver uses input_rank for runtime shape/strides. The im2col load
+  // operation carries runtime remap metadata explicitly.
   if (is_im2col) {
     auto tensor_shape_obj = from_new_ref(PyObject_GetAttr(arg, shape_attr));
     if (!tensor_shape_obj)

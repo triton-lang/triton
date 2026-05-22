@@ -310,7 +310,7 @@ def str_to_ty(name, c):
         dtype, rest = inner.split("[", maxsplit=1)
         block_shape, rest = rest.split("]", maxsplit=1)
         block_shape = [int(s.strip()) for s in block_shape.rstrip("]").split(",")]
-        # For im2col, parse optional input_rank=N and static im2col metadata.
+        # For im2col, parse optional input_rank=N and im2col descriptor metadata.
         tensor_rank = None
         im2col_metadata = {}
         import ast as _ast
