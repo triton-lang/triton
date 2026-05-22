@@ -106,6 +106,19 @@ def TritonNvidiaGPUClusterBarrierMbarAllocatorPass : Pass<"triton-nvidia-gpu-clu
   ];
 }
 
+def TritonNvidiaGPUFuseTMEMLoadReducePass : Pass<"triton-nvidia-tmem-load-reduce", "mlir::ModuleOp"> {
+  let summary = "Fuse tmem_load and reduce";
+
+  let description = [{
+    Fuse ttng.tmem_load followed by a row reduction into ttng.tmem_load with a
+    reduction op, to generate tcgen05.ld.red.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::ModuleOp"> {
   let summary = "lower to TMA load/store operations";
 
