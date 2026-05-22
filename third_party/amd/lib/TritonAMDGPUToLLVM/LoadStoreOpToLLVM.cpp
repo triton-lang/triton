@@ -537,12 +537,13 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                           public LoadStoreConversionBase {
   LoadOpConversion(LLVMTypeConverter &converter,
-                           const AMD::TargetInfo &targetInfo,
-                           ModuleAxisInfoAnalysis &axisAnalysisPass,
-                           PatternBenefit benefit,
-                           const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+                   const AMD::TargetInfo &targetInfo,
+                   ModuleAxisInfoAnalysis &axisAnalysisPass,
+                   PatternBenefit benefit,
+                   const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
@@ -637,19 +638,21 @@ struct BufferLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferLoadOp>,
       public LoadStoreConversionBase {
   BufferLoadOpConversion(LLVMTypeConverter &converter,
-                           const AMD::TargetInfo &targetInfo,
-                           ModuleAxisInfoAnalysis &axisAnalysisPass,
-                           PatternBenefit benefit,
-                           const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+                         const AMD::TargetInfo &targetInfo,
+                         ModuleAxisInfoAnalysis &axisAnalysisPass,
+                         PatternBenefit benefit,
+                         const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::BufferLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo, uniformitySolver);
+    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo,
+                                           uniformitySolver);
 
     // original values
     Value ptr = op.getPtr();
@@ -720,20 +723,21 @@ struct BufferLoadOpConversion
 struct BufferLoadToLocalOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferLoadToLocalOp>,
       public DirectToLdsLoadConversionBase {
-  BufferLoadToLocalOpConversion(LLVMTypeConverter &converter,
-                                  const AMD::TargetInfo &targetInfo,
-                                  ModuleAxisInfoAnalysis &axisAnalysisPass,
-                                  PatternBenefit benefit,
-                                  const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          DirectToLdsLoadConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+  BufferLoadToLocalOpConversion(
+      LLVMTypeConverter &converter, const AMD::TargetInfo &targetInfo,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit,
+      const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        DirectToLdsLoadConversionBase(targetInfo, axisAnalysisPass,
+                                      uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::BufferLoadToLocalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo, uniformitySolver);
+    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo,
+                                           uniformitySolver);
 
     // Original values
     Value ptr = op.getPtr();
@@ -893,13 +897,13 @@ struct BufferLoadToLocalOpConversion
 struct AsyncCopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>,
       public DirectToLdsLoadConversionBase {
-  AsyncCopyGlobalToLocalOpConversion(LLVMTypeConverter &converter,
-                                  const AMD::TargetInfo &targetInfo,
-                                  ModuleAxisInfoAnalysis &axisAnalysisPass,
-                                  PatternBenefit benefit,
-                                  const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          DirectToLdsLoadConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+  AsyncCopyGlobalToLocalOpConversion(
+      LLVMTypeConverter &converter, const AMD::TargetInfo &targetInfo,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit,
+      const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        DirectToLdsLoadConversionBase(targetInfo, axisAnalysisPass,
+                                      uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
@@ -1097,13 +1101,13 @@ struct AsyncCopyGlobalToLocalOpConversion
 struct AsyncCopyLocalToGlobalOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::AsyncCopyLocalToGlobalOp>,
       public DirectToLdsLoadConversionBase {
-  AsyncCopyLocalToGlobalOpConversion(LLVMTypeConverter &converter,
-                                  const AMD::TargetInfo &targetInfo,
-                                  ModuleAxisInfoAnalysis &axisAnalysisPass,
-                                  PatternBenefit benefit,
-                                  const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          DirectToLdsLoadConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+  AsyncCopyLocalToGlobalOpConversion(
+      LLVMTypeConverter &converter, const AMD::TargetInfo &targetInfo,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit,
+      const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        DirectToLdsLoadConversionBase(targetInfo, axisAnalysisPass,
+                                      uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::AsyncCopyLocalToGlobalOp op,
@@ -1229,13 +1233,13 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>,
       public LoadStoreConversionBase {
-  AsyncTDMCopyGlobalToLocalOpConversion(LLVMTypeConverter &converter,
-                           const AMD::TargetInfo &targetInfo,
-                           ModuleAxisInfoAnalysis &axisAnalysisPass,
-                           PatternBenefit benefit,
-                           const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+  AsyncTDMCopyGlobalToLocalOpConversion(
+      LLVMTypeConverter &converter, const AMD::TargetInfo &targetInfo,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit,
+      const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::AsyncTDMCopyGlobalToLocalOp op,
@@ -1327,13 +1331,13 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::amdgpu::AsyncTDMCopyLocalToGlobalOp>,
       public LoadStoreConversionBase {
-  AsyncTDMCopyLocalToGlobalOpConversion(LLVMTypeConverter &converter,
-                           const AMD::TargetInfo &targetInfo,
-                           ModuleAxisInfoAnalysis &axisAnalysisPass,
-                           PatternBenefit benefit,
-                           const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+  AsyncTDMCopyLocalToGlobalOpConversion(
+      LLVMTypeConverter &converter, const AMD::TargetInfo &targetInfo,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit,
+      const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::AsyncTDMCopyLocalToGlobalOp op,
@@ -1411,12 +1415,13 @@ struct AsyncTDMScatterOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::AsyncTDMScatterOp>,
       public LoadStoreConversionBase {
   AsyncTDMScatterOpConversion(LLVMTypeConverter &converter,
-                           const AMD::TargetInfo &targetInfo,
-                           ModuleAxisInfoAnalysis &axisAnalysisPass,
-                           PatternBenefit benefit,
-                           const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+                              const AMD::TargetInfo &targetInfo,
+                              ModuleAxisInfoAnalysis &axisAnalysisPass,
+                              PatternBenefit benefit,
+                              const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::AsyncTDMScatterOp op, OpAdaptor adaptor,
@@ -1510,12 +1515,13 @@ struct AsyncTDMGatherOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::AsyncTDMGatherOp>,
       public LoadStoreConversionBase {
   AsyncTDMGatherOpConversion(LLVMTypeConverter &converter,
-                           const AMD::TargetInfo &targetInfo,
-                           ModuleAxisInfoAnalysis &axisAnalysisPass,
-                           PatternBenefit benefit,
-                           const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+                             const AMD::TargetInfo &targetInfo,
+                             ModuleAxisInfoAnalysis &axisAnalysisPass,
+                             PatternBenefit benefit,
+                             const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::AsyncTDMGatherOp op, OpAdaptor adaptor,
@@ -1603,12 +1609,13 @@ struct AsyncTDMGatherOpConversion
 struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                            public LoadStoreConversionBase {
   StoreOpConversion(LLVMTypeConverter &converter,
-                           const AMD::TargetInfo &targetInfo,
-                           ModuleAxisInfoAnalysis &axisAnalysisPass,
-                           PatternBenefit benefit,
-                           const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+                    const AMD::TargetInfo &targetInfo,
+                    ModuleAxisInfoAnalysis &axisAnalysisPass,
+                    PatternBenefit benefit,
+                    const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
@@ -1685,19 +1692,21 @@ struct BufferAtomicRMWOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicRMWOp>,
       public LoadStoreConversionBase {
   BufferAtomicRMWOpConversion(LLVMTypeConverter &converter,
-                           const AMD::TargetInfo &targetInfo,
-                           ModuleAxisInfoAnalysis &axisAnalysisPass,
-                           PatternBenefit benefit,
-                           const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+                              const AMD::TargetInfo &targetInfo,
+                              ModuleAxisInfoAnalysis &axisAnalysisPass,
+                              PatternBenefit benefit,
+                              const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::BufferAtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo, uniformitySolver);
+    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo,
+                                           uniformitySolver);
 
     // original values
     Value ptr = op.getPtr();
@@ -1816,19 +1825,21 @@ struct BufferAtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicCASOp>,
       public LoadStoreConversionBase {
   BufferAtomicCASOpConversion(LLVMTypeConverter &converter,
-                           const AMD::TargetInfo &targetInfo,
-                           ModuleAxisInfoAnalysis &axisAnalysisPass,
-                           PatternBenefit benefit,
-                           const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+                              const AMD::TargetInfo &targetInfo,
+                              ModuleAxisInfoAnalysis &axisAnalysisPass,
+                              PatternBenefit benefit,
+                              const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::BufferAtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo, uniformitySolver);
+    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo,
+                                           uniformitySolver);
 
     // original values
     Value ptr = op.getPtr();
@@ -1872,7 +1883,6 @@ struct BufferAtomicCASOpConversion
     }
 
     mlir::Operation *lastCASOp;
-
 
     // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
     auto hasUsers = !op.getResult().getUsers().empty();
@@ -1923,19 +1933,21 @@ struct BufferStoreOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferStoreOp>,
       public LoadStoreConversionBase {
   BufferStoreOpConversion(LLVMTypeConverter &converter,
-                           const AMD::TargetInfo &targetInfo,
-                           ModuleAxisInfoAnalysis &axisAnalysisPass,
-                           PatternBenefit benefit,
-                           const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+                          const AMD::TargetInfo &targetInfo,
+                          ModuleAxisInfoAnalysis &axisAnalysisPass,
+                          PatternBenefit benefit,
+                          const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::BufferStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo, uniformitySolver);
+    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo,
+                                           uniformitySolver);
 
     // original values
     Value ptr = op.getPtr();
@@ -2002,12 +2014,13 @@ struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
   AtomicCASOpConversion(LLVMTypeConverter &converter,
-                           const AMD::TargetInfo &targetInfo,
-                           ModuleAxisInfoAnalysis &axisAnalysisPass,
-                           PatternBenefit benefit,
-                           const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+                        const AMD::TargetInfo &targetInfo,
+                        ModuleAxisInfoAnalysis &axisAnalysisPass,
+                        PatternBenefit benefit,
+                        const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
@@ -2179,12 +2192,13 @@ struct AtomicRMWOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicRMWOp>,
       public LoadStoreConversionBase {
   AtomicRMWOpConversion(LLVMTypeConverter &converter,
-                           const AMD::TargetInfo &targetInfo,
-                           ModuleAxisInfoAnalysis &axisAnalysisPass,
-                           PatternBenefit benefit,
-                           const DataFlowSolver *uniformitySolver = nullptr)
-        : ConvertOpToLLVMPattern(converter, benefit),
-          LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {}
+                        const AMD::TargetInfo &targetInfo,
+                        ModuleAxisInfoAnalysis &axisAnalysisPass,
+                        PatternBenefit benefit,
+                        const DataFlowSolver *uniformitySolver = nullptr)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,

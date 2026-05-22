@@ -62,14 +62,14 @@ bool isPureArithOrCast(Operation *op) {
              LLVM::URemOp, LLVM::SRemOp, LLVM::UDivOp, LLVM::SDivOp,
              LLVM::BitcastOp, LLVM::SMinOp, LLVM::SMaxOp, LLVM::UMinOp,
              LLVM::UMaxOp, LLVM::AbsOp, LLVM::PtrToIntOp, LLVM::IntToPtrOp,
-             LLVM::GEPOp, LLVM::FreezeOp, LLVM::AddrSpaceCastOp,
-             arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::ShLIOp,
-             arith::ShRSIOp, arith::ShRUIOp, arith::AndIOp, arith::OrIOp,
-             arith::XOrIOp, arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp,
-             arith::SelectOp, arith::CmpIOp, arith::IndexCastOp,
-             arith::IndexCastUIOp, arith::BitcastOp, arith::DivSIOp,
-             arith::DivUIOp, arith::RemSIOp, arith::RemUIOp, arith::MinSIOp,
-             arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp>(op);
+             LLVM::GEPOp, LLVM::FreezeOp, LLVM::AddrSpaceCastOp, arith::AddIOp,
+             arith::SubIOp, arith::MulIOp, arith::ShLIOp, arith::ShRSIOp,
+             arith::ShRUIOp, arith::AndIOp, arith::OrIOp, arith::XOrIOp,
+             arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp, arith::SelectOp,
+             arith::CmpIOp, arith::IndexCastOp, arith::IndexCastUIOp,
+             arith::BitcastOp, arith::DivSIOp, arith::DivUIOp, arith::RemSIOp,
+             arith::RemUIOp, arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp,
+             arith::MaxUIOp>(op);
 }
 
 bool isSeedUniform(Operation *op) {
@@ -108,9 +108,9 @@ class UniformityAnalysis
 public:
   using SparseForwardDataFlowAnalysis::SparseForwardDataFlowAnalysis;
 
-  LogicalResult
-  visitOperation(Operation *op, ArrayRef<const UniformityLattice *> operands,
-                 ArrayRef<UniformityLattice *> results) override {
+  LogicalResult visitOperation(Operation *op,
+                               ArrayRef<const UniformityLattice *> operands,
+                               ArrayRef<UniformityLattice *> results) override {
     // Seed-uniform: always uniform.
     if (isSeedUniform(op)) {
       for (auto *r : results)
@@ -129,8 +129,8 @@ public:
       Value underlying = lookThroughExtractValue(extract.getResult());
       // Peeled successfully; propagate that value's lattice.
       if (underlying != extract.getResult()) {
-        const UniformityLattice *underLat = getLatticeElementFor(
-            getProgramPointAfter(op), underlying);
+        const UniformityLattice *underLat =
+            getLatticeElementFor(getProgramPointAfter(op), underlying);
         if (!underLat) {
           for (auto *r : results)
             propagateIfChanged(r, r->join(UniformityValue::divergent()));
@@ -308,8 +308,8 @@ bool phiIsDivergentUnderControlFlow(BlockArgument arg,
 
 Value lookThroughExtractValue(Value v) {
   while (auto extract = v.getDefiningOp<LLVM::ExtractValueOp>()) {
-    Value resolved = resolveExtractChain(extract.getContainer(),
-                                         extract.getPosition(), v);
+    Value resolved =
+        resolveExtractChain(extract.getContainer(), extract.getPosition(), v);
     if (resolved == v)
       return v;
     v = resolved;
@@ -351,8 +351,7 @@ static bool isUniformRecursive(Value v, const DataFlowSolver &solver,
     if (auto ba = dyn_cast<BlockArgument>(peeled)) {
       Block *blk = ba.getOwner();
       if (blk && blk->isEntryBlock()) {
-        if (auto func = dyn_cast_or_null<LLVM::LLVMFuncOp>(
-                blk->getParentOp()))
+        if (auto func = dyn_cast_or_null<LLVM::LLVMFuncOp>(blk->getParentOp()))
           return isKernelEntry(func);
       }
     }
