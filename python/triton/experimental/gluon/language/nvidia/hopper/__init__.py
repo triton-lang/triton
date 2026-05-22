@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "async_copy",
+    "async_store",
     "cluster",
     "fence_async_shared",
     "mbarrier",
@@ -30,6 +31,19 @@ def fence_async_shared(cluster=False, _semantic=None):
     """
     cluster = _core._unwrap_if_constexpr(cluster)
     _semantic.builder.create_fence_async_shared(cluster)
+
+
+@_core.builtin
+def async_store(dst, value, mbarrier, _semantic=None):
+    """
+    Store a tensor to shared memory asynchronously and signal an mbarrier on completion.
+
+    Args:
+        dst (shared_memory_descriptor): Destination shared memory descriptor.
+        value (tensor): Tensor whose contents to store.
+        mbarrier (shared_memory_descriptor): Barrier signaled when the store completes.
+    """
+    _semantic.async_shared_store(dst, value, mbarrier)
 
 
 class warpgroup_mma_accumulator_type(_core.base_type):

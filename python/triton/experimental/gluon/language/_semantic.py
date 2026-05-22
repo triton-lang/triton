@@ -276,6 +276,16 @@ class GluonSemantic(TritonSemantic[TensorTy]):
                lambda: f"source dtype {value.dtype} and destination dtype {mem_desc.dtype} must match")
         self.builder.create_local_store(mem_desc.handle, value.handle)
 
+    def async_shared_store(self, mem_desc, value, mbarrier):
+        _check(isinstance(value, ttgl.tensor), lambda: f"expected 'value' to be a tensor, but got a {type(value)}")
+        _check(isinstance(mbarrier, ttgl.shared_memory_descriptor),
+               lambda: f"expected 'mbarrier' to be a shared_memory_descriptor, but got a {type(mbarrier)}")
+        _check(value.shape == mem_desc.shape,
+               lambda: f"source shape {value.shape} and destination shape {mem_desc.shape} must match")
+        _check(value.dtype == mem_desc.dtype,
+               lambda: f"source dtype {value.dtype} and destination dtype {mem_desc.dtype} must match")
+        self.builder.create_async_shared_store(mem_desc.handle, value.handle, mbarrier.handle)
+
     def _check_int_indices_and_normalize_axis(self, mem_desc, indices, axis):
         _check(isinstance(indices, ttgl.tensor),
                lambda: f"expected 'indices' to be a tensor, but got a {type(indices)}")

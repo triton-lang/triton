@@ -691,6 +691,11 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Value memDesc, Value value) {
              self.create<ttg::LocalStoreOp>(value, memDesc);
            })
+      .def("create_async_shared_store",
+           [](GluonOpBuilder &self, Value memDesc, Value value,
+              Value mbarrier) {
+             self.create<ttng::AsyncSharedStoreOp>(value, memDesc, mbarrier);
+           })
       .def("create_local_load",
            [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
              return self.create<ttg::LocalLoadOp>(resultTy, memDesc);

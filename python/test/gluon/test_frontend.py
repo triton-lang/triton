@@ -636,6 +636,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def async_shared_store_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])
+    values = ttgl.arange(0, 128, layout=layout).to(ttgl.int32)
+    dst = ttgl.allocate_shared_memory(ttgl.int32, [128], shared_layout)
+    bar = mbarrier.allocate_mbarrier()
+    hopper.async_store(dst, values, bar)
+
+
+@pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])
+def test_async_shared_store(target):
+    mod = run_parser(async_shared_store_kernel, *make_args(num_ctas=2), target=target)
+    assert "ttng.async_shared_store" in anonymize_ir(mod.str_nodebug())
+
+
+@gluon.jit
 def tcgen05_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr):
     a = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
     b = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
