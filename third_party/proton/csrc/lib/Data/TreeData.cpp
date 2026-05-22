@@ -246,38 +246,35 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
   jsonNodes[TreeData::Tree::TreeNode::RootId] = &(output.back());
   MetricSummary metricSummary;
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
-  auto appendKernelMetric = [&](json &metricsJson,
-                                const KernelMetric *kernelMetric) {
-    uint64_t duration =
-        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
-    uint64_t invocations = std::get<uint64_t>(
-        kernelMetric->getValue(KernelMetric::Invocations));
-    uint64_t deviceId =
-        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
-    uint64_t deviceType =
-        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceType));
-    metricSummary.hasKernelMetric = true;
-    metricSummary.updateDeviceIdMask(deviceType, deviceId);
-    const auto &deviceTypeName =
-        getDeviceTypeString(static_cast<DeviceType>(deviceType));
-    const auto deviceIdStr = std::to_string(deviceId);
-
-    metricsJson[KernelMetric::getValueName(KernelMetric::Duration)] = duration;
-    metricsJson[KernelMetric::getValueName(KernelMetric::Invocations)] =
-        invocations;
-    metricsJson[KernelMetric::getValueName(KernelMetric::DeviceId)] =
-        deviceIdStr;
-    metricsJson[KernelMetric::getValueName(KernelMetric::DeviceType)] =
-        deviceTypeName;
-  };
   auto appendMetrics = [&](json &metricsJson,
                            const std::map<MetricKind, std::unique_ptr<Metric>>
                                &metrics) {
     metricSummary.observeMetrics(metrics);
     for (const auto &[metricKind, metric] : metrics) {
       if (metricKind == MetricKind::Kernel) {
-        appendKernelMetric(metricsJson,
-                           static_cast<KernelMetric *>(metric.get()));
+        auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
+        uint64_t duration =
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
+        uint64_t invocations = std::get<uint64_t>(
+            kernelMetric->getValue(KernelMetric::Invocations));
+        uint64_t deviceId =
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
+        uint64_t deviceType = std::get<uint64_t>(
+            kernelMetric->getValue(KernelMetric::DeviceType));
+        metricSummary.hasKernelMetric = true;
+        metricSummary.updateDeviceIdMask(deviceType, deviceId);
+        const auto &deviceTypeName =
+            getDeviceTypeString(static_cast<DeviceType>(deviceType));
+        const auto deviceIdStr = std::to_string(deviceId);
+
+        metricsJson[KernelMetric::getValueName(KernelMetric::Duration)] =
+            duration;
+        metricsJson[KernelMetric::getValueName(KernelMetric::Invocations)] =
+            invocations;
+        metricsJson[KernelMetric::getValueName(KernelMetric::DeviceId)] =
+            deviceIdStr;
+        metricsJson[KernelMetric::getValueName(KernelMetric::DeviceType)] =
+            deviceTypeName;
       } else if (metricKind == MetricKind::PCSampling) {
         auto *pcSamplingMetric = static_cast<PCSamplingMetric *>(metric.get());
         for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
@@ -484,40 +481,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   constexpr uint32_t cycleInclusiveCount = 2;
   constexpr uint32_t cycleTotalCount = 4;
 
-  auto packFlexibleMetricValue = [&](const MetricValueType &value) {
-    std::visit(
-        [&](auto &&v) {
-          using T = std::decay_t<decltype(v)>;
-          if constexpr (std::is_same_v<T, uint64_t>) {
-            writer.packUInt(v);
-          } else if constexpr (std::is_same_v<T, int64_t>) {
-            writer.packInt(v);
-          } else if constexpr (std::is_same_v<T, double>) {
-            writer.packDouble(v);
-          } else if constexpr (std::is_same_v<T, std::string>) {
-            writer.packStr(v);
-          } else if constexpr (std::is_same_v<T, std::vector<uint64_t>>) {
-            writer.packArray(static_cast<uint32_t>(v.size()));
-            for (auto value : v) {
-              writer.packUInt(value);
-            }
-          } else if constexpr (std::is_same_v<T, std::vector<int64_t>>) {
-            writer.packArray(static_cast<uint32_t>(v.size()));
-            for (auto value : v) {
-              writer.packInt(value);
-            }
-          } else if constexpr (std::is_same_v<T, std::vector<double>>) {
-            writer.packArray(static_cast<uint32_t>(v.size()));
-            for (auto value : v) {
-              writer.packDouble(value);
-            }
-          } else {
-            static_assert(sizeof(T) == 0, "Unsupported MetricValueType");
-          }
-        },
-        value);
-  };
-
   auto countMetricEntries =
       [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
           bool isRoot) -> uint32_t {
@@ -551,31 +514,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     }
     return metricEntries;
   };
-  auto countFlexibleMetricEntries =
-      [&](const std::map<std::string, FlexibleMetric> &flexibleMetrics)
-      -> uint32_t { return static_cast<uint32_t>(flexibleMetrics.size()); };
-  auto packKernelMetricName = [&](KernelMetric::kernelMetricKind valueId) {
-    writer.packStr(KernelMetric::getValueName(valueId));
-  };
-  auto packCycleMetricName = [&](CycleMetric::CycleMetricKind valueId) {
-    writer.packStr(CycleMetric::getValueName(valueId));
-  };
-
-  auto packKernelMetricFields = [&](uint64_t duration, uint64_t invocations,
-                                    uint64_t deviceId, uint64_t deviceType) {
-    metricSummary.updateDeviceIdMask(deviceType, deviceId);
-    const auto &deviceTypeName =
-        getDeviceTypeString(static_cast<DeviceType>(deviceType));
-    packKernelMetricName(KernelMetric::Duration);
-    writer.packUInt(duration);
-    packKernelMetricName(KernelMetric::Invocations);
-    writer.packUInt(invocations);
-    packKernelMetricName(KernelMetric::DeviceId);
-    writer.packUIntString(deviceId);
-    packKernelMetricName(KernelMetric::DeviceType);
-    writer.packStr(deviceTypeName);
-  };
-
   auto packKernelMetricValues = [&](const KernelMetric *kernelMetric) {
     uint64_t duration =
         std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
@@ -585,7 +523,17 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
     uint64_t deviceType =
         std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceType));
-    packKernelMetricFields(duration, invocations, deviceId, deviceType);
+    metricSummary.updateDeviceIdMask(deviceType, deviceId);
+    const auto &deviceTypeName =
+        getDeviceTypeString(static_cast<DeviceType>(deviceType));
+    writer.packStr(KernelMetric::getValueName(KernelMetric::Duration));
+    writer.packUInt(duration);
+    writer.packStr(KernelMetric::getValueName(KernelMetric::Invocations));
+    writer.packUInt(invocations);
+    writer.packStr(KernelMetric::getValueName(KernelMetric::DeviceId));
+    writer.packUIntString(deviceId);
+    writer.packStr(KernelMetric::getValueName(KernelMetric::DeviceType));
+    writer.packStr(deviceTypeName);
   };
 
   auto packMetrics = [&](const std::map<MetricKind, std::unique_ptr<Metric>>
@@ -594,9 +542,9 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     for (const auto &[metricKind, metric] : metrics) {
       if (metricKind == MetricKind::Kernel) {
         if (isRoot) {
-          packKernelMetricName(KernelMetric::Duration);
+          writer.packStr(KernelMetric::getValueName(KernelMetric::Duration));
           writer.packUInt(0);
-          packKernelMetricName(KernelMetric::Invocations);
+          writer.packStr(KernelMetric::getValueName(KernelMetric::Invocations));
           writer.packUInt(0);
           continue;
         }
@@ -616,9 +564,10 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         }
       } else if (metricKind == MetricKind::Cycle) {
         if (isRoot) {
-          packCycleMetricName(CycleMetric::Duration);
+          writer.packStr(CycleMetric::getValueName(CycleMetric::Duration));
           writer.packUInt(0);
-          packCycleMetricName(CycleMetric::NormalizedDuration);
+          writer.packStr(
+              CycleMetric::getValueName(CycleMetric::NormalizedDuration));
           writer.packUInt(0);
           continue;
         }
@@ -634,13 +583,14 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
             std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceType));
         metricSummary.updateDeviceIdMask(deviceType, deviceId);
 
-        packCycleMetricName(CycleMetric::Duration);
+        writer.packStr(CycleMetric::getValueName(CycleMetric::Duration));
         writer.packUInt(duration);
-        packCycleMetricName(CycleMetric::NormalizedDuration);
+        writer.packStr(
+            CycleMetric::getValueName(CycleMetric::NormalizedDuration));
         writer.packDouble(normalizedDuration);
-        packCycleMetricName(CycleMetric::DeviceId);
+        writer.packStr(CycleMetric::getValueName(CycleMetric::DeviceId));
         writer.packUIntString(deviceId);
-        packCycleMetricName(CycleMetric::DeviceType);
+        writer.packStr(CycleMetric::getValueName(CycleMetric::DeviceType));
         writer.packUIntString(deviceType);
       } else {
         throw makeLogicError("MetricKind not supported");
@@ -649,9 +599,9 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     if (isRoot) {
       if (metricSummary.hasKernelMetric &&
           metrics.find(MetricKind::Kernel) == metrics.end()) {
-        packKernelMetricName(KernelMetric::Duration);
+        writer.packStr(KernelMetric::getValueName(KernelMetric::Duration));
         writer.packUInt(0);
-        packKernelMetricName(KernelMetric::Invocations);
+        writer.packStr(KernelMetric::getValueName(KernelMetric::Invocations));
         writer.packUInt(0);
       }
       if (metricSummary.hasPCSamplingMetric &&
@@ -665,9 +615,10 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       }
       if (metricSummary.hasCycleMetric &&
           metrics.find(MetricKind::Cycle) == metrics.end()) {
-        packCycleMetricName(CycleMetric::Duration);
+        writer.packStr(CycleMetric::getValueName(CycleMetric::Duration));
         writer.packUInt(0);
-        packCycleMetricName(CycleMetric::NormalizedDuration);
+        writer.packStr(
+            CycleMetric::getValueName(CycleMetric::NormalizedDuration));
         writer.packUInt(0);
       }
     }
@@ -677,7 +628,39 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         for (const auto &[_, flexibleMetric] : flexibleMetrics) {
           const auto valueName = flexibleMetric.getValueName(0);
           writer.packStr(valueName);
-          packFlexibleMetricValue(flexibleMetric.getValues()[0]);
+          std::visit(
+              [&](auto &&v) {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T, uint64_t>) {
+                  writer.packUInt(v);
+                } else if constexpr (std::is_same_v<T, int64_t>) {
+                  writer.packInt(v);
+                } else if constexpr (std::is_same_v<T, double>) {
+                  writer.packDouble(v);
+                } else if constexpr (std::is_same_v<T, std::string>) {
+                  writer.packStr(v);
+                } else if constexpr (std::is_same_v<T, std::vector<uint64_t>>) {
+                  writer.packArray(static_cast<uint32_t>(v.size()));
+                  for (auto value : v) {
+                    writer.packUInt(value);
+                  }
+                } else if constexpr (std::is_same_v<T,
+                                                    std::vector<int64_t>>) {
+                  writer.packArray(static_cast<uint32_t>(v.size()));
+                  for (auto value : v) {
+                    writer.packInt(value);
+                  }
+                } else if constexpr (std::is_same_v<T,
+                                                    std::vector<double>>) {
+                  writer.packArray(static_cast<uint32_t>(v.size()));
+                  for (auto value : v) {
+                    writer.packDouble(value);
+                  }
+                } else {
+                  static_assert(sizeof(T) == 0, "Unsupported MetricValueType");
+                }
+              },
+              flexibleMetric.getValues()[0]);
         }
       };
   auto countPromotedFlexibleMetricEntries =
@@ -688,7 +671,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     for (const auto &child : children) {
       auto it = linkedFlexibleMetrics.find(child.id);
       if (it != linkedFlexibleMetrics.end()) {
-        metricEntries += countFlexibleMetricEntries(it->second);
+        metricEntries += static_cast<uint32_t>(it->second.size());
       }
     }
     return metricEntries;
@@ -718,7 +701,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         const bool isRoot = treeNode.id == TreeData::Tree::TreeNode::RootId;
         writer.packMap(
             countMetricEntries(treeNode.metricSet.metrics, isRoot) +
-            countFlexibleMetricEntries(treeNode.metricSet.flexibleMetrics) +
+            static_cast<uint32_t>(treeNode.metricSet.flexibleMetrics.size()) +
             countPromotedFlexibleMetricEntries(
                 virtualRootNode.children,
                 treeNode.metricSet.linkedFlexibleMetrics));
@@ -729,19 +712,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         const bool hasLinkedTargets =
             !treeNode.metricSet.linkedMetrics.empty() ||
             !treeNode.metricSet.linkedFlexibleMetrics.empty();
-
-        auto getOnlyLinkedKernelMetric = [&](size_t virtualNodeId)
-            -> const KernelMetric * {
-          const auto metricsIt =
-              treeNode.metricSet.linkedMetrics.find(virtualNodeId);
-          if (metricsIt == treeNode.metricSet.linkedMetrics.end() ||
-              metricsIt->second.size() != 1 ||
-              metricsIt->second.begin()->first != MetricKind::Kernel) {
-            return nullptr;
-          }
-          return static_cast<KernelMetric *>(
-              metricsIt->second.begin()->second.get());
-        };
 
         auto hasLinkedVirtualNode = [&](auto &&hasLinkedVirtualNode,
                                         size_t virtualNodeId) -> bool {
@@ -779,8 +749,15 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,
                                          size_t virtualNodeId) -> void {
               const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-              const auto *onlyKernelMetric =
-                  getOnlyLinkedKernelMetric(virtualNodeId);
+              const KernelMetric *onlyKernelMetric = nullptr;
+              const auto onlyMetricIt =
+                  treeNode.metricSet.linkedMetrics.find(virtualNodeId);
+              if (onlyMetricIt != treeNode.metricSet.linkedMetrics.end() &&
+                  onlyMetricIt->second.size() == 1 &&
+                  onlyMetricIt->second.begin()->first == MetricKind::Kernel) {
+                onlyKernelMetric = static_cast<KernelMetric *>(
+                    onlyMetricIt->second.begin()->second.get());
+              }
               if (virtualNode.children.empty() &&
                   onlyKernelMetric != nullptr) {
                 writer.packMap(3);
@@ -871,15 +848,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     }
   }
 
-  auto countSetBits = [](uint32_t mask) -> uint32_t {
-    uint32_t count = 0;
-    while (mask) {
-      mask &= (mask - 1);
-      ++count;
-    }
-    return count;
-  };
-
   writer.packMap(deviceTypeEntries);
   for (size_t deviceType = 0;
        deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
@@ -892,7 +860,11 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         getDeviceTypeString(static_cast<DeviceType>(deviceType));
     writer.packStr(deviceTypeName);
 
-    writer.packMap(countSetBits(mask));
+    uint32_t deviceIdEntries = 0;
+    for (auto remaining = mask; remaining != 0; remaining &= (remaining - 1)) {
+      ++deviceIdEntries;
+    }
+    writer.packMap(deviceIdEntries);
     for (uint64_t deviceId = 0; deviceId < kMaxRegisteredDeviceIds;
          ++deviceId) {
       if ((mask & (1u << static_cast<uint32_t>(deviceId))) == 0) {
