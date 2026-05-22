@@ -221,6 +221,19 @@ public:
     this->values[IsMetricKernel] = isMetricKernel;
   }
 
+  void update(uint64_t startTime, uint64_t endTime, uint64_t invocations,
+              uint64_t deviceId, uint64_t deviceType, uint64_t streamId,
+              uint64_t isMetricKernel = 0) {
+    values[StartTime] = startTime;
+    values[EndTime] = endTime;
+    std::get<uint64_t>(values[Invocations]) += invocations;
+    std::get<uint64_t>(values[Duration]) += endTime - startTime;
+    values[DeviceId] = deviceId;
+    values[DeviceType] = deviceType;
+    values[StreamId] = streamId;
+    values[IsMetricKernel] = isMetricKernel;
+  }
+
   const std::string &getName() const override { return name; }
 
   // Fast path for callers that already know they are working with KernelMetric.

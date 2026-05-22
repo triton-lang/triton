@@ -18,6 +18,28 @@ void DataEntry::upsertMetric(std::unique_ptr<Metric> metric) const {
   }
 }
 
+void DataEntry::upsertKernelMetric(uint64_t startTime, uint64_t endTime,
+                                   uint64_t deviceId, uint64_t deviceType,
+                                   uint64_t streamId,
+                                   uint64_t isMetricKernel,
+                                   uint64_t invocations) const {
+  if (startTime >= endTime) {
+    return;
+  }
+  auto &metrics = metricSet.get().metrics;
+  auto it = metrics.find(MetricKind::Kernel);
+  if (it == metrics.end()) {
+    metrics.emplace(MetricKind::Kernel,
+                    std::make_unique<KernelMetric>(
+                        startTime, endTime, invocations, deviceId, deviceType,
+                        streamId, isMetricKernel));
+  } else {
+    static_cast<KernelMetric *>(it->second.get())
+        ->update(startTime, endTime, invocations, deviceId, deviceType, streamId,
+                 isMetricKernel);
+  }
+}
+
 void DataEntry::upsertLinkedMetric(std::unique_ptr<Metric> metric,
                                    size_t linkedId) const {
   auto &linkedMetrics = metricSet.get().linkedMetrics;
@@ -27,6 +49,28 @@ void DataEntry::upsertLinkedMetric(std::unique_ptr<Metric> metric,
     linkedMetricMap.emplace(metric->getKind(), std::move(metric));
   } else {
     it->second->updateMetric(*metric);
+  }
+}
+
+void DataEntry::upsertLinkedKernelMetric(uint64_t startTime, uint64_t endTime,
+                                         uint64_t deviceId,
+                                         uint64_t deviceType,
+                                         uint64_t streamId, size_t linkedId,
+                                         uint64_t isMetricKernel,
+                                         uint64_t invocations) const {
+  if (startTime >= endTime) {
+    return;
+  }
+  auto &linkedKernelMetrics = metricSet.get().linkedKernelMetrics;
+  auto it = linkedKernelMetrics.find(linkedId);
+  if (it == linkedKernelMetrics.end()) {
+    linkedKernelMetrics.emplace(linkedId,
+                                KernelMetric(startTime, endTime, invocations,
+                                             deviceId, deviceType, streamId,
+                                             isMetricKernel));
+  } else {
+    it->second.update(startTime, endTime, invocations, deviceId, deviceType,
+                      streamId, isMetricKernel);
   }
 }
 

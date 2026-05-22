@@ -32,6 +32,7 @@ struct DataEntry {
   using MetricMap = std::map<MetricKind, std::unique_ptr<Metric>>;
   using FlexibleMetricMap = std::map<std::string, FlexibleMetric>;
   using LinkedMetricMap = std::unordered_map<size_t, MetricMap>;
+  using LinkedKernelMetricMap = std::unordered_map<size_t, KernelMetric>;
   using LinkedFlexibleMetricMap = std::unordered_map<size_t, FlexibleMetricMap>;
   struct MetricSet {
     // Direct metrics associated with this entry.
@@ -40,6 +41,10 @@ struct DataEntry {
     FlexibleMetricMap flexibleMetrics{};
     // Metrics associated with linked entries.
     LinkedMetricMap linkedMetrics{};
+    // Kernel metrics associated with linked entries. Kernel metrics dominate
+    // graph profiling volume, so keep them flat instead of allocating a nested
+    // MetricMap per linked entry.
+    LinkedKernelMetricMap linkedKernelMetrics{};
     // Flexible metrics associated with linked entries.
     LinkedFlexibleMetricMap linkedFlexibleMetrics{};
   };
@@ -58,8 +63,20 @@ struct DataEntry {
 
   void upsertMetric(std::unique_ptr<Metric> metric) const;
 
+  void upsertKernelMetric(uint64_t startTime, uint64_t endTime,
+                          uint64_t deviceId, uint64_t deviceType,
+                          uint64_t streamId,
+                          uint64_t isMetricKernel = 0,
+                          uint64_t invocations = 1) const;
+
   void upsertLinkedMetric(std::unique_ptr<Metric> metric,
                           size_t linkedId) const;
+
+  void upsertLinkedKernelMetric(uint64_t startTime, uint64_t endTime,
+                                uint64_t deviceId, uint64_t deviceType,
+                                uint64_t streamId, size_t linkedId,
+                                uint64_t isMetricKernel = 0,
+                                uint64_t invocations = 1) const;
 
   void upsertFlexibleMetric(const std::string &metricName,
                             const MetricValueType &metricValue) const;

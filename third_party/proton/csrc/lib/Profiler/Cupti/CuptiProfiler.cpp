@@ -52,21 +52,86 @@ convertKernelActivityToMetric(CUpti_Activity *activity,
   return metric;
 }
 
+bool upsertKernelActivityMetric(const DataEntry &entry,
+                                CUpti_Activity *activity,
+                                bool isMetricKernel = false) {
+  auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
+  if (kernel->start >= kernel->end) {
+    return false;
+  }
+  entry.upsertKernelMetric(static_cast<uint64_t>(kernel->start),
+                           static_cast<uint64_t>(kernel->end),
+                           static_cast<uint64_t>(kernel->deviceId),
+                           static_cast<uint64_t>(DeviceType::CUDA),
+                           static_cast<uint64_t>(kernel->streamId),
+                           static_cast<uint64_t>(isMetricKernel));
+  return true;
+}
+
+bool upsertLinkedKernelActivityMetric(const DataEntry &entry,
+                                      CUpti_Activity *activity,
+                                      size_t linkedId,
+                                      bool isMetricKernel = false) {
+  auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
+  if (kernel->start >= kernel->end) {
+    return false;
+  }
+  entry.upsertLinkedKernelMetric(static_cast<uint64_t>(kernel->start),
+                                 static_cast<uint64_t>(kernel->end),
+                                 static_cast<uint64_t>(kernel->deviceId),
+                                 static_cast<uint64_t>(DeviceType::CUDA),
+                                 static_cast<uint64_t>(kernel->streamId),
+                                 linkedId,
+                                 static_cast<uint64_t>(isMetricKernel));
+  return true;
+}
+
+class DataPhaseTracker {
+public:
+  using DataPhaseMap = std::map<Data *, std::pair<size_t, size_t>>;
+
+  explicit DataPhaseTracker(DataPhaseMap &dataPhases)
+      : dataPhases(dataPhases) {}
+
+  void update(Data *data, size_t phase) {
+    if (hasLastUpdate && data == lastData && phase == lastPhase) {
+      return;
+    }
+    detail::updateDataPhases(dataPhases, data, phase);
+    lastData = data;
+    lastPhase = phase;
+    hasLastUpdate = true;
+  }
+
+private:
+  DataPhaseMap &dataPhases;
+  Data *lastData = nullptr;
+  size_t lastPhase = Data::kNoCompletePhase;
+  bool hasLastUpdate = false;
+};
+
 uint32_t processActivityKernel(
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ExternIdToStateMap &externIdToState,
+    std::unordered_map<uint64_t, size_t> &corrIdToExternIdCache,
     std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
         &externIdToStateCache,
-    std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
-    CUpti_Activity *activity) {
+    DataPhaseTracker &dataPhaseTracker,
+    CUpti_Activity *activity, bool useKernelMetricFastPath) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
   size_t externId = 0;
-  if (!/*not valid*/ corrIdToExternId.withRead(
-          correlationId, [&externId](size_t value) { externId = value; })) {
-    corrIdToExternId.erase(correlationId);
-    return correlationId;
+  auto corrCacheIt = corrIdToExternIdCache.find(correlationId);
+  if (corrCacheIt != corrIdToExternIdCache.end()) {
+    externId = corrCacheIt->second;
+  } else {
+    if (!/*not valid*/ corrIdToExternId.withRead(
+            correlationId, [&externId](size_t value) { externId = value; })) {
+      corrIdToExternId.erase(correlationId);
+      return correlationId;
+    }
+    corrIdToExternIdCache.emplace(correlationId, externId);
   }
   if (kernel->graphId == 0) { // XXX: This is a misnomer confirmed by NVIDIA,
                               // actually it refers to graphExecId
@@ -77,26 +142,44 @@ uint32_t processActivityKernel(
                              [&](const CuptiProfiler::ExternIdState &state) {
                                isMissingName = state.isMissingName;
                                dataToEntry = state.dataToEntry;
-                             });
+    });
     if (!isMissingName) {
       for (auto &[data, entry] : dataToEntry) {
-        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
-          entry.upsertMetric(std::move(kernelMetric));
-          detail::updateDataPhases(dataPhases, data, entry.phase);
+        if (useKernelMetricFastPath) {
+          if (upsertKernelActivityMetric(entry, activity)) {
+            dataPhaseTracker.update(data, entry.phase);
+          }
+        } else {
+          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+            entry.upsertMetric(std::move(kernelMetric));
+            dataPhaseTracker.update(data, entry.phase);
+          }
         }
       }
     } else {
       for (auto &[data, entry] : dataToEntry) {
-        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+        if (useKernelMetricFastPath) {
+          if (kernel->start >= kernel->end) {
+            continue;
+          }
           auto childEntry =
               data->addOp(entry.phase, entry.id, {Context(kernel->name)});
-          childEntry.upsertMetric(std::move(kernelMetric));
-          detail::updateDataPhases(dataPhases, data, entry.phase);
+          if (upsertKernelActivityMetric(childEntry, activity)) {
+            dataPhaseTracker.update(data, entry.phase);
+          }
+        } else {
+          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+            auto childEntry =
+                data->addOp(entry.phase, entry.id, {Context(kernel->name)});
+            childEntry.upsertMetric(std::move(kernelMetric));
+            dataPhaseTracker.update(data, entry.phase);
+          }
         }
       }
     }
     externIdToState.erase(externId);
     corrIdToExternId.erase(correlationId);
+    corrIdToExternIdCache.erase(correlationId);
   } else {
     // Graph kernels
     // A single graph launch can trigger multiple kernels.
@@ -133,10 +216,17 @@ uint32_t processActivityKernel(
         auto targetEntryIdIter = nodeState.dataToEntryId.find(data);
         if (targetEntryIdIter != nodeState.dataToEntryId.end()) {
           auto targetEntryId = targetEntryIdIter->second;
-          if (auto kernelMetric =
-                  convertKernelActivityToMetric(activity, isMetricKernel)) {
-            entry.upsertLinkedMetric(std::move(kernelMetric), targetEntryId);
-            detail::updateDataPhases(dataPhases, data, entry.phase);
+          if (useKernelMetricFastPath) {
+            if (upsertLinkedKernelActivityMetric(entry, activity, targetEntryId,
+                                                 isMetricKernel)) {
+              dataPhaseTracker.update(data, entry.phase);
+            }
+          } else {
+            if (auto kernelMetric =
+                    convertKernelActivityToMetric(activity, isMetricKernel)) {
+              entry.upsertLinkedMetric(std::move(kernelMetric), targetEntryId);
+              dataPhaseTracker.update(data, entry.phase);
+            }
           }
         }
       } // else the profiling session has been deactivated during graph
@@ -146,11 +236,22 @@ uint32_t processActivityKernel(
       // Since we don't have per-node info, we just attach the kernel metric to
       // the graph launch entry without creating a child entry for the node.
       for (auto &[data, entry] : externState.dataToEntry) {
-        if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+        if (useKernelMetricFastPath) {
+          if (kernel->start >= kernel->end) {
+            continue;
+          }
           auto childEntry =
               data->addOp(entry.phase, entry.id, {Context(kernel->name)});
-          childEntry.upsertMetric(std::move(kernelMetric));
-          detail::updateDataPhases(dataPhases, data, childEntry.phase);
+          if (upsertKernelActivityMetric(childEntry, activity)) {
+            dataPhaseTracker.update(data, childEntry.phase);
+          }
+        } else {
+          if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
+            auto childEntry =
+                data->addOp(entry.phase, entry.id, {Context(kernel->name)});
+            childEntry.upsertMetric(std::move(kernelMetric));
+            dataPhaseTracker.update(data, childEntry.phase);
+          }
         }
       }
     }
@@ -162,6 +263,7 @@ uint32_t processActivityKernel(
     if (externState.numNodes == 0) {
       externIdToState.erase(externId);
       corrIdToExternId.erase(correlationId);
+      corrIdToExternIdCache.erase(correlationId);
     }
   }
   return correlationId;
@@ -170,17 +272,20 @@ uint32_t processActivityKernel(
 uint32_t processActivity(
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ExternIdToStateMap &externIdToState,
+    std::unordered_map<uint64_t, size_t> &corrIdToExternIdCache,
     std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
         &externIdToStateCache,
-    std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
-    CUpti_Activity *activity) {
+    DataPhaseTracker &dataPhaseTracker,
+    CUpti_Activity *activity, bool useKernelMetricFastPath) {
   auto correlationId = 0;
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
     correlationId =
         processActivityKernel(corrIdToExternId, externIdToState,
-                              externIdToStateCache, dataPhases, activity);
+                              corrIdToExternIdCache,
+                              externIdToStateCache, dataPhaseTracker, activity,
+                              useKernelMetricFastPath);
     break;
   }
   default:
@@ -442,17 +547,22 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   CuptiProfiler &profiler = threadState.profiler;
   uint32_t maxCorrelationId = 0;
   std::map<Data *, std::pair<size_t, size_t>> dataPhases;
+  DataPhaseTracker dataPhaseTracker(dataPhases);
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
+  std::unordered_map<uint64_t, size_t> corrIdToExternIdCache;
   std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
       externIdToStateCache;
+  const bool useKernelMetricFastPath = !profiler.pcSamplingEnabled;
   do {
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
     if (status == CUPTI_SUCCESS) {
       auto correlationId =
           processActivity(profiler.correlation.corrIdToExternId,
                           profiler.correlation.externIdToState,
-                          externIdToStateCache, dataPhases, activity);
+                          corrIdToExternIdCache,
+                          externIdToStateCache, dataPhaseTracker, activity,
+                          useKernelMetricFastPath);
       maxCorrelationId = std::max(maxCorrelationId, correlationId);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;

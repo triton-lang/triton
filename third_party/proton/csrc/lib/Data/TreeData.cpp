@@ -250,6 +250,30 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
   MetricSummary metricSummary;
   std::vector<uint32_t> linkedVirtualNodeMarks(virtualTree->size(), 0);
   uint32_t linkedVirtualNodeMark = 0;
+  auto appendKernelMetric = [&](json &metricsJson,
+                                const KernelMetric *kernelMetric) {
+    uint64_t duration =
+        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
+    uint64_t invocations =
+        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Invocations));
+    uint64_t deviceId =
+        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
+    uint64_t deviceType =
+        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceType));
+    metricSummary.hasKernelMetric = true;
+    metricSummary.updateDeviceIdMask(deviceType, deviceId);
+    const auto &deviceTypeName =
+        getDeviceTypeString(static_cast<DeviceType>(deviceType));
+    const auto deviceIdStr = std::to_string(deviceId);
+
+    metricsJson[KernelMetric::getValueName(KernelMetric::Duration)] = duration;
+    metricsJson[KernelMetric::getValueName(KernelMetric::Invocations)] =
+        invocations;
+    metricsJson[KernelMetric::getValueName(KernelMetric::DeviceId)] =
+        deviceIdStr;
+    metricsJson[KernelMetric::getValueName(KernelMetric::DeviceType)] =
+        deviceTypeName;
+  };
   // Append fixed-schema metrics to a JSON metrics object and update device
   // metadata requirements while visiting them.
   auto appendMetrics = [&](json &metricsJson,
@@ -258,29 +282,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
     metricSummary.observeMetrics(metrics);
     for (const auto &[metricKind, metric] : metrics) {
       if (metricKind == MetricKind::Kernel) {
-        auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
-        uint64_t duration =
-            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
-        uint64_t invocations = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::Invocations));
-        uint64_t deviceId =
-            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
-        uint64_t deviceType = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::DeviceType));
-        metricSummary.hasKernelMetric = true;
-        metricSummary.updateDeviceIdMask(deviceType, deviceId);
-        const auto &deviceTypeName =
-            getDeviceTypeString(static_cast<DeviceType>(deviceType));
-        const auto deviceIdStr = std::to_string(deviceId);
-
-        metricsJson[KernelMetric::getValueName(KernelMetric::Duration)] =
-            duration;
-        metricsJson[KernelMetric::getValueName(KernelMetric::Invocations)] =
-            invocations;
-        metricsJson[KernelMetric::getValueName(KernelMetric::DeviceId)] =
-            deviceIdStr;
-        metricsJson[KernelMetric::getValueName(KernelMetric::DeviceType)] =
-            deviceTypeName;
+        appendKernelMetric(metricsJson,
+                           static_cast<KernelMetric *>(metric.get()));
       } else if (metricKind == MetricKind::PCSampling) {
         auto *pcSamplingMetric = static_cast<PCSamplingMetric *>(metric.get());
         for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
@@ -364,6 +367,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         bool hasLinkedVirtualNodes = false;
         uint32_t currentLinkedVirtualNodeMark = 0;
         if (!treeNode.metricSet.linkedMetrics.empty() ||
+            !treeNode.metricSet.linkedKernelMetrics.empty() ||
             !treeNode.metricSet.linkedFlexibleMetrics.empty()) {
           hasLinkedVirtualNodes = true;
           // Reuse the mark buffer across tree nodes. Bumping the generation
@@ -393,6 +397,10 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
             markLinkedVirtualNode(linkedId);
           }
           for (const auto &[linkedId, _] :
+               treeNode.metricSet.linkedKernelMetrics) {
+            markLinkedVirtualNode(linkedId);
+          }
+          for (const auto &[linkedId, _] :
                treeNode.metricSet.linkedFlexibleMetrics) {
             // Flexible metrics are keyed by the child <metric> helper, but
             // serialized on the parent frame so the helper node can stay out
@@ -413,11 +421,16 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
           const auto &virtualNode = virtualTree->getNode(virtualNodeId);
           const auto metricsIt =
               treeNode.metricSet.linkedMetrics.find(virtualNodeId);
+          const auto kernelMetricIt =
+              treeNode.metricSet.linkedKernelMetrics.find(virtualNodeId);
           outNode = json::object();
           outNode["frame"] = {{"name", virtualNode.name}, {"type", "function"}};
           outNode["metrics"] = json::object();
           if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
             appendMetrics(outNode["metrics"], metricsIt->second);
+          }
+          if (kernelMetricIt != treeNode.metricSet.linkedKernelMetrics.end()) {
+            appendKernelMetric(outNode["metrics"], &kernelMetricIt->second);
           }
           // Linked flexible metrics are only attached to <metric_node>
           // children, so they always belong on the parent frame.
@@ -747,6 +760,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
                       TreeData::Tree::TreeNode &treeNode) -> void {
     writer.appendRaw(tree->getMsgPackFrameHeader(treeNode.id));
     const bool isRoot = treeNode.id == TreeData::Tree::TreeNode::RootId;
+    const auto &linkedMetrics = treeNode.metricSet.linkedMetrics;
+    const auto &linkedKernelMetrics = treeNode.metricSet.linkedKernelMetrics;
     const auto &linkedFlexibleMetrics =
         treeNode.metricSet.linkedFlexibleMetrics;
     const auto promotedFlexibleMetricEntries =
@@ -766,7 +781,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     }
     bool hasLinkedVirtualNodes = false;
     uint32_t currentLinkedVirtualNodeMark = 0;
-    if (!treeNode.metricSet.linkedMetrics.empty() ||
+    if (!linkedMetrics.empty() || !linkedKernelMetrics.empty() ||
         !linkedFlexibleMetrics.empty()) {
       hasLinkedVirtualNodes = true;
       // Reuse the mark buffer across recursive packNode calls. Each node keeps
@@ -792,7 +807,10 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
           virtualNodeId = virtualTree->getNode(virtualNodeId).parentId;
         }
       };
-      for (const auto &[linkedId, _] : treeNode.metricSet.linkedMetrics) {
+      for (const auto &[linkedId, _] : linkedMetrics) {
+        markLinkedVirtualNode(linkedId);
+      }
+      for (const auto &[linkedId, _] : linkedKernelMetrics) {
         markLinkedVirtualNode(linkedId);
       }
       for (const auto &[linkedId, _] : linkedFlexibleMetrics) {
@@ -823,20 +841,31 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
                                      size_t virtualNodeId) -> void {
       const auto &virtualNode = virtualTree->getNode(virtualNodeId);
       writer.appendRaw(virtualTree->getMsgPackFrameHeader(virtualNodeId));
-      const auto metricsIt =
-          treeNode.metricSet.linkedMetrics.find(virtualNodeId);
+      const auto metricsIt = linkedMetrics.find(virtualNodeId);
+      const auto kernelMetricIt = linkedKernelMetrics.find(virtualNodeId);
+      const bool hasNestedKernelMetric =
+          metricsIt != linkedMetrics.end() &&
+          metricsIt->second.find(MetricKind::Kernel) != metricsIt->second.end();
+      uint32_t linkedMetricEntries =
+          metricsIt != linkedMetrics.end()
+              ? countMetricEntries(metricsIt->second, /*isRoot=*/false)
+              : 0;
+      if (!hasNestedKernelMetric &&
+          kernelMetricIt != linkedKernelMetrics.end()) {
+        linkedMetricEntries += kernelTotalCount;
+      }
       const auto promotedFlexibleMetricEntries =
           linkedFlexibleMetrics.empty()
               ? 0
               : countPromotedFlexibleMetricEntries(virtualNode.children,
                                                    linkedFlexibleMetrics);
-      writer.packMap((metricsIt != treeNode.metricSet.linkedMetrics.end()
-                          ? countMetricEntries(metricsIt->second,
-                                               /*isRoot=*/false)
-                          : 0) +
-                     promotedFlexibleMetricEntries);
-      if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
+      writer.packMap(linkedMetricEntries + promotedFlexibleMetricEntries);
+      if (metricsIt != linkedMetrics.end()) {
         packMetrics(metricsIt->second, /*isRoot=*/false);
+      }
+      if (!hasNestedKernelMetric &&
+          kernelMetricIt != linkedKernelMetrics.end()) {
+        packKernelMetricValues(&kernelMetricIt->second);
       }
       // Linked flexible metrics are only attached to <metric_node>
       // children, so they are always packed into the parent frame.

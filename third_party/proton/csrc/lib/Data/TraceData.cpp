@@ -961,6 +961,10 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
         targetEntryIds.insert(targetEntryId);
       }
       for (const auto &[targetEntryId, _] :
+           event.metricSet.linkedKernelMetrics) {
+        targetEntryIds.insert(targetEntryId);
+      }
+      for (const auto &[targetEntryId, _] :
            event.metricSet.linkedFlexibleMetrics) {
         targetEntryIds.insert(targetEntryId);
       }
@@ -1001,6 +1005,22 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
     }
     bool hasKernelMetrics = false, hasCycleMetrics = false;
 
+    auto processKernelMetric =
+        [&](size_t eventId, const KernelMetric *kernelMetric,
+            const DataEntry::FlexibleMetricMap *flexibleMetrics,
+            const std::vector<Context> &contexts, bool isGraphLinked) {
+          auto streamId = static_cast<size_t>(
+              std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId)));
+          auto startTimeNs =
+              std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
+          auto launchEventId = events.at(eventId).parentEventId;
+          kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
+                                              contexts, launchEventId,
+                                              isGraphLinked);
+          minTimeStamp = std::min(minTimeStamp, startTimeNs);
+          hasKernelMetrics = true;
+        };
+
     auto processMetricMaps =
         [&](size_t eventId, const DataEntry::MetricMap &metrics,
             const DataEntry::FlexibleMetricMap *flexibleMetrics,
@@ -1009,16 +1029,8 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
               kernelIt != metrics.end()) {
             auto *kernelMetric =
                 static_cast<KernelMetric *>(kernelIt->second.get());
-            auto streamId = static_cast<size_t>(std::get<uint64_t>(
-                kernelMetric->getValue(KernelMetric::StreamId)));
-            auto startTimeNs = std::get<uint64_t>(
-                kernelMetric->getValue(KernelMetric::StartTime));
-            auto launchEventId = events.at(eventId).parentEventId;
-            kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
-                                                contexts, launchEventId,
-                                                isGraphLinked);
-            minTimeStamp = std::min(minTimeStamp, startTimeNs);
-            hasKernelMetrics = true;
+            processKernelMetric(eventId, kernelMetric, flexibleMetrics,
+                                contexts, isGraphLinked);
           }
           if (auto cycleIt = metrics.find(MetricKind::Cycle);
               cycleIt != metrics.end()) {
@@ -1063,6 +1075,29 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
           }
           processMetricMaps(event.id, linkedMetrics, flexibleMetrics, contexts,
                             /*isGraphLinked=*/true);
+        }
+        for (const auto &[targetEntryId, linkedKernelMetric] :
+             event.metricSet.linkedKernelMetrics) {
+          const auto linkedMetricsIt =
+              event.metricSet.linkedMetrics.find(targetEntryId);
+          if (linkedMetricsIt != event.metricSet.linkedMetrics.end() &&
+              linkedMetricsIt->second.find(MetricKind::Kernel) !=
+                  linkedMetricsIt->second.end()) {
+            continue;
+          }
+          auto contexts = baseContexts;
+          auto &virtualContexts = targetIdToVirtualContexts[targetEntryId];
+          contexts.reserve(contexts.size() + virtualContexts.size());
+          for (const auto &context : virtualContexts) {
+            contexts.push_back(context);
+          }
+          const DataEntry::FlexibleMetricMap *flexibleMetrics = nullptr;
+          auto iter = event.metricSet.linkedFlexibleMetrics.find(targetEntryId);
+          if (iter != event.metricSet.linkedFlexibleMetrics.end()) {
+            flexibleMetrics = &iter->second;
+          }
+          processKernelMetric(event.id, &linkedKernelMetric, flexibleMetrics,
+                              contexts, /*isGraphLinked=*/true);
         }
         if (hasKernelMetrics && hasCycleMetrics) {
           throw makeLogicError("only one active metric type is supported");
