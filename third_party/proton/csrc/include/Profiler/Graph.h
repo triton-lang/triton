@@ -66,6 +66,22 @@ struct GraphState {
     return true;
   }
 
+  static std::optional<uint32_t> getCaptureGraphId(std::string_view name) {
+    constexpr std::string_view prefix = captureTag;
+    if (name.size() <= prefix.size() ||
+        name.substr(0, prefix.size()) != prefix) {
+      return std::nullopt;
+    }
+    uint32_t graphId = 0;
+    for (size_t i = prefix.size(); i < name.size(); ++i) {
+      if (name[i] < '0' || name[i] > '9') {
+        return std::nullopt;
+      }
+      graphId = graphId * 10 + static_cast<uint32_t>(name[i] - '0');
+    }
+    return graphId;
+  }
+
   static std::string_view getDisplayName(std::string_view name) {
     return isCaptureTag(name) ? std::string_view(captureTag) : name;
   }
