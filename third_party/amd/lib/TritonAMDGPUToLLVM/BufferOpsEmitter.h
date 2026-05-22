@@ -4,6 +4,7 @@
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Analysis/Utility.h"
@@ -60,7 +61,8 @@ namespace mlir::LLVM::AMD {
 // Failure to meet 2) and 3) will result in incorrect memory access.
 struct BufferEmitter {
   BufferEmitter(RewriterBase &rw, Location loc,
-                mlir::triton::AMD::TargetInfo ti);
+                mlir::triton::AMD::TargetInfo ti,
+                const DataFlowSolver *uniformitySolver);
 
   // Create a resource descriptor that points to the area of memory we want to
   // load from
@@ -110,6 +112,9 @@ private:
   RewriterBase &rewriter;
   Location loc;
   mlir::triton::AMD::TargetInfo targetInfo;
+  // Wave-uniformity solver threaded from the AMD conversion pass.
+  // Must be non-null (asserted in constructor).
+  const DataFlowSolver *uniformitySolver;
 };
 
 } // namespace mlir::LLVM::AMD

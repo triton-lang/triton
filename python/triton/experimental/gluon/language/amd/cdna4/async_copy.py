@@ -68,7 +68,7 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
 
 
 @builtin
-def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modifier="", _semantic=None):
+def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modifier="", contiguity=1, _semantic=None):
     """
     AMD buffer load to shared operation. Buffer load is similar to global load
     but it accesses global memory via a scalar base pointer and a tensor of
@@ -100,6 +100,8 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
+        contiguity (int): Minimum number of contiguous elements for vectorizing
+            the direct-to-LDS load. Defaults to 1.
     """
     _check(isinstance(offsets.type.layout, DistributedLayout),
            lambda: "expected offsets type layout to be a DistributedLayout")
@@ -118,9 +120,10 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     other = other.handle if other is not None else ir.value()
     stride = ir.value()
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
+    contiguity = _unwrap_if_constexpr(contiguity)
 
     _semantic.builder.create_buffer_load_to_local(dest.handle, ptr.handle, offsets.handle, mask, other, stride,
-                                                  cache_modifier)
+                                                  cache_modifier, contiguity)
 
 
 @builtin

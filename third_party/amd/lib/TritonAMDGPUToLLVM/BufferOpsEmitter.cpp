@@ -1,11 +1,16 @@
+#include "BufferOpsEmitter.h"
+
+#include "OffsetUniformitySplit.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 
-#include "BufferOpsEmitter.h"
+#include <cassert>
+#include <cstdint>
 
 using namespace triton::AMD;
 using mlir::triton::amdgpu::ISAFamily;
@@ -28,11 +33,18 @@ bool isZero(Value v) {
   }
   return false;
 }
+
 } // namespace
 
 namespace mlir::LLVM::AMD {
-BufferEmitter::BufferEmitter(RewriterBase &rw, Location loc, TargetInfo ti)
-    : rewriter(rw), loc(loc), targetInfo(ti) {}
+BufferEmitter::BufferEmitter(RewriterBase &rw, Location loc, TargetInfo ti,
+                             const DataFlowSolver *uniformitySolver)
+    : rewriter(rw), loc(loc), targetInfo(ti),
+      uniformitySolver(uniformitySolver) {
+  assert(uniformitySolver &&
+         "BufferEmitter must be constructed with the dataflow uniformity "
+         "solver");
+}
 
 Value BufferEmitter::createResourceDescriptor(Value basePtr,
                                               Value blockStride) {
@@ -129,22 +141,25 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
                              triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> commonArgs;
+  // soffset (ArgIndex 4) accepts a runtime SGPR, same as regular buffer
+  // loads. The uniformity split applies here too.
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
                  commonArgs);
 
   // buffer_load_to_lds is only supported on gfx942/gfx950 which always use
   // asyncmark. Emit the async intrinsic so LLVM's SIInsertWaitcnts tracks
   // these operations via asyncmark/wait_asyncmark.
+  //
   return ROCDL::RawPtrBufferLoadAsyncLdsOp::create(
       rewriter, loc, TypeRange{},
       ValueRange{
-          commonArgs[0], // Buffer descriptor
-          dst,           // LDS base ptr
-          byteWidth,     // Instr size
-          commonArgs[1], // Buffer offset
-          b.i32_val(0),  // LDS offset
-          commonArgs[2], // Instruction offset
-          commonArgs[3], // AUX
+          commonArgs[0], // ArgIndex 0: rsrc
+          dst,           // ArgIndex 1: LDS base ptr
+          byteWidth,     // ArgIndex 2: data byte size (immarg)
+          commonArgs[1], // ArgIndex 3: voffset (per-lane VGPR)
+          commonArgs[2], // ArgIndex 4: soffset (split scalar or 0)
+          b.i32_val(0),  // ArgIndex 5: imm offset (immarg, always 0 here)
+          commonArgs[3], // ArgIndex 6: aux (immarg)
       });
 }
 
@@ -270,30 +285,37 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
                                    triton::CacheModifier cm, bool isBufferLoad,
                                    SmallVector<Value> &args) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // 1. Create the (masked) offset
   Type elementType = getElementTypeOrSelf(type);
   const int valueElemNBits = std::max(8u, elementType.getIntOrFloatBitWidth());
   const int elementByteWidth = valueElemNBits / 8;
-  // Please note: the index passed is not in bytes, but in number of elements
-  // In order to pass the index to the buffer operation, we need to convert in
-  // bytes (i.e., we need to multiply by `elementByteWidth`)
-  Value vOffsetOutOfBunds = b.int_val(
+  // Index is in elements; multiply by elementByteWidth for bytes.
+  Value vOffsetOutOfBounds = b.int_val(
       32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
-  Value vOffsetBytes = b.mul(b.int_val(32, elementByteWidth), vOffsetElems);
-  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBunds);
 
-  // 2. Set the sgprOffset to 0
-  Value sgprOffset = b.int_val(32, 0);
+  // Split the offset into uniform (soffset, SGPR) and per-lane (voffset,
+  // VGPR) parts. We split in element units before the byte multiply so
+  // mul distributes cleanly over the partitioned leaves.
+  Value elemByteWidthVal = b.int_val(32, elementByteWidth);
+  Value vOffsetElemsForIntrinsic = vOffsetElems;
+  Value sgprOffsetBytes = b.int_val(32, 0);
+  auto [uniformOffsetElems, perLaneOffsetElems] =
+      splitUniformAdditive(vOffsetElems, rewriter, loc, uniformitySolver);
+  if (uniformOffsetElems) {
+    sgprOffsetBytes = b.mul(elemByteWidthVal, uniformOffsetElems);
+    vOffsetElemsForIntrinsic = perLaneOffsetElems;
+  }
+  Value vOffsetBytes = b.mul(elemByteWidthVal, vOffsetElemsForIntrinsic);
 
-  // 3. Create the cache modifiers word
+  // Masked lanes use OOB voffset; AMD buffer bounds checks ignore soffset.
+  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBounds);
+
   int32_t aux =
       getCtrlBitsForCacheModifierOnTarget(cm, isBufferLoad, targetInfo);
   Value cacheModifiers = b.int_val(32, aux);
 
-  // 4. Add the arguments
   args.push_back(rsrcDesc);
   args.push_back(maskedOffsetBytes);
-  args.push_back(sgprOffset);
+  args.push_back(sgprOffsetBytes);
   args.push_back(cacheModifiers);
 }
 
@@ -302,26 +324,20 @@ void BufferEmitter::fillCommonArgsAtomics(Type type, Value rsrcDesc,
                                           bool hasUsers,
                                           SmallVector<Value> &args) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // 1. Create the (masked) offset
   Type elementType = getElementTypeOrSelf(type);
   const int valueElemNBits = std::max(8u, elementType.getIntOrFloatBitWidth());
   const int elementByteWidth = valueElemNBits / 8;
-  // Please note: the index passed is not in bytes, but in number of elements
-  // In order to pass the index to the buffer operation, we need to convert in
-  // bytes (i.e., we need to multiply by `elementByteWidth`)
-  Value vOffsetOutOfBunds = b.int_val(
+  // Convert element index to bytes.
+  Value vOffsetOutOfBounds = b.int_val(
       32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
   Value vOffsetBytes = b.mul(b.int_val(32, elementByteWidth), vOffsetElems);
-  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBunds);
+  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBounds);
 
-  // 2. Set the sgprOffset to 0
   Value sgprOffset = b.int_val(32, 0);
 
-  // 3. Create the cache modifiers word
   int32_t aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
   Value cacheModifiers = b.int_val(32, aux);
 
-  // 4. Add the arguments
   args.push_back(rsrcDesc);
   args.push_back(maskedOffsetBytes);
   args.push_back(sgprOffset);
