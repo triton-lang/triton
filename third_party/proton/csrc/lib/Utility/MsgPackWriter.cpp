@@ -9,6 +9,12 @@
 namespace proton {
 namespace {
 
+void appendRaw(std::vector<uint8_t> &out, const uint8_t *data, size_t size) {
+  const auto offset = out.size();
+  out.resize(offset + size);
+  std::memcpy(out.data() + offset, data, size);
+}
+
 template <typename T> void writeBE(std::vector<uint8_t> &out, T value) {
   using U = std::make_unsigned_t<T>;
   U u = static_cast<U>(value);
@@ -92,6 +98,19 @@ void MsgPackWriter::packStr(std::string_view value) {
   const auto offset = out.size();
   out.resize(offset + size);
   std::memcpy(out.data() + offset, value.data(), size);
+}
+
+void MsgPackWriter::packHatchetFrameHeader(std::string_view name) {
+  static constexpr uint8_t prefix[] = {0x83, // map(3)
+                                       0xa5, 'f', 'r', 'a', 'm', 'e',
+                                       0x82, // frame: map(2)
+                                       0xa4, 'n', 'a', 'm', 'e'};
+  static constexpr uint8_t suffix[] = {
+      0xa4, 't', 'y', 'p',  'e', 0xa8, 'f', 'u', 'n', 'c', 't',
+      'i',  'o', 'n', 0xa7, 'm', 'e',  't', 'r', 'i', 'c', 's'};
+  appendRaw(out, prefix, sizeof(prefix));
+  packStr(name);
+  appendRaw(out, suffix, sizeof(suffix));
 }
 
 void MsgPackWriter::packUIntString(uint64_t value) {
