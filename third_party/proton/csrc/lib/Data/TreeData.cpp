@@ -511,7 +511,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
 
   MetricSummary metricSummary;
   metricSummary.hasKernelMetric = true;
-  const std::map<MetricKind, std::unique_ptr<Metric>> emptyMetrics;
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
   std::vector<uint32_t> linkedVirtualNodeMarks(virtualTree->size(), 0);
   uint32_t linkedVirtualNodeMark = 0;
@@ -752,20 +751,27 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
 
     writer.packFixStrLiteral("metrics");
     const bool isRoot = treeNode.id == TreeData::Tree::TreeNode::RootId;
+    const auto &linkedFlexibleMetrics =
+        treeNode.metricSet.linkedFlexibleMetrics;
+    const auto promotedFlexibleMetricEntries =
+        linkedFlexibleMetrics.empty()
+            ? 0
+            : countPromotedFlexibleMetricEntries(virtualRootNode.children,
+                                                 linkedFlexibleMetrics);
     writer.packMap(
         countMetricEntries(treeNode.metricSet.metrics, isRoot) +
         static_cast<uint32_t>(treeNode.metricSet.flexibleMetrics.size()) +
-        countPromotedFlexibleMetricEntries(
-            virtualRootNode.children,
-            treeNode.metricSet.linkedFlexibleMetrics));
+        promotedFlexibleMetricEntries);
     packMetrics(treeNode.metricSet.metrics, isRoot);
     packFlexibleMetrics(treeNode.metricSet.flexibleMetrics);
-    packPromotedFlexibleMetrics(virtualRootNode.children,
-                                treeNode.metricSet.linkedFlexibleMetrics);
+    if (!linkedFlexibleMetrics.empty()) {
+      packPromotedFlexibleMetrics(virtualRootNode.children,
+                                  linkedFlexibleMetrics);
+    }
     bool hasLinkedVirtualNodes = false;
     uint32_t currentLinkedVirtualNodeMark = 0;
     if (!treeNode.metricSet.linkedMetrics.empty() ||
-        !treeNode.metricSet.linkedFlexibleMetrics.empty()) {
+        !linkedFlexibleMetrics.empty()) {
       hasLinkedVirtualNodes = true;
       // Reuse the mark buffer across recursive packNode calls. Each node keeps
       // its own generation id so child recursion cannot overwrite the parent's
@@ -793,8 +799,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       for (const auto &[linkedId, _] : treeNode.metricSet.linkedMetrics) {
         markLinkedVirtualNode(linkedId);
       }
-      for (const auto &[linkedId, _] :
-           treeNode.metricSet.linkedFlexibleMetrics) {
+      for (const auto &[linkedId, _] : linkedFlexibleMetrics) {
         // Flexible metrics are keyed by the child <metric> helper, but
         // serialized on the parent frame so the helper node can stay out of
         // the dumped tree.
@@ -833,19 +838,25 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       writer.packFixStrLiteral("metrics");
       const auto metricsIt =
           treeNode.metricSet.linkedMetrics.find(virtualNodeId);
-      const auto &linkedMetrics =
-          (metricsIt != treeNode.metricSet.linkedMetrics.end())
-              ? metricsIt->second
-              : emptyMetrics;
-      writer.packMap(
-          countMetricEntries(linkedMetrics, /*isRoot=*/false) +
-          countPromotedFlexibleMetricEntries(
-              virtualNode.children, treeNode.metricSet.linkedFlexibleMetrics));
-      packMetrics(linkedMetrics, /*isRoot=*/false);
+      const auto promotedFlexibleMetricEntries =
+          linkedFlexibleMetrics.empty()
+              ? 0
+              : countPromotedFlexibleMetricEntries(virtualNode.children,
+                                                   linkedFlexibleMetrics);
+      writer.packMap((metricsIt != treeNode.metricSet.linkedMetrics.end()
+                          ? countMetricEntries(metricsIt->second,
+                                               /*isRoot=*/false)
+                          : 0) +
+                     promotedFlexibleMetricEntries);
+      if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
+        packMetrics(metricsIt->second, /*isRoot=*/false);
+      }
       // Linked flexible metrics are only attached to <metric_node>
       // children, so they are always packed into the parent frame.
-      packPromotedFlexibleMetrics(virtualNode.children,
-                                  treeNode.metricSet.linkedFlexibleMetrics);
+      if (!linkedFlexibleMetrics.empty()) {
+        packPromotedFlexibleMetrics(virtualNode.children,
+                                    linkedFlexibleMetrics);
+      }
 
       writer.packFixStrLiteral("children");
       writer.packArray(countLinkedVirtualChildren(virtualNode.children));
