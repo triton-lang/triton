@@ -490,10 +490,13 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   const std::map<MetricKind, std::unique_ptr<Metric>> emptyMetrics;
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
 
-  constexpr uint32_t kernelInclusiveCount = 2;
-  constexpr uint32_t kernelTotalCount = 4;
-  constexpr uint32_t cycleInclusiveCount = 2;
-  constexpr uint32_t cycleTotalCount = 4;
+  // Root metrics only carry inclusive aggregate fields. Non-root metrics also
+  // include device_id and device_type, so their serialized map entry counts are
+  // larger.
+  constexpr uint32_t kernelInclusiveCount = 2; // duration, count
+  constexpr uint32_t kernelTotalCount = 4;     // + device_id, device_type
+  constexpr uint32_t cycleInclusiveCount = 2;  // duration, normalized_duration
+  constexpr uint32_t cycleTotalCount = 4;      // + device_id, device_type
 
   auto countMetricEntries =
       [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
