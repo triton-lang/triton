@@ -82,9 +82,8 @@ public:
     if (values[valueId].index() != value.index()) {
       throw makeInvalidArgument(
           std::string("Metric value type mismatch for valueId ") +
-          std::to_string(valueId) + " (" +
-          std::string(getValueName(valueId)) + ")" +
-          ": current=" + getTypeNameForIndex(values[valueId].index()) +
+          std::to_string(valueId) + " (" + std::string(getValueName(valueId)) +
+          ")" + ": current=" + getTypeNameForIndex(values[valueId].index()) +
           ", new=" + getTypeNameForIndex(value.index()));
     }
     // Handle string and other values separately
@@ -108,8 +107,8 @@ public:
                       std::string("Vector metric size mismatch for "
                                   "valueId ") +
                       std::to_string(valueId) + " (" +
-                      std::string(getValueName(valueId)) + "): current=" +
-                      std::to_string(currentValue.size()) +
+                      std::string(getValueName(valueId)) +
+                      "): current=" + std::to_string(currentValue.size()) +
                       ", new=" + std::to_string(otherValue.size()));
                 }
                 for (size_t i = 0; i < currentValue.size(); ++i) {
@@ -120,8 +119,8 @@ public:
                     std::string("Metric aggregation not supported for "
                                 "valueId ") +
                     std::to_string(valueId) + " (" +
-                    std::string(getValueName(valueId)) + "): type=" +
-                    getTypeNameForIndex(values[valueId].index()));
+                    std::string(getValueName(valueId)) +
+                    "): type=" + getTypeNameForIndex(values[valueId].index()));
               }
             }
           },
