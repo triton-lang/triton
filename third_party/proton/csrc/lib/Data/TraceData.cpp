@@ -687,12 +687,11 @@ void reconstructGraphScopeEvents(
           isMetadataKernel = true;
           break;
         }
-        if (GraphState::isCaptureTag(context.name)) {
+        if (context.name == GraphState::captureTag) {
           seenCaptureTag = true;
         }
         if (seenCaptureTag) {
-          graphContexts.emplace_back(
-              std::string(GraphState::getDisplayName(context.name)));
+          graphContexts.emplace_back(context.name);
         }
       }
       if (isMetadataKernel) {
@@ -980,8 +979,7 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
         std::vector<Context> virtualContexts;
         virtualContexts.reserve(resolvedContexts.size());
         for (const auto &context : resolvedContexts) {
-          virtualContexts.emplace_back(
-              std::string(GraphState::getDisplayName(context.name)));
+          virtualContexts.emplace_back(context.name);
         }
         targetIdToVirtualContexts.emplace(targetEntryId,
                                           std::move(virtualContexts));

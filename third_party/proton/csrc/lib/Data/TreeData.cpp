@@ -340,9 +340,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         const auto &contextName = treeNode.name;
         auto contextId = treeNode.id;
         json *jsonNode = jsonNodes[contextId];
-        (*jsonNode)["frame"] = {
-            {"name", GraphState::getDisplayName(contextName)},
-            {"type", "function"}};
+        (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
         (*jsonNode)["metrics"] = json::object();
         auto &metricsJson = (*jsonNode)["metrics"];
         appendMetrics(metricsJson, treeNode.metricSet.metrics);
@@ -393,8 +391,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               treeNode.metricSet.linkedMetrics.find(virtualNodeId);
           outNode = json::object();
           outNode["frame"] = {
-              {"name", GraphState::getDisplayName(virtualNode.name)},
-              {"type", "function"}};
+              {"name", virtualNode.name}, {"type", "function"}};
           outNode["metrics"] = json::object();
           if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
             appendMetrics(outNode["metrics"], metricsIt->second);
@@ -712,7 +709,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     writer.packFixStrLiteral("frame");
     writer.packMap(2);
     writer.packFixStrLiteral("name");
-    writer.packStr(GraphState::getDisplayName(treeNode.name));
+    writer.packStr(treeNode.name);
     writer.packFixStrLiteral("type");
     writer.packFixStrLiteral("function");
 
@@ -776,7 +773,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       writer.packFixStrLiteral("frame");
       writer.packMap(2);
       writer.packFixStrLiteral("name");
-      writer.packStr(GraphState::getDisplayName(virtualNode.name));
+      writer.packStr(virtualNode.name);
       writer.packFixStrLiteral("type");
       writer.packFixStrLiteral("function");
 

@@ -11,7 +11,6 @@
 #include <mutex>
 #include <set>
 #include <shared_mutex>
-#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -45,14 +44,6 @@ struct GraphState {
   // Capture tag to identify captured call paths
   static constexpr const char *captureTag = "<captured_at>";
   static constexpr const char *metricTag = "<metric>";
-
-  static bool isCaptureTag(std::string_view name) {
-    return name == std::string_view(captureTag);
-  }
-
-  static std::string_view getDisplayName(std::string_view name) {
-    return isCaptureTag(name) ? std::string_view(captureTag) : name;
-  }
 
   struct NodeState {
     // The graph node id for this node
