@@ -353,29 +353,26 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         if (!treeNode.metricSet.linkedMetrics.empty() ||
             !treeNode.metricSet.linkedFlexibleMetrics.empty()) {
           linkedVirtualNodes.assign(virtualTree->size(), 0);
-          auto markLinkedVirtualNodes = [&](auto &&markLinkedVirtualNodes,
-                                            size_t virtualNodeId) -> bool {
-            bool hasLinkedNode =
-                treeNode.metricSet.linkedMetrics.find(virtualNodeId) !=
-                treeNode.metricSet.linkedMetrics.end();
-            const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-            for (const auto &child : virtualNode.children) {
-              // Linked flexible metrics are stored on the child <metric> node,
-              // but serialized on the parent frame so we can omit the helper
-              // node from the dumped tree.
-              if (treeNode.metricSet.linkedFlexibleMetrics.find(child.id) !=
-                  treeNode.metricSet.linkedFlexibleMetrics.end()) {
-                hasLinkedNode = true;
+          auto markLinkedVirtualNode = [&](size_t virtualNodeId) {
+            while (virtualNodeId != Tree::TreeNode::DummyId &&
+                   !linkedVirtualNodes[virtualNodeId]) {
+              linkedVirtualNodes[virtualNodeId] = 1;
+              if (virtualNodeId == Tree::TreeNode::RootId) {
+                break;
               }
-              hasLinkedNode =
-                  markLinkedVirtualNodes(markLinkedVirtualNodes, child.id) ||
-                  hasLinkedNode;
+              virtualNodeId = virtualTree->getNode(virtualNodeId).parentId;
             }
-            linkedVirtualNodes[virtualNodeId] = hasLinkedNode;
-            return hasLinkedNode;
           };
-          markLinkedVirtualNodes(markLinkedVirtualNodes,
-                                 Tree::TreeNode::RootId);
+          for (const auto &[linkedId, _] : treeNode.metricSet.linkedMetrics) {
+            markLinkedVirtualNode(linkedId);
+          }
+          for (const auto &[linkedId, _] :
+               treeNode.metricSet.linkedFlexibleMetrics) {
+            // Flexible metrics are keyed by the child <metric> helper, but
+            // serialized on the parent frame so the helper node can stay out
+            // of the dumped tree.
+            markLinkedVirtualNode(virtualTree->getNode(linkedId).parentId);
+          }
         }
         childrenArray.get_ref<json::array_t &>().reserve(
             treeNode.children.size() + virtualRootNode.children.size());
@@ -390,8 +387,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
           const auto metricsIt =
               treeNode.metricSet.linkedMetrics.find(virtualNodeId);
           outNode = json::object();
-          outNode["frame"] = {
-              {"name", virtualNode.name}, {"type", "function"}};
+          outNode["frame"] = {{"name", virtualNode.name}, {"type", "function"}};
           outNode["metrics"] = json::object();
           if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
             appendMetrics(outNode["metrics"], metricsIt->second);
@@ -729,28 +725,26 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     if (!treeNode.metricSet.linkedMetrics.empty() ||
         !treeNode.metricSet.linkedFlexibleMetrics.empty()) {
       linkedVirtualNodes.assign(virtualTree->size(), 0);
-      auto markLinkedVirtualNodes = [&](auto &&markLinkedVirtualNodes,
-                                        size_t virtualNodeId) -> bool {
-        bool hasLinkedNode =
-            treeNode.metricSet.linkedMetrics.find(virtualNodeId) !=
-            treeNode.metricSet.linkedMetrics.end();
-        const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-        for (const auto &child : virtualNode.children) {
-          // Linked flexible metrics are stored on the child <metric> node, but
-          // serialized on the parent frame so we can omit the helper node from
-          // the dumped tree.
-          if (treeNode.metricSet.linkedFlexibleMetrics.find(child.id) !=
-              treeNode.metricSet.linkedFlexibleMetrics.end()) {
-            hasLinkedNode = true;
+      auto markLinkedVirtualNode = [&](size_t virtualNodeId) {
+        while (virtualNodeId != Tree::TreeNode::DummyId &&
+               !linkedVirtualNodes[virtualNodeId]) {
+          linkedVirtualNodes[virtualNodeId] = 1;
+          if (virtualNodeId == Tree::TreeNode::RootId) {
+            break;
           }
-          hasLinkedNode =
-              markLinkedVirtualNodes(markLinkedVirtualNodes, child.id) ||
-              hasLinkedNode;
+          virtualNodeId = virtualTree->getNode(virtualNodeId).parentId;
         }
-        linkedVirtualNodes[virtualNodeId] = hasLinkedNode;
-        return hasLinkedNode;
       };
-      markLinkedVirtualNodes(markLinkedVirtualNodes, Tree::TreeNode::RootId);
+      for (const auto &[linkedId, _] : treeNode.metricSet.linkedMetrics) {
+        markLinkedVirtualNode(linkedId);
+      }
+      for (const auto &[linkedId, _] :
+           treeNode.metricSet.linkedFlexibleMetrics) {
+        // Flexible metrics are keyed by the child <metric> helper, but
+        // serialized on the parent frame so the helper node can stay out of
+        // the dumped tree.
+        markLinkedVirtualNode(virtualTree->getNode(linkedId).parentId);
+      }
     }
     auto countLinkedVirtualChildren = [&](const auto &children) {
       uint32_t childCount = 0;
