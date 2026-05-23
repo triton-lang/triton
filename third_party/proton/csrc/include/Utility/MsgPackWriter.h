@@ -23,6 +23,7 @@ public:
   void packDouble(double value);
   void packStr(std::string_view value);
   void packHatchetFrameHeader(std::string_view name);
+  void appendRaw(const std::vector<uint8_t> &bytes);
   template <size_t N> void packFixStrLiteral(const char (&value)[N]) {
     static_assert(N > 0);
     constexpr uint32_t size = static_cast<uint32_t>(N - 1);

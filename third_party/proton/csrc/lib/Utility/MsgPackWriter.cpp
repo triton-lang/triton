@@ -9,7 +9,7 @@
 namespace proton {
 namespace {
 
-void appendRaw(std::vector<uint8_t> &out, const uint8_t *data, size_t size) {
+void appendBytes(std::vector<uint8_t> &out, const uint8_t *data, size_t size) {
   const auto offset = out.size();
   out.resize(offset + size);
   std::memcpy(out.data() + offset, data, size);
@@ -108,9 +108,13 @@ void MsgPackWriter::packHatchetFrameHeader(std::string_view name) {
   static constexpr uint8_t suffix[] = {
       0xa4, 't', 'y', 'p',  'e', 0xa8, 'f', 'u', 'n', 'c', 't',
       'i',  'o', 'n', 0xa7, 'm', 'e',  't', 'r', 'i', 'c', 's'};
-  appendRaw(out, prefix, sizeof(prefix));
+  appendBytes(out, prefix, sizeof(prefix));
   packStr(name);
-  appendRaw(out, suffix, sizeof(suffix));
+  appendBytes(out, suffix, sizeof(suffix));
+}
+
+void MsgPackWriter::appendRaw(const std::vector<uint8_t> &bytes) {
+  appendBytes(out, bytes.data(), bytes.size());
 }
 
 void MsgPackWriter::packUIntString(uint64_t value) {

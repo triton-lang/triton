@@ -178,6 +178,20 @@ public:
 
   TreeNode &getNode(size_t id) { return treeNodes.at(id); }
 
+  const std::vector<uint8_t> &getMsgPackFrameHeader(size_t id) {
+    if (msgPackFrameHeaderCache.size() < treeNodes.size()) {
+      msgPackFrameHeaderCache.resize(treeNodes.size());
+    }
+    auto &header = msgPackFrameHeaderCache[id];
+    if (header.empty()) {
+      MsgPackWriter writer;
+      writer.reserve(treeNodes[id].name.size() + 32);
+      writer.packHatchetFrameHeader(treeNodes[id].name);
+      header = std::move(writer).take();
+    }
+    return header;
+  }
+
   void upsertFlexibleMetric(size_t contextId,
                             const FlexibleMetric &flexibleMetric) {
     auto &node = getNode(contextId);
@@ -234,6 +248,9 @@ private:
   size_t nextContextId = TreeNode::RootId + 1;
   // Node ids are dense and assigned sequentially, so index lookup is enough.
   std::deque<TreeNode> treeNodes;
+  // Cached MsgPack frame boilerplate keyed by dense node id. The cache is
+  // derived from immutable node names and grows with the tree.
+  std::vector<std::vector<uint8_t>> msgPackFrameHeaderCache;
 };
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree,
@@ -817,7 +834,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,
                                      size_t virtualNodeId) -> void {
       const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-      writer.packHatchetFrameHeader(virtualNode.name);
+      writer.appendRaw(virtualTree->getMsgPackFrameHeader(virtualNodeId));
       const auto metricsIt =
           treeNode.metricSet.linkedMetrics.find(virtualNodeId);
       const auto promotedFlexibleMetricEntries =
