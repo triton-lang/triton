@@ -740,16 +740,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   // under the same frame.
   auto packNode = [&](auto &&packNode,
                       TreeData::Tree::TreeNode &treeNode) -> void {
-    writer.packMap(3);
-
-    writer.packFixStrLiteral("frame");
-    writer.packMap(2);
-    writer.packFixStrLiteral("name");
-    writer.packStr(treeNode.name);
-    writer.packFixStrLiteral("type");
-    writer.packFixStrLiteral("function");
-
-    writer.packFixStrLiteral("metrics");
+    writer.packHatchetFrameHeader(treeNode.name);
     const bool isRoot = treeNode.id == TreeData::Tree::TreeNode::RootId;
     const auto &linkedFlexibleMetrics =
         treeNode.metricSet.linkedFlexibleMetrics;
@@ -826,16 +817,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,
                                      size_t virtualNodeId) -> void {
       const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-      writer.packMap(3);
-
-      writer.packFixStrLiteral("frame");
-      writer.packMap(2);
-      writer.packFixStrLiteral("name");
-      writer.packStr(virtualNode.name);
-      writer.packFixStrLiteral("type");
-      writer.packFixStrLiteral("function");
-
-      writer.packFixStrLiteral("metrics");
+      writer.packHatchetFrameHeader(virtualNode.name);
       const auto metricsIt =
           treeNode.metricSet.linkedMetrics.find(virtualNodeId);
       const auto promotedFlexibleMetricEntries =
