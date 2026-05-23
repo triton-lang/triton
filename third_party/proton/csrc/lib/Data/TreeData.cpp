@@ -362,6 +362,9 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
                 treeNode.metricSet.linkedMetrics.end();
             const auto &virtualNode = virtualTree->getNode(virtualNodeId);
             for (const auto &child : virtualNode.children) {
+              // Linked flexible metrics are stored on the child <metric> node,
+              // but serialized on the parent frame so we can omit the helper
+              // node from the dumped tree.
               if (treeNode.metricSet.linkedFlexibleMetrics.find(child.id) !=
                   treeNode.metricSet.linkedFlexibleMetrics.end()) {
                 hasLinkedNode = true;
@@ -736,6 +739,9 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
             treeNode.metricSet.linkedMetrics.end();
         const auto &virtualNode = virtualTree->getNode(virtualNodeId);
         for (const auto &child : virtualNode.children) {
+          // Linked flexible metrics are stored on the child <metric> node, but
+          // serialized on the parent frame so we can omit the helper node from
+          // the dumped tree.
           if (treeNode.metricSet.linkedFlexibleMetrics.find(child.id) !=
               treeNode.metricSet.linkedFlexibleMetrics.end()) {
             hasLinkedNode = true;
