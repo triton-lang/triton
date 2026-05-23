@@ -242,6 +242,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
   output.push_back(json::object());
   jsonNodes[TreeData::Tree::TreeNode::RootId] = &(output.back());
   MetricSummary metricSummary;
+  // Append fixed-schema metrics to a JSON metrics object and update device
+  // metadata requirements while visiting them.
   auto appendMetrics = [&](json &metricsJson,
                            const std::map<MetricKind, std::unique_ptr<Metric>>
                                &metrics) {
@@ -307,6 +309,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
       }
     }
   };
+  // Append user-defined flexible metrics, preserving scalar and vector value
+  // types in the JSON output.
   auto appendFlexibleMetrics =
       [&](json &metricsJson,
           const std::map<std::string, FlexibleMetric> &flexibleMetrics) {
@@ -353,6 +357,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         if (!treeNode.metricSet.linkedMetrics.empty() ||
             !treeNode.metricSet.linkedFlexibleMetrics.empty()) {
           linkedVirtualNodes.assign(virtualTree->size(), 0);
+          // Mark each linked target and its ancestors, producing the smallest
+          // virtual subtree needed to keep the linked target reachable.
           auto markLinkedVirtualNode = [&](size_t virtualNodeId) {
             while (virtualNodeId != Tree::TreeNode::DummyId &&
                    !linkedVirtualNodes[virtualNodeId]) {
@@ -380,6 +386,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
           childrenArray.push_back(json::object());
           jsonNodes[child.id] = &childrenArray.back();
         }
+        // Copy a marked virtual subtree into the current JSON node.
         auto appendLinkedVirtualNode = [&](auto &&appendLinkedVirtualNode,
                                            size_t virtualNodeId,
                                            json &outNode) -> void {
@@ -498,6 +505,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   constexpr uint32_t cycleInclusiveCount = 2;  // duration, normalized_duration
   constexpr uint32_t cycleTotalCount = 4;      // + device_id, device_type
 
+  // Count the exact number of key/value entries needed for a MsgPack metrics
+  // map before writing it.
   auto countMetricEntries =
       [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
           bool isRoot) -> uint32_t {
@@ -531,6 +540,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     }
     return metricEntries;
   };
+  // Pack the four fields emitted for a concrete kernel metric.
   auto packKernelMetricValues = [&](const KernelMetric *kernelMetric) {
     uint64_t duration =
         std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
@@ -553,6 +563,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     writer.packStr(deviceTypeName);
   };
 
+  // Pack all fixed-schema metrics for one frame. Root frames emit zero-valued
+  // inclusive placeholders for any metric type observed elsewhere.
   auto packMetrics = [&](const std::map<MetricKind, std::unique_ptr<Metric>>
                              &metrics,
                          bool isRoot) {
@@ -640,6 +652,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       }
     }
   };
+  // Pack user-defined flexible metrics in MsgPack, preserving scalar and vector
+  // value types.
   auto packFlexibleMetrics =
       [&](const std::map<std::string, FlexibleMetric> &flexibleMetrics) {
         for (const auto &[_, flexibleMetric] : flexibleMetrics) {
@@ -678,6 +692,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
               flexibleMetric.getValues()[0]);
         }
       };
+  // Count flexible metrics attached to child <metric> helpers that will be
+  // promoted into the parent frame's metrics map.
   auto countPromotedFlexibleMetricEntries =
       [&](const auto &children,
           const DataEntry::LinkedFlexibleMetricMap &linkedFlexibleMetrics)
@@ -691,6 +707,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     }
     return metricEntries;
   };
+  // Pack the child <metric> helper entries into the parent frame.
   auto packPromotedFlexibleMetrics =
       [&](const auto &children,
           const DataEntry::LinkedFlexibleMetricMap &linkedFlexibleMetrics) {
@@ -701,6 +718,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
           }
         }
       };
+  // Pack a real tree node, followed by any linked virtual subtree that belongs
+  // under the same frame.
   auto packNode = [&](auto &&packNode,
                       TreeData::Tree::TreeNode &treeNode) -> void {
     writer.packMap(3);
@@ -728,6 +747,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     if (!treeNode.metricSet.linkedMetrics.empty() ||
         !treeNode.metricSet.linkedFlexibleMetrics.empty()) {
       linkedVirtualNodes.assign(virtualTree->size(), 0);
+      // Mark each linked target and its ancestors, producing the smallest
+      // virtual subtree needed to keep the linked target reachable.
       auto markLinkedVirtualNode = [&](size_t virtualNodeId) {
         while (virtualNodeId != Tree::TreeNode::DummyId &&
                !linkedVirtualNodes[virtualNodeId]) {
@@ -749,6 +770,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         markLinkedVirtualNode(virtualTree->getNode(linkedId).parentId);
       }
     }
+    // Count marked linked children so MsgPack array headers can be emitted
+    // before recursively packing the child nodes.
     auto countLinkedVirtualChildren = [&](const auto &children) {
       uint32_t childCount = 0;
       if (linkedVirtualNodes.empty()) {
@@ -762,6 +785,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       return childCount;
     };
 
+    // Pack a marked virtual subtree as linked children of the current real
+    // frame.
     auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,
                                      size_t virtualNodeId) -> void {
       const auto &virtualNode = virtualTree->getNode(virtualNodeId);
