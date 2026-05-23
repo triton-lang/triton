@@ -6,6 +6,7 @@
 #include "Profiler/Graph.h"
 #include "Utility/Errors.h"
 #include "Utility/MsgPackWriter.h"
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -242,6 +243,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
   output.push_back(json::object());
   jsonNodes[TreeData::Tree::TreeNode::RootId] = &(output.back());
   MetricSummary metricSummary;
+  std::vector<uint32_t> linkedVirtualNodeMarks(virtualTree->size(), 0);
+  uint32_t linkedVirtualNodeMark = 0;
   // Append fixed-schema metrics to a JSON metrics object and update device
   // metadata requirements while visiting them.
   auto appendMetrics = [&](json &metricsJson,
@@ -353,16 +356,28 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         childrenArray = json::array();
         const auto &virtualRootNode =
             virtualTree->getNode(Tree::TreeNode::RootId);
-        std::vector<uint8_t> linkedVirtualNodes;
+        bool hasLinkedVirtualNodes = false;
+        uint32_t currentLinkedVirtualNodeMark = 0;
         if (!treeNode.metricSet.linkedMetrics.empty() ||
             !treeNode.metricSet.linkedFlexibleMetrics.empty()) {
-          linkedVirtualNodes.assign(virtualTree->size(), 0);
+          hasLinkedVirtualNodes = true;
+          // Reuse the mark buffer across tree nodes. Bumping the generation
+          // avoids clearing a virtual-tree-sized buffer for each real node.
+          ++linkedVirtualNodeMark;
+          if (linkedVirtualNodeMark == 0) {
+            std::fill(linkedVirtualNodeMarks.begin(),
+                      linkedVirtualNodeMarks.end(), 0);
+            linkedVirtualNodeMark = 1;
+          }
+          currentLinkedVirtualNodeMark = linkedVirtualNodeMark;
           // Mark each linked target and its ancestors, producing the smallest
           // virtual subtree needed to keep the linked target reachable.
           auto markLinkedVirtualNode = [&](size_t virtualNodeId) {
             while (virtualNodeId != Tree::TreeNode::DummyId &&
-                   !linkedVirtualNodes[virtualNodeId]) {
-              linkedVirtualNodes[virtualNodeId] = 1;
+                   linkedVirtualNodeMarks[virtualNodeId] !=
+                       currentLinkedVirtualNodeMark) {
+              linkedVirtualNodeMarks[virtualNodeId] =
+                  currentLinkedVirtualNodeMark;
               if (virtualNodeId == Tree::TreeNode::RootId) {
                 break;
               }
@@ -413,7 +428,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
           linkedChildren.get_ref<json::array_t &>().reserve(
               virtualNode.children.size());
           for (const auto &child : virtualNode.children) {
-            if (!linkedVirtualNodes[child.id]) {
+            if (linkedVirtualNodeMarks[child.id] !=
+                currentLinkedVirtualNodeMark) {
               continue;
             }
             linkedChildren.push_back(json::object());
@@ -423,7 +439,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         };
 
         for (const auto &child : virtualRootNode.children) {
-          if (linkedVirtualNodes.empty() || !linkedVirtualNodes[child.id]) {
+          if (!hasLinkedVirtualNodes || linkedVirtualNodeMarks[child.id] !=
+                                            currentLinkedVirtualNodeMark) {
             continue;
           }
           childrenArray.push_back(json::object());
@@ -496,6 +513,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   metricSummary.hasKernelMetric = true;
   const std::map<MetricKind, std::unique_ptr<Metric>> emptyMetrics;
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
+  std::vector<uint32_t> linkedVirtualNodeMarks(virtualTree->size(), 0);
+  uint32_t linkedVirtualNodeMark = 0;
 
   // Root metrics only carry inclusive aggregate fields. Non-root metrics also
   // include device_id and device_type, so their serialized map entry counts are
@@ -743,16 +762,28 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     packFlexibleMetrics(treeNode.metricSet.flexibleMetrics);
     packPromotedFlexibleMetrics(virtualRootNode.children,
                                 treeNode.metricSet.linkedFlexibleMetrics);
-    std::vector<uint8_t> linkedVirtualNodes;
+    bool hasLinkedVirtualNodes = false;
+    uint32_t currentLinkedVirtualNodeMark = 0;
     if (!treeNode.metricSet.linkedMetrics.empty() ||
         !treeNode.metricSet.linkedFlexibleMetrics.empty()) {
-      linkedVirtualNodes.assign(virtualTree->size(), 0);
+      hasLinkedVirtualNodes = true;
+      // Reuse the mark buffer across recursive packNode calls. Each node keeps
+      // its own generation id so child recursion cannot overwrite the parent's
+      // linked virtual subtree.
+      ++linkedVirtualNodeMark;
+      if (linkedVirtualNodeMark == 0) {
+        std::fill(linkedVirtualNodeMarks.begin(), linkedVirtualNodeMarks.end(),
+                  0);
+        linkedVirtualNodeMark = 1;
+      }
+      currentLinkedVirtualNodeMark = linkedVirtualNodeMark;
       // Mark each linked target and its ancestors, producing the smallest
       // virtual subtree needed to keep the linked target reachable.
       auto markLinkedVirtualNode = [&](size_t virtualNodeId) {
         while (virtualNodeId != Tree::TreeNode::DummyId &&
-               !linkedVirtualNodes[virtualNodeId]) {
-          linkedVirtualNodes[virtualNodeId] = 1;
+               linkedVirtualNodeMarks[virtualNodeId] !=
+                   currentLinkedVirtualNodeMark) {
+          linkedVirtualNodeMarks[virtualNodeId] = currentLinkedVirtualNodeMark;
           if (virtualNodeId == Tree::TreeNode::RootId) {
             break;
           }
@@ -774,11 +805,11 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     // before recursively packing the child nodes.
     auto countLinkedVirtualChildren = [&](const auto &children) {
       uint32_t childCount = 0;
-      if (linkedVirtualNodes.empty()) {
+      if (!hasLinkedVirtualNodes) {
         return childCount;
       }
       for (const auto &child : children) {
-        if (linkedVirtualNodes[child.id]) {
+        if (linkedVirtualNodeMarks[child.id] == currentLinkedVirtualNodeMark) {
           ++childCount;
         }
       }
@@ -819,7 +850,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       writer.packFixStrLiteral("children");
       writer.packArray(countLinkedVirtualChildren(virtualNode.children));
       for (const auto &child : virtualNode.children) {
-        if (!linkedVirtualNodes[child.id]) {
+        if (linkedVirtualNodeMarks[child.id] != currentLinkedVirtualNodeMark) {
           continue;
         }
         packLinkedVirtualNode(packLinkedVirtualNode, child.id);
@@ -833,7 +864,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       packNode(packNode, tree->getNode(child.id));
     }
     for (const auto &child : virtualRootNode.children) {
-      if (linkedVirtualNodes.empty() || !linkedVirtualNodes[child.id]) {
+      if (!hasLinkedVirtualNodes ||
+          linkedVirtualNodeMarks[child.id] != currentLinkedVirtualNodeMark) {
         continue;
       }
       packLinkedVirtualNode(packLinkedVirtualNode, child.id);
