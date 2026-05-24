@@ -686,8 +686,120 @@ class InterpreterBuilder:
         sem = self.ir_sem_to_interpreter_sem[sem]
         return TensorHandle(_interpreter.atomic_rmw(rmwOp, ptr.data, val.data, mask.data, sem), val.dtype.scalar)
 
+    _LIBDEVICE_SYMBOL_MAP = None
+
+    @classmethod
+    def _get_libdevice_symbol_map(cls):
+        if cls._LIBDEVICE_SYMBOL_MAP is not None:
+            return cls._LIBDEVICE_SYMBOL_MAP
+
+        _erfc = np.vectorize(math.erfc, otypes=[np.float64])
+        _lgamma = np.vectorize(math.lgamma, otypes=[np.float64])
+        _gamma = np.vectorize(math.gamma, otypes=[np.float64])
+
+        try:
+            from scipy import special as _sp
+            _erfinv = _sp.erfinv
+            _j0 = _sp.j0
+            _j1 = _sp.j1
+        except ImportError:
+            _erfinv = None
+            _j0 = None
+            _j1 = None
+
+        unary = {
+            'acos': np.arccos,
+            'acosh': np.arccosh,
+            'asin': np.arcsin,
+            'asinh': np.arcsinh,
+            'atan': np.arctan,
+            'atanh': np.arctanh,
+            'cbrt': np.cbrt,
+            'ceil': np.ceil,
+            'cos': np.cos,
+            'cosh': np.cosh,
+            'erf': np.vectorize(math.erf, otypes=[np.float64]),
+            'erfc': _erfc,
+            'exp': np.exp,
+            'exp10': lambda x: np.power(10.0, x),
+            'exp2': np.exp2,
+            'expm1': np.expm1,
+            'fabs': np.fabs,
+            'floor': np.floor,
+            'lgamma': _lgamma,
+            'log': np.log,
+            'log10': np.log10,
+            'log1p': np.log1p,
+            'log2': np.log2,
+            'nearbyint': np.rint,
+            'rint': np.rint,
+            'round': np.round,
+            'rsqrt': lambda x: 1.0 / np.sqrt(x),
+            'sin': np.sin,
+            'sinh': np.sinh,
+            'sqrt': np.sqrt,
+            'tan': np.tan,
+            'tanh': np.tanh,
+            'tgamma': _gamma,
+            'trunc': np.trunc,
+        }
+        if _erfinv is not None:
+            unary['erfinv'] = _erfinv
+        if _j0 is not None:
+            unary['j0'] = _j0
+        if _j1 is not None:
+            unary['j1'] = _j1
+
+        binary = {
+            'atan2': np.arctan2,
+            'copysign': np.copysign,
+            'fmax': np.fmax,
+            'fmin': np.fmin,
+            'fmod': np.fmod,
+            'hypot': np.hypot,
+            'pow': np.power,
+            'remainder': np.remainder,
+        }
+        ternary = {
+            'fma': lambda x, y, z: x * y + z,
+        }
+
+        symbol_map = {}
+        for name, fn in unary.items():
+            symbol_map[f'__nv_{name}f'] = (1, fn)
+            symbol_map[f'__nv_{name}'] = (1, fn)
+        for name, fn in binary.items():
+            symbol_map[f'__nv_{name}f'] = (2, fn)
+            symbol_map[f'__nv_{name}'] = (2, fn)
+        for name, fn in ternary.items():
+            symbol_map[f'__nv_{name}f'] = (3, fn)
+            symbol_map[f'__nv_{name}'] = (3, fn)
+        # Rounding-mode variants of fma
+        for suffix in ('_rn', '_rz', '_rd', '_ru'):
+            symbol_map[f'__nv_fma{suffix}'] = (3, ternary['fma'])
+            symbol_map[f'__nv_fmaf{suffix}'] = (3, ternary['fma'])
+        # Integer intrinsics
+        symbol_map['__nv_abs'] = (1, np.abs)
+        symbol_map['__nv_llabs'] = (1, np.abs)
+
+        cls._LIBDEVICE_SYMBOL_MAP = symbol_map
+        return symbol_map
+
     def create_extern_elementwise(self, libName, libPath, symbol, argList, retType, isPure):
-        raise NotImplementedError("extern_elementwise not supported in interpreter mode")
+        symbol_map = self._get_libdevice_symbol_map()
+        entry = symbol_map.get(symbol)
+        if entry is None:
+            raise NotImplementedError(
+                f"extern_elementwise symbol '{symbol}' not supported in interpreter mode"
+            )
+        nargs, fn = entry
+        if nargs == 1:
+            return self.unary_op(argList[0], fn)
+        elif nargs == 2:
+            return self.binary_op(argList[0], argList[1], fn)
+        else:
+            result = fn(*(a.data for a in argList[:nargs]))
+            return TensorHandle(result, argList[0].dtype.scalar)
 
     def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
         raise NotImplementedError("inline_asm not supported in interpreter mode")
@@ -1139,6 +1251,12 @@ def _patch_lang(fn):
         _patch_lang_tensor(lang.tensor, scope)
         _patch_lang_core(lang, scope)
     _patch_builtin(tl.core.tensor_descriptor_base, interpreter_builder, scope)
+    # Patch libdevice modules so extern_elementwise calls are routed to the interpreter
+    for value in fn.__globals__.values():
+        if inspect.ismodule(value) and hasattr(value, '__name__'):
+            name = value.__name__
+            if 'libdevice' in name or 'extra.cuda' in name or 'extra.hip' in name:
+                _patch_builtin(value, interpreter_builder, scope)
     return scope
 
 
