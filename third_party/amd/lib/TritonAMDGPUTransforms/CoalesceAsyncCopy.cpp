@@ -14,7 +14,7 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace ttg = triton::gpu;
-using mlir::triton::amdgpu::ISAFamily;
+namespace ttag = triton::amdgpu;
 
 namespace mlir {
 
@@ -47,9 +47,6 @@ struct CoalesceAsyncCopyWrites
     auto dstTy = cast<ttg::MemDescType>(dst.getType());
 
     auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(srcTy.getEncoding());
-    if (!blockedEnc)
-      return rewriter.notifyMatchFailure(copyOp,
-                                         "src encoding must be #blocked");
 
     if (!isa<ttg::SwizzledSharedEncodingAttr, ttg::PaddedSharedEncodingAttr>(
             dstTy.getEncoding())) {
@@ -102,10 +99,21 @@ struct CoalesceAsyncCopyWrites
 
     ttg::DistributedEncodingTrait newDistEnc;
 
+    unsigned directToLdsContig = loadContig;
     if (LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstTy.getEncoding(),
-                                      dstTy.getAllocShape(), loadContig)) {
-      return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
+                                      dstTy.getAllocShape(),
+                                      directToLdsContig)) {
+      if (directToLdsContig <= copyOp.getContiguity())
+        return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
+      rewriter.modifyOpInPlace(
+          copyOp, [&]() { copyOp.setContiguity(directToLdsContig); });
+      return success();
     }
+
+    if (!blockedEnc)
+      return rewriter.notifyMatchFailure(
+          copyOp, "src encoding must be #blocked to rewrite layout");
+
     // Check if we support load contig because canLoadDirectToLds can change it
     if (!targetInfo.supportsDirectToLdsLoadBitWidth(loadContig * elemBitWidth))
       return rewriter.notifyMatchFailure(copyOp,
@@ -232,6 +240,77 @@ private:
   const DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> &asyncCopyContiguity;
 };
 
+// Gluon's cdna4_async_copy.buffer_load_to_shared emits the AMD buffer-load
+// direct-to-LDS op directly, bypassing ttg.async_copy_global_to_local.  Apply
+// the same contiguity analysis to its scalar base pointer + offsets tensor so
+// sub-dword element types (for example i8 MXFP scales) can be widened to a
+// legal direct-to-LDS transfer width.
+struct CoalesceBufferLoadToLocalWrites
+    : public OpRewritePattern<ttag::BufferLoadToLocalOp> {
+  CoalesceBufferLoadToLocalWrites(
+      const triton::AMD::TargetInfo &targetInfo,
+      const DenseMap<ttag::BufferLoadToLocalOp, unsigned> &bufferLoadContiguity,
+      MLIRContext *ctx)
+      : OpRewritePattern(ctx), targetInfo{targetInfo},
+        bufferLoadContiguity{std::move(bufferLoadContiguity)} {}
+
+  LogicalResult matchAndRewrite(ttag::BufferLoadToLocalOp copyOp,
+                                PatternRewriter &rewriter) const override {
+    auto dstTy = cast<ttg::MemDescType>(copyOp.getDest().getType());
+    if (!isa<ttg::SwizzledSharedEncodingAttr, ttg::PaddedSharedEncodingAttr>(
+            dstTy.getEncoding())) {
+      return rewriter.notifyMatchFailure(
+          copyOp, "dst encoding must be #swizzled or #padded");
+    }
+
+    unsigned loadContig = 0;
+    if (auto it = bufferLoadContiguity.find(copyOp);
+        it != bufferLoadContiguity.end())
+      loadContig = it->second;
+    else
+      return copyOp->emitError()
+             << "No contiguity information about the buffer load to LDS op";
+    assert(loadContig > 0);
+
+    auto elemBitWidth = dstTy.getElementTypeBitWidth();
+    unsigned minLegalContig = 1;
+    while (minLegalContig <= 128 / elemBitWidth &&
+           !targetInfo.supportsDirectToLdsLoadBitWidth(minLegalContig *
+                                                       elemBitWidth))
+      minLegalContig *= 2;
+    if (minLegalContig <= 128 / elemBitWidth)
+      loadContig = std::max(loadContig, minLegalContig);
+    loadContig =
+        fitToValidDirectToLdsVecSize(loadContig, elemBitWidth, targetInfo);
+    if (loadContig == 0) {
+      return rewriter.notifyMatchFailure(
+          copyOp, "could not find legal direct-to-LDS vector width");
+    }
+
+    auto ptrTy = cast<RankedTensorType>(
+        mlir::LLVM::AMD::getPointerTypeWithShape(copyOp.getPtr(),
+                                                 copyOp.getOffsets()));
+    unsigned directToLdsContig = loadContig;
+    if (!LLVM::AMD::canLoadDirectToLDS(targetInfo, ptrTy, dstTy.getEncoding(),
+                                       dstTy.getAllocShape(),
+                                       directToLdsContig)) {
+      return rewriter.notifyMatchFailure(
+          copyOp, "buffer load to LDS does not write coalesced into LDS");
+    }
+
+    if (directToLdsContig <= copyOp.getContiguity())
+      return rewriter.notifyMatchFailure(copyOp, "already coalesced");
+
+    rewriter.modifyOpInPlace(
+        copyOp, [&]() { copyOp.setContiguity(directToLdsContig); });
+    return success();
+  }
+
+private:
+  const triton::AMD::TargetInfo &targetInfo;
+  const DenseMap<ttag::BufferLoadToLocalOp, unsigned> &bufferLoadContiguity;
+};
+
 } // anonymous namespace
 
 class TritonAMDGPUCoalesceAsyncCopyPass
@@ -252,22 +331,38 @@ public:
                             targetInfo.getISAFamily()))
       return; // This pass is CDNA3 and CDNA4 specific.
 
-    // Precompute the contiguity of all AsyncCopy ops based on the src and
-    // mask contiguity/alignment to avoid rebuilding ModuleAxisInfoAnalysis
-    // after every IR change.
+    // Precompute the contiguity of all copy ops based on src and mask
+    // contiguity/alignment to avoid rebuilding ModuleAxisInfoAnalysis after
+    // every IR change.
     AMD::ModuleAxisInfoAnalysis axisAnalysis(m);
+    auto applyMaskAlignment = [&](unsigned contiguity, Value mask) {
+      if (mask)
+        contiguity = std::min<unsigned>(contiguity,
+                                        axisAnalysis.getMaskAlignment(mask));
+      return contiguity;
+    };
+
     DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> asyncCopyContiguity;
     m->walk([&](ttg::AsyncCopyGlobalToLocalOp copyOp) {
       unsigned contiguity =
           mlir::LLVM::AMD::getContiguity(copyOp.getSrc(), axisAnalysis);
-      if (auto mask = copyOp.getMask()) {
-        contiguity =
-            std::min<unsigned>(contiguity, axisAnalysis.getMaskAlignment(mask));
-      }
-      asyncCopyContiguity.insert({copyOp, contiguity});
+      asyncCopyContiguity.insert(
+          {copyOp, applyMaskAlignment(contiguity, copyOp.getMask())});
+    });
+    DenseMap<ttag::BufferLoadToLocalOp, unsigned> bufferLoadContiguity;
+    m->walk([&](ttag::BufferLoadToLocalOp copyOp) {
+      auto ptrTy = mlir::LLVM::AMD::getPointerTypeWithShape(
+          copyOp.getPtr(), copyOp.getOffsets());
+      auto elemNumBits = triton::getPointeeBitWidth(ptrTy);
+      unsigned contiguity =
+          axisAnalysis.getContiguity(copyOp.getOffsets(), elemNumBits);
+      bufferLoadContiguity.insert(
+          {copyOp, applyMaskAlignment(contiguity, copyOp.getMask())});
     });
     patterns.add<CoalesceAsyncCopyWrites>(targetInfo, asyncCopyContiguity,
                                           context);
+    patterns.add<CoalesceBufferLoadToLocalWrites>(
+        targetInfo, bufferLoadContiguity, context);
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
