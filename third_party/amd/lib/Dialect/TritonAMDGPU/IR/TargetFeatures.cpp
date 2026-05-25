@@ -248,7 +248,8 @@ bool TargetFeatures::supportsClusterLoadBitWidth(int bitWidth) const {
 
 bool TargetFeatures::supportsBufferAtomicRMW() const {
   return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4,
-                             ISAFamily::RDNA4, ISAFamily::GFX1250},
+                             ISAFamily::RDNA3, ISAFamily::RDNA4,
+                             ISAFamily::GFX1250},
                             getISAFamily());
 }
 
@@ -257,6 +258,8 @@ bool TargetFeatures::supportsBufferAtomicFadd(Type elementType) const {
   if (isaFamily == ISAFamily::CDNA3 && elementType.isBF16())
     return false;
   if (isaFamily == ISAFamily::RDNA4 && elementType.isF64())
+    return false;
+  if (isaFamily == ISAFamily::RDNA3 && !elementType.isF32())
     return false;
   return true;
 }
