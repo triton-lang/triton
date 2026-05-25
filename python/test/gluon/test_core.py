@@ -182,7 +182,7 @@ def async_shared_store_f16_kernel(out, BLOCK: ttgl.constexpr):
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_async_shared_store():
     block = 128
-    out = torch.empty((block,), device="cuda", dtype=torch.int32)
+    out = torch.empty((block, ), device="cuda", dtype=torch.int32)
 
     compiled = async_shared_store_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
 
@@ -193,7 +193,7 @@ def test_async_shared_store():
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_async_shared_store_packed_f16():
     block = 256
-    out = torch.empty((block,), device="cuda", dtype=torch.float16)
+    out = torch.empty((block, ), device="cuda", dtype=torch.float16)
 
     compiled = async_shared_store_f16_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
 

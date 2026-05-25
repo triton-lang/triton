@@ -236,8 +236,8 @@ public:
       info->barriers.push_back(
           {storeOp.getBarrier(), nullptr, /*count=*/0,
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
-           /*txCount=*/-static_cast<int>(tti::getMemDescLength(
-               storeOp.getDst()))});
+           /*txCount=*/
+           -static_cast<int>(tti::getMemDescLength(storeOp.getDst()))});
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         storeOp.getDst());
     }
