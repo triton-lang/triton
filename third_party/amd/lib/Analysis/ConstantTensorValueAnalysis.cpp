@@ -185,38 +185,30 @@ unsigned getPerThreadConsecutiveContiguity(
   if (outDims.size() != rank)
     return 1;
 
+  // ll.apply returns outs in getOutDimNames() order, which matches `outDims`.
   auto coordAt = [&](int32_t regIdx) {
     SmallVector<std::pair<StringAttr, int32_t>> ins;
     ins.reserve(ll.getNumInDims());
     for (auto dim : ll.getInDimNames())
       ins.push_back({dim, dim == kReg ? regIdx : 0});
     auto outs = ll.apply(ins);
+    assert(outs.size() == rank);
     SmallVector<int64_t> coord(rank, 0);
-    for (auto [name, val] : outs) {
-      // outDims are in standard 0..rank-1 order.
-      auto it = llvm::find(outDims, name);
-      if (it != outDims.end())
-        coord[it - outDims.begin()] = val;
+    for (auto [i, kv] : llvm::enumerate(outs)) {
+      assert(kv.first == outDims[i]);
+      coord[i] = kv.second;
     }
     return coord;
   };
 
-  // To prove the contiguity is independent of unknown scalars (kernel args,
-  // block args), probe with two distinct substitutions and require the
-  // per-register deltas to agree. Use 0 and the AxisInfo divisibility of the
-  // offsets value as the two probes.
-  unsigned divisibility = std::max<unsigned>(
-      1, axisAnalysis.getAlignment(offsetsValue, /*elementBitWidth=*/8));
-  int64_t substA = 0;
-  int64_t substB = divisibility;
-
+  // Per-register memory deltas relative to register 0.
   auto deltasFor = [&](int64_t subst) -> std::optional<SmallVector<int64_t>> {
     auto base = evaluateAt(offsetsValue, coordAt(0), subst);
     if (!base)
       return std::nullopt;
-    SmallVector<int64_t> deltas;
+    SmallVector<int64_t> deltas{0};
     deltas.reserve(numRegs);
-    for (unsigned r = 0; r < numRegs; ++r) {
+    for (unsigned r = 1; r < numRegs; ++r) {
       auto v = evaluateAt(offsetsValue, coordAt(r), subst);
       if (!v)
         return std::nullopt;
@@ -225,18 +217,23 @@ unsigned getPerThreadConsecutiveContiguity(
     return deltas;
   };
 
-  auto deltasA = deltasFor(substA);
-  auto deltasB = deltasFor(substB);
+  // To prove the contiguity is independent of unknown scalars (kernel args,
+  // block args), probe with two distinct substitutions and require the
+  // per-register deltas to agree. Use 0 and the AxisInfo divisibility of the
+  // offsets value.
+  unsigned divisibility = std::max<unsigned>(
+      1, axisAnalysis.getAlignment(offsetsValue, /*elementBitWidth=*/8));
+  auto deltasA = deltasFor(0);
+  auto deltasB = deltasFor(divisibility);
   if (!deltasA || !deltasB || *deltasA != *deltasB)
     return 1;
 
-  // Largest N such that registers [0..N) produce memory deltas [0..N).
+  // Largest prefix where deltas[r] == r (i.e. registers [0..N) access
+  // consecutive offsets), rounded down to a power of two.
   unsigned consecutive = 1;
-  for (unsigned r = 1; r < numRegs; ++r) {
-    if ((*deltasA)[r] != (int64_t)r)
-      break;
-    consecutive = r + 1;
-  }
+  while (consecutive < numRegs &&
+         (*deltasA)[consecutive] == (int64_t)consecutive)
+    ++consecutive;
   return llvm::bit_floor(consecutive);
 }
 

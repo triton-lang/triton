@@ -312,22 +312,16 @@ private:
   const DenseMap<ttag::BufferLoadToLocalOp, unsigned> &bufferLoadContiguity;
 };
 
-// Layout-only widening for the VGPR sibling `amdgpu.buffer_load`. The op
-// already carries a `$contiguity` attribute that the lowering consumes via
+// Widening for the VGPR sibling `amdgpu.buffer_load`. The op already carries
+// a `$contiguity` attribute that the lowering consumes via
 // `vec = std::max(vec, op.getContiguity())`, but nothing in the pipeline
-// stamps it -- so vectorization is determined solely by AxisInfo during
-// lowering. This pattern mirrors `CoalesceBufferLoadToLocalWrites` but
-// without the dst-shared-encoding / `canLoadDirectToLDS` checks (the VGPR
-// path has no shared dst layout); it just clamps the precomputed AxisInfo
-// contiguity to a legal VGPR `buffer_load` transaction width (max 128 bits,
-// power of two) and stamps the attribute.
-//
-// In addition to the AxisInfo-derived contiguity, this also consults the
-// constant-tensor evaluator (`ConstantTensorValueAnalysis`) which samples
-// the offsets producer chain at per-register tensor coords. That catches
-// cases where the per-thread memory deltas are hidden behind mod/div
-// arithmetic (e.g. the MXFP4 B-scale pre-shuffle in
-// `mxfp4_gemm_gfx950.py`) which AxisInfo cannot see.
+// stamps it -- so vectorization is otherwise determined solely by AxisInfo
+// during lowering. This pattern clamps the precomputed contiguity to a
+// legal VGPR `buffer_load` transaction width (max 128 bits, power of two)
+// and stamps it. The precompute combines AxisInfo with the constant-tensor
+// evaluator (`ConstantTensorValueAnalysis`) so we also catch per-thread
+// memory deltas hidden behind mod/div arithmetic that AxisInfo cannot see
+// (e.g. the MXFP4 B-scale pre-shuffle in `mxfp4_gemm_gfx950.py`).
 struct CoalesceBufferLoadWrites
     : public OpRewritePattern<ttag::BufferLoadOp> {
   CoalesceBufferLoadWrites(
