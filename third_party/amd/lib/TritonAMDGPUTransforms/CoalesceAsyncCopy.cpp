@@ -4,6 +4,7 @@
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
+#include "third_party/amd/include/Analysis/ConstantTensorValueAnalysis.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -321,12 +322,12 @@ private:
 // contiguity to a legal VGPR `buffer_load` transaction width (max 128 bits,
 // power of two) and stamps the attribute.
 //
-// TODO: this is layout/AxisInfo-only. Cases where the per-thread memory
-// contiguity is hidden behind mod/div arithmetic (e.g. the MXFP4 B-scale
-// pre-shuffle in `mxfp4_gemm_gfx950.py`) require a constant-evaluator
-// over the offsets producer chain. See
-// `docs/amd-followup-buffer-load-coalesce.md` for the motivating case and
-// `docs/plans/amd-coalesce-buffer-load-vgpr.md` for the follow-up plan.
+// In addition to the AxisInfo-derived contiguity, this also consults the
+// constant-tensor evaluator (`ConstantTensorValueAnalysis`) which samples
+// the offsets producer chain at per-register tensor coords. That catches
+// cases where the per-thread memory deltas are hidden behind mod/div
+// arithmetic (e.g. the MXFP4 B-scale pre-shuffle in
+// `mxfp4_gemm_gfx950.py`) which AxisInfo cannot see.
 struct CoalesceBufferLoadWrites
     : public OpRewritePattern<ttag::BufferLoadOp> {
   CoalesceBufferLoadWrites(
@@ -419,6 +420,11 @@ public:
       auto elemNumBits = triton::getPointeeBitWidth(ptrTy);
       unsigned contiguity =
           axisAnalysis.getContiguity(loadOp.getOffsets(), elemNumBits);
+      // Use the per-register constant evaluator as an extra lower bound.
+      // This catches mod/div offset patterns AxisInfo cannot see.
+      unsigned evalContig = triton::AMD::getPerThreadConsecutiveContiguity(
+          loadOp.getOffsets(), axisAnalysis);
+      contiguity = std::max(contiguity, evalContig);
       bufferLoadVgprContiguity.insert(
           {loadOp, applyMaskAlignment(contiguity, loadOp.getMask())});
     });
