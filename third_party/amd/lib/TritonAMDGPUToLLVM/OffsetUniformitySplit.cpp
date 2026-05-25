@@ -17,33 +17,23 @@ namespace {
 // From UniformityAnalysis: peels extractvalue/insertvalue chains.
 using mlir::triton::AMD::lookThroughExtractValue;
 
-bool isAddOrDisjointOr(Operation *op) {
-  if (!op)
-    return false;
-  if (isa<LLVM::AddOp, arith::AddIOp>(op))
-    return true;
-  if (auto orOp = dyn_cast<LLVM::OrOp>(op))
-    return orOp.getIsDisjoint();
-  return false;
-}
-
-template <typename IsUniformFn>
-void collectAddTreeLeavesWith(Value v, IsUniformFn isUniform,
-                              SmallVectorImpl<Value> &uniformLeaves,
-                              SmallVectorImpl<Value> &perLaneLeaves) {
+// Walk the additive tree of `v` (rooted at `add` ops). Recurse into
+// both operands of each `add`; classify every leaf as uniform or
+// per-lane via `isUniform`.
+void collectAddTreeLeaves(Value v,
+                          llvm::function_ref<bool(Value)> isUniform,
+                          SmallVectorImpl<Value> &uniformLeaves,
+                          SmallVectorImpl<Value> &perLaneLeaves) {
   v = lookThroughExtractValue(v);
   Operation *def = v.getDefiningOp();
-  if (def && isAddOrDisjointOr(def)) {
-    collectAddTreeLeavesWith(def->getOperand(0), isUniform, uniformLeaves,
-                             perLaneLeaves);
-    collectAddTreeLeavesWith(def->getOperand(1), isUniform, uniformLeaves,
-                             perLaneLeaves);
+  if (def && isa<LLVM::AddOp, arith::AddIOp>(def)) {
+    collectAddTreeLeaves(def->getOperand(0), isUniform, uniformLeaves,
+                         perLaneLeaves);
+    collectAddTreeLeaves(def->getOperand(1), isUniform, uniformLeaves,
+                         perLaneLeaves);
     return;
   }
-  if (isUniform(v))
-    uniformLeaves.push_back(v);
-  else
-    perLaneLeaves.push_back(v);
+  (isUniform(v) ? uniformLeaves : perLaneLeaves).push_back(v);
 }
 
 bool isLiteralZero(Value v) {
@@ -64,15 +54,23 @@ Value sumValues(ArrayRef<Value> vs, RewriterBase &rewriter, Location loc) {
   return sum;
 }
 
-std::pair<Value, Value>
-splitUniformAdditiveImpl(Value offset, RewriterBase &rewriter, Location loc,
-                         llvm::function_ref<bool(Value)> isUniform) {
+} // namespace
+
+std::pair<Value, Value> splitUniformAdditive(Value offset,
+                                             RewriterBase &rewriter,
+                                             Location loc,
+                                             const DataFlowSolver *solver) {
+  assert(solver && "splitUniformAdditive requires a non-null DataFlowSolver");
+
+  auto isUniform = [&](Value v) {
+    return mlir::triton::AMD::isUniformValue(v, *solver);
+  };
+
   SmallVector<Value> uniformLeaves;
   SmallVector<Value> perLaneLeaves;
-  collectAddTreeLeavesWith(offset, isUniform, uniformLeaves, perLaneLeaves);
+  collectAddTreeLeaves(offset, isUniform, uniformLeaves, perLaneLeaves);
 
   llvm::erase_if(uniformLeaves, isLiteralZero);
-
   if (uniformLeaves.empty())
     return {Value(), offset};
 
@@ -83,23 +81,7 @@ splitUniformAdditiveImpl(Value offset, RewriterBase &rewriter, Location loc,
                      .getResult();
     return {uniform, zero};
   }
-  Value perLane = sumValues(perLaneLeaves, rewriter, loc);
-  return {uniform, perLane};
-}
-
-} // namespace
-
-std::pair<Value, Value> splitUniformAdditive(Value offset,
-                                             RewriterBase &rewriter,
-                                             Location loc,
-                                             const DataFlowSolver *solver) {
-  assert(solver && "splitUniformAdditive requires a non-null DataFlowSolver");
-  if (!solver)
-    return {Value(), offset};
-  auto isUniform = [&](Value v) {
-    return mlir::triton::AMD::isUniformValue(v, *solver);
-  };
-  return splitUniformAdditiveImpl(offset, rewriter, loc, isUniform);
+  return {uniform, sumValues(perLaneLeaves, rewriter, loc)};
 }
 
 } // namespace mlir::LLVM::AMD
