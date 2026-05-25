@@ -445,7 +445,7 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
         # CHECK: %[[COND:.*]] = arith.cmpi slt, %ivar_[[IV1]], %N : i32
         # CHECK: scf.condition(%[[COND]]) %arange_[[AR0]], %ivar_[[IV1]] : tensor<16xi32>, i32
         while ivar < N:
-            # CHECK: ^bb0(%arange_[[AR0]]: tensor<16xi32> loc("arange"), %ivar_[[IV1]]: i32
+            # CHECK: ^bb0(%arange_[[AR0]]: tensor<16xi32> loc("arange"(#{{.*}})), %ivar_[[IV1]]: i32
 
             # CHECK: %ivar_[[IV2:.+]] = arith.addi %ivar_[[IV1]], %c1_i32 : i32
             ivar += 1
