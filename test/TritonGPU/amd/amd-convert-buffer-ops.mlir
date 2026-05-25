@@ -1,6 +1,7 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx942 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX942-ONLY,CDNA
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx950 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX950-PLUS,CDNA
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1250 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX950-PLUS
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1100 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX1100
 
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
@@ -707,6 +708,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %4 = tt.splat %3 : !tt.ptr<bf16> -> tensor<512x!tt.ptr<bf16>, #blocked>
     %5 = tt.addptr %4, %2 : tensor<512x!tt.ptr<bf16>, #blocked>, tensor<512xi32, #blocked>
     // GFX942-ONLY-NOT: amdg.buffer_atomic_rmw
+    // GFX1100-NOT: amdg.buffer_atomic_rmw
     // GFX950-PLUS: amdg.buffer_atomic_rmw
     %6 = tt.atomic_rmw fadd, acq_rel, gpu, %5, %cst_0, %cst : (tensor<512x!tt.ptr<bf16>, #blocked>, tensor<512xbf16, #blocked>, tensor<512xi1, #blocked>) -> tensor<512xbf16, #blocked>
     tt.return
@@ -944,5 +946,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %20 = tt.addptr %19, %18 : tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xi32, #blocked>
     %21 = tt.atomic_rmw fadd, relaxed, gpu, %20, %15, %cst : (tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xf32, #blocked>, tensor<64xi1, #blocked>) -> tensor<64xf32, #blocked>
     tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // COMMON-LABEL: atomic_rmw_buffer_fadd_f32
+  tt.func public @atomic_rmw_buffer_fadd_f32(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: tensor<512xf32, #blocked>) -> tensor<512xf32, #blocked> {
+    %cst = arith.constant dense<true> : tensor<512xi1, #blocked>
+    %0 = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32, #blocked>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<512x!tt.ptr<f32>, #blocked>
+    %2 = tt.addptr %1, %0 : tensor<512x!tt.ptr<f32>, #blocked>, tensor<512xi32, #blocked>
+    // COMMON: amdg.buffer_atomic_rmw fadd
+    %3 = tt.atomic_rmw fadd, acq_rel, gpu, %2, %arg1, %cst : (tensor<512x!tt.ptr<f32>, #blocked>, tensor<512xf32, #blocked>, tensor<512xi1, #blocked>) -> tensor<512xf32, #blocked>
+    tt.return %3 : tensor<512xf32, #blocked>
   }
 }
