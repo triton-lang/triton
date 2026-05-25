@@ -136,7 +136,6 @@ bool init_globals() noexcept try {
   amd_tensor_descriptor_cls =
       import_from("triton.experimental.gluon.amd.gfx1250", "TensorDescriptor");
 
-  auto m_canonicalize = py::module_::import("triton._utils");
   canonicalize_dtype_fn = import_from("triton._utils", "canonicalize_dtype");
   canonicalize_ptr_dtype_fn =
       import_from("triton._utils", "canonicalize_ptr_dtype");
