@@ -275,3 +275,34 @@ tt.func @async_copy_with_padding_different_vec(%input: tensor<256x!tt.ptr<f32>, 
   tt.return
 }
 }
+
+// -----
+
+// VGPR-path `amdgpu.buffer_load`: the offsets have AxisInfo contiguity 4
+// (tt.make_range, divisibility 16), elemBitWidth = 32, so the pass should
+// stamp contiguity = 4 (clamped to 128 / 32 = 4).
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+// CHECK-LABEL: buffer_load_vgpr_stamp_contiguity
+tt.func @buffer_load_vgpr_stamp_contiguity(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> tensor<1024xf32, #blocked> {
+  %r = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+  // CHECK: amdg.buffer_load {{.*}} {contiguity = 4 : i32}
+  %ret = amdg.buffer_load %arg0[%r] : tensor<1024xf32, #blocked>
+  tt.return %ret : tensor<1024xf32, #blocked>
+}
+}
+
+// -----
+
+// Sub-dword element: i8 offsets with AxisInfo contiguity 16 should be
+// clamped to 128 / 8 = 16 and stamped.
+#blocked = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+// CHECK-LABEL: buffer_load_vgpr_i8
+tt.func @buffer_load_vgpr_i8(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}) -> tensor<4096xi8, #blocked> {
+  %r = tt.make_range {end = 4096 : i32, start = 0 : i32} : tensor<4096xi32, #blocked>
+  // CHECK: amdg.buffer_load {{.*}} {contiguity = 16 : i32}
+  %ret = amdg.buffer_load %arg0[%r] : tensor<4096xi8, #blocked>
+  tt.return %ret : tensor<4096xi8, #blocked>
+}
+}

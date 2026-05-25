@@ -311,6 +311,59 @@ private:
   const DenseMap<ttag::BufferLoadToLocalOp, unsigned> &bufferLoadContiguity;
 };
 
+// Layout-only widening for the VGPR sibling `amdgpu.buffer_load`. The op
+// already carries a `$contiguity` attribute that the lowering consumes via
+// `vec = std::max(vec, op.getContiguity())`, but nothing in the pipeline
+// stamps it -- so vectorization is determined solely by AxisInfo during
+// lowering. This pattern mirrors `CoalesceBufferLoadToLocalWrites` but
+// without the dst-shared-encoding / `canLoadDirectToLDS` checks (the VGPR
+// path has no shared dst layout); it just clamps the precomputed AxisInfo
+// contiguity to a legal VGPR `buffer_load` transaction width (max 128 bits,
+// power of two) and stamps the attribute.
+//
+// TODO: this is layout/AxisInfo-only. Cases where the per-thread memory
+// contiguity is hidden behind mod/div arithmetic (e.g. the MXFP4 B-scale
+// pre-shuffle in `mxfp4_gemm_gfx950.py`) require a constant-evaluator
+// over the offsets producer chain. See
+// `docs/amd-followup-buffer-load-coalesce.md` for the motivating case and
+// `docs/plans/amd-coalesce-buffer-load-vgpr.md` for the follow-up plan.
+struct CoalesceBufferLoadWrites
+    : public OpRewritePattern<ttag::BufferLoadOp> {
+  CoalesceBufferLoadWrites(
+      const DenseMap<ttag::BufferLoadOp, unsigned> &bufferLoadVgprContiguity,
+      MLIRContext *ctx)
+      : OpRewritePattern(ctx),
+        bufferLoadVgprContiguity{std::move(bufferLoadVgprContiguity)} {}
+
+  LogicalResult matchAndRewrite(ttag::BufferLoadOp loadOp,
+                                PatternRewriter &rewriter) const override {
+    unsigned loadContig = 0;
+    if (auto it = bufferLoadVgprContiguity.find(loadOp);
+        it != bufferLoadVgprContiguity.end())
+      loadContig = it->second;
+    else
+      return loadOp->emitError()
+             << "No contiguity information about the buffer load op";
+    assert(loadContig > 0);
+
+    // Clamp to the largest VGPR buffer_load transaction (128 bits =
+    // buffer_load_dwordx4), then to a power of two.
+    auto resTy = cast<RankedTensorType>(loadOp.getResult().getType());
+    unsigned elemBitWidth = resTy.getElementTypeBitWidth();
+    loadContig = llvm::bit_floor(std::min(loadContig, 128u / elemBitWidth));
+
+    if (loadContig <= loadOp.getContiguity())
+      return rewriter.notifyMatchFailure(loadOp, "already coalesced");
+
+    rewriter.modifyOpInPlace(
+        loadOp, [&]() { loadOp.setContiguity(loadContig); });
+    return success();
+  }
+
+private:
+  const DenseMap<ttag::BufferLoadOp, unsigned> &bufferLoadVgprContiguity;
+};
+
 } // anonymous namespace
 
 class TritonAMDGPUCoalesceAsyncCopyPass
@@ -359,10 +412,21 @@ public:
       bufferLoadContiguity.insert(
           {copyOp, applyMaskAlignment(contiguity, copyOp.getMask())});
     });
+    DenseMap<ttag::BufferLoadOp, unsigned> bufferLoadVgprContiguity;
+    m->walk([&](ttag::BufferLoadOp loadOp) {
+      auto ptrTy = mlir::LLVM::AMD::getPointerTypeWithShape(
+          loadOp.getPtr(), loadOp.getOffsets());
+      auto elemNumBits = triton::getPointeeBitWidth(ptrTy);
+      unsigned contiguity =
+          axisAnalysis.getContiguity(loadOp.getOffsets(), elemNumBits);
+      bufferLoadVgprContiguity.insert(
+          {loadOp, applyMaskAlignment(contiguity, loadOp.getMask())});
+    });
     patterns.add<CoalesceAsyncCopyWrites>(targetInfo, asyncCopyContiguity,
                                           context);
     patterns.add<CoalesceBufferLoadToLocalWrites>(
         targetInfo, bufferLoadContiguity, context);
+    patterns.add<CoalesceBufferLoadWrites>(bufferLoadVgprContiguity, context);
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
