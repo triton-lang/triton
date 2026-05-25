@@ -190,6 +190,14 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
   //   LLVM verifier to fail. When this is fixed, the ROCDL ops should be used
   //   here.
   auto rmwOpStr = stringifyRMWOp(rmwType).str();
+  // RMWOp::MAX / MIN stringify to "max" / "min", which are not real AMDGPU
+  // buffer-atomic intrinsic suffixes. The valid suffixes are
+  // .{s,u,f}{max,min}. RMWOp::UMAX and RMWOp::UMIN already stringify to
+  // "umax" / "umin" and need no override.
+  if (rmwType == RMWOp::MAX || rmwType == RMWOp::MIN) {
+    StringRef prefix = isa<FloatType>(getElementTypeOrSelf(type)) ? "f" : "s";
+    rmwOpStr = (prefix + rmwOpStr).str();
+  }
   auto instrinsic = "llvm.amdgcn.raw.ptr.buffer.atomic." + rmwOpStr;
   auto bufferAtomicRMW = LLVM::createLLVMIntrinsicCallOp(
       rewriter, loc, instrinsic, bufferType, args);
