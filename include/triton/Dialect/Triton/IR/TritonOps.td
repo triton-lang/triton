@@ -644,6 +644,9 @@ def TT_DotOp : TT_Op<"dot", [Pure,
         bf16x6: implement the 6xBF16 trick. For more info see the pass in F32DotTC.cpp
         ieee: don't use TC, implement dot in software.
         If the GPU does not have Tensor cores or the inputs are not f32, this flag is ignored.
+        $kChunksHint carries a user hint for the Hopper RS-WGMMA K-split pass; it
+        is consumed when lowering to `ttng.warp_group_dot` and is a no-op on other
+        paths (0 = compiler default, 1 = disabled, >=2 = explicit power of two).
     }];
 
     let arguments = (
@@ -652,7 +655,8 @@ def TT_DotOp : TT_Op<"dot", [Pure,
       TT_FpIntTensor:$b,
       TT_FpIntTensor:$c,
       DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
-      DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc
+      DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
+      DefaultValuedAttr<I32Attr, "0">:$kChunksHint
     );
 
     let results = (outs TT_FpIntTensor:$d);

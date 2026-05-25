@@ -172,7 +172,9 @@ public:
                                                   rewriter.getF32FloatAttr(0)));
     rewriter.replaceOpWithNewOp<DotOp>(op, expandLhsOp.getSrc(),
                                        expandRhsOp.getSrc(), newAcc,
-                                       InputPrecision::IEEE, 0);
+                                       InputPrecision::IEEE,
+                                       /*maxNumImpreciseAcc=*/0,
+                                       /*kChunksHint=*/0);
     return success();
   }
 };

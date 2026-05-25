@@ -318,15 +318,12 @@ SmallVector<Value> splitRhs(OpBuilder &builder,
 }
 
 std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
-  // Splits wgmma(tensor, shmem, acc) into
-  //   wgmma(tensor[:, :K//2], shmem[:K//2, :], acc)
-  //   wgmma(tensor[:, K//2:], shmem[K//2:, :], acc)
-  // which allows for in-register pipelining of the wgmmas.
-  //
-  // Theoretically, it may be beneficial to split even further which allows more
-  // fine-grained overlapping of the wgmma ops but empirically 2 splits gave the
-  // best performance. In future this may be something we want to allow the user
-  // to tune.
+  // Splits wgmma(tensor, shmem, acc) into numSplits chained sub-dots along K,
+  // which allows for in-register pipelining of the wgmmas. The default is 2.
+  // The count is read from the op's `kChunksHint` attr: 0 means "use default",
+  // 1 disables the split, >=2 is an explicit power-of-two chunk count. The op
+  // verifier enforces power-of-two and fit against K/instrK, so we only gate
+  // on the runtime-skip cases here.
   if (!isa<RankedTensorType>(dotOp.getA().getType())) {
     return {dotOp};
   }
@@ -336,14 +333,14 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
   auto origK = a.getType().getShape().back();
   auto instrK = cast<ttg::NvidiaMmaEncodingAttr>(dotOp.getType().getEncoding())
                     .getInstrShape()[2];
-  // Nothing to split
-  if (origK <= instrK) {
+
+  int32_t userChunks = dotOp.getKChunksHint();
+  if (userChunks == 1 || origK <= instrK) {
     return {dotOp};
   }
-  constexpr int numSplits = 2;
+  size_t numSplits = userChunks != 0 ? userChunks : 2;
   uint32_t newK = origK / numSplits;
 
-  assert(origK % newK == 0 && "origK must be divisible by newK");
   auto builder = OpBuilder(dotOp);
   auto loc = dotOp.getLoc();
   auto lhss = splitLhs(builder, a, newK);
@@ -355,7 +352,7 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
   Value C = dotOp.getC();
   uint32_t numImpreciseAccLeft = dotOp.getMaxNumImpreciseAcc();
   std::vector<ttng::WarpGroupDotOp> dots;
-  for (int i = 0; i < numSplits; i++) {
+  for (size_t i = 0; i < numSplits; i++) {
     //  2**30 is to prevent the subtile from adding
     // extra imprecise accumulator, See WGMMA.cpp
     auto take = std::min(numImpreciseAccLeft, newK);

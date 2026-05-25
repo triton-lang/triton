@@ -2350,8 +2350,8 @@ def cast(input, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcas
 
 
 @builtin
-def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=float32,
-        _semantic=None):
+def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, k_chunks_hint=None,
+        out_dtype=float32, _semantic=None):
     """
     Returns the matrix product of two blocks.
 
@@ -2378,6 +2378,11 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     :param allow_tf32: *Deprecated.* If true, input_precision is set to "tf32".
       Only one of :code:`input_precision` and :code:`allow_tf32` can be
       specified (i.e. at least one must be :code:`None`).
+    :param k_chunks_hint: Optional positive power of two that sets the number
+      of K-axis chunks used when splitting eligible register-shared WGMMA ops
+      for this dot on Hopper. :code:`1` disables chunking; :code:`None` (the
+      default) leaves the compiler default (currently :code:`2`) in place. This
+      knob has no effect on dots that do not reach the RS WGMMA split path.
     """
     assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
     if input_precision is None:
@@ -2388,6 +2393,7 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     input_precision = _unwrap_if_constexpr(input_precision)
     out_dtype = _unwrap_if_constexpr(out_dtype)
     max_num_imprecise_acc = _unwrap_if_constexpr(max_num_imprecise_acc)
+    k_chunks_hint = _unwrap_if_constexpr(k_chunks_hint)
     acc = _unwrap_if_constexpr(acc)
 
     # check shapes make sense:
@@ -2412,7 +2418,7 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
         if acc is not None:
             acc = _semantic.reshape(acc, [batch_size] + c_shape[-2:], can_reorder=False)
 
-    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype, k_chunks_hint)
 
     if rank >= 4:
         res = _semantic.reshape(res, c_shape, can_reorder=False)

@@ -105,6 +105,27 @@ def test_compile_only_dot() -> None:
     assert k.asm["cubin"] != b""
 
 
+def test_compile_only_dot_k_chunks_hint() -> None:
+
+    @triton.jit
+    def simple_dot(a_base, b_base, out, K_CHUNKS_HINT: tl.constexpr):
+        SIZE: tl.constexpr = 64
+        a_ptr = a_base + tl.arange(0, SIZE)[:, None] * SIZE + tl.arange(0, SIZE)[None, :]
+        b_ptr = b_base + tl.arange(0, SIZE)[:, None] * SIZE + tl.arange(0, SIZE)[None, :]
+        a = tl.load(a_ptr)
+        b = tl.load(b_ptr)
+        c = tl.dot(a, b, k_chunks_hint=K_CHUNKS_HINT)
+        out_ptr = out + tl.arange(0, SIZE)[:, None] * SIZE + tl.arange(0, SIZE)[None, :]
+        tl.store(out_ptr, c)
+
+    k = triton.compile(
+        triton.compiler.ASTSource(
+            fn=simple_dot,
+            signature={"a_base": "*fp16", "b_base": "*fp16", "out": "*fp32", "K_CHUNKS_HINT":
+                       "constexpr"}, constexprs={"K_CHUNKS_HINT": 4}), target=GPUTarget("cuda", 90, 32))
+    assert "kChunksHint = 4 : i32" in k.asm["ttir"]
+
+
 def test_compile_only_k_loop() -> None:
 
     @triton.jit

@@ -700,7 +700,7 @@ class InterpreterBuilder:
     def create_trans(self, arg, perm):
         return TensorHandle(np.transpose(arg.data, perm), arg.dtype.scalar)
 
-    def create_dot(self, a, b, d, input_precision, max_num_imprecise_acc):
+    def create_dot(self, a, b, d, input_precision, max_num_imprecise_acc, k_chunks_hint=0):
         a_data = a.data
         b_data = b.data
         if (a.dtype.primitive_bitwidth == 8 and a.dtype.is_floating()) or \

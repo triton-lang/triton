@@ -437,8 +437,9 @@ public:
 
       newDot = triton::nvidia_gpu::WarpGroupDotOp::create(
           rewriter, dotOp.getLoc(), mmaResult.newRetType, a, b,
-          mmaResult.newAcc, nullptr, dotOp.getInputPrecision(),
-          dotOp.getMaxNumImpreciseAcc(), false);
+          mmaResult.newAcc, /*useC=*/nullptr, dotOp.getInputPrecision(),
+          dotOp.getMaxNumImpreciseAcc(), /*isAsync=*/false,
+          dotOp.getKChunksHint());
     } else {
       int minBitwidth =
           std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
@@ -446,9 +447,10 @@ public:
                                   rewriter);
       b = convertDotOperandForMMA(b, 1, minBitwidth, mmaResult.newRetType,
                                   rewriter);
-      newDot = DotOp::create(rewriter, dotOp.getLoc(), mmaResult.newRetType, a,
-                             b, mmaResult.newAcc, dotOp.getInputPrecision(),
-                             dotOp.getMaxNumImpreciseAcc());
+      newDot =
+          DotOp::create(rewriter, dotOp.getLoc(), mmaResult.newRetType, a, b,
+                        mmaResult.newAcc, dotOp.getInputPrecision(),
+                        dotOp.getMaxNumImpreciseAcc(), dotOp.getKChunksHint());
     }
 
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, dotOp.getType(),

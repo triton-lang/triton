@@ -1420,7 +1420,7 @@ class TritonSemantic(Generic[TensorTy]):
         return getattr(ir.INPUT_PRECISION, input_precision)
 
     def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
-            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
+            max_num_imprecise_acc: int, out_dtype: tl.dtype, k_chunks_hint: Optional[int] = None) -> TensorTy:
         assert lhs.type.is_block() and rhs.type.is_block()
 
         if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
@@ -1509,8 +1509,16 @@ class TritonSemantic(Generic[TensorTy]):
             if lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and max_num_imprecise_acc > K:
                 raise ValueError(f"max_num_imprecise_acc ({max_num_imprecise_acc}) must be <= K ({K})")
 
+        if k_chunks_hint is None:
+            k_chunks_hint = 0
+        else:
+            if not isinstance(k_chunks_hint, int) or isinstance(
+                    k_chunks_hint, bool) or k_chunks_hint < 1 or (k_chunks_hint & (k_chunks_hint - 1)) != 0:
+                raise ValueError(f"k_chunks_hint must be None or a positive power of two, got {k_chunks_hint!r}")
+
         return self.tensor(
-            self.builder.create_dot(lhs.handle, rhs.handle, acc_handle, input_precision, max_num_imprecise_acc), ret_ty)
+            self.builder.create_dot(lhs.handle, rhs.handle, acc_handle, input_precision, max_num_imprecise_acc,
+                                    k_chunks_hint), ret_ty)
 
     def _str_to_fp_type(self, float_format: str):
         ty_enum = getattr(ir.ScaleDotElemTypeTY, float_format.upper(), None)

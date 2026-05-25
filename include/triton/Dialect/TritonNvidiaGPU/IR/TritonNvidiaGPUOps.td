@@ -208,7 +208,9 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
   let summary = "warp group dot";
 
   let description = [{
-    $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
+    $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp.
+    $kChunksHint tunes the number of K-axis chunks the RS-WGMMA pipeline splits
+    this op into (0 = compiler default, 1 = disabled, >=2 = explicit power of two).
   }];
 
   let arguments = (ins
@@ -218,7 +220,8 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
     Optional<I1>:$useC,
     DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
     DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
-    DefaultValuedAttr<BoolAttr, "false">:$isAsync
+    DefaultValuedAttr<BoolAttr, "false">:$isAsync,
+    DefaultValuedAttr<I32Attr, "0">:$kChunksHint
   );
 
   let results = (outs TT_FpIntTensor:$d);

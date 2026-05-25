@@ -771,7 +771,8 @@ public:
                                mfmaInstr->bElementType);
       newDot = tt::DotOp::create(rewriter, dotOp.getLoc(), newAcc.getType(), a,
                                  b, newAcc, dotOp.getInputPrecision(),
-                                 dotOp.getMaxNumImpreciseAcc());
+                                 dotOp.getMaxNumImpreciseAcc(),
+                                 dotOp.getKChunksHint());
     }
 
     Value dotOutput =
@@ -1532,7 +1533,8 @@ public:
                                          operandTypes[1]);
     auto newDot = tt::DotOp::create(
         rewriter, dotOp.getLoc(), newRetType, castedA, castedB, newAcc,
-        dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
+        dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc(),
+        dotOp.getKChunksHint());
 
     Value dotOutput = convertAndCastTensor(rewriter, newDot, oldRetEncoding,
                                            oldRetType.getElementType());
@@ -1639,9 +1641,10 @@ public:
     if (dotTypes.a.isF16() && dotTypes.b.isF16() && dotTypes.c.isF16() &&
         dotTypes.d.isF16() && k % 2 == 0) {
       auto newC = castToElTy(rewriter, dotOp.getC(), f32_ty);
-      auto newDot = DotOp::create(
-          rewriter, dotOp.getLoc(), newC.getType(), dotOp.getA(), dotOp.getB(),
-          newC, dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
+      auto newDot =
+          DotOp::create(rewriter, dotOp.getLoc(), newC.getType(), dotOp.getA(),
+                        dotOp.getB(), newC, dotOp.getInputPrecision(),
+                        dotOp.getMaxNumImpreciseAcc(), dotOp.getKChunksHint());
       auto newD = castToElTy(rewriter, newDot.getResult(), f16_ty);
       rewriter.replaceOp(dotOp, newD);
       return success();
@@ -1681,9 +1684,10 @@ public:
     auto newB = castToElTy(rewriter, dotOp.getB(), commonTy);
     auto newC = castToElTy(rewriter, dotOp.getC(), commonTy);
 
-    auto newDot = DotOp::create(rewriter, dotOp.getLoc(), newC.getType(), newA,
-                                newB, newC, dotOp.getInputPrecision(),
-                                dotOp.getMaxNumImpreciseAcc());
+    auto newDot =
+        DotOp::create(rewriter, dotOp.getLoc(), newC.getType(), newA, newB,
+                      newC, dotOp.getInputPrecision(),
+                      dotOp.getMaxNumImpreciseAcc(), dotOp.getKChunksHint());
     auto newD = castToElTy(rewriter, newDot.getResult(), dotTypes.d);
 
     rewriter.replaceOp(dotOp, newD);

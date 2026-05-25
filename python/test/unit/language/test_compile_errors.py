@@ -564,6 +564,28 @@ def test_dot_scaled_shape_verification(fresh_triton_cache):
     assert str(e.value.__cause__) == "Operands must have the same scale factor; (lhs: 16 vs rhs: 32)"
 
 
+@pytest.mark.parametrize("k_chunks_hint", [0, 3, True])
+def test_err_dot_invalid_k_chunks_hint(k_chunks_hint):
+
+    @triton.jit
+    def simple_dot(a_base, b_base, out, K_CHUNKS_HINT: tl.constexpr):
+        SIZE: tl.constexpr = 64
+        a_ptr = a_base + tl.arange(0, SIZE)[:, None] * SIZE + tl.arange(0, SIZE)[None, :]
+        b_ptr = b_base + tl.arange(0, SIZE)[:, None] * SIZE + tl.arange(0, SIZE)[None, :]
+        a = tl.load(a_ptr)
+        b = tl.load(b_ptr)
+        c = tl.dot(a, b, k_chunks_hint=K_CHUNKS_HINT)
+        out_ptr = out + tl.arange(0, SIZE)[:, None] * SIZE + tl.arange(0, SIZE)[None, :]
+        tl.store(out_ptr, c)
+
+    with pytest.raises(CompilationError, match="k_chunks_hint must be None or a positive power of two"):
+        triton.compile(
+            triton.compiler.ASTSource(
+                fn=simple_dot,
+                signature={"a_base": "*fp16", "b_base": "*fp16", "out": "*fp32", "K_CHUNKS_HINT":
+                           "constexpr"}, constexprs={"K_CHUNKS_HINT": k_chunks_hint}))
+
+
 def test_err_nested_function_def():
 
     @triton.jit

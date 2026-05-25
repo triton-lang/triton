@@ -120,6 +120,24 @@ LogicalResult WarpGroupDotOp::verify() {
     }
   }
 
+  int32_t chunks = getKChunksHint();
+  if (chunks != 0) {
+    if (chunks < 1 || !llvm::isPowerOf2_64(chunks))
+      return emitOpError("kChunksHint must be 0 or a positive power of two, "
+                         "got ")
+             << chunks;
+    // The split only runs on RS dots (tensor-typed LHS). For SS dots the knob
+    // is a no-op; still require the value to be well-formed above, but skip
+    // the K/instrK divisibility check which only makes sense for RS.
+    if (auto aTensorTy = dyn_cast<RankedTensorType>(getA().getType())) {
+      int64_t origK = aTensorTy.getShape().back();
+      int64_t instrK = nvmmaEnc.getInstrShape()[2];
+      if (origK > instrK && (int64_t)chunks * instrK > origK)
+        return emitOpError("kChunksHint=")
+               << chunks << " exceeds K/instrK=" << (origK / instrK);
+    }
+  }
+
   return success();
 }
 
