@@ -10,6 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -27,18 +28,6 @@ namespace proton {
 namespace {
 
 constexpr size_t kMaxRegisteredDeviceIds = 32;
-
-void packMsgPackHatchetFrameHeader(MsgPackWriter &writer,
-                                   std::string_view name) {
-  writer.packMap(3);
-  writer.packFixStrLiteral("frame");
-  writer.packMap(2);
-  writer.packFixStrLiteral("name");
-  writer.packStr(name);
-  writer.packFixStrLiteral("type");
-  writer.packFixStrLiteral("function");
-  writer.packFixStrLiteral("metrics");
-}
 
 struct MetricSummary {
   // Whether we observed at least one kernel metric.
@@ -359,42 +348,41 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         }
         // JSON dumping is not the performance-critical path, so use a direct
         // recursive copy of the linked virtual tree.
-        auto appendLinkedVirtualNode = [&](auto &&appendLinkedVirtualNode,
-                                           size_t virtualNodeId,
-                                           json &outNode) -> void {
-          const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-          const auto metricsIt =
-              treeNode.metricSet.linkedMetrics.find(virtualNodeId);
-          outNode = json::object();
-          outNode["frame"] = {{"name", virtualNode.name}, {"type", "function"}};
-          outNode["metrics"] = json::object();
-          if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
-            appendMetrics(outNode["metrics"], metricsIt->second);
-          }
-          // Linked flexible metrics are only attached to <metric_node>
-          // children, so they always belong on the parent frame.
-          for (const auto &child : virtualNode.children) {
-            auto flexibleIt =
-                treeNode.metricSet.linkedFlexibleMetrics.find(child.id);
-            if (flexibleIt != treeNode.metricSet.linkedFlexibleMetrics.end()) {
-              appendFlexibleMetrics(outNode["metrics"], flexibleIt->second);
-            }
-          }
-          outNode["children"] = json::array();
-          auto &linkedChildren = outNode["children"];
-          linkedChildren.get_ref<json::array_t &>().reserve(
-              virtualNode.children.size());
-          for (const auto &child : virtualNode.children) {
-            linkedChildren.push_back(json::object());
-            appendLinkedVirtualNode(appendLinkedVirtualNode, child.id,
-                                    linkedChildren.back());
-          }
-        };
+        std::function<void(size_t, json &, json &)> appendLinkedVirtualNode =
+            [&](size_t virtualNodeId, json &outNode, json &parentMetricsJson) {
+              const auto &virtualNode = virtualTree->getNode(virtualNodeId);
+              const auto metricsIt =
+                  treeNode.metricSet.linkedMetrics.find(virtualNodeId);
+              const auto flexibleIt =
+                  treeNode.metricSet.linkedFlexibleMetrics.find(virtualNodeId);
+              outNode = json::object();
+              outNode["frame"] = {{"name", virtualNode.name},
+                                  {"type", "function"}};
+              outNode["metrics"] = json::object();
+              if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
+                appendMetrics(outNode["metrics"], metricsIt->second);
+              }
+              // Linked flexible metrics are attached to <metric> helper nodes,
+              // but they belong on the helper's parent frame.
+              if (flexibleIt !=
+                  treeNode.metricSet.linkedFlexibleMetrics.end()) {
+                appendFlexibleMetrics(parentMetricsJson, flexibleIt->second);
+              }
+              outNode["children"] = json::array();
+              auto &linkedChildren = outNode["children"];
+              linkedChildren.get_ref<json::array_t &>().reserve(
+                  virtualNode.children.size());
+              for (const auto &child : virtualNode.children) {
+                linkedChildren.push_back(json::object());
+                appendLinkedVirtualNode(child.id, linkedChildren.back(),
+                                        outNode["metrics"]);
+              }
+            };
 
         for (const auto &child : virtualRootNode.children) {
-          childrenArray.push_back(json::object());
-          appendLinkedVirtualNode(appendLinkedVirtualNode, child.id,
-                                  childrenArray.back());
+          json linkedRootChildNode;
+          appendLinkedVirtualNode(child.id, linkedRootChildNode, metricsJson);
+          childrenArray.push_back(std::move(linkedRootChildNode));
         }
       });
 
@@ -461,6 +449,16 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   MetricSummary metricSummary;
   metricSummary.hasKernelMetric = true;
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
+  auto packHatchetFrameHeader = [&](std::string_view name) {
+    writer.packMap(3);
+    writer.packFixStrLiteral("frame");
+    writer.packMap(2);
+    writer.packFixStrLiteral("name");
+    writer.packStr(name);
+    writer.packFixStrLiteral("type");
+    writer.packFixStrLiteral("function");
+    writer.packFixStrLiteral("metrics");
+  };
 
   // Root metrics only carry inclusive aggregate fields. Non-root metrics also
   // include device_id and device_type, so their serialized map entry counts are
@@ -687,7 +685,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   // under the same frame.
   auto packNode = [&](auto &&packNode,
                       TreeData::Tree::TreeNode &treeNode) -> void {
-    packMsgPackHatchetFrameHeader(writer, treeNode.name);
+    packHatchetFrameHeader(treeNode.name);
     const bool isRoot = treeNode.id == TreeData::Tree::TreeNode::RootId;
     const auto &linkedFlexibleMetrics =
         treeNode.metricSet.linkedFlexibleMetrics;
@@ -713,7 +711,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,
                                      size_t virtualNodeId) -> void {
       const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-      packMsgPackHatchetFrameHeader(writer, virtualNode.name);
+      packHatchetFrameHeader(virtualNode.name);
       const auto metricsIt =
           treeNode.metricSet.linkedMetrics.find(virtualNodeId);
       const auto promotedFlexibleMetricEntries =
