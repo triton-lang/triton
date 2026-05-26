@@ -1,6 +1,5 @@
 #include "Utility/MsgPackWriter.h"
 
-#include <charconv>
 #include <cstring>
 #include <limits>
 #include <type_traits>
@@ -100,27 +99,8 @@ void MsgPackWriter::packStr(std::string_view value) {
   std::memcpy(out.data() + offset, value.data(), size);
 }
 
-void MsgPackWriter::packHatchetFrameHeader(std::string_view name) {
-  static constexpr uint8_t prefix[] = {0x83, // map(3)
-                                       0xa5, 'f', 'r', 'a', 'm', 'e',
-                                       0x82, // frame: map(2)
-                                       0xa4, 'n', 'a', 'm', 'e'};
-  static constexpr uint8_t suffix[] = {
-      0xa4, 't', 'y', 'p',  'e', 0xa8, 'f', 'u', 'n', 'c', 't',
-      'i',  'o', 'n', 0xa7, 'm', 'e',  't', 'r', 'i', 'c', 's'};
-  appendBytes(out, prefix, sizeof(prefix));
-  packStr(name);
-  appendBytes(out, suffix, sizeof(suffix));
-}
-
 void MsgPackWriter::appendRaw(const std::vector<uint8_t> &bytes) {
   appendBytes(out, bytes.data(), bytes.size());
-}
-
-void MsgPackWriter::packUIntString(uint64_t value) {
-  char buffer[std::numeric_limits<uint64_t>::digits10 + 1];
-  auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
-  packStr(std::string_view(buffer, static_cast<size_t>(result.ptr - buffer)));
 }
 
 void MsgPackWriter::packArray(uint32_t size) {
