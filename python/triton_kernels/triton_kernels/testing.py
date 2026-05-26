@@ -130,7 +130,6 @@ def compute_sanitizer(**target_kwargs):
                     }
                     if "CUDA_VISIBLE_DEVICES" in os.environ:
                         env["CUDA_VISIBLE_DEVICES"] = os.environ["CUDA_VISIBLE_DEVICES"]
-                    test_node = f"{path}::{kwargs['request'].node.name}"
                     cmd = [
                         "compute-sanitizer",
                         "--target-processes=application-only",
@@ -138,8 +137,9 @@ def compute_sanitizer(**target_kwargs):
                         f"--tool={tool.value}",
                     ]
                     if tool is ComputeSanitizerTool.MEMCHECK:
+                        # Catch accesses that otherwise land in adjacent allocations.
                         cmd.append("--padding=4096")
-                    cmd.extend([sys.executable, "-m", "pytest", "-vsx", test_node])
+                    cmd.extend([sys.executable, "-m", "pytest", "-vsx", f"{path}::{kwargs['request'].node.name}"])
                     for opt in ["--update_checksum", "--ignore_checksum_error"]:
                         if opt in sys.argv:
                             cmd.append(opt)
