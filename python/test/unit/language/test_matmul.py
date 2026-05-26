@@ -345,7 +345,8 @@ def fp8e8m0_to_float32(scale):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
-                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128), (128, 16, 256)])
+                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128), (128, 16, 256),
+                                                       (128, 16, 64)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))

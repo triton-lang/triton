@@ -281,6 +281,12 @@ def make_default_opt_flags_nvidia(
         # addition to the accumulator. A 128x256 accumulator already consumes
         # the full 512-column TMEM budget, so leave headroom for that operand.
         block_n = min(block_n, 128)
+    if (is_persistent and constraints.get("block_n", None) is None
+            and opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)):
+        # Native Blackwell MX lhs + dense rhs persistent dots also stage an
+        # expanded operand in TMEM, so keep the accumulator tile below the
+        # 512-column budget.
+        block_n = min(block_n, 128)
     # adjust block_m based on is_persistent signal
     if is_persistent and opt_flags_nvidia.is_x_scale_swizzled(precision_config):
         # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
@@ -324,6 +330,12 @@ def make_default_opt_flags_nvidia(
     )
 
     num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
+    if (constraints.get("num_warps", None) is None
+            and is_persistent
+            and block_n <= 128
+            and block_k >= 256
+            and opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)):
+        num_warps = max(num_warps, 8)
 
     # Occupancy target and maxnreg (for Hopper)
     occupancy_target = 1

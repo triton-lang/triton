@@ -478,6 +478,40 @@ def _reciprocal_involution_kernel(x_ptr, out_ptr, n_elements, BLOCK: gl.constexp
     gl.store(out_ptr + offs, z, mask=mask)
 
 
+@gluon.jit
+def _expect_zero_upper_triangle_kernel(x_ptr, out_ptr, N: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [4, 1], [1, 0])
+    row = gl.arange(0, N, layout=gl.SliceLayout(1, layout))[:, None]
+    col = gl.arange(0, N, layout=gl.SliceLayout(0, layout))[None, :]
+    upper_triangle = col > row
+    x = gl.load(x_ptr + row * N + col)
+    x = gl.where(upper_triangle, x - 1.0e30, x)
+    y = gl.exp(x)
+    y = gl.expect_zero(y, upper_triangle)
+    gl.store(out_ptr + row * N + col, y)
+
+
+def test_expect_zero_upper_triangle_exp(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    N = 32
+    torch.manual_seed(0)
+    x = torch.randn((N, N), dtype=torch.float32, device="cuda")
+    regular_out = torch.empty_like(x)
+    fpsan_out = torch.empty_like(x)
+    upper_triangle = torch.triu(torch.ones_like(x, dtype=torch.bool), diagonal=1)
+
+    fresh_knobs.compilation.instrumentation_mode = ""
+    _expect_zero_upper_triangle_kernel[(1, )](x, regular_out, N=N, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    _expect_zero_upper_triangle_kernel[(1, )](x, fpsan_out, N=N, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    assert torch.equal(regular_out[upper_triangle], torch.zeros_like(regular_out[upper_triangle]))
+    assert torch.equal(fpsan_out[upper_triangle], torch.zeros_like(fpsan_out[upper_triangle]))
+    assert not torch.equal(regular_out, fpsan_out)
+
+
 @pytest.mark.parametrize("op", ["mul_one", "add_zero"])
 def test_constant_identity_noop(device, op, fresh_knobs):
     _require_cuda_backend(device)

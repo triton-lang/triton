@@ -2,9 +2,11 @@
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Device.h"
+#include "DeviceType.h"
 #include "Utility/Errors.h"
 #include "Utility/MsgPackWriter.h"
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -21,15 +23,6 @@
 namespace proton {
 
 namespace {
-
-const std::array<std::string, static_cast<size_t>(DeviceType::COUNT)>
-    kDeviceTypeNames = []() {
-      std::array<std::string, static_cast<size_t>(DeviceType::COUNT)> names;
-      for (size_t i = 0; i < static_cast<size_t>(DeviceType::COUNT); ++i) {
-        names[i] = getDeviceTypeString(static_cast<DeviceType>(i));
-      }
-      return names;
-    }();
 
 constexpr size_t kMaxRegisteredDeviceIds = 32;
 
@@ -242,7 +235,7 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         uint64_t deviceType = std::get<uint64_t>(
             kernelMetric->getValue(KernelMetric::DeviceType));
         const auto &deviceTypeName =
-            kDeviceTypeNames[static_cast<size_t>(deviceType)];
+            getDeviceTypeString(static_cast<DeviceType>(deviceType));
         const auto &durationName =
             kernelMetric->getValueName(KernelMetric::Duration);
         const auto &invocationsName =
@@ -420,7 +413,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
       continue;
     }
 
-    const auto &deviceTypeName = kDeviceTypeNames[deviceType];
+    const auto &deviceTypeName =
+        getDeviceTypeString(static_cast<DeviceType>(deviceType));
     deviceJson[deviceTypeName] = json::object();
 
     for (uint64_t deviceId = 0; deviceId < kMaxRegisteredDeviceIds;
@@ -593,7 +587,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         uint64_t deviceType = std::get<uint64_t>(
             kernelMetric->getValue(KernelMetric::DeviceType));
         const auto &deviceTypeName =
-            kDeviceTypeNames[static_cast<size_t>(deviceType)];
+            getDeviceTypeString(static_cast<DeviceType>(deviceType));
         writer.packStr(kernelMetricDurationName);
         writer.packUInt(duration);
         writer.packStr(kernelMetricInvocationsName);
@@ -814,7 +808,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       continue;
     }
 
-    const auto &deviceTypeName = kDeviceTypeNames[deviceType];
+    const auto &deviceTypeName =
+        getDeviceTypeString(static_cast<DeviceType>(deviceType));
     writer.packStr(deviceTypeName);
 
     writer.packMap(countSetBits(mask));
