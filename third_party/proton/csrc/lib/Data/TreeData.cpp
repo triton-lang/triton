@@ -19,7 +19,6 @@
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -110,10 +109,6 @@ public:
       size_t id = DummyId;
     };
 
-    // Keep a linear child list for small fanouts to avoid hash table overhead.
-    // Build the lookup index only once repeated child scans become expensive.
-    static constexpr size_t kChildIndexThreshold = 8;
-
     TreeNode() = default;
     explicit TreeNode(size_t id, const std::string &name)
         : id(id), Context(name) {}
@@ -125,25 +120,9 @@ public:
 
     void addChild(std::string_view childName, size_t id) {
       children.push_back({childName, id});
-      if (childIndex) {
-        childIndex->emplace(childName, id);
-        return;
-      }
-      if (children.size() > kChildIndexThreshold) {
-        childIndex =
-            std::make_unique<std::unordered_map<std::string_view, size_t>>();
-        childIndex->reserve(children.size());
-        for (const auto &child : children) {
-          childIndex->emplace(child.name, child.id);
-        }
-      }
     }
 
     size_t findChild(std::string_view childName) const {
-      if (childIndex) {
-        auto it = childIndex->find(childName);
-        return it != childIndex->end() ? it->second : DummyId;
-      }
       for (const auto &child : children) {
         if (child.name == childName) {
           return child.id;
@@ -155,8 +134,6 @@ public:
     size_t parentId = DummyId;
     size_t id = DummyId;
     std::vector<ChildEntry> children = {};
-    std::unique_ptr<std::unordered_map<std::string_view, size_t>> childIndex =
-        {};
     // Direct and linked metrics associated with this tree node.
     DataEntry::MetricSet metricSet{};
     friend class Tree;
