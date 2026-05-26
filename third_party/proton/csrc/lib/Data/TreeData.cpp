@@ -28,6 +28,21 @@ namespace proton {
 namespace {
 
 constexpr size_t kMaxRegisteredDeviceIds = 32;
+
+std::vector<uint8_t> buildMsgPackHatchetFrameHeader(std::string_view name) {
+  MsgPackWriter writer;
+  writer.reserve(name.size() + 32);
+  writer.packMap(3);
+  writer.packFixStrLiteral("frame");
+  writer.packMap(2);
+  writer.packFixStrLiteral("name");
+  writer.packStr(name);
+  writer.packFixStrLiteral("type");
+  writer.packFixStrLiteral("function");
+  writer.packFixStrLiteral("metrics");
+  return std::move(writer).take();
+}
+
 struct MetricSummary {
   // Whether we observed at least one kernel metric.
   bool hasKernelMetric = false;
@@ -184,10 +199,7 @@ public:
     }
     auto &header = msgPackFrameHeaderCache[id];
     if (header.empty()) {
-      MsgPackWriter writer;
-      writer.reserve(treeNodes[id].name.size() + 32);
-      writer.packHatchetFrameHeader(treeNodes[id].name);
-      header = std::move(writer).take();
+      header = buildMsgPackHatchetFrameHeader(treeNodes[id].name);
     }
     return header;
   }
@@ -593,7 +605,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     writer.packStr(KernelMetric::getValueName(KernelMetric::Invocations));
     writer.packUInt(invocations);
     writer.packStr(KernelMetric::getValueName(KernelMetric::DeviceId));
-    writer.packUIntString(deviceId);
+    writer.packStr(std::to_string(deviceId));
     writer.packStr(KernelMetric::getValueName(KernelMetric::DeviceType));
     writer.packStr(deviceTypeName);
   };
@@ -653,9 +665,9 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
             CycleMetric::getValueName(CycleMetric::NormalizedDuration));
         writer.packDouble(normalizedDuration);
         writer.packStr(CycleMetric::getValueName(CycleMetric::DeviceId));
-        writer.packUIntString(deviceId);
+        writer.packStr(std::to_string(deviceId));
         writer.packStr(CycleMetric::getValueName(CycleMetric::DeviceType));
-        writer.packUIntString(deviceType);
+        writer.packStr(std::to_string(deviceType));
       } else {
         throw makeLogicError("MetricKind not supported");
       }
@@ -757,7 +769,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   // under the same frame.
   auto packNode = [&](auto &&packNode,
                       TreeData::Tree::TreeNode &treeNode) -> void {
-    writer.packHatchetFrameHeader(treeNode.name);
+    writer.appendRaw(tree->getMsgPackFrameHeader(treeNode.id));
     const bool isRoot = treeNode.id == TreeData::Tree::TreeNode::RootId;
     const auto &linkedFlexibleMetrics =
         treeNode.metricSet.linkedFlexibleMetrics;

@@ -175,6 +175,7 @@ public:
 
   const std::string &getName() const override { return name; }
 
+  // Flexible metrics carry their name as per-instance state.
   std::string_view getValueName(int valueId) const override {
     return valueName;
   }
@@ -222,10 +223,12 @@ public:
 
   const std::string &getName() const override { return name; }
 
+  // Fast path for callers that already know they are working with KernelMetric.
   static constexpr std::string_view getValueName(kernelMetricKind valueId) {
     return VALUE_NAMES[valueId];
   }
 
+  // Virtual access used through the Metric interface.
   std::string_view getValueName(int valueId) const override {
     return VALUE_NAMES[valueId];
   }
@@ -285,10 +288,12 @@ public:
 
   const std::string &getName() const override { return name; }
 
+  // Fast path for callers that already know they are working with PCSamplingMetric.
   static constexpr std::string_view getValueName(PCSamplingMetricKind valueId) {
     return VALUE_NAMES[valueId];
   }
 
+  // Virtual access used through the Metric interface.
   std::string_view getValueName(int valueId) const override {
     return VALUE_NAMES[valueId];
   }
@@ -370,10 +375,12 @@ public:
 
   const std::string &getName() const override { return name; }
 
+  // Fast path for callers that already know they are working with CycleMetric.
   static constexpr std::string_view getValueName(CycleMetricKind valueId) {
     return VALUE_NAMES[valueId];
   }
 
+  // Virtual access used through the Metric interface.
   std::string_view getValueName(int valueId) const override {
     return VALUE_NAMES[valueId];
   }
