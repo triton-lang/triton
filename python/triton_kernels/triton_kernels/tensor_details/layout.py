@@ -54,12 +54,11 @@ def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
     return StridedLayout(-2)
 
 
-def make_default_matmul_mx_act_scale_layout(ragged_metadata, value_ragged_dim):
+def make_default_matmul_mx_act_scale_layout(ragged_metadata):
     if cuda_capability_geq(10):
-        # The activation scale layout only segments rows of the value tensor.
-        return BlackwellActMXScaleLayout(ragged_metadata if value_ragged_dim == 0 else None)
+        return BlackwellActMXScaleLayout(ragged_metadata)
     return StridedLayout(-2)
 
 
-def make_default_matmul_mxfp8_act_scale_layout(ragged_metadata, value_ragged_dim):
-    return make_default_matmul_mx_act_scale_layout(ragged_metadata, value_ragged_dim)
+def make_default_matmul_mxfp8_act_scale_layout(ragged_metadata):
+    return make_default_matmul_mx_act_scale_layout(ragged_metadata)
