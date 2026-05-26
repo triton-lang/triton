@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import functools
 import os
+import threading
 import time
 import copy
 
@@ -435,6 +436,17 @@ class CompiledKernel:
         self.module = None
         self.function = None
         self._run = None
+        self._init_lock = threading.Lock()
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # drop since threading.Lock is not picklable
+        state["_init_lock"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._init_lock = threading.Lock()
 
     def __del__(self):
 
@@ -446,41 +458,53 @@ class CompiledKernel:
             self.module = None
 
     def _init_handles(self):
-        if self.module is not None:
+        # `self._run` is the publish flag: set last on success, or set to a
+        # raising partial on failure. Either way it serializes lazy init.
+        if self._run is not None:
             return
+        with self._init_lock:
+            self._init_handles_lock_held()
 
-        def raise_(err):
+    def _init_handles_lock_held(self):
+        if self._run is not None:
+            return
+        try:
+            device = driver.active.get_current_device()
+            launcher = driver.active.launcher_cls(self.src, self.metadata)
+            # not enough shared memory to run the kernel
+            max_shared = max_shared_mem(device)
+            if self.metadata.shared > max_shared:
+                raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
+            if hasattr(self.metadata, "tmem_size") and self.metadata.tmem_size is not None:
+                # Use blackwell max tmem size for now, this should be moved in device properties
+                max_tmem_size = 512  # tmem size in number of columns
+                if self.metadata.tmem_size > max_tmem_size:
+                    raise OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory")
+            if knobs.runtime.kernel_load_start_hook is not None:
+                knobs.runtime.kernel_load_start_hook(None, None, self.name, self.metadata_group, self.hash)
+            # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
+            module, function, n_regs, n_spills, n_max_threads = driver.active.utils.load_binary(
+                self.name, self.kernel, self.metadata.shared, device)
+            warp_size = driver.active.get_current_target().warp_size
+            if self.metadata.num_warps * warp_size > n_max_threads:
+                raise OutOfResources(self.metadata.num_warps * warp_size, n_max_threads, "threads")
+        except BaseException as err:
             # clone the exception object so that the one saved in the closure
             # of the partial function below doesn't get assigned a stack trace
             # after the subsequent raise. otherwise, the CompiledKernel instance
             # saved in the (global) kernel cache will keep references to all the
             # locals in the traceback via the exception instance in the closure.
-            cloned_err = copy.deepcopy(err)
-            self._run = functools.partial(_raise_error, cloned_err)
-            raise err
-
-        device = driver.active.get_current_device()
-        # create launcher
-        self._run = driver.active.launcher_cls(self.src, self.metadata)
-        # not enough shared memory to run the kernel
-        max_shared = max_shared_mem(device)
-        if self.metadata.shared > max_shared:
-            raise_(OutOfResources(self.metadata.shared, max_shared, "shared memory"))
-        if hasattr(self.metadata, "tmem_size") and self.metadata.tmem_size is not None:
-            # Use blackwell max tmem size for now, this should be moved in device properties
-            max_tmem_size = 512  # tmem size in number of columns
-            if self.metadata.tmem_size > max_tmem_size:
-                raise_(OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory"))
-        if knobs.runtime.kernel_load_start_hook is not None:
-            knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
-        # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
-            self.name, self.kernel, self.metadata.shared, device)
-        warp_size = driver.active.get_current_target().warp_size
-        if self.metadata.num_warps * warp_size > self.n_max_threads:
-            raise_(OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads"))
+            self._run = functools.partial(_raise_error, copy.deepcopy(err))
+            raise
+        # Success: populate handles first, publish self._run LAST.
+        self.n_regs = n_regs
+        self.n_spills = n_spills
+        self.n_max_threads = n_max_threads
+        self.module = module
+        self.function = function
+        self._run = launcher
         if knobs.runtime.kernel_load_end_hook is not None:
-            knobs.runtime.kernel_load_end_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
+            knobs.runtime.kernel_load_end_hook(module, function, self.name, self.metadata_group, self.hash)
 
     @property
     def run(self):
