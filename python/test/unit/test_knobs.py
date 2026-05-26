@@ -2,7 +2,7 @@ import os
 import pytest
 import shutil
 import triton
-from triton._internal_testing import is_hip
+from triton.language.target_info import is_hip
 
 from pathlib import Path
 

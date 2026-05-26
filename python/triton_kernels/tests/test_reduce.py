@@ -5,7 +5,8 @@ from triton_kernels.reduce import reduce, reduce_torch, PostprocessFn, FnSpecs
 from triton_kernels.reduce import scoped_opt_flags_constraints
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp_torch, downcast_to_mxfp_torch
 from triton_kernels.numerics import InFlexData, OutFlexData
-from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
+from triton_kernels.target_info import is_cuda
+from triton.language.target_info import is_hip, is_hip_cdna3, is_hip_cdna4
 import triton
 import triton.language as tl
 

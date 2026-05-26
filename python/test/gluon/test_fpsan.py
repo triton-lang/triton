@@ -8,7 +8,8 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton import language as tl
-from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250, is_hopper, is_interpreter
+from triton._internal_testing import is_blackwell, is_cuda, is_hopper, is_interpreter
+from triton.language.target_info import is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,

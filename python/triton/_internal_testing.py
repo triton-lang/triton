@@ -67,135 +67,14 @@ def is_sm12x():
     return is_cuda() and torch.cuda.get_device_capability()[0] == 12
 
 
-def is_hip():
-    target = get_current_target()
-    return False if target is None else target.backend == "hip"
-
-
-def is_hip_cdna2():
-    target = get_current_target()
-    return target is not None and target.backend == 'hip' and target.arch == 'gfx90a'
-
-
-def is_hip_cdna3():
-    target = get_current_target()
-    return target is not None and target.backend == 'hip' and target.arch == 'gfx942'
-
-
-def is_hip_cdna4():
-    target = get_current_target()
-    return target is not None and target.backend == 'hip' and target.arch == 'gfx950'
-
-
-def is_hip_rdna3():
-    target = get_current_target()
-    return target is not None and target.backend == 'hip' and 'gfx11' in target.arch
-
-
-def is_hip_rdna4():
-    target = get_current_target()
-    # check for gfx120 instead of gfx12, to avoid matching gfx1250
-    return target is not None and target.backend == 'hip' and 'gfx120' in target.arch
-
-
-def is_hip_gfx1250():
-    target = get_current_target()
-    return target is not None and target.backend == 'hip' and 'gfx1250' in target.arch
-
-
-def is_hip_cdna3_or_newer():
-    return is_hip_cdna3() or is_hip_cdna4()
-
-
-def is_hip_cdna():
-    return is_hip_cdna2() or is_hip_cdna3() or is_hip_cdna4()
-
-
-def is_hip_rdna():
-    return is_hip_rdna3() or is_hip_rdna4()
-
-
-def get_hip_lds_size():
-    return 163840 if is_hip_cdna4() else 65536
-
-
 def is_xpu():
     target = get_current_target()
     return False if target is None else target.backend == "xpu"
 
 
-def hip_supports_bf16xX():
-    """
-    Returns true if current architecture fully supports bf16x3 and bf16x6 precision
-    """
-    if is_hip_gfx1250():
-        return False
-    return True
-
-
-def hip_supports_float8_uz():
-    """
-    Returns true if current architecture supports float8e4b8 and float8e5b16(aka E4M3FNUZ and E5M2FNUZ)
-    """
-    return is_hip_cdna3()
-
-
-def hip_supports_cast_inf_clamping():
-    return not (is_hip_rdna4() or is_hip_gfx1250())
-
-
-def hip_supports_descriptor_scatter():
-    return is_hip_gfx1250()
-
-
-def hip_supports_f8e4m3fn_cast():
-    return is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx1250()
-
-
-def hip_supports_vdot():
-    return is_hip_cdna() or is_hip_rdna() or is_hip_gfx1250() or is_hip_gfx1250()
-
-
-def hip_supports_f8e5():
-    return is_hip_cdna4() or is_hip_rdna4() or is_hip_gfx1250()
-
-
-def hip_supports_f8e4nv():
-    return is_hip_cdna4() or is_hip_rdna4() or is_hip_gfx1250()
-
-
-def hip_supports_f8e4m3():
-    return is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250()
-
-
-def hip_supports_kpack():
-    return is_hip_cdna2() or is_hip_cdna3()
-
-
-def hip_supports_scaled_dot():
-    return is_hip_cdna() or is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250()
-
-
-def hip_wmma_version():
-    if is_hip_rdna3():
-        return 1
-    if is_hip_cdna4():
-        return 2
-    if is_hip_gfx1250():
-        return 3
-
-
 def get_arch():
     target = get_current_target()
     return "" if target is None else str(target.arch)
-
-
-def hip_supports_mxfp_dot():
-    return is_hip_cdna4() or is_hip_gfx1250()
-
-
-def hip_supports_mn_pack_scales():
-    return is_hip_cdna4()
 
 
 def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, high=None):

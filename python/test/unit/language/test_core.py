@@ -28,6 +28,17 @@ from triton._internal_testing import (
     is_cuda,
     is_interpreter,
     is_hopper,
+    get_arch,
+    is_xpu,
+    torch_float8_dtypes,
+    torch_dtypes,
+    numpy_random,
+    to_triton,
+    torch_dtype_name,
+    to_numpy,
+)
+
+from triton.language.target_info import (
     is_hip,
     is_hip_cdna,
     is_hip_cdna2,
@@ -46,15 +57,7 @@ from triton._internal_testing import (
     hip_supports_kpack,
     hip_supports_scaled_dot,
     hip_wmma_version,
-    get_arch,
     hip_supports_mxfp_dot,
-    is_xpu,
-    torch_float8_dtypes,
-    torch_dtypes,
-    numpy_random,
-    to_triton,
-    torch_dtype_name,
-    to_numpy,
 )
 from triton.runtime.errors import InterpreterError
 
@@ -3768,6 +3771,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                    r'(?:(?!st\.shared).)*'
                    r'cvt\.rn\.f16x2\.f32')
         assert re.search(pattern, ptx, flags=re.DOTALL)
+
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
