@@ -14,6 +14,12 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
+LinearLayout getSharedLayout(MemDescType memDescTy) {
+  return isPaddedEncoding(memDescTy.getEncoding())
+             ? paddedLinearLayout(memDescTy)
+             : toLinearLayout(memDescTy);
+}
+
 // Helper for LocalGather/ScatterOpConversion.
 // For gather: storeVals is empty, returns loaded values.
 // For scatter: storeVals contains values to store, returns empty.
@@ -54,9 +60,7 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
 
   auto regLayout = toLinearLayout(regTy);
-  auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
-                          ? paddedLinearLayout(memDescTy)
-                          : toLinearLayout(memDescTy);
+  auto sharedLayout = getSharedLayout(memDescTy);
   auto cvt = regLayout.invertAndCompose(sharedLayout);
 
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
