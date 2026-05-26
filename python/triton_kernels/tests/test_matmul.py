@@ -15,9 +15,9 @@ from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, quantize_nvfp4_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 # testing utilities
-from triton_kernels.testing import assert_close, make_random_tensor
+from triton_kernels.testing import assert_close, compute_sanitizer, make_random_tensor
 # target-specific utilities
-from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250
+from triton_kernels.target_info import cuda_capability_geq, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
@@ -577,6 +577,41 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if c_dtype.has_global_scale:
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
+
+
+@pytest.mark.skipif(not cuda_capability_geq(10), reason="Activation scale swizzling requires Blackwell")
+@compute_sanitizer()
+def test_k_ragged_mxfp8_act_scale_memcheck(device, opt_flags_scope, request):
+    _test_op(
+        m=64,
+        n=128,
+        k=96,
+        split_k=1,
+        do_gather=False,
+        do_scatter=False,
+        inner_expt_opt="pad_a",
+        do_gamma=True,
+        is_persistent=True,
+        num_warps=None,
+        n_slices=10,
+        mode="ragged",
+        act_dtype_str="mxfloat8_e4m3fn",
+        weight_dtype_str="bfloat16",
+        output_dtype_str="bfloat16",
+        block_m=128,
+        b_hbm_swizzling=False,
+        shuffle_mxfp4_w_layout=False,
+        a_hbm_swizzling=True,
+        colmajor_mxfp_weight=True,
+        epilogue_subtile=None,
+        a_transpose=False,
+        b_transpose=False,
+        c_transpose=False,
+        swiglu_opts=None,
+        c_hbm_swizzling=False,
+        device=device,
+        opt_flags_scope=opt_flags_scope,
+    )
 
 
 def test_set_idle_sms():

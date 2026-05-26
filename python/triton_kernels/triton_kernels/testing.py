@@ -132,21 +132,19 @@ def compute_sanitizer(**target_kwargs):
                     }
                     if "CUDA_VISIBLE_DEVICES" in os.environ:
                         env["CUDA_VISIBLE_DEVICES"] = os.environ["CUDA_VISIBLE_DEVICES"]
-                    assert "request_fixture" in kwargs, (
+                    request = kwargs.get("request") or kwargs.get("request_fixture")
+                    assert request is not None, (
                         "memcheck'ed test must have a (possibly unused) `request` fixture")
-                    test_id = kwargs["request_fixture"].node.callspec.id
-                    cmd = f"{path}::{test_fn.__name__}[{test_id}]"
+                    cmd = f"{path}::{request.node.name}"
                     cmd = [
                         "compute-sanitizer",
                         "--target-processes=application-only",
                         "--destroy-on-device-error=context",
                         f"--tool={tool.value}",
-                        sys.executable,
-                        "-m",
-                        "pytest",
-                        "-vsx",
-                        cmd,
                     ]
+                    if tool is ComputeSanitizerTool.MEMCHECK:
+                        cmd.append("--padding=4096")
+                    cmd.extend([sys.executable, "-m", "pytest", "-vsx", cmd])
                     for opt in ["--update_checksum", "--ignore_checksum_error"]:
                         if opt in sys.argv:
                             cmd.append(opt)
