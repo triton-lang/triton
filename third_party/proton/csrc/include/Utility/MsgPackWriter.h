@@ -15,6 +15,7 @@ public:
   void reserve(size_t bytes);
 
   std::vector<uint8_t> take() &&;
+  void appendBytes(const std::vector<uint8_t> &bytes);
 
   void packNil();
   void packBool(bool value);

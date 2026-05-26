@@ -461,15 +461,36 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         }
       });
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
+  auto packUncachedHatchetFrameHeader = [](MsgPackWriter &out,
+                                           std::string_view name) {
+    out.packMap(3);
+    out.packFixStrLiteral("frame");
+    out.packMap(2);
+    out.packFixStrLiteral("name");
+    out.packStr(name);
+    out.packFixStrLiteral("type");
+    out.packFixStrLiteral("function");
+    out.packFixStrLiteral("metrics");
+  };
+  // Names that fit in MsgPack fixstr are cheap enough to encode directly. Cache
+  // only longer headers so repeated linked virtual frames can skip the larger
+  // string copy without adding hash-table overhead to every small frame name.
+  constexpr size_t kCachedFrameHeaderMinNameBytes = 32;
+  std::unordered_map<std::string_view, std::vector<uint8_t>> frameHeaderCache;
   auto packHatchetFrameHeader = [&](std::string_view name) {
-    writer.packMap(3);
-    writer.packFixStrLiteral("frame");
-    writer.packMap(2);
-    writer.packFixStrLiteral("name");
-    writer.packStr(name);
-    writer.packFixStrLiteral("type");
-    writer.packFixStrLiteral("function");
-    writer.packFixStrLiteral("metrics");
+    if (name.size() < kCachedFrameHeaderMinNameBytes) {
+      packUncachedHatchetFrameHeader(writer, name);
+      return;
+    }
+
+    auto it = frameHeaderCache.find(name);
+    if (it == frameHeaderCache.end()) {
+      MsgPackWriter headerWriter;
+      headerWriter.reserve(32 + name.size());
+      packUncachedHatchetFrameHeader(headerWriter, name);
+      it = frameHeaderCache.emplace(name, std::move(headerWriter).take()).first;
+    }
+    writer.appendBytes(it->second);
   };
 
   // Root metrics only carry inclusive aggregate fields. Non-root metrics also

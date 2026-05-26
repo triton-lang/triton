@@ -22,6 +22,12 @@ void MsgPackWriter::reserve(size_t bytes) { out.reserve(bytes); }
 
 std::vector<uint8_t> MsgPackWriter::take() && { return std::move(out); }
 
+void MsgPackWriter::appendBytes(const std::vector<uint8_t> &bytes) {
+  const auto offset = out.size();
+  out.resize(offset + bytes.size());
+  std::memcpy(out.data() + offset, bytes.data(), bytes.size());
+}
+
 void MsgPackWriter::packNil() { out.push_back(0xc0); }
 
 void MsgPackWriter::packBool(bool value) { out.push_back(value ? 0xc3 : 0xc2); }
