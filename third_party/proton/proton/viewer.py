@@ -14,6 +14,24 @@ from triton.profiler.metric import FLOPS_WIDTHS
 from triton.profiler import specs
 
 
+def _check_hatchet(module):
+    # `import hatchet` can resolve to an unrelated package that also publishes a top-level
+    # `hatchet` module (for example the task-queue project on PyPI). Those packages import
+    # fine but lack the GraphFrame API the viewer relies on, which used to surface much later
+    # as a cryptic `AttributeError` deep inside `read`. Detect the wrong package up front and
+    # tell the user which distribution to install.
+    graph_frame = getattr(module, "GraphFrame", None)
+    required = ("from_literal", "update_inclusive_columns")
+    if graph_frame is None or not all(hasattr(graph_frame, attr) for attr in required):
+        location = getattr(module, "__file__", "unknown location")
+        raise ImportError(f"The imported `hatchet` package ({location}) is not llnl-hatchet. "
+                          "Another package named `hatchet` is shadowing it. "
+                          "`pip uninstall hatchet && pip install llnl-hatchet` to get the correct version.")
+
+
+_check_hatchet(ht)
+
+
 def match_available_metrics(metrics, inclusive_metrics, exclusive_metrics):
     ret = []
     if not isinstance(metrics, list):

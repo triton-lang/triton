@@ -197,3 +197,39 @@ def test_diff_profile():
     gf2, _ = parse(["time/s"], cuda_example_file)
     gf = apply_diff_profile(gf, derived_metrics, cuda_example_file, ["time/s"], None, None, 0.0)
     assert "time/s (inc)" in gf.dataframe.columns
+
+
+def test_check_hatchet_rejects_wrong_package():
+    from types import SimpleNamespace
+    from triton.profiler.viewer import _check_hatchet
+
+    # No GraphFrame at all (an unrelated package named `hatchet`).
+    with pytest.raises(ImportError, match="llnl-hatchet"):
+        _check_hatchet(SimpleNamespace(__file__="/some/wrong/hatchet/__init__.py"))
+
+    # GraphFrame present but missing the API the viewer depends on.
+    class PartialGraphFrame:
+
+        @staticmethod
+        def from_literal(graph_dict):
+            return None
+
+    with pytest.raises(ImportError, match="llnl-hatchet"):
+        _check_hatchet(SimpleNamespace(GraphFrame=PartialGraphFrame))
+
+
+def test_check_hatchet_accepts_llnl_hatchet():
+    from types import SimpleNamespace
+    from triton.profiler.viewer import _check_hatchet
+
+    class GraphFrame:
+
+        @staticmethod
+        def from_literal(graph_dict):
+            return None
+
+        def update_inclusive_columns(self):
+            return None
+
+    # A module exposing the llnl-hatchet API must pass without raising.
+    _check_hatchet(SimpleNamespace(GraphFrame=GraphFrame))
