@@ -4,6 +4,7 @@ numpy
 pytest
 pytest-instafail
 pytest-xdist
+psutil
 scipy>=1.7.1
 llnl-hatchet
 pandas<3.0
