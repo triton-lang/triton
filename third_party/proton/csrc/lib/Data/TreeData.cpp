@@ -463,14 +463,18 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
   auto packUncachedHatchetFrameHeader = [](MsgPackWriter &out,
                                            std::string_view name) {
-    out.packMap(3);
-    out.packFixStrLiteral("frame");
-    out.packMap(2);
-    out.packFixStrLiteral("name");
+    static constexpr uint8_t kHatchetFrameHeaderPrefix[] = {
+        0x83,                         // map(3)
+        0xa5, 'f',  'r',  'a',  'm', 'e',
+        0x82,                         // map(2)
+        0xa4, 'n',  'a',  'm',  'e'};
+    static constexpr uint8_t kHatchetFrameHeaderSuffix[] = {
+        0xa4, 't',  'y',  'p',  'e',
+        0xa8, 'f',  'u',  'n',  'c', 't', 'i', 'o', 'n',
+        0xa7, 'm',  'e',  't',  'r', 'i', 'c', 's'};
+    out.appendBytes(kHatchetFrameHeaderPrefix);
     out.packStr(name);
-    out.packFixStrLiteral("type");
-    out.packFixStrLiteral("function");
-    out.packFixStrLiteral("metrics");
+    out.appendBytes(kHatchetFrameHeaderSuffix);
   };
   // Names that fit in MsgPack fixstr are cheap enough to encode directly. Cache
   // only longer headers so repeated linked virtual frames can skip the larger

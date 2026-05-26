@@ -18,6 +18,11 @@ public:
 
   std::vector<uint8_t> take() &&;
   void appendBytes(const std::vector<uint8_t> &bytes);
+  template <size_t N> void appendBytes(const uint8_t (&bytes)[N]) {
+    const auto offset = out.size();
+    out.resize(offset + N);
+    std::memcpy(out.data() + offset, bytes, N);
+  }
 
   void packNil();
   void packBool(bool value);
