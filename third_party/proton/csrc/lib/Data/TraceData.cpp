@@ -691,7 +691,7 @@ void reconstructGraphScopeEvents(
           seenCaptureTag = true;
         }
         if (seenCaptureTag) {
-          graphContexts.emplace_back(context.name);
+          graphContexts.push_back(context);
         }
       }
       if (isMetadataKernel) {
@@ -973,15 +973,9 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
       for (auto targetEntryId : targetEntryIds) {
         // Linked target ids are event ids, so resolve through the event first.
         auto &targetEvent = virtualTrace->getEvent(targetEntryId);
-        auto resolvedContexts = virtualTrace->getContexts(targetEvent.contextId,
-                                                          /*skipRoot=*/true);
-        std::vector<Context> virtualContexts;
-        virtualContexts.reserve(resolvedContexts.size());
-        for (const auto &context : resolvedContexts) {
-          virtualContexts.emplace_back(context.name);
-        }
-        targetIdToVirtualContexts.emplace(targetEntryId,
-                                          std::move(virtualContexts));
+        targetIdToVirtualContexts.emplace(
+            targetEntryId, virtualTrace->getContexts(targetEvent.contextId,
+                                                     /*skipRoot=*/true));
       }
     });
   }
