@@ -484,13 +484,18 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     }
 
     auto it = frameHeaderCache.find(name);
-    if (it == frameHeaderCache.end()) {
-      MsgPackWriter headerWriter;
-      headerWriter.reserve(32 + name.size());
-      packUncachedHatchetFrameHeader(headerWriter, name);
-      it = frameHeaderCache.emplace(name, std::move(headerWriter).take()).first;
+    if (it != frameHeaderCache.end()) {
+      writer.appendBytes(it->second);
+      return;
     }
-    writer.appendBytes(it->second);
+
+    const auto offset = writer.size();
+    packUncachedHatchetFrameHeader(writer, name);
+    std::vector<uint8_t> headerBytes;
+    headerBytes.reserve(kCachedFrameHeaderMinNameBytes + name.size());
+    headerBytes.insert(headerBytes.end(), writer.data() + offset,
+                       writer.data() + writer.size());
+    frameHeaderCache.emplace(name, std::move(headerBytes));
   };
 
   // Root metrics only carry inclusive aggregate fields. Non-root metrics also

@@ -13,6 +13,8 @@ namespace proton {
 class MsgPackWriter {
 public:
   void reserve(size_t bytes);
+  size_t size() const { return out.size(); }
+  const uint8_t *data() const { return out.data(); }
 
   std::vector<uint8_t> take() &&;
   void appendBytes(const std::vector<uint8_t> &bytes);
