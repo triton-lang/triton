@@ -93,12 +93,6 @@ void MsgPackWriter::packStr(std::string_view value) {
   std::memcpy(out.data() + offset, value.data(), size);
 }
 
-void MsgPackWriter::appendBytes(const std::vector<uint8_t> &bytes) {
-  const auto offset = out.size();
-  out.resize(offset + bytes.size());
-  std::memcpy(out.data() + offset, bytes.data(), bytes.size());
-}
-
 void MsgPackWriter::packArray(uint32_t size) {
   if (size <= 15) {
     out.push_back(static_cast<uint8_t>(0x90 | size));

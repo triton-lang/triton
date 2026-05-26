@@ -28,9 +28,8 @@ namespace {
 
 constexpr size_t kMaxRegisteredDeviceIds = 32;
 
-std::vector<uint8_t> buildMsgPackHatchetFrameHeader(std::string_view name) {
-  MsgPackWriter writer;
-  writer.reserve(name.size() + 32);
+void packMsgPackHatchetFrameHeader(MsgPackWriter &writer,
+                                   std::string_view name) {
   writer.packMap(3);
   writer.packFixStrLiteral("frame");
   writer.packMap(2);
@@ -39,7 +38,6 @@ std::vector<uint8_t> buildMsgPackHatchetFrameHeader(std::string_view name) {
   writer.packFixStrLiteral("type");
   writer.packFixStrLiteral("function");
   writer.packFixStrLiteral("metrics");
-  return std::move(writer).take();
 }
 
 struct MetricSummary {
@@ -463,18 +461,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   MetricSummary metricSummary;
   metricSummary.hasKernelMetric = true;
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
-  std::vector<std::vector<uint8_t>> treeMsgPackFrameHeaderCache(tree->size());
-  std::vector<std::vector<uint8_t>> virtualMsgPackFrameHeaderCache(
-      virtualTree->size());
-  auto getMsgPackFrameHeader = [&](TreeData::Tree *sourceTree,
-                                   std::vector<std::vector<uint8_t>> &cache,
-                                   size_t id) -> const std::vector<uint8_t> & {
-    auto &header = cache[id];
-    if (header.empty()) {
-      header = buildMsgPackHatchetFrameHeader(sourceTree->getNode(id).name);
-    }
-    return header;
-  };
 
   // Root metrics only carry inclusive aggregate fields. Non-root metrics also
   // include device_id and device_type, so their serialized map entry counts are
@@ -701,8 +687,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   // under the same frame.
   auto packNode = [&](auto &&packNode,
                       TreeData::Tree::TreeNode &treeNode) -> void {
-    writer.appendBytes(
-        getMsgPackFrameHeader(tree, treeMsgPackFrameHeaderCache, treeNode.id));
+    packMsgPackHatchetFrameHeader(writer, treeNode.name);
     const bool isRoot = treeNode.id == TreeData::Tree::TreeNode::RootId;
     const auto &linkedFlexibleMetrics =
         treeNode.metricSet.linkedFlexibleMetrics;
@@ -728,8 +713,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,
                                      size_t virtualNodeId) -> void {
       const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-      writer.appendBytes(getMsgPackFrameHeader(
-          virtualTree, virtualMsgPackFrameHeaderCache, virtualNodeId));
+      packMsgPackHatchetFrameHeader(writer, virtualNode.name);
       const auto metricsIt =
           treeNode.metricSet.linkedMetrics.find(virtualNodeId);
       const auto promotedFlexibleMetricEntries =
