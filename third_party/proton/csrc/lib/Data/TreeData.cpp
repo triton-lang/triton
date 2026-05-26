@@ -235,8 +235,6 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
   output.push_back(json::object());
   jsonNodes[TreeData::Tree::TreeNode::RootId] = &(output.back());
   MetricSummary metricSummary;
-  std::vector<uint32_t> linkedVirtualNodeMarks(virtualTree->size(), 0);
-  uint32_t linkedVirtualNodeMark = 0;
   // Append fixed-schema metrics to a JSON metrics object and update device
   // metadata requirements while visiting them.
   auto appendMetrics = [&](json &metricsJson,
@@ -348,63 +346,29 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         childrenArray = json::array();
         const auto &virtualRootNode =
             virtualTree->getNode(Tree::TreeNode::RootId);
-        bool hasLinkedVirtualNodes = false;
-        uint32_t currentLinkedVirtualNodeMark = 0;
-        if (!treeNode.metricSet.linkedMetrics.empty() ||
-            !treeNode.metricSet.linkedFlexibleMetrics.empty()) {
-          hasLinkedVirtualNodes = true;
-          // Reuse the mark buffer across tree nodes. Bumping the generation
-          // avoids clearing a virtual-tree-sized buffer for each real node.
-          ++linkedVirtualNodeMark;
-          if (linkedVirtualNodeMark == 0) {
-            std::fill(linkedVirtualNodeMarks.begin(),
-                      linkedVirtualNodeMarks.end(), 0);
-            linkedVirtualNodeMark = 1;
-          }
-          currentLinkedVirtualNodeMark = linkedVirtualNodeMark;
-          // Mark each linked target and its ancestors, producing the smallest
-          // virtual subtree needed to keep the linked target reachable.
-          auto markLinkedVirtualNode = [&](size_t virtualNodeId) {
-            while (virtualNodeId != Tree::TreeNode::DummyId &&
-                   linkedVirtualNodeMarks[virtualNodeId] !=
-                       currentLinkedVirtualNodeMark) {
-              linkedVirtualNodeMarks[virtualNodeId] =
-                  currentLinkedVirtualNodeMark;
-              if (virtualNodeId == Tree::TreeNode::RootId) {
-                break;
-              }
-              virtualNodeId = virtualTree->getNode(virtualNodeId).parentId;
-            }
-          };
-          for (const auto &[linkedId, _] : treeNode.metricSet.linkedMetrics) {
-            markLinkedVirtualNode(linkedId);
-          }
-          for (const auto &[linkedId, _] :
-               treeNode.metricSet.linkedFlexibleMetrics) {
-            // Flexible metrics are keyed by the child <metric> helper, but
-            // serialized on the parent frame so the helper node can stay out
-            // of the dumped tree.
-            markLinkedVirtualNode(virtualTree->getNode(linkedId).parentId);
-          }
-        }
         childrenArray.get_ref<json::array_t &>().reserve(
             treeNode.children.size() + virtualRootNode.children.size());
         for (const auto &child : treeNode.children) {
           childrenArray.push_back(json::object());
           jsonNodes[child.id] = &childrenArray.back();
         }
-        // Copy a marked virtual subtree into the current JSON node.
+        if (treeNode.metricSet.linkedMetrics.empty() &&
+            treeNode.metricSet.linkedFlexibleMetrics.empty()) {
+          return;
+        }
+        // JSON dumping is not the performance-critical path, so keep linked
+        // virtual serialization straightforward: walk the virtual tree and
+        // skip only empty leaves. Ancestors without metrics are still emitted
+        // when they are needed to keep metric-bearing descendants reachable.
         auto appendLinkedVirtualNode = [&](auto &&appendLinkedVirtualNode,
                                            size_t virtualNodeId,
-                                           json &outNode) -> void {
+                                           json &outChildren) -> void {
           const auto &virtualNode = virtualTree->getNode(virtualNodeId);
           const auto metricsIt =
               treeNode.metricSet.linkedMetrics.find(virtualNodeId);
-          outNode = json::object();
-          outNode["frame"] = {{"name", virtualNode.name}, {"type", "function"}};
-          outNode["metrics"] = json::object();
+          json metricsJson = json::object();
           if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
-            appendMetrics(outNode["metrics"], metricsIt->second);
+            appendMetrics(metricsJson, metricsIt->second);
           }
           // Linked flexible metrics are only attached to <metric_node>
           // children, so they always belong on the parent frame.
@@ -412,32 +376,28 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
             auto flexibleIt =
                 treeNode.metricSet.linkedFlexibleMetrics.find(child.id);
             if (flexibleIt != treeNode.metricSet.linkedFlexibleMetrics.end()) {
-              appendFlexibleMetrics(outNode["metrics"], flexibleIt->second);
+              appendFlexibleMetrics(metricsJson, flexibleIt->second);
             }
           }
-          outNode["children"] = json::array();
-          auto &linkedChildren = outNode["children"];
-          linkedChildren.get_ref<json::array_t &>().reserve(
-              virtualNode.children.size());
+          json linkedChildren = json::array();
           for (const auto &child : virtualNode.children) {
-            if (linkedVirtualNodeMarks[child.id] !=
-                currentLinkedVirtualNodeMark) {
-              continue;
-            }
-            linkedChildren.push_back(json::object());
             appendLinkedVirtualNode(appendLinkedVirtualNode, child.id,
-                                    linkedChildren.back());
+                                    linkedChildren);
           }
+          if (metricsJson.empty() && linkedChildren.empty()) {
+            return;
+          }
+          outChildren.push_back(json::object());
+          auto &outNode = outChildren.back();
+          outNode["frame"] = {{"name", virtualNode.name},
+                              {"type", "function"}};
+          outNode["metrics"] = std::move(metricsJson);
+          outNode["children"] = std::move(linkedChildren);
         };
 
         for (const auto &child : virtualRootNode.children) {
-          if (!hasLinkedVirtualNodes || linkedVirtualNodeMarks[child.id] !=
-                                            currentLinkedVirtualNodeMark) {
-            continue;
-          }
-          childrenArray.push_back(json::object());
           appendLinkedVirtualNode(appendLinkedVirtualNode, child.id,
-                                  childrenArray.back());
+                                  childrenArray);
         }
       });
 
