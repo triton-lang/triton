@@ -808,6 +808,11 @@ LogicalResult AsyncTDMScatterOp::verify() {
     return emitOpError("TDM scatter only supports 2D tensors, got ")
            << blockShape.size() << "D";
 
+  if (tensorDescTy.getSharedLayout() &&
+      tensorDescTy.getSharedLayout() != smemTy.getEncoding())
+    return emitOpError(
+        "Mismatch between TDM descriptor and source smem encodings");
+
   // Check that every dimension of the block shape is <= 2^16
   auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
   if (failed(verifyResult))
@@ -862,6 +867,11 @@ LogicalResult AsyncTDMGatherOp::verify() {
   if (blockShape.size() != 2)
     return emitOpError("TDM gather only supports 2D tensors, got ")
            << blockShape.size() << "D";
+
+  if (tensorDescTy.getSharedLayout() &&
+      tensorDescTy.getSharedLayout() != smemTy.getEncoding())
+    return emitOpError(
+        "Mismatch between TDM descriptor and destination smem encodings");
 
   // Check that every dimension of the block shape is <= 2^16
   auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
