@@ -611,8 +611,8 @@ def test_k_ragged_mxfp8_act_scale_swizzling(device, opt_flags_scope):
         device=device,
         opt_flags_scope=opt_flags_scope,
     )
-    canonical = _test_op(a_hbm_swizzling=False, **kwargs)
     swizzled = _test_op(a_hbm_swizzling=True, **kwargs)
+    canonical = _test_op(a_hbm_swizzling=False, **kwargs)
     torch.testing.assert_close(swizzled, canonical)
 
 
