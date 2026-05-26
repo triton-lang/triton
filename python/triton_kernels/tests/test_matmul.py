@@ -577,11 +577,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if c_dtype.has_global_scale:
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
+    return tri_y
 
 
 @pytest.mark.skipif(not cuda_capability_geq(10), reason="Activation scale swizzling requires Blackwell")
-def test_k_ragged_mxfp8_act_scale_memcheck(device, opt_flags_scope):
-    _test_op(
+def test_k_ragged_mxfp8_act_scale_swizzling(device, opt_flags_scope):
+    kwargs = dict(
         m=64,
         n=128,
         k=96,
@@ -600,7 +601,6 @@ def test_k_ragged_mxfp8_act_scale_memcheck(device, opt_flags_scope):
         block_m=128,
         b_hbm_swizzling=False,
         shuffle_mxfp4_w_layout=False,
-        a_hbm_swizzling=True,
         colmajor_mxfp_weight=True,
         epilogue_subtile=None,
         a_transpose=False,
@@ -611,6 +611,9 @@ def test_k_ragged_mxfp8_act_scale_memcheck(device, opt_flags_scope):
         device=device,
         opt_flags_scope=opt_flags_scope,
     )
+    canonical = _test_op(a_hbm_swizzling=False, **kwargs)
+    swizzled = _test_op(a_hbm_swizzling=True, **kwargs)
+    torch.testing.assert_close(swizzled, canonical)
 
 
 def test_set_idle_sms():
