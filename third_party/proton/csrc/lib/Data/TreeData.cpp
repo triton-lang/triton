@@ -655,82 +655,54 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
               flexibleMetric.getValues()[0]);
         }
       };
-  // Count flexible metrics attached to child <metric> helpers that will be
-  // promoted into the parent frame's metrics map.
-  auto countPromotedFlexibleMetricEntries =
-      [&](const auto &children,
-          const DataEntry::LinkedFlexibleMetricMap &linkedFlexibleMetrics)
-      -> uint32_t {
-    uint32_t metricEntries = 0;
-    for (const auto &child : children) {
-      auto it = linkedFlexibleMetrics.find(child.id);
-      if (it != linkedFlexibleMetrics.end()) {
-        metricEntries += static_cast<uint32_t>(it->second.size());
+  auto packNode = [&](auto &&packNode,
+                      TreeData::Tree::TreeNode &treeNode) -> void {
+    // Write the header
+    packHatchetFrameHeader(treeNode.name);
+    const bool isRoot = treeNode.id == TreeData::Tree::TreeNode::RootId;
+    // Write the concrete nodes' own metrics and flexible metrics
+    writer.packMap(
+        countMetricEntries(treeNode.metricSet.metrics, isRoot) +
+        static_cast<uint32_t>(treeNode.metricSet.flexibleMetrics.size()));
+    packMetrics(treeNode.metricSet.metrics, isRoot);
+    packFlexibleMetrics(treeNode.metricSet.flexibleMetrics);
+
+    auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,
+                                     size_t virtualNodeId) -> void {
+      const auto &virtualNode = virtualTree->getNode(virtualNodeId);
+      auto &linkedMetrics = treeNode.metricSet.linkedMetrics;
+      auto &linkedFlexibleMetrics = treeNode.metricSet.linkedFlexibleMetrics;
+      // Write the header
+      packHatchetFrameHeader(virtualNode.name);
+      // Count linked metrics
+      auto metricEntries = 0u;
+      const auto metricsIt = linkedMetrics.find(virtualNodeId);
+      if (metricsIt != linkedMetrics.end()) {
+        metricEntries +=
+            countMetricEntries(metricsIt->second, /*isRoot=*/false);
       }
-    }
-    return metricEntries;
-  };
-  // Pack the child <metric> helper entries into the parent frame.
-  auto packPromotedFlexibleMetrics =
-      [&](const auto &children,
-          const DataEntry::LinkedFlexibleMetricMap &linkedFlexibleMetrics) {
-        for (const auto &child : children) {
+      // Count linked flexible metrics exist in the child <metric> helpers
+      if (!linkedFlexibleMetrics.empty()) {
+        for (const auto &child : virtualNode.children) {
+          auto it = linkedFlexibleMetrics.find(child.id);
+          if (it != linkedFlexibleMetrics.end()) {
+            metricEntries += static_cast<uint32_t>(it->second.size());
+          }
+        }
+      }
+      // Pack
+      writer.packMap(metricEntries);
+      if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
+        packMetrics(metricsIt->second, /*isRoot=*/false);
+      }
+      if (!linkedFlexibleMetrics.empty()) {
+        for (const auto &child : virtualNode.children) {
           auto it = linkedFlexibleMetrics.find(child.id);
           if (it != linkedFlexibleMetrics.end()) {
             packFlexibleMetrics(it->second);
           }
         }
-      };
-  auto packNode = [&](auto &&packNode,
-                      TreeData::Tree::TreeNode &treeNode) -> void {
-    packHatchetFrameHeader(treeNode.name);
-    const bool isRoot = treeNode.id == TreeData::Tree::TreeNode::RootId;
-    const auto &linkedFlexibleMetrics =
-        treeNode.metricSet.linkedFlexibleMetrics;
-    const auto promotedFlexibleMetricEntries =
-        linkedFlexibleMetrics.empty()
-            ? 0
-            : countPromotedFlexibleMetricEntries(virtualRootNode.children,
-                                                 linkedFlexibleMetrics);
-    writer.packMap(
-        countMetricEntries(treeNode.metricSet.metrics, isRoot) +
-        static_cast<uint32_t>(treeNode.metricSet.flexibleMetrics.size()) +
-        promotedFlexibleMetricEntries);
-    packMetrics(treeNode.metricSet.metrics, isRoot);
-    packFlexibleMetrics(treeNode.metricSet.flexibleMetrics);
-    if (!linkedFlexibleMetrics.empty()) {
-      packPromotedFlexibleMetrics(virtualRootNode.children,
-                                  linkedFlexibleMetrics);
-    }
-    const bool hasLinkedTargets = !treeNode.metricSet.linkedMetrics.empty() ||
-                                  !linkedFlexibleMetrics.empty();
-
-    auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,
-                                     size_t virtualNodeId) -> void {
-      const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-      packHatchetFrameHeader(virtualNode.name);
-      const auto metricsIt =
-          treeNode.metricSet.linkedMetrics.find(virtualNodeId);
-      const auto promotedFlexibleMetricEntries =
-          linkedFlexibleMetrics.empty()
-              ? 0
-              : countPromotedFlexibleMetricEntries(virtualNode.children,
-                                                   linkedFlexibleMetrics);
-      writer.packMap((metricsIt != treeNode.metricSet.linkedMetrics.end()
-                          ? countMetricEntries(metricsIt->second,
-                                               /*isRoot=*/false)
-                          : 0) +
-                     promotedFlexibleMetricEntries);
-      if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
-        packMetrics(metricsIt->second, /*isRoot=*/false);
       }
-      // Linked flexible metrics are only attached to <metric_node>
-      // children, so they are always packed into the parent frame.
-      if (!linkedFlexibleMetrics.empty()) {
-        packPromotedFlexibleMetrics(virtualNode.children,
-                                    linkedFlexibleMetrics);
-      }
-
       writer.packFixStrLiteral("children");
       writer.packArray(static_cast<uint32_t>(virtualNode.children.size()));
       for (const auto &child : virtualNode.children) {
@@ -738,9 +710,13 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       }
     };
 
+    const bool hasLinkedTargets =
+        !treeNode.metricSet.linkedMetrics.empty() ||
+        !treeNode.metricSet.linkedFlexibleMetrics.empty();
     uint32_t linkedChildCount =
-        hasLinkedTargets ? static_cast<uint32_t>(virtualRootNode.children.size())
-                         : 0;
+        hasLinkedTargets
+            ? static_cast<uint32_t>(virtualRootNode.children.size())
+            : 0;
     writer.packFixStrLiteral("children");
     writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
                      linkedChildCount);
