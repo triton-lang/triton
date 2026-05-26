@@ -585,6 +585,13 @@ def test_set_idle_sms():
     from triton_kernels.matmul_details.opt_flags import make_opt_flags
     num_idle_sms = 24
     matmul_set_idle_sms(num_idle_sms)
-    flags = make_opt_flags(FP32, FP32, FP32, PrecisionConfig(), \
-                           1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
-    assert flags.idle_sms == num_idle_sms
+    try:
+        flags = make_opt_flags(FP32, FP32, FP32, PrecisionConfig(), \
+                               1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
+        assert flags.idle_sms == num_idle_sms
+        with opt_flags.scoped_opt_flags_constraints({"idle_sms": num_idle_sms + 1}):
+            flags = make_opt_flags(FP32, FP32, FP32, PrecisionConfig(), \
+                                   1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
+            assert flags.idle_sms == num_idle_sms + 1
+    finally:
+        matmul_set_idle_sms(0)
