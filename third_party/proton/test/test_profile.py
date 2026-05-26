@@ -1701,19 +1701,16 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
     assert scope_a_frame["metrics"]["bytes"] == 160
     assert "count" not in scope_a_frame["metrics"]
     scope_a_metric_frame = _find_child_frame_by_name(scope_a_frame, "<metric>")
-    if scope_a_metric_frame is not None:
-        assert "bytes" not in scope_a_metric_frame["metrics"]
+    assert "bytes" not in scope_a_metric_frame["metrics"]
     assert scope_b_frame is not None
     assert scope_b_frame["metrics"]["sum"] == 40.0
     assert "count" not in scope_b_frame["metrics"]
     scope_b_metric_frame = _find_child_frame_by_name(scope_b_frame, "<metric>")
-    if scope_b_metric_frame is not None:
-        assert "sum" not in scope_b_metric_frame["metrics"]
+    assert "sum" not in scope_b_metric_frame["metrics"]
     assert scope_d_frame is not None
     assert scope_d_frame["metrics"]["vec"] == [0, 10, 20, 30]
     scope_d_metric_frame = _find_child_frame_by_name(scope_d_frame, "<metric>")
-    if scope_d_metric_frame is not None:
-        assert "vec" not in scope_d_metric_frame["metrics"]
+    assert "vec" not in scope_d_metric_frame["metrics"]
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
@@ -1854,12 +1851,10 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
         assert foo_frame["metrics"]["device_id"] == str(device.index)
         assert scope_a_frame["metrics"]["bytes"] == 160
         scope_a_metric_frame = _find_child_frame_by_name(scope_a_frame, "<metric>")
-        if scope_a_metric_frame is not None:
-            assert "bytes" not in scope_a_metric_frame["metrics"]
+        assert "bytes" not in scope_a_metric_frame["metrics"]
         assert scope_b_frame["metrics"]["sum"] == 40.0
         scope_b_metric_frame = _find_child_frame_by_name(scope_b_frame, "<metric>")
-        if scope_b_metric_frame is not None:
-            assert "sum" not in scope_b_metric_frame["metrics"]
+        assert "sum" not in scope_b_metric_frame["metrics"]
 
     assert len(data) > 1
     cuda_devices = data[1].get("CUDA", {})
@@ -1977,8 +1972,7 @@ def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_
         assert foo_test_frame is not None
         assert scope_a_frame["metrics"]["bytes"] == test_iterations / 10 * 16
         scope_a_metric_frame = _find_child_frame_by_name(scope_a_frame, "<metric>")
-        if scope_a_metric_frame is not None:
-            assert "bytes" not in scope_a_metric_frame["metrics"]
+        assert "bytes" not in scope_a_metric_frame["metrics"]
         assert foo_test_frame["metrics"]["bytes"] == test_iterations / 10 * 16
         assert foo_test_frame["metrics"]["flops"] == test_iterations / 10 * 4
 
