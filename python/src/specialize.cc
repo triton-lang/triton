@@ -73,7 +73,9 @@ static PyObject *get_tensor_spec_attr = nullptr;
 static PyObject *align_kwarg = nullptr;
 
 static DtypePtr2Str dtype_ptr2str;
+static std::mutex dtype_ptr2str_mutex;
 static Dtype2Str dtype2str;
+static std::mutex dtype2str_mutex;
 static TypeHandlerCache type_handler_cache;
 
 // Wrappers to make steal and borrow slightly simpler. We use raw CPython API
@@ -188,16 +190,25 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   if (dtype_hash == -1)
     return {};
   DTypeKey dsk{dtype_hash};
-  auto it = dtype2str.find(dsk);
-  if (it != dtype2str.end()) {
-    type_str = it->second;
-  } else {
+  type_str = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(dtype2str_mutex);
+    auto it = dtype2str.find(dsk);
+    if (it != dtype2str.end()) {
+      type_str = it->second;
+    }
+  }
+  if (!type_str) {
     auto res = from_new_ref(PyObject_CallFunctionObjArgs(canonicalize_dtype_fn,
                                                          dtype.ptr(), nullptr));
     if (!res)
       return {};
-    dtype2str[dsk] = res.ptr();
-    type_str = res.release().ptr();
+    std::lock_guard<std::mutex> lock(dtype2str_mutex);
+    auto [it, inserted] = dtype2str.emplace(dsk, res.ptr());
+    type_str = it->second;
+    if (inserted) {
+      res.release();
+    }
   }
 
   std::string desc_cstr;
@@ -330,19 +341,26 @@ std::pair<py::object, py::object> handle_tensor(PyObject *backend,
     return {};
 
   DTypePtrKey dsk{dtype_hash, is_const};
-  auto it = dtype_ptr2str.find(dsk);
-
   py::handle type_str;
-  if (it != dtype_ptr2str.end()) {
-    type_str = it->second;
-  } else {
-    auto canon_res =
+  {
+    std::lock_guard<std::mutex> lock(dtype_ptr2str_mutex);
+    auto it = dtype_ptr2str.find(dsk);
+    if (it != dtype_ptr2str.end()) {
+      type_str = it->second;
+    }
+  }
+  if (!type_str) {
+    auto canon_res = from_new_ref(
         PyObject_CallFunctionObjArgs(canonicalize_ptr_dtype_fn, dtype.ptr(),
-                                     is_const ? Py_True : Py_False, nullptr);
+                                     is_const ? Py_True : Py_False, nullptr));
     if (!canon_res)
       return {};
-    dtype_ptr2str[dsk] = canon_res;
-    type_str = canon_res;
+    std::lock_guard<std::mutex> lock(dtype_ptr2str_mutex);
+    auto [it, inserted] = dtype_ptr2str.emplace(dsk, canon_res.ptr());
+    type_str = it->second;
+    if (inserted) {
+      canon_res.release();
+    }
   }
 
   // handle alignment specialization of a tensor
