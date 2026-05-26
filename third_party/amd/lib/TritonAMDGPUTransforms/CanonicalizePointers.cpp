@@ -2059,9 +2059,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   // unsupported ops.
   target.addIllegalOp<UnrealizedConversionCastOp>();
   patterns.clear();
-  patterns.add<ConvertUnimplementedOpUnrealizedCasts>(patterns.getContext(),
-                                                      opsToRewrite, fatPrs,
-                                                      convertedBlocks);
+  patterns.add<ConvertUnimplementedOpUnrealizedCasts>(
+      patterns.getContext(), opsToRewrite, fatPrs, convertedBlocks);
   if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 
