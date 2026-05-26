@@ -681,8 +681,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
           }
         }
       };
-  // Pack a real tree node, followed by any linked virtual subtree that belongs
-  // under the same frame.
   auto packNode = [&](auto &&packNode,
                       TreeData::Tree::TreeNode &treeNode) -> void {
     packHatchetFrameHeader(treeNode.name);
@@ -707,7 +705,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     const bool hasLinkedTargets = !treeNode.metricSet.linkedMetrics.empty() ||
                                   !linkedFlexibleMetrics.empty();
 
-    // Pack the linked virtual subtree as children of the current real frame.
     auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,
                                      size_t virtualNodeId) -> void {
       const auto &virtualNode = virtualTree->getNode(virtualNodeId);
@@ -741,17 +738,18 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       }
     };
 
+    uint32_t linkedChildCount =
+        hasLinkedTargets ? static_cast<uint32_t>(virtualRootNode.children.size())
+                         : 0;
     writer.packFixStrLiteral("children");
     writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
-                     (hasLinkedTargets ? static_cast<uint32_t>(
-                                             virtualRootNode.children.size())
-                                       : 0));
+                     linkedChildCount);
     for (const auto &child : treeNode.children) {
       packNode(packNode, tree->getNode(child.id));
     }
     if (hasLinkedTargets) {
-      for (const auto &child : virtualRootNode.children) {
-        packLinkedVirtualNode(packLinkedVirtualNode, child.id);
+      for (const auto &virtualChild : virtualRootNode.children) {
+        packLinkedVirtualNode(packLinkedVirtualNode, virtualChild.id);
       }
     }
   };
