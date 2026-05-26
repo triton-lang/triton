@@ -8,12 +8,6 @@
 namespace proton {
 namespace {
 
-void appendBytes(std::vector<uint8_t> &out, const uint8_t *data, size_t size) {
-  const auto offset = out.size();
-  out.resize(offset + size);
-  std::memcpy(out.data() + offset, data, size);
-}
-
 template <typename T> void writeBE(std::vector<uint8_t> &out, T value) {
   using U = std::make_unsigned_t<T>;
   U u = static_cast<U>(value);
@@ -99,8 +93,10 @@ void MsgPackWriter::packStr(std::string_view value) {
   std::memcpy(out.data() + offset, value.data(), size);
 }
 
-void MsgPackWriter::appendRaw(const std::vector<uint8_t> &bytes) {
-  appendBytes(out, bytes.data(), bytes.size());
+void MsgPackWriter::appendBytes(const std::vector<uint8_t> &bytes) {
+  const auto offset = out.size();
+  out.resize(offset + bytes.size());
+  std::memcpy(out.data() + offset, bytes.data(), bytes.size());
 }
 
 void MsgPackWriter::packArray(uint32_t size) {
