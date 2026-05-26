@@ -475,7 +475,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   // Names that fit in MsgPack fixstr are cheap enough to encode directly. Cache
   // only longer headers so repeated linked virtual frames can skip the larger
   // string copy without adding hash-table overhead to every small frame name.
-  constexpr size_t kCachedFrameHeaderMinNameBytes = 32;
+  constexpr size_t kCachedFrameHeaderMinNameBytes = 64;
   std::unordered_map<std::string_view, std::vector<uint8_t>> frameHeaderCache;
   auto packHatchetFrameHeader = [&](std::string_view name) {
     if (name.size() < kCachedFrameHeaderMinNameBytes) {
