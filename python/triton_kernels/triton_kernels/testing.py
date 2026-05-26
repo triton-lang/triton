@@ -350,6 +350,6 @@ def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtyp
         if scale_hbm_swizzling is not None:
             # hack to avoid circular dependency
             if callable(scale_hbm_swizzling):
-                scale_hbm_swizzling = scale_hbm_swizzling(ragged_metadata)
+                scale_hbm_swizzling = scale_hbm_swizzling(ragged_metadata, ragged_dim)
             scales = convert_layout(scales, scale_hbm_swizzling)
     return buffer, scales, ragged_metadata
