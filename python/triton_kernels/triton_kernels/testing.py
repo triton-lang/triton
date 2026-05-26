@@ -105,8 +105,6 @@ def compute_sanitizer(**target_kwargs):
                 test_fn(*args, **kwargs)
                 return
 
-            import psutil
-
             if target_kwargs.pop("clear_torch_cache", False):
                 # If we don't pop clear_torch_cache, it won't pass
                 # target_kwargs.items() <= kwargs.items() condition below.
@@ -116,11 +114,10 @@ def compute_sanitizer(**target_kwargs):
             assert all(tool in ComputeSanitizerTool for tool in tools_to_check), (
                 f"{(tool for tool in tools_to_check if tool not in ComputeSanitizerTool)=}")
 
-            ppid_name = psutil.Process(os.getppid()).exe()
             run_compute_sanitizer = target_kwargs.items() <= kwargs.items()
             if "run_sanitizer" in kwargs:
                 run_compute_sanitizer &= kwargs["run_sanitizer"]
-            if run_compute_sanitizer and "compute-sanitizer" not in ppid_name:
+            if run_compute_sanitizer:
                 for tool in tools_to_check:
                     path = os.path.realpath(test_fn.__globals__["__file__"])
                     # get path of current file
@@ -129,13 +126,11 @@ def compute_sanitizer(**target_kwargs):
                         "PYTORCH_NO_CUDA_MEMORY_CACHING": "1",
                         "TORCH_SHOW_CPP_STACKTRACES": "1",
                         "CUDA_LAUNCH_BLOCKING": "1",
+                        "SKIP_COMPUTE_SANITIZER": "1",
                     }
                     if "CUDA_VISIBLE_DEVICES" in os.environ:
                         env["CUDA_VISIBLE_DEVICES"] = os.environ["CUDA_VISIBLE_DEVICES"]
-                    request = kwargs.get("request") or kwargs.get("request_fixture")
-                    assert request is not None, (
-                        "memcheck'ed test must have a (possibly unused) `request` fixture")
-                    test_node = f"{path}::{request.node.name}"
+                    test_node = f"{path}::{kwargs['request'].node.name}"
                     cmd = [
                         "compute-sanitizer",
                         "--target-processes=application-only",
