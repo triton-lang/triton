@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -120,20 +121,18 @@ public:
 
     void addChild(std::string_view childName, size_t id) {
       children.push_back({childName, id});
+      childIndex.emplace(childName, id);
     }
 
     size_t findChild(std::string_view childName) const {
-      for (const auto &child : children) {
-        if (child.name == childName) {
-          return child.id;
-        }
-      }
-      return DummyId;
+      auto it = childIndex.find(childName);
+      return it != childIndex.end() ? it->second : DummyId;
     }
 
     size_t parentId = DummyId;
     size_t id = DummyId;
     std::vector<ChildEntry> children = {};
+    std::unordered_map<std::string_view, size_t> childIndex = {};
     // Direct and linked metrics associated with this tree node.
     DataEntry::MetricSet metricSet{};
     friend class Tree;
