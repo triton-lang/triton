@@ -17,7 +17,7 @@ from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp
 # testing utilities
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
-from triton_kernels.target_info import cuda_capability_geq, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250
+from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
@@ -580,7 +580,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     return tri_y
 
 
-@pytest.mark.skipif(not cuda_capability_geq(10), reason="Activation scale swizzling requires Blackwell")
 def test_k_ragged_mxfp8_act_scale_swizzling(device, opt_flags_scope):
     kwargs = dict(
         m=64,
