@@ -10,7 +10,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <limits>
 #include <map>
 #include <memory>
@@ -138,7 +137,10 @@ public:
     friend class Tree;
   };
 
-  Tree() { treeNodes.emplace_back(TreeNode::RootId, TreeNode::RootId, "ROOT"); }
+  Tree() {
+    treeNodeMap.try_emplace(TreeNode::RootId, TreeNode::RootId,
+                            TreeNode::RootId, "ROOT");
+  }
 
   size_t addNode(const std::vector<Context> &contexts, size_t parentId) {
     for (const auto &context : contexts) {
@@ -148,14 +150,14 @@ public:
   }
 
   size_t addNode(const Context &context, size_t parentId) {
-    auto &parent = getNode(parentId);
+    auto &parent = treeNodeMap.at(parentId);
     std::string_view contextName = context.name;
     auto existingChildId = parent.findChild(contextName);
     if (existingChildId != TreeNode::DummyId)
       return existingChildId;
     auto id = nextContextId++;
-    treeNodes.emplace_back(id, parentId, context);
-    parent.addChild(treeNodes.back().name, id);
+    auto [it, inserted] = treeNodeMap.try_emplace(id, id, parentId, context);
+    parent.addChild(it->second.name, id);
     return id;
   }
 
@@ -167,22 +169,11 @@ public:
     return parentId;
   }
 
-  TreeNode &getNode(size_t id) { return treeNodes.at(id); }
-
-  const std::vector<uint8_t> &getMsgPackFrameHeader(size_t id) {
-    if (msgPackFrameHeaderCache.size() < treeNodes.size()) {
-      msgPackFrameHeaderCache.resize(treeNodes.size());
-    }
-    auto &header = msgPackFrameHeaderCache[id];
-    if (header.empty()) {
-      header = buildMsgPackHatchetFrameHeader(treeNodes[id].name);
-    }
-    return header;
-  }
+  TreeNode &getNode(size_t id) { return treeNodeMap.at(id); }
 
   void upsertFlexibleMetric(size_t contextId,
                             const FlexibleMetric &flexibleMetric) {
-    auto &node = getNode(contextId);
+    auto &node = treeNodeMap.at(contextId);
     auto &flexibleMetrics = node.metricSet.flexibleMetrics;
     auto valueName = std::string(flexibleMetric.getValueName(0));
     auto it = flexibleMetrics.find(valueName);
@@ -210,22 +201,21 @@ public:
     }
   }
 
-  size_t size() const { return treeNodes.size(); }
+  size_t size() const { return nextContextId; }
 
   Tree structure() const {
     Tree cloned;
-    cloned.treeNodes.clear();
     cloned.nextContextId = nextContextId;
 
-    for (const auto &node : treeNodes) {
-      cloned.treeNodes.emplace_back(node.id, node.parentId, node);
+    for (const auto &[id, node] : treeNodeMap) {
+      cloned.treeNodeMap.try_emplace(id, id, node.parentId, node);
     }
 
-    for (const auto &node : treeNodes) {
-      auto &clonedNode = cloned.getNode(node.id);
+    for (const auto &[id, node] : treeNodeMap) {
+      auto &clonedNode = cloned.treeNodeMap.at(id);
       clonedNode.children.reserve(node.children.size());
       for (const auto &child : node.children) {
-        clonedNode.addChild(cloned.getNode(child.id).name, child.id);
+        clonedNode.addChild(cloned.treeNodeMap[child.id].name, child.id);
       }
     }
 
@@ -234,11 +224,8 @@ public:
 
 private:
   size_t nextContextId = TreeNode::RootId + 1;
-  // Node ids are dense and assigned sequentially, so index lookup is enough.
-  std::deque<TreeNode> treeNodes;
-  // Cached MsgPack frame boilerplate keyed by dense node id. The cache is
-  // derived from immutable node names and grows with the tree.
-  std::vector<std::vector<uint8_t>> msgPackFrameHeaderCache;
+  // tree node id -> tree node
+  std::unordered_map<size_t, TreeNode> treeNodeMap;
 };
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree,
@@ -519,6 +506,19 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
   std::vector<uint32_t> linkedVirtualNodeMarks(virtualTree->size(), 0);
   uint32_t linkedVirtualNodeMark = 0;
+  std::vector<std::vector<uint8_t>> treeMsgPackFrameHeaderCache(tree->size());
+  std::vector<std::vector<uint8_t>> virtualMsgPackFrameHeaderCache(
+      virtualTree->size());
+  auto getMsgPackFrameHeader =
+      [&](TreeData::Tree *sourceTree,
+          std::vector<std::vector<uint8_t>> &cache,
+          size_t id) -> const std::vector<uint8_t> & {
+    auto &header = cache[id];
+    if (header.empty()) {
+      header = buildMsgPackHatchetFrameHeader(sourceTree->getNode(id).name);
+    }
+    return header;
+  };
 
   // Root metrics only carry inclusive aggregate fields. Non-root metrics also
   // include device_id and device_type, so their serialized map entry counts are
@@ -745,7 +745,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   // under the same frame.
   auto packNode = [&](auto &&packNode,
                       TreeData::Tree::TreeNode &treeNode) -> void {
-    writer.appendRaw(tree->getMsgPackFrameHeader(treeNode.id));
+    writer.appendBytes(
+        getMsgPackFrameHeader(tree, treeMsgPackFrameHeaderCache, treeNode.id));
     const bool isRoot = treeNode.id == TreeData::Tree::TreeNode::RootId;
     const auto &linkedFlexibleMetrics =
         treeNode.metricSet.linkedFlexibleMetrics;
@@ -822,7 +823,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     auto packLinkedVirtualNode = [&](auto &&packLinkedVirtualNode,
                                      size_t virtualNodeId) -> void {
       const auto &virtualNode = virtualTree->getNode(virtualNodeId);
-      writer.appendRaw(virtualTree->getMsgPackFrameHeader(virtualNodeId));
+      writer.appendBytes(getMsgPackFrameHeader(
+          virtualTree, virtualMsgPackFrameHeaderCache, virtualNodeId));
       const auto metricsIt =
           treeNode.metricSet.linkedMetrics.find(virtualNodeId);
       const auto promotedFlexibleMetricEntries =
