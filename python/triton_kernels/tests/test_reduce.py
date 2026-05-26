@@ -2,6 +2,7 @@ import pytest
 import torch
 from triton.testing import do_bench
 from triton_kernels.reduce import reduce, reduce_torch, PostprocessFn, FnSpecs
+from triton_kernels.reduce import scoped_opt_flags_constraints
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp_torch, downcast_to_mxfp_torch
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
@@ -117,6 +118,31 @@ def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
         y_tri.backward(dy)
         y_ref.backward(dy)
         assert torch.allclose(x_tri.grad.float(), x_ref.grad.float(), atol=1e-3, rtol=1e-3)
+
+
+def test_unpadded_batch_size_rowidxs_subtile():
+    if not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("rowidxs path requires CUDA")
+    if torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("rowidxs path requires CUDA capability >= 9")
+
+    torch.manual_seed(0)
+    device = "cuda"
+    B, M, N = 7, 73, 257
+    unpadded = 37
+    sentinel = -1234.0
+    x = torch.randn((B, M, N), device=device, dtype=torch.float16)
+    # K=7 selects the static-loop rowidxs path with heavy-block subtiles.
+    mask = torch.ones((B, M, 1), device=device, dtype=torch.int8).expand(B, M, N)
+    y = torch.full((M, N), sentinel, device=device, dtype=torch.float16)
+    unpadded_batch_size = torch.tensor(unpadded, device=device, dtype=torch.int32)
+
+    with scoped_opt_flags_constraints({"use_rowidxs": True, "subtile_heavy_blocks": True}):
+        y_tri, _ = reduce(x, dim=0, mask=mask, y=y, unpadded_batch_size=unpadded_batch_size)
+
+    y_ref = x[:, :unpadded, :].float().sum(dim=0).to(torch.float16)
+    assert torch.allclose(y_tri[:unpadded].float(), y_ref.float(), atol=1e-3, rtol=1e-3)
+    assert torch.equal(y_tri[unpadded:], torch.full_like(y_tri[unpadded:], sentinel))
 
 
 def bench_reduce(B: int = 4, M: int = 4096, N: int = 4096, *, dim: int = 0, dtype: torch.dtype = torch.float16,
