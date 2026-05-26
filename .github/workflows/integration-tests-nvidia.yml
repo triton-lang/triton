@@ -89,6 +89,14 @@ jobs:
         run: make test-lit
       - name: Run triton tests
         run: make NUM_PROCS=24 test-unit
+      - name: Run Triton Kernels memcheck test
+        if: ${{ matrix.config.runner_type == 'nvidia-gb200' }}
+        env:
+          CUDA_LAUNCH_BLOCKING: "1"
+          PYTORCH_NO_CUDA_MEMORY_CACHING: "1"
+        run: |
+          compute-sanitizer --target-processes=application-only --destroy-on-device-error=context --error-exitcode=1 --tool=memcheck --padding=4096 \
+            python3 -m pytest -s --tb=short python/triton_kernels/tests/test_matmul.py::test_k_ragged_mxfp8_act_scale_memcheck
       - name: Run gluon tests
         run: make NUM_PROCS=24 test-gluon
       - name: Run gsan tests

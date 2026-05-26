@@ -132,14 +132,15 @@ def compute_sanitizer(**target_kwargs):
                     }
                     if "CUDA_VISIBLE_DEVICES" in os.environ:
                         env["CUDA_VISIBLE_DEVICES"] = os.environ["CUDA_VISIBLE_DEVICES"]
-                    cmd = f"{path}::{kwargs['request'].node.name}"
+                    assert "request_fixture" in kwargs, (
+                        "memcheck'ed test must have a (possibly unused) `request` fixture")
+                    test_id = kwargs["request_fixture"].node.callspec.id
+                    cmd = f"{path}::{test_fn.__name__}[{test_id}]"
                     cmd = [
                         "compute-sanitizer",
                         "--target-processes=application-only",
                         "--destroy-on-device-error=context",
                         f"--tool={tool.value}",
-                        # Catch accesses that otherwise land in adjacent allocations.
-                        *(["--padding=4096"] if tool is ComputeSanitizerTool.MEMCHECK else []),
                         sys.executable,
                         "-m",
                         "pytest",

@@ -15,7 +15,7 @@ from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, quantize_nvfp4_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 # testing utilities
-from triton_kernels.testing import assert_close, compute_sanitizer, make_random_tensor
+from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
 from triton_kernels.target_info import cuda_capability_geq, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250
 from triton_kernels.swiglu import swiglu, swiglu_fn
@@ -580,8 +580,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
 
 @pytest.mark.skipif(not cuda_capability_geq(10), reason="Activation scale swizzling requires Blackwell")
-@compute_sanitizer()
-def test_k_ragged_mxfp8_act_scale_memcheck(device, opt_flags_scope, request):
+def test_k_ragged_mxfp8_act_scale_memcheck(device, opt_flags_scope):
     _test_op(
         m=64,
         n=128,
