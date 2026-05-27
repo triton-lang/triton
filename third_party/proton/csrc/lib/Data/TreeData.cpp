@@ -18,6 +18,7 @@
 #include <mutex>
 #include <ostream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
@@ -440,6 +441,17 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         }
       });
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
+  std::array<std::string, kMaxRegisteredDeviceIds> deviceIdStrings;
+  for (uint64_t deviceId = 0; deviceId < kMaxRegisteredDeviceIds; ++deviceId) {
+    deviceIdStrings[deviceId] = std::to_string(deviceId);
+  }
+  std::array<std::string_view, static_cast<size_t>(DeviceType::COUNT)>
+      deviceTypeNames;
+  for (size_t deviceType = 0;
+       deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
+    deviceTypeNames[deviceType] =
+        getDeviceTypeString(static_cast<DeviceType>(deviceType));
+  }
   auto packUncachedHatchetFrameHeader = [](MsgPackWriter &out,
                                            std::string_view name) {
     static constexpr uint8_t kHatchetFrameHeaderPrefix[] = {
@@ -532,25 +544,22 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   };
   // Pack the four fields emitted for a concrete kernel metric.
   auto packKernelMetricValues = [&](const KernelMetric *kernelMetric) {
-    uint64_t duration =
-        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
+    const auto &values = kernelMetric->getValues();
+    uint64_t duration = std::get<uint64_t>(values[KernelMetric::Duration]);
     uint64_t invocations =
-        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Invocations));
-    uint64_t deviceId =
-        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
-    uint64_t deviceType =
-        std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceType));
+        std::get<uint64_t>(values[KernelMetric::Invocations]);
+    uint64_t deviceId = std::get<uint64_t>(values[KernelMetric::DeviceId]);
+    uint64_t deviceType = std::get<uint64_t>(values[KernelMetric::DeviceType]);
     metricSummary.updateDeviceIdMask(deviceType, deviceId);
-    const auto &deviceTypeName =
-        getDeviceTypeString(static_cast<DeviceType>(deviceType));
+    const auto deviceTypeName = deviceTypeNames[deviceType];
     writer.appendBytes(kKernelDurationKey);
     writer.packUInt(duration);
     writer.appendBytes(kKernelInvocationsKey);
     writer.packUInt(invocations);
     writer.appendBytes(kDeviceIdKey);
-    writer.packStr(std::to_string(deviceId));
+    writer.packFixStr(deviceIdStrings[deviceId]);
     writer.appendBytes(kDeviceTypeKey);
-    writer.packStr(deviceTypeName);
+    writer.packFixStr(deviceTypeName);
   };
 
   // Pack all fixed-schema metrics for one frame. Root frames emit zero-valued
