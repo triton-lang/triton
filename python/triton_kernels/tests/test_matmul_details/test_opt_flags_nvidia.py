@@ -120,12 +120,12 @@ def test_matmul_hopper_mxfp4_rhs_packed_n_padding(device):
 
     torch.manual_seed(0)
     # Hopper MXFP4 RHS values are stored with N packed by 4 and then padded in
-    # packed space. The generic kernel must wrap using that padded packed width,
-    # not by padding logical N first and dividing afterward.
-    n = 3456
-    packed_n = torch.empty((1,), dtype=torch.int32, device=device)
-    _hopper_rhs_packed_n_extent[(1,)](packed_n, n)
-    assert packed_n.item() == 896
+    # packed space. The generic kernel must ceil-divide before padding and wrap
+    # using that padded packed width.
+    n = 258
+    packed_n = torch.empty((1, ), dtype=torch.int32, device=device)
+    _hopper_rhs_packed_n_extent[(1, )](packed_n, n)
+    assert packed_n.item() == 128
 
     m, k = 64, 2048
     a = torch.randn((m, k), device=device, dtype=torch.bfloat16)

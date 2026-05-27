@@ -32,11 +32,10 @@ def round_f32_to_tf32(x: tl.tensor):
 
 @triton.jit
 def _compute_packed_n_w(N, W_N_DIVISOR: tl.constexpr, SWIZZLE_MX_VALUE: tl.constexpr):
-    packed_n_w = N // W_N_DIVISOR
+    packed_n_w = tl.cdiv(N, W_N_DIVISOR)
     if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
         packed_n_w = tl.cdiv(packed_n_w, 64) * 64
     return packed_n_w
-
 
 _matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
