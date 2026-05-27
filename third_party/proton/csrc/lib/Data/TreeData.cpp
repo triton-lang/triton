@@ -715,23 +715,19 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     // Linked flexible metrics attached to generated helper leaves are promoted
     // into the parent metrics map above. Once promoted, a helper leaf with no
     // linked fixed metrics and no children carries no information in Hatchet.
-    uint32_t linkedChildCount = 0;
+    std::vector<size_t> linkedChildren;
+    linkedChildren.reserve(virtualNode.children.size());
     for (const auto &child : virtualNode.children) {
       const auto &childNode = virtualTree->getNode(child.id);
       if (!childNode.children.empty() ||
           linkedMetrics.find(child.id) != linkedMetrics.end()) {
-        ++linkedChildCount;
+        linkedChildren.push_back(child.id);
       }
     }
     writer.packFixStrLiteral("children");
-    writer.packArray(linkedChildCount);
-    for (const auto &child : virtualNode.children) {
-      const auto &childNode = virtualTree->getNode(child.id);
-      if (childNode.children.empty() &&
-          linkedMetrics.find(child.id) == linkedMetrics.end()) {
-        continue;
-      }
-      packLinkedVirtualNode(packLinkedVirtualNode, treeNode, child.id);
+    writer.packArray(static_cast<uint32_t>(linkedChildren.size()));
+    for (auto childId : linkedChildren) {
+      packLinkedVirtualNode(packLinkedVirtualNode, treeNode, childId);
     }
   };
   auto packNode = [&](auto &&packNode,
@@ -758,36 +754,21 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     // metrics are attached through linked virtual nodes instead, so a concrete
     // leaf with no metrics, linked metrics, flexible metrics, or children adds
     // no Hatchet information.
-    // Most captured launch scopes have only a few concrete children. Keep that
-    // common case allocation-free while still collecting children once so the
-    // MsgPack array header has an exact count.
-    constexpr size_t kInlineConcreteChildCount = 8;
-    std::array<TreeData::Tree::TreeNode *, kInlineConcreteChildCount>
-        inlineConcreteChildren;
-    std::vector<TreeData::Tree::TreeNode *> overflowConcreteChildren;
-    uint32_t concreteChildCount = 0;
+    std::vector<TreeData::Tree::TreeNode *> concreteChildren;
+    concreteChildren.reserve(treeNode.children.size());
     for (const auto &child : treeNode.children) {
       auto &childNode = tree->getNode(child.id);
       if (!childNode.children.empty() || !childNode.metricSet.metrics.empty() ||
           !childNode.metricSet.flexibleMetrics.empty() ||
           !childNode.metricSet.linkedMetrics.empty() ||
           !childNode.metricSet.linkedFlexibleMetrics.empty()) {
-        if (concreteChildCount < inlineConcreteChildren.size()) {
-          inlineConcreteChildren[concreteChildCount] = &childNode;
-        } else {
-          overflowConcreteChildren.push_back(&childNode);
-        }
-        ++concreteChildCount;
+        concreteChildren.push_back(&childNode);
       }
     }
     writer.packFixStrLiteral("children");
-    writer.packArray(concreteChildCount + linkedChildCount);
-    const auto inlineConcreteCount =
-        std::min<size_t>(concreteChildCount, inlineConcreteChildren.size());
-    for (size_t i = 0; i < inlineConcreteCount; ++i) {
-      packNode(packNode, *inlineConcreteChildren[i]);
-    }
-    for (auto *childNode : overflowConcreteChildren) {
+    writer.packArray(static_cast<uint32_t>(concreteChildren.size()) +
+                     linkedChildCount);
+    for (auto *childNode : concreteChildren) {
       packNode(packNode, *childNode);
     }
     if (hasLinkedTargets) {
