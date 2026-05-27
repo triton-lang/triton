@@ -194,6 +194,7 @@ def make_default_opt_flags_nvidia(
     has_y_acc_in,
     constraints,
     x_uses_tma_when_persistent=True,
+    w_transpose=False,
     mx_block_size=None,
     epilogue_reduction_n=1,
 ):
@@ -363,7 +364,8 @@ def make_default_opt_flags_nvidia(
     num_stages = -1
     for ep in subtiles_to_check:
         ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
-                                                 occupancy_target=occupancy_target)
+                                                 occupancy_target=occupancy_target,
+                                                 w_transpose=w_transpose)
         if ns > num_stages:
             epilogue_subtile, num_stages = ep, ns
 
@@ -469,6 +471,7 @@ def make_opt_flags(
     block_k,
     mx_block_size=None,
     x_uses_tma_when_persistent=True,
+    w_transpose=False,
     rhs_layout=None,
     epilogue_reduction_n=1,
 ):
@@ -505,6 +508,7 @@ def make_opt_flags(
         return make_default_opt_flags_nvidia(
             *args,
             x_uses_tma_when_persistent=x_uses_tma_when_persistent,
+            w_transpose=w_transpose,
             mx_block_size=mx_block_size,
             epilogue_reduction_n=epilogue_reduction_n,
         )
