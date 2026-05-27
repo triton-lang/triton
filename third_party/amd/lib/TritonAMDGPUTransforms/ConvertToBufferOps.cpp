@@ -664,7 +664,8 @@ struct TritonAMDGPUConvertToBufferOpsPass
               this->analyzeSmallTensorOfst);
     }
 
-    if (this->allowBufferAtomics && targetFeatures.supportsBufferAtomicRMW())
+    if (this->allowBufferAtomics &&
+        targetFeatures.supportsBufferAtomicRMW(this->assumeNoFineGrainedMemory))
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
           context, assumptions, axisInfoAnalysis, solver, targetFeatures,
           this->analyzeSmallTensorOfst);

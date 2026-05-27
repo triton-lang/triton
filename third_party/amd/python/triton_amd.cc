@@ -107,9 +107,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUMoveUpPrologueLoads());
   });
-  ADD_PASS_OPTION_WRAPPER_3("add_convert_to_buffer_ops",
+  ADD_PASS_OPTION_WRAPPER_4("add_convert_to_buffer_ops",
                             mlir::createTritonAMDGPUConvertToBufferOps,
-                            const std::string &, bool, bool);
+                            const std::string &, bool, bool, bool);
   ADD_FUNC_PASS_WRAPPER_0("add_optimize_buffer_op_ptr",
                           mlir::createTritonAMDGPUOptimizeBufferOpPtr);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);

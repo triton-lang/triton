@@ -127,7 +127,11 @@ public:
   // operations. This gates all buffer RMW conversions (BUFFER_ATOMIC_ADD,
   // _AND, _OR, _XOR, _UMIN, _UMAX, _SWAP, _ADD_F32, _PK_ADD_F16, etc.).
   // CAS (BUFFER_ATOMIC_CMPSWAP) is handled separately.
-  bool supportsBufferAtomicRMW() const;
+  // When `assumeNoFineGrainedMemory` is true, the caller asserts that no
+  // atomic destination resides in fine-grained pinned host memory; under that
+  // assumption the unsafe-lineage families (GCN5_1, CDNA1, CDNA2, RDNA1,
+  // RDNA2, RDNA3) are also considered safe.
+  bool supportsBufferAtomicRMW(bool assumeNoFineGrainedMemory = false) const;
   // Additional per-type gate for buffer atomic FADD. Integer RMW ops (ADD,
   // AND, etc.) work on i32/i64 universally, but float FADD has ISA-specific
   // type restrictions for BUFFER_ATOMIC_ADD_{F32,F64} and

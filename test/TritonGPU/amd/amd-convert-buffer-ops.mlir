@@ -1,6 +1,18 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx942 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX942-ONLY,CDNA
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx950 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX950-PLUS,CDNA
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1250 analyze-small-tensor-ofst=true"| FileCheck %s --check-prefixes=COMMON,GFX950-PLUS
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx906  analyze-small-tensor-ofst=true assume-no-fine-grained-memory=false" | FileCheck %s --check-prefixes=RMW-INT-AS-GENERIC,RMW-FADD-AS-GENERIC
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx908  analyze-small-tensor-ofst=true assume-no-fine-grained-memory=false" | FileCheck %s --check-prefixes=RMW-INT-AS-GENERIC,RMW-FADD-AS-GENERIC
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx90a  analyze-small-tensor-ofst=true assume-no-fine-grained-memory=false" | FileCheck %s --check-prefixes=RMW-INT-AS-GENERIC,RMW-FADD-AS-GENERIC
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1010 analyze-small-tensor-ofst=true assume-no-fine-grained-memory=false" | FileCheck %s --check-prefixes=RMW-INT-AS-GENERIC,RMW-FADD-AS-GENERIC
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1030 analyze-small-tensor-ofst=true assume-no-fine-grained-memory=false" | FileCheck %s --check-prefixes=RMW-INT-AS-GENERIC,RMW-FADD-AS-GENERIC
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1100 analyze-small-tensor-ofst=true assume-no-fine-grained-memory=false" | FileCheck %s --check-prefixes=RMW-INT-AS-GENERIC,RMW-FADD-AS-GENERIC
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx906  analyze-small-tensor-ofst=true assume-no-fine-grained-memory=true"  | FileCheck %s --check-prefixes=RMW-INT-AS-BUFFER,RMW-FADD-AS-GENERIC
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx908  analyze-small-tensor-ofst=true assume-no-fine-grained-memory=true"  | FileCheck %s --check-prefixes=RMW-INT-AS-BUFFER,RMW-FADD-AS-BUFFER
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx90a  analyze-small-tensor-ofst=true assume-no-fine-grained-memory=true"  | FileCheck %s --check-prefixes=RMW-INT-AS-BUFFER,RMW-FADD-AS-BUFFER
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1010 analyze-small-tensor-ofst=true assume-no-fine-grained-memory=true"  | FileCheck %s --check-prefixes=RMW-INT-AS-BUFFER,RMW-FADD-AS-GENERIC
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1030 analyze-small-tensor-ofst=true assume-no-fine-grained-memory=true"  | FileCheck %s --check-prefixes=RMW-INT-AS-BUFFER,RMW-FADD-AS-GENERIC
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1100 analyze-small-tensor-ofst=true assume-no-fine-grained-memory=true"  | FileCheck %s --check-prefixes=RMW-INT-AS-BUFFER,RMW-FADD-AS-BUFFER
 
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
@@ -944,5 +956,58 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %20 = tt.addptr %19, %18 : tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xi32, #blocked>
     %21 = tt.atomic_rmw fadd, relaxed, gpu, %20, %15, %cst : (tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xf32, #blocked>, tensor<64xi1, #blocked>) -> tensor<64xf32, #blocked>
     tt.return
+  }
+}
+
+// -----
+
+// Integer atomic_rmw is supported by BUFFER_ATOMIC_* on every gfx9+ family.
+// The assume-no-fine-grained-memory knob gates the rewrite on the unsafe-lineage
+// families (GCN5_1, CDNA1, CDNA2, RDNA1, RDNA2, RDNA3).
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // RMW-INT-AS-GENERIC-LABEL: assume_no_fine_grained_int
+  // RMW-INT-AS-BUFFER-LABEL:  assume_no_fine_grained_int
+  tt.func @assume_no_fine_grained_int(
+      %arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+      %arg1: tensor<512xi32, #blocked>) -> tensor<512xi32, #blocked> {
+    %c512_i32 = arith.constant 512 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c512_i32 : i32
+    %2 = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32, #blocked>
+    %3 = tt.addptr %arg0, %1 : !tt.ptr<i32>, i32
+    %4 = tt.splat %3 : !tt.ptr<i32> -> tensor<512x!tt.ptr<i32>, #blocked>
+    %5 = tt.addptr %4, %2 : tensor<512x!tt.ptr<i32>, #blocked>, tensor<512xi32, #blocked>
+    // RMW-INT-AS-GENERIC-NOT: amdg.buffer_atomic_rmw
+    // RMW-INT-AS-BUFFER:      amdg.buffer_atomic_rmw
+    %6 = tt.atomic_rmw add, acq_rel, gpu, %5, %arg1 : (tensor<512x!tt.ptr<i32>, #blocked>, tensor<512xi32, #blocked>) -> tensor<512xi32, #blocked>
+    tt.return %6 : tensor<512xi32, #blocked>
+  }
+}
+
+// -----
+
+// FP atomic_rmw fadd f32 under the knob is further gated by the per-arch FP
+// truth table from supportsBufferAtomicFadd(): allowed on CDNA1 / CDNA2 / RDNA3
+// (RMW-FADD-AS-BUFFER) and disallowed on GCN5_1 / RDNA1 / RDNA2 (no hardware
+// BUFFER_ATOMIC_ADD_F32, so the op stays generic = RMW-FADD-AS-GENERIC).
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // RMW-FADD-AS-GENERIC-LABEL: assume_no_fine_grained_fadd_f32
+  // RMW-FADD-AS-BUFFER-LABEL:  assume_no_fine_grained_fadd_f32
+  tt.func @assume_no_fine_grained_fadd_f32(
+      %arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+      %arg1: tensor<512xf32, #blocked>) -> tensor<512xf32, #blocked> {
+    %c512_i32 = arith.constant 512 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c512_i32 : i32
+    %2 = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32, #blocked>
+    %3 = tt.addptr %arg0, %1 : !tt.ptr<f32>, i32
+    %4 = tt.splat %3 : !tt.ptr<f32> -> tensor<512x!tt.ptr<f32>, #blocked>
+    %5 = tt.addptr %4, %2 : tensor<512x!tt.ptr<f32>, #blocked>, tensor<512xi32, #blocked>
+    // RMW-FADD-AS-GENERIC-NOT: amdg.buffer_atomic_rmw
+    // RMW-FADD-AS-BUFFER:      amdg.buffer_atomic_rmw
+    %6 = tt.atomic_rmw fadd, acq_rel, gpu, %5, %arg1 : (tensor<512x!tt.ptr<f32>, #blocked>, tensor<512xf32, #blocked>) -> tensor<512xf32, #blocked>
+    tt.return %6 : tensor<512xf32, #blocked>
   }
 }
