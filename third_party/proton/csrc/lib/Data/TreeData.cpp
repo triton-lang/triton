@@ -760,26 +760,11 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         }
       }
     }
-    uint32_t concreteChildCount = 0;
-    for (const auto &child : treeNode.children) {
-      const auto &childNode = tree->getNode(child.id);
-      if (!childNode.children.empty() || !childNode.metricSet.metrics.empty() ||
-          !childNode.metricSet.flexibleMetrics.empty() ||
-          !childNode.metricSet.linkedMetrics.empty() ||
-          !childNode.metricSet.linkedFlexibleMetrics.empty()) {
-        ++concreteChildCount;
-      }
-    }
     writer.packFixStrLiteral("children");
-    writer.packArray(concreteChildCount + linkedChildCount);
+    writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
+                     linkedChildCount);
     for (const auto &child : treeNode.children) {
       auto &childNode = tree->getNode(child.id);
-      if (childNode.children.empty() && childNode.metricSet.metrics.empty() &&
-          childNode.metricSet.flexibleMetrics.empty() &&
-          childNode.metricSet.linkedMetrics.empty() &&
-          childNode.metricSet.linkedFlexibleMetrics.empty()) {
-        continue;
-      }
       packNode(packNode, childNode);
     }
     if (hasLinkedTargets) {
