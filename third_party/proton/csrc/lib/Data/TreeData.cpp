@@ -445,7 +445,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   for (uint64_t deviceId = 0; deviceId < kMaxRegisteredDeviceIds; ++deviceId) {
     deviceIdStrings[deviceId] = std::to_string(deviceId);
   }
-  std::array<std::string_view, static_cast<size_t>(DeviceType::COUNT)>
+  std::array<std::string, static_cast<size_t>(DeviceType::COUNT)>
       deviceTypeNames;
   for (size_t deviceType = 0;
        deviceType < static_cast<size_t>(DeviceType::COUNT); ++deviceType) {
