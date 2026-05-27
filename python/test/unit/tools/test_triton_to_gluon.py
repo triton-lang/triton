@@ -13,6 +13,8 @@ from triton._internal_testing import (
     is_blackwell,
     is_hopper_or_newer,
     is_cuda,
+)
+from triton.language.target_info import (
     is_hip_cdna4,
     is_hip_gfx1250,
     get_cdna_version,

@@ -6,7 +6,8 @@ import pytest
 
 import pathlib
 import uuid
-from triton._internal_testing import is_cuda, is_hip_cdna
+
+from triton.language.target_info import is_cuda, is_hip_cdna
 
 
 def do_bench(kernel_call, quantiles, use_cuda_graph=False):

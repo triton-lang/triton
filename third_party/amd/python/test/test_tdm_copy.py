@@ -90,7 +90,7 @@ import torch
 
 import triton
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import is_hip_gfx1250
+from triton.language.target_info import is_hip_gfx1250
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
 

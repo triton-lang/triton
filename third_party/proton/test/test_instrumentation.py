@@ -14,7 +14,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.nvidia.blackwell import clc
 from triton.experimental.gluon.language.nvidia.hopper import mbarrier
-from triton._internal_testing import (
+from triton.language.target_info import (
     is_cuda,
     is_hip,
     is_hip_cdna2,

@@ -10,7 +10,7 @@ import numpy as np
 
 import triton
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import is_cuda, is_hip
+from triton.language.target_info import is_cuda, is_hip
 
 if is_cuda():
     from triton.backends.nvidia.driver import include_dirs, library_dirs

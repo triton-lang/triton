@@ -1,6 +1,6 @@
 import pytest
 import torch
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
+from triton.language.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
 

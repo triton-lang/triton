@@ -13,7 +13,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hip
+from triton.language.target_info import is_hip
 from triton.runtime.cache import FileCacheManager, RemoteCacheManager
 
 
