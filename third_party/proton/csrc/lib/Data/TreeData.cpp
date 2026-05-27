@@ -464,14 +464,13 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   auto packUncachedHatchetFrameHeader = [](MsgPackWriter &out,
                                            std::string_view name) {
     static constexpr uint8_t kHatchetFrameHeaderPrefix[] = {
-        0x83,                         // map(3)
-        0xa5, 'f',  'r',  'a',  'm', 'e',
-        0x82,                         // map(2)
-        0xa4, 'n',  'a',  'm',  'e'};
+        0x83, // map(3)
+        0xa5, 'f', 'r', 'a', 'm', 'e',
+        0x82, // map(2)
+        0xa4, 'n', 'a', 'm', 'e'};
     static constexpr uint8_t kHatchetFrameHeaderSuffix[] = {
-        0xa4, 't',  'y',  'p',  'e',
-        0xa8, 'f',  'u',  'n',  'c', 't', 'i', 'o', 'n',
-        0xa7, 'm',  'e',  't',  'r', 'i', 'c', 's'};
+        0xa4, 't', 'y', 'p',  'e', 0xa8, 'f', 'u', 'n', 'c', 't',
+        'i',  'o', 'n', 0xa7, 'm', 'e',  't', 'r', 'i', 'c', 's'};
     out.appendBytes(kHatchetFrameHeaderPrefix);
     out.packStr(name);
     out.appendBytes(kHatchetFrameHeaderSuffix);
@@ -702,7 +701,8 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
                                    size_t virtualNodeId) -> void {
     const auto &virtualNode = virtualTree->getNode(virtualNodeId);
     const auto &linkedMetrics = treeNode.metricSet.linkedMetrics;
-    const auto &linkedFlexibleMetrics = treeNode.metricSet.linkedFlexibleMetrics;
+    const auto &linkedFlexibleMetrics =
+        treeNode.metricSet.linkedFlexibleMetrics;
     // Write the header
     packHatchetFrameHeader(virtualNode.name);
     // Count linked metrics
