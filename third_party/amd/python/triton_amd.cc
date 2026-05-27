@@ -1,4 +1,5 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/include/hipblas_instance.h"
@@ -592,4 +593,129 @@ void init_triton_amd(py::module &&m) {
         self.gemm(init.m, init.n, init.k, A_ptr, B_ptr, C_ptr, D_ptr,
                   init.dtype, init.out_dtype, alpha, beta);
       });
+
+  m.def("is_hip_cdna", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.isCDNA();
+  });
+
+  m.def("is_hip_cdna2", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.isCDNA2();
+  });
+
+  m.def("is_hip_cdna3", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.isCDNA3();
+  });
+
+  m.def("is_hip_cdna4", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.isCDNA4();
+  });
+
+  m.def("is_hip_rdna", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.isRDNA();
+  });
+
+  m.def("is_hip_rdna3", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.isRDNA3();
+  });
+
+  m.def("is_hip_rdna4", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.isRDNA4();
+  });
+
+  m.def("is_hip_gfx1250", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.isGFX1250();
+  });
+
+  m.def("get_cdna_version", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.getCDNAVersion();
+  });
+
+  m.def("get_rdna_version", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.getRDNAVersion();
+  });
+
+  m.def("get_hip_lds_size", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.getSharedMemorySize();
+  });
+
+  m.def("hip_supports_bf16xX", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipSupportsBf16xX();
+  });
+
+  m.def("hip_supports_float8_uz", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipSupportsFloat8Uz();
+  });
+
+  m.def("hip_supports_cast_inf_clamping", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipSupportsCastInfClamping();
+  });
+
+  m.def("hip_supports_descriptor_scatter", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipSupportsDescriptorScatter();
+  });
+
+  m.def("hip_supports_f8e4m3fn_cast", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipSupportsF8e4m3fnCast();
+  });
+
+  m.def("hip_supports_vdot", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipSupportsVdot();
+  });
+
+  m.def("hip_supports_f8e5", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipSupportsF8e5();
+  });
+
+  m.def("hip_supports_f8e4nv", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipSupportsF8e4nv();
+  });
+
+  m.def("hip_supports_f8e4m3", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipSupportsF8e4m3();
+  });
+
+  m.def("hip_supports_kpack", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipSupportsKpack();
+  });
+
+  m.def("hip_supports_scaled_dot", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipSupportsScaledDot();
+  });
+
+  m.def("hip_wmma_version", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipWMMAVersion();
+  });
+
+  m.def("hip_supports_mxfp_dot", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipSupportsMxFpDot();
+  });
+
+  m.def("hip_supports_mn_pack_scales", [](const std::string &arch) {
+    mlir::triton::amdgpu::TargetFeatures tf{llvm::StringRef(arch)};
+    return tf.hipSupportsMNPackScales();
+  });
 }

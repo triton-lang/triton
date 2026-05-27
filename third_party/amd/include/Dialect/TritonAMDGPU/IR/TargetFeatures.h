@@ -52,9 +52,30 @@ public:
 
   bool isCDNA() const;
   bool isRDNA() const;
+  bool isCDNA2() const;
   bool isCDNA3() const;
   bool isCDNA4() const;
+  bool isRDNA3() const;
+  bool isRDNA4() const;
   bool isGFX1250() const;
+
+  int getCDNAVersion() const;
+  int getRDNAVersion() const;
+
+  bool hipSupportsBf16xX() const;
+  bool hipSupportsFloat8Uz() const;
+  bool hipSupportsCastInfClamping() const;
+  bool hipSupportsDescriptorScatter() const;
+  bool hipSupportsF8e4m3fnCast() const;
+  bool hipSupportsVdot() const;
+  bool hipSupportsF8e5() const;
+  bool hipSupportsF8e4nv() const;
+  bool hipSupportsF8e4m3() const;
+  bool hipSupportsKpack() const;
+  bool hipSupportsScaledDot() const;
+  int hipWMMAVersion() const;
+  bool hipSupportsMxFpDot() const;
+  bool hipSupportsMNPackScales() const;
 
   int getWarpSize() const;
   bool supportsWaveId() const;

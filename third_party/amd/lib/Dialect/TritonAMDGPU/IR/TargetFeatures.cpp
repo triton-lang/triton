@@ -106,6 +106,10 @@ bool TargetFeatures::isRDNA() const {
   return mlir::triton::amdgpu::isRDNA(getISAFamily());
 }
 
+bool TargetFeatures::isCDNA2() const {
+  return getISAFamily() == ISAFamily::CDNA2;
+}
+
 bool TargetFeatures::isCDNA3() const {
   return getISAFamily() == ISAFamily::CDNA3;
 }
@@ -114,9 +118,101 @@ bool TargetFeatures::isCDNA4() const {
   return getISAFamily() == ISAFamily::CDNA4;
 }
 
+bool TargetFeatures::isRDNA3() const {
+  return getISAFamily() == ISAFamily::RDNA3;
+}
+
+bool TargetFeatures::isRDNA4() const {
+  return getISAFamily() == ISAFamily::RDNA4;
+}
+
 bool TargetFeatures::isGFX1250() const {
   return getISAFamily() == ISAFamily::GFX1250;
 }
+
+int TargetFeatures::getCDNAVersion() const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA1:
+    return 1;
+  case ISAFamily::CDNA2:
+    return 2;
+  case ISAFamily::CDNA3:
+    return 3;
+  case ISAFamily::CDNA4:
+    return 4;
+  default:
+    return -1;
+  }
+}
+
+int TargetFeatures::getRDNAVersion() const {
+  switch (getISAFamily()) {
+  case ISAFamily::RDNA1:
+    return 1;
+  case ISAFamily::RDNA2:
+    return 2;
+  case ISAFamily::RDNA3:
+    return 3;
+  case ISAFamily::RDNA4:
+    return 4;
+  default:
+    return -1;
+  }
+}
+
+bool TargetFeatures::hipSupportsBf16xX() const { return !isGFX1250(); }
+
+bool TargetFeatures::hipSupportsFloat8Uz() const { return isCDNA3(); }
+
+bool TargetFeatures::hipSupportsCastInfClamping() const {
+  return !(isRDNA4() || isGFX1250());
+}
+
+bool TargetFeatures::hipSupportsDescriptorScatter() const {
+  return isGFX1250();
+}
+
+bool TargetFeatures::hipSupportsF8e4m3fnCast() const {
+  return isCDNA3() || isCDNA4() || isGFX1250();
+}
+
+bool TargetFeatures::hipSupportsVdot() const {
+  return isCDNA() || isRDNA() || isGFX1250();
+}
+
+bool TargetFeatures::hipSupportsF8e5() const {
+  return isCDNA4() || isRDNA4() || isGFX1250();
+}
+
+bool TargetFeatures::hipSupportsF8e4nv() const {
+  return isCDNA4() || isRDNA4() || isGFX1250();
+}
+
+bool TargetFeatures::hipSupportsF8e4m3() const {
+  return isCDNA3() || isCDNA4() || isRDNA3() || isRDNA4() || isGFX1250();
+}
+
+bool TargetFeatures::hipSupportsKpack() const { return isCDNA2() || isCDNA3(); }
+
+bool TargetFeatures::hipSupportsScaledDot() const {
+  return isCDNA() || isRDNA3() || isRDNA4() || isGFX1250();
+}
+
+int TargetFeatures::hipWMMAVersion() const {
+  if (isRDNA3())
+    return 1;
+  if (isCDNA4())
+    return 2;
+  if (isGFX1250())
+    return 3;
+  return 0;
+}
+
+bool TargetFeatures::hipSupportsMxFpDot() const {
+  return isCDNA4() || isGFX1250();
+}
+
+bool TargetFeatures::hipSupportsMNPackScales() const { return isCDNA4(); }
 
 int TargetFeatures::getWarpSize() const {
   switch (getISAFamily()) {
