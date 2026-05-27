@@ -731,7 +731,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         linkedChildren.push_back(child.id);
       }
     }
-    writer.packFixStrLiteral("children");
+    writer.packFixStr("children");
     writer.packArray(static_cast<uint32_t>(linkedChildren.size()));
     for (auto childId : linkedChildren) {
       packLinkedVirtualNode(packLinkedVirtualNode, treeNode, childId);
@@ -772,7 +772,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         concreteChildren.push_back(&childNode);
       }
     }
-    writer.packFixStrLiteral("children");
+    writer.packFixStr("children");
     writer.packArray(static_cast<uint32_t>(concreteChildren.size()) +
                      linkedChildCount);
     for (auto *childNode : concreteChildren) {
@@ -823,15 +823,15 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
       Device device = getDevice(static_cast<DeviceType>(deviceType), deviceId);
       writer.packStr(std::to_string(deviceId));
       writer.packMap(5);
-      writer.packFixStrLiteral("clock_rate");
+      writer.packFixStr("clock_rate");
       writer.packUInt(device.clockRate);
-      writer.packFixStrLiteral("memory_clock_rate");
+      writer.packFixStr("memory_clock_rate");
       writer.packUInt(device.memoryClockRate);
-      writer.packFixStrLiteral("bus_width");
+      writer.packFixStr("bus_width");
       writer.packUInt(device.busWidth);
-      writer.packFixStrLiteral("arch");
+      writer.packFixStr("arch");
       writer.packStr(device.arch);
-      writer.packFixStrLiteral("num_sms");
+      writer.packFixStr("num_sms");
       writer.packUInt(device.numSms);
     }
   }
