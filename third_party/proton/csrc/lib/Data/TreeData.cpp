@@ -551,7 +551,7 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     uint64_t deviceId = std::get<uint64_t>(values[KernelMetric::DeviceId]);
     uint64_t deviceType = std::get<uint64_t>(values[KernelMetric::DeviceType]);
     metricSummary.updateDeviceIdMask(deviceType, deviceId);
-    const auto deviceTypeName = deviceTypeNames[deviceType];
+    const auto &deviceTypeName = deviceTypeNames[deviceType];
     writer.appendBytes(kKernelDurationKey);
     writer.packUInt(duration);
     writer.appendBytes(kKernelInvocationsKey);
