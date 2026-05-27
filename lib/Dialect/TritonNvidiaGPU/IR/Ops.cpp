@@ -259,9 +259,6 @@ Type ArriveBarrierOp::getPredicateOperandTypeLike() {
   return IntegerType::get(getContext(), 1);
 }
 
-static LogicalResult verifyCompletionBarrierLayout(Operation *op,
-                                                   Value barrier);
-
 // -- AsyncSharedStoreOp --
 LogicalResult AsyncSharedStoreOp::verify() {
   // PTX defines weak shared::cluster st.async as UB for a one-CTA cluster.
@@ -274,14 +271,10 @@ LogicalResult AsyncSharedStoreOp::verify() {
     return failure();
   if (failed(verifyBarrierType(*this, getMbarrier().getType())))
     return failure();
-  if (failed(verifyCompletionBarrierLayout(getOperation(), getMbarrier())))
-    return failure();
 
   auto srcTy = getSrc().getType();
   auto dstTy = getDst().getType();
   unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
-  if (bitwidth < 8 || bitwidth > 64 || !llvm::isPowerOf2_32(bitwidth))
-    return emitOpError("requires 8-, 16-, 32-, or 64-bit element types");
 
   auto regLayout = toLinearLayout(srcTy);
   auto sharedLayout = isPaddedEncoding(dstTy.getEncoding())

@@ -413,7 +413,7 @@ static void lowerAsyncSharedStore(Location loc, MLIRContext *ctx,
                                   LinearLayout cvt, ArrayRef<Value> vals,
                                   Type llvmElemTy, MemDescType dstTy,
                                   SharedMemoryObject dstMemObj,
-                                  Value mbarrierPtr,
+                                  Value mbarrierPtr, MemDescType mbarrierTy,
                                   ConversionPatternRewriter &rewriter,
                                   const NVIDIA::TargetInfo &targetInfo) {
   auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
@@ -421,7 +421,8 @@ static void lowerAsyncSharedStore(Location loc, MLIRContext *ctx,
     auto prmtCvt = removeBroadcastSrc.apply(cvt);
     auto inVals = removeBroadcastSrc.apply(to_vector(vals));
     lowerAsyncSharedStore(loc, ctx, prmtCvt, inVals, llvmElemTy, dstTy,
-                          dstMemObj, mbarrierPtr, rewriter, targetInfo);
+                          dstMemObj, mbarrierPtr, mbarrierTy, rewriter,
+                          targetInfo);
     return;
   }
 
@@ -446,6 +447,8 @@ static void lowerAsyncSharedStore(Location loc, MLIRContext *ctx,
     Value dst = mapSharedToCluster(storeLoc, shmemAddr, targetCTAId, rewriter);
     Value mbarrier =
         mapSharedToCluster(storeLoc, mbarrierPtr, targetCTAId, rewriter);
+    mbarrier = LLVM::NVIDIA::getLeaderAddress(storeLoc, rewriter, mbarrier,
+                                              mbarrierTy);
     emitAsyncSharedStore(storeLoc, values.slice(idx, vecTy.getNumElements()),
                          dst, mbarrier, vecTy, rewriter);
     return {};
@@ -491,8 +494,8 @@ struct AsyncSharedStoreOpConversion
     auto cvt = regLayout.invertAndCompose(sharedLayout);
     auto values = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     lowerAsyncSharedStore(loc, op.getContext(), cvt, values, llvmElemTy, dstTy,
-                          dstMemObj, mbarrierMemObj.getBase(), rewriter,
-                          targetInfo);
+                          dstMemObj, mbarrierMemObj.getBase(), mbarrierTy,
+                          rewriter, targetInfo);
     rewriter.eraseOp(op);
     return success();
   }
