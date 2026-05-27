@@ -649,8 +649,7 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   if (failed(verifyResult))
     return verifyResult;
 
-  if (tensorDescTy.getSharedLayout() &&
-      tensorDescTy.getSharedLayout() != smemTy.getEncoding())
+  if (tensorDescTy.getSharedLayout() != smemTy.getEncoding())
     return emitOpError(
         "Mismatch between TDM descriptor and destination smem encodings");
 
@@ -755,8 +754,7 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   if (failed(verifyResult))
     return verifyResult;
 
-  if (tensorDescTy.getSharedLayout() &&
-      tensorDescTy.getSharedLayout() != smemTy.getEncoding())
+  if (tensorDescTy.getSharedLayout() != smemTy.getEncoding())
     return emitOpError(
         "Mismatch between TDM descriptor and source smem encodings");
 
@@ -807,26 +805,6 @@ LogicalResult AsyncTDMScatterOp::verify() {
   if (blockShape.size() != 2)
     return emitOpError("TDM scatter only supports 2D tensors, got ")
            << blockShape.size() << "D";
-
-  auto tDescEnc = tensorDescTy.getSharedLayout();
-  auto smemEnc = smemTy.getEncoding();
-  if (tDescEnc && tDescEnc != smemEnc) {
-    auto tDescEncPD = dyn_cast<gpu::PaddedSharedEncodingAttr>(tDescEnc);
-    auto smemEncPD = dyn_cast<gpu::PaddedSharedEncodingAttr>(smemEnc);
-    // Padded encoding could have different shapes, and still be compatible.
-    // Checking intervals and order
-    if (tDescEncPD && smemEncPD) {
-      if (tDescEncPD.getIntervals() != smemEncPD.getIntervals() ||
-          tDescEncPD.getPaddings() != smemEncPD.getPaddings() ||
-          tDescEncPD.getOrder() != smemEncPD.getOrder()) {
-        return emitOpError("Incompatible Padded encoding in TDM descriptor and "
-                           "source smem buffer");
-      }
-    } else {
-      return emitOpError(
-          "Mismatch between TDM descriptor and source smem encodings");
-    }
-  }
 
   // Check that every dimension of the block shape is <= 2^16
   auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
@@ -882,26 +860,6 @@ LogicalResult AsyncTDMGatherOp::verify() {
   if (blockShape.size() != 2)
     return emitOpError("TDM gather only supports 2D tensors, got ")
            << blockShape.size() << "D";
-
-  auto tDescEnc = tensorDescTy.getSharedLayout();
-  auto smemEnc = smemTy.getEncoding();
-  if (tDescEnc && tDescEnc != smemEnc) {
-    auto tDescEncPD = dyn_cast<gpu::PaddedSharedEncodingAttr>(tDescEnc);
-    auto smemEncPD = dyn_cast<gpu::PaddedSharedEncodingAttr>(smemEnc);
-    // Padded encoding could have different shapes, and still be compatible.
-    // Checking intervals and order
-    if (tDescEncPD && smemEncPD) {
-      if (tDescEncPD.getIntervals() != smemEncPD.getIntervals() ||
-          tDescEncPD.getPaddings() != smemEncPD.getPaddings() ||
-          tDescEncPD.getOrder() != smemEncPD.getOrder()) {
-        return emitOpError("Incompatible Padded encoding in TDM descriptor and "
-                           "destination smem buffer");
-      }
-    } else {
-      return emitOpError(
-          "Mismatch between TDM descriptor and destination smem encodings");
-    }
-  }
 
   // Check that every dimension of the block shape is <= 2^16
   auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
