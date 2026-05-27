@@ -6,6 +6,7 @@ from types import ModuleType
 import hashlib
 import tempfile
 import os
+import shutil
 import re
 import subprocess
 import functools
@@ -178,23 +179,54 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def path_to_rocm_lld():
-        # Check env path for ld.lld
-        lld_env_path = os.getenv("TRITON_HIP_LLD_PATH")
-        if lld_env_path is not None:
-            lld = Path(lld_env_path)
-            if lld.is_file():
-                return lld
-        # Check backend for ld.lld (used for pytorch wheels)
-        lld = Path(__file__).parent / "llvm/bin/ld.lld"
-        if lld.is_file():
-            return lld
-        lld = Path("/opt/rocm/llvm/bin/ld.lld")
-        if lld.is_file():
-            return lld
-        lld = Path("/usr/bin/ld.lld")
-        if lld.is_file():
-            return lld
-        raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found. Set 'TRITON_HIP_LLD_PATH' to its path.")
+        tried = []
+        # 1. Explicit env override.
+        env = os.environ.get("TRITON_HIP_LLD_PATH")
+        if env:
+            p = Path(env)
+            tried.append(str(p))
+            if p.is_file():
+                return p
+        # 2. Bundled with the triton wheel (pytorch wheels).
+        bundled = Path(__file__).parent / "llvm/bin/ld.lld"
+        tried.append(str(bundled))
+        if bundled.is_file():
+            return bundled
+        # 3. ROCM_PATH env (common on system installs).
+        rocm_path = os.environ.get("ROCM_PATH")
+        if rocm_path:
+            p = Path(rocm_path) / "llvm/bin/ld.lld"
+            tried.append(str(p))
+            if p.is_file():
+                return p
+        # 4. TheRock SDK install: ask `rocm-sdk path --root`.
+        if shutil.which("rocm-sdk") is not None:
+            try:
+                root = subprocess.check_output(["rocm-sdk", "path", "--root"], encoding="utf-8", timeout=5).strip()
+            except (subprocess.SubprocessError, OSError):
+                root = ""
+            if root:
+                p = Path(root) / "llvm/bin/ld.lld"
+                tried.append(str(p))
+                if p.is_file():
+                    return p
+        # 5. Default system install location.
+        p = Path("/opt/rocm/llvm/bin/ld.lld")
+        tried.append(str(p))
+        if p.is_file():
+            return p
+        # 6. Distro-installed standalone lld.
+        p = Path("/usr/bin/ld.lld")
+        tried.append(str(p))
+        if p.is_file():
+            return p
+        # 7. Anything on PATH.
+        on_path = shutil.which("ld.lld")
+        tried.append("PATH:ld.lld")
+        if on_path:
+            return Path(on_path)
+        raise Exception("ROCm linker ld.lld not found. Set 'TRITON_HIP_LLD_PATH' to its "
+                        "path. Probed: " + ", ".join(tried))
 
     @staticmethod
     def make_ttir(mod, metadata, options):
