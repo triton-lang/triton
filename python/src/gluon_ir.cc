@@ -286,10 +286,16 @@ py::object layoutToGluon(Attribute layout) {
     auto kOffset = mlir::StringAttr::get(ctx, "offset");
     auto kBlock = mlir::StringAttr::get(ctx, "block");
     const auto &ll = paddedShared.getLinearComponent();
+    auto outDims = llvm::to_vector(ll.getOutDimNames());
+
+    auto ofstBases = ll.getBases().lookup(kOffset);
+    auto ofstLL = triton::LinearLayout({{kOffset, ofstBases}}, outDims);
+    auto blkLL = divideLeft(ll, ofstLL);
+    assert(blkLL.has_value());
+    auto blkBases = blkLL->getBases().lookup(kBlock);
     auto shape = toStdVector(ll.getOutDimSizes());
-    return layouts.PaddedSharedLayout(intervalPaddingPairs,
-                                      ll.getBases().lookup(kOffset),
-                                      ll.getBases().lookup(kBlock), shape);
+    return layouts.PaddedSharedLayout(intervalPaddingPairs, ofstBases, blkBases,
+                                      shape);
   } else if (auto partitioned =
                  dyn_cast<ttg::PartitionedSharedEncodingAttr>(layout)) {
     py::object partitionLayout =
