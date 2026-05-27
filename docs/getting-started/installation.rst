@@ -50,7 +50,7 @@ Triton also supports a separate override for the Blackwell-specific assembler bi
 
       export TRITON_PTXAS_BLACKWELL_PATH=/usr/local/cuda/bin/ptxas
 
-These overrides are useful when validating Blackwell or other newly supported NVIDIA targets without replacing the bundled toolchain for every architecture.
+Use ``TRITON_PTXAS_PATH`` as the general override for newer NVIDIA bring-up flows, and use ``TRITON_PTXAS_BLACKWELL_PATH`` only when you need a separate Blackwell-specific assembler override without changing the bundled toolchain for other architectures.
 
 You can then test your installation by running the tests:
 
