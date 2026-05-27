@@ -849,7 +849,7 @@ def test_warpgroup_mma(ASYNC):
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tcgen05_mma_two_ctas_transposed_lhs_shared_layout():
     torch.manual_seed(0)
-    BLOCK_M, N, K = 128, 256, 16
+    BLOCK_M, N, K = 64, 128, 256
     M = 2 * BLOCK_M
     warps = [4, 1]
     cga_layout_a = ((1, 0), )
@@ -861,7 +861,7 @@ def test_tcgen05_mma_two_ctas_transposed_lhs_shared_layout():
     block_layout_b = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
                                         cga_layout=cga_layout_b)
     shared_layout_a = ttgl.NVMMASharedLayout(
-        swizzle_byte_width=64,
+        swizzle_byte_width=128,
         transposed=True,
         element_bitwidth=16,
         rank=2,
