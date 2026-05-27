@@ -712,9 +712,25 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         }
       }
     }
-    writer.packFixStrLiteral("children");
-    writer.packArray(static_cast<uint32_t>(virtualNode.children.size()));
+    // Linked flexible metrics attached to generated helper leaves are promoted
+    // into the parent metrics map above. Once promoted, a helper leaf with no
+    // linked fixed metrics and no children carries no information in Hatchet.
+    uint32_t linkedChildCount = 0;
     for (const auto &child : virtualNode.children) {
+      const auto &childNode = virtualTree->getNode(child.id);
+      if (!childNode.children.empty() ||
+          linkedMetrics.find(child.id) != linkedMetrics.end()) {
+        ++linkedChildCount;
+      }
+    }
+    writer.packFixStrLiteral("children");
+    writer.packArray(linkedChildCount);
+    for (const auto &child : virtualNode.children) {
+      const auto &childNode = virtualTree->getNode(child.id);
+      if (childNode.children.empty() &&
+          linkedMetrics.find(child.id) == linkedMetrics.end()) {
+        continue;
+      }
       packLinkedVirtualNode(packLinkedVirtualNode, treeNode, child.id);
     }
   };
@@ -733,18 +749,47 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     const bool hasLinkedTargets =
         !treeNode.metricSet.linkedMetrics.empty() ||
         !treeNode.metricSet.linkedFlexibleMetrics.empty();
-    uint32_t linkedChildCount =
-        hasLinkedTargets
-            ? static_cast<uint32_t>(virtualRootNode.children.size())
-            : 0;
-    writer.packFixStrLiteral("children");
-    writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
-                     linkedChildCount);
+    uint32_t linkedChildCount = 0;
+    if (hasLinkedTargets) {
+      for (const auto &child : virtualRootNode.children) {
+        const auto &childNode = virtualTree->getNode(child.id);
+        if (!childNode.children.empty() ||
+            treeNode.metricSet.linkedMetrics.find(child.id) !=
+                treeNode.metricSet.linkedMetrics.end()) {
+          ++linkedChildCount;
+        }
+      }
+    }
+    uint32_t concreteChildCount = 0;
     for (const auto &child : treeNode.children) {
-      packNode(packNode, tree->getNode(child.id));
+      const auto &childNode = tree->getNode(child.id);
+      if (!childNode.children.empty() || !childNode.metricSet.metrics.empty() ||
+          !childNode.metricSet.flexibleMetrics.empty() ||
+          !childNode.metricSet.linkedMetrics.empty() ||
+          !childNode.metricSet.linkedFlexibleMetrics.empty()) {
+        ++concreteChildCount;
+      }
+    }
+    writer.packFixStrLiteral("children");
+    writer.packArray(concreteChildCount + linkedChildCount);
+    for (const auto &child : treeNode.children) {
+      auto &childNode = tree->getNode(child.id);
+      if (childNode.children.empty() && childNode.metricSet.metrics.empty() &&
+          childNode.metricSet.flexibleMetrics.empty() &&
+          childNode.metricSet.linkedMetrics.empty() &&
+          childNode.metricSet.linkedFlexibleMetrics.empty()) {
+        continue;
+      }
+      packNode(packNode, childNode);
     }
     if (hasLinkedTargets) {
       for (const auto &virtualChild : virtualRootNode.children) {
+        const auto &childNode = virtualTree->getNode(virtualChild.id);
+        if (childNode.children.empty() &&
+            treeNode.metricSet.linkedMetrics.find(virtualChild.id) ==
+                treeNode.metricSet.linkedMetrics.end()) {
+          continue;
+        }
         packLinkedVirtualNode(packLinkedVirtualNode, treeNode, virtualChild.id);
       }
     }
