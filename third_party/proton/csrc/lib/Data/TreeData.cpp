@@ -498,14 +498,14 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   constexpr uint32_t kernelTotalCount = 4;     // + device_id, device_type
   constexpr uint32_t cycleInclusiveCount = 2;  // duration, normalized_duration
   constexpr uint32_t cycleTotalCount = 4;      // + device_id, device_type
-  static constexpr uint8_t kKernelDurationKey[] = {
-      0xa9, 't', 'i', 'm', 'e', ' ', '(', 'n', 's', ')'};
+  static constexpr uint8_t kKernelDurationKey[] = {0xa9, 't', 'i', 'm', 'e',
+                                                   ' ',  '(', 'n', 's', ')'};
   static constexpr uint8_t kKernelInvocationsKey[] = {0xa5, 'c', 'o',
                                                       'u',  'n', 't'};
-  static constexpr uint8_t kDeviceIdKey[] = {
-      0xa9, 'd', 'e', 'v', 'i', 'c', 'e', '_', 'i', 'd'};
-  static constexpr uint8_t kDeviceTypeKey[] = {
-      0xab, 'd', 'e', 'v', 'i', 'c', 'e', '_', 't', 'y', 'p', 'e'};
+  static constexpr uint8_t kDeviceIdKey[] = {0xa9, 'd', 'e', 'v', 'i',
+                                             'c',  'e', '_', 'i', 'd'};
+  static constexpr uint8_t kDeviceTypeKey[] = {0xab, 'd', 'e', 'v', 'i', 'c',
+                                               'e',  '_', 't', 'y', 'p', 'e'};
 
   // Count the exact number of key/value entries needed for a MsgPack metrics
   // map before writing it.
@@ -564,93 +564,94 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
 
   // Pack all fixed-schema metrics for one frame. Root frames emit zero-valued
   // inclusive placeholders for any metric type observed elsewhere.
-  auto packMetrics = [&](const std::map<MetricKind, std::unique_ptr<Metric>>
-                             &metrics,
-                         bool isRoot) {
-    for (const auto &[metricKind, metric] : metrics) {
-      if (metricKind == MetricKind::Kernel) {
-        if (isRoot) {
-          writer.appendBytes(kKernelDurationKey);
-          writer.packUInt(0);
-          writer.appendBytes(kKernelInvocationsKey);
-          writer.packUInt(0);
-          continue;
-        }
+  auto packMetrics =
+      [&](const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
+          bool isRoot) {
+        for (const auto &[metricKind, metric] : metrics) {
+          if (metricKind == MetricKind::Kernel) {
+            if (isRoot) {
+              writer.appendBytes(kKernelDurationKey);
+              writer.packUInt(0);
+              writer.appendBytes(kKernelInvocationsKey);
+              writer.packUInt(0);
+              continue;
+            }
 
-        packKernelMetricValues(static_cast<KernelMetric *>(metric.get()));
-      } else if (metricKind == MetricKind::PCSampling) {
-        auto *pcSamplingMetric = static_cast<PCSamplingMetric *>(metric.get());
-        for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
-          const auto valueName = pcSamplingMetric->getValueName(i);
-          writer.packStr(valueName);
-          if (isRoot) {
-            writer.packUInt(0);
+            packKernelMetricValues(static_cast<KernelMetric *>(metric.get()));
+          } else if (metricKind == MetricKind::PCSampling) {
+            auto *pcSamplingMetric =
+                static_cast<PCSamplingMetric *>(metric.get());
+            for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
+              const auto valueName = pcSamplingMetric->getValueName(i);
+              writer.packStr(valueName);
+              if (isRoot) {
+                writer.packUInt(0);
+              } else {
+                writer.packUInt(
+                    std::get<uint64_t>(pcSamplingMetric->getValues()[i]));
+              }
+            }
+          } else if (metricKind == MetricKind::Cycle) {
+            if (isRoot) {
+              writer.packStr(CycleMetric::getValueName(CycleMetric::Duration));
+              writer.packUInt(0);
+              writer.packStr(
+                  CycleMetric::getValueName(CycleMetric::NormalizedDuration));
+              writer.packUInt(0);
+              continue;
+            }
+
+            auto *cycleMetric = static_cast<CycleMetric *>(metric.get());
+            uint64_t duration = std::get<uint64_t>(
+                cycleMetric->getValue(CycleMetric::Duration));
+            double normalizedDuration = std::get<double>(
+                cycleMetric->getValue(CycleMetric::NormalizedDuration));
+            uint64_t deviceId = std::get<uint64_t>(
+                cycleMetric->getValue(CycleMetric::DeviceId));
+            uint64_t deviceType = std::get<uint64_t>(
+                cycleMetric->getValue(CycleMetric::DeviceType));
+            metricSummary.updateDeviceIdMask(deviceType, deviceId);
+
+            writer.packStr(CycleMetric::getValueName(CycleMetric::Duration));
+            writer.packUInt(duration);
+            writer.packStr(
+                CycleMetric::getValueName(CycleMetric::NormalizedDuration));
+            writer.packDouble(normalizedDuration);
+            writer.packStr(CycleMetric::getValueName(CycleMetric::DeviceId));
+            writer.packStr(std::to_string(deviceId));
+            writer.packStr(CycleMetric::getValueName(CycleMetric::DeviceType));
+            writer.packStr(std::to_string(deviceType));
           } else {
-            writer.packUInt(
-                std::get<uint64_t>(pcSamplingMetric->getValues()[i]));
+            throw makeLogicError("MetricKind not supported");
           }
         }
-      } else if (metricKind == MetricKind::Cycle) {
         if (isRoot) {
-          writer.packStr(CycleMetric::getValueName(CycleMetric::Duration));
-          writer.packUInt(0);
-          writer.packStr(
-              CycleMetric::getValueName(CycleMetric::NormalizedDuration));
-          writer.packUInt(0);
-          continue;
+          if (metricSummary.hasKernelMetric &&
+              metrics.find(MetricKind::Kernel) == metrics.end()) {
+            writer.appendBytes(kKernelDurationKey);
+            writer.packUInt(0);
+            writer.appendBytes(kKernelInvocationsKey);
+            writer.packUInt(0);
+          }
+          if (metricSummary.hasPCSamplingMetric &&
+              metrics.find(MetricKind::PCSampling) == metrics.end()) {
+            PCSamplingMetric pcSamplingMetric;
+            for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
+              const auto valueName = pcSamplingMetric.getValueName(i);
+              writer.packStr(valueName);
+              writer.packUInt(0);
+            }
+          }
+          if (metricSummary.hasCycleMetric &&
+              metrics.find(MetricKind::Cycle) == metrics.end()) {
+            writer.packStr(CycleMetric::getValueName(CycleMetric::Duration));
+            writer.packUInt(0);
+            writer.packStr(
+                CycleMetric::getValueName(CycleMetric::NormalizedDuration));
+            writer.packUInt(0);
+          }
         }
-
-        auto *cycleMetric = static_cast<CycleMetric *>(metric.get());
-        uint64_t duration =
-            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::Duration));
-        double normalizedDuration = std::get<double>(
-            cycleMetric->getValue(CycleMetric::NormalizedDuration));
-        uint64_t deviceId =
-            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceId));
-        uint64_t deviceType =
-            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceType));
-        metricSummary.updateDeviceIdMask(deviceType, deviceId);
-
-        writer.packStr(CycleMetric::getValueName(CycleMetric::Duration));
-        writer.packUInt(duration);
-        writer.packStr(
-            CycleMetric::getValueName(CycleMetric::NormalizedDuration));
-        writer.packDouble(normalizedDuration);
-        writer.packStr(CycleMetric::getValueName(CycleMetric::DeviceId));
-        writer.packStr(std::to_string(deviceId));
-        writer.packStr(CycleMetric::getValueName(CycleMetric::DeviceType));
-        writer.packStr(std::to_string(deviceType));
-      } else {
-        throw makeLogicError("MetricKind not supported");
-      }
-    }
-    if (isRoot) {
-      if (metricSummary.hasKernelMetric &&
-          metrics.find(MetricKind::Kernel) == metrics.end()) {
-        writer.appendBytes(kKernelDurationKey);
-        writer.packUInt(0);
-        writer.appendBytes(kKernelInvocationsKey);
-        writer.packUInt(0);
-      }
-      if (metricSummary.hasPCSamplingMetric &&
-          metrics.find(MetricKind::PCSampling) == metrics.end()) {
-        PCSamplingMetric pcSamplingMetric;
-        for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
-          const auto valueName = pcSamplingMetric.getValueName(i);
-          writer.packStr(valueName);
-          writer.packUInt(0);
-        }
-      }
-      if (metricSummary.hasCycleMetric &&
-          metrics.find(MetricKind::Cycle) == metrics.end()) {
-        writer.packStr(CycleMetric::getValueName(CycleMetric::Duration));
-        writer.packUInt(0);
-        writer.packStr(
-            CycleMetric::getValueName(CycleMetric::NormalizedDuration));
-        writer.packUInt(0);
-      }
-    }
-  };
+      };
   // Pack user-defined flexible metrics in MsgPack, preserving scalar and vector
   // value types.
   auto packFlexibleMetrics =
