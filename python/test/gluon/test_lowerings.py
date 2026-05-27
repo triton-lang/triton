@@ -544,8 +544,8 @@ def test_local_store_tmem_32x32b_2cta_splitm_to_splitk(device):
     )
 
     @gluon.jit
-    def kernel(x_ptr, y_ptr, shape: ttgl.constexpr, src_layout: ttgl.constexpr,
-               dst_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+    def kernel(x_ptr, y_ptr, shape: ttgl.constexpr, src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr,
+               shared_layout: ttgl.constexpr):
         K: ttgl.constexpr = shape[0]
         M: ttgl.constexpr = shape[1]
         src_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(1, src_layout))[:, None]
