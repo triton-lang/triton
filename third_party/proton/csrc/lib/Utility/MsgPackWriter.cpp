@@ -11,8 +11,12 @@ namespace {
 template <typename T> void writeBE(std::vector<uint8_t> &out, T value) {
   using U = std::make_unsigned_t<T>;
   U u = static_cast<U>(value);
-  for (int i = sizeof(U) - 1; i >= 0; --i) {
-    out.push_back(static_cast<uint8_t>((u >> (i * 8)) & 0xff));
+  const auto offset = out.size();
+  out.resize(offset + sizeof(U));
+#pragma unroll
+  for (size_t i = 0; i < sizeof(U); ++i) {
+    const auto shift = (sizeof(U) - 1 - i) * 8;
+    out[offset + i] = static_cast<uint8_t>((u >> shift) & 0xff);
   }
 }
 

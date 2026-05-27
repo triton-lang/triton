@@ -474,7 +474,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     const auto offset = writer.size();
     packUncachedHatchetFrameHeader(writer, name);
     std::vector<uint8_t> headerBytes;
-    headerBytes.reserve(kCachedFrameHeaderMinNameBytes + name.size());
     headerBytes.insert(headerBytes.end(), writer.data() + offset,
                        writer.data() + writer.size());
     frameHeaderCache.emplace(name, std::move(headerBytes));
@@ -487,6 +486,14 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   constexpr uint32_t kernelTotalCount = 4;     // + device_id, device_type
   constexpr uint32_t cycleInclusiveCount = 2;  // duration, normalized_duration
   constexpr uint32_t cycleTotalCount = 4;      // + device_id, device_type
+  static constexpr uint8_t kKernelDurationKey[] = {
+      0xa9, 't', 'i', 'm', 'e', ' ', '(', 'n', 's', ')'};
+  static constexpr uint8_t kKernelInvocationsKey[] = {0xa5, 'c', 'o',
+                                                      'u',  'n', 't'};
+  static constexpr uint8_t kDeviceIdKey[] = {
+      0xa9, 'd', 'e', 'v', 'i', 'c', 'e', '_', 'i', 'd'};
+  static constexpr uint8_t kDeviceTypeKey[] = {
+      0xab, 'd', 'e', 'v', 'i', 'c', 'e', '_', 't', 'y', 'p', 'e'};
 
   // Count the exact number of key/value entries needed for a MsgPack metrics
   // map before writing it.
@@ -536,13 +543,13 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     metricSummary.updateDeviceIdMask(deviceType, deviceId);
     const auto &deviceTypeName =
         getDeviceTypeString(static_cast<DeviceType>(deviceType));
-    writer.packStr(KernelMetric::getValueName(KernelMetric::Duration));
+    writer.appendBytes(kKernelDurationKey);
     writer.packUInt(duration);
-    writer.packStr(KernelMetric::getValueName(KernelMetric::Invocations));
+    writer.appendBytes(kKernelInvocationsKey);
     writer.packUInt(invocations);
-    writer.packStr(KernelMetric::getValueName(KernelMetric::DeviceId));
+    writer.appendBytes(kDeviceIdKey);
     writer.packStr(std::to_string(deviceId));
-    writer.packStr(KernelMetric::getValueName(KernelMetric::DeviceType));
+    writer.appendBytes(kDeviceTypeKey);
     writer.packStr(deviceTypeName);
   };
 
@@ -554,9 +561,9 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     for (const auto &[metricKind, metric] : metrics) {
       if (metricKind == MetricKind::Kernel) {
         if (isRoot) {
-          writer.packStr(KernelMetric::getValueName(KernelMetric::Duration));
+          writer.appendBytes(kKernelDurationKey);
           writer.packUInt(0);
-          writer.packStr(KernelMetric::getValueName(KernelMetric::Invocations));
+          writer.appendBytes(kKernelInvocationsKey);
           writer.packUInt(0);
           continue;
         }
@@ -611,9 +618,9 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     if (isRoot) {
       if (metricSummary.hasKernelMetric &&
           metrics.find(MetricKind::Kernel) == metrics.end()) {
-        writer.packStr(KernelMetric::getValueName(KernelMetric::Duration));
+        writer.appendBytes(kKernelDurationKey);
         writer.packUInt(0);
-        writer.packStr(KernelMetric::getValueName(KernelMetric::Invocations));
+        writer.appendBytes(kKernelInvocationsKey);
         writer.packUInt(0);
       }
       if (metricSummary.hasPCSamplingMetric &&
