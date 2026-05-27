@@ -188,26 +188,6 @@ public:
 
   size_t size() const { return treeNodes.size(); }
 
-  Tree structure() const {
-    Tree cloned;
-    cloned.treeNodes.clear();
-    cloned.nextContextId = nextContextId;
-
-    for (const auto &node : treeNodes) {
-      cloned.treeNodes.emplace_back(node.id, node.parentId, node);
-    }
-
-    for (const auto &node : treeNodes) {
-      auto &clonedNode = cloned.getNode(node.id);
-      clonedNode.children.reserve(node.children.size());
-      for (const auto &child : node.children) {
-        clonedNode.addChild(cloned.getNode(child.id).name, child.id);
-      }
-    }
-
-    return cloned;
-  }
-
 private:
   size_t nextContextId = TreeNode::RootId + 1;
   // Node ids are dense and assigned sequentially, so index lookup is enough.
