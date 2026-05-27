@@ -27,7 +27,7 @@ from .matmul_details.opt_flags import (
     make_opt_flags,
     scoped_opt_flags as scoped_opt_flags,
     scoped_opt_flags_constraints as scoped_opt_flags_constraints,
-    update_opt_flags_constraints,
+    set_idle_sms,
 )
 from .matmul_details.opt_flags_details import opt_flags_nvidia
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
@@ -235,7 +235,7 @@ def matmul_set_idle_sms(num_idle_sms):
     """
     persistent kernels will leave `num_idle_sms` idle
     """
-    update_opt_flags_constraints({"idle_sms": num_idle_sms})
+    set_idle_sms(num_idle_sms)
 
 def matmul(a, b, bias,
     a_ragged_metadata: RaggedTensorMetadata | None = None,

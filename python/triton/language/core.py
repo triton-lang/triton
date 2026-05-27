@@ -3305,7 +3305,18 @@ def debug_barrier(_semantic=None):
 @builtin
 def multiple_of(input, values, _semantic=None):
     """
-    Let the compiler know that the values in :code:`input` are all multiples of :code:`value`.
+    Let the compiler know that ``values[d]`` is the largest power of two that
+    divides the first element of every contiguous group along dimension ``d``
+    of :code:`input` (see :func:`max_contiguous` for the definition of contiguous
+    group). ``values`` must have one entry per dimension of :code:`input`.
+
+    For a 1D input with contiguity 1, this is equivalent to saying that every
+    element of :code:`input` is a multiple of ``values[0]``. For example, if
+    :code:`values` is ``[16]`` and :code:`input` is ``[64, 80, 96, 112]``, the
+    hint is valid because 16 divides 64.
+
+    This hint enables alignment-dependent optimizations such as vectorized
+    memory accesses.
     """
     if isinstance(values, constexpr):
         values = [values]
@@ -3321,7 +3332,19 @@ def multiple_of(input, values, _semantic=None):
 @builtin
 def max_contiguous(input, values, _semantic=None):
     """
-    Let the compiler know that the `value` first values in :code:`input` are contiguous.
+    Let the compiler know that the elements of :code:`input` along dimension
+    ``d`` form contiguous groups of length ``values[d]``. ``values`` must have
+    one entry per dimension of :code:`input` and each entry must be a power of
+    two.
+
+    A 1D array of ``N`` elements with contiguity ``C`` is viewed as ``N/C``
+    runs of ``C`` integers each, where the integers in a run are
+    sequentially contiguous. For example, if :code:`values` is ``[4]``, the
+    array ``[0, 1, 2, 3, 8, 9, 10, 11]`` satisfies the hint because it
+    consists of two runs of 4 contiguous values.
+
+    Together with :func:`multiple_of`, this hint enables vectorized loads and
+    stores of contiguous, aligned regions.
     """
     if isinstance(values, constexpr):
         values = [values]
@@ -3337,10 +3360,14 @@ def max_contiguous(input, values, _semantic=None):
 @builtin
 def max_constancy(input, values, _semantic=None):
     """
-    Let the compiler know that the `value` first values in :code:`input` are constant.
+    Let the compiler know that the elements of :code:`input` along dimension
+    ``d`` form constant groups of length ``values[d]``. ``values`` must have
+    one entry per dimension of :code:`input` and each entry must be a power of
+    two.
 
-    e.g. if :code:`values` is [4], then each group of 4 values in :code:`input` should all be equal,
-    for example [0, 0, 0, 0, 1, 1, 1, 1].
+    A 1D array of ``N`` elements with constancy ``C`` is viewed as ``N/C``
+    runs of ``C`` identical values. For example, if :code:`values` is ``[4]``,
+    the array ``[0, 0, 0, 0, 1, 1, 1, 1]`` satisfies the hint.
     """
     if isinstance(values, constexpr):
         values = [values]
