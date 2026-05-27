@@ -68,7 +68,7 @@ def make_default_opt_flags_amd(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "max_allowable_mn", "num_warps", "disable_mx4_block_swap"}
+    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap"}
     unsupported = set(constraints.keys()) - constraints_supported
     assert not unsupported, f"Given unsupported constraint: {unsupported}"
     # tokens per slice
@@ -166,7 +166,7 @@ def make_default_opt_flags_amd(
         w_cache_modifier=w_cache_modifier,
         split_k=split_k,
         is_persistent=is_persistent,
-        idle_sms=0,
+        idle_sms=constraints.get("idle_sms", _get_idle_sms()),
         epilogue_subtile=epilogue_subtile,
         arch=None,
         target_kernel_kwargs=target_kernel_kwargs,
@@ -388,7 +388,7 @@ def make_default_opt_flags_nvidia(
             # For some reason, overlapping the epilogue is slower for hopper bf16 x mxfp4
             FLATTEN_LOOPS=not is_hopper_scale,
         ),
-        idle_sms=constraints.get("idle_sms", 0),
+        idle_sms=constraints.get("idle_sms", _get_idle_sms()),
         occupancy_target=occupancy_target,
     )
     # check constraints
@@ -401,6 +401,14 @@ def make_default_opt_flags_nvidia(
 
 _opt_flags_constraints: ContextVar[dict | None] = ContextVar("opt_flags_constraints", default=None)
 _opt_flags: ContextVar[OptFlags | None] = ContextVar("opt_flags", default=None)
+_idle_sms = 0
+
+def _get_idle_sms() -> int:
+    return _idle_sms
+
+def set_idle_sms(num_idle_sms: int):
+    global _idle_sms
+    _idle_sms = num_idle_sms
 
 def _get_opt_flags_constraints() -> dict:
     constraints = _opt_flags_constraints.get()
