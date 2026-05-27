@@ -753,11 +753,31 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         hasLinkedTargets
             ? static_cast<uint32_t>(virtualRootNode.children.size())
             : 0;
+    // CUDA stream capture can create concrete launch-name leaves before the
+    // launch callback exits early without correlating metrics. Graph replay
+    // metrics are attached through linked virtual nodes instead, so a concrete
+    // leaf with no metrics, linked metrics, flexible metrics, or children adds
+    // no Hatchet information.
+    uint32_t concreteChildCount = 0;
+    for (const auto &child : treeNode.children) {
+      const auto &childNode = tree->getNode(child.id);
+      if (!childNode.children.empty() || !childNode.metricSet.metrics.empty() ||
+          !childNode.metricSet.flexibleMetrics.empty() ||
+          !childNode.metricSet.linkedMetrics.empty() ||
+          !childNode.metricSet.linkedFlexibleMetrics.empty()) {
+        ++concreteChildCount;
+      }
+    }
     writer.packFixStrLiteral("children");
-    writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
-                     linkedChildCount);
+    writer.packArray(concreteChildCount + linkedChildCount);
     for (const auto &child : treeNode.children) {
       auto &childNode = tree->getNode(child.id);
+      if (childNode.children.empty() && childNode.metricSet.metrics.empty() &&
+          childNode.metricSet.flexibleMetrics.empty() &&
+          childNode.metricSet.linkedMetrics.empty() &&
+          childNode.metricSet.linkedFlexibleMetrics.empty()) {
+        continue;
+      }
       packNode(packNode, childNode);
     }
     if (hasLinkedTargets) {
