@@ -758,27 +758,37 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     // metrics are attached through linked virtual nodes instead, so a concrete
     // leaf with no metrics, linked metrics, flexible metrics, or children adds
     // no Hatchet information.
+    // Most captured launch scopes have only a few concrete children. Keep that
+    // common case allocation-free while still collecting children once so the
+    // MsgPack array header has an exact count.
+    constexpr size_t kInlineConcreteChildCount = 8;
+    std::array<TreeData::Tree::TreeNode *, kInlineConcreteChildCount>
+        inlineConcreteChildren;
+    std::vector<TreeData::Tree::TreeNode *> overflowConcreteChildren;
     uint32_t concreteChildCount = 0;
     for (const auto &child : treeNode.children) {
-      const auto &childNode = tree->getNode(child.id);
+      auto &childNode = tree->getNode(child.id);
       if (!childNode.children.empty() || !childNode.metricSet.metrics.empty() ||
           !childNode.metricSet.flexibleMetrics.empty() ||
           !childNode.metricSet.linkedMetrics.empty() ||
           !childNode.metricSet.linkedFlexibleMetrics.empty()) {
+        if (concreteChildCount < inlineConcreteChildren.size()) {
+          inlineConcreteChildren[concreteChildCount] = &childNode;
+        } else {
+          overflowConcreteChildren.push_back(&childNode);
+        }
         ++concreteChildCount;
       }
     }
     writer.packFixStrLiteral("children");
     writer.packArray(concreteChildCount + linkedChildCount);
-    for (const auto &child : treeNode.children) {
-      auto &childNode = tree->getNode(child.id);
-      if (childNode.children.empty() && childNode.metricSet.metrics.empty() &&
-          childNode.metricSet.flexibleMetrics.empty() &&
-          childNode.metricSet.linkedMetrics.empty() &&
-          childNode.metricSet.linkedFlexibleMetrics.empty()) {
-        continue;
-      }
-      packNode(packNode, childNode);
+    const auto inlineConcreteCount =
+        std::min<size_t>(concreteChildCount, inlineConcreteChildren.size());
+    for (size_t i = 0; i < inlineConcreteCount; ++i) {
+      packNode(packNode, *inlineConcreteChildren[i]);
+    }
+    for (auto *childNode : overflowConcreteChildren) {
+      packNode(packNode, *childNode);
     }
     if (hasLinkedTargets) {
       for (const auto &virtualChild : virtualRootNode.children) {
