@@ -288,7 +288,8 @@ public:
 
   const std::string &getName() const override { return name; }
 
-  // Fast path for callers that already know they are working with PCSamplingMetric.
+  // Fast path for callers that already know they are working with
+  // PCSamplingMetric.
   static constexpr std::string_view getValueName(PCSamplingMetricKind valueId) {
     return VALUE_NAMES[valueId];
   }

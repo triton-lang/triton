@@ -466,10 +466,9 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   std::vector<std::vector<uint8_t>> treeMsgPackFrameHeaderCache(tree->size());
   std::vector<std::vector<uint8_t>> virtualMsgPackFrameHeaderCache(
       virtualTree->size());
-  auto getMsgPackFrameHeader =
-      [&](TreeData::Tree *sourceTree,
-          std::vector<std::vector<uint8_t>> &cache,
-          size_t id) -> const std::vector<uint8_t> & {
+  auto getMsgPackFrameHeader = [&](TreeData::Tree *sourceTree,
+                                   std::vector<std::vector<uint8_t>> &cache,
+                                   size_t id) -> const std::vector<uint8_t> & {
     auto &header = cache[id];
     if (header.empty()) {
       header = buildMsgPackHatchetFrameHeader(sourceTree->getNode(id).name);
@@ -762,10 +761,9 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
 
     writer.packFixStrLiteral("children");
     writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
-                     (hasLinkedTargets
-                          ? static_cast<uint32_t>(
-                                virtualRootNode.children.size())
-                          : 0));
+                     (hasLinkedTargets ? static_cast<uint32_t>(
+                                             virtualRootNode.children.size())
+                                       : 0));
     for (const auto &child : treeNode.children) {
       packNode(packNode, tree->getNode(child.id));
     }
