@@ -358,6 +358,7 @@ def matmul(a, b, bias,
         FnName.QUANTIZE_NVFP4.name,
     ) else 1
     a_transpose = a.stride(-1) != 1
+    b_transpose = b_is_shuffled or b.storage.data.stride()[-2] == 1
     # determine shapes
     has_gather = gather_indx is not None
     has_scatter = scatter_indx is not None
@@ -418,6 +419,7 @@ def matmul(a, b, bias,
         block_k = block_k,
         mx_block_size = mx_block_size,
         x_uses_tma_when_persistent = a_uses_tma_when_persistent,
+        w_transpose = b_transpose,
         rhs_layout=b.storage.layout,
         epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
@@ -548,7 +550,6 @@ def matmul(a, b, bias,
         b_tensor_or_tma.round_f32_to_tf32 = True
     # create tma descriptor for w_scale
     b_scale_has_tma = opt_flags.is_persistent and b_scale is not None
-    b_transpose = b_is_shuffled or b.storage.data.stride()[-2] == 1
     if b_scale_has_tma:
         scale_block_k = opt_flags.block_k // mx_block_size
         b_scale_storage = b_scale.storage
