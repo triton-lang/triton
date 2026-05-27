@@ -19,6 +19,8 @@ from triton.language.target_info import (
     is_hip,
     is_hip_cdna2,
     is_hip_cdna4,
+)
+from triton._internal_testing import (
     supports_tma,
     supports_ws,
 )
