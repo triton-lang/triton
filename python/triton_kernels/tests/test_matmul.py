@@ -21,7 +21,7 @@ from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdn
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
-from triton_kernels.tensor import Tensor, convert_layout, wrap_torch_tensor
+from triton_kernels.tensor import Tensor, convert_layout, make_ragged_tensor_metadata, wrap_torch_tensor
 from triton_kernels.tensor_details.dtype import FP32
 
 # ---------------
@@ -577,6 +577,54 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if c_dtype.has_global_scale:
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
+
+
+def test_k_ragged_mxfp8_act_scale_swizzling(device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    m, n, k = 64, 128, 96
+    a_dtype = DType("mxfloat8_e4m3fn")
+
+    def make_a(scale_layout):
+        torch.manual_seed(0)
+        return make_random_tensor(
+            shape=(m, k),
+            n_slices=10,
+            ragged_dim=1,
+            ragged_padding=True,
+            device=device,
+            dtype=a_dtype,
+            mxfp_dim=-1,
+            transpose=False,
+            squeeze_batch_dim=False,
+            scale_hbm_swizzling=scale_layout,
+        )
+
+    # A scale layout is supplied in both cases so K-ragged values get identical padding.
+    canonical_a, canonical_scale, canonical_metadata = make_a(layout.StridedLayout(-1))
+    swizzled_a, swizzled_scale, swizzled_metadata = make_a(layout.make_default_matmul_mx_act_scale_layout)
+    b = torch.randn((k, n), dtype=torch.bfloat16, device=device)
+    b_metadata = make_ragged_tensor_metadata(canonical_metadata.slice_sizes, k)
+
+    def run(a, scale, metadata):
+        return matmul(
+            a,
+            b,
+            None,
+            metadata,
+            b_metadata,
+            precision_config=PrecisionConfig(
+                a_mx_scale=scale,
+                a_microblock_size=MXFP_BLOCK_SIZE.value,
+                out_dtype=torch.bfloat16,
+            ),
+        )
+
+    with opt_flags.scoped_opt_flags_constraints({"block_m": 128, "is_persistent": True}):
+        swizzled = run(swizzled_a, swizzled_scale, swizzled_metadata)
+        canonical = run(canonical_a, canonical_scale, canonical_metadata)
+    torch.testing.assert_close(swizzled, canonical)
 
 
 def test_set_idle_sms():
