@@ -331,6 +331,11 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_llir(src, metadata, options):
         mod = src
+        if "gfx11" in options.arch:
+            ttgir_str = str(mod)
+            if ("f8E" in ttgir_str or "fp4_to_fp" in ttgir_str or "lhs = e2m1" in ttgir_str
+                    or "rhs = e2m1" in ttgir_str):
+                metadata["disable_true16"] = True
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -517,7 +522,7 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
-        features = ''
+        features = '-real-true16' if metadata.get("disable_true16") else ''
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
         _ = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
@@ -543,6 +548,8 @@ class HIPBackend(BaseBackend):
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
+        if metadata.get("disable_true16"):
+            target_features = (target_features + ',-real-true16').lstrip(',')
         hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
