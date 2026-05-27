@@ -749,17 +749,10 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     const bool hasLinkedTargets =
         !treeNode.metricSet.linkedMetrics.empty() ||
         !treeNode.metricSet.linkedFlexibleMetrics.empty();
-    uint32_t linkedChildCount = 0;
-    if (hasLinkedTargets) {
-      for (const auto &child : virtualRootNode.children) {
-        const auto &childNode = virtualTree->getNode(child.id);
-        if (!childNode.children.empty() ||
-            treeNode.metricSet.linkedMetrics.find(child.id) !=
-                treeNode.metricSet.linkedMetrics.end()) {
-          ++linkedChildCount;
-        }
-      }
-    }
+    uint32_t linkedChildCount =
+        hasLinkedTargets
+            ? static_cast<uint32_t>(virtualRootNode.children.size())
+            : 0;
     writer.packFixStrLiteral("children");
     writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
                      linkedChildCount);
@@ -769,12 +762,6 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
     }
     if (hasLinkedTargets) {
       for (const auto &virtualChild : virtualRootNode.children) {
-        const auto &childNode = virtualTree->getNode(virtualChild.id);
-        if (childNode.children.empty() &&
-            treeNode.metricSet.linkedMetrics.find(virtualChild.id) ==
-                treeNode.metricSet.linkedMetrics.end()) {
-          continue;
-        }
         packLinkedVirtualNode(packLinkedVirtualNode, treeNode, virtualChild.id);
       }
     }
