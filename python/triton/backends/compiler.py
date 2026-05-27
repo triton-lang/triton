@@ -74,15 +74,25 @@ class BaseBackend(metaclass=ABCMeta):
     @staticmethod
     def parse_attr(desc):
         assert isinstance(desc, str)
+        # Descriptors are concatenations of single-letter flags ("D"/"D8" for
+        # divisibility, plus backend-specific suffixes like AMD's "S" for
+        # pointer_range). Check the longer "D8" prefix first so the "D" check
+        # doesn't also match "D8".
         ret = []
-        if "D" in desc:
+        if "D8" in desc:
+            ret += [["tt.divisibility", 8]]
+        elif "D" in desc:
             ret += [["tt.divisibility", 16]]
         return ret
 
     @staticmethod
     def get_int_specialization(arg, **kwargs):
-        if arg % 16 == 0 and kwargs.get("align", False):
+        if not kwargs.get("align", False):
+            return ""
+        if arg % 16 == 0:
             return "D"
+        if arg % 8 == 0:
+            return "D8"
         return ""
 
     @staticmethod

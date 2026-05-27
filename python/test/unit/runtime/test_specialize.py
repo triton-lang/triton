@@ -92,17 +92,25 @@ def native_inputs_to_specialize():
         None,
         False,
         True,
-        1,
-        0,
+        -2 * 31 - 1,
         -1,
+        0,
+        1,
+        8,
         16,
         17,
+        24,
+        56,
+        72,
+        2**31 - 8,
         2**31 - 1,
         2**31,
-        -2 * 31 - 1,
+        2**63 - 8,
         2**63 - 1,
         2**63,
         2**63 + 1,
+        2**63 + 8,
+        2**64 - 8,
         2**64 - 1,
     ]
 
@@ -175,3 +183,37 @@ def test_specialize_impl(input_generator, backend, is_const, specialize_value, a
         result = native_specialize_impl(backend, arg, is_const, specialize_value, align)
         expected = reference_specialize_impl(backend, arg, is_const, specialize_value, align)
         assert result == expected
+
+
+@pytest.mark.parametrize("backend", [CUDABackend, HIPBackend])
+@pytest.mark.parametrize("value,expected_key", [
+    # Divisible by 16 -> the standard `D` specialization (divisibility = 16).
+    (0, "D"),
+    (16, "D"),
+    (-32, "D"),
+    (2**31, "D"),
+    # Divisible by 8 but not 16 -> the `D8` tier (divisibility = 8).
+    (8, "D8"),
+    (24, "D8"),
+    (72, "D8"),
+    (2**31 - 8, "D8"),
+    # Not divisible by 8 -> no specialization key.
+    (3, ""),
+    (7, ""),
+    (17, ""),
+])
+def test_d8_int_specialization(backend, value, expected_key):
+    """`D` maps to divisibility = 16, `D8` to divisibility = 8."""
+    assert backend.get_int_specialization(value, align=True) == expected_key
+    # No alignment hint requested -> the function must not specialize.
+    assert backend.get_int_specialization(value, align=False) == ""
+    # The string descriptor round-trips through `parse_attr` into the right
+    # `tt.divisibility` attribute value (or no attribute for the empty key).
+    attrs = backend.parse_attr(expected_key)
+    divisibility = next((v for k, v in attrs if k == "tt.divisibility"), None)
+    if expected_key == "D":
+        assert divisibility == 16
+    elif expected_key == "D8":
+        assert divisibility == 8
+    else:
+        assert divisibility is None
