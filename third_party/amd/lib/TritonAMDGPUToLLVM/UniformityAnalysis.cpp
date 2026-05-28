@@ -315,7 +315,7 @@ static bool isUniformRecursive(Value v, const DataFlowSolver &solver,
   if (!v || depth <= 0)
     return false;
   if (!visited.insert(v).second)
-    return true; // back-edge: don't contradict, let other operands decide
+    return false;
   Value peeled = lookThroughExtractValue(v);
   // First try the solver snapshot.
   if (const auto *lat = solver.lookupState<UniformityLattice>(peeled)) {
