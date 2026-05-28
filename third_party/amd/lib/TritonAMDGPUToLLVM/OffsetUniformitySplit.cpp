@@ -20,8 +20,7 @@ using mlir::triton::AMD::lookThroughExtractValue;
 // Walk the additive tree of `v` (rooted at `add` ops). Recurse into
 // both operands of each `add`; classify every leaf as uniform or
 // per-lane via `isUniform`.
-void collectAddTreeLeaves(Value v,
-                          llvm::function_ref<bool(Value)> isUniform,
+void collectAddTreeLeaves(Value v, llvm::function_ref<bool(Value)> isUniform,
                           SmallVectorImpl<Value> &uniformLeaves,
                           SmallVectorImpl<Value> &perLaneLeaves) {
   v = lookThroughExtractValue(v);
