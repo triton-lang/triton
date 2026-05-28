@@ -140,7 +140,17 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.max_contiguous">
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">max_contiguous</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">values</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.max_contiguous" title="Link to this definition"></a></dt>
-<dd><p>Let the compiler know that the <cite>value</cite> first values in <code class="code docutils literal notranslate"><span class="pre">input</span></code> are contiguous.</p>
+<dd><p>Let the compiler know that the elements of <code class="code docutils literal notranslate"><span class="pre">input</span></code> along dimension
+<code class="docutils literal notranslate"><span class="pre">d</span></code> form contiguous groups of length <code class="docutils literal notranslate"><span class="pre">values[d]</span></code>. <code class="docutils literal notranslate"><span class="pre">values</span></code> must have
+one entry per dimension of <code class="code docutils literal notranslate"><span class="pre">input</span></code> and each entry must be a power of
+two.</p>
+<p>A 1D array of <code class="docutils literal notranslate"><span class="pre">N</span></code> elements with contiguity <code class="docutils literal notranslate"><span class="pre">C</span></code> is viewed as <code class="docutils literal notranslate"><span class="pre">N/C</span></code>
+runs of <code class="docutils literal notranslate"><span class="pre">C</span></code> integers each, where the integers in a run are
+sequentially contiguous. For example, if <code class="code docutils literal notranslate"><span class="pre">values</span></code> is <code class="docutils literal notranslate"><span class="pre">[4]</span></code>, the
+array <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">8,</span> <span class="pre">9,</span> <span class="pre">10,</span> <span class="pre">11]</span></code> satisfies the hint because it
+consists of two runs of 4 contiguous values.</p>
+<p>Together with <a class="reference internal" href="triton.language.multiple_of.html#triton.language.multiple_of" title="triton.language.multiple_of"><code class="xref py py-func docutils literal notranslate"><span class="pre">multiple_of()</span></code></a>, this hint enables vectorized loads and
+stores of contiguous, aligned regions.</p>
 </dd></dl>
 
 </section>

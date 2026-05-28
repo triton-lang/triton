@@ -140,9 +140,13 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.max_constancy">
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">max_constancy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">values</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.max_constancy" title="Link to this definition"></a></dt>
-<dd><p>Let the compiler know that the <cite>value</cite> first values in <code class="code docutils literal notranslate"><span class="pre">input</span></code> are constant.</p>
-<p>e.g. if <code class="code docutils literal notranslate"><span class="pre">values</span></code> is [4], then each group of 4 values in <code class="code docutils literal notranslate"><span class="pre">input</span></code> should all be equal,
-for example [0, 0, 0, 0, 1, 1, 1, 1].</p>
+<dd><p>Let the compiler know that the elements of <code class="code docutils literal notranslate"><span class="pre">input</span></code> along dimension
+<code class="docutils literal notranslate"><span class="pre">d</span></code> form constant groups of length <code class="docutils literal notranslate"><span class="pre">values[d]</span></code>. <code class="docutils literal notranslate"><span class="pre">values</span></code> must have
+one entry per dimension of <code class="code docutils literal notranslate"><span class="pre">input</span></code> and each entry must be a power of
+two.</p>
+<p>A 1D array of <code class="docutils literal notranslate"><span class="pre">N</span></code> elements with constancy <code class="docutils literal notranslate"><span class="pre">C</span></code> is viewed as <code class="docutils literal notranslate"><span class="pre">N/C</span></code>
+runs of <code class="docutils literal notranslate"><span class="pre">C</span></code> identical values. For example, if <code class="code docutils literal notranslate"><span class="pre">values</span></code> is <code class="docutils literal notranslate"><span class="pre">[4]</span></code>,
+the array <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">0,</span> <span class="pre">0,</span> <span class="pre">0,</span> <span class="pre">1,</span> <span class="pre">1,</span> <span class="pre">1,</span> <span class="pre">1]</span></code> satisfies the hint.</p>
 </dd></dl>
 
 </section>

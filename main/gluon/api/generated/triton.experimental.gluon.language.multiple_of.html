@@ -148,7 +148,16 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.multiple_of">
 <span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.</span></span><span class="sig-name descname"><span class="pre">multiple_of</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">values</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.multiple_of" title="Link to this definition"></a></dt>
-<dd><p>Let the compiler know that the values in <code class="code docutils literal notranslate"><span class="pre">input</span></code> are all multiples of <code class="code docutils literal notranslate"><span class="pre">value</span></code>.</p>
+<dd><p>Let the compiler know that <code class="docutils literal notranslate"><span class="pre">values[d]</span></code> is the largest power of two that
+divides the first element of every contiguous group along dimension <code class="docutils literal notranslate"><span class="pre">d</span></code>
+of <code class="code docutils literal notranslate"><span class="pre">input</span></code> (see <a class="reference internal" href="triton.experimental.gluon.language.max_contiguous.html#triton.experimental.gluon.language.max_contiguous" title="triton.experimental.gluon.language.max_contiguous"><code class="xref py py-func docutils literal notranslate"><span class="pre">max_contiguous()</span></code></a> for the definition of contiguous
+group). <code class="docutils literal notranslate"><span class="pre">values</span></code> must have one entry per dimension of <code class="code docutils literal notranslate"><span class="pre">input</span></code>.</p>
+<p>For a 1D input with contiguity 1, this is equivalent to saying that every
+element of <code class="code docutils literal notranslate"><span class="pre">input</span></code> is a multiple of <code class="docutils literal notranslate"><span class="pre">values[0]</span></code>. For example, if
+<code class="code docutils literal notranslate"><span class="pre">values</span></code> is <code class="docutils literal notranslate"><span class="pre">[16]</span></code> and <code class="code docutils literal notranslate"><span class="pre">input</span></code> is <code class="docutils literal notranslate"><span class="pre">[64,</span> <span class="pre">80,</span> <span class="pre">96,</span> <span class="pre">112]</span></code>, the
+hint is valid because 16 divides 64.</p>
+<p>This hint enables alignment-dependent optimizations such as vectorized
+memory accesses.</p>
 </dd></dl>
 
 </section>
