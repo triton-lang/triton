@@ -2,9 +2,6 @@ add_proton_library(ProtonData
   Data.cpp
   Dump/ChromeTraceDump.cpp
   Dump/TraceDataDump.cpp
-  Dump/TreeDataDump.cpp
-  Dump/TreeDataHatchetDump.cpp
-  Dump/TreeDataHatchetMsgPackDump.cpp
   Metric.cpp
   TraceData.cpp
   TreeData.cpp
