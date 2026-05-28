@@ -546,3 +546,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+// RDNA3.5 (wave32) WMMA equivalent of inThreadTranspose_simple.
+
+// CHECK-DAG: [[$TRANSPOSABLE:#blocked[0-9]*]] = #ttg.blocked<{sizePerThread = [4, 8], threadsPerWarp = [2, 16], warpsPerCTA = [2, 1], order = [1, 0]}>
+// CHECK-DAG: [[$LINEAR:#linear[0-9]*]] = #ttg.linear<
+// CHECK-LABEL: inThreadTranspose_wmma
+// CHECK: tt.load {{.*}} : tensor<32x128x!tt.ptr<f16>, [[$TRANSPOSABLE]]>
+// CHECK: amdg.in_thread_transpose {{.*}} -> tensor<32x128xf16, [[$LINEAR]]>
+// CHECK: ttg.local_load {{.*}}-> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 16}>>
+#blocked_wmma = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
+#mma_wmma = #ttg.amd_wmma<{version = 1, isTranspose = true, ctaLayout = {warp = [[1, 0]]}}>
+#shared_wmma = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem_wmma = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "hip:gfx1151", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @inThreadTranspose_wmma(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    %0 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #blocked_wmma>
+    %1 = tt.load %0 : tensor<32x128x!tt.ptr<f16>, #blocked_wmma>
+    %2 = ttg.local_alloc %1 : (tensor<32x128xf16, #blocked_wmma>) -> !ttg.memdesc<32x128xf16, #shared_wmma, #smem_wmma>
+    %3 = ttg.local_load %2 : !ttg.memdesc<32x128xf16, #shared_wmma, #smem_wmma> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma_wmma, kWidth = 16}>>
+    tt.return
+  }
+}

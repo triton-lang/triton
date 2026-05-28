@@ -1420,7 +1420,7 @@ class TritonSemantic(Generic[TensorTy]):
         return getattr(ir.INPUT_PRECISION, input_precision)
 
     def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
-            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
+            max_num_imprecise_acc: int, out_dtype: tl.dtype | None) -> TensorTy:
         assert lhs.type.is_block() and rhs.type.is_block()
 
         if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
@@ -1456,6 +1456,9 @@ class TritonSemantic(Generic[TensorTy]):
 
         if input_precision is None:
             input_precision = self.builder.options.default_dot_input_precision
+
+        if out_dtype is None:
+            out_dtype = tl.float32 if acc is None else acc.type.element_ty
 
         input_precision = self._str_to_dot_input_precision(input_precision)
 
