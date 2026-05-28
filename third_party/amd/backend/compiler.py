@@ -72,6 +72,8 @@ class HIPOptions:
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", 'bf16x3', 'bf16x6')
     enable_fp_fusion: bool = True
+    # Disable LLVM's VectorCombine pass during LLVM IR optimization.
+    disable_vector_combine: bool = True
     launch_cooperative_grid: bool = False
     matrix_instr_nonkdim: int = 0
     kpack: int = 1
@@ -501,7 +503,8 @@ class HIPBackend(BaseBackend):
             if len(paths) > 0:
                 llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion, True)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion,
+                             options.disable_vector_combine)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
