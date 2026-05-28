@@ -20,8 +20,8 @@ class LayoutTransformation(ABC):
 @dataclass(frozen=True)
 class Layout(ABC):
 
-    def is_equivalent_to(self, other: "Layout", shape: list[int]) -> bool:
-        """Whether conversion to `other` can preserve the current storage."""
+    def can_preserve_storage_as(self, other: "Layout", shape: list[int]) -> bool:
+        """Whether existing storage is already valid for `other`."""
         return self == other
 
     @abstractmethod

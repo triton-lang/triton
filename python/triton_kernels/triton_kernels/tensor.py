@@ -233,8 +233,14 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
 
 
 def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
+    """Convert `tensor` storage encoding to `layout`.
+
+    Returns `tensor` unchanged when its existing storage is already valid for
+    `layout`. This operation does not clone, densify, or canonicalize physical
+    strides of a tensor that is already in the requested encoding.
+    """
     shape = list(tensor.shape)
-    if not layout_transformation_kwargs and tensor.storage.layout.is_equivalent_to(layout, shape):
+    if not layout_transformation_kwargs and tensor.storage.layout.can_preserve_storage_as(layout, shape):
         return tensor
     # convert `tensor` into canonical form
     transformation = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)

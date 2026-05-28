@@ -8,14 +8,14 @@ from triton_kernels.tensor import make_ragged_tensor_metadata, make_ragged_tenso
 # ------------------------------------------------------------
 
 
-def test_act_scale_layout_equivalence():
+def test_act_scale_storage_preservation():
     slice_sizes = torch.tensor([2, 3], dtype=torch.int32)
     metadata = make_ragged_tensor_metadata_torch(slice_sizes, 5)
     equivalent = BlackwellActMXScaleLayout(metadata)
     reconstructed = BlackwellActMXScaleLayout(make_ragged_tensor_metadata_torch(slice_sizes, 5))
 
-    assert equivalent.is_equivalent_to(BlackwellActMXScaleLayout(metadata), [5, 4])
-    assert not equivalent.is_equivalent_to(reconstructed, [5, 4])
+    assert equivalent.can_preserve_storage_as(BlackwellActMXScaleLayout(metadata), [5, 4])
+    assert not equivalent.can_preserve_storage_as(reconstructed, [5, 4])
 
 
 @pytest.mark.parametrize(

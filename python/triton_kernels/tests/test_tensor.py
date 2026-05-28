@@ -25,7 +25,15 @@ from triton_kernels.tensor_details.layout import (
 )
 
 
-@pytest.mark.parametrize(("transpose", "layout"), [(False, StridedLayout(-1)), (True, StridedLayout(-2))])
+@pytest.mark.parametrize(
+    ("transpose", "layout"),
+    [
+        (False, StridedLayout(-1)),
+        (False, StridedLayout(1)),
+        (True, StridedLayout(-2)),
+        (True, StridedLayout(0)),
+    ],
+)
 def test_convert_layout_noop(transpose, layout):
     data = torch.randn((7, 11))
     if transpose:
@@ -40,6 +48,13 @@ def test_convert_layout_noop_preserves_strided_view():
 
     assert convert_layout(tensor, StridedLayout(-1)) is tensor
     assert tensor.storage.data.stride() == (22, 1)
+
+
+def test_convert_layout_rejects_strided_view_without_contiguous_dimension():
+    tensor = wrap_torch_tensor(torch.randn((14, 22))[::2, ::2])
+
+    with pytest.raises(ValueError):
+        convert_layout(tensor, tensor.storage.layout)
 
 
 def test_convert_layout_noop_does_not_ignore_transformation_kwargs():
