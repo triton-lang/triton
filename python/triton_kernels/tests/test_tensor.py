@@ -25,6 +25,13 @@ def test_convert_layout_noop(transpose, layout):
     assert convert_layout(tensor, layout) is tensor
 
 
+def test_convert_layout_noop_does_not_ignore_transformation_kwargs():
+    tensor = wrap_torch_tensor(torch.randn((7, 11)))
+
+    with pytest.raises(TypeError):
+        convert_layout(tensor, tensor.storage.layout, unsupported=True)
+
+
 @pytest.mark.parametrize("n_slices", [1, 7, 33, 911, 1025])
 def test_make_ragged_tensor_metadata(n_slices):
     torch.manual_seed(0)
