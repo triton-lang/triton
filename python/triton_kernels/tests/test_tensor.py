@@ -2,6 +2,7 @@ import pytest
 import torch
 from triton_kernels.tensor_details.dtype import BIT
 from triton_kernels.tensor import (
+    convert_layout,
     make_ragged_tensor_metadata,
     make_ragged_tensor_metadata_torch,
     remap_ragged_tensor_metadata,
@@ -11,6 +12,17 @@ from triton_kernels.tensor import (
     wrap_torch_tensor,
 )
 from triton_kernels.testing import assert_equal
+from triton_kernels.tensor_details.layout import StridedLayout
+
+
+@pytest.mark.parametrize(("transpose", "layout"), [(False, StridedLayout(-1)), (True, StridedLayout(-2))])
+def test_convert_layout_noop(transpose, layout):
+    data = torch.randn((7, 11))
+    if transpose:
+        data = data.T
+    tensor = wrap_torch_tensor(data)
+
+    assert convert_layout(tensor, layout) is tensor
 
 
 @pytest.mark.parametrize("n_slices", [1, 7, 33, 911, 1025])

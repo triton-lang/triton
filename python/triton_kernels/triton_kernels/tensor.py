@@ -233,6 +233,8 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
 
 
 def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
+    if tensor.storage.layout == layout:
+        return tensor
     shape = list(tensor.shape)
     # convert `tensor` into canonical form
     transformation = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)
