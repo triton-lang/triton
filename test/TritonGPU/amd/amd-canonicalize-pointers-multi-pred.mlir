@@ -1,9 +1,5 @@
 // RUN: triton-opt %s -allow-unregistered-dialect -split-input-file -tritonamdgpu-canonicalize-pointers="enable-large-tensor-ptr-canon=true" | FileCheck %s
 
-// Scalar pointer passed as a block argument from two different predecessors:
-//   ^bb0 -> (cf.cond_br, false branch) -> ^bb2(ptr=arg0)
-//   ^bb1 -> (cf.br)                    -> ^bb2(ptr=arg1)
-
 // CHECK-LABEL:   tt.func @scalar_ptr_block_arg_two_predecessors(
 // CHECK:           cf.cond_br {{.*}}, ^bb1, ^bb2({{.*}} : !tt.ptr<f32>, i64)
 // CHECK:         ^bb1:
