@@ -362,10 +362,12 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
                 appendMetrics(outNode["metrics"], metricsIt->second);
               }
-              // Linked flexible metrics are attached to <metric> helper nodes,
-              // but they belong on the helper's parent frame.
+              // Linked flexible metrics are attached to generated <metric>
+              // helper nodes, but they belong on the helper's parent frame.
+              // Other linked virtual nodes should not carry flexible metrics.
               if (flexibleIt !=
-                  treeNode.metricSet.linkedFlexibleMetrics.end()) {
+                      treeNode.metricSet.linkedFlexibleMetrics.end() &&
+                  virtualNode.name == GraphState::metricTag) {
                 appendFlexibleMetrics(parentMetricsJson, flexibleIt->second);
               }
               outNode["children"] = json::array();
