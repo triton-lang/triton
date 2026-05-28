@@ -20,7 +20,7 @@ class LayoutTransformation(ABC):
 @dataclass(frozen=True)
 class Layout(ABC):
 
-    def can_preserve_storage_as(self, other: "Layout", shape: list[int]) -> bool:
+    def can_preserve_storage_as(self, other: "Layout", rank: int) -> bool:
         """Whether existing storage is already valid for `other`."""
         return self == other
 

@@ -240,7 +240,7 @@ def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwarg
     strides of a tensor that is already in the requested encoding.
     """
     shape = list(tensor.shape)
-    if not layout_transformation_kwargs and tensor.storage.layout.can_preserve_storage_as(layout, shape):
+    if not layout_transformation_kwargs and tensor.storage.layout.can_preserve_storage_as(layout, len(shape)):
         return tensor
     # convert `tensor` into canonical form
     transformation = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)

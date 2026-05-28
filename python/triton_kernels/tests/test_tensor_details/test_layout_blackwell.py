@@ -14,8 +14,8 @@ def test_act_scale_storage_preservation():
     equivalent = BlackwellActMXScaleLayout(metadata)
     reconstructed = BlackwellActMXScaleLayout(make_ragged_tensor_metadata_torch(slice_sizes, 5))
 
-    assert equivalent.can_preserve_storage_as(BlackwellActMXScaleLayout(metadata), [5, 4])
-    assert not equivalent.can_preserve_storage_as(reconstructed, [5, 4])
+    assert equivalent.can_preserve_storage_as(BlackwellActMXScaleLayout(metadata), 2)
+    assert not equivalent.can_preserve_storage_as(reconstructed, 2)
 
 
 @pytest.mark.parametrize(
