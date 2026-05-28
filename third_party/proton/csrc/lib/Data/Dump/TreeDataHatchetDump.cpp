@@ -8,6 +8,104 @@
 #include <type_traits>
 
 namespace proton {
+namespace {
+
+void appendMetricsToJson(
+    json &metricsJson,
+    const std::map<MetricKind, std::unique_ptr<Metric>> &metrics,
+    tree_data_dump::MetricSummary &metricSummary) {
+  metricSummary.observeMetrics(metrics);
+  for (const auto &[metricKind, metric] : metrics) {
+    if (metricKind == MetricKind::Kernel) {
+      auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
+      uint64_t duration =
+          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
+      uint64_t invocations =
+          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Invocations));
+      uint64_t deviceId =
+          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
+      uint64_t deviceType =
+          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceType));
+      metricSummary.hasKernelMetric = true;
+      metricSummary.updateDeviceIdMask(deviceType, deviceId);
+      const auto &deviceTypeName =
+          getDeviceTypeString(static_cast<DeviceType>(deviceType));
+      const auto deviceIdStr = std::to_string(deviceId);
+
+      metricsJson[KernelMetric::getValueName(KernelMetric::Duration)] =
+          duration;
+      metricsJson[KernelMetric::getValueName(KernelMetric::Invocations)] =
+          invocations;
+      metricsJson[KernelMetric::getValueName(KernelMetric::DeviceId)] =
+          deviceIdStr;
+      metricsJson[KernelMetric::getValueName(KernelMetric::DeviceType)] =
+          deviceTypeName;
+    } else if (metricKind == MetricKind::PCSampling) {
+      auto *pcSamplingMetric = static_cast<PCSamplingMetric *>(metric.get());
+      for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
+        const auto valueName = PCSamplingMetric::getValueName(
+            static_cast<PCSamplingMetric::PCSamplingMetricKind>(i));
+        std::visit([&](auto &&value) { metricsJson[valueName] = value; },
+                   pcSamplingMetric->getValues()[i]);
+      }
+    } else if (metricKind == MetricKind::Cycle) {
+      auto *cycleMetric = static_cast<CycleMetric *>(metric.get());
+      uint64_t duration =
+          std::get<uint64_t>(cycleMetric->getValue(CycleMetric::Duration));
+      double normalizedDuration = std::get<double>(
+          cycleMetric->getValue(CycleMetric::NormalizedDuration));
+      uint64_t deviceId =
+          std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceId));
+      uint64_t deviceType =
+          std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceType));
+      const auto deviceIdStr = std::to_string(deviceId);
+      const auto deviceTypeStr = std::to_string(deviceType);
+
+      metricsJson[CycleMetric::getValueName(CycleMetric::Duration)] = duration;
+      metricsJson[CycleMetric::getValueName(CycleMetric::NormalizedDuration)] =
+          normalizedDuration;
+      metricsJson[CycleMetric::getValueName(CycleMetric::DeviceId)] =
+          deviceIdStr;
+      metricsJson[CycleMetric::getValueName(CycleMetric::DeviceType)] =
+          deviceTypeStr;
+    } else if (metricKind == MetricKind::Flexible) {
+      // Flexible metrics are handled in a different way
+    } else {
+      throw makeLogicError("MetricKind not supported");
+    }
+  }
+}
+
+void appendFlexibleMetricsToJson(
+    json &metricsJson,
+    const std::map<std::string, FlexibleMetric> &flexibleMetrics) {
+  for (const auto &[_, flexibleMetric] : flexibleMetrics) {
+    const auto valueName = flexibleMetric.getValueName(0);
+    std::visit(
+        [&](auto &&v) {
+          using T = std::decay_t<decltype(v)>;
+          if constexpr (std::is_same_v<T, uint64_t> ||
+                        std::is_same_v<T, int64_t> ||
+                        std::is_same_v<T, double> ||
+                        std::is_same_v<T, std::string>) {
+            metricsJson[valueName] = v;
+          } else if constexpr (std::is_same_v<T, std::vector<uint64_t>> ||
+                               std::is_same_v<T, std::vector<int64_t>> ||
+                               std::is_same_v<T, std::vector<double>>) {
+            auto &arr = metricsJson[valueName] = json::array();
+            arr.template get_ref<json::array_t &>().reserve(v.size());
+            for (const auto &value : v) {
+              arr.push_back(value);
+            }
+          } else {
+            static_assert(sizeof(T) == 0, "Unsupported MetricValueType");
+          }
+        },
+        flexibleMetric.getValues()[0]);
+  }
+}
+
+} // namespace
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree,
                                 TreeData::Tree *virtualTree) const {
@@ -16,103 +114,6 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
   output.push_back(json::object());
   jsonNodes[TreeData::Tree::TreeNode::RootId] = &(output.back());
   tree_data_dump::MetricSummary metricSummary;
-  // Append fixed-schema metrics to a JSON metrics object and update device
-  // metadata requirements while visiting them.
-  auto appendMetrics = [&](json &metricsJson,
-                           const std::map<MetricKind, std::unique_ptr<Metric>>
-                               &metrics) {
-    metricSummary.observeMetrics(metrics);
-    for (const auto &[metricKind, metric] : metrics) {
-      if (metricKind == MetricKind::Kernel) {
-        auto *kernelMetric = static_cast<KernelMetric *>(metric.get());
-        uint64_t duration =
-            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
-        uint64_t invocations = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::Invocations));
-        uint64_t deviceId =
-            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
-        uint64_t deviceType = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::DeviceType));
-        metricSummary.hasKernelMetric = true;
-        metricSummary.updateDeviceIdMask(deviceType, deviceId);
-        const auto &deviceTypeName =
-            getDeviceTypeString(static_cast<DeviceType>(deviceType));
-        const auto deviceIdStr = std::to_string(deviceId);
-
-        metricsJson[KernelMetric::getValueName(KernelMetric::Duration)] =
-            duration;
-        metricsJson[KernelMetric::getValueName(KernelMetric::Invocations)] =
-            invocations;
-        metricsJson[KernelMetric::getValueName(KernelMetric::DeviceId)] =
-            deviceIdStr;
-        metricsJson[KernelMetric::getValueName(KernelMetric::DeviceType)] =
-            deviceTypeName;
-      } else if (metricKind == MetricKind::PCSampling) {
-        auto *pcSamplingMetric = static_cast<PCSamplingMetric *>(metric.get());
-        for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
-          const auto valueName = PCSamplingMetric::getValueName(
-              static_cast<PCSamplingMetric::PCSamplingMetricKind>(i));
-          std::visit([&](auto &&value) { metricsJson[valueName] = value; },
-                     pcSamplingMetric->getValues()[i]);
-        }
-      } else if (metricKind == MetricKind::Cycle) {
-        auto *cycleMetric = static_cast<CycleMetric *>(metric.get());
-        uint64_t duration =
-            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::Duration));
-        double normalizedDuration = std::get<double>(
-            cycleMetric->getValue(CycleMetric::NormalizedDuration));
-        uint64_t deviceId =
-            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceId));
-        uint64_t deviceType =
-            std::get<uint64_t>(cycleMetric->getValue(CycleMetric::DeviceType));
-        const auto deviceIdStr = std::to_string(deviceId);
-        const auto deviceTypeStr = std::to_string(deviceType);
-
-        metricsJson[CycleMetric::getValueName(CycleMetric::Duration)] =
-            duration;
-        metricsJson[CycleMetric::getValueName(
-            CycleMetric::NormalizedDuration)] = normalizedDuration;
-        metricsJson[CycleMetric::getValueName(CycleMetric::DeviceId)] =
-            deviceIdStr;
-        metricsJson[CycleMetric::getValueName(CycleMetric::DeviceType)] =
-            deviceTypeStr;
-      } else if (metricKind == MetricKind::Flexible) {
-        // Flexible metrics are handled in a different way
-      } else {
-        throw makeLogicError("MetricKind not supported");
-      }
-    }
-  };
-  // Append user-defined flexible metrics, preserving scalar and vector value
-  // types in the JSON output.
-  auto appendFlexibleMetrics =
-      [&](json &metricsJson,
-          const std::map<std::string, FlexibleMetric> &flexibleMetrics) {
-        for (const auto &[_, flexibleMetric] : flexibleMetrics) {
-          const auto valueName = flexibleMetric.getValueName(0);
-          std::visit(
-              [&](auto &&v) {
-                using T = std::decay_t<decltype(v)>;
-                if constexpr (std::is_same_v<T, uint64_t> ||
-                              std::is_same_v<T, int64_t> ||
-                              std::is_same_v<T, double> ||
-                              std::is_same_v<T, std::string>) {
-                  metricsJson[valueName] = v;
-                } else if constexpr (std::is_same_v<T, std::vector<uint64_t>> ||
-                                     std::is_same_v<T, std::vector<int64_t>> ||
-                                     std::is_same_v<T, std::vector<double>>) {
-                  auto &arr = metricsJson[valueName] = json::array();
-                  arr.template get_ref<json::array_t &>().reserve(v.size());
-                  for (const auto &value : v) {
-                    arr.push_back(value);
-                  }
-                } else {
-                  static_assert(sizeof(T) == 0, "Unsupported MetricValueType");
-                }
-              },
-              flexibleMetric.getValues()[0]);
-        }
-      };
   tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
       [&](TreeData::Tree::TreeNode &treeNode) {
         const auto &contextName = treeNode.name;
@@ -121,8 +122,10 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
         (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
         (*jsonNode)["metrics"] = json::object();
         auto &metricsJson = (*jsonNode)["metrics"];
-        appendMetrics(metricsJson, treeNode.metricSet.metrics);
-        appendFlexibleMetrics(metricsJson, treeNode.metricSet.flexibleMetrics);
+        appendMetricsToJson(metricsJson, treeNode.metricSet.metrics,
+                            metricSummary);
+        appendFlexibleMetricsToJson(metricsJson,
+                                    treeNode.metricSet.flexibleMetrics);
         auto &childrenArray = (*jsonNode)["children"];
         childrenArray = json::array();
         const auto &virtualRootNode =
@@ -154,7 +157,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
                                   {"type", "function"}};
               outNode["metrics"] = json::object();
               if (metricsIt != treeNode.metricSet.linkedMetrics.end()) {
-                appendMetrics(outNode["metrics"], metricsIt->second);
+                appendMetricsToJson(outNode["metrics"], metricsIt->second,
+                                    metricSummary);
               }
               // Linked flexible metrics are attached to generated <metric>
               // helper nodes, but they belong on the helper's parent frame.
@@ -162,7 +166,8 @@ json TreeData::buildHatchetJson(TreeData::Tree *tree,
               if (flexibleIt !=
                       treeNode.metricSet.linkedFlexibleMetrics.end() &&
                   virtualNode.name == GraphState::metricTag) {
-                appendFlexibleMetrics(parentMetricsJson, flexibleIt->second);
+                appendFlexibleMetricsToJson(parentMetricsJson,
+                                            flexibleIt->second);
               }
               outNode["children"] = json::array();
               auto &linkedChildren = outNode["children"];
