@@ -1,6 +1,6 @@
 import pytest
 import torch
-from triton_kernels.tensor_details.dtype import BIT
+from triton_kernels.tensor_details.dtype import BIT, FP4, UINT8
 from triton_kernels.tensor import (
     convert_layout,
     make_ragged_tensor_metadata,
@@ -12,7 +12,17 @@ from triton_kernels.tensor import (
     wrap_torch_tensor,
 )
 from triton_kernels.testing import assert_equal
-from triton_kernels.tensor_details.layout import StridedLayout
+from triton_kernels.tensor_details.layout import (
+    BlackwellActMXScaleLayout,
+    BlackwellMX4ValueShuffledLayout,
+    BlackwellMXScaleLayout,
+    BlackwellMXValueLayout,
+    CDNA4MXScaleLayout,
+    GFX1250MXScaleLayout,
+    HopperMXScaleLayout,
+    HopperMXValueLayout,
+    StridedLayout,
+)
 
 
 @pytest.mark.parametrize(("transpose", "layout"), [(False, StridedLayout(-1)), (True, StridedLayout(-2))])
@@ -37,6 +47,45 @@ def test_convert_layout_noop_does_not_ignore_transformation_kwargs():
 
     with pytest.raises(TypeError):
         convert_layout(tensor, tensor.storage.layout, unsupported=True)
+
+
+@pytest.mark.parametrize(
+    ("storage_shape", "logical_shape", "dtype", "layout", "equivalent_layout"),
+    [
+        ((10, 254, 60), None, UINT8, BlackwellMXScaleLayout(), BlackwellMXScaleLayout()),
+        ((130, 65), None, UINT8, BlackwellActMXScaleLayout(None), BlackwellActMXScaleLayout(None)),
+        ((256, 64), (256, 128), FP4, BlackwellMXValueLayout(), BlackwellMXValueLayout()),
+        ((128, 256), (128, 512), FP4, BlackwellMX4ValueShuffledLayout(), BlackwellMX4ValueShuffledLayout()),
+        ((70, 65), None, UINT8, HopperMXScaleLayout(-2, 4), HopperMXScaleLayout(-2, 4)),
+        ((64, 64), (64, 128), FP4, HopperMXValueLayout(-2, 3), HopperMXValueLayout(-2, 3)),
+        ((10, 254, 60), None, UINT8, CDNA4MXScaleLayout(), CDNA4MXScaleLayout()),
+        ((10, 254, 60), None, UINT8, GFX1250MXScaleLayout(), GFX1250MXScaleLayout()),
+    ],
+)
+def test_convert_layout_noop_for_equivalent_layout(storage_shape, logical_shape, dtype, layout, equivalent_layout):
+    tensor = wrap_torch_tensor(torch.randint(0, 256, storage_shape, dtype=torch.uint8), dtype=dtype,
+                               shape=logical_shape)
+    converted = convert_layout(tensor, layout)
+
+    assert converted is not tensor
+    assert convert_layout(converted, equivalent_layout) is converted
+
+
+@pytest.mark.parametrize(
+    ("storage_shape", "logical_shape", "dtype", "layout", "different_layout"),
+    [
+        ((70, 65), None, UINT8, HopperMXScaleLayout(-2, 4), HopperMXScaleLayout(-2, 8)),
+        ((64, 64), (64, 128), FP4, HopperMXValueLayout(-2, 3), HopperMXValueLayout(-2, 2)),
+        ((128, 256), (128, 512), FP4, BlackwellMX4ValueShuffledLayout(), BlackwellMX4ValueShuffledLayout(block_n=128)),
+    ],
+)
+def test_convert_layout_converts_different_parameterized_layout(storage_shape, logical_shape, dtype, layout,
+                                                                different_layout):
+    tensor = wrap_torch_tensor(torch.randint(0, 256, storage_shape, dtype=torch.uint8), dtype=dtype,
+                               shape=logical_shape)
+    converted = convert_layout(tensor, layout)
+
+    assert convert_layout(converted, different_layout) is not converted
 
 
 @pytest.mark.parametrize("n_slices", [1, 7, 33, 911, 1025])
