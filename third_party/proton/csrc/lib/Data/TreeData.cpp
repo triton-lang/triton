@@ -449,7 +449,17 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
   writer.reserve(16 * 1024 * 1024); // 16 MB
 
   MetricSummary metricSummary;
-  metricSummary.hasKernelMetric = true;
+  // Root metrics are serialized before descendants, so first scan the whole
+  // concrete tree for fixed-schema metric kinds. This lets the root emit the
+  // zero-valued Hatchet fields required for any metric kind present below it.
+  tree->template walk<TreeData::Tree::WalkPolicy::PreOrder>(
+      [&](TreeData::Tree::TreeNode &treeNode) {
+        metricSummary.observeMetrics(treeNode.metricSet.metrics);
+        for (const auto &[_, linkedMetrics] :
+             treeNode.metricSet.linkedMetrics) {
+          metricSummary.observeMetrics(linkedMetrics);
+        }
+      });
   const auto &virtualRootNode = virtualTree->getNode(Tree::TreeNode::RootId);
   auto packHatchetFrameHeader = [&](std::string_view name) {
     writer.packMap(3);
