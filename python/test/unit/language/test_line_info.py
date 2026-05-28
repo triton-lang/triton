@@ -543,6 +543,28 @@ def test_line_and_column_numbers(fresh_triton_cache):
     run_filecheck("placeholder", h.asm["ttir"], check_template)
 
 
+def test_while_block_arg_carries_init_handle_loc(fresh_triton_cache):
+
+    @triton.jit
+    def kernel_while_block_arg_loc(N):
+        # CHECK-LABEL: tt.func public @kernel_while_block_arg_loc
+        # CHECK: %ivar = arith.constant 0 : i32 loc(#[[INIT_IVAR_LOC:loc[0-9]+]])
+        # CHECK: %arange = tt.make_range {{.*}} loc(#[[INIT_ARANGE_LOC:loc[0-9]+]])
+        arange = tl.arange(0, 16)
+        ivar = 0
+        # CHECK: scf.while (%arange_{{.+}} = %arange, %ivar_{{.+}} = %ivar)
+        while ivar < N:
+            # CHECK: ^bb0(%arange_{{.+}}: tensor<16xi32> loc("arange"(#[[INIT_ARANGE_LOC]])), %ivar_{{.+}}: i32 loc("ivar"(#[[INIT_IVAR_LOC]])))
+            ivar += 1
+            arange *= ivar
+        tl.device_print("", arange)
+
+    h = triton.compile(
+        triton.compiler.ASTSource(fn=kernel_while_block_arg_loc, signature={"N": "i32"}, constexprs={}))
+    check_template = inspect.getsource(kernel_while_block_arg_loc.fn)
+    run_filecheck("placeholder", h.asm["ttir"], check_template)
+
+
 @pytest.fixture(autouse=True)
 def with_line_info(fresh_knobs):
     fresh_knobs.compilation.disable_line_info = False
