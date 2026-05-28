@@ -1,5 +1,9 @@
 from triton.runtime import driver
 from triton.runtime.jit import constexpr_function
+from triton.backends import backends
+
+if "amd" in backends:
+    from triton._C.libtriton import amd
 
 __all__ = ["current_target"]
 
@@ -39,11 +43,7 @@ def cuda_capability_geq(major, minor=0):
 @constexpr_function
 def is_hip():
     target = current_target()
-    return False if target is None else target.backend == "hip"
-
-
-if is_hip():
-    from triton._C.libtriton import amd
+    return target is not None and target.backend == "hip"
 
 
 @constexpr_function
