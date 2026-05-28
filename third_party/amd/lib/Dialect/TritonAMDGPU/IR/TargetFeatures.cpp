@@ -261,9 +261,8 @@ bool TargetFeatures::supportsBufferAtomicRMW(
   // enable when the user explicitly promises no such allocations reach the
   // kernel.
   if (assumeNoFineGrainedMemory &&
-      llvm::is_contained({ISAFamily::GCN5_1, ISAFamily::CDNA1,
-                          ISAFamily::CDNA2, ISAFamily::RDNA1, ISAFamily::RDNA2,
-                          ISAFamily::RDNA3},
+      llvm::is_contained({ISAFamily::GCN5_1, ISAFamily::CDNA1, ISAFamily::CDNA2,
+                          ISAFamily::RDNA1, ISAFamily::RDNA2, ISAFamily::RDNA3},
                          f))
     return true;
   return false;
