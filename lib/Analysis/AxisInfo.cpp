@@ -960,8 +960,12 @@ public:
                                   rhsInfo.getConstancy(d), condConstancy[d]));
           contiguity.push_back(gcd(lhsInfo.getContiguity(d),
                                    rhsInfo.getContiguity(d), condConstancy[d]));
+          // getDivisibilityFromContiguity does not see condConstancy; clamp
+          // by the just-computed output contiguity so the result remains
+          // sound when condConstancy reduces it below the input contiguities.
           divisibility.push_back(
-              getDivisibilityFromContiguity(lhsInfo, rhsInfo, d));
+              gcd(getDivisibilityFromContiguity(lhsInfo, rhsInfo, d),
+                  contiguity.back()));
         }
       }
       if (lhsInfo.getConstantValue().has_value() &&

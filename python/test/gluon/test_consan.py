@@ -1894,7 +1894,13 @@ def test_ws_two_loads_two_bars_loop(MISSING_BAR, device, run_wrapper, monkeypatc
         result = run_in_process(test_ws_two_loads_two_bars_loop, (MISSING_BAR, device, False, monkeypatch, num_ctas))
         if MISSING_BAR != "none":
             assert_expected_cuda_failure(result.exc)
-            assert "Buffer being accessed has outstanding" in result.driver_stderr_output
+            expected = ["Buffer being accessed has outstanding"]
+            # If the partition with the missing producer wait runs ahead and
+            # retires first, the same broken protocol can be reported as an
+            # mbarrier deadlock instead of an overlapping access.
+            if MISSING_BAR in ("2", "3"):
+                expected.append("Deadlock detected")
+            assert any(msg in result.driver_stderr_output for msg in expected)
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""

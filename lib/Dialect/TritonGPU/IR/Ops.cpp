@@ -821,6 +821,8 @@ static LogicalResult verifySharedMemoryRank(Operation *op,
 LogicalResult LocalAllocOp::verify() {
   if (!isa<SharedMemorySpaceAttr>(getType().getMemorySpace()))
     return emitOpError("should create a buffer of shared memory");
+  if (getIntOrFloatOrPtrBitWidth(getType().getElementType()) % 8 != 0)
+    return emitOpError("element type bit width must be a multiple of 8");
   if (getSrc() && failed(verifySharedMemoryRank(*this, getSrc().getType(),
                                                 getType(), "source")))
     return failure();

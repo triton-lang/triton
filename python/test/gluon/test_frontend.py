@@ -41,6 +41,7 @@ HIP_TARGET_CDNA4 = GPUTarget("hip", "gfx950", 64)
 HIP_TARGET_GFX1250 = GPUTarget("hip", "gfx1250", 32)
 
 ALL_TARGETS = [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET_RDNA4]
+ALL_MULTICTA_TARGETS = [HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET_GFX1250]
 
 
 def anonymize_ir(ir):
@@ -3350,6 +3351,18 @@ def infer_layout_for_padded_shared_kernel():
     ttgl.static_assert(reshaped.type.layout == ref_layout)
 
 
+@gluon.jit
+def test_convert_padded_shared_with_multicta_kernel():
+    shape: ttgl.constexpr = [512, 128]
+    initial_order: ttgl.constexpr = [0, 1]
+    layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for(interval_padding_pairs=[[256, 16]],
+                                                                       cga_layout=[[0, 1]], shape=shape,
+                                                                       order=initial_order)
+    smem = ttgl.allocate_shared_memory(ttgl.int32, shape, layout)
+    reshaped = smem.permute((0, 1))
+    ttgl.static_assert(reshaped.layout.cga_layout[0] == ttgl.constexpr([0, 1]))
+
+
 @pytest.mark.parametrize("target", ALL_TARGETS)
 def test_infer_layout_for_padded_shared(target):
     # This test is used to test the conversion to gluon object PaddedSharedLayout from PaddedSharedEncodingAttr.
@@ -3368,6 +3381,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@pytest.mark.parametrize("target", ALL_MULTICTA_TARGETS)
+def test_convert_padded_shared_with_multicta(target):
+    # It is to make sure layoutToGluon() handle CGA layout correctly when
+    # converting a PaddedSharedEncodingAttr to a PaddedSharedLayout object.
+    run_parser(test_convert_padded_shared_with_multicta_kernel, *make_args(num_ctas=2), target=target)
 
 
 @filecheck_test
