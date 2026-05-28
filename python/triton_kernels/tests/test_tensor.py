@@ -25,6 +25,13 @@ def test_convert_layout_noop(transpose, layout):
     assert convert_layout(tensor, layout) is tensor
 
 
+def test_convert_layout_noop_preserves_strided_view():
+    tensor = wrap_torch_tensor(torch.randn((14, 11))[::2])
+
+    assert convert_layout(tensor, StridedLayout(-1)) is tensor
+    assert tensor.storage.data.stride() == (22, 1)
+
+
 def test_convert_layout_noop_does_not_ignore_transformation_kwargs():
     tensor = wrap_torch_tensor(torch.randn((7, 11)))
 

@@ -32,6 +32,9 @@ class StridedLayout(Layout):
     def name(self):
         return "STRIDED"
 
+    def is_equivalent_to(self, other: Layout, shape: list[int]) -> bool:
+        return isinstance(other, StridedLayout) and self.order(len(shape)) == other.order(len(shape))
+
     def swizzle_block_shape(self, block_shape):
         return block_shape
 

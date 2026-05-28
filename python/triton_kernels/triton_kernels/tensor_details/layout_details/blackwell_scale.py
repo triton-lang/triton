@@ -34,6 +34,9 @@ class BlackwellActMXScaleLayout(Layout):
 
     ragged_metadata: RaggedTensorMetadata | None
 
+    def is_equivalent_to(self, other: Layout, shape: list[int]) -> bool:
+        return isinstance(other, BlackwellActMXScaleLayout) and self.ragged_metadata is other.ragged_metadata
+
     @property
     def name(self):
         return "BLACKWELL_ACT_SCALE"

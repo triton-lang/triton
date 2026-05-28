@@ -1,11 +1,21 @@
 import pytest
 import torch
 from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout, BlackwellActMXScaleLayout, StridedLayout
-from triton_kernels.tensor import make_ragged_tensor_metadata, wrap_torch_tensor, convert_layout
+from triton_kernels.tensor import make_ragged_tensor_metadata, make_ragged_tensor_metadata_torch, wrap_torch_tensor, convert_layout
 
 # ------------------------------------------------------------
 # Torch tests
 # ------------------------------------------------------------
+
+
+def test_act_scale_layout_equivalence():
+    slice_sizes = torch.tensor([2, 3], dtype=torch.int32)
+    metadata = make_ragged_tensor_metadata_torch(slice_sizes, 5)
+    equivalent = BlackwellActMXScaleLayout(metadata)
+    reconstructed = BlackwellActMXScaleLayout(make_ragged_tensor_metadata_torch(slice_sizes, 5))
+
+    assert equivalent.is_equivalent_to(BlackwellActMXScaleLayout(metadata), [5, 4])
+    assert not equivalent.is_equivalent_to(reconstructed, [5, 4])
 
 
 @pytest.mark.parametrize(
