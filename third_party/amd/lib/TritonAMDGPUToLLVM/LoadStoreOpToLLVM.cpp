@@ -2612,8 +2612,8 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                       PatternBenefit benefit,
-                                       const DataFlowSolver *uniformitySolver) {
+                                       const DataFlowSolver *uniformitySolver,
+                                       PatternBenefit benefit) {
   assert(uniformitySolver &&
          "load/store lowering must be populated with the dataflow uniformity "
          "solver so BufferEmitter never falls back to the legacy walker");

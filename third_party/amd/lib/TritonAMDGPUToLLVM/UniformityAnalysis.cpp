@@ -83,25 +83,12 @@ bool isSeedDivergent(Operation *op) {
              gpu::ThreadIdOp, gpu::LaneIdOp>(op);
 }
 
-// Kernel entry = AMDGPU_KERNEL cconv, kernel attribute, or public
-// visibility (the common case after tt.func lowering).
-bool isKernelEntry(LLVM::LLVMFuncOp func) {
-  if (func.getCConv() == LLVM::CConv::AMDGPU_KERNEL)
-    return true;
-  if (func->hasAttr("nvvm.kernel") || func->hasAttr("rocdl.kernel"))
-    return true;
-  if (func->hasAttr("amdgpu-flat-work-group-size"))
-    return true;
-  if (auto passthrough = func->getAttrOfType<ArrayAttr>("passthrough")) {
-    for (Attribute a : passthrough) {
-      if (auto s = dyn_cast<StringAttr>(a))
-        if (s.getValue() == "amdgpu-flat-work-group-size" ||
-            s.getValue().starts_with("amdgpu-flat-work-group-size"))
-          return true;
-    }
-  }
-  return func.isPublic();
-}
+// Kernel entry = public-linkage llvm.func. AMD `FuncOpConversion`
+// (FuncOpToLLVM.cpp) sets `Linkage::External` for tt.func kernels and
+// `Linkage::Internal` for device helpers; no AMDGPU-kernel cconv or
+// rocdl.kernel/amdgpu-flat-work-group-size attrs are attached at MLIR
+// level (those appear later during LLVM-IR translation).
+bool isKernelEntry(LLVM::LLVMFuncOp func) { return func.isPublic(); }
 
 class UniformityAnalysis
     : public SparseForwardDataFlowAnalysis<UniformityLattice> {
@@ -182,9 +169,7 @@ public:
     setAllToEntryStates(nonSuccessorInputLattices);
   }
 
-  // After tt.func lowers to llvm.func, kernels have CConv::C (not
-  // AMDGPU_KERNEL), so we check public visibility + kernel attributes.
-  // See isKernelEntry above.
+  // Kernel discrimination lives in isKernelEntry above (public linkage).
 
   void visitCallableOperation(
       CallableOpInterface callable,

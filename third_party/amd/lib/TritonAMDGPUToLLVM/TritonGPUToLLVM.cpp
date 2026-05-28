@@ -188,8 +188,8 @@ struct ConvertTritonAMDGPUToLLVM
       return signalPassFailure();
 
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
-                                           axisInfoAnalysis, AMDBenefit,
-                                           &uniformitySolver);
+                                           axisInfoAnalysis, &uniformitySolver,
+                                           AMDBenefit);
     AMD::populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
     AMD::populateBarrierOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
     AMD::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
