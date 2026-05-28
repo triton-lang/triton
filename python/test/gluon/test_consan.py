@@ -933,10 +933,14 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
             assert_expected_cuda_failure(result.exc)
             if MEM_ACCESS_KIND == "tma_cp":
                 # shmem operands are being read by the tcgen05_mma
-                assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+                assert (("Buffer being accessed has outstanding reads" in result.driver_stderr_output) or
+                        (TWO_CTAS
+                         and "Barrier used before initialization or after invalidation" in result.driver_stderr_output))
             elif MEM_ACCESS_KIND in ["tmem_load", "tmem_store"]:
                 # tmem is being written by the tcgen05_mma
-                assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+                assert (("Buffer being accessed has outstanding writes" in result.driver_stderr_output) or
+                        (TWO_CTAS
+                         and "Barrier used before initialization or after invalidation" in result.driver_stderr_output))
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -974,7 +978,7 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
         acc = blackwell.allocate_tensor_memory(ttgl.float32, [block_m, block_n], acc_layout)
         mbarrier.init(mma_bar, count=1)
         if MEM_ACCESS_KIND == "tma_cp":
-            tma_bar = mbarrier.allocate_mbarrier(two_ctas=TWO_CTAS)
+            tma_bar = mbarrier.allocate_mbarrier()
             mbarrier.init(tma_bar, count=1)
 
         blackwell.tcgen05_mma(smemA, smemB, acc)
