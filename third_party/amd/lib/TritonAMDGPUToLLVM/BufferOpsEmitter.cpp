@@ -122,10 +122,12 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
 
 Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
                               Value pred, Value falseVal,
-                              triton::CacheModifier cm) {
+                              triton::CacheModifier cm,
+                              bool splitSoffsetSafe) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> args;
-  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true, args);
+  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true, args,
+                 splitSoffsetSafe);
   Type bufferType = getBufferOpType(type, false);
   Value data = ROCDL::RawPtrBufferLoadOp::create(
       rewriter, loc, bufferType, args, ArrayRef<NamedAttribute>());
@@ -138,13 +140,14 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
 ROCDL::RawPtrBufferLoadAsyncLdsOp
 BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
                              Value offset, Value dst, Value pred,
-                             triton::CacheModifier cm) {
+                             triton::CacheModifier cm,
+                             bool splitSoffsetSafe) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> commonArgs;
   // soffset (ArgIndex 4) accepts a runtime SGPR, same as regular buffer
   // loads. The uniformity split applies here too.
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
-                 commonArgs);
+                 commonArgs, splitSoffsetSafe);
 
   // buffer_load_to_lds is only supported on gfx942/gfx950 which always use
   // asyncmark. Emit the async intrinsic so LLVM's SIInsertWaitcnts tracks
@@ -221,7 +224,8 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
 }
 
 void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
-                              Value pred, triton::CacheModifier cm) {
+                              Value pred, triton::CacheModifier cm,
+                              bool splitSoffsetSafe) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   VectorType vecTy = cast<VectorType>(data.getType());
   Type bufferType = getBufferOpType(vecTy, false);
@@ -229,7 +233,7 @@ void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
     data = b.bitcast(data, bufferType);
   SmallVector<Value, 6> args{data};
   fillCommonArgs(vecTy, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/false,
-                 args);
+                 args, splitSoffsetSafe);
   ROCDL::RawPtrBufferStoreOp::create(rewriter, loc, TypeRange{}, args,
                                      ArrayRef<NamedAttribute>());
 }
@@ -283,7 +287,8 @@ Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
 void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
                                    Value vOffsetElems, Value pred,
                                    triton::CacheModifier cm, bool isBufferLoad,
-                                   SmallVector<Value> &args) {
+                                   SmallVector<Value> &args,
+                                   bool splitSoffsetSafe) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type elementType = getElementTypeOrSelf(type);
   const int valueElemNBits = std::max(8u, elementType.getIntOrFloatBitWidth());
@@ -298,11 +303,16 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   Value elemByteWidthVal = b.int_val(32, elementByteWidth);
   Value vOffsetElemsForIntrinsic = vOffsetElems;
   Value sgprOffsetBytes = b.int_val(32, 0);
-  auto [uniformOffsetElems, perLaneOffsetElems] =
-      splitUniformAdditive(vOffsetElems, rewriter, loc, uniformitySolver);
-  if (uniformOffsetElems) {
-    sgprOffsetBytes = b.mul(elemByteWidthVal, uniformOffsetElems);
-    vOffsetElemsForIntrinsic = perLaneOffsetElems;
+  // Gate the split on the TTGIR-level safety annotation. Without it, AMD
+  // raw buffer ops would OOB-drop any lane whose voffset (sans soffset)
+  // wraps negative.
+  if (splitSoffsetSafe) {
+    auto [uniformOffsetElems, perLaneOffsetElems] =
+        splitUniformAdditive(vOffsetElems, rewriter, loc, uniformitySolver);
+    if (uniformOffsetElems) {
+      sgprOffsetBytes = b.mul(elemByteWidthVal, uniformOffsetElems);
+      vOffsetElemsForIntrinsic = perLaneOffsetElems;
+    }
   }
   Value vOffsetBytes = b.mul(elemByteWidthVal, vOffsetElemsForIntrinsic);
 

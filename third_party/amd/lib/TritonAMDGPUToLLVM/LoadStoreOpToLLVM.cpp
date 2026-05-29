@@ -702,7 +702,8 @@ struct BufferLoadOpConversion
             rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
             otherElems, vecStart);
       Value loadVal = bufferEmitter.emitLoad(
-          vecTy, rsrcDesc, offsetElems[vecStart], pred, falseVal, cacheMod);
+          vecTy, rsrcDesc, offsetElems[vecStart], pred, falseVal, cacheMod,
+          op->hasAttr("amdgpu.split_soffset_safe"));
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
@@ -852,7 +853,8 @@ struct BufferLoadToLocalOpConversion
             selectLdsAddressForPredicate(b, threadPred, shmemAddr);
         auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
             vecTy, vecBytesVal, rsrcDesc, offsetElem, predicatedAddress,
-            maybeSwizzledMaskElem, op.getCache());
+            maybeSwizzledMaskElem, op.getCache(),
+            op->hasAttr("amdgpu.split_soffset_safe"));
         if (targetInfo.requiresAliasInfoForAsyncOps())
           AMD::addAsyncCopyAliasScope(bufferLoadToLds);
       } else {
@@ -862,7 +864,8 @@ struct BufferLoadToLocalOpConversion
 
         auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
             vecTy, vecBytesVal, rsrcDesc, offsetElem, shmemAddr,
-            hasOther ? b.true_val() : maybeSwizzledMaskElem, op.getCache());
+            hasOther ? b.true_val() : maybeSwizzledMaskElem, op.getCache(),
+            op->hasAttr("amdgpu.split_soffset_safe"));
         if (targetInfo.requiresAliasInfoForAsyncOps())
           AMD::addAsyncCopyAliasScope(bufferLoadToLds);
 
@@ -2002,7 +2005,8 @@ struct BufferStoreOpConversion
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
           valueElems, vecStart);
       bufferEmitter.emitStore(rsrcDesc, offsetElems[vecStart], storeVal, pred,
-                              cacheMod);
+                              cacheMod,
+                              op->hasAttr("amdgpu.split_soffset_safe"));
     } // end vec
 
     rewriter.eraseOp(op);
