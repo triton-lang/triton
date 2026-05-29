@@ -111,8 +111,21 @@ def memcpy_1d_tma_kernel(in_desc, out_desc, XBLOCK: gl.constexpr):
     # groups, just like async copies. Each async TMA store is implicitly
     # committed to an async store group. We can wait until there are at most
     # `pendings` outstanding TMA stores using `store_wait`. Note that the commit
-    # groups for async copy and async TMA stores are separate.
-    tma.store_wait(pendings=0)
+    # groups for async copy and async TMA stores are separate. We only need the
+    # TMA to finish reading `smem` before this kernel exits, so use
+    # `read_only=True`.
+    tma.store_wait(pendings=0, read_only=True)
+
+
+# %%
+# TMA store waits
+# ---------------
+#
+# TMA stores have two relevant completion points: the TMA can finish reading
+# the source from shared memory, and later it can finish writing that tile
+# to global memory. `tma.store_wait(..., read_only=True)` waits for the first
+# point only. So the shared memory may be reused, but attempts to read from the
+# global memory locations would result in a data race.
 
 
 def memcpy_1d_tma(input, output, XBLOCK=8192):
@@ -219,7 +232,7 @@ def perform_add(read_index, bars, a_smem, b_smem, c_smem, c_desc, xoff, layout: 
     c_val = a_val + b_val
     yoff = read_index * YBLOCK
     # Pipeline the store by rotating the store wait.
-    tma.store_wait(pendings=0)
+    tma.store_wait(pendings=0, read_only=True)
     c_smem.store(c_val)
     fence_async_shared()
     # Issue the store without waiting for it.
@@ -265,7 +278,7 @@ def elementwise_add_tma_kernel(  #
         mbarrier.invalidate(bars.index(i))
 
     # Wait for the last store to complete.
-    tma.store_wait(pendings=0)
+    tma.store_wait(pendings=0, read_only=True)
 
 
 def elementwise_add_tma(a, b, c, XBLOCK=32, YBLOCK=64, num_buffers=2):

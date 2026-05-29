@@ -236,7 +236,7 @@ def simple_mma_scaled_kernel(a_desc, b_desc, c_desc, a_scale_ptr, a_scale_stride
     acc_smem.store(acc)
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], acc_smem)
-    tma.store_wait(0)
+    tma.store_wait(0, read_only=True)
 
 
 def make_operand_descriptor(value: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, MIXED_PREC: bool):
@@ -532,7 +532,7 @@ def mma_scaled_contig_kernel(a_desc, b_desc, c_desc, a_scale_ptr, b_scale_ptr, V
     acc_smem.store(acc)
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], acc_smem)
-    tma.store_wait(0)
+    tma.store_wait(0, read_only=True)
     # ======= End unchanged code from `simple_mma_scaled_kernel` =======
 
 
@@ -771,7 +771,7 @@ def mma_scaled_packed_block_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     acc_smem.store(acc)
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], acc_smem)
-    tma.store_wait(0)
+    tma.store_wait(0, read_only=True)
     # ======= End unchanged code from `simple_mma_scaled_kernel` =======
 
 
@@ -1040,7 +1040,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     acc_smem.store(acc)
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], acc_smem)
-    tma.store_wait(0)
+    tma.store_wait(0, read_only=True)
     # ======= End unchanged code from `mma_scaled_packed_block_kernel` =======
 
 
@@ -1315,12 +1315,12 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
 
         acc = acc.to(c_desc.dtype)
         # Pipeline the store by waiting for the previous store to complete.
-        tma.store_wait(0)
+        tma.store_wait(0, read_only=True)
         acc_smem.store(acc)
         fence_async_shared()
         tma.async_copy_shared_to_global(c_desc, [epilogue_pid_m * BLOCK_M, epilogue_pid_n * BLOCK_N], acc_smem)
 
-    # Wait for the last store.
+    # Wait for the last store to complete.
     tma.store_wait(0)
     for i in gl.static_range(num_buffers):
         mbarrier.invalidate(load_bars.index(i))
@@ -1400,11 +1400,11 @@ def mma_scaled_epilogue_partition(p):
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
         acc_state = acc_state.next()
 
-        tma.store_wait(0)
+        tma.store_wait(0, read_only=True)
         acc_smem.store(acc.to(p.c_desc.dtype))
         fence_async_shared()
         tma.async_copy_shared_to_global(p.c_desc, [pid_m * p.BLOCK_M, pid_n * p.BLOCK_N], acc_smem)
-    tma.store_wait(0)
+    tma.store_wait(0, read_only=True)
 
 
 @gluon.jit

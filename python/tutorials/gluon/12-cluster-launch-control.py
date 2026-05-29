@@ -177,7 +177,7 @@ def persistent_matmul_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.constexpr, Sche
         c_smem.store(c.to(dtype))
         fence_async_shared()
         tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
-        tma.store_wait(pendings=0)
+        tma.store_wait(pendings=0, read_only=True)
         scheduler = scheduler.advance()
 
 

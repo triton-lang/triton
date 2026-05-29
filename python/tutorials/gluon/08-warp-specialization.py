@@ -176,7 +176,7 @@ def store_partition(descs, barriers, buffers, xoff, numel, YBLOCK: gl.constexpr)
         yoff = i * YBLOCK
         tma.async_copy_shared_to_global(c_desc, [xoff, yoff], c_buf)
 
-        tma.store_wait(outstanding_stores)
+        tma.store_wait(outstanding_stores, read_only=True)
         c_empty_bar = c_empty_bars.index((i - outstanding_stores) % num_buffers)
         # Signal the compute partition that the buffer `outstanding_stores`
         # iterations ago is consumed, predicated on there having been at least
@@ -184,8 +184,8 @@ def store_partition(descs, barriers, buffers, xoff, numel, YBLOCK: gl.constexpr)
         mbarrier.arrive(c_empty_bar, count=1, pred=i >= outstanding_stores)
 
     # Since we waited for the last value of c, all the other partitions have
-    # exited by now. We just need to wait the stores to complete.
-    tma.store_wait(0)
+    # exited by now. We just need the final stores to complete.
+    tma.store_wait(0, read_only=True)
 
 
 # The default partition can have a different signature than the worker partition
@@ -526,15 +526,15 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
         accs = _split_n(acc, p.SUBTILE_FACTOR)
         for i in gl.static_range(len(accs)):
             acc = accs[i].to(dtype)
-            tma.store_wait(pendings=0)  # overlap with downcast
+            tma.store_wait(pendings=0, read_only=True)  # overlap with downcast
             acc_smem.store(acc.to(dtype))
             # Arrive after the first SMEM store and rely on ptxas to interleave.
             if i == 0:
                 mbarrier.arrive(acc_empty_bars.index(acc_state.index), count=1)
             fence_async_shared()
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_N * i], acc_smem)
-    # Overlap the last store with the wait, then wait for the last store here.
-    tma.store_wait(pendings=0)
+    # Overlap the last store with the source-buffer wait, then wait for the last store here.
+    tma.store_wait(pendings=0, read_only=True)
 
 
 @gluon.jit
