@@ -96,7 +96,7 @@ tt.func @tma_scatter(%arg0: !tt.tensordesc<1x128xbf16, #nvmma_128>, %arg1: tenso
   // CHECK-NEXT: [[SRC:%.*]] = ttg.local_alloc %arg3
   // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
   // CHECK-NEXT: ttng.async_tma_scatter %arg0[%arg1, %arg2] [[SRC]]
-  // CHECK-NEXT: ttng.async_tma_store_wait
+  // CHECK-NEXT: ttng.async_tma_store_wait {pendings = 0 : i32}
   tt.descriptor_scatter %arg0[%arg1, %arg2], %arg3 : !tt.tensordesc<1x128xbf16, #nvmma_128>, tensor<32xi32, #offsets>, i32, tensor<32x128xbf16, #blocked1>
   tt.return
 }
