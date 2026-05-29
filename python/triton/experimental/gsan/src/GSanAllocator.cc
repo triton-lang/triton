@@ -741,6 +741,44 @@ int gsanExportAllocationHandles(void *void_ptr, int *realFd, int *shadowFd,
   return 0;
 }
 
+int gsanExportAllocationMemhandleRegions(void *void_ptr, uintptr_t *realPtr,
+                                         size_t *realSize, uintptr_t *shadowPtr,
+                                         size_t *shadowSize) {
+  if (realPtr == nullptr || realSize == nullptr || shadowPtr == nullptr ||
+      shadowSize == nullptr) {
+    return -1;
+  }
+  *realPtr = 0;
+  *realSize = 0;
+  *shadowPtr = 0;
+  *shadowSize = 0;
+
+  const auto ptr = reinterpret_cast<CUdeviceptr>(void_ptr);
+  if (ptr == 0)
+    return -1;
+
+  std::lock_guard lg(mut);
+  if (alloc == nullptr)
+    return -1;
+
+  AllocNode *node = findNodeByAddress(&alloc->treeRoot, ptr);
+  if (node == nullptr || node->maxFreeBlockSize != 0 ||
+      ptr < node->virtualAddress ||
+      ptr >= node->virtualAddress + node->allocSize) {
+    fprintf(
+        stderr,
+        "gsanExportAllocationMemhandleRegions called with invalid pointer\n");
+    return -1;
+  }
+
+  *realPtr = static_cast<uintptr_t>(node->virtualAddress);
+  *realSize = node->allocSize;
+  *shadowPtr =
+      static_cast<uintptr_t>(gsan::getShadowAddress(node->virtualAddress));
+  *shadowSize = getShadowSize(node->allocSize);
+  return 0;
+}
+
 int gsanExportRuntimeStateHandle(int device, int *fd, size_t *allocSize) {
   if (fd == nullptr || allocSize == nullptr)
     return -1;
@@ -779,6 +817,42 @@ int gsanExportRuntimeStateHandle(int device, int *fd, size_t *allocSize) {
   }
 
   *fd = fdLocal;
+  *allocSize = size;
+  return 0;
+}
+
+int gsanExportRuntimeStateMemhandleRegion(int device, uintptr_t *ptr,
+                                          size_t *allocSize) {
+  if (ptr == nullptr || allocSize == nullptr)
+    return -1;
+  *ptr = 0;
+  *allocSize = 0;
+
+  if (device < 0 || device >= static_cast<int>(gsan::kMaxGPUs))
+    return -1;
+
+  std::lock_guard lg(mut);
+  if (gsanEnsureInit() != 0)
+    return -1;
+  CUresult err = ensureContext(device);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    return -1;
+  }
+  err = ensureRuntimeStateMapped(device);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    return -1;
+  }
+
+  int deviceRank = getDeviceRankForCudaDevice(device);
+  auto handle = alloc->perDeviceHandles[deviceRank];
+  auto size = alloc->perDeviceStateSize;
+  if (handle == 0 || size == 0)
+    return -1;
+
+  *ptr = static_cast<uintptr_t>(alloc->globalStateAddress +
+                                deviceRank * gsan::kPerDeviceStateStride);
   *allocSize = size;
   return 0;
 }
@@ -1276,6 +1350,40 @@ PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
                        static_cast<unsigned long long>(allocSize));
 }
 
+PyObject *pyExportAllocationMemhandleRegions(PyObject *self,
+                                             PyObject *const *args,
+                                             Py_ssize_t nargs) {
+  (void)self;
+  if (nargs != 1) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.export_allocation_memhandle_regions expected 1 positional "
+                 "argument, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  void *ptr = nullptr;
+  if (!parseVoidPtrArg(args[0], &ptr))
+    return nullptr;
+
+  uintptr_t realPtr = 0;
+  uintptr_t shadowPtr = 0;
+  size_t realSize = 0;
+  size_t shadowSize = 0;
+  int rc = gsanExportAllocationMemhandleRegions(ptr, &realPtr, &realSize,
+                                                &shadowPtr, &shadowSize);
+  if (rc != 0) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "gsanExportAllocationMemhandleRegions failed.");
+    return nullptr;
+  }
+
+  return Py_BuildValue("(KKKK)", static_cast<unsigned long long>(realPtr),
+                       static_cast<unsigned long long>(realSize),
+                       static_cast<unsigned long long>(shadowPtr),
+                       static_cast<unsigned long long>(shadowSize));
+}
+
 PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
                                     Py_ssize_t nargs) {
   (void)self;
@@ -1333,6 +1441,36 @@ PyObject *pyExportRuntimeStateHandle(PyObject *self, PyObject *const *args,
   }
 
   return Py_BuildValue("(iK)", fd, static_cast<unsigned long long>(allocSize));
+}
+
+PyObject *pyExportRuntimeStateMemhandleRegion(PyObject *self,
+                                              PyObject *const *args,
+                                              Py_ssize_t nargs) {
+  (void)self;
+  if (nargs != 1) {
+    PyErr_Format(
+        PyExc_TypeError,
+        "%s.export_runtime_state_memhandle_region expected 1 positional "
+        "argument, got %zd",
+        kModuleName, nargs);
+    return nullptr;
+  }
+
+  int device = 0;
+  if (!parseIntArg(args[0], "device", &device))
+    return nullptr;
+
+  uintptr_t ptr = 0;
+  size_t allocSize = 0;
+  int rc = gsanExportRuntimeStateMemhandleRegion(device, &ptr, &allocSize);
+  if (rc != 0) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "gsanExportRuntimeStateMemhandleRegion failed.");
+    return nullptr;
+  }
+
+  return Py_BuildValue("(KK)", static_cast<unsigned long long>(ptr),
+                       static_cast<unsigned long long>(allocSize));
 }
 
 PyObject *pyImportRuntimeStateHandle(PyObject *self, PyObject *const *args,
@@ -1395,12 +1533,19 @@ PyMethodDef kGSanAllocatorMethods[] = {
     {"export_allocation_handles",
      reinterpret_cast<PyCFunction>(pyExportAllocationHandles), METH_FASTCALL,
      "Export allocation handles for an existing allocation pointer."},
+    {"export_allocation_memhandle_regions",
+     reinterpret_cast<PyCFunction>(pyExportAllocationMemhandleRegions),
+     METH_FASTCALL,
+     "Export real and shadow allocation regions for an existing pointer."},
     {"import_allocation_handles",
      reinterpret_cast<PyCFunction>(pyImportAllocationHandles), METH_FASTCALL,
      "Import allocation handles and map into this process's VA space."},
     {"export_runtime_state_handle",
      reinterpret_cast<PyCFunction>(pyExportRuntimeStateHandle), METH_FASTCALL,
      "Export a runtime-state handle for a local device."},
+    {"export_runtime_state_memhandle_region",
+     reinterpret_cast<PyCFunction>(pyExportRuntimeStateMemhandleRegion),
+     METH_FASTCALL, "Export the local runtime-state memory region."},
     {"import_runtime_state_handle",
      reinterpret_cast<PyCFunction>(pyImportRuntimeStateHandle), METH_FASTCALL,
      "Import a peer runtime-state handle into this process's global-state VA."},

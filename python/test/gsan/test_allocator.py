@@ -9,10 +9,13 @@ from triton._internal_testing import is_cuda, run_in_process
 from triton.experimental.gsan import configure, create_mem_pool, freeze_config
 from triton.experimental.gsan._allocator import (
     export_allocation_handles,
+    export_allocation_memhandle_regions,
+    export_runtime_state_memhandle_region,
     free_allocation,
     get_device_rank,
     get_reserve_pointer,
     get_reserve_size,
+    get_runtime_state_layout,
     gsan_free,
     gsan_malloc,
     import_allocation_handles,
@@ -253,6 +256,70 @@ def test_mem_pool():
     del pool
     del real
     del shadow
+    torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_export_allocation_memhandle_regions_identifies_real_and_shadow(_direct_allocator):
+    malloc, free, _, _ = _direct_allocator
+    device = torch.cuda.current_device()
+
+    real_ptr = malloc(4096)
+    assert real_ptr != 0
+
+    try:
+        exported_real_ptr, exported_real_size, shadow_ptr, shadow_size = export_allocation_memhandle_regions(real_ptr)
+        assert exported_real_ptr == real_ptr
+        assert exported_real_size > 0
+        assert shadow_ptr != 0
+        assert shadow_size > 0
+
+        real = uint8_cuda_tensor_from_ptr(exported_real_ptr, exported_real_size, device)
+        shadow = shadow_tensor_for(real)
+        assert shadow.data_ptr() == shadow_ptr
+        assert shadow.numel() * shadow.element_size() == shadow_size
+    finally:
+        free(real_ptr)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_export_allocation_memhandle_regions_accepts_interior_pointer(_direct_allocator):
+    malloc, free, _, _ = _direct_allocator
+    device = torch.cuda.current_device()
+
+    real_ptr = malloc(4096)
+    assert real_ptr != 0
+
+    try:
+        exported_real_ptr, exported_real_size, shadow_ptr, shadow_size = export_allocation_memhandle_regions(real_ptr +
+                                                                                                             128)
+        assert exported_real_ptr == real_ptr
+        assert exported_real_size > 128
+        assert shadow_ptr != 0
+        assert shadow_size > 0
+
+        real = uint8_cuda_tensor_from_ptr(exported_real_ptr, exported_real_size, device)
+        shadow = shadow_tensor_for(real)
+        assert shadow.data_ptr() == shadow_ptr
+        assert shadow.numel() * shadow.element_size() == shadow_size
+    finally:
+        free(real_ptr)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_export_runtime_state_memhandle_region_matches_local_layout():
+    device = torch.cuda.current_device()
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        local = torch.empty(1, dtype=torch.uint8, device="cuda")
+
+    ptr, size = export_runtime_state_memhandle_region(device)
+    layout = get_runtime_state_layout(0)
+    assert ptr == layout["global_state_ptr"]
+    assert size > 0
+
+    del pool
+    del local
     torch.cuda.synchronize()
 
 

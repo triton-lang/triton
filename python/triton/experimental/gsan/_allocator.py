@@ -120,6 +120,11 @@ def export_allocation_handles(ptr: int) -> tuple[int, int, int]:
     return module.export_allocation_handles(ptr)
 
 
+def export_allocation_memhandle_regions(ptr: int) -> tuple[int, int, int, int]:
+    module = _load_gsan_module()
+    return module.export_allocation_memhandle_regions(ptr)
+
+
 def import_allocation_handles(real_fd: int, shadow_fd: int, alloc_size: int, device: int) -> int:
     module = _load_gsan_module()
     return module.import_allocation_handles(real_fd, shadow_fd, alloc_size, device)
@@ -128,6 +133,11 @@ def import_allocation_handles(real_fd: int, shadow_fd: int, alloc_size: int, dev
 def export_runtime_state_handle(device: int) -> tuple[int, int]:
     module = _load_gsan_module()
     return module.export_runtime_state_handle(device)
+
+
+def export_runtime_state_memhandle_region(device: int) -> tuple[int, int]:
+    module = _load_gsan_module()
+    return module.export_runtime_state_memhandle_region(device)
 
 
 def import_runtime_state_handle(fd: int, alloc_size: int, peer_device: int, device: int) -> None:
