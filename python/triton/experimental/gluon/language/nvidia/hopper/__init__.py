@@ -21,6 +21,11 @@ __all__ = [
 ]
 
 
+def _check(cond, msg_fn, category=ValueError):
+    if not cond:
+        raise category(msg_fn())
+
+
 @_core.builtin
 def fence_async_shared(cluster=False, _semantic=None):
     """
@@ -37,13 +42,19 @@ def fence_async_shared(cluster=False, _semantic=None):
 def async_store(dst, value, mbarrier, _semantic=None):
     """
     Store a tensor to shared memory asynchronously and signal an mbarrier on completion.
+    Requires a CTA cluster with at least two CTAs.
 
     Args:
         dst (shared_memory_descriptor): Destination shared memory descriptor.
         value (tensor): Tensor whose contents to store.
         mbarrier (shared_memory_descriptor): Barrier signaled when the store completes.
     """
-    _semantic.async_shared_store(dst, value, mbarrier)
+    _check(isinstance(value, _core.tensor), lambda: f"expected 'value' to be a tensor, but got a {type(value)}")
+    _check(isinstance(mbarrier, _core.shared_memory_descriptor),
+           lambda: f"expected 'mbarrier' to be a shared_memory_descriptor, but got a {type(mbarrier)}")
+    _check(value.shape == dst.shape, lambda: f"source shape {value.shape} and destination shape {dst.shape} must match")
+    _check(value.dtype == dst.dtype, lambda: f"source dtype {value.dtype} and destination dtype {dst.dtype} must match")
+    _semantic.builder.create_async_shared_store(dst.handle, value.handle, mbarrier.handle)
 
 
 class warpgroup_mma_accumulator_type(_core.base_type):

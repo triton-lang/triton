@@ -416,6 +416,7 @@ def TTNG_AsyncSharedStoreOp : TTNG_Op<"async_shared_store", [
   let description = [{
     Store a distributed tensor into shared memory using PTX st.async.shared.
     The store completion decrements the transaction count of `mbarrier`.
+    This op requires a CTA cluster with at least two CTAs.
   }];
 
   let arguments = (ins
