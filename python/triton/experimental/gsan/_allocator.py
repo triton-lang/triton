@@ -120,6 +120,11 @@ def export_allocation_handles(ptr: int) -> tuple[int, int, int]:
     return module.export_allocation_handles(ptr)
 
 
+def export_allocation_memhandle_regions(ptr: int) -> tuple[int, int, int, int]:
+    module = _load_gsan_module()
+    return module.export_allocation_memhandle_regions(ptr)
+
+
 def import_allocation_handles(real_fd: int, shadow_fd: int, alloc_size: int, device: int) -> int:
     module = _load_gsan_module()
     return module.import_allocation_handles(real_fd, shadow_fd, alloc_size, device)
