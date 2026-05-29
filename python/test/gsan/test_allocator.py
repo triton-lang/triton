@@ -9,6 +9,7 @@ from triton._internal_testing import is_cuda, run_in_process
 from triton.experimental.gsan import configure, create_mem_pool, freeze_config
 from triton.experimental.gsan._allocator import (
     export_allocation_handles,
+    export_allocation_memhandle_regions,
     free_allocation,
     get_device_rank,
     get_reserve_pointer,
@@ -254,6 +255,53 @@ def test_mem_pool():
     del real
     del shadow
     torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_export_allocation_memhandle_regions_identifies_real_and_shadow(_direct_allocator):
+    malloc, free, _, _ = _direct_allocator
+    device = torch.cuda.current_device()
+
+    real_ptr = malloc(4096)
+    assert real_ptr != 0
+
+    try:
+        exported_real_ptr, exported_real_size, shadow_ptr, shadow_size = export_allocation_memhandle_regions(real_ptr)
+        assert exported_real_ptr == real_ptr
+        assert exported_real_size > 0
+        assert shadow_ptr != 0
+        assert shadow_size > 0
+
+        real = uint8_cuda_tensor_from_ptr(exported_real_ptr, exported_real_size, device)
+        shadow = shadow_tensor_for(real)
+        assert shadow.data_ptr() == shadow_ptr
+        assert shadow.numel() * shadow.element_size() == shadow_size
+    finally:
+        free(real_ptr)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_export_allocation_memhandle_regions_accepts_interior_pointer(_direct_allocator):
+    malloc, free, _, _ = _direct_allocator
+    device = torch.cuda.current_device()
+
+    real_ptr = malloc(4096)
+    assert real_ptr != 0
+
+    try:
+        exported_real_ptr, exported_real_size, shadow_ptr, shadow_size = export_allocation_memhandle_regions(real_ptr +
+                                                                                                             128)
+        assert exported_real_ptr == real_ptr
+        assert exported_real_size > 128
+        assert shadow_ptr != 0
+        assert shadow_size > 0
+
+        real = uint8_cuda_tensor_from_ptr(exported_real_ptr, exported_real_size, device)
+        shadow = shadow_tensor_for(real)
+        assert shadow.data_ptr() == shadow_ptr
+        assert shadow.numel() * shadow.element_size() == shadow_size
+    finally:
+        free(real_ptr)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
