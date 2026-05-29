@@ -472,9 +472,8 @@ struct AsyncSharedStoreOpConversion
   matchAndRewrite(triton::nvidia_gpu::AsyncSharedStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     if (!triton::nvidia_gpu::AsyncSharedStoreOp::isSupported(
-            targetInfo.getComputeCapability()) ||
-        targetInfo.getPtxVersion() < 81)
-      return op.emitError("requires cluster-capable SM90+ and PTX 8.1+");
+            targetInfo.getComputeCapability()))
+      return op.emitError("requires cluster-capable SM90+");
 
     auto loc = op.getLoc();
     MemDescType dstTy = op.getDst().getType();
