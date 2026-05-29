@@ -1208,18 +1208,7 @@ static void convertSimpleBlockSignature(
     Block *oldBlock, ArrayRef<ValueRange> remappedOperands,
     ConversionPatternRewriter &rewriter, FatPointers &fatPtrs,
     llvm::SmallPtrSet<Block *, 8> &convertedBlocks) {
-  // A block may have multiple predecessors (e.g. both a cf.cond_br and a
-  // cf.br).  The first predecessor expands the block's argument list via
-  // applySignatureConversion (e.g. a single tt.ptr arg becomes two args:
-  // base + offset).  If a second predecessor later calls this function for
-  // the *same* block, oldBlock->getArgumentTypes().size() is already the
-  // expanded count, while remappedOperands still reflects the original
-  // operand grouping of the second branch — causing an out-of-bounds access
-  // in remappedOperands[i] when i reaches the old size.
-  //
-  // Fix: track which blocks have already had their signature expanded.
-  // On subsequent visits skip applySignatureConversion but still register
-  // the fat-pointer mapping so later uses of the block args resolve correctly.
+  // Skip blocks already expanded by a prior predecessor; just update fatPtrs.
   Block *newBlock = oldBlock;
   if (!convertedBlocks.contains(oldBlock)) {
     auto oldBlockTypes = oldBlock->getArgumentTypes();
@@ -2019,12 +2008,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   target.addDynamicallyLegalDialect<triton::amdgpu::TritonAMDGPUDialect>(
       isLegal);
 
-  // Shared set to track which blocks have already had their argument-list
-  // signature expanded by convertSimpleBlockSignature.  A block with multiple
-  // predecessors (e.g. both a cf.cond_br and a cf.br) would otherwise be
-  // passed to applySignatureConversion a second time with an operand array
-  // whose size no longer matches the already-expanded block arg count, causing
-  // an out-of-bounds ArrayRef access.
+  // Tracks blocks whose signature has been expanded; prevents double-conversion
+  // when a block has multiple predecessors.
   llvm::SmallPtrSet<Block *, 8> convertedBlocks;
 
   // Rewrite the rest of the ops.
