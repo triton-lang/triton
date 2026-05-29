@@ -138,9 +138,9 @@ private:
 
 } // namespace proton
 
+#include "Dump/Hatchet.cpp"
+#include "Dump/HatchetMsgPack.cpp"
 #include "Dump/TreeDataDump.cpp"
-#include "Dump/TreeDataHatchetDump.cpp"
-#include "Dump/TreeDataHatchetMsgPackDump.cpp"
 
 namespace proton {
 
