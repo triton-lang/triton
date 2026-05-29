@@ -77,6 +77,12 @@ class TensorMemoryLayout:
         two_ctas_str = "2CT" if self.two_ctas else ""
         return f"TL{block_str}{stride_str}{cga_layout_str}{two_ctas_str}TL"
 
+    def format_tensor_view(self, shape: List[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], False)
+
+    def format_hardware_view(self, shape: List[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], True)
+
     def __hash__(self):
         return hash((self.block, self.col_stride, tuple(tuple(b) for b in self.cga_layout), self.two_ctas))
 
@@ -101,6 +107,12 @@ class TensorMemoryScalesLayout:
     def mangle(self) -> str:
         cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout)
         return f"TLS{cga_layout_str}TLS"
+
+    def format_tensor_view(self, shape: List[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], False)
+
+    def format_hardware_view(self, shape: List[int]) -> str:
+        return gluon_ir.get_layout_view(self, [_unwrap_if_constexpr(s) for s in shape], True)
 
     def __hash__(self):
         return hash(tuple(tuple(b) for b in self.cga_layout))
