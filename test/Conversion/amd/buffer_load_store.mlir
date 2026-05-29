@@ -52,7 +52,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK-NOT: llvm.sub {{.*}}, %[[soffset]] : i32
         // CHECK: %[[masked_offset:.*]] = llvm.select {{.*}}, {{.*}}, %[[oob]] : i1, i32
         // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[masked_offset]], %[[soffset]]
-        %ret = amdg.buffer_load %arg0[%offset], %mask : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset], %mask {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
   }
 }
@@ -135,7 +135,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK-NOT: llvm.sub {{.*}}, %[[soffset]] : i32
         // CHECK: %[[masked_offset:.*]] = llvm.select {{.*}}, {{.*}}, %[[oob]] : i1, i32
         // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, %[[masked_offset]], %[[soffset]]
-        amdg.buffer_store %value, %arg0[%offset], %mask : tensor<128xf32, #blocked0>
+        amdg.buffer_store %value, %arg0[%offset], %mask {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
   }
 }

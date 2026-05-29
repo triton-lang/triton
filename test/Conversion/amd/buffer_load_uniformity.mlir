@@ -28,7 +28,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %offset = arith.addi %base, %range : tensor<128xi32, #blocked0>
         // CHECK-COUNT-8: llvm.mul
         // CHECK-NOT: llvm.mul
-        %ret = amdg.buffer_load %arg0[%offset] : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset] {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
     }
 }
@@ -51,7 +51,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %offset = arith.addi %mixed, %range : tensor<128xi32, #blocked0>
         // CHECK-COUNT-4: llvm.mul
         // CHECK-NOT: llvm.mul
-        %ret = amdg.buffer_load %arg0[%offset] : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset] {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
     }
 }
@@ -72,7 +72,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %offset = arith.addi %base, %range : tensor<128xi32, #blocked0>
         // CHECK-COUNT-8: llvm.mul
         // CHECK-NOT: llvm.mul
-        %ret = amdg.buffer_load %arg0[%offset] : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset] {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
     }
 }
@@ -94,7 +94,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %offset = arith.addi %base, %range : tensor<128xi32, #blocked0>
         // CHECK-COUNT-4: llvm.mul
         // CHECK-NOT: llvm.mul
-        %ret = amdg.buffer_load %arg0[%offset] : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset] {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
     }
 }
@@ -115,7 +115,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %mask = arith.cmpi slt, %range, %n: tensor<128xi32, #blocked0>
         // CHECK-COUNT-8: llvm.mul
         // CHECK-NOT: llvm.mul
-        %ret = amdg.buffer_load %arg0[%offset], %mask : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset], %mask {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
     }
 }
@@ -140,7 +140,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %offset = arith.addi %mixed, %range : tensor<128xi32, #blocked0>
         // CHECK-COUNT-4: llvm.mul
         // CHECK-NOT: llvm.mul
-        %ret = amdg.buffer_load %arg0[%offset] : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset] {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
     }
 }
@@ -158,7 +158,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %offset = arith.subi %base, %range : tensor<128xi32, #blocked0>
         // CHECK-COUNT-4: llvm.mul
         // CHECK-NOT: llvm.mul
-        %ret = amdg.buffer_load %arg0[%offset] : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset] {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
     }
 }
@@ -177,7 +177,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %offset = arith.addi %base, %range : tensor<128xi32, #blocked0>
         // CHECK-COUNT-4: llvm.mul
         // CHECK-NOT: llvm.mul
-        %ret = amdg.buffer_load %arg0[%offset] : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset] {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
     }
     // Public caller keeps the private callee alive through lowering.
@@ -205,7 +205,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %offset = arith.addi %base, %range : tensor<128xi32, #blocked0>
         // CHECK-COUNT-8: llvm.mul
         // CHECK-NOT: llvm.mul
-        %ret = amdg.buffer_load %arg0[%offset] : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset] {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
     }
 }
@@ -230,7 +230,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %offset = arith.addi %base, %range : tensor<128xi32, #blocked0>
         // CHECK-COUNT-8: llvm.mul
         // CHECK-NOT: llvm.mul
-        %ret = amdg.buffer_load %arg0[%offset] : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset] {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
     }
 }
@@ -255,7 +255,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %offset = arith.addi %base, %range : tensor<128xi32, #blocked0>
         // CHECK-COUNT-8: llvm.mul
         // CHECK-NOT: llvm.mul
-        %ret = amdg.buffer_load %arg0[%offset] : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset] {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
     }
 }
@@ -275,7 +275,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %offset = arith.addi %base0, %base1 : tensor<128xi32, #blocked0>
         // CHECK-COUNT-8: llvm.mul
         // CHECK-NOT: llvm.mul
-        %ret = amdg.buffer_load %arg0[%offset] : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset] {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
     }
 }
@@ -301,7 +301,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %mask = arith.cmpi slt, %range, %n : tensor<128xi32, #blocked0>
         // CHECK-COUNT-8: llvm.mul
         // CHECK-NOT: llvm.mul
-        %ret = amdg.buffer_load %arg0[%offset], %mask : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset], %mask {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
     }
 }
