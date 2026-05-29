@@ -1457,6 +1457,40 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
 
 
+@pytest.mark.skipif(not is_hip(), reason="Fine-grained (pinned) host memory atomics are an AMD-specific concern")
+@pytest.mark.parametrize("op", ['add', 'max', 'min'])
+def test_atomic_rmw_fine_grained_memory(op, device):
+    # Regression test for the silent buffer-atomic drop on fine-grained (pinned)
+    # host memory. On the unsafe-lineage AMD ISAs (e.g. RDNA3/gfx11, CDNA2) the
+    # FP BUFFER_ATOMIC_* instructions are NOP'd by the hardware when they target
+    # fine-grained allocations: the accumulation disappears with no fault, stall,
+    # or diagnostic (see the AMD GPU atomics documentation).
+    n_programs = 5
+
+    @triton.jit
+    def kernel(X, Z):
+        pid = tl.program_id(0)
+        x = tl.load(X + pid)
+        GENERATE_TEST_HERE
+
+    kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x)'})
+
+    numpy_op = {'add': np.sum, 'max': np.max, 'min': np.min}[op]
+    neutral = {'add': 0.0, 'max': float('-inf'), 'min': float('inf')}[op]
+
+    x = np.array([2**i for i in range(n_programs)], dtype=np.float32)
+    x_tri = to_triton(x, device=device)
+
+    # Allocate the atomic destination in pinned (fine-grained) host memory.
+    z_tri = torch.tensor([neutral], dtype=torch.float32).pin_memory()
+    assert z_tri.is_pinned()
+
+    kernel[(n_programs, )](x_tri, z_tri)
+
+    z_ref = torch.tensor([numpy_op(x)], dtype=torch.float32)
+    torch.testing.assert_close(z_tri.cpu(), z_ref, rtol=0, atol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_atomic_rmw_predicate(num_ctas, device):
