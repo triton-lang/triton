@@ -3182,10 +3182,9 @@ def histogram(input, num_bins, mask=None, _semantic=None, _generator=None):
     many values in :code:`input` are equal to :code:`i`, for :code:`i` in the range
     ``[0, num_bins)``.
 
-    Input values must lie in ``[0, num_bins)``. The result is unspecified for
-    values outside this range, and the behavior may differ between backends
-    (some drop such values while others fold them into the wrong bin), so do not
-    rely on it. Use :code:`mask` to drop out-of-range values explicitly:
+    Input values must lie in ``[0, num_bins)``. Values outside this range
+    produce undefined behavior, as the backend implementation may change. Use
+    :code:`mask` to drop out-of-range values explicitly:
 
     .. highlight:: python
     .. code-block:: python
