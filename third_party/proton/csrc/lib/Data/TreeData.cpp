@@ -10,6 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <map>
@@ -124,10 +125,7 @@ public:
     friend class Tree;
   };
 
-  Tree() {
-    treeNodeMap.try_emplace(TreeNode::RootId, TreeNode::RootId,
-                            TreeNode::RootId, "ROOT");
-  }
+  Tree() { treeNodes.emplace_back(TreeNode::RootId, TreeNode::RootId, "ROOT"); }
 
   size_t addNode(const std::vector<Context> &contexts, size_t parentId) {
     for (const auto &context : contexts) {
@@ -137,14 +135,14 @@ public:
   }
 
   size_t addNode(const Context &context, size_t parentId) {
-    auto &parent = treeNodeMap.at(parentId);
+    auto &parent = getNode(parentId);
     std::string_view contextName = context.name;
     auto existingChildId = parent.findChild(contextName);
     if (existingChildId != TreeNode::DummyId)
       return existingChildId;
     auto id = nextContextId++;
-    auto [it, inserted] = treeNodeMap.try_emplace(id, id, parentId, context);
-    parent.addChild(it->second.name, id);
+    treeNodes.emplace_back(id, parentId, context);
+    parent.addChild(treeNodes.back().name, id);
     return id;
   }
 
@@ -156,11 +154,11 @@ public:
     return parentId;
   }
 
-  TreeNode &getNode(size_t id) { return treeNodeMap.at(id); }
+  TreeNode &getNode(size_t id) { return treeNodes.at(id); }
 
   void upsertFlexibleMetric(size_t contextId,
                             const FlexibleMetric &flexibleMetric) {
-    auto &node = treeNodeMap.at(contextId);
+    auto &node = getNode(contextId);
     auto &flexibleMetrics = node.metricSet.flexibleMetrics;
     auto valueName = std::string(flexibleMetric.getValueName(0));
     auto it = flexibleMetrics.find(valueName);
@@ -188,31 +186,12 @@ public:
     }
   }
 
-  size_t size() const { return nextContextId; }
-
-  Tree structure() const {
-    Tree cloned;
-    cloned.nextContextId = nextContextId;
-
-    for (const auto &[id, node] : treeNodeMap) {
-      cloned.treeNodeMap.try_emplace(id, id, node.parentId, node);
-    }
-
-    for (const auto &[id, node] : treeNodeMap) {
-      auto &clonedNode = cloned.treeNodeMap.at(id);
-      clonedNode.children.reserve(node.children.size());
-      for (const auto &child : node.children) {
-        clonedNode.addChild(cloned.treeNodeMap[child.id].name, child.id);
-      }
-    }
-
-    return cloned;
-  }
+  size_t size() const { return treeNodes.size(); }
 
 private:
   size_t nextContextId = TreeNode::RootId + 1;
-  // tree node id -> tree node
-  std::unordered_map<size_t, TreeNode> treeNodeMap;
+  // Node ids are dense and assigned sequentially, so index lookup is enough.
+  std::deque<TreeNode> treeNodes;
 };
 
 json TreeData::buildHatchetJson(TreeData::Tree *tree,
