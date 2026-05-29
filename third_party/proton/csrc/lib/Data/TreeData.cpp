@@ -712,10 +712,22 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         }
       }
     }
-    writer.packFixStrLiteral("children");
-    writer.packArray(static_cast<uint32_t>(virtualNode.children.size()));
+    // Linked flexible metrics attached to generated helper leaves are promoted
+    // into the parent metrics map above. Once promoted, a helper leaf with no
+    // linked fixed metrics and no children carries no information in Hatchet.
+    std::vector<size_t> linkedChildren;
+    linkedChildren.reserve(virtualNode.children.size());
     for (const auto &child : virtualNode.children) {
-      packLinkedVirtualNode(packLinkedVirtualNode, treeNode, child.id);
+      const auto &childNode = virtualTree->getNode(child.id);
+      if (!childNode.children.empty() ||
+          linkedMetrics.find(child.id) != linkedMetrics.end()) {
+        linkedChildren.push_back(child.id);
+      }
+    }
+    writer.packFixStrLiteral("children");
+    writer.packArray(static_cast<uint32_t>(linkedChildren.size()));
+    for (auto childId : linkedChildren) {
+      packLinkedVirtualNode(packLinkedVirtualNode, treeNode, childId);
     }
   };
   auto packNode = [&](auto &&packNode,
@@ -737,11 +749,27 @@ TreeData::buildHatchetMsgPack(TreeData::Tree *tree,
         hasLinkedTargets
             ? static_cast<uint32_t>(virtualRootNode.children.size())
             : 0;
-    writer.packFixStrLiteral("children");
-    writer.packArray(static_cast<uint32_t>(treeNode.children.size()) +
-                     linkedChildCount);
+    // CUDA stream capture can create concrete launch-name leaves before the
+    // launch callback exits early without correlating metrics. Graph replay
+    // metrics are attached through linked virtual nodes instead, so a concrete
+    // leaf with no metrics, linked metrics, flexible metrics, or children adds
+    // no Hatchet information.
+    std::vector<TreeData::Tree::TreeNode *> concreteChildren;
+    concreteChildren.reserve(treeNode.children.size());
     for (const auto &child : treeNode.children) {
-      packNode(packNode, tree->getNode(child.id));
+      auto &childNode = tree->getNode(child.id);
+      if (!childNode.children.empty() || !childNode.metricSet.metrics.empty() ||
+          !childNode.metricSet.flexibleMetrics.empty() ||
+          !childNode.metricSet.linkedMetrics.empty() ||
+          !childNode.metricSet.linkedFlexibleMetrics.empty()) {
+        concreteChildren.push_back(&childNode);
+      }
+    }
+    writer.packFixStrLiteral("children");
+    writer.packArray(static_cast<uint32_t>(concreteChildren.size()) +
+                     linkedChildCount);
+    for (auto *childNode : concreteChildren) {
+      packNode(packNode, *childNode);
     }
     if (hasLinkedTargets) {
       for (const auto &virtualChild : virtualRootNode.children) {
