@@ -74,12 +74,9 @@ static cl::opt<bool> UseHWPointOfView(
         "tensor's perspective (e.g., each element maps to xxx thread)."),
     cl::init(false), cl::cat(getPrinterCategory()));
 
-static cl::opt<std::string>
-    TensorStr("t",
-              cl::desc("Tensor or memdesc shape and element type (e.g., "
-                       "tensor<2x2xf32>)"),
-              cl::init(""), cl::value_desc("tensor-or-memdesc-type"),
-              cl::cat(getPrinterCategory()));
+static cl::opt<std::string> TensorStr(
+    "t", cl::desc("Tensor shape and element type (e.g., tensor<2x2xf32>)"),
+    cl::init(""), cl::value_desc("tensor-type"), cl::cat(getPrinterCategory()));
 
 //===--------------------------------------------------------------------===//
 // Helper functions
