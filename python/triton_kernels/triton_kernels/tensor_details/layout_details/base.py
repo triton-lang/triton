@@ -20,6 +20,10 @@ class LayoutTransformation(ABC):
 @dataclass(frozen=True)
 class Layout(ABC):
 
+    def can_preserve_storage_as(self, other: "Layout", rank: int) -> bool:
+        """Whether existing storage is already valid for `other`."""
+        return self == other
+
     @abstractmethod
     def make_transformation(self, shape: list[int]) -> LayoutTransformation:
         pass

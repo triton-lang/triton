@@ -88,7 +88,9 @@ void MsgPackWriter::packStr(std::string_view value) {
     out.push_back(0xdb);
     writeBE(out, static_cast<uint32_t>(size));
   }
-  out.insert(out.end(), value.begin(), value.end());
+  const auto offset = out.size();
+  out.resize(offset + size);
+  std::memcpy(out.data() + offset, value.data(), size);
 }
 
 void MsgPackWriter::packArray(uint32_t size) {
