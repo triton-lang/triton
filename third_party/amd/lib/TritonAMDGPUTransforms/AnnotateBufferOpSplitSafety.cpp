@@ -85,9 +85,8 @@ struct AnnotateBufferOpSplitSafetyPass
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
-    // Set up the dataflow solver mirroring TritonAMDGPUConvertToBufferOps:
-    // dead-code + Triton-flavoured integer-range, the latter seeded from
-    // user-supplied `tl.assume` and per-arg attributes.
+    // Reuse AMD integer range analysis so `tl.assume` / `gl.assume` and
+    // argument attributes can prove buffer offsets non-negative.
     DenseMap<Value, SetVector<Operation *>> assumptions =
         AMD::TritonIntegerRangeAnalysis::collectAssumptions(mod);
     auto solver = createDataFlowSolver();
