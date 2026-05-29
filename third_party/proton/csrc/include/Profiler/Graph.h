@@ -9,7 +9,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <set>
 #include <shared_mutex>
 #include <unordered_map>
@@ -45,6 +44,7 @@ struct GraphState {
   // Capture tag to identify captured call paths
   static constexpr const char *captureTag = "<captured_at>";
   static constexpr const char *metricTag = "<metric>";
+
   struct NodeState {
     // The graph node id for this node
     uint64_t nodeId{};
