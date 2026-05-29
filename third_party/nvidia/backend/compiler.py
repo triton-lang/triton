@@ -376,7 +376,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_global_sanitizer(pm)
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-        passes.ttgpuir.add_allocate_warp_groups(pm)
+        passes.ttgpuir.add_allocate_warp_groups(pm, "consan" in options.instrumentation_mode)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
         if "consan" in options.instrumentation_mode:
