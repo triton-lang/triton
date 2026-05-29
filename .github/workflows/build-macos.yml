@@ -30,7 +30,7 @@ jobs:
       - name: Compute cache keys
         id: cache-key
         run: |
-          llvm_file="cmake/llvm-hash.txt"
+          llvm_file="cmake/llvm-info.json"
           nvidia_file="cmake/nvidia-toolchain-version.json"
           json_file="cmake/json-version.txt"
 
@@ -41,7 +41,7 @@ jobs:
           fi
 
           # Process the files if they exist
-          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "llvm=$(sha256sum $llvm_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT

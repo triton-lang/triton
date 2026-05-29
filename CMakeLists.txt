@@ -115,7 +115,7 @@ set_property(
   APPEND
   PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/python/build_helpers.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/llvm-hash.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/llvm-info.json"
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/json-version.txt"
 )
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
