@@ -3250,7 +3250,7 @@ def map_elementwise(
         :return: one tensor or a tuple of tensors, depending on the mapped function.
     '''
     # Build the block for the nested region first to discover the return types
-    assert pack >= 1
+    assert pack >= 1, f"pack must be >= 1, got {pack}"
     in_scalar_tys = [t.type.scalar for t in args]
     builder = _semantic.builder
     block = builder.new_block()
@@ -3882,8 +3882,8 @@ def builtin_max(*args, propagate_nan=_NOTHING, _semantic=None):
     is_constexpr = all(not isinstance(x, base_value) for x in args)
     if is_constexpr:
         assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin max"
-        assert not any(math.isnan(x) for x in args)
-        assert not any(is_negative_zero(x) for x in args)
+        assert not any(math.isnan(x) for x in args), "constexpr max does not support NaN values"
+        assert not any(is_negative_zero(x) for x in args), "constexpr max does not support negative zero"
         return constexpr(builtins.max(_unwrap_if_constexpr(args)))
 
     if propagate_nan is _NOTHING:
@@ -3906,8 +3906,8 @@ def builtin_min(*args, propagate_nan=_NOTHING, _semantic=None):
     is_constexpr = all(not isinstance(x, base_value) for x in args)
     if is_constexpr:
         assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin min"
-        assert not any(math.isnan(x) for x in args)
-        assert not any(is_negative_zero(x) for x in args)
+        assert not any(math.isnan(x) for x in args), "constexpr min does not support NaN values"
+        assert not any(is_negative_zero(x) for x in args), "constexpr min does not support negative zero"
         return constexpr(builtins.min(_unwrap_if_constexpr(args)))
 
     if propagate_nan is _NOTHING:
