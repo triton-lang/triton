@@ -1,9 +1,9 @@
 import argparse
 import contextlib
 import hashlib
+import io
 import json
 import os
-import io
 import platform
 import re
 import shutil
@@ -11,11 +11,12 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
-import tempfile
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Optional
 
@@ -38,7 +39,7 @@ def get_cmake_dir():
     return cmake_dir
 
 
-@dataclass
+@dataclass(frozen=True)
 class BuildHelperArgs:
     cache_path: str
     offline_build: bool
@@ -54,6 +55,10 @@ class BuildHelperArgs:
     cupti_include_path: Optional[str]
     cupti_lib_path: Optional[str]
     cupti_lib_blackwell_path: Optional[str]
+
+    @cached_property
+    def archives_path(self):
+        return os.path.join(self.cache_path, "archives")
 
 
 def _normalize_optional(value: str) -> Optional[str]:
@@ -90,6 +95,53 @@ def open_url(url):
     request = urllib.request.Request(url, None, headers)
     # Set timeout to 300 seconds to prevent the request from hanging forever.
     return urllib.request.urlopen(request, timeout=300)
+
+
+def _download_file_with_curl(curl: str, url: str, path: str, label: str):
+    print(f"{label}:", file=sys.stdout, flush=True)
+    command = [
+        curl,
+        "--fail",
+        "--location",
+        "--show-error",
+        "--continue-at",
+        "-",
+        "--output",
+        path,
+        "--url",
+        url,
+    ]
+    hostname = urllib.parse.urlparse(url).hostname
+    if hostname is not None and hostname.endswith(".blob.core.windows.net"):
+        # Anonymous Azure Blob requests default to 2009-09-19, which ignores Range requests.
+        command.extend(["--header", "x-ms-version: 2011-08-18"])
+    subprocess.run(
+        command,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+        check=True,
+    )
+
+
+def _download_file_with_urllib(url: str, path: str, label: str):
+    with open(path, "wb") as file:
+        with open_url(url) as response:
+            progress_reader = DownloadProgressReader(response, label)
+            shutil.copyfileobj(progress_reader, file)
+
+
+def _download_file(url: str, path: str, label: str):
+    curl = shutil.which("curl")
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    if curl is not None:
+        _download_file_with_curl(curl, url, path, label)
+    else:
+        _download_file_with_urllib(url, path, label)
+
+
+def _get_archive_path(download_dir: str, url: str):
+    archive_name = os.path.basename(urllib.parse.urlparse(url).path)
+    return os.path.join(download_dir, archive_name)
 
 
 def _format_byte_count(num_bytes: int) -> str:
@@ -168,49 +220,49 @@ class DownloadProgressReader:
         return getattr(self.response, name)
 
 
-def _download_file(url: str, label: str):
-    file_bytes = io.BytesIO()
-    with open_url(url) as response:
-        progress_reader = DownloadProgressReader(response, label)
-        shutil.copyfileobj(progress_reader, file_bytes)
-    file_bytes.seek(0)
-    return file_bytes
-
-
-def _download_and_extract(url, download_dir, label, expected_sha256=None):
-    label = f"downloading {label}"
-    os.makedirs(download_dir, exist_ok=True)
+def _extract_archive(archive_path, download_dir):
     with contextlib.ExitStack() as stack:
-        if url.endswith(".zip"):
-            # unzip requires random access, so download the entire file
-            file_bytes = stack.enter_context(_download_file(url, label))
-            file = stack.enter_context(zipfile.ZipFile(file_bytes, "r"))
+        if archive_path.endswith(".zip"):
+            file = stack.enter_context(zipfile.ZipFile(archive_path, "r"))
             file.extractall(path=download_dir)
         else:
-            response = stack.enter_context(open_url(url))
-            progress_reader = DownloadProgressReader(response, label)
-            tar_fileobj = progress_reader
-            if expected_sha256 is not None:
-                tar_fileobj = stack.enter_context(tempfile.TemporaryFile())
-                digest = hashlib.sha256()
-                while chunk := progress_reader.read(io.DEFAULT_BUFFER_SIZE):
-                    tar_fileobj.write(chunk)
-                    digest.update(chunk)
-                actual_sha256 = digest.hexdigest()
-                if actual_sha256 != expected_sha256:
-                    message = (f"LLVM download from {url} failed checksum validation. "
-                               f"Expected SHA256 {expected_sha256}, got {actual_sha256}.")
-                    if check_env_flag("TRITON_UNSAFE_DISABLE_SHA_CHECK"):
-                        print(f"WARNING: {message}", file=sys.stderr)
-                    else:
-                        raise RuntimeError(message)
-                tar_fileobj.seek(0)
-            file = stack.enter_context(tarfile.open(fileobj=tar_fileobj, mode="r|*"))
+            file = stack.enter_context(tarfile.open(archive_path, mode="r:*"))
             # Use extractall without filter for Python version < 3.12 compatibility
             if hasattr(tarfile, "data_filter"):
                 file.extractall(path=download_dir, filter="data")
             else:
                 file.extractall(path=download_dir)
+
+
+def _validate_sha256(archive_path, url, expected_sha256):
+    if expected_sha256 is None:
+        return
+    digest = hashlib.sha256()
+    with open(archive_path, "rb") as file:
+        while chunk := file.read(io.DEFAULT_BUFFER_SIZE):
+            digest.update(chunk)
+    actual_sha256 = digest.hexdigest()
+    if actual_sha256 == expected_sha256:
+        return
+    message = (f"LLVM download from {url} failed checksum validation. "
+               f"Expected SHA256 {expected_sha256}, got {actual_sha256}.")
+    if check_env_flag("TRITON_UNSAFE_DISABLE_SHA_CHECK"):
+        print(f"WARNING: {message}", file=sys.stderr)
+        return
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(archive_path)
+    raise RuntimeError(message)
+
+
+def _download_and_extract(url, download_dir, label, archives_path, expected_sha256=None):
+    archive_path = _get_archive_path(archives_path, url)
+    _download_file(url, archive_path, f"downloading {label}")
+    _validate_sha256(archive_path, url, expected_sha256)
+    with contextlib.suppress(Exception):
+        shutil.rmtree(download_dir)
+    os.makedirs(download_dir, exist_ok=True)
+    _extract_archive(archive_path, download_dir)
+    os.remove(archive_path)
 
 
 def update_symlink(link_path, source_path):
@@ -341,9 +393,8 @@ def _get_thirdparty_package_cmake_vars(package: Package, helper_args: BuildHelpe
     if helper_args.offline_build and not input_defined:
         raise RuntimeError(f"Requested an offline build but {package.syspath_var_name} is not set")
     if not helper_args.offline_build and not input_defined and not input_compatible:
-        with contextlib.suppress(Exception):
-            shutil.rmtree(package_root_dir)
-        _download_and_extract(package.url, package_root_dir, package.name, package.sha256sum)
+        _download_and_extract(package.url, package_root_dir, package.name, helper_args.archives_path,
+                              package.sha256sum)
         # write version url to package_dir
         with open(os.path.join(package_dir, "version.txt"), "w") as file:
             file.write(package.url)
@@ -419,7 +470,7 @@ def download_and_copy(name, src_func, dst_path, override_path, version, url_func
         assert curr_version is not None, f"No version information for {dst_path}"
         download = download or curr_version.group(1) != version
     if download:
-        _download_and_extract(url, tmp_path, name)
+        _download_and_extract(url, tmp_path, name, helper_args.archives_path)
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
     print(f"copy {src_path} to {dst_path} ...")
     if os.path.isdir(src_path):
@@ -608,6 +659,8 @@ def main(argv=None):
         download_and_copy_dependencies(helper_args)
     elif parsed_args.command == "write_thirdparty_cmake_vars":
         write_thirdparty_cmake_vars(output=parsed_args.output, packages=parsed_args.packages, helper_args=helper_args)
+    if os.path.exists(helper_args.archives_path):
+        shutil.rmtree(helper_args.archives_path)
 
 
 if __name__ == "__main__":
