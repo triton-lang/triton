@@ -32,6 +32,8 @@ public:
   void packStr(std::string_view value);
   void packFixStr(std::string_view value) {
     const auto size = static_cast<uint32_t>(value.size());
+    // MsgPack fixstr stores the string length in 5 bits, so literals must fit
+    // in the 0..31 byte range.
     if (size > 31) {
       packStr(value);
       return;
