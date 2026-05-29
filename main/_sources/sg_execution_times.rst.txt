@@ -6,7 +6,7 @@
 
 Computation times
 =================
-**21:20.195** total execution time for 10 files **from all galleries**:
+**21:13.183** total execution time for 10 files **from all galleries**:
 
 .. container::
 
@@ -33,32 +33,32 @@ Computation times
      - Time
      - Mem (MB)
    * - :ref:`sphx_glr_getting-started_tutorials_06-fused-attention.py` (``../python/tutorials/06-fused-attention.py``)
-     - 16:02.870
+     - 16:03.461
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_03-matrix-multiplication.py` (``../python/tutorials/03-matrix-multiplication.py``)
-     - 02:12.151
+     - 02:12.073
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_09-persistent-matmul.py` (``../python/tutorials/09-persistent-matmul.py``)
-     - 01:36.945
+     - 01:37.516
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_02-fused-softmax.py` (``../python/tutorials/02-fused-softmax.py``)
-     - 00:34.635
+     - 00:36.064
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_05-layer-norm.py` (``../python/tutorials/05-layer-norm.py``)
-     - 00:29.213
-     - 0.0
-   * - :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``../python/tutorials/01-vector-add.py``)
-     - 00:16.196
+     - 00:28.999
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_08-grouped-gemm.py` (``../python/tutorials/08-grouped-gemm.py``)
-     - 00:07.505
+     - 00:07.569
+     - 0.0
+   * - :ref:`sphx_glr_getting-started_tutorials_01-vector-add.py` (``../python/tutorials/01-vector-add.py``)
+     - 00:06.816
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_04-low-memory-dropout.py` (``../python/tutorials/04-low-memory-dropout.py``)
-     - 00:00.519
+     - 00:00.520
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_07-extern-functions.py` (``../python/tutorials/07-extern-functions.py``)
-     - 00:00.137
+     - 00:00.139
      - 0.0
    * - :ref:`sphx_glr_getting-started_tutorials_10-block-scaled-matmul.py` (``../python/tutorials/10-block-scaled-matmul.py``)
-     - 00:00.024
+     - 00:00.025
      - 0.0
