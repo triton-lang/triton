@@ -122,8 +122,7 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
 
 Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
                               Value pred, Value falseVal,
-                              triton::CacheModifier cm,
-                              bool splitSoffsetSafe) {
+                              triton::CacheModifier cm, bool splitSoffsetSafe) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> args;
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true, args,
@@ -140,8 +139,7 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
 ROCDL::RawPtrBufferLoadAsyncLdsOp
 BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
                              Value offset, Value dst, Value pred,
-                             triton::CacheModifier cm,
-                             bool splitSoffsetSafe) {
+                             triton::CacheModifier cm, bool splitSoffsetSafe) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> commonArgs;
   // soffset (ArgIndex 4) accepts a runtime SGPR, same as regular buffer
