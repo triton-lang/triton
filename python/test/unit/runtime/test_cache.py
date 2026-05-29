@@ -14,6 +14,60 @@ import torch
 import triton
 import triton.language as tl
 from triton._internal_testing import is_hip
+from triton.runtime.cache import FileCacheManager, RemoteCacheManager
+
+
+def test_file_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):
+    fresh_knobs.cache.dir = str(tmp_path)
+    manager = FileCacheManager("key")
+    metadata_path = manager.put("{}", "kernel.json", binary=False)
+    artifact_path = manager.put("binary", "kernel.cubin", binary=False)
+
+    manager.put_group("kernel.json", {
+        "kernel.json": metadata_path,
+        "kernel.cubin": artifact_path,
+    })
+    assert manager.get_group("kernel.json") == {
+        "kernel.json": metadata_path,
+        "kernel.cubin": artifact_path,
+    }
+
+    os.remove(artifact_path)
+    assert manager.get_group("kernel.json") is None
+
+
+def test_remote_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):
+
+    class DictRemoteCacheBackend:
+        data = {}
+
+        def __init__(self, key):
+            self.key = key
+
+        def get(self, filenames):
+            return {filename: self.data[filename] for filename in filenames if filename in self.data}
+
+        def put(self, filename, data):
+            self.data[filename] = data
+
+    fresh_knobs.cache.dir = str(tmp_path)
+    fresh_knobs.cache.remote_manager_class = DictRemoteCacheBackend
+    DictRemoteCacheBackend.data = {}
+
+    manager = RemoteCacheManager("key")
+    manager.put("{}", "kernel.json", binary=False)
+    manager.put(b"binary", "kernel.cubin")
+    manager.put_group("kernel.json", {
+        "kernel.json": "unused-local-path",
+        "kernel.cubin": "unused-local-path",
+    })
+
+    group = manager.get_group("kernel.json")
+    assert group is not None
+    assert set(group) == {"kernel.json", "kernel.cubin"}
+
+    del DictRemoteCacheBackend.data["kernel.cubin"]
+    assert manager.get_group("kernel.json") is None
 
 
 @triton.jit
