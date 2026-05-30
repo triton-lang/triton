@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <mutex>
 #include <pybind11/pybind11.h>
 #include <string>
 #include <string_view>
@@ -36,7 +37,8 @@ static std::pair<py::object, py::object>
 specialize_arg(PyObject *backend, PyObject *arg, bool is_const,
                bool specialize_value, bool align);
 
-static bool init_called = false;
+static std::once_flag init_flag;
+static bool init_success = false;
 
 static PyObject *constexpr_cls = nullptr;
 static PyObject *jit_callable_cls = nullptr;
@@ -155,11 +157,20 @@ bool init_globals() noexcept try {
   init_interned_strings();
   init_type_handler_cache();
 
-  init_called = true;
   return true;
 } catch (py::error_already_set &e) {
   e.restore();
   return false;
+}
+
+// NOTE: std::call_once does not support re-entrant calls from within the
+// callable. If init_globals() triggers a Python import that re-enters
+// native_specialize_impl on the same thread, behavior is undefined. In
+// practice this should not occur since triton.runtime.jit is already loaded
+// before specialize is first called.
+bool ensure_init() {
+  std::call_once(init_flag, []() { init_success = init_globals(); });
+  return init_success;
 }
 
 std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
@@ -572,10 +583,8 @@ std::pair<py::object, py::object> specialize_arg(PyObject *backend,
 // main entry-point from Python implementing specialization logic natively
 PyObject *specialize_impl(PyObject *self, PyObject *const *args,
                           Py_ssize_t nargs) {
-  if (!init_called) {
-    if (!init_globals()) {
-      return nullptr;
-    }
+  if (!ensure_init()) {
+    return nullptr;
   }
 
   if (nargs != 5) {
