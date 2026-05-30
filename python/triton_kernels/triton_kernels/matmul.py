@@ -299,6 +299,8 @@ def matmul(a, b, bias,
             or isinstance(b_scale_layout, HopperMXScaleLayout)):
         if not b_is_shuffled:
             assert b.stride(-2) == 1, "`w` must be column-major with Hopper-swizzled MX scales or non-strided MX value layouts"
+    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
+    if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     # unpack a scale
     a_scale = precision_config.a_mx_scale
     a_has_mx = a_scale is not None
@@ -379,27 +381,6 @@ def matmul(a, b, bias,
     K_W, N = b.shape[-2:]
     if a.ndim == 3 and b.ndim == 3:
         assert a.shape[0] == b.shape[0]
-    if ragged_dimension != "K":
-        assert K == K_W
-    if batch_size * M * N == 0:
-        out_shape = (batch_size, M, N // fused_activation.specs.reduction_n)
-        out_shape = out_shape[:-1] + (out_shape[-1] // precision_config.c_value_pack_factor, )
-        if fused_comm is not None:
-            out_shape = (out_shape[0], out_shape[1] * fused_comm.n_reduce_shards, out_shape[2])
-        if c is None:
-            ret = torch.empty(
-                out_shape,
-                device=a.device,
-                dtype=dtype_to_torch_dtype(precision_config.out_dtype or a.dtype),
-            )
-        else:
-            ret = c[None, :, :] if c.ndim == 2 else c
-            assert ret.shape == out_shape
-        if not (is_input_batched or b_ragged_metadata is not None):
-            ret = ret.squeeze(0)
-        return ret
-    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
-    if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     # compute optimization flags
     out_dtype = precision_config.out_dtype or a.dtype
     out_dtype = torch_dtype_to_dtype(out_dtype)
@@ -470,6 +451,7 @@ def matmul(a, b, bias,
             even_K = a_ragged_metadata.slice_sizes_divisibility is not None and b_ragged_metadata.slice_sizes_divisibility is not None
     else:
         batch_size = b.shape[0] if a_ragged_metadata is None and b.ndim == 3 else 1
+        assert K == K_W
         a_has_tma = opt_flags.is_persistent and (has_gather_tma or not has_gather)
         even_K = (K % opt_flags.block_k == 0)
     if b_scale is not None and b_scale.storage.layout.name != "STRIDED" and not opt_flags.is_persistent and target_info.has_native_mxfp():
@@ -485,6 +467,12 @@ def matmul(a, b, bias,
                                  fused_comm.n_reduce_shards if fused_comm is not None else 1,
                                  opt_flags)
     memory = apply_allocation(allocation, c)
+    # early exit
+    if batch_size * M * N == 0:
+        ret = memory["output"].squeeze(0)
+        if not is_input_batched:
+            ret = ret.squeeze(0)
+        return ret
     # TMA descriptors require a global memory allocation
     if opt_flags.is_persistent:
         triton.set_allocator(get_per_device_per_stream_alloc_fn(a.device))
