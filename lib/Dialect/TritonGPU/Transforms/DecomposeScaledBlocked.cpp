@@ -105,7 +105,7 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::broadcastScale(
   auto rank = scaleTy.getRank();
   // 2.1) Expand dims along the last dimension
   {
-    // 2.1.1) Find default encoding for ExpandDims
+    // 2.1.1) Find default encoding for the expanded reshape
     auto shape = to_vector(scaleTy.getShape());
     shape.insert(shape.end(), 1);
     auto nWarps = lookupNumWarps(scaledDotOp);
@@ -118,7 +118,9 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::broadcastScale(
     auto sliceType = scaleTy.cloneWithEncoding(sliceEnc);
     scale = ConvertLayoutOp::create(rewriter, loc, sliceType, scale);
   }
-  auto expandScale = ExpandDimsOp::create(rewriter, loc, scale, rank);
+  auto expandShape = to_vector(scale.getType().getShape());
+  expandShape.push_back(1);
+  auto expandScale = ReshapeOp::create(rewriter, loc, expandShape, scale);
   int32_t scaleFactor = scaledDotOp.deduceScaleFactor();
   // 2.2) Broadcast the dimension to the microscaling factor.
   auto scaleShape = to_vector(scaleTy.getShape());

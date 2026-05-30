@@ -1,6 +1,7 @@
 // RUN: triton-opt %s --split-input-file --tritongpu-hoist-tmem-alloc --tritongpu-partition-scheduling -allow-unregistered-dialect | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#expanded = #ttg.linear<{register = [[128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = []}>
 #load_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
@@ -72,12 +73,13 @@ tt.func public @attention_forward(
     %l_i_scaled = arith.mulf %l_i, %alpha : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %next_l_i = arith.addf %l_i_scaled, %l_ij : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
 
-    %alpha_0 = tt.expand_dims %alpha {axis = 1 : i32} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xf32, #blocked>
+    %expanded_alpha = tt.reshape %alpha : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xf32, #expanded>
+    %alpha_0 = ttg.convert_layout %expanded_alpha : tensor<256x1xf32, #expanded> -> tensor<256x1xf32, #blocked>
     %alpha_1 = tt.broadcast %alpha_0 : tensor<256x1xf32, #blocked> -> tensor<256x64xf32, #blocked>
 
     %acc_corrected = arith.mulf %acc, %alpha_1 : tensor<256x64xf32, #blocked>
 
-    // CHECK-NEXT: [[X:%.*]] = arith.addf [[SOFTMAX]], [[SOFTMAX]] {ttg.partition = array<i32: 1>}
+    // CHECK: [[X:%.*]] = arith.addf [[SOFTMAX]], [[SOFTMAX]] {ttg.partition = array<i32: 1>}
     %x = arith.addf %softmax, %softmax : tensor<256x64xf32, #blocked>
     // CHECK-NEXT: [[ACC_X:%.*]] = arith.addf %{{.*}}, [[X]] {ttg.partition = array<i32: 1>}
     // CHECK-COUNT-8: ttg.partition = array<i32:
@@ -165,9 +167,9 @@ tt.func @optimize_broadcast(%arg0: i32, %arg1: !tt.tensordesc<128x128xf32, #shar
     // CHECK: [[X:%.*]] = "producer"{{.*}}partition = array<i32: 0>
     %x = "producer"() {ttg.partition = array<i32: 0>, data} : () -> tensor<128xf32>
 
-    // CHECK-DAG: [[X0_P0:%.*]] = tt.expand_dims [[X]] {{.*}}partition = array<i32: 0>
-    // CHECK-DAG: [[X0_P1:%.*]] = tt.expand_dims [[X]] {{.*}}partition = array<i32: 1>
-    %x0 = tt.expand_dims %x {axis = 0 : i32} : tensor<128xf32> -> tensor<1x128xf32>
+    // CHECK-DAG: [[X0_P0:%.*]] = tt.reshape [[X]] {{.*}}partition = array<i32: 0>
+    // CHECK-DAG: [[X0_P1:%.*]] = tt.reshape [[X]] {{.*}}partition = array<i32: 1>
+    %x0 = tt.reshape %x : tensor<128xf32> -> tensor<1x128xf32>
     // CHECK-DAG: [[X1_P0:%.*]] = tt.broadcast [[X0_P0]] {{.*}}partition = array<i32: 0>
     // CHECK-DAG: [[X1_P1:%.*]] = tt.broadcast [[X0_P1]] {{.*}}partition = array<i32: 1>
     %x1 = tt.broadcast %x0 : tensor<1x128xf32> -> tensor<128x128xf32>
@@ -334,6 +336,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 16]], warp = [[16, 0], [32, 0], [0, 32]], block = []}>
+#expanded = #ttg.linear<{register = [[32, 0], [64, 0]], lane = [[0, 0], [0, 0], [0, 0], [1, 0], [2, 0]], warp = [[4, 0], [8, 0], [16, 0]], block = []}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, rank = 3}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, rank = 3}>
 #smem = #ttg.shared_memory
@@ -362,7 +365,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %32 = arith.muli %arg3, %c128_i32 : i32
         %36 = tt.splat %32 : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
         %38 = arith.cmpi slt, %36, %cst : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-        %39 = tt.expand_dims %38 {axis = 1 : i32} : tensor<128xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi1, #blocked>
+        %expanded39 = tt.reshape %38 : tensor<128xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi1, #expanded>
+        %39 = ttg.convert_layout %expanded39 : tensor<128x1xi1, #expanded> -> tensor<128x1xi1, #blocked>
         %40 = tt.broadcast %39 : tensor<128x1xi1, #blocked> -> tensor<128x64xi1, #blocked>
         //  CHECK: arith.select {{.*}} {ttg.partition = array<i32: 0>} {{.*}}
         //  CHECK-NEXT: scf.yield {ttg.partition = array<i32: 0>}
@@ -387,7 +391,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %32 = arith.muli %arg3, %c128_i32 {ttg.partition = array<i32: 0>} : i32
         %36 = tt.splat %32 {ttg.partition = array<i32: 0>} : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
         %38 = arith.cmpi slt, %36, %cst {ttg.partition = array<i32: 0>} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-        %39 = tt.expand_dims %38 {axis = 1 : i32, ttg.partition = array<i32: 0>} : tensor<128xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi1, #blocked>
+        %expanded39 = tt.reshape %38 {ttg.partition = array<i32: 0>} : tensor<128xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi1, #expanded>
+        %39 = ttg.convert_layout %expanded39 {ttg.partition = array<i32: 0>} : tensor<128x1xi1, #expanded> -> tensor<128x1xi1, #blocked>
         %40 = tt.broadcast %39 {ttg.partition = array<i32: 0>} : tensor<128x1xi1, #blocked> -> tensor<128x64xi1, #blocked>
         %41 = arith.select %40, %20, %cst_1 : tensor<128x64xi1, #blocked>, tensor<128x64xbf16, #blocked>
         scf.yield %41 : tensor<128x64xbf16, #blocked>
@@ -413,7 +418,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         %32 = arith.muli %arg4, %c128_i32 : i32
         %36 = tt.splat %32 : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
         %38 = arith.cmpi slt, %36, %cst : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-        %39 = tt.expand_dims %38 {axis = 1 : i32} : tensor<128xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi1, #blocked>
+        %expanded39 = tt.reshape %38 : tensor<128xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi1, #expanded>
+        %39 = ttg.convert_layout %expanded39 : tensor<128x1xi1, #expanded> -> tensor<128x1xi1, #blocked>
         %40 = tt.broadcast %39 : tensor<128x1xi1, #blocked> -> tensor<128x64xi1, #blocked>
         //  CHECK: arith.select {{.*}} {ttg.partition = array<i32: 0>} {{.*}}
         //  CHECK-NEXT: scf.yield {ttg.partition = array<i32: 0>}

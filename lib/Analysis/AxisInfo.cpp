@@ -604,41 +604,6 @@ public:
   }
 };
 
-class ExpandDimsOpAxisInfoVisitor final
-    : public AxisInfoVisitorImpl<triton::ExpandDimsOp> {
-public:
-  using AxisInfoVisitorImpl<triton::ExpandDimsOp>::AxisInfoVisitorImpl;
-
-  AxisInfo
-  getAxisInfo(triton::ExpandDimsOp op,
-              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    AxisInfo opInfo = operands[0]->getValue();
-    AxisInfo::DimVectorT contiguity = opInfo.getContiguity();
-    AxisInfo::DimVectorT divisibility = opInfo.getDivisibility();
-    AxisInfo::DimVectorT constancy = opInfo.getConstancy();
-    int64_t newDivisibility = 1;
-    if (opInfo.getConstantValue().has_value()) {
-      // The tensor is constant, same as ConstantOpAxisInfoVisitor
-      newDivisibility = highestPowOf2Divisor(opInfo.getConstantValue().value());
-    } else if (opInfo.getRank()) {
-      // Otherwise, calculate the GCD as the new divisibility
-      // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
-      newDivisibility =
-          opInfo.getContiguity(0) > 1 ? 1 : opInfo.getDivisibility(0);
-      for (int d = 1; d < opInfo.getRank(); ++d) {
-        newDivisibility =
-            gcd(newDivisibility,
-                opInfo.getContiguity(d) > 1 ? 1 : opInfo.getDivisibility(d));
-      }
-    }
-    contiguity.insert(contiguity.begin() + op.getAxis(), 1);
-    divisibility.insert(divisibility.begin() + op.getAxis(), newDivisibility);
-    constancy.insert(constancy.begin() + op.getAxis(), 1);
-    return AxisInfo(contiguity, divisibility, constancy,
-                    operands[0]->getValue().getConstantValue());
-  }
-};
-
 class BroadcastOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<triton::BroadcastOp> {
 public:
@@ -677,6 +642,34 @@ public:
   getAxisInfo(triton::ReshapeOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     AxisInfo srcInfo = operands[0]->getValue();
+
+    if (auto axis = op.getExpandDimsAxis()) {
+      AxisInfo::DimVectorT contiguity = srcInfo.getContiguity();
+      AxisInfo::DimVectorT divisibility = srcInfo.getDivisibility();
+      AxisInfo::DimVectorT constancy = srcInfo.getConstancy();
+      int64_t newDivisibility = 1;
+      if (srcInfo.getConstantValue().has_value()) {
+        // The tensor is constant, same as ConstantOpAxisInfoVisitor
+        newDivisibility =
+            highestPowOf2Divisor(srcInfo.getConstantValue().value());
+      } else if (srcInfo.getRank()) {
+        // Otherwise, calculate the GCD as the new divisibility
+        // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
+        newDivisibility =
+            srcInfo.getContiguity(0) > 1 ? 1 : srcInfo.getDivisibility(0);
+        for (int d = 1; d < srcInfo.getRank(); ++d) {
+          newDivisibility = gcd(
+              newDivisibility,
+              srcInfo.getContiguity(d) > 1 ? 1 : srcInfo.getDivisibility(d));
+        }
+      }
+      contiguity.insert(contiguity.begin() + *axis, 1);
+      divisibility.insert(divisibility.begin() + *axis, newDivisibility);
+      constancy.insert(constancy.begin() + *axis, 1);
+      return AxisInfo(contiguity, divisibility, constancy,
+                      srcInfo.getConstantValue());
+    }
+
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     auto dstTy = cast<RankedTensorType>(op.getType());
     auto dstShape = dstTy.getShape();
@@ -1191,7 +1184,6 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   RemOpAxisInfoVisitor<arith::RemUIOp>>();
   visitors.append<BroadcastOpAxisInfoVisitor>();
   visitors.append<SplatOpAxisInfoVisitor>();
-  visitors.append<ExpandDimsOpAxisInfoVisitor>();
   visitors.append<ReshapeOpAxisInfoVisitor>();
   visitors.append<CmpOpAxisInfoVisitor<arith::CmpIOp>>();
   visitors.append<LogicalOpAxisInfoVisitor<arith::AndIOp>,
