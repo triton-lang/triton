@@ -60,7 +60,7 @@ def test_module_walk(device):
         if name == "arith.constant":
             val = op.get_constant_value()
             assert isinstance(val, int)
-        if name == "tt.expand_dims":
+        if name == "tt.reshape":
             shape = op.get_result(0).get_shape()
             assert shape == [1, _BLOCK_SIZE]
         if name == "tt.reshape":
