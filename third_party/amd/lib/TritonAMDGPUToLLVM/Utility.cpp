@@ -26,7 +26,7 @@ enum class ShflKind : uint32_t {
 
 Value emitDpp(Location loc, RewriterBase &rewriter, Value old, Value src,
               DppCtrl dppCtrl, uint32_t rowMask = 0xf, uint32_t bankMask = 0xf,
-              bool boundCtrl = false) {
+              bool boundCtrl = true) {
   return ROCDL::DPPUpdateOp::create(
       rewriter, loc, src.getType(), old, src,
       rewriter.getI32IntegerAttr(static_cast<uint32_t>(dppCtrl)),
@@ -51,6 +51,25 @@ Value emitPermlaneX16Xor(Location loc, RewriterBase &rewriter, Value val,
   Value hiSel = b.i32_val(buildSelectorMask(8));
   return ROCDL::PermlaneX16Op::create(rewriter, loc, val.getType(), val, val,
                                       loSel, hiSel, true, false);
+}
+
+Value emitPermlaneSwapXor(Location loc, RewriterBase &rewriter, Value val,
+                          uint32_t laneMask) {
+  assert((laneMask == 16 || laneMask == 32) && "Expected a power of 2 mask");
+  assert(val.getType().isInteger(32) && "permlane_swap operates on i32 values");
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  MLIRContext *ctx = rewriter.getContext();
+  const char *intrinsic = laneMask == 32 ? "llvm.amdgcn.permlane32.swap"
+                                         : "llvm.amdgcn.permlane16.swap";
+  Type retTy = struct_ty({i32_ty, i32_ty});
+  Value f = b.false_val();
+  Value perm = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, retTy,
+                                               ValueRange{val, val, f, f})
+                   ->getResult(0);
+  Value v0 = b.extract_val(i32_ty, perm, 0);
+  Value v1 = b.extract_val(i32_ty, perm, 1);
+  Value isOriginalVal = b.icmp_eq(v0, val);
+  return b.select(isOriginalVal, v1, v0);
 }
 
 Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
@@ -139,6 +158,7 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
         ctrlBits |= (lane ^ quadMask) << (lane * 2);
       return static_cast<DppCtrl>(ctrlBits);
     };
+    bool usePermlaneSwap = isaFamily == ISAFamily::CDNA4 && (mask & 0x30);
 
     if (triton::amdgpu::isRDNA(isaFamily) || isaFamily == ISAFamily::GFX1250) {
       if (mask < 16)
@@ -148,7 +168,7 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
         return emitPermlaneX16Xor(loc, rewriter, val, mask & 0xf);
     } else if ((triton::amdgpu::isCDNA(isaFamily) ||
                 isaFamily == ISAFamily::GCN5_1) &&
-               mask < 16) {
+               (mask < 16 || usePermlaneSwap)) {
       Value result = val;
       uint32_t highBitsDppBasis = 0;
 
@@ -157,7 +177,7 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       if (mask & 8)
         highBitsDppBasis ^= 8;
 
-      uint32_t quadMask = mask ^ highBitsDppBasis;
+      uint32_t quadMask = (mask & 0xf) ^ highBitsDppBasis;
 
       if (highBitsDppBasis) {
         DppCtrl highBitsDppCtrl;
@@ -178,6 +198,13 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       if (quadMask) {
         result =
             emitDpp(loc, rewriter, result, result, makeQuadPermCtrl(quadMask));
+      }
+
+      if (usePermlaneSwap) {
+        if (mask & 16)
+          result = emitPermlaneSwapXor(loc, rewriter, result, 16);
+        if (mask & 32)
+          result = emitPermlaneSwapXor(loc, rewriter, result, 32);
       }
       return result;
     } else {
