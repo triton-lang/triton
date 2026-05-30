@@ -28,6 +28,7 @@ from .standard import (
     zeros,
     zeros_like,
 )
+from ..runtime.jit import constexpr_function
 from .core import (
     PropagateNan,
     TRITON_MAX_TENSOR_NUMEL,
@@ -176,6 +177,7 @@ __all__ = [
     "condition",
     "const",
     "constexpr",
+    "constexpr_function",
     "constexpr_type",
     "cos",
     "cumprod",
