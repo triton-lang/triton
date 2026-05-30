@@ -144,16 +144,16 @@ public:
     auto broadcastRhsOp = mulOp.getOperand(1).getDefiningOp<BroadcastOp>();
     if (!broadcastRhsOp)
       return failure();
-    // broadcast operand is expand dims
-    auto expandLhsOp = broadcastLhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
+    // broadcast operand is an expand-dims reshape
+    auto expandLhsOp = broadcastLhsOp.getSrc().getDefiningOp<ReshapeOp>();
     if (!expandLhsOp)
       return failure();
-    auto expandRhsOp = broadcastRhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
+    auto expandRhsOp = broadcastRhsOp.getSrc().getDefiningOp<ReshapeOp>();
     if (!expandRhsOp)
       return failure();
     // get not-broadcast dimensions
-    int expandLhsAxis = expandLhsOp.getAxis();
-    int expandRhsAxis = expandRhsOp.getAxis();
+    auto expandLhsAxis = expandLhsOp.getExpandDimsAxis();
+    auto expandRhsAxis = expandRhsOp.getExpandDimsAxis();
     if (expandLhsAxis != 2 || expandRhsAxis != 0)
       return failure();
     auto broadcastLhsShape =
