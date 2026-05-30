@@ -559,8 +559,7 @@ def test_while_block_arg_carries_init_handle_loc(fresh_triton_cache):
             arange *= ivar
         tl.device_print("", arange)
 
-    h = triton.compile(
-        triton.compiler.ASTSource(fn=kernel_while_block_arg_loc, signature={"N": "i32"}, constexprs={}))
+    h = triton.compile(triton.compiler.ASTSource(fn=kernel_while_block_arg_loc, signature={"N": "i32"}, constexprs={}))
     check_template = inspect.getsource(kernel_while_block_arg_loc.fn)
     run_filecheck("placeholder", h.asm["ttir"], check_template)
 
