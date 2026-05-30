@@ -168,6 +168,7 @@ def _select_reduce_forward_config(
     # handle masking, so let's require K <= 32 and is_cuda().
     use_rowidxs = (
         mask_chainable
+        and x_dtype.itemsize >= 2  # Row-index preprocessing is slower for fp8.
         and K <= 32
         and target_info.is_cuda()
         and torch.cuda.get_device_capability()[0] >= 9
