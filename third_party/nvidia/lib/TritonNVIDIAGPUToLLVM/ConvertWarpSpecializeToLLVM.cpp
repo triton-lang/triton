@@ -45,7 +45,7 @@ public:
       : numThreadsPerWarp(numThreadsPerWarp) {}
 
   bool isBarrierOp(Operation *op) const override {
-    return isa<NVVM::Barrier0Op>(op);
+    return isa<NVVM::BarrierOp>(op);
   }
 
   Type getBarrierHandleType(MLIRContext *ctx) const override {
