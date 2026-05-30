@@ -383,9 +383,11 @@ myst_sphinx_gallery_config = GalleryConfig(
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
+# Render the sphinx-multiversion version switcher (docs/_templates/versions.html)
+# in the sidebar so users can move between the documented versions.
 html_sidebars = {
     '**': [
-        '_templates/versions.html',
+        'versions.html',
     ],
 }
 
@@ -453,18 +455,6 @@ html_static_path = ['_static']
 html_css_files = [
     'css/custom.css',
 ]
-
-# Custom sidebar templates, must be a dictionary that maps document names
-# to template names.
-#
-# This is required for the alabaster theme
-# refs: http://alabaster.readthedocs.io/en/latest/installation.html#sidebars
-html_sidebars = {
-    '**': [
-        'relations.html',  # needs 'show_related': True theme option to display
-        'searchbox.html',
-    ]
-}
 
 html_logo = "https://cdn.openai.com/triton/assets/triton-logo.png"
 

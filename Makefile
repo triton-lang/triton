@@ -151,6 +151,13 @@ docs-requirements:
 docs-only:
 	cd docs; PATH="$(BUILD_DIR):$(PATH)" $(PYTHON) -m sphinx . _build/html/main
 
+# Build every whitelisted branch/tag (see smv_* in docs/conf.py) into
+# _build/html/<version>/ so the published site is versioned. Used by CI;
+# docs-only stays the fast single-version build for local previews.
+.PHONY: docs-multiversion
+docs-multiversion:
+	cd docs; PATH="$(BUILD_DIR):$(PATH)" $(PYTHON) -m sphinx_multiversion . _build/html
+
 .PHONY: docs
 .NOPARALLEL: docs
 docs: docs-requirements docs-only

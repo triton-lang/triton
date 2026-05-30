@@ -1,6 +1,9 @@
 tabulate
 cmake
-sphinx
+# sphinx-multiversion (used by `make docs-multiversion`) is incompatible with
+# Sphinx >= 8 (it calls the changed Config.read signature). Pin until it (or a
+# maintained successor) supports newer Sphinx.
+sphinx<8
 matplotlib
 myst_parser
 myst-sphinx-gallery

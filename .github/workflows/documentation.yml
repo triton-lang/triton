@@ -37,7 +37,7 @@ jobs:
         run: |
           # Limit the number of threads to reduce CPU memory usage
           # This CI node has 24 cores
-          MAX_JOBS=24 sudo -E make docs-only
+          MAX_JOBS=24 sudo -E make docs-multiversion
 
       - name: Update docs
         run: |
