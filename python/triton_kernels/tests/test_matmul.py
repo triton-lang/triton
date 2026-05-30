@@ -114,6 +114,11 @@ def _build_test_op_cases():
     test_cases = []
     # zero-sized
     test_cases.extend([
+        Case(m, n, k, mode, "float16", "float16")
+        for mode in ("ragged", "batched")
+        for (m, n, k) in ((0, 5, 7), (5, 0, 7), (5, 7, 0))
+    ])
+    test_cases.extend([
         Case(m, n, k, mode, "float16", "float16", split_k=None)
         for mode in ("ragged", "batched")
         for (m, n, k) in ((0, 5, 7), (5, 0, 7), (5, 7, 0))
