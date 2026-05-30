@@ -579,6 +579,18 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
+@pytest.mark.parametrize("a_shape, b_shape", [
+    ((0, 7), (7, 5)),
+    ((5, 7), (7, 0)),
+    ((0, 5, 7), (0, 7, 11)),
+])
+def test_empty_output_returns_before_kernel_selection(a_shape, b_shape, device, opt_flags_scope):
+    torch.manual_seed(0)
+    a = torch.randn(a_shape, dtype=torch.float16, device=device)
+    b = torch.randn(b_shape, dtype=torch.float16, device=device)
+    torch.testing.assert_close(matmul(a, b, None), torch.matmul(a, b))
+
+
 def test_k_ragged_mxfp8_act_scale_swizzling(device):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell or newer")
