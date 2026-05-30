@@ -73,6 +73,35 @@ Interfaces: `MBarrierOpInterface`
 
 
 
+### `ttng.async_shared_store` (triton::nvidia_gpu::AsyncSharedStoreOp)
+
+_Store a distributed tensor to shared memory asynchronously_
+
+Syntax:
+
+```
+operation ::= `ttng.async_shared_store` $src `,` $dst `,` $mbarrier attr-dict `:` type($src) `->`
+              qualified(type($dst)) `,` qualified(type($mbarrier))
+```
+
+Store a distributed tensor into shared memory using PTX st.async.shared.
+The store completion decrements the transaction count of `mbarrier`.
+This op requires a CTA cluster with at least two CTAs.
+
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `MBarrierOpInterface`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | ranked tensor of floating-point or integer or ptr values |
+| `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `mbarrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+
+
 ### `ttng.async_tma_copy_global_to_local` (triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp)
 
 _Copy data based on descriptor from global memory to local memory asynchronously_
@@ -273,7 +302,7 @@ Interfaces: `TMAOpInterface`, `TMAStoreLikeOpInterface`
 
 ### `ttng.async_tma_store_wait` (triton::nvidia_gpu::TMAStoreWaitOp)
 
-_Wait until all the inputs are read._
+_Wait for pending TMA store operations._
 
 Syntax:
 
@@ -281,8 +310,9 @@ Syntax:
 operation ::= `ttng.async_tma_store_wait` attr-dict
 ```
 
-Wait until all the read operations are done from the associated store operations.
-This is needed before the shared memory can be written to.
+Wait for the associated store operations to complete. When `read_only` is
+set, only wait until their reads from shared memory have completed. This is
+needed before shared memory can be written to again.
 
 Traits: `MemWaitOpTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
@@ -291,6 +321,7 @@ Traits: `MemWaitOpTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>pendings</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>read_only</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 
 
