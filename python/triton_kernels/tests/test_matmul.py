@@ -114,10 +114,11 @@ def _build_test_op_cases():
     test_cases = []
     # zero-sized
     test_cases.extend([
-        Case(m, n, k, mode, "float16", "float16")
+        Case(m, n, k, mode, "float16", "float16", split_k=None)
         for mode in ("ragged", "batched")
         for (m, n, k) in ((0, 5, 7), (5, 0, 7), (5, 7, 0))
     ])
+    test_cases.append(Case(5, 11, 7, "batched", "float16", "float16", n_slices=0, split_k=None))
     odd_shape1 = (727, 577, 859)
     odd_shape2 = (720, 576, 768)
     even_shape = (768, 512, 1024)
@@ -577,18 +578,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if c_dtype.has_global_scale:
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
-
-
-@pytest.mark.parametrize("a_shape, b_shape", [
-    ((0, 7), (7, 5)),
-    ((5, 7), (7, 0)),
-    ((0, 5, 7), (0, 7, 11)),
-])
-def test_empty_output_returns_for_zero_output_shapes(a_shape, b_shape, device, opt_flags_scope):
-    torch.manual_seed(0)
-    a = torch.randn(a_shape, dtype=torch.float16, device=device)
-    b = torch.randn(b_shape, dtype=torch.float16, device=device)
-    torch.testing.assert_close(matmul(a, b, None), torch.matmul(a, b))
 
 
 def test_k_ragged_mxfp8_act_scale_swizzling(device):
