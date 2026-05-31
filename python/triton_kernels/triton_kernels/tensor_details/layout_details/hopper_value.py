@@ -83,7 +83,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         batch = data.ndim - 2
         assert batch >= 0
         assert self.mma_version in (2, 3)
-        # Pre-pad both matrix dims before packing one of them by four.
+        # Align the dimension packed by four to a 64-byte load extent.
         *_, M_in, K_in = data.shape
         SWIZZLE_ALIGN_M = 64 if self.mx_axis == batch else 256
         SWIZZLE_ALIGN_K = 256 if self.mx_axis == batch else 64
