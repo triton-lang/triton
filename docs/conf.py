@@ -96,7 +96,18 @@ def process_gluon_docstring(app, what, name, obj, options, lines):
 def setup_gluon_napoleon(app):
     from sphinx.ext.napoleon import Config as NapoleonConfig
 
-    for name, default, rebuild, types in NapoleonConfig._config_values:
+    # Sphinx >= 8 exposes _config_values as a sequence of
+    # (name, default, rebuild, types) tuples; Sphinx < 8 (required by
+    # sphinx-multiversion) exposes a dict of name -> (default, rebuild).
+    # Support both so the docs build under either.
+    config_values = NapoleonConfig._config_values
+    if isinstance(config_values, dict):
+        entries = ((name, *value) for name, value in config_values.items())
+    else:
+        entries = config_values
+    for entry in entries:
+        name, default, rebuild = entry[0], entry[1], entry[2]
+        types = entry[3] if len(entry) > 3 else ()
         app.add_config_value(name, default, rebuild, types=types)
     app.connect("autodoc-process-docstring", process_gluon_docstring)
 
