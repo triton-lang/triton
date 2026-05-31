@@ -230,6 +230,17 @@ public:
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         loadOp.getResult());
     }
+    if (auto storeOp = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->barriers.push_back(
+          {storeOp.getBarrier(), nullptr, /*count=*/0,
+           MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
+           /*txCount=*/
+           -static_cast<int>(tti::getMemDescLength(storeOp.getDst()))});
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                        storeOp.getDst());
+    }
     if (auto tryCancelOp = dyn_cast<ttng::CLCTryCancelOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;

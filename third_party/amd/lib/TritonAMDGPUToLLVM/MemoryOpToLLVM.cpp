@@ -1,6 +1,7 @@
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -13,6 +14,20 @@ using mlir::triton::amdgpu::ISAFamily;
 using ::mlir::triton::gpu::MemDescType;
 
 namespace {
+
+static LLVM::FenceOp createAMDGPUMemoryFence(OpBuilder &builder, Location loc,
+                                             LLVM::AtomicOrdering ordering,
+                                             StringRef synchronizeAddrSpace) {
+  auto fence =
+      LLVM::FenceOp::create(builder, loc, ordering, /*syncscope=*/"workgroup");
+  if (!synchronizeAddrSpace.empty()) {
+    Attribute mmra = builder.getAttr<LLVM::MMRATagAttr>("amdgpu-synchronize-as",
+                                                        synchronizeAddrSpace);
+    fence->setDiscardableAttr(LLVM::LLVMDialect::getMmraAttrName(), mmra);
+  }
+  return fence;
+}
+
 class TransLocalLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
 public:
@@ -549,21 +564,27 @@ public:
                 triton::gpu::AddrSpace::TensorWrite;
     if ((op.getAddrSpace() & ~mask) != triton::gpu::AddrSpace::None)
       return failure();
-    // We can lower barrier to MemoryCounterWaitOp + s_barrier
-    // - MemoryCounterWaitOp specifies how many operations to
-    //   VMEM(Read)/VMEM(Write)/LDS can be outstanding when
-    //   the instruction completes.
-    // - s_barrier synchronizes the execution for the CTA
-    IntegerAttr zero = rewriter.getI32IntegerAttr(0);
     bool localBarrier = op.hasLocal();
     bool globalBarrier = op.hasGlobalRead() || op.hasGlobalWrite();
     if (localBarrier || globalBarrier) {
-      amdgpu::MemoryCounterWaitOp::create(
-          rewriter, op->getLoc(),
-          /* load= */ op.hasGlobalRead() ? zero : nullptr,
-          /* store= */ op.hasGlobalWrite() ? zero : nullptr,
-          /* ds= */ localBarrier ? zero : nullptr);
+      StringRef mmraAddrSpace = "";
+      if (localBarrier && !globalBarrier)
+        mmraAddrSpace = "local";
+      else if (!localBarrier && globalBarrier)
+        mmraAddrSpace = "global";
+
+      // Local/global barriers use LLVM fences so the AMDGPU memory legalizer
+      // selects target-specific waits. Mixed local+global barriers are left
+      // untagged so LLVM conservatively synchronizes every relevant space.
+      createAMDGPUMemoryFence(rewriter, op->getLoc(),
+                              LLVM::AtomicOrdering::release, mmraAddrSpace);
+      ROCDL::SBarrierOp::create(rewriter, op->getLoc());
+      createAMDGPUMemoryFence(rewriter, op->getLoc(),
+                              LLVM::AtomicOrdering::acquire, mmraAddrSpace);
+      rewriter.eraseOp(op);
+      return success();
     }
+
     rewriter.replaceOpWithNewOp<ROCDL::SBarrierOp>(op);
 
     return success();

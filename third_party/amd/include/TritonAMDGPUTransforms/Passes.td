@@ -186,6 +186,28 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
   ];
 }
 
+def TritonAMDGPUAnnotateBufferOpSplitSafety :
+    Pass<"tritonamdgpu-annotate-buffer-op-split-safety", "mlir::ModuleOp"> {
+  let summary = "Annotate amdgpu.buffer_* ops whose offsets are provably non-negative";
+
+  let description = [{
+    AMD raw buffer ops bound-check `voffset` alone (not `voffset + soffset`),
+    so the LLVM-stage soffset splitter can only safely lift uniform offset
+    components into the SGPR `soffset` slot when the per-lane voffset that
+    remains is non-negative.
+
+    This pass runs `TritonIntegerRangeAnalysis` (which understands
+    `tt.divisibility`, loop trip counts, and user-supplied `tl.assume`)
+    and tags each `amdgpu.buffer_load`, `amdgpu.buffer_store`, and
+    `amdgpu.buffer_load_to_local` whose offsets are provably non-negative
+    with `amdgpu.split_soffset_safe` (UnitAttr). The LLVM-stage splitter
+    in `BufferOpsEmitter` consults this attribute and only splits when it
+    is present.
+  }];
+
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
+}
+
 def TritonAMDGPUOptimizeBufferOpPtr : Pass<"tritonamdgpu-optimize-buffer-op-ptr", "mlir::triton::FuncOp"> {
   let summary = "Optimize address operands of buffer operations";
 

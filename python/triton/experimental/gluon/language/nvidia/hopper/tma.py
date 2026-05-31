@@ -384,9 +384,10 @@ def async_atomic_xor(tensor_desc, coord, src, _semantic=None):
 
 
 @builtin
-def store_wait(pendings, _semantic=None):
+def store_wait(pendings, read_only=False, _semantic=None):
     pendings = _unwrap_if_constexpr(pendings)
-    _semantic.builder.create_async_tma_store_wait(pendings)
+    read_only = _unwrap_if_constexpr(read_only)
+    _semantic.builder.create_async_tma_store_wait(pendings, read_only)
 
 
 @builtin

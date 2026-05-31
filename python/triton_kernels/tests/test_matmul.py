@@ -113,11 +113,15 @@ class Case:
 def _build_test_op_cases():
     test_cases = []
     # zero-sized
-    test_cases.extend([
-        Case(m, n, k, mode, "float16", "float16")
-        for mode in ("ragged", "batched")
-        for (m, n, k) in ((0, 5, 7), (5, 0, 7), (5, 7, 0))
-    ])
+    zero_sized_shapes = ((0, 5, 7), (5, 0, 7), (5, 7, 0))
+    # split_k=1 preserves existing constrained coverage; None exercises automatic split-K selection.
+    for split_k in (1, None):
+        test_cases.extend([
+            Case(m, n, k, mode, "float16", "float16", split_k=split_k)
+            for mode in ("plain", "ragged", "batched")
+            for (m, n, k) in zero_sized_shapes
+        ])
+    test_cases.append(Case(5, 11, 7, "batched", "float16", "float16", n_slices=0, split_k=None))
     odd_shape1 = (727, 577, 859)
     odd_shape2 = (720, 576, 768)
     even_shape = (768, 512, 1024)

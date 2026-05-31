@@ -315,6 +315,10 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_prepare_if_combining(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
+        if knobs.amd.use_buffer_ops:
+            # Run after CSE so matching assume and loop-bound expressions
+            # share SSA, letting range analysis prove both non-negative.
+            amd.passes.ttgpuir.add_annotate_buffer_op_split_safety(pm)
         passes.common.add_symbol_dce(pm)
         if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
@@ -342,6 +346,8 @@ class HIPBackend(BaseBackend):
         if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
             passes.ttgpuir.add_fp_sanitizer(pm)
+
+        amd.passes.ttgpuir.add_annotate_buffer_op_split_safety(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -501,7 +507,7 @@ class HIPBackend(BaseBackend):
             if len(paths) > 0:
                 llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion, True)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during

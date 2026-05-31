@@ -1832,10 +1832,8 @@ struct TMAStoreWaitOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMAStoreWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto ctx = op.getContext();
-    auto isRead = UnitAttr::get(ctx);
     rewriter.replaceOpWithNewOp<NVVM::CpAsyncBulkWaitGroupOp>(
-        op, op.getPendingsAttr(), isRead);
+        op, op.getPendingsAttr(), op.getReadOnlyAttr());
     return success();
   }
 };

@@ -235,6 +235,47 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize("EXPECT_DELTA", [0, 4], ids=["match", "mismatch"])
+def test_async_shared_store_expect_bytes(EXPECT_DELTA, device, run_wrapper, monkeypatch, num_ctas):
+    if num_ctas == 1:
+        pytest.skip("st.async.shared requires at least 2 CTAs")
+    if run_wrapper:
+        result = run_in_process(test_async_shared_store_expect_bytes,
+                                (EXPECT_DELTA, device, False, monkeypatch, num_ctas))
+        if EXPECT_DELTA:
+            assert_expected_cuda_failure(result.exc)
+            assert "Deadlock detected" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(out, EXPECT_DELTA: ttgl.constexpr):
+        cga_layout: ttgl.constexpr = multicast_cga_layout(ttgl.num_ctas(), 1)
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=cga_layout)
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=cga_layout)
+        offsets = ttgl.arange(0, XBLOCK, layout=layout)
+        values = offsets.to(ttgl.int32)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK], smem_layout)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        mbarrier.expect(bar, smem.nbytes_per_cta + EXPECT_DELTA)
+        hopper.async_store(smem, values, bar)
+        mbarrier.wait(bar, 0, deps=[smem])
+        result = smem.load(layout)
+        mbarrier.invalidate(bar)
+        ttgl.store(out + offsets, result)
+
+    output = torch.empty((XBLOCK.value, ), device=device, dtype=torch.int32)
+    kernel[(1, )](output, EXPECT_DELTA=EXPECT_DELTA, num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_tma_multicast_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
@@ -933,10 +974,14 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
             assert_expected_cuda_failure(result.exc)
             if MEM_ACCESS_KIND == "tma_cp":
                 # shmem operands are being read by the tcgen05_mma
-                assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+                assert (("Buffer being accessed has outstanding reads" in result.driver_stderr_output) or
+                        (TWO_CTAS
+                         and "Barrier used before initialization or after invalidation" in result.driver_stderr_output))
             elif MEM_ACCESS_KIND in ["tmem_load", "tmem_store"]:
                 # tmem is being written by the tcgen05_mma
-                assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+                assert (("Buffer being accessed has outstanding writes" in result.driver_stderr_output) or
+                        (TWO_CTAS
+                         and "Barrier used before initialization or after invalidation" in result.driver_stderr_output))
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -974,7 +1019,7 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
         acc = blackwell.allocate_tensor_memory(ttgl.float32, [block_m, block_n], acc_layout)
         mbarrier.init(mma_bar, count=1)
         if MEM_ACCESS_KIND == "tma_cp":
-            tma_bar = mbarrier.allocate_mbarrier(two_ctas=TWO_CTAS)
+            tma_bar = mbarrier.allocate_mbarrier()
             mbarrier.init(tma_bar, count=1)
 
         blackwell.tcgen05_mma(smemA, smemB, acc)

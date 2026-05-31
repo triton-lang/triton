@@ -2,6 +2,7 @@
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_PATTERNTRITONGPUOPTOLLVM_H_
 
 #include "TargetInfo.h"
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -35,6 +36,7 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                       const DataFlowSolver *uniformitySolver,
                                        PatternBenefit benefit);
 
 void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,

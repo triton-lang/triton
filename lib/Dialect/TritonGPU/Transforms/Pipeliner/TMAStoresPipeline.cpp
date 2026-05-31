@@ -54,7 +54,7 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
 
   // Put wait before the local_store make the store truly async. We know
   // that we are the only user of the CopyLocalToGlobal.
-  ttng::TMAStoreWaitOp::create(builder, loc, 0);
+  ttng::TMAStoreWaitOp::create(builder, loc, 0, /*read_only=*/false);
   ttg::LocalStoreOp::create(builder, loc, store.src, alloc);
   ttng::FenceAsyncSharedOp::create(builder, loc, false);
   auto desc = store.desc;
@@ -112,7 +112,8 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
   // Deallocate shared memory buffers.
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
-  ttng::TMAStoreWaitOp::create(builder, forOp->getLoc(), 0);
+  ttng::TMAStoreWaitOp::create(builder, forOp->getLoc(), 0,
+                               /*read_only=*/false);
   for (auto it : storeToAlloc) {
     ttg::LocalDeallocOp::create(builder, forOp->getLoc(), it.second);
   }
