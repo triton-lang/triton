@@ -83,10 +83,10 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         batch = data.ndim - 2
         assert batch >= 0
         assert self.mma_version in (2, 3)
-        # Pre-pad both matrix dims to multiples of 64
+        # Pre-pad both matrix dims before packing one of them by four.
         *_, M_in, K_in = data.shape
-        SWIZZLE_ALIGN_M = 64
-        SWIZZLE_ALIGN_K = 64
+        SWIZZLE_ALIGN_M = 64 if self.mx_axis == batch else 256
+        SWIZZLE_ALIGN_K = 256 if self.mx_axis == batch else 64
         pad_m = (SWIZZLE_ALIGN_M - (M_in % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
         pad_k = (SWIZZLE_ALIGN_K - (K_in % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
         data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
