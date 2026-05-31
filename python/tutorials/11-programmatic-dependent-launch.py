@@ -37,7 +37,7 @@ def add_kernel(x_ptr,  #
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     if USE_GDC:
-        # GDC wait waits for ALL programs in the the prior kernel to complete before continuing.
+        # GDC wait waits for ALL programs in the prior kernel to complete before continuing.
         # This ensures any memory operations happen before the wait in program order,
         # e.g. if the prior kernel writes to x or y the new values will be visible.
         tl.extra.cuda.gdc_wait()
