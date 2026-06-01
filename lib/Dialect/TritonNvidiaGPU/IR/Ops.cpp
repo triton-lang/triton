@@ -305,12 +305,32 @@ LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
   return success();
 }
 
-static LogicalResult verifyClusterSyncOp(Operation *op) {
+static LogicalResult verifyClusterNumCTAs(Operation *op) {
   int numCTAs = triton::gpu::lookupNumCTAs(op);
   if (numCTAs <= 1)
     return op->emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
+static LogicalResult verifyClusterSyncOp(Operation *op) {
+  if (failed(verifyClusterNumCTAs(op)))
+    return failure();
   if (op->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>())
     return op->emitOpError("cannot be used inside `ttg.warp_specialize`");
+  return success();
+}
+
+static LogicalResult verifyClusterBarrierOp(Operation *op) {
+  if (failed(verifyClusterNumCTAs(op)))
+    return failure();
+  // A verifier cannot infer whether a noinline callee executes inside a
+  // warp-specialized caller, so conservatively reject all noinline functions.
+  if (auto func = op->getParentOfType<mlir::triton::FuncOp>()) {
+    auto noinline = func->getAttrOfType<BoolAttr>("noinline");
+    if (noinline && noinline.getValue())
+      return op->emitOpError(
+          "inside a non-inline function is not yet implemented");
+  }
   return success();
 }
 
@@ -326,7 +346,7 @@ LogicalResult ClusterWaitOp::verify() {
 
 // -- ClusterBarrierOp --
 LogicalResult ClusterBarrierOp::verify() {
-  return verifyClusterSyncOp(getOperation());
+  return verifyClusterBarrierOp(getOperation());
 }
 
 // -- TMA operation verifiers --

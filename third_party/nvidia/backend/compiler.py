@@ -451,7 +451,9 @@ class CUDABackend(BaseBackend):
         total_num_warps = src.get_int_attr("ttg.total-num-warps")
         if total_num_warps is not None:
             metadata["num_warps"] = total_num_warps
-        metadata["shared"] = src.get_int_attr("ttg.shared")
+        align_as = lambda x, a: (x + a - 1) // a * a
+        metadata["shared"] = align_as(src.get_int_attr("ttg.shared"),
+                                      8) + 16 * (src.get_int_attr("ttg.ws_cluster_barrier_count") or 0)
         metadata["tmem_size"] = src.get_int_attr("ttg.tensor_memory_size")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size") or 0
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment") or 1

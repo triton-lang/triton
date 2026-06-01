@@ -609,6 +609,134 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
 
 // -----
 
+#sharedInitSync = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smemInitSync = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @cluster_barrier_inside_warp_specialize_reuses_init_sync
+  // CHECK-COUNT-1: fence.mbarrier_init.release.cluster
+  // CHECK-COUNT-1: nvvm.cluster.arrive.relaxed
+  tt.func @cluster_barrier_inside_warp_specialize_reuses_init_sync() {
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi64, #sharedInitSync, #smemInitSync, mutable>
+    ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #sharedInitSync, #smemInitSync, mutable>
+    %c0_i32 = arith.constant 0 : i32
+    %true = arith.constant true
+    ttng.wait_barrier %alloc, %c0_i32, %true : !ttg.memdesc<1xi64, #sharedInitSync, #smemInitSync, mutable>
+    ttg.warp_specialize()
+    default {
+      ttng.cluster_barrier
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 5 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: module attributes {
+  // CHECK-DAG: ttg.shared = 5 : i32
+  // CHECK-DAG: ttg.ws_cluster_barrier_count = 1 : i32
+  // CHECK-LABEL: @cluster_barrier_inside_warp_specialize
+  // CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;"
+  // CHECK: fence.mbarrier_init.release.cluster
+  // CHECK: nvvm.cluster.arrive.relaxed
+  // CHECK-NEXT: nvvm.cluster.wait
+  tt.func @cluster_barrier_inside_warp_specialize() {
+    ttg.warp_specialize()
+    default {
+      // CHECK: nvvm.barrier0
+      // CHECK: %[[PARITY:.*]] = llvm.load
+      // CHECK: %[[BARRIER_INT:.*]] = llvm.ptrtoint
+      // CHECK: %[[PEER_BARRIER_INT:.*]] = llvm.xor %[[BARRIER_INT]],
+      // CHECK: llvm.inttoptr %[[PEER_BARRIER_INT]]
+      // CHECK-NOT: mapa
+      // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
+      // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
+      // CHECK: llvm.xor %[[PARITY]],
+      // CHECK: st.shared.u32
+      // CHECK: nvvm.barrier0
+      ttng.cluster_barrier
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 5 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: module attributes {
+  // CHECK-DAG: ttg.shared = 5 : i32
+  // CHECK-DAG: ttg.ws_cluster_barrier_count = 2 : i32
+  // CHECK-LABEL: @cluster_barrier_inside_warp_specialize_disjoint_slots
+  // CHECK: llvm.mlir.constant(24 : i32)
+  // CHECK: mbarrier.init.shared::cta.b64
+  // CHECK: llvm.mlir.constant(8 : i32)
+  // CHECK: mbarrier.init.shared::cta.b64
+  tt.func @cluster_barrier_inside_warp_specialize_disjoint_slots() {
+    ttg.warp_specialize()
+    default {
+      ttng.cluster_barrier
+      ttng.cluster_barrier
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @cluster_barrier_inside_warp_specialize_relaxed
+  tt.func @cluster_barrier_inside_warp_specialize_relaxed() {
+    ttg.warp_specialize()
+    default {
+      // CHECK: mbarrier.arrive.relaxed.cluster.shared::cluster.b64
+      // CHECK: mbarrier.try_wait.parity.relaxed.cluster.shared::cta.b64
+      ttng.cluster_barrier {relaxed = true}
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: ttg.ws_cluster_barrier_count = 1 : i32
+  // CHECK-LABEL: @cluster_barrier_created_during_conversion
+  // CHECK: llvm.mlir.constant(8 : i32)
+  // CHECK: mbarrier.init.shared::cta.b64
+  // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
+  tt.func @cluster_barrier_created_during_conversion(%arg0: !tt.ptr<i32>) {
+    ttg.warp_specialize()
+    default {
+      %c1_i32 = arith.constant 1 : i32
+      %0 = tt.atomic_rmw add, acq_rel, gpu, %arg0, %c1_i32 {allocation.offset = 0 : i32} : (!tt.ptr<i32>, i32) -> i32
+      tt.store %arg0, %0 : !tt.ptr<i32>
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 4 : i32} {
   // CHECK-LABEL: @cluster_wait_not_warp_specialized
   llvm.func @cluster_wait_not_warp_specialized() {

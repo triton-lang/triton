@@ -96,8 +96,9 @@ def TTNG_ClusterBarrierOp : TTNG_Op<"cluster_barrier", []> {
     Lowers to a cluster arrive/wait pair.
 
     In warp-specialized kernels, lowering wraps the barrier in a synthetic
-    `ttg.warp_specialize` region so worker warps also execute the barrier.
-    This op cannot be placed inside an existing `ttg.warp_specialize`.
+    `ttg.warp_specialize` region so worker warps also execute a barrier outside
+    existing warp-specialized code. A barrier inside `ttg.warp_specialize`
+    lowers through a cluster-scoped mbarrier.
   }];
   let assemblyFormat = "attr-dict";
   let hasVerifier = 1;

@@ -15,9 +15,11 @@ void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      PatternBenefit benefit,
                                      NVIDIA::TargetInfo &info);
 
-void populateClusterOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
+void populateClusterOpsToLLVMPatterns(ModuleOp mod,
+                                      LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
-                                      PatternBenefit benefit);
+                                      PatternBenefit benefit,
+                                      NVIDIA::TargetInfo &info);
 
 void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            const TargetInfo &targetInfo,
