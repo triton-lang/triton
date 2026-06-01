@@ -427,6 +427,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
 // BufferAtomicCASOp
 //===----------------------------------------------------------------------===//
 def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
+  AttrSizedOperandSegments,
   SameLoadStoreOperandsAndResultEncoding,
   BufferOpInterface,
   TypesMatchWith<"result element type matches the val type", "result", "val", "$_self">,

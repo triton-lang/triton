@@ -521,10 +521,6 @@ void atomic_compare_exchange_strong(void *loc, void *expected,
   }
 }
 
-(pybind11::dtype dtype, const uint64_t *ptr, const void *val,
-                void *ret, const bool *mask, size_t numel,
-                std::memory_order order)
-
 class AtomicCASOp : public AtomicOp {
 public:
   AtomicCASOp(const uint64_t *ptr, void *expected, const void *desired,
@@ -556,6 +552,7 @@ protected:
 private:
   void *expected;
   const void *desired;
+  const bool *mask;
   size_t itemsize;
 };
 
