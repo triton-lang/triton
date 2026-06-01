@@ -1260,6 +1260,15 @@ class TritonSemantic(Generic[TensorTy]):
         element_ty = ptr.type.scalar.element_ty
         if element_ty.primitive_bitwidth not in [16, 32, 64]:
             raise ValueError("atomic_cas only supports elements with width {16, 32, 64}")
+        if mask is None:
+            mask_ir = self.builder.get_int1(True)
+            mask_ty = tl.int1
+            if ptr.type.is_block():
+                mask_ty = ptr.type.with_element_ty(tl.int1)
+                mask_ir = self.builder.create_splat(mask_ty.to_ir(self.builder), mask_ir)
+            mask = self.tensor(mask_ir, mask_ty)
+        elif not mask.type.scalar.is_bool():
+            raise ValueError("Mask must have boolean scalar type")
         return self.tensor(self.builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle, mask.handle, sem, scope), val.type)
 
     def atom_red_typechecking_impl(self, ptr: TensorTy, val: TensorTy, mask: TensorTy,
