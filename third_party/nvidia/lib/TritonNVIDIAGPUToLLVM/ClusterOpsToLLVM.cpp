@@ -27,7 +27,6 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/MathExtras.h"
@@ -203,15 +202,13 @@ struct ClusterWaitOpConversion
 struct ClusterBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ClusterBarrierOp> {
   const NVIDIA::TargetInfo *targetInfo;
-  bool hasCrossCTAMBarrierInit;
   mutable bool emittedMBarrierInitSync = false;
 
   ClusterBarrierOpConversion(LLVMTypeConverter &typeConverter,
                              PatternBenefit benefit,
-                             NVIDIA::TargetInfo &targetInfo,
-                             bool hasCrossCTAMBarrierInit)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(&targetInfo),
-        hasCrossCTAMBarrierInit(hasCrossCTAMBarrierInit) {}
+                             NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
 
   void createWSMBarrierPrologue(triton::nvidia_gpu::ClusterBarrierOp op,
                                 ConversionPatternRewriter &rewriter) const {
@@ -232,7 +229,7 @@ struct ClusterBarrierOpConversion
                        triton::gpu::lookupNumCTAs(op) - 1);
     createPredicatedPTXStore(rewriter, loc, pred, parityPtr, b.i32_val(0));
 
-    if (hasCrossCTAMBarrierInit || emittedMBarrierInitSync)
+    if (emittedMBarrierInitSync)
       return;
     emittedMBarrierInitSync = true;
     triton::nvidia_gpu::FenceMBarrierInitReleaseClusterOp::create(rewriter,
@@ -304,22 +301,10 @@ struct ClusterBarrierOpConversion
 } // namespace
 
 void mlir::triton::NVIDIA::populateClusterOpsToLLVMPatterns(
-    ModuleOp mod, LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit, NVIDIA::TargetInfo &targetInfo) {
-  bool hasCrossCTAMBarrierInit = false;
-  for (auto func : mod.getOps<LLVM::LLVMFuncOp>()) {
-    if (!triton::isKernel(func))
-      continue;
-    func.walk([&](triton::nvidia_gpu::InitBarrierOp op) {
-      auto barrierTy =
-          cast<triton::gpu::MemDescType>(op.getBarrier().getType());
-      if (barrierTy.getShape()[0] != triton::gpu::lookupNumCTAs(op))
-        hasCrossCTAMBarrierInit = true;
-    });
-  }
   patterns.add<ClusterArriveOpConversion>(typeConverter, benefit);
   patterns.add<ClusterWaitOpConversion>(typeConverter, benefit);
-  patterns.add<ClusterBarrierOpConversion>(typeConverter, benefit, targetInfo,
-                                           hasCrossCTAMBarrierInit);
+  patterns.add<ClusterBarrierOpConversion>(typeConverter, benefit, targetInfo);
   return;
 }

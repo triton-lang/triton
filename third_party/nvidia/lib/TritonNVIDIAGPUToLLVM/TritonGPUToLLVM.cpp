@@ -174,7 +174,7 @@ struct ConvertTritonGPUToLLVM
                                                  targetInfo, benefit);
     populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit,
                                     targetInfo);
-    populateClusterOpsToLLVMPatterns(mod, typeConverter, patterns, benefit,
+    populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit,
                                      targetInfo);
     mlir::triton::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
                                                     targetInfo, benefit);

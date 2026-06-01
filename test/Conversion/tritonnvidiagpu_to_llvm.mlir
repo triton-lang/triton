@@ -609,32 +609,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
 
 // -----
 
-#sharedInitSync = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
-#smemInitSync = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @cluster_barrier_inside_warp_specialize_reuses_init_sync
-  // CHECK-COUNT-1: fence.mbarrier_init.release.cluster
-  // CHECK-COUNT-1: nvvm.cluster.arrive.relaxed
-  tt.func @cluster_barrier_inside_warp_specialize_reuses_init_sync() {
-    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi64, #sharedInitSync, #smemInitSync, mutable>
-    ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #sharedInitSync, #smemInitSync, mutable>
-    %c0_i32 = arith.constant 0 : i32
-    %true = arith.constant true
-    ttng.wait_barrier %alloc, %c0_i32, %true : !ttg.memdesc<1xi64, #sharedInitSync, #smemInitSync, mutable>
-    ttg.warp_specialize()
-    default {
-      ttng.cluster_barrier
-      ttg.warp_yield
-    }
-    partition0() num_warps(4) {
-      ttg.warp_return
-    } : () -> ()
-    tt.return
-  }
-}
-
-// -----
-
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 5 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: module attributes {
   // CHECK-DAG: ttg.shared = 5 : i32
