@@ -141,7 +141,7 @@ fitToValidDirectToLdsVecSize(unsigned maxVecSize, unsigned elemBitwidth,
                              const triton::AMD::TargetInfo &targetInfo) {
   while (maxVecSize > 0 && !targetInfo.supportsDirectToLdsLoadBitWidth(
                                maxVecSize * elemBitwidth)) {
-    maxVecSize /= 2;
+    --maxVecSize;
   }
   return maxVecSize;
 }
