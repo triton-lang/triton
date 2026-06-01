@@ -458,6 +458,52 @@ def test_warp_specialize_tma_matmul_persistent_consan(M, N, K, a_use_tma, b_use_
 
 
 @triton.jit
+def ws_descriptor_dot_chain_kernel(C, K, Out, M: tl.constexpr, N: tl.constexpr, D: tl.constexpr,
+                                   BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+                                   WARP_SPECIALIZE: tl.constexpr):
+    pid_m = tl.program_id(0)
+    off_m = pid_m * BLOCK_M
+
+    c = C.load([off_m, 0])
+    acc = tl.zeros((BLOCK_M, D), tl.float32)
+    for start_n in tl.range(0, N, BLOCK_N, num_stages=2, warp_specialize=WARP_SPECIALIZE):
+        start_n = tl.multiple_of(start_n, BLOCK_N)
+        k = K.load([start_n, 0])
+        score = tl.dot(k, tl.trans(c), out_dtype=tl.float32)
+        ds = score.to(tl.bfloat16)
+        acc += tl.dot(tl.trans(ds), k, out_dtype=tl.float32)
+
+    Out.store([off_m, 0], acc)
+
+
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+def test_warp_specialize_descriptor_dot_chain_accum_count():
+    M, N, D = 256, 512, 128
+    BLOCK_M, BLOCK_N = 64, 64
+    torch.manual_seed(0)
+    c = torch.randn((M, D), device="cuda", dtype=torch.bfloat16) * 0.1
+    k = torch.randn((N, D), device="cuda", dtype=torch.bfloat16) * 0.1
+    out_ref = torch.empty((M, D), device="cuda", dtype=torch.float32)
+    out = torch.empty_like(out_ref)
+
+    c_desc = TensorDescriptor(c, shape=[M, D], strides=[D, 1], block_shape=[BLOCK_M, D])
+    k_desc = TensorDescriptor(k, shape=[N, D], strides=[D, 1], block_shape=[BLOCK_N, D])
+    out_ref_desc = TensorDescriptor(out_ref, shape=[M, D], strides=[D, 1], block_shape=[BLOCK_M, D])
+    out_desc = TensorDescriptor(out, shape=[M, D], strides=[D, 1], block_shape=[BLOCK_M, D])
+
+    grid = (triton.cdiv(M, BLOCK_M), )
+    ws_descriptor_dot_chain_kernel[grid](c_desc, k_desc, out_ref_desc, M, N, D, BLOCK_M, BLOCK_N, False,
+                                         num_warps=4, num_stages=2)
+    kernel = ws_descriptor_dot_chain_kernel[grid](c_desc, k_desc, out_desc, M, N, D, BLOCK_M, BLOCK_N, True,
+                                                 num_warps=4, num_stages=2)
+
+    assert "ttg.warp_specialize" in kernel.asm["ttgir"]
+    assert "ttng.async_tma_copy_global_to_local" in kernel.asm["ttgir"]
+    torch.testing.assert_close(out, out_ref, rtol=1e-2, atol=1e-1)
+
+
+@triton.jit
 def attention_inner_loop_kernel(  #
         desc_q, desc_k, desc_v,  #
         desc_acc, l_i_ptr, m_i_ptr,  #
@@ -496,6 +542,44 @@ def attention_inner_loop_kernel(  #
     desc_acc.store([off_m, 0], acc.to(q.dtype))
     tl.store(l_i_ptr + off_m + tl.arange(0, BLOCK_M), l_i)
     tl.store(m_i_ptr + off_m + tl.arange(0, BLOCK_M), m_i)
+
+
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+def test_warp_specialize_attention_descriptor_fallback_cleanup():
+    M, N = 256, 256
+    BLOCK_M, HEAD_DIM = 64, 64
+
+    torch.manual_seed(42)
+    q = torch.randn((M, HEAD_DIM), device="cuda", dtype=torch.float16)
+    k = torch.randn((N, HEAD_DIM), device="cuda", dtype=torch.float16)
+    v = torch.randn((N, HEAD_DIM), device="cuda", dtype=torch.float16)
+
+    acc_ref = torch.empty((M, HEAD_DIM), dtype=torch.float16, device="cuda")
+    l_i_ref = torch.empty((M, ), dtype=torch.float16, device="cuda")
+    m_i_ref = torch.empty((M, ), dtype=torch.float16, device="cuda")
+    acc = torch.empty((M, HEAD_DIM), dtype=torch.float16, device="cuda")
+    l_i = torch.empty((M, ), dtype=torch.float16, device="cuda")
+    m_i = torch.empty((M, ), dtype=torch.float16, device="cuda")
+
+    desc_q = TensorDescriptor(q, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_k = TensorDescriptor(k, shape=[N, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_v = TensorDescriptor(v, shape=[N, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+    desc_acc_ref = TensorDescriptor(acc_ref, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                    block_shape=[BLOCK_M, HEAD_DIM])
+    desc_acc = TensorDescriptor(acc, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
+
+    grid = (M // BLOCK_M, )
+    attention_inner_loop_kernel[grid](desc_q, desc_k, desc_v, desc_acc_ref, l_i_ref, m_i_ref, M, N, 0.5, BLOCK_M,
+                                      HEAD_DIM, False, num_stages=2, num_warps=4)
+    kernel = attention_inner_loop_kernel[grid](desc_q, desc_k, desc_v, desc_acc, l_i, m_i, M, N, 0.5, BLOCK_M,
+                                               HEAD_DIM, True, num_stages=2, num_warps=4)
+
+    assert "ttg.warp_specialize" in kernel.asm["ttgir"]
+    assert "ttng.async_tma_copy_global_to_local" in kernel.asm["ttgir"]
+    torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
+    torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
+    torch.testing.assert_close(m_i.to(torch.float32), m_i_ref.to(torch.float32), atol=0, rtol=0)
 
 
 @pytest.mark.parametrize("M, N", [(8192, 8192), (1024, 1024)])

@@ -61,6 +61,17 @@ public:
     // FIXME: skip data partitioning with on-host TMA.
     bool success = false;
     for (; numWarpGroups >= 2; numWarpGroups--) {
+      bool ownsGeneratedAsyncTasks = true;
+      funcOp->walk([&](Operation *op) {
+        if (!getAsyncTaskIds(op).empty())
+          ownsGeneratedAsyncTasks = false;
+      });
+      auto clearGeneratedAsyncTasks = [&]() {
+        if (!ownsGeneratedAsyncTasks)
+          return;
+        funcOp->walk([](Operation *op) { removeAsyncTaskIds(op); });
+      };
+
       // Partition key ops into multiple async tasks.
       doTaskPartition(funcOp, numWarpGroups);
       if (dumpIntermediateSteps) {
@@ -70,8 +81,10 @@ public:
       }
       // Propagate taskId.
       int retCode = doTaskIdPropagate(funcOp);
-      if (retCode == -1)
+      if (retCode == -1) {
+        clearGeneratedAsyncTasks();
         continue;
+      }
       if (dumpIntermediateSteps) {
         ::mlir::triton::tools::mlirDumpsOrDbgs()
             << "// -----// WarpSpec internal IR Dump After: doTaskIdPropagate\n"
@@ -88,7 +101,7 @@ public:
         success = true;
         break;
       }
-      // Clear async_task.
+      clearGeneratedAsyncTasks();
     }
     if (!success) {
       mlir::emitError(
