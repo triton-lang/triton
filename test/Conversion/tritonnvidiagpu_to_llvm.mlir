@@ -669,25 +669,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @cluster_barrier_inside_warp_specialize_relaxed
-  tt.func @cluster_barrier_inside_warp_specialize_relaxed() {
-    ttg.warp_specialize()
-    default {
-      // CHECK: mbarrier.arrive.relaxed.cluster.shared::cluster.b64
-      // CHECK: mbarrier.try_wait.parity.relaxed.cluster.shared::cta.b64
-      ttng.cluster_barrier {relaxed = true}
-      ttg.warp_yield
-    }
-    partition0() num_warps(4) {
-      ttg.warp_return
-    } : () -> ()
-    tt.return
-  }
-}
-
-// -----
-
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: ttg.ws_cluster_barrier_count = 1 : i32
   // CHECK-LABEL: @cluster_barrier_created_during_conversion

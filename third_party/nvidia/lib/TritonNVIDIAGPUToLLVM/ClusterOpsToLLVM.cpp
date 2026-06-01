@@ -69,11 +69,10 @@ static void createMBarrierInit(OpBuilder &b, Location loc, Value pred,
 }
 
 static void createMBarrierArrive(OpBuilder &b, Location loc, Value pred,
-                                 Value barrierPtr, bool relaxed) {
+                                 Value barrierPtr) {
   PTXBuilder ptxBuilder;
   auto &arrive = *ptxBuilder.create(
-      "@$0 mbarrier.arrive." + std::string(relaxed ? "relaxed" : "release") +
-      ".cluster.shared::cluster.b64 _, [$1];");
+      "@$0 mbarrier.arrive.release.cluster.shared::cluster.b64 _, [$1];");
   arrive({ptxBuilder.newOperand(pred, "b"),
           ptxBuilder.newOperand(barrierPtr, "r")},
          /*onlyAttachMLIRArgs=*/true);
@@ -81,15 +80,14 @@ static void createMBarrierArrive(OpBuilder &b, Location loc, Value pred,
 }
 
 static void createMBarrierWait(OpBuilder &b, Location loc, Value barrierPtr,
-                               Value parity, bool relaxed) {
+                               Value parity) {
   PTXBuilder ptxBuilder;
   auto &wait =
       *ptxBuilder.create("{\n"
                          "\t.reg .pred complete;\n"
                          "waitLoop:\n"
-                         "\tmbarrier.try_wait.parity." +
-                         std::string(relaxed ? "relaxed" : "acquire") +
-                         ".cluster.shared::cta.b64 complete, [$0], $1;\n"
+                         "\tmbarrier.try_wait.parity.acquire.cluster.shared::"
+                         "cta.b64 complete, [$0], $1;\n"
                          "\t@!complete bra.uni waitLoop;\n"
                          "}\n");
   wait({ptxBuilder.newOperand(barrierPtr, "r"),
@@ -275,10 +273,9 @@ struct ClusterBarrierOpConversion
     for (int i = 1; i < numCTAs; ++i) {
       Value peerBarrierInt = b.xor_(barrierInt, b.i32_val(i << 24));
       Value peerBarrierPtr = b.inttoptr(barrierPtr.getType(), peerBarrierInt);
-      createMBarrierArrive(rewriter, loc, pred, peerBarrierPtr,
-                           op.getRelaxed());
+      createMBarrierArrive(rewriter, loc, pred, peerBarrierPtr);
     }
-    createMBarrierWait(rewriter, loc, barrierPtr, parity, op.getRelaxed());
+    createMBarrierWait(rewriter, loc, barrierPtr, parity);
     createPredicatedPTXStore(rewriter, loc, pred, parityPtr,
                              b.xor_(parity, b.i32_val(1)));
     triton::gpu::BarrierOp::create(rewriter, loc,

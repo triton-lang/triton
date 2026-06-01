@@ -320,20 +320,6 @@ static LogicalResult verifyClusterSyncOp(Operation *op) {
   return success();
 }
 
-static LogicalResult verifyClusterBarrierOp(Operation *op) {
-  if (failed(verifyClusterNumCTAs(op)))
-    return failure();
-  // A verifier cannot infer whether a noinline callee executes inside a
-  // warp-specialized caller, so conservatively reject all noinline functions.
-  if (auto func = op->getParentOfType<mlir::triton::FuncOp>()) {
-    auto noinline = func->getAttrOfType<BoolAttr>("noinline");
-    if (noinline && noinline.getValue())
-      return op->emitOpError(
-          "inside a non-inline function is not yet implemented");
-  }
-  return success();
-}
-
 // -- ClusterArriveOp --
 LogicalResult ClusterArriveOp::verify() {
   return verifyClusterSyncOp(getOperation());
@@ -346,7 +332,21 @@ LogicalResult ClusterWaitOp::verify() {
 
 // -- ClusterBarrierOp --
 LogicalResult ClusterBarrierOp::verify() {
-  return verifyClusterBarrierOp(getOperation());
+  if (failed(verifyClusterNumCTAs(getOperation())))
+    return failure();
+  if (getRelaxed() &&
+      getOperation()->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>())
+    return emitOpError(
+        "NYI: cluster_barrier relaxed inside a warp-specialized region. We "
+        "could implement it for PTX 8.6+ tho.");
+  // A verifier cannot infer whether a noinline callee executes inside a
+  // warp-specialized caller, so conservatively reject all noinline functions.
+  if (auto func = getOperation()->getParentOfType<mlir::triton::FuncOp>()) {
+    auto noinline = func->getAttrOfType<BoolAttr>("noinline");
+    if (noinline && noinline.getValue())
+      return emitOpError("inside a non-inline function is not yet implemented");
+  }
+  return success();
 }
 
 // -- TMA operation verifiers --
