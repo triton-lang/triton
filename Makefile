@@ -34,8 +34,7 @@ test-cpp:
 
 .PHONY: test-unit
 test-unit: all
-	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) --ignore-glob='plugins/*' --ignore=test_debug.py
-	$(PYTEST) -n $(NUM_PROCS) python/test/unit/test_debug.py
+	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) --ignore-glob='plugins/*'
 	$(PYTEST) -n 6 python/triton_kernels/tests/
 	# Run attention separately to avoid out of gpu memory
 	$(PYTEST) python/tutorials/06-fused-attention.py

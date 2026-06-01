@@ -615,9 +615,11 @@ struct PointerCanonicalizationPattern : ConversionPattern {
   PointerCanonicalizationPattern(MLIRContext *context,
                                  llvm::SetVector<Operation *> &opsToRewrite,
                                  FatPointers &fatPtrs,
+                                 llvm::SmallPtrSet<Block *, 8> &convertedBlocks,
                                  PatternBenefit benefit = 1)
       : ConversionPattern(SourceOp::getOperationName(), benefit, context),
-        fatPtrs(fatPtrs), opToRewrite(opsToRewrite) {}
+        fatPtrs(fatPtrs), opToRewrite(opsToRewrite),
+        convertedBlocks(convertedBlocks) {}
 
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<ValueRange> operands,
@@ -636,6 +638,7 @@ struct PointerCanonicalizationPattern : ConversionPattern {
 
   FatPointers &fatPtrs;
   llvm::SetVector<Operation *> &opToRewrite;
+  llvm::SmallPtrSet<Block *, 8> &convertedBlocks;
 };
 
 /// splat integer offset, keep base
@@ -1201,19 +1204,23 @@ public:
 /// Simple here means each block arg is replaced 1-1 with the remapped operand
 /// types (e.g., scf.for does not use this helper because scf.for needs to skip
 /// the 0th bb arg, the induction var).
-static void convertSimpleBlockSignature(Block *oldBlock,
-                                        ArrayRef<ValueRange> remappedOperands,
-                                        ConversionPatternRewriter &rewriter,
-                                        FatPointers &fatPtrs) {
-  auto oldBlockTypes = oldBlock->getArgumentTypes();
-  TypeConverter::SignatureConversion blockSigConversion(oldBlockTypes.size());
-  for (unsigned i = 0, e = oldBlockTypes.size(); i != e; ++i) {
-    SmallVector<Type> remappedInitTypes =
-        llvm::to_vector(remappedOperands[i].getTypes());
-    blockSigConversion.addInputs(i, remappedInitTypes);
+static void convertSimpleBlockSignature(
+    Block *oldBlock, ArrayRef<ValueRange> remappedOperands,
+    ConversionPatternRewriter &rewriter, FatPointers &fatPtrs,
+    llvm::SmallPtrSet<Block *, 8> &convertedBlocks) {
+  // Skip blocks already expanded by a prior predecessor; just update fatPtrs.
+  Block *newBlock = oldBlock;
+  if (!convertedBlocks.contains(oldBlock)) {
+    auto oldBlockTypes = oldBlock->getArgumentTypes();
+    TypeConverter::SignatureConversion blockSigConversion(oldBlockTypes.size());
+    for (unsigned i = 0, e = oldBlockTypes.size(); i != e; ++i) {
+      SmallVector<Type> remappedInitTypes =
+          llvm::to_vector(remappedOperands[i].getTypes());
+      blockSigConversion.addInputs(i, remappedInitTypes);
+    }
+    newBlock = rewriter.applySignatureConversion(oldBlock, blockSigConversion);
+    convertedBlocks.insert(newBlock);
   }
-  auto newBlock =
-      rewriter.applySignatureConversion(oldBlock, blockSigConversion);
 
   int offset = 0;
   for (auto operands : remappedOperands) {
@@ -1241,9 +1248,9 @@ public:
       valRangeLens.push_back(remappedInit.size());
 
     convertSimpleBlockSignature(whileOp.getBeforeBody(), remappedInits,
-                                rewriter, fatPtrs);
+                                rewriter, fatPtrs, convertedBlocks);
     convertSimpleBlockSignature(whileOp.getAfterBody(), remappedInits, rewriter,
-                                fatPtrs);
+                                fatPtrs, convertedBlocks);
 
     SmallVector<Value> initArgs = flattenValues(remappedInits);
     SmallVector<Type> resultTypes = llvm::map_to_vector(
@@ -1325,9 +1332,9 @@ public:
         falseOperands);
 
     convertSimpleBlockSignature(branchOp.getTrueDest(), remappedTrueOperands,
-                                rewriter, fatPtrs);
+                                rewriter, fatPtrs, convertedBlocks);
     convertSimpleBlockSignature(branchOp.getFalseDest(), remappedFalseOperands,
-                                rewriter, fatPtrs);
+                                rewriter, fatPtrs, convertedBlocks);
 
     rewriter.replaceOp(branchOp, newOp);
     return success();
@@ -1518,7 +1525,7 @@ public:
     auto newOp = cf::BranchOp::create(rewriter, branchOp.getLoc(),
                                       branchOp.getDest(), trueOperands);
     convertSimpleBlockSignature(branchOp.getDest(), remappedDestOperands,
-                                rewriter, fatPtrs);
+                                rewriter, fatPtrs, convertedBlocks);
     rewriter.replaceOp(branchOp, newOp);
     return success();
   }
@@ -2001,6 +2008,10 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   target.addDynamicallyLegalDialect<triton::amdgpu::TritonAMDGPUDialect>(
       isLegal);
 
+  // Tracks blocks whose signature has been expanded; prevents double-conversion
+  // when a block has multiple predecessors.
+  llvm::SmallPtrSet<Block *, 8> convertedBlocks;
+
   // Rewrite the rest of the ops.
   // Note we *do not* declare unrealized_cast an illegal op here in order that
   // the whole conversion passes, even if there are tt ops that we do not
@@ -2025,7 +2036,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       ConvertExpandDims, ConvertSCFYieldOp, ConvertSCFIfOp,
       ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
       ConvertCFBranch, ConvertArithSelectOp, ConvertReturnOp>(
-      patterns.getContext(), opsToRewrite, fatPrs);
+      patterns.getContext(), opsToRewrite, fatPrs, convertedBlocks);
   if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 
@@ -2033,8 +2044,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   // unsupported ops.
   target.addIllegalOp<UnrealizedConversionCastOp>();
   patterns.clear();
-  patterns.add<ConvertUnimplementedOpUnrealizedCasts>(patterns.getContext(),
-                                                      opsToRewrite, fatPrs);
+  patterns.add<ConvertUnimplementedOpUnrealizedCasts>(
+      patterns.getContext(), opsToRewrite, fatPrs, convertedBlocks);
   if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 

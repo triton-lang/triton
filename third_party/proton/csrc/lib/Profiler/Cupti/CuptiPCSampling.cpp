@@ -103,7 +103,7 @@ size_t matchStallReasonsToIndices(
                      std::string::npos;
     std::string cuptiStallName = std::string(stallReasonNames[i]);
     for (size_t j = 0; j < PCSamplingMetric::PCSamplingMetricKind::Count; j++) {
-      auto metricName = PCSamplingMetric().getValueName(j);
+      auto metricName = std::string(PCSamplingMetric().getValueName(j));
       if (cuptiStallName.find(metricName) != std::string::npos) {
         if (notIssued)
           notIssuedStallReasonIndices.insert(stallReasonIndices[i]);

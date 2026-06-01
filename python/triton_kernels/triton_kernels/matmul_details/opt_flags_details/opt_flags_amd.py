@@ -10,7 +10,7 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precisi
     # block_n:
     n_cu = torch.cuda.get_device_properties(0).multi_processor_count
     if n is not None:
-        if n <= 128 and (n & (n - 1)) == 0:
+        if 0 < n <= 128 and (n & (n - 1)) == 0:
             block_n = n
         else:
             max_n = 64 if get_cdna_version() == 4 else 256

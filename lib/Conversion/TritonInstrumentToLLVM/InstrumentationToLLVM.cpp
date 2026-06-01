@@ -289,7 +289,7 @@ struct LockReleaseOpConversion
       auto *ptrOpr = ptx.newAddrOperand(adaptor.getLock(), "l");
       auto *valOpr = ptx.newOperand(zero, "r");
       auto &atom = *ptx.create("atom");
-      atom.global().o("acq_rel").o("gpu").o("exch").o("b32");
+      atom.global().o("release").o("gpu").o("exch").o("b32");
       atom(dstOpr, ptrOpr, valOpr).predicate(elect);
       ptx.launch(b, loc, i32);
     } else {

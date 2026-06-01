@@ -27,7 +27,7 @@ from .matmul_details.opt_flags import (
     make_opt_flags,
     scoped_opt_flags as scoped_opt_flags,
     scoped_opt_flags_constraints as scoped_opt_flags_constraints,
-    update_opt_flags_constraints,
+    set_idle_sms,
 )
 from .matmul_details.opt_flags_details import opt_flags_nvidia
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
@@ -235,7 +235,7 @@ def matmul_set_idle_sms(num_idle_sms):
     """
     persistent kernels will leave `num_idle_sms` idle
     """
-    update_opt_flags_constraints({"idle_sms": num_idle_sms})
+    set_idle_sms(num_idle_sms)
 
 def matmul(a, b, bias,
     a_ragged_metadata: RaggedTensorMetadata | None = None,
@@ -358,6 +358,7 @@ def matmul(a, b, bias,
         FnName.QUANTIZE_NVFP4.name,
     ) else 1
     a_transpose = a.stride(-1) != 1
+    b_transpose = b_is_shuffled or b.storage.data.stride()[-2] == 1
     # determine shapes
     has_gather = gather_indx is not None
     has_scatter = scatter_indx is not None
@@ -418,6 +419,7 @@ def matmul(a, b, bias,
         block_k = block_k,
         mx_block_size = mx_block_size,
         x_uses_tma_when_persistent = a_uses_tma_when_persistent,
+        w_transpose = b_transpose,
         rhs_layout=b.storage.layout,
         epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
@@ -548,7 +550,6 @@ def matmul(a, b, bias,
         b_tensor_or_tma.round_f32_to_tf32 = True
     # create tma descriptor for w_scale
     b_scale_has_tma = opt_flags.is_persistent and b_scale is not None
-    b_transpose = b_is_shuffled or b.storage.data.stride()[-2] == 1
     if b_scale_has_tma:
         scale_block_k = opt_flags.block_k // mx_block_size
         b_scale_storage = b_scale.storage
@@ -635,7 +636,7 @@ def matmul(a, b, bias,
                    None if ragged_dimension == "M" else a.shape[-2],
                    N, K, K_W,
                    betas, gammas,
-                   gather_indx,
+                   None if K == 0 else gather_indx,
                    scatter_indx,
                    None if scatter_indx is None else scatter_indx.shape[0],
                    ragged_dimension,

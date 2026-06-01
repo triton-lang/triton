@@ -244,17 +244,27 @@ void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
       leaves.push_back(createSingleBufferView(b, alloc, buffer));
   }
 
+  bool isTensorMemory =
+      isa<ttng::TensorMemorySpaceAttr>(allocType.getMemorySpace());
+  ttg::AddrSpace barrierSpace =
+      isTensorMemory
+          ? (ttg::AddrSpace::TensorRead | ttg::AddrSpace::TensorWrite)
+          : ttg::AddrSpace::Local;
+  // Synchronize warps, so in case of re-used memory we won't start poisoning
+  // memory that is still being used, and finish poisoning before the kernel's
+  // first real use of the allocation.
+  ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
   for (Value leaf : leaves) {
-    Value poison =
-        createPoisonTensor(b, cast<ttg::MemDescType>(leaf.getType()));
-    if (isa<ttng::TensorMemorySpaceAttr>(
-            cast<ttg::MemDescType>(leaf.getType()).getMemorySpace())) {
+    auto leafType = cast<ttg::MemDescType>(leaf.getType());
+    Value poison = createPoisonTensor(b, leafType);
+    if (isTensorMemory) {
       Value pred = arith::ConstantIntOp::create(b, 1, 1);
       ttng::TMEMStoreOp::create(b, leaf, poison, pred);
     } else {
       ttg::LocalStoreOp::create(b, poison, leaf);
     }
   }
+  ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
 }
 
 bool canInitializeAllocation(Value alloc) {
@@ -543,11 +553,26 @@ private:
         }
       }
       if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
-        if (!clusterBarrier.getRelaxed()) {
+        if (!clusterBarrier.getRelaxed() &&
+            !llvm::is_contained(auxData.nonPublishingClusterBarriers, op)) {
           b.setInsertionPointAfter(op);
+          // Publish the cluster-wide frontier once, then keep every CTA at
+          // this synchronization point until the publication completes.
+          b.setListener(nullptr);
+          Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+          Value zero = arith::ConstantIntOp::create(b, 0, 32);
+          Value isCTA0 =
+              arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
+          Value lock = auxData.lock.at(op).value;
+          tti::ExperimentalLockAcquireOp::create(b, lock, isCTA0);
           for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM})
-            funcBuilder.createPublishClusterVisibilityCall(b, nullptr, memType,
+            funcBuilder.createPublishClusterVisibilityCall(b, isCTA0, memType,
                                                            op);
+          tti::ExperimentalLockReleaseOp::create(b, lock, isCTA0);
+          auto publishBarrier = ttng::ClusterBarrierOp::create(b, b.getLoc());
+          auxData.nonPublishingClusterBarriers.push_back(
+              publishBarrier.getOperation());
+          b.setListener(&listener);
         }
       }
 
