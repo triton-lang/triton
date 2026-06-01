@@ -1254,13 +1254,13 @@ class TritonSemantic(Generic[TensorTy]):
 # atomic
 #########
 
-    def atomic_cas(self, ptr: TensorTy, cmp: TensorTy, val: TensorTy, sem: str, scope: str) -> TensorTy:
+    def atomic_cas(self, ptr: TensorTy, cmp: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
         sem = self._str_to_sem(sem)
         scope = self._str_to_scope(scope)
         element_ty = ptr.type.scalar.element_ty
         if element_ty.primitive_bitwidth not in [16, 32, 64]:
             raise ValueError("atomic_cas only supports elements with width {16, 32, 64}")
-        return self.tensor(self.builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle, sem, scope), val.type)
+        return self.tensor(self.builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle, mask.handle, sem, scope), val.type)
 
     def atom_red_typechecking_impl(self, ptr: TensorTy, val: TensorTy, mask: TensorTy,
                                    op: str) -> Tuple[TensorTy, TensorTy, TensorTy]:

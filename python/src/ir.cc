@@ -1627,7 +1627,7 @@ void init_triton_ir(py::module &&m) {
       // // atomic
       .def("create_atomic_cas",
            [](TritonOpBuilder &self, Value &ptr, Value &cmp, Value &val,
-              MemSemantic sem, MemSyncScope scope) -> Value {
+              Value &mask, MemSemantic sem, MemSyncScope scope) -> Value {
              Type dstType;
              if (auto srcTensorType =
                      dyn_cast<RankedTensorType>(ptr.getType())) {
@@ -1639,8 +1639,8 @@ void init_triton_ir(py::module &&m) {
                auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
                dstType = ptrType.getPointeeType();
              }
-             return self.create<AtomicCASOp>(dstType, ptr, cmp, val, sem,
-                                             scope);
+             return self.create<AtomicCASOp>(dstType, ptr, cmp, val, mask,
+                                             sem, scope);
            })
       .def("create_atomic_rmw",
            [](TritonOpBuilder &self, RMWOp rmwOp, Value &ptr, Value &val,

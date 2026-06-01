@@ -1847,10 +1847,12 @@ struct BufferAtomicCASOpConversion
     // original values
     Value ptr = op.getPtr();
     Value offset = op.getOffsets();
+    Value mask = op.getMask();
     Value val = op.getVal();
 
     Value llPtr = adaptor.getPtr();
     Value llOffset = adaptor.getOffsets();
+    Value llMask = adaptor.getMask();
     Value llVal = adaptor.getVal();
     Value llCmp = adaptor.getCmp();
     Value llStride = adaptor.getStride();
@@ -1871,6 +1873,9 @@ struct BufferAtomicCASOpConversion
     SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
     SmallVector<Value> valElems = unpackLLElements(loc, llVal, rewriter);
     SmallVector<Value> cmpElems = unpackLLElements(loc, llCmp, rewriter);
+
+    SmallVector<Value> maskElems =
+      getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
     SmallVector<Value> loadedVals;
@@ -1895,7 +1900,7 @@ struct BufferAtomicCASOpConversion
 
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Type vecTy = LLVM::getVectorType(valueElemTy, vec);
-      Value pred = threadPred;
+      Value pred = llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
       // Create the store val
       Value casStoreVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
@@ -2037,11 +2042,15 @@ struct AtomicCASOpConversion
     Value llPtr = adaptor.getPtr();
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
+    Value llMask = adaptor.getMask();
 
     // prep data by unpacking to get data ready
     auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
     auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
     auto valElements = unpackLLElements(loc, llVal, rewriter);
+    SmallVector<Value> maskElements;
+    if (llMask)
+      maskElements = unpackLLElements(loc, llMask, rewriter);
 
     auto memOrdering = op.getSem();
     auto atomicMemOrdering = getMemoryOrdering(memOrdering);
@@ -2090,6 +2099,7 @@ struct AtomicCASOpConversion
       }
       // use op
       if (tensorTy) { // for tensor
+        Value pred = llMask ? b.and_(threadPred, maskElements[i]) : threadPred;
         Value undefVal = b.undef(valueElemTy);
         auto *curBlock = rewriter.getInsertionBlock();
         auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
@@ -2098,7 +2108,7 @@ struct AtomicCASOpConversion
         endBlock->addArgument({valueElemTy}, {loc});
 
         rewriter.setInsertionPointToEnd(curBlock);
-        LLVM::CondBrOp::create(rewriter, loc, threadPred, atomicBlock, endBlock,
+        LLVM::CondBrOp::create(rewriter, loc, pred, atomicBlock, endBlock,
                                undefVal);
 
         rewriter.setInsertionPointToEnd(atomicBlock);
@@ -2130,6 +2140,8 @@ struct AtomicCASOpConversion
         rewriter.setInsertionPointToEnd(curBlock);
         auto tid = getThreadId(rewriter, loc);
         Value pred = b.icmp_eq(tid, b.i32_val(i));
+        if (llMask)
+          pred = b.and_(pred, maskElements[i]);
         LLVM::CondBrOp::create(rewriter, loc, pred, atomicBlock, endBlock);
 
         // Build main block with atomic_cmpxchg.

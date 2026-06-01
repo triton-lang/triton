@@ -521,12 +521,17 @@ void atomic_compare_exchange_strong(void *loc, void *expected,
   }
 }
 
+(pybind11::dtype dtype, const uint64_t *ptr, const void *val,
+                void *ret, const bool *mask, size_t numel,
+                std::memory_order order)
+
 class AtomicCASOp : public AtomicOp {
 public:
   AtomicCASOp(const uint64_t *ptr, void *expected, const void *desired,
-              size_t itemsize, size_t numel, std::memory_order order)
+              const bool *mask, size_t itemsize, size_t numel,
+              std::memory_order order)
       : AtomicOp(ptr, numel, order), expected(expected), desired(desired),
-        itemsize(itemsize) {}
+        mask(mask), itemsize(itemsize) {}
 
 protected:
   void applyAt(void *loc, size_t i) override {
@@ -715,7 +720,7 @@ void init_triton_interpreter(py::module &&m) {
 
   m.def("atomic_cas",
         [](py::array_t<uint64_t> ptr, py::array &cmp, py::array &val,
-           MemSemantic sem) -> py::array {
+           py::array_t<bool> mask, MemSemantic sem) -> py::array {
           std::memory_order order = mem_semantic_map[sem];
           int numel = ptr.size();
           auto shape =
@@ -730,8 +735,8 @@ void init_triton_interpreter(py::module &&m) {
                  static_cast<const void *>(reshaped_cmp.data()),
                  itemsize * numel);
           AtomicCASOp(reshaped_ptr.data(), ret.mutable_data(),
-                      static_cast<const void *>(reshaped_val.data()), itemsize,
-                      numel, order)
+                      static_cast<const void *>(reshaped_val.data()), 
+                      mask.data(), itemsize, numel, order)
               .apply();
           return ret.reshape(shape);
         });

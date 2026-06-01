@@ -254,6 +254,7 @@ struct ConvertTritonAtomicCASOpToBufferAtomicCAS
                   PatternRewriter &rewriter) const override {
     LDBG("Try to convert: " << op);
     Value ptr = op.getPtr();
+    Value mask = op.getMask();
     auto sem = op.getSem();
     auto scope = op.getScope();
 
@@ -319,7 +320,7 @@ struct ConvertTritonAtomicCASOpToBufferAtomicCAS
         op->getLoc(), op);
     rewriter.replaceOpWithNewOp<triton::amdgpu::BufferAtomicCASOp>(
         op, op.getVal().getType(), basePtr, tensorOffset, op.getCmp(),
-        op.getVal(), blockStride, sem, scope);
+        op.getVal(), blockStride, sem, scope, mask);
     return success();
   }
 
