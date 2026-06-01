@@ -1258,11 +1258,13 @@ def _implicit_cvt(arg):
         return tl.tensor(handle, tl.int1)
     if isinstance(arg, int):
         ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg), None)
+        # The numpy storage dtype must match the triton scalar type `ty` chosen by
+        # mangle_type: ints in [-2**31, 2**31) are i32, [2**31, 2**63) are i64, and
+        # [2**63, 2**64) are u64. (Note there is no uint32 mangling: a value in
+        # [2**31, 2**32) is i64, so it must be stored as int64, not uint32.)
         dtype = np.int32
         if -2**31 <= arg < 2**31:
             dtype = np.int32
-        elif 2**31 <= arg < 2**32:
-            dtype = np.uint32
         elif -2**63 <= arg < 2**63:
             dtype = np.int64
         elif 2**63 <= arg < 2**64:
