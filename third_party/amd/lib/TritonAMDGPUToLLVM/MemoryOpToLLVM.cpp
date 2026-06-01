@@ -241,6 +241,10 @@ private:
     assert(addrToOffset.getInDimSizeLog2(kAddr) >= 3 &&
            addrToOffset.getInDimSizeLog2(kAddr) <= 6);
 
+    // ds_read_tr* shuffles data across lanes so the lane issuing the load
+    // matches the kAddr decomposition of fullTile. Using addrToOffset's
+    // kAddr bases as the kLane bases of this layout lets us use laneId
+    // to get the LDS offset each lane should read.
     LinearLayout addrLayout =
         LinearLayout({{kLane, addrToOffset.getBases().lookup(kAddr)},
                       {kWarp, reps.getBases().lookup(kWarp)}},
@@ -266,6 +270,83 @@ private:
         if (partitionLayout.getBasis(kReg, pos, kPartition) != 0)
           return failure();
       }
+
+      // partitionLayout's kLane is the destination lane which is the lane that
+      // owns the loaded data in the destination tensor. The laneId is the
+      // source lane issuing the load. For ds_read_tr* the hardware shuffles
+      // data across lanes, so the two differ: we need to remap.
+      //
+      // Example: ds_load_tr8_b64 on gfx1250 (DoubleContiguity), from the test
+      // `ds_transpose_partitioned_uses_double_contiguity`.
+      //
+      //  fullTile:
+      //   - lane=1 -> (1, 0)
+      //     lane=2 -> (2, 0)
+      //     lane=4 -> (4, 0)
+      //     lane=8 -> (0, 4)
+      //     lane=16 -> (0, 16)
+      //   - register=1 -> (0, 1)
+      //     register=2 -> (0, 2)
+      //     register=4 -> (0, 8)
+      //   where out dims are: [offset (size 8), addr (size 32)]
+      //
+      // `addr` is the non-contiguous part of the source lane's access.
+      // `lane` in the inverse tile is the destination lane after the hardware
+      // transpose. `fullTile.invert().sublayout({kAddr}, {kLane})` gives:
+      //
+      //   - addr=1 -> (0)
+      //     addr=2 -> (0)
+      //     addr=4 -> (8)
+      //     addr=8 -> (0)
+      //     addr=16 -> (16)
+      //   where out dims are: [lane (size 32)]
+      //
+      // Then rename the input dimension from `addr` to `lane` so the map can
+      // compose with partitionLayout.
+      //
+      // For this test, partitionLayout would choose the partition from the
+      // destination-lane basis `lane=8`:
+      //
+      //   - register=1 -> (0)
+      //     ...
+      //     register=32 -> (0)
+      //   - lane=1 -> (0)
+      //     lane=2 -> (0)
+      //     lane=4 -> (0)
+      //     lane=8 -> (1)
+      //     lane=16 -> (0)
+      //   - warp=1 -> (0)
+      //     warp=2 -> (0)
+      //   where out dims are: [partition (size 2)]
+      //
+      // Querying this with the runtime source lane asks for the partition of
+      // the wrong lane. Composing with laneRemap rewrites the partition basis
+      // through the transpose:
+      //
+      //   - register=1 -> (0)
+      //     ...
+      //     register=32 -> (0)
+      //   - lane=1 -> (0)
+      //     lane=2 -> (0)
+      //     lane=4 -> (1)
+      //     lane=8 -> (0)
+      //     lane=16 -> (0)
+      //   - warp=1 -> (0)
+      //     warp=2 -> (0)
+      //   where out dims are: [partition (size 2)]
+      //
+      // Destination basis `lane=8` is reached from source basis `addr=4`, so
+      // each source lane selects the LDS base expected by its destination lane.
+
+      auto regIdentity = LinearLayout::identity1D(
+          partitionLayout.getInDimSize(kReg), kReg, kReg);
+      auto srcToDstLaneMap = fullTile.invert()
+                                 .sublayout({kAddr}, {kLane})
+                                 .renameInDim(kAddr, kLane);
+      auto warpIdentity = LinearLayout::identity1D(
+          partitionLayout.getInDimSize(kWarp), kWarp, kWarp);
+      auto laneRemap = regIdentity * srcToDstLaneMap * warpIdentity;
+      partitionLayout = laneRemap.compose(partitionLayout);
     }
 
     // Perform computation in bytes, LLVM optimises this better
