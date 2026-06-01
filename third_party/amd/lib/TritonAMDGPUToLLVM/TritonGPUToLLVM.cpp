@@ -177,6 +177,9 @@ struct ConvertTritonAMDGPUToLLVM
     AMD::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ftz,
                                              axisInfoAnalysis, allocation,
                                              targetInfo, AMDBenefit);
+    AMD::populateFpCastOpToLLVMPatterns(typeConverter, patterns, ftz,
+                                        axisInfoAnalysis, allocation,
+                                        targetInfo, AMDBenefit);
     // Run a dataflow analysis that classifies every SSA value as
     // wave-uniform or per-lane. The buffer-ops splitter queries this
     // to decide which offset components can move to the SGPR soffset.
