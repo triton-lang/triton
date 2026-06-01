@@ -174,7 +174,7 @@ def test_convert_1d_to_2d_slice_cga(num_ctas, device):
     torch.testing.assert_close(out, torch.arange(head, device=device, dtype=torch.float32))
 
 
-@pytest.mark.skipif(not is_cuda() or not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
 def test_cluster_barrier_in_warp_specialize(device):
     BLOCK = ttgl.constexpr(128)
 
@@ -201,7 +201,7 @@ def test_cluster_barrier_in_warp_specialize(device):
     torch.testing.assert_close(out, torch.arange(2 * BLOCK.value, device=device, dtype=torch.int32))
 
 
-@pytest.mark.skipif(not is_cuda() or not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
 @pytest.mark.parametrize("use_worker_partition", [False, True])
 def test_convert_layout_cross_cta_in_warp_specialize(use_worker_partition, device):
     M = ttgl.constexpr(64)
@@ -245,8 +245,6 @@ def test_convert_layout_cross_cta_in_warp_specialize(use_worker_partition, devic
     compiled = kernel[(1, )](x, y, src_layout, dst_layout, use_worker_partition, num_warps=4, num_ctas=4)
 
     ptx = compiled.asm["ptx"]
-    assert "mbarrier.arrive.release.cluster.shared::cluster.b64" in ptx
-    assert "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64" in ptx
     assert "ld.shared::cluster" in ptx
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 

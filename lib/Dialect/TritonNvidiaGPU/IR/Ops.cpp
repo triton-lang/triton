@@ -297,19 +297,16 @@ TypedValue<MemDescType> AsyncSharedStoreOp::getBarrier() {
   return getMbarrier();
 }
 
-// -- FenceMBarrierInitReleaseClusterOp --
-LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
-  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
-  if (numCTAs <= 1)
-    return emitOpError("requires ttg.num-ctas > 1");
-  return success();
-}
-
 static LogicalResult verifyClusterNumCTAs(Operation *op) {
   int numCTAs = triton::gpu::lookupNumCTAs(op);
   if (numCTAs <= 1)
     return op->emitOpError("requires ttg.num-ctas > 1");
   return success();
+}
+
+// -- FenceMBarrierInitReleaseClusterOp --
+LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
+  return verifyClusterNumCTAs(getOperation());
 }
 
 static LogicalResult verifyClusterSyncOp(Operation *op) {

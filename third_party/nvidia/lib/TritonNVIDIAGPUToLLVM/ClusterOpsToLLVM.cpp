@@ -47,16 +47,6 @@ static void createClusterWait(OpBuilder &b, Location loc) {
   NVVM::ClusterWaitOp::create(b, loc, UnitAttr::get(b.getContext()));
 }
 
-static void createPredicatedPTXStore(OpBuilder &b, Location loc, Value pred,
-                                     Value ptr, Value value) {
-  PTXBuilder ptxBuilder;
-  auto &store = *ptxBuilder.create("@$0 st.shared.u32 [$1], $2;");
-  store({ptxBuilder.newOperand(pred, "b"), ptxBuilder.newOperand(ptr, "r"),
-         ptxBuilder.newOperand(value, "r")},
-        /*onlyAttachMLIRArgs=*/true);
-  ptxBuilder.launch(b, loc, void_ty(b.getContext()));
-}
-
 static void createMBarrierInit(OpBuilder &b, Location loc, Value pred,
                                Value barrierPtr, int count) {
   PTXBuilder ptxBuilder;
@@ -97,9 +87,9 @@ static void createMBarrierWait(OpBuilder &b, Location loc, Value barrierPtr,
 }
 
 template <typename EmitFn>
-LogicalResult emitClusterSyncForAllWarps(Operation *op,
-                                         ConversionPatternRewriter &rewriter,
-                                         EmitFn emit) {
+LogicalResult lowerClusterSyncForAllWarps(Operation *op,
+                                          ConversionPatternRewriter &rewriter,
+                                          EmitFn emit) {
   auto loc = op->getLoc();
   auto mod = op->getParentOfType<ModuleOp>();
   if (!mod)
@@ -116,8 +106,10 @@ LogicalResult emitClusterSyncForAllWarps(Operation *op,
   if (workerNumWarps < 0)
     return rewriter.notifyMatchFailure(op, "invalid total/default num-warps");
 
+  rewriter.setInsertionPoint(op);
   if (workerNumWarps == 0) {
     emit(rewriter);
+    rewriter.eraseOp(op);
     return success();
   }
 
@@ -156,16 +148,6 @@ LogicalResult emitClusterSyncForAllWarps(Operation *op,
     triton::gpu::WarpReturnOp::create(rewriter, loc);
   }
 
-  return success();
-}
-
-template <typename EmitFn>
-LogicalResult lowerClusterSyncForAllWarps(Operation *op,
-                                          ConversionPatternRewriter &rewriter,
-                                          EmitFn emit) {
-  rewriter.setInsertionPoint(op);
-  if (failed(emitClusterSyncForAllWarps(op, rewriter, emit)))
-    return failure();
   rewriter.eraseOp(op);
   return success();
 }
@@ -206,7 +188,9 @@ struct ClusterBarrierOpConversion
                              PatternBenefit benefit,
                              NVIDIA::TargetInfo &targetInfo)
       : ConvertOpToLLVMPattern(typeConverter, benefit),
-        targetInfo(&targetInfo) {}
+        targetInfo(&targetInfo) {
+    setHasBoundedRewriteRecursion();
+  }
 
   void createWSMBarrierPrologue(triton::nvidia_gpu::ClusterBarrierOp op,
                                 ConversionPatternRewriter &rewriter) const {
@@ -225,17 +209,15 @@ struct ClusterBarrierOpConversion
     Value pred = b.icmp_eq(tid, b.i32_val(0));
     createMBarrierInit(rewriter, loc, pred, barrierPtr,
                        triton::gpu::lookupNumCTAs(op) - 1);
-    createPredicatedPTXStore(rewriter, loc, pred, parityPtr, b.i32_val(0));
+    targetInfo->storeShared(rewriter, loc, parityPtr, b.i32_val(0), pred);
 
     if (emittedMBarrierInitSync)
       return;
     emittedMBarrierInitSync = true;
     triton::nvidia_gpu::FenceMBarrierInitReleaseClusterOp::create(rewriter,
                                                                   loc);
-    (void)emitClusterSyncForAllWarps(func, rewriter, [&](OpBuilder &b) {
-      createClusterArrive(b, loc, /*relaxed=*/true);
-      createClusterWait(b, loc);
-    });
+    triton::nvidia_gpu::ClusterBarrierOp::create(rewriter, loc,
+                                                 /*relaxed=*/true);
   }
 
   LogicalResult
@@ -257,14 +239,12 @@ struct ClusterBarrierOpConversion
 
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto ptrTy = LLVM::LLVMPointerType::get(
-        rewriter.getContext(), targetInfo->getSharedAddressSpace());
     Value barrierPtr =
         LLVM::getSharedMemoryBase(loc, rewriter, *targetInfo, op);
+    auto ptrTy = cast<LLVM::LLVMPointerType>(barrierPtr.getType());
     Value parityPtr = b.gep(ptrTy, i8_ty, barrierPtr, LLVM::GEPArg(8));
 
-    triton::gpu::BarrierOp::create(rewriter, loc,
-                                   triton::gpu::AddrSpace::Local);
+    b.barrier(triton::gpu::AddrSpace::Local);
     Value parity = b.load(i32_ty, parityPtr);
     Value tid = getThreadId(rewriter, loc);
     Value pred = b.icmp_eq(tid, b.i32_val(0));
@@ -276,10 +256,9 @@ struct ClusterBarrierOpConversion
       createMBarrierArrive(rewriter, loc, pred, peerBarrierPtr);
     }
     createMBarrierWait(rewriter, loc, barrierPtr, parity);
-    createPredicatedPTXStore(rewriter, loc, pred, parityPtr,
-                             b.xor_(parity, b.i32_val(1)));
-    triton::gpu::BarrierOp::create(rewriter, loc,
-                                   triton::gpu::AddrSpace::Local);
+    targetInfo->storeShared(rewriter, loc, parityPtr,
+                            b.xor_(parity, b.i32_val(1)), pred);
+    b.barrier(triton::gpu::AddrSpace::Local);
     rewriter.eraseOp(op);
     return success();
   }
