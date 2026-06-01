@@ -174,6 +174,81 @@ def test_convert_1d_to_2d_slice_cga(num_ctas, device):
     torch.testing.assert_close(out, torch.arange(head, device=device, dtype=torch.float32))
 
 
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+def test_cluster_barrier_in_warp_specialize(device):
+    BLOCK = ttgl.constexpr(128)
+
+    @gluon.jit
+    def partition(out, offset: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
+        offs = offset + ttgl.arange(0, BLOCK, layout=layout)
+        ttgl.barrier(cluster=True)
+        ttgl.store(out + offs, offs)
+
+    @gluon.jit
+    def kernel(out):
+        ttgl.warp_specialize([
+            (partition, (out, 0)),
+            (partition, (out, BLOCK)),
+        ], [4])
+
+    out = torch.empty((2 * BLOCK.value, ), device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](out, num_warps=4, num_ctas=2)
+
+    ptx = compiled.asm["ptx"]
+    assert ptx.count("mbarrier.arrive.release.cluster.shared::cluster.b64") >= 2
+    assert "mapa" not in ptx
+    torch.testing.assert_close(out, torch.arange(2 * BLOCK.value, device=device, dtype=torch.int32))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.parametrize("use_worker_partition", [False, True])
+def test_convert_layout_cross_cta_in_warp_specialize(use_worker_partition, device):
+    M = ttgl.constexpr(64)
+    N = ttgl.constexpr(128)
+    src_cga_layout = [[0, 1], [0, 2]]
+    dst_cga_layout = [[0, 1], [1, 0]]
+    src_layout = _with_cga_layout(_2d_layouts[0], src_cga_layout)
+    dst_layout = _with_cga_layout(_2d_layouts[1], dst_cga_layout)
+
+    @gluon.jit
+    def convert_partition(x_ptr, y_ptr, src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr):
+        offs_m_src = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, src_layout))[:, None]
+        offs_n_src = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, src_layout))[None, :]
+        x = ttgl.load(x_ptr + offs_m_src * N + offs_n_src)
+        y = ttgl.convert_layout(x, layout=dst_layout)
+        offs_m_dst = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, dst_layout))[:, None]
+        offs_n_dst = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, dst_layout))[None, :]
+        ttgl.store(y_ptr + offs_m_dst * N + offs_n_dst, y)
+
+    @gluon.jit
+    def empty_partition():
+        pass
+
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr,
+               use_worker_partition: ttgl.constexpr):
+        if use_worker_partition:
+            ttgl.warp_specialize([
+                (empty_partition, ()),
+                (convert_partition, (x_ptr, y_ptr, src_layout, dst_layout)),
+            ], [4])
+        else:
+            ttgl.warp_specialize([
+                (convert_partition, (x_ptr, y_ptr, src_layout, dst_layout)),
+                (empty_partition, ()),
+            ], [4])
+
+    torch.manual_seed(0)
+    x = torch.randn((M.value, N.value), dtype=torch.float16, device=device)
+    y = torch.zeros_like(x)
+    compiled = kernel[(1, )](x, y, src_layout, dst_layout, use_worker_partition, num_warps=4, num_ctas=4)
+
+    ptx = compiled.asm["ptx"]
+    assert "ld.shared::cluster" in ptx
+    torch.testing.assert_close(y, x, rtol=0, atol=0)
+
+
 def _swizzled_warp_layouts_1d():
     """1D DistributedLinearLayout test layouts (non-injective, lowered as GenericLinearEncoding)."""
 

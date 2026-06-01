@@ -77,6 +77,12 @@ public:
     addLegalOp<triton::gpu::WarpYieldOp>();
     addLegalOp<triton::gpu::WarpSpecializePartitionsOp>();
     addLegalOp<triton::gpu::WarpReturnOp>();
+    // LLVM conversion may synthesize more cluster barriers. Lower all
+    // warp-specialized barriers together after conversion.
+    addDynamicallyLegalOp<triton::nvidia_gpu::ClusterBarrierOp>(
+        [](triton::nvidia_gpu::ClusterBarrierOp op) {
+          return bool(op->getParentOfType<triton::gpu::WarpSpecializeOp>());
+        });
   }
 };
 
@@ -215,6 +221,9 @@ struct ConvertTritonGPUToLLVM
 
     TritonLLVMConversionTarget convTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+      return signalPassFailure();
+
+    if (failed(lowerWarpSpecializedClusterBarriers(mod, targetInfo)))
       return signalPassFailure();
 
     // Lower CF ops separately to avoid breaking analysis.
