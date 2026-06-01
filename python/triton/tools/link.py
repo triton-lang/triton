@@ -1,3 +1,4 @@
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Sequence, Union
@@ -29,16 +30,12 @@ class KernelLinkerMeta:
 class HeaderParser:
 
     def __init__(self) -> None:
-        import re
-
         # [kernel_name, c signature]
         self.linker_directives = re.compile("//[\\s]*tt-linker:[\\s]*([\\w]+):(.+):(.+)")
         # [name, hash, suffix]
         self.kernel_name = re.compile("^([\\w]+)_([\\w]+)_([\\w]*)$")
         # [(type, name)]
         self.c_sig = re.compile("[\\s]*(\\w+)\\s(\\w+)[,]?")
-        # [d|c]
-        self.arg_suffix = re.compile("[c,d]")
         # [backend_name]
         self.backend_name_re = re.compile("//[\\s]*tt-linker-backend:[\\s]*([\\w]+)")
 
@@ -98,24 +95,21 @@ class HeaderParser:
         args = c_sig.split(",")
         s2i = {"c": 1, "d": 16}
         num_specs = 0
-        sizes = []
-        # scan through suffix, suffix only includes indexes followed by d or c.
-        for i in range(len(args)):
-            pos = 0
-            idx_matched = suffix.startswith(str(i))
-            if not idx_matched:
-                continue
-            pos += len(str(i))
-            if self.arg_suffix.match(suffix, pos):
-                num_specs += 1
-                sizes.extend([None] * (i - len(sizes)))
-                sizes.append(s2i[suffix[pos]])
-                pos += 1
-            suffix = suffix[pos:]
+        sizes = [None] * len(args)
+        # suffix is a concatenation of `<index><c|d>` tokens, where `<index>`
+        # is the (possibly multi-digit) position of the specialized argument.
+        # Tokenize explicitly so that multi-digit indices (e.g. `11d`) are not
+        # confused with a single-digit index that happens to be a prefix.
+        for idx_str, hint in re.findall(r"(\d+)([cd])", suffix):
+            i = int(idx_str)
+            if i >= len(args):
+                raise Exception(f"Argument index {i} in suffix is out of range for signature: {c_sig}")
+            num_specs += 1
+            sizes[i] = s2i[hint]
 
-        if len(suffix) > 0:
+        # Make sure the suffix contained nothing but valid tokens.
+        if re.sub(r"\d+[cd]", "", suffix):
             raise Exception(f"Has invalid extra suffix: {suffix}")
-        sizes.extend([None] * (len(args) - len(sizes)))
 
         return num_specs, sizes
 
