@@ -56,7 +56,7 @@ def find_paths_if(iterable: Union[IterableType, Any], pred: Callable[[ObjPath, A
 
 
 def is_power_of_two(x):
-    return (x & (x - 1)) == 0
+    return x > 0 and (x & (x - 1)) == 0
 
 
 def validate_block_shape(shape: List[int]):
