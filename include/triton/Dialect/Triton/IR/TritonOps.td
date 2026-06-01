@@ -363,7 +363,7 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [
                   "getPointerTypeSameShape($_self)">,
   TypesMatchWith<"mask type matches value type",
                  "val", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">
 ]> {
     let summary = "atomic cas";
 
