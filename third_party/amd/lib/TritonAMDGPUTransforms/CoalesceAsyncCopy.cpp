@@ -375,8 +375,9 @@ public:
 
     mlir::RewritePatternSet patterns(context);
 
-    if (!llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
-                            targetInfo.getISAFamily()))
+    auto isaFamily = targetInfo.getISAFamily();
+    if (isaFamily != triton::amdgpu::ISAFamily::CDNA3 &&
+        isaFamily != triton::amdgpu::ISAFamily::CDNA4)
       return; // This pass is CDNA3 and CDNA4 specific.
 
     // Precompute the contiguity of all copy ops based on src and mask
