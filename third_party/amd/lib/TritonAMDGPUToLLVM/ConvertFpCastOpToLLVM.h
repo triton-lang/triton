@@ -10,11 +10,11 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                         const Value &v);
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
                         const Value &v, const RoundingMode rounding);
-SmallVector<Value> Fp32_to_F16_RTNE(Location loc,
-                                    ConversionPatternRewriter &rewriter,
-                                    Type inElemTy, Type outElemTy,
-                                    gpu::MultipleOperandsRange operands,
-                                    amdgpu::ISAFamily isaFamily);
+SmallVector<Value> convertFp32ToF16rtne(Location loc,
+                                        ConversionPatternRewriter &rewriter,
+                                        Type inElemTy, Type outElemTy,
+                                        gpu::MultipleOperandsRange operands,
+                                        amdgpu::ISAFamily isaFamily);
 } // namespace mlir::triton::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_CONVERTFPCASTOPTOLLVM_H_

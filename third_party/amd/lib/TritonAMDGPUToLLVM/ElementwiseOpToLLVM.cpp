@@ -251,8 +251,8 @@ struct TruncFOpConversion
     auto outElemTy = getElementTypeOrSelf(op.getOut());
     auto inElemTy = getElementTypeOrSelf(op.getIn());
     if (inElemTy.isF32() && (outElemTy.isBF16() || outElemTy.isF16())) {
-      return AMD::Fp32_to_F16_RTNE(loc, rewriter, inElemTy, outElemTy, operands,
-                                   isaFamily);
+      return AMD::convertFp32ToF16rtne(loc, rewriter, inElemTy, outElemTy,
+                                       operands, isaFamily);
     }
     return {LLVM::FPTruncOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
