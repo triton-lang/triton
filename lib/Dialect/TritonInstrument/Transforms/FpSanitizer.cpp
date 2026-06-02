@@ -191,8 +191,16 @@ public:
     auto layout = getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
                                               memTy.getElementType());
     auto cgaLayout = ttg::getCGALayout(memTy.getEncoding());
-    if (cgaLayout.getRank() != memTy.getRank())
-      return layout;
+    if (cgaLayout.getRank() != memTy.getRank()) {
+      if (!isa<ttng::TensorMemoryEncodingAttr>(memTy.getEncoding()))
+        return layout;
+      assert(cgaLayout.getRank() + 1 == memTy.getRank());
+
+      // A rank-3 TMEM allocation is a dynamically indexed concatenation of
+      // rank-2 buffers. Keep the buffer dimension unsplit while preserving the
+      // rank-2 TMEM CGA mapping on the trailing matrix dimensions.
+      cgaLayout = ttg::prependUnitDimToCGALayout(cgaLayout);
+    }
     return ttg::BlockedEncodingAttr::get(
         rewriter.getContext(), layout.getSizePerThread(),
         layout.getThreadsPerWarp(), layout.getWarpsPerCTA(), layout.getOrder(),

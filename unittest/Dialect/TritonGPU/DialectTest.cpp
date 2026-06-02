@@ -26,6 +26,18 @@ static void PrintTo(const Attribute &attr, std::ostream *os) {
 namespace mlir::triton::gpu {
 namespace {
 
+TEST(DialectTest, PrependUnitDimToCGALayout) {
+  MLIRContext ctx;
+  ctx.getOrLoadDialect<TritonGPUDialect>();
+  auto layout =
+      CGAEncodingAttr::fromSplitParams(&ctx, {2, 1}, {2, 1}, {0, 1});
+  auto expanded = prependUnitDimToCGALayout(layout);
+  auto kBlock = StringAttr::get(&ctx, "block");
+
+  EXPECT_THAT(expanded.getLinearLayout().getBasis(kBlock, 0),
+              testing::ElementsAre(0, 1, 0));
+}
+
 std::vector<DistributedEncodingTrait>
 createDistributedEncodings(MLIRContext &ctx) {
   // Assorted distributed encodings to run tests on
