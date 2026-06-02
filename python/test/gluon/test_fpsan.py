@@ -130,6 +130,58 @@ def _signed_cast_payload_u64(payload, src_bitwidth: int, dst_bitwidth: int) -> n
     return np.where((x & sign) != 0, x | extension, x) & _low_mask_u64(dst_bitwidth)
 
 
+_FLOAT_DTYPE_INFO = {
+    "f32": (32, 0x3F800000, np.int32, torch.int32, torch.float32, gl.float32),
+    "f16": (16, 0x3C00, np.int16, torch.int16, torch.float16, gl.float16),
+    "bf16": (16, 0x3F80, np.int16, torch.int16, torch.bfloat16, gl.bfloat16),
+    "e4m3": (8, 0x38, np.int8, torch.int8, torch.float8_e4m3fn, gl.float8e4nv),
+    "e5m2": (8, 0x3C, np.int8, torch.int8, torch.float8_e5m2, gl.float8e5),
+}
+
+
+def _float_dtype_info(dtype: str):
+    return _FLOAT_DTYPE_INFO[dtype]
+
+
+def _float_payload_edges(bitwidth: int) -> np.ndarray:
+    if bitwidth == 8:
+        return np.asarray([0x00, 0x01, 0x7F, 0x80, 0x81, 0xFF], dtype=np.uint64)
+    if bitwidth == 16:
+        return np.asarray([0x0000, 0x0001, 0x00FF, 0x0100, 0x7FFF, 0x8000, 0x8001, 0xFFFF], dtype=np.uint64)
+    assert bitwidth == 32
+    return np.asarray([0x00000000, 0x00000001, 0x000000FF, 0x00000100, 0x0000FFFF, 0x00010000, 0x7FFFFFFF,
+                       0x80000000, 0x80000001, 0xFFFFFFFF],
+                      dtype=np.uint64)
+
+
+def _random_float_bits(rs: np.random.RandomState, shape, dtype: str) -> np.ndarray:
+    bitwidth, one_bits, np_storage_dtype, _, _, _ = _float_dtype_info(dtype)
+    payload = rs.randint(0, 1 << bitwidth, size=shape, dtype=np.uint64)
+    edges = _float_payload_edges(bitwidth)
+    payload.reshape(-1)[:len(edges)] = edges
+    bits = _unmix_payload_u64_to_float_bits(payload, bitwidth, one_bits)
+    np_unsigned_dtype = np.dtype(f"u{bitwidth // 8}")
+    return bits.astype(np_unsigned_dtype).view(np_storage_dtype)
+
+
+def _as_float_bits_tensor(bits: np.ndarray, dtype: str):
+    _, _, _, torch_storage_dtype, torch_dtype, _ = _float_dtype_info(dtype)
+    storage = torch.tensor(bits, device="cuda", dtype=torch_storage_dtype)
+    return storage, triton.TensorWrapper(storage, dtype=torch_dtype)
+
+
+def _mix_float_bits(bits: np.ndarray, dtype: str) -> np.ndarray:
+    bitwidth, one_bits, _, _, _, _ = _float_dtype_info(dtype)
+    return _mix_float_bits_to_payload_u64(bits, bitwidth, one_bits)
+
+
+def _unmix_payload_to_float_bits(payload: np.ndarray, dtype: str) -> np.ndarray:
+    bitwidth, one_bits, np_storage_dtype, _, _, _ = _float_dtype_info(dtype)
+    bits = _unmix_payload_u64_to_float_bits(payload, bitwidth, one_bits)
+    np_unsigned_dtype = np.dtype(f"u{bitwidth // 8}")
+    return bits.astype(np_unsigned_dtype).view(np_storage_dtype)
+
+
 def _payload_u32_to_f32_bits_i32(x_u64: np.ndarray) -> np.ndarray:
     return _unmix_payload_u32_to_f32_bits_i32((x_u64 & np.uint64(0xFFFFFFFF)).astype(np.uint32))
 
@@ -391,26 +443,22 @@ EXTERN_TERNARY_CASES = TERNARY_EXTERN_SYMBOLS[_extern_backend_name()]
 EXTERN_MIXED_CASES = MIXED_EXTERN_SYMBOLS[_extern_backend_name()]
 
 
-def _as_payload_np_i32(x) -> np.ndarray:
+def _as_payload_np_unsigned(x) -> np.ndarray:
     if isinstance(x, torch.Tensor):
         x = x.detach().cpu().numpy()
     if not isinstance(x, np.ndarray):
         raise TypeError(f"unsupported input type: {type(x)}")
-    if x.dtype == np.int32:
-        return x.astype(np.int32, copy=False)
-    if x.dtype == np.uint32:
-        return x.view(np.int32)
-    if x.dtype == np.float32:
-        return x.view(np.int32)
+    if x.dtype.kind in "iuf" and x.dtype.itemsize in (1, 2, 4):
+        return x.view(np.dtype(f"u{x.dtype.itemsize}"))
     raise TypeError(f"unsupported dtype for payload comparison: {x.dtype}")
 
 
 def _assert_payload_equal(actual, expected) -> None:
-    np.testing.assert_array_equal(_as_payload_np_i32(actual), _as_payload_np_i32(expected))
+    np.testing.assert_array_equal(_as_payload_np_unsigned(actual), _as_payload_np_unsigned(expected))
 
 
 def _payload_equal(a, b) -> bool:
-    return np.array_equal(_as_payload_np_i32(a), _as_payload_np_i32(b))
+    return np.array_equal(_as_payload_np_unsigned(a), _as_payload_np_unsigned(b))
 
 
 @gluon.jit
@@ -1276,23 +1324,31 @@ def test_cast_ext_payload_semantics(device, fresh_knobs):
     _assert_payload_equal(out_np[:3], special_f32_bits)
 
 
-def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = None) -> np.ndarray:
-    # Computes: c + a @ b in Z/(2^32) on mixed f32 payload bits.
-    a_u = _mix_f32_bits_to_payload_u32(a_i32).astype(np.uint64)
-    b_u = _mix_f32_bits_to_payload_u32(b_i32).astype(np.uint64)
-    c_u = _mix_f32_bits_to_payload_u32(c_i32).astype(np.uint64) if c_i32 is not None else None
+def _mm_payload_bits(a_bits: np.ndarray, b_bits: np.ndarray, c_bits: np.ndarray, type_a: str, type_b: str,
+                     acc_type: str) -> np.ndarray:
+    # Computes: c + a @ b in Z/(2^acc_width) on mixed float payload bits.
+    a_width = _float_dtype_info(type_a)[0]
+    b_width = _float_dtype_info(type_b)[0]
+    acc_width = _float_dtype_info(acc_type)[0]
+    a_u = _signed_cast_payload_u64(_mix_float_bits(a_bits, type_a), a_width, acc_width)
+    b_u = _signed_cast_payload_u64(_mix_float_bits(b_bits, type_b), b_width, acc_width)
+    c_u = _mix_float_bits(c_bits, acc_type) if c_bits is not None else None
     m, k = a_u.shape
     k2, n = b_u.shape
     assert k == k2
     out = np.empty((m, n), dtype=np.uint64)
-    mask = np.uint64(0xFFFFFFFF)
+    mask = _low_mask_u64(acc_width)
     for i in range(m):
         for j in range(n):
             s = c_u[i, j] if c_u is not None else 0
             for kk in range(k):
                 s = (s + (a_u[i, kk] * b_u[kk, j])) & mask
             out[i, j] = s
-    return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
+    return _unmix_payload_to_float_bits(out, acc_type)
+
+
+def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = None) -> np.ndarray:
+    return _mm_payload_bits(a_i32, b_i32, c_i32, "f32", "f32", "f32")
 
 
 def _bmm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = None) -> np.ndarray:
@@ -1399,7 +1455,7 @@ def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_s
 
 def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.ndarray, b_scale_u8: np.ndarray,
                            c_i32: np.ndarray = None, a_pack: int = 1, b_pack: int = 1,
-                           elem_type: str = "e2m1") -> np.ndarray:
+                           type_a: str = "e2m1", type_b: str = "e2m1") -> np.ndarray:
     a_scale = a_scale_u8.astype(np.uint64)
     b_scale = b_scale_u8.astype(np.uint64)
     c_u = _mix_f32_bits_to_payload_u32(c_i32).astype(np.uint64) if c_i32 is not None else None
@@ -1425,7 +1481,7 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
         out[1::2, :] = (data.astype(np.uint64) >> np.uint64(4)) & np.uint64(0x0F)
         return out
 
-    def compute_payload_matrix(data: np.ndarray) -> np.ndarray:
+    def compute_payload_matrix(data: np.ndarray, elem_type: str) -> np.ndarray:
         if elem_type in ("e4m3", "e5m2"):
             one_bits = 0x38 if elem_type == "e4m3" else 0x3C
             payload = _mix_float_bits_to_payload_u64(data, 8, one_bits)
@@ -1436,8 +1492,8 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
         raw_bf16 = (raw_scale & np.uint64(0xFF)) << np.uint64(7)
         return _mix_float_bits_to_payload_u64(raw_bf16, 16, 0x3F80)
 
-    a_payload = compute_payload_matrix(unpack_payload_matrix(a_u8, a_pack, pack_axis=1))
-    b_payload = compute_payload_matrix(unpack_payload_matrix(b_u8, b_pack, pack_axis=0))
+    a_payload = compute_payload_matrix(unpack_payload_matrix(a_u8, a_pack, pack_axis=1), type_a)
+    b_payload = compute_payload_matrix(unpack_payload_matrix(b_u8, b_pack, pack_axis=0), type_b)
     a_scale_payload = scale_payload_matrix(a_scale)
     b_scale_payload = scale_payload_matrix(b_scale)
 
@@ -1455,10 +1511,27 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
     return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
 
 
-def test_dot_fma(device, fresh_knobs):
+_DOT_FLOAT_DTYPES = [
+    ("f32", "f32", "f32"),
+    ("bf16", "bf16", "f32"),
+    ("f16", "f16", "f16"),
+    ("f16", "f16", "f32"),
+    *[(type_a, type_b, acc_type)
+      for type_a, type_b, acc_type in itertools.product(("e4m3", "e5m2"), ("e4m3", "e5m2"), ("f16", "f32"))],
+]
+
+_TCGEN05_FLOAT_DTYPES = [
+    *_DOT_FLOAT_DTYPES,
+    ("f16", "bf16", "f32"),
+    ("bf16", "f16", "f32"),
+]
+
+
+@pytest.mark.parametrize(("type_a", "type_b", "acc_type"), _DOT_FLOAT_DTYPES)
+def test_dot_fma(device, type_a, type_b, acc_type, fresh_knobs):
     _require_cuda_backend(device)
 
-    B = 16
+    B = 32
     BLOCK = gl.constexpr(B)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
@@ -1486,21 +1559,15 @@ def test_dot_fma(device, fresh_knobs):
         gl.store(out_ptr + out_offs, out)
 
     rs = np.random.RandomState(0)
-    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    exp_bits = _mm_payload_u32(a_bits, b_bits.T, c_bits)
+    a_bits = _random_float_bits(rs, (B, B), type_a)
+    b_bits = _random_float_bits(rs, (B, B), type_b)
+    c_bits = _random_float_bits(rs, (B, B), acc_type)
+    exp_bits = _mm_payload_bits(a_bits, b_bits.T, c_bits, type_a, type_b, acc_type)
 
-    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
-    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
-    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
-    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
-
-    # Wrap int storage as fp32 so fpsan operates on payload bits.
-    aw = triton.TensorWrapper(a, dtype=torch.float32)
-    bw = triton.TensorWrapper(b, dtype=torch.float32)
-    cw = triton.TensorWrapper(c, dtype=torch.float32)
-    outw = triton.TensorWrapper(out, dtype=torch.float32)
+    _, aw = _as_float_bits_tensor(a_bits, type_a)
+    _, bw = _as_float_bits_tensor(b_bits, type_b)
+    _, cw = _as_float_bits_tensor(c_bits, acc_type)
+    out, outw = _as_float_bits_tensor(np.empty((B, B), dtype=_float_dtype_info(acc_type)[2]), acc_type)
 
     compiled = kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
     ttgir = compiled.asm["ttgir"]
@@ -1568,7 +1635,8 @@ def test_dot_fma_batched(device, fresh_knobs):
 
 @pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
 @pytest.mark.parametrize(("use_acc", "is_async"), [(False, False), (True, False), (True, True)])
-def test_warpgroup_mma(device, use_acc, is_async, fresh_knobs):
+@pytest.mark.parametrize(("type_a", "type_b", "acc_type"), _DOT_FLOAT_DTYPES)
+def test_warpgroup_mma(device, use_acc, is_async, type_a, type_b, acc_type, fresh_knobs):
     _require_cuda_backend(device)
 
     B = 64
@@ -1577,10 +1645,11 @@ def test_warpgroup_mma(device, use_acc, is_async, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     @gluon.jit
-    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, USE_ACC: gl.constexpr, IS_ASYNC: gl.constexpr):
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, USE_ACC: gl.constexpr, IS_ASYNC: gl.constexpr, A_DTYPE: gl.constexpr,
+               B_DTYPE: gl.constexpr, INSTR_K: gl.constexpr, PRECISION: gl.constexpr):
         layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
         acc_layout: gl.constexpr = gl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1],
-                                                             instr_shape=[16, 32, 16])
+                                                             instr_shape=[16, 32, INSTR_K])
 
         offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
         offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
@@ -1591,41 +1660,41 @@ def test_warpgroup_mma(device, use_acc, is_async, fresh_knobs):
         b_tile = gl.load(b_ptr + offs_k_row * BLOCK + offs_n)
         c_tile = gl.load(c_ptr + offs_m * BLOCK + offs_n)
 
-        smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], gl.float32)
-        smem_a = gl.allocate_shared_memory(gl.float32, [BLOCK, BLOCK], smem_layout, a_tile)
-        smem_b = gl.allocate_shared_memory(gl.float32, [BLOCK, BLOCK], smem_layout, b_tile)
+        smem_layout_a: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], A_DTYPE)
+        smem_layout_b: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], B_DTYPE)
+        smem_a = gl.allocate_shared_memory(A_DTYPE, [BLOCK, BLOCK], smem_layout_a, a_tile)
+        smem_b = gl.allocate_shared_memory(B_DTYPE, [BLOCK, BLOCK], smem_layout_b, b_tile)
 
         acc = gl.convert_layout(c_tile, acc_layout)
-        acc = hopper.warpgroup_mma(smem_a, smem_b, acc, use_acc=USE_ACC, precision="tf32", is_async=IS_ASYNC)
+        acc = hopper.warpgroup_mma(smem_a, smem_b, acc, use_acc=USE_ACC, precision=PRECISION, is_async=IS_ASYNC)
         if IS_ASYNC:
             acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
         out = gl.convert_layout(acc, layout)
         gl.store(out_ptr + offs_m * BLOCK + offs_n, out)
 
     rs = np.random.RandomState(0)
-    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits if use_acc else None)
+    a_bits = _random_float_bits(rs, (B, B), type_a)
+    b_bits = _random_float_bits(rs, (B, B), type_b)
+    c_bits = _random_float_bits(rs, (B, B), acc_type)
+    exp_bits = _mm_payload_bits(a_bits, b_bits, c_bits if use_acc else None, type_a, type_b, acc_type)
 
-    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
-    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
-    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
-    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+    _, aw = _as_float_bits_tensor(a_bits, type_a)
+    _, bw = _as_float_bits_tensor(b_bits, type_b)
+    _, cw = _as_float_bits_tensor(c_bits, acc_type)
+    out, outw = _as_float_bits_tensor(np.empty((B, B), dtype=_float_dtype_info(acc_type)[2]), acc_type)
 
-    aw = triton.TensorWrapper(a, dtype=torch.float32)
-    bw = triton.TensorWrapper(b, dtype=torch.float32)
-    cw = triton.TensorWrapper(c, dtype=torch.float32)
-    outw = triton.TensorWrapper(out, dtype=torch.float32)
-
-    kernel[(1, )](aw, bw, cw, outw, USE_ACC=use_acc, IS_ASYNC=is_async)
+    a_width, _, _, _, _, a_dtype = _float_dtype_info(type_a)
+    _, _, _, _, _, b_dtype = _float_dtype_info(type_b)
+    precision = "tf32" if type_a == "f32" else "ieee"
+    kernel[(1, )](aw, bw, cw, outw, USE_ACC=use_acc, IS_ASYNC=is_async, A_DTYPE=a_dtype, B_DTYPE=b_dtype,
+                  INSTR_K=256 // a_width, PRECISION=precision)
 
     _assert_payload_equal(out, exp_bits)
 
 
 @pytest.mark.skipif(not (is_hip_cdna4() or is_hip_gfx1250()), reason="Requires DotScaledOp support (CDNA4, or GFX1250)")
-@pytest.mark.parametrize("type_a", ["e2m1", "e4m3", "e5m2"])
-@pytest.mark.parametrize("type_b", ["e2m1", "e4m3", "e5m2", "bf16"])
+@pytest.mark.parametrize("type_a", ["e2m1", "e4m3", "e5m2", "bf16", "fp16"])
+@pytest.mark.parametrize("type_b", ["e2m1", "e4m3", "e5m2", "bf16", "fp16"])
 def test_dot_scaled(device, type_a, type_b, fresh_knobs):
     _require_cuda_backend(device)
 
@@ -1680,12 +1749,18 @@ def test_dot_scaled(device, type_a, type_b, fresh_knobs):
     a_scale = torch.tensor(a_scale_bits, device="cuda", dtype=torch.uint8)
     b_scale = torch.tensor(b_scale_bits, device="cuda", dtype=torch.uint8)
 
-    if type_b == "bf16":
+    if type_a in ("bf16", "fp16"):
+        a_bits = rs.randint(0, 65536, size=(B, packed_k_a)).astype(np.uint16)
+        a = torch.tensor(a_bits, device="cuda", dtype=torch.uint16).view(torch.bfloat16 if type_a == "bf16" else
+                                                                        torch.float16)
+    if type_b in ("bf16", "fp16"):
         b_bits = rs.randint(0, 65536, size=(packed_k_b, B)).astype(np.uint16)
-        b = torch.tensor(b_bits, device="cuda", dtype=torch.uint16).view(torch.bfloat16)
+        b = torch.tensor(b_bits, device="cuda", dtype=torch.uint16).view(torch.bfloat16 if type_b == "bf16" else
+                                                                        torch.float16)
 
-    exp_bits = _dot_scaled_payload_u32(a_bits, b_bits, a_scale_bits, None if type_b == "bf16" else b_scale_bits, a_pack,
-                                       b_pack, type_a, type_b)
+    exp_bits = _dot_scaled_payload_u32(a_bits, b_bits, None if type_a in ("bf16", "fp16") else a_scale_bits,
+                                       None if type_b in ("bf16", "fp16") else b_scale_bits, a_pack, b_pack, type_a,
+                                       type_b)
 
     out = torch.empty((B, B), device="cuda", dtype=torch.int32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
@@ -1697,7 +1772,8 @@ def test_dot_scaled(device, type_a, type_b, fresh_knobs):
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("use_acc", [False, True])
-def test_tcgen05_mma(device, use_acc, fresh_knobs):
+@pytest.mark.parametrize(("type_a", "type_b", "acc_type"), _TCGEN05_FLOAT_DTYPES)
+def test_tcgen05_mma(device, use_acc, type_a, type_b, acc_type, fresh_knobs):
     _require_cuda_backend(device)
 
     B = 64
@@ -1706,7 +1782,8 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     @gluon.jit
-    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, USE_ACC: gl.constexpr):
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, USE_ACC: gl.constexpr, A_DTYPE: gl.constexpr, B_DTYPE: gl.constexpr,
+               ACC_DTYPE: gl.constexpr, ACC_BITWIDTH: gl.constexpr):
         layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
 
         offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
@@ -1721,15 +1798,15 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
         a_tile = gl.load(a_ptr + a_offs)
         b_tile = gl.load(b_ptr + b_offs)
 
-        smem_layout_a: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], gl.float32)
-        smem_layout_b: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], gl.float32)
-        smem_a = gl.allocate_shared_memory(gl.float32, [BLOCK, BLOCK], smem_layout_a)
-        smem_b = gl.allocate_shared_memory(gl.float32, [BLOCK, BLOCK], smem_layout_b)
+        smem_layout_a: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], A_DTYPE)
+        smem_layout_b: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], B_DTYPE)
+        smem_a = gl.allocate_shared_memory(A_DTYPE, [BLOCK, BLOCK], smem_layout_a)
+        smem_b = gl.allocate_shared_memory(B_DTYPE, [BLOCK, BLOCK], smem_layout_b)
         smem_a.store(a_tile)
         smem_b.store(b_tile)
 
-        tmem_layout: gl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
-        acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK, BLOCK], layout=tmem_layout)
+        tmem_layout: gl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=32 // ACC_BITWIDTH)
+        acc_tmem = allocate_tensor_memory(ACC_DTYPE, [BLOCK, BLOCK], layout=tmem_layout)
         acc_reg_layout: gl.constexpr = acc_tmem.get_reg_layout()
         if USE_ACC:
             c_tile = gl.load(c_ptr + out_offs)
@@ -1750,29 +1827,29 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
         gl.store(out_ptr + out_offs, out)
 
     rs = np.random.RandomState(0)
-    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    exp_bits = _mm_payload_u32(a_bits, b_bits.T, c_bits if use_acc else None)
+    a_bits = _random_float_bits(rs, (B, B), type_a)
+    b_bits = _random_float_bits(rs, (B, B), type_b)
+    c_bits = _random_float_bits(rs, (B, B), acc_type)
+    exp_bits = _mm_payload_bits(a_bits, b_bits.T, c_bits if use_acc else None, type_a, type_b, acc_type)
 
-    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
-    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
-    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
-    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+    _, aw = _as_float_bits_tensor(a_bits, type_a)
+    _, bw = _as_float_bits_tensor(b_bits, type_b)
+    _, cw = _as_float_bits_tensor(c_bits, acc_type)
+    out, outw = _as_float_bits_tensor(np.empty((B, B), dtype=_float_dtype_info(acc_type)[2]), acc_type)
 
-    aw = triton.TensorWrapper(a, dtype=torch.float32)
-    bw = triton.TensorWrapper(b, dtype=torch.float32)
-    cw = triton.TensorWrapper(c, dtype=torch.float32)
-    outw = triton.TensorWrapper(out, dtype=torch.float32)
-
-    kernel[(1, )](aw, bw, cw, outw, USE_ACC=use_acc)
+    a_dtype = _float_dtype_info(type_a)[5]
+    b_dtype = _float_dtype_info(type_b)[5]
+    acc_bitwidth, _, _, _, _, acc_dtype = _float_dtype_info(acc_type)
+    kernel[(1, )](aw, bw, cw, outw, USE_ACC=use_acc, A_DTYPE=a_dtype, B_DTYPE=b_dtype, ACC_DTYPE=acc_dtype,
+                  ACC_BITWIDTH=acc_bitwidth)
 
     _assert_payload_equal(out, exp_bits)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("elem_type", ["e2m1", "e4m3", "e5m2"])
-def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
+@pytest.mark.parametrize("type_a", ["e2m1", "e4m3", "e5m2"])
+@pytest.mark.parametrize("type_b", ["e2m1", "e4m3", "e5m2"])
+def test_tcgen05_mma_scaled(device, type_a, type_b, fresh_knobs):
     _require_cuda_backend(device)
 
     B = 128
@@ -1782,33 +1859,38 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     @gluon.jit
-    def kernel(a_ptr, b_ptr, a_scale_ptr, b_scale_ptr, c_ptr, out_ptr, TYPE: gl.constexpr):
+    def kernel(a_ptr, b_ptr, a_scale_ptr, b_scale_ptr, c_ptr, out_ptr, TYPE_A: gl.constexpr, TYPE_B: gl.constexpr):
         layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
-        IS_FP4: gl.constexpr = TYPE == "e2m1"
-        PACK_FACTOR: gl.constexpr = 2 if IS_FP4 else 1
-        PACKED_K: gl.constexpr = BLOCK // PACK_FACTOR
-        ELEM_DTYPE: gl.constexpr = gl.uint8 if IS_FP4 else (gl.float8e4nv if TYPE == "e4m3" else gl.float8e5)
-        a_nvmma_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, PACKED_K], ELEM_DTYPE)
-        b_nvmma_layout: gl.constexpr = (gl.NVMMASharedLayout.get_default_for([BLOCK, PACKED_K], ELEM_DTYPE)
-                                        if IS_FP4 else gl.NVMMASharedLayout(swizzle_byte_width=128, transposed=False,
-                                                                            element_bitwidth=8, rank=2))
+        IS_FP4_A: gl.constexpr = TYPE_A == "e2m1"
+        IS_FP4_B: gl.constexpr = TYPE_B == "e2m1"
+        PACK_FACTOR_A: gl.constexpr = 2 if IS_FP4_A else 1
+        PACK_FACTOR_B: gl.constexpr = 2 if IS_FP4_B else 1
+        PACKED_K_A: gl.constexpr = BLOCK // PACK_FACTOR_A
+        PACKED_K_B: gl.constexpr = BLOCK // PACK_FACTOR_B
+        ELEM_DTYPE_A: gl.constexpr = gl.uint8 if IS_FP4_A else (gl.float8e4nv if TYPE_A == "e4m3" else gl.float8e5)
+        ELEM_DTYPE_B: gl.constexpr = gl.uint8 if IS_FP4_B else (gl.float8e4nv if TYPE_B == "e4m3" else gl.float8e5)
+        a_nvmma_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, PACKED_K_A], ELEM_DTYPE_A)
+        b_nvmma_layout: gl.constexpr = (gl.NVMMASharedLayout.get_default_for([BLOCK, PACKED_K_B], ELEM_DTYPE_B)
+                                        if IS_FP4_B else gl.NVMMASharedLayout(swizzle_byte_width=128, transposed=False,
+                                                                              element_bitwidth=8, rank=2))
         scale_layout: gl.constexpr = TensorMemoryScalesLayout()
 
         offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
         offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
-        offs_k_row = gl.arange(0, PACKED_K, layout=gl.SliceLayout(1, layout))[:, None]
-        offs_k_col = gl.arange(0, PACKED_K, layout=gl.SliceLayout(0, layout))[None, :]
+        offs_bk_row = gl.arange(0, PACKED_K_B, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_ak_col = gl.arange(0, PACKED_K_A, layout=gl.SliceLayout(0, layout))[None, :]
+        offs_bk_col = gl.arange(0, PACKED_K_B, layout=gl.SliceLayout(0, layout))[None, :]
 
-        a_tile = gl.load(a_ptr + offs_m * PACKED_K + offs_k_col)
+        a_tile = gl.load(a_ptr + offs_m * PACKED_K_A + offs_ak_col)
         c_tile = gl.load(c_ptr + offs_m * BLOCK + offs_n)
-        a_smem = gl.allocate_shared_memory(ELEM_DTYPE, [BLOCK, PACKED_K], a_nvmma_layout, a_tile)
-        if IS_FP4:
-            b_tile = gl.load(b_ptr + offs_m * PACKED_K + offs_k_col)
-            b_smem = gl.allocate_shared_memory(ELEM_DTYPE, [BLOCK, PACKED_K], b_nvmma_layout, b_tile)
+        a_smem = gl.allocate_shared_memory(ELEM_DTYPE_A, [BLOCK, PACKED_K_A], a_nvmma_layout, a_tile)
+        if IS_FP4_B:
+            b_tile = gl.load(b_ptr + offs_m * PACKED_K_B + offs_bk_col)
+            b_smem = gl.allocate_shared_memory(ELEM_DTYPE_B, [BLOCK, PACKED_K_B], b_nvmma_layout, b_tile)
             b_mma = b_smem.permute((1, 0))
         else:
-            b_tile = gl.load(b_ptr + offs_k_row * BLOCK + offs_n)
-            b_smem = gl.allocate_shared_memory(ELEM_DTYPE, [PACKED_K, BLOCK], b_nvmma_layout, b_tile)
+            b_tile = gl.load(b_ptr + offs_bk_row * BLOCK + offs_n)
+            b_smem = gl.allocate_shared_memory(ELEM_DTYPE_B, [PACKED_K_B, BLOCK], b_nvmma_layout, b_tile)
             b_mma = b_smem
 
         tmem_layout: gl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
@@ -1827,7 +1909,7 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
 
         bar = gl.allocate_shared_memory(gl.int64, [1], gl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(bar, count=1)
-        tcgen05_mma_scaled(a_smem, b_mma, acc_tmem, a_scale_tmem, b_scale_tmem, TYPE, TYPE, use_acc=True,
+        tcgen05_mma_scaled(a_smem, b_mma, acc_tmem, a_scale_tmem, b_scale_tmem, TYPE_A, TYPE_B, use_acc=True,
                            mbarriers=[bar])
         mbarrier.wait(bar, phase=0)
         mbarrier.invalidate(bar)
@@ -1836,29 +1918,34 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
         gl.store(out_ptr + offs_m * BLOCK + offs_n, out)
 
     rs = np.random.RandomState(0)
-    pack_factor = 2 if elem_type == "e2m1" else 1
-    packed_k = B // pack_factor
-    a_bits = rs.randint(0 if elem_type == "e2m1" else 20, 256 if elem_type == "e2m1" else 40, size=(B, packed_k),
+    pack_factor_a = 2 if type_a == "e2m1" else 1
+    pack_factor_b = 2 if type_b == "e2m1" else 1
+    packed_k_a = B // pack_factor_a
+    packed_k_b = B // pack_factor_b
+    a_bits = rs.randint(0 if type_a == "e2m1" else 20, 256 if type_a == "e2m1" else 40, size=(B, packed_k_a),
                         dtype=np.uint8)
-    if elem_type == "e2m1":
-        b_bits = rs.randint(0, 256, size=(B, packed_k), dtype=np.uint8)
+    if type_b == "e2m1":
+        b_bits = rs.randint(0, 256, size=(B, packed_k_b), dtype=np.uint8)
         b_ref_bits = b_bits.T
     else:
-        b_bits = rs.randint(20, 40, size=(packed_k, B), dtype=np.uint8)
+        b_bits = rs.randint(20, 40, size=(packed_k_b, B), dtype=np.uint8)
         b_ref_bits = b_bits
     a_scale_bits = rs.randint(1, 4, size=(B, B // 32), dtype=np.int8)
     b_scale_bits = rs.randint(1, 4, size=(B, B // 32), dtype=np.int8)
     c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
     exp_bits = _mm_scaled_payload_u32(a_bits, b_ref_bits, a_scale_bits.view(np.uint8), b_scale_bits.view(np.uint8),
-                                      c_bits, a_pack=pack_factor, b_pack=pack_factor, elem_type=elem_type)
+                                      c_bits, a_pack=pack_factor_a, b_pack=pack_factor_b, type_a=type_a, type_b=type_b)
 
-    if elem_type == "e2m1":
+    if type_a == "e2m1":
         a = torch.tensor(a_bits, device="cuda", dtype=torch.uint8)
+    else:
+        torch_dtype_a = torch.float8_e4m3fn if type_a == "e4m3" else torch.float8_e5m2
+        a = torch.tensor(a_bits, device="cuda", dtype=torch.uint8).view(torch_dtype_a)
+    if type_b == "e2m1":
         b = torch.tensor(b_bits, device="cuda", dtype=torch.uint8)
     else:
-        torch_dtype = torch.float8_e4m3fn if elem_type == "e4m3" else torch.float8_e5m2
-        a = torch.tensor(a_bits, device="cuda", dtype=torch.uint8).view(torch_dtype)
-        b = torch.tensor(b_bits, device="cuda", dtype=torch.uint8).view(torch_dtype)
+        torch_dtype_b = torch.float8_e4m3fn if type_b == "e4m3" else torch.float8_e5m2
+        b = torch.tensor(b_bits, device="cuda", dtype=torch.uint8).view(torch_dtype_b)
     a_scale = torch.tensor(a_scale_bits, device="cuda", dtype=torch.int8)
     b_scale = torch.tensor(b_scale_bits, device="cuda", dtype=torch.int8)
     c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
@@ -1867,7 +1954,7 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
     cw = triton.TensorWrapper(c, dtype=torch.float32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
-    kernel[(1, )](a, b, a_scale, b_scale, cw, outw, TYPE=elem_type)
+    kernel[(1, )](a, b, a_scale, b_scale, cw, outw, TYPE_A=type_a, TYPE_B=type_b)
 
     _assert_payload_equal(out, exp_bits)
 
