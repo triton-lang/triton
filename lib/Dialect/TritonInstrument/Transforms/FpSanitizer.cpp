@@ -65,21 +65,12 @@ Operation *createGlobalScratchBarrier(PatternRewriter &rewriter, Location loc,
   return barrier;
 }
 
-Value createLeadCTAPredicate(PatternRewriter &rewriter, Location loc) {
-  Value ctaId = ExperimentalClusterCTAIdOp::create(rewriter, loc);
-  Value one = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
-  Value zero = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
-  Value lowBit = arith::AndIOp::create(rewriter, loc, ctaId, one);
-  return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq, lowBit,
-                              zero);
-}
-
-Value restrictToLeadCTA(PatternRewriter &rewriter, Location loc, Value pred,
-                        bool twoCTAs) {
-  if (!twoCTAs)
-    return pred;
-  return arith::AndIOp::create(rewriter, loc, pred,
-                               createLeadCTAPredicate(rewriter, loc));
+void createSynchronousCompletionArrive(PatternRewriter &rewriter, Location loc,
+                                        Value barrier, Value pred) {
+  // Hardware two-CTA tcgen05 completion is issued by the lead CTA and
+  // multicast to its partner. FPSAN erases that operation, so each CTA must
+  // arrive on its local completion barrier after the synchronous rendezvous.
+  ttng::ArriveBarrierOp::create(rewriter, loc, barrier, 1, pred);
 }
 
 enum class UnaryOpId : uint64_t {
@@ -2004,10 +1995,8 @@ struct TCGen5CommitPattern : public OpRewritePattern<ttng::TCGen5CommitOp> {
     if (twoCTAs)
       createGlobalScratchBarrier(rewriter, op.getLoc(),
                                  /*sharedClusterState=*/true);
-    Value pred =
-        restrictToLeadCTA(rewriter, op.getLoc(), op.getPred(), twoCTAs);
-    ttng::ArriveBarrierOp::create(rewriter, op.getLoc(), op.getBarrier(), 1,
-                                  pred);
+    createSynchronousCompletionArrive(rewriter, op.getLoc(), op.getBarrier(),
+                                      op.getPred());
     rewriter.eraseOp(op);
     return success();
   }
@@ -2214,9 +2203,7 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
       for (size_t i = 0; i < barriers.size(); ++i) {
         Value pred =
             arith::AndIOp::create(rewriter, loc, op.getPred(), barrierPreds[i]);
-        pred = restrictToLeadCTA(rewriter, loc, pred,
-                                 scratch->usesSharedClusterState());
-        ttng::ArriveBarrierOp::create(rewriter, loc, barriers[i], 1, pred);
+        createSynchronousCompletionArrive(rewriter, loc, barriers[i], pred);
       }
     }
 
@@ -2396,9 +2383,7 @@ struct TCGen5MMAScaledPattern
       for (size_t i = 0; i < barriers.size(); ++i) {
         Value pred =
             arith::AndIOp::create(rewriter, loc, op.getPred(), barrierPreds[i]);
-        pred = restrictToLeadCTA(rewriter, loc, pred,
-                                 scratch->usesSharedClusterState());
-        ttng::ArriveBarrierOp::create(rewriter, loc, barriers[i], 1, pred);
+        createSynchronousCompletionArrive(rewriter, loc, barriers[i], pred);
       }
     }
 
