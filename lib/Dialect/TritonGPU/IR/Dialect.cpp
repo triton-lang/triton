@@ -105,9 +105,7 @@ bool isGenericLinearEncoding(Attribute attr) {
 
 Attribute inferEncodingFromLinearLayout(MLIRContext *ctx, LinearLayout ll,
                                         Attribute srcEnc) {
-  if (isGenericLinearEncoding(srcEnc)) {
-    assert(!isPermutationMatrixLayout(ll) &&
-           "Expected non-permutation layout from this source encoding");
+  if (isGenericLinearEncoding(srcEnc) && !isPermutationMatrixLayout(ll)) {
     return GenericLinearEncodingAttr::get(ctx, std::move(ll));
   }
   return LinearEncodingAttr::get(ctx, std::move(ll));
@@ -3100,21 +3098,6 @@ struct TritonGPUInferLayoutInterface
       resultEncoding = SharedLinearEncodingAttr::get(
           ctx, std::move(transposedLl), shared.getAlignment());
     }
-    return success();
-  }
-
-  LogicalResult
-  inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
-                            Attribute &resultEncoding,
-                            std::optional<Location> location) const override {
-    auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(operandEncoding);
-    if (!sliceEncoding)
-      return emitOptionalError(
-          location, "ExpandDimsOp operand encoding must be SliceEncodingAttr");
-    if (sliceEncoding.getDim() != axis)
-      return emitOptionalError(
-          location, "Incompatible slice dimension for ExpandDimsOp operand");
-    resultEncoding = sliceEncoding.getParent();
     return success();
   }
 

@@ -71,8 +71,7 @@ static bool isNonNegative(Value v, DataFlowSolver &solver) {
     return mr.getStartAttr().getInt() >= 0;
   if (isa<triton::GetProgramIdOp, triton::GetNumProgramsOp>(def))
     return true;
-  if (isa<triton::SplatOp, triton::BroadcastOp, triton::ExpandDimsOp,
-          triton::ReshapeOp>(def))
+  if (isa<triton::SplatOp, triton::BroadcastOp, triton::ReshapeOp>(def))
     return isNonNegative(def->getOperand(0), solver);
 
   return false;

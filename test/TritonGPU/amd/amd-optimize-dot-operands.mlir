@@ -30,7 +30,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
         %4 = arith.extui %3 : tensor<4x128xi8, #ttg.slice<{dim = 2, parent = #linear}>> to tensor<4x128xi16, #ttg.slice<{dim = 2, parent = #linear}>>
         %5 = arith.shli %4, %cst_0 : tensor<4x128xi16, #ttg.slice<{dim = 2, parent = #linear}>>
         %6 = tt.bitcast %5 : tensor<4x128xi16, #ttg.slice<{dim = 2, parent = #linear}>> -> tensor<4x128xbf16, #ttg.slice<{dim = 2, parent = #linear}>>
-        %7 = tt.expand_dims %6 {axis = 2 : i32} : tensor<4x128xbf16, #ttg.slice<{dim = 2, parent = #linear}>> -> tensor<4x128x1xbf16, #linear>
+        %7 = tt.reshape %6 : tensor<4x128xbf16, #ttg.slice<{dim = 2, parent = #linear}>> -> tensor<4x128x1xbf16, #linear>
         %8 = tt.broadcast %7 : tensor<4x128x1xbf16, #linear> -> tensor<4x128x32xbf16, #linear>
         %9 = tt.trans %8 {order = array<i32: 0, 2, 1>} : tensor<4x128x32xbf16, #linear> -> tensor<4x32x128xbf16, #linear2>
         %10 = tt.reshape %9 : tensor<4x32x128xbf16, #linear2> -> tensor<128x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
