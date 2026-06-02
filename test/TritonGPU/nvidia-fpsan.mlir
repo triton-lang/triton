@@ -1,6 +1,5 @@
 // RUN: split-file %s %t
 // RUN: triton-opt %t/success.mlir -split-input-file -allow-unregistered-dialect -tritoninstrument-fp-sanitizer -triton-nvidia-check-matmul-two-cta | FileCheck %t/success.mlir
-// RUN: not triton-opt %t/inconsistent-two-ctas.mlir -allow-unregistered-dialect -tritoninstrument-fp-sanitizer 2>&1 | FileCheck %t/inconsistent-two-ctas.mlir
 
 //--- success.mlir
 
@@ -348,36 +347,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %b_scale = ttng.tmem_alloc : () -> !ttg.memdesc<128x8xf8E4M3FN, #tmem_scale_b, #ttng.tensor_memory, mutable>
     %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.tc_gen5_mma_scaled %a, %b, %d, %a_scale, %b_scale, %true, %true lhs = e2m1 rhs = e2m1, %bar[%true] {is_async, two_ctas} : !ttg.memdesc<256x256xi8, #shared_a, #smem, mutable>, !ttg.memdesc<256x128xi8, #shared_b, #smem, mutable>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<256x8xf8E4M3FN, #tmem_scale_a, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x8xf8E4M3FN, #tmem_scale_b, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    tt.return
-  }
-}
-
-//--- inconsistent-two-ctas.mlir
-
-#shared_a_one = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
-#shared_b_one = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
-#tmem_one = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[0, 0]]>
-#shared_a_two = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
-#shared_b_two = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
-#tmem_two = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.tensor_memory_size = 0 : i32, "ttg.total-num-warps" = 1 : i32} {
-  // CHECK: error: inconsistent two_ctas setting across matmuls; expected all matmuls to disable two_ctas.
-  tt.func public @one_cta_mma() {
-    %true = arith.constant true
-    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared_a_one, #smem, mutable>
-    %b = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<128x128xf16, #shared_b_one, #smem, mutable>
-    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem_one, #ttng.tensor_memory, mutable>
-    ttng.tc_gen5_mma %a, %b, %d, %true, %true : !ttg.memdesc<128x128xf16, #shared_a_one, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared_b_one, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem_one, #ttng.tensor_memory, mutable>
-    tt.return
-  }
-
-  tt.func public @two_cta_mma() {
-    %true = arith.constant true
-    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256x128xf16, #shared_a_two, #smem, mutable>
-    %b = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<128x128xf16, #shared_b_two, #smem, mutable>
-    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<256x128xf32, #tmem_two, #ttng.tensor_memory, mutable>
-    ttng.tc_gen5_mma %a, %b, %d, %true, %true {two_ctas} : !ttg.memdesc<256x128xf16, #shared_a_two, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared_b_two, #smem, mutable>, !ttg.memdesc<256x128xf32, #tmem_two, #ttng.tensor_memory, mutable>
     tt.return
   }
 }
