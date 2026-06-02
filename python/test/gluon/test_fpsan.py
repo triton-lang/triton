@@ -153,9 +153,10 @@ def _float_payload_edges(bitwidth: int) -> np.ndarray:
     if bitwidth == 16:
         return np.asarray([0x0000, 0x0001, 0x00FF, 0x0100, 0x7FFF, 0x8000, 0x8001, 0xFFFF], dtype=np.uint64)
     if bitwidth == 32:
-        return np.asarray([0x00000000, 0x00000001, 0x000000FF, 0x00000100, 0x0000FFFF, 0x00010000, 0x7FFFFFFF,
-                           0x80000000, 0x80000001, 0xFFFFFFFF],
-                          dtype=np.uint64)
+        return np.asarray([
+            0x00000000, 0x00000001, 0x000000FF, 0x00000100, 0x0000FFFF, 0x00010000, 0x7FFFFFFF, 0x80000000, 0x80000001,
+            0xFFFFFFFF
+        ], dtype=np.uint64)
     assert bitwidth == 64
     return np.asarray([
         0x0000000000000000,
@@ -168,8 +169,7 @@ def _float_payload_edges(bitwidth: int) -> np.ndarray:
         0x8000000000000000,
         0x8000000000000001,
         0xFFFFFFFFFFFFFFFF,
-    ],
-                      dtype=np.uint64)
+    ], dtype=np.uint64)
 
 
 def _random_float_bits(rs: np.random.RandomState, shape, dtype: str) -> np.ndarray:
@@ -1478,9 +1478,8 @@ def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_s
 
 
 def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.ndarray, b_scale_u8: np.ndarray,
-                           c_i32: np.ndarray = None, a_pack: int = 1, b_pack: int = 1,
-                           type_a: str = "e2m1", type_b: str = "e2m1", scale_factor: int = 32,
-                           scale_type: str = "e8m0") -> np.ndarray:
+                           c_i32: np.ndarray = None, a_pack: int = 1, b_pack: int = 1, type_a: str = "e2m1",
+                           type_b: str = "e2m1", scale_factor: int = 32, scale_type: str = "e8m0") -> np.ndarray:
     a_scale = a_scale_u8.astype(np.uint64)
     b_scale = b_scale_u8.astype(np.uint64)
     c_u = _mix_f32_bits_to_payload_u32(c_i32).astype(np.uint64) if c_i32 is not None else None
@@ -1565,15 +1564,14 @@ _TCGEN05_SCALED_DTYPES = list(itertools.product(("e2m1", "e4m3", "e5m2"), repeat
 _MFMA_FP8_DTYPES = ("e4m3fnuz", "e5m2fnuz") if is_hip_cdna3() else ("e4m3", "e5m2")
 
 _MFMA_DOT_CASES = [
-    pytest.param("f32", "f32", "f32", 16, 16, 32, 32, 32, 8 if is_hip_cdna3() else 16,
-                 4 if is_hip_cdna3() else 8, id="f32-f32-f32-broad"),
+    pytest.param("f32", "f32", "f32", 16, 16, 32, 32, 32, 8 if is_hip_cdna3() else 16, 4 if is_hip_cdna3() else 8,
+                 id="f32-f32-f32-broad"),
     pytest.param("f64", "f64", "f64", 16, 16, 4, 16, 16, 4, 1, id="f64-f64-f64-minimum"),
     pytest.param("f32", "f32", "f32", 16, 16, 4, 16, 16, 4, 1, id="f32-f32-f32-minimum"),
     pytest.param("f16", "f16", "f32", 16, 16, 16, 16, 16, 16, 4, id="f16-f16-f32-minimum"),
     pytest.param("bf16", "bf16", "f32", 16, 16, 16, 16, 16, 16, 4, id="bf16-bf16-f32-minimum"),
     *[
-        pytest.param(type_a, type_b, "f32", 16, 16, 32, 16, 16, 32, 8,
-                     id=f"{type_a}-{type_b}-f32-minimum")
+        pytest.param(type_a, type_b, "f32", 16, 16, 32, 16, 16, 32, 8, id=f"{type_a}-{type_b}-f32-minimum")
         for type_a, type_b in itertools.product(_MFMA_FP8_DTYPES, repeat=2)
     ],
 ]
@@ -1603,8 +1601,8 @@ _DOT_FMA_CASES = [
 ]
 
 _MMA_V2_CASES = [
-    pytest.param(*dtypes, 8 if dtypes[0] == "f64" else 16, 8, _native_mma_k(dtypes[0]),
-                 8 if dtypes[0] == "f64" else 16, id="-".join(dtypes)) for dtypes in _DOT_FMA_DTYPES
+    pytest.param(*dtypes, 8 if dtypes[0] == "f64" else 16, 8, _native_mma_k(dtypes[0]), 8 if dtypes[0] == "f64" else 16,
+                 id="-".join(dtypes)) for dtypes in _DOT_FMA_DTYPES
 ]
 
 _WARP_GROUP_MMA_CASES = [
@@ -1630,8 +1628,7 @@ _TCGEN05_MMA_SCALED_CASES = [
     ],
     *[
         pytest.param(type_a, type_b, 128, 128, 64 if type_a == type_b == "e2m1" else 32, 32, "e8m0",
-                     id=f"{type_a}-{type_b}-mxfp-minimum")
-        for type_a, type_b in _TCGEN05_SCALED_DTYPES
+                     id=f"{type_a}-{type_b}-mxfp-minimum") for type_a, type_b in _TCGEN05_SCALED_DTYPES
     ],
     pytest.param("e2m1", "e2m1", 128, 128, 64, 16, "e4m3", id="e2m1-e2m1-nvfp4-minimum"),
 ]
@@ -1698,8 +1695,8 @@ def test_mma_v2(device, type_a, type_b, acc_type, m, n, k, instr_m, fresh_knobs)
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     @gluon.jit
-    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, A_K_WIDTH: gl.constexpr, B_K_WIDTH: gl.constexpr,
-               INSTR_M: gl.constexpr, PRECISION: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, A_K_WIDTH: gl.constexpr, B_K_WIDTH: gl.constexpr, INSTR_M: gl.constexpr,
+               PRECISION: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
         layout: gl.constexpr = gl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [4, 1], [1, 0])
         acc_layout: gl.constexpr = gl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1],
                                                              instr_shape=[INSTR_M, 8])
@@ -1734,8 +1731,8 @@ def test_mma_v2(device, type_a, type_b, acc_type, m, n, k, instr_m, fresh_knobs)
     a_width = _float_dtype_info(type_a)[0]
     b_width = _float_dtype_info(type_b)[0]
     precision = "tf32" if type_a == "f32" else "ieee"
-    kernel[(1, )](aw, bw, cw, outw, A_K_WIDTH=max(32 // a_width, 1), B_K_WIDTH=max(32 // b_width, 1),
-                  INSTR_M=instr_m, PRECISION=precision, THREADS_PER_WARP=THREADS_PER_WARP)
+    kernel[(1, )](aw, bw, cw, outw, A_K_WIDTH=max(32 // a_width, 1), B_K_WIDTH=max(32 // b_width, 1), INSTR_M=instr_m,
+                  PRECISION=precision, THREADS_PER_WARP=THREADS_PER_WARP)
 
     _assert_payload_equal(out, exp_bits)
 
@@ -1915,12 +1912,12 @@ def test_dot_scaled(device, type_a, type_b, fresh_knobs):
 
     if type_a in ("bf16", "fp16"):
         a_bits = rs.randint(0, 65536, size=(B, packed_k_a)).astype(np.uint16)
-        a = torch.tensor(a_bits, device="cuda", dtype=torch.uint16).view(torch.bfloat16 if type_a == "bf16" else
-                                                                        torch.float16)
+        a = torch.tensor(a_bits, device="cuda",
+                         dtype=torch.uint16).view(torch.bfloat16 if type_a == "bf16" else torch.float16)
     if type_b in ("bf16", "fp16"):
         b_bits = rs.randint(0, 65536, size=(packed_k_b, B)).astype(np.uint16)
-        b = torch.tensor(b_bits, device="cuda", dtype=torch.uint16).view(torch.bfloat16 if type_b == "bf16" else
-                                                                        torch.float16)
+        b = torch.tensor(b_bits, device="cuda",
+                         dtype=torch.uint16).view(torch.bfloat16 if type_b == "bf16" else torch.float16)
 
     exp_bits = _dot_scaled_payload_u32(a_bits, b_bits, None if type_a in ("bf16", "fp16") else a_scale_bits,
                                        None if type_b in ("bf16", "fp16") else b_scale_bits, a_pack, b_pack, type_a,
@@ -2012,8 +2009,7 @@ def test_tcgen05_mma(device, use_acc, type_a, type_b, acc_type, m, n, k, fresh_k
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize(("type_a", "type_b", "m", "n", "k", "scale_factor", "scale_type"),
-                         _TCGEN05_MMA_SCALED_CASES)
+@pytest.mark.parametrize(("type_a", "type_b", "m", "n", "k", "scale_factor", "scale_type"), _TCGEN05_MMA_SCALED_CASES)
 def test_tcgen05_mma_scaled(device, type_a, type_b, m, n, k, scale_factor, scale_type, fresh_knobs):
     _require_cuda_backend(device)
 
@@ -2038,8 +2034,8 @@ def test_tcgen05_mma_scaled(device, type_a, type_b, m, n, k, scale_factor, scale
         ELEM_DTYPE_B: gl.constexpr = gl.uint8 if IS_FP4_B else (gl.float8e4nv if TYPE_B == "e4m3" else gl.float8e5)
         a_nvmma_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([M, PACKED_K_A], ELEM_DTYPE_A)
         b_nvmma_layout: gl.constexpr = (gl.NVMMASharedLayout.get_default_for([N, PACKED_K_B], ELEM_DTYPE_B)
-                                        if IS_FP4_B else gl.NVMMASharedLayout(
-                                            swizzle_byte_width=128, transposed=False, element_bitwidth=8, rank=2))
+                                        if IS_FP4_B else gl.NVMMASharedLayout(swizzle_byte_width=128, transposed=False,
+                                                                              element_bitwidth=8, rank=2))
         scale_layout: gl.constexpr = TensorMemoryScalesLayout()
 
         offs_m = gl.arange(0, M, layout=gl.SliceLayout(1, layout))[:, None]
