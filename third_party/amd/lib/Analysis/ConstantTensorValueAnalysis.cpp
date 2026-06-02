@@ -134,6 +134,11 @@ struct Ctx {
   llvm::SmallDenseMap<const void *, int64_t, 8> symDiv;
   std::map<std::string, int64_t> atomDiv;
   std::map<std::string, Range> atomRng;
+  // (value, coord) -> Val memo. Makes each register's walk linear in DAG size
+  // (no re-walking shared/CSE'd subterms) and lets coord-independent scalar
+  // subtrees -- evaluated with empty coord -- be computed once and reused across
+  // all registers. Keyed exactly (not by hash) to stay sound.
+  std::map<std::string, Val> memo;
   explicit Ctx(ModuleAxisInfoAnalysis &a) : ai(a) {}
 
   int64_t symDivOf(Value v) {
@@ -323,6 +328,24 @@ Val minMax(const Val &a, const Val &b, bool isMin, Ctx &ctx) {
 }
 
 Val eval(Value v, ArrayRef<int64_t> coord, Ctx &ctx, unsigned depth);
+Val evalImpl(Value v, ArrayRef<int64_t> coord, Ctx &ctx, unsigned depth);
+
+// Memoizing wrapper: dedups shared DAG subterms within a register and reuses
+// coord-independent (scalar) results across registers.
+Val eval(Value v, ArrayRef<int64_t> coord, Ctx &ctx, unsigned depth) {
+  std::string key = std::to_string((uintptr_t)v.getAsOpaquePointer());
+  key += '@';
+  for (int64_t c : coord) {
+    key += std::to_string(c);
+    key += ',';
+  }
+  auto it = ctx.memo.find(key);
+  if (it != ctx.memo.end())
+    return it->second;
+  Val r = evalImpl(v, coord, ctx, depth);
+  ctx.memo.emplace(std::move(key), r);
+  return r;
+}
 
 std::optional<int64_t> evalConstInt(Value v, ArrayRef<int64_t> coord) {
   auto cst = v.getDefiningOp<arith::ConstantOp>();
@@ -409,7 +432,7 @@ Val scalarSymbol(Value v, Ctx &ctx) {
   return s;
 }
 
-Val eval(Value v, ArrayRef<int64_t> coord, Ctx &ctx, unsigned depth) {
+Val evalImpl(Value v, ArrayRef<int64_t> coord, Ctx &ctx, unsigned depth) {
   bool isTensor = isa<RankedTensorType>(v.getType());
   if (depth > kMaxDepth)
     return isTensor ? Val::ground() : scalarSymbol(v, ctx);
