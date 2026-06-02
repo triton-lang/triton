@@ -132,11 +132,14 @@ def _signed_cast_payload_u64(payload, src_bitwidth: int, dst_bitwidth: int) -> n
 
 
 _FLOAT_DTYPE_INFO = {
+    "f64": (64, 0x3FF0000000000000, np.int64, torch.int64, torch.float64, gl.float64),
     "f32": (32, 0x3F800000, np.int32, torch.int32, torch.float32, gl.float32),
     "f16": (16, 0x3C00, np.int16, torch.int16, torch.float16, gl.float16),
     "bf16": (16, 0x3F80, np.int16, torch.int16, torch.bfloat16, gl.bfloat16),
     "e4m3": (8, 0x38, np.int8, torch.int8, torch.float8_e4m3fn, gl.float8e4nv),
     "e5m2": (8, 0x3C, np.int8, torch.int8, torch.float8_e5m2, gl.float8e5),
+    "e4m3fnuz": (8, 0x40, np.int8, torch.int8, torch.float8_e4m3fnuz, gl.float8e4b8),
+    "e5m2fnuz": (8, 0x40, np.int8, torch.int8, torch.float8_e5m2fnuz, gl.float8e5b16),
 }
 
 
@@ -149,15 +152,30 @@ def _float_payload_edges(bitwidth: int) -> np.ndarray:
         return np.asarray([0x00, 0x01, 0x7F, 0x80, 0x81, 0xFF], dtype=np.uint64)
     if bitwidth == 16:
         return np.asarray([0x0000, 0x0001, 0x00FF, 0x0100, 0x7FFF, 0x8000, 0x8001, 0xFFFF], dtype=np.uint64)
-    assert bitwidth == 32
-    return np.asarray([0x00000000, 0x00000001, 0x000000FF, 0x00000100, 0x0000FFFF, 0x00010000, 0x7FFFFFFF,
-                       0x80000000, 0x80000001, 0xFFFFFFFF],
+    if bitwidth == 32:
+        return np.asarray([0x00000000, 0x00000001, 0x000000FF, 0x00000100, 0x0000FFFF, 0x00010000, 0x7FFFFFFF,
+                           0x80000000, 0x80000001, 0xFFFFFFFF],
+                          dtype=np.uint64)
+    assert bitwidth == 64
+    return np.asarray([
+        0x0000000000000000,
+        0x0000000000000001,
+        0x00000000000000FF,
+        0x0000000000000100,
+        0x00000000FFFFFFFF,
+        0x0000000100000000,
+        0x7FFFFFFFFFFFFFFF,
+        0x8000000000000000,
+        0x8000000000000001,
+        0xFFFFFFFFFFFFFFFF,
+    ],
                       dtype=np.uint64)
 
 
 def _random_float_bits(rs: np.random.RandomState, shape, dtype: str) -> np.ndarray:
     bitwidth, one_bits, np_storage_dtype, _, _, _ = _float_dtype_info(dtype)
-    payload = rs.randint(0, 1 << bitwidth, size=shape, dtype=np.uint64)
+    high = np.iinfo(np.uint64).max if bitwidth == 64 else 1 << bitwidth
+    payload = rs.randint(0, high, size=shape, dtype=np.uint64)
     edges = _float_payload_edges(bitwidth)
     edge_count = min(payload.size, len(edges))
     payload.reshape(-1)[:edge_count] = edges[:edge_count]
@@ -450,7 +468,7 @@ def _as_payload_np_unsigned(x) -> np.ndarray:
         x = x.detach().cpu().numpy()
     if not isinstance(x, np.ndarray):
         raise TypeError(f"unsupported input type: {type(x)}")
-    if x.dtype.kind in "iuf" and x.dtype.itemsize in (1, 2, 4):
+    if x.dtype.kind in "iuf" and x.dtype.itemsize in (1, 2, 4, 8):
         return x.view(np.dtype(f"u{x.dtype.itemsize}"))
     raise TypeError(f"unsupported dtype for payload comparison: {x.dtype}")
 
@@ -1340,12 +1358,13 @@ def _mm_payload_bits(a_bits: np.ndarray, b_bits: np.ndarray, c_bits: np.ndarray,
     assert k == k2
     out = np.empty((m, n), dtype=np.uint64)
     mask = _low_mask_u64(acc_width)
-    for i in range(m):
-        for j in range(n):
-            s = c_u[i, j] if c_u is not None else 0
-            for kk in range(k):
-                s = (s + (a_u[i, kk] * b_u[kk, j])) & mask
-            out[i, j] = s
+    with np.errstate(over="ignore"):
+        for i in range(m):
+            for j in range(n):
+                s = c_u[i, j] if c_u is not None else 0
+                for kk in range(k):
+                    s = (s + (a_u[i, kk] * b_u[kk, j])) & mask
+                out[i, j] = s
     return _unmix_payload_to_float_bits(out, acc_type)
 
 
@@ -1530,6 +1549,11 @@ _DOT_FLOAT_DTYPES = [
       for type_a, type_b, acc_type in itertools.product(("e4m3", "e5m2"), ("e4m3", "e5m2"), ("f16", "f32"))],
 ]
 
+_DOT_FMA_DTYPES = [
+    *_DOT_FLOAT_DTYPES,
+    ("f64", "f64", "f64"),
+]
+
 _TCGEN05_FLOAT_DTYPES = [
     *_DOT_FLOAT_DTYPES,
     ("f16", "bf16", "f32"),
@@ -1538,21 +1562,49 @@ _TCGEN05_FLOAT_DTYPES = [
 
 _TCGEN05_SCALED_DTYPES = list(itertools.product(("e2m1", "e4m3", "e5m2"), repeat=2))
 
+_MFMA_FP8_DTYPES = ("e4m3fnuz", "e5m2fnuz") if is_hip_cdna3() else ("e4m3", "e5m2")
+
+_MFMA_DOT_CASES = [
+    pytest.param("f32", "f32", "f32", 16, 16, 32, 32, 32, 8 if is_hip_cdna3() else 16,
+                 4 if is_hip_cdna3() else 8, id="f32-f32-f32-broad"),
+    pytest.param("f64", "f64", "f64", 16, 16, 4, 16, 16, 4, 1, id="f64-f64-f64-minimum"),
+    pytest.param("f32", "f32", "f32", 16, 16, 4, 16, 16, 4, 1, id="f32-f32-f32-minimum"),
+    pytest.param("f16", "f16", "f32", 16, 16, 16, 16, 16, 16, 4, id="f16-f16-f32-minimum"),
+    pytest.param("bf16", "bf16", "f32", 16, 16, 16, 16, 16, 16, 4, id="bf16-bf16-f32-minimum"),
+    *[
+        pytest.param(type_a, type_b, "f32", 16, 16, 32, 16, 16, 32, 8,
+                     id=f"{type_a}-{type_b}-f32-minimum")
+        for type_a, type_b in itertools.product(_MFMA_FP8_DTYPES, repeat=2)
+    ],
+]
+
+_WMMA_DOT_CASES = [
+    pytest.param("f32", "f32", "f32", 32, 32, 32, 4, 2, id="f32-f32-f32-broad"),
+    pytest.param("f32", "f32", "f32", 16, 16, 4, 4, 2, id="f32-f32-f32-minimum"),
+    pytest.param("f16", "f16", "f32", 16, 16, 32, 32, 8, id="f16-f16-f32-minimum"),
+    pytest.param("bf16", "bf16", "f32", 16, 16, 32, 32, 8, id="bf16-bf16-f32-minimum"),
+    *[
+        pytest.param(type_a, type_b, "f32", 16, 16, 64, 64, 8, id=f"{type_a}-{type_b}-f32-minimum")
+        for type_a, type_b in itertools.product(("e4m3", "e5m2"), repeat=2)
+    ],
+]
+
 
 def _native_mma_k(type_a: str) -> int:
     return 256 // _float_dtype_info(type_a)[0]
 
 
 _DOT_FMA_CASES = [
-    *[pytest.param(*dtypes, 32, 32, 32, id=f"{'-'.join(dtypes)}-broad") for dtypes in _DOT_FLOAT_DTYPES],
+    *[pytest.param(*dtypes, 32, 32, 32, id=f"{'-'.join(dtypes)}-broad") for dtypes in _DOT_FMA_DTYPES],
     *[
         pytest.param(*dtypes, 1, 1, _native_mma_k(dtypes[0]), id=f"{'-'.join(dtypes)}-minimum")
-        for dtypes in _DOT_FLOAT_DTYPES
+        for dtypes in _DOT_FMA_DTYPES
     ],
 ]
 
 _MMA_V2_CASES = [
-    pytest.param(*dtypes, 16, 8, _native_mma_k(dtypes[0]), id="-".join(dtypes)) for dtypes in _DOT_FLOAT_DTYPES
+    pytest.param(*dtypes, 8 if dtypes[0] == "f64" else 16, 8, _native_mma_k(dtypes[0]),
+                 8 if dtypes[0] == "f64" else 16, id="-".join(dtypes)) for dtypes in _DOT_FMA_DTYPES
 ]
 
 _WARP_GROUP_MMA_CASES = [
@@ -1635,8 +1687,8 @@ def test_dot_fma(device, type_a, type_b, acc_type, m, n, k, fresh_knobs):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA MMA v2")
-@pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k"), _MMA_V2_CASES)
-def test_mma_v2(device, type_a, type_b, acc_type, m, n, k, fresh_knobs):
+@pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_m"), _MMA_V2_CASES)
+def test_mma_v2(device, type_a, type_b, acc_type, m, n, k, instr_m, fresh_knobs):
     _require_cuda_backend(device)
 
     M = gl.constexpr(m)
@@ -1647,10 +1699,10 @@ def test_mma_v2(device, type_a, type_b, acc_type, m, n, k, fresh_knobs):
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, c_ptr, out_ptr, A_K_WIDTH: gl.constexpr, B_K_WIDTH: gl.constexpr,
-               PRECISION: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+               INSTR_M: gl.constexpr, PRECISION: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
         layout: gl.constexpr = gl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [4, 1], [1, 0])
         acc_layout: gl.constexpr = gl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1],
-                                                             instr_shape=[16, 8])
+                                                             instr_shape=[INSTR_M, 8])
         lhs_layout: gl.constexpr = gl.DotOperandLayout(parent=acc_layout, operand_index=0, k_width=A_K_WIDTH)
         rhs_layout: gl.constexpr = gl.DotOperandLayout(parent=acc_layout, operand_index=1, k_width=B_K_WIDTH)
 
@@ -1682,8 +1734,8 @@ def test_mma_v2(device, type_a, type_b, acc_type, m, n, k, fresh_knobs):
     a_width = _float_dtype_info(type_a)[0]
     b_width = _float_dtype_info(type_b)[0]
     precision = "tf32" if type_a == "f32" else "ieee"
-    kernel[(1, )](aw, bw, cw, outw, A_K_WIDTH=32 // a_width, B_K_WIDTH=32 // b_width, PRECISION=precision,
-                  THREADS_PER_WARP=THREADS_PER_WARP)
+    kernel[(1, )](aw, bw, cw, outw, A_K_WIDTH=max(32 // a_width, 1), B_K_WIDTH=max(32 // b_width, 1),
+                  INSTR_M=instr_m, PRECISION=precision, THREADS_PER_WARP=THREADS_PER_WARP)
 
     _assert_payload_equal(out, exp_bits)
 
@@ -2315,20 +2367,18 @@ def test_reduction_matches_loop(device, fresh_knobs):
 
 
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
-def test_mfma_dot(device, fresh_knobs):
+@pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_m", "instr_n", "instr_k", "k_width"),
+                         _MFMA_DOT_CASES)
+def test_mfma_dot(device, type_a, type_b, acc_type, m, n, k, instr_m, instr_n, instr_k, k_width, fresh_knobs):
     _require_cuda_backend(device)
-
-    M, N, K = 16, 16, 32
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     cdna_version = 3 if is_hip_cdna3() else 4
-    nonkdim = 32
-    kdim = 8 if cdna_version == 3 else 16
-    k_width_val = 4 if cdna_version == 3 else 8
 
     blocked = gl.BlockedLayout([4, 4], [4, 16], [4, 1], [1, 0])
-    mfma_layout = gl.amd.AMDMFMALayout(cdna_version, [nonkdim, nonkdim, kdim], True, [4, 1])
+    mfma_layout = gl.amd.AMDMFMALayout(cdna_version, [instr_m, instr_n, instr_k], True, [4, 1],
+                                       element_bitwidth=_float_dtype_info(acc_type)[0])
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, c_ptr, out_ptr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr,
@@ -2354,47 +2404,43 @@ def test_mfma_dot(device, fresh_knobs):
         gl.store(out_ptr + offs_am[:, None] * BLOCK_N + offs_bn[None, :], result)
 
     rs = np.random.RandomState(0)
-    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(M, K), dtype=np.int32)
-    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(K, N), dtype=np.int32)
-    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(M, N), dtype=np.int32)
-    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits)
+    a_bits = _random_float_bits(rs, (m, k), type_a)
+    b_bits = _random_float_bits(rs, (k, n), type_b)
+    c_bits = _random_float_bits(rs, (m, n), acc_type)
+    exp_bits = _mm_payload_bits(a_bits, b_bits, c_bits, type_a, type_b, acc_type)
 
-    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
-    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
-    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
-    out = torch.empty((M, N), device="cuda", dtype=torch.int32)
+    _, aw = _as_float_bits_tensor(a_bits, type_a)
+    _, bw = _as_float_bits_tensor(b_bits, type_b)
+    _, cw = _as_float_bits_tensor(c_bits, acc_type)
+    out, outw = _as_float_bits_tensor(np.empty((m, n), dtype=_float_dtype_info(acc_type)[2]), acc_type)
 
-    aw = triton.TensorWrapper(a, dtype=torch.float32)
-    bw = triton.TensorWrapper(b, dtype=torch.float32)
-    cw = triton.TensorWrapper(c, dtype=torch.float32)
-    outw = triton.TensorWrapper(out, dtype=torch.float32)
-
-    kernel[(1, )](aw, bw, cw, outw, BLOCK_M=M, BLOCK_N=N, BLOCK_K=K, blocked=blocked, k_width=k_width_val,
+    kernel[(1, )](aw, bw, cw, outw, BLOCK_M=m, BLOCK_N=n, BLOCK_K=k, blocked=blocked, k_width=k_width,
                   mfma_layout=mfma_layout)
 
     _assert_payload_equal(out, exp_bits)
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
-def test_wmma_dot(device, fresh_knobs):
+@pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_k", "k_width"), _WMMA_DOT_CASES)
+def test_wmma_dot(device, type_a, type_b, acc_type, m, n, k, instr_k, k_width, fresh_knobs):
     _require_cuda_backend(device)
 
-    B = 32
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     @gluon.jit
-    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, BLOCK: gl.constexpr, INSTR_SHAPE_K: gl.constexpr, K_WIDTH: gl.constexpr):
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr,
+               INSTR_SHAPE_K: gl.constexpr, K_WIDTH: gl.constexpr):
         blocked: gl.constexpr = gl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
         wmma: gl.constexpr = gl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, INSTR_SHAPE_K])
 
-        offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, blocked))[:, None]
-        offs_k = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, blocked))[None, :]
-        offs_bk = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, blocked))[:, None]
-        offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, blocked))[None, :]
+        offs_m = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, blocked))[:, None]
+        offs_k = gl.arange(0, BLOCK_K, layout=gl.SliceLayout(0, blocked))[None, :]
+        offs_bk = gl.arange(0, BLOCK_K, layout=gl.SliceLayout(1, blocked))[:, None]
+        offs_n = gl.arange(0, BLOCK_N, layout=gl.SliceLayout(0, blocked))[None, :]
 
-        a = gl.load(a_ptr + offs_m * BLOCK + offs_k)
-        b = gl.load(b_ptr + offs_bk * BLOCK + offs_n)
-        c = gl.load(c_ptr + offs_m * BLOCK + offs_n)
+        a = gl.load(a_ptr + offs_m * BLOCK_K + offs_k)
+        b = gl.load(b_ptr + offs_bk * BLOCK_N + offs_n)
+        c = gl.load(c_ptr + offs_m * BLOCK_N + offs_n)
         c = gl.convert_layout(c, wmma)
 
         a = gl.convert_layout(a, gl.DotOperandLayout(0, wmma, K_WIDTH))
@@ -2402,26 +2448,21 @@ def test_wmma_dot(device, fresh_knobs):
         acc = gl.amd.gfx1250.wmma(a, b, c)
 
         out_layout: gl.constexpr = gl.SliceLayout(1, wmma)
-        offs_cm = gl.arange(0, BLOCK, layout=out_layout)[:, None]
-        offs_cn = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, wmma))[None, :]
-        gl.store(out_ptr + offs_cm * BLOCK + offs_cn, acc)
+        offs_cm = gl.arange(0, BLOCK_M, layout=out_layout)[:, None]
+        offs_cn = gl.arange(0, BLOCK_N, layout=gl.SliceLayout(0, wmma))[None, :]
+        gl.store(out_ptr + offs_cm * BLOCK_N + offs_cn, acc)
 
     rs = np.random.RandomState(0)
-    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
-    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits)
+    a_bits = _random_float_bits(rs, (m, k), type_a)
+    b_bits = _random_float_bits(rs, (k, n), type_b)
+    c_bits = _random_float_bits(rs, (m, n), acc_type)
+    exp_bits = _mm_payload_bits(a_bits, b_bits, c_bits, type_a, type_b, acc_type)
 
-    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
-    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
-    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
-    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+    _, aw = _as_float_bits_tensor(a_bits, type_a)
+    _, bw = _as_float_bits_tensor(b_bits, type_b)
+    _, cw = _as_float_bits_tensor(c_bits, acc_type)
+    out, outw = _as_float_bits_tensor(np.empty((m, n), dtype=_float_dtype_info(acc_type)[2]), acc_type)
 
-    aw = triton.TensorWrapper(a, dtype=torch.float32)
-    bw = triton.TensorWrapper(b, dtype=torch.float32)
-    cw = triton.TensorWrapper(c, dtype=torch.float32)
-    outw = triton.TensorWrapper(out, dtype=torch.float32)
-
-    kernel[(1, )](aw, bw, cw, outw, BLOCK=B, INSTR_SHAPE_K=4, K_WIDTH=2)
+    kernel[(1, )](aw, bw, cw, outw, BLOCK_M=m, BLOCK_N=n, BLOCK_K=k, INSTR_SHAPE_K=instr_k, K_WIDTH=k_width)
 
     _assert_payload_equal(out, exp_bits)
