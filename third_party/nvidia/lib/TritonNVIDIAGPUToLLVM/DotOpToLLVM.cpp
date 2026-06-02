@@ -30,8 +30,7 @@ struct ScaledDotOpConversion
     : public ConvertOpToLLVMPattern<triton::DotScaledOp> {
   using ConvertOpToLLVMPattern<triton::DotScaledOp>::ConvertOpToLLVMPattern;
 
-  ScaledDotOpConversion(LLVMTypeConverter &converter, int,
-                        PatternBenefit benefit)
+  ScaledDotOpConversion(LLVMTypeConverter &converter, PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::DotScaledOp>(converter, benefit) {}
 
   LogicalResult
@@ -163,6 +162,5 @@ void mlir::triton::NVIDIA::populateDotOpToLLVMPatterns(
   patterns.add<DotOpConversion>(typeConverter, computeCapability, benefit);
   patterns.add<WarpGroupDotOpConversion>(typeConverter, benefit);
   patterns.add<WarpGroupDotWaitOpConversion>(typeConverter, benefit);
-  patterns.add<ScaledDotOpConversion>(typeConverter, computeCapability,
-                                      benefit);
+  patterns.add<ScaledDotOpConversion>(typeConverter, benefit);
 }

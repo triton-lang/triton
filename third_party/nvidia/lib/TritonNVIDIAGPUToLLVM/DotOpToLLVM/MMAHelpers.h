@@ -329,10 +329,10 @@ private:
   }
 };
 
-static Value getOffsetedBase(Value v, gpu::MemDescType memDescTy,
-                             const TypeConverter *typeConverter,
-                             ConversionPatternRewriter &rewriter,
-                             Location loc) {
+static inline Value getOffsetedBase(Value v, gpu::MemDescType memDescTy,
+                                    const TypeConverter *typeConverter,
+                                    ConversionPatternRewriter &rewriter,
+                                    Location loc) {
   TritonLLVMOpBuilder tb(loc, rewriter);
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
   auto smemObj =
