@@ -160,10 +160,18 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
     };
     bool usePermlaneSwap = isaFamily == ISAFamily::CDNA4 && (mask & 0x30);
 
+    // bound_ctrl:1 lets LLVM's AMDGPU DPP combiner fuse v_mov_dpp into a
+    // VOP3 consumer; on gfx110x this can produce e.g.
+    // `v_bfe_i32_e64_dpp v, v, 0, 16` which the assembler rejects (immediate
+    // src1/src2 not allowed in VOP3_DPP on that silicon). Gate on the helper
+    // so gfx110x stays unfused while every other target keeps the perf win.
+    const bool boundCtrl = triton::amdgpu::isDppBoundCtrlSafe(mod, isaFamily);
+
     if (triton::amdgpu::isRDNA(isaFamily) || isaFamily == ISAFamily::GFX1250) {
       if (mask < 16)
         return emitDpp(loc, rewriter, val, val,
-                       makeDppCtrl(DppCtrl::ROW_XMASK0, mask));
+                       makeDppCtrl(DppCtrl::ROW_XMASK0, mask),
+                       /*rowMask=*/0xf, /*bankMask=*/0xf, boundCtrl);
       else if (mask < 32)
         return emitPermlaneX16Xor(loc, rewriter, val, mask & 0xf);
     } else if ((triton::amdgpu::isCDNA(isaFamily) ||
@@ -192,12 +200,14 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
           highBitsDppCtrl = DppCtrl::ROW_MIRROR;
           break;
         }
-        result = emitDpp(loc, rewriter, result, result, highBitsDppCtrl);
+        result = emitDpp(loc, rewriter, result, result, highBitsDppCtrl,
+                         /*rowMask=*/0xf, /*bankMask=*/0xf, boundCtrl);
       }
 
       if (quadMask) {
         result =
-            emitDpp(loc, rewriter, result, result, makeQuadPermCtrl(quadMask));
+            emitDpp(loc, rewriter, result, result, makeQuadPermCtrl(quadMask),
+                    /*rowMask=*/0xf, /*bankMask=*/0xf, boundCtrl);
       }
 
       if (usePermlaneSwap) {

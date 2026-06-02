@@ -343,4 +343,11 @@ bool isRDNA(ISAFamily isaFamily) {
   }
 }
 
+bool isDppBoundCtrlSafe(ModuleOp moduleOp, ISAFamily isaFamily) {
+  if (isaFamily != ISAFamily::RDNA3)
+    return true;
+  StringRef arch = TargetFeatures::fromModuleOp(moduleOp).getArch();
+  return arch == "gfx1150" || arch == "gfx1151";
+}
+
 } // namespace mlir::triton::amdgpu
