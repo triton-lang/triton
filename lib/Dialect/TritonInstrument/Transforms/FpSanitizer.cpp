@@ -936,35 +936,31 @@ Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
   auto i32Ty = rewriter.getI32Type();
   auto offsetsTy = RankedTensorType::get(shape, i32Ty, encoding);
 
-  if (shape[0] != 1) {
-    auto dim0Enc = getSingleDimSliceEncoding(encoding, 0);
-    auto dim0Ty = RankedTensorType::get({shape[0]}, i32Ty, dim0Enc);
-    auto range0 = tt::MakeRangeOp::create(rewriter, loc, dim0Ty, 0, shape[0]);
-    auto stride0Const = createConstIntTensor(rewriter, loc, stride0, dim0Ty);
-    auto off0 =
-        arith::MulIOp::create(rewriter, loc, dim0Ty, range0, stride0Const);
-    auto off0Exp = expandAllSlicedDims(rewriter, loc, off0);
-    if (cast<RankedTensorType>(off0Exp.getType()).getShape() != shape) {
-      off0Exp = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off0Exp);
-    }
-    ptrTensor =
-        tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off0Exp);
+  auto dim0Enc = getSingleDimSliceEncoding(encoding, 0);
+  auto dim0Ty = RankedTensorType::get({shape[0]}, i32Ty, dim0Enc);
+  auto range0 = tt::MakeRangeOp::create(rewriter, loc, dim0Ty, 0, shape[0]);
+  auto stride0Const = createConstIntTensor(rewriter, loc, stride0, dim0Ty);
+  auto off0 =
+      arith::MulIOp::create(rewriter, loc, dim0Ty, range0, stride0Const);
+  auto off0Exp = expandAllSlicedDims(rewriter, loc, off0);
+  if (cast<RankedTensorType>(off0Exp.getType()).getShape() != shape) {
+    off0Exp = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off0Exp);
   }
+  ptrTensor =
+      tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off0Exp);
 
-  if (shape[1] != 1) {
-    auto dim1Enc = getSingleDimSliceEncoding(encoding, 1);
-    auto dim1Ty = RankedTensorType::get({shape[1]}, i32Ty, dim1Enc);
-    auto range1 = tt::MakeRangeOp::create(rewriter, loc, dim1Ty, 0, shape[1]);
-    auto stride1Const = createConstIntTensor(rewriter, loc, stride1, dim1Ty);
-    auto off1 =
-        arith::MulIOp::create(rewriter, loc, dim1Ty, range1, stride1Const);
-    auto off1Exp = expandAllSlicedDims(rewriter, loc, off1);
-    if (cast<RankedTensorType>(off1Exp.getType()).getShape() != shape) {
-      off1Exp = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off1Exp);
-    }
-    ptrTensor =
-        tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off1Exp);
+  auto dim1Enc = getSingleDimSliceEncoding(encoding, 1);
+  auto dim1Ty = RankedTensorType::get({shape[1]}, i32Ty, dim1Enc);
+  auto range1 = tt::MakeRangeOp::create(rewriter, loc, dim1Ty, 0, shape[1]);
+  auto stride1Const = createConstIntTensor(rewriter, loc, stride1, dim1Ty);
+  auto off1 =
+      arith::MulIOp::create(rewriter, loc, dim1Ty, range1, stride1Const);
+  auto off1Exp = expandAllSlicedDims(rewriter, loc, off1);
+  if (cast<RankedTensorType>(off1Exp.getType()).getShape() != shape) {
+    off1Exp = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off1Exp);
   }
+  ptrTensor =
+      tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off1Exp);
 
   return ptrTensor;
 }
