@@ -68,8 +68,8 @@ Operation *createGlobalScratchBarrier(PatternRewriter &rewriter, Location loc,
 void createSynchronousCompletionArrive(PatternRewriter &rewriter, Location loc,
                                         Value barrier, Value pred) {
   // Hardware two-CTA tcgen05 completion is issued by the lead CTA and
-  // multicast to its partner. FPSAN erases that operation, so each CTA must
-  // arrive on its local completion barrier after the synchronous rendezvous.
+  // multicast to its partner. Since FPSAN erases that instruction, each CTA
+  // performs the corresponding arrival on its local barrier copy.
   ttng::ArriveBarrierOp::create(rewriter, loc, barrier, 1, pred);
 }
 
@@ -188,8 +188,15 @@ public:
   ttg::BlockedEncodingAttr getScratchEncoding(PatternRewriter &rewriter,
                                               Value memdesc,
                                               ttg::MemDescType memTy) {
-    return getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
-                                       memTy.getElementType());
+    auto layout = getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
+                                              memTy.getElementType());
+    auto cgaLayout = ttg::getCGALayout(memTy.getEncoding());
+    if (cgaLayout.getRank() != memTy.getRank())
+      return layout;
+    return ttg::BlockedEncodingAttr::get(
+        rewriter.getContext(), layout.getSizePerThread(),
+        layout.getThreadsPerWarp(), layout.getWarpsPerCTA(), layout.getOrder(),
+        cgaLayout);
   }
 
   static Value castToI32(PatternRewriter &rewriter, Location loc, Value value) {
@@ -853,6 +860,13 @@ createOperandScratch(PatternRewriter &rewriter, Location loc,
     if (!fullVal)
       return std::nullopt;
   } else {
+    if (scratch.usesSharedClusterState()) {
+      // A two-CTA TMA barrier is waited on by the lead CTA. FPSAN executes the
+      // emulated MMA in both CTAs, so rendezvous before the partner snapshots
+      // the shared-memory operand.
+      ttng::ClusterBarrierOp::create(rewriter, loc);
+      ttng::FenceAsyncSharedOp::create(rewriter, loc, /*bCluster=*/true);
+    }
     fullVal =
         ttg::LocalLoadOp::create(rewriter, loc, tensorTy, memdesc, Value())
             .getResult();
@@ -923,31 +937,35 @@ Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
   auto i32Ty = rewriter.getI32Type();
   auto offsetsTy = RankedTensorType::get(shape, i32Ty, encoding);
 
-  auto dim0Enc = getSingleDimSliceEncoding(encoding, 0);
-  auto dim0Ty = RankedTensorType::get({shape[0]}, i32Ty, dim0Enc);
-  auto range0 = tt::MakeRangeOp::create(rewriter, loc, dim0Ty, 0, shape[0]);
-  auto stride0Const = createConstIntTensor(rewriter, loc, stride0, dim0Ty);
-  auto off0 =
-      arith::MulIOp::create(rewriter, loc, dim0Ty, range0, stride0Const);
-  auto off0Exp = expandAllSlicedDims(rewriter, loc, off0);
-  if (cast<RankedTensorType>(off0Exp.getType()).getShape() != shape) {
-    off0Exp = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off0Exp);
+  if (shape[0] != 1) {
+    auto dim0Enc = getSingleDimSliceEncoding(encoding, 0);
+    auto dim0Ty = RankedTensorType::get({shape[0]}, i32Ty, dim0Enc);
+    auto range0 = tt::MakeRangeOp::create(rewriter, loc, dim0Ty, 0, shape[0]);
+    auto stride0Const = createConstIntTensor(rewriter, loc, stride0, dim0Ty);
+    auto off0 =
+        arith::MulIOp::create(rewriter, loc, dim0Ty, range0, stride0Const);
+    auto off0Exp = expandAllSlicedDims(rewriter, loc, off0);
+    if (cast<RankedTensorType>(off0Exp.getType()).getShape() != shape) {
+      off0Exp = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off0Exp);
+    }
+    ptrTensor =
+        tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off0Exp);
   }
-  ptrTensor =
-      tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off0Exp);
 
-  auto dim1Enc = getSingleDimSliceEncoding(encoding, 1);
-  auto dim1Ty = RankedTensorType::get({shape[1]}, i32Ty, dim1Enc);
-  auto range1 = tt::MakeRangeOp::create(rewriter, loc, dim1Ty, 0, shape[1]);
-  auto stride1Const = createConstIntTensor(rewriter, loc, stride1, dim1Ty);
-  auto off1 =
-      arith::MulIOp::create(rewriter, loc, dim1Ty, range1, stride1Const);
-  auto off1Exp = expandAllSlicedDims(rewriter, loc, off1);
-  if (cast<RankedTensorType>(off1Exp.getType()).getShape() != shape) {
-    off1Exp = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off1Exp);
+  if (shape[1] != 1) {
+    auto dim1Enc = getSingleDimSliceEncoding(encoding, 1);
+    auto dim1Ty = RankedTensorType::get({shape[1]}, i32Ty, dim1Enc);
+    auto range1 = tt::MakeRangeOp::create(rewriter, loc, dim1Ty, 0, shape[1]);
+    auto stride1Const = createConstIntTensor(rewriter, loc, stride1, dim1Ty);
+    auto off1 =
+        arith::MulIOp::create(rewriter, loc, dim1Ty, range1, stride1Const);
+    auto off1Exp = expandAllSlicedDims(rewriter, loc, off1);
+    if (cast<RankedTensorType>(off1Exp.getType()).getShape() != shape) {
+      off1Exp = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off1Exp);
+    }
+    ptrTensor =
+        tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off1Exp);
   }
-  ptrTensor =
-      tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off1Exp);
 
   return ptrTensor;
 }
@@ -982,8 +1000,9 @@ Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
   Value stored = tensor;
   if (isFloatLike(tensorTy))
     stored = embedToInt(rewriter, loc, tensor);
-  return tt::StoreOp::create(rewriter, loc, ptrTensor, stored,
-                             CacheModifier::NONE, EvictionPolicy::NORMAL);
+  return tt::StoreOp::create(rewriter, loc, ptrTensor, stored, Value(),
+                             CacheModifier::NONE, EvictionPolicy::NORMAL,
+                             /*ignoreCTA=*/true);
 }
 
 Value unpackPackedFp4Slice(PatternRewriter &rewriter, Location loc,
@@ -1969,6 +1988,11 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
         scratch->getScratchEncoding(rewriter, op.getDst(), dstMemTy);
     auto srcRegTy = RankedTensorType::get(
         srcMemTy.getShape(), srcMemTy.getElementType(), srcEncoding);
+    if (scratch->usesSharedClusterState()) {
+      // Match the lead-CTA TMA wait before both CTAs emulate the TMEM copy.
+      ttng::ClusterBarrierOp::create(rewriter, loc);
+      ttng::FenceAsyncSharedOp::create(rewriter, loc, /*bCluster=*/true);
+    }
     Value srcReg =
         ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
             .getResult();
@@ -2164,16 +2188,16 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     int64_t tileM = std::min<int64_t>(kTileM, m);
     int64_t tileN = std::min<int64_t>(kTileN, n);
 
-    auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
-                                                     dMemTy.getElementType());
+    auto accTileLayout = getOptimizedBlockedEncoding(
+        rewriter, {tileM, tileN}, dMemTy.getElementType());
+    auto aTileLayout = getOptimizedBlockedEncoding(
+        rewriter, {tileM, k}, aMemTy.getElementType());
+    auto bTileLayout = getOptimizedBlockedEncoding(
+        rewriter, {k, tileN}, bMemTy.getElementType());
     auto accTileTy = RankedTensorType::get(
         {tileM, tileN}, dMemTy.getElementType(), accTileLayout);
-    auto aTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, k},
-                                                   aMemTy.getElementType());
     auto aTileTy =
         RankedTensorType::get({tileM, k}, aMemTy.getElementType(), aTileLayout);
-    auto bTileLayout = getOptimizedBlockedEncoding(rewriter, {k, tileN},
-                                                   bMemTy.getElementType());
     auto bTileTy =
         RankedTensorType::get({k, tileN}, bMemTy.getElementType(), bTileLayout);
 
@@ -2326,16 +2350,16 @@ struct TCGen5MMAScaledPattern
     int64_t tileM = std::min<int64_t>(kTileM, m);
     int64_t tileN = std::min<int64_t>(kTileN, n);
 
-    auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
-                                                     dMemTy.getElementType());
+    auto accTileLayout = getOptimizedBlockedEncoding(
+        rewriter, {tileM, tileN}, dMemTy.getElementType());
+    auto aTileLayout = getOptimizedBlockedEncoding(
+        rewriter, {tileM, aPackedK}, aMemTy.getElementType());
+    auto bTileLayout = getOptimizedBlockedEncoding(
+        rewriter, {bPackedK, tileN}, bMemTy.getElementType());
     auto accTileTy = RankedTensorType::get(
         {tileM, tileN}, dMemTy.getElementType(), accTileLayout);
-    auto aTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, aPackedK},
-                                                   aMemTy.getElementType());
     auto aTileTy = RankedTensorType::get({tileM, aPackedK},
                                          aMemTy.getElementType(), aTileLayout);
-    auto bTileLayout = getOptimizedBlockedEncoding(rewriter, {bPackedK, tileN},
-                                                   bMemTy.getElementType());
     auto bTileTy = RankedTensorType::get({bPackedK, tileN},
                                          bMemTy.getElementType(), bTileLayout);
 
@@ -2356,7 +2380,6 @@ struct TCGen5MMAScaledPattern
     scale.bKPackFactor = bKPackFactor;
     scale.aScaleFactor = *aScaleFactor;
     scale.bScaleFactor = *bScaleFactor;
-
     // The operand and scale scratch buffers are written cooperatively, so all
     // warps must finish those stores before the emulation loop reads them.
     createGlobalScratchBarrier(rewriter, loc,
@@ -2476,6 +2499,9 @@ public:
       signalPassFailure();
       return;
     }
+
+    getOperation()->setAttr(ttng::AttrTwoCTAsName,
+                            BoolAttr::get(&getContext(), twoCTAs));
 
     TmemScratchManager scratch(twoCTAs);
     RewritePatternSet patterns(&getContext());
