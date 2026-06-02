@@ -407,25 +407,24 @@ public:
       auto elemNumBits = triton::getPointeeBitWidth(ptrTy);
       unsigned contiguity =
           axisAnalysis.getContiguity(loadOp.getOffsets(), elemNumBits);
-      // Use the LinearLayout-native per-register contiguity as an extra lower
-      // bound. This recovers the register->offset map's basis images, verifies
-      // GF(2)-linearity over the whole register subspace, and proves
-      // scalar-independence by multi-substitution agreement -- catching the
-      // mod/div offset patterns AxisInfo's per-axis model cannot see, more
-      // soundly than a sequential two-probe walk.
-      // Production path: AMD-only constant evaluator (sound multi-probe).
+      // Extra lower bound: the per-register contiguity measured along the
+      // offsets tensor's LinearLayout register order -- the quantity AxisInfo's
+      // per-axis model structurally cannot express for the MXFP4 B-scale
+      // mod/div offsets. It recovers the register->offset map by partial
+      // evaluation, verifies GF(2)-linearity over the whole register subspace,
+      // and rejects scalar-dependent strides via multi-substitution agreement.
       //
-      // NOTE: `lib/Analysis/RegisterContiguity.cpp` is a backend-agnostic,
-      // upstream-quality PROTOTYPE of the same query
-      // (`triton::getPerThreadContiguityAlongRegisters(offsets, axisAnalysis)`).
-      // It proves scalar-independence structurally (symbol cancellation +
-      // AxisInfo divisibility) instead of probing. It is intentionally NOT
-      // wired in here yet: on the MXFP4 scale loads it is *sound but
-      // conservative* -- it yields contig-2 where this evaluator yields
-      // contig-4, because the 128-row panel base is only AxisInfo-provably
-      // 16-aligned. Reaching parity needs the panel base annotated
-      // `tt.divisibility = 128` plus a divisibility-aware div fold. Swap the
-      // call below to A/B test.
+      // On scalar handling it makes the SAME caller-provided-alignment
+      // assumption that AxisInfo already relies on throughout Triton (e.g. the
+      // tt.divisibility contract on arguments): unknown scalars are substituted
+      // rather than proven. A fully symbolic alternative was prototyped
+      // (structural symbol cancellation, no substitution) and shown to be the
+      // wrong trade here -- the MXFP4 panel-base 128-alignment is host
+      // knowledge, not derivable from the kernel IR, so a strictly-sound
+      // analysis is forced to give contig-2 (ushort) where this one correctly
+      // yields contig-4 (dword). Being stricter than AxisInfo costs coalescing
+      // without making the surrounding stack sound, so we stay consistent with
+      // AxisInfo's assumption model.
       unsigned evalContig =
           triton::AMD::getPerThreadContiguityFromLinearLayout(
               loadOp.getOffsets(), axisAnalysis);
