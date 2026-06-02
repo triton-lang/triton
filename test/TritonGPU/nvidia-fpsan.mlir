@@ -250,3 +250,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.tensor_memory_size = 0 : i32, "ttg.total-num-warps" = 1 : i32} {
+    // CHECK-LABEL: @tcgen05_mma_two_ctas
+  tt.func public @tcgen05_mma_two_ctas() {
+    // CHECK: ttg.global_scratch_alloc {{.*}}shared_cluster_state
+    // CHECK: tt.store
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: scf.for
+    // CHECK: tt.store
+    // CHECK-NEXT: }
+    // CHECK-NEXT: }
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK: tti.experimental_cluster_cta_id
+    // CHECK: arith.andi
+    // CHECK: arith.cmpi eq
+    // CHECK: ttng.arrive_barrier
+    // CHECK-NOT: ttng.tc_gen5_mma
+    %true = arith.constant true
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256x128xf16, #shared_a, #smem, mutable>
+    %b = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<128x128xf16, #shared_b, #smem, mutable>
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async, two_ctas} : !ttg.memdesc<256x128xf16, #shared_a, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared_b, #smem, mutable>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    tt.return
+  }
+}
