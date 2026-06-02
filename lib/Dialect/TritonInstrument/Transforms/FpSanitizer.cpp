@@ -2181,16 +2181,16 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     int64_t tileM = std::min<int64_t>(kTileM, m);
     int64_t tileN = std::min<int64_t>(kTileN, n);
 
-    auto accTileLayout = getOptimizedBlockedEncoding(
-        rewriter, {tileM, tileN}, dMemTy.getElementType());
-    auto aTileLayout = getOptimizedBlockedEncoding(
-        rewriter, {tileM, k}, aMemTy.getElementType());
-    auto bTileLayout = getOptimizedBlockedEncoding(
-        rewriter, {k, tileN}, bMemTy.getElementType());
+    auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
+                                                     dMemTy.getElementType());
     auto accTileTy = RankedTensorType::get(
         {tileM, tileN}, dMemTy.getElementType(), accTileLayout);
+    auto aTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, k},
+                                                   aMemTy.getElementType());
     auto aTileTy =
         RankedTensorType::get({tileM, k}, aMemTy.getElementType(), aTileLayout);
+    auto bTileLayout = getOptimizedBlockedEncoding(rewriter, {k, tileN},
+                                                   bMemTy.getElementType());
     auto bTileTy =
         RankedTensorType::get({k, tileN}, bMemTy.getElementType(), bTileLayout);
 
@@ -2343,16 +2343,16 @@ struct TCGen5MMAScaledPattern
     int64_t tileM = std::min<int64_t>(kTileM, m);
     int64_t tileN = std::min<int64_t>(kTileN, n);
 
-    auto accTileLayout = getOptimizedBlockedEncoding(
-        rewriter, {tileM, tileN}, dMemTy.getElementType());
-    auto aTileLayout = getOptimizedBlockedEncoding(
-        rewriter, {tileM, aPackedK}, aMemTy.getElementType());
-    auto bTileLayout = getOptimizedBlockedEncoding(
-        rewriter, {bPackedK, tileN}, bMemTy.getElementType());
+    auto accTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, tileN},
+                                                     dMemTy.getElementType());
     auto accTileTy = RankedTensorType::get(
         {tileM, tileN}, dMemTy.getElementType(), accTileLayout);
+    auto aTileLayout = getOptimizedBlockedEncoding(rewriter, {tileM, aPackedK},
+                                                   aMemTy.getElementType());
     auto aTileTy = RankedTensorType::get({tileM, aPackedK},
                                          aMemTy.getElementType(), aTileLayout);
+    auto bTileLayout = getOptimizedBlockedEncoding(rewriter, {bPackedK, tileN},
+                                                   bMemTy.getElementType());
     auto bTileTy = RankedTensorType::get({bPackedK, tileN},
                                          bMemTy.getElementType(), bTileLayout);
 
@@ -2373,6 +2373,7 @@ struct TCGen5MMAScaledPattern
     scale.bKPackFactor = bKPackFactor;
     scale.aScaleFactor = *aScaleFactor;
     scale.bScaleFactor = *bScaleFactor;
+
     // The operand and scale scratch buffers are written cooperatively, so all
     // warps must finish those stores before the emulation loop reads them.
     createGlobalScratchBarrier(rewriter, loc,
@@ -2467,31 +2468,9 @@ public:
           return failure();
         });
 
-    Operation *firstMatmul = nullptr;
     bool twoCTAs = false;
-    WalkResult walkResult =
-        getOperation().walk([&](ttng::MMAv5OpInterface op) -> WalkResult {
-          bool currentTwoCTAs = op.getTwoCtas();
-          if (!firstMatmul) {
-            firstMatmul = op;
-            twoCTAs = currentTwoCTAs;
-            return WalkResult::advance();
-          }
-          if (currentTwoCTAs == twoCTAs)
-            return WalkResult::advance();
-          auto diag = op.emitError()
-                      << "inconsistent two_ctas setting across matmuls; "
-                         "expected all matmuls to "
-                      << (twoCTAs ? "enable" : "disable") << " two_ctas.";
-          diag.attachNote(firstMatmul->getLoc())
-              << "first matmul here has two_ctas="
-              << (twoCTAs ? "true" : "false") << ".";
-          return WalkResult::interrupt();
-        });
-    if (walkResult.wasInterrupted()) {
-      signalPassFailure();
-      return;
-    }
+    getOperation().walk(
+        [&](ttng::MMAv5OpInterface op) { twoCTAs |= op.getTwoCtas(); });
 
     getOperation()->setAttr(ttng::AttrTwoCTAsName,
                             BoolAttr::get(&getContext(), twoCTAs));
