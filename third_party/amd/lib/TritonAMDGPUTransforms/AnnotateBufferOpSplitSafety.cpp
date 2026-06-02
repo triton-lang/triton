@@ -28,9 +28,8 @@ static bool isLeafNonNegative(Value v, DataFlowSolver &solver) {
   // An `add` is never a leaf to the soffset splitter. It peels the summands
   // apart and lifts the uniform ones into the unsigned soffset. So a sum whose
   // range is non-negative can still hide a negative summand.
-  if (Operation *def = v.getDefiningOp())
-    if (isa<arith::AddIOp>(def))
-      return false;
+  if (v.getDefiningOp<arith::AddIOp>())
+    return false;
 
   const auto *range = solver.lookupState<dataflow::IntegerValueRangeLattice>(v);
   if (!range || range->getValue().isUninitialized())
