@@ -5,6 +5,7 @@ add_triton_library(TritonAnalysis
   Membar.cpp
   Alias.cpp
   Utility.cpp
+  RegisterContiguity.cpp
 
   DEPENDS
   TritonTableGen

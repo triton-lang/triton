@@ -413,6 +413,19 @@ public:
       // scalar-independence by multi-substitution agreement -- catching the
       // mod/div offset patterns AxisInfo's per-axis model cannot see, more
       // soundly than a sequential two-probe walk.
+      // Production path: AMD-only constant evaluator (sound multi-probe).
+      //
+      // NOTE: `lib/Analysis/RegisterContiguity.cpp` is a backend-agnostic,
+      // upstream-quality PROTOTYPE of the same query
+      // (`triton::getPerThreadContiguityAlongRegisters(offsets, axisAnalysis)`).
+      // It proves scalar-independence structurally (symbol cancellation +
+      // AxisInfo divisibility) instead of probing. It is intentionally NOT
+      // wired in here yet: on the MXFP4 scale loads it is *sound but
+      // conservative* -- it yields contig-2 where this evaluator yields
+      // contig-4, because the 128-row panel base is only AxisInfo-provably
+      // 16-aligned. Reaching parity needs the panel base annotated
+      // `tt.divisibility = 128` plus a divisibility-aware div fold. Swap the
+      // call below to A/B test.
       unsigned evalContig =
           triton::AMD::getPerThreadContiguityFromLinearLayout(
               loadOp.getOffsets(), axisAnalysis);
