@@ -231,9 +231,7 @@ class DependenciesFinder(ast.NodeVisitor):
         visit_defaults(node.defaults)
 
     def visitAssnTarget(self, node):
-        # Target is either a single string, or a (possibly nested) list of
-        # strings (if the assn target is a tuple, including nested tuples
-        # like `(a, b), c = ...`).
+        # Target is either a single string, or a (possibly nested) list of strings if the assign target is a tuple.
         target = self.visit(node)
 
         def _add(t):
