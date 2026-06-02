@@ -1736,6 +1736,22 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 
 
 @pytest.mark.interpreter
+def test_atomic_cas_mask_false_is_noop(device):
+    @triton.jit
+    def masked_noop(Lock, triton_dtype: tl.constexpr):
+        offsets = tl.arange(0, 1)
+        num0 = tl.full((1, ), 0, dtype=triton_dtype)
+        num1 = tl.full((1, ), 1, dtype=triton_dtype)
+        mask = tl.full((1, ), False, dtype=tl.int1)
+        tl.atomic_cas(Lock + offsets, num0, num1, mask=mask)
+
+    Lock = torch.zeros((1, ), device=device, dtype=torch.int32)
+    masked_noop[(1, )](Lock, triton_dtype=tl.int32)
+
+    assert Lock[0] == 0
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 @pytest.mark.parametrize("size", [4, 128, 512, 1024])
