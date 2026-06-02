@@ -163,7 +163,9 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
     if (triton::amdgpu::isRDNA(isaFamily) || isaFamily == ISAFamily::GFX1250) {
       if (mask < 16)
         return emitDpp(loc, rewriter, val, val,
-                       makeDppCtrl(DppCtrl::ROW_XMASK0, mask));
+                       makeDppCtrl(DppCtrl::ROW_XMASK0, mask), 0xf, 0xf,
+                       !triton::amdgpu::isRDNA(isaFamily) ||
+                           isaFamily == ISAFamily::RDNA4);
       else if (mask < 32)
         return emitPermlaneX16Xor(loc, rewriter, val, mask & 0xf);
     } else if ((triton::amdgpu::isCDNA(isaFamily) ||
