@@ -1492,7 +1492,7 @@ def is_blackwell():
 @pytest.mark.parametrize("c", [GPT_OSS_120B_CONFIG])
 @pytest.mark.parametrize("batch_size", get_batch_sizes(GPT_OSS_120B_CONFIG))
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon MoE BMM1 fused-gather is only supported on Blackwell GPUs")
-def test_op(c: MLPConfig, batch_size: tuple[int, ...]):
+def test_op(c: MLPConfig, batch_size: int):
     prepared = prepare_case(c, batch_size, device=f"cuda:{torch.cuda.current_device()}")
     ref_y, ref_precision = run_provider(prepared, "reference")
     cand_y, cand_precision = run_provider(prepared, "example")
@@ -1517,6 +1517,13 @@ def test_op(c: MLPConfig, batch_size: tuple[int, ...]):
             description=f"{description}:out_scale",
             verbose=False,
         )
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Gluon MoE BMM1 fused-gather is only supported on Blackwell GPUs")
+def test_op_consan():
+    with triton.knobs.compilation.scope():
+        triton.knobs.compilation.instrumentation_mode = "consan"
+        test_op(GPT_OSS_120B_CONFIG, batch_size=128)
 
 
 # ===-----------------------------------------------------------------------===#
