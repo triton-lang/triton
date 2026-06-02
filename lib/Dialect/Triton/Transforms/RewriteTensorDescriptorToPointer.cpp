@@ -87,8 +87,11 @@ Value expandOffsets(OpBuilder &builder, Location loc,
     if (j == dim) {
       continue;
     }
+    auto shape =
+        cast<RankedTensorType>(expandedResult.getType()).getShape().vec();
+    shape.insert(shape.begin() + j, 1);
     expandedResult =
-        triton::ExpandDimsOp::create(builder, loc, expandedResult, j);
+        triton::ReshapeOp::create(builder, loc, shape, expandedResult);
   }
 
   return expandedResult;

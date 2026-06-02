@@ -15,6 +15,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include <array>
+#include <map>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -98,9 +99,26 @@ public:
     bool toFp16 = elemType == f16_ty;
 
     auto xVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
+    auto resultTy = cast<RankedTensorType>(op.getType());
+    auto srcOffsets = emitOffsetForLayout(srcTy.getEncoding(), srcTy);
+    auto resultOffsets = emitOffsetForLayout(resultTy.getEncoding(), resultTy);
+    assert(srcOffsets.size() == xVals.size());
+    assert(resultOffsets.size() == 2 * xVals.size());
+    std::map<SmallVector<unsigned>, SmallVector<unsigned>> resultIndices;
+    for (auto [i, offset] : llvm::enumerate(resultOffsets))
+      resultIndices[offset].push_back(i);
+    std::map<SmallVector<unsigned>, unsigned> nextResultIndex;
 
-    SmallVector<Value> results;
-    results.reserve(xVals.size() * 2);
+    SmallVector<Value> results(resultOffsets.size());
+    auto setResult = [&](int srcIndex, unsigned subIndex, Value value) {
+      auto offset = srcOffsets[srcIndex];
+      offset[op.getAxis()] = 2 * offset[op.getAxis()] + subIndex;
+      auto &indices = resultIndices.at(offset);
+      auto &nextIndex = nextResultIndex[offset];
+      assert(nextIndex < indices.size());
+      results[indices[nextIndex++]] = value;
+    };
     assert(xVals.size() % 4 == 0);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     for (int i = 0; i < xVals.size(); i += 4) {
@@ -117,11 +135,11 @@ public:
       Type retType = struct_ty(rets);
       Value ret =
           createInlineAsmUpcast(loc, rewriter, toFp16, retType, packedVec);
-      for (int i = 0; i < 4; i++) {
-        Value extractI32 = b.extract_val(ret, i);
+      for (int j = 0; j < 4; j++) {
+        Value extractI32 = b.extract_val(ret, j);
         Value elements = b.bitcast(extractI32, vec_ty(elemType, 2));
-        results.push_back(b.extract_element(elements, b.i32_val(0)));
-        results.push_back(b.extract_element(elements, b.i32_val(1)));
+        setResult(i + j, 0, b.extract_element(elements, b.i32_val(0)));
+        setResult(i + j, 1, b.extract_element(elements, b.i32_val(1)));
       }
     }
 

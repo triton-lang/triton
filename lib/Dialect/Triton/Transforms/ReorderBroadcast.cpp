@@ -216,7 +216,7 @@ public:
     ModuleOp m = getOperation();
 
     BroadcastOp::getCanonicalizationPatterns(patterns, context);
-    ExpandDimsOp::getCanonicalizationPatterns(patterns, context);
+    ReshapeOp::getCanonicalizationPatterns(patterns, context);
     // elementwise(broadcast(a)) => broadcast(elementwise(a))
     patterns.add<MoveBroadcastAfterElementwisePattern>(context);
     // elementwise(splat(a), splat(b), ...) => splat(elementwise(a, b, ...))
