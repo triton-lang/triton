@@ -1430,6 +1430,9 @@ def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_s
     M, N = a_data.shape[0], b_data.shape[1]
     K = a_data.shape[1] * a_pack
     compute_type = "fp16" if "fp16" in (type_a, type_b) else "bf16"
+    # CDNA4 converts raw E8M0 scale bytes to bf16 before scaled-upcast, even
+    # when the scaled-upcast result uses fp16.
+    scale_compute_type = "bf16" if is_hip_cdna4() else compute_type
     compute_mask = np.uint64(0xFFFF)
     mask = np.uint64(0xFFFFFFFF)
     out = np.zeros((M, N), dtype=np.uint64)
@@ -1441,10 +1444,10 @@ def _dot_scaled_payload_u32(a_data: np.ndarray, b_data: np.ndarray, a_scale, b_s
             a_val = _dot_scaled_compute_payload_elem(a_val, type_a, compute_type)
             b_val = _dot_scaled_compute_payload_elem(b_val, type_b, compute_type)
             if a_scale is not None:
-                a_scale_val = _dot_scaled_scale_payload(np.uint64(a_scale[i, kk // 32]), compute_type)
+                a_scale_val = _dot_scaled_scale_payload(np.uint64(a_scale[i, kk // 32]), scale_compute_type)
                 a_val = (a_val * a_scale_val) & compute_mask
             if b_scale is not None:
-                b_scale_val = _dot_scaled_scale_payload(np.uint64(b_scale[j, kk // 32]), compute_type)
+                b_scale_val = _dot_scaled_scale_payload(np.uint64(b_scale[j, kk // 32]), scale_compute_type)
                 b_val = (b_val * b_scale_val) & compute_mask
             a_val = _signed_cast_payload_scalar(a_val, 16, 32)
             b_val = _signed_cast_payload_scalar(b_val, 16, 32)
