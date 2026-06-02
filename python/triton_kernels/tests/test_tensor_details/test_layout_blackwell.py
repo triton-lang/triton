@@ -1,11 +1,20 @@
 import pytest
 import torch
-from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout, BlackwellActMXScaleLayout, StridedLayout
+from triton_kernels.tensor_details.layout import (
+    BlackwellActMXScaleLayout,
+    BlackwellMX4ValueShuffledLayout,
+    BlackwellMXScaleLayout,
+    BlackwellMXValueLayout,
+    StridedLayout,
+)
+from triton_kernels.tensor_details.dtype import FP4
 from triton_kernels.tensor import make_ragged_tensor_metadata, make_ragged_tensor_metadata_torch, wrap_torch_tensor, convert_layout
 
 # ------------------------------------------------------------
 # Torch tests
 # ------------------------------------------------------------
+
+ZERO_SIZED_SHAPES = [(0, 64), (64, 0), (2, 0), (0, 2), (0, 64, 64)]
 
 
 def test_act_scale_storage_preservation():
@@ -16,6 +25,45 @@ def test_act_scale_storage_preservation():
 
     assert equivalent.can_preserve_storage_as(BlackwellActMXScaleLayout(metadata), 2)
     assert not equivalent.can_preserve_storage_as(reconstructed, 2)
+
+
+@pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)
+@pytest.mark.parametrize("layout", [BlackwellMXScaleLayout(), BlackwellActMXScaleLayout(None)])
+@pytest.mark.parametrize("device", ["cpu", "meta"])
+def test_scale_zero_sized_roundtrip(shape, layout, device):
+    x = torch.empty(shape, dtype=torch.uint8, device=device)
+    src = wrap_torch_tensor(x)
+
+    swizzled = convert_layout(src, layout)
+    roundtrip = convert_layout(swizzled, src.storage.layout)
+
+    assert roundtrip.storage.data.shape == x.shape
+
+
+@pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)
+@pytest.mark.parametrize("layout", [BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout()])
+@pytest.mark.parametrize("device", ["cpu", "meta"])
+def test_value_zero_sized_roundtrip(shape, layout, device):
+    x = torch.empty(shape, dtype=torch.uint8, device=device)
+    src = wrap_torch_tensor(x, dtype=FP4)
+
+    swizzled = convert_layout(src, layout)
+    roundtrip = convert_layout(swizzled, src.storage.layout)
+
+    assert roundtrip.storage.data.shape == x.shape
+
+
+@pytest.mark.parametrize(("slice_sizes", "shape"), [([0], (0, 64)), ([2, 0], (2, 0))])
+@pytest.mark.parametrize("device", ["cpu", "meta"])
+def test_act_scale_zero_sized_ragged_roundtrip(slice_sizes, shape, device):
+    metadata = make_ragged_tensor_metadata_torch(torch.tensor(slice_sizes, dtype=torch.int32), shape[0])
+    x = torch.empty(shape, device=device)
+    src = wrap_torch_tensor(x)
+
+    swizzled = convert_layout(src, BlackwellActMXScaleLayout(metadata))
+    roundtrip = convert_layout(swizzled, src.storage.layout)
+
+    assert roundtrip.storage.data.shape == x.shape
 
 
 @pytest.mark.parametrize(
