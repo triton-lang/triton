@@ -724,6 +724,12 @@ public:
     //    ds_read_b128, which is the largest vector size for shared memory load.
     auto kWidth = kBase;
 
+    // The scaled-MFMA rewrite below requires kWidth == 32, so kPack must be 1
+    // to keep the packing guard from widening kWidth past kBase. Scaled MFMA
+    // only runs on gfx950, where the compiler always clamps kPack to 1.
+    assert((!withScale || kPack == 1) &&
+           "scaled MFMA requires kPack == 1 (clamped on gfx950)");
+
     // We want to extend kWidth by kPack (kPack=1 means no extension) to
     // increase ds_read vector size. Only apply packing when the resulting dot
     // operand layout still fits within the input dot's K dimension; some MFMA
