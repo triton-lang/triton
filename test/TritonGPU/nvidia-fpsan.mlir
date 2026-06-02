@@ -286,6 +286,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared_copy = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [32, 0], [64, 0], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4], [0, 8], [0, 16]], block = [[0, 0]]}, alignment = 16>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #smem = #ttg.shared_memory
+#blocked_multibuffer = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<CGALayout = [[0, 0]]>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.tensor_memory_size = 0 : i32, "ttg.total-num-warps" = 1 : i32} {
@@ -295,6 +296,21 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %b = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<128x128xf16, #shared_b, #smem, mutable>
     %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
     ttng.tc_gen5_mma %a, %b, %d, %true, %true {two_ctas} : !ttg.memdesc<256x128xf16, #shared_a, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared_b, #smem, mutable>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @tmem_multibuffer_two_ctas
+  tt.func public @tmem_multibuffer_two_ctas(%idx: i32) {
+    // CHECK: ttg.global_scratch_alloc {{.*}}shared_cluster_state
+    // CHECK-NOT: ttng.tmem_load
+    // CHECK-NOT: ttng.tmem_store
+    // CHECK-NOT: ttg.memdesc_index
+    %true = arith.constant true
+    %zero = arith.constant dense<0.0> : tensor<256x128xf32, #blocked_multibuffer>
+    %buf = ttng.tmem_alloc : () -> !ttg.memdesc<2x256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %view = ttg.memdesc_index %buf[%idx] : !ttg.memdesc<2x256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %zero, %view, %true : tensor<256x128xf32, #blocked_multibuffer> -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %val = ttng.tmem_load %view : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x128xf32, #blocked_multibuffer>
     tt.return
   }
 

@@ -251,6 +251,8 @@ void printCGAAttr(AsmPrinter &printer, CGAEncodingAttr layout);
 
 CGAEncodingAttr getCGALayout(Attribute layout);
 
+CGAEncodingAttr prependUnitDimToCGALayout(CGAEncodingAttr layout);
+
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 
 SmallVector<unsigned> getCTASplitNum(Attribute layout);
