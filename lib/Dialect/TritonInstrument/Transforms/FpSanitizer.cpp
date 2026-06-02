@@ -865,7 +865,6 @@ createOperandScratch(PatternRewriter &rewriter, Location loc,
       // emulated MMA in both CTAs, so rendezvous before the partner snapshots
       // the shared-memory operand.
       ttng::ClusterBarrierOp::create(rewriter, loc);
-      ttng::FenceAsyncSharedOp::create(rewriter, loc, /*bCluster=*/true);
     }
     fullVal =
         ttg::LocalLoadOp::create(rewriter, loc, tensorTy, memdesc, Value())
@@ -1000,9 +999,8 @@ Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
   Value stored = tensor;
   if (isFloatLike(tensorTy))
     stored = embedToInt(rewriter, loc, tensor);
-  return tt::StoreOp::create(rewriter, loc, ptrTensor, stored, Value(),
-                             CacheModifier::NONE, EvictionPolicy::NORMAL,
-                             /*ignoreCTA=*/true);
+  return tt::StoreOp::create(rewriter, loc, ptrTensor, stored,
+                             CacheModifier::NONE, EvictionPolicy::NORMAL);
 }
 
 Value unpackPackedFp4Slice(PatternRewriter &rewriter, Location loc,
@@ -1991,7 +1989,6 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     if (scratch->usesSharedClusterState()) {
       // Match the lead-CTA TMA wait before both CTAs emulate the TMEM copy.
       ttng::ClusterBarrierOp::create(rewriter, loc);
-      ttng::FenceAsyncSharedOp::create(rewriter, loc, /*bCluster=*/true);
     }
     Value srcReg =
         ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
