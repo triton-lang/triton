@@ -393,12 +393,17 @@ def test_constexpr_tuple_arg_unpack(device):
 
     @triton.jit
     def kernel_value(out_ptr, shape: tl.constexpr):
+        d0: tl.constexpr
+        d1: tl.constexpr
+        d2: tl.constexpr
         d0, d1, d2 = shape
         x = tl.full((1, ), d0 * 100 + d1 * 10 + d2, dtype=tl.int32)
         tl.store(out_ptr + tl.arange(0, 1), x)
 
     @triton.jit
     def kernel_shape(out_ptr, shape: tl.constexpr):
+        d0: tl.constexpr
+        d1: tl.constexpr
         d0, d1 = shape
         x = tl.full((d0, d1), 1.0, dtype=tl.float32)
         x = tl.reshape(x, (d0 * d1, ))
@@ -420,6 +425,9 @@ def test_constexpr_nested_tuple_arg_unpack(device):
 
     @triton.jit
     def kernel_nested(out_ptr, shape: tl.constexpr):
+        d0: tl.constexpr
+        d1: tl.constexpr
+        d2: tl.constexpr
         (d0, d1), d2 = shape
         x = tl.full((1, ), d0 * 100 + d1 * 10 + d2, dtype=tl.int32)
         tl.store(out_ptr + tl.arange(0, 1), x)

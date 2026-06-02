@@ -189,7 +189,7 @@ class DependenciesFinder(ast.NodeVisitor):
         lhs_name = getattr(lhs, "__name__", "")
         if lhs is None or lhs_name in self.supported_modules:
             return None
-        ret = getattr(lhs, node.attr)
+        ret = getattr(lhs, node.attr, None)
         self.record_reference(ret)
         return ret
 
