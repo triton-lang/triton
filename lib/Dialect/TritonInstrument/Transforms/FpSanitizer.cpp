@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include <cassert>
@@ -192,14 +193,16 @@ public:
                                               memTy.getElementType());
     auto cgaLayout = ttg::getCGALayout(memTy.getEncoding());
     if (cgaLayout.getRank() != memTy.getRank()) {
-      if (!isa<ttng::TensorMemoryEncodingAttr>(memTy.getEncoding()))
-        return layout;
-      assert(cgaLayout.getRank() + 1 == memTy.getRank());
+      assert(cgaLayout.getRank() + 1 == memTy.getRank() &&
+             "expected at most one extra multibuffering dimension");
 
-      // A rank-3 TMEM allocation is a dynamically indexed concatenation of
-      // rank-2 buffers. Keep the buffer dimension unsplit while preserving the
-      // rank-2 TMEM CGA mapping on the trailing matrix dimensions.
-      cgaLayout = ttg::prependUnitDimToCGALayout(cgaLayout);
+      // Ignore the leading pipelining dim when forwarding the CGA layout.
+      SmallVector<int64_t> cgaShape = {1};
+      llvm::append_range(cgaShape, cgaLayout.getLinearLayout().getOutDimSizes());
+      cgaLayout = ttg::CGAEncodingAttr::get(
+          rewriter.getContext(),
+          cgaLayout.getLinearLayout().reshapeOuts(
+              standardOutDimPairs(rewriter.getContext(), cgaShape)));
     }
     return ttg::BlockedEncodingAttr::get(
         rewriter.getContext(), layout.getSizePerThread(),
