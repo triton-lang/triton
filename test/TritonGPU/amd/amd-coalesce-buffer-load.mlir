@@ -258,3 +258,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %ret : tensor<128x4xi8, #linear>
   }
 }
+
+// -----
+
+// Lane-straddle soundness (regression for the lane-0-only over-claim). offsets =
+// make_range % 6 (non-power-of-two) with a blocked layout where each thread
+// holds 4 contiguous coords. Lane 0 sees coords 0,1,2,3 -> 0,1,2,3 (looks
+// contig 4), but lane 1 sees 4,5,6,7 -> 4,5,0,1 (true contig 2). The analysis
+// models the lane contribution symbolically and must stamp 2, not 4.
+#blk_straddle = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // GFX950-LABEL: @vgpr_lane_straddle_mod6
+  tt.func @vgpr_lane_straddle_mod6(%ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32}) -> tensor<256xi32, #blk_straddle> {
+    %r = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blk_straddle>
+    %c6 = arith.constant dense<6> : tensor<256xi32, #blk_straddle>
+    %m = arith.remsi %r, %c6 : tensor<256xi32, #blk_straddle>
+    // GFX950: amdg.buffer_load {{.*}} {contiguity = 2 : i32}
+    %ret = amdg.buffer_load %ptr[%m] : tensor<256xi32, #blk_straddle>
+    tt.return %ret : tensor<256xi32, #blk_straddle>
+  }
+}

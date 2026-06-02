@@ -35,6 +35,16 @@ int64_t floorMod(int64_t a, int64_t b) {
     r += b;
   return r;
 }
+int64_t gcdPos(int64_t a, int64_t b) {
+  a = a < 0 ? -a : a;
+  b = b < 0 ? -b : b;
+  while (b) {
+    int64_t t = a % b;
+    a = b;
+    b = t;
+  }
+  return a;
+}
 
 // ---- Range (sound interval over-approximation; gates floordiv/mod/min/max) --
 struct Range {
@@ -48,10 +58,10 @@ Range rAdd(const Range &a, const Range &b) {
   Range r;
   r.loInf = a.loInf || b.loInf;
   r.hiInf = a.hiInf || b.hiInf;
-  if (!r.loInf)
-    r.lo = a.lo + b.lo;
-  if (!r.hiInf)
-    r.hi = a.hi + b.hi;
+  if (!r.loInf && __builtin_add_overflow(a.lo, b.lo, &r.lo))
+    r.loInf = true; // overflow -> unbounded (Finding 3)
+  if (!r.hiInf && __builtin_add_overflow(a.hi, b.hi, &r.hi))
+    r.hiInf = true;
   return r;
 }
 Range rScale(const Range &a, int64_t k) {
@@ -61,17 +71,17 @@ Range rScale(const Range &a, int64_t k) {
   if (k > 0) {
     r.loInf = a.loInf;
     r.hiInf = a.hiInf;
-    if (!r.loInf)
-      r.lo = a.lo * k;
-    if (!r.hiInf)
-      r.hi = a.hi * k;
+    if (!r.loInf && __builtin_mul_overflow(a.lo, k, &r.lo))
+      r.loInf = true;
+    if (!r.hiInf && __builtin_mul_overflow(a.hi, k, &r.hi))
+      r.hiInf = true;
   } else {
     r.loInf = a.hiInf;
     r.hiInf = a.loInf;
-    if (!r.loInf)
-      r.lo = a.hi * k;
-    if (!r.hiInf)
-      r.hi = a.lo * k;
+    if (!r.loInf && __builtin_mul_overflow(a.hi, k, &r.lo))
+      r.loInf = true;
+    if (!r.hiInf && __builtin_mul_overflow(a.lo, k, &r.hi))
+      r.hiInf = true;
   }
   return r;
 }
@@ -103,6 +113,11 @@ struct Val {
   llvm::SmallDenseMap<const void *, int64_t, 2> lin; // scalar symbol -> coeff
   std::map<std::string, int64_t> opq;                // opaque atom key -> coeff
   Range rng;
+  // Set when an explicit IR subtraction may have driven the value negative.
+  // floor-based mod/div folding is only valid on non-negative operands
+  // (signed remsi/divsi truncate toward zero; unsigned remui/divui wrap).
+  // Unknown scalars are treated as non-negative (memory-index convention).
+  bool tainted = false;
 
   static Val ground() {
     Val v;
@@ -152,15 +167,21 @@ struct Ctx {
     symDiv[k] = d;
     return d;
   }
-  int64_t divOfLin(const void *symPtr, int64_t coeff) {
+  // coeff * divisibility, std::nullopt on int64 overflow (so the M1 drop check
+  // conservatively treats the term as NOT a multiple of c -- Finding 3).
+  std::optional<int64_t> divOfLin(const void *symPtr, int64_t coeff) {
     auto it = symDiv.find(symPtr);
-    int64_t d = it != symDiv.end() ? it->second : 1;
-    return coeff * d;
+    int64_t d = it != symDiv.end() ? it->second : 1, r;
+    if (__builtin_mul_overflow(coeff, d, &r))
+      return std::nullopt;
+    return r;
   }
-  int64_t divOfOpq(const std::string &key, int64_t coeff) {
+  std::optional<int64_t> divOfOpq(const std::string &key, int64_t coeff) {
     auto it = atomDiv.find(key);
-    int64_t d = it != atomDiv.end() ? it->second : 1;
-    return coeff * d;
+    int64_t d = it != atomDiv.end() ? it->second : 1, r;
+    if (__builtin_mul_overflow(coeff, d, &r))
+      return std::nullopt;
+    return r;
   }
 };
 
@@ -188,6 +209,7 @@ Val addSub(const Val &a, const Val &b, bool sub) {
   for (auto &kv : b.opq)
     r.opq[kv.first] += sub ? -kv.second : kv.second;
   r.rng = rAdd(a.rng, sub ? rScale(b.rng, -1) : b.rng);
+  r.tainted = a.tainted || b.tainted;
   r.prune();
   return r;
 }
@@ -197,11 +219,15 @@ Val scaleBy(Val a, int64_t k) {
     return a;
   if (k == 0)
     return Val::constant(0);
-  a.cst *= k;
+  // Overflow -> cannot represent the scaled value soundly (Finding 3).
+  if (__builtin_mul_overflow(a.cst, k, &a.cst))
+    return Val::ground();
   for (auto &kv : a.lin)
-    kv.second *= k;
+    if (__builtin_mul_overflow(kv.second, k, &kv.second))
+      return Val::ground();
   for (auto &kv : a.opq)
-    kv.second *= k;
+    if (__builtin_mul_overflow(kv.second, k, &kv.second))
+      return Val::ground();
   a.rng = rScale(a.rng, k);
   return a;
 }
@@ -225,33 +251,69 @@ Val mulV(const Val &a, const Val &b, Ctx &ctx) {
   if (b.pureConst())
     return scaleBy(a, b.cst);
   // unknown * unknown -> opaque
-  int64_t div = 1; // conservative
-  return makeAtom(ctx, "*(" + keyOf(a) + "," + keyOf(b) + ")", div,
-                  Range::full());
+  Val o = makeAtom(ctx, "*(" + keyOf(a) + "," + keyOf(b) + ")", /*div=*/1,
+                   Range::full());
+  o.tainted = a.tainted || b.tainted;
+  return o;
 }
 
 // (sum a_i u_i + sum b_k t_k + cst) mod c.  Each symbolic term drops when
 // c | coeff*divisibility(term). Else fall back to an opaque atom (Range [0,c)).
+// Opaque result for a value floor-folding cannot soundly simplify (e.g. a
+// possibly-negative operand under truncating/ wrapping mod-div).
+Val taintedOpaque(const Val &a, char op, int64_t c, Ctx &ctx) {
+  Val o = makeAtom(ctx, std::string(1, op) + std::to_string(c) + "!(" +
+                            keyOf(a) + ")",
+                   /*div=*/1, Range::full());
+  o.tainted = true;
+  return o;
+}
+
 Val modC(const Val &a, int64_t c, Ctx &ctx) {
   if (a.fatal || c <= 0)
     return a.fatal ? a : Val::ground();
-  // M1: every symbolic term is a multiple of c.
-  bool allMultiple = true;
-  for (auto &kv : a.lin)
-    allMultiple &= (ctx.divOfLin(kv.first, kv.second) % c == 0);
-  for (auto &kv : a.opq)
-    allMultiple &= (ctx.divOfOpq(kv.first, kv.second) % c == 0);
-  if (allMultiple)
-    return Val::constant(floorMod(a.cst, c));
-  // M2: range fits a single band.
-  if (auto m = rBand(a.rng, c))
-    return addSub(a, Val::constant(*m * c), /*sub=*/true);
-  // Fallback: opaque, keyed by the whole value (cancels iff register-invariant).
+  if (a.tainted) // possibly-negative operand: floor-mod != remsi/remui
+    return taintedOpaque(a, '%', c, ctx);
+  // Drop every term provably a multiple of c (c | coeff*divisibility); the
+  // remaining residual (cst + surviving terms) must fit a single band
+  // [m*c,(m+1)c) for the result to be exact = residual - m*c. This combines the
+  // old M1 (all-drop) and M2 (whole-range-band) and crucially handles the mixed
+  // case: e.g. (pid*128 + row + L_row) % 128 -> pid*128 drops, residual
+  // row+L_row in [0,128) -> exact, even though pid's range is unknown.
+  Val resid;
+  resid.cst = floorMod(a.cst, c); // multiple-of-c part of the constant drops too
+  resid.rng = Range::point(resid.cst);
+  for (auto &kv : a.lin) {
+    auto d = ctx.divOfLin(kv.first, kv.second);
+    if (d && *d % c == 0)
+      continue; // provably a multiple of c -> drops
+    resid.lin[kv.first] += kv.second;
+    resid.rng = Range::full(); // surviving symbol: range unknown
+  }
+  for (auto &kv : a.opq) {
+    auto d = ctx.divOfOpq(kv.first, kv.second);
+    if (d && *d % c == 0)
+      continue; // provably a multiple of c -> drops
+    resid.opq[kv.first] += kv.second;
+    auto it = ctx.atomRng.find(kv.first);
+    Range ar = it != ctx.atomRng.end() ? it->second : Range::full();
+    resid.rng = rAdd(resid.rng, rScale(ar, kv.second));
+  }
+  resid.prune();
+  if (auto m = rBand(resid.rng, c)) {
+    int64_t mc;
+    if (!__builtin_mul_overflow(*m, c, &mc))
+      return addSub(resid, Val::constant(mc), /*sub=*/true);
+  }
+  // Fallback: opaque, keyed by the REDUCED residual (multiples dropped, cst
+  // reduced mod c) so register-invariant operands that differ only by a
+  // multiple of c -- e.g. (row+L)%16 at row=0 vs row=64 -- get the same key and
+  // cancel in offset(r) - offset(0).
   Range r;
   r.loInf = r.hiInf = false;
   r.lo = 0;
   r.hi = c - 1;
-  return makeAtom(ctx, "%" + std::to_string(c) + "(" + keyOf(a) + ")",
+  return makeAtom(ctx, "%" + std::to_string(c) + "(" + keyOf(resid) + ")",
                   /*div=*/1, r);
 }
 
@@ -261,6 +323,8 @@ Val modC(const Val &a, int64_t c, Ctx &ctx) {
 Val divC(const Val &a, int64_t c, Ctx &ctx) {
   if (a.fatal || c <= 0)
     return a.fatal ? a : Val::ground();
+  if (a.tainted) // possibly-negative operand: floor-div != divsi/divui
+    return taintedOpaque(a, '/', c, ctx);
 
   Val q;            // exact quotient of the c-divisible part
   Val rest;         // residual (must land in one band)
@@ -322,22 +386,31 @@ Val minMax(const Val &a, const Val &b, bool isMin, Ctx &ctx) {
     if (b.rng.hi <= a.rng.lo)
       return isMin ? b : a;
   }
-  return makeAtom(ctx, (isMin ? "min(" : "max(") + keyOf(a) + "," + keyOf(b) +
-                           ")",
-                  /*div=*/1, rHull(a.rng, b.rng));
+  Val o = makeAtom(ctx, (isMin ? "min(" : "max(") + keyOf(a) + "," + keyOf(b) +
+                            ")",
+                   /*div=*/1, rHull(a.rng, b.rng));
+  o.tainted = a.tainted || b.tainted;
+  return o;
 }
 
-Val eval(Value v, ArrayRef<int64_t> coord, Ctx &ctx, unsigned depth);
-Val evalImpl(Value v, ArrayRef<int64_t> coord, Ctx &ctx, unsigned depth);
+// Coordinates are now symbolic Vals: a coordinate axis = concrete register
+// contribution + a register-invariant lane/warp/block atom (so contiguity is
+// proven over ALL lanes, not just lane 0).
+Val eval(Value v, ArrayRef<Val> coord, Ctx &ctx, unsigned depth);
+Val evalImpl(Value v, ArrayRef<Val> coord, Ctx &ctx, unsigned depth);
 
 // Memoizing wrapper: dedups shared DAG subterms within a register and reuses
-// coord-independent (scalar) results across registers.
-Val eval(Value v, ArrayRef<int64_t> coord, Ctx &ctx, unsigned depth) {
+// coord-independent (scalar) results across registers. Results produced via the
+// depth cap are NOT memoized, so a truncated value can never be reused at a
+// shallower depth (Finding 4).
+Val eval(Value v, ArrayRef<Val> coord, Ctx &ctx, unsigned depth) {
+  if (depth > kMaxDepth)
+    return evalImpl(v, coord, ctx, depth);
   std::string key = std::to_string((uintptr_t)v.getAsOpaquePointer());
   key += '@';
-  for (int64_t c : coord) {
-    key += std::to_string(c);
-    key += ',';
+  for (const Val &c : coord) {
+    key += keyOf(c);
+    key += ';';
   }
   auto it = ctx.memo.find(key);
   if (it != ctx.memo.end())
@@ -347,7 +420,9 @@ Val eval(Value v, ArrayRef<int64_t> coord, Ctx &ctx, unsigned depth) {
   return r;
 }
 
-std::optional<int64_t> evalConstInt(Value v, ArrayRef<int64_t> coord) {
+// Constant fold; for a non-splat dense tensor we can only index it when the
+// coordinate is fully concrete (no lane/warp symbolic part).
+std::optional<int64_t> evalConstInt(Value v, ArrayRef<Val> coord) {
   auto cst = v.getDefiningOp<arith::ConstantOp>();
   if (!cst)
     return std::nullopt;
@@ -365,9 +440,12 @@ std::optional<int64_t> evalConstInt(Value v, ArrayRef<int64_t> coord) {
   auto shape = ty.getShape();
   int64_t flat = 0;
   for (int i = 0; i < ty.getRank(); ++i) {
-    if (coord[i] < 0 || coord[i] >= shape[i])
+    if (!coord[i].pureConst())
+      return std::nullopt; // symbolic lane component -> cannot index
+    int64_t ci = coord[i].cst;
+    if (ci < 0 || ci >= shape[i])
       return std::nullopt;
-    flat = flat * shape[i] + coord[i];
+    flat = flat * shape[i] + ci;
   }
   auto vals = dense.getValues<APInt>();
   if (flat >= (int64_t)vals.size())
@@ -375,14 +453,16 @@ std::optional<int64_t> evalConstInt(Value v, ArrayRef<int64_t> coord) {
   return (*(vals.begin() + flat)).getSExtValue();
 }
 
-Val evalBinary(Operation *op, ArrayRef<int64_t> coord, Ctx &ctx,
-               unsigned depth) {
+Val evalBinary(Operation *op, ArrayRef<Val> coord, Ctx &ctx, unsigned depth) {
   Val a = eval(op->getOperand(0), coord, ctx, depth + 1);
   Val b = eval(op->getOperand(1), coord, ctx, depth + 1);
   if (isa<arith::AddIOp>(op))
     return addSub(a, b, false);
-  if (isa<arith::SubIOp>(op))
-    return addSub(a, b, true);
+  if (isa<arith::SubIOp>(op)) {
+    Val r = addSub(a, b, true);
+    r.tainted = true; // explicit subtraction may go negative
+    return r;
+  }
   if (isa<arith::MulIOp>(op))
     return mulV(a, b, ctx);
   if (isa<arith::DivSIOp, arith::DivUIOp>(op))
@@ -432,7 +512,7 @@ Val scalarSymbol(Value v, Ctx &ctx) {
   return s;
 }
 
-Val evalImpl(Value v, ArrayRef<int64_t> coord, Ctx &ctx, unsigned depth) {
+Val evalImpl(Value v, ArrayRef<Val> coord, Ctx &ctx, unsigned depth) {
   bool isTensor = isa<RankedTensorType>(v.getType());
   if (depth > kMaxDepth)
     return isTensor ? Val::ground() : scalarSymbol(v, ctx);
@@ -448,23 +528,25 @@ Val evalImpl(Value v, ArrayRef<int64_t> coord, Ctx &ctx, unsigned depth) {
   if (auto rng = dyn_cast<tt::MakeRangeOp>(op)) {
     if (coord.size() != 1)
       return Val::ground();
-    return Val::constant((int64_t)rng.getStart() + coord[0]);
+    // start + coordinate (coordinate carries the symbolic lane/warp part)
+    return addSub(Val::constant((int64_t)rng.getStart()), coord[0],
+                  /*sub=*/false);
   }
   if (auto splat = dyn_cast<tt::SplatOp>(op))
     return eval(splat.getSrc(), /*coord=*/{}, ctx, depth + 1);
   if (auto bcast = dyn_cast<tt::BroadcastOp>(op)) {
     auto srcTy = cast<RankedTensorType>(bcast.getSrc().getType());
-    SmallVector<int64_t> sc(coord.begin(), coord.end());
+    SmallVector<Val> sc(coord.begin(), coord.end());
     for (auto [i, d] : llvm::enumerate(srcTy.getShape()))
       if (d == 1)
-        sc[i] = 0;
+        sc[i] = Val::constant(0);
     return eval(bcast.getSrc(), sc, ctx, depth + 1);
   }
   if (auto ex = dyn_cast<tt::ExpandDimsOp>(op)) {
     unsigned axis = ex.getAxis();
     if (axis >= coord.size())
       return Val::ground();
-    SmallVector<int64_t> sc;
+    SmallVector<Val> sc;
     for (auto [i, c] : llvm::enumerate(coord))
       if (i != axis)
         sc.push_back(c);
@@ -511,18 +593,55 @@ unsigned getPerThreadContiguityFromLinearLayout(
   if (llvm::range_size(ll.getOutDimNames()) != rank)
     return 1;
 
+  auto outDims = llvm::to_vector(ll.getOutDimNames());
+  Ctx ctx(axisAnalysis);
+
+  // Per-axis lane/warp/block contribution, modeled as a register-invariant
+  // bounded atom: divisibility = gcd of the non-register basis components along
+  // that axis, range = [sum of negatives, sum of positives]. This makes the
+  // contiguity a theorem over ALL lanes/warps -- the existing mod/div rules
+  // either drop or band-resolve this atom (MXFP4 pow2-aligned tilings), or it
+  // survives and correctly caps contiguity (non-aligned / non-pow2 offsets).
+  SmallVector<Val> laneAtom(rank);
+  for (unsigned j = 0; j < rank; ++j) {
+    int64_t g = 0, lo = 0, hi = 0;
+    for (auto dim : ll.getInDimNames()) {
+      if (dim == kReg)
+        continue;
+      for (int p = 0, e = ll.getInDimSizeLog2(dim); p < e; ++p) {
+        int64_t comp = ll.getBasis(dim, p, outDims[j]);
+        if (comp == 0)
+          continue;
+        g = gcdPos(g, comp);
+        if (comp > 0)
+          hi += comp;
+        else
+          lo += comp;
+      }
+    }
+    if (lo == 0 && hi == 0) {
+      laneAtom[j] = Val::constant(0);
+    } else {
+      Range r;
+      r.loInf = r.hiInf = false;
+      r.lo = lo;
+      r.hi = hi;
+      laneAtom[j] =
+          makeAtom(ctx, "lane#" + std::to_string(j), g > 0 ? g : 1, r);
+    }
+  }
+
   auto coordAt = [&](int32_t regIdx) {
     SmallVector<std::pair<StringAttr, int32_t>> ins;
     for (auto dim : ll.getInDimNames())
       ins.push_back({dim, dim == kReg ? regIdx : 0});
     auto outs = ll.apply(ins);
-    SmallVector<int64_t> coord(rank, 0);
+    SmallVector<Val> coord(rank, Val::constant(0));
     for (auto [i, kv] : llvm::enumerate(outs))
-      coord[i] = kv.second;
+      coord[i] = addSub(Val::constant(kv.second), laneAtom[i], /*sub=*/false);
     return coord;
   };
 
-  Ctx ctx(axisAnalysis);
   Val base = eval(offsetsValue, coordAt(0), ctx, 0);
   if (base.fatal)
     return 1;
