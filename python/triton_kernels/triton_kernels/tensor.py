@@ -225,7 +225,7 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
     if shape_max is None:
         shape_max = list(shape)
     if layout is None:
-        # For a strided (dense) tensor we only track which dimension has unit stride.
+        # For a strided tensor we only track which dimension has unit stride.
         # This is consistent with how we expand `shape` for packed sub-byte dtypes.
         major_dim = torch_tensor.stride().index(1) if 1 in torch_tensor.stride() else -1
         layout = StridedLayout(major_dim=major_dim - torch_tensor.ndim)
@@ -233,7 +233,15 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
 
 
 def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
+    """Convert `tensor` storage encoding to `layout`.
+
+    Returns `tensor` unchanged when its existing storage is already valid for
+    `layout`. This operation does not clone, densify, or canonicalize physical
+    strides of a tensor that is already in the requested encoding.
+    """
     shape = list(tensor.shape)
+    if not layout_transformation_kwargs and tensor.storage.layout.can_preserve_storage_as(layout, len(shape)):
+        return tensor
     # convert `tensor` into canonical form
     transformation = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)
     canonical_data = transformation.unswizzle_data(tensor.storage.data)

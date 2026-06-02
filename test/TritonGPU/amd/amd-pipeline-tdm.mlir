@@ -355,3 +355,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK-NEXT: scf.yield
 // CHECK-NEXT: } else {
 // CHECK-NEXT: scf.yield
+
+// -----
+
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked5 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked6 = #ttg.blocked<{sizePerThread = [1, 1, 1, 1], threadsPerWarp = [1, 1, 1, 32], warpsPerCTA = [1, 2, 4, 1], order = [3, 2, 1, 0]}>
+#blocked8 = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked11 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 4], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @descriptor_store_predicate(%arg0: !tt.tensordesc<32x16xbf16>, %arg1: !tt.tensordesc<1x16x4x32xbf16>, %arg2: tensor<16x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked8}>>, %ub: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x64xf32, #blocked8>
+    %0 = scf.for %iv = %c0_i32 to %ub step %c32_i32 iter_args(%idx = %c0_i32) -> (i32) : i32 {
+      %load = tt.descriptor_load %arg0[%idx, %c0_i32] : !tt.tensordesc<32x16xbf16> -> tensor<32x16xbf16, #blocked3>
+      %lhs = ttg.convert_layout %load : tensor<32x16xbf16, #blocked3> -> tensor<32x16xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked8}>>
+      %dot = tt.dot %lhs, %arg2, %cst : tensor<32x16xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked8}>> * tensor<16x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked8}>> -> tensor<32x64xf32, #blocked8>
+      %dot_blocked = ttg.convert_layout %dot : tensor<32x64xf32, #blocked8> -> tensor<32x64xf32, #blocked1>
+      %trans = tt.trans %dot_blocked {order = array<i32: 1, 0>} : tensor<32x64xf32, #blocked1> -> tensor<64x32xf32, #blocked11>
+      %store_layout = ttg.convert_layout %trans : tensor<64x32xf32, #blocked11> -> tensor<64x32xf32, #blocked5>
+      %reshaped = tt.reshape %store_layout : tensor<64x32xf32, #blocked5> -> tensor<1x16x4x32xf32, #blocked6>
+      %out = arith.truncf %reshaped : tensor<1x16x4x32xf32, #blocked6> to tensor<1x16x4x32xbf16, #blocked6>
+      tt.descriptor_store %arg1[%c0_i32, %c0_i32, %c0_i32, %idx], %out : !tt.tensordesc<1x16x4x32xbf16>, tensor<1x16x4x32xbf16, #blocked6>
+      %next = arith.addi %idx, %c32_i32 : i32
+      scf.yield %next : i32
+    }
+    tt.return
+  }
+}
+
+// CHECK-LABEL: tt.func @descriptor_store_predicate
+// CHECK-NOT: ttg.mask
+// CHECK: scf.if %{{[0-9]+}} {
+// CHECK-NEXT: tt.descriptor_store
+// CHECK-NEXT: }

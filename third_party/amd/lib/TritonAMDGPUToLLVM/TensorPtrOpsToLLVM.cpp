@@ -76,7 +76,6 @@ struct MakeTensorDescOpConversion
     Type elementType =
         getTypeConverter()->convertType(tensorDescTy.getElementType());
     SmallVector<int64_t> blockShape = to_vector(tensorDescTy.getShape());
-    int numWarps = lookupNumWarps(op);
     auto shapePerCTA = triton::gpu::getShapePerCTA(sharedEnc, blockShape);
 
     if (failed(validateStridesAndSharedOrder(op, sharedEnc, shapePerCTA,
@@ -85,16 +84,15 @@ struct MakeTensorDescOpConversion
     }
     auto sharedOrder = triton::gpu::getOrder(
         cast<triton::gpu::SharedEncodingTrait>(sharedEnc), shapePerCTA);
-    // Create TDM descriptor for 2D-5D tensors
-    auto tdmDesc = LLVM::AMD::createTDMDescriptor(
-        rewriter, loc, getTypeConverter(), elementType, shapePerCTA, numWarps,
-        padInterval, padAmount, tensorShape, tensorStride, basePtr, sharedEnc);
-
-    // `getAllGroups()` returns 2 (2D) or 4 (3D-5D) vector Values; scalarize
-    // them into 12 or 20 i32 scalars to match the flat MLIR struct type
-    // returned by `convertTensorDescType` (which matches the host-side
-    // TDMDescriptor ABI).
-    SmallVector<Value> groups = tdmDesc.getAllGroups();
+    // Lower the tensor descriptor to a base TDM descriptor.  The final hardware
+    // descriptor is completed at each TDM op site because pred, LDS address,
+    // barrier, and tile_dim* are op-local.
+    // Returns 2 (2D) or 4 (3D-5D) vector groups; scalarize into 12 or 20
+    // i32 scalars to match the flat MLIR struct type from
+    // `convertTensorDescType` (matches the host-side TDMDescriptor ABI).
+    SmallVector<Value> groups = LLVM::AMD::createTDMDescriptor(
+        rewriter, loc, getTypeConverter(), elementType, blockShape.size(),
+        padInterval, padAmount, tensorShape, tensorStride, basePtr);
     SmallVector<Value> scalars =
         mlir::LLVM::AMD::scalarizeTDMDescriptor(rewriter, loc, groups);
 

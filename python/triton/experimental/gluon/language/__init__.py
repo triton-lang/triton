@@ -86,6 +86,7 @@ from ._core import (
     barrier,
     to_linear_layout,
     to_tensor,
+    expect_zero,
     warp_specialize,
     where,
 )

@@ -191,6 +191,75 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
             assert total_iters == 10
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, device: str):
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    def inactive_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        return {"name": "inactive_metric_owner", "sum_metric": args["x"].sum()}
+
+    def profiled_metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        return {"name": "profiled_metric_owner", "sum_metric": args["x"].sum()}
+
+    @triton.jit(launch_metadata=inactive_metadata_fn)
+    def inactive_kernel(x, y):
+        tl.store(y, tl.load(x) + 1.0)
+
+    @triton.jit(launch_metadata=profiled_metadata_fn)
+    def profiled_kernel(x, y):
+        tl.store(y, tl.load(x) + 2.0)
+
+    x = torch.ones((2, 2), device=device)
+    y = torch.empty_like(x)
+
+    # Compile before capture so the repro isolates graph metric replay state.
+    inactive_kernel[(1, )](x, y)
+    profiled_kernel[(1, )](x, y)
+    torch.cuda.synchronize()
+
+    temp_file = tmp_path / "test_cudagraph_metric_queue_handles_inactive_replay.hatchet"
+    session = proton.start(str(temp_file.with_suffix("")), context="shadow", hook="triton")
+    try:
+        inactive_graph = torch.cuda.CUDAGraph()
+        with cuda_graph_without_gc(inactive_graph):
+            inactive_kernel[(1, )](x, y)
+
+        profiled_graph = torch.cuda.CUDAGraph()
+        with cuda_graph_without_gc(profiled_graph):
+            profiled_kernel[(1, )](x, y)
+
+        # Metric-copy kernels still replay on the GPU, but an inactive Proton
+        # session has no host attribution state for this graph launch.
+        proton.deactivate(session)
+        inactive_graph.replay()
+        torch.cuda.synchronize()
+
+        proton.activate(session)
+        with proton.scope("profiled_replay"):
+            profiled_graph.replay()
+        torch.cuda.synchronize()
+    finally:
+        proton.finalize(session)
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    replay_frame = _find_frame_by_name(data[0], "profiled_replay")
+    assert replay_frame is not None
+    capture_frame = _find_frame_by_name(replay_frame, "<captured_at>")
+    assert capture_frame is not None
+
+    inactive_frame = _find_frame_by_name(capture_frame, "inactive_metric_owner")
+    profiled_frame = _find_frame_by_name(capture_frame, "profiled_metric_owner")
+    # Proton may retain an empty structural frame for a previously captured graph,
+    # but the inactive replay's metric payload must not be attributed here.
+    if inactive_frame is not None:
+        assert "sum_metric" not in inactive_frame["metrics"]
+    assert profiled_frame is not None
+    assert profiled_frame["metrics"]["sum_metric"] == float(x.numel())
+
+
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
 def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str):
     stream = torch.cuda.Stream()

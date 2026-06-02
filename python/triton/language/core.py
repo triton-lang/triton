@@ -2350,7 +2350,7 @@ def cast(input, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcas
 
 
 @builtin
-def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=float32,
+def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=None,
         _semantic=None):
     """
     Returns the matrix product of two blocks.
@@ -2854,6 +2854,32 @@ def where(condition, x, y, _semantic=None):
     return _semantic.where(condition, x, y)
 
 
+@builtin
+def expect_zero(x, mask, _semantic=None):
+    """
+    Mark values that are expected to have underflowed to zero.
+
+    In regular compilation this preserves :code:`x`. Debug builds assert that
+    :code:`x` is zero wherever :code:`mask` is true. Under FPSAN this becomes
+    :code:`where(mask, 0, x)` so sanitized execution observes the intended
+    floating-point underflow.
+
+    :param x: values to preserve outside FPSAN mode.
+    :param mask: positions where :code:`x` is expected to be zero.
+    """
+    x = _unwrap_if_constexpr(x)
+    mask = _semantic.to_tensor(mask)
+    instrumentation_mode = getattr(_semantic.builder.options, "instrumentation_mode", "")
+    if "fpsan" in instrumentation_mode:
+        return _semantic.where(mask, 0, x)
+    if _semantic.builder.options.debug:
+        x_tensor = _semantic.to_tensor(x)
+        zero = _semantic.to_tensor(0)
+        cond = _semantic.or_(_semantic.equal(x_tensor, zero), _semantic.not_(mask))
+        _semantic.device_assert(cond, "expect_zero expected x == 0 where mask is true", None)
+    return x
+
+
 # -----------------------
 # Math
 # -----------------------
@@ -3224,7 +3250,7 @@ def map_elementwise(
         :return: one tensor or a tuple of tensors, depending on the mapped function.
     '''
     # Build the block for the nested region first to discover the return types
-    assert pack >= 1
+    assert pack >= 1, f"pack must be >= 1, got {pack}"
     in_scalar_tys = [t.type.scalar for t in args]
     builder = _semantic.builder
     block = builder.new_block()
@@ -3279,7 +3305,18 @@ def debug_barrier(_semantic=None):
 @builtin
 def multiple_of(input, values, _semantic=None):
     """
-    Let the compiler know that the values in :code:`input` are all multiples of :code:`value`.
+    Let the compiler know that ``values[d]`` is the largest power of two that
+    divides the first element of every contiguous group along dimension ``d``
+    of :code:`input` (see :func:`max_contiguous` for the definition of contiguous
+    group). ``values`` must have one entry per dimension of :code:`input`.
+
+    For a 1D input with contiguity 1, this is equivalent to saying that every
+    element of :code:`input` is a multiple of ``values[0]``. For example, if
+    :code:`values` is ``[16]`` and :code:`input` is ``[64, 80, 96, 112]``, the
+    hint is valid because 16 divides 64.
+
+    This hint enables alignment-dependent optimizations such as vectorized
+    memory accesses.
     """
     if isinstance(values, constexpr):
         values = [values]
@@ -3295,7 +3332,19 @@ def multiple_of(input, values, _semantic=None):
 @builtin
 def max_contiguous(input, values, _semantic=None):
     """
-    Let the compiler know that the `value` first values in :code:`input` are contiguous.
+    Let the compiler know that the elements of :code:`input` along dimension
+    ``d`` form contiguous groups of length ``values[d]``. ``values`` must have
+    one entry per dimension of :code:`input` and each entry must be a power of
+    two.
+
+    A 1D array of ``N`` elements with contiguity ``C`` is viewed as ``N/C``
+    runs of ``C`` integers each, where the integers in a run are
+    sequentially contiguous. For example, if :code:`values` is ``[4]``, the
+    array ``[0, 1, 2, 3, 8, 9, 10, 11]`` satisfies the hint because it
+    consists of two runs of 4 contiguous values.
+
+    Together with :func:`multiple_of`, this hint enables vectorized loads and
+    stores of contiguous, aligned regions.
     """
     if isinstance(values, constexpr):
         values = [values]
@@ -3311,10 +3360,14 @@ def max_contiguous(input, values, _semantic=None):
 @builtin
 def max_constancy(input, values, _semantic=None):
     """
-    Let the compiler know that the `value` first values in :code:`input` are constant.
+    Let the compiler know that the elements of :code:`input` along dimension
+    ``d`` form constant groups of length ``values[d]``. ``values`` must have
+    one entry per dimension of :code:`input` and each entry must be a power of
+    two.
 
-    e.g. if :code:`values` is [4], then each group of 4 values in :code:`input` should all be equal,
-    for example [0, 0, 0, 0, 1, 1, 1, 1].
+    A 1D array of ``N`` elements with constancy ``C`` is viewed as ``N/C``
+    runs of ``C`` identical values. For example, if :code:`values` is ``[4]``,
+    the array ``[0, 0, 0, 0, 1, 1, 1, 1]`` satisfies the hint.
     """
     if isinstance(values, constexpr):
         values = [values]
@@ -3829,8 +3882,8 @@ def builtin_max(*args, propagate_nan=_NOTHING, _semantic=None):
     is_constexpr = all(not isinstance(x, base_value) for x in args)
     if is_constexpr:
         assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin max"
-        assert not any(math.isnan(x) for x in args)
-        assert not any(is_negative_zero(x) for x in args)
+        assert not any(math.isnan(x) for x in args), "constexpr max does not support NaN values"
+        assert not any(is_negative_zero(x) for x in args), "constexpr max does not support negative zero"
         return constexpr(builtins.max(_unwrap_if_constexpr(args)))
 
     if propagate_nan is _NOTHING:
@@ -3853,8 +3906,8 @@ def builtin_min(*args, propagate_nan=_NOTHING, _semantic=None):
     is_constexpr = all(not isinstance(x, base_value) for x in args)
     if is_constexpr:
         assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin min"
-        assert not any(math.isnan(x) for x in args)
-        assert not any(is_negative_zero(x) for x in args)
+        assert not any(math.isnan(x) for x in args), "constexpr min does not support NaN values"
+        assert not any(is_negative_zero(x) for x in args), "constexpr min does not support negative zero"
         return constexpr(builtins.min(_unwrap_if_constexpr(args)))
 
     if propagate_nan is _NOTHING:

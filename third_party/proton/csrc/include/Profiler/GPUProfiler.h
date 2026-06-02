@@ -27,7 +27,6 @@ namespace detail {
 
 void flushDataPhasesImpl(
     const bool periodicFlushEnabled, const std::string &periodicFlushingFormat,
-    std::map<Data *, size_t> &dataFlushedPhases,
     const std::map<Data *,
                    std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
         &dataPhases,
@@ -93,14 +92,12 @@ protected:
   }
 
   void flushDataPhases(
-      std::map<Data *, size_t> &dataFlushedPhases,
       const std::map<Data *,
                      std::pair</*start_phase=*/size_t, /*end_phase=*/size_t>>
           &dataPhases,
       PendingGraphPool *pendingGraphPool) {
     detail::flushDataPhasesImpl(periodicFlushingEnabled, periodicFlushingFormat,
-                                dataFlushedPhases, dataPhases,
-                                pendingGraphPool);
+                                dataPhases, pendingGraphPool);
   }
 
   // Profiler

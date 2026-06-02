@@ -56,7 +56,7 @@ tt.func private @experimental_lock_acquire(
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_lock_release
 // CHECK: nvvm.barrier0
-// CHECK: atom.global.acq_rel.gpu.exch.b32
+// CHECK: atom.global.release.gpu.exch.b32
 tt.func private @experimental_lock_release(
   %lock: !tt.ptr<i32>,
   %pred: i1

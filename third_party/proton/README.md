@@ -427,3 +427,93 @@ if proton.data.is_phase_complete(session_id, phase_id):
     data_phase = proton.data.get_json(session_id, phase_id)
     proton.data.clear(session_id, phase_id)
 ```
+
+## Third party backends
+
+Developers of out-of-tree Triton backends can also provide Proton support.
+This can be done by providing subclasses of certain Proton classes and implementing the virtual methods.
+These implementations can then be linked into the Proton build using the provided CMake helper functions.
+
+### Example third party backend
+
+The implementation must be placed under a `proton` folder in the existing Triton plugin.
+Proton will check for any Triton plugins registering Proton backends at build time and incorporate them into the build.
+```
+triton-plugin/
+├── <triton-plugin files>
+└── proton/
+    ├── CMakeLists.txt
+    ├── MyBackendSourceFile.cpp
+    └── <implementation files>
+```
+
+An example of what could be in `CMakeLists.txt` to register support using the provided helper functions.
+
+```cmake
+# Register my backend with proton so calls to it's hook can be generated.
+# This also adds the MyBackend target to the libproton build.
+add_proton_backend(MyBackend
+    MyBackendNamespace
+    MyBackendSourceFile.cpp
+)
+
+# Register an extension to the DeviceType enum if your backend introduces a new device.
+add_proton_device_type(MY_DEVICE)
+
+# Link an external library into the build, for example a custom profiling api.
+add_proton_backend_external_lib(MyProfilingApi)
+
+# Add any includes/sources/dependencies to MyBackend target using standard CMake practices.
+...
+```
+
+The registration source file `MyBackendSourceFile.cpp` is responsible for providing the `registerProtonBackend` hook in the
+namespace passed to `add_proton_backend`.
+This hook will be called at runtime and provide access to the backends implementations.
+Each member of a `proton::BackendRegistration` is
+optional allowing backends to register partial support.
+
+```c++
+namespace MyBackendNamespace {
+
+proton::BackendRegistration registerProtonBackend() {
+  return {
+      proton::ProfilerRegistration{
+          "MyBackend", "TritonBackendForThisProfiler",
+          []() -> proton::Profiler * { return &MyProfilerImplementation::instance(); }},
+      proton::DeviceRegistration{
+          "MY_DEVICE", proton::DeviceType::MY_DEVICE,
+          [](uint64_t index) { return getMyDevice(index); }},
+      proton::RuntimeRegistration{
+          "MY_DEVICE", []() -> proton::Runtime * { return &MyRuntimeImplementaiton::instance(); }},
+  };
+}
+
+}
+```
+
+The backend should then provide implementation of any Proton extension points it is registering support for.
+This is a minimal dummy implementation of a profiler using a custom profiling api, refer to existing implementors of
+the respective extension point for information on what your implementation should look like.
+
+```c++
+class MyProfilerImplementation : public GPUProfiler<MyProfilerImplementation> {
+    // Similar to CuptiProfiler or RoctracerProfiler
+}
+```
+
+```c++
+void MyProfilerImplementation::MyProfilerImplementationPimpl::doStart() {
+    // Any setup required for profiling, make use of MyProfilingApi which was linked to
+    // the libproton build using the cmake add_proton_backend_external_lib function earlier.
+    MyProfilingApi::registerCallback(callback_function)
+}
+
+void MyProfilerImplementation::MyProfilerImplementationPimpl::callbackFunction(...) {
+    // Do correlation and record callback/activity in a similar manor to Cupti/Roctracer
+    // assuming the profiling API has a similar design. If not introduce your own abstractions
+    // to handle correlation and callbacks.
+    const auto kernelMetric = ...
+    entry.upsertMetric(std::move(kernelMetric))
+}
+```

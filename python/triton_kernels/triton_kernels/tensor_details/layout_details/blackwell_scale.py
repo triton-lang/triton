@@ -34,6 +34,9 @@ class BlackwellActMXScaleLayout(Layout):
 
     ragged_metadata: RaggedTensorMetadata | None
 
+    def can_preserve_storage_as(self, other: Layout, rank: int) -> bool:
+        return isinstance(other, BlackwellActMXScaleLayout) and self.ragged_metadata is other.ragged_metadata
+
     @property
     def name(self):
         return "BLACKWELL_ACT_SCALE"
@@ -127,6 +130,8 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
 
         # ragged path: map padded blocks back into the original ragged rows
         assert self.B == 1, "ragged scale layout only supports 2D input"
+        if not data.numel():
+            return data.reshape(self.M, self.K)
         data = unpad_segments_triton(
             data.squeeze(0),
             self.ragged_metadata,

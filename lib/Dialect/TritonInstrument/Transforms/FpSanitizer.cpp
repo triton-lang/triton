@@ -1316,6 +1316,24 @@ struct BinaryFloatToIntPattern : public OpRewritePattern<OpF> {
   }
 };
 
+struct NegFOpPattern : public OpRewritePattern<arith::NegFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::NegFOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isFloatLike(op.getType()))
+      return failure();
+
+    auto loc = op.getLoc();
+    auto inputI = embedToInt(rewriter, loc, op.getOperand());
+    auto zeroI = getIntConstantLike(rewriter, loc, inputI.getType(), 0);
+    auto resI = arith::SubIOp::create(rewriter, loc, zeroI, inputI);
+    auto resF = unembedToFloat(rewriter, loc, resI, op.getType());
+    rewriter.replaceOp(op, resF);
+    return success();
+  }
+};
+
 struct DivFOpPattern : public OpRewritePattern<arith::DivFOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(arith::DivFOp op,
@@ -2400,10 +2418,11 @@ public:
                  BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
                  BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
                  BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
-                 DivFOpPattern, PreciseDivFOpPattern, RemFOpPattern, FmaPattern,
-                 ExpOpPattern, Exp2OpPattern, CosOpPattern, SinOpPattern,
-                 ExtFOpPattern, TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
-                 DotPattern, DotScaledPattern>(&getContext());
+                 NegFOpPattern, DivFOpPattern, PreciseDivFOpPattern,
+                 RemFOpPattern, FmaPattern, ExpOpPattern, Exp2OpPattern,
+                 CosOpPattern, SinOpPattern, ExtFOpPattern, TruncFOpPattern,
+                 FpToFpPattern, Fp4ToFpPattern, DotPattern, DotScaledPattern>(
+        &getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);

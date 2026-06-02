@@ -761,6 +761,33 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     swizzling.
     The operation can also take an optional 64bit LDS barrier address, in which case
     it sends an "LDS atomic arrive" to signal its completion.
+
+    `warp_used_hint` is an optional i32 bitmask performance hint for
+    partial TDM copy: bit `n` (LSB = warp 0) means warp `n` issues the
+    instruction; bits above `num_warps - 1` must be zero.  Same data
+    lands in shared memory either way -- only emission changes:
+    `K = popcount(hint)` warps cover the block, the rest are pred-off.
+
+    For "all warps participate", omit the attribute (preferred) or pass
+    a full bitmask `K = num_warps`; an explicit `warp_used_hint = 0` is
+    rejected by the verifier.
+
+    Restriction: the hint must be *axis-aligned*.  Pin some warpId bit
+    positions to fixed values and leave the others free; the active
+    warps are exactly those with the pinned bits set accordingly.
+    K = `popcount(hint)` is therefore a power of two (= 2^(number of
+    free bits)).  Legal: `0x0F` (warps 0..3), `0xF0` (warps 4..7),
+    `0x55` / `0xAA` / `0xCC` (stride-by-`2^j`).  Rejected: non
+    axis-aligned patterns like `0x69` or `0x1B`.
+
+    Why this shape: power-of-two K keeps the per-warp tile recalc
+    (`block / K`) integer-clean, and the bit-pinning shape lets the
+    per-warp offset and active-mask predicate fall out of the same
+    `getFreeVariableMasks` LL machinery the no-hint path uses.
+
+    PartitionedSharedEncoding additionally requires `K = popcount(hint)`
+    to be a multiple of `numLogicalPieces` (the hinted path doesn't
+    support multi-instruction slicing).
   }];
 
   let arguments = (ins
@@ -769,14 +796,28 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
     I32:$pred,
     Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier,
-    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache
+    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
+    OptionalAttr<I32Attr>:$warp_used_hint
   );
 
   let results = (outs TTG_AsyncToken:$token);
 
   let builders = [
     OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred), [{
-      return build($_builder, $_state, desc, indices, result, pred, /*barrier=*/static_cast<mlir::Value>(nullptr));
+      return build($_builder, $_state, desc, indices, result, pred,
+                   /*barrier=*/static_cast<mlir::Value>(nullptr),
+                   /*cache=*/triton::CacheModifier::NONE,
+                   /*warp_used_hint=*/IntegerAttr());
+    }]>,
+    OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred, "Value":$barrier), [{
+      return build($_builder, $_state, desc, indices, result, pred, barrier,
+                   /*cache=*/triton::CacheModifier::NONE,
+                   /*warp_used_hint=*/IntegerAttr());
+    }]>,
+    OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred,
+                   "Value":$barrier, "::mlir::triton::CacheModifier":$cache), [{
+      return build($_builder, $_state, desc, indices, result, pred, barrier, cache,
+                   /*warp_used_hint=*/IntegerAttr());
     }]>
   ];
 

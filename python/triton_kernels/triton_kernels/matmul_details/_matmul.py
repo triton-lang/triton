@@ -11,6 +11,7 @@ from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_m
 from triton_kernels.tensor_details.layout_details.gfx1250_scale import unswizzle_mx_scale_gfx1250
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile
 from triton_kernels.target_info import cuda_capability_geq
 from ._common import (
     compute_offsets,
@@ -27,6 +28,14 @@ def round_f32_to_tf32(x: tl.tensor):
     # use cvt.rn on Hopper+ to match the rounding of TMA.
     ASM: tl.constexpr = "cvt.rn.tf32.f32 $0, $1;" if cuda_capability_geq(9, 0) else "cvt.rna.tf32.f32 $0, $1;"
     return tl.inline_asm_elementwise(ASM, "=r, r", [x], dtype=tl.float32, is_pure=True, pack=1)
+
+
+@triton.jit
+def _compute_packed_n_w(N, W_N_DIVISOR: tl.constexpr, SWIZZLE_MX_VALUE: tl.constexpr):
+    packed_n_w = tl.cdiv(N, W_N_DIVISOR)
+    if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+        packed_n_w = tl.cdiv(packed_n_w, 64) * 64
+    return packed_n_w
 
 _matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
@@ -125,6 +134,8 @@ def _matmul(
     is_w_microscaled: tl.constexpr = WMxScale is not None
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
+    if is_x_microscaled or is_w_microscaled:
+        MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
 
     if is_w_microscaled:
         tl.static_assert(MX_BLOCK_SIZE == NVFP_BLOCK_SIZE or MX_BLOCK_SIZE == MXFP_BLOCK_SIZE,
@@ -163,7 +174,6 @@ def _matmul(
             # the contiguous dimension, N.
             PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
             PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_K_DIVISOR
-        MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
     else:
         W_K_DIVISOR: tl.constexpr = 1
         W_K_MULTIPLIER: tl.constexpr = 1
@@ -175,7 +185,6 @@ def _matmul(
     if is_x_microscaled:
         x_type: tl.constexpr = X.dtype.element_ty
         is_x_fp4: tl.constexpr = x_type == tl.uint8
-        tl.static_assert(is_w_microscaled)
         tl.static_assert(x_type == tl.float8e4nv or x_type == tl.uint8, "mx_act_ptr must be float8e4nv or uint8")
         # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8e4nv.
         tl.static_assert(
@@ -244,14 +253,18 @@ def _matmul(
 
     if RAGGED_DIMENSION == "K":
         K_W = tl.multiple_of(tl.load(WSliceOffs + pid_s + 1), W_SLICE_SIZES_DIVISIBILITY)
-        if PACKED_BLOCK_K_W > BLOCK_K:
-            K_W = K_W * (PACKED_BLOCK_K_W // BLOCK_K)
-        else:
-            K_W = K_W // (BLOCK_K // PACKED_BLOCK_K_W)
         K_X = tl.multiple_of(tl.load(XSliceOffs + pid_s + 1), X_SLICE_SIZES_DIVISIBILITY)
     else:
-        K_W = K * (PACKED_BLOCK_K_W // BLOCK_K) if PACKED_BLOCK_K_W >= BLOCK_K else K // (BLOCK_K // PACKED_BLOCK_K_W)
+        if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+            # Hopper value swizzling physically pads K to a full 64-row tile.
+            K_W = tl.cdiv(K, 64) * 64
+        else:
+            K_W = K
         K_X = K
+    if PACKED_BLOCK_K_W > BLOCK_K:
+        K_W = K_W * (PACKED_BLOCK_K_W // BLOCK_K)
+    else:
+        K_W = K_W // (BLOCK_K // PACKED_BLOCK_K_W)
 
     loop_k = tl.multiple_of(tl.load(XSliceSizes + pid_s), X_SLICE_SIZES_DIVISIBILITY) if RAGGED_DIMENSION == "K" else K - off_k_x
     k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
@@ -333,10 +346,8 @@ def _matmul(
 
     # B pointers
     offs_w_n = pid_n * PACKED_BLOCK_N_W + tl.arange(0, PACKED_BLOCK_N_W)
-    N_W = N
-    if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
-        N_W = tl.cdiv(N_W, 64) * 64
-    offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % (N_W // W_N_DIVISOR), PACKED_BLOCK_N_W), PACKED_BLOCK_N_W)
+    packed_n_w = _compute_packed_n_w(N, W_N_DIVISOR, SWIZZLE_MX_VALUE)
+    offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % packed_n_w, PACKED_BLOCK_N_W), PACKED_BLOCK_N_W)
 
     if is_x_microscaled:
         XMxScale += start_z.to(index_type) * stride_x_mx_z
@@ -389,7 +400,7 @@ def _matmul(
                 x = round_f32_to_tf32(x)
             if w.dtype == tl.float32 and ALLOW_TF32:
                 w = round_f32_to_tf32(w)
-        if is_w_microscaled:
+        if is_x_microscaled or is_w_microscaled:
             x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
             w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
 
@@ -403,24 +414,34 @@ def _matmul(
                 else:
                     x_scales = tl.full((BLOCK_M, MX_SCALE_BLOCK_K), 1.0, dtype=tl.float8e4nv)
 
-            if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
-                w_scales = unswizzle_mx_scale_bw(tl.load(WMxScalePtrs))
-            elif SWIZZLE_MX_SCALE == "HOPPER_SCALE":
-                # Handshake with the swizzling code
-                num_warps: tl.constexpr = tl.extra.cuda.num_warps()
-                tl.static_assert(num_warps == 8 or num_warps == 4)
-                w_scales = unswizzle_mxfp4_scale_hopper(tl.load(WMxScalePtrs), mx_axis=1, num_warps=num_warps)
-                mask_k_scale = off_k_x + tl.arange(0, MX_SCALE_BLOCK_K) * MX_PACK_DIVISOR < x_k_limit
-                scale_zero = tl.full(w_scales.shape, 0, dtype=w_scales.dtype)
-                w_scales = tl.where(mask_k_scale[None, :], w_scales, scale_zero)
-            elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
-                w_scales = unswizzle_mx_scale_cdna4(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
-            elif SWIZZLE_MX_SCALE == "GFX1250_SCALE":
-                w_scales = unswizzle_mx_scale_gfx1250(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
+            if is_w_microscaled:
+                if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
+                    w_scales = unswizzle_mx_scale_bw(tl.load(WMxScalePtrs))
+                elif SWIZZLE_MX_SCALE == "HOPPER_SCALE":
+                    # Handshake with the swizzling code
+                    num_warps: tl.constexpr = tl.extra.cuda.num_warps()
+                    tl.static_assert(num_warps == 8 or num_warps == 4)
+                    w_scales = unswizzle_mxfp4_scale_hopper(tl.load(WMxScalePtrs), mx_axis=1, num_warps=num_warps)
+                    mask_k_scale = off_k_x + tl.arange(0, MX_SCALE_BLOCK_K) * MX_PACK_DIVISOR < x_k_limit
+                    scale_zero = tl.full(w_scales.shape, 0, dtype=w_scales.dtype)
+                    w_scales = tl.where(mask_k_scale[None, :], w_scales, scale_zero)
+                elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
+                    w_scales = unswizzle_mx_scale_cdna4(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
+                elif SWIZZLE_MX_SCALE == "GFX1250_SCALE":
+                    w_scales = unswizzle_mx_scale_gfx1250(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
+                else:
+                    w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
             else:
-                w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
+                w_scales: tl.constexpr = None
 
-            if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+            if is_x_fp4 and not is_w_microscaled and not cuda_capability_geq(10, 0):
+                tl.static_assert(w_format == "fp16" or w_format == "bf16")
+                x_dense = upcast_mxfp4_tile(x, x_scales, w.dtype)
+                if SWAP_XW:
+                    acc = tl.dot(w.T, x_dense.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                else:
+                    acc = tl.dot(x_dense, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+            elif SWIZZLE_MX_VALUE == "HOPPER_VALUE":
                 # Handshake with the swizzling code
                 tl.static_assert(w_format == "e2m1")
                 tl.static_assert(SWAP_XW)
@@ -437,15 +458,14 @@ def _matmul(
                     acc = tl.dot_scaled(w.T, w_scales, w_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
                 else:
                     acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True, rhs_k_pack=rhs_k_pack)
-            if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
-                WMxScalePtrs += (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_w_mx_k
-            else:
-                WMxScalePtrs += (PACKED_MX_BLOCK * SPLIT_K) * stride_w_mx_k
+            if is_w_microscaled:
+                if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
+                    WMxScalePtrs += (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_w_mx_k
+                else:
+                    WMxScalePtrs += (PACKED_MX_BLOCK * SPLIT_K) * stride_w_mx_k
             if is_x_microscaled:
                 XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
         else:
-            # if w.dtype.is_fp8() and not x.dtype.is_fp8():
-            #     w = w.to(x.dtype)
             if SWAP_XW:
                 acc = tl.dot(w.T, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
             else:

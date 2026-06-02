@@ -1,6 +1,8 @@
 #ifndef PROTON_DATA_PHASE_STORE_H_
 #define PROTON_DATA_PHASE_STORE_H_
 
+#include "Utility/Errors.h"
+
 #include <cstddef>
 #include <map>
 #include <memory>
@@ -96,8 +98,7 @@ private:
     std::shared_lock<std::shared_mutex> lock(phasesMutex);
     auto it = phases.find(phase);
     if (it == phases.end() || !it->second) {
-      throw std::runtime_error("[PROTON] Phase " + std::to_string(phase) +
-                               " has no data.");
+      throw makeOutOfRange("Phase " + std::to_string(phase) + " has no data.");
     }
     return it->second;
   }

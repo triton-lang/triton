@@ -95,10 +95,11 @@ Value createCmpIntTensorScalar(
 }
 
 template <typename OpTy>
-Value reduce(ImplicitLocOpBuilder &b, Value tensor, int axis) {
+Value reduceLastDim(ImplicitLocOpBuilder &b, Value tensor) {
   OpBuilder::InsertionGuard guard(b);
   auto tensorType = cast<RankedTensorType>(tensor.getType());
-  assert(axis >= 0 && axis < tensorType.getRank() && "invalid reduction axis");
+  assert(tensorType.getRank() > 0 && "cannot reduce a rank-0 tensor");
+  int axis = tensorType.getRank() - 1;
   auto reduceOp = triton::ReduceOp::create(b, std::vector<Value>{tensor}, axis);
   auto &region = reduceOp.getRegion();
   auto &block = region.emplaceBlock();
@@ -111,10 +112,36 @@ Value reduce(ImplicitLocOpBuilder &b, Value tensor, int axis) {
 }
 
 template <typename OpTy>
-Value reduceLastDim(ImplicitLocOpBuilder &b, Value tensor) {
+Value reduce(ImplicitLocOpBuilder &b, Value tensor, ArrayRef<int> axes) {
   auto tensorType = cast<RankedTensorType>(tensor.getType());
-  assert(tensorType.getRank() > 0 && "cannot reduce a rank-0 tensor");
-  return reduce<OpTy>(b, tensor, tensorType.getRank() - 1);
+  assert(!axes.empty() && "expected at least one reduction axis");
+
+  llvm::SmallDenseSet<int> reducedAxes;
+  for (int axis : axes) {
+    assert(axis >= 0 && axis < tensorType.getRank() &&
+           "invalid reduction axis");
+    assert(reducedAxes.insert(axis).second && "duplicate reduction axis");
+  }
+
+  SmallVector<int32_t> transposeOrder;
+  SmallVector<int64_t> flattenedShape;
+  for (int dim = 0; dim < tensorType.getRank(); ++dim) {
+    if (reducedAxes.contains(dim))
+      continue;
+    transposeOrder.push_back(dim);
+    flattenedShape.push_back(tensorType.getShape()[dim]);
+  }
+
+  int64_t reducedSize = 1;
+  for (int axis : axes) {
+    transposeOrder.push_back(axis);
+    reducedSize *= tensorType.getShape()[axis];
+  }
+  flattenedShape.push_back(reducedSize);
+
+  tensor = triton::TransOp::create(b, tensor, transposeOrder);
+  tensor = triton::ReshapeOp::create(b, flattenedShape, tensor);
+  return reduceLastDim<OpTy>(b, tensor);
 }
 
 template <typename OpTy>
@@ -272,7 +299,7 @@ Value expandAliases(ImplicitLocOpBuilder &b, Value bufferMask,
   Value bufMaskMatrix =
       convertAndBroadcast(b, bufferMask, {0}, aliasMatrixType);
   Value aliasingMask = arith::AndIOp::create(b, aliasMatrix, bufMaskMatrix);
-  Value aliasVector = reduce<arith::OrIOp>(b, aliasingMask, /*axis=*/0);
+  Value aliasVector = reduce<arith::OrIOp>(b, aliasingMask, {0});
   return createConvertLayout(b, aliasVector, bufferMaskType.getEncoding());
 }
 
@@ -764,8 +791,7 @@ void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
             convertAndBroadcast(fb, phaseIsOne, {0, 1}, waitingGlobalType);
         Value effectiveWaiting = arith::SelectOp::create(
             fb, phaseIsOne, waitingPhase1, waitingPhase0);
-        Value waitingOr = reduce<arith::OrIOp>(fb, effectiveWaiting, 1);
-        waitingOr = reduce<arith::OrIOp>(fb, waitingOr, 0);
+        Value waitingOr = reduce<arith::OrIOp>(fb, effectiveWaiting, {0, 1});
         auto waitingOrType = cast<RankedTensorType>(waitingOr.getType());
         Value activeMasks = tti::createLoadScratchMemory(
             fb, fb.getLoc(), activeMasksPtr, activeMasksGlobalType);
@@ -1800,8 +1826,7 @@ void FunctionBuilder::createTrackVisibleReadsCall(ImplicitLocOpBuilder &b,
             fb, readVisibilityType, /*dim=*/2, createCurrentCTAMask(fb));
         visibleReads = arith::SelectOp::create(fb, sourceCTAMask, visibleReads,
                                                readVisibilityZero);
-        visibleReads = reduce<arith::OrIOp>(fb, visibleReads, /*axis=*/3);
-        visibleReads = reduce<arith::OrIOp>(fb, visibleReads, /*axis=*/2);
+        visibleReads = reduce<arith::OrIOp>(fb, visibleReads, {2, 3});
         visibleReads =
             convertAndBroadcast(fb, visibleReads, {0, 1, 4}, readTrackingType);
         Value readTrackingOrVisible =
@@ -2086,8 +2111,7 @@ void FunctionBuilder::createTransferVisibleWritesCall(
             tti::createConstIntTensor(fb, fb.getLoc(), 0, writeTrackingType);
         Value trackingBuffers = arith::SelectOp::create(
             fb, barriersEqBar, writeTracking, zeroTracking);
-        trackingBuffers = reduceLastDim<arith::OrIOp>(fb, trackingBuffers);
-        trackingBuffers = reduce<arith::OrIOp>(fb, trackingBuffers, /*axis=*/2);
+        trackingBuffers = reduce<arith::OrIOp>(fb, trackingBuffers, {2, 3});
         trackingBuffers = convertAndBroadcast(fb, trackingBuffers, {0, 1},
                                               writeVisibilityType);
         auto trackingBuffersType =
@@ -2181,8 +2205,7 @@ void FunctionBuilder::createTransferVisibleReadsCall(
             tti::createConstIntTensor(fb, fb.getLoc(), 0, readTrackingType);
         Value trackingBar = arith::SelectOp::create(
             fb, barriersEqBar, readTracking, readTrackingZero);
-        trackingBar = reduce<arith::OrIOp>(fb, trackingBar, /*axis=*/3);
-        trackingBar = reduce<arith::OrIOp>(fb, trackingBar, /*axis=*/2);
+        trackingBar = reduce<arith::OrIOp>(fb, trackingBar, {2, 3});
         trackingBar =
             convertAndBroadcast(fb, trackingBar, {0, 1, 4}, readVisibilityType);
         Value readVisibilityOrTracking =
@@ -2208,7 +2231,7 @@ void FunctionBuilder::createTransferVisibleReadsCall(
 void FunctionBuilder::createVerifyWriteVisibilityCall(
     ImplicitLocOpBuilder &b, Value buf, uint32_t length, int thread,
     StringRef operandName, Value pred, MemType memType, Operation *insertPoint,
-    Value effectCTAs, bool allowNoWrite) {
+    Value effectCTAs) {
   if (auxData.buffers[(int)memType].empty() ||
       auxData.writeVisibility[(int)memType].empty() ||
       (auxData.hasNonTrivialAliasing[(int)memType] &&
@@ -2230,13 +2253,10 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
   std::string message = "Buffer being accessed has outstanding writes.";
   if (!operandName.empty())
     message += " Operand: " + operandName.str();
-  std::string uninitializedMessage = "Buffer being read before any write.";
-  if (!operandName.empty())
-    uninitializedMessage += " Operand: " + operandName.str();
   AssertInfo assertInfo{message, b.getI1Type()};
   Type aliasMatrixTypeBase;
-  auto buildVerifyWriteBody = [&writeVisibilityType, &aliasMatrixTypeBase](
-                                  bool useAlias, bool allowNoWrite) {
+  auto buildVerifyWriteBody = [&writeVisibilityType,
+                               &aliasMatrixTypeBase](bool useAlias) {
     return [=](ImplicitLocOpBuilder &fb, Block *entryBlock) {
       Value bufOffset = entryBlock->getArgument(0);
       Value lengthVal = entryBlock->getArgument(1);
@@ -2278,35 +2298,14 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
           arith::AndIOp::create(fb, bufVisibility, bufferThreadBit);
       bufferHasVisibility = arith::CmpIOp::create(
           fb, arith::CmpIPredicate::eq, bufferHasVisibility, bufferThreadBit);
-      Value result;
-      if (!allowNoWrite) {
-        Value rowOne = tti::createConstIntTensor(
-            fb, fb.getLoc(), 1, cast<RankedTensorType>(buffersEqBuf.getType()));
-        Value rowInitialized =
-            arith::XOrIOp::create(fb, noOneIsWriting, rowOne);
-        Value initializedRows =
-            arith::AndIOp::create(fb, rowInitialized, buffersEqBuf);
-        // Alias rows are alternatives within a CTA, but every selected CTA must
-        // have at least one initialized row.
-        Value initializedCTAs =
-            reduce<arith::OrIOp>(fb, initializedRows, /*axis=*/1);
-        Value selectedCTAs = reduce<arith::OrIOp>(fb, buffersEqBuf, /*axis=*/1);
-        Value ctaOne = tti::createConstIntTensor(
-            fb, fb.getLoc(), 1, cast<RankedTensorType>(selectedCTAs.getType()));
-        Value unmatchedCTAs = arith::XOrIOp::create(fb, selectedCTAs, ctaOne);
-        Value initializedOrUnmatched =
-            arith::OrIOp::create(fb, initializedCTAs, unmatchedCTAs);
-        result = reduceAll<arith::AndIOp>(fb, initializedOrUnmatched);
-      } else {
-        Value writeVisible =
-            arith::OrIOp::create(fb, noOneIsWriting, bufferHasVisibility);
-        result = reduceAll<arith::AndIOp>(fb, writeVisible);
-      }
+      Value writeVisible =
+          arith::OrIOp::create(fb, noOneIsWriting, bufferHasVisibility);
+      Value allWritesVisible = reduceAll<arith::AndIOp>(fb, writeVisible);
 
       Value vTrue = arith::ConstantOp::create(
-          fb, result.getType(), fb.getIntegerAttr(fb.getI1Type(), 1));
+          fb, allWritesVisible.getType(), fb.getIntegerAttr(fb.getI1Type(), 1));
       Value predicatedWriteVisible =
-          arith::SelectOp::create(fb, pred, result, vTrue);
+          arith::SelectOp::create(fb, pred, allWritesVisible, vTrue);
       triton::ReturnOp::create(fb, predicatedWriteVisible);
     };
   };
@@ -2319,33 +2318,18 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
     SmallVector<Value> args = {bufOffset,  lengthVal,     pred,
                                threadVal,  buffersVal,    writeVisibilityVal,
                                effectCTAs, aliasMatrixVal};
-    if (!allowNoWrite) {
-      AssertInfo initializedAssertInfo{uninitializedMessage, b.getI1Type()};
-      createCallToCachedFunction(
-          b, "verify_write_initialized", args, initializedAssertInfo,
-          {buffersType, writeVisibilityType, aliasMatrixType,
-           (uint64_t)memType},
-          buildVerifyWriteBody(/*useAlias=*/true, /*allowNoWrite=*/false));
-    }
     createCallToCachedFunction(
         b, "verify_write_visibility", args, assertInfo,
         {buffersType, writeVisibilityType, aliasMatrixType, (uint64_t)memType},
-        buildVerifyWriteBody(/*useAlias=*/true, /*allowNoWrite=*/true));
+        buildVerifyWriteBody(/*useAlias=*/true));
   } else {
     SmallVector<Value> args = {bufOffset, lengthVal,  pred,
                                threadVal, buffersVal, writeVisibilityVal,
                                effectCTAs};
-    if (!allowNoWrite) {
-      AssertInfo initializedAssertInfo{uninitializedMessage, b.getI1Type()};
-      createCallToCachedFunction(
-          b, "verify_write_initialized_noalias", args, initializedAssertInfo,
-          {buffersType, writeVisibilityType, (uint64_t)memType},
-          buildVerifyWriteBody(/*useAlias=*/false, /*allowNoWrite=*/false));
-    }
     createCallToCachedFunction(
         b, "verify_write_visibility_noalias", args, assertInfo,
         {buffersType, writeVisibilityType, (uint64_t)memType},
-        buildVerifyWriteBody(/*useAlias=*/false, /*allowNoWrite=*/true));
+        buildVerifyWriteBody(/*useAlias=*/false));
   }
 }
 
@@ -2408,17 +2392,14 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
           tti::createConstIntTensor(fb, fb.getLoc(), 0, readVisibilityType);
       Value bufVisibility = arith::SelectOp::create(
           fb, buffersEqBuf, readVisibility, readVisibilityZero);
-      Value totalVisibility = reduce<arith::OrIOp>(fb, bufVisibility,
-                                                   /*axis=*/3);
-      totalVisibility = reduce<arith::OrIOp>(fb, totalVisibility, /*axis=*/2);
+      Value totalVisibility = reduce<arith::OrIOp>(fb, bufVisibility, {2, 3});
       Value threadColumnMask =
           createDimMask(fb, threadVal, readVisibilityType, /*dim=*/3);
       Value accessorVisibility = arith::SelectOp::create(
           fb, relationMask, bufVisibility, readVisibilityZero);
       accessorVisibility = arith::SelectOp::create(
           fb, threadColumnMask, accessorVisibility, readVisibilityZero);
-      accessorVisibility =
-          reduce<arith::OrIOp>(fb, accessorVisibility, /*axis=*/3);
+      accessorVisibility = reduce<arith::OrIOp>(fb, accessorVisibility, {3});
       auto accessorVisibilityType =
           cast<RankedTensorType>(accessorVisibility.getType());
       totalVisibility = convertAndBroadcast(fb, totalVisibility, {0, 1, 3},
@@ -2430,10 +2411,7 @@ void FunctionBuilder::createVerifyReadVisibilityCall(
                                 threadAndTotalVisibility, totalVisibility);
       Value selectedAccessors =
           arith::AndIOp::create(fb, buffersEqBuf, relationMask);
-      selectedAccessors =
-          reduce<arith::OrIOp>(fb, selectedAccessors, /*axis=*/4);
-      selectedAccessors =
-          reduce<arith::OrIOp>(fb, selectedAccessors, /*axis=*/3);
+      selectedAccessors = reduce<arith::OrIOp>(fb, selectedAccessors, {3, 4});
       selectedAccessors = convertAndBroadcast(fb, selectedAccessors, {0, 1, 2},
                                               accessorVisibilityType);
       Value one = tti::createConstIntTensor(
@@ -2596,7 +2574,7 @@ void FunctionBuilder::createCopyReadVisibilityCall(ImplicitLocOpBuilder &b,
             createDimMask(fb, sourceThread, readVisibilityType, /*dim=*/3);
         Value sourceColumn = arith::SelectOp::create(
             fb, sourceColumnMask, readVisibility, zeroTensor);
-        Value sourceVector = reduce<arith::OrIOp>(fb, sourceColumn, /*axis=*/3);
+        Value sourceVector = reduce<arith::OrIOp>(fb, sourceColumn, {3});
         Value broadcastRow = convertAndBroadcast(fb, sourceVector, {0, 1, 2, 4},
                                                  readVisibilityType);
         Value replicated = arith::SelectOp::create(fb, destMaskTensor,
@@ -2660,8 +2638,7 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
             arith::AndIOp::create(fb, writeVisibility, baseMask), zeroWrites);
         Value syncWrites = arith::SelectOp::create(fb, hasBaseWrite,
                                                    writeVisibility, zeroWrites);
-        Value writesForCluster =
-            reduce<arith::OrIOp>(fb, syncWrites, /*axis=*/2);
+        Value writesForCluster = reduce<arith::OrIOp>(fb, syncWrites, {2});
         writesForCluster = convertAndBroadcast(fb, writesForCluster, {0, 1},
                                                writeVisibilityType);
         Value newWriteVisibility =
@@ -2679,10 +2656,8 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
             arith::AndIOp::create(fb, readVisibility, readBaseMask), zeroReads);
         Value syncReads =
             arith::SelectOp::create(fb, hasBaseRead, readVisibility, zeroReads);
-        Value readsForCluster = reduce<arith::OrIOp>(fb, syncReads, /*axis=*/4);
-        readsForCluster = reduce<arith::OrIOp>(fb, readsForCluster,
-                                               /*axis=*/2);
-        readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1, 3},
+        Value readsForCluster = reduce<arith::OrIOp>(fb, syncReads, {2, 3, 4});
+        readsForCluster = convertAndBroadcast(fb, readsForCluster, {0, 1},
                                               readVisibilityType);
         Value newReadVisibility =
             arith::OrIOp::create(fb, readVisibility, readsForCluster);

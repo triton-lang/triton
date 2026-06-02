@@ -27,6 +27,8 @@ def min_dot_size(target: GPUTarget):
             return (1, 1, 32)
         elif lhs_bitwidth == 64:
             return (1, 1, 4)
+        elif lhs_bitwidth == 32:
+            return (1, 1, 8)
         else:
             return (1, 1, 16)
 

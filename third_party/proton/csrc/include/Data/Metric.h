@@ -2,6 +2,7 @@
 #define PROTON_DATA_METRIC_H_
 
 #include "Runtime/Runtime.h"
+#include "Utility/Errors.h"
 #include "Utility/String.h"
 #include "Utility/Traits.h"
 #include <atomic>
@@ -12,6 +13,7 @@
 #include <set>
 #include <shared_mutex>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -64,7 +66,7 @@ public:
 
   virtual const std::string &getName() const = 0;
 
-  virtual const std::string &getValueName(int valueId) const = 0;
+  virtual std::string_view getValueName(int valueId) const = 0;
 
   virtual bool isProperty(int valueId) const = 0;
 
@@ -78,10 +80,10 @@ public:
   void updateValue(int valueId, MetricValueType value) {
     // Enforce type consistency: once a valueId has a type, it must not change.
     if (values[valueId].index() != value.index()) {
-      throw std::runtime_error(
+      throw makeInvalidArgument(
           std::string("Metric value type mismatch for valueId ") +
-          std::to_string(valueId) + " (" + getValueName(valueId) + ")" +
-          ": current=" + getTypeNameForIndex(values[valueId].index()) +
+          std::to_string(valueId) + " (" + std::string(getValueName(valueId)) +
+          ")" + ": current=" + getTypeNameForIndex(values[valueId].index()) +
           ", new=" + getTypeNameForIndex(value.index()));
     }
     // Handle string and other values separately
@@ -101,10 +103,11 @@ public:
                                    std::is_arithmetic_v<
                                        typename CurrentType::value_type>) {
                 if (currentValue.size() != otherValue.size()) {
-                  throw std::runtime_error(
-                      std::string("[PROTON] Vector metric size mismatch for "
+                  throw makeInvalidArgument(
+                      std::string("Vector metric size mismatch for "
                                   "valueId ") +
-                      std::to_string(valueId) + " (" + getValueName(valueId) +
+                      std::to_string(valueId) + " (" +
+                      std::string(getValueName(valueId)) +
                       "): current=" + std::to_string(currentValue.size()) +
                       ", new=" + std::to_string(otherValue.size()));
                 }
@@ -112,10 +115,11 @@ public:
                   currentValue[i] += otherValue[i];
                 }
               } else {
-                throw std::runtime_error(
-                    std::string("[PROTON] Metric aggregation not supported for "
+                throw makeLogicError(
+                    std::string("Metric aggregation not supported for "
                                 "valueId ") +
-                    std::to_string(valueId) + " (" + getValueName(valueId) +
+                    std::to_string(valueId) + " (" +
+                    std::string(getValueName(valueId)) +
                     "): type=" + getTypeNameForIndex(values[valueId].index()));
               }
             }
@@ -171,7 +175,8 @@ public:
 
   const std::string &getName() const override { return name; }
 
-  const std::string &getValueName(int valueId) const override {
+  // Flexible metrics carry their name as per-instance state.
+  std::string_view getValueName(int valueId) const override {
     return valueName;
   }
 
@@ -218,7 +223,13 @@ public:
 
   const std::string &getName() const override { return name; }
 
-  const std::string &getValueName(int valueId) const override {
+  // Fast path for callers that already know they are working with KernelMetric.
+  static constexpr std::string_view getValueName(kernelMetricKind valueId) {
+    return VALUE_NAMES[valueId];
+  }
+
+  // Virtual access used through the Metric interface.
+  std::string_view getValueName(int valueId) const override {
     return VALUE_NAMES[valueId];
   }
 
@@ -231,7 +242,7 @@ private:
       true, true, false, false, true, true, true, true};
   const static inline bool EXCLUSIVE[kernelMetricKind::Count] = {
       false, false, false, false, true, true, true, true};
-  const static inline std::string VALUE_NAMES[kernelMetricKind::Count] = {
+  static constexpr std::string_view VALUE_NAMES[kernelMetricKind::Count] = {
       "start_time (ns)", "end_time (ns)", "count",     "time (ns)",
       "device_id",       "device_type",   "stream_id", "is_metric_kernel",
   };
@@ -277,14 +288,21 @@ public:
 
   const std::string &getName() const override { return name; }
 
-  const std::string &getValueName(int valueId) const override {
+  // Fast path for callers that already know they are working with
+  // PCSamplingMetric.
+  static constexpr std::string_view getValueName(PCSamplingMetricKind valueId) {
+    return VALUE_NAMES[valueId];
+  }
+
+  // Virtual access used through the Metric interface.
+  std::string_view getValueName(int valueId) const override {
     return VALUE_NAMES[valueId];
   }
 
   bool isProperty(int valueId) const override { return false; }
   bool isExclusive(int valueId) const override { return false; }
 
-  const static inline std::string VALUE_NAMES[PCSamplingMetricKind::Count] = {
+  static constexpr std::string_view VALUE_NAMES[PCSamplingMetricKind::Count] = {
       "num_samples",
       "num_stalled_samples",
       "stalled_branch_resolving",
@@ -358,7 +376,13 @@ public:
 
   const std::string &getName() const override { return name; }
 
-  const std::string &getValueName(int valueId) const override {
+  // Fast path for callers that already know they are working with CycleMetric.
+  static constexpr std::string_view getValueName(CycleMetricKind valueId) {
+    return VALUE_NAMES[valueId];
+  }
+
+  // Virtual access used through the Metric interface.
+  std::string_view getValueName(int valueId) const override {
     return VALUE_NAMES[valueId];
   }
 
@@ -373,7 +397,7 @@ private:
   const static inline bool EXCLUSIVE[CycleMetricKind::Count] = {
       false, false, true, true, true,  true,  true, true,
       true,  true,  true, true, false, false, false};
-  const static inline std::string VALUE_NAMES[CycleMetricKind::Count] = {
+  static constexpr std::string_view VALUE_NAMES[CycleMetricKind::Count] = {
       "start_cycle", "end_cycle",      "cycles",         "normalized_cycles",
       "kernel_id",   "kernel_name",    "block_id",       "processor_id",
       "unit_id",     "device_id",      "device_type",    "time_shift_cost",
@@ -487,8 +511,8 @@ public:
     std::shared_lock<std::shared_mutex> lock(metricDescriptorMutex);
     auto it = metricDescriptors.find(id);
     if (it == metricDescriptors.end()) {
-      throw std::runtime_error("[PROTON] MetricBuffer: unknown metric id: " +
-                               std::to_string(id));
+      throw makeOutOfRange("MetricBuffer: unknown metric id: " +
+                           std::to_string(id));
     }
     return it->second;
   }
