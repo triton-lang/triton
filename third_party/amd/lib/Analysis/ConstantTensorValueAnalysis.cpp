@@ -237,4 +237,104 @@ unsigned getPerThreadConsecutiveContiguity(
   return llvm::bit_floor(consecutive);
 }
 
+unsigned getPerThreadContiguityFromLinearLayout(
+    Value offsetsValue, mlir::triton::ModuleAxisInfoAnalysis &axisAnalysis) {
+  auto tensorTy = dyn_cast<RankedTensorType>(offsetsValue.getType());
+  if (!tensorTy)
+    return 1;
+
+  // register -> tensor-coord map, straight from the tensor's LinearLayout.
+  LinearLayout ll = ttg::toLinearLayout(tensorTy);
+  MLIRContext *ctx = tensorTy.getContext();
+  StringAttr kReg = StringAttr::get(ctx, "register");
+  if (!llvm::is_contained(ll.getInDimNames(), kReg))
+    return 1;
+  unsigned numRegs = ll.getInDimSize(kReg);
+  if (numRegs <= 1)
+    return 1;
+  unsigned numRegBits = llvm::Log2_32(numRegs);
+
+  auto outDims = llvm::to_vector(ll.getOutDimNames());
+  unsigned rank = tensorTy.getRank();
+  if (outDims.size() != rank)
+    return 1;
+
+  // Tensor coord reached by register value `regIdx` (all other in-dims = 0).
+  auto coordAt = [&](int32_t regIdx) {
+    SmallVector<std::pair<StringAttr, int32_t>> ins;
+    ins.reserve(ll.getNumInDims());
+    for (auto dim : ll.getInDimNames())
+      ins.push_back({dim, dim == kReg ? regIdx : 0});
+    auto outs = ll.apply(ins);
+    SmallVector<int64_t> coord(rank, 0);
+    for (auto [i, kv] : llvm::enumerate(outs))
+      coord[i] = kv.second;
+    return coord;
+  };
+
+  // Recover the register->offset map for one unknown-scalar substitution:
+  // basis[b] = offset(2^b) - offset(0). Returns std::nullopt if the chain has
+  // an unsupported op, or if the map is NOT GF(2)-linear over the register
+  // subspace (some composite register value disagrees with the XOR-free sum of
+  // its set-bit basis deltas -- e.g. an offset with carries between bits).
+  auto recoverBasis =
+      [&](int64_t subst) -> std::optional<SmallVector<int64_t>> {
+    auto base = evaluateAt(offsetsValue, coordAt(0), subst);
+    if (!base)
+      return std::nullopt;
+    SmallVector<int64_t> basis(numRegBits, 0);
+    for (unsigned b = 0; b < numRegBits; ++b) {
+      auto v = evaluateAt(offsetsValue, coordAt(1u << b), subst);
+      if (!v)
+        return std::nullopt;
+      basis[b] = *v - *base;
+    }
+    // Linearity check across the full register subspace.
+    for (unsigned r = 1; r < numRegs; ++r) {
+      auto v = evaluateAt(offsetsValue, coordAt(r), subst);
+      if (!v)
+        return std::nullopt;
+      int64_t predicted = 0;
+      for (unsigned b = 0; b < numRegBits; ++b)
+        if (r & (1u << b))
+          predicted += basis[b];
+      if (*v - *base != predicted)
+        return std::nullopt; // not linear -> not a valid register->offset LL.
+    }
+    return basis;
+  };
+
+  // Structural independence from kernel/loop scalars: require the recovered
+  // basis images to be identical across several substitutions. Any term whose
+  // register-stride depends on an unknown scalar shows up as a basis mismatch.
+  unsigned divisibility = std::max<unsigned>(
+      1, axisAnalysis.getAlignment(offsetsValue, /*elementBitWidth=*/8));
+  const int64_t substs[] = {0,
+                            1,
+                            3,
+                            7,
+                            static_cast<int64_t>(divisibility),
+                            static_cast<int64_t>(divisibility) - 1,
+                            0x40000001};
+  std::optional<SmallVector<int64_t>> ref;
+  for (int64_t s : substs) {
+    auto basis = recoverBasis(s);
+    if (!basis)
+      return 1;
+    if (!ref)
+      ref = basis;
+    else if (*ref != *basis)
+      return 1; // register-stride depends on an unknown scalar.
+  }
+
+  // Read contiguity straight off the verified linear map: registers [0..2^k)
+  // hit offsets [0..2^k) iff basis bit b maps to 2^b for every b < k, taken
+  // from bit 0 upward.
+  unsigned contigBits = 0;
+  while (contigBits < numRegBits &&
+         (*ref)[contigBits] == (int64_t)(1u << contigBits))
+    ++contigBits;
+  return 1u << contigBits;
+}
+
 } // namespace mlir::triton::AMD

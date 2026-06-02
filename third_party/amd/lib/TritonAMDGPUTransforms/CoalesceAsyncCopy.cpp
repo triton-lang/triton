@@ -415,10 +415,15 @@ public:
       auto elemNumBits = triton::getPointeeBitWidth(ptrTy);
       unsigned contiguity =
           axisAnalysis.getContiguity(loadOp.getOffsets(), elemNumBits);
-      // Use the per-register constant evaluator as an extra lower bound.
-      // This catches mod/div offset patterns AxisInfo cannot see.
-      unsigned evalContig = triton::AMD::getPerThreadConsecutiveContiguity(
-          loadOp.getOffsets(), axisAnalysis);
+      // Use the LinearLayout-native per-register contiguity as an extra lower
+      // bound. This recovers the register->offset map's basis images, verifies
+      // GF(2)-linearity over the whole register subspace, and proves
+      // scalar-independence by multi-substitution agreement -- catching the
+      // mod/div offset patterns AxisInfo's per-axis model cannot see, more
+      // soundly than a sequential two-probe walk.
+      unsigned evalContig =
+          triton::AMD::getPerThreadContiguityFromLinearLayout(
+              loadOp.getOffsets(), axisAnalysis);
       contiguity = std::max(contiguity, evalContig);
       bufferLoadVgprContiguity.insert(
           {loadOp, applyMaskAlignment(contiguity, loadOp.getMask())});
