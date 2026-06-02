@@ -253,13 +253,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+// CHECK: #[[$SHARED_A_SCRATCH:[A-Za-z0-9_]+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
 // CHECK: module attributes {{.*}}"ttng.two-ctas" = true
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.tensor_memory_size = 0 : i32, "ttg.total-num-warps" = 1 : i32} {
     // CHECK-LABEL: @tcgen05_mma_two_ctas
   tt.func public @tcgen05_mma_two_ctas() {
     // CHECK: ttg.global_scratch_alloc {{.*}}shared_cluster_state
     // CHECK: ttng.cluster_barrier
-    // CHECK-NEXT: {{.*}} = ttg.local_load
+    // CHECK-NEXT: {{.*}} = ttg.local_load {{.*}} -> tensor<256x128xf16, #[[$SHARED_A_SCRATCH]]>
     // CHECK: tt.store
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: ttng.cluster_barrier
@@ -289,6 +290,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #blocked_multibuffer = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<CGALayout = [[0, 0]]>
+// CHECK: #[[$TMEM_VIEW_SCRATCH:[A-Za-z0-9_]+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = {{\[\[1, 0\]\]}}}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.tensor_memory_size = 0 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func public @enable_two_ctas() {
     %true = arith.constant true
@@ -302,6 +304,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: @tmem_multibuffer_two_ctas
   tt.func public @tmem_multibuffer_two_ctas(%idx: i32) {
     // CHECK: ttg.global_scratch_alloc {{.*}}shared_cluster_state
+    // CHECK: tt.store {{.*}} {ignore_cta} : tensor<256x128x!tt.ptr<i32>, #[[$TMEM_VIEW_SCRATCH]]>
     // CHECK-NOT: ttng.tmem_load
     // CHECK-NOT: ttng.tmem_store
     // CHECK-NOT: ttg.memdesc_index

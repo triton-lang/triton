@@ -348,14 +348,6 @@ CGAEncodingAttr getCGALayout(Attribute layout) {
   llvm_unreachable("Unimplemented usage of getCGALayout");
 }
 
-CGAEncodingAttr prependUnitDimToCGALayout(CGAEncodingAttr layout) {
-  auto *ctx = layout.getContext();
-  SmallVector<int64_t> shape = {1};
-  llvm::append_range(shape, layout.getLinearLayout().getOutDimSizes());
-  return CGAEncodingAttr::get(
-      ctx, layout.getLinearLayout().reshapeOuts(standardOutDimPairs(ctx, shape)));
-}
-
 static LinearEncodingAttr
 getSlicedLinearEncoding(SliceEncodingAttr sliceLayout) {
   SmallVector<unsigned> slices = {sliceLayout.getDim()};
