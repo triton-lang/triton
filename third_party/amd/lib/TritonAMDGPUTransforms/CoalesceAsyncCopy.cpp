@@ -48,6 +48,9 @@ struct CoalesceAsyncCopyWrites
     auto dstTy = cast<ttg::MemDescType>(dst.getType());
 
     auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(srcTy.getEncoding());
+    if (!blockedEnc)
+      return rewriter.notifyMatchFailure(copyOp,
+                                         "src encoding must be #blocked");
 
     if (!isa<ttg::SwizzledSharedEncodingAttr, ttg::PaddedSharedEncodingAttr>(
             dstTy.getEncoding())) {
@@ -100,21 +103,10 @@ struct CoalesceAsyncCopyWrites
 
     ttg::DistributedEncodingTrait newDistEnc;
 
-    unsigned directToLdsContig = loadContig;
     if (LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstTy.getEncoding(),
-                                      dstTy.getAllocShape(),
-                                      directToLdsContig)) {
-      if (directToLdsContig <= copyOp.getContiguity())
-        return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
-      rewriter.modifyOpInPlace(
-          copyOp, [&]() { copyOp.setContiguity(directToLdsContig); });
-      return success();
+                                      dstTy.getAllocShape(), loadContig)) {
+      return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
     }
-
-    if (!blockedEnc)
-      return rewriter.notifyMatchFailure(
-          copyOp, "src encoding must be #blocked to rewrite layout");
-
     // Check if we support load contig because canLoadDirectToLds can change it
     if (!targetInfo.supportsDirectToLdsLoadBitWidth(loadContig * elemBitWidth))
       return rewriter.notifyMatchFailure(copyOp,

@@ -25,27 +25,9 @@ namespace mlir::triton::AMD {
 std::optional<int64_t> evaluateAt(Value value, ArrayRef<int64_t> coord,
                                   int64_t unknownScalarSubst = 0);
 
-// Per-register memory contiguity for an integer offsets tensor whose linear
-// layout's "register" dimension maps to tensor-coord deltas. Samples
-// `evaluateAt` at lane=warp=0 and each register basis vector, taking the
-// difference from the base register. Returns the largest power-of-two N such
-// that register indices [0..N) produce memory deltas [0..N) (i.e. N
-// consecutive elements per thread).
-//
-// To prove independence from kernel-argument scalars, the deltas are sampled
-// at TWO unknown-scalar substitutions: 0 and the AxisInfo-derived
-// divisibility of the offsets value. If the per-register deltas disagree
-// between the two probes, the function returns 1 (cannot prove contiguity).
-//
-// Returns 1 on any failure. Never returns 0.
-unsigned getPerThreadConsecutiveContiguity(
-    Value offsetsValue, mlir::triton::ModuleAxisInfoAnalysis &axisAnalysis);
-
-// LinearLayout-native per-register contiguity (recommended replacement for
-// `getPerThreadConsecutiveContiguity`).
-//
-// Instead of walking the per-register offsets sequentially and probing two
-// unknown-scalar substitutions, this:
+// LinearLayout-native per-register memory contiguity for an integer offsets
+// tensor whose linear layout's "register" dimension maps to tensor-coord
+// deltas. It:
 //   1. Uses the offsets tensor's LinearLayout to map each `register` *basis*
 //      bit (lane=warp=block=0) to a tensor coord, and evaluates the offset
 //      delta that flipping that single bit produces -- i.e. it recovers the

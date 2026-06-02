@@ -85,17 +85,17 @@ That single fact partitions the branch into "load-bearing" and "redundant."
    **identical to baseline lowering** — they pass on the branch and "fail" on
    main only because main doesn't *stamp the attribute*, not because main
    produces worse ASM. On main those kernels already emit `buffer_load_dwordx4`.
-2. **The entire `CoalesceBufferLoadToLocalWrites` pattern (direct-to-LDS).**
-   It uses **only AxisInfo** — it never calls the evaluator. The LDS lowering
-   already does `vec = getVectorSize(...); vec = max(vec, contiguity);
-   canLoadDirectToLDS(...)`. So this whole pattern duplicates lowering. Tests
-   `@lds_i8/i16_axisinfo_*`, `@lds_i16_mask_clamps_to2`,
-   `@lds_i16_non_power_two_contig3_to2` re-prove lowering behavior at a
-   different stage. The genuinely new LDS-facing fix is the `AsyncUtility`
-   one-liner, which is independent of this pattern. (Minor caveat: the
-   pattern's `minLegalContig` *floor* can raise contiguity above what AxisInfo
-   proved safe; if that is ever reachable it is a soundness concern, not a
-   feature.)
+2. ~~**The entire `CoalesceBufferLoadToLocalWrites` pattern (direct-to-LDS).**~~
+   **CORRECTION (empirically disproved during cleanup).** The original static
+   reading was that this pattern merely duplicates the lowering's AxisInfo
+   vectorization. That is *wrong*: the pattern's `minLegalContig` **floor** is
+   load-bearing. Disabling the pattern and recompiling the MXFP4 kernels
+   produces a hard compile failure (`LLVM Translation failed for operation:
+   builtin.unrealized_conversion_cast` on `a_scales_ptr`) — the sub-dword i8
+   scale-to-LDS `buffer_load_to_local` cannot be legalized to a valid
+   direct-to-LDS transfer width without the floor, and the lowering does **not**
+   raise it on its own. So this pattern is **required**, not redundant. See the
+   "Branch cleanup" section for the probe.
 
 ### Consequence for the test suite's framing
 
@@ -109,13 +109,20 @@ not as "the pass enables vectorization that was otherwise impossible."
 
 ### Recommendation (necessity)
 
-- **Keep:** the constant evaluator on the VGPR path, the `AsyncUtility` fix,
-  and the `CoalesceAsyncCopyWrites` loosening.
-- **Drop or explicitly demote to belt-and-suspenders:** the AxisInfo-only
-  stamping (the VGPR AxisInfo lower-bound term and the whole
-  `CoalesceBufferLoadToLocalWrites` pattern). If kept, document them as
-  "redundant safety stamping," not new capability, and stop presenting their
-  tests as proof of new pass behavior.
+*(Updated after the cleanup pass — see "Branch cleanup" for what was actually
+removed and the empirical evidence.)*
+
+- **Keep:** the LinearLayout-native VGPR contiguity analysis, the
+  `CoalesceBufferLoadToLocalWrites` LDS pattern (**required** for sub-dword
+  i8 direct-to-LDS legalization — empirically load-bearing), the `AsyncUtility`
+  fix (shared-infra correctness fix used by the lowering and `LowerLoops`), and
+  the VGPR AxisInfo lower-bound term (cheap safety net under the LL-native
+  result).
+- **Removed:** the older symbolic-evaluator contiguity derivation
+  (`getPerThreadConsecutiveContiguity`, prefix-walk + 2-substitution probe —
+  superseded by the LinearLayout-native function) and the orthogonal
+  `CoalesceAsyncCopyWrites` async-copy loosening (not used by these kernels and
+  the source of a failing test; reverted to `main`).
 - **Bigger-picture direction:** see the SOTA evaluation below — Triton already
   has LinearLayout, which can express the cross-axis per-thread stride
   directly; a layout-native contiguity query is the more general and sound
@@ -337,7 +344,67 @@ conditional fallback in the task did not trigger.
 (`@async_copy_with_padding_different_vec`, line ~273) fails on the **baseline**
 `amd-coalesce-lds` branch, in the async-copy *layout-rewrite* path that this
 work does not touch. It is unrelated to the buffer-load coalescing changes and
-is flagged here only so it is not mistaken for a regression.
+is flagged here only so it is not mistaken for a regression. (Removed by the
+cleanup pass below — the async loosening that broke it was reverted to `main`.)
+
+## Branch cleanup: trimming to the minimal, regression-free diff
+
+After the LinearLayout-native approach was proven to work end-to-end, the branch
+was trimmed against `upstream/main`. Every removal was gated on the full AMD lit
+suite (109 tests) **and** the zero-`buffer_load_ubyte` assembly sweep across all
+five dense kernels.
+
+### Removed
+
+1. **The older symbolic-evaluator contiguity derivation**
+   (`getPerThreadConsecutiveContiguity`: prefix-walk + 2-substitution probe,
+   ~99 lines incl. its header decl/comment). It became dead code the moment the
+   pass switched to `getPerThreadContiguityFromLinearLayout`. The shared
+   `evaluateAt` machinery it used is retained — the LL-native function still
+   needs it to read basis images.
+2. **The `CoalesceAsyncCopyWrites` async-copy loosening** (reverted to `main`)
+   and the **+59-line additions to `amd-coalesce-async-copy.mlir`** (restored to
+   `main`). This change touched the `async_copy_global_to_local` path, which the
+   MXFP4 kernels do not use (`async_copy_global_to_local` count = 0 in their
+   IR), and it was the sole cause of the failing test noted above. Reverting to
+   `main` is regression-free by construction and turns the AMD suite green
+   (109/109).
+
+### Kept (and *why*, with evidence)
+
+- **`CoalesceBufferLoadToLocalWrites` (direct-to-LDS pattern)** — **required**,
+  contrary to the earlier static "redundant" reading. Probe: disable only
+  `patterns.add<CoalesceBufferLoadToLocalWrites>(...)`, rebuild `libtriton.so`,
+  recompile the kernels →
+
+  ```text
+  loc("a_scales_ptr"...): error: LLVM Translation failed for operation:
+      builtin.unrealized_conversion_cast
+  RuntimeError: failed to translate module to LLVM IR
+  ```
+
+  The sub-dword i8 scale-to-LDS `buffer_load_to_local` needs the pattern's
+  `minLegalContig` floor to reach a legal direct-to-LDS width; the lowering does
+  not raise it independently.
+- **`AsyncUtility.cpp` `--maxVecSize` fix** — shared-infra correctness fix.
+  `fitToValidDirectToLdsVecSize` is called by the lowering (`Utility.cpp`) and
+  `LowerLoops.cpp`, not just the coalesce pass, so it is an independent bugfix
+  worth retaining.
+- **The VGPR AxisInfo lower-bound term** — kept as a cheap safety net: the
+  LL-native function returns 1 on any failure, and the AxisInfo floor matches
+  what the lowering would compute anyway.
+
+### Result
+
+| Check | Before cleanup | After cleanup |
+|---|---|---|
+| AMD lit suite (`test/TritonGPU/amd` + `test/Conversion/amd`) | 108/109 (1 pre-existing fail) | **109/109** |
+| `buffer_load_ubyte` across 5 dense kernels | 0 | **0** |
+| Buffer-load widths per kernel | `dword`/`dwordx4` | **unchanged** |
+| Code diff vs `main` (non-doc) | ~944 lines | **~760 lines** |
+
+Net: the older implementation and an orthogonal failing async change are gone,
+the branch is green, and the MXFP4 B-scale widening is byte-for-byte preserved.
 
 ## Investigation detail
 
