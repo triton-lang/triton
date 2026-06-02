@@ -41,7 +41,9 @@ bool isCDNA4(ISAFamily family) { return family == ISAFamily::CDNA4; }
 bool isCDNA4OrHigher(ISAFamily family) {
   return family == ISAFamily::CDNA4 || family == ISAFamily::GFX1250;
 }
-
+bool isCDNA3OrHigher(ISAFamily family) {
+  return family == ISAFamily::CDNA3 || isCDNA4OrHigher(family);
+}
 // List of architectures that have hardware support for FNUZ fp8 formats. On
 // those architectures we will use the HW instructions to do the conversion
 // instead of the software fallback.
@@ -465,46 +467,6 @@ SmallVector<Value> PkF4ToFp32(Location loc, ConversionPatternRewriter &rewriter,
   return ret;
 }
 
-// Convert OCP Fp8 to Fp32 on CDNA4+
-SmallVector<Value> Fp8E4M3fnToFp32(Location loc,
-                                   ConversionPatternRewriter &rewriter,
-                                   const SmallVector<Value> &v) {
-  if (v.size() == 8) {
-    return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F32Fp8Op>(loc, rewriter,
-                                                               v);
-  }
-  assert(v.size() == 4);
-  return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkF32Fp8Op>(loc, rewriter, v);
-}
-
-// Convert OCP Bf8 to Fp32 on CDNA4+
-SmallVector<Value> Fp8E5M2ToFp32(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const SmallVector<Value> &v) {
-  if (v.size() == 8) {
-    return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F32Bf8Op>(loc, rewriter,
-                                                               v);
-  }
-  assert(v.size() == 4);
-  return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkF32Bf8Op>(loc, rewriter, v);
-}
-
-// Nanoo Bf8 -> Fp32 on CDNA3+
-SmallVector<Value> Fp8E5M2fnuzToFp32(Location loc,
-                                     ConversionPatternRewriter &rewriter,
-                                     const SmallVector<Value> &v) {
-  assert(v.size() == 4);
-  return PkF4ToFp32<ROCDL::CvtPkF32Bf8Op>(loc, rewriter, v);
-}
-
-// Nanoo Fp8 -> Fp32 on CDNA3+
-SmallVector<Value> Fp8E4M3fnuzToFp32(Location loc,
-                                     ConversionPatternRewriter &rewriter,
-                                     const SmallVector<Value> &v) {
-  assert(v.size() == 4);
-  return PkF4ToFp32<ROCDL::CvtPkF32Fp8Op>(loc, rewriter, v);
-}
-
 Value Fp8E4M3fnToFp16OneValue(Location loc, ConversionPatternRewriter &rewriter,
                               Value v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -557,21 +519,6 @@ SmallVector<Value> Fp8E4M3fnToFp16SW(Location loc,
   return results;
 }
 
-SmallVector<Value> Fp8E4M3fnToFp16HW(Location loc,
-                                     ConversionPatternRewriter &rewriter,
-                                     const SmallVector<Value> &v) {
-  if (v.size() == 8) {
-    return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F16Fp8Op>(loc, rewriter,
-                                                               v);
-  }
-  assert(v.size() == 4);
-  return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkF16Fp8Op>(loc, rewriter, v);
-}
-
-ConverterT Fp8E4M3fnToFp16(ISAFamily isaFamily) {
-  return isCDNA4OrHigher(isaFamily) ? Fp8E4M3fnToFp16HW : Fp8E4M3fnToFp16SW;
-}
-
 // Ocp Bf8->Fp16
 SmallVector<Value> Fp8E5M2ToFp16SW(Location loc,
                                    ConversionPatternRewriter &rewriter,
@@ -599,21 +546,6 @@ SmallVector<Value> Fp8E5M2ToFp16SW(Location loc,
           b.extract_element(f16_ty, fp16x2Vec0, b.i32_val(1)),
           b.extract_element(f16_ty, fp16x2Vec1, b.i32_val(0)),
           b.extract_element(f16_ty, fp16x2Vec1, b.i32_val(1))};
-}
-
-SmallVector<Value> Fp8E5M2ToFp16HW(Location loc,
-                                   ConversionPatternRewriter &rewriter,
-                                   const SmallVector<Value> &v) {
-  if (v.size() == 8) {
-    return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F16Bf8Op>(loc, rewriter,
-                                                               v);
-  }
-  assert(v.size() == 4);
-  return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkF16Bf8Op>(loc, rewriter, v);
-}
-
-ConverterT Fp8E5M2ToFp16(ISAFamily isaFamily) {
-  return isCDNA4OrHigher(isaFamily) ? Fp8E5M2ToFp16HW : Fp8E5M2ToFp16SW;
 }
 
 Value Fp8E5M2fnuzToFp16OneValue(Location loc,
@@ -673,10 +605,6 @@ SmallVector<Value> Fp8E5M2fnuzToFp16HW(Location loc,
     ret[i] = Fp32ToFp16rtneOneValue(loc, rewriter, ret[i]);
 
   return ret;
-}
-
-ConverterT Fp8E5M2fnuzToFp16(ISAFamily isaFamily) {
-  return hasFnuzFp8HW(isaFamily) ? Fp8E5M2fnuzToFp16HW : Fp8E5M2fnuzToFp16SW;
 }
 
 // OCP Bf8/Fp8 -> Bf16
@@ -761,41 +689,11 @@ SmallVector<Value> Fp8E5M2ToBf16SW(Location loc,
   return OcpF8ToBf16SW<Float8E5M2Type>(loc, rewriter, v);
 }
 
-SmallVector<Value> Fp8E5M2ToBf16HW(Location loc,
-                                   ConversionPatternRewriter &rewriter,
-                                   const SmallVector<Value> &v) {
-  if (v.size() == 8) {
-    return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8Bf16Bf8Op>(loc, rewriter,
-                                                                v);
-  }
-  assert(v.size() == 4);
-  return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkBf16Bf8Op>(loc, rewriter, v);
-}
-
-ConverterT Fp8E5M2ToBf16(ISAFamily isaFamily) {
-  return isCDNA4OrHigher(isaFamily) ? Fp8E5M2ToBf16HW : Fp8E5M2ToBf16SW;
-}
-
 // fp8e4m3fn to bf16
 SmallVector<Value> Fp8E4M3fnToBf16SW(Location loc,
                                      ConversionPatternRewriter &rewriter,
                                      const SmallVector<Value> &v) {
   return OcpF8ToBf16SW<Float8E4M3FNType>(loc, rewriter, v);
-}
-
-SmallVector<Value> Fp8E4M3fnToBf16HW(Location loc,
-                                     ConversionPatternRewriter &rewriter,
-                                     const SmallVector<Value> &v) {
-  if (v.size() == 8) {
-    return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8Bf16Fp8Op>(loc, rewriter,
-                                                                v);
-  }
-  assert(v.size() == 4);
-  return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkBf16Fp8Op>(loc, rewriter, v);
-}
-
-ConverterT Fp8E4M3fnToBf16(ISAFamily isaFamily) {
-  return isCDNA4OrHigher(isaFamily) ? Fp8E4M3fnToBf16HW : Fp8E4M3fnToBf16SW;
 }
 
 // fp8e4m3fnuz to bf16
@@ -861,10 +759,6 @@ SmallVector<Value> Fp8E4M3fnuzToBf16SW(Location loc,
           b.extract_element(bf16_ty, out0, b.i32_val(1))};
 }
 
-ConverterT Fp8E4M3fnuzToBf16(ISAFamily isaFamily) {
-  return hasFnuzFp8HW(isaFamily) ? Fp8E4M3fnuzToBf16HW : Fp8E4M3fnuzToBf16SW;
-}
-
 // fp8e5m2fnuz to bf16
 SmallVector<Value> Fp8E5M2fnuzToBf16HW(Location loc,
                                        ConversionPatternRewriter &rewriter,
@@ -887,10 +781,6 @@ SmallVector<Value> Fp8E5M2fnuzToBf16SW(Location loc,
     result[i] = AMD::convertFp32ToBf16(loc, rewriter, fp32, RoundingMode::RTZ);
   }
   return result;
-}
-
-ConverterT Fp8E5M2fnuzToBf16(ISAFamily isaFamily) {
-  return hasFnuzFp8HW(isaFamily) ? Fp8E5M2fnuzToBf16HW : Fp8E5M2fnuzToBf16SW;
 }
 
 Value Fp8E4M3fnuzToFp16OneValue(Location loc,
@@ -967,10 +857,6 @@ SmallVector<Value> Fp8E4M3fnuzToFp16HW(Location loc,
     ret[i] = Fp32ToFp16rtneOneValue(loc, rewriter, ret[i]);
 
   return ret;
-}
-
-ConverterT Fp8E4M3fnuzToFp16(ISAFamily isaFamily) {
-  return hasFnuzFp8HW(isaFamily) ? Fp8E4M3fnuzToFp16HW : Fp8E4M3fnuzToFp16SW;
 }
 
 Value Fp32ToFp16rtneOneValue(Location loc, RewriterBase &rewriter,
@@ -1125,21 +1011,6 @@ SmallVector<Value> Fp16ToFp8E5M2rtneSW(Location loc,
   }
 
   return result;
-}
-
-SmallVector<Value> Fp16ToFp8E5M2rtneHW(Location loc,
-                                       ConversionPatternRewriter &rewriter,
-                                       const SmallVector<Value> &v) {
-  if (v.size() == 8) {
-    return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Bf8F16Op>(loc, rewriter,
-                                                                v);
-  }
-  assert(v.size() == 4);
-  return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkBf8F16Op>(loc, rewriter, v);
-}
-
-ConverterT Fp16ToFp8E5M2rtne(ISAFamily isaFamily) {
-  return isCDNA4OrHigher(isaFamily) ? Fp16ToFp8E5M2rtneHW : Fp16ToFp8E5M2rtneSW;
 }
 
 // Fp16 -> OCP Bf8 (RTZ)
@@ -1345,22 +1216,6 @@ SmallVector<Value> Fp16ToFp8E4M3fnRtneSW(Location loc,
   return result;
 }
 
-SmallVector<Value> Fp16ToFp8E4M3fnRtneHW(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         const SmallVector<Value> &v) {
-  if (v.size() == 8) {
-    return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Fp8F16Op>(loc, rewriter,
-                                                                v);
-  }
-  assert(v.size() == 4);
-  return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkFp8F16Op>(loc, rewriter, v);
-}
-
-ConverterT Fp16ToFp8E4M3fnRtne(ISAFamily isaFamily) {
-  return isCDNA4OrHigher(isaFamily) ? Fp16ToFp8E4M3fnRtneHW
-                                    : Fp16ToFp8E4M3fnRtneSW;
-}
-
 // Fp16 -> Fp32
 Value Fp16ToFp32OneValue(Location loc, ConversionPatternRewriter &rewriter,
                          const Value &v) {
@@ -1403,25 +1258,7 @@ SmallVector<Value> Fp32ToFp8E4M3fnRtneSW(Location loc,
   return result;
 }
 
-// Convert Fp32 to OCP Fp8 on CDNA4
-SmallVector<Value> Fp32ToFp8E4M3fnRtneHW(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         const SmallVector<Value> &v) {
-  if (v.size() == 8) {
-    return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Fp8F32Op>(loc, rewriter,
-                                                                v);
-  }
-  assert(v.size() == 4);
-  return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkFp8F32Op>(loc, rewriter, v);
-}
-
-ConverterT Fp32ToFp8E4M3fnRtne(ISAFamily isaFamily) {
-  return isCDNA4OrHigher(isaFamily) ? Fp32ToFp8E4M3fnRtneHW
-                                    : Fp32ToFp8E4M3fnRtneSW;
-}
-
 // Fp32 -> OCP Bf8 (RTNE)
-
 SmallVector<Value> Fp32ToFp8E5M2rtneSW(Location loc,
                                        ConversionPatternRewriter &rewriter,
                                        const SmallVector<Value> &v) {
@@ -1499,21 +1336,6 @@ SmallVector<Value> Fp32ToFp8E5M2rtneSW(Location loc,
   return result;
 }
 
-SmallVector<Value> Fp32ToFp8E5M2rtneHW(Location loc,
-                                       ConversionPatternRewriter &rewriter,
-                                       const SmallVector<Value> &v) {
-  if (v.size() == 8) {
-    return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Bf8F32Op>(loc, rewriter,
-                                                                v);
-  }
-  assert(v.size() == 4);
-  return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkBf8F32Op>(loc, rewriter, v);
-}
-
-ConverterT Fp32ToFp8E5M2rtne(ISAFamily isaFamily) {
-  return isCDNA4OrHigher(isaFamily) ? Fp32ToFp8E5M2rtneHW : Fp32ToFp8E5M2rtneSW;
-}
-
 // Fp32 -> Nanoo Bf8 on CDNA3
 SmallVector<Value> Fp32ToFp8E5M2fnuzHW(Location loc,
                                        ConversionPatternRewriter &rewriter,
@@ -1532,10 +1354,6 @@ SmallVector<Value> Fp32ToFp8E5M2fnuzSW(Location loc,
   result[1] = downcastToFp8rtneOneValue<Float32Type, Float8E5M2FNUZType>(
       loc, rewriter, v[1]);
   return result;
-}
-
-ConverterT Fp32ToFp8E5M2fnuz(ISAFamily isaFamily) {
-  return hasFnuzFp8HW(isaFamily) ? Fp32ToFp8E5M2fnuzHW : Fp32ToFp8E5M2fnuzSW;
 }
 
 // Fp32 -> Nanoo Fp8 on CDNA3
@@ -1558,10 +1376,6 @@ SmallVector<Value> Fp32ToFp8E4M3fnuzSW(Location loc,
   return result;
 }
 
-ConverterT Fp32ToFp8E4M3fnuz(ISAFamily isaFamily) {
-  return hasFnuzFp8HW(isaFamily) ? Fp32ToFp8E4M3fnuzHW : Fp32ToFp8E4M3fnuzSW;
-}
-
 SmallVector<Value> Fp16ToFp8E5M2fnuzSW(Location loc,
                                        ConversionPatternRewriter &rewriter,
                                        const SmallVector<Value> &v) {
@@ -1580,10 +1394,6 @@ SmallVector<Value> Fp16ToFp8E5M2fnuzHW(Location loc,
 
   // Convert fp32 to bf8
   return Pk4Fp32ToF8<ROCDL::CvtPkBf8F32Op>(loc, rewriter, f32Vec);
-}
-
-ConverterT Fp16ToFp8E5M2fnuz(ISAFamily isaFamily) {
-  return hasFnuzFp8HW(isaFamily) ? Fp16ToFp8E5M2fnuzHW : Fp16ToFp8E5M2fnuzSW;
 }
 
 SmallVector<Value> convertFp32ToFp16rtz(Location loc,
@@ -1723,21 +1533,6 @@ SmallVector<Value> Bf16ToFp8E5M2SW(Location loc,
   return result;
 }
 
-SmallVector<Value> Bf16ToFp8E5M2HW(Location loc,
-                                   ConversionPatternRewriter &rewriter,
-                                   const SmallVector<Value> &v) {
-  if (v.size() == 8) {
-    return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Bf8Bf16Op>(loc, rewriter,
-                                                                 v);
-  }
-  assert(v.size() == 4);
-  return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkBf8Bf16Op>(loc, rewriter, v);
-}
-
-ConverterT Bf16ToFp8E5M2(ISAFamily isaFamily) {
-  return isCDNA4OrHigher(isaFamily) ? Bf16ToFp8E5M2HW : Bf16ToFp8E5M2SW;
-}
-
 // Bf16 -> OCP Fp8 using RTNE
 SmallVector<Value> Bf16ToFp8E4M3fnRtneSW(Location loc,
                                          ConversionPatternRewriter &rewriter,
@@ -1748,22 +1543,6 @@ SmallVector<Value> Bf16ToFp8E4M3fnRtneSW(Location loc,
     result[i] = downcastToFp8rtneOneValue<BFloat16Type, Float8E4M3FNType>(
         loc, rewriter, v[i]);
   return result;
-}
-
-SmallVector<Value> Bf16ToFp8E4M3fnRtneHW(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         const SmallVector<Value> &v) {
-  if (v.size() == 8) {
-    return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Fp8Bf16Op>(loc, rewriter,
-                                                                 v);
-  }
-  assert(v.size() == 4);
-  return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkFp8Bf16Op>(loc, rewriter, v);
-}
-
-ConverterT Bf16ToFp8E4M3fn(ISAFamily isaFamily) {
-  return isCDNA4OrHigher(isaFamily) ? Bf16ToFp8E4M3fnRtneHW
-                                    : Bf16ToFp8E4M3fnRtneSW;
 }
 
 // bf16 to fp8e4m3fnuz
@@ -1788,10 +1567,6 @@ SmallVector<Value> Bf16ToFp8E4M3fnuzSW(Location loc,
   return result;
 }
 
-ConverterT Bf16ToFp8E4M3fnuz(ISAFamily isaFamily) {
-  return hasFnuzFp8HW(isaFamily) ? Bf16ToFp8E4M3fnuzHW : Bf16ToFp8E4M3fnuzSW;
-}
-
 // bf16 to fp8e5m2fnuz
 SmallVector<Value> Bf16ToFp8E5M2fnuzHW(Location loc,
                                        ConversionPatternRewriter &rewriter,
@@ -1812,10 +1587,6 @@ SmallVector<Value> Bf16ToFp8E5M2fnuzSW(Location loc,
     result[i] = downcastToFp8rtneOneValue<BFloat16Type, Float8E5M2FNUZType>(
         loc, rewriter, v[i]);
   return result;
-}
-
-ConverterT Bf16ToFp8E5M2fnuz(ISAFamily isaFamily) {
-  return hasFnuzFp8HW(isaFamily) ? Bf16ToFp8E5M2fnuzHW : Bf16ToFp8E5M2fnuzSW;
 }
 
 SmallVector<Value> Fp16ToFp8E4M3fnuzSW(Location loc,
@@ -1842,11 +1613,692 @@ SmallVector<Value> Fp16ToFp8E4M3fnuzHW(Location loc,
   return Pk4Fp32ToF8<ROCDL::CvtPkFp8F32Op>(loc, rewriter, f32Vec);
 }
 
-ConverterT Fp16ToFp8E4M3fnuz(ISAFamily isaFamily) {
-  return hasFnuzFp8HW(isaFamily) ? Fp16ToFp8E4M3fnuzHW : Fp16ToFp8E4M3fnuzSW;
-}
+class ConverterInterface {
+public:
+  explicit ConverterInterface(ISAFamily isaFamily,
+                              std::optional<RoundingMode> roundingMode)
+      : isaFamily(isaFamily), roundingMode(roundingMode), numElements(0) {}
+  virtual ~ConverterInterface() = default;
+  virtual std::optional<SmallVector<Value>>
+  convert(Location loc, ConversionPatternRewriter &rewriter,
+          const SmallVector<Value> &v) = 0;
 
-// Attempts to use vectorized conversions via inline PTX when possible.
+  size_t getNumElements() {
+    assert(numElements != 0 && "num conversion elements must be initialized");
+    return numElements;
+  }
+
+protected:
+  bool isRoundingUndefined() { return !roundingMode.has_value(); }
+
+  ISAFamily isaFamily;
+  std::optional<RoundingMode> roundingMode;
+  size_t numElements;
+};
+
+class CvtFp8E4M3ToFp16 : public ConverterInterface {
+public:
+  explicit CvtFp8E4M3ToFp16(Type srcTy, ISAFamily isaFamily,
+                            std::optional<RoundingMode> roundingMode)
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
+    numElements =
+        isa<Float8E4M3FNType>(srcTy) && (isaFamily == ISAFamily::GFX1250) ? 8
+                                                                          : 4;
+  }
+
+  std::optional<SmallVector<Value>> convert(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) final {
+
+    // specific rounding modes are not supported
+    if (!isRoundingUndefined())
+      return std::nullopt;
+
+    if (isa<Float8E4M3FNUZType>(srcTy)) {
+      if (hasFnuzFp8HW(isaFamily))
+        return Fp8E4M3fnuzToFp16HW(loc, rewriter, v);
+      else
+        return Fp8E4M3fnuzToFp16SW(loc, rewriter, v);
+    } else if (isa<Float8E4M3FNType>(srcTy)) {
+      if (isaFamily == ISAFamily::GFX1250) {
+        return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F16Fp8Op>(loc,
+                                                                   rewriter, v);
+      } else if (isaFamily == ISAFamily::CDNA4) {
+        return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkF16Fp8Op>(loc,
+                                                                   rewriter, v);
+      } else
+        return Fp8E4M3fnToFp16SW(loc, rewriter, v);
+    }
+    return std::nullopt;
+  }
+
+private:
+  Type srcTy;
+};
+
+class CvtFp8E5M2ToFp16 : public ConverterInterface {
+public:
+  explicit CvtFp8E5M2ToFp16(Type srcTy, ISAFamily isaFamily,
+                            std::optional<RoundingMode> roundingMode)
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
+    if (isa<Float8E5M2FNUZType>(srcTy)) {
+      numElements = 4;
+    } else if (isa<Float8E5M2Type>(srcTy)) {
+      numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+    }
+  }
+
+  std::optional<SmallVector<Value>> convert(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) final {
+
+    // specific rounding modes are not supported
+    if (!isRoundingUndefined())
+      return std::nullopt;
+
+    if (isa<Float8E5M2FNUZType>(srcTy)) {
+      if (hasFnuzFp8HW(isaFamily))
+        return Fp8E5M2fnuzToFp16HW(loc, rewriter, v);
+      else
+        return Fp8E5M2fnuzToFp16SW(loc, rewriter, v);
+    } else if (isa<Float8E5M2Type>(srcTy)) {
+      if (isaFamily == ISAFamily::GFX1250) {
+        return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F16Bf8Op>(loc,
+                                                                   rewriter, v);
+      } else if (isaFamily == ISAFamily::CDNA4) {
+        return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkF16Bf8Op>(loc,
+                                                                   rewriter, v);
+      } else
+        return Fp8E5M2ToFp16SW(loc, rewriter, v);
+    }
+    return std::nullopt;
+  }
+
+private:
+  Type srcTy;
+};
+
+class CvtFp8E4M3ToBf16 : public ConverterInterface {
+public:
+  explicit CvtFp8E4M3ToBf16(Type srcTy, ISAFamily isaFamily,
+                            std::optional<RoundingMode> roundingMode)
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
+    if (isa<Float8E4M3FNUZType>(srcTy)) {
+      numElements = isCDNA4(isaFamily) ? 2 : 4;
+    } else if (isa<Float8E4M3FNType>(srcTy)) {
+      numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+    }
+  }
+
+  std::optional<SmallVector<Value>> convert(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) final {
+
+    // specific rounding modes are not supported
+    if (!isRoundingUndefined())
+      return std::nullopt;
+
+    if (isa<Float8E4M3FNUZType>(srcTy)) {
+      if (hasFnuzFp8HW(isaFamily))
+        return Fp8E4M3fnuzToBf16HW(loc, rewriter, v);
+      else
+        return Fp8E4M3fnuzToBf16SW(loc, rewriter, v);
+    } else if (isa<Float8E4M3FNType>(srcTy)) {
+      if (isaFamily == ISAFamily::GFX1250) {
+        return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8Bf16Fp8Op>(
+            loc, rewriter, v);
+      } else if (isaFamily == ISAFamily::CDNA4) {
+        return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkBf16Fp8Op>(
+            loc, rewriter, v);
+      } else
+        return OcpF8ToBf16SW<Float8E4M3FNType>(loc, rewriter, v);
+    }
+    return std::nullopt;
+  }
+
+private:
+  Type srcTy;
+};
+
+class CvtFp8E5M2ToBf16 : public ConverterInterface {
+public:
+  explicit CvtFp8E5M2ToBf16(Type srcTy, ISAFamily isaFamily,
+                            std::optional<RoundingMode> roundingMode)
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
+    numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+  }
+
+  std::optional<SmallVector<Value>> convert(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) final {
+
+    // specific rounding modes are not supported!
+    if (!isRoundingUndefined())
+      return std::nullopt;
+
+    if (isa<Float8E5M2FNUZType>(srcTy)) {
+      if (hasFnuzFp8HW(isaFamily))
+        return Fp8E5M2fnuzToBf16HW(loc, rewriter, v);
+      else
+        return Fp8E5M2fnuzToBf16SW(loc, rewriter, v);
+    } else if (isa<Float8E5M2Type>(srcTy)) {
+      if (isaFamily == ISAFamily::GFX1250) {
+        return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8Bf16Bf8Op>(
+            loc, rewriter, v);
+      } else if (isaFamily == ISAFamily::CDNA4) {
+        return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkBf16Bf8Op>(
+            loc, rewriter, v);
+      } else
+        return OcpF8ToBf16SW<Float8E5M2Type>(loc, rewriter, v);
+    }
+    return std::nullopt;
+  }
+
+private:
+  Type srcTy;
+};
+
+class CvtFp8E4M3ToFp32 : public ConverterInterface {
+public:
+  explicit CvtFp8E4M3ToFp32(Type srcTy, ISAFamily isaFamily,
+                            std::optional<RoundingMode> roundingMode)
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
+    numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+  }
+
+  std::optional<SmallVector<Value>> convert(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) final {
+
+    // specific rounding modes are not supported
+    if (!isRoundingUndefined())
+      return std::nullopt;
+
+    bool useTwoStepConversion = false;
+    if (isa<Float8E4M3FNUZType>(srcTy)) {
+      if (isaFamily == ISAFamily::CDNA3)
+        return PkF4ToFp32<ROCDL::CvtPkF32Fp8Op>(loc, rewriter, v);
+      else
+        useTwoStepConversion = true;
+    } else if (isa<Float8E4M3FNType>(srcTy)) {
+      if (isaFamily == ISAFamily::GFX1250)
+        return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F32Fp8Op>(loc,
+                                                                   rewriter, v);
+      else if (isaFamily == ISAFamily::CDNA4)
+        return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkF32Fp8Op>(loc,
+                                                                   rewriter, v);
+      else
+        useTwoStepConversion = true;
+    }
+
+    // FP8 -> FP16 -> FP32
+    if (useTwoStepConversion) {
+      auto converter = CvtFp8E4M3ToFp16(srcTy, isaFamily, roundingMode);
+      auto result = converter.convert(loc, rewriter, v);
+      assert(result.has_value() && "fp8 to fp16 conversion must be completed");
+      for (Value &v : *result)
+        v = Fp16ToFp32OneValue(loc, rewriter, v);
+      return result;
+    }
+
+    return std::nullopt;
+  }
+
+private:
+  Type srcTy;
+};
+
+class CvtFp8E5M2ToFp32 : public ConverterInterface {
+public:
+  explicit CvtFp8E5M2ToFp32(Type srcTy, ISAFamily isaFamily,
+                            std::optional<RoundingMode> roundingMode)
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
+    numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+  }
+
+  std::optional<SmallVector<Value>> convert(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) final {
+
+    // specific rounding modes are not supported
+    if (!isRoundingUndefined())
+      return std::nullopt;
+
+    bool useTwoStepConversion = false;
+    if (isa<Float8E5M2FNUZType>(srcTy)) {
+      if (isaFamily == ISAFamily::CDNA3)
+        return PkF4ToFp32<ROCDL::CvtPkF32Bf8Op>(loc, rewriter, v);
+      else
+        useTwoStepConversion = true;
+    } else if (isa<Float8E5M2Type>(srcTy)) {
+      if (isaFamily == ISAFamily::GFX1250)
+        return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F32Bf8Op>(loc,
+                                                                   rewriter, v);
+      else if (isaFamily == ISAFamily::CDNA4)
+        return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkF32Bf8Op>(loc,
+                                                                   rewriter, v);
+      else
+        useTwoStepConversion = true;
+    }
+
+    // BF8 -> FP16 -> FP32
+    if (useTwoStepConversion) {
+      auto converter = CvtFp8E5M2ToFp16(srcTy, isaFamily, roundingMode);
+      auto result = converter.convert(loc, rewriter, v);
+      assert(result.has_value() && "fp8 to fp16 conversion must be completed");
+      for (Value &v : *result)
+        v = Fp16ToFp32OneValue(loc, rewriter, v);
+      return result;
+    }
+
+    return std::nullopt;
+  }
+
+private:
+  Type srcTy;
+};
+
+class CvtFp16ToFp8E4M3 : public ConverterInterface {
+public:
+  explicit CvtFp16ToFp8E4M3(Type dstTy, ISAFamily isaFamily,
+                            std::optional<RoundingMode> roundingMode)
+      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {
+
+    if (isa<Float8E4M3FNType>(dstTy)) {
+      numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+    } else if (isa<Float8E4M3FNUZType>(dstTy)) {
+      numElements = isCDNA3OrHigher(isaFamily) ? 4 : 2;
+    }
+  }
+
+  std::optional<SmallVector<Value>> convert(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) final {
+
+    // support only for the RTNE rounding
+    if (roundingMode != RoundingMode::RTNE)
+      return std::nullopt;
+
+    if (isa<Float8E4M3FNType>(dstTy)) {
+      if (isaFamily == ISAFamily::GFX1250) {
+        return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Fp8F16Op>(
+            loc, rewriter, v);
+      } else if (isaFamily == ISAFamily::CDNA4) {
+        return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkFp8F16Op>(loc,
+                                                                   rewriter, v);
+      } else
+        return Fp16ToFp8E4M3fnRtneSW(loc, rewriter, v);
+    } else if (isa<Float8E4M3FNUZType>(dstTy)) {
+      if (hasFnuzFp8HW(isaFamily))
+        return Fp16ToFp8E4M3fnuzHW(loc, rewriter, v);
+      else
+        return Fp16ToFp8E4M3fnuzSW(loc, rewriter, v);
+    }
+
+    return std::nullopt;
+  }
+
+private:
+  Type dstTy;
+};
+
+class CvtFp16ToFp8E5M2 : public ConverterInterface {
+public:
+  explicit CvtFp16ToFp8E5M2(Type dstTy, ISAFamily isaFamily,
+                            std::optional<RoundingMode> roundingMode)
+      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {
+
+    if (roundingMode == RoundingMode::RTNE) {
+      if (isa<Float8E5M2FNUZType>(dstTy)) {
+        numElements = (isaFamily == ISAFamily::CDNA3) ? 4 : 2;
+      }
+      if (isa<Float8E5M2Type>(dstTy)) {
+        numElements = (isaFamily == ISAFamily::GFX1250) ? 8 : 4;
+      }
+    } else if (roundingMode == RoundingMode::RTZ) {
+      numElements = 4;
+    }
+  }
+
+  std::optional<SmallVector<Value>> convert(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) final {
+
+    if (roundingMode == RoundingMode::RTNE) {
+      if (isa<Float8E5M2FNUZType>(dstTy)) {
+        if (hasFnuzFp8HW(isaFamily))
+          return Fp16ToFp8E5M2fnuzHW(loc, rewriter, v);
+        else
+          return Fp16ToFp8E5M2fnuzSW(loc, rewriter, v);
+      } else if (isa<Float8E5M2Type>(dstTy)) {
+        if (isaFamily == ISAFamily::GFX1250) {
+          return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Bf8F16Op>(
+              loc, rewriter, v);
+        } else if (isaFamily == ISAFamily::CDNA4) {
+          return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkBf8F16Op>(
+              loc, rewriter, v);
+        } else
+          return Fp16ToFp8E5M2rtneSW(loc, rewriter, v);
+      }
+    } else if (roundingMode == RoundingMode::RTZ) {
+      return Fp16ToFp8E5M2rtz(loc, rewriter, v);
+    }
+
+    return std::nullopt;
+  }
+
+private:
+  Type dstTy;
+};
+
+class CvtBf16ToFp8E4M3 : public ConverterInterface {
+public:
+  explicit CvtBf16ToFp8E4M3(Type dstTy, ISAFamily isaFamily,
+                            std::optional<RoundingMode> roundingMode)
+      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {
+
+    if (isa<Float8E4M3FNType>(dstTy)) {
+      numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+    } else if (isa<Float8E4M3FNUZType>(dstTy)) {
+      numElements = 4;
+    }
+  }
+
+  std::optional<SmallVector<Value>> convert(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) final {
+
+    // support only for the RTNE rounding
+    if (roundingMode != RoundingMode::RTNE)
+      return std::nullopt;
+
+    if (isa<Float8E4M3FNType>(dstTy)) {
+      if (isaFamily == ISAFamily::GFX1250) {
+        return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Fp8Bf16Op>(
+            loc, rewriter, v);
+      } else if (isaFamily == ISAFamily::CDNA4) {
+        return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkFp8Bf16Op>(
+            loc, rewriter, v);
+      } else
+        return Bf16ToFp8E4M3fnRtneSW(loc, rewriter, v);
+    } else if (isa<Float8E4M3FNUZType>(dstTy)) {
+      if (hasFnuzFp8HW(isaFamily))
+        return Bf16ToFp8E4M3fnuzHW(loc, rewriter, v);
+      else
+        return Bf16ToFp8E4M3fnuzSW(loc, rewriter, v);
+    }
+
+    return std::nullopt;
+  }
+
+private:
+  Type dstTy;
+};
+
+class CvtBf16ToFp8E5M2 : public ConverterInterface {
+public:
+  explicit CvtBf16ToFp8E5M2(Type dstTy, ISAFamily isaFamily,
+                            std::optional<RoundingMode> roundingMode)
+      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {
+
+    if (isa<Float8E5M2Type>(dstTy)) {
+      numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+    } else if (isa<Float8E5M2FNUZType>(dstTy)) {
+      numElements = 4;
+    }
+  }
+
+  std::optional<SmallVector<Value>> convert(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) final {
+
+    // support only for the RTNE rounding
+    if (roundingMode != RoundingMode::RTNE)
+      return std::nullopt;
+
+    if (isa<Float8E5M2Type>(dstTy)) {
+      if (isaFamily == ISAFamily::GFX1250) {
+        return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Bf8Bf16Op>(
+            loc, rewriter, v);
+      } else if (isaFamily == ISAFamily::CDNA4) {
+        return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkBf8Bf16Op>(
+            loc, rewriter, v);
+      } else
+        return Bf16ToFp8E5M2SW(loc, rewriter, v);
+    } else if (isa<Float8E5M2FNUZType>(dstTy)) {
+      if (hasFnuzFp8HW(isaFamily))
+        return Bf16ToFp8E5M2fnuzHW(loc, rewriter, v);
+      else
+        return Bf16ToFp8E5M2fnuzSW(loc, rewriter, v);
+    }
+
+    return std::nullopt;
+  }
+
+private:
+  Type dstTy;
+};
+
+class CvtFP16ToFp32 : public ConverterInterface {
+public:
+  explicit CvtFP16ToFp32(Type srcTy, ISAFamily isaFamily,
+                         std::optional<RoundingMode> roundingMode)
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
+    numElements = 4;
+  }
+
+  std::optional<SmallVector<Value>>
+  convert(Location loc, ConversionPatternRewriter &rewriter,
+          const SmallVector<Value> &inVals) final {
+    SmallVector<Value> result;
+    for (const Value &v : inVals) {
+      if (isa<Float16Type>(srcTy)) {
+        result.push_back(Fp16ToFp32OneValue(loc, rewriter, v));
+      } else if (isa<BFloat16Type>(srcTy)) {
+        result.push_back(AMD::convertBf16ToFp32(loc, rewriter, v));
+      }
+    }
+    return result.empty() ? std::nullopt
+                          : std::optional<SmallVector<Value>>(result);
+  }
+
+private:
+  Type srcTy;
+};
+
+class CvtFp32ToFp16 : public ConverterInterface {
+public:
+  explicit CvtFp32ToFp16(ISAFamily isaFamily,
+                         std::optional<RoundingMode> roundingMode)
+      : ConverterInterface(isaFamily, roundingMode) {
+    numElements = 2;
+  }
+
+  std::optional<SmallVector<Value>>
+  convert(Location loc, ConversionPatternRewriter &rewriter,
+          const SmallVector<Value> &inVals) final {
+    Type dstTy = Float16Type::get(rewriter.getContext());
+    if (roundingMode == RoundingMode::RTNE) {
+      if (isCDNA4OrHigher(isaFamily))
+        return convertFp32ToFp16rtne(loc, rewriter, inVals, dstTy);
+      else {
+        SmallVector<Value> outVals(inVals.size());
+        for (const Value &v : inVals) {
+          outVals.push_back(LLVM::FPTruncOp::create(rewriter, loc, dstTy, v));
+        }
+        return outVals;
+      }
+    } else if (roundingMode == RoundingMode::RTZ) {
+      return convertFp32ToFp16rtz(loc, rewriter, inVals);
+    }
+    return std::nullopt;
+  }
+};
+
+class CvtFp32ToBf16 : public ConverterInterface {
+public:
+  explicit CvtFp32ToBf16(ISAFamily isaFamily,
+                         std::optional<RoundingMode> roundingMode)
+      : ConverterInterface(isaFamily, roundingMode) {
+    if (roundingMode == RoundingMode::RTNE) {
+      numElements = isCDNA4OrHigher(isaFamily) ? 2 : 1;
+    } else if (roundingMode == RoundingMode::RTZ)
+      numElements = 1;
+  }
+
+  std::optional<SmallVector<Value>> convert(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) final {
+    Type dstTy = Float16Type::get(rewriter.getContext());
+    ;
+    if (roundingMode == RoundingMode::RTNE) {
+      if (isCDNA4OrHigher(isaFamily))
+        return convertFp32ToFp16rtne(loc, rewriter, v, dstTy);
+      else {
+        auto result =
+            AMD::convertFp32ToBf16(loc, rewriter, v[0], RoundingMode::RTNE);
+        return SmallVector<Value>{result};
+      }
+    } else if (roundingMode == RoundingMode::RTZ) {
+      auto result =
+          AMD::convertFp32ToBf16(loc, rewriter, v[0], roundingMode.value());
+      return SmallVector<Value>{result};
+    }
+    return std::nullopt;
+  }
+};
+
+class CvtFp32ToFp8E4M3 : public ConverterInterface {
+public:
+  explicit CvtFp32ToFp8E4M3(Type dstTy, ISAFamily isaFamily,
+                            std::optional<RoundingMode> roundingMode)
+      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {
+    if (isa<Float8E4M3FNUZType>(dstTy)) {
+      numElements = hasFnuzFp8HW(isaFamily) ? 4 : 2;
+    } else if (isa<Float8E4M3FNType>(dstTy)) {
+      numElements = (isaFamily == ISAFamily::GFX1250) ? 8 : 4;
+    }
+  }
+
+  std::optional<SmallVector<Value>>
+  convert(Location loc, ConversionPatternRewriter &rewriter,
+          const SmallVector<Value> &inVals) final {
+
+    // support only for the RTNE rounding
+    if (roundingMode != RoundingMode::RTNE)
+      return std::nullopt;
+
+    bool useTwoStageConversion = false;
+
+    if (isa<Float8E4M3FNUZType>(dstTy)) {
+      if (hasFnuzFp8HW(isaFamily))
+        return Fp32ToFp8E4M3fnuzHW(loc, rewriter, inVals);
+      else
+        return Fp32ToFp8E4M3fnuzSW(loc, rewriter, inVals);
+    } else if (isa<Float8E4M3FNType>(dstTy)) {
+      if (isaFamily == ISAFamily::GFX1250) {
+        return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Fp8F32Op>(
+            loc, rewriter, inVals);
+      } else if (isaFamily == ISAFamily::CDNA4) {
+        return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkFp8F32Op>(
+            loc, rewriter, inVals);
+      } else
+        useTwoStageConversion = true;
+    }
+
+    if (useTwoStageConversion) {
+      auto fp16converter = CvtFp32ToFp16(isaFamily, roundingMode);
+      SmallVector<Value> fp16Values;
+      if (isa<Float8E4M3FNType>(dstTy)) {
+        auto fp16Values0 =
+            fp16converter.convert(loc, rewriter, {inVals[0], inVals[1]});
+        auto fp16Values1 =
+            fp16converter.convert(loc, rewriter, {inVals[2], inVals[3]});
+        assert(fp16Values0.has_value() && fp16Values1.has_value() &&
+               "fp32 to fp16 conversion must be completed");
+        fp16Values.append(*fp16Values0);
+        fp16Values.append(*fp16Values1);
+      } else {
+        auto maybeFp16Values = fp16converter.convert(loc, rewriter, inVals);
+        assert(maybeFp16Values.has_value() &&
+               "fp32 to fp16 conversion must be completed");
+        fp16Values.append(*maybeFp16Values);
+      }
+
+      auto fp8converter = CvtFp16ToFp8E4M3(dstTy, isaFamily, roundingMode);
+      return fp8converter.convert(loc, rewriter, fp16Values);
+    }
+    return std::nullopt;
+  }
+
+private:
+  Type dstTy;
+};
+
+class CvtFp32ToFp8E5M2 : public ConverterInterface {
+public:
+  explicit CvtFp32ToFp8E5M2(Type dstTy, ISAFamily isaFamily,
+                            std::optional<RoundingMode> roundingMode)
+      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {
+
+    if (roundingMode == RoundingMode::RTNE) {
+      if (isa<Float8E5M2FNUZType>(dstTy)) {
+        numElements = hasFnuzFp8HW(isaFamily) ? 4 : 2;
+      } else if (isa<Float8E5M2Type>(dstTy)) {
+        numElements = (isaFamily == ISAFamily::GFX1250) ? 8
+                      : (isaFamily == ISAFamily::CDNA4) ? 4
+                                                        : 2;
+      }
+    }
+    if (roundingMode == RoundingMode::RTZ) {
+      if (isa<Float8E5M2Type>(dstTy))
+        numElements = 4;
+    }
+  }
+
+  std::optional<SmallVector<Value>>
+  convert(Location loc, ConversionPatternRewriter &rewriter,
+          const SmallVector<Value> &inVals) final {
+
+    bool useTwoStageConversion = false;
+    if (roundingMode == RoundingMode::RTNE) {
+      if (isa<Float8E5M2FNUZType>(dstTy)) {
+        if (hasFnuzFp8HW(isaFamily))
+          return Fp32ToFp8E5M2fnuzHW(loc, rewriter, inVals);
+        else
+          return Fp32ToFp8E5M2fnuzSW(loc, rewriter, inVals);
+      } else if (isa<Float8E5M2Type>(dstTy)) {
+        if (isaFamily == ISAFamily::GFX1250) {
+          return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Bf8F32Op>(
+              loc, rewriter, inVals);
+        } else if (isaFamily == ISAFamily::CDNA4) {
+          return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkBf8F32Op>(
+              loc, rewriter, inVals);
+        } else
+          useTwoStageConversion = true;
+      }
+    } else if (roundingMode == RoundingMode::RTZ) {
+      if (isa<Float8E5M2Type>(dstTy))
+        return Fp32ToFp8E5M2rtz(loc, rewriter, inVals);
+    }
+
+    // Convert FP32 -> F16 -> BF8
+    if (useTwoStageConversion) {
+      auto fp16converter = CvtFp32ToFp16(isaFamily, roundingMode);
+      auto fp16Values = fp16converter.convert(loc, rewriter, inVals);
+      assert(fp16Values.has_value() &&
+             "fp32 to fp16 conversion must be completed");
+      auto fp8converter = CvtFp16ToFp8E5M2(dstTy, isaFamily, roundingMode);
+      return fp8converter.convert(loc, rewriter, *fp16Values);
+    }
+
+    return std::nullopt;
+  }
+
+private:
+  Type dstTy;
+};
+
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<triton::FpToFpOp, FpToFpOpConversion> {
   explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
@@ -1856,114 +2308,67 @@ struct FpToFpOpConversion
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
         isaFamily(isaFamily) {}
 
-  FailureOr<ConverterT>
-  getConversionFunc(Type srcTy, Type dstTy,
-                    std::optional<RoundingMode> roundingMode) const {
-    auto F8E4M3FNUZTyID = TypeID::get<Float8E4M3FNUZType>();
-    auto F8E5M2FNUZTyID = TypeID::get<Float8E5M2FNUZType>();
-    auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
-    auto F8E4M3FNTyID = TypeID::get<Float8E4M3FNType>();
-    auto F16TyID = TypeID::get<Float16Type>();
-    auto BF16TyID = TypeID::get<BFloat16Type>();
-    auto F32TyID = TypeID::get<Float32Type>();
-
-    auto undefRounding = static_cast<RoundingMode>(-1);
-
-    DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, ConverterT> srcMap = {
-        // F8 -> F16
-        {{F8E4M3FNUZTyID, F16TyID, undefRounding},
-         Fp8E4M3fnuzToFp16(isaFamily)},
-        {{F8E4M3FNTyID, F16TyID, undefRounding}, Fp8E4M3fnToFp16(isaFamily)},
-        {{F8E5M2FNUZTyID, F16TyID, undefRounding},
-         Fp8E5M2fnuzToFp16(isaFamily)},
-        {{F8E5M2TyID, F16TyID, undefRounding}, Fp8E5M2ToFp16(isaFamily)},
-        // F16 -> F8
-        {{F16TyID, F8E4M3FNTyID, RoundingMode::RTNE},
-         Fp16ToFp8E4M3fnRtne(isaFamily)},
-        {{F16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
-         Fp16ToFp8E5M2fnuz(isaFamily)},
-        {{F16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
-         Fp16ToFp8E4M3fnuz(isaFamily)},
-        {{F16TyID, F8E5M2TyID, RoundingMode::RTNE},
-         Fp16ToFp8E5M2rtne(isaFamily)},
-        {{F16TyID, F8E5M2TyID, RoundingMode::RTZ}, Fp16ToFp8E5M2rtz},
-        // F8 -> BF16
-        {{F8E5M2TyID, BF16TyID, undefRounding}, Fp8E5M2ToBf16(isaFamily)},
-        {{F8E5M2FNUZTyID, BF16TyID, undefRounding},
-         Fp8E5M2fnuzToBf16(isaFamily)},
-        {{F8E4M3FNTyID, BF16TyID, undefRounding}, Fp8E4M3fnToBf16(isaFamily)},
-        {{F8E4M3FNUZTyID, BF16TyID, undefRounding},
-         Fp8E4M3fnuzToBf16(isaFamily)},
-        // BF16 -> F8
-        {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE}, Bf16ToFp8E5M2(isaFamily)},
-        {{BF16TyID, F8E4M3FNTyID, RoundingMode::RTNE},
-         Bf16ToFp8E4M3fn(isaFamily)},
-        {{BF16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
-         Bf16ToFp8E5M2fnuz(isaFamily)},
-        {{BF16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
-         Bf16ToFp8E4M3fnuz(isaFamily)},
-        // F32 <-> F8
-        {{F32TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
-         Fp32ToFp8E4M3fnuz(isaFamily)},
-        {{F32TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
-         Fp32ToFp8E5M2fnuz(isaFamily)},
-        {{F32TyID, F8E4M3FNTyID, RoundingMode::RTNE},
-         Fp32ToFp8E4M3fnRtne(isaFamily)},
-        {{F32TyID, F8E5M2TyID, RoundingMode::RTNE},
-         Fp32ToFp8E5M2rtne(isaFamily)},
-        {{F32TyID, F8E5M2TyID, RoundingMode::RTZ}, Fp32ToFp8E5M2rtz},
-        {{F8E4M3FNUZTyID, F32TyID, undefRounding}, Fp8E4M3fnuzToFp32},
-        {{F8E5M2FNUZTyID, F32TyID, undefRounding}, Fp8E5M2fnuzToFp32},
-        {{F8E4M3FNTyID, F32TyID, undefRounding}, Fp8E4M3fnToFp32},
-        {{F8E5M2TyID, F32TyID, undefRounding}, Fp8E5M2ToFp32},
-        // F32 -> F16 with RTZ
-        {{F32TyID, F16TyID, RoundingMode::RTZ}, convertFp32ToFp16rtz},
-    };
-    std::tuple<TypeID, TypeID, RoundingMode> key = {
-        srcTy.getTypeID(), dstTy.getTypeID(),
-        roundingMode.value_or(undefRounding)};
-    if (srcMap.count(key) == 0) {
-      return failure();
+  std::unique_ptr<ConverterInterface>
+  getConverter(Type srcTy, Type dstTy,
+               std::optional<RoundingMode> roundingMode) const {
+    if ((isa<Float8E4M3FNUZType, Float8E4M3FNType>(srcTy)) &&
+        (isa<Float16Type>(dstTy))) {
+      return std::make_unique<CvtFp8E4M3ToFp16>(srcTy, isaFamily, roundingMode);
     }
-    return srcMap.lookup(key);
-  }
-
-  int getNumElements(
-      Type srcElementType, Type dstElementType,
-      std::optional<::mlir::triton::RoundingMode> roundingMode) const {
-    const bool isRTZ = roundingMode == RoundingMode::RTZ;
-    const bool isRTNE = roundingMode == RoundingMode::RTNE;
-
-    // numElements = 2 for :
-    // fp32 -> fp16 with RTZ
-    // fp32/fp16 -> nanoo fp8/bf8
-    // fp8e4m3fnuz -> bf16
-    if ((isa<Float32Type>(srcElementType) && isa<Float16Type>(dstElementType) &&
-         isRTZ) ||
-        (isa<Float32Type, Float16Type>(srcElementType) &&
-         isa<Float8E4M3FNUZType, Float8E5M2FNUZType>(dstElementType) &&
-         !hasFnuzFp8HW(isaFamily)) ||
-        (isa<Float8E4M3FNUZType>(srcElementType) && dstElementType.isBF16() &&
-         !hasFnuzFp8HW(isaFamily))) {
-      return 2;
+    if ((isa<Float8E5M2FNUZType, Float8E5M2Type>(srcTy)) &&
+        (isa<Float16Type>(dstTy))) {
+      return std::make_unique<CvtFp8E5M2ToFp16>(srcTy, isaFamily, roundingMode);
     }
-
-    // special downcast cases for GFX1250+
-    if ((isaFamily == ISAFamily::GFX1250) &&
-        ((isa<Float32Type, Float16Type, BFloat16Type>(srcElementType))) &&
-        ((isa<Float8E4M3FNType, Float8E5M2Type>(dstElementType))) && isRTNE) {
-      return 8;
+    if ((isa<Float8E4M3FNUZType, Float8E4M3FNType>(srcTy)) &&
+        (isa<BFloat16Type>(dstTy))) {
+      return std::make_unique<CvtFp8E4M3ToBf16>(srcTy, isaFamily, roundingMode);
     }
-
-    // special upcast cases for GFX1250+
-    if ((isaFamily == ISAFamily::GFX1250) &&
-        ((isa<Float8E5M2Type, Float8E4M3FNType>(srcElementType))) &&
-        ((isa<Float16Type, BFloat16Type, Float32Type>(dstElementType)))) {
-      return 8;
+    if ((isa<Float8E5M2FNUZType, Float8E5M2Type>(srcTy)) &&
+        (isa<BFloat16Type>(dstTy))) {
+      return std::make_unique<CvtFp8E5M2ToBf16>(srcTy, isaFamily, roundingMode);
     }
-
-    // return default value
-    return 4;
+    if ((isa<Float8E4M3FNUZType, Float8E4M3FNType>(srcTy)) &&
+        (isa<Float32Type>(dstTy))) {
+      return std::make_unique<CvtFp8E4M3ToFp32>(srcTy, isaFamily, roundingMode);
+    }
+    if ((isa<Float8E5M2FNUZType, Float8E5M2Type>(srcTy)) &&
+        (isa<Float32Type>(dstTy))) {
+      return std::make_unique<CvtFp8E5M2ToFp32>(srcTy, isaFamily, roundingMode);
+    }
+    if ((isa<Float16Type>(srcTy)) &&
+        (isa<Float8E4M3FNUZType, Float8E4M3FNType>(dstTy))) {
+      return std::make_unique<CvtFp16ToFp8E4M3>(dstTy, isaFamily, roundingMode);
+    }
+    if ((isa<Float16Type>(srcTy)) &&
+        (isa<Float8E5M2FNUZType, Float8E5M2Type>(dstTy))) {
+      return std::make_unique<CvtFp16ToFp8E5M2>(dstTy, isaFamily, roundingMode);
+    }
+    if ((isa<BFloat16Type>(srcTy)) &&
+        (isa<Float8E4M3FNType, Float8E4M3FNUZType>(dstTy))) {
+      return std::make_unique<CvtBf16ToFp8E4M3>(dstTy, isaFamily, roundingMode);
+    }
+    if ((isa<BFloat16Type>(srcTy)) &&
+        (isa<Float8E5M2Type, Float8E5M2FNUZType>(dstTy))) {
+      return std::make_unique<CvtBf16ToFp8E5M2>(dstTy, isaFamily, roundingMode);
+    }
+    if ((isa<Float16Type, BFloat16Type>(srcTy)) && (isa<Float32Type>(dstTy))) {
+      return std::make_unique<CvtFP16ToFp32>(srcTy, isaFamily, roundingMode);
+    }
+    if ((isa<Float32Type>(srcTy)) && (isa<Float16Type>(dstTy))) {
+      return std::make_unique<CvtFp32ToFp16>(isaFamily, roundingMode);
+    }
+    if ((isa<Float32Type>(srcTy)) && (isa<BFloat16Type>(dstTy))) {
+      return std::make_unique<CvtFp32ToBf16>(isaFamily, roundingMode);
+    }
+    if ((isa<Float32Type>(srcTy)) &&
+        (isa<Float8E5M2FNUZType, Float8E5M2Type>(dstTy))) {
+      return std::make_unique<CvtFp32ToFp8E5M2>(dstTy, isaFamily, roundingMode);
+    }
+    if ((isa<Float32Type>(srcTy)) &&
+        (isa<Float8E4M3FNUZType, Float8E4M3FNType>(dstTy))) {
+      return std::make_unique<CvtFp32ToFp8E4M3>(dstTy, isaFamily, roundingMode);
+    }
+    return nullptr;
   }
 
   SmallVector<Value> createDestOps(triton::FpToFpOp op, OpAdaptor adaptor,
@@ -1975,83 +2380,21 @@ struct FpToFpOpConversion
     auto dstElementType = getElementTypeOrSelf(op.getResult());
 
     auto roundingMode = op.getRounding();
-    if (srcElementType.isF32() &&
-        (dstElementType.isF16() || dstElementType.isBF16())) {
-      assert(roundingMode.has_value() &&
-             "rounding mode must be specified for fp32->fp16/bf16 conversion");
-      if (roundingMode.value() == RoundingMode::RTNE) {
-        return AMD::convertFp32ToF16rtne(loc, rewriter, srcElementType,
-                                         dstElementType, operands, isaFamily);
-      }
-    }
-    if (srcElementType.isF32() && dstElementType.isBF16()) {
-      return {AMD::convertFp32ToBf16(loc, rewriter, operands[0][0],
-                                     RoundingMode::RTZ)};
+
+    auto converter = getConverter(srcElementType, dstElementType, roundingMode);
+    if (converter == nullptr) {
+      std::string rmError;
+      if (roundingMode.has_value())
+        rmError = std::string(" with rounding mode ") +
+                  stringifyRoundingMode(roundingMode.value()).str();
+      op->emitError("Unsupported conversion from ")
+          << srcElementType << " to " << dstElementType << rmError;
+      return SmallVector<Value>{};
     }
 
-    size_t numElements =
-        getNumElements(srcElementType, dstElementType, roundingMode);
-
-    // fp32 -> fp8 with rtne can be done in two steps:
-    // - fp32 -> fp16 with rtne and
-    // - fp16 -> fp8 with rtne
-    // with the following exceptions:
-    // 1. fp32 -> ocp fp8/bf8 on CDNA4: has hardware support
-    // 2. fp32 -> nanoo fp8/bf8 on CDNA3: has hardware support
-    // 3. fp32 -> ocp fp8/bf8 on non-CDNA4: has software support
-    bool useFP16IntermediateSrc =
-        srcElementType.isF32() && !dstElementType.isF16() &&
-        !(isCDNA4OrHigher(isaFamily) &&
-          (llvm::isa<Float8E4M3FNType, Float8E4M3FNUZType, Float8E5M2Type,
-                     Float8E5M2FNUZType>(dstElementType))) &&
-        !(isaFamily == ISAFamily::CDNA3 &&
-          (llvm::isa<Float8E4M3FNUZType, Float8E5M2FNUZType>(
-              dstElementType))) &&
-        !(!isCDNA4OrHigher(isaFamily) &&
-          (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(dstElementType)));
-
-    // fp8/bf8->f32, if neither nanoo fp8/bf8 on CDNA3 nor ocp fp8/bf8 on CDNA4,
-    // is done in two steps: fp8/bf8->fp16 and fp16->fp32
-    bool isDstFP32 = dstElementType.isF32();
-    bool useFP16IntermediateDst =
-        (isDstFP32 &&
-         !(isCDNA4OrHigher(isaFamily) &&
-           (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(srcElementType))) &&
-         !(isaFamily == ISAFamily::CDNA3 &&
-           (llvm::isa<Float8E4M3FNUZType, Float8E5M2FNUZType>(
-               srcElementType))));
-
-    Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
-    Type dstType = useFP16IntermediateDst ? f16_ty : dstElementType;
-
-    SmallVector<Value> inVals;
-    inVals.reserve(std::min(numElements, operands.size()));
-    for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
-      inVals.push_back(operands[i][0]);
-    }
-    bool isSrcFP16 = srcElementType.isF16();
-    bool isSrcBF16 = srcElementType.isBF16();
-
-    if ((isSrcFP16 || isSrcBF16) && isDstFP32) {
-      SmallVector<Value> outVals;
-      for (Value &v : inVals) {
-        if (isSrcFP16)
-          outVals.push_back(Fp16ToFp32OneValue(loc, rewriter, v));
-        else
-          outVals.push_back(AMD::convertBf16ToFp32(loc, rewriter, v));
-      }
-      return outVals;
-    }
-    if (useFP16IntermediateSrc) {
-      if (isCDNA4(isaFamily))
-        inVals = convertFp32ToFp16rtne(loc, rewriter, inVals, f16_ty);
-      else {
-        for (Value &v : inVals)
-          v = Fp32ToFp16rtneOneValue(loc, rewriter, v);
-      }
-    }
-
-    if (dstType.isFloat() && (dstType.getIntOrFloatBitWidth() == 8)) {
+    // set clamping attribute for FP8 data types
+    if (dstElementType.isFloat() &&
+        (dstElementType.getIntOrFloatBitWidth() == 8)) {
       auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
       if (func) {
         using attrType = triton::amdgpu::SetFP8ClampingAttr;
@@ -2062,32 +2405,25 @@ struct FpToFpOpConversion
       }
     }
 
-    inVals.resize(numElements, b.undef(typeConverter->convertType(srcType)));
-    SmallVector<Value> outVals;
-    if (srcType != dstType) {
-      auto getCvtFunc = getConversionFunc(srcType, dstType, roundingMode);
-      if (failed(getCvtFunc)) {
-        std::string rmError;
-        if (roundingMode.has_value())
-          rmError = std::string(" with rounding mode ") +
-                    stringifyRoundingMode(roundingMode.value()).str();
-        op->emitError("Unsupported conversion from ")
-            << srcType << " to " << dstType << rmError;
-        return outVals;
-      } else {
-        auto cvtFunc = getCvtFunc.value();
-        outVals = cvtFunc(loc, rewriter, inVals);
-      }
-    } else {
-      outVals = inVals;
+    const size_t numElements = converter->getNumElements();
+
+    // extract a chunk of input element defined by the converter (i.e., the
+    // instruction property) filled the rest of the values with undefs if the
+    // input vector is too small
+    SmallVector<Value> inVals;
+    inVals.reserve(std::min(numElements, operands.size()));
+    for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
+      inVals.push_back(operands[i][0]);
     }
+    inVals.resize(numElements,
+                  b.undef(typeConverter->convertType(srcElementType)));
+
+    auto maybeOutVals = converter->convert(loc, rewriter, inVals);
+    assert(maybeOutVals.has_value());
+    auto outVals = maybeOutVals.value();
 
     assert(outVals.size() == inVals.size());
     outVals.resize(std::min(numElements, operands.size()));
-    if (useFP16IntermediateDst)
-      for (Value &v : outVals)
-        v = Fp16ToFp32OneValue(loc, rewriter, v);
-    // Pack values
     return outVals;
   }
 
