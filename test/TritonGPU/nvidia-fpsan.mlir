@@ -259,7 +259,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK-LABEL: @tcgen05_mma_two_ctas
   tt.func public @tcgen05_mma_two_ctas() {
     // CHECK: ttg.global_scratch_alloc {{.*}}shared_cluster_state
-    // CHECK: ttng.fence_async_shared {bCluster = true}
+    // CHECK: ttng.cluster_barrier
+    // CHECK-NEXT: {{.*}} = ttg.local_load
     // CHECK: tt.store
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: ttng.cluster_barrier
@@ -302,7 +303,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func public @tmem_copy_commit_two_ctas() {
     // CHECK: ttg.global_scratch_alloc {{.*}}shared_cluster_state
     // CHECK-NOT: ttng.tmem_copy
-    // CHECK: ttng.fence_async_shared {bCluster = true}
+    // CHECK: ttng.cluster_barrier
+    // CHECK-NEXT: {{.*}} = ttg.local_load
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: ttng.cluster_barrier
     // CHECK: ttg.barrier global_read|global_write
@@ -332,7 +334,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: @tcgen05_mma_scaled_two_ctas
   tt.func public @tcgen05_mma_scaled_two_ctas() {
     // CHECK: ttg.global_scratch_alloc {{.*}}shared_cluster_state
-    // CHECK: ttng.fence_async_shared {bCluster = true}
+    // CHECK: ttng.cluster_barrier
+    // CHECK-NEXT: {{.*}} = ttg.local_load
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: ttng.cluster_barrier
     // CHECK: ttng.arrive_barrier

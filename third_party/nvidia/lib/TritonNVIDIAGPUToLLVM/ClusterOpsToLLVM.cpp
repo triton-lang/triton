@@ -86,13 +86,6 @@ static void createMBarrierWait(OpBuilder &b, Location loc, Value barrierPtr,
   ptxBuilder.launch(b, loc, void_ty(b.getContext()));
 }
 
-static void createFenceSCGpu(OpBuilder &b, Location loc) {
-  PTXBuilder ptxBuilder;
-  auto &fence = *ptxBuilder.create("fence.sc.gpu");
-  fence();
-  ptxBuilder.launch(b, loc, void_ty(b.getContext()));
-}
-
 template <typename EmitFn>
 LogicalResult lowerClusterSyncForAllWarps(Operation *op,
                                           ConversionPatternRewriter &rewriter,
@@ -252,7 +245,6 @@ struct ClusterBarrierOpConversion
     Value parityPtr = b.gep(ptrTy, i8_ty, barrierPtr, LLVM::GEPArg(8));
 
     b.barrier(triton::gpu::AddrSpace::Local);
-    createFenceSCGpu(rewriter, loc);
     Value parity = b.load(i32_ty, parityPtr);
     Value tid = getThreadId(rewriter, loc);
     Value pred = b.icmp_eq(tid, b.i32_val(0));
@@ -264,7 +256,6 @@ struct ClusterBarrierOpConversion
       createMBarrierArrive(rewriter, loc, pred, peerBarrierPtr);
     }
     createMBarrierWait(rewriter, loc, barrierPtr, parity);
-    createFenceSCGpu(rewriter, loc);
     targetInfo->storeShared(rewriter, loc, parityPtr,
                             b.xor_(parity, b.i32_val(1)), pred);
     b.barrier(triton::gpu::AddrSpace::Local);
