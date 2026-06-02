@@ -1669,13 +1669,19 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
         idx = fn.arg_names.index(k)
         arg_types[idx] = str_to_ty(v, None)
 
+    def constexpr_type(value):
+        if isinstance(value, builtins.tuple):
+            fields = value._fields if is_namedtuple(type(value)) else None
+            return language.tuple_type([constexpr_type(v) for v in value], fields)
+        return constexpr(value).type
+
     def apply_constexpr_types(argument, indices, value):
         index = indices.pop()
         if len(indices) == 0:
             if isinstance(argument, list):
-                argument[index] = constexpr(value).type
+                argument[index] = constexpr_type(value)
             else:
-                argument.types[index] = constexpr(value).type
+                argument.types[index] = constexpr_type(value)
         else:
             apply_constexpr_types(argument[index], indices, value)
 
