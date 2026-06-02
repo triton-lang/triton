@@ -1712,7 +1712,7 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
         num1 = tl.full((1, ), 1, dtype=triton_dtype).item()
 
         ptrs = data + tl.arange(0, 128)
-        while tl.atomic_cas(Lock, num0, num1, SEM) == 1:
+        while tl.atomic_cas(Lock, num0, num1, sem=SEM) == 1:
             pass
 
         tl.store(ptrs, tl.load(ptrs) + 1.0)
