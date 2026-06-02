@@ -1168,10 +1168,6 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 @pytest.mark.parametrize("cta_layout", [(), ((1, 0), ), ((1, 0), (2, 0))], ids=["1cta", "2ctas", "4ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout, profile=False):
-    _test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout)
-
-
-def _test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout):
     device = "cuda"
 
     def alloc_fn(size: int, alignment: int, stream):
@@ -1204,8 +1200,8 @@ def _test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout):
 def test_op_consan(dtype, cta_layout):
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.instrumentation_mode = "consan"
-        _test_op(Z=1, H=1, N_CTX=1024, HEAD_DIM=64, causal=False, dtype=dtype, use_tmem_red=False,
-                 cta_layout=cta_layout)
+        test_op(Z=1, H=1, N_CTX=1024, HEAD_DIM=64, causal=False, dtype=dtype, use_tmem_red=False,
+                cta_layout=cta_layout)
 
 
 # ===-----------------------------------------------------------------------===#
