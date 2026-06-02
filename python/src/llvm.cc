@@ -44,6 +44,7 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
+#include <optional>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -336,8 +337,18 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
 std::string translateLLVMIRToASM(
     llvm::Module &module, const std::string &triple, const std::string &proc,
     const std::string &features, const std::vector<std::string> &flags,
-    bool enable_fp_fusion, bool isObject, bool canonicalizeGEP) {
+    bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
+    bool disableSched = false) {
   using namespace mlir;
+
+  auto amdgcnAsLevel = triton::tools::getStrEnv("TRITON_ENABLE_AMDGCN_AS");
+  // TRITON_ENABLE_AMDGPU_RA_HINTS=1 sets the RA hint flags without running the
+  // amdgcnas post-assembly pass. Lets us isolate the LLVM flag vs.
+  // post-assembly contributions. Back-compat: AMDGCN_AS=1|2 still implies it.
+  auto raHintsOnly = triton::tools::getStrEnv("TRITON_ENABLE_AMDGPU_RA_HINTS");
+  if (amdgcnAsLevel == "1" || amdgcnAsLevel == "2" || raHintsOnly == "1") {
+    setLLVMOption<bool>("amdgpu-mfma-vgpr-form", false);
+  }
 
   // Apply flags
   for (const std::string &flag : flags) {
@@ -359,6 +370,17 @@ std::string translateLLVMIRToASM(
         setLLVMOption<bool>(flag.str(), true);
       }
     }
+  }
+
+  // Disable LLVM's pre- and post-RA machine schedulers when the LLIR scheduler
+  // already scheduled this kernel (signalled by the caller), so its instruction
+  // ordering is preserved through codegen. Use RAII so these process-global
+  // cl::opt values are restored when this compile finishes, instead of leaking
+  // into subsequent kernels (including the NVIDIA backend in the same process).
+  std::optional<ScopedLLVMOption<bool>> mischedGuard, postMischedGuard;
+  if (disableSched) {
+    mischedGuard.emplace("enable-misched", false);
+    postMischedGuard.emplace("enable-post-misched", false);
   }
 
   // inline everything
@@ -803,8 +825,8 @@ void init_triton_llvm(py::module_ &m) {
   m.def("translate_to_asm",
         [](std::string llvmIR, std::string triple, std::string proc,
            std::string features, std::vector<std::string> flags,
-           bool enable_fp_fusion, bool isObject,
-           bool canonicalizeGEP) -> py::object {
+           bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
+           bool disableSched) -> py::object {
           std::string obj;
           {
             // when allow_threads goes out of scope, gil will be released
@@ -823,7 +845,7 @@ void init_triton_llvm(py::module_ &m) {
             }
             obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
                                        enable_fp_fusion, isObject,
-                                       canonicalizeGEP);
+                                       canonicalizeGEP, disableSched);
           }
           if (isObject)
             return py::object(py::bytes(obj.c_str(), obj.size()));

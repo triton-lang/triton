@@ -472,7 +472,10 @@ class CUDABackend(BaseBackend):
         features = get_features(opt, self.target.arch)
         flags = ["nvptx-mad-wide-opt"]
         canonicalize_gep = "fpsan" in opt.instrumentation_mode
-        ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep)
+        # Last arg (disableSched): NVIDIA does not run the LLIR scheduler, so
+        # never disable LLVM's machine schedulers.
+        ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False,
+                                    canonicalize_gep, False)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1

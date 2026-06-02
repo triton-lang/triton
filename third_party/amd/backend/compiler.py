@@ -1,6 +1,7 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
+from triton.tools.amdgcnas import amdgcn_as
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
@@ -514,8 +515,24 @@ class HIPBackend(BaseBackend):
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-y")
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-z")
 
+        # TRITON_ENABLE_AMDGPU_RA_HINTS=1 sets the RA hint attrs without running
+        # the amdgcnas post-assembly pass. Lets us isolate the LLVM flag vs.
+        # post-assembly contributions. Back-compat: AMDGCN_AS=1|2 still implies
+        # the RA hint.
+        ra_hints_only = os.environ.get("TRITON_ENABLE_AMDGPU_RA_HINTS", "0") == "1"
+        if os.environ.get("TRITON_ENABLE_AMDGCN_AS", "0") in ("1", "2") or ra_hints_only:
+            kernel_fn.add_fn_attr("amdgpu-agpr-alloc", "256")
+
         if knobs.amd.scalarize_packed_fops:
             amd.add_scalarize_packed_fops_llvm_pass(kernel_fn)
+
+        # Run the LLIR scheduler and record whether it actually scheduled this
+        # kernel. make_amdgcn uses this to disable LLVM's machine schedulers
+        # only when the LLIR scheduler took effect (so misched stays enabled if
+        # the pass is off or bails out).
+        metadata["llir_scheduled"] = bool(
+            os.environ.get("TRITON_ENABLE_LLIR_SCHED")
+            and amd.add_llir_schedule_pass(kernel_fn, options.arch))
 
         # Get some metadata
         metadata["num_warps"] = total_warps_num
@@ -557,8 +574,19 @@ class HIPBackend(BaseBackend):
                                                amd.TARGET_TRIPLE, options.arch, features, flags,
                                                options.enable_fp_fusion, False, knobs.amd.swap_mir_enable_misched)
         else:
+            # Disable LLVM's pre/post-RA machine schedulers only when the LLIR
+            # scheduler scheduled this kernel (recorded in make_llir), so its
+            # instruction ordering is preserved. Otherwise leave them enabled.
+            disable_sched = bool(metadata.get("llir_scheduled", False))
             amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags,
-                                           options.enable_fp_fusion, False, False)
+                                           options.enable_fp_fusion, False, False, disable_sched)
+
+        amdgcn_as_level = os.environ.get("TRITON_ENABLE_AMDGCN_AS", "0")
+        if amdgcn_as_level == "1":
+            amdgcn = amdgcn_as(amdgcn, False)
+        elif amdgcn_as_level == "2":
+            amdgcn = amdgcn_as(amdgcn, True)
+
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
