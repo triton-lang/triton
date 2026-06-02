@@ -54,6 +54,10 @@ public:
       return;
     }
 
+    // FPSAN records the setting before erasing the MMAv5 operations.
+    if (!firstMatmul && mod->hasAttr(AttrTwoCTAsName))
+      return;
+
     bool twoCTAValue = firstMatmul ? firstTwoCTA : false;
     mod->setAttr(AttrTwoCTAsName, BoolAttr::get(mod.getContext(), twoCTAValue));
   }
