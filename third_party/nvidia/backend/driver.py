@@ -72,7 +72,17 @@ def _cuda_driver_is_active():
     cu_init = libcuda.cuInit
     cu_init.argtypes = [ctypes.c_uint]
     cu_init.restype = ctypes.c_int
-    if cu_init(0) != 0:
+    rc = cu_init(0)
+    # CUDA_ERROR_NOT_INITIALIZED (3) is what cuInit returns in a process that was
+    # fork()ed after its parent already initialized CUDA (e.g. a PyTorch Inductor
+    # compile worker). libcuda loaded and a GPU exists; only this fork's CUDA
+    # context is unusable. Treat that as "GPU present" so driver selection does
+    # not spuriously fail (pytorch/pytorch#184643). cuDeviceGetCount would also
+    # return rc=3 here, so short-circuit before it.
+    CUDA_ERROR_NOT_INITIALIZED = 3
+    if rc == CUDA_ERROR_NOT_INITIALIZED:
+        return True
+    if rc != 0:
         return False
 
     cu_device_get_count = libcuda.cuDeviceGetCount
