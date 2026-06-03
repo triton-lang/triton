@@ -306,14 +306,10 @@ private:
 
 // Widening for the VGPR sibling `amdgpu.buffer_load`. The op already carries
 // a `$contiguity` attribute that the lowering consumes via
-// `vec = std::max(vec, op.getContiguity())`, but nothing in the pipeline
-// stamps it -- so vectorization is otherwise determined solely by AxisInfo
-// during lowering. This pattern clamps the precomputed contiguity to a
-// legal VGPR `buffer_load` transaction width (max 128 bits, power of two)
-// and stamps it. The precompute combines AxisInfo with the constant-tensor
-// evaluator (`ConstantTensorValueAnalysis`) so we also catch per-thread
-// memory deltas hidden behind mod/div arithmetic that AxisInfo cannot see
-// (e.g. the MXFP4 B-scale pre-shuffle in `mxfp4_gemm_gfx950.py`).
+// `vec = std::max(vec, op.getContiguity())`, but direct Gluon buffer_load ops
+// may reach this point with the default hint. This pattern clamps the shared
+// global-memory contiguity proof to a legal VGPR transaction width (max 128
+// bits, power of two) and stamps it.
 struct CoalesceBufferLoadWrites
     : public OpRewritePattern<ttag::BufferLoadOp> {
   CoalesceBufferLoadWrites(
@@ -383,6 +379,22 @@ public:
       return contiguity;
     };
 
+    // Shared proof source for AMD buffer-load-like global reads. AxisInfo covers
+    // ordinary single-axis contiguity; the symbolic register-order proof covers
+    // cross-axis per-thread contiguity (e.g. MXFP4 scales). Sink-specific code
+    // below still applies VGPR vs direct-to-LDS legality constraints.
+    auto getGlobalBufferContiguity = [&](Value ptr, Value offsets,
+                                         Value mask) {
+      auto ptrTy = mlir::LLVM::AMD::getPointerTypeWithShape(ptr, offsets);
+      auto elemNumBits = triton::getPointeeBitWidth(ptrTy);
+      unsigned contiguity = axisAnalysis.getContiguity(offsets, elemNumBits);
+      unsigned symbolicContiguity =
+          triton::AMD::getPerThreadContiguityFromLinearLayout(offsets,
+                                                              axisAnalysis);
+      contiguity = std::max(contiguity, symbolicContiguity);
+      return applyMaskAlignment(contiguity, mask);
+    };
+
     DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> asyncCopyContiguity;
     m->walk([&](ttg::AsyncCopyGlobalToLocalOp copyOp) {
       unsigned contiguity =
@@ -392,33 +404,17 @@ public:
     });
     DenseMap<ttag::BufferLoadToLocalOp, unsigned> bufferLoadContiguity;
     m->walk([&](ttag::BufferLoadToLocalOp copyOp) {
-      auto ptrTy = mlir::LLVM::AMD::getPointerTypeWithShape(
-          copyOp.getPtr(), copyOp.getOffsets());
-      auto elemNumBits = triton::getPointeeBitWidth(ptrTy);
-      unsigned contiguity =
-          axisAnalysis.getContiguity(copyOp.getOffsets(), elemNumBits);
       bufferLoadContiguity.insert(
-          {copyOp, applyMaskAlignment(contiguity, copyOp.getMask())});
+          {copyOp, getGlobalBufferContiguity(copyOp.getPtr(),
+                                             copyOp.getOffsets(),
+                                             copyOp.getMask())});
     });
     DenseMap<ttag::BufferLoadOp, unsigned> bufferLoadVgprContiguity;
     m->walk([&](ttag::BufferLoadOp loadOp) {
-      auto ptrTy = mlir::LLVM::AMD::getPointerTypeWithShape(
-          loadOp.getPtr(), loadOp.getOffsets());
-      auto elemNumBits = triton::getPointeeBitWidth(ptrTy);
-      unsigned contiguity =
-          axisAnalysis.getContiguity(loadOp.getOffsets(), elemNumBits);
-      // Extra lower bound: per-register contiguity measured along the offsets
-      // tensor's LinearLayout register order. AxisInfo's per-axis model cannot
-      // express MXFP4 B-scale contiguity because one thread's consecutive bytes
-      // are formed jointly by row and column deltas. The AMD analysis below
-      // symbolically evaluates the offset over register/lane layout coordinates
-      // and proves offset(reg r) - offset(reg 0) == r for the accepted prefix.
-      unsigned evalContig =
-          triton::AMD::getPerThreadContiguityFromLinearLayout(
-              loadOp.getOffsets(), axisAnalysis);
-      contiguity = std::max(contiguity, evalContig);
       bufferLoadVgprContiguity.insert(
-          {loadOp, applyMaskAlignment(contiguity, loadOp.getMask())});
+          {loadOp, getGlobalBufferContiguity(loadOp.getPtr(),
+                                             loadOp.getOffsets(),
+                                             loadOp.getMask())});
     });
     patterns.add<CoalesceAsyncCopyWrites>(targetInfo, asyncCopyContiguity,
                                           context);
