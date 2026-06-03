@@ -194,7 +194,7 @@ def _select_reduce_forward_config(
         chain_factor = 1
 
     if num_warps is None:
-        num_warps = 8 if (use_rowidxs or chain_factor > 1) else 4
+        num_warps = 8 if (x_dtype.itemsize >= 2 and (use_rowidxs or chain_factor > 1)) else 4
 
     return OptFlags(
         block_s0, block_x_s1, block_y_s1, num_warps, use_static_loop,

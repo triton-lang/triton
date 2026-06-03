@@ -1072,3 +1072,15 @@ def test_aggregate_replace_ir():
     # Original aggregate still references original tensor.
     # CHECK: call @{{.*}}anchor{{.*}}([[A]])
     anchor(state.vals)
+
+
+def test_dot_fp16_accumulator():
+
+    @triton.jit
+    def fp16_acc_kernel():
+        c = tl.zeros([16, 16], dtype=tl.float16)
+        a = tl.full([16, 16], 1, dtype=tl.float16)
+        b = tl.full([16, 16], 1, dtype=tl.float16)
+        tl.dot(a, b, c)
+
+    run_parser(fp16_acc_kernel)
