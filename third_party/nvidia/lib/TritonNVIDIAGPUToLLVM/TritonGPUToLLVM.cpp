@@ -24,6 +24,7 @@
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 
 #include "Allocation.h"
 #include "PatternTritonGPUOpToLLVM.h"
@@ -77,12 +78,6 @@ public:
     addLegalOp<triton::gpu::WarpYieldOp>();
     addLegalOp<triton::gpu::WarpSpecializePartitionsOp>();
     addLegalOp<triton::gpu::WarpReturnOp>();
-    // LLVM conversion may synthesize more cluster barriers. Lower all
-    // warp-specialized barriers together after conversion.
-    addDynamicallyLegalOp<triton::nvidia_gpu::ClusterBarrierOp>(
-        [](triton::nvidia_gpu::ClusterBarrierOp op) {
-          return bool(op->getParentOfType<triton::gpu::WarpSpecializeOp>());
-        });
   }
 };
 
@@ -127,6 +122,7 @@ struct ConvertTritonGPUToLLVM
       if (failed(cleanupPm.run(mod)))
         return signalPassFailure();
     }
+    mlir::triton::nvidia_gpu::runClusterBarrierMbarAllocator(mod);
     bool hasGlobalScratchAlloc = false;
     mod.walk([&](triton::gpu::GlobalScratchAllocOp) {
       hasGlobalScratchAlloc = true;
@@ -180,7 +176,8 @@ struct ConvertTritonGPUToLLVM
                                                  targetInfo, benefit);
     populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit,
                                     targetInfo);
-    populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
+    populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit,
+                                     targetInfo);
     mlir::triton::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
                                                     targetInfo, benefit);
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
@@ -221,9 +218,6 @@ struct ConvertTritonGPUToLLVM
 
     TritonLLVMConversionTarget convTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
-      return signalPassFailure();
-
-    if (failed(lowerWarpSpecializedClusterBarriers(mod, targetInfo)))
       return signalPassFailure();
 
     // Lower CF ops separately to avoid breaking analysis.

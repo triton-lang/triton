@@ -23,16 +23,22 @@
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "llvm/ADT/DenseMap.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <type_traits>
+
+namespace mlir::triton {
+#define GEN_PASS_DEF_INITIALIZEWSCLUSTERBARRIERS
+#include "TritonNVIDIAGPUToLLVM/Passes.h.inc"
+} // namespace mlir::triton
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -90,13 +96,14 @@ static void createMBarrierWait(OpBuilder &b, Location loc, Value barrierPtr,
   ptxBuilder.launch(b, loc, void_ty(b.getContext()));
 }
 
-static Value getWSRegionThread0Predicate(OpBuilder &rewriter, Location loc) {
+static Value getClusterBarrierMbarPtr(Location loc, RewriterBase &rewriter,
+                                      FunctionOpInterface func, int64_t offset,
+                                      const NVIDIA::TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // This runs after GPU and arith conversion, so emit only NVVM/LLVM ops.
-  Value tid = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
-  int startThreadId =
-      getWarpGroupStartThreadId(rewriter.getInsertionBlock()).value_or(0);
-  return b.icmp_eq(tid, b.i32_val(startThreadId));
+  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
+                                          targetInfo.getSharedAddressSpace());
+  return b.gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func),
+               b.i32_val(offset));
 }
 
 template <typename EmitFn>
@@ -173,89 +180,49 @@ struct ClusterSyncOpConversion : public ConvertOpToLLVMPattern<Op> {
     return success();
   }
 };
-} // namespace
 
-void mlir::triton::NVIDIA::populateClusterOpsToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<ClusterSyncOpConversion<triton::nvidia_gpu::ClusterArriveOp>,
-               ClusterSyncOpConversion<triton::nvidia_gpu::ClusterWaitOp>,
-               ClusterSyncOpConversion<triton::nvidia_gpu::ClusterBarrierOp>>(
-      typeConverter, benefit);
-  return;
-}
+struct ClusterBarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ClusterBarrierOp> {
+  ClusterBarrierOpConversion(LLVMTypeConverter &typeConverter,
+                             PatternBenefit benefit,
+                             const NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
-LogicalResult mlir::triton::NVIDIA::lowerWarpSpecializedClusterBarriers(
-    ModuleOp mod, const NVIDIA::TargetInfo &targetInfo) {
-  Builder builder(mod.getContext());
-  auto funcs = mod.getOps<LLVM::LLVMFuncOp>();
-  auto kernelIt = llvm::find_if(
-      funcs, [](LLVM::LLVMFuncOp func) { return triton::isKernel(func); });
-  if (kernelIt == funcs.end())
-    return success();
-  LLVM::LLVMFuncOp kernel = *kernelIt;
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::ClusterBarrierOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto mbarOffset = op->getAttrOfType<IntegerAttr>(
+        triton::nvidia_gpu::kClusterBarrierMbarOffsetAttrName);
+    if (!mbarOffset) {
+      auto mod = op->getParentOfType<ModuleOp>();
+      int defaultNumWarps = triton::gpu::lookupNumWarps(op);
+      int totalNumWarps = defaultNumWarps;
+      if (auto attr = mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
+        totalNumWarps = attr.getInt();
 
-  SmallVector<triton::nvidia_gpu::ClusterBarrierOp> barriers;
-  kernel.walk(
-      [&](triton::nvidia_gpu::ClusterBarrierOp op) { barriers.push_back(op); });
-  if (barriers.empty())
-    return success();
-  int64_t shared = mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt();
-
-  DenseMap<unsigned, IntegerAttr> regionOffsets;
-  SmallVector<triton::nvidia_gpu::ClusterBarrierOp> initBarriers;
-  for (triton::nvidia_gpu::ClusterBarrierOp op : barriers) {
-    // Regions executed by the same warp group share a barrier.
-    unsigned regionId = getWarpGroupStartWarpId(op->getBlock()).value_or(0);
-
-    auto [offsetIt, inserted] = regionOffsets.try_emplace(regionId);
-    if (inserted) {
-      int64_t offset = llvm::alignTo(shared, int64_t{8}) +
-                       int64_t(regionOffsets.size() - 1) * 16;
-      offsetIt->second = builder.getI32IntegerAttr(offset);
-      initBarriers.push_back(op);
+      rewriter.setInsertionPoint(op);
+      lowerClusterSyncForAllWarps(op.getLoc(), rewriter, defaultNumWarps,
+                                  totalNumWarps, [&](OpBuilder &b) {
+                                    createClusterArrive(b, op.getLoc(),
+                                                        op.getRelaxed());
+                                    createClusterWait(b, op.getLoc());
+                                  });
+      rewriter.eraseOp(op);
+      return success();
     }
-    op->setAttr("allocation.offset", offsetIt->second);
-  }
-  mod->setAttr("ttg.ws_cluster_barrier_count",
-               builder.getI32IntegerAttr(regionOffsets.size()));
 
-  auto loc = initBarriers.front().getLoc();
-  TritonLLVMIRRewriter rewriter(loc, mod.getContext());
-  rewriter.setInsertionPointToStart(&kernel.getBody().front());
-  Value initPred = getWSRegionThread0Predicate(rewriter, loc);
-  for (triton::nvidia_gpu::ClusterBarrierOp op : initBarriers) {
-    loc = op.getLoc();
+    auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value barrierPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
-    auto ptrTy = cast<LLVM::LLVMPointerType>(barrierPtr.getType());
-    Value parityPtr = b.gep(ptrTy, i8_ty, barrierPtr, LLVM::GEPArg(8));
-    createMBarrierInit(rewriter, loc, initPred, barrierPtr,
-                       triton::gpu::lookupNumCTAs(op) - 1);
-    targetInfo.storeShared(rewriter, loc, parityPtr, b.i32_val(0), initPred);
-  }
-  createFenceMBarrierInitReleaseCluster(rewriter, loc, initPred);
-  int defaultNumWarps = triton::gpu::lookupNumWarps(kernel);
-  int totalNumWarps = defaultNumWarps;
-  if (auto attr = mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
-    totalNumWarps = attr.getInt();
-  lowerClusterSyncForAllWarps(loc, rewriter, defaultNumWarps, totalNumWarps,
-                              [&](OpBuilder &b) {
-                                createClusterArrive(b, loc, /*relaxed=*/true);
-                                createClusterWait(b, loc);
-                              });
-
-  for (triton::nvidia_gpu::ClusterBarrierOp op : barriers) {
-    loc = op.getLoc();
-    TritonLLVMIRRewriter rewriter(loc, op);
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value barrierPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+    auto func = op->getParentOfType<FunctionOpInterface>();
+    Value barrierPtr = getClusterBarrierMbarPtr(
+        loc, rewriter, func, mbarOffset.getInt(), targetInfo);
     auto ptrTy = cast<LLVM::LLVMPointerType>(barrierPtr.getType());
     Value parityPtr = b.gep(ptrTy, i8_ty, barrierPtr, LLVM::GEPArg(8));
 
     NVVM::Barrier0Op::create(rewriter, loc);
     Value parity = b.load(i32_ty, parityPtr);
-    Value pred = getWSRegionThread0Predicate(rewriter, loc);
+    Value pred = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
     Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
     int numCTAs = triton::gpu::lookupNumCTAs(op);
     bool relaxed = op.getRelaxed() && targetInfo.getPtxVersion() >= 86;
@@ -269,6 +236,73 @@ LogicalResult mlir::triton::NVIDIA::lowerWarpSpecializedClusterBarriers(
                            b.xor_(parity, b.i32_val(1)), pred);
     NVVM::Barrier0Op::create(rewriter, loc);
     rewriter.eraseOp(op);
+    return success();
   }
-  return success();
+
+private:
+  const NVIDIA::TargetInfo &targetInfo;
+};
+
+struct InitializeWSClusterBarriers
+    : public mlir::triton::impl::InitializeWSClusterBarriersBase<
+          InitializeWSClusterBarriers> {
+  using InitializeWSClusterBarriersBase::InitializeWSClusterBarriersBase;
+
+  void runOnOperation() override {
+    ModuleOp mod = getOperation();
+    auto countAttr = mod->getAttrOfType<IntegerAttr>(
+        triton::nvidia_gpu::kWSClusterBarrierCountAttrName);
+    if (!countAttr || countAttr.getInt() == 0)
+      return;
+
+    auto funcs = mod.getOps<LLVM::LLVMFuncOp>();
+    auto kernelIt = llvm::find_if(
+        funcs, [](LLVM::LLVMFuncOp func) { return triton::isKernel(func); });
+    if (kernelIt == funcs.end())
+      return;
+    LLVM::LLVMFuncOp kernel = *kernelIt;
+
+    NVIDIA::TargetInfo targetInfo(computeCapability, ptxVersion);
+    Location loc = kernel.getLoc();
+    TritonLLVMIRRewriter rewriter(loc, mod.getContext());
+    rewriter.setInsertionPointToStart(&kernel.getBody().front());
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value tid = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
+    Value initPred = b.icmp_eq(tid, b.i32_val(0));
+    auto sharedAttr = mod->getAttrOfType<IntegerAttr>("ttg.shared");
+    int64_t shared = sharedAttr ? sharedAttr.getInt() : 0;
+    int64_t offset = llvm::alignTo(shared, int64_t{8});
+    int64_t count = countAttr.getInt();
+    int numCTAs = triton::gpu::lookupNumCTAs(kernel);
+    for (int64_t i = 0; i < count; ++i, offset += 16) {
+      Value barrierPtr =
+          getClusterBarrierMbarPtr(loc, rewriter, kernel, offset, targetInfo);
+      auto ptrTy = cast<LLVM::LLVMPointerType>(barrierPtr.getType());
+      Value parityPtr = b.gep(ptrTy, i8_ty, barrierPtr, LLVM::GEPArg(8));
+      createMBarrierInit(rewriter, loc, initPred, barrierPtr, numCTAs - 1);
+      targetInfo.storeShared(rewriter, loc, parityPtr, b.i32_val(0), initPred);
+    }
+
+    NVIDIA::createFenceMBarrierInitReleaseCluster(rewriter, loc, initPred);
+    int defaultNumWarps = triton::gpu::lookupNumWarps(kernel);
+    int totalNumWarps = defaultNumWarps;
+    if (auto attr = mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
+      totalNumWarps = attr.getInt();
+    lowerClusterSyncForAllWarps(loc, rewriter, defaultNumWarps, totalNumWarps,
+                                [&](OpBuilder &b) {
+                                  createClusterArrive(b, loc,
+                                                      /*relaxed=*/true);
+                                  createClusterWait(b, loc);
+                                });
+  }
+};
+} // namespace
+
+void mlir::triton::NVIDIA::populateClusterOpsToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit, const NVIDIA::TargetInfo &targetInfo) {
+  patterns.add<ClusterSyncOpConversion<triton::nvidia_gpu::ClusterArriveOp>,
+               ClusterSyncOpConversion<triton::nvidia_gpu::ClusterWaitOp>>(
+      typeConverter, benefit);
+  patterns.add<ClusterBarrierOpConversion>(typeConverter, benefit, targetInfo);
 }

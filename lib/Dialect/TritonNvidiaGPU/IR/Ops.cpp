@@ -332,9 +332,18 @@ LogicalResult ClusterBarrierOp::verify() {
   if (failed(verifyClusterIsMultiCTA(getOperation())))
     return failure();
   auto func = getOperation()->getParentOfType<FunctionOpInterface>();
-  if (!func || !triton::isKernel(func))
+  if (!func)
     return emitOpError("must be inside a kernel function");
-  return success();
+  if (triton::isKernel(func))
+    return success();
+  // Inlineable Triton helpers are verified before the inliner moves their
+  // bodies into the kernel.
+  if (auto tritonFunc = dyn_cast<triton::FuncOp>(func.getOperation())) {
+    auto noinline = tritonFunc->getAttrOfType<BoolAttr>("noinline");
+    if (!noinline || !noinline.getValue())
+      return success();
+  }
+  return emitOpError("must be inside a kernel function");
 }
 
 // -- TMA operation verifiers --

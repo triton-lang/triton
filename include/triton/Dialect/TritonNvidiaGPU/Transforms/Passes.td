@@ -97,6 +97,15 @@ def TritonNvidiaGPUTMemBarrierInsertionPass : Pass<"triton-nvidia-gpu-tmem-barri
   ];
 }
 
+def TritonNvidiaGPUClusterBarrierMbarAllocatorPass : Pass<"triton-nvidia-gpu-cluster-barrier-mbar-allocator", "mlir::ModuleOp"> {
+  let summary = "Allocate mbarriers for warp-specialized cluster barriers";
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::ModuleOp"> {
   let summary = "lower to TMA load/store operations";
 

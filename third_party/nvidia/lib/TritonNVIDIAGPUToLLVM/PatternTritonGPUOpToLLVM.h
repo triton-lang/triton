@@ -20,11 +20,8 @@ void createFenceMBarrierInitReleaseCluster(OpBuilder &builder, Location loc,
 
 void populateClusterOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
-                                      PatternBenefit benefit);
-
-LogicalResult
-lowerWarpSpecializedClusterBarriers(ModuleOp mod,
-                                    const NVIDIA::TargetInfo &info);
+                                      PatternBenefit benefit,
+                                      const NVIDIA::TargetInfo &targetInfo);
 
 void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            const TargetInfo &targetInfo,

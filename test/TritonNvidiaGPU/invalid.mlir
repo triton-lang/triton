@@ -509,7 +509,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 
-  tt.func private @cluster_barrier_in_non_kernel_function_invalid() {
+  tt.func private @cluster_barrier_in_non_kernel_function_invalid() attributes {noinline = true} {
     // expected-error @below {{must be inside a kernel function}}
     ttng.cluster_barrier
     tt.return

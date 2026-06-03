@@ -1,6 +1,6 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=90 -reconcile-unrealized-casts | FileCheck %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=85' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX85 %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX86 %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 -reconcile-unrealized-casts | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=85' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=85' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX85 %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX86 %s
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -701,9 +701,38 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func @cluster_barrier_created_during_conversion(%arg0: !tt.ptr<i32>) {
     ttg.warp_specialize()
     default {
+      %c0_i32 = arith.constant 0 : i32
       %c1_i32 = arith.constant 1 : i32
-      %0 = tt.atomic_rmw add, acq_rel, gpu, %arg0, %c1_i32 {allocation.offset = 0 : i32} : (!tt.ptr<i32>, i32) -> i32
+      %0 = tt.atomic_cas acq_rel, gpu, %arg0, %c0_i32, %c1_i32 {allocation.offset = 0 : i32} : (!tt.ptr<i32>, i32, i32) -> i32
       tt.store %arg0, %0 : !tt.ptr<i32>
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#blockedSplitM = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
+#slice0 = #ttg.slice<{dim = 0, parent = #blockedSplitM}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 16384 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: ttg.ws_cluster_barrier_count = 1 : i32
+  // CHECK-LABEL: @cluster_barrier_created_within_reduce_lowering
+  // CHECK: mbarrier.init.shared::cta.b64
+  // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
+  tt.func @cluster_barrier_created_within_reduce_lowering() {
+    ttg.warp_specialize()
+    default {
+      %cst = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blockedSplitM>
+      %red = "tt.reduce"(%cst) ({
+      ^bb0(%lhs: f16, %rhs: f16):
+        %add = arith.addf %lhs, %rhs : f16
+        tt.reduce.return %add : f16
+      }) {allocation.offset = 0 : i32, axis = 0 : i32} : (tensor<256x128xf16, #blockedSplitM>) -> tensor<128xf16, #slice0>
       ttg.warp_yield
     }
     partition0() num_warps(4) {
