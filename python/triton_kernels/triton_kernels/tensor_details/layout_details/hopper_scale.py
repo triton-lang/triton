@@ -64,8 +64,10 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         SWIZZLE_ALIGN_K = 2
         pad_m = (SWIZZLE_ALIGN_M - (M % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
         pad_k = (SWIZZLE_ALIGN_K - (K % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
-        data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
-        *batch, M, K = data.shape
+        if data.numel():
+            data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
+        M += pad_m
+        K += pad_k
         assert data.is_contiguous()
         assert M % (
             2 * self.num_warps * 2 *

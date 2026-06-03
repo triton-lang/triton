@@ -1,5 +1,6 @@
 #include "Profiler/GPUProfiler.h"
 #include "Profiler/Graph.h"
+#include "Utility/Errors.h"
 
 #include <algorithm>
 #include <chrono>
@@ -185,13 +186,13 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
     const std::string key = modeAndOptions[1].substr(0, delimiterPos);
     const std::string value = modeAndOptions[1].substr(delimiterPos + 1);
     if (key != "format") {
-      throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
-                                  ": unsupported option key: " + key);
+      throw makeInvalidArgument(
+          profilerName + std::string(": unsupported option key: ") + key);
     }
     if (value != "hatchet_msgpack" && value != "chrome_trace" &&
         value != "hatchet") {
-      throw std::invalid_argument(std::string("[PROTON] ") + profilerName +
-                                  ": unsupported format: " + value);
+      throw makeInvalidArgument(profilerName +
+                                std::string(": unsupported format: ") + value);
     }
     periodicFlushingFormat = value;
   } else {

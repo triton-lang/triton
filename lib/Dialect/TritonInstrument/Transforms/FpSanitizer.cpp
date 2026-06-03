@@ -10,10 +10,8 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/bit.h"
 #include <cassert>
 
 namespace mlir {
@@ -28,6 +26,15 @@ namespace ttng = mlir::triton::nvidia_gpu;
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h.inc"
 
 namespace {
+
+Type getIntTypeLike(Type ty);
+bool isFloatLike(Type ty) { return isa<FloatType>(getElementTypeOrSelf(ty)); }
+bool isIntLike(Type ty) { return isa<IntegerType>(getElementTypeOrSelf(ty)); }
+
+bool isNumericLike(Type ty) {
+  Type elemTy = getElementTypeOrSelf(ty);
+  return isa<FloatType>(elemTy) || isa<IntegerType>(elemTy);
+}
 
 static bool isValueAvailableInScope(Value value, Region *scope) {
   if (!scope)
@@ -106,6 +113,48 @@ struct ScratchState {
   DenseMap<Region *, ScratchInfo> byScope;
 };
 
+Type getScratchStorageElementType(Type elemTy) {
+  if (auto floatTy = dyn_cast<FloatType>(elemTy))
+    return IntegerType::get(elemTy.getContext(), floatTy.getWidth());
+  return elemTy;
+}
+
+RankedTensorType getScratchStorageType(RankedTensorType tensorTy) {
+  auto elemTy = getScratchStorageElementType(tensorTy.getElementType());
+  return tensorTy.clone(elemTy);
+}
+
+Value embedToInt(PatternRewriter &rewriter, Location loc, Value v) {
+  if (isa<IntegerType>(getElementTypeOrSelf(v.getType())))
+    return v;
+  return ExperimentalFPSanEmbedOp::create(rewriter, loc,
+                                          getIntTypeLike(v.getType()), v);
+}
+
+Value unembedToFloat(PatternRewriter &rewriter, Location loc, Value v,
+                     Type floatTy) {
+  return ExperimentalFPSanUnembedOp::create(rewriter, loc, floatTy, v);
+}
+
+Value loadFpSanScratchMemory(PatternRewriter &rewriter, Location loc,
+                             Value alloc, RankedTensorType tensorTy) {
+  auto storageTy = getScratchStorageType(tensorTy);
+  Value stored = createLoadScratchMemory(rewriter, loc, alloc, storageTy);
+  if (isFloatLike(tensorTy))
+    return unembedToFloat(rewriter, loc, stored, tensorTy);
+  return stored;
+}
+
+Operation *storeFpSanScratchMemory(PatternRewriter &rewriter, Location loc,
+                                   Value alloc, Value tensor,
+                                   RankedTensorType tensorTy) {
+  auto storageTy = getScratchStorageType(tensorTy);
+  Value stored = tensor;
+  if (isFloatLike(tensorTy))
+    stored = embedToInt(rewriter, loc, tensor);
+  return createStoreScratchMemory(rewriter, loc, alloc, stored, storageTy);
+}
+
 class TmemScratchManager {
 public:
   ttg::BlockedEncodingAttr getScratchEncoding(PatternRewriter &rewriter,
@@ -175,20 +224,19 @@ public:
       auto layout = getScratchEncoding(rewriter, memdesc, memTy);
       auto tensorTy = RankedTensorType::get(memTy.getShape(),
                                             memTy.getElementType(), layout);
+      auto storageElemTy = getScratchStorageElementType(memTy.getElementType());
 
       int64_t elSize = memTy.getElementType().getIntOrFloatBitWidth() / 8;
       int64_t alignment = std::max<int64_t>(elSize, 16);
       int64_t sizeInBytes = product(memTy.getShape()) * elSize;
-      auto ptrTy = triton::getPointerType(memTy.getElementType());
+      auto ptrTy = triton::getPointerType(storageElemTy);
       auto allocOp = createThirdPartyScratchAlloc(rewriter, loc, ptrTy,
                                                   sizeInBytes, alignment);
-      allocOp->setDiscardableAttr("tt.divisibility",
-                                  rewriter.getI64IntegerAttr(alignment));
       Value ptr = allocOp.getResult();
 
       if (Value init = alloc.getSrc()) {
         auto initTy = cast<RankedTensorType>(init.getType());
-        if (!createStoreScratchMemory(rewriter, loc, ptr, init, initTy))
+        if (!storeFpSanScratchMemory(rewriter, loc, ptr, init, initTy))
           return std::nullopt;
       }
 
@@ -272,7 +320,8 @@ public:
       rewriter.setInsertionPoint(view);
       auto loc = view.getLoc();
       Value ptr = baseInfo->ptr;
-      auto ptrTy = triton::getPointerType(memTy.getElementType());
+      auto ptrTy = triton::getPointerType(
+          getScratchStorageElementType(memTy.getElementType()));
       if (ptr.getType() != ptrTy) {
         ptr = tt::BitcastOp::create(rewriter, loc, ptrTy, ptr);
       }
@@ -325,16 +374,15 @@ private:
 
 Value createScratchAndStore(PatternRewriter &rewriter, Location loc, Value val,
                             RankedTensorType tensorTy) {
+  auto storageTy = getScratchStorageType(tensorTy);
   int64_t elSize = tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
   int64_t alignment = std::max<int64_t>(elSize, 16);
   int64_t sizeInBytes = product(tensorTy.getShape()) * elSize;
-  auto ptrTy = triton::getPointerType(tensorTy.getElementType());
+  auto ptrTy = triton::getPointerType(storageTy.getElementType());
   auto allocOp = createThirdPartyScratchAlloc(rewriter, loc, ptrTy, sizeInBytes,
                                               alignment);
-  allocOp->setDiscardableAttr("tt.divisibility",
-                              rewriter.getI64IntegerAttr(alignment));
-  if (!createStoreScratchMemory(rewriter, loc, allocOp.getResult(), val,
-                                tensorTy))
+  if (!storeFpSanScratchMemory(rewriter, loc, allocOp.getResult(), val,
+                               tensorTy))
     return Value();
   return allocOp.getResult();
 }
@@ -363,14 +411,6 @@ Region *getScratchScopeRegion(Operation *anchor) {
 // Utility functions
 // ------------------------------------------------------------
 
-Type getElementType(Type ty) {
-  if (auto shaped = dyn_cast<ShapedType>(ty))
-    return shaped.getElementType();
-  return ty;
-}
-
-bool isFloatLike(Type ty) { return isa<FloatType>(getElementType(ty)); }
-
 LogicalResult emitFpSanUnsupported(Operation *op) {
   op->emitOpError() << "unsupported by fpsan";
   return failure();
@@ -388,7 +428,7 @@ LogicalResult emitFpSanInvariantError(Operation *op) {
 }
 
 Type getIntTypeLike(Type ty) {
-  auto elem = dyn_cast<FloatType>(getElementType(ty));
+  auto elem = dyn_cast<FloatType>(getElementTypeOrSelf(ty));
   if (!elem)
     return Type();
 
@@ -404,7 +444,7 @@ Type getIntTypeLike(Type ty) {
 }
 
 unsigned getIntBitwidth(Type ty) {
-  auto elem = cast<IntegerType>(getElementType(ty));
+  auto elem = cast<IntegerType>(getElementTypeOrSelf(ty));
   return elem.getWidth();
 }
 
@@ -469,29 +509,12 @@ Value castSignedIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
 
 Value castScalarIntToIntLike(PatternRewriter &rewriter, Location loc,
                              Value scalar, Type targetTy) {
-  auto elemTy = cast<IntegerType>(getElementType(targetTy));
+  auto elemTy = cast<IntegerType>(getElementTypeOrSelf(targetTy));
   if (scalar.getType() != elemTy)
     scalar = castSignedIntValueToType(rewriter, loc, scalar, elemTy);
   if (isa<ShapedType>(targetTy))
     return tt::SplatOp::create(rewriter, loc, targetTy, scalar);
   return scalar;
-}
-
-Value selectUIntConstantOnSign(PatternRewriter &rewriter, Location loc,
-                               Value signSource, uint64_t signMaskValue,
-                               uint64_t nonNegativeValue,
-                               uint64_t negativeValue) {
-  auto signMask =
-      getUIntConstantLike(rewriter, loc, signSource.getType(), signMaskValue);
-  auto zero = getUIntConstantLike(rewriter, loc, signSource.getType(), 0u);
-  auto sign = arith::AndIOp::create(rewriter, loc, signSource, signMask);
-  auto isNeg = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
-                                     sign, zero);
-  auto nonNeg = getUIntConstantLike(rewriter, loc, signSource.getType(),
-                                    nonNegativeValue);
-  auto neg =
-      getUIntConstantLike(rewriter, loc, signSource.getType(), negativeValue);
-  return arith::SelectOp::create(rewriter, loc, isNeg, neg, nonNeg);
 }
 
 uint64_t getLowBitsMask(unsigned bitWidth) {
@@ -509,131 +532,13 @@ uint64_t invOddU64(uint64_t a) {
   return x;
 }
 
-uint64_t getOneBitPattern(FloatType floatTy) {
-  llvm::APFloat one(1.0);
-  bool losesInfo = false;
-  one.convert(floatTy.getFloatSemantics(), llvm::APFloat::rmNearestTiesToEven,
-              &losesInfo);
-  return one.bitcastToAPInt().getZExtValue();
-}
-
-struct PayloadMixConfig {
-  unsigned bitWidth;
-  unsigned shift;
-  uint64_t signMask;
-  uint64_t magMask;
-  uint64_t mulA;
-  uint64_t mulAInv;
-  uint64_t mulBPos;
-  uint64_t mulBNeg;
-  uint64_t mulBPosInv;
-  uint64_t mulBNegInv;
-};
-
-PayloadMixConfig getPayloadMixConfig(FloatType floatTy) {
-  unsigned bitWidth = floatTy.getWidth();
-  assert(bitWidth > 1 && bitWidth <= 64);
-  uint64_t signMask = uint64_t{1} << (bitWidth - 1);
-  uint64_t magMask = signMask - 1;
-
-  uint64_t oneBits = getOneBitPattern(floatTy);
-  assert(oneBits != 0 && "expected non-zero 1.0 bit pattern");
-  unsigned shift = llvm::countr_zero(oneBits);
-  assert(shift != 0 && "expected even 1.0 bit pattern");
-
-  // we firstly multiply by an arbitrary odd constant to mix from low
-  // bits to high whilst remaining invertible:
-  uint64_t mulA = 922291u & magMask;
-  uint64_t oneMixed = (oneBits * mulA) & magMask;
-  oneMixed ^= oneMixed >> shift;
-  assert((oneMixed & 1) == 1 && "expected odd mixed 1.0");
-
-  // the second multiplier is chosen so that the entire payload mixing
-  // operation maps the float 1.0 to the integer 1:
-  uint64_t mulBPos = invOddU64(oneMixed) & magMask;
-  uint64_t mulBNeg = (mulBPos * magMask) & magMask;
-  return PayloadMixConfig{
-      bitWidth,
-      shift,
-      signMask,
-      magMask,
-      mulA,
-      invOddU64(mulA) & magMask,
-      mulBPos,
-      mulBNeg,
-      invOddU64(mulBPos) & magMask,
-      invOddU64(mulBNeg) & magMask,
-  };
-}
-
-Value xorShiftRight(PatternRewriter &rewriter, Location loc, Value v,
-                    unsigned shift) {
-  auto shiftValue = getUIntConstantLike(rewriter, loc, v.getType(), shift);
-  auto shifted = arith::ShRUIOp::create(rewriter, loc, v, shiftValue);
-  return arith::XOrIOp::create(rewriter, loc, v, shifted);
-}
-
-Value inverseXorShiftRight(PatternRewriter &rewriter, Location loc, Value v,
-                           const PayloadMixConfig &cfg) {
-  for (unsigned shift = cfg.shift; shift < cfg.bitWidth; shift *= 2)
-    v = xorShiftRight(rewriter, loc, v, shift);
-  return v;
-}
-
-// Move float bit patterns into a payload domain where +0.0 maps to 0 and +1.0
-// maps to 1. Negative values use a different final multiplier so that -1.0
-// maps to the all-ones payload.
-Value mixFloatToInt(PatternRewriter &rewriter, Location loc, Value u,
-                    FloatType floatTy) {
-  PayloadMixConfig cfg = getPayloadMixConfig(floatTy);
-  auto signFlip =
-      selectUIntConstantOnSign(rewriter, loc, u, cfg.signMask, 0, cfg.signMask);
-  auto x = arith::XOrIOp::create(rewriter, loc, u, signFlip);
-  auto mulA = getUIntConstantLike(rewriter, loc, u.getType(), cfg.mulA);
-  auto magMask = getUIntConstantLike(rewriter, loc, u.getType(), cfg.magMask);
-  auto yMul = arith::MulIOp::create(rewriter, loc, x, mulA);
-  auto y = arith::AndIOp::create(rewriter, loc, yMul, magMask);
-  auto z = xorShiftRight(rewriter, loc, y, cfg.shift);
-  auto mulB = selectUIntConstantOnSign(rewriter, loc, u, cfg.signMask,
-                                       cfg.mulBPos, cfg.mulBNeg);
-  auto wMul = arith::MulIOp::create(rewriter, loc, z, mulB);
-  auto w = arith::AndIOp::create(rewriter, loc, wMul, magMask);
-  return arith::XOrIOp::create(rewriter, loc, w, signFlip);
-}
-
-Value unmixIntToFloat(PatternRewriter &rewriter, Location loc, Value v,
-                      FloatType floatTy) {
-  PayloadMixConfig cfg = getPayloadMixConfig(floatTy);
-  auto signFlip =
-      selectUIntConstantOnSign(rewriter, loc, v, cfg.signMask, 0, cfg.signMask);
-  auto w = arith::XOrIOp::create(rewriter, loc, v, signFlip);
-  auto magMask = getUIntConstantLike(rewriter, loc, v.getType(), cfg.magMask);
-  auto mulBInv = selectUIntConstantOnSign(rewriter, loc, v, cfg.signMask,
-                                          cfg.mulBPosInv, cfg.mulBNegInv);
-  auto zMul = arith::MulIOp::create(rewriter, loc, w, mulBInv);
-  auto z = arith::AndIOp::create(rewriter, loc, zMul, magMask);
-  auto y = inverseXorShiftRight(rewriter, loc, z, cfg);
-  auto mulAInv = getUIntConstantLike(rewriter, loc, v.getType(), cfg.mulAInv);
-  auto xMul = arith::MulIOp::create(rewriter, loc, y, mulAInv);
-  auto x = arith::AndIOp::create(rewriter, loc, xMul, magMask);
-  return arith::XOrIOp::create(rewriter, loc, x, signFlip);
-}
-
-Value embedToInt(PatternRewriter &rewriter, Location loc, Value v) {
-  if (isa<IntegerType>(getElementType(v.getType())))
-    return v;
-  auto intTy = getIntTypeLike(v.getType());
-  Value raw = tt::BitcastOp::create(rewriter, loc, intTy, v);
-  raw = mixFloatToInt(rewriter, loc, raw,
-                      cast<FloatType>(getElementType(v.getType())));
-  return raw;
-}
-
-Value unembedToFloat(PatternRewriter &rewriter, Location loc, Value v,
-                     Type floatTy) {
-  v = unmixIntToFloat(rewriter, loc, v,
-                      cast<FloatType>(getElementType(floatTy)));
-  return tt::BitcastOp::create(rewriter, loc, floatTy, v);
+Value embedFloatBitsToInt(PatternRewriter &rewriter, Location loc,
+                          Value rawBits, FloatType floatElemTy) {
+  Type floatTy = floatElemTy;
+  if (auto ranked = dyn_cast<RankedTensorType>(rawBits.getType()))
+    floatTy = ranked.clone(floatElemTy);
+  Value rawFloat = tt::BitcastOp::create(rewriter, loc, floatTy, rawBits);
+  return embedToInt(rewriter, loc, rawFloat);
 }
 
 uint64_t stableStringHash(StringRef str) {
@@ -745,7 +650,7 @@ Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
 }
 
 Value fpsanExp2(PatternRewriter &rewriter, Location loc, Value input) {
-  auto elemTy = dyn_cast<FloatType>(getElementType(input.getType()));
+  auto elemTy = dyn_cast<FloatType>(getElementTypeOrSelf(input.getType()));
   if (!elemTy)
     return Value();
   return fpsanExp2FromInt(rewriter, loc, embedToInt(rewriter, loc, input),
@@ -753,7 +658,7 @@ Value fpsanExp2(PatternRewriter &rewriter, Location loc, Value input) {
 }
 
 Value fpsanExp(PatternRewriter &rewriter, Location loc, Value input) {
-  auto elemTy = dyn_cast<FloatType>(getElementType(input.getType()));
+  auto elemTy = dyn_cast<FloatType>(getElementTypeOrSelf(input.getType()));
   if (!elemTy)
     return Value();
 
@@ -828,7 +733,7 @@ FpSanCosSin fpsanCosSinPayload(PatternRewriter &rewriter, Location loc,
 }
 
 Value fpsanCos(PatternRewriter &rewriter, Location loc, Value input) {
-  if (!isa<FloatType>(getElementType(input.getType())))
+  if (!isFloatLike(input.getType()))
     return Value();
   auto cosSin =
       fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
@@ -836,31 +741,17 @@ Value fpsanCos(PatternRewriter &rewriter, Location loc, Value input) {
 }
 
 Value fpsanSin(PatternRewriter &rewriter, Location loc, Value input) {
-  if (!isa<FloatType>(getElementType(input.getType())))
+  if (!isFloatLike(input.getType()))
     return Value();
   auto cosSin =
       fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
   return unembedToFloat(rewriter, loc, cosSin.sin, input.getType());
 }
 
-bool isIntLike(Type ty) { return isa<IntegerType>(getElementType(ty)); }
-
-bool isNumericLike(Type ty) {
-  Type elemTy = getElementType(ty);
-  return isa<FloatType>(elemTy) || isa<IntegerType>(elemTy);
-}
-
 bool externHasNumericOperands(tt::ExternElementwiseOp op) {
   return llvm::all_of(op.getOperands(), [](Value operand) {
     return isNumericLike(operand.getType());
   });
-}
-
-bool externInvolvesFloatLike(tt::ExternElementwiseOp op) {
-  return isFloatLike(op.getType()) ||
-         llvm::any_of(op.getOperands(), [](Value operand) {
-           return isFloatLike(operand.getType());
-         });
 }
 
 Value castExternOperandToResultInt(PatternRewriter &rewriter, Location loc,
@@ -927,7 +818,7 @@ createOperandScratch(PatternRewriter &rewriter, Location loc,
     auto info = scratch.getOrCreate(memdesc, rewriter, scope);
     if (!info)
       return std::nullopt;
-    fullVal = createLoadScratchMemory(rewriter, loc, info->ptr, tensorTy);
+    fullVal = loadFpSanScratchMemory(rewriter, loc, info->ptr, tensorTy);
     if (!fullVal)
       return std::nullopt;
   } else {
@@ -938,13 +829,12 @@ createOperandScratch(PatternRewriter &rewriter, Location loc,
   int64_t elSize = memTy.getElementType().getIntOrFloatBitWidth() / 8;
   int64_t alignment = std::max<int64_t>(elSize, 16);
   int64_t sizeInBytes = product(memTy.getShape()) * elSize;
-  auto ptrTy = triton::getPointerType(memTy.getElementType());
+  auto ptrTy = triton::getPointerType(
+      getScratchStorageElementType(memTy.getElementType()));
   auto allocOp = createThirdPartyScratchAlloc(rewriter, loc, ptrTy, sizeInBytes,
                                               alignment);
-  allocOp->setDiscardableAttr("tt.divisibility",
-                              rewriter.getI64IntegerAttr(alignment));
   Value ptr = allocOp.getResult();
-  if (!createStoreScratchMemory(rewriter, loc, ptr, fullVal, tensorTy))
+  if (!storeFpSanScratchMemory(rewriter, loc, ptr, fullVal, tensorTy))
     return std::nullopt;
   return ScratchInfo{ptr, tensorTy};
 }
@@ -1031,20 +921,18 @@ Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
   return ptrTensor;
 }
 
-Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
-                                   Value base, RankedTensorType resultTy,
-                                   int64_t stride1) {
-  return createPointerTensorStrided2D(rewriter, loc, base, resultTy,
-                                      /*stride0=*/1, stride1);
-}
-
 Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc, Value base,
                            RankedTensorType tensorTy, int64_t stride0,
                            int64_t stride1) {
-  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, tensorTy,
+  auto storageTy = getScratchStorageType(tensorTy);
+  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, storageTy,
                                                 stride0, stride1);
-  return tt::LoadOp::create(rewriter, loc, ptrTensor, CacheModifier::NONE,
-                            EvictionPolicy::NORMAL, false);
+  Value stored =
+      tt::LoadOp::create(rewriter, loc, ptrTensor, CacheModifier::NONE,
+                         EvictionPolicy::NORMAL, false);
+  if (isFloatLike(tensorTy))
+    return unembedToFloat(rewriter, loc, stored, tensorTy);
+  return stored;
 }
 
 Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc, Value base,
@@ -1057,17 +945,14 @@ Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
                                  Value base, Value tensor,
                                  RankedTensorType tensorTy, int64_t stride0,
                                  int64_t stride1) {
-  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, tensorTy,
+  auto storageTy = getScratchStorageType(tensorTy);
+  auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, storageTy,
                                                 stride0, stride1);
-  return tt::StoreOp::create(rewriter, loc, ptrTensor, tensor,
+  Value stored = tensor;
+  if (isFloatLike(tensorTy))
+    stored = embedToInt(rewriter, loc, tensor);
+  return tt::StoreOp::create(rewriter, loc, ptrTensor, stored,
                              CacheModifier::NONE, EvictionPolicy::NORMAL);
-}
-
-Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
-                                 Value base, Value tensor,
-                                 RankedTensorType tensorTy, int64_t stride1) {
-  return storeScratchStrided2D(rewriter, loc, base, tensor, tensorTy,
-                               /*stride0=*/1, stride1);
 }
 
 Value unpackPackedFp4Slice(PatternRewriter &rewriter, Location loc,
@@ -1134,7 +1019,7 @@ Value castDotScaledOperandToComputePayload(PatternRewriter &rewriter,
           getTypeWithElement(slice.getType(),
                              IntegerType::get(rewriter.getContext(),
                                               storageFloat.getWidth())));
-      payload = mixFloatToInt(rewriter, loc, raw, storageFloat);
+      payload = embedFloatBitsToInt(rewriter, loc, raw, storageFloat);
     }
     return castSignedIntValueToType(rewriter, loc, payload, computeIntTy);
   }
@@ -1153,7 +1038,7 @@ Value scaleI8ToF32Payload(PatternRewriter &rewriter, Location loc,
   Value scaleI32 = arith::ExtUIOp::create(rewriter, loc, i32Ty, scaleI);
   auto shift = getUIntConstantLike(rewriter, loc, i32Ty, 23);
   Value rawF32 = arith::ShLIOp::create(rewriter, loc, scaleI32, shift);
-  return mixFloatToInt(rewriter, loc, rawF32, rewriter.getF32Type());
+  return embedFloatBitsToInt(rewriter, loc, rawF32, rewriter.getF32Type());
 }
 
 Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
@@ -1174,7 +1059,7 @@ Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
   unsigned shiftValue = computeElem.getFPMantissaWidth() - 1;
   auto shift = getUIntConstantLike(rewriter, loc, computeIntTy, shiftValue);
   Value rawCompute = arith::ShLIOp::create(rewriter, loc, scaleComputeI, shift);
-  return mixFloatToInt(rewriter, loc, rawCompute, computeElem);
+  return embedFloatBitsToInt(rewriter, loc, rawCompute, computeElem);
 }
 
 Value castDotScaledScaleToComputePayload(PatternRewriter &rewriter,
@@ -1796,7 +1681,7 @@ struct DotPattern : public OpRewritePattern<tt::DotOp> {
     Value out = aTy.getRank() == 2
                     ? loadScratchStrided2D(rewriter, loc, dPtr, cTy,
                                            /*stride1=*/m)
-                    : createLoadScratchMemory(rewriter, loc, dPtr, cTy);
+                    : loadFpSanScratchMemory(rewriter, loc, dPtr, cTy);
     if (!out)
       return emitFpSanCodegenError(op.getOperation());
     rewriter.replaceOp(op, out);
@@ -1957,7 +1842,7 @@ struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
     auto resultTy = cast<RankedTensorType>(op.getResult().getType());
     if (!resultTy.getEncoding())
       return emitFpSanUnsupported(op.getOperation());
-    Value result = createLoadScratchMemory(rewriter, loc, info->ptr, resultTy);
+    Value result = loadFpSanScratchMemory(rewriter, loc, info->ptr, resultTy);
     if (!result)
       return emitFpSanCodegenError(op.getOperation());
 
@@ -1994,7 +1879,7 @@ struct TMEMStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     if (!srcTy.getEncoding())
       return emitFpSanUnsupported(op.getOperation());
-    if (!createStoreScratchMemory(rewriter, loc, info->ptr, op.getSrc(), srcTy))
+    if (!storeFpSanScratchMemory(rewriter, loc, info->ptr, op.getSrc(), srcTy))
       return emitFpSanCodegenError(op.getOperation());
 
     createGlobalScratchBarrier(rewriter, loc);
@@ -2036,7 +1921,7 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     Value srcReg =
         ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
             .getResult();
-    if (!createStoreScratchMemory(rewriter, loc, info->ptr, srcReg, srcRegTy))
+    if (!storeFpSanScratchMemory(rewriter, loc, info->ptr, srcReg, srcRegTy))
       return emitFpSanCodegenError(op.getOperation());
 
     createGlobalScratchBarrier(rewriter, loc);

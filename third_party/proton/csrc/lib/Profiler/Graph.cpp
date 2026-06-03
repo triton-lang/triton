@@ -2,6 +2,7 @@
 
 #include "Data/Data.h"
 #include "Runtime/Runtime.h"
+#include "Utility/Errors.h"
 
 #include <cstring>
 #include <optional>

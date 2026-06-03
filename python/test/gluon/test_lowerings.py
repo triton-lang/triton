@@ -5,6 +5,7 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
@@ -38,9 +39,41 @@ def _filter_layouts(layouts):
     return [l for l in layouts if _is_layout_applicable(l)]
 
 
+@gluon.constexpr_function
+def _make_cga_broadcast(rank: ttgl.constexpr, num_ctas: ttgl.constexpr):
+    if num_ctas == 1:
+        return []
+    n = num_ctas.bit_length() - 1
+    return [[0] * rank for _ in range(n)]
+
+
 @gluon.jit
 def _combine(a, b):
     return a + b
+
+
+@gluon.jit
+def convert_1d_to_2d_slice_cga_kernel(out, HEAD: ttgl.constexpr, NUM_CTAS: ttgl.constexpr):
+    layout_d: ttgl.constexpr = ttgl.BlockedLayout(
+        [1],
+        [32],
+        [ttgl.num_warps()],
+        [0],
+        _make_cga_broadcast(1, NUM_CTAS),
+    )
+    layout_nd: ttgl.constexpr = ttgl.BlockedLayout(
+        [1, 1],
+        [1, 32],
+        [ttgl.num_warps(), 1],
+        [1, 0],
+        _make_cga_broadcast(2, NUM_CTAS),
+    )
+
+    d = ttgl.arange(0, HEAD, layout=layout_d)
+    x = d.to(ttgl.float32)
+    dd = ttgl.arange(0, HEAD, layout=ttgl.SliceLayout(0, layout_nd))
+    y = ttgl.convert_layout(x, ttgl.SliceLayout(0, layout_nd))
+    ttgl.store(out + dd, y)
 
 
 @gluon.jit
@@ -128,6 +161,17 @@ def test_scan_blocked_broadcast_layout_multiblock(device):
     scan_kernel[(1, )](x, y, M, 1, src_layout, 0, num_warps=2)
 
     torch.testing.assert_close(y, torch.cumsum(x, dim=0))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("num_ctas", [2, 4, 8])
+def test_convert_1d_to_2d_slice_cga(num_ctas, device):
+    head = 64
+    out = torch.empty((head, ), device=device, dtype=torch.float32)
+
+    convert_1d_to_2d_slice_cga_kernel[(1, )](out, head, num_ctas, num_warps=2, num_ctas=num_ctas)
+
+    torch.testing.assert_close(out, torch.arange(head, device=device, dtype=torch.float32))
 
 
 def _swizzled_warp_layouts_1d():
@@ -851,12 +895,64 @@ _intermediate_layouts = _filter_layouts([
 ])
 
 
+def _with_cga_layout(layout, cga_layout):
+    if isinstance(layout, ttgl.BlockedLayout):
+        return ttgl.BlockedLayout(layout.size_per_thread, layout.threads_per_warp, layout.warps_per_cta, layout.order,
+                                  cga_layout=cga_layout)
+    if isinstance(layout, ttgl.NVMMADistributedLayout):
+        return ttgl.NVMMADistributedLayout(layout.version, layout.warps_per_cta, layout.instr_shape,
+                                           cga_layout=cga_layout)
+    if isinstance(layout, ttgl.DotOperandLayout):
+        return ttgl.DotOperandLayout(parent=_with_cga_layout(layout.parent, cga_layout),
+                                     operand_index=layout.operand_index, k_width=layout.k_width)
+    if isinstance(layout, ttgl.SliceLayout):
+        parent_cga_layout = [basis[:layout.dim] + [0] + basis[layout.dim:] for basis in cga_layout]
+        return ttgl.SliceLayout(dim=layout.dim, parent=_with_cga_layout(layout.parent, parent_cga_layout))
+    if isinstance(layout, ttgl.SwizzledSharedLayout):
+        return ttgl.SwizzledSharedLayout(layout.vec, layout.per_phase, layout.max_phase, layout.order,
+                                         cga_layout=cga_layout)
+    raise AssertionError(f"Unsupported multi-CTA layout {type(layout)}")
+
+
+_single_cta_convert2d_layout_cases = [(None, None, interm_layout, src_layout, dst_layout)
+                                      for interm_layout in _intermediate_layouts
+                                      for src_layout in _2d_layouts
+                                      for dst_layout in _2d_layouts]
+# Pair each layout with the next one so multi-CTA coverage stays small while every layout appears as source and dest.
+_multi_cta_2d_layout_pairs = list(zip(_2d_layouts, _2d_layouts[1:] + _2d_layouts[:1]))
+# Use different source/destination CGA shapes to cover CTA repartitioning during convert_layout.
+_multi_cta_cga_layout_pairs = [([1, 4], [2, 2]), ([4, 1], [2, 2])]
+_multi_cta_convert2d_layout_cases = [(src_ctas_per_cga, dst_ctas_per_cga, None, src_layout, dst_layout)
+                                     for src_ctas_per_cga, dst_ctas_per_cga in _multi_cta_cga_layout_pairs
+                                     for src_layout, dst_layout in _multi_cta_2d_layout_pairs]
+_convert2d_layout_cases = _single_cta_convert2d_layout_cases + _multi_cta_convert2d_layout_cases
+
+
 @pytest.mark.parametrize("M, N", [[64, 1], [64, 64], [64, 128], [1, 64]])
 @pytest.mark.parametrize("dtype", ["float16"])
-@pytest.mark.parametrize("src_layout", _2d_layouts)
-@pytest.mark.parametrize("interm_layout", _intermediate_layouts)
-@pytest.mark.parametrize("dst_layout", _2d_layouts)
-def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, device):
+@pytest.mark.parametrize("src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout",
+                         _convert2d_layout_cases)
+def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout, dtype,
+                           device):
+    num_ctas = 1
+    if src_ctas_per_cga is not None:
+        if not is_cuda() or not is_hopper_or_newer():
+            pytest.skip("num_ctas > 1 requires NVIDIA Hopper or newer")
+        if M % src_ctas_per_cga[0] != 0 or N % src_ctas_per_cga[1] != 0:
+            pytest.skip("Shape must be divisible by the source CGA shape")
+        if M % dst_ctas_per_cga[0] != 0 or N % dst_ctas_per_cga[1] != 0:
+            pytest.skip("Shape must be divisible by the destination CGA shape")
+        if src_ctas_per_cga[0] * src_ctas_per_cga[1] != dst_ctas_per_cga[0] * dst_ctas_per_cga[1]:
+            pytest.skip("Source and destination CGA shapes must have the same number of CTAs")
+        src_cga_layout = make_cga_layout(src_ctas_per_cga, src_ctas_per_cga, [1, 0])
+        dst_cga_layout = make_cga_layout(dst_ctas_per_cga, dst_ctas_per_cga, [1, 0])
+        num_ctas = src_ctas_per_cga[0] * src_ctas_per_cga[1]
+        src_layout = _with_cga_layout(src_layout, src_cga_layout)
+        dst_layout = _with_cga_layout(dst_layout, dst_cga_layout)
+    else:
+        if dst_ctas_per_cga is not None:
+            pytest.skip("Destination CGA shape requires a source CGA shape")
+
     if str(src_layout) == str(dst_layout):
         pytest.skip("Source and destination layouts are the same")
 
@@ -920,9 +1016,12 @@ def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, d
     torch_dtype = getattr(torch, dtype)
     x = torch.randn((M, N), dtype=torch_dtype, device=device)
     y = torch.zeros_like(x)
-    kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout)
+    compiled = kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout, num_ctas=num_ctas)
 
     torch.testing.assert_close(y, x, rtol=0, atol=0)
+    if src_ctas_per_cga != dst_ctas_per_cga:
+        assert "ld.shared::cluster" in compiled.asm["ptx"]
+        assert "st.shared::cluster" not in compiled.asm["ptx"]
 
 
 # MMA layout pairs for MMA-to-MMA conversion tests

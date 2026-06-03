@@ -71,7 +71,7 @@ findBufferAccessMemdescSubview(Operation *subview) {
     src = indexOp.getSrc();
     shape = to_vector(indexOp.getType().getShape());
     offsets = {indexOp.getIndex()};
-    for (auto i : llvm::seq(std::max<int>(0, shape.size() - 1)))
+    for (int i = 0, e = std::max<int>(0, shape.size() - 1); i < e; ++i)
       offsets.push_back(arith::ConstantIntOp::create(builder, loc, 0, 32));
   } else {
     auto subsliceOp = cast<ttg::MemDescSubsliceOp>(subview);
@@ -261,7 +261,6 @@ struct TritonNvidiaGPUInterleaveTMemPass
       TritonNvidiaGPUInterleaveTMemPass>::TritonNvidiaGPUInterleaveTMemPassBase;
 
   void runOnOperation() override {
-    MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     SmallVector<std::pair<Operation *, Value>> opsToSink;
     m.walk([&](Operation *op) {

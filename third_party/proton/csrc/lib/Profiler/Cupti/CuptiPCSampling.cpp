@@ -3,6 +3,7 @@
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/CuptiApi.h"
 #include "Utility/Atomic.h"
+#include "Utility/Errors.h"
 #include "Utility/Map.h"
 #include "Utility/String.h"
 #include <memory>
@@ -142,8 +143,8 @@ CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
        CUPTI_API_VERSION >= CUPTI_CUDA12_4_VERSION) ||
       (libVersion >= CUPTI_CUDA12_4_VERSION &&
        CUPTI_API_VERSION < CUPTI_CUDA12_4_VERSION)) {
-    throw std::runtime_error(
-        "[PROTON] CUPTI API version: " + std::to_string(CUPTI_API_VERSION) +
+    throw makeRuntimeError(
+        "CUPTI API version: " + std::to_string(CUPTI_API_VERSION) +
         " and CUPTI driver version: " + std::to_string(libVersion) +
         " are not compatible. Please set the environment variable "
         " TRITON_CUPTI_INCLUDE_PATH and TRITON_CUPTI_LIB_PATH to resolve the "
@@ -377,7 +378,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
         auto *stallReason = &pcData->stallReason[j];
         if (!configureData->stallReasonIndexToMetricIndex.count(
                 stallReason->pcSamplingStallReasonIndex))
-          throw std::runtime_error("[PROTON] Invalid stall reason index");
+          throw makeOutOfRange("Invalid stall reason index");
         for (const auto &[data, baseEntry] : dataToEntry) {
           auto entry = baseEntry;
           if (lineInfo.fileName.size())

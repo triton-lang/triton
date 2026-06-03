@@ -702,7 +702,7 @@ static SmallVector<T> repeatInterleave(const SmallVectorImpl<T> &vs,
   SmallVector<T> result;
   result.reserve(vs.size() * nRepeat);
   for (auto v : vs)
-    for (auto _ : llvm::seq(nRepeat))
+    for (int i = 0; i < nRepeat; ++i)
       result.push_back(v);
   return result;
 }

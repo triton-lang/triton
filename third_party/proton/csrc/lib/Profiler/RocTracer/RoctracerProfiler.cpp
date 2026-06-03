@@ -6,6 +6,7 @@
 #include "Driver/GPU/RoctracerApi.h"
 #include "Runtime/HipRuntime.h"
 #include "Utility/Env.h"
+#include "Utility/Errors.h"
 
 #include "Driver/GPU/RoctxTypes.h"
 #include "hip/amd_detail/hip_runtime_prof.h"
@@ -302,6 +303,9 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       const char *kernelName = getKernelName(cid, data);
       threadState.enterOp(Scope(kernelName ? kernelName : ""));
       auto &dataToEntry = threadState.dataToEntry;
+      if (dataToEntry.empty()) {
+        return;
+      }
       size_t numInstances = 1;
       if (cid == HIP_API_ID_hipGraphLaunch) {
         pImpl->corrIdToIsHipGraph[data->correlation_id] = true;
@@ -387,7 +391,11 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
         break;
       }
       }
+      const bool deactivated = threadState.dataToEntry.empty();
       threadState.exitOp();
+      if (deactivated) {
+        return;
+      }
       // Track outstanding op for flush
       profiler.correlation.submit(data->correlation_id);
     }
@@ -495,8 +503,7 @@ void RoctracerProfiler::doSetMode(
                                     periodicFlushingFormat, modeAndOptions,
                                     "RoctracerProfiler");
   } else if (!mode.empty()) {
-    throw std::invalid_argument(
-        "[PROTON] RoctracerProfiler: unsupported mode: " + mode);
+    throw makeInvalidArgument("RoctracerProfiler: unsupported mode: " + mode);
   }
 }
 

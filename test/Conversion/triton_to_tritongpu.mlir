@@ -182,3 +182,46 @@ tt.func @split_op(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>) {
   tt.store %2, %res1 : tensor<64x!tt.ptr<f32>>
   tt.return
 }
+
+// -----
+
+// CHECK-LABEL: tt.func private @callee
+// CHECK-SAME: (%{{.*}}: !tt.ptr<i32>) -> tensor<128xi32, #{{.*}}>
+tt.func private @callee(%arg0: !tt.ptr<i32>) -> tensor<128xi32> {
+  %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // CHECK: tt.return %{{.*}} : tensor<128xi32, #{{.*}}>
+  tt.return %0 : tensor<128xi32>
+}
+
+// CHECK-LABEL: tt.func @caller
+tt.func @caller(%ptr: !tt.ptr<i32>) {
+  // CHECK: %{{.*}} = tt.call @callee(%{{.*}}) : (!tt.ptr<i32>) -> tensor<128xi32, #{{.*}}>
+  %v = tt.call @callee(%ptr) : (!tt.ptr<i32>) -> tensor<128xi32>
+  %ptrs = tt.splat %ptr : !tt.ptr<i32> -> tensor<128x!tt.ptr<i32>>
+  tt.store %ptrs, %v : tensor<128x!tt.ptr<i32>>
+  tt.return
+}
+
+// -----
+
+// When a callee returns a tensor whose default encoding doesn't match what
+// the caller's consumer wants, a ttg.convert_layout should be auto-inserted
+// at the call boundary.
+
+// CHECK-LABEL: tt.func private @make_a
+// CHECK: tt.return %{{.*}} : tensor<128x32xf16, #[[$BLOCKED:[^,>]+]]>
+tt.func private @make_a() -> tensor<128x32xf16> {
+  %a = arith.constant dense<1.0> : tensor<128x32xf16>
+  tt.return %a : tensor<128x32xf16>
+}
+
+// CHECK-LABEL: tt.func @call_into_dot
+// CHECK: %[[V:.*]] = tt.call @make_a() : () -> tensor<128x32xf16, #[[$BLOCKED]]>
+// CHECK: ttg.convert_layout %[[V]] : tensor<128x32xf16, #[[$BLOCKED]]> -> tensor<128x32xf16, #ttg.dot_op<{{.*}}>>
+// CHECK: tt.dot
+tt.func @call_into_dot(%b: tensor<32x128xf16>) {
+  %a = tt.call @make_a() : () -> tensor<128x32xf16>
+  %c = arith.constant dense<0.0> : tensor<128x128xf32>
+  %0 = tt.dot %a, %b, %c : tensor<128x32xf16> * tensor<32x128xf16> -> tensor<128x128xf32>
+  tt.return
+}

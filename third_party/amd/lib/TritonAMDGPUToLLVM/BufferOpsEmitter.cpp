@@ -8,6 +8,7 @@
 #include "BufferOpsEmitter.h"
 
 using namespace triton::AMD;
+using mlir::triton::amdgpu::ISAFamily;
 
 namespace {
 
@@ -130,7 +131,6 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
   SmallVector<Value, 6> commonArgs;
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
                  commonArgs);
-  Type bufferType = getBufferOpType(type, false);
 
   // buffer_load_to_lds is only supported on gfx942/gfx950 which always use
   // asyncmark. Emit the async intrinsic so LLVM's SIInsertWaitcnts tracks

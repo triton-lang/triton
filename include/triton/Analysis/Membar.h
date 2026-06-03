@@ -197,6 +197,10 @@ inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
   return translatedBlockInfo;
 }
 
+/// Returns true if `op` synchronizes local memory accesses for membar-style
+/// analyses.
+bool containsLocalBarrier(Operation *op);
+
 //===----------------------------------------------------------------------===//
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//

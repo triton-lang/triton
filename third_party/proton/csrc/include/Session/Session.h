@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -36,11 +37,11 @@ public:
   Profiler *getProfiler() const { return profiler; }
 
 private:
-  Session(size_t id, const std::string &path, Profiler *profiler,
+  Session(const std::string &path, Profiler *profiler,
           std::unique_ptr<ContextSource> contextSource,
           std::unique_ptr<Data> data)
-      : id(id), path(path), profiler(profiler),
-        contextSource(std::move(contextSource)), data(std::move(data)) {}
+      : path(path), profiler(profiler), contextSource(std::move(contextSource)),
+        data(std::move(data)) {}
 
   template <typename T> std::vector<T *> getInterfaces() {
     std::vector<T *> interfaces;
@@ -60,7 +61,6 @@ private:
   }
 
   const std::string path{};
-  size_t id{};
   Profiler *profiler{};
   std::unique_ptr<ContextSource> contextSource{};
   std::unique_ptr<Data> data{};
@@ -136,7 +136,7 @@ private:
   Profiler *validateAndSetProfilerMode(Profiler *profiler,
                                        const std::string &mode);
 
-  std::unique_ptr<Session> makeSession(size_t id, const std::string &path,
+  std::unique_ptr<Session> makeSession(const std::string &path,
                                        const std::string &profilerName,
                                        const std::string &contextSourceName,
                                        const std::string &dataName,

@@ -138,7 +138,6 @@ FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
                             OpBuilder &builder) {
   using namespace mlir;
-  MLIRContext *ctx = op.getContext();
   auto loc = op.getLoc();
   auto mkI32Constant = [&](int32_t val) {
     return arith::ConstantOp::create(builder, loc, builder.getI32Type(),

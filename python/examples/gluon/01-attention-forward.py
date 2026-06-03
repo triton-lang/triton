@@ -383,26 +383,25 @@ class AttentionProgram:
 
 @gluon.jit
 def _borrow_s_as_p(config, s_tmem):
-    p_tmem = s_tmem.slice(0, config.BLOCK_N // 2)
-    return p_tmem._reinterpret(config.dtype, config.qk_shape, config.p_tmem_layout)
+    p_tmem = s_tmem._reinterpret(config.dtype, [config.SPLIT_M, 2 * config.BLOCK_N], config.p_tmem_layout)
+    return p_tmem.slice(0, config.BLOCK_N)
 
 
 @gluon.jit
 def _borrow_s_as_alpha(config, s_tmem):
-    alpha_tmem = s_tmem.slice(config.BLOCK_N // 2, 1)
     alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M_PER_CTA, 1], col_stride=1,
                                                     cga_layout=config.CGA_LAYOUT, two_ctas=gl.num_ctas() > 1)
-    return alpha_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], alpha_layout)
+    alpha_tmem = s_tmem._reinterpret(layout=alpha_layout)
+    return alpha_tmem.slice(config.BLOCK_N // 2, 1)
 
 
 @gluon.jit
 def _borrow_s_for_epilogue(config, s_tmem):
-    m_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 1, 1)
-    l_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 2, 1)
     layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M_PER_CTA, 1], col_stride=1, cga_layout=config.CGA_LAYOUT,
                                               two_ctas=gl.num_ctas() > 1)
-    m_i_tmem = m_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
-    l_i_tmem = l_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
+    s_tmem = s_tmem._reinterpret(layout=layout)
+    m_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 1, 1)
+    l_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 2, 1)
     return m_i_tmem, l_i_tmem
 
 
@@ -880,7 +879,7 @@ def attention_kernel(  #
 
     q_chnl = get_desc_channel(desc_q, num_buffers=2)
     kv_chnl = get_desc_channel(desc_k, num_buffers=config.num_kv_buffers)
-    v_mem = kv_chnl.mem._reinterpret(desc_v.dtype, [config.num_kv_buffers] + desc_v.block_type.shape, desc_v.layout)
+    v_mem = kv_chnl.mem._reinterpret(layout=desc_v.layout)
     o_chnl = TensorMemoryChannel.alloc(config.o_shape, gl.float32, config.o_tmem_layout, num_buffers=2,
                                        producer_two_ctas=gl.num_ctas() > 1)
     epi_chnl = SharedMemoryChannel.alloc(config.o_shape, config.dtype, gl.constexpr(desc_o.layout), num_buffers=2)

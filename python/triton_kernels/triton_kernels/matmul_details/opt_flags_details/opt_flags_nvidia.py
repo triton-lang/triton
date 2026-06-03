@@ -13,8 +13,10 @@ def is_x_scale_swizzled(precision_config):
             and isinstance(precision_config.a_mx_scale.storage.layout, BlackwellActMXScaleLayout))
 
 
-def compute_swap_xw(precision_config, block_m, is_persistent):
+def compute_swap_xw(precision_config, block_m, is_persistent, lhs_dtype, rhs_dtype):
     if target_info.cuda_capability_geq(10, 0):
+        if lhs_dtype == FP4 and rhs_dtype == FP4:
+            return block_m <= 128 and is_persistent
         if precision_config.b_mx_scale is not None:
             return block_m <= 64 and is_persistent
         else:
@@ -71,8 +73,9 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
         block_k = max(min_block_k, min(triton.next_power_of_2(k), block_k))
     has_mx_weight_scale = precision_config is not None and precision_config.b_mx_scale is not None
     if has_native_mxfp and is_persistent and has_mx_weight_scale:
-        # Cap block_k to conserve smem to increase num_stages
-        block_k = min(block_k, 128)
+        # If both inputs are fp4, allow larger block_k.
+        max_block_k = 256 if lhs_dtype == FP4 and rhs_dtype == FP4 else 128
+        block_k = min(block_k, max_block_k)
     if has_y_acc_in and lhs_width == rhs_width == 16 and not target_info.cuda_capability_geq(10, 0):
         block_k = min(block_k, 32)
     return block_k
@@ -120,6 +123,7 @@ def compute_num_stages(
 ):
     if precision_config.max_num_imprecise_acc is not None:
         return 3
+    act_size = lhs_dtype.bitwidth / 8
     weight_size = rhs_dtype.bitwidth / 8
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
     if has_native_mxfp and precision_config.b_mx_scale is not None and lhs_dtype in [FP16, BF16]:
@@ -131,14 +135,16 @@ def compute_num_stages(
         # block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True -> leading to num_stages=4
         weight_size = 2
 
-    stage_size = block_m * block_k * (max(8, lhs_dtype.bitwidth) // 8) + block_k * block_n * weight_size
+    stage_size = block_m * block_k * act_size + block_k * block_n * weight_size
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
     smem_capacity //= occupancy_target
-    if has_native_mxfp and getattr(precision_config, "b_mx_scale", None) is not None:
-        if rhs_dtype == FP4:
-            # 4-bit e2m1 weights are padded 2x
-            # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
+    if has_native_mxfp:
+        # 4-bit e2m1 operands are padded 2x
+        # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
+        if precision_config.a_mx_scale is not None and lhs_dtype == FP4 and rhs_dtype != FP4:
+            stage_size += block_k * block_n * act_size
+        if precision_config.b_mx_scale is not None and rhs_dtype == FP4 and lhs_dtype != FP4:
             stage_size += block_k * block_n * weight_size
 
     if precision_config.a_mx_scale is not None:
@@ -166,15 +172,15 @@ def compute_num_stages(
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
         epilogue_smem = int((block_m + 4) * acc_block_n * acc_size)
-        if compute_swap_xw(precision_config, block_m, is_persistent):
+        if compute_swap_xw(precision_config, block_m, is_persistent, lhs_dtype, rhs_dtype):
             # The fp32 accumulator stays in TMEM for the Blackwell SWAP_XW
             # persistent path. Fused reductions such as swiglu still need smem
             # for the unreduced output tile before the narrower TMA-store tile.
-            if epilogue_reduction_n > 1:
+            if epilogue_reduction_n > 1 or epilogue_subtile > 1:
                 epilogue_smem += int(block_m * block_n * out_itemsize)
         smem_capacity -= epilogue_smem
         if x_transpose:
-            smem_capacity -= block_m * block_k * (max(8, lhs_dtype.bitwidth) // 8)
+            smem_capacity -= int(block_m * block_k * act_size)
 
     # Persistent fp32 kernels need extra smem headroom (metadata/barriers/TMA state)
     # that is not fully captured by the simple stage_size model above.
@@ -186,6 +192,14 @@ def compute_num_stages(
         smem_capacity -= int(block_m * acc_block_n * out_itemsize)
     smem_capacity = max(smem_capacity, 0)
     max_stages = 5 if rhs_dtype == FP4 else 4  # maybe 5 everywhere; just haven't tested
+    b_mx_scale_layout = None if not isinstance(precision_config.b_mx_scale,
+                                               Tensor) else precision_config.b_mx_scale.storage.layout
+    if (is_persistent and rhs_dtype == FP4 and isinstance(b_mx_scale_layout, HopperMXScaleLayout)
+            and precision_config.a_mx_scale is not None and precision_config.c_mx_scale is not None):
+        # The Hopper-scale FP4 path with MX input and output needs enough
+        # extra epilogue/scale smem that a 5-stage persistent kernel can
+        # exceed H100's launch limit.
+        max_stages = 4
     num_stages = min(smem_capacity // int(stage_size), max_stages)
     # Keep one stage of headroom for persistent fp32 to avoid launch-time OOR.
     if is_persistent and (lhs_dtype == FP32 or rhs_dtype == FP32):
