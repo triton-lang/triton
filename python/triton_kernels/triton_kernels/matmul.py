@@ -381,24 +381,6 @@ def matmul(a, b, bias,
     K_W, N = b.shape[-2:]
     if a.ndim == 3 and b.ndim == 3:
         assert a.shape[0] == b.shape[0]
-    if ragged_dimension != "K":
-        assert K == K_W
-    if b_is_shuffled and b.dtype.bitwidth != 4:
-        raise ValueError("Shuffled weights are only supported for mxfp4 values")
-    n_reduce_shards = fused_comm.n_reduce_shards if fused_comm is not None else 1
-    if batch_size * M * N == 0:
-        out_shape = (
-            batch_size,
-            (scatter_indx.shape[0] if scatter_indx is not None else M) * n_reduce_shards,
-            N // fused_activation.specs.reduction_n // precision_config.c_value_pack_factor,
-        )
-        ret = apply_allocation(
-            MatmulAllocation(a.device, (out_shape, precision_config.out_dtype or a.dtype), {}),
-            c,
-        )["output"].squeeze(0)
-        if not is_input_batched:
-            ret = ret.squeeze(0)
-        return ret
     # compute optimization flags
     out_dtype = precision_config.out_dtype or a.dtype
     out_dtype = torch_dtype_to_dtype(out_dtype)
@@ -442,6 +424,8 @@ def matmul(a, b, bias,
         epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
     if b_is_shuffled:
+        if b.dtype.bitwidth != 4:
+            raise ValueError("Shuffled weights are only supported for mxfp4 values")
         if not opt_flags.is_persistent:
             raise InapplicableConstraint("Shuffled weights require the persistent TMA kernel")
         b_layout = b.storage.layout
@@ -467,6 +451,7 @@ def matmul(a, b, bias,
             even_K = a_ragged_metadata.slice_sizes_divisibility is not None and b_ragged_metadata.slice_sizes_divisibility is not None
     else:
         batch_size = b.shape[0] if a_ragged_metadata is None and b.ndim == 3 else 1
+        assert K == K_W
         a_has_tma = opt_flags.is_persistent and (has_gather_tma or not has_gather)
         even_K = (K % opt_flags.block_k == 0)
     if b_scale is not None and b_scale.storage.layout.name != "STRIDED" and not opt_flags.is_persistent and target_info.has_native_mxfp():
@@ -479,8 +464,15 @@ def matmul(a, b, bias,
     # allocate output/scratchpad memory
     allocation = init_allocation(a, b, precision_config, fused_activation,
                                  gather_indx, scatter_indx, batch_size,
-                                 n_reduce_shards, opt_flags)
+                                 fused_comm.n_reduce_shards if fused_comm is not None else 1,
+                                 opt_flags)
     memory = apply_allocation(allocation, c)
+    # early exit
+    if batch_size * M * N == 0:
+        ret = memory["output"].squeeze(0)
+        if not is_input_batched:
+            ret = ret.squeeze(0)
+        return ret
     # TMA descriptors require a global memory allocation
     if opt_flags.is_persistent:
         triton.set_allocator(get_per_device_per_stream_alloc_fn(a.device))
