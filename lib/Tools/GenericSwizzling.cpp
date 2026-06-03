@@ -210,38 +210,40 @@ SmallVector<int32_t> computeSegment(ArrayRef<int32_t> bankSrc,
     return segment;
   }
 
-  auto quotientBasis = [](ArrayRef<int32_t> basis,
-                          ArrayRef<int32_t> moduloBasis, int32_t dim) {
-    SmallVector<uint64_t> reducer(dim, 0);
-    auto addIfIndependent = [&](uint64_t v) -> bool {
-      while (v != 0) {
-        int32_t pivot = __builtin_ctzll(v);
-        assert(pivot < dim && "basis vector has bits outside dim");
-        if (reducer[pivot] == 0) {
-          reducer[pivot] = v;
-          return true;
+  // Computes representatives for a basis of span(basis) / span(moduloBasis)
+  // by selecting a subset of independent vectors directly from the input basis.
+  auto relativeComplementBasis =
+      [](ArrayRef<int32_t> basis, ArrayRef<int32_t> moduloBasis, int32_t dim) {
+        SmallVector<uint64_t> reducer(dim, 0);
+        auto addIfIndependent = [&](uint64_t v) -> bool {
+          while (v != 0) {
+            int32_t pivot = __builtin_ctzll(v);
+            assert(pivot < dim && "basis vector has bits outside dim");
+            if (reducer[pivot] == 0) {
+              reducer[pivot] = v;
+              return true;
+            }
+            // Reduce vector against the existing basis
+            v ^= reducer[pivot];
+          }
+          return false;
+        };
+        for (auto v : moduloBasis) {
+          addIfIndependent(static_cast<uint64_t>(v));
         }
-        // Reduce vector against the existing basis
-        v ^= reducer[pivot];
-      }
-      return false;
-    };
-    for (auto v : moduloBasis) {
-      addIfIndependent(static_cast<uint64_t>(v));
-    }
-    SmallVector<int32_t> result;
-    for (auto v : basis) {
-      if (addIfIndependent(static_cast<uint64_t>(v))) {
-        result.push_back(v);
-      }
-    }
-    return result;
-  };
+        SmallVector<int32_t> result;
+        for (auto v : basis) {
+          if (addIfIndependent(static_cast<uint64_t>(v))) {
+            result.push_back(v);
+          }
+        }
+        return result;
+      };
   auto intersection = intersectionBasis(srcPhase, dstPhase, dim);
 
   // A and B are the difference sets
-  auto A = quotientBasis(srcPhase, intersection, dim);
-  auto B = quotientBasis(dstPhase, intersection, dim);
+  auto A = relativeComplementBasis(srcPhase, intersection, dim);
+  auto B = relativeComplementBasis(dstPhase, intersection, dim);
   if (A.size() > B.size()) {
     std::swap(A, B);
   }

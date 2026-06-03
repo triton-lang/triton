@@ -30,12 +30,6 @@ struct LocalMemOpTile {
   // phase 0 lane ID subspace. This is used to track which parallel lane
   // addresses are processed together in the same hardware execution phase for
   // shared memory bank conflict accounting.
-  // - CDNA3 operates in 8 phases of 8 threads each for ds_read_b128
-  //   (e.g., phase 0: T0-T3, T20-T23).
-  //   V0 = span{l0, l1, l2 ^ l4}, represented as {1, 2, 20}.
-  // - CDNA4 operates in 4 phases of 16 threads each for ds_read_b128
-  //   (e.g., phase 0: T0-T3, T12-T15, T20-T23, T24-T27).
-  //   V0 = span{l0, l1, l2 ^ l3, l2 ^ l4}, represented as {1, 2, 12, 20}.
   llvm::SmallVector<int32_t> laneMask;
 
   llvm::SmallVector<int32_t> getLaneAddr(llvm::ArrayRef<int32_t> lane) const;
