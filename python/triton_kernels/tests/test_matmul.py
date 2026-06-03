@@ -539,6 +539,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if c_dtype.has_global_scale:
             tri_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
+        if is_persistent and c.numel() == 0:
+            raise
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     # --- torch implementation ---
     # Fused NVFP4 output quantizes the float32 activation result and applies
