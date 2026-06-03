@@ -158,7 +158,7 @@ def test_split_k_uses_intermediate_out_dtype(monkeypatch):
     for precision_config, dummy_config, scratch_dtype, opt_dtype in cases:
         allocation = init_allocation(
             x, w, precision_config, FusedActivation(), None, None, 1, 1,
-            3,
+            types.SimpleNamespace(split_k=3),
         )
         assert allocation.scratchpads["matmul"] == ((3, 1, 7, 13), scratch_dtype)
 

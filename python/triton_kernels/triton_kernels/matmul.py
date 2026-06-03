@@ -156,7 +156,7 @@ class MatmulAllocation:
 
 def init_allocation(x, w, precision_config, fused_activation,
                     gather_indx, scatter_indx, batch_dim,
-                    n_reduce_shards, split_k):
+                    n_reduce_shards, opt_flags):
     # ---- output ------
     N = w.shape[-1]
     # by default - M is number of rows in the activations
@@ -174,15 +174,15 @@ def init_allocation(x, w, precision_config, fused_activation,
     output = (out_shape, out_dtype)
     # ---- scratchpad -----#
     scratchpad = dict()
-    N_scratch = N // fused_activation.specs.reduction_n if split_k == 1 else N
-    if split_k > 1:
+    N_scratch = N // fused_activation.specs.reduction_n if opt_flags.split_k == 1 else N
+    if opt_flags.split_k > 1:
         scratch_out_dtype = dtype_to_torch_dtype(precision_config.intermediate_out_dtype)
-        scratchpad["matmul"] = ((split_k, batch_dim, M, N_scratch), scratch_out_dtype)
+        scratchpad["matmul"] = ((opt_flags.split_k, batch_dim, M, N_scratch), scratch_out_dtype)
     if "matmul" in scratchpad and precision_config.c_mx_scale is not None:
         assert batch_dim == 1, "batch_dim > 1 not supported yet"
         scale_dtype = precision_config.c_mx_scale.storage.data.dtype if isinstance(precision_config.c_mx_scale, Tensor) else precision_config.c_mx_scale.dtype
         scratchpad["mx_c_mx_scale"] = (
-            (split_k, 1, M, triton.cdiv(N_scratch, precision_config.c_microblock_size)),
+            (opt_flags.split_k, 1, M, triton.cdiv(N_scratch, precision_config.c_microblock_size)),
             scale_dtype,
         )
     return MatmulAllocation(x.device, output, scratchpad)
@@ -387,10 +387,15 @@ def matmul(a, b, bias,
         raise ValueError("Shuffled weights are only supported for mxfp4 values")
     n_reduce_shards = fused_comm.n_reduce_shards if fused_comm is not None else 1
     if batch_size * M * N == 0:
-        allocation = init_allocation(a, b, precision_config, fused_activation,
-                                     gather_indx, scatter_indx, batch_size,
-                                     n_reduce_shards, 1)
-        ret = apply_allocation(allocation, c)["output"].squeeze(0)
+        out_shape = (
+            batch_size,
+            (scatter_indx.shape[0] if scatter_indx is not None else M) * n_reduce_shards,
+            N // fused_activation.specs.reduction_n // precision_config.c_value_pack_factor,
+        )
+        ret = apply_allocation(
+            MatmulAllocation(a.device, (out_shape, precision_config.out_dtype or a.dtype), {}),
+            c,
+        )["output"].squeeze(0)
         if not is_input_batched:
             ret = ret.squeeze(0)
         return ret
@@ -474,7 +479,7 @@ def matmul(a, b, bias,
     # allocate output/scratchpad memory
     allocation = init_allocation(a, b, precision_config, fused_activation,
                                  gather_indx, scatter_indx, batch_size,
-                                 n_reduce_shards, opt_flags.split_k)
+                                 n_reduce_shards, opt_flags)
     memory = apply_allocation(allocation, c)
     # TMA descriptors require a global memory allocation
     if opt_flags.is_persistent:
