@@ -202,7 +202,6 @@ class PartitionArgs:
     out_scale_ptr: gl.tensor
 
     out_ptr: gl.tensor
-    acc_probe_ptr: gl.tensor
     bias_ptr: gl.tensor
     bias_stride: gl.tensor
     gather_indx_ptr: gl.tensor
@@ -257,8 +256,9 @@ class PartitionArgs:
     FORCE_EPILOGUE_WARPS_N1: gl.constexpr
     REUSE_GATHER_INDICES: gl.constexpr
     INLINE_MMA_INPUT_RELEASE: gl.constexpr
+
+    # This optional config is only used to test FPSAN.
     REVERSE_K_TILES: gl.constexpr
-    STORE_ACC_PROBE: gl.constexpr
 
     @gluon.jit
     def apply_block_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
@@ -537,6 +537,7 @@ def epilogue_direct_store(
 @gluon.jit
 def apply_bias_and_scale(
     p: PartitionArgs,
+    acc_fpsan_probe_ptr: gl.tensor | None,
     idx,
     phase,
     pid_n,
@@ -560,12 +561,12 @@ def apply_bias_and_scale(
     )
     mbarrier.wait(acc_ready_bar, phase)
     acc_regs = acc_buf.load().permute((1, 0))
-    if p.STORE_ACC_PROBE:
+    if acc_fpsan_probe_ptr is not None:
         probe_layout: gl.constexpr = acc_regs.type.layout
         probe_offs_m = off_m + gl.arange(0, p.BLOCK_M, layout=gl.SliceLayout(1, probe_layout))[:, None]
         probe_offs_n = off_n + gl.arange(0, p.BLOCK_N, layout=gl.SliceLayout(0, probe_layout))[None, :]
         probe_mask = (probe_offs_m < shape_m) & (probe_offs_n < p.out_desc.shape[1] * p.REDUCTION_N)
-        probe_ptrs = p.acc_probe_ptr + (slice_offset + probe_offs_m) * (p.out_desc.shape[1] * p.REDUCTION_N)
+        probe_ptrs = acc_fpsan_probe_ptr + (slice_offset + probe_offs_m) * (p.out_desc.shape[1] * p.REDUCTION_N)
         gl.store(probe_ptrs + probe_offs_n, acc_regs, mask=probe_mask)
     mbarrier.arrive(acc_empty_bar)
     idx, phase = advance(idx, phase, p.acc_num_bufs)
@@ -578,7 +579,7 @@ def apply_bias_and_scale(
 
 
 @gluon.jit
-def epilogue_partition(p: PartitionArgs):
+def epilogue_partition(p: PartitionArgs, acc_fpsan_probe_ptr: gl.tensor | None):
     idx = 0
     phase = 0
 
@@ -607,6 +608,7 @@ def epilogue_partition(p: PartitionArgs):
         out_off_n_packed = pid_n * (p.BLOCK_N // p.REDUCTION_N // 4)
         idx, phase, acc_packed = apply_bias_and_scale(
             p,
+            acc_fpsan_probe_ptr,
             idx,
             phase,
             pid_n,
@@ -637,7 +639,6 @@ def ws_matmul_kernel(
     scale_desc: tma.tensor_descriptor,
     out_desc: tma.tensor_descriptor,
     out_ptr: gl.tensor,
-    acc_probe_ptr: gl.tensor,
     #
     bias_ptr: gl.tensor,
     bias_stride: gl.tensor,
@@ -684,11 +685,13 @@ def ws_matmul_kernel(
     FORCE_EPILOGUE_WARPS_N1: gl.constexpr,
     REUSE_GATHER_INDICES: gl.constexpr,
     INLINE_MMA_INPUT_RELEASE: gl.constexpr,
-    REVERSE_K_TILES: gl.constexpr,
-    STORE_ACC_PROBE: gl.constexpr,
     SCALE_SIZE_OUTER: gl.constexpr,
     SCALE_SIZE_INNER: gl.constexpr,
     MXFP_BLOCK_SIZE: gl.constexpr,
+
+    # These optional configs are only used to test FPSAN.
+    REVERSE_K_TILES: gl.constexpr,
+    acc_fpsan_probe_ptr: gl.tensor | None,
 ):
     use_2cta: gl.constexpr = gl.num_ctas() > 1
     gl.static_assert(gl.num_ctas() == 1 or gl.num_ctas() == 2, "kernel supports at most 2 CTAs")
@@ -757,7 +760,6 @@ def ws_matmul_kernel(
         out_scale_ptr=out_scale_ptr,
         #
         out_ptr=out_ptr,
-        acc_probe_ptr=acc_probe_ptr,
         bias_ptr=bias_ptr,
         bias_stride=bias_stride,
         gather_indx_ptr=gather_indx_ptr,
@@ -813,12 +815,11 @@ def ws_matmul_kernel(
         REUSE_GATHER_INDICES=REUSE_GATHER_INDICES,
         INLINE_MMA_INPUT_RELEASE=INLINE_MMA_INPUT_RELEASE,
         REVERSE_K_TILES=REVERSE_K_TILES,
-        STORE_ACC_PROBE=STORE_ACC_PROBE,
     )
 
     gl.warp_specialize(
         [
-            (epilogue_partition, (p, )),
+            (epilogue_partition, (p, acc_fpsan_probe_ptr)),
             (load_activations, (p, )),
             (load_weights, (p, )),
             (mma_partition, (p, )),
@@ -915,7 +916,6 @@ class KernelConfig:
     REUSE_GATHER_INDICES: bool = False
     INLINE_MMA_INPUT_RELEASE: bool = False
     REVERSE_K_TILES: bool = False
-    STORE_ACC_PROBE: bool = False
 
     LOAD_ACTIVATION_REGS: int = 112
     LOAD_WEIGHT_REGS: int = 48
@@ -1133,7 +1133,7 @@ def matmul(
     c: torch.Tensor,
     fused_activation: FusedActivation,
     p: KernelConfig | None = None,
-    acc_probe: torch.Tensor | None = None,
+    acc_fpsan_probe: torch.Tensor | None = None,
 ):
     specs = fused_activation.specs
     assert specs.name == "swiglu"
@@ -1208,7 +1208,6 @@ def matmul(
         scale_desc=scale_desc,
         out_desc=out_desc,
         out_ptr=c,
-        acc_probe_ptr=c if acc_probe is None else acc_probe,
         #
         bias_ptr=bias,
         bias_stride=bias.stride(0),
@@ -1255,12 +1254,13 @@ def matmul(
         FORCE_EPILOGUE_WARPS_N1=p.FORCE_EPILOGUE_WARPS_N1,
         REUSE_GATHER_INDICES=p.REUSE_GATHER_INDICES,
         INLINE_MMA_INPUT_RELEASE=p.INLINE_MMA_INPUT_RELEASE,
-        REVERSE_K_TILES=p.REVERSE_K_TILES,
-        STORE_ACC_PROBE=p.STORE_ACC_PROBE,
         #
         SCALE_SIZE_OUTER=p.SCALE_SIZE_OUTER,
         SCALE_SIZE_INNER=p.SCALE_SIZE_INNER,
         MXFP_BLOCK_SIZE=p.MXFP_BLOCK_SIZE,
+        #
+        REVERSE_K_TILES=p.REVERSE_K_TILES,
+        acc_fpsan_probe_ptr=acc_fpsan_probe,
         #
         num_warps=p.NUM_WARPS,
         num_ctas=p.NUM_CTAS,
@@ -1560,7 +1560,7 @@ def test_op_consan():
 def test_op_fpsan():
     p0 = _select_tiny16_config(4)
     assert p0 is not None
-    p0 = replace(p0, X_NUM_BUFS=2, W_NUM_BUFS=2, STORE_ACC_PROBE=True)
+    p0 = replace(p0, X_NUM_BUFS=2, W_NUM_BUFS=2)
     p1 = replace(
         p0,
         BLOCK_M=32,
@@ -1584,18 +1584,18 @@ def test_op_fpsan():
                 (off_k // p.BLOCK_K) % 4
             ]
         precision_config = make_precision_config(prepared)
-        acc_probe = torch.zeros(
+        acc_fpsan_probe = torch.zeros(
             (prepared.out_shape[0], prepared.out_shape[1] * prepared.fused_activation.specs.reduction_n),
             dtype=torch.float32,
             device=prepared.x.device,
         )
         run_kernel(
             prepared,
-            lambda **kwargs: matmul(**kwargs, p=p, acc_probe=acc_probe),
+            lambda **kwargs: matmul(**kwargs, p=p, acc_fpsan_probe=acc_fpsan_probe),
             precision_config,
             make_output_buffer(prepared),
         )
-        return acc_probe.view(torch.int32)
+        return acc_fpsan_probe.view(torch.int32)
 
     normal = tuple(run(p) for p in configs)
     assert not torch.equal(*normal)
