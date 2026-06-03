@@ -54,10 +54,10 @@ public:
       return;
     }
 
-    // FPSAN records the setting before erasing the MMAv5 operations.
+    // FPSAN rewrites all `tcgen05` MMA ops but sets the flag so it can be
+    // propagated.
     if (!firstMatmul && mod->hasAttr(AttrTwoCTAsName))
       return;
-
     bool twoCTAValue = firstMatmul ? firstTwoCTA : false;
     mod->setAttr(AttrTwoCTAsName, BoolAttr::get(mod.getContext(), twoCTAValue));
   }
