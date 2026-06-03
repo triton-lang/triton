@@ -25,6 +25,12 @@ constexpr llvm::StringLiteral kSplitSafeAttrName = "amdgpu.split_soffset_safe";
 // additive/shape expression proves non-negative. This may miss safe splits,
 // but never annotates an offset with a possibly-negative voffset.
 static bool isLeafNonNegative(Value v, DataFlowSolver &solver) {
+  // An `add` is never a leaf to the soffset splitter. It peels the summands
+  // apart and lifts the uniform ones into the unsigned soffset. So a sum whose
+  // range is non-negative can still hide a negative summand.
+  if (v.getDefiningOp<arith::AddIOp>())
+    return false;
+
   const auto *range = solver.lookupState<dataflow::IntegerValueRangeLattice>(v);
   if (!range || range->getValue().isUninitialized())
     return false;

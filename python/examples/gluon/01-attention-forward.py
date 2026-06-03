@@ -1194,6 +1194,15 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout, prof
         torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
+@pytest.mark.parametrize("cta_layout", [(), ((1, 0), )], ids=["1cta", "2ctas"])
+@pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
+def test_op_consan(dtype, cta_layout):
+    with triton.knobs.compilation.scope():
+        triton.knobs.compilation.instrumentation_mode = "consan"
+        test_op(Z=1, H=1, N_CTX=1024, HEAD_DIM=64, causal=False, dtype=dtype, use_tmem_red=False, cta_layout=cta_layout)
+
+
 # ===-----------------------------------------------------------------------===#
 # Benchmarking
 # ===-----------------------------------------------------------------------===#

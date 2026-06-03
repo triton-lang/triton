@@ -260,7 +260,7 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: llvm.br [[AFTER:\^.*]]
 
-  // AMD: [[WID:%.*]] = llvm.call_intrinsic "llvm.amdgcn.wave.id"
+  // AMD: [[WID:%.*]] = rocdl.wave.id : i32
   // AMD-NEXT: [[IS_DEFAULT:%.*]] = llvm.icmp "ult" [[WID]], [[C4]]
   // AMD-NEXT: llvm.cond_br [[IS_DEFAULT]], [[BODY:\^bb[0-9]+]], [[SWITCH_LOOP:\^bb[0-9]+]]
 
