@@ -1637,6 +1637,8 @@ _TCGEN05_MMA_SCALED_CASES = [
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k"), _DOT_FMA_CASES)
 def test_dot_fma(device, type_a, type_b, acc_type, m, n, k, fresh_knobs):
     _require_cuda_backend(device)
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 9 and "e4m3" in (type_a, type_b):
+        pytest.skip("E4M3 requires Hopper or newer")
 
     M = gl.constexpr(m)
     N = gl.constexpr(n)
@@ -1687,6 +1689,8 @@ def test_dot_fma(device, type_a, type_b, acc_type, m, n, k, fresh_knobs):
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_m"), _MMA_V2_CASES)
 def test_mma_v2(device, type_a, type_b, acc_type, m, n, k, instr_m, fresh_knobs):
     _require_cuda_backend(device)
+    if torch.cuda.get_device_capability()[0] < 9 and "e4m3" in (type_a, type_b):
+        pytest.skip("E4M3 requires Hopper or newer")
 
     M = gl.constexpr(m)
     N = gl.constexpr(n)
