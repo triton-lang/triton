@@ -1082,12 +1082,16 @@ class TritonSemantic(Generic[TensorTy]):
         assert value.shape == desc.block_shape, \
             f"expected value shape {desc.block_shape}, got {value.shape}"
 
-    def descriptor_store(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets) -> TensorTy:
+    def descriptor_store(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets, cache_modifier: str = "",
+                         eviction_policy: str = "") -> TensorTy:
         self.validate_store_like(desc, value, offsets)
         # implicitly cast to the descriptor's type
         value = self.cast(value, desc.dtype)
         offsets = self._convert_to_ir_values(offsets, require_i64=False)
-        return self.tensor(self.builder.create_descriptor_store(desc.handle, value.handle, offsets), tl.void)
+        return self.tensor(
+            self.builder.create_descriptor_store(desc.handle, value.handle, offsets,
+                                                 self._str_to_store_cache_modifier(cache_modifier),
+                                                 self._str_to_eviction_policy(eviction_policy)), tl.void)
 
     def descriptor_atomic_add(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets) -> TensorTy:
         self.validate_store_like(desc, value, offsets)
@@ -1143,8 +1147,6 @@ class TritonSemantic(Generic[TensorTy]):
     def descriptor_gather(self, desc, x_offsets, y_offset, cache_modifier: str, eviction_policy: str) -> TensorTy:
         assert isinstance(desc, tl.tensor_descriptor_base), \
             f"expected a tensor descriptor, got {desc.__class__.__name__}"
-        assert cache_modifier == "", "cache modifier is not supported yet"
-        assert eviction_policy == "", "eviction policy is not supported yet"
 
         # Validate descriptor.
         assert len(desc.block_shape) == 2, f"descriptor must be 2D, but got {desc.block_shape}"
@@ -1164,10 +1166,13 @@ class TritonSemantic(Generic[TensorTy]):
 
         type = tl.block_type(desc.dtype, [x_offsets.shape[0], desc.block_shape[1]])
         y_offset = self._convert_to_ir_values((y_offset, ), require_i64=False)[0]
-        x = self.builder.create_descriptor_gather(desc.handle, x_offsets.handle, y_offset, type.to_ir(self.builder))
+        x = self.builder.create_descriptor_gather(desc.handle, x_offsets.handle, y_offset, type.to_ir(self.builder),
+                                                  self._str_to_load_cache_modifier(cache_modifier),
+                                                  self._str_to_eviction_policy(eviction_policy))
         return self.tensor(x, type)
 
-    def descriptor_scatter(self, desc, value: TensorTy, x_offsets, y_offset) -> TensorTy:
+    def descriptor_scatter(self, desc, value: TensorTy, x_offsets, y_offset, cache_modifier: str = "",
+                           eviction_policy: str = "") -> TensorTy:
         assert isinstance(desc, tl.tensor_descriptor_base), \
             f"expected a tensor descriptor, got {type(desc).__name__}"
 
@@ -1188,7 +1193,9 @@ class TritonSemantic(Generic[TensorTy]):
             1] >= min_cols, f"descriptor scatter of {dtype} must have at least {min_cols} columns, but got {desc.block_shape[1]}"
 
         y_offset = self._convert_to_ir_values((y_offset, ), require_i64=False)[0]
-        self.builder.create_descriptor_scatter(desc.handle, value.handle, x_offsets.handle, y_offset)
+        self.builder.create_descriptor_scatter(desc.handle, value.handle, x_offsets.handle, y_offset,
+                                               self._str_to_store_cache_modifier(cache_modifier),
+                                               self._str_to_eviction_policy(eviction_policy))
         return self.tensor(None, tl.void)
 
     def _broadcast_ptr_val_mask(self, ptr, val, mask):

@@ -838,27 +838,27 @@ class InterpreterBuilder:
         return self.create_masked_load(ptrs, mask, other, cache_modifier=cache_modifier,
                                        eviction_policy=eviction_policy, is_volatile=False)
 
-    def create_descriptor_store(self, desc: TensorDescHandle, value: TensorHandle, indices: List[TensorHandle]):
+    def create_descriptor_store(self, desc: TensorDescHandle, value: TensorHandle, indices: List[TensorHandle],
+                                cache_modifier=None, eviction_policy=None):
         ptrs, mask = desc.materialize_pointers(indices)
-        return self.create_masked_store(ptrs, value, mask, None, None)
+        return self.create_masked_store(ptrs, value, mask, cache_modifier, eviction_policy)
 
-    def create_descriptor_gather(self, desc: TensorDescHandle, x_offsets: TensorHandle, y_offset: TensorHandle, type):
+    def create_descriptor_gather(self, desc: TensorDescHandle, x_offsets: TensorHandle, y_offset: TensorHandle, type,
+                                 cache_modifier=None, eviction_policy=None):
         dtype = desc.base.dtype.element_ty
         np_dtype = _get_np_dtype(dtype)
         result = np.zeros([x_offsets.data.shape[0], desc.block_shape[-1]], dtype=np_dtype)
-        cache_modifier = None
-        eviction_policy = None
         for i, x_offset in enumerate(x_offsets.data):
             indices = [TensorHandle(x_offset, tl.int32), y_offset]
             result[i, :] = self.create_descriptor_load(desc, indices, cache_modifier, eviction_policy).data
         return TensorHandle(result, dtype)
 
     def create_descriptor_scatter(self, desc: TensorDescHandle, value: TensorHandle, x_offsets: TensorHandle,
-                                  y_offset: TensorHandle):
+                                  y_offset: TensorHandle, cache_modifier=None, eviction_policy=None):
         for i, x_offset in enumerate(x_offsets.data):
             slice = TensorHandle(value.data[i], value.dtype)
             indices = [TensorHandle(x_offset, tl.int32), y_offset]
-            self.create_descriptor_store(desc, slice, indices)
+            self.create_descriptor_store(desc, slice, indices, cache_modifier, eviction_policy)
 
     def get_all_ones_value(self, type):
         np_type = _get_np_dtype(type)

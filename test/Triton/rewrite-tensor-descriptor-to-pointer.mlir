@@ -159,3 +159,69 @@ module {
 
 // CHECK-LABEL: @arg_attr
 // CHECK-SAME: %arg7: i32 {tt.divisibility = 16 : i32} loc({{.*}})) {
+
+// -----
+
+module {
+  tt.func public @load_cache_modifier(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> (tensor<128xf32>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c128_i32 = arith.constant 128 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %0 = tt.make_tensor_descriptor %arg0, [%c128_i32], [%c1_i64] {order = array<i32: 0>} : <f32>, <128xf32>
+    %3 = tt.descriptor_load %0[%c0_i32] cacheModifier = ca evictionPolicy = evict_first : !tt.tensordesc<128xf32> -> tensor<128xf32>
+    tt.return %3 : tensor<128xf32>
+  }
+}
+
+// CHECK-LABEL: @load_cache_modifier
+// CHECK: tt.load {{.*}} cacheModifier = ca evictionPolicy = evict_first
+
+// -----
+
+module {
+  tt.func public @store_cache_modifier(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: tensor<128xf32>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c128_i32 = arith.constant 128 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %0 = tt.make_tensor_descriptor %arg0, [%c128_i32], [%c1_i64] {order = array<i32: 0>} : <f32>, <128xf32>
+    tt.descriptor_store %0[%c0_i32], %arg1 cacheModifier = wb evictionPolicy = evict_last : !tt.tensordesc<128xf32>, tensor<128xf32>
+    tt.return
+  }
+}
+
+// CHECK-LABEL: @store_cache_modifier
+// CHECK: tt.store {{.*}} cacheModifier = wb evictionPolicy = evict_last
+
+// -----
+
+module {
+  tt.func public @gather_cache_modifier(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: tensor<8xi32>) -> (tensor<8x128xbf16>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c128_i64 = arith.constant 128 : i64
+    %c128_i32 = arith.constant 128 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %0 = tt.make_tensor_descriptor %arg0, [%c128_i32, %c128_i32], [%c128_i64, %c1_i64] {order = array<i32: 0, 1>} : <bf16>, <1x128xbf16>
+    %3 = tt.descriptor_gather %0[%arg1, %c0_i32] cacheModifier = ca evictionPolicy = evict_first : (!tt.tensordesc<1x128xbf16>, tensor<8xi32>, i32) -> tensor<8x128xbf16>
+    tt.return %3 : tensor<8x128xbf16>
+  }
+}
+
+// CHECK-LABEL: @gather_cache_modifier
+// CHECK: tt.load {{.*}} cacheModifier = ca evictionPolicy = evict_first
+
+// -----
+
+module {
+  tt.func public @scatter_cache_modifier(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: tensor<8xi32>, %arg2: tensor<8x128xbf16>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c128_i64 = arith.constant 128 : i64
+    %c128_i32 = arith.constant 128 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %0 = tt.make_tensor_descriptor %arg0, [%c128_i32, %c128_i32], [%c128_i64, %c1_i64] {order = array<i32: 0, 1>} : <bf16>, <1x128xbf16>
+    tt.descriptor_scatter %0[%arg1, %c0_i32], %arg2 cacheModifier = wb evictionPolicy = evict_last : !tt.tensordesc<1x128xbf16>, tensor<8xi32>, i32, tensor<8x128xbf16>
+    tt.return
+  }
+}
+
+// CHECK-LABEL: @scatter_cache_modifier
+// CHECK: tt.store {{.*}} cacheModifier = wb evictionPolicy = evict_last

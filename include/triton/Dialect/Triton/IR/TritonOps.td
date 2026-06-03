@@ -1261,11 +1261,17 @@ def TT_DescriptorStoreOp : TT_Op<"descriptor_store", [TT_DescriptorStoreLikeOpIn
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     TT_Tensor:$src,
-    Variadic<I32>:$indices
+    Variadic<I32>:$indices,
+    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
   );
 
   let assemblyFormat = [{
     $desc `[` $indices `]` `,` $src
+    oilist(
+      `cacheModifier` `=` $cache |
+      `evictionPolicy` `=` $evict
+    )
     attr-dict `:` qualified(type($desc)) `,` type($src)
   }];
   let hasVerifier = 1;
@@ -1306,12 +1312,18 @@ def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorLoadLikeOpI
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     RankedTensorOf<[I16, I32]>:$x_offsets,
-    I32:$y_offset
+    I32:$y_offset,
+    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
   );
   let results = (outs TT_Tensor:$result);
 
   let assemblyFormat = [{
     $desc `[` $x_offsets `,` $y_offset `]`
+    oilist(
+      `cacheModifier` `=` $cache |
+      `evictionPolicy` `=` $evict
+    )
     attr-dict `:` functional-type(operands, results)
   }];
 
@@ -1333,11 +1345,17 @@ def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [TT_DescriptorStoreLike
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     RankedTensorOf<[I16, I32]>:$x_offsets,
     I32:$y_offset,
-    TT_Tensor:$src
+    TT_Tensor:$src,
+    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
   );
 
   let assemblyFormat = [{
     $desc `[` $x_offsets `,` $y_offset `]` `,` $src
+    oilist(
+      `cacheModifier` `=` $cache |
+      `evictionPolicy` `=` $evict
+    )
     attr-dict `:` type(operands)
   }];
 

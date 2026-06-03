@@ -1812,3 +1812,57 @@ def test_tensor_descriptor_store_downcast(dtype_str, device):
     kernel[(grid_m, grid_n)](desc, M, N, M_BLOCK=M_BLOCK, N_BLOCK=N_BLOCK)
     ref = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N).to(torch_dtype)
     torch.testing.assert_close(out, ref)
+
+
+@pytest.mark.parametrize("cache", ["", ".ca", ".cg"])
+def test_tensor_descriptor_load_cache_modifier(cache, device):
+    if not is_cuda():
+        pytest.skip("Cache modifier test only supports CUDA")
+
+    src = torch.empty(128, device=device)
+    dst = torch.empty(128, device=device)
+
+    @triton.jit
+    def kernel(dst, src, CACHE: tl.constexpr):
+        desc = tl.make_tensor_descriptor(src, shape=[128], strides=[1], block_shape=[128])
+        x = desc.load([0], cache_modifier=CACHE)
+        tl.store(dst + tl.arange(0, 128), x)
+
+    pgm = kernel[(1, )](dst, src, CACHE=cache)
+
+    ptx = pgm.asm['ptx']
+    all_modifiers = ['.ca', '.cg', '.cs', '.cv']
+    for modifier in all_modifiers:
+        if modifier == cache:
+            assert f'ld.global{modifier}' in ptx, \
+                f"Expected ld.global{modifier} in PTX but not found"
+        else:
+            assert f'ld.global{modifier}' not in ptx, \
+                f"Unexpected ld.global{modifier} found in PTX"
+
+
+@pytest.mark.parametrize("cache", ["", ".wb", ".cg", ".cs", ".wt"])
+def test_tensor_descriptor_store_cache_modifier(cache, device):
+    if not is_cuda():
+        pytest.skip("Cache modifier test only supports CUDA")
+
+    src = torch.empty(128, device=device)
+    dst = torch.empty(128, device=device)
+
+    @triton.jit
+    def kernel(dst, src, CACHE: tl.constexpr):
+        desc = tl.make_tensor_descriptor(dst, shape=[128], strides=[1], block_shape=[128])
+        x = tl.load(src + tl.arange(0, 128))
+        desc.store([0], x, cache_modifier=CACHE)
+
+    pgm = kernel[(1, )](dst, src, CACHE=cache)
+
+    ptx = pgm.asm['ptx']
+    all_modifiers = ['.wb', '.cg', '.cs', '.wt']
+    for modifier in all_modifiers:
+        if modifier == cache:
+            assert f'st.global{modifier}' in ptx, \
+                f"Expected st.global{modifier} in PTX but not found"
+        else:
+            assert f'st.global{modifier}' not in ptx, \
+                f"Unexpected st.global{modifier} found in PTX"

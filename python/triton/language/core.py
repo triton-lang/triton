@@ -1422,24 +1422,30 @@ class tensor_descriptor_base(base_value):
         return str(self.type)
 
     @builtin
-    def load(self, offsets: Sequence[constexpr | tensor], _semantic=None) -> tensor:
+    def load(self, offsets: Sequence[constexpr | tensor], cache_modifier: str = "", eviction_policy: str = "",
+             _semantic=None) -> tensor:
         """Load a block from the descriptor starting at the given element offsets.
 
         Values outside of the tensor bounds will be filled with zeros.
 
+        :param cache_modifier: Cache modifier for the load operation, e.g. ".ca", ".cg"
+        :param eviction_policy: Eviction policy for the load operation, e.g. "evict_last", "evict_first"
         :note: Offset must be a multiple of 16-bytes
         """
-        return _semantic.descriptor_load(self, offsets, "", "")
+        return _semantic.descriptor_load(self, offsets, cache_modifier, eviction_policy)
 
     @builtin
-    def store(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
+    def store(self, offsets: Sequence[constexpr | tensor], value: tensor, cache_modifier: str = "",
+              eviction_policy: str = "", _semantic=None) -> tensor:
         """Store a block from the descriptor starting at the given element offsets.
 
         Values outside of the tensor bounds will be ignored.
 
+        :param cache_modifier: Cache modifier for the store operation, e.g. ".wb", ".cg"
+        :param eviction_policy: Eviction policy for the store operation, e.g. "evict_last", "evict_first"
         :note: Offset must be a multiple of 16-bytes
         """
-        return _semantic.descriptor_store(self, value, offsets)
+        return _semantic.descriptor_store(self, value, offsets, cache_modifier, eviction_policy)
 
     @builtin
     def atomic_add(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
@@ -1466,20 +1472,20 @@ class tensor_descriptor_base(base_value):
         return _semantic.descriptor_atomic_xor(self, value, offsets)
 
     @builtin
-    def gather(self, *args, _semantic=None) -> tensor:
+    def gather(self, *args, _semantic=None, cache_modifier: str = "", eviction_policy: str = "") -> tensor:
         """Gather multiple descriptors worth of data"""
         assert len(args) == 2, f"descriptor gather only supports 2D indexing, but got {len(args)}"
         x_offsets = args[0]
         y_offset = args[1]
-        return _semantic.descriptor_gather(self, x_offsets, y_offset, "", "")
+        return _semantic.descriptor_gather(self, x_offsets, y_offset, cache_modifier, eviction_policy)
 
     @builtin
-    def scatter(self, value, *args, _semantic=None) -> tensor:
+    def scatter(self, value, *args, _semantic=None, cache_modifier: str = "", eviction_policy: str = "") -> tensor:
         """Scatter multiple descriptors worth of data"""
         assert len(args) == 2, f"descriptor scatter only supports 2D indexing, but got {len(args)}"
         x_offsets = args[0]
         y_offset = args[1]
-        return _semantic.descriptor_scatter(self, value, x_offsets, y_offset)
+        return _semantic.descriptor_scatter(self, value, x_offsets, y_offset, cache_modifier, eviction_policy)
 
 
 class tensor_descriptor_type(tensor_descriptor_base_type):
@@ -2541,16 +2547,17 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
 
 @builtin
 def load_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[constexpr | tensor],
-                           _semantic=None) -> tensor:
+                           cache_modifier: str = "", eviction_policy: str = "", _semantic=None) -> tensor:
     """Load a block of data from a tensor descriptor."""
-    return desc.load(offsets, _semantic=_semantic)
+    return desc.load(offsets, cache_modifier=cache_modifier, eviction_policy=eviction_policy, _semantic=_semantic)
 
 
 @builtin
 def store_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[constexpr | tensor], value: tensor,
-                            _semantic=None) -> tensor:
+                            cache_modifier: str = "", eviction_policy: str = "", _semantic=None) -> tensor:
     """Store a block of data to a tensor descriptor."""
-    return desc.store(offsets, value, _semantic=_semantic)
+    return desc.store(offsets, value, cache_modifier=cache_modifier, eviction_policy=eviction_policy,
+                      _semantic=_semantic)
 
 
 @_tensor_member_fn

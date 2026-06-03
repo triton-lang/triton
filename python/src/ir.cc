@@ -1555,14 +1555,17 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_descriptor_gather",
            [](TritonOpBuilder &self, Value desc, Value x_indices, Value y_index,
-              Type type) -> Value {
-             return self.create<DescriptorGatherOp>(type, desc, x_indices,
-                                                    y_index);
+              Type type, CacheModifier cacheModifier,
+              EvictionPolicy evictionPolicy) -> Value {
+             return self.create<DescriptorGatherOp>(
+                 type, desc, x_indices, y_index, cacheModifier, evictionPolicy);
            })
       .def("create_descriptor_store",
            [](TritonOpBuilder &self, Value desc, Value value,
-              std::vector<Value> &indices) -> void {
-             self.create<DescriptorStoreOp>(desc, value, indices);
+              std::vector<Value> &indices, CacheModifier cacheModifier,
+              EvictionPolicy evictionPolicy) -> void {
+             self.create<DescriptorStoreOp>(desc, value, indices, cacheModifier,
+                                            evictionPolicy);
            })
       .def("create_descriptor_reduce",
            [](TritonOpBuilder &self, DescriptorReduceKind kind, Value desc,
@@ -1571,8 +1574,10 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_descriptor_scatter",
            [](TritonOpBuilder &self, Value desc, Value value, Value x_indices,
-              Value y_index) -> void {
-             self.create<DescriptorScatterOp>(desc, x_indices, y_index, value);
+              Value y_index, CacheModifier cacheModifier,
+              EvictionPolicy evictionPolicy) -> void {
+             self.create<DescriptorScatterOp>(desc, x_indices, y_index, value,
+                                              cacheModifier, evictionPolicy);
            })
       .def("create_reshape",
            [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,
