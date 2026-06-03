@@ -297,21 +297,18 @@ TypedValue<MemDescType> AsyncSharedStoreOp::getBarrier() {
   return getMbarrier();
 }
 
-static LogicalResult verifyClusterNumCTAs(Operation *op) {
-  int numCTAs = triton::gpu::lookupNumCTAs(op);
+// -- FenceMBarrierInitReleaseClusterOp --
+LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
+  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
   if (numCTAs <= 1)
-    return op->emitOpError("requires ttg.num-ctas > 1");
+    return emitOpError("requires ttg.num-ctas > 1");
   return success();
 }
 
-// -- FenceMBarrierInitReleaseClusterOp --
-LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
-  return verifyClusterNumCTAs(getOperation());
-}
-
 static LogicalResult verifyClusterSyncOp(Operation *op) {
-  if (failed(verifyClusterNumCTAs(op)))
-    return failure();
+  int numCTAs = triton::gpu::lookupNumCTAs(op);
+  if (numCTAs <= 1)
+    return op->emitOpError("requires ttg.num-ctas > 1");
   if (op->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>())
     return op->emitOpError("cannot be used inside `ttg.warp_specialize`");
   return success();
@@ -329,21 +326,7 @@ LogicalResult ClusterWaitOp::verify() {
 
 // -- ClusterBarrierOp --
 LogicalResult ClusterBarrierOp::verify() {
-  if (failed(verifyClusterNumCTAs(getOperation())))
-    return failure();
-  if (getRelaxed() &&
-      getOperation()->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>())
-    return emitOpError(
-        "NYI: cluster_barrier relaxed inside a warp-specialized region. We "
-        "could implement it for PTX 8.6+ tho.");
-  // A verifier cannot infer whether a noinline callee executes inside a
-  // warp-specialized caller, so conservatively reject all noinline functions.
-  if (auto func = getOperation()->getParentOfType<mlir::triton::FuncOp>()) {
-    auto noinline = func->getAttrOfType<BoolAttr>("noinline");
-    if (noinline && noinline.getValue())
-      return emitOpError("inside a non-inline function is not yet implemented");
-  }
-  return success();
+  return verifyClusterSyncOp(getOperation());
 }
 
 // -- TMA operation verifiers --
