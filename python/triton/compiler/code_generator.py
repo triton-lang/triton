@@ -746,7 +746,7 @@ class CodeGenerator(ast.NodeVisitor):
             if isinstance(target, ast.Name):
                 annotation = self.pending_annotations.pop(target.id, None)
                 if annotation == constexpr:
-                    return constexpr(value)
+                    return normalize_value(value)
             return _sanitize_value(value)
 
         targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
