@@ -407,24 +407,12 @@ public:
       auto elemNumBits = triton::getPointeeBitWidth(ptrTy);
       unsigned contiguity =
           axisAnalysis.getContiguity(loadOp.getOffsets(), elemNumBits);
-      // Extra lower bound: the per-register contiguity measured along the
-      // offsets tensor's LinearLayout register order -- the quantity AxisInfo's
-      // per-axis model structurally cannot express for the MXFP4 B-scale
-      // mod/div offsets. It recovers the register->offset map by partial
-      // evaluation, verifies GF(2)-linearity over the whole register subspace,
-      // and rejects scalar-dependent strides via multi-substitution agreement.
-      //
-      // On scalar handling it makes the SAME caller-provided-alignment
-      // assumption that AxisInfo already relies on throughout Triton (e.g. the
-      // tt.divisibility contract on arguments): unknown scalars are substituted
-      // rather than proven. A fully symbolic alternative was prototyped
-      // (structural symbol cancellation, no substitution) and shown to be the
-      // wrong trade here -- the MXFP4 panel-base 128-alignment is host
-      // knowledge, not derivable from the kernel IR, so a strictly-sound
-      // analysis is forced to give contig-2 (ushort) where this one correctly
-      // yields contig-4 (dword). Being stricter than AxisInfo costs coalescing
-      // without making the surrounding stack sound, so we stay consistent with
-      // AxisInfo's assumption model.
+      // Extra lower bound: per-register contiguity measured along the offsets
+      // tensor's LinearLayout register order. AxisInfo's per-axis model cannot
+      // express MXFP4 B-scale contiguity because one thread's consecutive bytes
+      // are formed jointly by row and column deltas. The AMD analysis below
+      // symbolically evaluates the offset over register/lane layout coordinates
+      // and proves offset(reg r) - offset(reg 0) == r for the accepted prefix.
       unsigned evalContig =
           triton::AMD::getPerThreadContiguityFromLinearLayout(
               loadOp.getOffsets(), axisAnalysis);
