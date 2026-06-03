@@ -176,10 +176,7 @@ public:
     if (failed(createTMADesc(alloc, op, rewriter))) {
       return failure();
     }
-    TensormapFenceproxyAcquireOp::create(
-        rewriter, loc, alloc.getResult(),
-        arith::ConstantOp::create(rewriter, loc, rewriter.getI1Type(),
-                                  rewriter.getBoolAttr(true)));
+    TensormapFenceproxyAcquireOp::create(rewriter, loc, alloc.getResult());
     auto newDesc = ReinterpretTensorDescOp::create(rewriter, loc, op.getType(),
                                                    alloc.getResult());
     rewriter.replaceOp(op, newDesc);

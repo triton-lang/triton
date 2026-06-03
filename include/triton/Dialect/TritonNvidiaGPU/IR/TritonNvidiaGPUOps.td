@@ -1033,7 +1033,6 @@ def TTNG_TensormapCreateOp: TTNG_Op<
   [
     MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>,
     AttrSizedOperandSegments,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>,
   ]
 > {
   let summary = "Create a new TMA descriptor on device";
@@ -1048,8 +1047,7 @@ def TTNG_TensormapCreateOp: TTNG_Op<
       ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<15>]>:$elem_type,
       ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<2>]>:$interleave_layout,
       ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<3>]>:$swizzle_mode,
-      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<1>]>:$fill_mode,
-      I1:$pred
+      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<1>]>:$fill_mode
   );
   let extraClassDeclaration = [{
       int32_t getRank() {
@@ -1062,7 +1060,6 @@ def TTNG_TensormapCreateOp: TTNG_Op<
     `[` $global_dim `]` `,`
     `[` $global_stride `]` `,`
     `[` $element_stride `]`
-    `,` $pred
     attr-dict `:` functional-type(operands, results)
   }];
 
@@ -1071,15 +1068,12 @@ def TTNG_TensormapCreateOp: TTNG_Op<
 
 def TTNG_TensormapFenceproxyAcquireOp: TTNG_Op<
   "tensormap_fenceproxy_acquire",
-  [
-    MemoryEffects<[MemWrite<GlobalMemory>]>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>,
-  ]
+  [MemoryEffects<[MemWrite<GlobalMemory>]>]
 > {
   let summary = "Acquire fence on a tensormap object";
-  let arguments = (ins TT_PtrType:$desc_ptr, I1:$pred);
+  let arguments = (ins TT_PtrType:$desc_ptr);
   let assemblyFormat = [{
-    $desc_ptr `,` $pred attr-dict `:` qualified(type($desc_ptr))
+    $desc_ptr attr-dict `:` qualified(type($desc_ptr))
   }];
 }
 
