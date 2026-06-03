@@ -188,23 +188,12 @@ void mlir::triton::NVIDIA::populateClusterOpsToLLVMPatterns(
 LogicalResult mlir::triton::NVIDIA::lowerWarpSpecializedClusterBarriers(
     ModuleOp mod, const NVIDIA::TargetInfo &targetInfo) {
   Builder builder(mod.getContext());
-  LLVM::LLVMFuncOp kernel;
-  for (LLVM::LLVMFuncOp func : mod.getOps<LLVM::LLVMFuncOp>()) {
-    if (triton::isKernel(func)) {
-      kernel = func;
-      continue;
-    }
-    WalkResult result = func.walk([&](triton::nvidia_gpu::ClusterBarrierOp op) {
-      op.emitError("cluster_barrier inside a non-inline function is not "
-                   "supported");
-      return WalkResult::interrupt();
-    });
-    if (result.wasInterrupted())
-      return failure();
-  }
-
-  if (!kernel)
+  auto funcs = mod.getOps<LLVM::LLVMFuncOp>();
+  auto kernelIt = llvm::find_if(
+      funcs, [](LLVM::LLVMFuncOp func) { return triton::isKernel(func); });
+  if (kernelIt == funcs.end())
     return success();
+  LLVM::LLVMFuncOp kernel = *kernelIt;
 
   SmallVector<triton::nvidia_gpu::ClusterBarrierOp> barriers;
   kernel.walk(

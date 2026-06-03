@@ -331,13 +331,9 @@ LogicalResult ClusterWaitOp::verify() {
 LogicalResult ClusterBarrierOp::verify() {
   if (failed(verifyClusterIsMultiCTA(getOperation())))
     return failure();
-  // A verifier cannot infer whether a noinline callee executes inside a
-  // warp-specialized caller, so conservatively reject all noinline functions.
-  if (auto func = getOperation()->getParentOfType<mlir::triton::FuncOp>()) {
-    auto noinline = func->getAttrOfType<BoolAttr>("noinline");
-    if (noinline && noinline.getValue())
-      return emitOpError("inside a non-inline function is not yet implemented");
-  }
+  auto func = getOperation()->getParentOfType<FunctionOpInterface>();
+  if (!func || !triton::isKernel(func))
+    return emitOpError("must be inside a kernel function");
   return success();
 }
 
