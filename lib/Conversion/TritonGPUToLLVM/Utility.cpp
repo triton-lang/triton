@@ -632,6 +632,53 @@ SmallVector<Value> computeLocalPtrs(Location loc,
   return ptrs;
 }
 
+FailureOr<LocalAtomicScatterRMWInfo> prepareLocalAtomicScatterRMW(
+    triton::gpu::LocalAtomicScatterRMWOp op, Value dst, Value indices,
+    Value inputValues, Value mask, ConversionPatternRewriter &rewriter,
+    const TargetInfoBase &targetInfo, const LLVMTypeConverter *typeConverter) {
+  auto loc = op.getLoc();
+  auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
+  auto memDescTy = cast<triton::gpu::MemDescType>(op.getDst().getType());
+  if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
+          memDescTy.getEncoding())) {
+    return failure();
+  }
+
+  auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+  auto smemObj =
+      LLVM::getSharedMemoryObjectFromStruct(loc, dst, llvmElemTy, rewriter);
+  SmallVector<Value> idxValues = unpackLLElements(loc, indices, rewriter);
+  SmallVector<Value> values = unpackLLElements(loc, inputValues, rewriter);
+  SmallVector<Value> maskValues;
+  if (mask)
+    maskValues = unpackLLElements(loc, mask, rewriter);
+
+  LinearLayout regLayout = triton::gpu::toLinearLayout(valuesTy);
+  auto freeVarMasks = regLayout.getFreeVariableMasks();
+  auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
+  Value threadPred = triton::gpu::emitRedundantThreadPredicate(
+      freeVarMasks, rewriter, loc, targetInfo);
+  LinearLayout activeRegLayout = regLayout;
+  if (!removeBroadcast.isIdentity()) {
+    activeRegLayout = removeBroadcast.apply(regLayout);
+    values = removeBroadcast.apply(values);
+    idxValues = removeBroadcast.apply(idxValues);
+    if (!maskValues.empty())
+      maskValues = removeBroadcast.apply(maskValues);
+  }
+  SmallVector<SmallVector<Value>> srcIndices =
+      emitIndices(loc, rewriter, targetInfo, activeRegLayout, valuesTy,
+                  /*withCTAOffset=*/true);
+
+  SmallVector<Value> ptrs =
+      computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
+                       srcIndices, op.getAxis(), rewriter);
+
+  return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,
+                                   removeBroadcast, threadPred, values,
+                                   maskValues,      ptrs};
+}
+
 SmallVector<std::pair<unsigned, unsigned>>
 getPaddedSharedShifts(Attribute enc, unsigned bitwidth, bool offsetInBytes) {
   auto padded = triton::gpu::getPaddedEncoding(enc);
