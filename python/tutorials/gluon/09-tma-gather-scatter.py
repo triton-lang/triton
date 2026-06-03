@@ -393,7 +393,7 @@ def async_scatter_kernel(tensor_desc, x_offsets_ptr, y_offset, src_ptr, src_stri
     fence_async_shared()
     tma.async_scatter(tensor_desc, x_offsets, y_offset, smem_src)
     # Wait for the completion of the async scatter using `store_wait`.
-    tma.store_wait(0, read_only=True)
+    tma.store_wait(0)
 
 
 def async_scatter(input, x_offsets, y_offset, src, BLOCK_X, BLOCK_Y):
@@ -564,12 +564,12 @@ def matmul_fused_gather_scatter_kernel(X_desc, W_desc, out_desc, X_gather_indx_p
         out, mma = mma.take_result()
         out = out.to(dtype)
         # Pipeline the async scatter by waiting for the previous scatter to complete.
-        tma.store_wait(pendings=0, read_only=True)
+        tma.store_wait(pendings=0)
         out_smem.store(out)
         fence_async_shared()
         tma.async_scatter(out_desc, out_offs_m, epilogue_off_n, out_smem)
     # Wait for the last async scatter to complete.
-    tma.store_wait(pendings=0, read_only=True)
+    tma.store_wait(pendings=0)
 
 
 # %%

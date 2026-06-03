@@ -258,7 +258,7 @@ def tma_im2col_kernel(in_desc, out_desc, coord_n: int, coord_h: int, coord_w: in
     mbarrier.invalidate(bar)
 
     tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
-    tma.store_wait(pendings=0, read_only=True)
+    tma.store_wait(pendings=0)
 
 
 def run_tma_im2col(title, pixel_box_lower_corner, pixel_box_upper_corner, coord, offsets):
@@ -952,7 +952,7 @@ def store_output_tile(mma, dtype, out_desc, offs_m, offs_n):
     c_smem.store(acc.to(dtype))
     fence_async_shared()
     tma.async_copy_shared_to_global(out_desc, [offs_m, offs_n], c_smem)
-    tma.store_wait(pendings=0, read_only=True)
+    tma.store_wait(pendings=0)
 
 
 @gluon.jit

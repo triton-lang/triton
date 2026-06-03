@@ -243,7 +243,7 @@ def matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.constexpr, num_b
     c_smem.store(c.to(dtype))
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
-    tma.store_wait(pendings=0, read_only=True)
+    tma.store_wait(pendings=0)
 
 
 def matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, num_warps):
@@ -406,7 +406,7 @@ def persistent_matmul_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.constexpr, Sche
         c_smem.store(c.to(dtype))
         fence_async_shared()
         tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
-        tma.store_wait(pendings=0, read_only=True)
+        tma.store_wait(pendings=0)
 
 
 def persistent_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, num_warps, SchedulerImpl):
@@ -668,7 +668,7 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, c_half_desc, MMAI
         consumer, mma = issue_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, STEALB, num_buffers)
         if STEALB:
             # Wait for the epilogue before the first TMA load.
-            tma.store_wait(pendings=0, read_only=True)
+            tma.store_wait(pendings=0)
         for k in range(BLOCK_K * (num_buffers - 1), K, BLOCK_K):
             producer = issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, STEALB,
                                           num_buffers)
@@ -698,7 +698,7 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, c_half_desc, MMAI
         c = c.to(dtype)
         if not STEALB:
             c_buf = c_smem
-            tma.store_wait(pendings=0, read_only=True)
+            tma.store_wait(pendings=0)
             c_buf.store(c)
             fence_async_shared()
             tma.async_copy_shared_to_global(c_desc, [epilogue_off_m, epilogue_off_n], c_buf)
@@ -720,7 +720,7 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, c_half_desc, MMAI
             fence_async_shared()
             tma.async_copy_shared_to_global(c_half_desc, [epilogue_off_m, epilogue_off_n], c0_buf)
             tma.async_copy_shared_to_global(c_half_desc, [epilogue_off_m, epilogue_off_n + BLOCK_N // 2], c1_buf)
-    tma.store_wait(pendings=0, read_only=True)
+    tma.store_wait(pendings=0)
 
 
 def persistent_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, num_warps, SchedulerImpl):

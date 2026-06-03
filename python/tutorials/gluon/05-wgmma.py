@@ -198,7 +198,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     d_smem.store(d)
     fence_async_shared()
     tma.async_copy_shared_to_global(d_desc, [0, 0], d_smem)
-    tma.store_wait(pendings=0, read_only=True)
+    tma.store_wait(pendings=0)
 
 
 def small_mma(A, B, C, D, INSTR_SHAPE_N, LHS_IN_REG=False, num_warps=4):
@@ -377,7 +377,7 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     c_smem.store(acc.to(dtype))
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
-    tma.store_wait(pendings=0, read_only=True)
+    tma.store_wait(pendings=0)
 
 
 def blocked_matmul(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, num_warps):
@@ -576,7 +576,7 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     c_smem.store(acc.to(dtype))
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
-    tma.store_wait(pendings=0, read_only=True)
+    tma.store_wait(pendings=0)
 
 
 def blocked_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):

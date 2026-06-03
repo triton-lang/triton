@@ -546,7 +546,7 @@ def mma_scaled_epilogue_partition(p):
             acc_sub = acc_buf.slice(EPILOGUE_BLOCK_N * s, EPILOGUE_BLOCK_N)
             acc_smem = acc_smems.index(sub_acc_state.index)
             acc = acc_sub.load().to(p.c_desc.dtype)
-            tma.store_wait(pendings=subtile_stages - 1, read_only=True)
+            tma.store_wait(pendings=subtile_stages - 1)
             acc_smem.store(acc)
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + EPILOGUE_BLOCK_N * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
@@ -554,7 +554,7 @@ def mma_scaled_epilogue_partition(p):
         acc_state = acc_state.next()
         scheduler = scheduler.step(i)
         i += 1
-    tma.store_wait(0, read_only=True)
+    tma.store_wait(0)
 
 
 @gluon.jit

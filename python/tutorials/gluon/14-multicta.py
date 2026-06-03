@@ -953,7 +953,7 @@ def matmul_epilogue_partition(p):
             acc_sub = acc_buf.slice(split_tile_n * s, split_tile_n)
             acc_smem = acc_smems.index(sub_acc_state.index)
             acc = acc_sub.load().to(dtype)
-            tma.store_wait(pendings=subtile_stages - 1, read_only=True)
+            tma.store_wait(pendings=subtile_stages - 1)
             acc_smem.store(acc)
             tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + split_tile_n * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
