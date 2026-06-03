@@ -245,7 +245,7 @@ struct CoalesceBufferLoadToLocalWrites
       const DenseMap<ttag::BufferLoadToLocalOp, unsigned> &bufferLoadContiguity,
       MLIRContext *ctx)
       : OpRewritePattern(ctx), targetInfo{targetInfo},
-        bufferLoadContiguity{std::move(bufferLoadContiguity)} {}
+        bufferLoadContiguity{bufferLoadContiguity} {}
 
   LogicalResult matchAndRewrite(ttag::BufferLoadToLocalOp copyOp,
                                 PatternRewriter &rewriter) const override {
@@ -316,7 +316,7 @@ struct CoalesceBufferLoadWrites
       const DenseMap<ttag::BufferLoadOp, unsigned> &bufferLoadVgprContiguity,
       MLIRContext *ctx)
       : OpRewritePattern(ctx),
-        bufferLoadVgprContiguity{std::move(bufferLoadVgprContiguity)} {}
+        bufferLoadVgprContiguity{bufferLoadVgprContiguity} {}
 
   LogicalResult matchAndRewrite(ttag::BufferLoadOp loadOp,
                                 PatternRewriter &rewriter) const override {
@@ -363,9 +363,8 @@ public:
 
     mlir::RewritePatternSet patterns(context);
 
-    auto isaFamily = targetInfo.getISAFamily();
-    if (isaFamily != triton::amdgpu::ISAFamily::CDNA3 &&
-        isaFamily != triton::amdgpu::ISAFamily::CDNA4)
+    if (!llvm::is_contained({ttag::ISAFamily::CDNA3, ttag::ISAFamily::CDNA4},
+                            targetInfo.getISAFamily()))
       return; // This pass is CDNA3 and CDNA4 specific.
 
     // Precompute the contiguity of all copy ops based on src and mask
@@ -385,8 +384,7 @@ public:
     // below still applies VGPR vs direct-to-LDS legality constraints.
     auto getGlobalBufferContiguity = [&](Value ptr, Value offsets,
                                          Value mask) {
-      auto ptrTy = mlir::LLVM::AMD::getPointerTypeWithShape(ptr, offsets);
-      auto elemNumBits = triton::getPointeeBitWidth(ptrTy);
+      auto elemNumBits = triton::getPointeeBitWidth(ptr.getType());
       unsigned contiguity = axisAnalysis.getContiguity(offsets, elemNumBits);
       unsigned symbolicContiguity =
           triton::AMD::getPerThreadContiguityFromLinearLayout(offsets,

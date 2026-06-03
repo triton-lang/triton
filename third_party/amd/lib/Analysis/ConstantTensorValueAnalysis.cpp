@@ -59,7 +59,7 @@ Range rAdd(const Range &a, const Range &b) {
   r.loInf = a.loInf || b.loInf;
   r.hiInf = a.hiInf || b.hiInf;
   if (!r.loInf && __builtin_add_overflow(a.lo, b.lo, &r.lo))
-    r.loInf = true; // overflow -> unbounded (Finding 3)
+    r.loInf = true; // overflow -> conservatively unbounded
   if (!r.hiInf && __builtin_add_overflow(a.hi, b.hi, &r.hi))
     r.hiInf = true;
   return r;
@@ -99,8 +99,9 @@ Range rHull(const Range &a, const Range &b) {
 std::optional<int64_t> rBand(const Range &a, int64_t c) {
   if (!a.finite())
     return std::nullopt;
-  if (floorDiv(a.lo, c) == floorDiv(a.hi, c))
-    return floorDiv(a.lo, c);
+  int64_t loBand = floorDiv(a.lo, c);
+  if (loBand == floorDiv(a.hi, c))
+    return loBand;
   return std::nullopt;
 }
 
@@ -167,8 +168,8 @@ struct Ctx {
     symDiv[k] = d;
     return d;
   }
-  // coeff * divisibility, std::nullopt on int64 overflow (so the M1 drop check
-  // conservatively treats the term as NOT a multiple of c -- Finding 3).
+  // coeff * divisibility, std::nullopt on int64 overflow (so the drop check
+  // conservatively treats the term as not provably a multiple of c).
   std::optional<int64_t> divOfLin(const void *symPtr, int64_t coeff) {
     auto it = symDiv.find(symPtr);
     int64_t d = it != symDiv.end() ? it->second : 1, r;
@@ -219,7 +220,7 @@ Val scaleBy(Val a, int64_t k) {
     return a;
   if (k == 0)
     return Val::constant(0);
-  // Overflow -> cannot represent the scaled value soundly (Finding 3).
+  // Overflow -> cannot represent the scaled value soundly.
   if (__builtin_mul_overflow(a.cst, k, &a.cst))
     return Val::ground();
   for (auto &kv : a.lin)
@@ -328,13 +329,11 @@ Val divC(const Val &a, int64_t c, Ctx &ctx) {
 
   Val q;            // exact quotient of the c-divisible part
   Val rest;         // residual (must land in one band)
-  q.rng = Range::point(0);
-  rest.rng = Range::point(0);
   // constant part
   q.cst = floorDiv(a.cst, c);
+  q.rng = Range::point(q.cst);
   rest.cst = floorMod(a.cst, c);
-  rest.rng = rAdd(rest.rng, Range::point(rest.cst));
-  q.rng = rAdd(q.rng, Range::point(q.cst));
+  rest.rng = Range::point(rest.cst);
   for (auto &kv : a.lin) {
     if (kv.second % c == 0) {
       q.lin[kv.first] += kv.second / c;
@@ -362,7 +361,7 @@ Val divC(const Val &a, int64_t c, Ctx &ctx) {
     return q;
   }
   // Fallback: opaque DIV of the whole value.
-  Range r = rScale(a.rng, 1); // floor(range/c)
+  Range r = a.rng;
   if (r.finite()) {
     r.lo = floorDiv(a.rng.lo, c);
     r.hi = floorDiv(a.rng.hi, c);
@@ -402,7 +401,7 @@ Val evalImpl(Value v, ArrayRef<Val> coord, Ctx &ctx, unsigned depth);
 // Memoizing wrapper: dedups shared DAG subterms within a register and reuses
 // coord-independent (scalar) results across registers. Results produced via the
 // depth cap are NOT memoized, so a truncated value can never be reused at a
-// shallower depth (Finding 4).
+// shallower depth.
 Val eval(Value v, ArrayRef<Val> coord, Ctx &ctx, unsigned depth) {
   if (depth > kMaxDepth)
     return evalImpl(v, coord, ctx, depth);

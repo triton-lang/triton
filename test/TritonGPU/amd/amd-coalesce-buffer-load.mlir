@@ -118,7 +118,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// Constant evaluator: AxisInfo cannot describe the per-register four-byte
+// Symbolic register-order proof: AxisInfo cannot describe the per-register four-byte
 // pattern, but direct evaluation proves offsets [x, x+1, x+2, x+3].
 #linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]], warp = [[64, 0], [0, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
@@ -147,7 +147,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// Constant evaluator negative: per-register deltas are scalar-dependent and
+// Symbolic register-order proof negative: per-register deltas are scalar-dependent and
 // must not be assumed contiguous.
 #linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]], warp = [[64, 0], [0, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
@@ -226,14 +226,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // LinearLayout-native soundness guard. The per-register stride carries a
 // kernel-arg term  poison(arg) = arg*(arg-1)  (built in tensor ops so the
-// evaluator walks it). It is ZERO at arg in {0, 1} -- exactly the two points a
-// naive {0, divisibility=1} two-probe samples -- but NON-zero for arg >= 2, so
-// the true per-thread contiguity is NOT 4 for all inputs. The layout-native
-// multi-substitution probe must refuse to stamp contiguity here.
+// symbolic evaluator walks it). It is ZERO at arg in {0, 1} but NON-zero for
+// arg >= 2, so the true per-thread contiguity is NOT 4 for all inputs. The
+// symbolic register-order proof must refuse to stamp contiguity here.
 #linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]], warp = [[64, 0], [0, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
-  // GFX950-LABEL: @vgpr_ll_native_scalar_dep_agrees_at_two_probes
-  tt.func @vgpr_ll_native_scalar_dep_agrees_at_two_probes(%ptr: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg: i32) -> tensor<128x4xi8, #linear> {
+  // GFX950-LABEL: @vgpr_symbolic_scalar_dep_reject
+  tt.func @vgpr_symbolic_scalar_dep_reject(%ptr: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg: i32) -> tensor<128x4xi8, #linear> {
     %rows = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #linear}>>
     %cols = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 0, parent = #linear}>>
     %rows2d = tt.expand_dims %rows {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #linear}>> -> tensor<128x1xi32, #linear>
