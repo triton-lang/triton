@@ -490,6 +490,7 @@ class nvidia_knobs(base_knobs):
     nvdisasm: env_nvidia_tool = env_nvidia_tool("nvdisasm")
     ptxas: env_nvidia_tool = env_nvidia_tool("ptxas")
     ptxas_blackwell: env_nvidia_tool = env_nvidia_tool("ptxas-blackwell")
+    ptxas_thor: env_nvidia_tool = env_nvidia_tool("ptxas-thor")
 
     dump_nvptx: env_bool = env_bool("NVPTX_ENABLE_DUMP")
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")

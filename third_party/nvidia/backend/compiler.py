@@ -32,6 +32,10 @@ def min_dot_size(target: GPUTarget):
 
 
 def get_ptxas(arch: int) -> knobs.NvidiaTool:
+    # Thor (sm_110) needs its own ptxas; other blackwell archs (sm_100, sm_120)
+    # use ptxas-blackwell, and pre-blackwell archs use the default ptxas.
+    if arch == 110:
+        return knobs.nvidia.ptxas_thor
     return knobs.nvidia.ptxas_blackwell if arch >= 100 else knobs.nvidia.ptxas
 
 
