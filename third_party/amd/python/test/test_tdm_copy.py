@@ -81,6 +81,14 @@ What this file actually tests
   * Runtime test on gfx1250 compares against a torch-on-CPU reference.
 
 Runtime tests are skipped on non-gfx1250 hosts.
+
+This file is the *standalone* per-`async_load` reference.  Merging only
+fuses adjacent copies with DISJOINT active-warp sets, so the hinted pairs
+here deliberately overlap to stay un-merged; the compile test also sets
+TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1 to suppress auto-generated hints
+for the unhinted pair.  Merge-aware lowering (where compatible hinted
+copies fuse into a single `tensor_load_to_lds`) is covered separately in
+`test_tdm_merge.py`.
 """
 
 import re
@@ -165,15 +173,22 @@ def vector_add_tdm_kernel(
 # Hint cookbook for `vector_add_tdm_kernel`.  Layout: (HINT_A, HINT_B,
 # id).  Bit `i` => warp `i`; `0` selects the kwarg-free load (an
 # explicit zero is rejected by the verifier).  All entries below are
-# verifier-legal.
+# individually verifier-legal.
+#
+# This is the *standalone* per-`async_load` reference, so every hinted
+# pair must stay un-merged.  Merging only fuses adjacent copies whose
+# active-warp sets are DISJOINT, so each pair here deliberately OVERLAPS
+# (shares >= 1 warp bit) -- the merge analyser's disjointness check
+# rejects them and both copies lower to their own `tensor_load_to_lds`.
+# (`no_hint` stays standalone via the auto-merge env knob below.)
 _HINT_PARAMS = [
     (0b00000000, 0b00000000, "no_hint"),
-    (0b11111111, 0b00000000, "full_a_unhinted_b"),
-    (0b00001111, 0b11110000, "lo4_hi4"),
-    (0b01010101, 0b10101010, "strided_pair"),
-    (0b00110011, 0b11001100, "lo_hi_pairs"),
-    (0b00000011, 0b00001100, "K2_low_warps"),
-    (0b00000001, 0b00000010, "single_warp_pair"),
+    (0b00001111, 0b00000011, "lo4_overlap_lo2"),
+    (0b01010101, 0b00010001, "strided_overlap_lane"),
+    (0b00110011, 0b00000011, "lohi_overlap_lo2"),
+    (0b00001111, 0b00001111, "identical_lo4"),
+    (0b00000011, 0b00000001, "lo2_overlap_single"),
+    (0b11111111, 0b00001111, "full_overlap_lo4"),
 ]
 
 
@@ -195,8 +210,16 @@ _COMPILE_BLOCK_SHAPES = [(64, 64), (32, 128)]
     [_param_args(p) for p in _HINT_PARAMS],
     ids=[_param_id(p) for p in _HINT_PARAMS],
 )
-def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
-    """Compile-only: each `async_load` lowers to one `tensor_load_to_lds`."""
+def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, monkeypatch):
+    """Compile-only: each `async_load` lowers to one `tensor_load_to_lds`.
+
+    The hinted pairs use OVERLAPPING active-warp sets, so the merge
+    analyser's disjointness check rejects them and each copy stays
+    standalone.  The env knob additionally suppresses auto-generated
+    hints for the `no_hint` (unhinted) pair.  The fused (merged) lowering
+    is exercised in `test_tdm_merge.py`.
+    """
+    monkeypatch.setenv("TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS", "1")
     NUM_WARPS = 8
     signature = {
         "a_ptr": "*i32",

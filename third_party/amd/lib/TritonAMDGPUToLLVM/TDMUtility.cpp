@@ -1,15 +1,25 @@
 #include "TDMUtility.h"
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "triton/Tools/Sys/GetEnv.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/Support/Debug.h"
 #include <numeric>
 #include <optional>
 
 // Include shared C-compatible TDM utilities
 #include "../../backend/include/TDMCommon.h"
+
+#ifdef DEBUG_TYPE
+#undef DEBUG_TYPE
+#endif
+#define DEBUG_TYPE "tdm-merge"
 
 namespace mlir::LLVM::AMD {
 
@@ -168,6 +178,11 @@ analyzeGatherScatterLayout(RankedTensorType indicesType) {
 }
 
 } // namespace
+
+int getTDMEffectiveWarps(int numWarps, std::optional<uint32_t> warpUsedHint) {
+  return warpUsedHint ? static_cast<int>(llvm::popcount(*warpUsedHint))
+                      : numWarps;
+}
 
 std::pair<SmallVector<unsigned>, unsigned>
 distributeTDMWarpsAlignToPartition(ArrayRef<int64_t> blockShape, int numWarps,
@@ -1117,6 +1132,28 @@ int64_t computePerPartitionSliceStride(
   return stride;
 }
 
+// Emit the raw TDM intrinsic call from already-filled descriptor groups.
+// Pads the group operands to the fixed 4 x <4xi32> + 1 x <8xi32> ABI, appends
+// the aux-bits operand, and selects the load/store intrinsic name.  Both the
+// standalone and merged emitters go through here so the intrinsic operand ABI
+// is defined in one place.
+void emitTDMRawIntrinsic(RewriterBase &rewriter, Location loc,
+                         ArrayRef<Value> inputGroups, bool isLoad,
+                         int32_t auxBits) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
+  auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
+  SmallVector<Value, 6> groups(inputGroups.begin(), inputGroups.end());
+  // Pad to 4 vector groups (intrinsic always takes 4 group operands).
+  while (groups.size() < 4)
+    groups.push_back(LLVM::ZeroOp::create(rewriter, loc, v4i32Ty));
+  groups.push_back(LLVM::ZeroOp::create(rewriter, loc, v8i32Ty)); // group4
+  groups.push_back(b.i32_val(auxBits));
+  const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
+                                     : "llvm.amdgcn.tensor.store.from.lds";
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {}, groups);
+}
+
 // Emit a single TDM intrinsic (load or store) for the given block shape.
 // This handles both the 2D (d2 intrinsic) and >2D (full intrinsic) cases.
 void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
@@ -1131,10 +1168,6 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                       Value ctaId, bool isLoad, ArrayRef<unsigned> warpsPerCTA,
                       int32_t auxBits,
                       std::optional<uint32_t> warpUsedHint = std::nullopt) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
-  auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
-
   SmallVector<Value, 4> groups(desc.begin(),
                                desc.begin() + (numDims > 2 ? 4 : 2));
   fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
@@ -1143,14 +1176,7 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                     barrier, instrSharedLayout, ctaId, !isLoad, warpsPerCTA,
                     warpUsedHint);
 
-  // Pad to 4 vector groups (intrinsic always takes 4 group operands).
-  while (groups.size() < 4)
-    groups.push_back(LLVM::ZeroOp::create(rewriter, loc, v4i32Ty));
-  groups.push_back(LLVM::ZeroOp::create(rewriter, loc, v8i32Ty)); // group4
-  groups.push_back(b.i32_val(auxBits));
-  const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
-                                     : "llvm.amdgcn.tensor.store.from.lds";
-  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {}, groups);
+  emitTDMRawIntrinsic(rewriter, loc, groups, isLoad, auxBits);
 }
 
 } // namespace
@@ -1183,7 +1209,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
   // of numWarps; verifier guarantees single-instruction emission (incl.
   // partitioned encodings).  Inactive warps become HW no-ops via
   // fillTDMDescriptor's free-variable-mask predication (XOR-anchored at i0).
-  int effectiveWarps = warpUsedHint ? llvm::popcount(*warpUsedHint) : numWarps;
+  int effectiveWarps = getTDMEffectiveWarps(numWarps, warpUsedHint);
 
   auto [warpsPerCTA, numTDMInstructions] =
       distributeTDMWarpsAlignToPartition(blockShape, effectiveWarps, encoding);
@@ -1509,5 +1535,410 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
         b.select(combinedPred, b.add(localOffset, tileOffset), b.i64_val(0));
   }
   return offsets;
+}
+
+// ---------------------------------------------------------------------------
+// TDM copy merging: analysis + merged emit.
+
+namespace {
+
+using TDMCopyGlobalToLocalOp =
+    ::mlir::triton::amdgpu::AsyncTDMCopyGlobalToLocalOp;
+
+// Index of the lowest active warp in the hint.
+uint32_t getWarpUsedHintI0(uint32_t hint) {
+  assert(hint != 0 && "hint must be non-zero");
+  return llvm::countr_zero(hint);
+}
+
+// A hint's active warps form an axis-aligned coset: their warp IDs all agree on
+// a fixed set of bit positions and vary on the rest.  Returns those fixed bits
+// (within the num_warps id range).  A wave belongs to the hint iff XOR-ing its
+// warpId with i0 (the lowest active warp) leaves these bits clear -- the test
+// used to build the per-member select predicate.
+uint32_t getWarpUsedHintFreeMask(uint32_t hint, int numWarps) {
+  assert(llvm::isPowerOf2_32(numWarps) && "numWarps must be power-of-two");
+  uint32_t warpIdMask = (uint32_t{1} << llvm::Log2_32(numWarps)) - 1;
+
+  // `varying` = bit positions that differ across the active warps (relative to
+  // i0); the fixed bits are everything else within the id range.
+  uint32_t i0 = getWarpUsedHintI0(hint);
+  uint32_t varying = 0;
+  for (uint32_t mask = hint; mask != 0; mask &= mask - 1)
+    varying |= static_cast<uint32_t>(llvm::countr_zero(mask) ^ i0);
+
+  return warpIdMask & ~varying;
+}
+
+// Generated hint for member `groupIdx`: an axis-aligned mask that splits the
+// numWarps warps evenly across the group.  (groupSize 3 needs a dedicated
+// half + quarter + quarter split to stay axis-aligned.)
+uint32_t getGeneratedMergeHint(unsigned groupIdx, unsigned groupSize,
+                               unsigned numWarps) {
+  if (groupSize == 3) {
+    assert((numWarps == 4 || numWarps == 8) &&
+           "3-way generated hints support 4 or 8 warps");
+    unsigned lowGroupWarps = numWarps / 2;
+    if (groupIdx == 0)
+      return (uint32_t{1} << lowGroupWarps) - 1;
+    if (groupIdx == 1)
+      return ((uint32_t{1} << (lowGroupWarps / 2)) - 1) << lowGroupWarps;
+    assert(groupIdx == 2 && "3-way group index out of range");
+    return ((uint32_t{1} << (lowGroupWarps / 2)) - 1)
+           << (lowGroupWarps + lowGroupWarps / 2);
+  }
+
+  uint32_t hint = 0;
+  for (unsigned warp = groupIdx; warp < numWarps; warp += groupSize)
+    hint |= uint32_t{1} << warp;
+  return hint;
+}
+
+// True if hint generation may stamp this copy: it has no hint yet, no mbarrier,
+// and no partitioned destination.  Generated hints are stamped after the op
+// verifier runs, so skip partitioned layouts instead of revalidating their
+// extra K % numLogicalPieces constraint here.
+bool isGeneratedMergeHintCandidate(TDMCopyGlobalToLocalOp op) {
+  if (op.getWarpUsedHintAttr() || op.getBarrier())
+    return false;
+  return !isa<triton::gpu::PartitionedSharedEncodingAttr>(
+      op.getResult().getType().getEncoding());
+}
+
+// True if this copy may join a merge group.
+bool isMergeableTDMCopy(TDMCopyGlobalToLocalOp op) {
+  return op.getWarpUsedHintAttr() && !op.getBarrier();
+}
+
+// Rank (number of dimensions) of the copy's tensor descriptor.
+size_t getTDMDescriptorRank(TDMCopyGlobalToLocalOp op) {
+  return op.getDesc().getType().getShape().size();
+}
+
+// Stamp one generated group: pull its destination views ahead of the copies,
+// make the copies adjacent, and assign each an axis-aligned disjoint hint.
+// The caller (assignGeneratedMergeHintsGreedily) guarantees a 2/3/4-member
+// group with one view per copy.
+void assignGeneratedMergeHints(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
+                               ArrayRef<triton::gpu::MemDescIndexOp> viewOps,
+                               unsigned numWarps) {
+  auto groupSize = static_cast<unsigned>(group.size());
+  auto *ctx = group.front().getContext();
+  auto hintTy = IntegerType::get(ctx, 32);
+
+  Operation *firstCopy = group.front();
+  for (triton::gpu::MemDescIndexOp viewOp : llvm::drop_begin(viewOps))
+    viewOp->moveBefore(firstCopy);
+
+  Operation *prevCopy = group.front();
+  for (TDMCopyGlobalToLocalOp copyOp : llvm::drop_begin(group)) {
+    copyOp->moveAfter(prevCopy);
+    prevCopy = copyOp;
+  }
+
+  for (auto [idx, copyOp] : llvm::enumerate(group)) {
+    uint32_t hint = getGeneratedMergeHint(idx, groupSize, numWarps);
+    copyOp.setWarpUsedHintAttr(IntegerAttr::get(hintTy, hint));
+  }
+}
+
+// Split a run into the largest supported groups and stamp their hints.
+void assignGeneratedMergeHintsGreedily(
+    MutableArrayRef<TDMCopyGlobalToLocalOp> run,
+    ArrayRef<triton::gpu::MemDescIndexOp> viewRun, unsigned numWarps) {
+  // Generated 3-way hints only support 4 or 8 warps, so cap auto-merge at 8;
+  // beyond that a trailing triple would ask getGeneratedMergeHint for an
+  // unsupported split.
+  if (numWarps > 8)
+    return;
+
+  for (size_t i = 0; i < run.size();) {
+    size_t remaining = run.size() - i;
+    // Take the largest group that fits (<= 4 members and <= numWarps).  A 3-way
+    // group is only reachable for an exact trailing triple, since size 4 is
+    // preferred whenever >= 4 copies remain.
+    size_t chosen = 0;
+    for (size_t size : {size_t{4}, size_t{3}, size_t{2}}) {
+      if (size <= remaining && size <= numWarps) {
+        chosen = size;
+        break;
+      }
+    }
+    if (chosen < 2)
+      break;
+    assignGeneratedMergeHints(run.slice(i, chosen), viewRun.slice(i, chosen),
+                              numWarps);
+    i += chosen;
+  }
+}
+
+// For canonical unhinted copies,
+//
+//   memdesc_index A; async_tdm_copy A; memdesc_index B; async_tdm_copy B; ...
+//
+// move the views before the copies and add generated `warp_used_hint` masks.
+//
+// This IR mutation is persisted (not analysis-local) and runs from two separate
+// passes -- UpdateAsyncWaitCount (to count the post-merge physical intrinsics)
+// and the later LLVM conversion (to actually fuse).  They share no state, so
+// each regenerates the hints; this is safe because the stamping is idempotent:
+// `isGeneratedMergeHintCandidate` skips copies that already carry a hint, so
+// the second run is a no-op.  `computeTDMMergeGroups` assumes hints are already
+// materialized, so it must run after this.
+void prepareGeneratedTDMMergeHintsImpl(ModuleOp mod) {
+  llvm::SmallSetVector<Block *, 8> blocks;
+  mod->walk(
+      [&](TDMCopyGlobalToLocalOp tdm) { blocks.insert(tdm->getBlock()); });
+
+  for (Block *block : blocks) {
+    unsigned numWarps = triton::gpu::lookupNumWarps(block->getParentOp());
+    // `run` tracks adjacent copies eligible for generated hints.
+    SmallVector<TDMCopyGlobalToLocalOp, 8> run;
+    SmallVector<triton::gpu::MemDescIndexOp, 8> viewRun;
+    auto flush = [&]() {
+      assignGeneratedMergeHintsGreedily(run, viewRun, numWarps);
+      run.clear();
+      viewRun.clear();
+    };
+
+    for (Operation &op : llvm::make_early_inc_range(*block)) {
+      if (auto tdm = dyn_cast<TDMCopyGlobalToLocalOp>(&op)) {
+        auto viewOp =
+            tdm.getResult().getDefiningOp<triton::gpu::MemDescIndexOp>();
+        if (!isGeneratedMergeHintCandidate(tdm) || !viewOp ||
+            viewOp->getBlock() != block ||
+            !viewOp->isBeforeInBlock(tdm.getOperation())) {
+          flush();
+          continue;
+        }
+        viewRun.push_back(viewOp);
+        run.push_back(tdm);
+        continue;
+      }
+      if (isa<triton::gpu::MemDescIndexOp>(&op))
+        continue;
+      flush();
+    }
+    flush();
+  }
+}
+
+// Pairwise checks other than hint disjointness: rank and cache.
+bool canMergeWith(ArrayRef<Operation *> members,
+                  TDMCopyGlobalToLocalOp candidate) {
+  auto first = cast<TDMCopyGlobalToLocalOp>(members.front());
+  // Equal rank implies equal descriptor group count (groupCount = rank>2?4:2),
+  // so the rank check subsumes the group-count check.
+  if (getTDMDescriptorRank(first) != getTDMDescriptorRank(candidate))
+    return false;
+  if (first.getCache() != candidate.getCache())
+    return false;
+  return true;
+}
+
+// Build merge groups from an adjacent run of hinted TDM copies.
+void emitMergeGroup(
+    MutableArrayRef<Operation *> run,
+    DenseMap<Operation *, std::shared_ptr<TDMMergeGroupInfo>> &result) {
+  auto hintOf = [](Operation *op) {
+    return static_cast<uint32_t>(
+        cast<TDMCopyGlobalToLocalOp>(op).getWarpUsedHintAttr().getInt());
+  };
+
+  while (run.size() >= 2) {
+    // Extend while hints stay disjoint and descriptors stay compatible.
+    SmallVector<Operation *, 4> members{run.front()};
+    SmallVector<uint32_t, 4> hints{hintOf(run.front())};
+    uint32_t orSoFar = hints.front();
+    for (size_t i = 1; i < run.size() && members.size() < 4; ++i) {
+      auto op = cast<TDMCopyGlobalToLocalOp>(run[i]);
+      if (!canMergeWith(members, op))
+        break;
+      uint32_t hint = hintOf(op);
+      if (orSoFar & hint) // hints must be pairwise-disjoint
+        break;
+      orSoFar |= hint;
+      hints.push_back(hint);
+      members.push_back(run[i]);
+    }
+
+    size_t groupSize = members.size();
+    if (groupSize >= 2) {
+      TDMMergeGroupInfo info;
+      info.members.assign(members.begin(), members.end());
+      info.memberHints.assign(hints.begin(), hints.end());
+      info.lastInProgramOrder = info.members.back();
+      LLVM_DEBUG({
+        llvm::dbgs() << "[tdm-merge] group of " << groupSize << " ops\n";
+        for (auto [idx, op] : llvm::enumerate(info.members))
+          llvm::dbgs() << "  hint=0x"
+                       << llvm::Twine::utohexstr(info.memberHints[idx]) << " "
+                       << *op << "\n";
+      });
+      auto shared = std::make_shared<TDMMergeGroupInfo>(std::move(info));
+      for (auto *op : shared->members)
+        result[op] = shared;
+      run = run.drop_front(groupSize);
+    } else {
+      run = run.drop_front(1);
+    }
+  }
+}
+
+// Fill one member descriptor for the fused emit.
+SmallVector<Value, 4> fillMergedTDMDescriptorMember(
+    RewriterBase &rewriter, Location loc,
+    const LLVMTypeConverter *typeConverter, ArrayRef<Value> desc,
+    const TDMMergeMemberInfo &info, int numWarps, ArrayRef<Value> offset,
+    ArrayRef<Value> dstPtrs, Value pred, bool isLoad, Value ctaId,
+    uint32_t hint) {
+  assert(desc.size() == info.numGroups &&
+         "descPerMember must match the member descriptor group count");
+
+  int effectiveWarps = static_cast<int>(llvm::popcount(hint));
+  auto [warpsPerCTA, numTDMInstructions] =
+      ::mlir::LLVM::AMD::distributeTDMWarpsAlignToPartition(
+          info.shapePerCTA, effectiveWarps, info.encoding);
+  assert(numTDMInstructions == 1 &&
+         "verifier guarantees single-instruction emission for hinted ops");
+  (void)numTDMInstructions;
+
+  SmallVector<Value, 4> filled(desc.begin(), desc.end());
+  SmallVector<Value> offsets(offset.begin(), offset.end());
+  fillTDMDescriptor(rewriter, loc, typeConverter, info.elementType,
+                    info.shapePerCTA, numWarps, info.padInterval,
+                    info.padAmount, filled, offsets, dstPtrs, pred,
+                    info.multicastMask, /*barrierPtr=*/Value(),
+                    info.sharedLayout, ctaId, /*isStore=*/!isLoad, warpsPerCTA,
+                    hint);
+  return filled;
+}
+
+// Returns a wave-uniform i1 (all lanes agree, since it depends only on warpId):
+// true for the waves whose warp belongs to `hint`.  Drives the per-member
+// `select` that picks this wave's descriptor in the fused emit.
+Value buildTDMMergeMemberActivePredicate(RewriterBase &rewriter, Location loc,
+                                         uint32_t hint, int numWarps) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto [_laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  uint32_t i0 = getWarpUsedHintI0(hint);
+  Value warpIdShifted = i0 != 0 ? b.xor_(warpId, b.i32_val(i0)) : warpId;
+
+  uint32_t freeMask = getWarpUsedHintFreeMask(hint, numWarps);
+  return b.icmp_eq(b.and_(warpIdShifted, b.i32_val(freeMask)), b.i32_val(0));
+}
+
+} // namespace
+
+// Controls only the *auto-generation* of merge hints for adjacent unhinted
+// copies.  On by default; set TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1 (or
+// "on"/"true") to turn it off.  When off the compiler stops synthesizing hints,
+// but merge-group formation itself is NOT gated: TDM copies that already carry
+// compatible warp_used_hint values (user-authored or previously generated)
+// still merge.  This matches the documented contract in
+// test_tdm_merge.py -- the env var governs auto-generation, not whether
+// existing compatible hints fuse.
+static bool tdmAutoMergeEnabled() {
+  auto disabled = mlir::triton::tools::isEnvValueBool(
+      mlir::triton::tools::getStrEnv("TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS"));
+  return !disabled.value_or(false);
+}
+
+void prepareGeneratedTDMMergeHints(ModuleOp mod) {
+  if (!tdmAutoMergeEnabled())
+    return;
+  prepareGeneratedTDMMergeHintsImpl(mod);
+}
+
+// Find groups of consecutive, hinted TDM copies.  Any intervening op ends the
+// current run.  Generated hints must already be materialized.
+llvm::DenseMap<Operation *, std::shared_ptr<TDMMergeGroupInfo>>
+computeTDMMergeGroups(ModuleOp mod) {
+  llvm::DenseMap<Operation *, std::shared_ptr<TDMMergeGroupInfo>> result;
+
+  // Collect the blocks that contain TDM copies, then scan each one in order.
+  llvm::SmallSetVector<Block *, 8> blocks;
+  mod->walk(
+      [&](TDMCopyGlobalToLocalOp tdm) { blocks.insert(tdm->getBlock()); });
+  for (Block *block : blocks) {
+    SmallVector<Operation *> candidates;
+    auto flush = [&]() {
+      // Finalize the current adjacent run before starting a new one.
+      if (candidates.size() >= 2)
+        emitMergeGroup(candidates, result);
+      candidates.clear();
+    };
+
+    for (Operation &op : *block) {
+      // Accumulate adjacent merge-eligible copies; anything else (including a
+      // non-mergeable TDM copy) ends the run.
+      if (auto tdm = dyn_cast<TDMCopyGlobalToLocalOp>(&op))
+        if (isMergeableTDMCopy(tdm)) {
+          candidates.push_back(&op);
+          continue;
+        }
+      flush();
+    }
+    flush();
+  }
+
+  return result;
+}
+
+// Emit one fused TDM load for a merge group; store merging is not supported yet.
+void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
+                            const LLVMTypeConverter *typeConverter,
+                            ArrayRef<SmallVector<Value>> descPerMember,
+                            ArrayRef<TDMMergeMemberInfo> memberInfo,
+                            int numWarps,
+                            ArrayRef<SmallVector<Value>> offsetPerMember,
+                            ArrayRef<SmallVector<Value>> dstPtrsPerMember,
+                            ArrayRef<Value> predPerMember, bool isLoad,
+                            Value ctaId, int32_t auxBits,
+                            const TDMMergeGroupInfo &groupInfo) {
+  size_t N = groupInfo.members.size();
+  assert(N >= 2 && N <= 4 && "merge group size invariant");
+  assert(descPerMember.size() == N && memberInfo.size() == N &&
+         offsetPerMember.size() == N && dstPtrsPerMember.size() == N &&
+         predPerMember.size() == N);
+  assert(groupInfo.memberHints.size() == N &&
+         "merge group must carry one hint per member");
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // canMergeWith guarantees a uniform rank across members, so every member
+  // shares this descriptor group count (2 for rank <= 2, otherwise 4).
+  size_t numGroups = memberInfo.front().numGroups;
+
+  // Hints came from computeTDMMergeGroups; no per-member recheck here.
+  ArrayRef<uint32_t> hintPerMember = groupInfo.memberHints;
+
+  SmallVector<SmallVector<Value, 4>, 4> filledPerMember(N);
+  for (size_t i = 0; i < N; ++i) {
+    const TDMMergeMemberInfo &info = memberInfo[i];
+    filledPerMember[i] = fillMergedTDMDescriptorMember(
+        rewriter, loc, typeConverter, descPerMember[i], info, numWarps,
+        offsetPerMember[i], dstPtrsPerMember[i], predPerMember[i], isLoad,
+        ctaId, hintPerMember[i]);
+  }
+
+  // Build predicates for all but the last member; the last is the default.
+  SmallVector<Value, 4> memberActive(N - 1);
+  for (size_t s = 0; s + 1 < N; ++s)
+    memberActive[s] = buildTDMMergeMemberActivePredicate(
+        rewriter, loc, hintPerMember[s], numWarps);
+
+  // Pick the descriptor for this wave with a scalar select chain.
+  // FIXME(perf): descriptor groups that are loop-invariant across members
+  // (e.g. identical across the group) produce redundant selects; hoist those
+  // out of the per-group loop instead of rebuilding a full chain for each.
+  SmallVector<Value, 6> args(numGroups);
+  for (size_t g = 0; g < numGroups; ++g) {
+    Value acc = filledPerMember[N - 1][g];
+    for (size_t s = N - 1; s-- > 0;)
+      acc = b.select(memberActive[s], filledPerMember[s][g], acc);
+    args[g] = acc;
+  }
+
+  emitTDMRawIntrinsic(rewriter, loc, args, isLoad, auxBits);
 }
 } // namespace mlir::LLVM::AMD

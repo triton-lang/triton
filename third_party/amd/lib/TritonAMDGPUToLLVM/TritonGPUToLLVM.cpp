@@ -190,9 +190,15 @@ struct ConvertTritonAMDGPUToLLVM
     if (failed(uniformitySolver.initializeAndRun(mod)))
       return signalPassFailure();
 
+    // Generate implicit-merge hints, then run the analysis once before
+    // populating patterns.  The map is queried by
+    // AsyncTDMCopyGlobalToLocalOp conversion to decide whether to fuse.  Lives
+    // on this stack frame, which encloses pattern application below.
+    mlir::LLVM::AMD::prepareGeneratedTDMMergeHints(mod);
+    auto tdmMergeGroups = mlir::LLVM::AMD::computeTDMMergeGroups(mod);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
                                            axisInfoAnalysis, &uniformitySolver,
-                                           AMDBenefit);
+                                           tdmMergeGroups, AMDBenefit);
     AMD::populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
     AMD::populateBarrierOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
     AMD::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
