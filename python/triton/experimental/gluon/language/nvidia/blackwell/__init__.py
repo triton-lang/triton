@@ -47,8 +47,10 @@ class TensorMemoryLayout:
             layouts use ``32 / bitwidth``.
         cga_layout (Optional[List[List[int]]]): CGA layout bases. Defaults to [].
         two_ctas (bool): Whether the layout is for two-CTA mode. Defaults to False.
-        fp4_padded (bool): Whether byte storage uses the padded MMAv5 fp4
-            operand-A contract. Defaults to False.
+        fp4_padded (bool): Whether byte-backed operand A uses the padded MMAv5
+            FP4 layout. Its descriptor keeps the packed ``Mx(K/2)xi8`` shape,
+            MMAv5 treats logical K as twice descriptor K, and physical TMEM
+            reserves one byte per logical FP4 element. Defaults to False.
     """
     block: Tuple[int, int]
     col_stride: int

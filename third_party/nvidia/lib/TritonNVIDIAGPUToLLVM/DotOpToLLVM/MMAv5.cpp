@@ -21,25 +21,33 @@ class DotOpMmaV5TmemLoader : public DotOpMmaMemLoader {
 public:
   static DotOpMmaV5TmemLoader build(Location loc, RewriterBase &rewriter,
                                     mlir::triton::gpu::MemDescType memTy,
-                                    Value tmemBase, bool isFp4 = false) {
+                                    Value tmemBase,
+                                    unsigned logicalElementBitWidth) {
     // We take the full layout even when it is a subview
     // We'll just iterate the real shape when calling tmemLoad tho
-    auto bitwidth = memTy.getElementTypeBitWidth();
+    unsigned storageElementBitWidth = memTy.getElementTypeBitWidth();
+    assert(logicalElementBitWidth > 0 &&
+           storageElementBitWidth % logicalElementBitWidth == 0 &&
+           "logical element bit width must divide TMEM storage bit width");
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     Value address = tb.ptrtoint(i32_ty, tmemBase);
 
     auto llInv = toLinearLayout(memTy).pseudoinvert();
-    if (isFp4) {
+    unsigned packingFactor = storageElementBitWidth / logicalElementBitWidth;
+    if (packingFactor > 1) {
       auto dims = to_vector(llInv.getInDimNames());
-      auto logicalToPacked =
+      // MMAv5 indexes logical FP4 K elements, but the byte-backed memdesc has
+      // packed K coordinates. The fp4Padded layout separately maps those
+      // packed columns onto padded physical TMEM storage.
+      auto logicalToStorage =
           LinearLayout::identity1D(llInv.getInDimSize(dims[0]), dims[0],
                                    dims[0]) *
-          LinearLayout::zeros1D(2, dims[1], dims[1]) *
+          LinearLayout::zeros1D(packingFactor, dims[1], dims[1]) *
           LinearLayout::identity1D(llInv.getInDimSize(dims[1]), dims[1],
                                    dims[1]);
-      llInv = logicalToPacked.compose(llInv);
+      llInv = logicalToStorage.compose(llInv);
     }
-    return DotOpMmaV5TmemLoader(llInv, address, bitwidth);
+    return DotOpMmaV5TmemLoader(llInv, address, storageElementBitWidth);
   }
 
   MemDescOperand tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
@@ -47,7 +55,7 @@ public:
     auto dims = to_vector(ll.getInDimNames());
     auto rowCol = ll.apply({{dims[0], a}, {dims[1], b}});
     int row = rowCol[0].second;
-    int col = rowCol[1].second * bitwidth / 32;
+    int col = rowCol[1].second * storageElementBitWidth / 32;
     int offset = col | (row << 16);
     return {address, offset};
   }
@@ -58,12 +66,14 @@ public:
   }
 
 private:
-  DotOpMmaV5TmemLoader(LinearLayout ll, Value address, int bitwidth)
-      : ll(std::move(ll)), address(address), bitwidth(bitwidth) {}
+  DotOpMmaV5TmemLoader(LinearLayout ll, Value address,
+                       int storageElementBitWidth)
+      : ll(std::move(ll)), address(address),
+        storageElementBitWidth(storageElementBitWidth) {}
 
   LinearLayout ll;
   Value address;
-  int bitwidth;
+  int storageElementBitWidth;
 };
 
 //===----------------------------------------------------------------------===//
@@ -480,8 +490,9 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   bool transA = false;
   auto isFp4a = op.numBitsPerElementA == 4;
   if (aInTmem) {
-    aLoader = std::make_unique<DotOpMmaV5TmemLoader>(
-        DotOpMmaV5TmemLoader::build(loc, rewriter, aTensorTy, baseA, isFp4a));
+    aLoader =
+        std::make_unique<DotOpMmaV5TmemLoader>(DotOpMmaV5TmemLoader::build(
+            loc, rewriter, aTensorTy, baseA, op.numBitsPerElementA));
   } else {
     auto loader = DotOpMmaSmemLoader::build(loc, rewriter, aTensorTy, baseA,
                                             aOperandShape, 0, 5, isFp4a);
@@ -565,7 +576,8 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
   dot.numBitsPerElementB = bTensorTy.getElementTypeBitWidth();
 
   DotOpMmaV5TmemLoader dLoader =
-      DotOpMmaV5TmemLoader::build(loc, rewriter, dTensorTy, adaptor.getD());
+      DotOpMmaV5TmemLoader::build(loc, rewriter, dTensorTy, adaptor.getD(),
+                                  dTensorTy.getElementTypeBitWidth());
   dot.getAccAddress = [&](ConversionPatternRewriter &rewriter, Location loc,
                           int m, int n, const DotConversion::InstDesc &desc) {
     return dLoader.tmemLoad(m * desc.mmaSizeM, n * desc.mmaSizeN, rewriter,

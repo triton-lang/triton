@@ -458,8 +458,9 @@ SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
       packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
   } else if (auto tmemLayout =
                  dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
-    // We know fp4 padded TMEM is always on the LHS, so the packed axis is the
-    // inner dimension.
+    // An fp4Padded TMEM descriptor keeps the packed Mx(K/2)xi8 shape. Allocate
+    // two physical columns per packed K coordinate so each logical FP4 element
+    // occupies one byte in TMEM.
     if (tmemLayout.getFp4Padded())
       packedAxis = 1;
   }
