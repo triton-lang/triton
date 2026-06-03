@@ -550,7 +550,6 @@ class NVWSAssignStagePhase
     : public impl::NVWSAssignStagePhaseBase<NVWSAssignStagePhase> {
 public:
   void runOnOperation() override {
-    MLIRContext *context = &getContext();
     mlir::ModuleOp m = getOperation();
 
     m.walk([&](triton::FuncOp funcOp) {

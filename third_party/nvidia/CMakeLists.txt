@@ -39,6 +39,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
               -fno-exceptions
               -fcuda-flush-denormals-to-zero
               --cuda-gpu-arch=sm_80
+              --cuda-feature=+ptx70
               ${TRITON_GSAN_INCLUDE_FLAGS}
               "${GSAN_RUNTIME_SRC}" -o "${GSAN_RUNTIME_IR}"
       DEPENDS "${GSAN_RUNTIME_SRC}" ${GSAN_RUNTIME_HDRS}

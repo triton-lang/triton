@@ -31,6 +31,7 @@ from .standard import (
 from .core import (
     PropagateNan,
     TRITON_MAX_TENSOR_NUMEL,
+    aggregate_replace,
     load_tensor_descriptor,
     store_tensor_descriptor,
     make_tensor_descriptor,
@@ -118,6 +119,7 @@ from .core import (
     uint32,
     uint64,
     uint8,
+    expect_zero,
     view,
     void,
     where,
@@ -273,6 +275,7 @@ __all__ = [
     "uint32",
     "uint64",
     "uint8",
+    "expect_zero",
     "uint_to_uniform_float",
     "umulhi",
     "unsqueeze",

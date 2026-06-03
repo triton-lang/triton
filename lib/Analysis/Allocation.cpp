@@ -42,14 +42,17 @@ namespace triton {
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,
-                                       int bitwidth) {
+                                       int bitwidth, int numBanks,
+                                       gpu::LocalMemOpTile srcTile,
+                                       gpu::LocalMemOpTile dstTile) {
   auto *ctx = srcLayout.getInDimNames().begin()->getContext();
   auto srcLayoutNoBroadcast =
       actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
   auto dstLayoutNoBroadcast =
       actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
-  auto smem = gpu::optimalSwizzlingLdSt(srcLayoutNoBroadcast,
-                                        dstLayoutNoBroadcast, bitwidth);
+  auto smem =
+      gpu::optimalSwizzlingLdSt(srcLayoutNoBroadcast, dstLayoutNoBroadcast,
+                                bitwidth, numBanks, srcTile, dstTile);
   auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
   // The smem has the same cta layout as the srcLayout, so we use that instead
   // We remove the number of elements that are duplicated in the cta layout
@@ -59,10 +62,12 @@ unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
 }
 
 unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
-                                       RankedTensorType dstTy) {
-  return getNumScratchElemsSwizzledCvt(gpu::toLinearLayout(srcTy),
-                                       gpu::toLinearLayout(dstTy),
-                                       getBitwidth(srcTy));
+                                       RankedTensorType dstTy, int numBanks,
+                                       gpu::LocalMemOpTile srcTile,
+                                       gpu::LocalMemOpTile dstTile) {
+  return getNumScratchElemsSwizzledCvt(
+      gpu::toLinearLayout(srcTy), gpu::toLinearLayout(dstTy),
+      getBitwidth(srcTy), numBanks, srcTile, dstTile);
 }
 
 // Both `atomic_cas` and `atomic_rmw` may need scratch memory to store values

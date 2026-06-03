@@ -5,6 +5,12 @@ include "mlir/Pass/PassBase.td"
 
 def AllocateAMDGPUSharedMemory : Pass<"allocate-amdgpu-shared-memory", "mlir::ModuleOp"> {
   let summary = "Add metadata for shared memory allocation";
+  let constructor = "mlir::triton::createAllocateAMDGPUSharedMemoryPass(\"\")";
+
+  let options = [
+      Option<"arch", "arch", "std::string", /*default*/"\"\"",
+             "gfx target device architecture, e.g., gfx942">,
+  ];
 
   let description = [{
     This pass uses the `ModuleAllocation` analysis to:

@@ -569,8 +569,15 @@ void init_triton_llvm(py::module &&m) {
       .def_property_readonly(
           "name", [](llvm::Function *fn) { return fn->getName().str(); })
       .def("set_calling_conv", &llvm::Function::setCallingConv)
-      .def("add_fn_attr", [](llvm::Function *fn, std::string &name,
-                             std::string &val) { fn->addFnAttr(name, val); })
+      .def(
+          "add_fn_attr",
+          [](llvm::Function *fn, std::string &name, std::string &val) {
+            if (val.empty())
+              fn->addFnAttr(name);
+            else
+              fn->addFnAttr(name, val);
+          },
+          py::arg("name"), py::arg("val") = "")
       .def("remove_fn_attr", [](llvm::Function *fn,
                                 std::string &name) { fn->removeFnAttr(name); })
       .def("add_fn_asan_attr",

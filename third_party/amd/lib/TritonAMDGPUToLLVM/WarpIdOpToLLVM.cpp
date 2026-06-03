@@ -6,13 +6,12 @@
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "third_party/amd/include/TritonAMDGPUToLLVM/TargetUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
-using mlir::triton::AMD::ISAFamily;
+using triton::amdgpu::ISAFamily;
 
 namespace {
 

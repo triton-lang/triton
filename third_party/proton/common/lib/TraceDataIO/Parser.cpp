@@ -1,9 +1,10 @@
 #include "TraceDataIO/Parser.h"
+#include "Utility/Errors.h"
 
 using namespace proton;
 
 ParserException::ParserException(const std::string &msg, ExceptionSeverity sev)
-    : std::runtime_error(msg), severity(sev) {}
+    : std::runtime_error(prefixErrorMessage(msg)), severity(sev) {}
 
 ParserBase::ParserBase(ByteSpan &buffer, const ParserConfig &config)
     : buffer(buffer), config(config) {}

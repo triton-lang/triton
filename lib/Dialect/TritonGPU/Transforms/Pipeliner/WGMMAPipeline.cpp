@@ -133,13 +133,18 @@ static int minNumInterleavedCommitOps(Operation *waitOp) {
 /// Update wait op number by analyzing the number of async_commit_group ops
 /// along all paths.
 void mlir::triton::updateWaits(ModuleOp module) {
-  llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
+  llvm::SmallSetVector<Operation *, 8> waitOps;
   module.walk([&](ttg::AsyncWaitOp waitOp) {
     int minNumCommits = minNumInterleavedCommitOps(waitOp);
     waitOp.setNum(minNumCommits);
     waitOps.insert(waitOp);
   });
-  tt::combineRedundantWaitOps(waitOps);
+  tt::combineRedundantWaitOps(
+      waitOps, [](Operation *op) { return isa<ttg::AsyncCommitGroupOp>(op); },
+      [](OpBuilder &b, Location loc, ValueRange operands,
+         unsigned num) -> Operation * {
+        return ttg::AsyncWaitOp::create(b, loc, operands, num);
+      });
 }
 
 // Add the given values as operands of the given wait, and replace all uses of

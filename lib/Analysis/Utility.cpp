@@ -105,7 +105,8 @@ bool ReduceOpHelper::isAssociative() {
   return !hasNoAssociativeOp;
 }
 
-unsigned ReduceOpHelper::getScratchSizeInBytes() {
+unsigned ReduceOpHelper::getScratchSizeInBytes(
+    GetNumScratchElemsFn numScratchElemsGetter) {
   auto kLane = StringAttr::get(op.getContext(), "lane");
 
   auto isReduced = [axis = axis](const LinearLayout &layout) {
@@ -124,8 +125,13 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
     // BaseOffsets in the lowering.
     int bytes = 0;
     for (auto inputTy : op.getInputTypes()) {
-      auto nelem =
-          getNumScratchElemsSwizzledCvt(regLl, tmpLl, getBitwidth(inputTy));
+      unsigned nelem = 0;
+      if (numScratchElemsGetter) {
+        nelem = numScratchElemsGetter(regLl, tmpLl, getBitwidth(inputTy));
+      } else {
+        nelem =
+            getNumScratchElemsSwizzledCvt(regLl, tmpLl, getBitwidth(inputTy));
+      }
       bytes += nelem * (getBitwidth(inputTy) / 8);
     }
     bytesRegToTmp = std::max<unsigned>(bytesRegToTmp, bytes);
@@ -1191,7 +1197,7 @@ bool supportMMA(triton::DotOp op, int version) {
     if (k < 256 / aElemTy.getIntOrFloatBitWidth())
       return false;
     if (!(retShapePerCTA[rank - 2] % 64 == 0 &&
-          retShapePerCTA[rank - 1] % 16 == 0))
+          retShapePerCTA[rank - 1] % 8 == 0))
       return false;
     if (aElemTy.isF64() || bElemTy.isF64() ||
         retType.getElementType().isF64()) {
@@ -1216,7 +1222,7 @@ bool supportMMA(triton::DotOp op, int version) {
     if (rank == 3)
       return false;
     if (!(numWarps % 4 == 0 && retShapePerCTA[rank - 2] % 64 == 0 &&
-          retShapePerCTA[rank - 1] % 16 == 0 &&
+          retShapePerCTA[rank - 1] % 8 == 0 &&
           (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy) ||
            aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
            aElemTy.isF32()))) {

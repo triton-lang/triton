@@ -32,6 +32,9 @@ class StridedLayout(Layout):
     def name(self):
         return "STRIDED"
 
+    def can_preserve_storage_as(self, other: Layout, rank: int) -> bool:
+        return isinstance(other, StridedLayout) and self.order(rank) == other.order(rank)
+
     def swizzle_block_shape(self, block_shape):
         return block_shape
 
@@ -60,7 +63,7 @@ class StridedLayoutTransformation(LayoutTransformation):
     order: list[int]
 
     def swizzle_data(self, data):
-        assert data.stride(-1) == 1
+        assert data.numel() == 0 or data.stride(-1) == 1
         r = len(self.shape)
         if r == 0:
             return data

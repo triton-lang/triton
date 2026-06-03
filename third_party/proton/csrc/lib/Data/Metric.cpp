@@ -1,4 +1,5 @@
 #include "Data/Metric.h"
+#include "Utility/Errors.h"
 
 #include <cstring>
 #include <stdexcept>
@@ -6,12 +7,13 @@
 
 namespace proton {
 
-std::map<size_t, MetricBuffer::MetricDescriptor>
+std::map<uint64_t, MetricBuffer::MetricDescriptor>
     MetricBuffer::metricDescriptors;
-std::map<std::string, size_t> MetricBuffer::metricNameToId;
+std::map<std::string, uint64_t> MetricBuffer::metricNameToId;
 std::shared_mutex MetricBuffer::metricDescriptorMutex;
 
-std::atomic<size_t> MetricBuffer::metricId{0};
+std::atomic<uint64_t> MetricBuffer::metricId{0};
+std::atomic<uint64_t> MetricBuffer::metricSeqId{1};
 
 MetricBuffer::~MetricBuffer() {
   for (auto &[device, buffer] : deviceBuffers) {
@@ -30,11 +32,10 @@ MetricBuffer::~MetricBuffer() {
 void MetricBuffer::receive(
     const std::map<std::string, TensorMetric> &tensorMetrics,
     const std::map<std::string, MetricValueType> &scalarMetrics,
-    const MetricKernelLaunchState &metricKernelLaunchState) {
-  queueMetrics(tensorMetrics, metricKernelLaunchState.stream,
-               metricKernelLaunchState.tensor);
-  queueMetrics(scalarMetrics, metricKernelLaunchState.stream,
-               metricKernelLaunchState.scalar);
+    const MetricKernelLaunchState &metricKernelLaunchState,
+    const MetricKernelLaunchCallback &callback) {
+  queueMetrics(tensorMetrics, metricKernelLaunchState.tensor, callback);
+  queueMetrics(scalarMetrics, metricKernelLaunchState.scalar, callback);
 }
 
 MetricBuffer::MetricDescriptor
@@ -46,16 +47,15 @@ MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
     if (nameIt != metricNameToId.end()) {
       auto &descriptor = metricDescriptors.at(nameIt->second);
       if (descriptor.typeIndex != typeIndex) {
-        throw std::runtime_error(
-            "[PROTON] MetricBuffer: type mismatch for metric " + name +
+        throw makeInvalidArgument(
+            "MetricBuffer: type mismatch for metric " + name +
             ": current=" + getTypeNameForIndex(descriptor.typeIndex) +
             ", new=" + getTypeNameForIndex(typeIndex));
       }
       if (descriptor.size != size) {
-        throw std::runtime_error(
-            "[PROTON] MetricBuffer: size mismatch for metric " + name +
-            ": current=" + std::to_string(descriptor.size) +
-            ", new=" + std::to_string(size));
+        throw makeInvalidArgument(
+            "MetricBuffer: size mismatch for metric " + name + ": current=" +
+            std::to_string(descriptor.size) + ", new=" + std::to_string(size));
       }
       return descriptor;
     }
@@ -68,21 +68,21 @@ MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
   if (nameIt != metricNameToId.end()) {
     auto &descriptor = metricDescriptors.at(nameIt->second);
     if (descriptor.typeIndex != typeIndex) {
-      throw std::runtime_error(
-          "[PROTON] MetricBuffer: type mismatch for metric " + name +
+      throw makeInvalidArgument(
+          "MetricBuffer: type mismatch for metric " + name +
           ": current=" + getTypeNameForIndex(descriptor.typeIndex) +
           ", new=" + getTypeNameForIndex(typeIndex));
     }
     if (descriptor.size != size) {
-      throw std::runtime_error(
-          "[PROTON] MetricBuffer: size mismatch for metric " + name +
-          ": current=" + std::to_string(descriptor.size) +
-          ", new=" + std::to_string(size));
+      throw makeInvalidArgument("MetricBuffer: size mismatch for metric " +
+                                name +
+                                ": current=" + std::to_string(descriptor.size) +
+                                ", new=" + std::to_string(size));
     }
     return descriptor;
   }
 
-  auto newMetricId = metricId.fetch_add(1);
+  uint64_t newMetricId = metricId.fetch_add(1);
   MetricDescriptor descriptor{newMetricId, typeIndex, size, name};
   metricDescriptors.emplace(newMetricId, descriptor);
   metricNameToId.emplace(name, newMetricId);
@@ -124,15 +124,14 @@ collectTensorMetrics(Runtime *runtime,
       }
       tensorMetricsHost[name] = std::move(values);
     } else {
-      throw std::runtime_error(
-          "[PROTON] Unsupported tensor metric type index: " +
-          std::to_string(tensorMetric.typeIndex));
+      throw makeInvalidArgument("Unsupported tensor metric type index: " +
+                                std::to_string(tensorMetric.typeIndex));
     }
   }
   return tensorMetricsHost;
 }
 
-void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
+void MetricBuffer::queue(uint64_t seqId, TensorMetric tensorMetric,
                          void *stream,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
@@ -143,7 +142,7 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&numWords),
-                          reinterpret_cast<void *>(&metricId),
+                          reinterpret_cast<void *>(&seqId),
                           reinterpret_cast<void *>(&tensorMetric.ptr),
                           reinterpret_cast<void *>(&metricValueSize),
                           reinterpret_cast<void *>(&globalScratchPtr),
@@ -154,7 +153,7 @@ void MetricBuffer::queue(size_t metricId, TensorMetric tensorMetric,
                         nullptr);
 }
 
-void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
+void MetricBuffer::queue(uint64_t seqId, MetricValueType scalarMetric,
                          void *stream,
                          const MetricKernelLaunchConfig &launchConfig) {
   auto &buffer = getOrCreateBuffer();
@@ -163,11 +162,11 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
       [](auto &&value) -> uint64_t {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, std::string>) {
-          throw std::runtime_error(
-              "[PROTON] String metrics are not supported in MetricBuffer");
+          throw makeInvalidArgument(
+              "String metrics are not supported in MetricBuffer");
         } else if constexpr (is_std_vector_v<T>) {
-          throw std::runtime_error(
-              "[PROTON] Vector metrics are not supported in MetricBuffer");
+          throw makeInvalidArgument(
+              "Vector metrics are not supported in MetricBuffer");
         } else {
           static_assert(sizeof(T) == sizeof(uint64_t),
                         "MetricValueType alternative must be 8 bytes");
@@ -182,7 +181,7 @@ void MetricBuffer::queue(size_t metricId, MetricValueType scalarMetric,
   void *kernelParams[] = {reinterpret_cast<void *>(&buffer.devicePtr),
                           reinterpret_cast<void *>(&buffer.deviceOffsetPtr),
                           reinterpret_cast<void *>(&numWords),
-                          reinterpret_cast<void *>(&metricId),
+                          reinterpret_cast<void *>(&seqId),
                           reinterpret_cast<void *>(&metricBits),
                           reinterpret_cast<void *>(&globalScratchPtr),
                           reinterpret_cast<void *>(&profileScratchPtr)};

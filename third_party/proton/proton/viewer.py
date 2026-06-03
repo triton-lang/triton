@@ -34,14 +34,15 @@ def match_available_metrics(metrics, inclusive_metrics, exclusive_metrics):
 
 def remove_frames(database: json):
     # We first fine frames that match either one of the two conditions:
-    # 1. The frame name is COMPUTE_METADATA_SCOPE_NAME
+    # 1. The frame name is a metadata frame
     # 2. The frame has no metrics and no children
     # Then we go up from the located nodes and remove the parents if all children were
     # metadata nodes
     def remove_frame_helper(node):
         if "frame" not in node:
             return node
-        if node["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME:
+        if node["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME or node["frame"]["name"].startswith(
+                f"{COMPUTE_METADATA_SCOPE_NAME}:"):
             return None
         if len(node["metrics"]) == 0 and len(node["children"]) == 0:
             return None

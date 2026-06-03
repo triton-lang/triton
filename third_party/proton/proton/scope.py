@@ -5,6 +5,7 @@ from typing import Optional, Union, Any, Sequence
 
 from .flags import flags
 from .metric import transform_tensor_metrics, set_metric_kernels
+from .state import metadata_state
 from triton._C.libproton import proton as libproton
 
 thread_local_scopes = threading.local()
@@ -46,8 +47,9 @@ class scope:
         self.id = libproton.record_scope()
         libproton.enter_scope(self.id, self.name)
         if self.metrics:
-            set_metric_kernels()
-            libproton.add_metrics(self.id, *transform_tensor_metrics(self.metrics))
+            with metadata_state():
+                set_metric_kernels()
+                libproton.add_metrics(self.id, *transform_tensor_metrics(self.metrics))
 
     def _exit_scope(self):
         if not flags.profiling_on or self.id is None:
@@ -112,8 +114,9 @@ def enter_scope(name: str, *, metrics: Optional[dict[str, Any]] = None) -> Optio
     thread_local_scopes.scopes.append((id, name))
     libproton.enter_scope(id, name)
     if metrics:
-        set_metric_kernels()
-        libproton.add_metrics(id, *transform_tensor_metrics(metrics))
+        with metadata_state():
+            set_metric_kernels()
+            libproton.add_metrics(id, *transform_tensor_metrics(metrics))
     return id
 
 
@@ -127,7 +130,8 @@ def exit_scope(name: Optional[str] = None, *, metrics: Optional[dict[str, Any]] 
     elif not name:
         name = popped_name
     if metrics:
-        set_metric_kernels()
-        libproton.add_metrics(id, *transform_tensor_metrics(metrics))
+        with metadata_state():
+            set_metric_kernels()
+            libproton.add_metrics(id, *transform_tensor_metrics(metrics))
     libproton.exit_scope(id, name)
     return id

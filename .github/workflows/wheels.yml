@@ -27,6 +27,13 @@ jobs:
       id-token: write
       contents: read
 
+    # The self-hosted x86_64 runner ships a docker CLI (1.52) newer than the
+    # daemon's max API version (1.43), so unpinned docker commands fail with
+    # "client version 1.52 is too new". Pin at the job level so every step
+    # (including cibuildwheel's internal docker invocations) inherits it.
+    env:
+      DOCKER_API_VERSION: "1.43"
+
     steps:
 
       - name: Prune stale docker containers
@@ -82,6 +89,12 @@ jobs:
           # many_linux_2_28 image comes with GCC 12.2.1, but not clang.
           # With this install, it gets clang 16.0.6.
           export CIBW_BEFORE_ALL="dnf install clang lld -y"
+
+          # Skip auditwheel's dependency-bundling pass on libtriton.so. Without
+          # this, every shared library libtriton.so links against is copied into
+          # triton.libs/ and the wheel grows by ~130MB. PyTorch's build script
+          # uses the same flag for the same reason.
+          export CIBW_REPAIR_WHEEL_COMMAND_LINUX="auditwheel repair --exclude libtriton.so -w {dest_dir} {wheel}"
 
           if [[ ${{ matrix.config.arch }} == 'x86_64' ]]; then
             export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux_2_28_${{ matrix.config.arch }}:latest"

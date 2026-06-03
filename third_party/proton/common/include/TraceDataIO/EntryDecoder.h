@@ -2,6 +2,7 @@
 #define PROTON_COMMON_ENTRY_DECODER_H_
 
 #include "ByteSpan.h"
+#include "Utility/Errors.h"
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -11,7 +12,7 @@ namespace proton {
 class EntryBase;
 
 template <typename EntryT> void decodeFn(ByteSpan &buffer, EntryT &entry) {
-  throw std::runtime_error("No decoder function is implemented");
+  throw makeLogicError("No decoder function is implemented");
 }
 
 class EntryDecoder {

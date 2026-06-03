@@ -709,9 +709,6 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   Value curI = fused.getRegionIterArg(1);
   Value i;
 
-  auto lenInnersIt =
-      ValueRange(fused.getRegionIterArgs()).begin() + lenInnersStartIdx;
-
   ArrayRef<BlockArgument> ivars = fused.getRegionIterArgs().slice(ivarStartIdx);
   auto bodyOutsIt =
       ValueRange(fused.getRegionIterArgs()).begin() + innerOutsStartIdx;

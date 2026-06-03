@@ -587,7 +587,6 @@ struct TensorMemoryStoreOpConversion
     Value pred = adaptor.getPred();
     auto memTy = cast<MemDescType>(op.getDst().getType());
     auto regTy = cast<RankedTensorType>(op.getSrc().getType());
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     SmallVector<Value> srcValues =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
@@ -595,12 +594,6 @@ struct TensorMemoryStoreOpConversion
     lowerTMemLdStFromTypes(loc, rewriter, regTy, memTy, tmemBase, maxnreg, pred,
                            llvmElemTy, srcValues);
     NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::STORE);
-
-    // Emit a barrier to ensure all threads have finished writing to tensor
-    // memory before any use of the tensor memory.
-    // Can be AddrSpace::TensorWrite if we emit
-    // NVVM::Tcgen05WaitKind::STORE during barrier lowering
-    b.barrier(triton::gpu::AddrSpace::None);
 
     rewriter.eraseOp(op);
     return success();
@@ -640,11 +633,6 @@ struct TensorMemoryAllocOpConversion
       lowerTMemLdStFromTypes(loc, rewriter, regTy, memTy, ptr, maxnreg,
                              b.i1_val(true), llvmElemTy, srcValues);
       NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::STORE);
-      // Emit a barrier to ensure all threads have finished writing to tensor
-      // memory before any use of the tensor memory.
-      // Can be AddrSpace::TensorWrite if we emit
-      // NVVM::Tcgen05WaitKind::STORE during barrier lowering
-      b.barrier(triton::gpu::AddrSpace::None);
     }
     // Cast to address space 3 as the shared memory object uses 3.
     // TODO: clean this up and use either a int or ptr address space 6

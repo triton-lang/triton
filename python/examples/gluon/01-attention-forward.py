@@ -383,26 +383,26 @@ class AttentionProgram:
 
 @gluon.jit
 def _borrow_s_as_p(config, s_tmem):
-    p_tmem = s_tmem.slice(0, config.BLOCK_N // 2)
-    return p_tmem._reinterpret(config.dtype, config.qk_shape, config.p_tmem_layout)
+    cols: gl.constexpr = s_tmem.dtype.primitive_bitwidth // config.dtype.primitive_bitwidth
+    p_tmem = s_tmem._reinterpret(config.dtype, [config.SPLIT_M, cols * config.BLOCK_N], config.p_tmem_layout)
+    return p_tmem.slice(0, config.BLOCK_N)
 
 
 @gluon.jit
 def _borrow_s_as_alpha(config, s_tmem):
-    alpha_tmem = s_tmem.slice(config.BLOCK_N // 2, 1)
     alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M_PER_CTA, 1], col_stride=1,
                                                     cga_layout=config.CGA_LAYOUT, two_ctas=gl.num_ctas() > 1)
-    return alpha_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], alpha_layout)
+    alpha_tmem = s_tmem._reinterpret(layout=alpha_layout)
+    return alpha_tmem.slice(config.BLOCK_N // 2, 1)
 
 
 @gluon.jit
 def _borrow_s_for_epilogue(config, s_tmem):
-    m_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 1, 1)
-    l_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 2, 1)
     layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M_PER_CTA, 1], col_stride=1, cga_layout=config.CGA_LAYOUT,
                                               two_ctas=gl.num_ctas() > 1)
-    m_i_tmem = m_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
-    l_i_tmem = l_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
+    s_tmem = s_tmem._reinterpret(layout=layout)
+    m_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 1, 1)
+    l_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 2, 1)
     return m_i_tmem, l_i_tmem
 
 
@@ -880,7 +880,7 @@ def attention_kernel(  #
 
     q_chnl = get_desc_channel(desc_q, num_buffers=2)
     kv_chnl = get_desc_channel(desc_k, num_buffers=config.num_kv_buffers)
-    v_mem = kv_chnl.mem._reinterpret(desc_v.dtype, [config.num_kv_buffers] + desc_v.block_type.shape, desc_v.layout)
+    v_mem = kv_chnl.mem._reinterpret(layout=desc_v.layout)
     o_chnl = TensorMemoryChannel.alloc(config.o_shape, gl.float32, config.o_tmem_layout, num_buffers=2,
                                        producer_two_ctas=gl.num_ctas() > 1)
     epi_chnl = SharedMemoryChannel.alloc(config.o_shape, config.dtype, gl.constexpr(desc_o.layout), num_buffers=2)
@@ -1163,7 +1163,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 @pytest.mark.parametrize("N_CTX", [1024, 2048, 4096, 8192])
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
 @pytest.mark.parametrize("causal", [False, True])
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float8_e5m2])
 @pytest.mark.parametrize("use_tmem_red", [False, True] if is_blackwell_ultra() else [False])
 @pytest.mark.parametrize("cta_layout", [(), ((1, 0), ), ((1, 0), (2, 0))], ids=["1cta", "2ctas", "4ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
@@ -1179,15 +1179,28 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout, prof
         pytest.skip("TMEM reduction is only supported on Blackwell Ultra GPUs")
 
     torch.manual_seed(42)
-    q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
-    k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
-    v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=device).normal_(mean=0.0, std=0.5).requires_grad_())
+    q = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).to(dtype).requires_grad_())
+    k = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).to(dtype).requires_grad_())
+    v = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).to(dtype).requires_grad_())
     sm_scale = 0.5
 
-    ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
-
     tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red=use_tmem_red, cta_layout=cta_layout)
-    torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
+    if dtype == torch.float8_e5m2:
+        ref_out = torch.nn.functional.scaled_dot_product_attention(q.float(), k.float(), v.float(), scale=sm_scale,
+                                                                   is_causal=causal)
+        torch.testing.assert_close(ref_out.to(dtype).float(), tri_out.float(), atol=0.25, rtol=0.25)
+    else:
+        ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
+        torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
+@pytest.mark.parametrize("cta_layout", [(), ((1, 0), )], ids=["1cta", "2ctas"])
+@pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
+def test_op_consan(dtype, cta_layout):
+    with triton.knobs.compilation.scope():
+        triton.knobs.compilation.instrumentation_mode = "consan"
+        test_op(Z=1, H=1, N_CTX=1024, HEAD_DIM=64, causal=False, dtype=dtype, use_tmem_red=False, cta_layout=cta_layout)
 
 
 # ===-----------------------------------------------------------------------===#

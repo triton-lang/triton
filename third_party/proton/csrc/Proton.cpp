@@ -2,10 +2,15 @@
 
 #include <cstdint>
 #include <map>
+#include <pybind11/cast.h>
 #include <stdexcept>
+#include <string>
 #include <variant>
 #include <vector>
 
+#include "Backend/Backend.h"
+#include "Context/Context.h"
+#include "Session/Session.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
@@ -36,7 +41,6 @@ std::map<std::string, MetricValueType> convertPythonMetrics(
 } // namespace
 
 static void initProton(pybind11::module &&m) {
-  using ret = pybind11::return_value_policy;
   using namespace pybind11::literals;
 
   // Accept raw integer pointers from Python (e.g., Tensor.data_ptr()) instead
@@ -68,6 +72,8 @@ static void initProton(pybind11::module &&m) {
   auto metricTypeVectorDoubleIndex =
       pybind11::cast(variant_index_v<std::vector<double>, MetricValueType>);
 
+  m.attr("metadata_scope_name") = std::string(kMetadataScopeName);
+  m.attr("metadata_scope_prefix") = std::string(kMetadataScopePrefix);
   m.attr("metric_type_int64_index") = metricTypeInt64Index;
   m.attr("metric_type_double_index") = metricTypeDoubleIndex;
   m.attr("metric_type_vector_int64_index") = metricTypeVectorInt64Index;
@@ -182,11 +188,12 @@ static void initProton(pybind11::module &&m) {
         MetricKernelLaunchState metricKernelLaunchState{
             MetricKernelLaunchConfig{
                 reinterpret_cast<void *>(tensorMetricKernel),
-                tensorMetricKernelNumThreads, tensorMetricKernelSharedMemBytes},
+                reinterpret_cast<void *>(stream), tensorMetricKernelNumThreads,
+                tensorMetricKernelSharedMemBytes},
             MetricKernelLaunchConfig{
                 reinterpret_cast<void *>(scalarMetricKernel),
-                scalarMetricKernelNumThreads, scalarMetricKernelSharedMemBytes},
-            reinterpret_cast<void *>(stream)};
+                reinterpret_cast<void *>(stream), scalarMetricKernelNumThreads,
+                scalarMetricKernelSharedMemBytes}};
         SessionManager::instance().setMetricKernels(metricKernelLaunchState);
       },
       pybind11::arg("tensorMetricKernel"), pybind11::arg("scalarMetricKernel"),
@@ -234,6 +241,19 @@ static void initProton(pybind11::module &&m) {
         return SessionManager::instance().isDataPhaseComplete(sessionId, phase);
       },
       pybind11::arg("sessionId"), pybind11::arg("phase"));
+  m.def("get_available_profilers",
+        []() { return getRegisteredProfilerNames(); });
+  m.def(
+      "select_profiler_from_triton_backend",
+      [](const std::string &tritonBackend) {
+        const auto profiler = getProfilerForTritonBackend(tritonBackend);
+        if (profiler.has_value()) {
+          return profiler.value();
+        }
+        throw pybind11::value_error(
+            "No profiler registered for triton backend " + tritonBackend);
+      },
+      pybind11::arg("tritonBackend"));
 }
 
 PYBIND11_MODULE(libproton, m) {

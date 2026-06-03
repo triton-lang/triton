@@ -610,8 +610,6 @@ makeAtomicRMWOp(pybind11::dtype dtype, const uint64_t *ptr, const void *val,
 } // namespace
 
 void init_triton_interpreter(py::module &&m) {
-  using ret = py::return_value_policy;
-
   py::enum_<MemSemantic>(m, "MEM_SEMANTIC", py::module_local())
       .value("ACQUIRE_RELEASE", MemSemantic::ACQUIRE_RELEASE)
       .value("ACQUIRE", MemSemantic::ACQUIRE)

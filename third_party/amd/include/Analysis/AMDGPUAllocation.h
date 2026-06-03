@@ -4,12 +4,16 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
 
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+
 namespace mlir::triton::AMD {
 
 unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
-                                        RankedTensorType dstTy);
+                                        RankedTensorType dstTy,
+                                        TargetInfoBase &targetInfo);
 
-unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op);
+unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
+                                            TargetInfoBase &targetInfo);
 
 // For a layout conversion between `srcTy` and `dstTy`, return the vector length
 // that can be used for the stores to and loads from shared memory,

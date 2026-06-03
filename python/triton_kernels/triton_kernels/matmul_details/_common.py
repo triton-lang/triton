@@ -1,5 +1,10 @@
 import triton
 import triton.language as tl
+from triton_kernels.tensor_details.layout_details.blackwell_scale import (
+    SWIZZLE_SIZE_OUTER,
+    swizzle_act_mx_scale_bw_store_ptr,
+    swizzle_mx_scale_bw_store_ptr,
+)
 
 # -----------------------------------------------------------------------------
 #                                  Utilities
@@ -133,6 +138,88 @@ def compute_offsets(
         off_x_k,
         off_w_k,
     )
+
+
+@triton.jit
+def output_mx_scale_store_ptr(
+    base,
+    local_rows,
+    output_rows,
+    cols,
+    start_z,
+    start_m,
+    M,
+    n_cols,
+    scale_block_offs,
+    expt_id,
+    pid_k,
+    pid_k_direct,
+    batch_size,
+    stride_k,
+    stride_z,
+    stride_m,
+    stride_n,
+    HAS_SCATTER: tl.constexpr,
+    USE_SCATTER_TMA: tl.constexpr,
+    Y_TMA_MODE: tl.constexpr,
+    RAGGED_DIMENSION: tl.constexpr,
+    Y_MX_SCALE_LAYOUT: tl.constexpr,
+    INDEX_TYPE: tl.constexpr = tl.int64,
+):
+    if Y_MX_SCALE_LAYOUT == "BLACKWELL_ACT_SCALE":
+        if HAS_SCATTER:
+            scale_m_block = 0
+            scale_rows = output_rows
+        elif RAGGED_DIMENSION == "M":
+            scale_m_block = tl.load(scale_block_offs + expt_id)
+            scale_rows = local_rows
+        else:
+            scale_m_block = start_z * tl.cdiv(M, SWIZZLE_SIZE_OUTER)
+            scale_rows = local_rows
+        return swizzle_act_mx_scale_bw_store_ptr(
+            base,
+            scale_rows,
+            cols,
+            scale_m_block,
+            stride_k,
+            stride_z,
+            stride_m,
+            stride_n,
+            INDEX_TYPE=INDEX_TYPE,
+        )
+    elif Y_MX_SCALE_LAYOUT == "BLACKWELL_SCALE":
+        return swizzle_mx_scale_bw_store_ptr(
+            base,
+            output_rows,
+            cols,
+            start_z,
+            n_cols,
+            stride_k,
+            stride_z,
+            stride_m,
+            stride_n,
+            INDEX_TYPE=INDEX_TYPE,
+        )
+    else:
+        tl.static_assert(Y_MX_SCALE_LAYOUT == "STRIDED")
+        zero = tl.full((), 0, tl.int32)
+        scale_k = zero
+        if USE_SCATTER_TMA:
+            scale_z = zero
+            scale_rows = (output_rows.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
+        elif Y_TMA_MODE == "dense":
+            scale_z = pid_k * batch_size + start_z
+            scale_rows = local_rows
+        elif Y_TMA_MODE == "ragged":
+            scale_z = pid_k
+            scale_rows = start_m + local_rows
+        else:
+            tl.static_assert(Y_TMA_MODE is None)
+            scale_k = pid_k_direct
+            scale_z = start_z
+            scale_rows = output_rows
+        return (base + scale_k.to(INDEX_TYPE) * stride_k + scale_z.to(INDEX_TYPE) * stride_z +
+                scale_rows.to(INDEX_TYPE)[:, None] * stride_m + cols.to(INDEX_TYPE)[None, :] * stride_n)
 
 
 def make_matmul_repr(base_name, order):
