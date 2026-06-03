@@ -1786,12 +1786,9 @@ def test_tcgen05_mma_two_ctas(device, use_acc, fresh_knobs):
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, c_ptr, out_ptr, USE_ACC: gl.constexpr):
-        a_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0],
-                                                  cga_layout=((1, 0), ))
-        b_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0],
-                                                  cga_layout=((0, 1), ))
-        out_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0],
-                                                    cga_layout=((1, 0), ))
+        a_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=((1, 0), ))
+        b_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=((0, 1), ))
+        out_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=((1, 0), ))
 
         offs_m = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, a_layout))[:, None]
         offs_k_a = gl.arange(0, BLOCK_K, layout=gl.SliceLayout(0, a_layout))[None, :]
@@ -1804,9 +1801,9 @@ def test_tcgen05_mma_two_ctas(device, use_acc, fresh_knobs):
         b_tile = gl.load(b_ptr + offs_k_b * BLOCK_N + offs_n)
 
         smem_layout_a: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float32,
-                                                                          cga_layout=((1, 0), ))
+                                                                           cga_layout=((1, 0), ))
         smem_layout_b: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float32,
-                                                                          cga_layout=((0, 1), ))
+                                                                           cga_layout=((0, 1), ))
         smem_a = gl.allocate_shared_memory(gl.float32, [BLOCK_M, BLOCK_K], smem_layout_a, a_tile)
         smem_b = gl.allocate_shared_memory(gl.float32, [BLOCK_K, BLOCK_N], smem_layout_b, b_tile)
 
@@ -1970,12 +1967,9 @@ def test_tcgen05_mma_scaled_two_ctas(device, fresh_knobs):
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, a_scale_ptr, b_scale_ptr, c_ptr, out_ptr):
-        a_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0],
-                                                  cga_layout=((1, 0), ))
-        b_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0],
-                                                  cga_layout=((1, 0), ))
-        out_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0],
-                                                    cga_layout=((1, 0), ))
+        a_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=((1, 0), ))
+        b_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=((1, 0), ))
+        out_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=((1, 0), ))
 
         offs_m = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, a_layout))[:, None]
         offs_k_a = gl.arange(0, BLOCK_K, layout=gl.SliceLayout(0, a_layout))[None, :]
@@ -1989,9 +1983,9 @@ def test_tcgen05_mma_scaled_two_ctas(device, fresh_knobs):
         c_tile = gl.load(c_ptr + out_offs_m * BLOCK_N + out_offs_n)
 
         a_smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float8e5,
-                                                                          cga_layout=((1, 0), ))
+                                                                           cga_layout=((1, 0), ))
         b_smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_N, BLOCK_K], gl.float8e5,
-                                                                          cga_layout=((1, 0), ))
+                                                                           cga_layout=((1, 0), ))
         a_smem = gl.allocate_shared_memory(gl.float8e5, [BLOCK_M, BLOCK_K], a_smem_layout, a_tile)
         b_smem = gl.allocate_shared_memory(gl.float8e5, [BLOCK_N, BLOCK_K], b_smem_layout, b_tile)
 
@@ -2015,8 +2009,8 @@ def test_tcgen05_mma_scaled_two_ctas(device, fresh_knobs):
 
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
-        tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc, a_scale, b_scale, "e5m2", "e5m2",
-                           use_acc=True, mbarriers=[bar])
+        tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc, a_scale, b_scale, "e5m2", "e5m2", use_acc=True,
+                           mbarriers=[bar])
         mbarrier.wait(bar, phase=0, deps=[a_smem, b_smem])
         mbarrier.invalidate(bar)
 
@@ -2137,8 +2131,7 @@ def test_tmem_copy_scales_in_warp_specialize_partition(device, two_ctas, fresh_k
             tcgen05_mma(mma_a, mma_b, mma_acc, use_acc=False)
 
         cga_layout: gl.constexpr = ((0, 0), ) if TWO_CTAS else ()
-        blocked: gl.constexpr = gl.BlockedLayout([1, 4], [32, 1], [gl.num_warps(), 1], [1, 0],
-                                                 cga_layout=cga_layout)
+        blocked: gl.constexpr = gl.BlockedLayout([1, 4], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=cga_layout)
         in_ptrs = (in_ptr + gl.arange(0, SMEM_H)[:, None] * SMEM_W + gl.arange(0, SMEM_W)[None, :])
         value = gl.load(gl.set_auto_layout(in_ptrs, blocked))
 
