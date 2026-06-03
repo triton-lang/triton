@@ -56,18 +56,17 @@ constexpr int64_t kTileN = 8;
 
 Operation *createGlobalScratchBarrier(PatternRewriter &rewriter, Location loc,
                                       bool sharedClusterState = false) {
-  Operation *barrier =
-      ttg::BarrierOp::create(rewriter, loc,
-                             ttg::AddrSpace::GlobalRead |
-                                 ttg::AddrSpace::GlobalWrite)
-          .getOperation();
+  Operation *barrier = ttg::BarrierOp::create(rewriter, loc,
+                                              ttg::AddrSpace::GlobalRead |
+                                                  ttg::AddrSpace::GlobalWrite)
+                           .getOperation();
   if (sharedClusterState)
     barrier = ttng::ClusterBarrierOp::create(rewriter, loc).getOperation();
   return barrier;
 }
 
 void createSynchronousCompletionArrive(PatternRewriter &rewriter, Location loc,
-                                        Value barrier, Value pred) {
+                                       Value barrier, Value pred) {
   // Hardware two-CTA tcgen05 completion is issued by the lead CTA and
   // multicast to its partner. Since FPSAN erases that instruction, each CTA
   // performs the corresponding arrival on its local barrier copy.
@@ -198,7 +197,8 @@ public:
 
       // Ignore the leading pipelining dim when forwarding the CGA layout.
       SmallVector<int64_t> cgaShape = {1};
-      llvm::append_range(cgaShape, cgaLayout.getLinearLayout().getOutDimSizes());
+      llvm::append_range(cgaShape,
+                         cgaLayout.getLinearLayout().getOutDimSizes());
       cgaLayout = ttg::CGAEncodingAttr::get(
           rewriter.getContext(),
           cgaLayout.getLinearLayout().reshapeOuts(

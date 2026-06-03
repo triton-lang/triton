@@ -1580,9 +1580,7 @@ def test_op_fpsan():
             p=p,
         )
         for off_k in range(0, prepared.x.shape[1], p.BLOCK_K):
-            prepared.x[:, off_k:off_k + p.BLOCK_K] = (448.0, 0.015625, -448.0, 1.0)[
-                (off_k // p.BLOCK_K) % 4
-            ]
+            prepared.x[:, off_k:off_k + p.BLOCK_K] = (448.0, 0.015625, -448.0, 1.0)[(off_k // p.BLOCK_K) % 4]
         precision_config = make_precision_config(prepared)
         acc_fpsan_probe = torch.zeros(
             (prepared.out_shape[0], prepared.out_shape[1] * prepared.fused_activation.specs.reduction_n),
