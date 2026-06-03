@@ -531,23 +531,25 @@ public:
 
 protected:
   void applyAt(void *loc, size_t i) override {
-    if (mask[i]) {
-      // Atomic operations perform bitwise comparison, so it's safe to
-      // use number of bytes (itemsize) to determine the type of pointers
-      if (itemsize == 1) {
-        atomic_compare_exchange_strong<uint8_t>(loc, expected, desired, i, order);
-      } else if (itemsize == 2) {
-        atomic_compare_exchange_strong<uint16_t>(loc, expected, desired, i,
-                                                order);
-      } else if (itemsize == 4) {
-        atomic_compare_exchange_strong<uint32_t>(loc, expected, desired, i,
-                                                order);
-      } else if (itemsize == 8) {
-        atomic_compare_exchange_strong<uint64_t>(loc, expected, desired, i,
-                                                order);
-      } else {
-        throw std::invalid_argument("Invalid byte size");
-      }
+    if (!mask[i]) {
+      return;
+    }
+
+    // Atomic operations perform bitwise comparison, so it's safe to
+    // use number of bytes (itemsize) to determine the type of pointers
+    if (itemsize == 1) {
+      atomic_compare_exchange_strong<uint8_t>(loc, expected, desired, i, order);
+    } else if (itemsize == 2) {
+      atomic_compare_exchange_strong<uint16_t>(loc, expected, desired, i,
+                                              order);
+    } else if (itemsize == 4) {
+      atomic_compare_exchange_strong<uint32_t>(loc, expected, desired, i,
+                                              order);
+    } else if (itemsize == 8) {
+      atomic_compare_exchange_strong<uint64_t>(loc, expected, desired, i,
+                                              order);
+    } else {
+      throw std::invalid_argument("Invalid byte size");
     }
   }
 
