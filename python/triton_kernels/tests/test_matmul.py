@@ -122,6 +122,18 @@ def _build_test_op_cases():
             for (m, n, k) in zero_sized_shapes
         ])
     test_cases.append(Case(5, 11, 7, "batched", "float16", "float16", n_slices=0, split_k=None))
+    empty_output_shapes = ((0, 256, 256), (256, 0, 256))
+    test_cases.extend([
+        Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1", b_hbm_swizzling=True)
+        for shape in empty_output_shapes
+    ])
+    test_cases.extend([
+        Case(*shape, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1",
+             a_hbm_swizzling=True, b_hbm_swizzling=True, c_hbm_swizzling=True)
+        for shape in empty_output_shapes
+    ])
+    test_cases.append(Case(256, 256, 256, "batched", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1",
+                           n_slices=0, a_hbm_swizzling=True, b_hbm_swizzling=True, c_hbm_swizzling=True))
     odd_shape1 = (727, 577, 859)
     odd_shape2 = (720, 576, 768)
     even_shape = (768, 512, 1024)
