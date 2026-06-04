@@ -88,69 +88,54 @@ jobs:
       - name: Run lit tests
         run: make test-lit
       - name: Run triton tests
-        if: ${{ matrix.config.runner_type != 'nvidia-gb200' }}
-        run: make NUM_PROCS=24 test-unit
-      - name: Run triton tests on GB200
-        if: ${{ matrix.config.runner_type == 'nvidia-gb200' }}
-        shell: bash
         run: |
+          if [[ "${{ matrix.config.runner_type }}" != "nvidia-gb200" ]]; then
+            exec make NUM_PROCS=24 test-unit
+          fi
           set -euo pipefail
           test "$(nvidia-smi -L | wc -l)" -ge 4
-
           pids=()
           CUDA_VISIBLE_DEVICES=0 python3 -m pytest -s --tb=short -n 24 \
-            --ignore-glob='plugins/*' python/test/unit &
-          pids+=("$!")
+            --ignore-glob='plugins/*' python/test/unit & pids+=("$!")
           for group in 1 2 3 4; do
             gpu=$((group - 1))
             CUDA_VISIBLE_DEVICES="$gpu" python3 -m pytest -s --tb=short -n 3 \
               --splits 4 --group "$group" --splitting-algorithm=least_duration \
-              python/triton_kernels/tests/ &
-            pids+=("$!")
+              python/triton_kernels/tests/ & pids+=("$!")
           done
           CUDA_VISIBLE_DEVICES=0 python3 -m pytest -s --tb=short \
-            python/tutorials/06-fused-attention.py &
-          pids+=("$!")
+            python/tutorials/06-fused-attention.py & pids+=("$!")
           CUDA_VISIBLE_DEVICES=0 \
             TRITON_ALWAYS_COMPILE=1 \
             TRITON_DISABLE_LINE_INFO=0 \
             LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
             python3 -m pytest -s --tb=short --capture=tee-sys -rfs -vvv \
-              python/test/unit/instrumentation/test_gpuhello.py &
-          pids+=("$!")
-
+              python/test/unit/instrumentation/test_gpuhello.py & pids+=("$!")
           status=0
           for pid in "${pids[@]}"; do
             wait "$pid" || status=1
           done
           exit "$status"
       - name: Run gluon tests
-        if: ${{ matrix.config.runner_type != 'nvidia-gb200' }}
-        run: make NUM_PROCS=24 test-gluon
-      - name: Run gluon tests on GB200
-        if: ${{ matrix.config.runner_type == 'nvidia-gb200' }}
-        shell: bash
         run: |
+          if [[ "${{ matrix.config.runner_type }}" != "nvidia-gb200" ]]; then
+            exec make NUM_PROCS=24 test-gluon
+          fi
           set -euo pipefail
           test "$(nvidia-smi -L | wc -l)" -ge 4
-
           pids=()
           for group in 1 2 3; do
             gpu=$((group - 1))
             CUDA_VISIBLE_DEVICES="$gpu" python3 -m pytest -s --tb=short -n 8 \
               --splits 3 --group "$group" --splitting-algorithm=least_duration \
               --ignore=python/test/gluon/test_fpsan.py \
-              python/test/gluon/ python/tutorials/gluon/ &
-            pids+=("$!")
+              python/test/gluon/ python/tutorials/gluon/ & pids+=("$!")
           done
           CUDA_VISIBLE_DEVICES=2 python3 -m pytest -s --tb=short -n 12 --maxschedchunk=1 \
-            python/test/gluon/test_fpsan.py &
-          pids+=("$!")
+            python/test/gluon/test_fpsan.py & pids+=("$!")
           CUDA_VISIBLE_DEVICES=3 \
             PYTHONPATH="$PWD/python/triton_kernels${PYTHONPATH:+:$PYTHONPATH}" \
-            python3 -m pytest -s --tb=short -n 2 python/examples/gluon/ &
-          pids+=("$!")
-
+            python3 -m pytest -s --tb=short -n 2 python/examples/gluon/ & pids+=("$!")
           status=0
           for pid in "${pids[@]}"; do
             wait "$pid" || status=1
