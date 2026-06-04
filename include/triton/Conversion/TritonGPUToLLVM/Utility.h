@@ -616,14 +616,8 @@ struct LocalSharedMemoryAddress {
 SmallVector<LocalSharedMemoryAddress> computeLocalAddrs(
     Location loc, triton::gpu::MemDescType memDescTy,
     SharedMemoryObject smemObj, Type llvmElemTy, ArrayRef<Value> idxValues,
-    ArrayRef<SmallVector<Value>> coords, unsigned axis, RewriterBase &rewriter);
-
-SmallVector<LocalSharedMemoryAddress>
-computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
-                  SharedMemoryObject smemObj, Type llvmElemTy,
-                  ArrayRef<Value> idxValues,
-                  ArrayRef<SmallVector<Value>> coords, unsigned axis,
-                  ArrayRef<Value> offsets, RewriterBase &rewriter);
+    ArrayRef<SmallVector<Value>> coords, unsigned axis, RewriterBase &rewriter,
+    ArrayRef<Value> offsets = {});
 
 SmallVector<Value> computeLocalPtrs(Location loc,
                                     triton::gpu::MemDescType memDescTy,

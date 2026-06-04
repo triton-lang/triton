@@ -24,17 +24,16 @@ lowerLocalScGt(Location loc, MLIRContext *ctx, MemDescType memDescTy,
                unsigned axis, ArrayRef<Value> storeVals, RewriterBase &rewriter,
                const TargetInfoBase &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  bool isScatter = !storeVals.empty();
   SmallVector<LocalSharedMemoryAddress> addrs = computeLocalAddrs(
       loc, memDescTy, smemObj, llvmElemTy, idxValues, coords, axis, rewriter);
-
-  SmallVector<Value> results;
-  if (!isScatter)
+  if (storeVals.empty())
     return loadLocalAddrs(loc, llvmElemTy, addrs, rewriter, targetInfo);
 
   Value currentCtaId;
   if (!addrs.empty() && addrs.front().ctaId)
     currentCtaId = targetInfo.getClusterCTAId(rewriter, loc);
+
+  SmallVector<Value> results;
   for (auto [i, addr] : llvm::enumerate(addrs)) {
     if (addr.ctaId) {
       Value isLocal = b.icmp_eq(*addr.ctaId, currentCtaId);

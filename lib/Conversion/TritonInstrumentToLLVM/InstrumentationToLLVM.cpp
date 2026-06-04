@@ -375,7 +375,7 @@ struct LocalGatherOpConversion
 
     auto addrs =
         computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
-                          dstIndices, op.getAxis(), offsets, rewriter);
+                          dstIndices, op.getAxis(), rewriter, offsets);
     auto results = loadLocalAddrs(loc, llvmElemTy, addrs, rewriter, targetInfo);
     Value result = packLLElements(loc, typeConverter, results, rewriter, regTy);
 

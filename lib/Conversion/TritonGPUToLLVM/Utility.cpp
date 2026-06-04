@@ -545,17 +545,7 @@ computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
                   SharedMemoryObject smemObj, Type llvmElemTy,
                   ArrayRef<Value> idxValues,
                   ArrayRef<SmallVector<Value>> coords, unsigned axis,
-                  RewriterBase &rewriter) {
-  return computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
-                           coords, axis, /*offsets=*/{}, rewriter);
-}
-
-SmallVector<LocalSharedMemoryAddress>
-computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
-                  SharedMemoryObject smemObj, Type llvmElemTy,
-                  ArrayRef<Value> idxValues,
-                  ArrayRef<SmallVector<Value>> coords, unsigned axis,
-                  ArrayRef<Value> offsets, RewriterBase &rewriter) {
+                  RewriterBase &rewriter, ArrayRef<Value> offsets) {
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -670,29 +660,22 @@ SmallVector<Value> loadLocalAddrs(Location loc, Type llvmElemTy,
                                   const TargetInfoBase &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value currentCtaId;
-  if (llvm::any_of(addrs, [](const LocalSharedMemoryAddress &addr) {
-        return addr.ctaId.has_value();
-      }))
+  if (!addrs.empty() && addrs.front().ctaId)
     currentCtaId = targetInfo.getClusterCTAId(rewriter, loc);
 
-  SmallVector<Value> results;
-  results.reserve(addrs.size());
-  for (const LocalSharedMemoryAddress &addr : addrs) {
-    if (!addr.ctaId) {
-      results.push_back(targetInfo.loadShared(rewriter, loc, addr.ptr,
-                                              llvmElemTy, b.true_val()));
-      continue;
-    }
-
-    Value isLocal = b.icmp_eq(*addr.ctaId, currentCtaId);
-    Value isRemote = b.icmp_ne(*addr.ctaId, currentCtaId);
-    Value local =
-        targetInfo.loadShared(rewriter, loc, addr.ptr, llvmElemTy, isLocal);
-    Value remote = targetInfo.loadDShared(rewriter, loc, addr.ptr, addr.ctaId,
-                                          llvmElemTy, isRemote);
-    results.push_back(b.select(isLocal, local, remote));
-  }
-  return results;
+  return llvm::map_to_vector(
+      addrs, [&](const LocalSharedMemoryAddress &addr) -> Value {
+        if (!addr.ctaId)
+          return targetInfo.loadShared(rewriter, loc, addr.ptr, llvmElemTy,
+                                       b.true_val());
+        Value isLocal = b.icmp_eq(*addr.ctaId, currentCtaId);
+        Value local =
+            targetInfo.loadShared(rewriter, loc, addr.ptr, llvmElemTy, isLocal);
+        Value remote = targetInfo.loadDShared(
+            rewriter, loc, addr.ptr, addr.ctaId, llvmElemTy,
+            b.icmp_ne(*addr.ctaId, currentCtaId));
+        return b.select(isLocal, local, remote);
+      });
 }
 
 FailureOr<LocalAtomicScatterRMWInfo> prepareLocalAtomicScatterRMW(
