@@ -35,9 +35,6 @@ static Type replaceEncoding(Type type, Attribute encoding) {
                                tensorType.getElementType(), encoding);
 }
 
-// In the AMD backend, the only dot operand whose parent is a plain blocked
-// encoding is the FMA (outer-product) lowering; MFMA/WMMA use dedicated
-// encodings. So a blocked parent identifies the FMA path.
 static bool isFmaDotOperand(ttg::DotOperandEncodingAttr dotOperandEnc) {
   return isa<ttg::BlockedEncodingAttr>(dotOperandEnc.getParent());
 }

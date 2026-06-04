@@ -571,7 +571,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
 }
 
 // -----
-// FMA path (f32 on gfx1201). The dot operand's parent encoding is #ttg.blocked
+// FMA path. The dot operand's parent encoding is #ttg.blocked
 // (FMA outer-product), not AMDMfma/AMDWmma. 
 // CHECK-DAG: [[$DOT:#.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
 // CHECK-DAG: [[$SHAREDA:#.*]] = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
