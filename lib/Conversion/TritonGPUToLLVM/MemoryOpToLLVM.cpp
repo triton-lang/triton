@@ -18,7 +18,7 @@ using namespace mlir::triton::gpu;
 // For gather: storeVals is empty, returns loaded values.
 // For scatter: storeVals contains values to store, returns empty.
 SmallVector<Value>
-lowerLocalScGt(Location loc, MemDescType memDescTy,
+lowerLocalScGt(Location loc, MLIRContext *ctx, MemDescType memDescTy,
                SharedMemoryObject smemObj, Type llvmElemTy,
                ArrayRef<Value> idxValues, ArrayRef<SmallVector<Value>> coords,
                unsigned axis, ArrayRef<Value> storeVals, RewriterBase &rewriter,
@@ -27,15 +27,37 @@ lowerLocalScGt(Location loc, MemDescType memDescTy,
   bool isScatter = !storeVals.empty();
   SmallVector<LocalSharedMemoryAddress> addrs = computeLocalAddrs(
       loc, memDescTy, smemObj, llvmElemTy, idxValues, coords, axis, rewriter);
+  Value currentCtaId;
+  if (!addrs.empty() && addrs.front().ctaId)
+    currentCtaId = targetInfo.getClusterCTAId(rewriter, loc);
 
   SmallVector<Value> results;
+  if (!isScatter)
+    results.resize(coords.size());
+
   for (auto [i, addr] : llvm::enumerate(addrs)) {
     if (isScatter) {
-      targetInfo.storeDShared(rewriter, loc, addr.ptr, addr.ctaId, storeVals[i],
-                              b.true_val());
+      if (addr.ctaId) {
+        Value isLocal = b.icmp_eq(*addr.ctaId, currentCtaId);
+        Value isRemote = b.icmp_ne(*addr.ctaId, currentCtaId);
+        targetInfo.storeShared(rewriter, loc, addr.ptr, storeVals[i], isLocal);
+        targetInfo.storeDShared(rewriter, loc, addr.ptr, addr.ctaId,
+                                storeVals[i], isRemote);
+      } else {
+        targetInfo.storeShared(rewriter, loc, addr.ptr, storeVals[i],
+                               b.true_val());
+      }
+    } else if (addr.ctaId) {
+      Value isLocal = b.icmp_eq(*addr.ctaId, currentCtaId);
+      Value isRemote = b.icmp_ne(*addr.ctaId, currentCtaId);
+      Value local =
+          targetInfo.loadShared(rewriter, loc, addr.ptr, llvmElemTy, isLocal);
+      Value remote = targetInfo.loadDShared(rewriter, loc, addr.ptr, addr.ctaId,
+                                            llvmElemTy, isRemote);
+      results[i] = b.select(isLocal, local, remote);
     } else {
-      results.push_back(targetInfo.loadDShared(
-          rewriter, loc, addr.ptr, addr.ctaId, llvmElemTy, b.true_val()));
+      results[i] = targetInfo.loadShared(rewriter, loc, addr.ptr, llvmElemTy,
+                                         b.true_val());
     }
   }
 
@@ -263,6 +285,7 @@ public:
   matchAndRewrite(LocalGatherOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto *ctx = op.getContext();
     auto memDescTy = cast<MemDescType>(op.getSrc().getType());
     auto regTy = cast<RankedTensorType>(op.getType());
     auto typeConverter = getTypeConverter();
@@ -277,7 +300,7 @@ public:
         emitIndices(loc, rewriter, targetInfo, regTy.getEncoding(), regTy,
                     /*withCTAOffset=*/true);
 
-    auto results = lowerLocalScGt(loc, memDescTy, smemObj, llvmElemTy,
+    auto results = lowerLocalScGt(loc, ctx, memDescTy, smemObj, llvmElemTy,
                                   idxValues, dstIndices, op.getAxis(),
                                   /*storeVals=*/{}, rewriter, targetInfo);
 
@@ -304,6 +327,7 @@ public:
   matchAndRewrite(LocalScatterOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto *ctx = op.getContext();
     auto memDescTy = cast<MemDescType>(op.getDst().getType());
     auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
     auto typeConverter = getTypeConverter();
@@ -320,7 +344,7 @@ public:
         emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(), valuesTy,
                     /*withCTAOffset=*/true);
 
-    lowerLocalScGt(loc, memDescTy, smemObj, llvmElemTy, idxValues,
+    lowerLocalScGt(loc, ctx, memDescTy, smemObj, llvmElemTy, idxValues,
                    srcIndices, op.getAxis(), values, rewriter, targetInfo);
 
     rewriter.eraseOp(op);
