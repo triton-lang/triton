@@ -1545,59 +1545,29 @@ namespace {
 using TDMCopyGlobalToLocalOp =
     ::mlir::triton::amdgpu::AsyncTDMCopyGlobalToLocalOp;
 
-// Index of the lowest active warp in the hint.
-uint32_t getWarpUsedHintI0(uint32_t hint) {
-  assert(hint != 0 && "hint must be non-zero");
-  return llvm::countr_zero(hint);
-}
-
-// A hint's active warps form an axis-aligned coset: their warp IDs all agree on
-// a fixed set of bit positions and vary on the rest.  Returns those fixed bits
-// (within the num_warps id range).  A wave belongs to the hint iff XOR-ing its
-// warpId with i0 (the lowest active warp) leaves these bits clear -- the test
-// used to build the per-member select predicate.
-uint32_t getWarpUsedHintFreeMask(uint32_t hint, int numWarps) {
-  assert(llvm::isPowerOf2_32(numWarps) && "numWarps must be power-of-two");
-  uint32_t warpIdMask = (uint32_t{1} << llvm::Log2_32(numWarps)) - 1;
-
-  // `varying` = bit positions that differ across the active warps (relative to
-  // i0); the fixed bits are everything else within the id range.
-  uint32_t i0 = getWarpUsedHintI0(hint);
-  uint32_t varying = 0;
-  for (uint32_t mask = hint; mask != 0; mask &= mask - 1)
-    varying |= static_cast<uint32_t>(llvm::countr_zero(mask) ^ i0);
-
-  return warpIdMask & ~varying;
-}
-
 // Generated hint for member `groupIdx`: an axis-aligned mask that splits the
 // numWarps warps evenly across the group.  (groupSize 3 needs a dedicated
 // half + quarter + quarter split to stay axis-aligned.)
 uint32_t getGeneratedMergeHint(unsigned groupIdx, unsigned groupSize,
                                unsigned numWarps) {
+  assert(groupIdx < groupSize && "groupIdx out of range");
   if (groupSize == 3) {
-    assert((numWarps == 4 || numWarps == 8) &&
-           "3-way generated hints support 4 or 8 warps");
-    unsigned lowGroupWarps = numWarps / 2;
-    if (groupIdx == 0)
-      return (uint32_t{1} << lowGroupWarps) - 1;
-    if (groupIdx == 1)
-      return ((uint32_t{1} << (lowGroupWarps / 2)) - 1) << lowGroupWarps;
-    assert(groupIdx == 2 && "3-way group index out of range");
-    return ((uint32_t{1} << (lowGroupWarps / 2)) - 1)
-           << (lowGroupWarps + lowGroupWarps / 2);
+    // numWarps is 4 or 8 (the greedy splitter caps auto-merge at 8). The 3-way
+    // split is half + quarter + quarter to keep each hint an axis-aligned coset.
+    static constexpr uint32_t kHints4[3] = {0b0011, 0b0100, 0b1000};
+    static constexpr uint32_t kHints8[3] = {0b00001111, 0b00110000, 0b11000000};
+    return (numWarps == 4 ? kHints4 : kHints8)[groupIdx];
   }
 
-  uint32_t hint = 0;
-  for (unsigned warp = groupIdx; warp < numWarps; warp += groupSize)
-    hint |= uint32_t{1} << warp;
-  return hint;
+  // Every groupSize-th warp starting at groupIdx (e.g. groupSize=2 -> 0b…0101,
+  // then shifted). Gives one set bit per stride.
+  uint32_t stridePattern =
+      ((uint32_t{1} << numWarps) - 1) / ((uint32_t{1} << groupSize) - 1);
+  return stridePattern << groupIdx;
 }
 
-// True if hint generation may stamp this copy: it has no hint yet, no mbarrier,
-// and no partitioned destination.  Generated hints are stamped after the op
-// verifier runs, so skip partitioned layouts instead of revalidating their
-// extra K % numLogicalPieces constraint here.
+// Check if hint generation can stamp this copy: it has no hint yet, no mbarrier,
+// and no partitioned destination.
 bool isGeneratedMergeHintCandidate(TDMCopyGlobalToLocalOp op) {
   if (op.getWarpUsedHintAttr() || op.getBarrier())
     return false;
@@ -1605,19 +1575,18 @@ bool isGeneratedMergeHintCandidate(TDMCopyGlobalToLocalOp op) {
       op.getResult().getType().getEncoding());
 }
 
-// True if this copy may join a merge group.
+// Check if this copy can join a merge group.
 bool isMergeableTDMCopy(TDMCopyGlobalToLocalOp op) {
   return op.getWarpUsedHintAttr() && !op.getBarrier();
 }
 
-// Rank (number of dimensions) of the copy's tensor descriptor.
+// Rank of the copy's tensor descriptor.
 size_t getTDMDescriptorRank(TDMCopyGlobalToLocalOp op) {
   return op.getDesc().getType().getShape().size();
 }
 
 // Stamp each member of an already-adjacent group with an axis-aligned disjoint
-// hint.  The caller (assignGeneratedMergeHintsGreedily) guarantees a 2/3/4
-// member group.
+// hint.
 void assignGeneratedMergeHints(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
                                unsigned numWarps) {
   auto groupSize = static_cast<unsigned>(group.size());
@@ -1633,16 +1602,13 @@ void assignGeneratedMergeHints(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
 void assignGeneratedMergeHintsGreedily(
     MutableArrayRef<TDMCopyGlobalToLocalOp> run, unsigned numWarps) {
   // Generated 3-way hints only support 4 or 8 warps, so cap auto-merge at 8;
-  // beyond that a trailing triple would ask getGeneratedMergeHint for an
-  // unsupported split.
   if (numWarps > 8)
     return;
 
   for (size_t i = 0; i < run.size();) {
     size_t remaining = run.size() - i;
     // Take the largest group that fits (<= 4 members and <= numWarps).  A 3-way
-    // group is only reachable for an exact trailing triple, since size 4 is
-    // preferred whenever >= 4 copies remain.
+    // group is only reachable for an exact trailing triple.
     size_t chosen = 0;
     for (size_t size : {size_t{4}, size_t{3}, size_t{2}}) {
       if (size <= remaining && size <= numWarps) {
@@ -1657,14 +1623,9 @@ void assignGeneratedMergeHintsGreedily(
   }
 }
 
-// Add generated `warp_used_hint` masks to runs of already-adjacent unhinted
-// copies so they can fuse later.  Copies separated by any other op -- including
-// their own `memdesc_index` destinations in the interleaved
-//
-//   memdesc_index A; async_tdm_copy A; memdesc_index B; async_tdm_copy B; ...
-//
-// form -- are left untouched; hoisting them to become adjacent is a possible
-// future optimization.
+// Stamp generated `warp_used_hint` masks onto runs of already-adjacent unhinted
+// copies so they can fuse later.  Copies separated by any other op are left
+// untouched (merging non-adjacent copies is a possible future optimization).
 //
 // This only adds attributes (no IR reordering) and runs from two separate
 // passes -- UpdateAsyncWaitCount (to count the post-merge physical intrinsics)
@@ -1785,17 +1746,14 @@ SmallVector<Value, 4> fillMergedTDMDescriptorMember(
 }
 
 // Returns a wave-uniform i1 (all lanes agree, since it depends only on warpId):
-// true for the waves whose warp belongs to `hint`.  Drives the per-member
-// `select` that picks this wave's descriptor in the fused emit.
+// true for the waves whose warp belongs to `hint`, i.e. bit `warpId` is set.
+// Drives the per-member `select` that picks this wave's descriptor.
 Value buildTDMMergeMemberActivePredicate(RewriterBase &rewriter, Location loc,
-                                         uint32_t hint, int numWarps) {
+                                         uint32_t hint) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto [_laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  uint32_t i0 = getWarpUsedHintI0(hint);
-  Value warpIdShifted = i0 != 0 ? b.xor_(warpId, b.i32_val(i0)) : warpId;
-
-  uint32_t freeMask = getWarpUsedHintFreeMask(hint, numWarps);
-  return b.icmp_eq(b.and_(warpIdShifted, b.i32_val(freeMask)), b.i32_val(0));
+  Value bit = b.and_(b.lshr(b.i32_val(hint), warpId), b.i32_val(1));
+  return b.icmp_ne(bit, b.i32_val(0));
 }
 
 } // namespace
@@ -1876,8 +1834,8 @@ void emitTDMLoadMerged(RewriterBase &rewriter, Location loc,
   // Build predicates for all but the last member; the last is the default.
   SmallVector<Value, 4> memberActive(N - 1);
   for (size_t s = 0; s + 1 < N; ++s)
-    memberActive[s] = buildTDMMergeMemberActivePredicate(
-        rewriter, loc, hintPerMember[s], numWarps);
+    memberActive[s] =
+        buildTDMMergeMemberActivePredicate(rewriter, loc, hintPerMember[s]);
 
   // Pick the descriptor for this wave with a scalar select chain.
   // FIXME(perf): descriptor groups that are loop-invariant across members
