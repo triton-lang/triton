@@ -205,7 +205,10 @@ void assignTDMMergeGroupIds(ModuleOp mod);
 
 // Rebuild the merge-group map from the attributes stamped by
 // `assignTDMMergeGroupIds`.  The wait-count pass and the LLVM conversion both
-// call this to consume the one frozen grouping.
+// call this to consume the one frozen grouping.  Each reconstructed group is
+// validated (2..4 members, one block, contiguous indices, disjoint hints) to
+// catch an `amdgpu.tdm_merge_id` aliased by a cloning pass before it turns into
+// a bogus fused intrinsic.
 llvm::DenseMap<Operation *, std::shared_ptr<TDMMergeGroupInfo>>
 readTDMMergeGroups(ModuleOp mod);
 

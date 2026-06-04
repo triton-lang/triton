@@ -1857,14 +1857,28 @@ readTDMMergeGroups(ModuleOp mod) {
     auto &members = kv.second;
     llvm::sort(members,
                [](const auto &a, const auto &b) { return a.first < b.first; });
+
+    // A frozen group must stay well-formed: 2..4 members in one block, with
+    // contiguous indices 0..N-1 and pairwise-disjoint hints.  A violation means
+    // an intervening pass cloned members and aliased their `amdgpu.tdm_merge_id`
+    // (e.g. inlining a multi-call function that holds a group), mixing unrelated
+    // instances into one bucket.  Detect that here rather than fusing a bogus
+    // intrinsic.
+    size_t n = members.size();
+    assert(n >= 2 && n <= 4 && "TDM merge group must have 2..4 members");
+    Block *block = members.front().second->getBlock();
+    uint32_t hintUnion = 0;
     TDMMergeGroupInfo info;
-    for (auto &member : members) {
+    for (auto [pos, member] : llvm::enumerate(members)) {
       TDMCopyGlobalToLocalOp op = member.second;
+      uint32_t hint = static_cast<uint32_t>(op.getWarpUsedHintAttr().getInt());
+      assert(member.first == static_cast<int32_t>(pos) &&
+             op->getBlock() == block && (hintUnion & hint) == 0 &&
+             "malformed TDM merge group (aliased tdm_merge_id?)");
+      hintUnion |= hint;
       info.members.push_back(op.getOperation());
-      info.memberHints.push_back(
-          static_cast<uint32_t>(op.getWarpUsedHintAttr().getInt()));
+      info.memberHints.push_back(hint);
     }
-    assert(info.members.size() >= 2 && "merge group must have >= 2 members");
     info.lastInProgramOrder = info.members.back();
     auto shared = std::make_shared<TDMMergeGroupInfo>(std::move(info));
     for (auto *op : shared->members)
