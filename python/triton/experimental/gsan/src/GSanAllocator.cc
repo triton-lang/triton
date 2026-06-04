@@ -6,6 +6,8 @@
 #include <charconv>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -29,6 +31,34 @@ void gsanFree(void *ptr, ssize_t size, int device, void *stream);
 namespace {
 constexpr size_t kThreadStateHeaderSize =
     offsetof(gsan::ThreadState, vectorClock);
+
+union GSanShareableHandle {
+  int fd;
+  CUmemFabricHandle fabricHandle;
+};
+
+bool isSupportedShareableHandleType(CUmemAllocationHandleType handleType) {
+  return handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR ||
+         handleType == CU_MEM_HANDLE_TYPE_FABRIC;
+}
+
+void *getShareableHandleImportArg(const GSanShareableHandle *handle,
+                                  CUmemAllocationHandleType handleType) {
+  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
+    return reinterpret_cast<void *>(static_cast<uintptr_t>(handle->fd));
+  if (handleType == CU_MEM_HANDLE_TYPE_FABRIC)
+    return const_cast<CUmemFabricHandle *>(&handle->fabricHandle);
+  return nullptr;
+}
+
+void *getShareableHandleExportArg(GSanShareableHandle *handle,
+                                  CUmemAllocationHandleType handleType) {
+  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
+    return &handle->fd;
+  if (handleType == CU_MEM_HANDLE_TYPE_FABRIC)
+    return &handle->fabricHandle;
+  return nullptr;
+}
 
 // We use a tree structure to manage virtual address allocations.
 //
@@ -63,8 +93,11 @@ struct GSanConfig {
   int numThreads = 0;
   int clockBufferSize = 0;
   uint32_t rngSeed = 0;
+  CUmemAllocationHandleType shareableHandleType =
+      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
   bool clockBufferSizeConfigured = false;
   bool rngSeedConfigured = false;
+  bool shareableHandleTypeConfigured = false;
   int deviceRanks[gsan::kMaxGPUs] = {};
   bool configuredDeviceRanks[gsan::kMaxGPUs] = {};
   bool topologyConfigured = false;
@@ -91,6 +124,18 @@ void printCUDAError(CUresult err) {
 static AllocatorState *alloc = nullptr;
 static GSanConfig config;
 static std::mutex mut;
+
+CUmemAllocationHandleType getRequestedShareableHandleType() {
+  if (config.shareableHandleTypeConfigured)
+    return config.shareableHandleType;
+
+  const auto *allocConf = getenv("PYTORCH_CUDA_ALLOC_CONF");
+  if (allocConf != nullptr &&
+      strstr(allocConf, "fabric_handles:True") != nullptr) {
+    return CU_MEM_HANDLE_TYPE_FABRIC;
+  }
+  return CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+}
 
 int getDeviceRankForCudaDevice(int device) {
   if (!config.topologyConfigured)
@@ -408,6 +453,10 @@ CUresult refreshConfigForDevice(int device) {
     }
     config.clockBufferSizeConfigured = true;
   }
+  if (!config.shareableHandleTypeConfigured) {
+    config.shareableHandleType = getRequestedShareableHandleType();
+    config.shareableHandleTypeConfigured = true;
+  }
   return CUDA_SUCCESS;
 }
 
@@ -425,7 +474,7 @@ CUresult ensureRuntimeStateMapped(int device) {
   prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
   prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
   prop.location.id = device;
-  prop.requestedHandleTypes = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+  prop.requestedHandleTypes = getRequestedShareableHandleType();
 
   size_t granularity = 0;
   err = cuMemGetAllocationGranularity(&granularity, &prop,
@@ -581,7 +630,7 @@ extern "C" void *gsanMalloc(ssize_t size, int device,
   prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
   prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
   prop.location.id = device;
-  prop.requestedHandleTypes = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+  prop.requestedHandleTypes = getRequestedShareableHandleType();
 
   size_t granularity = 0;
   err = cuMemGetAllocationGranularity(&granularity, &prop,
@@ -689,12 +738,17 @@ void *gsanGetReservePointer() {
   return reinterpret_cast<void *>(alloc->reserveBaseAddress);
 }
 
-int gsanExportAllocationHandles(void *void_ptr, int *realFd, int *shadowFd,
-                                size_t *allocSize) {
-  if (realFd == nullptr || shadowFd == nullptr || allocSize == nullptr)
+int gsanExportAllocationHandles(void *void_ptr,
+                                GSanShareableHandle *realShareableHandle,
+                                GSanShareableHandle *shadowShareableHandle,
+                                size_t *allocSize,
+                                CUmemAllocationHandleType handleType) {
+  if (realShareableHandle == nullptr || shadowShareableHandle == nullptr ||
+      allocSize == nullptr || !isSupportedShareableHandleType(handleType)) {
     return -1;
-  *realFd = -1;
-  *shadowFd = -1;
+  }
+  *realShareableHandle = {};
+  *shadowShareableHandle = {};
   *allocSize = 0;
 
   const auto ptr = reinterpret_cast<CUdeviceptr>(void_ptr);
@@ -707,33 +761,31 @@ int gsanExportAllocationHandles(void *void_ptr, int *realFd, int *shadowFd,
 
   AllocNode *node = findNodeByAddress(&alloc->treeRoot, ptr);
   if (node == nullptr || node->maxFreeBlockSize != 0 ||
-      node->virtualAddress != ptr) {
+      ptr < node->virtualAddress ||
+      ptr >= node->virtualAddress + node->allocSize) {
     fprintf(stderr,
             "gsanExportAllocationHandles called with invalid pointer\n");
     return -1;
   }
 
-  int realFdLocal = -1;
-  int shadowFdLocal = -1;
-  CUresult err =
-      cuMemExportToShareableHandle(&realFdLocal, node->realHandle,
-                                   CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0);
+  CUresult err = cuMemExportToShareableHandle(
+      getShareableHandleExportArg(realShareableHandle, handleType),
+      node->realHandle, handleType, 0);
   if (err != CUDA_SUCCESS) {
     printCUDAError(err);
     return -1;
   }
 
-  err =
-      cuMemExportToShareableHandle(&shadowFdLocal, node->shadowHandle,
-                                   CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0);
+  err = cuMemExportToShareableHandle(
+      getShareableHandleExportArg(shadowShareableHandle, handleType),
+      node->shadowHandle, handleType, 0);
   if (err != CUDA_SUCCESS) {
     printCUDAError(err);
-    close(realFdLocal);
+    if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
+      close(realShareableHandle->fd);
     return -1;
   }
 
-  *realFd = realFdLocal;
-  *shadowFd = shadowFdLocal;
   *allocSize = node->allocSize;
   return 0;
 }
@@ -776,10 +828,15 @@ int gsanExportAllocationMemhandleRegions(void *void_ptr, uintptr_t *realPtr,
   return 0;
 }
 
-int gsanExportRuntimeStateHandle(int device, int *fd, size_t *allocSize) {
-  if (fd == nullptr || allocSize == nullptr)
+int gsanExportRuntimeStateHandle(int device,
+                                 GSanShareableHandle *shareableHandle,
+                                 size_t *allocSize,
+                                 CUmemAllocationHandleType handleType) {
+  if (shareableHandle == nullptr || allocSize == nullptr ||
+      !isSupportedShareableHandleType(handleType)) {
     return -1;
-  *fd = -1;
+  }
+  *shareableHandle = {};
   *allocSize = 0;
 
   if (device < 0 || device >= static_cast<int>(gsan::kMaxGPUs))
@@ -805,23 +862,30 @@ int gsanExportRuntimeStateHandle(int device, int *fd, size_t *allocSize) {
   if (handle == 0 || size == 0)
     return -1;
 
-  int fdLocal = -1;
   err = cuMemExportToShareableHandle(
-      &fdLocal, handle, CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0);
+      getShareableHandleExportArg(shareableHandle, handleType), handle,
+      handleType, 0);
   if (err != CUDA_SUCCESS) {
     printCUDAError(err);
     return -1;
   }
 
-  *fd = fdLocal;
   *allocSize = size;
   return 0;
 }
 
-void *gsanImportAllocationHandles(int realFd, int shadowFd, size_t allocSize,
-                                  int device) {
-  if (realFd < 0 || shadowFd < 0 || allocSize == 0)
+void *
+gsanImportAllocationHandles(const GSanShareableHandle *realShareableHandle,
+                            const GSanShareableHandle *shadowShareableHandle,
+                            CUmemAllocationHandleType handleType,
+                            size_t allocSize, int device) {
+  if (realShareableHandle == nullptr || shadowShareableHandle == nullptr ||
+      !isSupportedShareableHandleType(handleType) || allocSize == 0)
     return nullptr;
+  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR &&
+      (realShareableHandle->fd < 0 || shadowShareableHandle->fd < 0)) {
+    return nullptr;
+  }
 
   std::lock_guard lg(mut);
   if (gsanEnsureInit() != 0)
@@ -846,14 +910,15 @@ void *gsanImportAllocationHandles(int realFd, int shadowFd, size_t allocSize,
   bool realMapped = false;
   bool shadowMapped = false;
   err = cuMemImportFromShareableHandle(
-      &realHandle, reinterpret_cast<void *>(static_cast<uintptr_t>(realFd)),
-      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR);
+      &realHandle, getShareableHandleImportArg(realShareableHandle, handleType),
+      handleType);
   if (err != CUDA_SUCCESS)
     goto error;
 
   err = cuMemImportFromShareableHandle(
-      &shadowHandle, reinterpret_cast<void *>(static_cast<uintptr_t>(shadowFd)),
-      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR);
+      &shadowHandle,
+      getShareableHandleImportArg(shadowShareableHandle, handleType),
+      handleType);
   if (err != CUDA_SUCCESS)
     goto error;
 
@@ -875,10 +940,16 @@ error:
   return nullptr;
 }
 
-int gsanImportRuntimeStateHandle(int fd, size_t allocSize, int peerDevice,
-                                 int device) {
-  if (fd < 0 || allocSize == 0)
+int gsanImportRuntimeStateHandle(const GSanShareableHandle *shareableHandle,
+                                 CUmemAllocationHandleType handleType,
+                                 size_t allocSize, int peerDevice, int device) {
+  if (shareableHandle == nullptr ||
+      !isSupportedShareableHandleType(handleType) || allocSize == 0)
     return -1;
+  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR &&
+      shareableHandle->fd < 0) {
+    return -1;
+  }
   if (peerDevice < 0 || peerDevice >= static_cast<int>(gsan::kMaxGPUs))
     return -1;
 
@@ -903,8 +974,8 @@ int gsanImportRuntimeStateHandle(int fd, size_t allocSize, int peerDevice,
       alloc->globalStateAddress + peerDevice * gsan::kPerDeviceStateStride;
 
   err = cuMemImportFromShareableHandle(
-      &importedHandle, reinterpret_cast<void *>(static_cast<uintptr_t>(fd)),
-      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR);
+      &importedHandle, getShareableHandleImportArg(shareableHandle, handleType),
+      handleType);
   if (err != CUDA_SUCCESS)
     goto error;
 
@@ -948,6 +1019,55 @@ bool parseIntArg(PyObject *obj, const char *name, int *out) {
   }
   *out = static_cast<int>(value);
   return true;
+}
+
+bool parseShareableHandleTypeArg(PyObject *obj, const char *name,
+                                 CUmemAllocationHandleType *out) {
+  int handleType = 0;
+  if (!parseIntArg(obj, name, &handleType))
+    return false;
+  if (handleType != CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR &&
+      handleType != CU_MEM_HANDLE_TYPE_FABRIC) {
+    PyErr_Format(PyExc_ValueError, "%s has unsupported value %d", name,
+                 handleType);
+    return false;
+  }
+  *out = static_cast<CUmemAllocationHandleType>(handleType);
+  return true;
+}
+
+bool parseShareableHandleArg(PyObject *obj, const char *name,
+                             CUmemAllocationHandleType handleType,
+                             GSanShareableHandle *out) {
+  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
+    return parseIntArg(obj, name, &out->fd);
+
+  if (!PyBytes_Check(obj)) {
+    PyErr_Format(PyExc_TypeError, "%s must be bytes", name);
+    return false;
+  }
+
+  char *data = nullptr;
+  Py_ssize_t size = 0;
+  if (PyBytes_AsStringAndSize(obj, &data, &size) != 0)
+    return false;
+  if (size != static_cast<Py_ssize_t>(sizeof(out->fabricHandle))) {
+    PyErr_Format(PyExc_ValueError, "%s must contain exactly %zu bytes, got %zd",
+                 name, sizeof(out->fabricHandle), size);
+    return false;
+  }
+
+  memcpy(&out->fabricHandle, data, sizeof(out->fabricHandle));
+  return true;
+}
+
+PyObject *shareableHandleToPyObject(const GSanShareableHandle &handle,
+                                    CUmemAllocationHandleType handleType) {
+  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
+    return PyLong_FromLong(handle.fd);
+  return PyBytes_FromStringAndSize(
+      reinterpret_cast<const char *>(&handle.fabricHandle),
+      sizeof(handle.fabricHandle));
 }
 
 bool parseUInt32Arg(PyObject *obj, const char *name, uint32_t *out) {
@@ -1027,9 +1147,9 @@ PyObject *pyFree([[maybe_unused]] PyObject *self, PyObject *const *args,
 
 PyObject *pyConfigure([[maybe_unused]] PyObject *self, PyObject *const *args,
                       Py_ssize_t nargs) {
-  if (nargs != 4) {
+  if (nargs != 5) {
     PyErr_Format(PyExc_TypeError,
-                 "%s.configure expected 4 positional arguments, got %zd",
+                 "%s.configure expected 5 positional arguments, got %zd",
                  kModuleName, nargs);
     return nullptr;
   }
@@ -1121,6 +1241,15 @@ PyObject *pyConfigure([[maybe_unused]] PyObject *self, PyObject *const *args,
     }
   }
 
+  const bool shareableHandleTypeRequested = args[4] != Py_None;
+  CUmemAllocationHandleType requestedShareableHandleType =
+      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+  if (shareableHandleTypeRequested &&
+      !parseShareableHandleTypeArg(args[4], "handle_type",
+                                   &requestedShareableHandleType)) {
+    return nullptr;
+  }
+
   std::lock_guard lg(mut);
   if (config.topologyFrozen) {
     PyErr_SetString(PyExc_RuntimeError,
@@ -1144,6 +1273,10 @@ PyObject *pyConfigure([[maybe_unused]] PyObject *self, PyObject *const *args,
   if (clockBufferSizeRequested) {
     config.clockBufferSize = requestedClockBufferSize;
     config.clockBufferSizeConfigured = true;
+  }
+  if (shareableHandleTypeRequested) {
+    config.shareableHandleType = requestedShareableHandleType;
+    config.shareableHandleTypeConfigured = true;
   }
   Py_RETURN_NONE;
 }
@@ -1286,29 +1419,36 @@ PyObject *pyGetRuntimeStateLayout([[maybe_unused]] PyObject *self,
 PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
                                     Py_ssize_t nargs) {
   (void)self;
-  if (nargs != 1) {
+  if (nargs != 2) {
     PyErr_Format(
         PyExc_TypeError,
-        "%s.export_allocation_handles expected 1 positional argument, got %zd",
+        "%s.export_allocation_handles expected 2 positional arguments, got %zd",
         kModuleName, nargs);
     return nullptr;
   }
 
   void *ptr = nullptr;
-  if (!parseVoidPtrArg(args[0], &ptr))
+  CUmemAllocationHandleType handleType =
+      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+  if (!parseVoidPtrArg(args[0], &ptr) ||
+      !parseShareableHandleTypeArg(args[1], "handle_type", &handleType))
     return nullptr;
 
-  int realFd = -1;
-  int shadowFd = -1;
+  GSanShareableHandle realShareableHandle = {};
+  GSanShareableHandle shadowShareableHandle = {};
   size_t allocSize = 0;
-  int rc = gsanExportAllocationHandles(ptr, &realFd, &shadowFd, &allocSize);
+  int rc = gsanExportAllocationHandles(ptr, &realShareableHandle,
+                                       &shadowShareableHandle, &allocSize,
+                                       handleType);
   if (rc != 0) {
     PyErr_SetString(PyExc_RuntimeError, "gsanExportAllocationHandles failed.");
     return nullptr;
   }
 
-  return Py_BuildValue("(iiK)", realFd, shadowFd,
-                       static_cast<unsigned long long>(allocSize));
+  return Py_BuildValue(
+      "(NNK)", shareableHandleToPyObject(realShareableHandle, handleType),
+      shareableHandleToPyObject(shadowShareableHandle, handleType),
+      static_cast<unsigned long long>(allocSize));
 }
 
 PyObject *pyExportAllocationMemhandleRegions(PyObject *self,
@@ -1348,20 +1488,25 @@ PyObject *pyExportAllocationMemhandleRegions(PyObject *self,
 PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
                                     Py_ssize_t nargs) {
   (void)self;
-  if (nargs != 4) {
+  if (nargs != 5) {
     PyErr_Format(
         PyExc_TypeError,
-        "%s.import_allocation_handles expected 4 positional arguments, got %zd",
+        "%s.import_allocation_handles expected 5 positional arguments, got %zd",
         kModuleName, nargs);
     return nullptr;
   }
 
-  int realFd = 0;
-  int shadowFd = 0;
+  GSanShareableHandle realShareableHandle = {};
+  GSanShareableHandle shadowShareableHandle = {};
   int device = 0;
-  if (!parseIntArg(args[0], "real_fd", &realFd) ||
-      !parseIntArg(args[1], "shadow_fd", &shadowFd) ||
-      !parseIntArg(args[3], "device", &device)) {
+  CUmemAllocationHandleType handleType =
+      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+  if (!parseIntArg(args[3], "device", &device) ||
+      !parseShareableHandleTypeArg(args[4], "handle_type", &handleType) ||
+      !parseShareableHandleArg(args[0], "real_handle", handleType,
+                               &realShareableHandle) ||
+      !parseShareableHandleArg(args[1], "shadow_handle", handleType,
+                               &shadowShareableHandle)) {
     return nullptr;
   }
 
@@ -1369,7 +1514,9 @@ PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
   if (allocSize == static_cast<size_t>(-1) && PyErr_Occurred())
     return nullptr;
 
-  void *ptr = gsanImportAllocationHandles(realFd, shadowFd, allocSize, device);
+  void *ptr =
+      gsanImportAllocationHandles(&realShareableHandle, &shadowShareableHandle,
+                                  handleType, allocSize, device);
   if (ptr == nullptr) {
     PyErr_SetString(PyExc_RuntimeError, "gsanImportAllocationHandles failed.");
     return nullptr;
@@ -1381,46 +1528,56 @@ PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
 PyObject *pyExportRuntimeStateHandle(PyObject *self, PyObject *const *args,
                                      Py_ssize_t nargs) {
   (void)self;
-  if (nargs != 1) {
+  if (nargs != 2) {
     PyErr_Format(PyExc_TypeError,
-                 "%s.export_runtime_state_handle expected 1 positional "
-                 "argument, got %zd",
-                 kModuleName, nargs);
-    return nullptr;
-  }
-
-  int device = 0;
-  if (!parseIntArg(args[0], "device", &device))
-    return nullptr;
-
-  int fd = -1;
-  size_t allocSize = 0;
-  int rc = gsanExportRuntimeStateHandle(device, &fd, &allocSize);
-  if (rc != 0) {
-    PyErr_SetString(PyExc_RuntimeError, "gsanExportRuntimeStateHandle failed.");
-    return nullptr;
-  }
-
-  return Py_BuildValue("(iK)", fd, static_cast<unsigned long long>(allocSize));
-}
-
-PyObject *pyImportRuntimeStateHandle(PyObject *self, PyObject *const *args,
-                                     Py_ssize_t nargs) {
-  (void)self;
-  if (nargs != 4) {
-    PyErr_Format(PyExc_TypeError,
-                 "%s.import_runtime_state_handle expected 4 positional "
+                 "%s.export_runtime_state_handle expected 2 positional "
                  "arguments, got %zd",
                  kModuleName, nargs);
     return nullptr;
   }
 
-  int fd = 0;
+  int device = 0;
+  CUmemAllocationHandleType handleType =
+      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+  if (!parseIntArg(args[0], "device", &device) ||
+      !parseShareableHandleTypeArg(args[1], "handle_type", &handleType))
+    return nullptr;
+
+  GSanShareableHandle shareableHandle = {};
+  size_t allocSize = 0;
+  int rc = gsanExportRuntimeStateHandle(device, &shareableHandle, &allocSize,
+                                        handleType);
+  if (rc != 0) {
+    PyErr_SetString(PyExc_RuntimeError, "gsanExportRuntimeStateHandle failed.");
+    return nullptr;
+  }
+
+  return Py_BuildValue("(NK)",
+                       shareableHandleToPyObject(shareableHandle, handleType),
+                       static_cast<unsigned long long>(allocSize));
+}
+
+PyObject *pyImportRuntimeStateHandle(PyObject *self, PyObject *const *args,
+                                     Py_ssize_t nargs) {
+  (void)self;
+  if (nargs != 5) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.import_runtime_state_handle expected 5 positional "
+                 "arguments, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  GSanShareableHandle shareableHandle = {};
   int peerDevice = 0;
   int device = 0;
-  if (!parseIntArg(args[0], "fd", &fd) ||
-      !parseIntArg(args[2], "peer_device", &peerDevice) ||
-      !parseIntArg(args[3], "device", &device)) {
+  CUmemAllocationHandleType handleType =
+      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+  if (!parseIntArg(args[2], "peer_device", &peerDevice) ||
+      !parseIntArg(args[3], "device", &device) ||
+      !parseShareableHandleTypeArg(args[4], "handle_type", &handleType) ||
+      !parseShareableHandleArg(args[0], "handle", handleType,
+                               &shareableHandle)) {
     return nullptr;
   }
 
@@ -1428,7 +1585,8 @@ PyObject *pyImportRuntimeStateHandle(PyObject *self, PyObject *const *args,
   if (allocSize == static_cast<size_t>(-1) && PyErr_Occurred())
     return nullptr;
 
-  int rc = gsanImportRuntimeStateHandle(fd, allocSize, peerDevice, device);
+  int rc = gsanImportRuntimeStateHandle(&shareableHandle, handleType, allocSize,
+                                        peerDevice, device);
   if (rc != 0) {
     PyErr_SetString(PyExc_RuntimeError, "gsanImportRuntimeStateHandle failed.");
     return nullptr;
