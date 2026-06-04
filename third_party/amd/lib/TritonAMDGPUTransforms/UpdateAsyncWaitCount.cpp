@@ -461,12 +461,11 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
       }
     }
 
-    // amdgpu.AsyncTDMWait should only count async tdm ops. If auto merge hints
-    // are enabled, prepare them before computing counts so source-level logical
-    // waits are translated to the number of physical TDM intrinsics that
-    // conversion will actually emit.
-    mlir::LLVM::AMD::prepareGeneratedTDMMergeHints(m);
-    auto tdmMergeGroups = mlir::LLVM::AMD::computeTDMMergeGroups(m);
+    // amdgpu.AsyncTDMWait should only count async tdm ops. Read the merge
+    // grouping frozen earlier by the tritonamdgpu-prepare-tdm-merge pass so the
+    // counted physical TDM intrinsics match exactly what the LLVM conversion
+    // (which reads the same grouping) will emit.
+    auto tdmMergeGroups = mlir::LLVM::AMD::readTDMMergeGroups(m);
 
     SmallVector<triton::amdgpu::AsyncTDMWait> waitTDMOps;
     getOperation()->walk([&](triton::amdgpu::AsyncTDMWait waitOp) {

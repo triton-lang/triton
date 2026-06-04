@@ -41,11 +41,12 @@ void populateFpCastOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 // exception handling, etc.
 void adjustModeRegister(ModuleOp mod, const TargetInfo &targetInfo);
 
-// `tdmMergeGroups` carries the implicit-merge analysis result built once per
-// pass via `LLVM::AMD::computeTDMMergeGroups(module)`; the
-// AsyncTDMCopyGlobalToLocalOp conversion pattern queries it to decide whether
-// to emit a fused intrinsic.  The map MUST outlive the pattern set; pass an
-// empty map (e.g. a default-constructed reference) to disable merging.
+// `tdmMergeGroups` carries the frozen implicit-merge grouping, recovered via
+// `LLVM::AMD::readTDMMergeGroups(module)` from attributes stamped by the
+// tritonamdgpu-prepare-tdm-merge pass; the AsyncTDMCopyGlobalToLocalOp
+// conversion pattern queries it to decide whether to emit a fused intrinsic.
+// The map MUST outlive the pattern set; pass an empty map (e.g. a
+// default-constructed reference) to disable merging.
 void populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,

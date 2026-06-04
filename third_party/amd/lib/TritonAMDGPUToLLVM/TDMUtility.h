@@ -125,15 +125,16 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 // (user-authored or previously generated) still merge.  To keep a hinted copy
 // standalone, make its hint overlap its neighbor's hint.
 //
-// `prepareGeneratedTDMMergeHints` is a narrower pre-pass: it stamps hints on
-// runs of already-adjacent unhinted, non-partitioned copies.  It adds only
-// attributes (no IR reordering), so copies that are not already consecutive do
-// not auto-merge.  It is not the full mergeability contract.  Then
-// `computeTDMMergeGroups` builds a map from each merging
-// `async_tdm_copy_global_to_local` op to its group info (IR unchanged).  The
-// conversion pattern dispatches on it: the first visited member emits a fused
-// intrinsic via `emitTDMLoadMerged` and erases the whole group; singletons
-// fall back to `emitTDMLoadStore`.
+// The grouping is decided once, early, by the `tritonamdgpu-prepare-tdm-merge`
+// pass (`assignTDMMergeGroupIds`): it stamps hints on runs of already-adjacent
+// unhinted, non-partitioned copies (gated by the env var), runs
+// `computeTDMMergeGroups`, and freezes each member's group id/index as
+// attributes.  Both later consumers -- the wait-count pass and the LLVM
+// conversion -- call `readTDMMergeGroups` to recover that same map (IR
+// unchanged), so they share one grouping.  The conversion pattern dispatches on
+// the map: the first visited member emits a fused intrinsic via
+// `emitTDMLoadMerged` and erases the whole group; singletons fall back to
+// `emitTDMLoadStore`.
 //
 // Mergeability rules (v1; all required):
 //   1. Every member has a verifier-legal `warp_used_hint`; unhinted copies end
@@ -144,7 +145,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 //      valid `warp_used_hint`.  Members may have different K = popcount(hint).
 //   4. Group size N is 2, 3, or 4.
 //   5. Members are strictly consecutive in one block; any intervening op (TDM
-//      or not) ends the current run.
+//      or not) ends the current run.  Evaluated when the grouping is frozen;
+//      later adjacency changes do not split or grow a group.
 //   6. Members have same-rank descriptors representable by a compatible
 //      hardware descriptor group form for the fused intrinsic.
 //   7. Members share the same `cache` modifier (one auxBits on the fused
@@ -178,8 +180,8 @@ struct TDMMergeMemberInfo {
 // copies so they fuse later.  Only attributes are added -- copies separated by
 // any other op (including their own `memdesc_index` destinations) are left
 // alone.  Partitioned destinations are skipped because their extra hint
-// legality rule is verified before this pass runs.
-// No-op when the env var disables auto-merge.
+// legality rule is verified before hint generation runs.  No-op when the env
+// var disables auto-merge.  Invoked by `assignTDMMergeGroupIds`.
 void prepareGeneratedTDMMergeHints(ModuleOp mod);
 
 // Walk `mod` and identify all merge groups from copies that already carry
@@ -192,10 +194,24 @@ void prepareGeneratedTDMMergeHints(ModuleOp mod);
 llvm::DenseMap<Operation *, std::shared_ptr<TDMMergeGroupInfo>>
 computeTDMMergeGroups(ModuleOp mod);
 
+// Runs early, from the `tritonamdgpu-prepare-tdm-merge` pass: generate hints
+// (gated by the env var), compute the merge groups, and freeze the decision by
+// stamping each member with `amdgpu.tdm_merge_id` (a module-unique group id) and
+// `amdgpu.tdm_merge_index` (its position in the group, program order).  The
+// wait-count pass and the LLVM conversion both read this frozen grouping, so the
+// counted intrinsics match the emitted ones even if a later pass perturbs copy
+// adjacency.
+void assignTDMMergeGroupIds(ModuleOp mod);
+
+// Rebuild the merge-group map from the attributes stamped by
+// `assignTDMMergeGroupIds`.  The wait-count pass and the LLVM conversion both
+// call this to consume the one frozen grouping.
+llvm::DenseMap<Operation *, std::shared_ptr<TDMMergeGroupInfo>>
+readTDMMergeGroups(ModuleOp mod);
+
 // Emit one fused TDM load intrinsic for a merge group, `select`ing each wave's
 // descriptor on an SGPR-uniform per-wave selector.  `auxBits` comes from any
-// member (rule 7 makes it uniform); no mbarrier (rule 2).  Store merging is not
-// supported.
+// member (rule 7 makes it uniform); no mbarrier (rule 2).
 void emitTDMLoadMerged(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter,
                        ArrayRef<TDMMergeMemberInfo> members, int numWarps,

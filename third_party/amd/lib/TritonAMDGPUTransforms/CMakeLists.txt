@@ -16,6 +16,7 @@ add_triton_library(TritonAMDGPUTransforms
   PrepareIfCombining.cpp
   MoveUpPrologueLoads.cpp
   Pipeline.cpp
+  PrepareTDMMerge.cpp
   ScheduleLoops.cpp
   LowerLoops.cpp
   MfmaGroup.cpp

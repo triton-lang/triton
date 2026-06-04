@@ -1627,13 +1627,9 @@ void assignGeneratedMergeHintsGreedily(
 // copies so they can fuse later.  Copies separated by any other op are left
 // untouched (merging non-adjacent copies is a possible future optimization).
 //
-// This only adds attributes (no IR reordering) and runs from two separate
-// passes -- UpdateAsyncWaitCount (to count the post-merge physical intrinsics)
-// and the later LLVM conversion (to actually fuse).  They share no state, so
-// each regenerates the hints; this is safe because the stamping is idempotent:
-// `isGeneratedMergeHintCandidate` skips copies that already carry a hint, so
-// the second run is a no-op.  `computeTDMMergeGroups` assumes hints are already
-// materialized, so it must run after this.
+// This only adds attributes (no IR reordering).  It runs from
+// `assignTDMMergeGroupIds`, before the `computeTDMMergeGroups` call there, which
+// assumes hints are already materialized.
 void prepareGeneratedTDMMergeHintsImpl(ModuleOp mod) {
   llvm::SmallSetVector<Block *, 8> blocks;
   mod->walk(
@@ -1806,6 +1802,74 @@ computeTDMMergeGroups(ModuleOp mod) {
     flush();
   }
 
+  return result;
+}
+
+// Discardable attributes that freeze the merge grouping in the IR so the
+// wait-count pass and the LLVM conversion consume the same decision.
+static constexpr llvm::StringLiteral kTDMMergeIdAttr = "amdgpu.tdm_merge_id";
+static constexpr llvm::StringLiteral kTDMMergeIndexAttr =
+    "amdgpu.tdm_merge_index";
+
+void assignTDMMergeGroupIds(ModuleOp mod) {
+  prepareGeneratedTDMMergeHints(mod);
+  auto groups = computeTDMMergeGroups(mod);
+
+  auto i32Ty = IntegerType::get(mod.getContext(), 32);
+  int32_t nextId = 0;
+  DenseMap<TDMMergeGroupInfo *, int32_t> groupId;
+  // Walk in program order so group ids are assigned deterministically.
+  mod->walk([&](TDMCopyGlobalToLocalOp op) {
+    auto it = groups.find(op);
+    if (it == groups.end())
+      return;
+    TDMMergeGroupInfo *info = it->second.get();
+    auto [idIt, inserted] = groupId.try_emplace(info, nextId);
+    if (inserted)
+      ++nextId;
+    int32_t id = idIt->second;
+    auto pos = llvm::find(info->members, op.getOperation()) -
+               info->members.begin();
+    op->setAttr(kTDMMergeIdAttr, IntegerAttr::get(i32Ty, id));
+    op->setAttr(kTDMMergeIndexAttr,
+                IntegerAttr::get(i32Ty, static_cast<int32_t>(pos)));
+  });
+}
+
+llvm::DenseMap<Operation *, std::shared_ptr<TDMMergeGroupInfo>>
+readTDMMergeGroups(ModuleOp mod) {
+  // Bucket members by their stamped group id (insertion-ordered for
+  // deterministic group ids in debug output).
+  llvm::MapVector<int32_t, SmallVector<std::pair<int32_t, TDMCopyGlobalToLocalOp>>>
+      buckets;
+  mod->walk([&](TDMCopyGlobalToLocalOp op) {
+    auto idAttr = op->getAttrOfType<IntegerAttr>(kTDMMergeIdAttr);
+    if (!idAttr)
+      return;
+    auto idxAttr = op->getAttrOfType<IntegerAttr>(kTDMMergeIndexAttr);
+    assert(idxAttr && "merge-group member missing index attribute");
+    buckets[static_cast<int32_t>(idAttr.getInt())].push_back(
+        {static_cast<int32_t>(idxAttr.getInt()), op});
+  });
+
+  llvm::DenseMap<Operation *, std::shared_ptr<TDMMergeGroupInfo>> result;
+  for (auto &kv : buckets) {
+    auto &members = kv.second;
+    llvm::sort(members,
+               [](const auto &a, const auto &b) { return a.first < b.first; });
+    TDMMergeGroupInfo info;
+    for (auto &member : members) {
+      TDMCopyGlobalToLocalOp op = member.second;
+      info.members.push_back(op.getOperation());
+      info.memberHints.push_back(
+          static_cast<uint32_t>(op.getWarpUsedHintAttr().getInt()));
+    }
+    assert(info.members.size() >= 2 && "merge group must have >= 2 members");
+    info.lastInProgramOrder = info.members.back();
+    auto shared = std::make_shared<TDMMergeGroupInfo>(std::move(info));
+    for (auto *op : shared->members)
+      result[op] = shared;
+  }
   return result;
 }
 

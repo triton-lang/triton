@@ -1,5 +1,5 @@
-// RUN: triton-opt %s --split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,ENABLE
-// RUN: env TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1 triton-opt %s --split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,DISABLE
+// RUN: triton-opt %s --split-input-file --tritonamdgpu-prepare-tdm-merge --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,ENABLE
+// RUN: env TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1 triton-opt %s --split-input-file --tritonamdgpu-prepare-tdm-merge --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,DISABLE
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory

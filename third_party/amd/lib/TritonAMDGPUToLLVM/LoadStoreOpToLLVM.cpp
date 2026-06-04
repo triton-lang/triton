@@ -2701,7 +2701,7 @@ void populateLoadStoreOpToLLVMPatterns(
                AsyncTDMScatterOpConversion, AsyncTDMGatherOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit, uniformitySolver);
   // AsyncTDMCopyGlobalToLocalOpConversion additionally consumes the
-  // op-to-merge-group map built by computeTDMMergeGroups, so it is constructed
+  // op-to-merge-group map recovered by readTDMMergeGroups, so it is constructed
   // separately from the main pattern list.
   patterns.add<AsyncTDMCopyGlobalToLocalOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit, uniformitySolver,
