@@ -43,12 +43,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %dst_a = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
     %dst_b = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
 
-    // Canonical memdesc_index/copy pairs get generated hints unless disabled.
+    // Adjacent unhinted copies get generated hints (and fuse) unless disabled.
+    // Auto hint generation only adds attributes, so the copies must already be
+    // consecutive; see tdm_auto_hints_skip_interleaved for the deferred case.
     // ENABLE: "llvm.amdgcn.tensor.load.to.lds"
     // ENABLE-NOT: "llvm.amdgcn.tensor.load.to.lds"
     // DISABLE: "llvm.amdgcn.tensor.load.to.lds"
     // DISABLE: "llvm.amdgcn.tensor.load.to.lds"
     // DISABLE-NOT: "llvm.amdgcn.tensor.load.to.lds"
+    %dst0 = ttg.memdesc_index %dst_a[%c0] : !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %dst1 = ttg.memdesc_index %dst_b[%c0] : !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %0 = amdg.async_tdm_copy_global_to_local %desc[%c0, %c0] into %dst0, pred = %pred : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %1 = amdg.async_tdm_copy_global_to_local %desc[%c0, %c0] into %dst1, pred = %pred : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_auto_hints_skip_interleaved
+  tt.func public @tdm_auto_hints_skip_interleaved(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 128 : i32
+    %c_stride0 = arith.constant 128 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %c0 = arith.constant 0 : i32
+    %pred = arith.constant 1 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <64x64xf16, #shared>
+    %dst_a = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
+    %dst_b = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
+
+    // A memdesc_index between the copies makes them non-consecutive, so auto
+    // hint generation leaves them alone -- two intrinsics with or without the
+    // env var.  Hoisting the views to fuse this form is a deferred optimization.
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+    // CHECK-NOT: "llvm.amdgcn.tensor.load.to.lds"
     %dst0 = ttg.memdesc_index %dst_a[%c0] : !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     %0 = amdg.async_tdm_copy_global_to_local %desc[%c0, %c0] into %dst0, pred = %pred : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     %dst1 = ttg.memdesc_index %dst_b[%c0] : !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>

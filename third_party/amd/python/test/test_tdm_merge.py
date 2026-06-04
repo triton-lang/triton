@@ -5,9 +5,10 @@ compatible `warp_used_hint`s.  Adjacent hinted copies with pairwise-disjoint
 hints fuse into one `llvm.amdgcn.tensor.load.to.lds` during TDM->LLVM lowering;
 each wave `select`s its own descriptor (no source rewrite).  Unless
 `TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1`, the compiler also auto-generates
-hints for adjacent unhinted copies of the canonical indexed-destination shape
-(`memdesc_index A; async_tdm_copy A; ...`).  The env knob gates only
-auto-generation; user-provided compatible hints always merge.
+hints for runs of already-adjacent unhinted copies (it only adds attributes;
+copies separated by another op, e.g. interleaved `memdesc_index` destinations,
+are left alone).  The env knob gates only auto-generation; user-provided
+compatible hints always merge.
 
 For `warp_used_hint` legality (K, i0, axis-aligned coset) and a hint cookbook,
 see `test_tdm_copy.py`.  Authoritative mergeability rules live in

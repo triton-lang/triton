@@ -1366,9 +1366,9 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       auto mergedAuxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
           op.getCache(), /*isLoad*/ true, targetInfo);
       rewriter.setInsertionPoint(group.lastInProgramOrder);
-      mlir::LLVM::AMD::emitTDMLoadStoreMerged(rewriter, loc, getTypeConverter(),
-                                              members, numWarps, /*isLoad=*/true,
-                                              ctaId, mergedAuxBits, group);
+      mlir::LLVM::AMD::emitTDMLoadMerged(rewriter, loc, getTypeConverter(),
+                                         members, numWarps, ctaId, mergedAuxBits,
+                                         group);
 
       for (size_t i = numMembers; i-- > 0;)
         rewriter.eraseOp(group.members[i]);

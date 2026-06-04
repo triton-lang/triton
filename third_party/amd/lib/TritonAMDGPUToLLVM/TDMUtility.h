@@ -125,14 +125,14 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 // (user-authored or previously generated) still merge.  To keep a hinted copy
 // standalone, make its hint overlap its neighbor's hint.
 //
-// `prepareGeneratedTDMMergeHints` is a narrower pre-pass: it mutates only the
-// canonical adjacent unhinted indexed-destination form with non-partitioned
-// destinations into hinted merge candidates.  It is not the full mergeability
-// contract; it only creates hints for one safe IR shape.  Then
+// `prepareGeneratedTDMMergeHints` is a narrower pre-pass: it stamps hints on
+// runs of already-adjacent unhinted, non-partitioned copies.  It adds only
+// attributes (no IR reordering), so copies that are not already consecutive do
+// not auto-merge.  It is not the full mergeability contract.  Then
 // `computeTDMMergeGroups` builds a map from each merging
 // `async_tdm_copy_global_to_local` op to its group info (IR unchanged).  The
 // conversion pattern dispatches on it: the first visited member emits a fused
-// intrinsic via `emitTDMLoadStoreMerged` and erases the whole group; singletons
+// intrinsic via `emitTDMLoadMerged` and erases the whole group; singletons
 // fall back to `emitTDMLoadStore`.
 //
 // Mergeability rules (v1; all required):
@@ -174,13 +174,11 @@ struct TDMMergeMemberInfo {
 };
 
 // Enabled by default (set TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1 to disable):
-// mutate only canonical adjacent unhinted copies with indexed destinations of
-// the form
-//   memdesc_index A; async_tdm_copy A; memdesc_index B; async_tdm_copy B; ...
-// into hinted merge candidates by moving the destination memdesc_index ops
-// before the copy group and assigning disjoint warp_used_hint masks.  Partitioned
-// destinations are skipped because their extra hint legality rule is verified
-// before this pass runs.
+// stamp disjoint `warp_used_hint` masks on runs of already-adjacent unhinted
+// copies so they fuse later.  Only attributes are added -- copies separated by
+// any other op (including their own `memdesc_index` destinations) are left
+// alone.  Partitioned destinations are skipped because their extra hint
+// legality rule is verified before this pass runs.
 // No-op when the env var disables auto-merge.
 void prepareGeneratedTDMMergeHints(ModuleOp mod);
 
@@ -194,14 +192,15 @@ void prepareGeneratedTDMMergeHints(ModuleOp mod);
 llvm::DenseMap<Operation *, std::shared_ptr<TDMMergeGroupInfo>>
 computeTDMMergeGroups(ModuleOp mod);
 
-// Emit one fused TDM intrinsic for a merge group, `select`ing each wave's
+// Emit one fused TDM load intrinsic for a merge group, `select`ing each wave's
 // descriptor on an SGPR-uniform per-wave selector.  `auxBits` comes from any
-// member (rule 7 makes it uniform); no mbarrier (rule 2).
-void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
-                            const LLVMTypeConverter *typeConverter,
-                            ArrayRef<TDMMergeMemberInfo> members, int numWarps,
-                            bool isLoad, Value ctaId, int32_t auxBits,
-                            const TDMMergeGroupInfo &groupInfo);
+// member (rule 7 makes it uniform); no mbarrier (rule 2).  Store merging is not
+// supported.
+void emitTDMLoadMerged(RewriterBase &rewriter, Location loc,
+                       const LLVMTypeConverter *typeConverter,
+                       ArrayRef<TDMMergeMemberInfo> members, int numWarps,
+                       Value ctaId, int32_t auxBits,
+                       const TDMMergeGroupInfo &groupInfo);
 
 // Effective warp count that drives TDM warp distribution and the resulting
 // physical instruction count.  A `warp_used_hint` restricts emission to
