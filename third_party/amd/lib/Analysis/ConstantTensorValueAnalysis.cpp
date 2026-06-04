@@ -23,6 +23,16 @@ namespace {
 
 constexpr unsigned kMaxDepth = 96;
 
+// This file proves register-order contiguity by evaluating the offset tensor at
+// symbolic LinearLayout coordinates. For each register r,
+// eval(offset, coordAt(r)) produces an abstract integer expression. Contiguity r
+// is accepted only when eval(r) - eval(0) simplifies to the exact constant r
+// with no remaining symbols or opaque atoms.
+//
+// Soundness is conservative: unsupported tensor-valued expressions become
+// fatal, unsupported scalar-valued expressions become register-invariant scalar
+// symbols, and overflow/unsafe signedness prevents exact rewrites.
+
 int64_t floorDiv(int64_t a, int64_t b) {
   int64_t q = a / b, r = a % b;
   if (r != 0 && ((r < 0) != (b < 0)))
@@ -105,9 +115,20 @@ std::optional<int64_t> rBand(const Range &a, int64_t c) {
   return std::nullopt;
 }
 
-// ---- Abstract value: exact function of the unknowns at a fixed register -----
-// V = cst + sum lin[sym]*sym + sum opq[atomKey]*atom.  `fatal` is bottom-truth
-// (an unanalyzable tensor whose register variance is unknown).
+// ---- Abstract value: exact expression plus conservative metadata ------------
+// At one symbolic coordinate, a non-fatal Val represents the exact algebraic
+// expression:
+//   cst + sum lin[scalar]*scalar + sum opq[atomKey]*atom.
+//
+// `lin` symbols are register-invariant MLIR scalar values such as program IDs,
+// function arguments, or collapsed scalar subexpressions. `opq` atoms are named
+// indivisible terms with registered divisibility/range metadata: lane-coordinate
+// contributions, nonlinear products, unresolved mod/div/min/max results, etc.
+//
+// `rng` is a sound interval over-approximation used only to justify exact
+// band-based rewrites through mod/div/min/max. `fatal` means an unhandled tensor
+// expression may vary with the register coordinate, so no contiguity proof may
+// depend on it.
 struct Val {
   bool fatal = false;
   int64_t cst = 0;
@@ -115,9 +136,11 @@ struct Val {
   std::map<std::string, int64_t> opq;                // opaque atom key -> coeff
   Range rng;
   // Set when an explicit IR subtraction may have driven the value negative.
-  // floor-based mod/div folding is only valid on non-negative operands
-  // (signed remsi/divsi truncate toward zero; unsigned remui/divui wrap).
-  // Unknown scalars are treated as non-negative (memory-index convention).
+  // The mod/div simplifiers use mathematical floor-mod/floor-div identities,
+  // which match the intended non-negative memory-index arithmetic but are not
+  // generally equivalent to signed remsi/divsi truncation or unsigned wraparound.
+  // Unknown scalar symbols are assumed non-negative by memory-index convention;
+  // tainted values therefore fall back to opaque mod/div atoms.
   bool tainted = false;
 
   static Val ground() {
@@ -144,7 +167,11 @@ struct Val {
   }
 };
 
-// Per-analysis context: AxisInfo divisibility for scalar symbols + atom metadata.
+// Per-analysis context. AxisInfo is used here only as divisibility evidence for
+// scalar symbols; it is not trusted to prove the cross-axis contiguity itself.
+// Opaque atoms carry their own divisibility/range metadata so enclosing mod/div
+// operations can prove that terms drop or remain within one quotient band.
+// Missing divisibility information is treated as 1.
 struct Ctx {
   ModuleAxisInfoAnalysis &ai;
   llvm::SmallDenseMap<const void *, int64_t, 8> symDiv;
@@ -275,12 +302,13 @@ Val modC(const Val &a, int64_t c, Ctx &ctx) {
     return a.fatal ? a : Val::ground();
   if (a.tainted) // possibly-negative operand: floor-mod != remsi/remui
     return taintedOpaque(a, '%', c, ctx);
-  // Drop every term provably a multiple of c (c | coeff*divisibility); the
-  // remaining residual (cst + surviving terms) must fit a single band
-  // [m*c,(m+1)c) for the result to be exact = residual - m*c. This combines the
-  // old M1 (all-drop) and M2 (whole-range-band) and crucially handles the mixed
-  // case: e.g. (pid*128 + row + L_row) % 128 -> pid*128 drops, residual
-  // row+L_row in [0,128) -> exact, even though pid's range is unknown.
+  // Reduce modulo by dropping all terms provably divisible by c, then reason
+  // about the remaining residual. If that residual lies in one c-sized band
+  // [m*c,(m+1)c), the modulo is exactly residual - m*c.
+  //
+  // The opaque fallback is keyed by this reduced residual, not the original
+  // input. That lets operands differing only by register-invariant multiples of
+  // c get the same atom key and cancel in offset(r) - offset(0).
   Val resid;
   resid.cst = floorMod(a.cst, c); // multiple-of-c part of the constant drops too
   resid.rng = Range::point(resid.cst);
@@ -318,9 +346,14 @@ Val modC(const Val &a, int64_t c, Ctx &ctx) {
                   /*div=*/1, r);
 }
 
-// floordiv c.  Pull terms whose *coefficient* is divisible by c into the exact
-// quotient; the remaining residual must fit a single band (via range) to be
-// exact, otherwise fall back to an opaque atom.
+// Exact floor-division by a positive constant when the quotient is representable
+// in the Val domain. Terms whose coefficients are divisible by c are moved into
+// the quotient. The remaining residual is exact only if range proves it stays in
+// one c-sized band; then the band number is added to the quotient.
+//
+// If the residual may cross bands, fall back to an opaque atom for floor(a/c).
+// Divisibility of a symbol alone is not enough to create a new quotient symbol;
+// the coefficient itself must be divisible by c.
 Val divC(const Val &a, int64_t c, Ctx &ctx) {
   if (a.fatal || c <= 0)
     return a.fatal ? a : Val::ground();
@@ -392,16 +425,20 @@ Val minMax(const Val &a, const Val &b, bool isMin, Ctx &ctx) {
   return o;
 }
 
-// Coordinates are now symbolic Vals: a coordinate axis = concrete register
-// contribution + a register-invariant lane/warp/block atom (so contiguity is
-// proven over ALL lanes, not just lane 0).
+// Coordinates are symbolic Vals: one axis = concrete register contribution plus
+// a register-invariant lane/warp/block atom. That makes the proof quantify over
+// every thread's non-register coordinates, not just lane/warp/block zero.
 Val eval(Value v, ArrayRef<Val> coord, Ctx &ctx, unsigned depth);
 Val evalImpl(Value v, ArrayRef<Val> coord, Ctx &ctx, unsigned depth);
 
 // Memoizing wrapper: dedups shared DAG subterms within a register and reuses
-// coord-independent (scalar) results across registers. Results produced via the
-// depth cap are NOT memoized, so a truncated value can never be reused at a
-// shallower depth.
+// coord-independent scalar results across registers. The memo key includes the
+// exact symbolic coordinate.
+//
+// Results produced after the depth cap are intentionally not memoized. At that
+// point evalImpl returns a conservative approximation; caching it could cause a
+// later shallower traversal of the same (value, coord) to reuse the imprecise
+// capped result instead of decomposing it exactly.
 Val eval(Value v, ArrayRef<Val> coord, Ctx &ctx, unsigned depth) {
   if (depth > kMaxDepth)
     return evalImpl(v, coord, ctx, depth);
@@ -500,9 +537,10 @@ Val evalBinary(Operation *op, ArrayRef<Val> coord, Ctx &ctx, unsigned depth) {
   return Val::ground();
 }
 
-// Treat an opaque scalar (program-id, function arg, unhandled scalar op) as a
-// single register-invariant symbol -- sound because a scalar does not depend on
-// the register/coordinate.
+// Opaque scalar values are modeled as single register-invariant symbols. This
+// is sound because scalar MLIR values do not depend on the tensor register
+// coordinate, but it loses internal structure except for AxisInfo divisibility
+// attached to the scalar result.
 Val scalarSymbol(Value v, Ctx &ctx) {
   ctx.symDivOf(v); // cache divisibility
   Val s;
@@ -556,8 +594,11 @@ Val evalImpl(Value v, ArrayRef<Val> coord, Ctx &ctx, unsigned depth) {
   if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp>(op))
     return eval(op->getOperand(0), coord, ctx, depth + 1);
 
-  // arithmetic (recurses through scalar AND tensor ops, exposing literal
-  // coefficients like pid*128 needed for the floordiv divisibility pull)
+  // Recurse through both tensor and scalar arithmetic. Scalar formulas often
+  // carry constants such as pid*128, shifts, or masks; exposing those
+  // coefficients lets mod/div prove that terms drop or divide exactly. If
+  // scalar decomposition fails, collapse the scalar result to one
+  // register-invariant symbol instead of making the tensor analysis fatal.
   if (op->getNumOperands() == 2 && op->getNumResults() == 1) {
     Val r = evalBinary(op, coord, ctx, depth);
     // A scalar result is register-invariant no matter how it is computed: if we
@@ -595,12 +636,16 @@ unsigned getPerThreadContiguityFromLinearLayout(
   auto outDims = llvm::to_vector(ll.getOutDimNames());
   Ctx ctx(axisAnalysis);
 
-  // Per-axis lane/warp/block contribution, modeled as a register-invariant
-  // bounded atom: divisibility = gcd of the non-register basis components along
-  // that axis, range = [sum of negatives, sum of positives]. This makes the
-  // contiguity a theorem over ALL lanes/warps -- the existing mod/div rules
-  // either drop or band-resolve this atom (MXFP4 pow2-aligned tilings), or it
-  // survives and correctly caps contiguity (non-aligned / non-pow2 offsets).
+  // Build one register-invariant coordinate atom per tensor axis for all
+  // non-register LinearLayout input dimensions: lane, warp, block, etc.
+  // coordAt(r) fixes those inputs to zero and adds this atom back, so comparing
+  // registers proves a theorem over every thread's real non-register
+  // coordinates, not just over lane/warp/block zero.
+  //
+  // The atom divisibility is the gcd of non-register basis components along
+  // that output axis. Its range is a sound over-approximation of all bit
+  // contributions. Mod/div rules can drop aligned atoms or resolve them by
+  // range; otherwise the surviving atom correctly caps contiguity.
   SmallVector<Val> laneAtom(rank);
   for (unsigned j = 0; j < rank; ++j) {
     int64_t g = 0, lo = 0, hi = 0;

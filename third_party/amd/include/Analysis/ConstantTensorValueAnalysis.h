@@ -9,14 +9,20 @@ class ModuleAxisInfoAnalysis;
 
 namespace mlir::triton::AMD {
 
-// Per-thread memory contiguity of an integer offsets tensor, measured along the
-// LinearLayout "register" order. This complements AxisInfo for AMD buffer-load
-// offsets whose true contiguity is formed across multiple tensor axes (for
-// example MXFP4 scale pre-shuffles).
+// Proves per-thread memory-offset contiguity in LinearLayout "register" order.
+// AxisInfo describes per-axis properties; this analysis symbolically evaluates
+// the integer offset expression at successive register coordinates so it can
+// prove contiguity created by combining multiple tensor axes, e.g. AMD
+// buffer-load offsets after layout/pre-shuffle arithmetic.
+//
+// The proof is universal over program-id/function-argument scalars and over
+// non-register LinearLayout coordinates such as lane/warp/block. Any dependence
+// that cannot be eliminated, shown register-invariant, or reduced exactly
+// prevents the proven contiguity from increasing.
 //
 // Returns the largest proven power-of-two N such that every thread's registers
 // [0..N) access N consecutive offsets. Returns 1 if the property cannot be
-// proven (never 0).
+// proven; never returns 0.
 unsigned getPerThreadContiguityFromLinearLayout(
     Value offsetsValue, mlir::triton::ModuleAxisInfoAnalysis &axisAnalysis);
 
