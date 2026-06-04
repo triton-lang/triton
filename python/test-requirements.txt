@@ -3,6 +3,7 @@ isort
 numpy
 pytest
 pytest-instafail
+pytest-split
 pytest-xdist
 scipy>=1.7.1
 llnl-hatchet
