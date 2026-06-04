@@ -1,6 +1,7 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TDMUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
@@ -465,7 +466,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
     // grouping frozen earlier by the tritonamdgpu-prepare-tdm-merge pass so the
     // counted physical TDM intrinsics match exactly what the LLVM conversion
     // (which reads the same grouping) will emit.
-    auto tdmMergeGroups = mlir::LLVM::AMD::readTDMMergeGroups(m);
+    auto tdmMergeGroups = mlir::triton::AMD::readTDMMergeGroups(m);
 
     SmallVector<triton::amdgpu::AsyncTDMWait> waitTDMOps;
     getOperation()->walk([&](triton::amdgpu::AsyncTDMWait waitOp) {

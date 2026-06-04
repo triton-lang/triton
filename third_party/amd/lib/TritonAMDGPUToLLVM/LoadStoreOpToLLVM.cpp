@@ -1241,7 +1241,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit,
       const DataFlowSolver *uniformitySolver,
       const llvm::DenseMap<Operation *,
-                           std::shared_ptr<mlir::LLVM::AMD::TDMMergeGroupInfo>>
+                           std::shared_ptr<mlir::triton::AMD::TDMMergeGroupInfo>>
           &mergeGroups)
       : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver),
@@ -1317,7 +1317,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     // If this op is part of a merge group, the first member visited emits one
     // fused intrinsic for the whole group and erases the rest; the others are
     // already gone by the time they would be visited.  See the mergeability
-    // contract and TDMMergeGroupInfo in TDMUtility.h.
+    // contract and TDMMergeGroupInfo in TDMMergeUtility.h.
     auto mergeIt = mergeGroups.find(op);
     if (mergeIt != mergeGroups.end()) {
       const auto &group = *mergeIt->second;
@@ -1395,7 +1395,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
 
 private:
   const llvm::DenseMap<Operation *,
-                       std::shared_ptr<mlir::LLVM::AMD::TDMMergeGroupInfo>>
+                       std::shared_ptr<mlir::triton::AMD::TDMMergeGroupInfo>>
       &mergeGroups;
 };
 
@@ -2686,7 +2686,7 @@ void populateLoadStoreOpToLLVMPatterns(
     RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     const DataFlowSolver *uniformitySolver,
     const llvm::DenseMap<Operation *,
-                         std::shared_ptr<mlir::LLVM::AMD::TDMMergeGroupInfo>>
+                         std::shared_ptr<mlir::triton::AMD::TDMMergeGroupInfo>>
         &tdmMergeGroups,
     PatternBenefit benefit) {
   assert(uniformitySolver &&

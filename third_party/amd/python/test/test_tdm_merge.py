@@ -12,7 +12,7 @@ compatible hints always merge.
 
 For `warp_used_hint` legality (K, i0, axis-aligned coset) and a hint cookbook,
 see `test_tdm_copy.py`.  Authoritative mergeability rules live in
-`TDMUtility.h::TDMMergeGroupInfo`; in brief, the N (2..4) members must be
+`TDMMergeUtility.h::TDMMergeGroupInfo`; in brief, the N (2..4) members must be
 consecutive, hinted, mbarrier-free, pairwise-disjoint, same-rank and same-cache
 (any intervening op, including a workgroup barrier, ends the run).  Only
 pairwise disjointness is required -- the union need not be a coset (e.g. K=1

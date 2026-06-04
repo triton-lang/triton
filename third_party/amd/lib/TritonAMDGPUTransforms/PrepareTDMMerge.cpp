@@ -1,5 +1,5 @@
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "amd/lib/TritonAMDGPUToLLVM/TDMUtility.h"
+#include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
 
 namespace mlir {
 
@@ -11,7 +11,7 @@ namespace {
 struct TritonAMDGPUPrepareTDMMergePass
     : impl::TritonAMDGPUPrepareTDMMergeBase<TritonAMDGPUPrepareTDMMergePass> {
   void runOnOperation() override {
-    mlir::LLVM::AMD::assignTDMMergeGroupIds(getOperation());
+    mlir::triton::AMD::assignTDMMergeGroupIds(getOperation());
   }
 };
 

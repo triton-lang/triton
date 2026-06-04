@@ -1,10 +1,10 @@
 #ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_PATTERNTRITONGPUOPTOLLVM_H_
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_PATTERNTRITONGPUOPTOLLVM_H_
 
-#include "TDMUtility.h"
 #include "TargetInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "llvm/ADT/DenseMap.h"
@@ -42,7 +42,7 @@ void populateFpCastOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 void adjustModeRegister(ModuleOp mod, const TargetInfo &targetInfo);
 
 // `tdmMergeGroups` carries the frozen implicit-merge grouping, recovered via
-// `LLVM::AMD::readTDMMergeGroups(module)` from attributes stamped by the
+// `triton::AMD::readTDMMergeGroups(module)` from attributes stamped by the
 // tritonamdgpu-prepare-tdm-merge pass; the AsyncTDMCopyGlobalToLocalOp
 // conversion pattern queries it to decide whether to emit a fused intrinsic.
 // The map MUST outlive the pattern set; pass an empty map (e.g. a
@@ -52,7 +52,7 @@ void populateLoadStoreOpToLLVMPatterns(
     RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     const DataFlowSolver *uniformitySolver,
     const llvm::DenseMap<Operation *,
-                         std::shared_ptr<mlir::LLVM::AMD::TDMMergeGroupInfo>>
+                         std::shared_ptr<mlir::triton::AMD::TDMMergeGroupInfo>>
         &tdmMergeGroups,
     PatternBenefit benefit);
 

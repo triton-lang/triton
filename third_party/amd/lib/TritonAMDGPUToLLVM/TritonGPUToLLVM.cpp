@@ -6,6 +6,7 @@
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "TritonAMDGPUToLLVM/TypeConverter.h"
 #include "TritonAMDGPUToLLVM/UniformityAnalysis.h"
+#include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlowFramework.h"
@@ -194,7 +195,7 @@ struct ConvertTritonAMDGPUToLLVM
     // pass.  The map is queried by AsyncTDMCopyGlobalToLocalOp conversion to
     // decide whether to fuse.  Lives on this stack frame, which encloses
     // pattern application below.
-    auto tdmMergeGroups = mlir::LLVM::AMD::readTDMMergeGroups(mod);
+    auto tdmMergeGroups = mlir::triton::AMD::readTDMMergeGroups(mod);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
                                            axisInfoAnalysis, &uniformitySolver,
                                            tdmMergeGroups, AMDBenefit);
