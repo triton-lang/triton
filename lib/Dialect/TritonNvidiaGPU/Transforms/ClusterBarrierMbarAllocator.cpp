@@ -87,9 +87,11 @@ void runClusterBarrierMbarAllocator(ModuleOp mod) {
 
   if (regionOffsets.empty())
     mod->removeAttr(kWSClusterBarrierCountAttrName);
-  else
+  else {
     mod->setAttr(kWSClusterBarrierCountAttrName,
                  builder.getI32IntegerAttr(regionOffsets.size()));
+    mod->setAttr("ttg.shared", builder.getI32IntegerAttr(nextOffset));
+  }
 }
 
 } // namespace mlir::triton::nvidia_gpu

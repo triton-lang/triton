@@ -613,7 +613,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 5 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: module attributes {
-  // CHECK-DAG: ttg.shared = 5 : i32
+  // CHECK-DAG: ttg.shared = 24 : i32
   // CHECK-DAG: ttg.ws_cluster_barrier_count = 1 : i32
   // CHECK-LABEL: @cluster_barrier_inside_warp_specialize
   // CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;"
@@ -668,7 +668,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 5 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: module attributes {
-  // CHECK-DAG: ttg.shared = 5 : i32
+  // CHECK-DAG: ttg.shared = 40 : i32
   // CHECK-DAG: ttg.ws_cluster_barrier_count = 2 : i32
   // CHECK-LABEL: @cluster_barrier_inside_warp_specialize_reuses_slots
   // CHECK-COUNT-2: mbarrier.init.shared::cta.b64

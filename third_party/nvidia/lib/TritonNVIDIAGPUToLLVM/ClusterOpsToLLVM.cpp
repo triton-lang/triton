@@ -31,7 +31,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
-#include "llvm/Support/MathExtras.h"
 
 #include <type_traits>
 
@@ -271,8 +270,8 @@ struct InitializeWSClusterBarriers
     Value initPred = b.icmp_eq(tid, b.i32_val(0));
     auto sharedAttr = mod->getAttrOfType<IntegerAttr>("ttg.shared");
     int64_t shared = sharedAttr ? sharedAttr.getInt() : 0;
-    int64_t offset = llvm::alignTo(shared, int64_t{8});
     int64_t count = countAttr.getInt();
+    int64_t offset = shared - count * 16;
     int numCTAs = triton::gpu::lookupNumCTAs(kernel);
     for (int64_t i = 0; i < count; ++i, offset += 16) {
       Value barrierPtr =

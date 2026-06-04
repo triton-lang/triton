@@ -31,7 +31,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 5 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // ALLOC: module attributes {
-  // ALLOC-DAG: ttg.shared = 5 : i32
+  // ALLOC-DAG: ttg.shared = 40 : i32
   // ALLOC-DAG: ttg.ws_cluster_barrier_count = 2 : i32
   // ALLOC-LABEL: @cluster_barrier_mbar_allocator
   tt.func @cluster_barrier_mbar_allocator(%ptr: !tt.ptr<i32>) {
