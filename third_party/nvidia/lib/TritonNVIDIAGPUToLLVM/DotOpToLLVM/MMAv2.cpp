@@ -289,7 +289,8 @@ enum class TensorCoreType : uint8_t {
   INT32_INT4_INT4_INT32, // Not implemented
   INT32_INT8_INT8_INT32, // Not implemented
   // double precision tensor core instr
-  FP64_FP64_FP64_FP64,
+  FP64_FP64_FP64_FP64,    // m16n8k4.f64 (Phase 1+)
+  FP64_FP64_FP64_FP64_M8, // m8n8k4.f64  (legacy, used when instrShape[M] = 8)
   // scaled mxfp8 x mxfp8 matmul
   FP32_FP8E5M2_FP8E5M2_FP32_SCALE_VEC_1X,
   FP32_FP8E5M2_FP8E4M3FN_FP32_SCALE_VEC_1X,
@@ -309,6 +310,8 @@ static Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
   Type i32Ty = type::i32Ty(ctx);
   Type fp64x2Ty =
       LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(2, fp64Ty));
+  Type fp64x4Ty =
+      LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp64Ty));
   Type fp32x4Ty =
       LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, fp32Ty));
   Type i32x4Ty =
@@ -337,6 +340,8 @@ static Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
   case TensorCoreType::INT32_INT8_INT8_INT32:
     return i32x4Ty;
   case TensorCoreType::FP64_FP64_FP64_FP64:
+    return fp64x4Ty;
+  case TensorCoreType::FP64_FP64_FP64_FP64_M8:
     return fp64x2Ty;
   case TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32_SCALE_VEC_1X:
   case TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32_SCALE_VEC_1X:
@@ -427,8 +432,18 @@ static TensorCoreType getMmaTypeDot(DotOp op, RankedTensorType aTy,
         llvm::isa<Float8E4M3FNType>(bTy.getElementType()))
       return TensorCoreType::FP16_FP8E4M3FN_FP8E4M3FN_FP16;
   } else if (dTy.getElementType().isF64()) {
-    if (aTy.getElementType().isF64() && bTy.getElementType().isF64())
+    if (aTy.getElementType().isF64() && bTy.getElementType().isF64()) {
+      // instrShape[M] selects m16n8k4 (M=16) vs legacy m8n8k4 (M=8).
+      auto mmaEnc = dyn_cast<NvidiaMmaEncodingAttr>(dTy.getEncoding());
+      if (mmaEnc) {
+        auto instrShape = mmaEnc.getInstrShape();
+        unsigned rank = dTy.getRank();
+        unsigned instrM = instrShape[rank - 2];
+        if (instrM == 8)
+          return TensorCoreType::FP64_FP64_FP64_FP64_M8;
+      }
       return TensorCoreType::FP64_FP64_FP64_FP64;
+    }
   }
 
   return TensorCoreType::NOT_APPLICABLE;
@@ -482,6 +497,8 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxAmpere = {
      "mma.sync.aligned.m16n8k32.row.col.f16.e4m3.e4m3.f16"},
 
     {TensorCoreType::FP64_FP64_FP64_FP64,
+     "mma.sync.aligned.m16n8k4.row.col.f64.f64.f64.f64"},
+    {TensorCoreType::FP64_FP64_FP64_FP64_M8,
      "mma.sync.aligned.m8n8k4.row.col.f64.f64.f64.f64"},
 };
 
@@ -588,21 +605,15 @@ static void callMmaTuringFp16(PTXBuilder &builder, int b,
   mma(retArgs, aArgs2, bArgs2, cArgs);
 }
 
-// Emit m8n8k4 fp64 MMA instructions.
-// With numRegisters.m=1, numRegisters.k=1: emits a single m8n8k4.
-// With numRegisters.m=2, numRegisters.k=2: emits 2*2=4 m8n8k4 grouped as
-// m16n8k8
-static void callMmaAmpereFp64(PTXBuilder &builder, int b,
-                              const BaseOffset &base,
-                              mlir::triton::PTXInstr &mma, unsigned numMmaRets,
-                              unsigned colsPerThread, int numCPackedElem,
-                              unsigned batchOffset, ValueTableV2 &ha,
-                              ValueTableV2 &hb, const SmallVector<Value> &fc,
-                              int kRegs, int mRegs) {
-  // Each m sub-tile gets numMmaRets/mRegs results (2 f64 values per m8n8k4).
+// Legacy m8n8k4.f64 emit (sm_80 fallback; selected when instrShape=[8, 8]).
+static void
+callMmaAmpereFp64M8K4(PTXBuilder &builder, int b, const BaseOffset &base,
+                      mlir::triton::PTXInstr &mma, unsigned numMmaRets,
+                      unsigned colsPerThread, int numCPackedElem,
+                      unsigned batchOffset, ValueTableV2 &ha, ValueTableV2 &hb,
+                      const SmallVector<Value> &fc, int kRegs, int mRegs) {
   int retsPerM = numMmaRets / mRegs;
 
-  // Build ret/c operand lists for each m sub-tile.
   SmallVector<PTXBuilder::Operand *> retArgsList, cArgsList;
   for (int vm = 0; vm < mRegs; ++vm) {
     auto *retArgs = builder.newListOperand(retsPerM, "=d");
@@ -627,6 +638,39 @@ static void callMmaAmpereFp64(PTXBuilder &builder, int b,
       mma(retArgsList[vm], aArgs, bArgs, cArgsList[vm]);
     }
   }
+}
+
+// Emit one m16n8k4.f64 per call. A=2 regs/thread (gid, gid+8), B=1 reg,
+// C=4 regs. The two A regs come in as adjacent ha[] entries.
+// TODO(fp64 m16 family): extend for m16n8k{8,16} — A/B reg counts grow
+// with kWidth. K-selector to extend: pickFp64MmaK in
+// TritonGPU/Transforms/Utility.cpp.
+static void callMmaAmpereFp64M16K4(PTXBuilder &builder, int b,
+                                   const BaseOffset &base,
+                                   mlir::triton::PTXInstr &mma,
+                                   unsigned numMmaRets, unsigned colsPerThread,
+                                   int numCPackedElem, unsigned batchOffset,
+                                   ValueTableV2 &ha, ValueTableV2 &hb,
+                                   const SmallVector<Value> &fc) {
+  assert(numMmaRets == 4 && "m16n8k4.f64 produces 4 f64 outputs/thread");
+
+  auto *retArgs = builder.newListOperand(numMmaRets, "=d");
+  auto *cArgs = builder.newListOperand();
+  unsigned cBase =
+      (base.m * colsPerThread + numMmaRets * numCPackedElem * base.n) /
+          numCPackedElem +
+      batchOffset * b;
+  for (unsigned i = 0; i < numMmaRets; ++i) {
+    cArgs->listAppend(builder.newOperand(fc[cBase + i], std::to_string(i)));
+  }
+
+  auto *aArgs = builder.newListOperand({
+      {ha[{b, base.m + 0, base.k}], "d"},
+      {ha[{b, base.m + 1, base.k}], "d"},
+  });
+  auto *bArgs = builder.newListOperand({{hb[{b, base.n, base.k}], "d"}});
+
+  mma(retArgs, aArgs, bArgs, cArgs);
 }
 
 // Unified MMAV2 function for Ampere and HopperF64 architectures
@@ -778,7 +822,12 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
   int bitwidthRet = dTensorTy.getElementType().getIntOrFloatBitWidth();
-  auto numMmaRets = bitwidthRet == 64 ? 2 : bitwidthRet / 8;
+  // f64 m16n8k4 returns 4 f64 outputs/thread; legacy m8n8k4 returns 2.
+  unsigned numMmaRets;
+  if (bitwidthRet == 64)
+    numMmaRets = (mmaType == TensorCoreType::FP64_FP64_FP64_FP64_M8) ? 2 : 4;
+  else
+    numMmaRets = bitwidthRet / 8;
   int numCPackedElem = bitwidthRet == 64 ? 1 : 4 / numMmaRets;
 
   auto rank = dTensorTy.getRank();
@@ -849,11 +898,20 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
     return op.emitError(
         "unsupported MMA instruction for the given operand/result types");
 
-  NumRegisters numRegisters = (mmaType == TensorCoreType::FP64_FP64_FP64_FP64)
-                                  ? NumRegisters{1, 1, 1}
-                                  : NumRegisters{2, 1, 2};
+  // f64 m16n8k4: A=2 regs (gid, gid+8). f64 m8n8k4 legacy: 1 A reg.
+  NumRegisters numRegisters;
+  if (mmaType == TensorCoreType::FP64_FP64_FP64_FP64)
+    numRegisters = NumRegisters{2, 1, 1};
+  else if (mmaType == TensorCoreType::FP64_FP64_FP64_FP64_M8)
+    numRegisters = NumRegisters{1, 1, 1};
+  else
+    numRegisters = NumRegisters{2, 1, 2};
 
-  EmitMmaCallback emit = [&](PTXBuilder &builder, int b, int m, int n, int k,
+  bool isFp64M16 = mmaType == TensorCoreType::FP64_FP64_FP64_FP64;
+  bool isFp64M8 = mmaType == TensorCoreType::FP64_FP64_FP64_FP64_M8;
+
+  EmitMmaCallback emit = [&, isFp64M16, isFp64M8](
+                             PTXBuilder &builder, int b, int m, int n, int k,
                              mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                              unsigned colsPerThread, unsigned batchOffset,
                              ValueTableV2 &ha, ValueTableV2 &hb,
@@ -861,7 +919,7 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                              int /*repK*/) {
     bool isIntMMA = dTy.getElementType().isInteger(32);
     bool isAccF16 = dTy.getElementType().isF16();
-    bool isFp64MMA = dTy.getElementType().isF64();
+    bool isFp64MMA = isFp64M16 || isFp64M8;
     const unsigned numCPackedElem = isFp64MMA ? 1u : 4u / numMmaRets;
     BaseOffset base{numRegisters.m * m, numRegisters.n * n, numRegisters.k * k};
     if (isTuring) {
@@ -873,10 +931,13 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
         callMmaTuringFp16(builder, b, base, mma, numMmaRets, colsPerThread,
                           numCPackedElem, ha, hb, fc, isAccF16);
     } else {
-      if (isFp64MMA) {
-        callMmaAmpereFp64(builder, b, base, mma, numMmaRets, colsPerThread,
-                          numCPackedElem, batchOffset, ha, hb, fc,
-                          numRegisters.k, numRegisters.m);
+      if (isFp64M16) {
+        callMmaAmpereFp64M16K4(builder, b, base, mma, numMmaRets, colsPerThread,
+                               numCPackedElem, batchOffset, ha, hb, fc);
+      } else if (isFp64M8) {
+        callMmaAmpereFp64M8K4(builder, b, base, mma, numMmaRets, colsPerThread,
+                              numCPackedElem, batchOffset, ha, hb, fc,
+                              numRegisters.k, numRegisters.m);
       } else {
         callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
                   numCPackedElem, batchOffset, ha, hb, fc,
