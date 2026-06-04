@@ -74,9 +74,10 @@ jobs:
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
-      - name: Cache build dependencies
+      - name: Restore build dependencies cache
+        id: restore-build-deps-cache
         if: ${{ !contains(matrix.runner, 'gfx90a') }}
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -199,6 +200,15 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
+      - name: Save build dependencies cache
+        if: ${{ github.ref == 'refs/heads/main' && !contains(matrix.runner, 'gfx90a') }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ steps.restore-build-deps-cache.outputs.cache-primary-key }}
       - name: Clean up caches
         # Always cleanup the worker, even if builds or tests failed given that these directories are
         # mapped from the host and we write files as the root user in the docker.
@@ -250,8 +260,9 @@ jobs:
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
-      - name: Cache build dependencies
-        uses: actions/cache@v4
+      - name: Restore build dependencies cache
+        id: restore-build-deps-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.triton/llvm
@@ -313,6 +324,15 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
+      - name: Save build dependencies cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ steps.restore-build-deps-cache.outputs.cache-primary-key }}
       - name: Clean up caches
         if: always()
         run: |
