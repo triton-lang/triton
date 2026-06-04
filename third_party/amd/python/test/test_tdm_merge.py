@@ -1,133 +1,34 @@
-"""User-facing manual + test suite for adjacent TDM-copy merging on gfx1250.
+"""Manual + tests for adjacent TDM-copy merging on gfx1250.
 
-This is the canonical reference for **implicit merging** of adjacent
-`async_load`s with compatible `warp_used_hint` values on AMD gfx1250.
-The environment knob only controls whether the compiler auto-generates hints
-for adjacent unhinted copies; user-provided compatible hints remain mergeable.
-General predicated/partial-copy coverage lives with the TDM copy tests;
-this file keeps only merge-specific coverage.
+Canonical reference for **implicit merging** of adjacent `async_load`s with
+compatible `warp_used_hint`s.  Adjacent hinted copies with pairwise-disjoint
+hints fuse into one `llvm.amdgcn.tensor.load.to.lds` during TDM->LLVM lowering;
+each wave `select`s its own descriptor (no source rewrite).  Unless
+`TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1`, the compiler also auto-generates
+hints for adjacent unhinted copies of the canonical indexed-destination shape
+(`memdesc_index A; async_tdm_copy A; ...`).  The env knob gates only
+auto-generation; user-provided compatible hints always merge.
 
-Worked examples by shape:
+For `warp_used_hint` legality (K, i0, axis-aligned coset) and a hint cookbook,
+see `test_tdm_copy.py`.  Authoritative mergeability rules live in
+`TDMUtility.h::TDMMergeGroupInfo`; in brief, the N (2..4) members must be
+consecutive, hinted, mbarrier-free, pairwise-disjoint, same-rank and same-cache
+(any intervening op, including a workgroup barrier, ends the run).  Only
+pairwise disjointness is required -- the union need not be a coset (e.g. K=1
+hints {0b0001,0b0010,0b0100,0b1000} fuse as N=4).  Destination MemDescTypes may
+differ; metadata is lowered per member.  Kernels use `async_wait(0)` ("wait for
+everything"), correct under any merge outcome.
 
-  * Two descriptors merged          -> `vector_add_tdm_kernel`,
-                                       merge-eligible rows
-  * Two descriptors not merged      -> `vector_add_tdm_kernel`,
-                                       merge-rule violation rows
-  * Three descriptors fused         -> `vector_add_tdm_kernel_3way`
-  * Four descriptors fused          -> `vector_add_tdm_kernel_4way`
-  * Heterogeneous destinations      -> `heterogeneous_tdm_merge_kernel`
-  * Cache-modifier vs merge         -> `vector_add_tdm_kernel_cache`
+Worked examples (kernel -> what it exercises):
+  * vector_add_tdm_kernel          -- 2-way merge + decline cookbook
+  * vector_add_tdm_kernel_3way     -- 3-way merge (non-uniform generated shape)
+  * vector_add_tdm_kernel_4way     -- 4-way member-predicate path
+  * heterogeneous_tdm_merge_kernel -- differing destination MemDescTypes
+  * vector_add_tdm_kernel_cache    -- cache_modifier gates merge (rule 7)
 
-================================================================
-Manual: terminology
-================================================================
-
-For `warp_used_hint` legality (K, i0, axis-aligned coset) and a cookbook of
-legal/illegal hints and the generic hint formulas, see the manual in
-`test_tdm_copy.py`; this file does not repeat it.  One merge-specific term:
-
-  * **current run**: consecutive `async_load`s the merge analyser considers for
-    fusion.  From the run head it picks the largest supported N (2, 3, or 4)
-    with pairwise-disjoint hints.
-
-================================================================
-Manual: implicit op-merging across adjacent copies
-================================================================
-
-Two or more adjacent `async_load`s with compatible hints fuse into one
-`llvm.amdgcn.tensor.load.to.lds` during TDM->LLVM lowering.  Each wave
-selects its member via SGPR-uniform selection; no source-level rewrite is
-needed.  Unless `TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1`, the compiler can
-also create compatible hints for adjacent unhinted copies.
-
-There are two separate capabilities:
-
-  1. **Fundamental lowering merge**: if the source already provides compatible
-     `warp_used_hint`s, TDM-to-LLVM can merge the copies even when they write to
-     independent shared allocations, provided the allocation ops are outside the
-     consecutive copy run.
-  2. **Automatic hint generation**: unless the disable env var is set, the
-     compiler can synthesize hints only for the canonical indexed-destination
-     shape with non-partitioned destinations:
-
-         memdesc_index A; async_tdm_copy A;
-         memdesc_index B; async_tdm_copy B; ...
-
-     The auto pass does not synthesize hints for arbitrary independent
-     `allocate_shared_memory` destinations or partitioned destinations; provide
-     hints explicitly for those.
-
-Mergeability rules (authoritative list in
-`TDMUtility.h::TDMMergeGroupInfo`):
-
-  1. Every member has a verifier-legal `warp_used_hint`. Unhinted copies end
-     the current run unless auto hint generation is enabled and the copies match
-     the generated-hint pattern.
-  2. No member has an `mbarrier`.  Such ops lower as singletons and
-     end the current run.
-  3. Members have pairwise-disjoint hints. The union does not need to be a
-     verifier-legal `warp_used_hint`.  Members may have different K.
-  4. Group size N is 2, 3, or 4.
-  5. Members are consecutive in the same block; any intervening op
-     (TDM or not) ends the current run.
-  6. Members have same-rank descriptors that can be represented by a compatible
-     hardware descriptor group form for the fused intrinsic. Destination
-     `MemDescType`s may differ; shape/layout/type metadata is lowered per
-     member.
-  7. Members share the same `cache_modifier`.
-
-The analyser picks, from the head of the current run, the largest
-supported N (up to 4) whose hints stay pairwise disjoint.  Op order, not
-warp order: it picks the first N `async_load`s, not the first N warps.
-The union need not be a coset, so e.g. K=1 hints {0b0001, 0b0010,
-0b0100, 0b1000} fuse as one N=4 group.
-
-Example: two adjacent loads that *will* fuse:
-
-    # Op A's hint activates warps {0,1,2,3} (the lower half).
-    # Op B's hint activates warps {4,5,6,7} (the upper half).
-    # K=4 each, pairwise disjoint -> fuses into one `tensor_load_to_lds` op.
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, [m, n], a_buf,
-                                    warp_used_hint=0b00001111)
-    ttgl.amd.gfx1250.tdm.async_load(b_desc, [m, n], b_buf,
-                                    warp_used_hint=0b11110000)
-    ttgl.amd.gfx1250.tdm.async_wait(0)  # one outstanding fused TDM op
-
-Example: two adjacent loads that *will not* fuse:
-
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, [m, n], a_buf,
-                                    warp_used_hint=0b00000011)   # warps {0,1}
-    ttgl.amd.gfx1250.tdm.async_load(b_desc, [m, n], b_buf,
-                                    warp_used_hint=0b00000110)   # warps {1,2}
-    # Rule 3 violation: the hints overlap on warp 1, so they are not
-    # pairwise disjoint.  Lowered as two separate intrinsics.
-
-================================================================
-Manual: `async_wait` is user-owned
-================================================================
-
-The lowering doesn't adjust wait counts; size them on the post-merge
-intrinsic count.  `async_wait(0)` ("wait for everything") is correct
-under any merge outcome and is what every kernel here uses.
-
-================================================================
-Manual: cache modifier interaction with merge
-================================================================
-
-`async_load(..., cache_modifier=".cg")` lowers to the single auxBits
-immediate on the fused intrinsic, so mismatched cache modifiers block
-fusion (rule 7).  See `vector_add_tdm_kernel_cache` for a worked
-example covering same-cache and mismatched-cache sides.
-
-================================================================
-What this file actually tests
-================================================================
-
-  * Compile-only tests count `tensor_load_to_lds` instructions in
-    the AMDGCN asm to assert the merge analyser's decisions.
-  * Runtime tests on gfx1250 compare against a torch-on-CPU reference.
-
-Runtime tests are skipped on non-gfx1250 hosts.
+Compile-only tests count `tensor_load_to_lds` in the AMDGCN asm (no GPU);
+runtime tests compare against a torch-on-CPU reference and are skipped off
+gfx1250.
 """
 
 import re
@@ -193,25 +94,13 @@ def vector_add_tdm_kernel(
     off_m = pid_m * BLOCK_M
     off_n = pid_n * BLOCK_N
 
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(
-        base=a_ptr,
-        shape=(M, N),
-        strides=(N, 1),
-        block_shape=(BLOCK_M, BLOCK_N),
-        layout=SHARED_LAYOUT,
-    )
-    b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(
-        base=b_ptr,
-        shape=(M, N),
-        strides=(N, 1),
-        block_shape=(BLOCK_M, BLOCK_N),
-        layout=SHARED_LAYOUT,
-    )
+    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr, shape=(M, N), strides=(N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
 
-    # One allocation per copy: distinct buffers let the membar analysis see the
-    # destinations as disjoint, so no workgroup barrier is inserted between the
-    # adjacent copies (a barrier would split the current run).  Fusion then
-    # depends only on the hint merge rules below.
+    # One allocation per copy: distinct buffers let membar see disjoint
+    # destinations, so no workgroup barrier splits the adjacent copies.
     a_stage = ttgl.allocate_shared_memory(a_desc.dtype, [1] + a_desc.block_shape, a_desc.layout)
     b_stage = ttgl.allocate_shared_memory(b_desc.dtype, [1] + b_desc.block_shape, b_desc.layout)
     a_buf = a_stage.index(0)
@@ -222,10 +111,7 @@ def vector_add_tdm_kernel(
         HINT_B = None
     ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_m, off_n], a_buf, warp_used_hint=HINT_A)
     ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_m, off_n], b_buf, warp_used_hint=HINT_B)
-
-    # `async_wait(0)` = "wait for everything", correct under any merge
-    # outcome.
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.gfx1250.tdm.async_wait(0)  # "wait for everything"; correct under any merge
 
     a = a_buf.load(layout=BLOCKED_LAYOUT)
     b = b_buf.load(layout=BLOCKED_LAYOUT)
@@ -299,35 +185,19 @@ def _assert_tensor_load_count(amdgcn: str, expected: int, context: str):
                                 f"got {actual}\nMatched tensor_load_to_lds lines:\n" + "\n".join(lines))
 
 
-def _compile_vector_add_tdm_amdgcn(BLOCK_M: int, BLOCK_N: int, USE_HINT: bool) -> str:
-    NUM_WARPS = 8
-    signature = {
-        "a_ptr": "*fp16",
-        "b_ptr": "*fp16",
-        "c_ptr": "*fp16",
-        "M": "i32",
-        "N": "i32",
-        "BLOCK_M": "constexpr",
-        "BLOCK_N": "constexpr",
-        "HINT_A": "constexpr",
-        "HINT_B": "constexpr",
-        "USE_HINT": "constexpr",
-    }
-    constexprs = {
-        "BLOCK_M": BLOCK_M,
-        "BLOCK_N": BLOCK_N,
-        "HINT_A": 0,
-        "HINT_B": 0,
-        "USE_HINT": USE_HINT,
-    }
+def _compile_amdgcn(fn, ptr_names, constexprs, *, ptr_ty="*fp16", num_warps=8) -> str:
+    """Compile `fn` for gfx1250 and return its AMDGCN asm.
+
+    The signature is `{ptrs: ptr_ty, M/N: i32, <constexpr keys>: constexpr}`,
+    matching every kernel here (pointer args, then M, N, then constexprs).
+    """
+    signature = {p: ptr_ty for p in ptr_names}
+    signature["M"] = signature["N"] = "i32"
+    signature.update({name: "constexpr" for name in constexprs})
     k = triton.compile(
-        gluon._runtime.GluonASTSource(
-            fn=vector_add_tdm_kernel,
-            signature=signature,
-            constexprs=constexprs,
-        ),
+        gluon._runtime.GluonASTSource(fn=fn, signature=signature, constexprs=constexprs),
         target=GPUTarget("hip", "gfx1250", 32),
-        options={"num_warps": NUM_WARPS},
+        options={"num_warps": num_warps},
     )
     return k.asm["amdgcn"]
 
@@ -348,62 +218,31 @@ _COMPILE_BLOCK_SHAPES = [(64, 64), (32, 128)]
 )
 def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, expected_merge, request):
     """Compile-only: asserts 1 fused vs 2 separate `tensor_load_to_lds`."""
-    NUM_WARPS = 8
     use_tdm_hint = _use_tdm_hint(request)
-    signature = {
-        "a_ptr": "*fp16",
-        "b_ptr": "*fp16",
-        "c_ptr": "*fp16",
-        "M": "i32",
-        "N": "i32",
-        "BLOCK_M": "constexpr",
-        "BLOCK_N": "constexpr",
-        "HINT_A": "constexpr",
-        "HINT_B": "constexpr",
-        "USE_HINT": "constexpr",
-    }
-    constexprs = {
-        "BLOCK_M": BLOCK_M,
-        "BLOCK_N": BLOCK_N,
-        "HINT_A": HINT_A,
-        "HINT_B": HINT_B,
-        "USE_HINT": use_tdm_hint,
-    }
-    k = triton.compile(
-        gluon._runtime.GluonASTSource(
-            fn=vector_add_tdm_kernel,
-            signature=signature,
-            constexprs=constexprs,
-        ),
-        target=GPUTarget("hip", "gfx1250", 32),
-        options={"num_warps": NUM_WARPS},
-    )
-
-    amdgcn = k.asm["amdgcn"]
+    amdgcn = _compile_amdgcn(
+        vector_add_tdm_kernel, ["a_ptr", "b_ptr", "c_ptr"], {
+            "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N,
+            "HINT_A": HINT_A, "HINT_B": HINT_B, "USE_HINT": use_tdm_hint
+        })
     context = f"HINT_A=0b{HINT_A:08b}, HINT_B=0b{HINT_B:08b}"
-    if not use_tdm_hint:
-        _assert_tensor_load_count(amdgcn, 2, f"unhinted {context}")
-    elif expected_merge:
-        _assert_tensor_load_count(amdgcn, 1, f"fused {context}")
-    else:
-        _assert_tensor_load_count(amdgcn, 2, context)
+    fused = use_tdm_hint and expected_merge
+    _assert_tensor_load_count(amdgcn, 1 if fused else 2, context)
 
 
 def test_compile_vector_add_tdm_auto_merge_env_toggle(monkeypatch):
     """Compile-only: env toggles generated hints for adjacent unhinted copies."""
     env_var = "TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS"
 
-    monkeypatch.setenv(env_var, "1")
-    amdgcn = _compile_vector_add_tdm_amdgcn(64, 64, USE_HINT=False)
-    _assert_tensor_load_count(amdgcn, 2, "env-disabled generated hints")
+    def compile_unhinted(block_m, block_n):
+        return _compile_amdgcn(
+            vector_add_tdm_kernel, ["a_ptr", "b_ptr", "c_ptr"], {
+                "BLOCK_M": block_m, "BLOCK_N": block_n,
+                "HINT_A": 0, "HINT_B": 0, "USE_HINT": False
+            })
 
-    monkeypatch.setenv(env_var, "0")
-    amdgcn = _compile_vector_add_tdm_amdgcn(32, 128, USE_HINT=False)
-    _assert_tensor_load_count(amdgcn, 1, "env-enabled generated hints")
-
-    monkeypatch.setenv(env_var, "1")
-    amdgcn = _compile_vector_add_tdm_amdgcn(128, 64, USE_HINT=False)
-    _assert_tensor_load_count(amdgcn, 2, "env-reset generated hints")
+    for env, block, expected in [("1", (64, 64), 2), ("0", (32, 128), 1), ("1", (128, 64), 2)]:
+        monkeypatch.setenv(env_var, env)
+        _assert_tensor_load_count(compile_unhinted(*block), expected, f"env={env} generated hints")
 
 
 # ---------------------------------------------------------------------------
@@ -437,19 +276,8 @@ def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, expected_merge
     c = torch.empty((M, N), dtype=torch.float16, device="cuda")
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    vector_add_tdm_kernel[grid](
-        a,
-        b,
-        c,
-        M,
-        N,
-        BLOCK_M,
-        BLOCK_N,
-        HINT_A,
-        HINT_B,
-        use_tdm_hint,
-        num_warps=NUM_WARPS,
-    )
+    vector_add_tdm_kernel[grid](a, b, c, M, N, BLOCK_M, BLOCK_N, HINT_A, HINT_B,
+                                use_tdm_hint, num_warps=NUM_WARPS)
 
     expected = a_cpu + b_cpu
     torch.testing.assert_close(c.cpu(), expected, atol=1e-3, rtol=1e-3)
@@ -536,47 +364,13 @@ _HINT_PARAMS_3WAY = [
 ]
 
 
-def _compile_vector_add_tdm_3way_amdgcn(
-    num_warps: int,
-    use_hint: bool,
-    hint_a: int = 0,
-    hint_b: int = 0,
-    hint_c: int = 0,
-    block_m: int = 64,
-    block_n: int = 64,
-) -> str:
-    signature = {
-        "a_ptr": "*fp16",
-        "b_ptr": "*fp16",
-        "c_ptr": "*fp16",
-        "out_ptr": "*fp16",
-        "M": "i32",
-        "N": "i32",
-        "BLOCK_M": "constexpr",
-        "BLOCK_N": "constexpr",
-        "HINT_A": "constexpr",
-        "HINT_B": "constexpr",
-        "HINT_C": "constexpr",
-        "USE_HINT": "constexpr",
-    }
-    constexprs = {
-        "BLOCK_M": block_m,
-        "BLOCK_N": block_n,
-        "HINT_A": hint_a,
-        "HINT_B": hint_b,
-        "HINT_C": hint_c,
-        "USE_HINT": use_hint,
-    }
-    k = triton.compile(
-        gluon._runtime.GluonASTSource(
-            fn=vector_add_tdm_kernel_3way,
-            signature=signature,
-            constexprs=constexprs,
-        ),
-        target=GPUTarget("hip", "gfx1250", 32),
-        options={"num_warps": num_warps},
-    )
-    return k.asm["amdgcn"]
+def _compile_3way(num_warps, use_hint, hints=(0, 0, 0), block=(64, 64)) -> str:
+    a, b, c = hints
+    return _compile_amdgcn(
+        vector_add_tdm_kernel_3way, ["a_ptr", "b_ptr", "c_ptr", "out_ptr"], {
+            "BLOCK_M": block[0], "BLOCK_N": block[1],
+            "HINT_A": a, "HINT_B": b, "HINT_C": c, "USE_HINT": use_hint
+        }, num_warps=num_warps)
 
 
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _COMPILE_BLOCK_SHAPES)
@@ -588,39 +382,21 @@ def _compile_vector_add_tdm_3way_amdgcn(
 def test_compile_vector_add_tdm_3way(BLOCK_M, BLOCK_N, NUM_WARPS, HINT_A, HINT_B, HINT_C, expected_merge, request):
     """Compile-only: 3 adjacent copies fuse when their hints are pairwise disjoint."""
     use_tdm_hint = _use_tdm_hint(request)
-    amdgcn = _compile_vector_add_tdm_3way_amdgcn(
-        NUM_WARPS, use_tdm_hint, HINT_A, HINT_B, HINT_C, BLOCK_M, BLOCK_N)
-    context = (
-        f"NUM_WARPS={NUM_WARPS}, HINT_A=0b{HINT_A:08b}, "
-        f"HINT_B=0b{HINT_B:08b}, HINT_C=0b{HINT_C:08b}"
-    )
-    if not use_tdm_hint:
-        _assert_tensor_load_count(amdgcn, 3, f"unhinted {context}")
-    elif expected_merge:
-        _assert_tensor_load_count(amdgcn, 1, f"fused {context}")
-    else:
-        _assert_tensor_load_count(amdgcn, 3, context)
+    amdgcn = _compile_3way(NUM_WARPS, use_tdm_hint, (HINT_A, HINT_B, HINT_C), (BLOCK_M, BLOCK_N))
+    context = f"NUM_WARPS={NUM_WARPS}, HINT_A=0b{HINT_A:08b}, HINT_B=0b{HINT_B:08b}, HINT_C=0b{HINT_C:08b}"
+    fused = use_tdm_hint and expected_merge
+    _assert_tensor_load_count(amdgcn, 1 if fused else 3, context)
 
 
 def test_compile_vector_add_tdm_3way_auto_merge_env_toggle(monkeypatch):
     """Compile-only: env can generate 3-way hints for adjacent unhinted copies."""
     env_var = "TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS"
-
-    monkeypatch.setenv(env_var, "1")
-    amdgcn = _compile_vector_add_tdm_3way_amdgcn(8, use_hint=False, block_m=64, block_n=64)
-    _assert_tensor_load_count(amdgcn, 3, "3-way env-disabled generated hints")
-
-    monkeypatch.setenv(env_var, "0")
-    amdgcn = _compile_vector_add_tdm_3way_amdgcn(8, use_hint=False, block_m=32, block_n=128)
-    _assert_tensor_load_count(amdgcn, 1, "3-way env-enabled generated hints for 8 warps")
-
-    monkeypatch.setenv(env_var, "0")
-    amdgcn = _compile_vector_add_tdm_3way_amdgcn(4, use_hint=False, block_m=128, block_n=64)
-    _assert_tensor_load_count(amdgcn, 1, "3-way env-enabled generated hints for 4 warps")
-
-    monkeypatch.setenv(env_var, "1")
-    amdgcn = _compile_vector_add_tdm_3way_amdgcn(4, use_hint=False, block_m=64, block_n=128)
-    _assert_tensor_load_count(amdgcn, 3, "3-way env-reset generated hints")
+    # (env, num_warps, block, expected): generation runs for 4 and 8 warps.
+    for env, warps, block, expected in [("1", 8, (64, 64), 3), ("0", 8, (32, 128), 1),
+                                        ("0", 4, (128, 64), 1), ("1", 4, (64, 128), 3)]:
+        monkeypatch.setenv(env_var, env)
+        amdgcn = _compile_3way(warps, use_hint=False, block=block)
+        _assert_tensor_load_count(amdgcn, expected, f"3-way env={env} warps={warps}")
 
 
 # ===========================================================================
@@ -728,50 +504,15 @@ _HINT_PARAMS_4WAY = [
 )
 def test_compile_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, HINT_D, request):
     """Compile-only: every quadruple must fuse to a single intrinsic."""
-    NUM_WARPS = 8
     use_tdm_hint = _use_tdm_hint(request)
-    signature = {
-        "a_ptr": "*fp16",
-        "b_ptr": "*fp16",
-        "c_ptr": "*fp16",
-        "d_ptr": "*fp16",
-        "out_ptr": "*fp16",
-        "M": "i32",
-        "N": "i32",
-        "BLOCK_M": "constexpr",
-        "BLOCK_N": "constexpr",
-        "HINT_A": "constexpr",
-        "HINT_B": "constexpr",
-        "HINT_C": "constexpr",
-        "HINT_D": "constexpr",
-        "USE_HINT": "constexpr",
-    }
-    constexprs = {
-        "BLOCK_M": BLOCK_M,
-        "BLOCK_N": BLOCK_N,
-        "HINT_A": HINT_A,
-        "HINT_B": HINT_B,
-        "HINT_C": HINT_C,
-        "HINT_D": HINT_D,
-        "USE_HINT": use_tdm_hint,
-    }
-    k = triton.compile(
-        gluon._runtime.GluonASTSource(
-            fn=vector_add_tdm_kernel_4way,
-            signature=signature,
-            constexprs=constexprs,
-        ),
-        target=GPUTarget("hip", "gfx1250", 32),
-        options={"num_warps": NUM_WARPS},
-    )
-    expected_tdm = 1 if use_tdm_hint else 4
-    amdgcn = k.asm["amdgcn"]
-    _assert_tensor_load_count(
-        amdgcn,
-        expected_tdm,
-        f"HINT_A=0b{HINT_A:08b}, HINT_B=0b{HINT_B:08b}, "
-        f"HINT_C=0b{HINT_C:08b}, HINT_D=0b{HINT_D:08b}",
-    )
+    amdgcn = _compile_amdgcn(
+        vector_add_tdm_kernel_4way, ["a_ptr", "b_ptr", "c_ptr", "d_ptr", "out_ptr"], {
+            "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "HINT_A": HINT_A, "HINT_B": HINT_B,
+            "HINT_C": HINT_C, "HINT_D": HINT_D, "USE_HINT": use_tdm_hint
+        })
+    context = (f"HINT_A=0b{HINT_A:08b}, HINT_B=0b{HINT_B:08b}, "
+               f"HINT_C=0b{HINT_C:08b}, HINT_D=0b{HINT_D:08b}")
+    _assert_tensor_load_count(amdgcn, 1 if use_tdm_hint else 4, context)
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on gfx1250.")
@@ -800,23 +541,8 @@ def test_runtime_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, H
     out = torch.empty((M, N), dtype=torch.float16, device="cuda")
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    vector_add_tdm_kernel_4way[grid](
-        a,
-        b,
-        c,
-        d,
-        out,
-        M,
-        N,
-        BLOCK_M,
-        BLOCK_N,
-        HINT_A,
-        HINT_B,
-        HINT_C,
-        HINT_D,
-        use_tdm_hint,
-        num_warps=NUM_WARPS,
-    )
+    vector_add_tdm_kernel_4way[grid](a, b, c, d, out, M, N, BLOCK_M, BLOCK_N,
+                                     HINT_A, HINT_B, HINT_C, HINT_D, use_tdm_hint, num_warps=NUM_WARPS)
     expected = a_cpu + b_cpu + c_cpu + d_cpu
     torch.testing.assert_close(out.cpu(), expected, atol=1e-3, rtol=1e-3)
 
@@ -859,34 +585,14 @@ def heterogeneous_tdm_merge_kernel(
     off_m = pid_m * BLOCK_M
     off_n = pid_n * BLOCK_N
 
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(
-        base=a_ptr,
-        shape=(M, N),
-        strides=(N, 1),
-        block_shape=(BLOCK_M, BLOCK_N),
-        layout=A_SHARED_LAYOUT,
-    )
-    b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(
-        base=b_ptr,
-        shape=(M, N),
-        strides=(N, 1),
-        block_shape=(BLOCK_M, BLOCK_N_B),
-        layout=B_SHARED_LAYOUT,
-    )
-    as_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(
-        base=as_ptr,
-        shape=(M, N),
-        strides=(N, 1),
-        block_shape=(BLOCK_SCALE_M, BLOCK_SCALE_N),
-        layout=SCALE_SHARED_LAYOUT,
-    )
-    bs_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(
-        base=bs_ptr,
-        shape=(M, N),
-        strides=(N, 1),
-        block_shape=(BLOCK_SCALE_M, BLOCK_SCALE_N),
-        layout=SCALE_SHARED_LAYOUT,
-    )
+    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=A_SHARED_LAYOUT)
+    b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr, shape=(M, N), strides=(N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N_B), layout=B_SHARED_LAYOUT)
+    as_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=as_ptr, shape=(M, N), strides=(N, 1),
+                                                          block_shape=(BLOCK_SCALE_M, BLOCK_SCALE_N), layout=SCALE_SHARED_LAYOUT)
+    bs_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=bs_ptr, shape=(M, N), strides=(N, 1),
+                                                          block_shape=(BLOCK_SCALE_M, BLOCK_SCALE_N), layout=SCALE_SHARED_LAYOUT)
 
     a_stage = ttgl.allocate_shared_memory(a_desc.dtype, [1] + a_desc.block_shape, a_desc.layout)
     b_stage = ttgl.allocate_shared_memory(b_desc.dtype, [1] + b_desc.block_shape, b_desc.layout)
@@ -911,54 +617,16 @@ def heterogeneous_tdm_merge_kernel(
 
 def test_compile_heterogeneous_tdm_merge(request):
     """Compile-only: A/B/AS/BS destination MemDescTypes still fuse."""
-    NUM_WARPS = 8
     use_tdm_hint = _use_tdm_hint(request)
-    HINT_A = 0b00010001
-    HINT_B = 0b00100010
-    HINT_AS = 0b01000100
-    HINT_BS = 0b10001000
-    signature = {
-        "a_ptr": "*i8",
-        "b_ptr": "*i8",
-        "as_ptr": "*i8",
-        "bs_ptr": "*i8",
-        "M": "i32",
-        "N": "i32",
-        "BLOCK_M": "constexpr",
-        "BLOCK_N": "constexpr",
-        "BLOCK_N_B": "constexpr",
-        "BLOCK_SCALE_M": "constexpr",
-        "BLOCK_SCALE_N": "constexpr",
-        "HINT_A": "constexpr",
-        "HINT_B": "constexpr",
-        "HINT_AS": "constexpr",
-        "HINT_BS": "constexpr",
-        "USE_HINT": "constexpr",
-    }
-    constexprs = {
-        "BLOCK_M": 256,
-        "BLOCK_N": 128,
-        "BLOCK_N_B": 2048,
-        "BLOCK_SCALE_M": 64,
-        "BLOCK_SCALE_N": 32,
-        "HINT_A": HINT_A,
-        "HINT_B": HINT_B,
-        "HINT_AS": HINT_AS,
-        "HINT_BS": HINT_BS,
-        "USE_HINT": use_tdm_hint,
-    }
-    k = triton.compile(
-        gluon._runtime.GluonASTSource(
-            fn=heterogeneous_tdm_merge_kernel,
-            signature=signature,
-            constexprs=constexprs,
-        ),
-        target=GPUTarget("hip", "gfx1250", 32),
-        options={"num_warps": NUM_WARPS},
-    )
-    expected_tdm = 1 if use_tdm_hint else 4
-    amdgcn = k.asm["amdgcn"]
-    _assert_tensor_load_count(amdgcn, expected_tdm, "heterogeneous A/B/AS/BS destination MemDescTypes")
+    amdgcn = _compile_amdgcn(
+        heterogeneous_tdm_merge_kernel, ["a_ptr", "b_ptr", "as_ptr", "bs_ptr"], {
+            "BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_N_B": 2048,
+            "BLOCK_SCALE_M": 64, "BLOCK_SCALE_N": 32,
+            "HINT_A": 0b00010001, "HINT_B": 0b00100010,
+            "HINT_AS": 0b01000100, "HINT_BS": 0b10001000, "USE_HINT": use_tdm_hint
+        }, ptr_ty="*i8")
+    _assert_tensor_load_count(amdgcn, 1 if use_tdm_hint else 4,
+                              "heterogeneous A/B/AS/BS destination MemDescTypes")
 
 
 # ===========================================================================
@@ -1050,50 +718,16 @@ _CACHE_PARAMS = [
 )
 def test_compile_vector_add_tdm_cache(BLOCK_M, BLOCK_N, CACHE_A, CACHE_B, expected_merge, request):
     """Compile-only: asserts rule 7 (matching cache modifiers)."""
-    NUM_WARPS = 8
     use_tdm_hint = _use_tdm_hint(request)
-    HINT_A = 0b00001111  # warps {0,1,2,3}
-    HINT_B = 0b11110000  # warps {4,5,6,7}; union covers all 8 warps
-    signature = {
-        "a_ptr": "*fp16",
-        "b_ptr": "*fp16",
-        "c_ptr": "*fp16",
-        "M": "i32",
-        "N": "i32",
-        "BLOCK_M": "constexpr",
-        "BLOCK_N": "constexpr",
-        "HINT_A": "constexpr",
-        "HINT_B": "constexpr",
-        "CACHE_A": "constexpr",
-        "CACHE_B": "constexpr",
-        "USE_HINT": "constexpr",
-    }
-    constexprs = {
-        "BLOCK_M": BLOCK_M,
-        "BLOCK_N": BLOCK_N,
-        "HINT_A": HINT_A,
-        "HINT_B": HINT_B,
-        "CACHE_A": CACHE_A,
-        "CACHE_B": CACHE_B,
-        "USE_HINT": use_tdm_hint,
-    }
-    k = triton.compile(
-        gluon._runtime.GluonASTSource(
-            fn=vector_add_tdm_kernel_cache,
-            signature=signature,
-            constexprs=constexprs,
-        ),
-        target=GPUTarget("hip", "gfx1250", 32),
-        options={"num_warps": NUM_WARPS},
-    )
-    amdgcn = k.asm["amdgcn"]
+    # Hints pinned to the lo/hi split so only the cache modifier decides fusion.
+    amdgcn = _compile_amdgcn(
+        vector_add_tdm_kernel_cache, ["a_ptr", "b_ptr", "c_ptr"], {
+            "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "HINT_A": 0b00001111, "HINT_B": 0b11110000,
+            "CACHE_A": CACHE_A, "CACHE_B": CACHE_B, "USE_HINT": use_tdm_hint
+        })
     context = f"CACHE_A={CACHE_A!r}, CACHE_B={CACHE_B!r}"
-    if not use_tdm_hint:
-        _assert_tensor_load_count(amdgcn, 2, f"unhinted {context}")
-    elif expected_merge:
-        _assert_tensor_load_count(amdgcn, 1, f"fused {context}")
-    else:
-        _assert_tensor_load_count(amdgcn, 2, context)
+    fused = use_tdm_hint and expected_merge
+    _assert_tensor_load_count(amdgcn, 1 if fused else 2, context)
 
 
 if __name__ == "__main__":

@@ -158,6 +158,7 @@ struct TDMMergeGroupInfo {
   Operation *lastInProgramOrder = nullptr;
 };
 
+// Everything the fused emit needs for one member, gathered by the conversion.
 struct TDMMergeMemberInfo {
   SmallVector<int64_t> shapePerCTA;
   unsigned padInterval = 0;
@@ -166,7 +167,10 @@ struct TDMMergeMemberInfo {
   triton::LinearLayout sharedLayout;
   Attribute encoding;
   Value multicastMask;
-  size_t numGroups = 0;
+  SmallVector<Value> desc;    // unpacked descriptor groups (numGroups = size)
+  SmallVector<Value> offset;  // remapped indices
+  SmallVector<Value> dstPtrs; // shared-memory base pointers
+  Value pred;                 // optional per-copy predicate
 };
 
 // Enabled by default (set TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1 to disable):
@@ -190,19 +194,13 @@ void prepareGeneratedTDMMergeHints(ModuleOp mod);
 llvm::DenseMap<Operation *, std::shared_ptr<TDMMergeGroupInfo>>
 computeTDMMergeGroups(ModuleOp mod);
 
-// Emit one fused TDM intrinsic for a merge group. The conversion builds
-// per-member descriptors and `select`s between them on an SGPR-uniform per-wave
-// selector. `auxBits` comes from any member (rule 7 makes it uniform); no
-// mbarrier (rule 2).
+// Emit one fused TDM intrinsic for a merge group, `select`ing each wave's
+// descriptor on an SGPR-uniform per-wave selector.  `auxBits` comes from any
+// member (rule 7 makes it uniform); no mbarrier (rule 2).
 void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
                             const LLVMTypeConverter *typeConverter,
-                            ArrayRef<SmallVector<Value>> descPerMember,
-                            ArrayRef<TDMMergeMemberInfo> memberInfo,
-                            int numWarps,
-                            ArrayRef<SmallVector<Value>> offsetPerMember,
-                            ArrayRef<SmallVector<Value>> dstPtrsPerMember,
-                            ArrayRef<Value> predPerMember, bool isLoad,
-                            Value ctaId, int32_t auxBits,
+                            ArrayRef<TDMMergeMemberInfo> members, int numWarps,
+                            bool isLoad, Value ctaId, int32_t auxBits,
                             const TDMMergeGroupInfo &groupInfo);
 
 // Effective warp count that drives TDM warp distribution and the resulting

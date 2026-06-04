@@ -1788,28 +1788,22 @@ void emitMergeGroup(
 // Fill one member descriptor for the fused emit.
 SmallVector<Value, 4> fillMergedTDMDescriptorMember(
     RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter, ArrayRef<Value> desc,
-    const TDMMergeMemberInfo &info, int numWarps, ArrayRef<Value> offset,
-    ArrayRef<Value> dstPtrs, Value pred, bool isLoad, Value ctaId,
-    uint32_t hint) {
-  assert(desc.size() == info.numGroups &&
-         "descPerMember must match the member descriptor group count");
-
+    const LLVMTypeConverter *typeConverter, const TDMMergeMemberInfo &m,
+    int numWarps, bool isLoad, Value ctaId, uint32_t hint) {
   int effectiveWarps = static_cast<int>(llvm::popcount(hint));
   auto [warpsPerCTA, numTDMInstructions] =
       ::mlir::LLVM::AMD::distributeTDMWarpsAlignToPartition(
-          info.shapePerCTA, effectiveWarps, info.encoding);
+          m.shapePerCTA, effectiveWarps, m.encoding);
   assert(numTDMInstructions == 1 &&
          "verifier guarantees single-instruction emission for hinted ops");
   (void)numTDMInstructions;
 
-  SmallVector<Value, 4> filled(desc.begin(), desc.end());
-  SmallVector<Value> offsets(offset.begin(), offset.end());
-  fillTDMDescriptor(rewriter, loc, typeConverter, info.elementType,
-                    info.shapePerCTA, numWarps, info.padInterval,
-                    info.padAmount, filled, offsets, dstPtrs, pred,
-                    info.multicastMask, /*barrierPtr=*/Value(),
-                    info.sharedLayout, ctaId, /*isStore=*/!isLoad, warpsPerCTA,
+  SmallVector<Value, 4> filled(m.desc.begin(), m.desc.end());
+  SmallVector<Value> offsets(m.offset.begin(), m.offset.end());
+  fillTDMDescriptor(rewriter, loc, typeConverter, m.elementType, m.shapePerCTA,
+                    numWarps, m.padInterval, m.padAmount, filled, offsets,
+                    m.dstPtrs, m.pred, m.multicastMask, /*barrierPtr=*/Value(),
+                    m.sharedLayout, ctaId, /*isStore=*/!isLoad, warpsPerCTA,
                     hint);
   return filled;
 }
@@ -1830,14 +1824,10 @@ Value buildTDMMergeMemberActivePredicate(RewriterBase &rewriter, Location loc,
 
 } // namespace
 
-// Controls only the *auto-generation* of merge hints for adjacent unhinted
-// copies.  On by default; set TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1 (or
-// "on"/"true") to turn it off.  When off the compiler stops synthesizing hints,
-// but merge-group formation itself is NOT gated: TDM copies that already carry
-// compatible warp_used_hint values (user-authored or previously generated)
-// still merge.  This matches the documented contract in
-// test_tdm_merge.py -- the env var governs auto-generation, not whether
-// existing compatible hints fuse.
+// Gates only auto-generation of hints (see TDMUtility.h for the full contract).
+// On by default; set TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1/"on"/"true" to
+// stop synthesizing hints.  Merge-group formation is never gated: copies that
+// already carry compatible hints still fuse.
 static bool tdmAutoMergeEnabled() {
   auto disabled = mlir::triton::tools::isEnvValueBool(
       mlir::triton::tools::getStrEnv("TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS"));
@@ -1888,38 +1878,24 @@ computeTDMMergeGroups(ModuleOp mod) {
 // Emit one fused TDM load for a merge group; store merging is not supported yet.
 void emitTDMLoadStoreMerged(RewriterBase &rewriter, Location loc,
                             const LLVMTypeConverter *typeConverter,
-                            ArrayRef<SmallVector<Value>> descPerMember,
-                            ArrayRef<TDMMergeMemberInfo> memberInfo,
-                            int numWarps,
-                            ArrayRef<SmallVector<Value>> offsetPerMember,
-                            ArrayRef<SmallVector<Value>> dstPtrsPerMember,
-                            ArrayRef<Value> predPerMember, bool isLoad,
-                            Value ctaId, int32_t auxBits,
+                            ArrayRef<TDMMergeMemberInfo> members, int numWarps,
+                            bool isLoad, Value ctaId, int32_t auxBits,
                             const TDMMergeGroupInfo &groupInfo) {
   size_t N = groupInfo.members.size();
-  assert(N >= 2 && N <= 4 && "merge group size invariant");
-  assert(descPerMember.size() == N && memberInfo.size() == N &&
-         offsetPerMember.size() == N && dstPtrsPerMember.size() == N &&
-         predPerMember.size() == N);
-  assert(groupInfo.memberHints.size() == N &&
-         "merge group must carry one hint per member");
+  assert(N >= 2 && N <= 4 && members.size() == N &&
+         groupInfo.memberHints.size() == N && "merge group invariants");
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // canMergeWith guarantees a uniform rank across members, so every member
   // shares this descriptor group count (2 for rank <= 2, otherwise 4).
-  size_t numGroups = memberInfo.front().numGroups;
-
-  // Hints came from computeTDMMergeGroups; no per-member recheck here.
+  size_t numGroups = members.front().desc.size();
   ArrayRef<uint32_t> hintPerMember = groupInfo.memberHints;
 
   SmallVector<SmallVector<Value, 4>, 4> filledPerMember(N);
-  for (size_t i = 0; i < N; ++i) {
-    const TDMMergeMemberInfo &info = memberInfo[i];
+  for (size_t i = 0; i < N; ++i)
     filledPerMember[i] = fillMergedTDMDescriptorMember(
-        rewriter, loc, typeConverter, descPerMember[i], info, numWarps,
-        offsetPerMember[i], dstPtrsPerMember[i], predPerMember[i], isLoad,
-        ctaId, hintPerMember[i]);
-  }
+        rewriter, loc, typeConverter, members[i], numWarps, isLoad, ctaId,
+        hintPerMember[i]);
 
   // Build predicates for all but the last member; the last is the default.
   SmallVector<Value, 4> memberActive(N - 1);

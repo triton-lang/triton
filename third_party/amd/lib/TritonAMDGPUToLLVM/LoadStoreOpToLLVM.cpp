@@ -1323,75 +1323,52 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       const auto &group = *mergeIt->second;
       size_t numMembers = group.members.size();
 
-      SmallVector<SmallVector<Value>> descPerMember(numMembers);
-      SmallVector<SmallVector<Value>> offsetPerMember(numMembers);
-      SmallVector<SmallVector<Value>> dstPtrsPerMember(numMembers);
-      SmallVector<Value> predPerMember(numMembers);
-      SmallVector<mlir::LLVM::AMD::TDMMergeMemberInfo> memberInfo;
-      memberInfo.reserve(numMembers);
-
       // Gather each member's descriptor, offsets, dst pointers, pred, and
       // layout metadata for the fused emit.
+      SmallVector<mlir::LLVM::AMD::TDMMergeMemberInfo, 4> members(numMembers);
       for (size_t i = 0; i < numMembers; ++i) {
         auto memberOp =
             cast<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(group.members[i]);
+        auto descTy = memberOp.getDesc().getType();
+        auto enc = descTy.getSharedLayout();
+        mlir::LLVM::AMD::TDMMergeMemberInfo &m = members[i];
 
-        auto memberTensorDescTy = memberOp.getDesc().getType();
-        auto memberEncoding = memberTensorDescTy.getSharedLayout();
-        Type memberElementType = getTypeConverter()->convertType(
-            memberTensorDescTy.getElementType());
-        triton::LinearLayout memberSharedLayout =
-            isPaddedEncoding(memberEncoding)
-                ? paddedLinearLayout(memberTensorDescTy.getShape(),
-                                     memberEncoding)
-                : toLinearLayout(memberTensorDescTy.getShape(), memberEncoding);
-
-        unsigned memberPadInterval = 0;
-        unsigned memberPadAmount = 0;
-        if (auto padEnc = getPaddedEncoding(memberEncoding)) {
+        m.elementType = getTypeConverter()->convertType(descTy.getElementType());
+        m.sharedLayout = isPaddedEncoding(enc)
+                             ? paddedLinearLayout(descTy.getShape(), enc)
+                             : toLinearLayout(descTy.getShape(), enc);
+        if (auto padEnc = getPaddedEncoding(enc)) {
           assert(padEnc.getIntervals().size() == 1 &&
                  padEnc.getPaddings().size() == 1);
-          memberPadInterval = padEnc.getIntervals()[0];
-          memberPadAmount = padEnc.getPaddings()[0];
+          m.padInterval = padEnc.getIntervals()[0];
+          m.padAmount = padEnc.getPaddings()[0];
         }
+        if (targetInfo.supportsMultiCTALaunch())
+          m.multicastMask =
+              LLVM::AMD::emitCtaMulticastMask(rewriter, loc, ctaId, m.sharedLayout);
 
-        Value memberMulticastMask;
-        if (targetInfo.supportsMultiCTALaunch()) {
-          memberMulticastMask = LLVM::AMD::emitCtaMulticastMask(
-              rewriter, loc, ctaId, memberSharedLayout);
-        }
-
-        auto memberShapePerCTA = triton::gpu::getShapePerCTA(
-            memberEncoding, memberTensorDescTy.getShape());
-        descPerMember[i] = mlir::LLVM::AMD::unpackTDMDescriptor(
+        m.encoding = enc;
+        m.shapePerCTA =
+            llvm::to_vector(triton::gpu::getShapePerCTA(enc, descTy.getShape()));
+        m.desc = mlir::LLVM::AMD::unpackTDMDescriptor(
             rewriter, loc, rewriter.getRemappedValue(memberOp.getDesc()));
-
-        SmallVector<Value> indices;
         for (Value idx : memberOp.getIndices())
-          indices.push_back(rewriter.getRemappedValue(idx));
-        offsetPerMember[i] = std::move(indices);
-
-        auto memberDstMemObj = LLVM::getSharedMemoryObjectFromStruct(
+          m.offset.push_back(rewriter.getRemappedValue(idx));
+        auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
             loc, rewriter.getRemappedValue(memberOp.getResult()),
-            memberElementType, rewriter);
-        dstPtrsPerMember[i] = llvm::to_vector(memberDstMemObj.getBases());
-
-        predPerMember[i] = memberOp.getPred()
-                               ? rewriter.getRemappedValue(memberOp.getPred())
-                               : Value();
-        memberInfo.push_back(
-            {llvm::to_vector(memberShapePerCTA), memberPadInterval,
-             memberPadAmount, memberElementType, memberSharedLayout,
-             memberEncoding, memberMulticastMask, descPerMember[i].size()});
+            m.elementType, rewriter);
+        m.dstPtrs = llvm::to_vector(dstMemObj.getBases());
+        m.pred = memberOp.getPred()
+                     ? rewriter.getRemappedValue(memberOp.getPred())
+                     : Value();
       }
 
       auto mergedAuxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
           op.getCache(), /*isLoad*/ true, targetInfo);
       rewriter.setInsertionPoint(group.lastInProgramOrder);
-      mlir::LLVM::AMD::emitTDMLoadStoreMerged(
-          rewriter, loc, getTypeConverter(), descPerMember, memberInfo,
-          numWarps, offsetPerMember, dstPtrsPerMember, predPerMember,
-          /*isLoad=*/true, ctaId, mergedAuxBits, group);
+      mlir::LLVM::AMD::emitTDMLoadStoreMerged(rewriter, loc, getTypeConverter(),
+                                              members, numWarps, /*isLoad=*/true,
+                                              ctaId, mergedAuxBits, group);
 
       for (size_t i = numMembers; i-- > 0;)
         rewriter.eraseOp(group.members[i]);
