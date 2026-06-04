@@ -35,6 +35,13 @@ static Type replaceEncoding(Type type, Attribute encoding) {
                                tensorType.getElementType(), encoding);
 }
 
+// In the AMD backend, the only dot operand whose parent is a plain blocked
+// encoding is the FMA (outer-product) lowering; MFMA/WMMA use dedicated
+// encodings. So a blocked parent identifies the FMA path.
+static bool isFmaDotOperand(ttg::DotOperandEncodingAttr dotOperandEnc) {
+  return isa<ttg::BlockedEncodingAttr>(dotOperandEnc.getParent());
+}
+
 /// Replace load encoding with given one.
 ///
 /// This functions converts load inputs to given one
@@ -110,15 +117,24 @@ Attribute createNewSharedEncoding(RankedTensorType operandType) {
   auto ctx = operandType.getContext();
   auto dotOperandEnc =
       cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding());
+  bool isFMA = isFmaDotOperand(dotOperandEnc);
   auto cgaLayout = ttg::getCGALayout(dotOperandEnc);
   auto bitWidth = operandType.getElementTypeBitWidth();
   SmallVector<unsigned> order{1, 0};
   if (dotOperandEnc.getOpIdx() == 1)
     std::swap(order[0], order[1]);
+  // The order computed above is the matrix-core orientation (K-dim contiguous).
+  // FMA wants the operand-major dim (M for A, N for B) contiguous in LDS, which
+  // is the opposite orientation.
+  if (isFMA)
+    std::swap(order[0], order[1]);
 
   auto tempAttr = ttg::SwizzledSharedEncodingAttr::get(
       ctx, dotOperandEnc, operandType.getShape(), order, cgaLayout, bitWidth,
       /*needTrans=*/false);
+
+  if (isFMA)
+    return tempAttr;
 
   auto sharedVec = tempAttr.getVec();
   auto perPhase = tempAttr.getPerPhase();
@@ -590,10 +606,9 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
     return failure();
 
   int kDimNum = opDotOpEnc.getOpIdx() == 0 ? 1 : 0;
-  // TODO: support wmma
-  if (!isa<ttg::AMDMfmaEncodingAttr, ttg::AMDWmmaEncodingAttr>(
-          opDotOpEnc.getParent())) {
-    LDBG("Operand's parent encoding is not MFMA");
+  if (!isa<ttg::AMDMfmaEncodingAttr, ttg::AMDWmmaEncodingAttr,
+           ttg::BlockedEncodingAttr>(opDotOpEnc.getParent())) {
+    LDBG("Operand's parent encoding is not MFMA/WMMA/Blocked");
     return failure();
   }
 
@@ -623,7 +638,14 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
     if (!blockedEnc)
       return failure();
     auto order = blockedEnc.getOrder();
-    if (order[0] == kDimNum) {
+    bool isFMA = isFmaDotOperand(opDotOpEnc);
+    bool loadIsKContiguous = (order[0] == kDimNum);
+    // MFMA/WMMA need an operand-major global load to transpose into a
+    // K-contiguous LDS tile, so they bail when the load is already
+    // K-contiguous. FMA is the opposite: it needs a K-contiguous global load to
+    // transpose into an operand-major (M/N-contiguous) LDS tile, so it bails
+    // when the load is already operand-major.
+    if (isFMA ? !loadIsKContiguous : loadIsKContiguous) {
       return failure();
     }
     auto globalLoadSearch = findAllDefiningOps<tt::LoadOp>(loadCandidate);
