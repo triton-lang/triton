@@ -182,7 +182,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
             dtype=data.dtype,
             device=data.device,
         )
-        if not out.numel():
+        if data.device.type == "meta" or not out.numel():
             return out
 
         block_k = 64
