@@ -618,12 +618,24 @@ SmallVector<LocalSharedMemoryAddress> computeLocalAddrs(
     SharedMemoryObject smemObj, Type llvmElemTy, ArrayRef<Value> idxValues,
     ArrayRef<SmallVector<Value>> coords, unsigned axis, RewriterBase &rewriter);
 
+SmallVector<LocalSharedMemoryAddress>
+computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
+                  SharedMemoryObject smemObj, Type llvmElemTy,
+                  ArrayRef<Value> idxValues,
+                  ArrayRef<SmallVector<Value>> coords, unsigned axis,
+                  ArrayRef<Value> offsets, RewriterBase &rewriter);
+
 SmallVector<Value> computeLocalPtrs(Location loc,
                                     triton::gpu::MemDescType memDescTy,
                                     SharedMemoryObject smemObj, Type llvmElemTy,
                                     ArrayRef<Value> idxValues,
                                     ArrayRef<SmallVector<Value>> coords,
                                     unsigned axis, RewriterBase &rewriter);
+
+SmallVector<Value> loadLocalAddrs(Location loc, Type llvmElemTy,
+                                  ArrayRef<LocalSharedMemoryAddress> addrs,
+                                  RewriterBase &rewriter,
+                                  const TargetInfoBase &targetInfo);
 
 // Backend-agnostic preparation for lowering LocalAtomicScatterRMWOp.
 struct LocalAtomicScatterRMWInfo {
