@@ -68,13 +68,12 @@ bool canUseI8MmaTile(int64_t m, int64_t n, int numWarps) {
   return m >= 16 && n >= 8 && (m / 16) * (n / 8) >= numWarps;
 }
 
-std::pair<int64_t, int64_t> getMmaEmulationTileShape(PatternRewriter &rewriter,
-                                                     int64_t m, int64_t n,
-                                                     int64_t k,
-                                                     IntegerType accElem,
-                                                     bool directShared = false) {
-  std::pair<int64_t, int64_t> tile = {
-      std::min<int64_t>(kTileM, m), std::min<int64_t>(kTileN, n)};
+std::pair<int64_t, int64_t>
+getMmaEmulationTileShape(PatternRewriter &rewriter, int64_t m, int64_t n,
+                         int64_t k, IntegerType accElem,
+                         bool directShared = false) {
+  std::pair<int64_t, int64_t> tile = {std::min<int64_t>(kTileM, m),
+                                      std::min<int64_t>(kTileN, n)};
   int64_t numWarps =
       ttg::lookupNumWarps(rewriter.getInsertionBlock()->getParent());
   if (supportsI8DotDecomposition(rewriter, accElem) && (k % kI8MmaK) == 0) {
@@ -931,8 +930,8 @@ createTmemOperandScratch(PatternRewriter &rewriter, Location loc,
 
 std::optional<MmaOperandSource> createMmaOperandSource(
     PatternRewriter &rewriter, Location loc, TmemScratchManager &scratch,
-    Value memdesc, ttg::MemDescType memTy, bool isTmem,
-    RankedTensorType tileTy, Region *scope, int64_t rowStride, int64_t stride) {
+    Value memdesc, ttg::MemDescType memTy, bool isTmem, RankedTensorType tileTy,
+    Region *scope, int64_t rowStride, int64_t stride) {
   if (!isTmem)
     return MmaOperandSource{Value(), memdesc, tileTy, rowStride, stride};
   auto info =
@@ -1596,10 +1595,10 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
   rewriter.setInsertionPointToStart(mLoop.getBody());
   auto nLoop = scf::ForOp::create(rewriter, loc, zero, nUpper, nStep);
   rewriter.setInsertionPointToStart(nLoop.getBody());
-  Value mIdxI32 = arith::IndexCastOp::create(
-      rewriter, loc, i32Ty, mLoop.getInductionVar());
-  Value nIdxI32 = arith::IndexCastOp::create(
-      rewriter, loc, i32Ty, nLoop.getInductionVar());
+  Value mIdxI32 =
+      arith::IndexCastOp::create(rewriter, loc, i32Ty, mLoop.getInductionVar());
+  Value nIdxI32 =
+      arith::IndexCastOp::create(rewriter, loc, i32Ty, nLoop.getInductionVar());
 
   Value dRowStrideConst = arith::ConstantOp::create(
       rewriter, loc, rewriter.getI32IntegerAttr(dRowStride));
@@ -2759,9 +2758,9 @@ struct TCGen5MMAScaledPattern
     auto aSource = createMmaOperandSource(rewriter, loc, *scratch, op.getA(),
                                           aMemTy, aIsTmem, aTileTy, scope,
                                           /*rowStride=*/1, /*stride=*/m);
-    auto bSource = createMmaOperandSource(
-        rewriter, loc, *scratch, op.getB(), bMemTy, bIsTmem, bTileTy, scope,
-        /*rowStride=*/1, /*stride=*/bPackedK);
+    auto bSource = createMmaOperandSource(rewriter, loc, *scratch, op.getB(),
+                                          bMemTy, bIsTmem, bTileTy, scope,
+                                          /*rowStride=*/1, /*stride=*/bPackedK);
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());
 
