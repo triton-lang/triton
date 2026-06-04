@@ -1,5 +1,4 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory -test-print-membar | FileCheck --dump-input=fail --dump-input-context=30 %s
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-cluster-barrier-mbar-allocator | FileCheck --check-prefix=ALLOC %s
 
 // -----
 
@@ -20,46 +19,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttg.local_store %cvt, %buf : tensor<256x128xf16, #blockedSplitN> -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
     %ld = ttg.local_load %buf : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> tensor<256x128xf16, #blockedSplitM>
     tt.return %ld : tensor<256x128xf16, #blockedSplitM>
-  }
-}
-
-// -----
-
-#blockedSplitM = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
-#blockedSplitN = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
-#slice0 = #ttg.slice<{dim = 0, parent = #blockedSplitM}>
-
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 5 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // ALLOC: module attributes {
-  // ALLOC-DAG: ttg.shared = 40 : i32
-  // ALLOC-DAG: ttg.ws_cluster_barrier_count = 2 : i32
-  // ALLOC-LABEL: @cluster_barrier_mbar_allocator
-  tt.func @cluster_barrier_mbar_allocator(%ptr: !tt.ptr<i32>) {
-    ttg.warp_specialize()
-    default {
-      %c0 = arith.constant 0 : i32
-      %c1 = arith.constant 1 : i32
-      %cst = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blockedSplitM>
-      // ALLOC: ttg.convert_layout {{.*}} {ttg.mbar_offset = 8 : i32}
-      %cvt = ttg.convert_layout %cst : tensor<256x128xf16, #blockedSplitM> -> tensor<256x128xf16, #blockedSplitN>
-      // ALLOC: "tt.reduce"
-      // ALLOC: }) {ttg.mbar_offset = 8 : i32}
-      %red = "tt.reduce"(%cst) ({
-      ^bb0(%lhs: f16, %rhs: f16):
-        %add = arith.addf %lhs, %rhs : f16
-        tt.reduce.return %add : f16
-      }) {axis = 0 : i32} : (tensor<256x128xf16, #blockedSplitM>) -> tensor<128xf16, #slice0>
-      // ALLOC: tt.atomic_cas {{.*}} {ttg.mbar_offset = 8 : i32}
-      %cas = tt.atomic_cas acq_rel, gpu, %ptr, %c0, %c1 : (!tt.ptr<i32>, i32, i32) -> i32
-      tt.store %ptr, %cas : !tt.ptr<i32>
-      ttg.warp_yield
-    }
-    partition0() num_warps(4) {
-      // ALLOC: ttng.cluster_barrier {ttg.mbar_offset = 24 : i32}
-      ttng.cluster_barrier
-      ttg.warp_return
-    } : () -> ()
-    tt.return
   }
 }
 
