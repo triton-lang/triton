@@ -277,3 +277,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return %ret : tensor<256xi32, #blk_straddle>
   }
 }
+
+// -----
+
+// Warp-straddle soundness. Similar to the lane-straddle test above, but the
+// non-register contribution that crosses the `% 6` period comes from the warp
+// dimension. Warp 0 sees cols 0,1,2,3 -> contig 4, but warp 1 sees cols
+// 4,5,6,7 -> 4,5,0,1, so the theorem over all warps is only contig 2.
+#linear_warp_straddle = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]], warp = [[0, 4]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // GFX950-LABEL: @vgpr_warp_straddle_mod6
+  tt.func @vgpr_warp_straddle_mod6(%ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32}) -> tensor<64x8xi32, #linear_warp_straddle> {
+    %rows = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #linear_warp_straddle}>>
+    %cols = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #ttg.slice<{dim = 0, parent = #linear_warp_straddle}>>
+    %rows2d = tt.expand_dims %rows {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #linear_warp_straddle}>> -> tensor<64x1xi32, #linear_warp_straddle>
+    %cols2d = tt.expand_dims %cols {axis = 0 : i32} : tensor<8xi32, #ttg.slice<{dim = 0, parent = #linear_warp_straddle}>> -> tensor<1x8xi32, #linear_warp_straddle>
+    %c128 = arith.constant dense<128> : tensor<64x1xi32, #linear_warp_straddle>
+    %c6 = arith.constant dense<6> : tensor<1x8xi32, #linear_warp_straddle>
+    %row = arith.muli %rows2d, %c128 : tensor<64x1xi32, #linear_warp_straddle>
+    %mod = arith.remui %cols2d, %c6 : tensor<1x8xi32, #linear_warp_straddle>
+    %row_b = tt.broadcast %row : tensor<64x1xi32, #linear_warp_straddle> -> tensor<64x8xi32, #linear_warp_straddle>
+    %mod_b = tt.broadcast %mod : tensor<1x8xi32, #linear_warp_straddle> -> tensor<64x8xi32, #linear_warp_straddle>
+    %off = arith.addi %row_b, %mod_b : tensor<64x8xi32, #linear_warp_straddle>
+    // GFX950: amdg.buffer_load {{.*}} {contiguity = 2 : i32}
+    %ret = amdg.buffer_load %ptr[%off] : tensor<64x8xi32, #linear_warp_straddle>
+    tt.return %ret : tensor<64x8xi32, #linear_warp_straddle>
+  }
+}
+
+// -----
+
+// Direct-to-LDS uses the same shared global-memory contiguity proof as VGPR
+// buffer_load. Here AxisInfo alone cannot prove that `(r * 16 + scalar) % 16`
+// is register-invariant, but the symbolic proof drops the register-varying
+// multiple of 16 and the LDS path stamps contiguity 4.
+#blocked_lds_symbolic = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#shared_lds_symbolic = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 8, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // GFX950-LABEL: @lds_mod_residual_keying_scalar_1d
+  tt.func @lds_mod_residual_keying_scalar_1d(%ptr: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg: i32, %dst: !ttg.memdesc<256xi8, #shared_lds_symbolic, #smem, mutable>) {
+    %r = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked_lds_symbolic>
+    %c16 = arith.constant dense<16> : tensor<256xi32, #blocked_lds_symbolic>
+    %p = tt.splat %arg : i32 -> tensor<256xi32, #blocked_lds_symbolic>
+    %wide = arith.muli %r, %c16 : tensor<256xi32, #blocked_lds_symbolic>
+    %sum = arith.addi %wide, %p : tensor<256xi32, #blocked_lds_symbolic>
+    %m = arith.remui %sum, %c16 : tensor<256xi32, #blocked_lds_symbolic>
+    %off = arith.addi %r, %m : tensor<256xi32, #blocked_lds_symbolic>
+    // GFX950: amdg.buffer_load_to_local {{.*}} into {{.*}} {contiguity = 4 : i32}
+    %tok = amdg.buffer_load_to_local %ptr[%off] into %dst : <i8>[tensor<256xi32, #blocked_lds_symbolic>] -> <256xi8, #shared_lds_symbolic, #smem, mutable>
+    tt.return
+  }
+}
