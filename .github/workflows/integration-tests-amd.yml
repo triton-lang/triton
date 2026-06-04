@@ -75,6 +75,7 @@ jobs:
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
+        if: ${{ matrix.runner[0] != 'self-hosted' }}
         uses: actions/cache@v4
         with:
           # Note that we cannot use environment variables here given there is
