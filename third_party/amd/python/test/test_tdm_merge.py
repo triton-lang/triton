@@ -1,35 +1,11 @@
-"""Manual + tests for adjacent TDM-copy merging on gfx1250.
+"""Tests for adjacent TDM-copy merging on gfx1250.
 
-Canonical reference for **implicit merging** of adjacent `async_load`s with
-compatible `warp_used_hint`s.  Adjacent hinted copies with pairwise-disjoint
-hints fuse into one `llvm.amdgcn.tensor.load.to.lds` during TDM->LLVM lowering;
-each wave `select`s its own descriptor (no source rewrite).  Unless
-`TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1`, the compiler also auto-generates
-hints for runs of already-adjacent unhinted copies (it only adds attributes;
-copies separated by another op, e.g. interleaved `memdesc_index` destinations,
-are left alone).  The env knob gates only auto-generation; user-provided
-compatible hints always merge.
+Adjacent `async_load`s with compatible `warp_used_hint` masks should fuse into
+one `tensor_load_to_lds`.  The prepare pass can also generate hints for adjacent
+unhinted copies unless `TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1` is set.
 
-For `warp_used_hint` legality (K, i0, axis-aligned coset) and a hint cookbook,
-see `test_tdm_copy.py`.  Authoritative mergeability rules live in
-`TDMMergeUtility.h::TDMMergeGroupInfo`; in brief, the N (2..4) members must be
-consecutive, hinted, mbarrier-free, pairwise-disjoint, same-rank and same-cache
-(any intervening op, including a workgroup barrier, ends the run).  Only
-pairwise disjointness is required -- the union need not be a coset (e.g. K=1
-hints {0b0001,0b0010,0b0100,0b1000} fuse as N=4).  Destination MemDescTypes may
-differ; metadata is lowered per member.  Kernels use `async_wait(0)` ("wait for
-everything"), correct under any merge outcome.
-
-Worked examples (kernel -> what it exercises):
-  * vector_add_tdm_kernel          -- 2-way merge + decline cookbook
-  * vector_add_tdm_kernel_3way     -- 3-way merge (non-uniform generated shape)
-  * vector_add_tdm_kernel_4way     -- 4-way member-predicate path
-  * heterogeneous_tdm_merge_kernel -- differing destination MemDescTypes
-  * vector_add_tdm_kernel_cache    -- cache_modifier gates merge (rule 7)
-
-Compile-only tests count `tensor_load_to_lds` in the AMDGCN asm (no GPU);
-runtime tests compare against a torch-on-CPU reference and are skipped off
-gfx1250.
+Compile-only tests count AMDGCN instructions; runtime tests compare against a
+torch CPU reference and are skipped off gfx1250.
 """
 
 import re
@@ -51,24 +27,16 @@ def _use_tdm_hint(request):
 
 
 def _hints(use_hint, *hints):
-    """Resolve the per-copy hints: the real masks when enabled, else all-`None`
-    (the default unhinted `async_load` path)."""
+    """Return real hints when enabled, otherwise unhinted loads."""
     return hints if use_hint else (None, ) * len(hints)
 
 
-# ---------------------------------------------------------------------------
 # Shared kernel building blocks.
-# ---------------------------------------------------------------------------
 
 
 @gluon.jit
 def _stage_input(ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, layout: ttgl.constexpr):
-    """A TDM descriptor for `ptr` plus its own single-tile staging buffer.
-
-    Returns `(descriptor, buffer)`.  One buffer per copy keeps adjacent copies
-    hazard-free, so membar never inserts a barrier that would split the merge
-    run.  Callers stage every input up front, then issue the loads back-to-back.
-    """
+    """Build a descriptor and independent staging buffer for one TDM copy."""
     desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=ptr, shape=(M, N), strides=(N, 1),
                                                        block_shape=(BLOCK_M, BLOCK_N), layout=layout)
     buf = ttgl.allocate_shared_memory(desc.dtype, [1] + desc.block_shape, desc.layout).index(0)
@@ -86,20 +54,7 @@ def _store_tile(out_ptr, value, off_m, off_n, M, N, BLOCK_M: ttgl.constexpr, BLO
     ttgl.store(out_ptr + offs, value, mask=mask)
 
 
-# ===========================================================================
-# Worked example #1: 2-way merge
-# ===========================================================================
-# Covers mergeable adjacent pairs: every hint pair here is legal and pairwise
-# disjoint, so all fuse into one `tensor_load_to_lds`.  The decline-to-merge
-# path is exercised separately by the cache cookbook below, which splits on a
-# rule-7 cache-modifier mismatch.
-#
-#     ttgl.amd.gfx1250.tdm.async_load(a_desc, [m, n], a_buf,
-#                                     warp_used_hint=HINT_A)
-#     ttgl.amd.gfx1250.tdm.async_load(b_desc, [m, n], b_buf,
-#                                     warp_used_hint=HINT_B)
-#     ttgl.amd.gfx1250.tdm.async_wait(0)
-# ===========================================================================
+# 2-way merge: adjacent loads fuse when their hints are disjoint.
 
 
 @gluon.jit
@@ -114,8 +69,7 @@ def vector_add_tdm_kernel(
     HINT_A: ttgl.constexpr,
     HINT_B: ttgl.constexpr,
 ):
-    """Two-tile vector add; the two hinted loads sit back-to-back so the merge
-    analyser can consider them (fusion follows rules 1-7 documented above)."""
+    """Two-tile vector add with adjacent TDM loads."""
     num_warps: ttgl.constexpr = ttgl.num_warps()
     BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
     SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
@@ -136,14 +90,7 @@ def vector_add_tdm_kernel(
     _store_tile(c_ptr, c, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
 
 
-# ---------------------------------------------------------------------------
-# Hint cookbook for `vector_add_tdm_kernel`.  Layout:
-# (HINT_A, HINT_B, expected_merge, id).  Bit `i` => warp `i`.
-# Every pair here is pairwise-disjoint, so all merge; other failing-rule cases
-# live in the cache cookbook below.  `expected_merge` is kept in the schema for
-# symmetry.
-# ---------------------------------------------------------------------------
-
+# Layout: (HINT_A, HINT_B, expected_merge, id).  Bit `i` selects warp `i`.
 _HINT_PARAMS = [
     # minimal mergeable pair: K=1 each, union {0,1}
     (0b00000001, 0b00000010, True, "merge_single_warp_pair"),
@@ -155,10 +102,7 @@ _HINT_PARAMS = [
     (0b00110011, 0b11001100, True, "merge_lo_hi_pairs"),
     # partial coverage: K=2 each, union covers 4 of 8 warps (rest idle).
     (0b00000011, 0b00001100, True, "merge_partial_K4_idle"),
-    # disjoint K=1 hints whose union {0,3} is not itself a coset.  Rule 3
-    # only requires pairwise disjointness, so this still merges: warp 0 is the
-    # only active warp for member A and warp 3 the only one for member B; all
-    # other warps stay idle -- matching standalone emission.
+    # pairwise-disjoint hints whose union is not itself a coset.
     (0b00000001, 0b00001000, True, "merge_disjoint_K1_noncoset_union"),
 ]
 
@@ -229,11 +173,6 @@ def _run_vector_add(kernel, n_inputs, block, hints, *, num_warps=8):
     torch.testing.assert_close(out.cpu(), expected, atol=1e-3, rtol=1e-3)
 
 
-# ---------------------------------------------------------------------------
-# Compile-only test: counts `tensor_load_to_lds` instructions in the
-# AMDGCN asm.  No GPU required.
-# ---------------------------------------------------------------------------
-
 _COMPILE_BLOCK_SHAPES = [(64, 64), (32, 128)]
 
 
@@ -271,10 +210,6 @@ def test_compile_vector_add_tdm_auto_merge_env_toggle(monkeypatch):
         _assert_tensor_load_count(compile_unhinted(*block), expected, f"env={env} generated hints")
 
 
-# ---------------------------------------------------------------------------
-# Runtime correctness test on gfx1250 hardware.
-# ---------------------------------------------------------------------------
-
 _RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
 
 
@@ -290,14 +225,9 @@ def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, expected_merge
     _run_vector_add(vector_add_tdm_kernel, 2, (BLOCK_M, BLOCK_N), _hints(_use_tdm_hint(request), HINT_A, HINT_B))
 
 
-# ===========================================================================
-# Worked example #2: 3-way merge across three descriptors
-# ===========================================================================
-# Three back-to-back TDM copies can fuse into one hardware op when their hints
-# are pairwise disjoint.  This covers the non-uniform generated-hint shape:
+# 3-way merge: covers the non-uniform generated-hint shape.
 #   num_warps=4: {0b0011, 0b0100, 0b1000}
 #   num_warps=8: {0b00001111, 0b00110000, 0b11000000}
-# ===========================================================================
 
 
 @gluon.jit
@@ -340,8 +270,7 @@ def vector_add_tdm_kernel_3way(
 _HINT_PARAMS_3WAY = [
     (8, 0b00001111, 0b00110000, 0b11000000, True, "three_way_8w_generated_shape"),
     (4, 0b0011, 0b0100, 0b1000, True, "three_way_4w_generated_shape"),
-    # Disjoint K=1 hints whose union {0,3,4} is not a coset; rule 3 only
-    # requires pairwise disjointness, so they still fuse.
+    # Pairwise-disjoint hints whose union is not a coset.
     (8, 0b00000001, 0b00001000, 0b00010000, True, "three_way_noncoset_union"),
 ]
 
@@ -380,12 +309,7 @@ def test_compile_vector_add_tdm_3way_auto_merge_env_toggle(monkeypatch):
         _assert_tensor_load_count(amdgcn, expected, f"3-way env={env} warps={warps}")
 
 
-# ===========================================================================
-# Worked example #3: 4-way merge across four descriptors
-# ===========================================================================
-# Four back-to-back TDM copies fused into one hardware op, exercising
-# the N=4 member-predicate path.
-# ===========================================================================
+# 4-way merge: exercises the N=4 member-predicate path.
 
 
 @gluon.jit
@@ -404,8 +328,7 @@ def vector_add_tdm_kernel_4way(
     HINT_C: ttgl.constexpr,
     HINT_D: ttgl.constexpr,
 ):
-    """Sum four tiles via four adjacent TDM copies (distinct buffers, shared
-    layout/block shape per rule 6); fuses into one intrinsic under rules 1-7."""
+    """Sum four tiles via four adjacent TDM copies."""
     num_warps: ttgl.constexpr = ttgl.num_warps()
     BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
     SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
@@ -431,11 +354,7 @@ def vector_add_tdm_kernel_4way(
     _store_tile(out_ptr, out, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
 
 
-# 4-way merge cookbook (all positive / must-fuse cases):
-#   - four_K1_lo4_union: K=1 each, active warps {0,1,2,3}.  Shows the
-#     analyser tolerating non-coset intermediate union 0b0111.
-#   - four_K2_full_union: K=2 each, union covers all 8 warps -- fan-out
-#     where every warp loads exactly one of four tiles.
+# 4-way positive cases: K=1 partial coverage and K=2 full coverage.
 _HINT_PARAMS_4WAY = [
     (0b00000001, 0b00000010, 0b00000100, 0b00001000, "four_K1_lo4_union"),
     (0b00000011, 0b00001100, 0b00110000, 0b11000000, "four_K2_full_union"),
@@ -476,14 +395,7 @@ def test_runtime_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, H
                     _hints(_use_tdm_hint(request), HINT_A, HINT_B, HINT_C, HINT_D))
 
 
-# ===========================================================================
-# Worked example #4: heterogeneous destination MemDescTypes
-# ===========================================================================
-# Four adjacent TDM copies with different destination shared-memory shapes and
-# layouts still fuse when the remaining merge rules hold.  This mirrors the
-# MXFP A/B/AS/BS load group and guards against accidentally deriving all
-# descriptor-fill metadata from the first member.
-# ===========================================================================
+# Heterogeneous destination MemDescTypes should still fuse.
 
 
 @gluon.jit
@@ -539,13 +451,7 @@ def test_compile_heterogeneous_tdm_merge(request):
                               "heterogeneous A/B/AS/BS destination MemDescTypes")
 
 
-# ===========================================================================
-# Worked example #5: cache_modifier interaction with merging
-# ===========================================================================
-# Rule 7: members must share the same `cache_modifier` (the fused
-# intrinsic has one auxBits field).  Hints are pinned to the canonical
-# "split warps in half" pair so only the cache modifier decides fusion.
-# ===========================================================================
+# Cache modifiers must match for a merge.
 
 
 @gluon.jit
@@ -584,8 +490,7 @@ def vector_add_tdm_kernel_cache(
     _store_tile(c_ptr, c, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
 
 
-# Cache-modifier cookbook.  Layout: (CACHE_A, CACHE_B, expected_merge,
-# id).  Hints pinned; only the cache string varies.
+# Layout: (CACHE_A, CACHE_B, expected_merge, id).  Hints are pinned.
 _CACHE_PARAMS = [
     # same cache: rule 7 satisfied
     ("", "", True, "same_default"),
