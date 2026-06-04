@@ -44,6 +44,8 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
 
+bool usePreferredClusterFallback(ModuleOp moduleOp);
+
 /// Create a predicate with just single active thread.
 Value createElectPredicate(Location loc, OpBuilder &rewriter);
 Value createElectPredicateWarp0(Location loc, OpBuilder &rewriter);

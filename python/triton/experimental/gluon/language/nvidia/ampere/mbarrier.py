@@ -5,7 +5,15 @@ from triton.experimental.gluon._runtime import constexpr_function, jit
 from triton.experimental.gluon.language._layouts import SwizzledSharedLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
 
-__all__ = ["allocate_mbarrier", "arrive", "init", "invalidate", "MBarrierLayout", "wait"]
+__all__ = [
+    "allocate_mbarrier",
+    "arrive",
+    "init",
+    "init_tcgen05_mma",
+    "invalidate",
+    "MBarrierLayout",
+    "wait",
+]
 
 
 class MBarrierLayout(SwizzledSharedLayout):
@@ -77,6 +85,25 @@ def init(mbarrier, count, _semantic=None):
     """
     count = _unwrap_if_constexpr(count)
     _semantic.builder.create_mbarrier_init(mbarrier.handle, count)
+
+
+@builtin
+def init_tcgen05_mma(mbarrier, descs=(), _semantic=None):
+    descs = _unwrap_if_constexpr(descs)
+    num_ctas: ttgl.constexpr = ttgl.num_ctas(_semantic=_semantic)
+    num_ctas = _unwrap_if_constexpr(num_ctas)
+    cga_layout: ttgl.constexpr = [[2**i] for i in range(num_ctas.bit_length() - 1)]
+    actual_cga_layout: ttgl.constexpr = [list(basis) for basis in mbarrier.layout.cga_layout]
+    ttgl.static_assert(
+        list(mbarrier.shape) == [num_ctas] and actual_cga_layout == cga_layout,
+        "tcgen05 MMA barriers must have shape [num_ctas] and 1D cga_layout",
+        _semantic=_semantic,
+    )
+    if not descs:
+        _semantic.builder.create_mbarrier_init(mbarrier.handle, 1)
+        return
+    desc_handles = [desc.handle for desc in descs]
+    _semantic.builder.create_mma_barrier_init(mbarrier.handle, desc_handles)
 
 
 @builtin

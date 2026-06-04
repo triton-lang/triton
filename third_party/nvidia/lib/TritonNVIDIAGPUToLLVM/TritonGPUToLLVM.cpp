@@ -232,7 +232,7 @@ struct ConvertTritonGPUToLLVM
     // Fold CTAId when there is only 1 CTA.
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     if (numCTAs == 1) {
-      mod.walk([](triton::nvgpu::ClusterCTAIdOp id) {
+      mod.walk([](triton::nvgpu::ProgramCTAIdOp id) {
         OpBuilder b(id);
         Value zero = LLVM::createConstantI32(id->getLoc(), b, 0);
         id.replaceAllUsesWith(zero);
@@ -295,10 +295,10 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
                             Allocation *allocation) {
   // These mbarrier ops are single threaded, so are always synchronized wrt.
   // each other.
-  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
-          before) &&
-      isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
-          after))
+  if (isa<ttng::InitBarrierOp, ttng::InitMmaBarrierOp, ttng::InvalBarrierOp,
+          ttng::BarrierExpectOp>(before) &&
+      isa<ttng::InitBarrierOp, ttng::InitMmaBarrierOp, ttng::InvalBarrierOp,
+          ttng::BarrierExpectOp>(after))
     return true;
 
   // wait_barrier will never run ahead of the load it's waiting on

@@ -134,7 +134,7 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   if (triton::gpu::lookupNumCTAs(&rewriter.getInsertionBlock()->front()) == 1)
     return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
 
-  return triton::nvgpu::ClusterCTAIdOp::create(rewriter, loc,
+  return triton::nvgpu::ProgramCTAIdOp::create(rewriter, loc,
                                                rewriter.getI32Type());
 }
 

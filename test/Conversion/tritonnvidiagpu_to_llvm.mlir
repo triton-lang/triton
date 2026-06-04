@@ -19,10 +19,29 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: init_barrier_cluster_broadcast
   tt.func @init_barrier_cluster_broadcast() {
     %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi64, #shared0, #smem, mutable>
-    // CHECK: nvg.cluster_id
+    // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
     // CHECK: @$0 mbarrier.init.shared::cta.b64 [$1], 2;
     ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     ttng.inval_barrier %alloc : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#mcast = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0], [0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttng.preferred-cluster-fallback-ctas" = 2 : i32} {
+  // CHECK-LABEL: init_mma_barrier_preferred_fallback
+  tt.func @init_mma_barrier_preferred_fallback() {
+    %barrier = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4xi64, #barrier, #smem, mutable>
+    %desc = ttg.local_alloc {allocation.offset = 8 : i32} : () -> !ttg.memdesc<128x128xf16, #mcast, #smem, mutable>
+    // CHECK: nvvm.read.ptx.sreg.cluster.nctaid.x
+    // CHECK: llvm.select
+    // CHECK: @$0 mbarrier.init.shared::cta.b64 [$1], $2;
+    ttng.init_mma_barrier %barrier, %desc : !ttg.memdesc<4xi64, #barrier, #smem, mutable>, !ttg.memdesc<128x128xf16, #mcast, #smem, mutable>
+    ttng.inval_barrier %barrier : !ttg.memdesc<4xi64, #barrier, #smem, mutable>
     tt.return
   }
 }
@@ -34,7 +53,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: inval_barrier_cluster_broadcast
   tt.func @inval_barrier_cluster_broadcast(%alloc: !ttg.memdesc<1xi64, #shared0, #smem, mutable>) {
-    // CHECK: nvg.cluster_id
+    // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.and
     // CHECK: llvm.inttoptr
@@ -116,7 +135,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: arrive_barrier_cluster_broadcast
   tt.func @arrive_barrier_cluster_broadcast(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>) {
     // CHECK: nvvm.barrier0
-    // CHECK-NOT: nvg.cluster_id
+    // CHECK-NOT: nvg.program_cta_id
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.and
     // CHECK: llvm.inttoptr
@@ -395,7 +414,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: tma_copy_local_to_global_broadcast
   // CHECK: elect.sync
-  // CHECK: nvg.cluster_id
+  // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
   // CHECK: llvm.and
   // CHECK: llvm.icmp "eq"
   // CHECK: "@$0 cp.async.bulk.tensor.2d.global.shared::cta.bulk_group [$1, {$2, $3}], [$4];", "b,l,r,r,r" {{.*}} : (i1, !llvm.ptr, i32, i32, !llvm.ptr<3>) -> !llvm.void
@@ -456,7 +475,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: expect_barrier_cluster_broadcast
   // CHECK: nvvm.barrier0
-  // CHECK-NOT: nvg.cluster_id
+  // CHECK-NOT: nvg.program_cta_id
   // CHECK: llvm.ptrtoint
   // CHECK: llvm.and
   // CHECK: llvm.inttoptr

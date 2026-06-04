@@ -144,6 +144,61 @@ struct InitBarrierOpConversion
   }
 };
 
+struct InitMmaBarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::InitMmaBarrierOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  const NVIDIA::TargetInfo *targetInfo;
+  InitMmaBarrierOpConversion(LLVMTypeConverter &typeConverter,
+                             PatternBenefit benefit,
+                             NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::InitMmaBarrierOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto barrierTy = op.getAlloc().getType();
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getAlloc(),
+        typeConverter->convertType(barrierTy.getElementType()), rewriter);
+
+    Value pred = getElectWarp0OrThread0(*targetInfo, b);
+    if (auto leaderPred =
+            LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
+      pred = b.and_(pred, *leaderPred);
+
+    int preferredCount = triton::nvidia_gpu::getTCGen5MmaBarrierCount(
+        op.getDescs(), /*fallback=*/false);
+    int fallbackCount = triton::nvidia_gpu::getTCGen5MmaBarrierCount(
+        op.getDescs(), /*fallback=*/true);
+
+    Value initCount;
+    if (preferredCount == fallbackCount) {
+      initCount = b.i32_val(preferredCount);
+    } else {
+      Value actualNumCTAs =
+          NVVM::ClusterDimBlocksXOp::create(rewriter, loc, i32_ty);
+      int numCTAs = triton::gpu::lookupNumCTAs(op);
+      Value isFallback = b.icmp_ne(actualNumCTAs, b.i32_val(numCTAs));
+      initCount = b.select(isFallback, b.i32_val(fallbackCount),
+                           b.i32_val(preferredCount));
+    }
+
+    ::mlir::triton::PTXBuilder ptxBuilder;
+    auto &barSyncOp =
+        *ptxBuilder.create("@$0 mbarrier.init.shared::cta.b64 [$1], $2;");
+    barSyncOp({ptxBuilder.newOperand(pred, "b"),
+               ptxBuilder.newOperand(smemObj.getBase(), "r"),
+               ptxBuilder.newOperand(initCount, "r")},
+              /*onlyAttachMLIRArgs=*/true);
+    ptxBuilder.launch(rewriter, loc, void_ty(op->getContext()));
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct InvalBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::InvalBarrierOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -396,7 +451,7 @@ struct CLCTryCancelOpConversion
     auto numCTAs = ttg::lookupNumCTAs(op);
     if (numCTAs > 1) {
       TritonLLVMOpBuilder b(loc, rewriter);
-      auto clusterCtaId = targetInfo->getClusterCTAId(rewriter, loc);
+      Value clusterCtaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
       pred = b.and_(pred, b.icmp_eq(clusterCtaId, b.i32_val(0)));
     }
 
@@ -548,8 +603,8 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
   patterns.add<FenceMBarrierInitReleaseClusterOpConversion>(typeConverter,
                                                             benefit);
-  patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(
-      typeConverter, benefit, targetInfo);
+  patterns.add<InitBarrierOpConversion, InitMmaBarrierOpConversion,
+               InvalBarrierOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
