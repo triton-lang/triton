@@ -25,8 +25,8 @@ constexpr unsigned kMaxDepth = 96;
 
 // This file proves register-order contiguity by evaluating the offset tensor at
 // symbolic LinearLayout coordinates. For each register r,
-// eval(offset, coordAt(r)) produces an abstract integer expression. Contiguity r
-// is accepted only when eval(r) - eval(0) simplifies to the exact constant r
+// eval(offset, coordAt(r)) produces an abstract integer expression. Contiguity
+// r is accepted only when eval(r) - eval(0) simplifies to the exact constant r
 // with no remaining symbols or opaque atoms.
 //
 // Soundness is conservative: unsupported tensor-valued expressions become
@@ -122,13 +122,14 @@ std::optional<int64_t> rBand(const Range &a, int64_t c) {
 //
 // `lin` symbols are register-invariant MLIR scalar values such as program IDs,
 // function arguments, or collapsed scalar subexpressions. `opq` atoms are named
-// indivisible terms with registered divisibility/range metadata: lane-coordinate
-// contributions, nonlinear products, unresolved mod/div/min/max results, etc.
+// indivisible terms with registered divisibility/range metadata:
+// lane-coordinate contributions, nonlinear products, unresolved mod/div/min/max
+// results, etc.
 //
 // `rng` is a sound interval over-approximation used only to justify exact
-// band-based rewrites through mod/div/min/max. `fatal` means an unhandled tensor
-// expression may vary with the register coordinate, so no contiguity proof may
-// depend on it.
+// band-based rewrites through mod/div/min/max. `fatal` means an unhandled
+// tensor expression may vary with the register coordinate, so no contiguity
+// proof may depend on it.
 struct Val {
   bool fatal = false;
   int64_t cst = 0;
@@ -138,9 +139,9 @@ struct Val {
   // Set when an explicit IR subtraction may have driven the value negative.
   // The mod/div simplifiers use mathematical floor-mod/floor-div identities,
   // which match the intended non-negative memory-index arithmetic but are not
-  // generally equivalent to signed remsi/divsi truncation or unsigned wraparound.
-  // Unknown scalar symbols are assumed non-negative by memory-index convention;
-  // tainted values therefore fall back to opaque mod/div atoms.
+  // generally equivalent to signed remsi/divsi truncation or unsigned
+  // wraparound. Unknown scalar symbols are assumed non-negative by memory-index
+  // convention; tainted values therefore fall back to opaque mod/div atoms.
   bool tainted = false;
 
   static Val ground() {
@@ -179,8 +180,8 @@ struct Ctx {
   std::map<std::string, Range> atomRng;
   // (value, coord) -> Val memo. Makes each register's walk linear in DAG size
   // (no re-walking shared/CSE'd subterms) and lets coord-independent scalar
-  // subtrees -- evaluated with empty coord -- be computed once and reused across
-  // all registers. Keyed exactly (not by hash) to stay sound.
+  // subtrees -- evaluated with empty coord -- be computed once and reused
+  // across all registers. Keyed exactly (not by hash) to stay sound.
   std::map<std::string, Val> memo;
   explicit Ctx(ModuleAxisInfoAnalysis &a) : ai(a) {}
 
@@ -290,9 +291,9 @@ Val mulV(const Val &a, const Val &b, Ctx &ctx) {
 // Opaque result for a value floor-folding cannot soundly simplify (e.g. a
 // possibly-negative operand under truncating/ wrapping mod-div).
 Val taintedOpaque(const Val &a, char op, int64_t c, Ctx &ctx) {
-  Val o = makeAtom(ctx, std::string(1, op) + std::to_string(c) + "!(" +
-                            keyOf(a) + ")",
-                   /*div=*/1, Range::full());
+  Val o = makeAtom(
+      ctx, std::string(1, op) + std::to_string(c) + "!(" + keyOf(a) + ")",
+      /*div=*/1, Range::full());
   o.tainted = true;
   return o;
 }
@@ -310,7 +311,8 @@ Val modC(const Val &a, int64_t c, Ctx &ctx) {
   // input. That lets operands differing only by register-invariant multiples of
   // c get the same atom key and cancel in offset(r) - offset(0).
   Val resid;
-  resid.cst = floorMod(a.cst, c); // multiple-of-c part of the constant drops too
+  resid.cst =
+      floorMod(a.cst, c); // multiple-of-c part of the constant drops too
   resid.rng = Range::point(resid.cst);
   for (auto &kv : a.lin) {
     auto d = ctx.divOfLin(kv.first, kv.second);
@@ -346,10 +348,11 @@ Val modC(const Val &a, int64_t c, Ctx &ctx) {
                   /*div=*/1, r);
 }
 
-// Exact floor-division by a positive constant when the quotient is representable
-// in the Val domain. Terms whose coefficients are divisible by c are moved into
-// the quotient. The remaining residual is exact only if range proves it stays in
-// one c-sized band; then the band number is added to the quotient.
+// Exact floor-division by a positive constant when the quotient is
+// representable in the Val domain. Terms whose coefficients are divisible by c
+// are moved into the quotient. The remaining residual is exact only if range
+// proves it stays in one c-sized band; then the band number is added to the
+// quotient.
 //
 // If the residual may cross bands, fall back to an opaque atom for floor(a/c).
 // Divisibility of a symbol alone is not enough to create a new quotient symbol;
@@ -360,8 +363,8 @@ Val divC(const Val &a, int64_t c, Ctx &ctx) {
   if (a.tainted) // possibly-negative operand: floor-div != divsi/divui
     return taintedOpaque(a, '/', c, ctx);
 
-  Val q;            // exact quotient of the c-divisible part
-  Val rest;         // residual (must land in one band)
+  Val q;    // exact quotient of the c-divisible part
+  Val rest; // residual (must land in one band)
   // constant part
   q.cst = floorDiv(a.cst, c);
   q.rng = Range::point(q.cst);
@@ -418,9 +421,9 @@ Val minMax(const Val &a, const Val &b, bool isMin, Ctx &ctx) {
     if (b.rng.hi <= a.rng.lo)
       return isMin ? b : a;
   }
-  Val o = makeAtom(ctx, (isMin ? "min(" : "max(") + keyOf(a) + "," + keyOf(b) +
-                            ")",
-                   /*div=*/1, rHull(a.rng, b.rng));
+  Val o =
+      makeAtom(ctx, (isMin ? "min(" : "max(") + keyOf(a) + "," + keyOf(b) + ")",
+               /*div=*/1, rHull(a.rng, b.rng));
   o.tainted = a.tainted || b.tainted;
   return o;
 }
@@ -602,8 +605,9 @@ Val evalImpl(Value v, ArrayRef<Val> coord, Ctx &ctx, unsigned depth) {
   if (op->getNumOperands() == 2 && op->getNumResults() == 1) {
     Val r = evalBinary(op, coord, ctx, depth);
     // A scalar result is register-invariant no matter how it is computed: if we
-    // failed to decompose it (e.g. divsi by a non-constant inside the program-id
-    // math), keep it as one opaque symbol rather than poisoning to bottom.
+    // failed to decompose it (e.g. divsi by a non-constant inside the
+    // program-id math), keep it as one opaque symbol rather than poisoning to
+    // bottom.
     if (r.fatal && !isTensor)
       return scalarSymbol(v, ctx);
     return r;

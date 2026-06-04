@@ -280,9 +280,9 @@ struct CoalesceBufferLoadToLocalWrites
           copyOp, "could not find legal direct-to-LDS vector width");
     }
 
-    auto ptrTy = cast<RankedTensorType>(
-        mlir::LLVM::AMD::getPointerTypeWithShape(copyOp.getPtr(),
-                                                 copyOp.getOffsets()));
+    auto ptrTy =
+        cast<RankedTensorType>(mlir::LLVM::AMD::getPointerTypeWithShape(
+            copyOp.getPtr(), copyOp.getOffsets()));
     unsigned directToLdsContig = loadContig;
     if (!LLVM::AMD::canLoadDirectToLDS(targetInfo, ptrTy, dstTy.getEncoding(),
                                        dstTy.getAllocShape(),
@@ -310,8 +310,7 @@ private:
 // may reach this point with the default hint. This pattern clamps the shared
 // global-memory contiguity proof to a legal VGPR transaction width (max 128
 // bits, power of two) and stamps it.
-struct CoalesceBufferLoadWrites
-    : public OpRewritePattern<ttag::BufferLoadOp> {
+struct CoalesceBufferLoadWrites : public OpRewritePattern<ttag::BufferLoadOp> {
   CoalesceBufferLoadWrites(
       const DenseMap<ttag::BufferLoadOp, unsigned> &bufferLoadVgprContiguity,
       MLIRContext *ctx)
@@ -338,8 +337,8 @@ struct CoalesceBufferLoadWrites
     if (loadContig <= loadOp.getContiguity())
       return rewriter.notifyMatchFailure(loadOp, "already coalesced");
 
-    rewriter.modifyOpInPlace(
-        loadOp, [&]() { loadOp.setContiguity(loadContig); });
+    rewriter.modifyOpInPlace(loadOp,
+                             [&]() { loadOp.setContiguity(loadContig); });
     return success();
   }
 
@@ -373,17 +372,17 @@ public:
     AMD::ModuleAxisInfoAnalysis axisAnalysis(m);
     auto applyMaskAlignment = [&](unsigned contiguity, Value mask) {
       if (mask)
-        contiguity = std::min<unsigned>(contiguity,
-                                        axisAnalysis.getMaskAlignment(mask));
+        contiguity =
+            std::min<unsigned>(contiguity, axisAnalysis.getMaskAlignment(mask));
       return contiguity;
     };
 
-    // Shared proof source for AMD buffer-load-like global reads. AxisInfo covers
-    // ordinary single-axis contiguity; the symbolic register-order proof covers
-    // cross-axis per-thread contiguity (e.g. MXFP4 scales). Sink-specific code
-    // below still applies VGPR vs direct-to-LDS legality constraints.
-    auto getGlobalBufferContiguity = [&](Value ptr, Value offsets,
-                                         Value mask) {
+    // Shared proof source for AMD buffer-load-like global reads. AxisInfo
+    // covers ordinary single-axis contiguity; the symbolic register-order proof
+    // covers cross-axis per-thread contiguity (e.g. MXFP4 scales).
+    // Sink-specific code below still applies VGPR vs direct-to-LDS legality
+    // constraints.
+    auto getGlobalBufferContiguity = [&](Value ptr, Value offsets, Value mask) {
       auto elemNumBits = triton::getPointeeBitWidth(ptr.getType());
       unsigned contiguity = axisAnalysis.getContiguity(offsets, elemNumBits);
       unsigned symbolicContiguity =
@@ -403,16 +402,16 @@ public:
     DenseMap<ttag::BufferLoadToLocalOp, unsigned> bufferLoadContiguity;
     m->walk([&](ttag::BufferLoadToLocalOp copyOp) {
       bufferLoadContiguity.insert(
-          {copyOp, getGlobalBufferContiguity(copyOp.getPtr(),
-                                             copyOp.getOffsets(),
-                                             copyOp.getMask())});
+          {copyOp,
+           getGlobalBufferContiguity(copyOp.getPtr(), copyOp.getOffsets(),
+                                     copyOp.getMask())});
     });
     DenseMap<ttag::BufferLoadOp, unsigned> bufferLoadVgprContiguity;
     m->walk([&](ttag::BufferLoadOp loadOp) {
       bufferLoadVgprContiguity.insert(
-          {loadOp, getGlobalBufferContiguity(loadOp.getPtr(),
-                                             loadOp.getOffsets(),
-                                             loadOp.getMask())});
+          {loadOp,
+           getGlobalBufferContiguity(loadOp.getPtr(), loadOp.getOffsets(),
+                                     loadOp.getMask())});
     });
     patterns.add<CoalesceAsyncCopyWrites>(targetInfo, asyncCopyContiguity,
                                           context);
