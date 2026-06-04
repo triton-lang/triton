@@ -139,8 +139,23 @@
 <h1>triton.experimental.gluon.language.nvidia.blackwell.tma.store_wait<a class="headerlink" href="#triton-experimental-gluon-language-nvidia-blackwell-tma-store-wait" title="Link to this heading"></a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.nvidia.blackwell.tma.store_wait">
-<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.blackwell.tma.</span></span><span class="sig-name descname"><span class="pre">store_wait</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pendings</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">read_only</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.tma.store_wait" title="Link to this definition"></a></dt>
-<dd></dd></dl>
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.blackwell.tma.</span></span><span class="sig-name descname"><span class="pre">store_wait</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pendings</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">read_only</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.tma.store_wait" title="Link to this definition"></a></dt>
+<dd><p>Wait for pending TMA stores.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>pendings</strong> (<em>int</em><em> | </em><em>ttgl.constexpr</em>) – Maximum number of TMA stores allowed to remain pending.</p></li>
+<li><p><strong>read_only</strong> (<em>bool</em><em> | </em><em>ttgl.constexpr</em>) – If true, wait only until the pending stores have finished reading
+their shared-memory sources, but writes may not be visible in HBM. Defaults to true.</p></li>
+</ul>
+</dd>
+</dl>
+<p class="rubric">Notes</p>
+<p>By default, <code class="docutils literal notranslate"><span class="pre">tma.store_wait</span></code> only waits for the TMA store to finish reading from the shared memory,
+however this does not mean that the write has been fully flushed to HBM. If your kernel uses TMA to pass
+messages between CTAs, or between nvlink devices then you will need to use <code class="docutils literal notranslate"><span class="pre">read_only=False</span></code> before any
+release operation.</p>
+</dd></dl>
 
 </section>
 

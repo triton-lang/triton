@@ -296,7 +296,7 @@ partitions, even when they are sequenced by mbarrier.arrive:</p>
         <span class="n">mbarrier</span><span class="o">.</span><span class="n">arrive</span><span class="p">(</span><span class="n">c_empty_bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">pred</span><span class="o">=</span><span class="n">i</span> <span class="o">&gt;=</span> <span class="n">outstanding_stores</span><span class="p">)</span>
 
     <span class="c1"># Since we waited for the last value of c, all the other partitions have</span>
-    <span class="c1"># exited by now. We just need to wait the stores to complete.</span>
+    <span class="c1"># exited by now. We just need the final stores to complete.</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
 

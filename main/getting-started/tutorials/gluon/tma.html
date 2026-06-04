@@ -71,7 +71,10 @@
 <li class="toctree-l2"><a class="reference internal" href="intro.html">Introduction to Gluon</a></li>
 <li class="toctree-l2"><a class="reference internal" href="layouts.html">Tensor Layouts</a></li>
 <li class="toctree-l2"><a class="reference internal" href="async-copy.html">Async Copy in Gluon</a></li>
-<li class="toctree-l2 current"><a class="current reference internal" href="#">TMA in Gluon</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">TMA in Gluon</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#tma-store-waits">TMA store waits</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="wgmma.html">Warp-Group MMA</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tcgen05.html">The 5th Generation TensorCore<sup>TM</sup></a></li>
 <li class="toctree-l2"><a class="reference internal" href="persistence.html">Persistent Kernels</a></li>
@@ -233,6 +236,70 @@ to issue async tranfers:</p>
     <span class="c1"># `pendings` outstanding TMA stores using `store_wait`. Note that the commit</span>
     <span class="c1"># groups for async copy and async TMA stores are separate.</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="tma-store-waits">
+<h2>TMA store waits<a class="headerlink" href="#tma-store-waits" title="Link to this heading"></a></h2>
+<p>TMA stores have two relevant completion points: the TMA can finish reading
+the source from shared memory, and later it can finish writing that tile
+to global memory. By default, <code class="docutils literal notranslate"><span class="pre">tma.store_wait(...)</span></code> waits for the first
+point only. So the shared memory may be reused, but attempts to read from the
+global memory locations would result in a data race.</p>
+<p>If you do need to wait for the tile to be flushed to global memory, you need
+to use the <code class="docutils literal notranslate"><span class="pre">read_only=False</span></code> variant.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
+
+<span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">tma_message_passing_kernel</span><span class="p">(</span><span class="n">message_desc</span><span class="p">,</span> <span class="n">ready</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">MESSAGE_SIZE</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="n">pid</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">BlockedLayout</span><span class="p">([</span><span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">32</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="n">offsets</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">MESSAGE_SIZE</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
+    <span class="n">smem</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">message_desc</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">message_desc</span><span class="o">.</span><span class="n">block_shape</span><span class="p">,</span> <span class="n">message_desc</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">pid</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="c1"># CTA 0 sends a message by staging it in shared memory and then using</span>
+        <span class="c1"># TMA to write it to HBM.</span>
+        <span class="n">smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">offsets</span> <span class="o">+</span> <span class="mi">1000</span><span class="p">)</span>
+        <span class="n">fence_async_shared</span><span class="p">()</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_copy_shared_to_global</span><span class="p">(</span><span class="n">message_desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
+
+        <span class="c1"># Before signaling CTA 1, wait for the TMA write to become visible in HBM.</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">read_only</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">gl</span><span class="o">.</span><span class="n">atomic_xchg</span><span class="p">(</span><span class="n">ready</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">sem</span><span class="o">=</span><span class="s2">&quot;release&quot;</span><span class="p">,</span> <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;gpu&quot;</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="c1"># CTA 1 waits until the TMA message has been published, then reads it</span>
+        <span class="c1"># back through TMA.</span>
+        <span class="n">ready_value</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">while</span> <span class="n">ready_value</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">ready_value</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">atomic_add</span><span class="p">(</span><span class="n">ready</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">sem</span><span class="o">=</span><span class="s2">&quot;acquire&quot;</span><span class="p">,</span> <span class="n">scope</span><span class="o">=</span><span class="s2">&quot;gpu&quot;</span><span class="p">)</span>
+
+        <span class="n">bar</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">allocate_shared_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">mbarrier</span><span class="o">.</span><span class="n">MBarrierLayout</span><span class="p">())</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">message_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span><span class="p">)</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">async_load</span><span class="p">(</span><span class="n">message_desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">bar</span><span class="p">,</span> <span class="n">smem</span><span class="p">)</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">bar</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">smem</span><span class="p">])</span>
+        <span class="n">mbarrier</span><span class="o">.</span><span class="n">invalidate</span><span class="p">(</span><span class="n">bar</span><span class="p">)</span>
+        <span class="n">gl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">output</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">smem</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">layout</span><span class="p">))</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">tma_message_passing</span><span class="p">(</span><span class="n">MESSAGE_SIZE</span><span class="p">):</span>
+    <span class="n">message</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="n">MESSAGE_SIZE</span><span class="p">,</span> <span class="p">),</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">ready</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="n">MESSAGE_SIZE</span><span class="p">,</span> <span class="p">),</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+
+    <span class="n">block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">MESSAGE_SIZE</span><span class="p">]</span>
+    <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">(</span><span class="n">block_shape</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+    <span class="n">message_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">message</span><span class="p">,</span> <span class="n">block_shape</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
+    <span class="n">tma_message_passing_kernel</span><span class="p">[(</span><span class="mi">2</span><span class="p">,</span> <span class="p">)](</span><span class="n">message_desc</span><span class="p">,</span> <span class="n">ready</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">MESSAGE_SIZE</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">output</span>
+
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;MESSAGE_SIZE&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">16</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_hopper_or_newer</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Hopper or newer&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_tma_message_passing</span><span class="p">(</span><span class="n">MESSAGE_SIZE</span><span class="p">):</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">tma_message_passing</span><span class="p">(</span><span class="n">MESSAGE_SIZE</span><span class="p">)</span>
+    <span class="n">expected</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">MESSAGE_SIZE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1000</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">memcpy_1d_tma</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">XBLOCK</span><span class="o">=</span><span class="mi">8192</span><span class="p">):</span>
@@ -470,6 +537,7 @@ on the layout of global tensors, it may not be possible to use TMAs.</p></li>
 <li><p>TMA instructions can be pipelined, but require explicit synchronization
 between the async proxy and generic proxy.</p></li>
 </ul>
+</section>
 </section>
 
 

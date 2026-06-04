@@ -656,7 +656,7 @@ latency of the global loads.</p>
         <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">wait_num_outstanding</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
         <span class="n">out</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">take_result</span><span class="p">()</span>
         <span class="n">out</span> <span class="o">=</span> <span class="n">out</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
-        <span class="c1"># Pipeline the async scatter by waiting for the previous store to complete.</span>
+        <span class="c1"># Pipeline the async scatter by waiting for the previous scatter to complete.</span>
         <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
         <span class="n">out_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
         <span class="n">fence_async_shared</span><span class="p">()</span>
