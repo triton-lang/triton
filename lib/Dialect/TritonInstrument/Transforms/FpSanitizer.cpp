@@ -57,32 +57,15 @@ constexpr int64_t kI8MmaK = 32;
 
 bool supportsI8DotDecomposition(PatternRewriter &rewriter,
                                 IntegerType accElem) {
-  auto module =
+  auto moduleOp =
       rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  if (getAMDArch(module))
+  if (getAMDArch(moduleOp))
     return false;
   return llvm::is_contained({16, 32, 64}, accElem.getWidth());
 }
 
-std::optional<SmallVector<unsigned>> getI8MmaWarpsPerCTA(int64_t m, int64_t n,
-                                                         int numWarps) {
-  if (m < 16 || n < 8 || (m % 16) != 0 || (n % 8) != 0 || numWarps <= 0)
-    return std::nullopt;
-
-  SmallVector<unsigned> warpsPerCTA{1, 1};
-  SmallVector<int64_t> reps{m / 16, n / 8};
-  while (warpsPerCTA[0] * warpsPerCTA[1] < numWarps) {
-    unsigned axis = reps[0] >= reps[1] ? 0 : 1;
-    if (reps[axis] <= 1 || (reps[axis] % 2) != 0)
-      axis = 1 - axis;
-    if (reps[axis] <= 1 || (reps[axis] % 2) != 0)
-      return std::nullopt;
-    warpsPerCTA[axis] *= 2;
-    reps[axis] /= 2;
-  }
-  if (warpsPerCTA[0] * warpsPerCTA[1] != numWarps)
-    return std::nullopt;
-  return warpsPerCTA;
+bool canUseI8MmaTile(int64_t m, int64_t n, int numWarps) {
+  return m >= 16 && n >= 8 && (m / 16) * (n / 8) >= numWarps;
 }
 
 std::pair<int64_t, int64_t> getMmaEmulationTileShape(PatternRewriter &rewriter,
@@ -93,12 +76,8 @@ std::pair<int64_t, int64_t> getMmaEmulationTileShape(PatternRewriter &rewriter,
     int64_t numWarps =
         ttg::lookupNumWarps(rewriter.getInsertionBlock()->getParent());
     int64_t tileM = std::min<int64_t>(16 * numWarps, m);
-    while (tileM > 0 && (m % tileM) != 0)
-      tileM /= 2;
     int64_t tileN = std::min<int64_t>(8 * numWarps, n);
-    while (tileN > 0 && (n % tileN) != 0)
-      tileN /= 2;
-    if (getI8MmaWarpsPerCTA(tileM, tileN, numWarps))
+    if (canUseI8MmaTile(tileM, tileN, numWarps))
       return {tileM, tileN};
   }
   return {std::min<int64_t>(kTileM, m), std::min<int64_t>(kTileN, n)};
@@ -1418,9 +1397,9 @@ Value tryEmitI8DotDecomposition(PatternRewriter &rewriter, Location loc,
   if (bShape[0] != k || (k % kI8MmaK) != 0 ||
       !supportsI8DotDecomposition(rewriter, accElem))
     return Value();
-  auto warpsPerCTA = getI8MmaWarpsPerCTA(m, n, numWarps);
-  if (!warpsPerCTA)
+  if (!canUseI8MmaTile(m, n, numWarps))
     return Value();
+  auto warpsPerCTA = ttg::getMmaV2WarpsPerCTA({m, n}, numWarps);
 
   auto aElem = cast<IntegerType>(aPayloadTy.getElementType());
   auto bElem = cast<IntegerType>(bPayloadTy.getElementType());
@@ -1434,7 +1413,7 @@ Value tryEmitI8DotDecomposition(PatternRewriter &rewriter, Location loc,
   auto i8Ty = rewriter.getI8Type();
   auto i32Ty = rewriter.getI32Type();
   auto mmaLayout = ttg::NvidiaMmaEncodingAttr::get(
-      ctx, /*versionMajor=*/2, /*versionMinor=*/0, *warpsPerCTA,
+      ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA,
       ttg::getCGALayout(accLayout), SmallVector<unsigned>{16, 8});
   auto aDotLayout = ttg::DotOperandEncodingAttr::get(ctx, 0, mmaLayout, i8Ty);
   auto bDotLayout = ttg::DotOperandEncodingAttr::get(ctx, 1, mmaLayout, i8Ty);
@@ -1580,7 +1559,7 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
       (k % kI8MmaK) == 0 && supportsI8DotDecomposition(rewriter, accElem) &&
       isScaleK32Aligned(scale.aScalePtr, scale.aScaleFactor) &&
       isScaleK32Aligned(scale.bScalePtr, scale.bScaleFactor) &&
-      getI8MmaWarpsPerCTA(tileM, tileN, numWarps).has_value();
+      canUseI8MmaTile(tileM, tileN, numWarps);
   if (canUseI8Decomposition) {
     if (!scale.computeElem && accElem.getWidth() <= 32) {
       Value aTile = loadScratchStrided2D(rewriter, loc, aTilePtr, aTileTy,

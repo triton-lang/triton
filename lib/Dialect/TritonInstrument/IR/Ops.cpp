@@ -16,12 +16,6 @@ namespace instrument {
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
-bool DotI8Op::verifyDims() {
-  auto aShape = getA().getType().getShape();
-  auto bShape = getB().getType().getShape();
-  return aShape.back() == bShape[bShape.size() - 2];
-}
-
 LogicalResult DotI8Op::verify() {
   auto aEnc =
       dyn_cast<ttg::DotOperandEncodingAttr>(getA().getType().getEncoding());

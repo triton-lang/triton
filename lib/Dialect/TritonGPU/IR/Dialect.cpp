@@ -472,6 +472,30 @@ SmallVector<int64_t> getAllocationShapePerCTA(Type type) {
                                   tensorType.getShape());
 }
 
+SmallVector<unsigned> getMmaV2WarpsPerCTA(ArrayRef<int64_t> shape,
+                                          int numWarps) {
+  if (shape.size() == 3)
+    return {static_cast<unsigned>(numWarps), 1, 1};
+
+  assert(shape.size() == 2);
+  SmallVector<int64_t> reps = {ceil(shape[0], int64_t{16}),
+                               ceil(shape[1], int64_t{8})};
+  SmallVector<unsigned> warps = {1, 1};
+  // Balance repetitions to reduce register pressure, breaking ties toward M
+  // because the lhs instruction tile uses more registers than the rhs.
+  while (product(warps) < numWarps) {
+    if (reps[0] >= reps[1]) {
+      warps[0] *= 2;
+      if (reps[0] != 1)
+        reps[0] /= 2;
+    } else {
+      warps[1] *= 2;
+      reps[1] /= 2;
+    }
+  }
+  return warps;
+}
+
 unsigned getNumCTAs(Attribute layout) {
   return product<unsigned>(getCTAsPerCGA(layout));
 }
