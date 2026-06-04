@@ -22,6 +22,7 @@ namespace {
 using TDMCopyGlobalToLocalOp =
     ::mlir::triton::amdgpu::AsyncTDMCopyGlobalToLocalOp;
 
+// Generated hint for one member of an auto-merge group.
 uint32_t getGeneratedMergeHint(unsigned groupIdx, unsigned groupSize,
                                unsigned numWarps) {
   assert(groupIdx < groupSize && "groupIdx out of range");
@@ -40,6 +41,7 @@ uint32_t getGeneratedMergeHint(unsigned groupIdx, unsigned groupSize,
   return stridePattern << groupIdx;
 }
 
+// Check if hint generation can stamp this copy.
 bool isGeneratedMergeHintCandidate(TDMCopyGlobalToLocalOp op) {
   if (op.getWarpUsedHintAttr() || op.getBarrier())
     return false;
@@ -47,14 +49,17 @@ bool isGeneratedMergeHintCandidate(TDMCopyGlobalToLocalOp op) {
       op.getResult().getType().getEncoding());
 }
 
+// Check if this copy can join a merge group.
 bool isMergeableTDMCopy(TDMCopyGlobalToLocalOp op) {
   return op.getWarpUsedHintAttr() && !op.getBarrier();
 }
 
+// Rank of the copy's tensor descriptor.
 size_t getTDMDescriptorRank(TDMCopyGlobalToLocalOp op) {
   return op.getDesc().getType().getShape().size();
 }
 
+// Stamp each member of an adjacent group with a disjoint generated hint.
 void assignGeneratedMergeHints(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
                                unsigned numWarps) {
   auto groupSize = static_cast<unsigned>(group.size());
@@ -65,6 +70,7 @@ void assignGeneratedMergeHints(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
   }
 }
 
+// Split an adjacent run into largest supported groups and stamp hints.
 void assignGeneratedMergeHintsGreedily(
     MutableArrayRef<TDMCopyGlobalToLocalOp> run, unsigned numWarps) {
   // Generated 3-way hints only support 4 or 8 warps, so cap auto-merge at 8.
@@ -89,6 +95,7 @@ void assignGeneratedMergeHintsGreedily(
   }
 }
 
+// Stamp generated hints onto already-adjacent unhinted copy runs.
 void prepareGeneratedTDMMergeHintsImpl(ModuleOp mod) {
   llvm::SmallSetVector<Block *, 8> blocks;
   mod->walk(
@@ -115,6 +122,7 @@ void prepareGeneratedTDMMergeHintsImpl(ModuleOp mod) {
   }
 }
 
+// Pairwise merge checks other than hint disjointness.
 bool canMergeWith(ArrayRef<Operation *> members,
                   TDMCopyGlobalToLocalOp candidate) {
   auto first = cast<TDMCopyGlobalToLocalOp>(members.front());
@@ -127,6 +135,7 @@ bool canMergeWith(ArrayRef<Operation *> members,
   return true;
 }
 
+// Build merge groups from an adjacent run of hinted TDM copies.
 void emitMergeGroup(MutableArrayRef<Operation *> run,
                     TDMMergeGroupMap &result) {
   auto hintOf = [](Operation *op) {
@@ -173,6 +182,7 @@ void emitMergeGroup(MutableArrayRef<Operation *> run,
   }
 }
 
+// Gate only auto-generation of hints, not grouping of existing hints.
 bool tdmAutoMergeEnabled() {
   auto disabled = mlir::triton::tools::isEnvValueBool(
       mlir::triton::tools::getStrEnv("TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS"));
@@ -181,12 +191,14 @@ bool tdmAutoMergeEnabled() {
 
 } // namespace
 
+// Generate hints for adjacent unhinted copies when the env knob allows it.
 void prepareGeneratedTDMMergeHints(ModuleOp mod) {
   if (!tdmAutoMergeEnabled())
     return;
   prepareGeneratedTDMMergeHintsImpl(mod);
 }
 
+// Find groups of consecutive, hinted TDM copies.
 TDMMergeGroupMap computeTDMMergeGroups(ModuleOp mod) {
   TDMMergeGroupMap result;
 
@@ -215,10 +227,12 @@ TDMMergeGroupMap computeTDMMergeGroups(ModuleOp mod) {
   return result;
 }
 
+// Discardable attributes that freeze merge grouping in the IR.
 static constexpr llvm::StringLiteral kTDMMergeIdAttr = "amdgpu.tdm_merge_id";
 static constexpr llvm::StringLiteral kTDMMergeIndexAttr =
     "amdgpu.tdm_merge_index";
 
+// Generate hints, compute groups, and stamp group id/index attributes.
 void assignTDMMergeGroupIds(ModuleOp mod) {
   prepareGeneratedTDMMergeHints(mod);
   auto groups = computeTDMMergeGroups(mod);
@@ -243,6 +257,7 @@ void assignTDMMergeGroupIds(ModuleOp mod) {
   });
 }
 
+// Rebuild and validate merge groups from frozen group id/index attributes.
 TDMMergeGroupMap readTDMMergeGroups(ModuleOp mod) {
   llvm::MapVector<int32_t, SmallVector<std::pair<int32_t, TDMCopyGlobalToLocalOp>>>
       buckets;
