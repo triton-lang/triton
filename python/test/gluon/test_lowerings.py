@@ -762,7 +762,9 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, saniti
 
     combine_fn = _add if reduce_op == "sum" else _max
 
-    @gluon.jit
+    # Alignment specialization vectorizes CUDA sm80 fp16 reduce cases into PTX
+    # that crashes ptxas. This test only needs to exercise reduce/layout lowering.
+    @gluon.jit(do_not_specialize_on_alignment=["x_ptr", "z_ptr"])
     def kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
                epilogue_kind: ttgl.constexpr):
         x_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
