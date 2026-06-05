@@ -30,6 +30,10 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
 
     auto loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto kRegister = str_attr("register");
+    auto srcTy = op.getSrc().getType();
+    auto resTy = op.getType();
     auto elemType = op.getType().getElementType();
     assert(elemType == f16_ty || elemType == bf16_ty);
     bool toFp16 = elemType == f16_ty;
@@ -52,8 +56,21 @@ public:
       results.append(upcast.begin(), upcast.end());
     }
 
-    Value result = packLLElements(loc, getTypeConverter(), results, rewriter,
-                                  op.getType());
+    auto srcLayout = toLinearLayout(srcTy);
+    auto axisDim = *(srcLayout.getOutDimNames().begin() + op.getAxis());
+    auto fullSrcLayout =
+        LinearLayout::identity1D(2, kRegister, axisDim) * srcLayout;
+    auto resToFullSrc = toLinearLayout(resTy)
+                            .invertAndCompose(fullSrcLayout)
+                            .sublayout({kRegister}, {kRegister});
+
+    SmallVector<Value> mappedResults(results.size());
+    for (int i = 0; i < results.size(); ++i) {
+      auto srcIndex = resToFullSrc.apply({{kRegister, i}}).front().second;
+      mappedResults[i] = results[srcIndex];
+    }
+    Value result = packLLElements(loc, getTypeConverter(), mappedResults,
+                                  rewriter, op.getType());
     rewriter.replaceOp(op, result);
     return success();
   }
