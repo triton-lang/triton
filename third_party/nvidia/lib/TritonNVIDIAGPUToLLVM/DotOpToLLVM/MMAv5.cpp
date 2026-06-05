@@ -34,24 +34,18 @@ public:
 
     auto llInv = toLinearLayout(memTy).pseudoinvert();
     unsigned packingFactor = storageElementBitWidth / logicalElementBitWidth;
-    if (packingFactor > 1) {
-      auto dims = to_vector(llInv.getInDimNames());
-      // MMAv5 indexes logical FP4 K elements, but the byte-backed memdesc has
-      // packed K coordinates. The fp4Padded layout separately maps those
-      // packed columns onto padded physical TMEM storage.
-      auto logicalToStorage =
-          LinearLayout::identity1D(llInv.getInDimSize(dims[0]), dims[0],
-                                   dims[0]) *
-          LinearLayout::zeros1D(packingFactor, dims[1], dims[1]) *
-          LinearLayout::identity1D(llInv.getInDimSize(dims[1]), dims[1],
-                                   dims[1]);
-      llInv = logicalToStorage.compose(llInv);
-    }
-    return DotOpMmaV5TmemLoader(llInv, address, storageElementBitWidth);
+    return DotOpMmaV5TmemLoader(llInv, address, storageElementBitWidth,
+                                packingFactor);
   }
 
   MemDescOperand tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
                           Location loc) const {
+    // MMAv5 supplies a logical K coordinate, while byte-backed FP4 memdescs
+    // use packed K coordinates. This applies to both dense and fp4Padded FP4;
+    // the memdesc layout handles any additional physical padding.
+    assert(b % packingFactor == 0 &&
+           "logical K coordinate must be aligned to packed storage");
+    b /= packingFactor;
     auto dims = to_vector(ll.getInDimNames());
     auto rowCol = ll.apply({{dims[0], a}, {dims[1], b}});
     int row = rowCol[0].second;
@@ -67,13 +61,15 @@ public:
 
 private:
   DotOpMmaV5TmemLoader(LinearLayout ll, Value address,
-                       int storageElementBitWidth)
+                       int storageElementBitWidth, int packingFactor)
       : ll(std::move(ll)), address(address),
-        storageElementBitWidth(storageElementBitWidth) {}
+        storageElementBitWidth(storageElementBitWidth),
+        packingFactor(packingFactor) {}
 
   LinearLayout ll;
   Value address;
   int storageElementBitWidth;
+  int packingFactor;
 };
 
 //===----------------------------------------------------------------------===//
