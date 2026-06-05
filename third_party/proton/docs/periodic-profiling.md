@@ -138,6 +138,8 @@ phase1 = proton.data.advance_phase(session)
 # device by themselves.
 proton.deactivate(session, flushing=True)
 
+# Note that you can still call `is_phase_complete()` without flushing so that
+# CPU and GPU work can proceed in parallel.
 if proton.data.is_phase_complete(session, phase0):
     data = proton.data.get(session, phase0)
     proton.data.clear(session, phase0)
