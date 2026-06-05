@@ -75,7 +75,7 @@ public:
   bool supportsMultiCTALaunch() const;
   bool supportsClusterLoadBitWidth(int bitWidth) const;
 
-  bool supportsBufferAtomicRMW() const;
+  bool supportsBufferAtomicRMW(bool assumeNoFineGrainedMemory = false) const;
   bool supportsBufferAtomicFadd(Type elementType) const;
   int32_t getBufferAtomicCachePolicy(bool hasUsers) const;
 

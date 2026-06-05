@@ -731,8 +731,8 @@ bool TargetInfo::useAsyncMarks() const {
   return targetFeatures.useAsyncMarks();
 }
 
-bool TargetInfo::supportsBufferAtomicRMW() const {
-  return targetFeatures.supportsBufferAtomicRMW();
+bool TargetInfo::supportsBufferAtomicRMW(bool assumeNoFineGrainedMemory) const {
+  return targetFeatures.supportsBufferAtomicRMW(assumeNoFineGrainedMemory);
 }
 
 bool TargetInfo::supportsBufferAtomicFadd(mlir::Type elementType) const {

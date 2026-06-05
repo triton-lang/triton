@@ -246,19 +246,52 @@ bool TargetFeatures::supportsClusterLoadBitWidth(int bitWidth) const {
   return false;
 }
 
-bool TargetFeatures::supportsBufferAtomicRMW() const {
-  return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4,
-                             ISAFamily::RDNA4, ISAFamily::GFX1250},
-                            getISAFamily());
+bool TargetFeatures::supportsBufferAtomicRMW(
+    bool assumeNoFineGrainedMemory) const {
+  ISAFamily f = getISAFamily();
+  // Inherently safe: these families expose LLVM's
+  // FeatureAgentScopeFineGrainedRemoteMemoryAtomics and their BUFFER_ATOMIC_*
+  // instructions handle fine-grained memory semantics correctly.
+  if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4, ISAFamily::RDNA4,
+                          ISAFamily::GFX1250},
+                         f))
+    return true;
+  // On these older families BUFFER_ATOMIC_* silently drops writes against
+  // fine-grained pinned host memory (per AMD GPU atomics documentation). Only
+  // enable when the user explicitly promises no such allocations reach the
+  // kernel.
+  if (assumeNoFineGrainedMemory &&
+      llvm::is_contained({ISAFamily::GCN5_1, ISAFamily::CDNA1, ISAFamily::CDNA2,
+                          ISAFamily::RDNA1, ISAFamily::RDNA2, ISAFamily::RDNA3},
+                         f))
+    return true;
+  return false;
 }
 
 bool TargetFeatures::supportsBufferAtomicFadd(Type elementType) const {
-  auto isaFamily = getISAFamily();
-  if (isaFamily == ISAFamily::CDNA3 && elementType.isBF16())
+  // The convert-to-buffer-ops pattern only invokes us with f16, bf16, f32, or
+  // f64 element types.
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA3:
+    return !elementType.isBF16();
+  case ISAFamily::CDNA4:
+  case ISAFamily::GFX1250:
+    return true;
+  case ISAFamily::RDNA4:
+    return !elementType.isF64();
+  case ISAFamily::CDNA2:
+    return elementType.isF32() || elementType.isF16() || elementType.isF64();
+  case ISAFamily::CDNA1:
+    return elementType.isF32() || elementType.isF16();
+  case ISAFamily::RDNA3:
+    return elementType.isF32();
+  // gfx906 / gfx1010 / gfx1030 have no FP buffer-atomic-add at all.
+  case ISAFamily::GCN5_1:
+  case ISAFamily::RDNA1:
+  case ISAFamily::RDNA2:
+  default:
     return false;
-  if (isaFamily == ISAFamily::RDNA4 && elementType.isF64())
-    return false;
-  return true;
+  }
 }
 
 int32_t TargetFeatures::getBufferAtomicCachePolicy(bool hasUsers) const {
