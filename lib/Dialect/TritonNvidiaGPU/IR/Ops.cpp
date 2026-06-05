@@ -149,13 +149,6 @@ bool WarpGroupDotOp::needsPartialAccumulator() {
   return isFP8 && accFP32 && maxNumImpreciseAcc <= aTensorTy.getShape()[1];
 }
 
-bool WarpGroupDotOp::verifyDims() {
-  auto aShape = this->getA().getType().getShape();
-  auto bShape = this->getB().getType().getShape();
-
-  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
-}
-
 // -- WarpGroupDotWaitOp --
 LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
@@ -975,13 +968,6 @@ void TCGen5MMAOp::getEffects(
   for (auto &barrierMutable : getBarriersMutable())
     effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
                          SharedMemory::get());
-}
-
-bool TCGen5MMAOp::verifyDims() {
-  auto aShape = this->getA().getType().getShape();
-  auto bShape = this->getB().getType().getShape();
-
-  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
 }
 
 Value TCGen5MMAOp::useAccumulator() { return getUseD(); }

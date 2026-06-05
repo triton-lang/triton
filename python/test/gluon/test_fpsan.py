@@ -1771,6 +1771,70 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("partition_warps", [4, 2, 1])
+def test_tcgen05_mma_warp_specialize_partition(device, partition_warps, fresh_knobs):
+    _require_cuda_backend(device)
+
+    M = gl.constexpr(64)
+    N = gl.constexpr(32)
+    K = gl.constexpr(32)
+    PARTITION_WARPS = gl.constexpr(partition_warps)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def default_partition():
+        pass
+
+    @gluon.jit
+    def mma_partition(smem_a, smem_b, acc_tmem, bar):
+        tcgen05_mma(smem_a, smem_b.permute((1, 0)), acc_tmem, use_acc=False, pred=True, mbarriers=[bar])
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, out_ptr):
+        layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
+        offs_m = gl.arange(0, M, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_n = gl.arange(0, N, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_k = gl.arange(0, K, layout=gl.SliceLayout(0, layout))[None, :]
+        out_offs_n = gl.arange(0, N, layout=gl.SliceLayout(0, layout))[None, :]
+
+        a = gl.load(a_ptr + offs_m * K + offs_k)
+        b = gl.load(b_ptr + offs_n * K + offs_k)
+        smem_a = gl.allocate_shared_memory(gl.float32, [M, K], gl.NVMMASharedLayout.get_default_for([M, K], gl.float32),
+                                           a)
+        smem_b = gl.allocate_shared_memory(gl.float32, [N, K], gl.NVMMASharedLayout.get_default_for([N, K], gl.float32),
+                                           b)
+        acc_tmem = allocate_tensor_memory(gl.float32, [M, N], layout=TensorMemoryLayout((M, N), col_stride=1))
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+
+        gl.warp_specialize([
+            (default_partition, ()),
+            (mma_partition, (smem_a, smem_b, acc_tmem, bar)),
+        ], [PARTITION_WARPS])
+
+        mbarrier.wait(bar, phase=0, deps=[smem_a, smem_b])
+        mbarrier.invalidate(bar)
+        out = gl.convert_layout(acc_tmem.load(), layout)
+        gl.store(out_ptr + offs_m * N + out_offs_n, out)
+
+    rs = np.random.RandomState(0)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(M.value, K.value), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(N.value, K.value), dtype=np.int32)
+    exp_bits = _mm_payload_u32(a_bits, b_bits.T)
+    a = torch.tensor(a_bits, device=device, dtype=torch.int32)
+    b = torch.tensor(b_bits, device=device, dtype=torch.int32)
+    out = torch.empty((M.value, N.value), device=device, dtype=torch.int32)
+
+    kernel[(1, )](
+        triton.TensorWrapper(a, dtype=torch.float32),
+        triton.TensorWrapper(b, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        num_warps=4,
+    )
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("use_acc", [False, True])
 def test_tcgen05_mma_two_ctas(device, use_acc, fresh_knobs):
     _require_cuda_backend(device)

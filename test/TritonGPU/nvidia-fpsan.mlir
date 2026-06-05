@@ -76,7 +76,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: ttg.global_scratch_alloc
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: scf.for
-    // CHECK: ttg.barrier global_read|global_write
+    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = true
+    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = true
+    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = false
+    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = false
+    // CHECK-NOT: tti.dot_i8
     // CHECK: tt.store
     // CHECK: ttg.barrier global_read|global_write
     // CHECK: ttng.arrive_barrier
@@ -103,7 +107,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: ttg.global_scratch_alloc
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: scf.for
-    // CHECK: ttg.barrier global_read|global_write
     // CHECK: tt.store
     // CHECK: ttg.barrier global_read|global_write
     // CHECK: ttng.arrive_barrier
@@ -132,6 +135,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: ttg.global_scratch_alloc
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: scf.for
+    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = true
+    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = true
+    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = false
+    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = false
+    // CHECK-NOT: tti.dot_i8
     // CHECK: ttg.barrier global_read|global_write
     // CHECK: tt.store
     // CHECK: ttg.barrier global_read|global_write
