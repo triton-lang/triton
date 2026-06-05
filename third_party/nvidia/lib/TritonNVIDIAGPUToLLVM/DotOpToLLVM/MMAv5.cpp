@@ -4,15 +4,13 @@
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
 namespace ttng = mlir::triton::nvidia_gpu;
-
-using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
-using ::mlir::triton::gpu::SharedLinearEncodingAttr;
 
 namespace {
 
@@ -80,20 +78,12 @@ enum class mxfpKind { mxf8f6f4 = 0, mxf4 = 1, mxf4nvf4 = 2 };
 
 bool isTransposed(Value operand) {
   auto tensorTy = cast<MemDescType>(operand.getType());
-  auto enc = tensorTy.getEncoding();
-  if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(enc))
-    return shared.getTransposed();
-  if (auto tensor = dyn_cast<ttng::TensorMemoryEncodingAttr>(enc))
+  if (isa<ttng::TensorMemoryEncodingAttr>(tensorTy.getEncoding()))
     return false;
-  if (auto sharedLinear = dyn_cast<SharedLinearEncodingAttr>(enc)) {
-    // Hack. We should refactor the lowering to be able to use the
-    // result from the memory descriptor
-    auto *ctx = sharedLinear.getContext();
-    auto kOffset = StringAttr::get(ctx, "offset");
-    auto dim0 = StringAttr::get(ctx, "dim0");
-    return sharedLinear.getLinearLayout().getBasis(kOffset, 0, dim0) != 0;
-  }
-  return false;
+
+  auto attrs = ttng::getNvmmaSmemAttrs(tensorTy);
+  assert(attrs && "expected MMAv5 shared operand to have NVMMA SMEM attrs");
+  return attrs->transposed;
 }
 
 inline mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
