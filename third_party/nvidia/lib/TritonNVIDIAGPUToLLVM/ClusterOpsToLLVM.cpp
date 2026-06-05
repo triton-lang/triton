@@ -219,7 +219,7 @@ struct ClusterBarrierOpConversion
     auto ptrTy = cast<LLVM::LLVMPointerType>(barrierPtr.getType());
     Value parityPtr = b.gep(ptrTy, i8_ty, barrierPtr, LLVM::GEPArg(8));
 
-    NVVM::Barrier0Op::create(rewriter, loc);
+    NVVM::BarrierOp::create(rewriter, loc);
     Value parity = b.load(i32_ty, parityPtr);
     Value pred = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
     Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
@@ -233,7 +233,7 @@ struct ClusterBarrierOpConversion
     createMBarrierWait(rewriter, loc, barrierPtr, parity);
     targetInfo.storeShared(rewriter, loc, parityPtr,
                            b.xor_(parity, b.i32_val(1)), pred);
-    NVVM::Barrier0Op::create(rewriter, loc);
+    NVVM::BarrierOp::create(rewriter, loc);
     rewriter.eraseOp(op);
     return success();
   }
