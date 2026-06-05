@@ -1533,10 +1533,11 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
 namespace {
 
 // Fill one member descriptor for the fused load emit.
-SmallVector<Value, 4> fillMergedTDMDescriptorMember(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter, const TDMMergeMemberInfo &m,
-    int numWarps, Value ctaId, uint32_t hint) {
+SmallVector<Value, 4>
+fillMergedTDMDescriptorMember(RewriterBase &rewriter, Location loc,
+                              const LLVMTypeConverter *typeConverter,
+                              const TDMMergeMemberInfo &m, int numWarps,
+                              Value ctaId, uint32_t hint) {
   int effectiveWarps = static_cast<int>(llvm::popcount(hint));
   auto [warpsPerCTA, numTDMInstructions] =
       ::mlir::LLVM::AMD::distributeTDMWarpsAlignToPartition(
@@ -1569,11 +1570,11 @@ Value buildTDMMergeMemberActivePredicate(RewriterBase &rewriter, Location loc,
 } // namespace
 
 // Emit one fused TDM load for a merge group.  Store merging is not supported.
-void emitTDMLoadMerged(RewriterBase &rewriter, Location loc,
-                       const LLVMTypeConverter *typeConverter,
-                       ArrayRef<TDMMergeMemberInfo> members, int numWarps,
-                       Value ctaId, int32_t auxBits,
-                       const ::mlir::triton::AMD::TDMMergeGroupInfo &groupInfo) {
+void emitTDMLoadMerged(
+    RewriterBase &rewriter, Location loc,
+    const LLVMTypeConverter *typeConverter,
+    ArrayRef<TDMMergeMemberInfo> members, int numWarps, Value ctaId,
+    int32_t auxBits, const ::mlir::triton::AMD::TDMMergeGroupInfo &groupInfo) {
   size_t N = groupInfo.members.size();
   assert(N >= 2 && N <= 4 && members.size() == N &&
          groupInfo.memberHints.size() == N && "merge group invariants");
@@ -1586,9 +1587,9 @@ void emitTDMLoadMerged(RewriterBase &rewriter, Location loc,
 
   SmallVector<SmallVector<Value, 4>, 4> filledPerMember(N);
   for (size_t i = 0; i < N; ++i)
-    filledPerMember[i] = fillMergedTDMDescriptorMember(
-        rewriter, loc, typeConverter, members[i], numWarps, ctaId,
-        hintPerMember[i]);
+    filledPerMember[i] =
+        fillMergedTDMDescriptorMember(rewriter, loc, typeConverter, members[i],
+                                      numWarps, ctaId, hintPerMember[i]);
 
   // Build predicates for all but the last member; the last is the default.
   SmallVector<Value, 4> memberActive(N - 1);

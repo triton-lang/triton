@@ -1,12 +1,12 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
 #include "AsyncUtility.h"
+#include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "TritonAMDGPUToLLVM/TypeConverter.h"
 #include "TritonAMDGPUToLLVM/UniformityAnalysis.h"
-#include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlowFramework.h"

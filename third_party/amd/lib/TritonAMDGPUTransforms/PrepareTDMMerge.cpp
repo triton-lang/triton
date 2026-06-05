@@ -1,5 +1,5 @@
-#include "TritonAMDGPUTransforms/Passes.h"
 #include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
+#include "TritonAMDGPUTransforms/Passes.h"
 
 namespace mlir {
 

@@ -1,10 +1,10 @@
 #ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_PATTERNTRITONGPUOPTOLLVM_H_
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_PATTERNTRITONGPUOPTOLLVM_H_
 
+#include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
 #include "TargetInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
-#include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "llvm/ADT/DenseMap.h"

@@ -28,14 +28,15 @@ uint32_t getGeneratedMergeHint(unsigned groupIdx, unsigned groupSize,
   assert(groupIdx < groupSize && "groupIdx out of range");
   if (groupSize == 3) {
     // numWarps is 4 or 8 (the greedy splitter caps auto-merge at 8). The 3-way
-    // split is half + quarter + quarter to keep each hint an axis-aligned coset.
+    // split is half + quarter + quarter to keep each hint an axis-aligned
+    // coset.
     static constexpr uint32_t kHints4[3] = {0b0011, 0b0100, 0b1000};
     static constexpr uint32_t kHints8[3] = {0b00001111, 0b00110000, 0b11000000};
     return (numWarps == 4 ? kHints4 : kHints8)[groupIdx];
   }
 
-  // Every groupSize-th warp starting at groupIdx (e.g. groupSize=2 -> 0b...0101,
-  // then shifted). Gives one set bit per stride.
+  // Every groupSize-th warp starting at groupIdx (e.g. groupSize=2 ->
+  // 0b...0101, then shifted). Gives one set bit per stride.
   uint32_t stridePattern =
       ((uint32_t{1} << numWarps) - 1) / ((uint32_t{1} << groupSize) - 1);
   return stridePattern << groupIdx;
@@ -184,8 +185,9 @@ void emitMergeGroup(MutableArrayRef<Operation *> run,
 
 // Gate only auto-generation of hints, not grouping of existing hints.
 bool tdmAutoMergeEnabled() {
-  auto disabled = mlir::triton::tools::isEnvValueBool(
-      mlir::triton::tools::getStrEnv("TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS"));
+  auto disabled =
+      mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
+          "TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS"));
   return !disabled.value_or(false);
 }
 
@@ -249,8 +251,8 @@ void assignTDMMergeGroupIds(ModuleOp mod) {
     if (inserted)
       ++nextId;
     int32_t id = idIt->second;
-    auto pos = llvm::find(info->members, op.getOperation()) -
-               info->members.begin();
+    auto pos =
+        llvm::find(info->members, op.getOperation()) - info->members.begin();
     op->setAttr(kTDMMergeIdAttr, IntegerAttr::get(i32Ty, id));
     op->setAttr(kTDMMergeIndexAttr,
                 IntegerAttr::get(i32Ty, static_cast<int32_t>(pos)));
@@ -259,7 +261,8 @@ void assignTDMMergeGroupIds(ModuleOp mod) {
 
 // Rebuild and validate merge groups from frozen group id/index attributes.
 TDMMergeGroupMap readTDMMergeGroups(ModuleOp mod) {
-  llvm::MapVector<int32_t, SmallVector<std::pair<int32_t, TDMCopyGlobalToLocalOp>>>
+  llvm::MapVector<int32_t,
+                  SmallVector<std::pair<int32_t, TDMCopyGlobalToLocalOp>>>
       buckets;
   mod->walk([&](TDMCopyGlobalToLocalOp op) {
     auto idAttr = op->getAttrOfType<IntegerAttr>(kTDMMergeIdAttr);

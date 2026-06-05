@@ -1240,8 +1240,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       LLVMTypeConverter &converter, const AMD::TargetInfo &targetInfo,
       ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit,
       const DataFlowSolver *uniformitySolver,
-      const llvm::DenseMap<Operation *,
-                           std::shared_ptr<mlir::triton::AMD::TDMMergeGroupInfo>>
+      const llvm::DenseMap<
+          Operation *, std::shared_ptr<mlir::triton::AMD::TDMMergeGroupInfo>>
           &mergeGroups)
       : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver),
@@ -1333,7 +1333,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         auto enc = descTy.getSharedLayout();
         mlir::LLVM::AMD::TDMMergeMemberInfo &m = members[i];
 
-        m.elementType = getTypeConverter()->convertType(descTy.getElementType());
+        m.elementType =
+            getTypeConverter()->convertType(descTy.getElementType());
         m.sharedLayout = isPaddedEncoding(enc)
                              ? paddedLinearLayout(descTy.getShape(), enc)
                              : toLinearLayout(descTy.getShape(), enc);
@@ -1344,19 +1345,19 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
           m.padAmount = padEnc.getPaddings()[0];
         }
         if (targetInfo.supportsMultiCTALaunch())
-          m.multicastMask =
-              LLVM::AMD::emitCtaMulticastMask(rewriter, loc, ctaId, m.sharedLayout);
+          m.multicastMask = LLVM::AMD::emitCtaMulticastMask(
+              rewriter, loc, ctaId, m.sharedLayout);
 
         m.encoding = enc;
-        m.shapePerCTA =
-            llvm::to_vector(triton::gpu::getShapePerCTA(enc, descTy.getShape()));
+        m.shapePerCTA = llvm::to_vector(
+            triton::gpu::getShapePerCTA(enc, descTy.getShape()));
         m.desc = mlir::LLVM::AMD::unpackTDMDescriptor(
             rewriter, loc, rewriter.getRemappedValue(memberOp.getDesc()));
         for (Value idx : memberOp.getIndices())
           m.offset.push_back(rewriter.getRemappedValue(idx));
         auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
-            loc, rewriter.getRemappedValue(memberOp.getResult()),
-            m.elementType, rewriter);
+            loc, rewriter.getRemappedValue(memberOp.getResult()), m.elementType,
+            rewriter);
         m.dstPtrs = llvm::to_vector(dstMemObj.getBases());
         m.pred = memberOp.getPred()
                      ? rewriter.getRemappedValue(memberOp.getPred())
@@ -1367,8 +1368,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
           op.getCache(), /*isLoad*/ true, targetInfo);
       rewriter.setInsertionPoint(group.lastInProgramOrder);
       mlir::LLVM::AMD::emitTDMLoadMerged(rewriter, loc, getTypeConverter(),
-                                         members, numWarps, ctaId, mergedAuxBits,
-                                         group);
+                                         members, numWarps, ctaId,
+                                         mergedAuxBits, group);
 
       for (size_t i = numMembers; i-- > 0;)
         rewriter.eraseOp(group.members[i]);

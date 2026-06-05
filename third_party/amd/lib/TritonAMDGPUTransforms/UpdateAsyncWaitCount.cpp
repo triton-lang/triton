@@ -1,7 +1,7 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
-#include "TritonAMDGPUTransforms/Passes.h"
 #include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TDMUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
