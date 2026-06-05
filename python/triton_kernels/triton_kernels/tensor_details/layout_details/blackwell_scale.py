@@ -159,18 +159,17 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "N_pad", (N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N)
 
     def swizzle_data(self, data):
-        """
-        Equivalent torch transformation:
+        if data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1:
+            if data.numel():
+                data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
+            data = data.transpose(-1, -2).contiguous()
+            data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K,
+                                self.SWIZZLE_K)
+            data = data.transpose(2, 4).contiguous()
+            data = data.view(1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256)
+            return data
 
-        if data.numel():
-            data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
-        data = data.transpose(-1, -2).contiguous()
-        data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K,
-                            self.SWIZZLE_K)
-        data = data.transpose(2, 4).contiguous()
-        data = data.view(1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256)
-        return data
-        """
+        # The following code is equivalent to the above, but faster for GPU tensors.
 
         # Ensure that `leading_shape` can be collapsed into a single B dim.
         assert tuple(data.shape) == tuple(self.shape)
@@ -179,22 +178,22 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         out = torch.empty(
             (1, self.B * self.N_pad // self.ALIGN_N,
              self.K_pad // self.SWIZZLE_K, 2, 256),
-            dtype=data.dtype,
+            dtype=torch.uint8,
             device=data.device,
         )
-        if data.device.type == "meta" or not out.numel():
+        if not out.numel():
             return out
 
         block_k = 64
         grid = (self.B * triton.cdiv(self.N_pad, self.ALIGN_N) *
                 triton.cdiv(self.K_pad, block_k), )
         _swizzle_blackwell_mx_scale[grid](
-            data,
+            data.view(torch.uint8),
             self.K, self.N, self.K_pad, self.N_pad,
             *data.stride(),
             out, BLOCK_K=block_k, num_warps=4,
         )
-        return out
+        return out.view(data.dtype)
 
     def unswizzle_data(self, data):
         data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 32, self.ALIGN_N // 32,
