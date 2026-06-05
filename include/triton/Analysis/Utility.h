@@ -252,6 +252,8 @@ bool supportWMMA(triton::DotOp op);
 
 bool supportMMA(triton::DotOp op, int version);
 
+bool supportMMA(triton::DotOpInterface op, int version);
+
 bool supportMMA(Value value, int version);
 
 // Conversion from `srcTy` to `dstTy` involving the minimum amount of data

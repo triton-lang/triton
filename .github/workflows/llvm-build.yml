@@ -3,12 +3,13 @@ name: LLVM Build
 on:
   push:
     branches:
-      - llvm-head
+      - main
     paths:
-      - cmake/llvm-info.json
+      - cmake/llvm-build-info.json
   pull_request:
     paths:
       - .github/workflows/llvm-build.yml
+      - cmake/llvm-build-info.json
   workflow_dispatch:
 
 env:
@@ -56,11 +57,11 @@ jobs:
     - name: Fetch LLVM Build Metadata
       shell: bash
       run: |
-        LLVM_COMMIT_HASH="$(jq -r '.llvm_hash' llvm-build/cmake/llvm-info.json)"
+        LLVM_COMMIT_HASH="$(jq -r '.llvm_hash' llvm-build/cmake/llvm-build-info.json)"
         echo "Found LLVM commit hash: ${LLVM_COMMIT_HASH}"
         echo "llvm_commit_hash=${LLVM_COMMIT_HASH}" >> ${GITHUB_ENV}
 
-        LLVM_BUILD_NUMBER="$(jq -r '.build_number' llvm-build/cmake/llvm-info.json)"
+        LLVM_BUILD_NUMBER="$(jq -r '.build_number' llvm-build/cmake/llvm-build-info.json)"
         echo "Found LLVM build number: ${LLVM_BUILD_NUMBER}"
 
         SHORT_LLVM_COMMIT_HASH="${LLVM_COMMIT_HASH:0:8}"
@@ -70,6 +71,16 @@ jobs:
         INSTALL_DIR="llvm-${SHORT_LLVM_COMMIT_HASH}-${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${LLVM_BUILD_NUMBER}"
         echo "LLVM installation directory name: ${INSTALL_DIR}"
         echo "llvm_install_dir=${INSTALL_DIR}" >> ${GITHUB_ENV}
+
+    - name: Check LLVM Build Does Not Exist
+      shell: bash
+      run: |
+        URL="https://oaitriton.blob.core.windows.net/public/llvm-builds/${{ env.llvm_install_dir }}.tar.gz"
+        HTTP_STATUS="$(curl --head --silent --show-error --output /dev/null --write-out "%{http_code}" "${URL}")"
+        if [ "${HTTP_STATUS}" != "404" ]; then
+          echo "LLVM build already exists or could not be checked: ${URL} returned ${HTTP_STATUS}"
+          exit 1
+        fi
 
     - name: Checkout LLVM
       uses: actions/checkout@v6
@@ -170,7 +181,7 @@ jobs:
           ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}-*.tar.gz
 
     - name: Azure login
-      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'main' }}
       uses: azure/login@v2
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID_LLVM }}
@@ -178,7 +189,7 @@ jobs:
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_LLVM }}
 
     - name: Upload LLVM Artifacts to Azure
-      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'main' }}
       shell: bash -el {0}
       run: |
         sha256sum "${{ env.llvm_install_dir }}.tar.gz"
@@ -189,7 +200,7 @@ jobs:
         echo "Blob URL: ${URL}"
 
     - name: Azure Logout
-      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'main' }}
       run: |
         az logout
         az cache purge
