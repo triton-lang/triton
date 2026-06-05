@@ -525,7 +525,8 @@ class JITCallable:
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
 
             from triton.language.core import constexpr
-            constexpr_globals = [(name, val) for (name, _), (val, _) in self.used_global_vals.items()
+            constexpr_globals = [(name, val)
+                                 for (name, _), (val, _) in self.used_global_vals.items()
                                  if isinstance(val, constexpr)]
             constexpr_globals.sort(key=lambda item: (item[0], repr(item[1])))
             self.hash += str(constexpr_globals)
