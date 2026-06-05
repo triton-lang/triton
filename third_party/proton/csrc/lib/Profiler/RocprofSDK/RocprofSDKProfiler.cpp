@@ -16,6 +16,7 @@
 #include "rocprofiler-sdk/agent.h"
 #include "rocprofiler-sdk/buffer_tracing.h"
 #include "rocprofiler-sdk/callback_tracing.h"
+#include "rocprofiler-sdk/external_correlation.h"
 #include "rocprofiler-sdk/hip/api_args.h"
 #include "rocprofiler-sdk/hip/runtime_api_id.h"
 #include "rocprofiler-sdk/marker/api_id.h"
@@ -35,6 +36,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace proton {
 
@@ -49,6 +51,9 @@ constexpr size_t BufferSize = 64 * 1024 * 1024;
 constexpr const char *UnknownKernelName = "<unknown>";
 
 struct RocprofSDKProfilerPimpl;
+
+thread_local std::vector<size_t> graphExternIdStack;
+thread_local size_t currentGraphLaunchExternId = Scope::DummyScopeId;
 
 // ---- SDK runtime state (singleton, outlives any profiler instance) ----
 
@@ -311,6 +316,9 @@ extractStreamId(rocprofiler_tracing_operation_t op,
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch:
     stream = payload->args.hipGraphLaunch.stream;
     break;
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch_spt:
+    stream = payload->args.hipGraphLaunch_spt.stream;
+    break;
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchMultiKernelMultiDevice: {
     const auto *p =
         payload->args.hipExtLaunchMultiKernelMultiDevice.launchParamsList;
@@ -353,6 +361,7 @@ bool isKernelLaunchOperation(rocprofiler_tracing_operation_t op) {
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchKernel:
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchKernel:
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch:
+  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch_spt:
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernel:
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernelMultiDevice:
     return true;
@@ -367,8 +376,6 @@ void processKernelRecord(
     RocprofSDKProfiler &profiler,
     RocprofSDKProfiler::CorrIdToExternIdMap &corrIdToExternId,
     RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
-    ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
-        &corrIdToIsHipGraph,
     std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
     const std::string &kernelName,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record,
@@ -384,39 +391,101 @@ void processKernelRecord(
   if (externId == Scope::DummyScopeId)
     return;
 
-  bool isGraph = corrIdToIsHipGraph.contain(record->correlation_id.internal);
-  auto &state = externIdToState[externId];
+  DataToEntryMap dataToEntry;
+  bool isMissingName = true;
+  if (!externIdToState.withRead(
+          externId, [&](const RocprofSDKProfiler::ExternIdState &state) {
+            dataToEntry = state.dataToEntry;
+            isMissingName = state.isMissingName;
+          }))
+    return;
 
-  if (!isGraph) {
-    for (auto [data, entry] : state.dataToEntry) {
-      if (auto metric = convertDispatchToMetric(record, streamId)) {
-        if (state.isMissingName) {
-          auto childEntry =
-              data->addOp(entry.phase, entry.id, {Context(kernelName)});
-          childEntry.upsertMetric(std::move(metric));
-        } else {
-          entry.upsertMetric(std::move(metric));
-        }
-        detail::updateDataPhases(dataPhases, data, entry.phase);
-      }
-    }
-  } else {
-    for (auto [data, entry] : state.dataToEntry) {
-      if (auto metric = convertDispatchToMetric(record, streamId)) {
+  for (auto [data, entry] : dataToEntry) {
+    if (auto metric = convertDispatchToMetric(record, streamId)) {
+      if (isMissingName) {
         auto childEntry =
             data->addOp(entry.phase, entry.id, {Context(kernelName)});
         childEntry.upsertMetric(std::move(metric));
-        detail::updateDataPhases(dataPhases, data, entry.phase);
+      } else {
+        entry.upsertMetric(std::move(metric));
       }
+      detail::updateDataPhases(dataPhases, data, entry.phase);
     }
   }
 
-  --state.numNodes;
-  if (state.numNodes == 0) {
+  bool complete = false;
+  externIdToState.withWrite(externId,
+                            [&](RocprofSDKProfiler::ExternIdState &state) {
+                              if (state.numNodes > 0)
+                                --state.numNodes;
+                              complete = state.numNodes == 0;
+                            });
+  if (complete) {
     corrIdToExternId.erase(record->correlation_id.internal);
-    corrIdToIsHipGraph.erase(record->correlation_id.internal);
     externIdToState.erase(externId);
   }
+}
+
+bool processGraphKernelRecord(
+    RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
+    std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
+    const std::string &kernelName,
+    const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record,
+    size_t externId, uint64_t streamId) {
+  if (externId == Scope::DummyScopeId)
+    return false;
+  DataToEntryMap dataToEntry;
+  if (!externIdToState.withRead(
+          externId, [&](const RocprofSDKProfiler::ExternIdState &state) {
+            dataToEntry = state.dataToEntry;
+          }))
+    return false;
+  // The ROCProfiler-SDK path does not build captured graph-node metadata.
+  // Match CUPTI's no-capture fallback: attach replay kernels under the graph
+  // launch entry.
+  for (auto [data, entry] : dataToEntry) {
+    if (auto metric = convertDispatchToMetric(record, streamId)) {
+      auto childEntry =
+          data->addOp(entry.phase, entry.id, {Context(kernelName)});
+      childEntry.upsertMetric(std::move(metric));
+      detail::updateDataPhases(dataPhases, data, childEntry.phase);
+    }
+  }
+  bool complete = false;
+  externIdToState.withWrite(externId,
+                            [&](RocprofSDKProfiler::ExternIdState &state) {
+                              if (state.numNodes > 0)
+                                --state.numNodes;
+                              complete = state.numNodes == 0;
+                            });
+  if (complete)
+    externIdToState.erase(externId);
+  return complete;
+}
+
+size_t countGraphKernelNodes(hipGraph_t graph) {
+  if (!graph)
+    return 0;
+
+  size_t numNodes = 0;
+  if (hip::graphGetNodes<false>(graph, nullptr, &numNodes) != hipSuccess ||
+      numNodes == 0) {
+    return 0;
+  }
+
+  std::vector<hipGraphNode_t> nodes(numNodes);
+  if (hip::graphGetNodes<false>(graph, nodes.data(), &numNodes) != hipSuccess)
+    return 0;
+
+  size_t numKernelNodes = 0;
+  for (auto node : nodes) {
+    hipGraphNodeType type{};
+    if (hip::graphNodeGetType<false>(node, &type) == hipSuccess &&
+        type == hipGraphNodeTypeKernel) {
+      ++numKernelNodes;
+    }
+  }
+  return numKernelNodes;
 }
 
 } // namespace
@@ -441,6 +510,13 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
                                  rocprofiler_user_data_t *userData, void *arg);
   static void markerCallback(rocprofiler_callback_tracing_record_t record,
                              rocprofiler_user_data_t *userData, void *arg);
+  static void hipGraphCallback(rocprofiler_callback_tracing_record_t record,
+                               rocprofiler_user_data_t *userData, void *arg);
+  static int externalCorrelationCallback(
+      rocprofiler_thread_id_t threadId, rocprofiler_context_id_t contextId,
+      rocprofiler_external_correlation_id_request_kind_t kind,
+      rocprofiler_tracing_operation_t operation, uint64_t internalCorrelationId,
+      rocprofiler_user_data_t *externalCorrelationId, void *userData);
   static void roctxCallback(uint32_t operationId, void *data);
   static void codeObjectCallback(rocprofiler_callback_tracing_record_t record,
                                  rocprofiler_user_data_t *userData, void *arg);
@@ -474,27 +550,6 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
     kernelNames[kernelId] = std::string(name);
   }
 
-  ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
-      corrIdToIsHipGraph;
-
-  ThreadSafeMap<hipGraphExec_t, hipGraph_t,
-                std::unordered_map<hipGraphExec_t, hipGraph_t>>
-      graphExecToGraph;
-
-  ThreadSafeMap<hipGraph_t, uint32_t, std::unordered_map<hipGraph_t, uint32_t>>
-      graphToNumInstances;
-
-  ThreadSafeMap<hipStream_t, uint32_t,
-                std::unordered_map<hipStream_t, uint32_t>>
-      streamToCaptureCount;
-
-  ThreadSafeMap<hipStream_t, bool, std::unordered_map<hipStream_t, bool>>
-      streamToCapture;
-
-  // Fast check: non-zero when any stream is being captured. Avoids acquiring
-  // a shared_mutex on every kernel launch EXIT just to find an empty map.
-  std::atomic<int> activeCaptureCount{0};
-
   KernelNameMap kernelNames;
 
   // correlation_id → HIP stream pointer, captured at hipLaunchKernel ENTER.
@@ -502,6 +557,16 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
   // maps multiple HIP streams to the same underlying HSA queue.
   ThreadSafeMap<uint64_t, uint64_t, std::unordered_map<uint64_t, uint64_t>>
       corrIdToStreamId;
+
+  ThreadSafeMap<hipGraph_t, size_t, std::unordered_map<hipGraph_t, size_t>>
+      graphToNumKernelNodes;
+
+  ThreadSafeMap<hipGraphExec_t, size_t,
+                std::unordered_map<hipGraphExec_t, size_t>>
+      graphExecToNumKernelNodes;
+
+  ThreadSafeMap<size_t, uint64_t, std::unordered_map<size_t, uint64_t>>
+      graphExternIdToCorrId;
 };
 
 // ---- HIP Runtime API callback (correlation tracking) ----
@@ -529,24 +594,20 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
         Scope(resolvedName ? std::string(resolvedName) : std::string()));
     auto &dataToEntry = threadState.dataToEntry;
     size_t numInstances = 1;
-    if (operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch) {
-      impl->corrIdToIsHipGraph[record.correlation_id.internal] = true;
-      numInstances = std::numeric_limits<size_t>::max();
-      bool foundGraph = false;
-      auto graphExec = payload->args.hipGraphLaunch.graphExec;
-      if (impl->graphExecToGraph.contain(graphExec)) {
-        auto graph = impl->graphExecToGraph[graphExec];
-        if (impl->graphToNumInstances.contain(graph)) {
-          numInstances = impl->graphToNumInstances[graph];
-          foundGraph = true;
-        }
-      }
-      if (!foundGraph) {
-        std::cerr
-            << "[PROTON] Cannot find graph and it may cause a memory leak."
-               "To avoid this problem, please start profiling before the "
-               "graph is created."
-            << std::endl;
+    if (operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch ||
+        operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch_spt) {
+      hipGraphExec_t graphExec =
+          operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch
+              ? payload->args.hipGraphLaunch.graphExec
+              : payload->args.hipGraphLaunch_spt.graphExec;
+      bool foundGraphExec = impl->graphExecToNumKernelNodes.withRead(
+          graphExec, [&](const size_t &value) { numInstances = value; });
+      if (!foundGraphExec) {
+        numInstances = 1;
+        std::cerr << "[PROTON] Cannot find graph node count for graphExec "
+                     "and graph replay attribution may be incomplete. "
+                     "Please start profiling before the graph is captured."
+                  << std::endl;
       }
     }
     auto &scope = threadState.scopeStack.back();
@@ -556,97 +617,134 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
                                    dataToEntry);
     impl->corrIdToStreamId[record.correlation_id.internal] =
         extractStreamId(operation, payload);
+    if (operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch ||
+        operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch_spt) {
+      currentGraphLaunchExternId = scope.scopeId;
+      impl->graphExternIdToCorrId[scope.scopeId] =
+          record.correlation_id.internal;
+    }
     return;
   }
 
   if (record.phase != ROCPROFILER_CALLBACK_PHASE_EXIT)
     return;
 
-  switch (operation) {
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamBeginCapture: {
-    auto stream = payload->args.hipStreamBeginCapture.stream;
-    impl->streamToCaptureCount[stream] = 0;
-    impl->streamToCapture[stream] = true;
-    impl->activeCaptureCount.fetch_add(1, std::memory_order_release);
-    break;
-  }
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture: {
-    auto stream = payload->args.hipStreamEndCapture.stream;
-    auto graph = *(payload->args.hipStreamEndCapture.pGraph);
-    uint32_t captured = impl->streamToCaptureCount.contain(stream)
-                            ? impl->streamToCaptureCount[stream]
-                            : 0;
-    impl->graphToNumInstances[graph] = captured;
-    impl->streamToCapture.erase(stream);
-    impl->streamToCaptureCount.erase(stream);
-    impl->activeCaptureCount.fetch_sub(1, std::memory_order_release);
-    break;
-  }
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithFlags: {
-    auto graph = payload->args.hipGraphInstantiateWithFlags.graph;
-    auto graphExec = *(payload->args.hipGraphInstantiateWithFlags.pGraphExec);
-    impl->graphExecToGraph[graphExec] = graph;
-    break;
-  }
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiate: {
-    auto graph = payload->args.hipGraphInstantiate.graph;
-    auto graphExec = *(payload->args.hipGraphInstantiate.pGraphExec);
-    impl->graphExecToGraph[graphExec] = graph;
-    break;
-  }
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphExecDestroy: {
-    auto graphExec = payload->args.hipGraphExecDestroy.graphExec;
-    impl->graphExecToGraph.erase(graphExec);
-    break;
-  }
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphDestroy: {
-    auto graph = payload->args.hipGraphDestroy.graph;
-    impl->graphToNumInstances.erase(graph);
-    break;
-  }
-  default:
-    break;
-  }
-
-  // Count kernel launches during graph capture. The atomic fast-check avoids
-  // acquiring the shared_mutex on streamToCapture for every kernel launch
-  // when no capture is active (the overwhelmingly common case).
-  if (isKernelOp &&
-      impl->activeCaptureCount.load(std::memory_order_acquire) > 0) {
-    hipStream_t stream = nullptr;
+  if (payload && payload->retval.hipError_t_retval == hipSuccess) {
     switch (operation) {
-    case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchKernel:
-      stream = payload->args.hipLaunchKernel.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture_spt: {
+      auto graphPtr =
+          operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture
+              ? payload->args.hipStreamEndCapture.pGraph
+              : payload->args.hipStreamEndCapture_spt.pGraph;
+      if (graphPtr && *graphPtr) {
+        impl->graphToNumKernelNodes[*graphPtr] =
+            countGraphKernelNodes(*graphPtr);
+      }
       break;
-    case ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchKernel:
-      stream = payload->args.hipExtLaunchKernel.stream;
+    }
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiate:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithFlags:
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithParams: {
+      hipGraph_t graph = nullptr;
+      hipGraphExec_t *graphExecPtr = nullptr;
+      if (operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiate) {
+        graph = payload->args.hipGraphInstantiate.graph;
+        graphExecPtr = payload->args.hipGraphInstantiate.pGraphExec;
+      } else if (operation ==
+                 ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithFlags) {
+        graph = payload->args.hipGraphInstantiateWithFlags.graph;
+        graphExecPtr = payload->args.hipGraphInstantiateWithFlags.pGraphExec;
+      } else {
+        graph = payload->args.hipGraphInstantiateWithParams.graph;
+        graphExecPtr = payload->args.hipGraphInstantiateWithParams.pGraphExec;
+      }
+      if (graphExecPtr && *graphExecPtr) {
+        size_t numKernelNodes = 0;
+        if (!impl->graphToNumKernelNodes.withRead(
+                graph, [&](const size_t &value) { numKernelNodes = value; })) {
+          numKernelNodes = countGraphKernelNodes(graph);
+        }
+        impl->graphExecToNumKernelNodes[*graphExecPtr] = numKernelNodes;
+      }
       break;
-    case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchCooperativeKernel:
-      stream = payload->args.hipLaunchCooperativeKernel.stream;
+    }
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphExecDestroy:
+      impl->graphExecToNumKernelNodes.erase(
+          payload->args.hipGraphExecDestroy.graphExec);
       break;
-    case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchKernel:
-      stream = payload->args.hipModuleLaunchKernel.stream;
-      break;
-    case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernel:
-      stream = payload->args.hipModuleLaunchCooperativeKernel.stream;
-      break;
-    case ROCPROFILER_HIP_RUNTIME_API_ID_hipExtModuleLaunchKernel:
-      stream = payload->args.hipExtModuleLaunchKernel.stream;
-      break;
-    case ROCPROFILER_HIP_RUNTIME_API_ID_hipHccModuleLaunchKernel:
-      stream = payload->args.hipHccModuleLaunchKernel.stream;
+    case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphDestroy:
+      impl->graphToNumKernelNodes.erase(payload->args.hipGraphDestroy.graph);
       break;
     default:
       break;
     }
-    if (stream && impl->streamToCapture.contain(stream))
-      impl->streamToCaptureCount[stream]++;
   }
 
   if (isKernelOp) {
     threadState.exitOp();
     profiler.correlation.submit(record.correlation_id.internal);
+    if (operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch ||
+        operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch_spt) {
+      currentGraphLaunchExternId = Scope::DummyScopeId;
+    }
   }
+}
+
+void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
+    rocprofiler_callback_tracing_record_t record,
+    rocprofiler_user_data_t *userData, void *arg) {
+  if (record.kind != ROCPROFILER_CALLBACK_TRACING_HIP_GRAPH)
+    return;
+  if (record.operation != ROCPROFILER_HIP_GRAPH_OPERATION_HIP_GRAPH_LAUNCH)
+    return;
+
+  auto *payload = static_cast<rocprofiler_callback_tracing_hip_graph_data_t *>(
+      record.payload);
+  if (!payload)
+    return;
+
+  if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
+    graphExternIdStack.push_back(currentGraphLaunchExternId);
+  } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_EXIT &&
+             !graphExternIdStack.empty()) {
+    graphExternIdStack.pop_back();
+  }
+}
+
+int RocprofSDKProfiler::RocprofSDKProfilerPimpl::externalCorrelationCallback(
+    rocprofiler_thread_id_t threadId, rocprofiler_context_id_t contextId,
+    rocprofiler_external_correlation_id_request_kind_t kind,
+    rocprofiler_tracing_operation_t operation, uint64_t internalCorrelationId,
+    rocprofiler_user_data_t *externalCorrelationId, void *userData) {
+  externalCorrelationId->value = 0;
+  if (kind != ROCPROFILER_EXTERNAL_CORRELATION_REQUEST_KERNEL_DISPATCH)
+    return 0;
+  if (graphExternIdStack.empty())
+    return 0;
+
+  auto externId = graphExternIdStack.back();
+  if (externId == Scope::DummyScopeId && !threadState.scopeStack.empty()) {
+    externId = threadState.scopeStack.back().scopeId;
+  }
+  if (externId == Scope::DummyScopeId)
+    return 0;
+  if (!threadState.dataToEntry.empty()) {
+    auto &profiler = threadState.profiler;
+    auto isMissingName = threadState.scopeStack.empty()
+                             ? true
+                             : threadState.scopeStack.back().name.empty();
+    profiler.correlation.externIdToState.upsert(
+        externId, [&](RocprofSDKProfiler::ExternIdState &state) {
+          if (!state.dataToEntry.empty())
+            return;
+          state.numNodes = 1;
+          state.dataToEntry = threadState.dataToEntry;
+          state.isMissingName = isMissingName;
+        });
+  }
+  externalCorrelationId->value = externId + 1;
+  return 0;
 }
 
 // ---- ROCTx marker callback via rocprofiler-sdk ----
@@ -752,25 +850,43 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
 
   for (size_t i = 0; i < numHeaders; ++i) {
     auto *header = headers[i];
-    if (header->category != ROCPROFILER_BUFFER_CATEGORY_TRACING ||
-        header->kind != ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH) {
+    if (header->category != ROCPROFILER_BUFFER_CATEGORY_TRACING) {
       continue;
     }
-    auto *record =
-        static_cast<rocprofiler_buffer_tracing_kernel_dispatch_record_t *>(
-            header->payload);
-    maxCorrelationId =
-        std::max(maxCorrelationId, record->correlation_id.internal);
-    auto kernelName = impl->getKernelName(record->dispatch_info.kernel_id);
-    uint64_t streamId =
-        static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
-    impl->corrIdToStreamId.withRead(
-        record->correlation_id.internal,
-        [&](const uint64_t &sid) { streamId = sid; });
-    processKernelRecord(profiler, correlation.corrIdToExternId,
-                        correlation.externIdToState, impl->corrIdToIsHipGraph,
-                        dataPhases, kernelName, record, streamId);
-    impl->corrIdToStreamId.erase(record->correlation_id.internal);
+    if (header->kind == ROCPROFILER_BUFFER_TRACING_KERNEL_DISPATCH) {
+      auto *record =
+          static_cast<rocprofiler_buffer_tracing_kernel_dispatch_record_t *>(
+              header->payload);
+      maxCorrelationId =
+          std::max(maxCorrelationId, record->correlation_id.internal);
+      auto kernelName = impl->getKernelName(record->dispatch_info.kernel_id);
+      if (record->correlation_id.external.value != 0) {
+        uint64_t streamId =
+            static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
+        auto externId =
+            static_cast<size_t>(record->correlation_id.external.value - 1);
+        if (processGraphKernelRecord(correlation.externIdToState, dataPhases,
+                                     kernelName, record, externId, streamId)) {
+          uint64_t graphLaunchCorrId = 0;
+          if (impl->graphExternIdToCorrId.withRead(
+                  externId,
+                  [&](const uint64_t &value) { graphLaunchCorrId = value; })) {
+            correlation.corrIdToExternId.erase(graphLaunchCorrId);
+            impl->graphExternIdToCorrId.erase(externId);
+          }
+        }
+        continue;
+      }
+      uint64_t streamId =
+          static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
+      impl->corrIdToStreamId.withRead(
+          record->correlation_id.internal,
+          [&](const uint64_t &sid) { streamId = sid; });
+      processKernelRecord(profiler, correlation.corrIdToExternId,
+                          correlation.externIdToState, dataPhases, kernelName,
+                          record, streamId);
+      impl->corrIdToStreamId.erase(record->correlation_id.internal);
+    }
   }
   profiler.flushDataPhases(dataPhases, profiler.pendingGraphPool.get());
   if (maxCorrelationId > 0) {
@@ -805,12 +921,11 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
   // time, even though the context is not yet active.
   rocprofiler::createContext<true>(&state->profilingContext);
 
-  // Subscribe only to the HIP operations Proton needs: kernel launches,
-  // graph capture/instantiate/destroy. Passing nullptr/0 would subscribe to
-  // all ~519 HIP runtime APIs, causing the SDK to construct correlation IDs
-  // and invoke our callback for every hipMalloc, hipMemcpy, etc.
+  // Subscribe only to the HIP operations Proton needs. Passing nullptr/0 would
+  // subscribe to all ~519 HIP runtime APIs, causing the SDK to construct
+  // correlation IDs and invoke our callback for every hipMalloc, hipMemcpy,
+  // etc.
   constexpr rocprofiler_tracing_operation_t kTracedHipOps[] = {
-      // Kernel launches (ENTER: correlation tracking, EXIT: capture counting)
       ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchKernel,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchKernel,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchMultiKernelMultiDevice,
@@ -822,13 +937,12 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
       ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernel,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernelMultiDevice,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch,
-      // Graph capture (EXIT only)
-      ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamBeginCapture,
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch_spt,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture,
-      // Graph instantiate (EXIT only)
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture_spt,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiate,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithFlags,
-      // Graph cleanup (EXIT only)
+      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithParams,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphExecDestroy,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphDestroy,
   };
@@ -838,6 +952,24 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
       kTracedHipOps, std::size(kTracedHipOps),
       &RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback,
       nullptr);
+
+  rocprofiler::configureCallbackTracingService<true>(
+      state->profilingContext, ROCPROFILER_CALLBACK_TRACING_HIP_GRAPH, nullptr,
+      0, &RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback,
+      nullptr);
+
+  {
+    constexpr rocprofiler_external_correlation_id_request_kind_t
+        kExternalCorrelationKinds[] = {
+            ROCPROFILER_EXTERNAL_CORRELATION_REQUEST_KERNEL_DISPATCH,
+        };
+    rocprofiler::configureExternalCorrelationIdRequestService<true>(
+        state->profilingContext, kExternalCorrelationKinds,
+        std::size(kExternalCorrelationKinds),
+        &RocprofSDKProfiler::RocprofSDKProfilerPimpl::
+            externalCorrelationCallback,
+        nullptr);
+  }
 
   // Marker tracing: always configure MARKER_CORE_API so we intercept roctx
   // calls that go through librocprofiler-sdk-roctx.so (TheRock/torch

@@ -3,16 +3,17 @@ Reproducibility tests for Proton.
 Each test should invoke one or more GPU kernels and check the validity of their profiling results.
 """
 
-import torch
+import pathlib
+
 import triton
 import triton.profiler as proton
+import torch
 import json
 import gc
 import pytest
 from typing import NamedTuple
-import pathlib
-import threading
 from contextlib import contextmanager
+import threading
 
 import triton.language as tl
 import triton.profiler.hooks.launch as proton_launch
@@ -105,7 +106,7 @@ def test_triton(tmp_path: pathlib.Path, device: str):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
-@pytest.mark.skipif(not is_cuda(), reason="HIP backend does not reliably attribute cudagraph replay launches to scopes")
+@pytest.mark.skipif(not (is_cuda() or is_hip()), reason="Only CUDA/HIP backends support cudagraph replay")
 def test_cudagraph(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
