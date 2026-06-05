@@ -37,13 +37,8 @@ proton.start(
 )
 ```
 
-The mode object form also supports a sampling interval:
-
-```python
-import triton.profiler.mode as pmode
-
-proton.start("profile_name", backend="cupti", mode=pmode.PCSampling(interval=1000))
-```
+Proton currently uses the CUPTI backend's default sampling period; the sampling
+interval is not configurable through this mode.
 
 Instruction sampling can add significant end-to-end overhead because Proton
 transfers and processes sample data on the CPU. Viewer filters such as
