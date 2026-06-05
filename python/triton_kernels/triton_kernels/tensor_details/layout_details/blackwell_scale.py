@@ -170,8 +170,8 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
             if data.numel():
                 data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
             data = data.transpose(-1, -2).contiguous()
-            data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K,
-                                self.SWIZZLE_K)
+            data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32,
+                                self.K_pad // self.SWIZZLE_K, self.SWIZZLE_K)
             data = data.transpose(2, 4).contiguous()
             data = data.view(1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256)
             return data
@@ -183,8 +183,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         data = data.reshape((self.B, self.K, self.N))
 
         out = torch.empty(
-            (1, self.B * self.N_pad // self.ALIGN_N,
-             self.K_pad // self.SWIZZLE_K, 2, 256),
+            (1, self.B * self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 2, 256),
             dtype=torch.uint8,
             device=data.device,
         )
@@ -192,13 +191,17 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
             return out
 
         block_k = 64
-        grid = (self.B * triton.cdiv(self.N_pad, self.ALIGN_N) *
-                triton.cdiv(self.K_pad, block_k), )
+        grid = (self.B * triton.cdiv(self.N_pad, self.ALIGN_N) * triton.cdiv(self.K_pad, block_k), )
         _swizzle_blackwell_mx_scale[grid](
             data.view(torch.uint8),
-            self.K, self.N, self.K_pad, self.N_pad,
+            self.K,
+            self.N,
+            self.K_pad,
+            self.N_pad,
             *data.stride(),
-            out, BLOCK_K=block_k, num_warps=4,
+            out,
+            BLOCK_K=block_k,
+            num_warps=4,
         )
         return out.view(data.dtype)
 
@@ -502,11 +505,7 @@ def swizzle_mx_scale_bw_store_ptr(base, rows, cols, leading_idx, n_cols, stride_
 
 
 @triton.jit
-def _swizzle_blackwell_mx_scale(Data,
-                                K, N, K_PAD, N_PAD,
-                                stride_b, stride_k, stride_n,
-                                Out,
-                                BLOCK_K: tl.constexpr):
+def _swizzle_blackwell_mx_scale(Data, K, N, K_PAD, N_PAD, stride_b, stride_k, stride_n, Out, BLOCK_K: tl.constexpr):
     tl.static_assert(BLOCK_K % 4 == 0)
     BLKSIZE: tl.constexpr = 4 * 128
 
