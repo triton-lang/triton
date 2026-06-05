@@ -912,8 +912,9 @@ The mbarrier must be 8-byte aligned shared memory.</p>
 </div>
 <p>Lowers to a cluster arrive/wait pair.</p>
 <p>In warp-specialized kernels, lowering wraps the barrier in a synthetic
-<code class="docutils literal notranslate"><span class="pre">ttg.warp_specialize</span></code> region so worker warps also execute the barrier.
-This op cannot be placed inside an existing <code class="docutils literal notranslate"><span class="pre">ttg.warp_specialize</span></code>.</p>
+<code class="docutils literal notranslate"><span class="pre">ttg.warp_specialize</span></code> region so worker warps also execute a barrier outside
+existing warp-specialized code. A barrier inside <code class="docutils literal notranslate"><span class="pre">ttg.warp_specialize</span></code>
+lowers through a cluster-scoped mbarrier.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id23">
 <h3>Attributes:<a class="headerlink" href="#id23" title="Link to this heading"></a></h3>
