@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include <cassert>
@@ -53,9 +54,23 @@ static bool isValueAvailableInScope(Value value, Region *scope) {
 constexpr int64_t kTileM = 8;
 constexpr int64_t kTileN = 8;
 
-void createGlobalScratchBarrier(PatternRewriter &rewriter, Location loc) {
-  ttg::BarrierOp::create(
-      rewriter, loc, ttg::AddrSpace::GlobalRead | ttg::AddrSpace::GlobalWrite);
+Operation *createGlobalScratchBarrier(PatternRewriter &rewriter, Location loc,
+                                      bool sharedClusterState = false) {
+  Operation *barrier = ttg::BarrierOp::create(rewriter, loc,
+                                              ttg::AddrSpace::GlobalRead |
+                                                  ttg::AddrSpace::GlobalWrite)
+                           .getOperation();
+  if (sharedClusterState)
+    barrier = ttng::ClusterBarrierOp::create(rewriter, loc).getOperation();
+  return barrier;
+}
+
+void createSynchronousCompletionArrive(PatternRewriter &rewriter, Location loc,
+                                       Value barrier, Value pred) {
+  // Hardware two-CTA tcgen05 completion is issued by the lead CTA and
+  // multicast to its partner. Since FPSAN erases that instruction, each CTA
+  // performs the corresponding arrival on its local barrier copy.
+  ttng::ArriveBarrierOp::create(rewriter, loc, barrier, 1, pred);
 }
 
 enum class UnaryOpId : uint64_t {
@@ -157,11 +172,42 @@ Operation *storeFpSanScratchMemory(PatternRewriter &rewriter, Location loc,
 
 class TmemScratchManager {
 public:
+  explicit TmemScratchManager(bool sharedClusterState)
+      : sharedClusterState(sharedClusterState) {}
+
+  bool usesSharedClusterState() const { return sharedClusterState; }
+
+  ttg::GlobalScratchAllocOp createScratchAlloc(PatternRewriter &rewriter,
+                                               Location loc, Type ptrType,
+                                               int64_t sizeInBytes,
+                                               int64_t alignment) {
+    return createThirdPartyScratchAlloc(rewriter, loc, ptrType, sizeInBytes,
+                                        alignment, sharedClusterState);
+  }
+
   ttg::BlockedEncodingAttr getScratchEncoding(PatternRewriter &rewriter,
                                               Value memdesc,
                                               ttg::MemDescType memTy) {
-    return getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
-                                       memTy.getElementType());
+    auto layout = getOptimizedBlockedEncoding(rewriter, memTy.getShape(),
+                                              memTy.getElementType());
+    auto cgaLayout = ttg::getCGALayout(memTy.getEncoding());
+    if (cgaLayout.getRank() != memTy.getRank()) {
+      assert(cgaLayout.getRank() + 1 == memTy.getRank() &&
+             "expected at most one extra multibuffering dimension");
+
+      // Ignore the leading pipelining dim when forwarding the CGA layout.
+      SmallVector<int64_t> cgaShape = {1};
+      llvm::append_range(cgaShape,
+                         cgaLayout.getLinearLayout().getOutDimSizes());
+      cgaLayout = ttg::CGAEncodingAttr::get(
+          rewriter.getContext(),
+          cgaLayout.getLinearLayout().reshapeOuts(
+              standardOutDimPairs(rewriter.getContext(), cgaShape)));
+    }
+    return ttg::BlockedEncodingAttr::get(
+        rewriter.getContext(), layout.getSizePerThread(),
+        layout.getThreadsPerWarp(), layout.getWarpsPerCTA(), layout.getOrder(),
+        cgaLayout);
   }
 
   static Value castToI32(PatternRewriter &rewriter, Location loc, Value value) {
@@ -230,14 +276,16 @@ public:
       int64_t alignment = std::max<int64_t>(elSize, 16);
       int64_t sizeInBytes = product(memTy.getShape()) * elSize;
       auto ptrTy = triton::getPointerType(storageElemTy);
-      auto allocOp = createThirdPartyScratchAlloc(rewriter, loc, ptrTy,
-                                                  sizeInBytes, alignment);
+      auto allocOp =
+          createScratchAlloc(rewriter, loc, ptrTy, sizeInBytes, alignment);
       Value ptr = allocOp.getResult();
 
       if (Value init = alloc.getSrc()) {
         auto initTy = cast<RankedTensorType>(init.getType());
         if (!storeFpSanScratchMemory(rewriter, loc, ptr, init, initTy))
           return std::nullopt;
+        if (sharedClusterState)
+          createGlobalScratchBarrier(rewriter, loc, sharedClusterState);
       }
 
       state.canonical = ScratchInfo{ptr, tensorTy};
@@ -370,6 +418,7 @@ private:
   }
 
   DenseMap<Value, ScratchState> scratchMap;
+  bool sharedClusterState;
 };
 
 Value createScratchAndStore(PatternRewriter &rewriter, Location loc, Value val,
@@ -822,6 +871,12 @@ createOperandScratch(PatternRewriter &rewriter, Location loc,
     if (!fullVal)
       return std::nullopt;
   } else {
+    if (scratch.usesSharedClusterState()) {
+      // A two-CTA TMA barrier is waited on by the lead CTA. FPSAN executes the
+      // emulated MMA in both CTAs, so rendezvous before the partner snapshots
+      // the shared-memory operand.
+      ttng::ClusterBarrierOp::create(rewriter, loc);
+    }
     fullVal =
         ttg::LocalLoadOp::create(rewriter, loc, tensorTy, memdesc, Value())
             .getResult();
@@ -831,8 +886,8 @@ createOperandScratch(PatternRewriter &rewriter, Location loc,
   int64_t sizeInBytes = product(memTy.getShape()) * elSize;
   auto ptrTy = triton::getPointerType(
       getScratchStorageElementType(memTy.getElementType()));
-  auto allocOp = createThirdPartyScratchAlloc(rewriter, loc, ptrTy, sizeInBytes,
-                                              alignment);
+  auto allocOp =
+      scratch.createScratchAlloc(rewriter, loc, ptrTy, sizeInBytes, alignment);
   Value ptr = allocOp.getResult();
   if (!storeFpSanScratchMemory(rewriter, loc, ptr, fullVal, tensorTy))
     return std::nullopt;
@@ -1864,7 +1919,8 @@ struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
     if (!result)
       return emitFpSanCodegenError(op.getOperation());
 
-    createGlobalScratchBarrier(rewriter, loc);
+    createGlobalScratchBarrier(rewriter, loc,
+                               scratch->usesSharedClusterState());
 
     if (op.getNumResults() == 1) {
       rewriter.replaceOp(op, result);
@@ -1900,7 +1956,8 @@ struct TMEMStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
     if (!storeFpSanScratchMemory(rewriter, loc, info->ptr, op.getSrc(), srcTy))
       return emitFpSanCodegenError(op.getOperation());
 
-    createGlobalScratchBarrier(rewriter, loc);
+    createGlobalScratchBarrier(rewriter, loc,
+                               scratch->usesSharedClusterState());
 
     if (op.getNumResults() == 0) {
       rewriter.eraseOp(op);
@@ -1936,13 +1993,18 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
         scratch->getScratchEncoding(rewriter, op.getDst(), dstMemTy);
     auto srcRegTy = RankedTensorType::get(
         srcMemTy.getShape(), srcMemTy.getElementType(), srcEncoding);
+    if (scratch->usesSharedClusterState()) {
+      // Match the lead-CTA TMA wait before both CTAs emulate the TMEM copy.
+      ttng::ClusterBarrierOp::create(rewriter, loc);
+    }
     Value srcReg =
         ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
             .getResult();
     if (!storeFpSanScratchMemory(rewriter, loc, info->ptr, srcReg, srcRegTy))
       return emitFpSanCodegenError(op.getOperation());
 
-    createGlobalScratchBarrier(rewriter, loc);
+    createGlobalScratchBarrier(rewriter, loc,
+                               scratch->usesSharedClusterState());
 
     rewriter.eraseOp(op);
     return success();
@@ -1953,14 +2015,22 @@ private:
 };
 
 struct TCGen5CommitPattern : public OpRewritePattern<ttng::TCGen5CommitOp> {
-  using OpRewritePattern::OpRewritePattern;
+  TCGen5CommitPattern(MLIRContext *ctx, bool twoCTAs)
+      : OpRewritePattern(ctx), twoCTAs(twoCTAs) {}
+
   LogicalResult matchAndRewrite(ttng::TCGen5CommitOp op,
                                 PatternRewriter &rewriter) const override {
-    ttng::ArriveBarrierOp::create(rewriter, op.getLoc(), op.getBarrier(), 1,
-                                  op.getPred());
+    if (twoCTAs)
+      createGlobalScratchBarrier(rewriter, op.getLoc(),
+                                 /*sharedClusterState=*/true);
+    createSynchronousCompletionArrive(rewriter, op.getLoc(), op.getBarrier(),
+                                      op.getPred());
     rewriter.eraseOp(op);
     return success();
   }
+
+private:
+  bool twoCTAs;
 };
 
 struct WarpGroupDotPattern : public OpRewritePattern<ttng::WarpGroupDotOp> {
@@ -2137,7 +2207,8 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
 
     // Each warp may only populate a subset of the operand scratch tiles, so
     // synchronize before the emulation loops start reading them.
-    createGlobalScratchBarrier(rewriter, loc);
+    createGlobalScratchBarrier(rewriter, loc,
+                               scratch->usesSharedClusterState());
 
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, aScratch->ptr, bScratch->ptr, dInfo->ptr, m, n, k, tileM,
@@ -2149,9 +2220,8 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
 
     // The emulation loop also writes D through scratch memory from multiple
     // warps, so make those stores visible before signaling completion.
-    auto postLoopBarrier = ttg::BarrierOp::create(
-        rewriter, loc,
-        ttg::AddrSpace::GlobalRead | ttg::AddrSpace::GlobalWrite);
+    auto postLoopBarrier = createGlobalScratchBarrier(
+        rewriter, loc, scratch->usesSharedClusterState());
 
     if (!op.getBarriers().empty()) {
       OpBuilder::InsertionGuard guard(rewriter);
@@ -2161,7 +2231,7 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
       for (size_t i = 0; i < barriers.size(); ++i) {
         Value pred =
             arith::AndIOp::create(rewriter, loc, op.getPred(), barrierPreds[i]);
-        ttng::ArriveBarrierOp::create(rewriter, loc, barriers[i], 1, pred);
+        createSynchronousCompletionArrive(rewriter, loc, barriers[i], pred);
       }
     }
 
@@ -2317,7 +2387,8 @@ struct TCGen5MMAScaledPattern
 
     // The operand and scale scratch buffers are written cooperatively, so all
     // warps must finish those stores before the emulation loop reads them.
-    createGlobalScratchBarrier(rewriter, loc);
+    createGlobalScratchBarrier(rewriter, loc,
+                               scratch->usesSharedClusterState());
 
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, aScratch->ptr, bScratch->ptr, dInfo->ptr, m, n, k, tileM,
@@ -2329,9 +2400,8 @@ struct TCGen5MMAScaledPattern
 
     // The emulated MMA updates the accumulator scratch cooperatively as well.
     // Flush those stores before completion barriers or later TMEM loads.
-    auto postLoopBarrier = ttg::BarrierOp::create(
-        rewriter, loc,
-        ttg::AddrSpace::GlobalRead | ttg::AddrSpace::GlobalWrite);
+    auto postLoopBarrier = createGlobalScratchBarrier(
+        rewriter, loc, scratch->usesSharedClusterState());
 
     if (!op.getBarriers().empty()) {
       OpBuilder::InsertionGuard guard(rewriter);
@@ -2341,7 +2411,7 @@ struct TCGen5MMAScaledPattern
       for (size_t i = 0; i < barriers.size(); ++i) {
         Value pred =
             arith::AndIOp::create(rewriter, loc, op.getPred(), barrierPreds[i]);
-        ttng::ArriveBarrierOp::create(rewriter, loc, barriers[i], 1, pred);
+        createSynchronousCompletionArrive(rewriter, loc, barriers[i], pred);
       }
     }
 
@@ -2409,7 +2479,14 @@ public:
           return failure();
         });
 
-    TmemScratchManager scratch;
+    bool twoCTAs = false;
+    getOperation().walk(
+        [&](ttng::MMAv5OpInterface op) { twoCTAs |= op.getTwoCtas(); });
+
+    getOperation()->setAttr(ttng::AttrTwoCTAsName,
+                            BoolAttr::get(&getContext(), twoCTAs));
+
+    TmemScratchManager scratch(twoCTAs);
     RewritePatternSet patterns(&getContext());
     patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
                  BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
@@ -2437,7 +2514,7 @@ public:
                  TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
                                                            &scratch);
     patterns.add<WarpGroupDotPattern>(&getContext());
-    patterns.add<TCGen5CommitPattern>(&getContext());
+    patterns.add<TCGen5CommitPattern>(&getContext(), twoCTAs);
 
     LogicalResult result =
         applyPatternsGreedily(getOperation(), std::move(patterns));
