@@ -159,7 +159,14 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "N_pad", (N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N)
 
     def swizzle_data(self, data):
-        if data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1:
+        need_torch = data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1
+        try:
+            from torch._subclasses.fake_tensor import is_fake
+            need_torch = need_torch or is_fake(data)
+        except ImportError:
+            pass
+
+        if need_torch:
             if data.numel():
                 data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
             data = data.transpose(-1, -2).contiguous()
