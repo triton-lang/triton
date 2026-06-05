@@ -268,6 +268,8 @@ public:
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
     auto memDescTy = cast<MemDescType>(op.getSrc().getType());
+    // TODO: PartitionedSharedEncoding lowering will be enabled in subsequent
+    // PRs.
     if (isa<PartitionedSharedEncodingAttr>(memDescTy.getEncoding())) {
       return rewriter.notifyMatchFailure(
           op, "PartitionedSharedEncoding not yet supported in lowering");
@@ -314,6 +316,8 @@ public:
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
     auto memDescTy = cast<MemDescType>(op.getDst().getType());
+    // TODO: PartitionedSharedEncoding lowering will be enabled in subsequent
+    // PRs.
     if (isa<PartitionedSharedEncodingAttr>(memDescTy.getEncoding())) {
       return rewriter.notifyMatchFailure(
           op, "PartitionedSharedEncoding not yet supported in lowering");

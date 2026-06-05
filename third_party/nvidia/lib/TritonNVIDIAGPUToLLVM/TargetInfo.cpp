@@ -209,14 +209,31 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Value val,
                               Value pred) const {
+  if (!ctaId) {
+    storeDSharedImpl(rewriter, loc, ptr, ctaId, val, pred);
+    return;
+  }
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value currentCtaId = getClusterCTAId(rewriter, loc);
+  Value isLocal = b.icmp_eq(*ctaId, currentCtaId);
+  storeDSharedImpl(rewriter, loc, ptr, std::nullopt, val,
+                   b.and_(pred, isLocal));
+  storeDSharedImpl(rewriter, loc, ptr, ctaId, val,
+                   b.and_(pred, b.icmp_ne(*ctaId, currentCtaId)));
+}
+
+void TargetInfo::storeDSharedImpl(RewriterBase &rewriter, Location loc,
+                                  Value ptr, std::optional<Value> ctaId,
+                                  Value val, Value pred) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
   assert(ptrTy.getAddressSpace() == 3 && "Invalid addr space for load_dsmem");
 
   if (!isa<VectorType>(val.getType())) {
-    storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, {val}, rewriter),
-                 pred);
+    storeDSharedImpl(rewriter, loc, ptr, ctaId,
+                     packLLVector(loc, {val}, rewriter), pred);
     return;
   }
 
@@ -233,8 +250,8 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
     for (Value &v : vals) {
       v = b.zext(int_ty(8), b.bitcast(v, int_ty(elemBitwidth)));
     }
-    storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, vals, rewriter),
-                 pred);
+    storeDSharedImpl(rewriter, loc, ptr, ctaId,
+                     packLLVector(loc, vals, rewriter), pred);
     return;
   }
 
@@ -247,8 +264,8 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
         v = b.bitcast(v, int_ty(elemBitwidth));
       }
     }
-    storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, vals, rewriter),
-                 pred);
+    storeDSharedImpl(rewriter, loc, ptr, ctaId,
+                     packLLVector(loc, vals, rewriter), pred);
     return;
   }
 
@@ -268,8 +285,8 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
           rewriter);
       newVals.push_back(b.bitcast(v, i32_ty));
     }
-    storeDShared(rewriter, loc, ptr, ctaId,
-                 packLLVector(loc, newVals, rewriter), pred);
+    storeDSharedImpl(rewriter, loc, ptr, ctaId,
+                     packLLVector(loc, newVals, rewriter), pred);
     return;
   }
 
@@ -282,7 +299,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
     for (int i = 0; i < vec / maxVec; i++) {
       auto newPtr = b.gep(ptr.getType(), elemTy, ptr, b.i32_val(i * maxVec),
                           LLVM::GEPNoWrapFlags::inbounds);
-      storeDShared(
+      storeDSharedImpl(
           rewriter, loc, newPtr, ctaId,
           packLLVector(loc, ArrayRef(vals).slice(i * maxVec, maxVec), rewriter),
           pred);
@@ -296,16 +313,21 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   assert(1 <= vec && vec <= 4);
   assert(vec * elemBitwidth <= 128);
 
-  auto emitStore = [&](Value storePtr, bool isRemote, Value storePred) {
-    if (isConstantTruePred(storePred)) {
-      b.store(val, storePtr, /*align=*/vec * elemBitwidth / 8);
-      return;
-    }
-    PTXBuilder builder;
-    auto st = builder.create("st")
-                  ->o(isRemote ? "shared::cluster" : "shared::cta")
-                  .v(vec, /*predicate=*/vec > 1)
-                  .b(elemBitwidth);
+  // Get pointer to remote shared memory if needed.
+  if (ctaId.has_value()) {
+    ptr = mapa(rewriter, loc, ptr, *ctaId, pred);
+  }
+
+  PTXBuilder builder;
+  auto st = builder.create("st")
+                ->o(ctaId.has_value() ? "shared::cluster" : "shared::cta")
+                .v(vec, /*predicate=*/vec > 1)
+                .b(elemBitwidth);
+  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
+
+  if (isConstantTruePred(pred)) {
+    b.store(val, ptr, /*align=*/vec * elemBitwidth / 8);
+  } else {
     PTXBuilder::Operand *valOpr;
     std::string constraint = getConstraintForBitwidth(elemBitwidth);
     if (vec > 1) {
@@ -317,27 +339,42 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
     } else {
       valOpr = builder.newOperand(val, constraint);
     }
-    st(builder.newAddrOperand(storePtr, "r"), valOpr).predicate(storePred, "b");
+    st(ptrOpr, valOpr).predicate(pred, "b");
     builder.launch(rewriter, loc, void_ty(ctx));
-  };
-
-  if (!ctaId) {
-    emitStore(ptr, /*isRemote=*/false, pred);
-    return;
   }
-
-  Value currentCtaId = getClusterCTAId(rewriter, loc);
-  Value isLocal = b.icmp_eq(*ctaId, currentCtaId);
-  Value localPred = b.and_(pred, isLocal);
-  Value remotePred = b.and_(pred, b.icmp_ne(*ctaId, currentCtaId));
-  emitStore(ptr, /*isRemote=*/false, localPred);
-  emitStore(mapa(rewriter, loc, ptr, *ctaId, remotePred),
-            /*isRemote=*/true, remotePred);
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Type loadTy,
                               Value pred, Operation *localLoadOp) const {
+  if (!ctaId)
+    return loadDSharedImpl(rewriter, loc, ptr, ctaId, loadTy, pred,
+                           localLoadOp);
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value currentCtaId = getClusterCTAId(rewriter, loc);
+  Value isLocal = b.icmp_eq(*ctaId, currentCtaId);
+  Value local = loadDSharedImpl(rewriter, loc, ptr, std::nullopt, loadTy,
+                                b.and_(pred, isLocal), localLoadOp);
+  Value remote = loadDSharedImpl(rewriter, loc, ptr, ctaId, loadTy,
+                                 b.and_(pred, b.icmp_ne(*ctaId, currentCtaId)),
+                                 localLoadOp);
+  if (!isa<VectorType>(loadTy))
+    return b.select(isLocal, local, remote);
+
+  SmallVector<Value> selected;
+  for (auto [localVal, remoteVal] :
+       llvm::zip(unpackLLVector(loc, local, rewriter),
+                 unpackLLVector(loc, remote, rewriter))) {
+    selected.push_back(b.select(isLocal, localVal, remoteVal));
+  }
+  return packLLVector(loc, selected, rewriter);
+}
+
+Value TargetInfo::loadDSharedImpl(RewriterBase &rewriter, Location loc,
+                                  Value ptr, std::optional<Value> ctaId,
+                                  Type loadTy, Value pred,
+                                  Operation *localLoadOp) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
@@ -345,7 +382,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
   if (!isa<VectorType>(loadTy)) {
     SmallVector<Value> values = unpackLLVector(
-        loc, loadDShared(rewriter, loc, ptr, ctaId, vec_ty(loadTy, 1), pred),
+        loc,
+        loadDSharedImpl(rewriter, loc, ptr, ctaId, vec_ty(loadTy, 1), pred),
         rewriter);
     assert(values.size() == 1);
     return values[0];
@@ -361,7 +399,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     assert(vec == 1 &&
            "don't know how to load/store vectors of sub-byte elems");
     SmallVector<Value> vals = unpackLLVector(
-        loc, loadDShared(rewriter, loc, ptr, ctaId, int_ty(8), pred), rewriter);
+        loc, loadDSharedImpl(rewriter, loc, ptr, ctaId, int_ty(8), pred),
+        rewriter);
     assert(vals.size() == 1);
     return b.bitcast(b.trunc(int_ty(elemBitwidth), vals[0]), elemTy);
   }
@@ -370,7 +409,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   if (!elemTy.isInteger()) {
     Type newLoadTy = vec_ty(int_ty(elemBitwidth), vec);
     SmallVector<Value> vals = unpackLLVector(
-        loc, loadDShared(rewriter, loc, ptr, ctaId, newLoadTy, pred), rewriter);
+        loc, loadDSharedImpl(rewriter, loc, ptr, ctaId, newLoadTy, pred),
+        rewriter);
     for (Value &v : vals) {
       v = b.bitcast(v, elemTy);
     }
@@ -384,7 +424,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   if (vec > 4 && elemBitwidth < 32) {
     int newVec = vec / (32 / elemBitwidth);
     auto newVecTy = vec_ty(i32_ty, newVec);
-    auto res = loadDShared(rewriter, loc, ptr, ctaId, newVecTy, pred);
+    auto res = loadDSharedImpl(rewriter, loc, ptr, ctaId, newVecTy, pred);
 
     // Unpack the b32's into the original vector type.
     SmallVector<Value> vals;
@@ -406,8 +446,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     for (int i = 0; i < vec / maxVec; i++) {
       auto newPtr = b.gep(ptr.getType(), elemTy, ptr, b.i32_val(i * maxVec),
                           LLVM::GEPNoWrapFlags::inbounds);
-      auto newVal = loadDShared(rewriter, loc, newPtr, ctaId,
-                                vec_ty(elemTy, maxVec), pred);
+      auto newVal = loadDSharedImpl(rewriter, loc, newPtr, ctaId,
+                                    vec_ty(elemTy, maxVec), pred);
       for (Value v : unpackLLVector(loc, newVal, rewriter)) {
         vals.push_back(v);
       }
@@ -421,62 +461,45 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   assert(1 <= vec && vec <= 4);
   assert(vec * elemBitwidth <= 128);
 
-  auto emitLoad = [&](Value loadPtr, bool isRemote, Value loadPred) {
-    Value load;
-    if (isConstantTruePred(loadPred)) {
-      Type resultTy = vec == 1 ? Type(int_ty(elemBitwidth))
-                               : Type(vec_ty(int_ty(elemBitwidth), vec));
-      load = b.load(resultTy, loadPtr, /*align=*/vec * elemBitwidth / 8);
-      if (vec > 1) {
-        Type structTy = struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth)));
-        Value structValue = b.undef(structTy);
-        for (int i = 0; i < vec; i++) {
-          structValue = b.insert_val(structTy, structValue,
-                                     b.extract_element(load, b.i32_val(i)), i);
-        }
-        load = structValue;
-      }
-    } else {
-      PTXBuilder builder;
-      auto ld = builder.create("ld")
-                    ->o(isRemote ? "shared::cluster" : "shared::cta")
-                    .v(vec, /*predicate=*/vec > 1)
-                    .b(elemBitwidth);
-      std::string elemConstraint = "=" + getConstraintForBitwidth(elemBitwidth);
-      auto *outOpr = vec == 1 ? builder.newOperand(elemConstraint)
-                              : builder.newListOperand(vec, elemConstraint);
-      ld(outOpr, builder.newAddrOperand(loadPtr, "r")).predicate(loadPred, "b");
-
-      Type resultTy =
-          vec == 1
-              ? Type(int_ty(elemBitwidth))
-              : Type(struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth))));
-      load = builder.launch(rewriter, loc, resultTy, /*hasSideEffects=*/true);
-    }
-    SmallVector<Value> resultVals = unpackLLElements(loc, load, rewriter);
-    return packLLVector(loc, resultVals, rewriter);
-  };
-
-  if (!ctaId)
-    return emitLoad(ptr, /*isRemote=*/false, pred);
-
-  Value currentCtaId = getClusterCTAId(rewriter, loc);
-  Value isLocal = b.icmp_eq(*ctaId, currentCtaId);
-  Value localPred = b.and_(pred, isLocal);
-  Value remotePred = b.and_(pred, b.icmp_ne(*ctaId, currentCtaId));
-  Value local = emitLoad(ptr, /*isRemote=*/false, localPred);
-  Value remote = emitLoad(mapa(rewriter, loc, ptr, *ctaId, remotePred),
-                          /*isRemote=*/true, remotePred);
-  if (vec == 1)
-    return b.select(isLocal, local, remote);
-
-  SmallVector<Value> selected;
-  for (auto [localVal, remoteVal] :
-       llvm::zip(unpackLLVector(loc, local, rewriter),
-                 unpackLLVector(loc, remote, rewriter))) {
-    selected.push_back(b.select(isLocal, localVal, remoteVal));
+  // Get pointer to remote shared memory if needed.
+  if (ctaId.has_value()) {
+    ptr = mapa(rewriter, loc, ptr, *ctaId, pred);
   }
-  return packLLVector(loc, selected, rewriter);
+
+  PTXBuilder builder;
+  auto ld = builder.create("ld")
+                ->o(ctaId.has_value() ? "shared::cluster" : "shared::cta")
+                .v(vec, /*predicate=*/vec > 1)
+                .b(elemBitwidth);
+
+  Value load;
+  if (isConstantTruePred(pred)) {
+    Type resultTy = vec == 1 ? Type(int_ty(elemBitwidth))
+                             : Type(vec_ty(int_ty(elemBitwidth), vec));
+    load = b.load(resultTy, ptr, /*align=*/vec * elemBitwidth / 8);
+    if (vec > 1) {
+      Type structTy = struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth)));
+      Value structValue = b.undef(structTy);
+      for (int i = 0; i < vec; i++) {
+        structValue = b.insert_val(structTy, structValue,
+                                   b.extract_element(load, b.i32_val(i)), i);
+      }
+      load = structValue;
+    }
+  } else {
+    std::string elemConstraint = "=" + getConstraintForBitwidth(elemBitwidth);
+    auto *outOpr = vec == 1 ? builder.newOperand(elemConstraint)
+                            : builder.newListOperand(vec, elemConstraint);
+    ld(outOpr, builder.newAddrOperand(ptr, "r")).predicate(pred, "b");
+
+    Type resultTy =
+        vec == 1
+            ? Type(int_ty(elemBitwidth))
+            : Type(struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth))));
+    load = builder.launch(rewriter, loc, resultTy, /*hasSideEffects=*/true);
+  }
+  SmallVector<Value> resultVals = unpackLLElements(loc, load, rewriter);
+  return packLLVector(loc, resultVals, rewriter);
 }
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
