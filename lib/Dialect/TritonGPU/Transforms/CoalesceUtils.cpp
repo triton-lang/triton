@@ -13,11 +13,10 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton::gpu {
-BlockedEncodingAttr
-buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
-                       int numWarps, int threadsPerWarp,
-                       triton::gpu::CGAEncodingAttr cgaLayout,
-                       SmallVector<int64_t> shapePerCTA) {
+BlockedEncodingAttr buildCoalescedEncoding(
+    MLIRContext *context, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    Operation *op, int numWarps, int threadsPerWarp,
+    triton::gpu::CGAEncodingAttr cgaLayout, SmallVector<int64_t> shapePerCTA) {
   Value ptr = getMemAccessPtr(op);
   auto refTensorType = cast<RankedTensorType>(ptr.getType());
 
@@ -89,7 +88,7 @@ buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
   }
   SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
   sizePerThread[order[0]] = perThread;
-  return BlockedEncodingAttr::get(op->getContext(), refTensorType.getShape(),
+  return BlockedEncodingAttr::get(context, refTensorType.getShape(),
                                   sizePerThread, order, numWarps,
                                   threadsPerWarp, cgaLayout);
 }
