@@ -31,6 +31,10 @@ void populateElementwiseOpToLLVMPatterns(
 // exception handling, etc.
 void adjustModeRegister(ModuleOp mod, const TargetInfo &targetInfo);
 
+// Tags every `llvm.atomicrmw` with the `amdgpu.no.fine.grained.memory`
+// metadata.
+void annotateAtomicNoFineGrainedMemory(ModuleOp mod);
+
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,

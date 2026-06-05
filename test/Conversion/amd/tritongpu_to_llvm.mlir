@@ -2,6 +2,7 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --check-prefixes=GFX950,COMMON
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --check-prefixes=GFX1250,COMMON
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx906 | FileCheck %s --check-prefixes=GFX906,COMMON
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx1100 assume-no-fine-grained-memory=true" | FileCheck %s --check-prefixes=NOFINE
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32_scalar
@@ -840,6 +841,27 @@ module attributes {"ttg.target" = "hip:gfx906", "ttg.num-ctas" = 1 : i32, "ttg.n
   tt.func @v_dot_i8_gfx906(%arg0: tensor<16x16xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %arg1: tensor<16x16xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %arg2: tensor<16x16xi32, #blocked>) {
     // GFX906-COUNT-4: llvm.call_intrinsic "llvm.amdgcn.sdot4"
     %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x16xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<16x16xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: atomic_no_fine_grained_memory
+  // NOFINE-LABEL: atomic_no_fine_grained_memory
+  tt.func @atomic_no_fine_grained_memory(%arg0 : !tt.ptr<f32>, %arg1 : i1, %arg2 : f32, %arg3 : !tt.ptr<i32>) {
+    %c32 = arith.constant 32 : i32
+    %c64 = arith.constant 64 : i32
+    // CHECK: llvm.atomicrmw fadd
+    // CHECK-NOT: rocdl.no_fine_grained_memory
+    // NOFINE: llvm.atomicrmw fadd
+    // NOFINE-SAME: {rocdl.no_fine_grained_memory}
+    %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2, %arg1 : (!tt.ptr<f32>, f32, i1) -> f32
+    tt.store %arg0, %0 : !tt.ptr<f32>
+    // NOFINE: llvm.cmpxchg
+    // NOFINE-NOT: rocdl.no_fine_grained_memory
+    %1 = tt.atomic_cas relaxed, gpu, %arg3, %c32, %c64 : (!tt.ptr<i32>, i32, i32) -> i32
     tt.return
   }
 }

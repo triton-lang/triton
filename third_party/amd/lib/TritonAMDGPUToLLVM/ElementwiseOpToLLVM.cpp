@@ -2566,6 +2566,20 @@ void adjustModeRegister(ModuleOp mod, const TargetInfo &targetInfo) {
   });
 }
 
+void annotateAtomicNoFineGrainedMemory(ModuleOp mod) {
+  MLIRContext *ctx = mod->getContext();
+  auto *rocdlDialect = ctx->getLoadedDialect<ROCDL::ROCDLDialect>();
+  auto noFineMemHelper = rocdlDialect->getNoFineGrainedMemoryAttrHelper();
+
+  // Only `amdgpu.no.fine.grained.memory` is set, because that is exactly what
+  // the AMDGCN_ASSUME_NO_FINE_GRAINED_MEMORY knob promises (no pinned/
+  // fine-grained allocations), and it is what gates the native atomic on the
+  // older archs that lack AgentScopeFineGrainedRemoteMemoryAtomics.
+  mod->walk([&](LLVM::AtomicRMWOp rmw) {
+    noFineMemHelper.setAttr(rmw, UnitAttr::get(ctx));
+  });
+}
+
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, bool ftz,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,

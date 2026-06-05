@@ -22,7 +22,7 @@ def AllocateAMDGPUSharedMemory : Pass<"allocate-amdgpu-shared-memory", "mlir::Mo
 
 def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::ModuleOp"> {
     let summary = "Convert TritonGPU to LLVM";
-    let constructor = "mlir::triton::createConvertTritonAMDGPUToLLVMPass(\"\", /*ftz=*/true)";
+    let constructor = "mlir::triton::createConvertTritonAMDGPUToLLVMPass(\"\", /*ftz=*/true, /*assumeNoFineGrainedMemory=*/false)";
 
     let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::math::MathDialect",
@@ -38,6 +38,9 @@ def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::Mod
                "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
         Option<"ftz", "ftz", "bool", /*default*/"true",
                "flush denorms for math functions">,
+        Option<"assumeNoFineGrainedMemory", "assume-no-fine-grained-memory",
+               "bool", /*default*/"false",
+               "Assume kernel atomic destinations are not fine-grained pinned host memory, and tag llvm.atomicrmw with the corresponding AMDGPU metadata.">,
     ];
 }
 

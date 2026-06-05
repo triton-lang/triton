@@ -75,9 +75,11 @@ public:
 struct ConvertTritonAMDGPUToLLVM
     : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
           ConvertTritonAMDGPUToLLVM> {
-  explicit ConvertTritonAMDGPUToLLVM(StringRef gfxArch, bool ftz) {
+  explicit ConvertTritonAMDGPUToLLVM(StringRef gfxArch, bool ftz,
+                                     bool assumeNoFineGrainedMemory) {
     this->gfxArch = gfxArch.str();
     this->ftz = ftz;
+    this->assumeNoFineGrainedMemory = assumeNoFineGrainedMemory;
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -248,6 +250,12 @@ struct ConvertTritonAMDGPUToLLVM
     AMD::adjustModeRegister(mod, targetInfo);
     fixUpLoopAnnotation(mod);
 
+    // When the user promises no fine-grained pinned host memory is used as an
+    // atomic destination, tag atomicrmw ops with the corresponding
+    // AMDGPU metadata.
+    if (this->assumeNoFineGrainedMemory)
+      AMD::annotateAtomicNoFineGrainedMemory(mod);
+
     // Ensure warp group code is isolated from above.
     makeAllWarpGroupsIsolatedFromAbove(mod);
   }
@@ -278,8 +286,10 @@ private:
 namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(StringRef gfxArch, bool ftz) {
-  return std::make_unique<ConvertTritonAMDGPUToLLVM>(gfxArch, ftz);
+createConvertTritonAMDGPUToLLVMPass(StringRef gfxArch, bool ftz,
+                                    bool assumeNoFineGrainedMemory) {
+  return std::make_unique<ConvertTritonAMDGPUToLLVM>(gfxArch, ftz,
+                                                     assumeNoFineGrainedMemory);
 }
 
 } // namespace mlir::triton
