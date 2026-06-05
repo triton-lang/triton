@@ -24,40 +24,26 @@ lowerLocalScGt(Location loc, MLIRContext *ctx, MemDescType memDescTy,
                unsigned axis, ArrayRef<Value> storeVals, RewriterBase &rewriter,
                const TargetInfoBase &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  bool isScatter = !storeVals.empty();
   SmallVector<LocalSharedMemoryAddress> addrs = computeLocalAddrs(
       loc, memDescTy, smemObj, llvmElemTy, idxValues, coords, axis, rewriter);
+  if (storeVals.empty())
+    return loadLocalAddrs(loc, llvmElemTy, addrs, rewriter, targetInfo);
+
   Value currentCtaId;
   if (!addrs.empty() && addrs.front().ctaId)
     currentCtaId = targetInfo.getClusterCTAId(rewriter, loc);
 
   SmallVector<Value> results;
-  if (!isScatter)
-    results.resize(coords.size());
-
   for (auto [i, addr] : llvm::enumerate(addrs)) {
-    if (isScatter) {
-      if (addr.ctaId) {
-        Value isLocal = b.icmp_eq(*addr.ctaId, currentCtaId);
-        Value isRemote = b.icmp_ne(*addr.ctaId, currentCtaId);
-        targetInfo.storeShared(rewriter, loc, addr.ptr, storeVals[i], isLocal);
-        targetInfo.storeDShared(rewriter, loc, addr.ptr, addr.ctaId,
-                                storeVals[i], isRemote);
-      } else {
-        targetInfo.storeShared(rewriter, loc, addr.ptr, storeVals[i],
-                               b.true_val());
-      }
-    } else if (addr.ctaId) {
+    if (addr.ctaId) {
       Value isLocal = b.icmp_eq(*addr.ctaId, currentCtaId);
       Value isRemote = b.icmp_ne(*addr.ctaId, currentCtaId);
-      Value local =
-          targetInfo.loadShared(rewriter, loc, addr.ptr, llvmElemTy, isLocal);
-      Value remote = targetInfo.loadDShared(rewriter, loc, addr.ptr, addr.ctaId,
-                                            llvmElemTy, isRemote);
-      results[i] = b.select(isLocal, local, remote);
+      targetInfo.storeShared(rewriter, loc, addr.ptr, storeVals[i], isLocal);
+      targetInfo.storeDShared(rewriter, loc, addr.ptr, addr.ctaId, storeVals[i],
+                              isRemote);
     } else {
-      results[i] = targetInfo.loadShared(rewriter, loc, addr.ptr, llvmElemTy,
-                                         b.true_val());
+      targetInfo.storeShared(rewriter, loc, addr.ptr, storeVals[i],
+                             b.true_val());
     }
   }
 

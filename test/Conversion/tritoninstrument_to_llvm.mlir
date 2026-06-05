@@ -137,3 +137,25 @@ tt.func private @experimental_fpsan_unembed(%arg0: i32) -> f32 {
   tt.return %0 : f32
 }
 }
+
+// -----
+
+#local_gather_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
+#local_gather_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_local_gather
+// CHECK: ld.shared::cluster
+tt.func private @experimental_local_gather(%out: !tt.ptr<i32>) {
+  %src = ttg.local_alloc {allocation.offset = [0 : i32, 256 : i32]} : () -> !ttg.memdesc<2x32xi32, #local_gather_shared, #ttg.shared_memory, mutable>
+  %idx = arith.constant dense<0> : tensor<2x32xi32, #local_gather_blocked>
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %g = tti.experimental_local_gather %src[%idx] offsets = [%c1, %c0] {axis = 0 : i32} : !ttg.memdesc<2x32xi32, #local_gather_shared, #ttg.shared_memory, mutable>, tensor<2x32xi32, #local_gather_blocked> -> tensor<2x32xi32, #local_gather_blocked>
+  %ptrs = tt.splat %out : !tt.ptr<i32> -> tensor<2x32x!tt.ptr<i32>, #local_gather_blocked>
+  %offs = arith.constant dense<0> : tensor<2x32xi32, #local_gather_blocked>
+  %out_ptrs = tt.addptr %ptrs, %offs : tensor<2x32x!tt.ptr<i32>, #local_gather_blocked>, tensor<2x32xi32, #local_gather_blocked>
+  tt.store %out_ptrs, %g : tensor<2x32x!tt.ptr<i32>, #local_gather_blocked>
+  tt.return
+}
+}

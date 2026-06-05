@@ -613,10 +613,12 @@ struct LocalSharedMemoryAddress {
 // Compute per-element shared-memory addresses for a local atomic/ldst update by
 // replacing `coords[*][axis]` with `idxValues[*]` and mapping the resulting
 // logical coordinates back to shared-memory offsets and target CTAs.
-SmallVector<LocalSharedMemoryAddress> computeLocalAddrs(
-    Location loc, triton::gpu::MemDescType memDescTy,
-    SharedMemoryObject smemObj, Type llvmElemTy, ArrayRef<Value> idxValues,
-    ArrayRef<SmallVector<Value>> coords, unsigned axis, RewriterBase &rewriter);
+SmallVector<LocalSharedMemoryAddress>
+computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
+                  SharedMemoryObject smemObj, Type llvmElemTy,
+                  ArrayRef<Value> idxValues,
+                  ArrayRef<SmallVector<Value>> coords, unsigned axis,
+                  RewriterBase &rewriter, ArrayRef<Value> offsets = {});
 
 SmallVector<Value> computeLocalPtrs(Location loc,
                                     triton::gpu::MemDescType memDescTy,
@@ -624,6 +626,11 @@ SmallVector<Value> computeLocalPtrs(Location loc,
                                     ArrayRef<Value> idxValues,
                                     ArrayRef<SmallVector<Value>> coords,
                                     unsigned axis, RewriterBase &rewriter);
+
+SmallVector<Value> loadLocalAddrs(Location loc, Type llvmElemTy,
+                                  ArrayRef<LocalSharedMemoryAddress> addrs,
+                                  RewriterBase &rewriter,
+                                  const TargetInfoBase &targetInfo);
 
 // Backend-agnostic preparation for lowering LocalAtomicScatterRMWOp.
 struct LocalAtomicScatterRMWInfo {
