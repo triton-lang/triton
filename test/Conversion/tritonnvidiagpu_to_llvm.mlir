@@ -623,7 +623,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func @cluster_barrier_inside_warp_specialize() {
     ttg.warp_specialize()
     default {
-      // CHECK: nvvm.barrier0
+      // CHECK: nvvm.barrier
       // CHECK: %[[PARITY:.*]] = llvm.load
       // CHECK: %[[BARRIER_INT:.*]] = llvm.ptrtoint
       // CHECK: %[[PEER_BARRIER_INT:.*]] = llvm.xor %[[BARRIER_INT]],
@@ -633,7 +633,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
       // CHECK: llvm.xor %[[PARITY]],
       // CHECK: st.shared::cta.b32
-      // CHECK: nvvm.barrier0
+      // CHECK: nvvm.barrier
       ttng.cluster_barrier
       ttg.warp_yield
     }
