@@ -13,6 +13,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -79,7 +80,7 @@ public:
 
       // Emit a barrier if we are reusing the shmem
       if (i > 0) {
-        sync(rewriter, loc, lastCvtCrossesCTAs);
+        sync(rewriter, loc, lastCvtCrossesCTAs, op);
       }
       accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs);
       lastCvtCrossesCTAs = !mlir::isCvtDimSync(regLl, tmpLl, kBlock);
@@ -99,7 +100,7 @@ public:
       auto outputLayout = triton::gpu::toLinearLayout(resultTy);
       if (regLl != outputLayout) {
         // Reuse the shmem
-        sync(rewriter, loc, lastCvtCrossesCTAs);
+        sync(rewriter, loc, lastCvtCrossesCTAs, op);
         accs =
             convertLayoutValues(loc, rewriter, op, regLl, outputLayout, accs);
       }
@@ -163,10 +164,10 @@ private:
     return srcValues;
   }
 
-  void sync(ConversionPatternRewriter &rewriter, Location loc,
-            bool crossCTA) const {
+  void sync(ConversionPatternRewriter &rewriter, Location loc, bool crossCTA,
+            Operation *sourceOp) const {
     if (crossCTA) {
-      targetInfo.clusterBarrier(loc, rewriter);
+      targetInfo.clusterBarrier(loc, rewriter, sourceOp);
     } else {
       targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
     }
@@ -433,6 +434,7 @@ private:
               .getResult(0);
       auto cvt =
           triton::gpu::ConvertLayoutOp::create(rewriter, loc, dstTy, srcTensor);
+      triton::nvidia_gpu::copyClusterBarrierMbarOffset(op, cvt);
       cvt->setAttr("allocation.offset",
                    IntegerAttr::get(offsetTy, baseOffset + smemBaseOffsets[i]));
       Type packedDstTy = getTypeConverter()->convertType(dstTy);
