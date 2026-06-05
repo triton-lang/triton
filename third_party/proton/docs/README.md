@@ -4,26 +4,6 @@ This directory contains the long-form Proton documentation. The top-level
 [`README.md`](../README.md) stays focused on installation and a minimal quick
 start.
 
-## Quick Example
-
-Profile a Python region and view the resulting tree:
-
-```python
-import triton.profiler as proton
-
-session = proton.start("profile_name", context="shadow")
-
-with proton.scope("forward", {"bytes": 1024}):
-    kernel[grid](...)
-
-proton.deactivate(session)
-proton.finalize(session)
-```
-
-```bash
-proton-viewer -m time/s profile_name.hatchet
-```
-
 ## Guides
 
 - [Python profiling API](python-api.md): sessions, decorators, scopes, states,
