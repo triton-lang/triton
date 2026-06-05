@@ -9,7 +9,7 @@ Triton runtime when `backend=None`.
 | --- | --- | --- |
 | `cupti` | NVIDIA GPUs | Default NVIDIA backend. Supports regular profiling, `pcsampling`, and `periodic_flushing`. |
 | `rocprofiler` | AMD GPUs | Preferred AMD backend when rocprofiler-sdk is available. Supports regular profiling and `periodic_flushing`. |
-| `roctracer` | AMD GPUs | AMD fallback backend. Supports regular profiling and `periodic_flushing`. |
+| `roctracer` | AMD GPUs | **Deprecated** AMD fallback backend. Supports regular profiling and `periodic_flushing`. |
 | `instrumentation` | NVIDIA and AMD GPUs | Intra-kernel instrumentation backend for scope-level cycle metrics inside kernels. |
 
 Examples:
