@@ -26,9 +26,9 @@ constexpr llvm::StringLiteral kSplitSafeAttrName = "amdgpu.split_soffset_safe";
 // Shape/layout ops that forward their operand's values unchanged, and with them
 // the operand's sign and its integer-range lattice state.
 static bool isTransparentWrapper(Operation *op) {
-  bool isWrapper = isa<triton::SplatOp, triton::BroadcastOp,
-                       triton::ExpandDimsOp, triton::ReshapeOp,
-                       ttg::ConvertLayoutOp>(op);
+  bool isWrapper =
+      isa<triton::SplatOp, triton::BroadcastOp, triton::ExpandDimsOp,
+          triton::ReshapeOp, ttg::ConvertLayoutOp>(op);
   assert((!isWrapper || op->getNumOperands() == 1) &&
          "transparent wrapper must have a single SSA operand.");
   return isWrapper;
