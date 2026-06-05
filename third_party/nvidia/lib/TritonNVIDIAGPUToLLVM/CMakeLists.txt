@@ -28,6 +28,7 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     GluonTransforms
     TritonAnalysis
     TritonGPUToLLVM
+    TritonInstrumentIR
     TritonInstrumentToLLVM
     MLIRReconcileUnrealizedCasts
     NVGPUIR

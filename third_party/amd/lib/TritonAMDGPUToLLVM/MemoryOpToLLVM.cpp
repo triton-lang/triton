@@ -1,4 +1,5 @@
 #include "AsyncUtility.h"
+#include "AtomicRMWOpsEmitter.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -622,6 +623,78 @@ private:
   const AMD::TargetInfo &targetInfo;
 };
 
+struct LocalAtomicScatterRMWOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalAtomicScatterRMWOp> {
+
+  LocalAtomicScatterRMWOpConversion(const LLVMTypeConverter &converter,
+                                    const AMD::TargetInfo &targetInfo,
+                                    PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::LocalAtomicScatterRMWOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    auto lowering = prepareLocalAtomicScatterRMW(
+        op, adaptor.getDst(), adaptor.getIndices(), adaptor.getValues(),
+        op.getMask() ? adaptor.getMask() : Value(), rewriter, targetInfo,
+        getTypeConverter());
+    if (failed(lowering))
+      return failure();
+    LocalAtomicScatterRMWInfo &info = *lowering;
+
+    auto binOp = matchAtomicOp(op.getAtomicRmwOp());
+    if (!binOp)
+      return rewriter.notifyMatchFailure(op, "Unsupported RMW operation");
+
+    // Lower to per-element llvm.atomicrmw on addrspace(3) with
+    // syncscope("workgroup") monotonic.
+    const auto memOrder = LLVM::AtomicOrdering::monotonic;
+    const StringRef scope = "workgroup";
+    LLVM::AMD::AtomicRMWEmitter emitter(targetInfo, *binOp, memOrder, scope);
+
+    bool returnOld = !op.getResult().use_empty();
+
+    SmallVector<Value> results;
+    if (returnOld)
+      results.reserve(info.ptrs.size());
+
+    for (auto [i, ptrAndValue] :
+         llvm::enumerate(llvm::zip(info.ptrs, info.values))) {
+      auto [ptr, value] = ptrAndValue;
+      Value rmwMask = triton::gpu::maybeAnd(
+          rewriter, loc, info.threadPred,
+          info.maskValues.empty() ? Value() : info.maskValues[i]);
+      // emitAtomicRMW requires a non-null predicate, default to true if null.
+      if (!rmwMask)
+        rmwMask = b.true_val();
+
+      Value old = emitter.emitAtomicRMW(rewriter, ptr, value, rmwMask,
+                                        /*sharedMemBase=*/std::nullopt,
+                                        /*enableIntraWaveReduce=*/false);
+      if (returnOld)
+        results.push_back(old);
+    }
+
+    if (!returnOld) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    if (!info.removeBroadcast.isIdentity())
+      results = broadcastAs(results, info.regLayout);
+    finalizeTensorAtomicResults(op, info.valuesTy, rewriter, results,
+                                info.llvmElemTy, b, info.threadPred, targetInfo,
+                                getTypeConverter());
+    return success();
+  }
+
+private:
+  const AMD::TargetInfo &targetInfo;
+};
+
 class BarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::BarrierOp> {
 public:
@@ -805,6 +878,8 @@ void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
                                            transBenefit);
   patterns.add<LocalLoadPackedTransposedOpConversion>(typeConverter, targetInfo,
                                                       benefit);
+  patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
+                                                  benefit.getBenefit() + 1);
   patterns.add<BarrierOpConversion, MemoryCounterWaitOpConversion>(
       typeConverter, targetInfo, barrierBenefit);
 }

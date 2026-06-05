@@ -475,6 +475,8 @@ def make_opt_flags(
     rhs_layout=None,
     epilogue_reduction_n=1,
 ):
+    # Empty outputs do not launch a kernel, so persistent TMA constraints are vacuous.
+    can_use_persistent_tma = can_use_persistent_tma or batch_size * m * n == 0
     opt_flags_constraints = _get_opt_flags_constraints()
     if opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")

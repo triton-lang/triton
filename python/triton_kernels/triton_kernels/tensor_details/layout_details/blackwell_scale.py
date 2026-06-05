@@ -130,6 +130,8 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
 
         # ragged path: map padded blocks back into the original ragged rows
         assert self.B == 1, "ragged scale layout only supports 2D input"
+        if not data.numel():
+            return data.reshape(self.M, self.K)
         data = unpad_segments_triton(
             data.squeeze(0),
             self.ragged_metadata,
