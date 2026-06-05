@@ -122,6 +122,18 @@ def _build_test_op_cases():
             for (m, n, k) in zero_sized_shapes
         ])
     test_cases.append(Case(5, 11, 7, "batched", "float16", "float16", n_slices=0, split_k=None))
+    empty_output_shapes = ((0, 256, 256), (256, 0, 256))
+    test_cases.extend([
+        Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1", b_hbm_swizzling=True)
+        for shape in empty_output_shapes
+    ])
+    test_cases.extend([
+        Case(*shape, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1",
+             a_hbm_swizzling=True, b_hbm_swizzling=True, c_hbm_swizzling=True)
+        for shape in empty_output_shapes
+    ])
+    test_cases.append(Case(256, 256, 256, "batched", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1",
+                           n_slices=0, a_hbm_swizzling=True, b_hbm_swizzling=True, c_hbm_swizzling=True))
     odd_shape1 = (727, 577, 859)
     odd_shape2 = (720, 576, 768)
     even_shape = (768, 512, 1024)
@@ -527,6 +539,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if c_dtype.has_global_scale:
             tri_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
+        if is_persistent and c.numel() == 0:
+            raise
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     # --- torch implementation ---
     # Fused NVFP4 output quantizes the float32 activation result and applies
