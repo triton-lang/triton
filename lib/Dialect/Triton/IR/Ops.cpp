@@ -670,8 +670,6 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
   return reduceOp;
 }
 
-unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
-
 //-- ScanOp --
 void ScanOp::build(OpBuilder &builder, OperationState &state,
                    ValueRange operands, int axis, bool reverse) {
@@ -704,8 +702,6 @@ llvm::SmallVector<RankedTensorType> ScanOp::getInputTypes() {
 llvm::SmallVector<Type> ScanOp::getElementTypes() {
   return getElementTypesImpl(this->getOperands());
 }
-
-unsigned ScanOp::getNumOperands() { return this->getOperands().size(); }
 
 //-- MapElementwiseOp
 LogicalResult MapElementwiseOp::verify() {

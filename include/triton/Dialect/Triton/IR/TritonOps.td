@@ -727,7 +727,6 @@ def TT_ReduceOp: TT_Op<"reduce",
     let extraClassDeclaration = [{
       llvm::SmallVector<RankedTensorType> getInputTypes();
       llvm::SmallVector<Type> getElementTypes();
-      unsigned getNumOperands();
 
       // Returns the CombineOp iff this ReduceOp's region contains only
       // one CombineOp other than the return, or nullptr if not applicable.
@@ -763,7 +762,6 @@ def TT_ScanOp: TT_Op<"scan",
     let extraClassDeclaration = [{
       llvm::SmallVector<RankedTensorType> getInputTypes();
       llvm::SmallVector<Type> getElementTypes();
-      unsigned getNumOperands();
     }];
 }
 

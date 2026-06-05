@@ -1361,6 +1361,33 @@ _ld_st_shared_layouts = _filter_layouts([
 ])
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+def test_local_load_transposed_nvmma_zero_swizzle(device):
+    rows = 128
+    cols = 16
+    src_layout = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [1, 0])
+    dst_layout = ttgl.BlockedLayout([1, 16], [1, 32], [1, 4], [1, 0])
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, transposed=False, element_bitwidth=8, rank=2)
+
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, rows: ttgl.constexpr, cols: ttgl.constexpr, src_layout: ttgl.constexpr,
+               dst_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+        offs_row = ttgl.arange(0, rows, layout=ttgl.SliceLayout(1, src_layout))[:, None]
+        offs_col = ttgl.arange(0, cols, layout=ttgl.SliceLayout(0, src_layout))[None, :]
+        x = ttgl.load(x_ptr + offs_row * cols + offs_col)
+        smem = ttgl.allocate_shared_memory(ttgl.uint8, [rows, cols], shared_layout, x)
+
+        y = smem.permute((1, 0)).load(dst_layout)
+        offs_col = ttgl.arange(0, cols, layout=ttgl.SliceLayout(1, dst_layout))[:, None]
+        offs_row = ttgl.arange(0, rows, layout=ttgl.SliceLayout(0, dst_layout))[None, :]
+        ttgl.store(y_ptr + offs_col * rows + offs_row, y)
+
+    x = torch.arange(rows * cols, device=device, dtype=torch.int64).to(torch.uint8).reshape(rows, cols)
+    y = torch.empty((cols, rows), device=device, dtype=torch.uint8)
+    kernel[(1, )](x, y, rows, cols, src_layout, dst_layout, shared_layout, num_warps=4)
+    torch.testing.assert_close(y, x.T)
+
+
 @pytest.mark.parametrize("shape, dtype", [
     ((16, 32), "float8_e5m2"),
     ((16, 32), "float16"),
