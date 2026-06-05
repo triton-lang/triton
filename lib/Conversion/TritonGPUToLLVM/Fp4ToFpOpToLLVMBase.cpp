@@ -12,6 +12,9 @@ LogicalResult Fp4ToFpOpConversionBase::matchAndRewrite(
     Fp4ToFpOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
   auto loc = op.getLoc();
+  auto *ctx = op.getContext();
+  auto kRegister = str_attr("register");
+  auto srcTy = op.getSrc().getType();
   auto resTy = op.getType();
   auto elemType = resTy.getElementType();
   assert(elemType == f16_ty || elemType == bf16_ty);
@@ -30,8 +33,24 @@ LogicalResult Fp4ToFpOpConversionBase::matchAndRewrite(
     results.append(upcast.begin(), upcast.end());
   }
 
+  auto srcLayout = toLinearLayout(srcTy);
+  auto axisDim = *(srcLayout.getOutDimNames().begin() + op.getAxis());
+  // Expand the source layout to reflect the unpacked elements in results.
+  auto fullSrcLayout =
+      LinearLayout::identity1D(2, kRegister, axisDim) * srcLayout;
+  // Create a mapping to get the source location associated with each result.
+  auto resToFullSrc = toLinearLayout(resTy)
+                          .invertAndCompose(fullSrcLayout)
+                          .sublayout({kRegister}, {kRegister});
+
+  // Apply the mapping to get the final result.
+  SmallVector<Value> mappedResults(results.size());
+  for (int i = 0; i < results.size(); ++i) {
+    auto srcIndex = resToFullSrc.apply({{kRegister, i}}).front().second;
+    mappedResults[i] = results[srcIndex];
+  }
   Value result =
-      packLLElements(loc, getTypeConverter(), results, rewriter, resTy);
+      packLLElements(loc, getTypeConverter(), mappedResults, rewriter, resTy);
   rewriter.replaceOp(op, result);
   return success();
 }
