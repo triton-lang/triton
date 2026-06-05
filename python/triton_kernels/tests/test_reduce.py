@@ -120,6 +120,39 @@ def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
         assert torch.allclose(x_tri.grad.float(), x_ref.grad.float(), atol=1e-3, rtol=1e-3)
 
 
+@pytest.mark.parametrize("B, M, N", [
+    (5, 2, 0),
+    (0, 2, 5),
+])
+@pytest.mark.parametrize("dtype", [
+    torch.float16,
+    torch.float32,
+])
+@pytest.mark.parametrize("mask_mode", [
+    "none",
+    "full",
+    "broadcast_b",
+    "broadcast_m",
+    "broadcast_n",
+])
+def test_op_empty_forward_backward(B, M, N, dtype, mask_mode):
+    torch.manual_seed(0)
+    device = "cuda"
+    x = torch.randn((B, M, N), device=device, dtype=dtype, requires_grad=True)
+    mask = init_mask(mask_mode, B, M, N, device)
+    x_tri = x.clone().detach().requires_grad_(True)
+    x_ref = x.clone().detach().requires_grad_(True)
+
+    y_tri, _ = reduce(x_tri, dim=1, mask=mask)
+    y_ref, _ = reduce_torch(x_ref, dim=1, mask=mask, x_flex=None, y_flex=None)
+    assert torch.allclose(y_tri.float(), y_ref.float(), atol=1e-3, rtol=1e-3)
+
+    dy = torch.randn_like(y_tri)
+    y_tri.backward(dy)
+    y_ref.backward(dy)
+    assert torch.allclose(x_tri.grad.float(), x_ref.grad.float(), atol=1e-3, rtol=1e-3)
+
+
 def test_unpadded_batch_size_rowidxs_subtile():
     if not torch.cuda.is_available() or not is_cuda():
         pytest.skip("rowidxs path requires CUDA")

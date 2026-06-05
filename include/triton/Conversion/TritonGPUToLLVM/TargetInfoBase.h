@@ -22,7 +22,8 @@ public:
   virtual void barrier(Location loc, RewriterBase &rewriter,
                        triton::gpu::AddrSpace targets) const = 0;
   // Emit a cluster-level barrier when supported. Defaults to CTA barrier.
-  virtual void clusterBarrier(Location loc, RewriterBase &rewriter) const = 0;
+  virtual void clusterBarrier(Location loc, RewriterBase &rewriter,
+                              Operation *sourceOp) const = 0;
   // Insert a warp syncronization barrier that also guarantees local address
   // space visibility at warp level when supported by the backend.
   // Backends that do not support warp-level barriers should conservatively

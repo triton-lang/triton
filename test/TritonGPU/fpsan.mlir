@@ -25,6 +25,68 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @dot_i8_decomposition
+  tt.func public @dot_i8_decomposition() -> tensor<32x32xf32, #blocked> {
+    // CHECK: scf.for
+    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = true
+    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = true
+    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = false
+    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = false
+    // CHECK-NOT: tti.dot_i8
+    %one = arith.constant 1.000000e+00 : f16
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %a = tt.splat %one : f16 -> tensor<32x32xf16, #dot_operand_a>
+    %b = tt.splat %one : f16 -> tensor<32x32xf16, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<32x32xf16, #dot_operand_a> * tensor<32x32xf16, #dot_operand_b> -> tensor<32x32xf32, #blocked>
+    tt.return %out : tensor<32x32xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @dot_f64_i8_decomposition
+  tt.func public @dot_f64_i8_decomposition() -> tensor<32x32xf64, #blocked> {
+    // CHECK-COUNT-36: tti.dot_i8
+    // CHECK-NOT: tti.dot_i8
+    // CHECK: arith.extsi {{.*}} : tensor<{{.*}}xi32, #{{.*}}> to tensor<{{.*}}xi64, #{{.*}}>
+    %one = arith.constant 1.000000e+00 : f64
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf64, #blocked>
+    %a = tt.splat %one : f64 -> tensor<32x32xf64, #dot_operand_a>
+    %b = tt.splat %one : f64 -> tensor<32x32xf64, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<32x32xf64, #dot_operand_a> * tensor<32x32xf64, #dot_operand_b> -> tensor<32x32xf64, #blocked>
+    tt.return %out : tensor<32x32xf64, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @dot_f64_fma_fallback
+  tt.func public @dot_f64_fma_fallback() -> tensor<8x8xf64, #blocked> {
+    // CHECK: scf.for
+    // CHECK-NOT: tt.dot
+    %one = arith.constant 1.000000e+00 : f64
+    %zero = arith.constant dense<0.000000e+00> : tensor<8x8xf64, #blocked>
+    %a = tt.splat %one : f64 -> tensor<8x4xf64, #dot_operand_a>
+    %b = tt.splat %one : f64 -> tensor<4x8xf64, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<8x4xf64, #dot_operand_a> * tensor<4x8xf64, #dot_operand_b> -> tensor<8x8xf64, #blocked>
+    tt.return %out : tensor<8x8xf64, #blocked>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 32, 1], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
 #dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
@@ -56,6 +118,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: scf.for
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NOT: ttg.dot_scaled
+    // CHECK-NOT: tt.dot
     // CHECK-NOT: ttg.convert_layout
      %cst = arith.constant 1.000000e+00 : f16
      %zero = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #blocked>
@@ -63,6 +126,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
      %b = tt.splat %cst : f16 -> tensor<16x16xf16, #dot_B>
      %out = tt.dot_scaled %a, %b, %zero lhs = fp16 rhs = fp16 {fastMath = false} : tensor<16x16xf16, #dot_A> * tensor<16x16xf16, #dot_B> -> tensor<16x16xf32, #blocked>
      tt.return %out : tensor<16x16xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dot_A = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_B = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @dot_scaled_i8_decomposition
+  tt.func public @dot_scaled_i8_decomposition() -> tensor<32x32xf32, #blocked> {
+    // CHECK: scf.for
+    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = true
+    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = true
+    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = false
+    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = false
+    // CHECK-NOT: tti.dot_i8
+    // CHECK-NOT: ttg.dot_scaled
+    %one = arith.constant 1.000000e+00 : f16
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %a = tt.splat %one : f16 -> tensor<32x64xf16, #dot_A>
+    %b = tt.splat %one : f16 -> tensor<64x32xf16, #dot_B>
+    %out = tt.dot_scaled %a, %b, %zero lhs = fp16 rhs = fp16 {fastMath = false} : tensor<32x64xf16, #dot_A> * tensor<64x32xf16, #dot_B> -> tensor<32x32xf32, #blocked>
+    tt.return %out : tensor<32x32xf32, #blocked>
   }
 }
 
@@ -79,6 +166,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: tt.store
     // CHECK: ttg.barrier global_read|global_write
     // CHECK: scf.for
+    // CHECK-COUNT-10: tti.dot_i8
+    // CHECK-NOT: tti.dot_i8
     // CHECK: ttg.barrier global_read|global_write
     // CHECK: %[[RAW:.*]] = tt.load
     // CHECK: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[RAW]]
