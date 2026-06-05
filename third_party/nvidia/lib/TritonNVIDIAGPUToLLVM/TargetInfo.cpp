@@ -296,21 +296,16 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   assert(1 <= vec && vec <= 4);
   assert(vec * elemBitwidth <= 128);
 
-  // Get pointer to remote shared memory if needed.
-  if (ctaId.has_value()) {
-    ptr = mapa(rewriter, loc, ptr, *ctaId, pred);
-  }
-
-  PTXBuilder builder;
-  auto st = builder.create("st")
-                ->o(ctaId.has_value() ? "shared::cluster" : "shared::cta")
-                .v(vec, /*predicate=*/vec > 1)
-                .b(elemBitwidth);
-  auto *ptrOpr = builder.newAddrOperand(ptr, "r");
-
-  if (isConstantTruePred(pred)) {
-    b.store(val, ptr, /*align=*/vec * elemBitwidth / 8);
-  } else {
+  auto emitStore = [&](Value storePtr, bool isRemote, Value storePred) {
+    if (isConstantTruePred(storePred)) {
+      b.store(val, storePtr, /*align=*/vec * elemBitwidth / 8);
+      return;
+    }
+    PTXBuilder builder;
+    auto st = builder.create("st")
+                  ->o(isRemote ? "shared::cluster" : "shared::cta")
+                  .v(vec, /*predicate=*/vec > 1)
+                  .b(elemBitwidth);
     PTXBuilder::Operand *valOpr;
     std::string constraint = getConstraintForBitwidth(elemBitwidth);
     if (vec > 1) {
@@ -322,9 +317,22 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
     } else {
       valOpr = builder.newOperand(val, constraint);
     }
-    st(ptrOpr, valOpr).predicate(pred, "b");
+    st(builder.newAddrOperand(storePtr, "r"), valOpr).predicate(storePred, "b");
     builder.launch(rewriter, loc, void_ty(ctx));
+  };
+
+  if (!ctaId) {
+    emitStore(ptr, /*isRemote=*/false, pred);
+    return;
   }
+
+  Value currentCtaId = getClusterCTAId(rewriter, loc);
+  Value isLocal = b.icmp_eq(*ctaId, currentCtaId);
+  Value localPred = b.and_(pred, isLocal);
+  Value remotePred = b.and_(pred, b.icmp_ne(*ctaId, currentCtaId));
+  emitStore(ptr, /*isRemote=*/false, localPred);
+  emitStore(mapa(rewriter, loc, ptr, *ctaId, remotePred),
+            /*isRemote=*/true, remotePred);
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -413,45 +421,62 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   assert(1 <= vec && vec <= 4);
   assert(vec * elemBitwidth <= 128);
 
-  // Get pointer to remote shared memory if needed.
-  if (ctaId.has_value()) {
-    ptr = mapa(rewriter, loc, ptr, *ctaId, pred);
-  }
-
-  PTXBuilder builder;
-  auto ld = builder.create("ld")
-                ->o(ctaId.has_value() ? "shared::cluster" : "shared::cta")
-                .v(vec, /*predicate=*/vec > 1)
-                .b(elemBitwidth);
-
-  Value load;
-  if (isConstantTruePred(pred)) {
-    Type resultTy = vec == 1 ? Type(int_ty(elemBitwidth))
-                             : Type(vec_ty(int_ty(elemBitwidth), vec));
-    load = b.load(resultTy, ptr, /*align=*/vec * elemBitwidth / 8);
-    if (vec > 1) {
-      Type structTy = struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth)));
-      Value structValue = b.undef(structTy);
-      for (int i = 0; i < vec; i++) {
-        structValue = b.insert_val(structTy, structValue,
-                                   b.extract_element(load, b.i32_val(i)), i);
+  auto emitLoad = [&](Value loadPtr, bool isRemote, Value loadPred) {
+    Value load;
+    if (isConstantTruePred(loadPred)) {
+      Type resultTy = vec == 1 ? Type(int_ty(elemBitwidth))
+                               : Type(vec_ty(int_ty(elemBitwidth), vec));
+      load = b.load(resultTy, loadPtr, /*align=*/vec * elemBitwidth / 8);
+      if (vec > 1) {
+        Type structTy = struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth)));
+        Value structValue = b.undef(structTy);
+        for (int i = 0; i < vec; i++) {
+          structValue = b.insert_val(structTy, structValue,
+                                     b.extract_element(load, b.i32_val(i)), i);
+        }
+        load = structValue;
       }
-      load = structValue;
-    }
-  } else {
-    std::string elemConstraint = "=" + getConstraintForBitwidth(elemBitwidth);
-    auto *outOpr = vec == 1 ? builder.newOperand(elemConstraint)
-                            : builder.newListOperand(vec, elemConstraint);
-    ld(outOpr, builder.newAddrOperand(ptr, "r")).predicate(pred, "b");
+    } else {
+      PTXBuilder builder;
+      auto ld = builder.create("ld")
+                    ->o(isRemote ? "shared::cluster" : "shared::cta")
+                    .v(vec, /*predicate=*/vec > 1)
+                    .b(elemBitwidth);
+      std::string elemConstraint = "=" + getConstraintForBitwidth(elemBitwidth);
+      auto *outOpr = vec == 1 ? builder.newOperand(elemConstraint)
+                              : builder.newListOperand(vec, elemConstraint);
+      ld(outOpr, builder.newAddrOperand(loadPtr, "r")).predicate(loadPred, "b");
 
-    Type resultTy =
-        vec == 1
-            ? Type(int_ty(elemBitwidth))
-            : Type(struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth))));
-    load = builder.launch(rewriter, loc, resultTy, /*hasSideEffects=*/true);
+      Type resultTy =
+          vec == 1
+              ? Type(int_ty(elemBitwidth))
+              : Type(struct_ty(SmallVector<Type>(vec, int_ty(elemBitwidth))));
+      load = builder.launch(rewriter, loc, resultTy, /*hasSideEffects=*/true);
+    }
+    SmallVector<Value> resultVals = unpackLLElements(loc, load, rewriter);
+    return packLLVector(loc, resultVals, rewriter);
+  };
+
+  if (!ctaId)
+    return emitLoad(ptr, /*isRemote=*/false, pred);
+
+  Value currentCtaId = getClusterCTAId(rewriter, loc);
+  Value isLocal = b.icmp_eq(*ctaId, currentCtaId);
+  Value localPred = b.and_(pred, isLocal);
+  Value remotePred = b.and_(pred, b.icmp_ne(*ctaId, currentCtaId));
+  Value local = emitLoad(ptr, /*isRemote=*/false, localPred);
+  Value remote = emitLoad(mapa(rewriter, loc, ptr, *ctaId, remotePred),
+                          /*isRemote=*/true, remotePred);
+  if (vec == 1)
+    return b.select(isLocal, local, remote);
+
+  SmallVector<Value> selected;
+  for (auto [localVal, remoteVal] :
+       llvm::zip(unpackLLVector(loc, local, rewriter),
+                 unpackLLVector(loc, remote, rewriter))) {
+    selected.push_back(b.select(isLocal, localVal, remoteVal));
   }
-  SmallVector<Value> resultVals = unpackLLElements(loc, load, rewriter);
-  return packLLVector(loc, resultVals, rewriter);
+  return packLLVector(loc, selected, rewriter);
 }
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,

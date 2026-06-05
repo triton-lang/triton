@@ -562,8 +562,7 @@ computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
 
   auto kOffset = str_attr("offset");
   auto kBlock = str_attr("block");
-  bool useBlockId = invSharedLayout.hasOutDim(kBlock) &&
-                    invSharedLayout.getOutDimSize(kBlock) > 1;
+  bool useBlockId = invSharedLayout.getOutDimSize(kBlock) > 1;
   // Get the subslice affine offset (non-zero for memdesc subslices)
   Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
   auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
@@ -591,19 +590,11 @@ computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
       inputs.push_back({allDims[dim], indices[dim]});
 
     auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
-
-    // Extract the offset and target CTA.
-    Value offset = nullptr;
-    Value blockId = nullptr;
-    for (auto [name, value] : outputs) {
-      if (name == kOffset)
-        offset = value;
-      else if (name == kBlock)
-        blockId = value;
-    }
-    assert(offset && "expected offset output from inverted shared layout");
-    assert((!useBlockId || blockId) &&
-           "expected block output from multi-CTA shared layout");
+    assert(outputs.size() == 2);
+    auto [offsetName, offset] = outputs[0];
+    auto [blockName, blockId] = outputs[1];
+    assert(offsetName == kOffset);
+    assert(blockName == kBlock);
 
     // For subslices, the physical offset is computed as:
     //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)

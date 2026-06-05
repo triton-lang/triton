@@ -810,8 +810,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @local_gather_scatter_two_ctas
+  // CHECK: ld.shared::cta
   // CHECK: ld.shared::cluster
   // CHECK: nvvm.barrier0
+  // CHECK: st.shared::cta
   // CHECK: st.shared::cluster
   tt.func @local_gather_scatter_two_ctas(%out: !tt.ptr<i32>, %vals: tensor<2x32xi32, #local_gather_scatter_blocked>) {
     %src = ttg.local_alloc {allocation.offset = [0 : i32, 256 : i32]} : () -> !ttg.memdesc<2x32xi32, #local_gather_scatter_shared, #ttg.shared_memory, mutable>

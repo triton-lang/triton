@@ -27,9 +27,6 @@ lowerLocalScGt(Location loc, MLIRContext *ctx, MemDescType memDescTy,
   bool isScatter = !storeVals.empty();
   SmallVector<LocalSharedMemoryAddress> addrs = computeLocalAddrs(
       loc, memDescTy, smemObj, llvmElemTy, idxValues, coords, axis, rewriter);
-  Value currentCtaId;
-  if (!addrs.empty() && addrs.front().ctaId)
-    currentCtaId = targetInfo.getClusterCTAId(rewriter, loc);
 
   SmallVector<Value> results;
   if (!isScatter)
@@ -37,27 +34,11 @@ lowerLocalScGt(Location loc, MLIRContext *ctx, MemDescType memDescTy,
 
   for (auto [i, addr] : llvm::enumerate(addrs)) {
     if (isScatter) {
-      if (addr.ctaId) {
-        Value isLocal = b.icmp_eq(*addr.ctaId, currentCtaId);
-        Value isRemote = b.icmp_ne(*addr.ctaId, currentCtaId);
-        targetInfo.storeShared(rewriter, loc, addr.ptr, storeVals[i], isLocal);
-        targetInfo.storeDShared(rewriter, loc, addr.ptr, addr.ctaId,
-                                storeVals[i], isRemote);
-      } else {
-        targetInfo.storeShared(rewriter, loc, addr.ptr, storeVals[i],
-                               b.true_val());
-      }
-    } else if (addr.ctaId) {
-      Value isLocal = b.icmp_eq(*addr.ctaId, currentCtaId);
-      Value isRemote = b.icmp_ne(*addr.ctaId, currentCtaId);
-      Value local =
-          targetInfo.loadShared(rewriter, loc, addr.ptr, llvmElemTy, isLocal);
-      Value remote = targetInfo.loadDShared(rewriter, loc, addr.ptr, addr.ctaId,
-                                            llvmElemTy, isRemote);
-      results[i] = b.select(isLocal, local, remote);
+      targetInfo.storeDShared(rewriter, loc, addr.ptr, addr.ctaId, storeVals[i],
+                              b.true_val());
     } else {
-      results[i] = targetInfo.loadShared(rewriter, loc, addr.ptr, llvmElemTy,
-                                         b.true_val());
+      results[i] = targetInfo.loadDShared(rewriter, loc, addr.ptr, addr.ctaId,
+                                          llvmElemTy, b.true_val());
     }
   }
 
@@ -287,6 +268,10 @@ public:
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
     auto memDescTy = cast<MemDescType>(op.getSrc().getType());
+    if (isa<PartitionedSharedEncodingAttr>(memDescTy.getEncoding())) {
+      return rewriter.notifyMatchFailure(
+          op, "PartitionedSharedEncoding not yet supported in lowering");
+    }
     auto regTy = cast<RankedTensorType>(op.getType());
     auto typeConverter = getTypeConverter();
 
@@ -329,6 +314,10 @@ public:
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
     auto memDescTy = cast<MemDescType>(op.getDst().getType());
+    if (isa<PartitionedSharedEncodingAttr>(memDescTy.getEncoding())) {
+      return rewriter.notifyMatchFailure(
+          op, "PartitionedSharedEncoding not yet supported in lowering");
+    }
     auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
     auto typeConverter = getTypeConverter();
 
