@@ -605,9 +605,19 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             const LinearLayout &layout, RankedTensorType type,
             bool withCTAOffset);
 
-// Compute per-element shared-memory pointers for a local atomic/ldst update by
+struct LocalSharedMemoryAddress {
+  Value ptr;
+  std::optional<Value> ctaId;
+};
+
+// Compute per-element shared-memory addresses for a local atomic/ldst update by
 // replacing `coords[*][axis]` with `idxValues[*]` and mapping the resulting
-// logical coordinates back to shared-memory offsets.
+// logical coordinates back to shared-memory offsets and target CTAs.
+SmallVector<LocalSharedMemoryAddress> computeLocalAddrs(
+    Location loc, triton::gpu::MemDescType memDescTy,
+    SharedMemoryObject smemObj, Type llvmElemTy, ArrayRef<Value> idxValues,
+    ArrayRef<SmallVector<Value>> coords, unsigned axis, RewriterBase &rewriter);
+
 SmallVector<Value> computeLocalPtrs(Location loc,
                                     triton::gpu::MemDescType memDescTy,
                                     SharedMemoryObject smemObj, Type llvmElemTy,

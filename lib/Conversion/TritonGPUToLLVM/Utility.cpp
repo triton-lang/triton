@@ -540,12 +540,12 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return emitIndices(loc, rewriter, target, ll, type, withCTAOffset);
 }
 
-SmallVector<Value> computeLocalPtrs(Location loc,
-                                    triton::gpu::MemDescType memDescTy,
-                                    SharedMemoryObject smemObj, Type llvmElemTy,
-                                    ArrayRef<Value> idxValues,
-                                    ArrayRef<SmallVector<Value>> coords,
-                                    unsigned axis, RewriterBase &rewriter) {
+SmallVector<LocalSharedMemoryAddress>
+computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
+                  SharedMemoryObject smemObj, Type llvmElemTy,
+                  ArrayRef<Value> idxValues,
+                  ArrayRef<SmallVector<Value>> coords, unsigned axis,
+                  RewriterBase &rewriter) {
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -561,12 +561,15 @@ SmallVector<Value> computeLocalPtrs(Location loc,
     allDims.push_back(str_attr("dim" + Twine(dim)));
 
   auto kOffset = str_attr("offset");
+  auto kBlock = str_attr("block");
+  bool useBlockId = invSharedLayout.hasOutDim(kBlock) &&
+                    invSharedLayout.getOutDimSize(kBlock) > 1;
   // Get the subslice affine offset (non-zero for memdesc subslices)
   Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
   auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
 
-  SmallVector<Value> ptrs;
-  ptrs.reserve(coords.size());
+  SmallVector<LocalSharedMemoryAddress> addrs;
+  addrs.reserve(coords.size());
 
   for (auto [i, idxVal] : llvm::enumerate(idxValues)) {
     Value idx = idxVal;
@@ -589,15 +592,18 @@ SmallVector<Value> computeLocalPtrs(Location loc,
 
     auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
 
-    // Extract the offset value
+    // Extract the offset and target CTA.
     Value offset = nullptr;
+    Value blockId = nullptr;
     for (auto [name, value] : outputs) {
-      if (name == kOffset) {
+      if (name == kOffset)
         offset = value;
-        break;
-      }
+      else if (name == kBlock)
+        blockId = value;
     }
     assert(offset && "expected offset output from inverted shared layout");
+    assert((!useBlockId || blockId) &&
+           "expected block output from multi-CTA shared layout");
 
     // For subslices, the physical offset is computed as:
     //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
@@ -626,10 +632,23 @@ SmallVector<Value> computeLocalPtrs(Location loc,
       ptr = b.gep(smemObj.getBase().getType(), llvmElemTy, smemObj.getBase(),
                   offset);
     }
-    ptrs.push_back(ptr);
+    addrs.push_back(
+        {ptr, useBlockId ? std::optional<Value>(blockId) : std::nullopt});
   }
 
-  return ptrs;
+  return addrs;
+}
+
+SmallVector<Value> computeLocalPtrs(Location loc,
+                                    triton::gpu::MemDescType memDescTy,
+                                    SharedMemoryObject smemObj, Type llvmElemTy,
+                                    ArrayRef<Value> idxValues,
+                                    ArrayRef<SmallVector<Value>> coords,
+                                    unsigned axis, RewriterBase &rewriter) {
+  return llvm::map_to_vector(
+      computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues, coords,
+                        axis, rewriter),
+      [](const LocalSharedMemoryAddress &addr) { return addr.ptr; });
 }
 
 FailureOr<LocalAtomicScatterRMWInfo> prepareLocalAtomicScatterRMW(
