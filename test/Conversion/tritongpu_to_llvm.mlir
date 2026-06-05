@@ -1491,6 +1491,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#mma = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1, 1], instrShape = [16, 8]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#mma, kWidth=4}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#mma, kWidth=4}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: matmul_signed_i8dot
+  tt.func @matmul_signed_i8dot(%a: tensor<16x32xi8, #dot_operand_a>,
+                               %b: tensor<32x8xi8, #dot_operand_b>,
+                               %c: tensor<16x8xi32, #mma>) {
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32
+    %d = tt.dot %a, %b, %c : tensor<16x32xi8, #dot_operand_a> * tensor<32x8xi8, #dot_operand_b> -> tensor<16x8xi32, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1, 1], instrShape = [16, 8]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#mma, kWidth=4}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#mma, kWidth=4}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: matmul_mixed_signed_i8dot
+  tt.func @matmul_mixed_signed_i8dot(%a: tensor<16x32xi8, #dot_operand_a>,
+                                     %b: tensor<32x8xi8, #dot_operand_b>,
+                                     %c: tensor<16x8xi32, #mma>) {
+    // CHECK-NOT: satfinite
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mma.sync.aligned.m16n8k32.row.col.s32.s8.u8.s32
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mma.sync.aligned.m16n8k32.row.col.s32.u8.s8.s32
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mma.sync.aligned.m16n8k32.row.col.s32.u8.u8.s32
+    // CHECK-NOT: satfinite
+    %d0 = tti.dot_i8 %a, %b, %c, aSigned = true, bSigned = true : tensor<16x32xi8, #dot_operand_a> * tensor<32x8xi8, #dot_operand_b> -> tensor<16x8xi32, #mma>
+    %d1 = tti.dot_i8 %a, %b, %d0, aSigned = true, bSigned = false : tensor<16x32xi8, #dot_operand_a> * tensor<32x8xi8, #dot_operand_b> -> tensor<16x8xi32, #mma>
+    %d2 = tti.dot_i8 %a, %b, %d1, aSigned = false, bSigned = true : tensor<16x32xi8, #dot_operand_a> * tensor<32x8xi8, #dot_operand_b> -> tensor<16x8xi32, #mma>
+    %d3 = tti.dot_i8 %a, %b, %d2, aSigned = false, bSigned = false : tensor<16x32xi8, #dot_operand_a> * tensor<32x8xi8, #dot_operand_b> -> tensor<16x8xi32, #mma>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
   // CHECK-LABEL: atomic_add_f32

@@ -283,13 +283,6 @@ LogicalResult DotOp::verify() {
                                                      bEncoding);
 }
 
-bool DotOp::verifyDims() {
-  auto aShape = this->getA().getType().getShape();
-  auto bShape = this->getB().getType().getShape();
-
-  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
-}
-
 //-- DotScaledOp --
 bool DotScaledOp::verifyDims() {
   auto aShape = this->getA().getType().getShape();
