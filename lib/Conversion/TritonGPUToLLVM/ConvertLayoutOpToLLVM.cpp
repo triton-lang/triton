@@ -110,7 +110,8 @@ struct ConvertLayoutOpConversion
   SmallVector<Value> transferSwizzlingLocalMemImpl(
       Location loc, ConversionPatternRewriter &rewriter,
       const LinearLayout &srcLayout, const LinearLayout &dstLayout,
-      ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase) const {
+      ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
+      Operation *sourceOp) const {
     auto *ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     // We handle transformations recursively as they all need a preprocessing
@@ -122,9 +123,9 @@ struct ConvertLayoutOpConversion
       auto newInVals = llvm::to_vector(llvm::map_range(inVals, [&](Value v) {
         return b.ptrtoint(llvmElemTyPtr, v).getResult();
       }));
-      auto outVals =
-          transferSwizzlingLocalMemImpl(loc, rewriter, srcLayout, dstLayout,
-                                        newInVals, llvmElemTyPtr, smemBase);
+      auto outVals = transferSwizzlingLocalMemImpl(
+          loc, rewriter, srcLayout, dstLayout, newInVals, llvmElemTyPtr,
+          smemBase, sourceOp);
       for (auto &v : outVals) {
         v = b.inttoptr(llvmElemTy, v);
       }
@@ -138,7 +139,8 @@ struct ConvertLayoutOpConversion
       auto newInVals = llvm::to_vector(llvm::map_range(
           inVals, [&](Value v) { return b.zext(i8ElemTy, v).getResult(); }));
       auto outVals = transferSwizzlingLocalMemImpl(
-          loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase);
+          loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase,
+          sourceOp);
       for (auto &v : outVals) {
         v = b.trunc(llvmElemTy, v);
       }
@@ -151,15 +153,17 @@ struct ConvertLayoutOpConversion
       auto prmtSrc = removeBroadcastSrc.apply(srcLayout);
       auto newInVals = removeBroadcastSrc.apply(inVals);
       return transferSwizzlingLocalMemImpl(loc, rewriter, prmtSrc, dstLayout,
-                                           newInVals, llvmElemTy, smemBase);
+                                           newInVals, llvmElemTy, smemBase,
+                                           sourceOp);
     }
 
     // Remove broadcasting in dst
     auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
     if (!removeBroadcastDst.isIdentity()) {
       auto prmtDst = removeBroadcastDst.apply(dstLayout);
-      auto outVals = transferSwizzlingLocalMemImpl(
-          loc, rewriter, srcLayout, prmtDst, inVals, llvmElemTy, smemBase);
+      auto outVals =
+          transferSwizzlingLocalMemImpl(loc, rewriter, srcLayout, prmtDst,
+                                        inVals, llvmElemTy, smemBase, sourceOp);
       return broadcastAs(outVals, dstLayout);
     }
 
@@ -219,7 +223,7 @@ struct ConvertLayoutOpConversion
       } else if (isBlockSync) {
         targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
       } else {
-        targetInfo.clusterBarrier(loc, rewriter);
+        targetInfo.clusterBarrier(loc, rewriter, sourceOp);
       }
     };
 
@@ -259,7 +263,7 @@ struct ConvertLayoutOpConversion
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto inVals = unpackLLElements(loc, src, rewriter);
     auto outVals = transferSwizzlingLocalMemImpl(
-        loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase);
+        loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase, op);
 
     Value result =
         packLLElements(loc, getTypeConverter(), outVals, rewriter, dstTy);

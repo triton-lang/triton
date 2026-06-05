@@ -9,7 +9,7 @@ from triton.experimental.gluon.language._semantic import _check, _compute_tmem_r
 
 from . import tma
 from . import clc
-from ..hopper import fence_async_shared, mbarrier
+from ..hopper import async_store, fence_async_shared, mbarrier
 from ..ampere import async_copy, mma_v2
 
 from triton._C.libtriton import ir
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 __all__ = [
     "allocate_tensor_memory",
     "async_copy",
+    "async_store",
     "clc",
     "fence_async_shared",
     "mbarrier",

@@ -1,8 +1,11 @@
 import pytest
 import torch
+import triton
+import triton.language as tl
 from triton._internal_testing import is_cuda
 
 from triton_kernels.matmul import matmul, matmul_torch, PrecisionConfig
+from triton_kernels.matmul_details._matmul import _compute_packed_n_w
 from triton_kernels.matmul_details.opt_flags import InapplicableConstraint, scoped_opt_flags_constraints
 from triton_kernels.matmul_details.opt_flags_details import opt_flags_nvidia
 from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp
@@ -102,6 +105,49 @@ def test_matmul_hopper_mxfp4_rhs_scale_padding_is_masked(device, constraints):
         pytest.skip(f"inapplicable opt_flags constraint {e}")
 
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@triton.jit
+def _hopper_rhs_packed_n_extent(out, n: tl.constexpr):
+    tl.store(out, _compute_packed_n_w(n, 4, "HOPPER_VALUE"))
+
+
+@pytest.mark.parametrize("n", [258, 320])
+def test_matmul_hopper_mxfp4_rhs_packed_n_padding(device, n):
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("requires CUDA")
+    if torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip("requires Hopper")
+
+    torch.manual_seed(0)
+    # Hopper MXFP4 RHS values are stored with N packed by 4 and then padded in
+    # packed space. The generic kernel must ceil-divide before padding and wrap
+    # using that padded packed width.
+    packed_n = torch.empty((1, ), dtype=torch.int32, device=device)
+    _hopper_rhs_packed_n_extent[(1, )](packed_n, n)
+    assert packed_n.item() == 128
+
+    m, k = 64, 2048
+    a = torch.randn((m, k), device=device, dtype=torch.bfloat16)
+    weight_fp = torch.randn((n, k), device=device, dtype=torch.bfloat16).T
+    weight_val, weight_scale = downcast_to_mxfp(weight_fp, torch.uint8, axis=-2)
+    value_layout = layout.make_default_matmul_mxfp4_w_layout(mx_axis=-2)
+    scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=-2, num_warps=8)
+    b = convert_layout(wrap_torch_tensor(weight_val, dtype=FP4), value_layout)
+    b_scale = convert_layout(wrap_torch_tensor(weight_scale, dtype=UINT8), scale_layout)
+    assert b.storage.data.shape[-1] == packed_n.item()
+    precision_config = PrecisionConfig(
+        b_mx_scale=b_scale,
+        b_microblock_size=MXFP_BLOCK_SIZE.value,
+        out_dtype=a.dtype,
+    )
+
+    with scoped_opt_flags_constraints({"is_persistent": False, "block_n": 256}):
+        expected = matmul_torch(a, b, None, precision_config=precision_config)
+        actual = matmul(a, b, None, precision_config=precision_config)
+
+    assert torch.isfinite(actual).all()
+    assert_close(expected, actual, maxtol=3e-2, rmstol=None)
 
 
 @pytest.mark.parametrize("n, expected", [(64, 128), (200, 256)])

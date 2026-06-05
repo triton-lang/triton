@@ -30,66 +30,6 @@ bool isConstI32OneTensor(Value value) {
                       [](const APInt &value) { return value.isOne(); });
 }
 
-struct LocalAtomicScatterRMWInfo {
-  RankedTensorType valuesTy;
-  Type llvmElemTy;
-  LinearLayout regLayout;
-  ColumnAction removeBroadcast;
-  Value threadPred;
-  SmallVector<Value> values;
-  SmallVector<Value> maskValues;
-  SmallVector<Value> ptrs;
-};
-
-FailureOr<LocalAtomicScatterRMWInfo>
-prepareLocalAtomicScatterRMW(triton::gpu::LocalAtomicScatterRMWOp op, Value dst,
-                             Value indices, Value inputValues, Value mask,
-                             ConversionPatternRewriter &rewriter,
-                             const NVIDIA::TargetInfo &targetInfo,
-                             const LLVMTypeConverter *typeConverter) {
-  auto loc = op.getLoc();
-  auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
-  auto memDescTy = cast<MemDescType>(op.getDst().getType());
-  if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
-          memDescTy.getEncoding())) {
-    return failure();
-  }
-
-  auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
-  auto smemObj =
-      LLVM::getSharedMemoryObjectFromStruct(loc, dst, llvmElemTy, rewriter);
-  SmallVector<Value> idxValues = unpackLLElements(loc, indices, rewriter);
-  SmallVector<Value> values = unpackLLElements(loc, inputValues, rewriter);
-  SmallVector<Value> maskValues;
-  if (mask)
-    maskValues = unpackLLElements(loc, mask, rewriter);
-
-  LinearLayout regLayout = toLinearLayout(valuesTy);
-  auto freeVarMasks = regLayout.getFreeVariableMasks();
-  auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
-  Value threadPred =
-      emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
-  LinearLayout activeRegLayout = regLayout;
-  if (!removeBroadcast.isIdentity()) {
-    activeRegLayout = removeBroadcast.apply(regLayout);
-    values = removeBroadcast.apply(values);
-    idxValues = removeBroadcast.apply(idxValues);
-    if (!maskValues.empty())
-      maskValues = removeBroadcast.apply(maskValues);
-  }
-  SmallVector<SmallVector<Value>> srcIndices =
-      emitIndices(loc, rewriter, targetInfo, activeRegLayout, valuesTy,
-                  /*withCTAOffset=*/true);
-
-  SmallVector<Value> ptrs =
-      computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
-                       srcIndices, op.getAxis(), rewriter);
-
-  return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,
-                                   removeBroadcast, threadPred, values,
-                                   maskValues,      ptrs};
-}
-
 Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
                     Value ptr, bool returnOld, Value pred = Value()) {
   PTXBuilder ptxBuilder;
@@ -300,6 +240,209 @@ private:
   const NVIDIA::TargetInfo &targetInfo;
 };
 
+static std::string getAsyncSharedStoreConstraint(unsigned bitwidth) {
+  switch (bitwidth) {
+  case 32:
+    return "r";
+  case 64:
+    return "l";
+  default:
+    llvm_unreachable("unsupported st.async.shared bitwidth");
+  }
+}
+
+static Value normalizeAsyncSharedStoreValue(Value value, Type valueTy,
+                                            unsigned bitwidth,
+                                            TritonLLVMOpBuilder &b) {
+  Type intTy = IntegerType::get(valueTy.getContext(), bitwidth);
+  if (isa<LLVM::LLVMPointerType>(valueTy))
+    return b.ptrtoint(intTy, value);
+  if (!valueTy.isInteger())
+    return b.bitcast(value, intTy);
+  return value;
+}
+
+static Value packAsyncSharedStoreValue(Location loc, ArrayRef<Value> values,
+                                       Type elemTy, unsigned storeBitwidth,
+                                       TritonLLVMOpBuilder &b,
+                                       ConversionPatternRewriter &rewriter) {
+  unsigned elemBitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
+  assert(values.size() == storeBitwidth / elemBitwidth);
+  if (values.size() == 1)
+    return normalizeAsyncSharedStoreValue(values.front(), elemTy, storeBitwidth,
+                                          b);
+
+  Value packed = packLLVector(loc, values, rewriter);
+  return b.bitcast(packed,
+                   IntegerType::get(elemTy.getContext(), storeBitwidth));
+}
+
+static Value mapSharedToCluster(Location loc, Value ptr, Value ctaId,
+                                ConversionPatternRewriter &rewriter) {
+  auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
+  assert(ptrTy.getAddressSpace() == 3 &&
+         "st.async.shared expects a shared-memory pointer");
+  return NVVM::MapaOp::create(rewriter, loc, ptr_ty(rewriter.getContext(), 7),
+                              ptr, ctaId);
+}
+
+static void emitAsyncSharedStore(Location loc, ArrayRef<Value> vals, Value dst,
+                                 Value mbarrier, VectorType vecTy,
+                                 ConversionPatternRewriter &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Type elemTy = vecTy.getElementType();
+  unsigned vec = vecTy.getNumElements();
+  unsigned elemBitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
+  assert((elemBitwidth == 8 || elemBitwidth == 16 || elemBitwidth == 32 ||
+          elemBitwidth == 64) &&
+         "st.async.shared only supports packable elements");
+
+  if (vec * elemBitwidth > 128) {
+    assert(vec % (128 / elemBitwidth) == 0);
+    int maxVec = 128 / elemBitwidth;
+    auto splitVecTy = VectorType::get({static_cast<int64_t>(maxVec)}, elemTy);
+    for (int i = 0; i < vec / maxVec; i++) {
+      auto newDst = b.gep(dst.getType(), elemTy, dst, b.i32_val(i * maxVec),
+                          LLVM::GEPNoWrapFlags::inbounds);
+      emitAsyncSharedStore(loc, vals.slice(i * maxVec, maxVec), newDst,
+                           mbarrier, splitVecTy, rewriter);
+    }
+    return;
+  }
+  assert(vec * elemBitwidth >= 32 &&
+         "st.async.shared requires at least a 32-bit store");
+
+  unsigned storeBitwidth = elemBitwidth < 32 ? 32u : elemBitwidth;
+  unsigned elemsPerStore = storeBitwidth / elemBitwidth;
+  assert(vec % elemsPerStore == 0);
+  unsigned storeVec = vec / elemsPerStore;
+  assert(1 <= storeVec && storeVec <= 4);
+
+  PTXBuilder builder;
+  auto st = builder.create("st.async")
+                ->o("weak")
+                .o("shared::cluster")
+                .o("mbarrier::complete_tx::bytes")
+                .v(storeVec, /*predicate=*/storeVec > 1)
+                .b(storeBitwidth);
+  auto *dstOpr = builder.newAddrOperand(dst, "r");
+  auto *mbarrierOpr = builder.newAddrOperand(mbarrier, "r");
+  auto constraint = getAsyncSharedStoreConstraint(storeBitwidth);
+  PTXBuilder::Operand *valueOpr;
+  if (storeVec == 1) {
+    valueOpr = builder.newOperand(
+        packAsyncSharedStoreValue(loc, vals.slice(0, elemsPerStore), elemTy,
+                                  storeBitwidth, b, rewriter),
+        constraint);
+  } else {
+    SmallVector<std::pair<Value, std::string>> vecVals;
+    vecVals.reserve(storeVec);
+    for (unsigned i = 0; i < storeVec; i++) {
+      vecVals.push_back({packAsyncSharedStoreValue(
+                             loc, vals.slice(i * elemsPerStore, elemsPerStore),
+                             elemTy, storeBitwidth, b, rewriter),
+                         constraint});
+    }
+    valueOpr = builder.newListOperand(vecVals);
+  }
+  st(dstOpr, valueOpr, mbarrierOpr);
+  builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+}
+
+static void lowerAsyncSharedStore(Location loc, MLIRContext *ctx,
+                                  LinearLayout cvt, ArrayRef<Value> vals,
+                                  Type llvmElemTy, MemDescType dstTy,
+                                  SharedMemoryObject dstMemObj,
+                                  Value mbarrierPtr, MemDescType mbarrierTy,
+                                  ConversionPatternRewriter &rewriter,
+                                  const NVIDIA::TargetInfo &targetInfo) {
+  auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
+  if (!removeBroadcastSrc.isIdentity()) {
+    auto prmtCvt = removeBroadcastSrc.apply(cvt);
+    auto inVals = removeBroadcastSrc.apply(to_vector(vals));
+    lowerAsyncSharedStore(loc, ctx, prmtCvt, inVals, llvmElemTy, dstTy,
+                          dstMemObj, mbarrierPtr, mbarrierTy, rewriter,
+                          targetInfo);
+    return;
+  }
+
+  auto affineOffset = dstMemObj.getShmemOffset(loc, rewriter, dstTy);
+  auto maskSpanAffineOffset = dstMemObj.getMaskSpanOffsets(dstTy);
+  std::optional<int> maybeMaxVecElems;
+  SmallVector<std::pair<unsigned, unsigned>> paddingShifts;
+  if (triton::gpu::isPaddedEncoding(dstTy.getEncoding())) {
+    maybeMaxVecElems = triton::gpu::getMinInterval(dstTy.getEncoding());
+    auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+    paddingShifts = getPaddedSharedShifts(dstTy.getEncoding(), bitwidth,
+                                          /*offsetInBytes=*/true);
+  }
+
+  SmallVector<Value> smemBases(dstMemObj.getBases().begin(),
+                               dstMemObj.getBases().end());
+  Value currentCTAId = targetInfo.getClusterCTAId(rewriter, loc);
+  auto emitSt = [&](RewriterBase &, Location storeLoc, ArrayRef<Value> values,
+                    Value shmemAddr, int idx, VectorType vecTy,
+                    std::optional<Value> ctaId) -> SmallVector<Value> {
+    Value targetCTAId = ctaId.value_or(currentCTAId);
+    Value dst = mapSharedToCluster(storeLoc, shmemAddr, targetCTAId, rewriter);
+    Value mbarrier =
+        mapSharedToCluster(storeLoc, mbarrierPtr, targetCTAId, rewriter);
+    mbarrier = LLVM::NVIDIA::getLeaderAddress(storeLoc, rewriter, mbarrier,
+                                              mbarrierTy);
+    emitAsyncSharedStore(storeLoc, values.slice(idx, vecTy.getNumElements()),
+                         dst, mbarrier, vecTy, rewriter);
+    return {};
+  };
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  lowerLdSt(loc, ctx, cvt, vals, llvmElemTy, smemBases, paddingShifts,
+            affineOffset, maskSpanAffineOffset, laneId, warpId, rewriter,
+            targetInfo, maybeMaxVecElems, emitSt);
+}
+
+struct AsyncSharedStoreOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncSharedStoreOp> {
+  AsyncSharedStoreOpConversion(const LLVMTypeConverter &converter,
+                               const NVIDIA::TargetInfo &targetInfo,
+                               PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncSharedStoreOp>(
+            converter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::AsyncSharedStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!triton::nvidia_gpu::AsyncSharedStoreOp::isSupported(
+            targetInfo.getComputeCapability()))
+      return op.emitError("requires cluster-capable SM90+");
+
+    auto loc = op.getLoc();
+    MemDescType dstTy = op.getDst().getType();
+    RankedTensorType srcTy = op.getSrc().getType();
+    Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
+    auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getDst(), llvmElemTy, rewriter);
+    auto mbarrierTy = op.getMbarrier().getType();
+    auto mbarrierMemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getMbarrier(),
+        typeConverter->convertType(mbarrierTy.getElementType()), rewriter);
+
+    auto regLayout = toLinearLayout(srcTy);
+    auto sharedLayout = isPaddedEncoding(dstTy.getEncoding())
+                            ? paddedLinearLayout(dstTy)
+                            : toLinearLayout(dstTy);
+    auto cvt = regLayout.invertAndCompose(sharedLayout);
+    auto values = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    lowerAsyncSharedStore(loc, op.getContext(), cvt, values, llvmElemTy, dstTy,
+                          dstMemObj, mbarrierMemObj.getBase(), mbarrierTy,
+                          rewriter, targetInfo);
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  const NVIDIA::TargetInfo &targetInfo;
+};
+
 struct LocalAtomicScatterRMWOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalAtomicScatterRMWOp> {
 public:
@@ -378,6 +521,8 @@ void mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
                                        benefit.getBenefit() + 1);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo,
                                        benefit.getBenefit() + 1);
+  patterns.add<AsyncSharedStoreOpConversion>(typeConverter, targetInfo,
+                                             benefit.getBenefit() + 1);
   patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
                                                   benefit.getBenefit() + 1);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo,

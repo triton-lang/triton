@@ -29,6 +29,14 @@ def round_f32_to_tf32(x: tl.tensor):
     ASM: tl.constexpr = "cvt.rn.tf32.f32 $0, $1;" if cuda_capability_geq(9, 0) else "cvt.rna.tf32.f32 $0, $1;"
     return tl.inline_asm_elementwise(ASM, "=r, r", [x], dtype=tl.float32, is_pure=True, pack=1)
 
+
+@triton.jit
+def _compute_packed_n_w(N, W_N_DIVISOR: tl.constexpr, SWIZZLE_MX_VALUE: tl.constexpr):
+    packed_n_w = tl.cdiv(N, W_N_DIVISOR)
+    if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+        packed_n_w = tl.cdiv(packed_n_w, 64) * 64
+    return packed_n_w
+
 _matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
             repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
@@ -338,10 +346,8 @@ def _matmul(
 
     # B pointers
     offs_w_n = pid_n * PACKED_BLOCK_N_W + tl.arange(0, PACKED_BLOCK_N_W)
-    N_W = N
-    if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
-        N_W = tl.cdiv(N_W, 64) * 64
-    offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % (N_W // W_N_DIVISOR), PACKED_BLOCK_N_W), PACKED_BLOCK_N_W)
+    packed_n_w = _compute_packed_n_w(N, W_N_DIVISOR, SWIZZLE_MX_VALUE)
+    offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % packed_n_w, PACKED_BLOCK_N_W), PACKED_BLOCK_N_W)
 
     if is_x_microscaled:
         XMxScale += start_z.to(index_type) * stride_x_mx_z

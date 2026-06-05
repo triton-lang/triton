@@ -569,8 +569,15 @@ void init_triton_llvm(py::module &&m) {
       .def_property_readonly(
           "name", [](llvm::Function *fn) { return fn->getName().str(); })
       .def("set_calling_conv", &llvm::Function::setCallingConv)
-      .def("add_fn_attr", [](llvm::Function *fn, std::string &name,
-                             std::string &val) { fn->addFnAttr(name, val); })
+      .def(
+          "add_fn_attr",
+          [](llvm::Function *fn, std::string &name, std::string &val) {
+            if (val.empty())
+              fn->addFnAttr(name);
+            else
+              fn->addFnAttr(name, val);
+          },
+          py::arg("name"), py::arg("val") = "")
       .def("remove_fn_attr", [](llvm::Function *fn,
                                 std::string &name) { fn->removeFnAttr(name); })
       .def("add_fn_asan_attr",
@@ -647,7 +654,7 @@ void init_triton_llvm(py::module &&m) {
       "optimize_module",
       [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
          std::string arch, std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion, bool disable_vector_combine) {
+         bool enable_fp_fusion) {
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
           return;
         // Check to see if we are passing a list of flags to disable
@@ -678,24 +685,11 @@ void init_triton_llvm(py::module &&m) {
         PassInstrumentationCallbacks passInstrCb;
         StandardInstrumentations standardInstr(mod->getContext(),
                                                /*DebugLogging*/ true);
-        bool enablePassInstrumentation = false;
-        if (disable_vector_combine) {
-          // VectorCombinePass::name() returns the C++ class name, not the
-          // registry name "vector-combine".
-          const StringRef kVectorCombinePassName = "VectorCombinePass";
-          passInstrCb.registerShouldRunOptionalPassCallback(
-              [kVectorCombinePassName](StringRef passName, Any) {
-                return passName != kVectorCombinePassName;
-              });
-          enablePassInstrumentation = true;
-        }
         if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
           setLLVMOption<bool>("print-after-all", true);
           standardInstr.registerCallbacks(passInstrCb, &mam);
-          enablePassInstrumentation = true;
-        }
-        if (enablePassInstrumentation)
           instrCbPtr = &passInstrCb;
+        }
 
         PipelineTuningOptions tuningOptions;
         tuningOptions.LoopUnrolling = true;
@@ -773,7 +767,6 @@ void init_triton_llvm(py::module &&m) {
       py::arg("arch") = "", py::arg("features") = "",
       py::arg("flags") = std::vector<std::string>{},
       py::arg("enable_fp_fusion") = false,
-      py::arg("disable_vector_combine") = false,
       py::call_guard<py::gil_scoped_release>());
 
   m.def(

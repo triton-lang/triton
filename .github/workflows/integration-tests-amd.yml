@@ -59,7 +59,7 @@ jobs:
       - name: Compute cache keys
         id: cache-key
         run: |
-          llvm_file="cmake/llvm-hash.txt"
+          llvm_file="cmake/llvm-info.json"
           nvidia_file="cmake/nvidia-toolchain-version.json"
           json_file="cmake/json-version.txt"
 
@@ -70,12 +70,14 @@ jobs:
           fi
 
           # Process the files if they exist
-          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "llvm=$(sha256sum $llvm_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
-      - name: Cache build dependencies
-        uses: actions/cache@v4
+      - name: Restore build dependencies cache
+        id: restore-build-deps-cache
+        if: ${{ !contains(matrix.runner, 'gfx90a') }}
+        uses: actions/cache/restore@v4
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -104,7 +106,7 @@ jobs:
           pip uninstall -y triton pytorch-triton-rocm
 
           ccache --zero-stats
-          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+          if ${{ contains(matrix.runner, 'amd-gfx950') }}; then
             pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
             pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
           fi
@@ -148,19 +150,19 @@ jobs:
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_tensor_atomic_cas with buffer ops disabled on gfx950 and gfx942
-          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
+          if ${{ contains(matrix.runner, 'amd-gfx950') || contains(matrix.runner, 'amd-gfx942') }}; then
             AMDGCN_USE_BUFFER_OPS=0 pytest --capture=tee-sys -rfs -n 12 language/test_core.py::test_tensor_atomic_cas
           fi
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+          if ${{ contains(matrix.runner, 'amd-gfx950') }}; then
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py -k "not test_line_info_ir_source"
           else
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
           fi
 
           # Run tests under triton/python/triton_kernels/tests/ on gfx950 and gfx942
-          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
+          if ${{ contains(matrix.runner, 'amd-gfx950') || contains(matrix.runner, 'amd-gfx942') }}; then
             cd ../../triton_kernels/
             python3 -m pytest -s -n 12 tests/
           fi
@@ -198,6 +200,15 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
+      - name: Save build dependencies cache
+        if: ${{ github.ref == 'refs/heads/main' && !contains(matrix.runner, 'gfx90a') }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ steps.restore-build-deps-cache.outputs.cache-primary-key }}
       - name: Clean up caches
         # Always cleanup the worker, even if builds or tests failed given that these directories are
         # mapped from the host and we write files as the root user in the docker.
@@ -236,7 +247,7 @@ jobs:
       - name: Compute cache keys
         id: cache-key
         run: |
-          llvm_file="cmake/llvm-hash.txt"
+          llvm_file="cmake/llvm-info.json"
           nvidia_file="cmake/nvidia-toolchain-version.json"
           json_file="cmake/json-version.txt"
 
@@ -245,12 +256,13 @@ jobs:
             exit 1
           fi
 
-          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "llvm=$(sha256sum $llvm_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
-      - name: Cache build dependencies
-        uses: actions/cache@v4
+      - name: Restore build dependencies cache
+        id: restore-build-deps-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.triton/llvm
@@ -312,6 +324,15 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
+      - name: Save build dependencies cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ steps.restore-build-deps-cache.outputs.cache-primary-key }}
       - name: Clean up caches
         if: always()
         run: |

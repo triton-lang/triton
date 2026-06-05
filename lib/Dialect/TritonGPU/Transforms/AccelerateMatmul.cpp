@@ -88,7 +88,7 @@ SmallVector<unsigned> warpsPerTileV2(DotOpInterface dotOp,
   auto rank = shape.size();
   // Early exit for batched matmul
   if (rank == 3)
-    return {(unsigned)numWarps, 1, 1};
+    return getMmaV2WarpsPerCTA(shape, numWarps);
 
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion() &&
@@ -117,33 +117,7 @@ SmallVector<unsigned> warpsPerTileV2(DotOpInterface dotOp,
     }
   }
 
-  assert(rank == 2);
-  SmallVector<int64_t> shapePerWarp = {16, 8};
-  SmallVector<int64_t> warps = {1, 1};
-  // Compute repM and repN
-  SmallVector<int64_t> reps = {ceil(shape[0], shapePerWarp[0]),
-                               ceil(shape[1], shapePerWarp[1])};
-  // The formula for the number of registers given the reps is
-  // repM * 4 * repK + repN * 2 * repK + regsC
-  // where regsC = repM * repN * 4, which does not depend on the warp shape
-  //
-  // As such, to minimize the register pressure, we need to balance
-  // repM and repN. We then untie towards M, as the lhs tile has 4 elements,
-  // and the rhs tile has just 2.
-  while (product(warps) < numWarps) {
-    if (reps[0] >= reps[1]) {
-      warps[0] *= 2;
-      // Too many warps for this mma (repM == repN == 1).
-      // We allocate the remaining warps to the left (arbitrary choice)
-      if (reps[0] != 1) {
-        reps[0] /= 2;
-      }
-    } else {
-      warps[1] *= 2;
-      reps[1] /= 2;
-    }
-  }
-  return {(unsigned)warps[0], (unsigned)warps[1]};
+  return getMmaV2WarpsPerCTA(shape, numWarps);
 }
 SmallVector<unsigned, 2>
 warpsPerTileV3(DotOpInterface dotOp, const ArrayRef<int64_t> shape,

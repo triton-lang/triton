@@ -6,7 +6,7 @@ import pytest
 
 import pathlib
 import uuid
-from triton._internal_testing import is_cuda, is_hip_cdna2
+from triton._internal_testing import is_cuda, is_hip_cdna
 
 
 def do_bench(kernel_call, quantiles, use_cuda_graph=False):
@@ -147,7 +147,7 @@ def test_restore_with_none(pass_kwargs_to_kernel, device):
     triton.testing.assert_close(dst, torch.ones_like(dst))
 
 
-@pytest.mark.skipif(is_hip_cdna2(), reason="Hit LLVM assertion in splitLiveThroughBlock")
+@pytest.mark.skipif(is_hip_cdna(), reason="Hit LLVM assertion in splitLiveThroughBlock")
 def test_hooks(device):
     # Autotuner's pre- and post- hooks should be called the same number of times
     N = 4096

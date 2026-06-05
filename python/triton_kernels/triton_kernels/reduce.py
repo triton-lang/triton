@@ -13,6 +13,11 @@ from typing import Optional
 from .specialize import SpecializationModule, ClosureArg, FnSpecs
 
 try:
+    _triton_aggregate = triton.aggregate
+except (AttributeError, NotImplementedError):
+    _triton_aggregate = dataclass(frozen=True)
+
+try:
     from triton.language.extra import libdevice
 except ImportError:
     libdevice = None
@@ -32,9 +37,38 @@ class OptFlags:
     num_warps: int
     use_static_loop: bool
     chain_factor: int = 1
+    use_rowidxs: bool = False
+    subtile_heavy_blocks: bool = False
 
 
+_opt_flags_constraints: ContextVar[dict | None] = ContextVar("reduce_opt_flags_constraints", default=None)
 _opt_flags: ContextVar[OptFlags | None] = ContextVar("reduce_opt_flags", default=None)
+
+
+def _get_opt_flags_constraints() -> dict:
+    constraints = _opt_flags_constraints.get()
+    return {} if constraints is None else constraints
+
+
+def update_opt_flags_constraints(constraints: dict[str, int | bool | None]):
+    updated = _get_opt_flags_constraints().copy()
+    updated.update(constraints)
+    _opt_flags_constraints.set(updated)
+
+
+def reset_opt_flags_constraints():
+    _opt_flags_constraints.set(None)
+
+
+@contextmanager
+def scoped_opt_flags_constraints(constraints):
+    updated = _get_opt_flags_constraints().copy()
+    updated.update(constraints)
+    token = _opt_flags_constraints.set(updated)
+    try:
+        yield
+    finally:
+        _opt_flags_constraints.reset(token)
 
 
 @contextmanager
@@ -96,6 +130,10 @@ def _select_reduce_forward_config(
     has_mx: bool,
     mask_chainable: bool,  # Can we reuse mask along the S1 dim?
 ) -> OptFlags:
+    opt_flags_constraints = _get_opt_flags_constraints()
+    chain_factor = opt_flags_constraints.get("chain_factor")
+    num_warps = opt_flags_constraints.get("num_warps")
+
     use_static_loop = K <= 8
     if K in (2, 3, 4) and S0 <= 256 and Y_S1 >= 4096 and reduction_n == 1 and not has_mx:
         if K >= 3:
@@ -126,6 +164,15 @@ def _select_reduce_forward_config(
                 return OptFlags(block_s0, block_s1, block_s1, 4, use_static_loop, 1)
             block_s1 //= 2
 
+    # When `row_idxs` is used, we use 32-bit bitmap and libdevice.ffs() to
+    # handle masking, so let's require K <= 32 and is_cuda().
+    use_rowidxs = (
+        mask_chainable
+        and K <= 32
+        and target_info.is_cuda()
+        and torch.cuda.get_device_capability()[0] >= 9
+    )
+
     block_s0 = 32
     block_x_s1 = 128
     block_y_s1 = block_x_s1 // reduction_n
@@ -133,19 +180,35 @@ def _select_reduce_forward_config(
     grid_n = triton.cdiv(Y_S1, block_y_s1)
     # Enable chaining for large tensors (seems like it's neutral/negative for
     # fp8 and/or small tensors).
-    if mask_chainable and S0 >= 32768 and x_dtype.itemsize >= 2:
+    if chain_factor is not None:
+        pass  # Use the one from opt_flags_constraints.
+    elif mask_chainable and S0 >= 16384 and x_dtype.itemsize >= 2:
         chain_factor = (grid_m * grid_n) // (target_info.num_sms() * 4)
         chain_factor = min(max(1, chain_factor), grid_n)
+        if "max_chain_factor" in opt_flags_constraints:
+            chain_factor = min(chain_factor, opt_flags_constraints.get("max_chain_factor"))
         # Adjust chain_factor to divide along S1 axis as even as possible.
         n_divisor = triton.cdiv(grid_n, chain_factor)
         chain_factor = triton.cdiv(grid_n, n_divisor)
-        if chain_factor > 1:
-            use_static_loop = False
     else:
         chain_factor = 1
-    num_warps = 8 if chain_factor > 1 else 4
 
-    return OptFlags(32, 128, 128 // reduction_n, num_warps, use_static_loop, chain_factor)
+    if num_warps is None:
+        num_warps = 8 if (x_dtype.itemsize >= 2 and (use_rowidxs or chain_factor > 1)) else 4
+
+    return OptFlags(
+        block_s0, block_x_s1, block_y_s1, num_warps, use_static_loop,
+        chain_factor=chain_factor,
+        use_rowidxs=use_rowidxs,
+        subtile_heavy_blocks=use_rowidxs and use_static_loop and K >= 5,
+    )
+
+
+def _check_all_constraints_satisfied(opt_flags):
+    opt_flags_constraints = _get_opt_flags_constraints()
+    for k, v in opt_flags_constraints.items():
+        if k != "max_chain_factor":
+            assert getattr(opt_flags, k) == v
 
 
 # Divide Mask into blocks of size (BLOCK_M, K).  In each block, compute
@@ -213,42 +276,123 @@ def _create_row_idxs(Mask, stride_mr, stride_m0,  #
     tl.store(RowIdxs + tl.gather(idxs, idxs1, axis=0), idxs, mask=has_0_or_1)
 
 
+@_triton_aggregate
+class ReduceForwardCommonArgs:
+    X: object
+    stride_xr: object
+    stride_x0: object
+    stride_x1: object
+    XMx: object
+    stride_xmxr: object
+    stride_xmx0: object
+    stride_xmx1: object
+    Y: object
+    stride_y0: object
+    stride_y1: object
+    YMx: object
+    stride_ymx0: object
+    stride_ymx1: object
+    Mask: object
+    stride_mr: object
+    stride_m0: object
+    stride_m1: object
+    Scale: object
+    stride_sr: object
+    stride_s0: object
+    stride_s1: object
+    K: tl.constexpr
+    S0: object
+    X_S1: object
+    Y_S1: object
+    BLOCK_K: tl.constexpr
+    POSTPROCESS_FN1: tl.constexpr
+    postprocess_fn1_args: object
+    POSTPROCESS_FN2: tl.constexpr
+    postprocess_fn2_args: object
+    POSTPROCESS_MX_FN: tl.constexpr
+    postprocess_mx_fn_args: object
+    XFlex: object
+    XGlobalScale: object
+    YFlexExpected: object
+    YFlexActual: object
+    YFlexChecksum: object
+    Y_FLEX_SATURATE_INF: tl.constexpr
+    ActiveInputCounts: object
+    RowIdxs: object
+    BROADCAST_R: tl.constexpr
+    BROADCAST_S0: tl.constexpr
+    BROADCAST_S1: tl.constexpr
+    IS_SCALE_NONE: tl.constexpr
+    SCALE_BROADCAST_R: tl.constexpr
+    SCALE_BROADCAST_S0: tl.constexpr
+    SCALE_BROADCAST_S1: tl.constexpr
+    BLOCK_X_S1: tl.constexpr
+    BLOCK_Y_S1: tl.constexpr
+    CHAIN_FACTOR: tl.constexpr
+    Y_MX_BLOCK_SIZE: tl.constexpr
+    Y_VALUE_PACK_FACTOR: tl.constexpr
+
+
 @triton.jit(noinline=True)
-def _reduce_forward_inner(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x tensor (input)
-                          XMx, stride_xmxr, stride_xmx0, stride_xmx1,  # x mx scale
-                          Y, stride_y0: tl.int64, stride_y1,  # y tensor (output)
-                          YMx, stride_ymx0, stride_ymx1,  # y mx scale
-                          Mask, stride_mr, stride_m0, stride_m1,  # mask tensor
-                          Scale, stride_sr, stride_s0, stride_s1,  # scale tensor
-                          # shape (K = reduction dim; S0, IN_S1 = input dims, OUT_S1 = output dims)
-                          K: tl.constexpr, S0, X_S1, Y_S1,  #
-                          BLOCK_K: tl.constexpr,
-                          POSTPROCESS_FN1: tl.constexpr, postprocess_fn1_args,  #
-                          POSTPROCESS_FN2: tl.constexpr, postprocess_fn2_args,  #
-                          POSTPROCESS_MX_FN: tl.constexpr, postprocess_mx_fn_args,  #
-                          XFlex,  # TODO: remove this
-                          XGlobalScale,  # x global scale
-                          YFlexExpected, YFlexActual, YFlexChecksum,
-                          Y_FLEX_SATURATE_INF: tl.constexpr,  # y flex (global) scale
-                          ActiveInputCounts, RowIdxs,  #
-                          BROADCAST_R: tl.constexpr,  #
-                          BROADCAST_S0: tl.constexpr,  #
-                          BROADCAST_S1: tl.constexpr,  #
-                          IS_SCALE_NONE: tl.constexpr,  #
-                          SCALE_BROADCAST_R: tl.constexpr,  #
-                          SCALE_BROADCAST_S0: tl.constexpr,  #
-                          SCALE_BROADCAST_S1: tl.constexpr,  #
-                          BLOCK_S0: tl.constexpr,  #
-                          BLOCK_X_S1: tl.constexpr,  #
-                          BLOCK_Y_S1: tl.constexpr,  #
-                          CHAIN_FACTOR: tl.constexpr,  #
-                          Y_MX_BLOCK_SIZE: tl.constexpr,  #
-                          Y_VALUE_PACK_FACTOR: tl.constexpr,  #
-                          # Only the following two args are adjusted for the inner call.
-                          USE_STATIC_LOOP: tl.constexpr,  #
-                          LIMIT: tl.constexpr,
-                          ):
-    pid_s0 = tl.program_id(0)
+def _reduce_forward_inner(pid_s0, pid_s1,
+                          args,
+                          BLOCK_S0: tl.constexpr,
+                          USE_STATIC_LOOP: tl.constexpr,
+                          LIMIT: tl.constexpr):
+    X = args.X
+    stride_xr = args.stride_xr
+    stride_x0 = args.stride_x0
+    stride_x1 = args.stride_x1
+    XMx = args.XMx
+    stride_xmxr = args.stride_xmxr
+    stride_xmx0 = args.stride_xmx0
+    stride_xmx1 = args.stride_xmx1
+    Y = args.Y
+    stride_y0 = args.stride_y0
+    stride_y1 = args.stride_y1
+    YMx = args.YMx
+    stride_ymx0 = args.stride_ymx0
+    stride_ymx1 = args.stride_ymx1
+    Mask = args.Mask
+    stride_mr = args.stride_mr
+    stride_m0 = args.stride_m0
+    stride_m1 = args.stride_m1
+    Scale = args.Scale
+    stride_sr = args.stride_sr
+    stride_s0 = args.stride_s0
+    stride_s1 = args.stride_s1
+    K: tl.constexpr = args.K
+    S0 = args.S0
+    X_S1 = args.X_S1
+    Y_S1 = args.Y_S1
+    BLOCK_K: tl.constexpr = args.BLOCK_K
+    POSTPROCESS_FN1: tl.constexpr = args.POSTPROCESS_FN1
+    postprocess_fn1_args = args.postprocess_fn1_args
+    POSTPROCESS_FN2: tl.constexpr = args.POSTPROCESS_FN2
+    postprocess_fn2_args = args.postprocess_fn2_args
+    POSTPROCESS_MX_FN: tl.constexpr = args.POSTPROCESS_MX_FN
+    postprocess_mx_fn_args = args.postprocess_mx_fn_args
+    XFlex = args.XFlex
+    XGlobalScale = args.XGlobalScale
+    YFlexExpected = args.YFlexExpected
+    YFlexActual = args.YFlexActual
+    YFlexChecksum = args.YFlexChecksum
+    Y_FLEX_SATURATE_INF: tl.constexpr = args.Y_FLEX_SATURATE_INF
+    ActiveInputCounts = args.ActiveInputCounts
+    RowIdxs = args.RowIdxs
+    BROADCAST_R: tl.constexpr = args.BROADCAST_R
+    BROADCAST_S0: tl.constexpr = args.BROADCAST_S0
+    BROADCAST_S1: tl.constexpr = args.BROADCAST_S1
+    IS_SCALE_NONE: tl.constexpr = args.IS_SCALE_NONE
+    SCALE_BROADCAST_R: tl.constexpr = args.SCALE_BROADCAST_R
+    SCALE_BROADCAST_S0: tl.constexpr = args.SCALE_BROADCAST_S0
+    SCALE_BROADCAST_S1: tl.constexpr = args.SCALE_BROADCAST_S1
+    BLOCK_X_S1: tl.constexpr = args.BLOCK_X_S1
+    BLOCK_Y_S1: tl.constexpr = args.BLOCK_Y_S1
+    CHAIN_FACTOR: tl.constexpr = args.CHAIN_FACTOR
+    Y_MX_BLOCK_SIZE: tl.constexpr = args.Y_MX_BLOCK_SIZE
+    Y_VALUE_PACK_FACTOR: tl.constexpr = args.Y_VALUE_PACK_FACTOR
+
     tl.static_assert(XMx is None or BLOCK_X_S1 % 32 == 0)
     BLOCK_X_SMX1: tl.constexpr = tl.cdiv(BLOCK_X_S1, 32)
     BLOCK_Y_SMX1: tl.constexpr = tl.cdiv(BLOCK_Y_S1, 1 if Y_MX_BLOCK_SIZE is None else Y_MX_BLOCK_SIZE)
@@ -274,13 +418,13 @@ def _reduce_forward_inner(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1
         m = (m != 0).to(tl.uint32) << tl.arange(0, BLOCK_K)[None, :]
         bitmap = tl.sum(m, axis=1)
 
-    for blk_s1 in tl.range(0, CHAIN_FACTOR):
+    for blk_s1_idx in tl.range(0, CHAIN_FACTOR):
         if not USE_STATIC_LOOP:
             y = tl.zeros((BLOCK_S0, BLOCK_X_S1), dtype=tl.float32)
 
-        pid_s1 = tl.program_id(1) * CHAIN_FACTOR + blk_s1
-        offs_x_s1 = pid_s1 * BLOCK_X_S1 + tl.arange(0, BLOCK_X_S1)
-        offs_x_smx1 = pid_s1 * BLOCK_X_SMX1 + tl.arange(0, BLOCK_X_SMX1)
+        blk_s1 = pid_s1 * CHAIN_FACTOR + blk_s1_idx
+        offs_x_s1 = blk_s1 * BLOCK_X_S1 + tl.arange(0, BLOCK_X_S1)
+        offs_x_smx1 = blk_s1 * BLOCK_X_SMX1 + tl.arange(0, BLOCK_X_SMX1)
         valid_x_s1 = offs_x_s1 < X_S1
         valid_in_smx1 = offs_x_smx1 < tl.cdiv(X_S1, 32)
         if USE_BITMAP:
@@ -327,8 +471,8 @@ def _reduce_forward_inner(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1
             y = POSTPROCESS_FN1(y, *postprocess_fn1_args)
         if XGlobalScale is not None:
             y *= tl.load(XGlobalScale)
-        offs_y_s1 = pid_s1 * BLOCK_Y_S1 + tl.arange(0, BLOCK_Y_S1)
-        offs_y_smx1 = pid_s1 * BLOCK_Y_SMX1 + tl.arange(0, BLOCK_Y_SMX1)
+        offs_y_s1 = blk_s1 * BLOCK_Y_S1 + tl.arange(0, BLOCK_Y_S1)
+        offs_y_smx1 = blk_s1 * BLOCK_Y_SMX1 + tl.arange(0, BLOCK_Y_SMX1)
         valid_y_s1 = offs_y_s1 < Y_S1
         valid_y_smx1 = offs_y_smx1 < tl.cdiv(Y_S1, 1 if Y_MX_BLOCK_SIZE is None else Y_MX_BLOCK_SIZE)
         is_out_fp4: tl.constexpr = YMx is not None and Y_VALUE_PACK_FACTOR == 2
@@ -343,7 +487,7 @@ def _reduce_forward_inner(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1
             if POSTPROCESS_FN2 is not None:
                 y = POSTPROCESS_FN2(y, *postprocess_fn2_args, target_dtype=Y.dtype.element_ty)
         if is_out_fp4:
-            offs_y_s1 = pid_s1 * (BLOCK_Y_S1 // 2) + tl.arange(0, BLOCK_Y_S1 // 2)
+            offs_y_s1 = blk_s1 * (BLOCK_Y_S1 // 2) + tl.arange(0, BLOCK_Y_S1 // 2)
             valid_y_s1 = offs_y_s1 < tl.cdiv(Y_S1, 2)
         y_ptrs = Y + offs_s0[:, None] * stride_y0 + offs_y_s1[None, :] * stride_y1
         tl.store(y_ptrs, y, mask=valid_s0[:, None] & valid_y_s1[None, :])
@@ -382,9 +526,25 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
                     CHAIN_FACTOR: tl.constexpr,  #
                     Y_MX_BLOCK_SIZE: tl.constexpr,  #
                     Y_VALUE_PACK_FACTOR: tl.constexpr,  #
+                    SUBTILE_HEAVY_BLOCKS: tl.constexpr,  #
                     DIM,  # only used for launch_metadata
                     ):
-    pid_s0 = tl.program_id(0)
+    grid_m = tl.cdiv(S0, BLOCK_S0)
+    grid_n = tl.cdiv(Y_S1, BLOCK_Y_S1 * CHAIN_FACTOR)
+    grid_subtile: tl.constexpr = 2 if SUBTILE_HEAVY_BLOCKS else 1
+
+    pid = tl.program_id(0)
+    if (RowIdxs is not None) and (CHAIN_FACTOR > 1):
+        # Run heavy blocks first: seems like it's better only with chaining.
+        pid_s0 = pid // (grid_n * grid_subtile)
+        pid %= (grid_n * grid_subtile)
+        pid_s1 = pid // grid_subtile
+    else:
+        pid_s1 = pid // (grid_m * grid_subtile)
+        pid %= (grid_m * grid_subtile)
+        pid_s0 = pid // grid_subtile
+    subtile_id = pid % grid_subtile
+
     offs_s0 = pid_s0 * BLOCK_S0 + tl.arange(0, BLOCK_S0)
     if UnpaddedBatchSize is not None:
         unpadded = tl.load(UnpaddedBatchSize).to(tl.int32)
@@ -393,113 +553,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
         S0 = unpadded
     valid_s0 = offs_s0 < S0
 
-    if ActiveInputCounts is not None:
-        tl.static_assert(RowIdxs is not None)
-        offs_s0 = tl.load(RowIdxs + offs_s0, mask=valid_s0, other=0)
-        n_actives = tl.load(ActiveInputCounts + offs_s0, mask=valid_s0, other=0)
-        max_actives = tl.max(n_actives)
-
-        if max_actives <= 1:
-            _reduce_forward_inner(
-                X, stride_xr, stride_x0, stride_x1,  #
-                XMx, stride_xmxr, stride_xmx0, stride_xmx1,  #
-                Y, stride_y0, stride_y1,  #
-                YMx, stride_ymx0, stride_ymx1,  #
-                Mask, stride_mr, stride_m0, stride_m1,  #
-                Scale, stride_sr, stride_s0, stride_s1,  #
-                K, S0, X_S1, Y_S1, BLOCK_K,  #
-                POSTPROCESS_FN1, postprocess_fn1_args,  #
-                POSTPROCESS_FN2, postprocess_fn2_args,  #
-                POSTPROCESS_MX_FN, postprocess_mx_fn_args,  #
-                XFlex, XGlobalScale,  #
-                YFlexExpected, YFlexActual, YFlexChecksum,  #
-                Y_FLEX_SATURATE_INF,  #
-                ActiveInputCounts, RowIdxs,  #
-                BROADCAST_R,  #
-                BROADCAST_S0,  #
-                BROADCAST_S1,  #
-                IS_SCALE_NONE,  #
-                SCALE_BROADCAST_R,  #
-                SCALE_BROADCAST_S0,  #
-                SCALE_BROADCAST_S1,  #
-                BLOCK_S0,  #
-                BLOCK_X_S1,  #
-                BLOCK_Y_S1,  #
-                CHAIN_FACTOR,  #
-                Y_MX_BLOCK_SIZE,  #
-                Y_VALUE_PACK_FACTOR,  #
-                USE_STATIC_LOOP=True,
-                LIMIT=1,
-            )
-            return
-        elif max_actives == 2:
-            _reduce_forward_inner(
-                X, stride_xr, stride_x0, stride_x1,  #
-                XMx, stride_xmxr, stride_xmx0, stride_xmx1,  #
-                Y, stride_y0, stride_y1,  #
-                YMx, stride_ymx0, stride_ymx1,  #
-                Mask, stride_mr, stride_m0, stride_m1,  #
-                Scale, stride_sr, stride_s0, stride_s1,  #
-                K, S0, X_S1, Y_S1, BLOCK_K,  #
-                POSTPROCESS_FN1, postprocess_fn1_args,  #
-                POSTPROCESS_FN2, postprocess_fn2_args,  #
-                POSTPROCESS_MX_FN, postprocess_mx_fn_args,  #
-                XFlex, XGlobalScale,  #
-                YFlexExpected, YFlexActual, YFlexChecksum,  #
-                Y_FLEX_SATURATE_INF,  #
-                ActiveInputCounts, RowIdxs,  #
-                BROADCAST_R,  #
-                BROADCAST_S0,  #
-                BROADCAST_S1,  #
-                IS_SCALE_NONE,  #
-                SCALE_BROADCAST_R,  #
-                SCALE_BROADCAST_S0,  #
-                SCALE_BROADCAST_S1,  #
-                BLOCK_S0,  #
-                BLOCK_X_S1,  #
-                BLOCK_Y_S1,  #
-                CHAIN_FACTOR,  #
-                Y_MX_BLOCK_SIZE,  #
-                Y_VALUE_PACK_FACTOR,  #
-                USE_STATIC_LOOP=True,
-                LIMIT=2,
-            )
-            return
-        elif max_actives == 3:
-            _reduce_forward_inner(
-                X, stride_xr, stride_x0, stride_x1,  #
-                XMx, stride_xmxr, stride_xmx0, stride_xmx1,  #
-                Y, stride_y0, stride_y1,  #
-                YMx, stride_ymx0, stride_ymx1,  #
-                Mask, stride_mr, stride_m0, stride_m1,  #
-                Scale, stride_sr, stride_s0, stride_s1,  #
-                K, S0, X_S1, Y_S1, BLOCK_K,  #
-                POSTPROCESS_FN1, postprocess_fn1_args,  #
-                POSTPROCESS_FN2, postprocess_fn2_args,  #
-                POSTPROCESS_MX_FN, postprocess_mx_fn_args,  #
-                XFlex, XGlobalScale,  #
-                YFlexExpected, YFlexActual, YFlexChecksum,  #
-                Y_FLEX_SATURATE_INF,  #
-                ActiveInputCounts, RowIdxs,  #
-                BROADCAST_R,  #
-                BROADCAST_S0,  #
-                BROADCAST_S1,  #
-                IS_SCALE_NONE,  #
-                SCALE_BROADCAST_R,  #
-                SCALE_BROADCAST_S0,  #
-                SCALE_BROADCAST_S1,  #
-                BLOCK_S0,  #
-                BLOCK_X_S1,  #
-                BLOCK_Y_S1,  #
-                CHAIN_FACTOR,  #
-                Y_MX_BLOCK_SIZE,  #
-                Y_VALUE_PACK_FACTOR,  #
-                USE_STATIC_LOOP=True,
-                LIMIT=3,
-            )
-            return
-
-    _reduce_forward_inner(
+    common_args = ReduceForwardCommonArgs(
         X, stride_xr, stride_x0, stride_x1,  #
         XMx, stride_xmxr, stride_xmx0, stride_xmx1,  #
         Y, stride_y0, stride_y1,  #
@@ -521,15 +575,70 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
         SCALE_BROADCAST_R,  #
         SCALE_BROADCAST_S0,  #
         SCALE_BROADCAST_S1,  #
-        BLOCK_S0,  #
         BLOCK_X_S1,  #
         BLOCK_Y_S1,  #
         CHAIN_FACTOR,  #
         Y_MX_BLOCK_SIZE,  #
         Y_VALUE_PACK_FACTOR,  #
-        USE_STATIC_LOOP=USE_STATIC_LOOP,
-        LIMIT=K,
     )
+
+    if ActiveInputCounts is not None:
+        tl.static_assert(RowIdxs is not None)
+        offs_s0 = tl.load(RowIdxs + offs_s0, mask=valid_s0, other=0)
+        n_actives = tl.load(ActiveInputCounts + offs_s0, mask=valid_s0, other=0)
+        max_actives = tl.max(n_actives)
+
+        if max_actives <= 1:
+            if subtile_id == 0:
+                _reduce_forward_inner(
+                    pid_s0, pid_s1,
+                    common_args,  #
+                    BLOCK_S0,
+                    USE_STATIC_LOOP=True,
+                    LIMIT=1,
+                )
+            return
+        elif max_actives == 2:
+            if subtile_id == 0:
+                _reduce_forward_inner(
+                    pid_s0, pid_s1,
+                    common_args,  #
+                    BLOCK_S0,
+                    USE_STATIC_LOOP=True,
+                    LIMIT=2,
+                )
+            return
+        elif max_actives == 3:
+            if subtile_id == 0:
+                _reduce_forward_inner(
+                    pid_s0, pid_s1,
+                    common_args,  #
+                    BLOCK_S0,
+                    USE_STATIC_LOOP=True,
+                    LIMIT=3,
+                )
+            return
+
+    if SUBTILE_HEAVY_BLOCKS:
+        # Split the heaviest blocks that falls here along the S0 axis.  We have
+        # this because otherwise the last _reduce_forward_inner may require a
+        # lot more registers than others, reducing occupancy for everyone.
+        _reduce_forward_inner(
+            pid_s0 * 2 + subtile_id, pid_s1,
+            common_args,  #
+            BLOCK_S0 // 2,
+            USE_STATIC_LOOP=USE_STATIC_LOOP,
+            LIMIT=K,
+        )
+    else:
+        if subtile_id == 0:
+            _reduce_forward_inner(
+                pid_s0, pid_s1,
+                common_args,  #
+                BLOCK_S0,
+                USE_STATIC_LOOP=USE_STATIC_LOOP,
+                LIMIT=K,
+            )
 
 
 forward_specializations = SpecializationModule(
@@ -627,6 +736,8 @@ def reduce_forward(
     y_mxscale = None
     if y_has_mx:
         y_mxscale = torch.empty((S0, triton.cdiv(Y_S1, y_microblock_size)), device=x.device, dtype=y_mx_scale_dtype)
+    if S0 == 0 or Y_S1 == 0:
+        return y, y_mxscale
     # Strides for X along reduced and non-reduced dims
     stride_xr = x.stride(dim)
     stride_x0 = x.stride(nonred[0])
@@ -653,8 +764,11 @@ def reduce_forward(
             x_mxscale is not None or y_has_mx,
             mask_chainable,
         )
+        _check_all_constraints_satisfied(opt_flags)
     block_y_s1_chain = opt_flags.block_y_s1 * opt_flags.chain_factor
-    grid = (triton.cdiv(S0, opt_flags.block_s0), triton.cdiv(Y_S1, block_y_s1_chain))
+    grid = triton.cdiv(S0, opt_flags.block_s0) * triton.cdiv(Y_S1, block_y_s1_chain)
+    if opt_flags.subtile_heavy_blocks:
+        grid *= 2
     if y_has_mx:
         if y_dtype == torch.float8_e4m3fn:
             postprocess_mx_fn = FnSpecs("quantize_mxfp8", quantize_mxfp8_fn, tuple(), tuple())
@@ -668,15 +782,9 @@ def reduce_forward(
                                                 postprocess_fn2=postprocess_fn2.specs,
                                                 postprocess_mx_fn=postprocess_mx_fn)._reduce_forward
 
-    if (
-        mask_chainable
-        and K <= 32
-        and target_info.is_cuda()
-        and torch.cuda.get_device_capability()[0] >= 9
-    ):
+    if opt_flags.use_rowidxs:
         # Optimize for the common case with per-row mask and most output rows
         # are expected to have one corresponding input row.
-        # (We're using libdevice.ffs() so let's require is_cuda().)
         assert S0 < 2**32  # Just in case.
         assert stride_m1 == 0
         active_input_counts = torch.empty((S0,), dtype=torch.int16, device=x.device)
@@ -701,7 +809,7 @@ def reduce_forward(
     else:
         active_input_counts = row_idxs = None
 
-    reduce_kernel[grid](
+    reduce_kernel[(grid,)](
         x_flex.reinterpret(x), stride_xr, stride_x0, stride_x1,  #
         x_mxscale, stride_xmxr, stride_xmx0, stride_xmx1,  #
         y_flex.reinterpret(y), y.stride(0), y.stride(1),  #
@@ -729,8 +837,9 @@ def reduce_forward(
         CHAIN_FACTOR=opt_flags.chain_factor,
         Y_MX_BLOCK_SIZE=y_microblock_size,  #
         Y_VALUE_PACK_FACTOR=y_value_pack_factor,  #
+        SUBTILE_HEAVY_BLOCKS=opt_flags.subtile_heavy_blocks,
         DIM=dim,  #
-        num_warps=opt_flags.num_warps  #
+        num_warps=opt_flags.num_warps,  #
     )
     return y, y_mxscale
 
@@ -871,6 +980,8 @@ def reduce_backward(
     reduction_n = (postprocess_fn1.specs.reduction_n if postprocess_fn1 is not None else FnSpecs.default().reduction_n)
     Y_S1 = X_S1 // reduction_n
     assert dy.shape == (S0, Y_S1), f"dY shape {dy.shape} mismatch with (S0={S0}, Y_S1={Y_S1})"
+    if S0 == 0 or X_S1 == 0:
+        return
 
     # Strides for dX must match the element size of the tensor passed to the kernel.
     # If we reinterpret the dtype (e.g., flex/float8), use the reinterpreted view's strides.
