@@ -32,6 +32,7 @@ Examples:
 proton -n dynamic_net tutorials/dynamic-net.py
 proton -n tests pytest third_party/proton/test/test_cmd.py -s --tb=short
 proton -n trace -d trace script.py
+proton -n samples -b cupti -m pcsampling script.py
 ```
 
 ## `proton-viewer`
