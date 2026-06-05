@@ -84,6 +84,24 @@ def test_mxfp4_scale_roundtrip(shape):
     assert (res == x).all()
 
 
+def test_mxfp4_scale_roundtrip_noncontiguous():
+    x = torch.randint(0, 256, (2, 16, 1024), dtype=torch.uint8, device="cuda")[..., ::2]
+    assert not x.is_contiguous()
+    layout = BlackwellMXScaleLayout()
+    transformation = layout.make_transformation(x.shape, is_fp4=False)
+    res = transformation.unswizzle_data(transformation.swizzle_data(x))
+    assert torch.equal(res, x)
+
+
+def test_mxfp4_scale_swizzle_meta():
+    x = torch.empty((2, 16, 32), dtype=torch.uint8, device="meta")
+    layout = BlackwellMXScaleLayout()
+    transformation = layout.make_transformation(x.shape, is_fp4=False)
+    swizzled = transformation.swizzle_data(x)
+    assert swizzled.device.type == "meta"
+    assert swizzled.shape == (1, 2, 4, 2, 256)
+
+
 @pytest.mark.parametrize("shape", [(2, 256, 192), (1, 128, 64)])
 def test_act_scale_roundtrip_batched(shape):
     x = torch.randn(shape, device="cuda", dtype=torch.float32)

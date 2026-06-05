@@ -162,9 +162,9 @@ def _convert_dp_to_ep(
         dst_row_ptrs = tl.where(dst_rank == expt_ranks, peer_dst_ptr, dst_row_ptrs)
     dst_row_ptrs = dst_row_ptrs.to(src_ptr.dtype, bitcast=True)
     dst_row_ptrs = tl.multiple_of(dst_row_ptrs, 16)
-    dst_row_ptrs = dst_row_ptrs + dst_row_indx * dst_stride_m
+    dst_row_ptrs = dst_row_ptrs + dst_row_indx * dst_stride_m.to(tl.int64)
     dst_ptrs = dst_row_ptrs[:, None] + offs_n[None, :]
-    src_ptrs = src_ptr + off_m_local * src_stride_m + offs_n
+    src_ptrs = src_ptr + off_m_local * src_stride_m.to(tl.int64) + offs_n
     for start_n in range(0, src_shape_n, BLOCK):
         mask_n = start_n + offs_n < src_shape_n
         src = tl.load(src_ptrs, mask=mask_n, other=0.0)
@@ -241,10 +241,10 @@ def _convert_ep_to_dp(
     has_dst_expt = (tl.load(expt_filter_ptr + dst_expt_indx // 32) >> (dst_expt_indx % 32)) & 1
     if not has_dst_expt.to(tl.int1):
         return
-    dst_indx_local = dst_indx_global - dst_rank * n_tokens_local
+    dst_indx_local = dst_indx_global - dst_rank * n_tokens_local.to(tl.int64)
     offs_n = tl.arange(0, BLOCK)
-    dst_ptrs = dst_ptr + dst_indx_local * dst_stride_m + offs_n
-    src_ptrs = src_ptr + pid_m * src_stride_m + offs_n
+    dst_ptrs = dst_ptr + dst_indx_local * dst_stride_m.to(tl.int64) + offs_n
+    src_ptrs = src_ptr + pid_m * src_stride_m.to(tl.int64) + offs_n
     for start_n in range(0, src_shape_n, BLOCK):
         mask_n = start_n + offs_n < src_shape_n
         src = tl.load(src_ptrs, mask=mask_n, other=0.0)
