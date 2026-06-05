@@ -84,8 +84,7 @@ getMmaEmulationTileShape(PatternRewriter &rewriter, int64_t m, int64_t n,
   }
   if (directShared) {
     int64_t widerN = std::min<int64_t>(16 * numWarps, n);
-    if (widerN > tile.second &&
-        canUseI8MmaTile(tile.first, widerN, numWarps))
+    if (widerN > tile.second && canUseI8MmaTile(tile.first, widerN, numWarps))
       tile.second = widerN;
   }
   return tile;
