@@ -553,6 +553,28 @@ def test_shift_op(dtype_x, dtype_y, op, num_ctas, device):
     _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas, y_low=0, y_high=bw)
 
 
+@pytest.mark.interpreter
+def test_interpreter_ashr_does_not_mutate_uint64_rhs(device):
+    @triton.jit
+    def kernel(Z, X, Y, BLOCK: tl.constexpr):
+        off = tl.arange(0, BLOCK)
+        x = tl.load(X + off)
+        y = tl.load(Y + off)
+        _ = x >> y
+        z = y + (1 << 63)
+        tl.store(Z + off, z)
+
+    x = np.array([-1, -8, -(1 << 62), 2], dtype=np.int64)
+    y = np.array([0, 1, 63, 1], dtype=np.uint64)
+    z = np.empty_like(y)
+
+    z_tri = to_triton(z, device=device, dst_type="uint64")
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device, dst_type="uint64")
+    kernel[(1, )](z_tri, x_tri, y_tri, BLOCK=y.size)
+    np.testing.assert_equal(to_numpy(z_tri), y + np.uint64(1 << 63))
+
+
 # ---------------
 # test compare ops
 # ---------------
