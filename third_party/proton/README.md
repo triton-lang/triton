@@ -95,22 +95,3 @@ proton.start(
     mode=pmode.Default(buffer_type="shared"),
 )
 ```
-
-## Documentation
-
-- [Documentation index](docs/README.md)
-- [Python profiling API](docs/python-api.md)
-- [Backends and modes](docs/backends-and-modes.md)
-- [Periodic profiling](docs/periodic-profiling.md)
-- [Intra-kernel profiling](docs/intra-kernel.md)
-- [Command line and viewer](docs/cli-and-viewer.md)
-- [Advanced features](docs/advanced.md)
-
-## Examples
-
-Runnable examples are kept under [`tutorials/`](tutorials/):
-
-- [`tutorials/dynamic-net.py`](tutorials/dynamic-net.py): PyTorch model profiling with Proton scopes.
-- [`tutorials/matmul.py`](tutorials/matmul.py): Triton matmul profiling, launch metadata, and instruction sampling.
-- [`tutorials/intra_kernel/example_dsl.py`](tutorials/intra_kernel/example_dsl.py): Proton DSL instrumentation.
-- [`tutorials/intra_kernel/example_override.py`](tutorials/intra_kernel/example_override.py): TTGIR override instrumentation.
