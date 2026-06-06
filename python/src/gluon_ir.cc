@@ -1071,7 +1071,10 @@ void init_gluon_ir(py::module &&m) {
       .def("create_scaled_upcast_fp4",
            [](GluonOpBuilder &self, Value input, Value scale, Type elemType,
               int axis) -> Value {
-             return self.create<ttag::ScaledUpcastFp4Op>(input, scale, elemType,
+             // The scale carries the result shape and layout by contract.
+             auto scaleTy = cast<RankedTensorType>(scale.getType());
+             auto resultTy = scaleTy.clone(elemType);
+             return self.create<ttag::ScaledUpcastFp4Op>(resultTy, input, scale,
                                                          axis);
            })
       .def("create_scaled_upcast_fp8",
