@@ -207,8 +207,7 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
 }
 
 static void storeDSharedImpl(RewriterBase &rewriter, Location loc, Value ptr,
-                             std::optional<Value> ctaId, Value val,
-                             Value pred) {
+                             Value ctaId, Value val, Value pred) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
@@ -297,13 +296,13 @@ static void storeDSharedImpl(RewriterBase &rewriter, Location loc, Value ptr,
   assert(vec * elemBitwidth <= 128);
 
   // Get pointer to remote shared memory if needed.
-  if (ctaId.has_value()) {
-    ptr = mapa(rewriter, loc, ptr, *ctaId, pred);
+  if (ctaId) {
+    ptr = mapa(rewriter, loc, ptr, ctaId, pred);
   }
 
   PTXBuilder builder;
   auto st = builder.create("st")
-                ->o(ctaId.has_value() ? "shared::cluster" : "shared::cta")
+                ->o(ctaId ? "shared::cluster" : "shared::cta")
                 .v(vec, /*predicate=*/vec > 1)
                 .b(elemBitwidth);
   auto *ptrOpr = builder.newAddrOperand(ptr, "r");
@@ -328,23 +327,20 @@ static void storeDSharedImpl(RewriterBase &rewriter, Location loc, Value ptr,
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                              std::optional<Value> ctaId, Value val,
-                              Value pred) const {
+                              Value ctaId, Value val, Value pred) const {
   if (!ctaId)
     return storeDSharedImpl(rewriter, loc, ptr, ctaId, val, pred);
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value currentCtaId = getClusterCTAId(rewriter, loc);
-  Value isLocal = b.icmp_eq(*ctaId, currentCtaId);
-  storeDSharedImpl(rewriter, loc, ptr, std::nullopt, val,
-                   b.and_(pred, isLocal));
+  Value isLocal = b.icmp_eq(ctaId, currentCtaId);
+  storeDSharedImpl(rewriter, loc, ptr, Value(), val, b.and_(pred, isLocal));
   storeDSharedImpl(rewriter, loc, ptr, ctaId, val,
-                   b.and_(pred, b.icmp_ne(*ctaId, currentCtaId)));
+                   b.and_(pred, b.icmp_ne(ctaId, currentCtaId)));
 }
 
 static Value loadDSharedImpl(RewriterBase &rewriter, Location loc, Value ptr,
-                             std::optional<Value> ctaId, Type loadTy,
-                             Value pred) {
+                             Value ctaId, Type loadTy, Value pred) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
@@ -432,13 +428,13 @@ static Value loadDSharedImpl(RewriterBase &rewriter, Location loc, Value ptr,
   assert(vec * elemBitwidth <= 128);
 
   // Get pointer to remote shared memory if needed.
-  if (ctaId.has_value()) {
-    ptr = mapa(rewriter, loc, ptr, *ctaId, pred);
+  if (ctaId) {
+    ptr = mapa(rewriter, loc, ptr, ctaId, pred);
   }
 
   PTXBuilder builder;
   auto ld = builder.create("ld")
-                ->o(ctaId.has_value() ? "shared::cluster" : "shared::cta")
+                ->o(ctaId ? "shared::cluster" : "shared::cta")
                 .v(vec, /*predicate=*/vec > 1)
                 .b(elemBitwidth);
 
@@ -473,18 +469,18 @@ static Value loadDSharedImpl(RewriterBase &rewriter, Location loc, Value ptr,
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                              std::optional<Value> ctaId, Type loadTy,
-                              Value pred, Operation *) const {
+                              Value ctaId, Type loadTy, Value pred,
+                              Operation *) const {
   if (!ctaId)
     return loadDSharedImpl(rewriter, loc, ptr, ctaId, loadTy, pred);
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value currentCtaId = getClusterCTAId(rewriter, loc);
-  Value isLocal = b.icmp_eq(*ctaId, currentCtaId);
-  Value local = loadDSharedImpl(rewriter, loc, ptr, std::nullopt, loadTy,
+  Value isLocal = b.icmp_eq(ctaId, currentCtaId);
+  Value local = loadDSharedImpl(rewriter, loc, ptr, Value(), loadTy,
                                 b.and_(pred, isLocal));
   Value remote = loadDSharedImpl(rewriter, loc, ptr, ctaId, loadTy,
-                                 b.and_(pred, b.icmp_ne(*ctaId, currentCtaId)));
+                                 b.and_(pred, b.icmp_ne(ctaId, currentCtaId)));
   if (!isa<VectorType>(loadTy))
     return b.select(isLocal, local, remote);
 

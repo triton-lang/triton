@@ -623,8 +623,7 @@ computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
       ptr = b.gep(smemObj.getBase().getType(), llvmElemTy, smemObj.getBase(),
                   offset);
     }
-    addrs.push_back(
-        {ptr, useBlockId ? std::optional<Value>(blockId) : std::nullopt});
+    addrs.push_back({ptr, useBlockId ? blockId : Value()});
   }
 
   return addrs;
@@ -736,8 +735,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
 
   auto emitLdSt = [&](RewriterBase &rewriter, Location loc,
                       ArrayRef<Value> vals, Value shmemAddr, int idx,
-                      VectorType vecTy,
-                      std::optional<Value> ctaId) -> SmallVector<Value> {
+                      VectorType vecTy, Value ctaId) -> SmallVector<Value> {
     auto length = vecTy.getNumElements();
     if (isStore) {
       Value valsVec =
@@ -759,18 +757,17 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                    warpId, rewriter, targetInfo, maybeMaxVecElems, emitLdSt);
 }
 
-SmallVector<Value>
-lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
-          ArrayRef<Value> valsArray, // Input for store, output for load
-          Type llvmElemTy, ArrayRef<Value> smemBases,
-          ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
-          Value affineOffset, uint64_t maskSpanAffineOffset, Value laneId,
-          Value warpId, RewriterBase &rewriter,
-          const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
-          std::function<SmallVector<Value>(RewriterBase &, Location,
-                                           ArrayRef<Value>, Value, int,
-                                           VectorType, std::optional<Value>)>
-              lowerInst) {
+SmallVector<Value> lowerLdSt(
+    Location loc, MLIRContext *ctx, LinearLayout cvt,
+    ArrayRef<Value> valsArray, // Input for store, output for load
+    Type llvmElemTy, ArrayRef<Value> smemBases,
+    ArrayRef<std::pair<unsigned, unsigned>> paddingShifts, Value affineOffset,
+    uint64_t maskSpanAffineOffset, Value laneId, Value warpId,
+    RewriterBase &rewriter, const TargetInfoBase &targetInfo,
+    std::optional<int> maybeMaxVecElems,
+    std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
+                                     Value, int, VectorType, Value)>
+        lowerInst) {
   assert(!smemBases.empty() && "smemBases cannot be empty");
   auto vals = to_vector(valsArray);
   bool isStore = !vals.empty();
@@ -916,7 +913,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
         smemBase = b.extract_element(basesVec, partitionIdx);
       }
 
-      std::optional<Value> innerCtaOffset;
+      Value innerCtaOffset;
       if (useBlockId) {
         innerCtaOffset = b.add(ctaOffset, b.i32_val(idxAndBlockAdd[1].second));
       }
@@ -2019,7 +2016,7 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
 
   auto emitSt = [&](RewriterBase &rewriter, Location loc, ArrayRef<Value> vals,
                     Value shmemAddr, int idx, VectorType vecTy,
-                    std::optional<Value> ctaId) -> SmallVector<Value> {
+                    Value ctaId) -> SmallVector<Value> {
     auto length = vecTy.getNumElements();
     Value valsVec =
         packLLVector(loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
@@ -2030,7 +2027,7 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
 
   auto emitLd = [&](RewriterBase &rewriter, Location loc, ArrayRef<Value> vals,
                     Value shmemAddr, int idx, VectorType vecTy,
-                    std::optional<Value> ctaId) -> SmallVector<Value> {
+                    Value ctaId) -> SmallVector<Value> {
     Value loadedVec = targetInfo.loadDShared(rewriter, loc, shmemAddr, ctaId,
                                              vecTy, b.true_val());
     return unpackLLVector(loc, loadedVec, rewriter);
