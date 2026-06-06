@@ -37,6 +37,44 @@ class BlockedLayout:
     def __str__(self):
         return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
+    def expand_dims_layout(self, shape, axis):
+        # Match the linear layout inferred when reshaping a slice back to the
+        # blocked parent shape.
+        assert shape[axis] == 1
+        rank = len(shape)
+        bases = {"register": [], "lane": [], "warp": [], "block": []}
+        tile_shape = [1] * rank
+
+        for name, dim_sizes in [
+            ("register", self.sz_per_thread),
+            ("lane", self.threads_per_warp),
+            ("warp", self.warps_per_cta),
+        ]:
+            for dim in self.order:
+                size = dim_sizes[dim]
+                assert size > 0 and size & (size - 1) == 0
+                for bit in range(size.bit_length() - 1):
+                    basis = [0] * rank
+                    basis[dim] = tile_shape[dim] << bit
+                    bases[name].append(basis)
+            tile_shape = [x * y for x, y in zip(tile_shape, dim_sizes)]
+
+        for dim, size in enumerate(shape):
+            assert size > 0 and size & (size - 1) == 0
+            while tile_shape[dim] < size:
+                basis = [0] * rank
+                basis[dim] = tile_shape[dim]
+                bases["register"].append(basis)
+                tile_shape[dim] *= 2
+
+        for input_bases in bases.values():
+            for basis in input_bases:
+                for dim, size in enumerate(shape):
+                    if basis[dim] >= size:
+                        basis[dim] = 0
+        bases["register"] = [basis for basis in bases["register"] if any(basis)]
+        return LinearLayout(**bases)
+
 
 # -----------------------
 # test extract slice
@@ -115,10 +153,19 @@ def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_t
     if not is_hip():
         pytest.skip("extract_slice is AMD specific instruction.")
 
+    expanded_m = blocked_layout.expand_dims_layout([M, 1], 1)
+    expanded_m_tile = blocked_layout.expand_dims_layout([M_tile_size, 1], 1)
+    expanded_n = blocked_layout.expand_dims_layout([1, N], 0)
+    expanded_n_tile = blocked_layout.expand_dims_layout([1, N_tile_size], 0)
+
     ir = f"""
     #blocked = {blocked_layout}
     #src_extract_layout = {extract_layout[0]}
     #dst_extract_layout = {extract_layout[1]}
+    #expanded_m = {expanded_m}
+    #expanded_m_tile = {expanded_m_tile}
+    #expanded_n = {expanded_n}
+    #expanded_n_tile = {expanded_n_tile}
     module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {str(THREADS_PER_WARP)} : i32}} {{
     tt.func public @kernel(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
         %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
@@ -127,17 +174,21 @@ def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_t
         %42 = tt.make_range {{end = {M_tile_size} : i32, start = 0 : i32}} : tensor<{M_tile_size}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>>
         %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>>
         %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
-        %4 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>
-        %43 = tt.expand_dims %42 {{axis = 1 : i32}} : tensor<{M_tile_size}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M_tile_size}x1xi32, #blocked>
+        %expanded4 = tt.reshape %0 : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #expanded_m>
+        %4 = ttg.convert_layout %expanded4 : tensor<{M}x1xi32, #expanded_m> -> tensor<{M}x1xi32, #blocked>
+        %expanded43 = tt.reshape %42 : tensor<{M_tile_size}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M_tile_size}x1xi32, #expanded_m_tile>
+        %43 = ttg.convert_layout %expanded43 : tensor<{M_tile_size}x1xi32, #expanded_m_tile> -> tensor<{M_tile_size}x1xi32, #blocked>
         %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #blocked>
         %44 = arith.muli %43, %cst_n : tensor<{M_tile_size}x1xi32, #blocked>
-        %6 = tt.expand_dims %1 {{axis = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N}xi32, #blocked>
+        %expanded6 = tt.reshape %1 : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N}xi32, #expanded_n>
+        %6 = ttg.convert_layout %expanded6 : tensor<1x{N}xi32, #expanded_n> -> tensor<1x{N}xi32, #blocked>
         %7 = tt.broadcast %6 : tensor<1x{N}xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
         %8 = tt.broadcast %5 : tensor<{M}x1xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
         %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #blocked>
         %33 = tt.make_range {{end = {N_tile_size} : i32, start = 0 : i32}} : tensor<{N_tile_size}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>>
         %34 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>
-        %37 = tt.expand_dims %33 {{axis = 0 : i32}} : tensor<{N_tile_size}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N_tile_size}xi32, #blocked>
+        %expanded37 = tt.reshape %33 : tensor<{N_tile_size}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N_tile_size}xi32, #expanded_n_tile>
+        %37 = ttg.convert_layout %expanded37 : tensor<1x{N_tile_size}xi32, #expanded_n_tile> -> tensor<1x{N_tile_size}xi32, #blocked>
         %38 = tt.broadcast %37 : tensor<1x{N_tile_size}xi32, #blocked> -> tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
         %39 = tt.broadcast %44 : tensor<{M_tile_size}x1xi32, #blocked> -> tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
         %40 = arith.addi %38, %39 : tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
@@ -264,10 +315,16 @@ def test_concat_op(dtype, M, N, M_tile_size, N_tile_size, src_layout, dst_layout
     else:
         threadsPerWarp = [16, 4]
 
+    blocked_layout = BlockedLayout([1, 8], threadsPerWarp, [4, 1], [1, 0])
+    expanded_m = blocked_layout.expand_dims_layout([M, 1], 1)
+    expanded_m_tile = blocked_layout.expand_dims_layout([M_tile_size, 1], 1)
+
     ir = f"""
-    #blocked = #ttg.blocked<{{sizePerThread=[1, 8], threadsPerWarp={threadsPerWarp}, warpsPerCTA=[4, 1], order=[1, 0]}}>
+    #blocked = {blocked_layout}
     #src_layout = {src_layout}
     #dst_layout = {dst_layout}
+    #expanded_m = {expanded_m}
+    #expanded_m_tile = {expanded_m_tile}
 
     module attributes {{"ttg.num-ctas" = 1, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {str(THREADS_PER_WARP)} : i32}} {{
     tt.func public @kernel(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg3: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg4: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
@@ -280,17 +337,19 @@ def test_concat_op(dtype, M, N, M_tile_size, N_tile_size, src_layout, dst_layout
         %100 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
         %101 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
         %102 = tt.splat %arg3 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
-        %4 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>
-        %43 = tt.expand_dims %42 {{axis = 1 : i32}} : tensor<{M_tile_size}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M_tile_size}x1xi32, #blocked>
+        %expanded4 = tt.reshape %0 : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M}x1xi32, #expanded_m>
+        %4 = ttg.convert_layout %expanded4 : tensor<{M}x1xi32, #expanded_m> -> tensor<{M}x1xi32, #blocked>
+        %expanded43 = tt.reshape %42 : tensor<{M_tile_size}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<{M_tile_size}x1xi32, #expanded_m_tile>
+        %43 = ttg.convert_layout %expanded43 : tensor<{M_tile_size}x1xi32, #expanded_m_tile> -> tensor<{M_tile_size}x1xi32, #blocked>
         %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #blocked>
         %44 = arith.muli %43, %cst_n : tensor<{M_tile_size}x1xi32, #blocked>
-        %6 = tt.expand_dims %1 {{axis = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{M}xi32, #blocked>
+        %6 = tt.reshape %1 : tensor<{M}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{M}xi32, #blocked>
         %7 = tt.broadcast %6 : tensor<1x{M}xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
         %8 = tt.broadcast %5 : tensor<{M}x1xi32, #blocked> -> tensor<{M}x{N}xi32, #blocked>
         %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #blocked>
         %33 = tt.make_range {{end = {N_tile_size} : i32, start = 0 : i32}} : tensor<{N_tile_size}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>>
         %34 = tt.splat %arg4 : !tt.ptr<f16> -> tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>
-        %37 = tt.expand_dims %33 {{axis = 0 : i32}} : tensor<{N_tile_size}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N_tile_size}xi32, #blocked>
+        %37 = tt.reshape %33 : tensor<{N_tile_size}xi32, #ttg.slice<{{dim = 0, parent = #blocked}}>> -> tensor<1x{N_tile_size}xi32, #blocked>
         %38 = tt.broadcast %37 : tensor<1x{N_tile_size}xi32, #blocked> -> tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
         %39 = tt.broadcast %44 : tensor<{M_tile_size}x1xi32, #blocked> -> tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
         %40 = arith.addi %38, %39 : tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>

@@ -144,22 +144,17 @@ public:
     auto broadcastRhsOp = mulOp.getOperand(1).getDefiningOp<BroadcastOp>();
     if (!broadcastRhsOp)
       return failure();
-    auto getExpandDims = [](Value value)
-        -> std::optional<std::pair<Value, unsigned>> {
-      if (auto expandOp = value.getDefiningOp<ExpandDimsOp>())
-        return std::make_pair(expandOp.getSrc(), expandOp.getAxis());
-      if (auto reshapeOp = value.getDefiningOp<ReshapeOp>()) {
-        if (auto axis = reshapeOp.getExpandDimsAxis())
-          return std::make_pair(reshapeOp.getSrc(), *axis);
-      }
-      return std::nullopt;
-    };
-    auto expandLhs = getExpandDims(broadcastLhsOp.getSrc());
-    auto expandRhs = getExpandDims(broadcastRhsOp.getSrc());
-    if (!expandLhs || !expandRhs)
+    // broadcast operand is an expand-dims reshape
+    auto expandLhsOp = broadcastLhsOp.getSrc().getDefiningOp<ReshapeOp>();
+    if (!expandLhsOp)
+      return failure();
+    auto expandRhsOp = broadcastRhsOp.getSrc().getDefiningOp<ReshapeOp>();
+    if (!expandRhsOp)
       return failure();
     // get not-broadcast dimensions
-    if (expandLhs->second != 2 || expandRhs->second != 0)
+    auto expandLhsAxis = expandLhsOp.getExpandDimsAxis();
+    auto expandRhsAxis = expandRhsOp.getExpandDimsAxis();
+    if (expandLhsAxis != 2 || expandRhsAxis != 0)
       return failure();
     auto broadcastLhsShape =
         cast<ShapedType>(broadcastLhsOp.getType()).getShape();
@@ -175,8 +170,8 @@ public:
         SplatOp::create(rewriter, op->getLoc(), newAccType,
                         arith::ConstantOp::create(rewriter, op->getLoc(),
                                                   rewriter.getF32FloatAttr(0)));
-    rewriter.replaceOpWithNewOp<DotOp>(op, expandLhs->first, expandRhs->first,
-                                       newAcc,
+    rewriter.replaceOpWithNewOp<DotOp>(op, expandLhsOp.getSrc(),
+                                       expandRhsOp.getSrc(), newAcc,
                                        InputPrecision::IEEE, 0);
     return success();
   }
