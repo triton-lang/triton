@@ -625,8 +625,10 @@ class InterpreterBuilder:
         # Triton's rshift operator depends on the signedness of the left operand
         lhs_dtype = _get_signed_np_dtype(lhs.data.dtype)
         rhs_dtype = _get_signed_np_dtype(rhs.data.dtype)
-        lhs.data = lhs.data.astype(lhs_dtype)
-        rhs.data = rhs.data.astype(rhs_dtype)
+        lhs_data = lhs.data.astype(lhs_dtype)
+        rhs_data = rhs.data.astype(rhs_dtype)
+        lhs = TensorHandle(lhs_data, lhs.dtype)
+        rhs = TensorHandle(rhs_data, rhs.dtype)
         return self.binary_op(lhs, rhs, np.right_shift)
 
     def create_umulhi(self, lhs, rhs):

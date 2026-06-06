@@ -1,3 +1,5 @@
+import re
+
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
@@ -113,14 +115,15 @@ def test_pipeline_static_range_with_unroll():
     signature = {"A": "*fp16", "B": "*fp16", "N": "i32", "BLOCK": "constexpr"}
     constexprs = {"BLOCK": BLOCK}
     k = _compile_gluon(pipeline_static_range_unrolled, signature, constexprs)
-    amdgcn = k.asm["amdgcn"]
-    setprio_lines = [line.strip() for line in amdgcn.splitlines() if "s_setprio" in line]
-    prios = [int(l.split()[-1]) for l in setprio_lines]
-    # Each converted loop emits: 1 pre-loop + (N-1) in-body + 1 wrap-around + 1 post-loop reset.
-    # Main loop has 8 clusters (static_range(2) * 2 stages * unroll(2)): 1+7+1+1 = 10.
-    # Epilogue has 4 clusters (static_range(2) * 2 stages): 1+3+1+1 = 6.
-    # Total: 16 s_setprio.  Both priority levels must appear.
-    assert len(prios) == 16, \
-        f"Expected 16 s_setprio (main=10 + epilogue=6), got {len(prios)}: {prios}"
-    assert prios.count(0) == 8 and prios.count(1) == 8, \
-        f"Expected 8 prio-0 and 8 prio-1, got {prios}"
+    ttgir = k.asm["ttgir"]
+    pipelined_loop_pattern = r"scf\.for\b.*?\n    \} \{[^}]*triton\.warp_pipeline\.pipelined_for[^}]*\}"
+    pipelined_loops = re.findall(pipelined_loop_pattern, ttgir, re.S)
+    stage_counts = [loop.count("triton.warp_pipeline.stage") for loop in pipelined_loops]
+    priority_counts = [(loop.count("triton.warp_pipeline.priority = 1"),
+                        loop.count("triton.warp_pipeline.priority = 0")) for loop in pipelined_loops]
+    # Main loop has 8 clusters (static_range(2) * 2 stages * unroll(2)).
+    # Epilogue has 4 clusters (static_range(2) * 2 stages).
+    assert stage_counts == [8, 4], \
+        f"Expected main+epilogue warp-pipelined loops with 8 and 4 stages, got {stage_counts}"
+    assert priority_counts == [(4, 4), (2, 2)], \
+        f"Expected balanced stage priorities in ttgir, got {priority_counts}"

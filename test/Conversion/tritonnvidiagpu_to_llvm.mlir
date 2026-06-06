@@ -82,7 +82,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @arrive_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>) {
     // CHECK-NEXT: [[BASE:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<3>, i32)>
     // CHECK-NEXT: llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<3>, i32)>
-    // CHECK-NEXT: nvvm.barrier0
+    // CHECK-NEXT: nvvm.barrier
     // CHECK-NEXT: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
     // CHECK-NEXT: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
     // CHECK-NEXT: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
@@ -97,7 +97,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @arrive_barrier_pred(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %pred: i1) {
     // CHECK-NEXT: [[BASE:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<3>, i32)>
     // CHECK-NEXT: llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<3>, i32)>
-    // CHECK-NEXT: nvvm.barrier0
+    // CHECK-NEXT: nvvm.barrier
     // CHECK-NEXT: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
     // CHECK-NEXT: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
     // CHECK-NEXT: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
@@ -117,7 +117,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: arrive_barrier_cluster_broadcast
   tt.func @arrive_barrier_cluster_broadcast(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>) {
-    // CHECK: nvvm.barrier0
+    // CHECK: nvvm.barrier
     // CHECK-NOT: nvg.cluster_id
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.and
@@ -437,7 +437,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: expect_barrier
-  // CHECK: nvvm.barrier0
+  // CHECK: nvvm.barrier
   // CHECK: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
   // CHECK: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
   // CHECK: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
@@ -457,7 +457,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: expect_barrier_cluster_broadcast
-  // CHECK: nvvm.barrier0
+  // CHECK: nvvm.barrier
   // CHECK-NOT: nvg.cluster_id
   // CHECK: llvm.ptrtoint
   // CHECK: llvm.and
@@ -623,7 +623,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func @cluster_barrier_inside_warp_specialize() {
     ttg.warp_specialize()
     default {
-      // CHECK: nvvm.barrier0
+      // CHECK: nvvm.barrier
       // CHECK: %[[PARITY:.*]] = llvm.load
       // CHECK: %[[BARRIER_INT:.*]] = llvm.ptrtoint
       // CHECK: %[[PEER_BARRIER_INT:.*]] = llvm.xor %[[BARRIER_INT]],
@@ -633,7 +633,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
       // CHECK: llvm.xor %[[PARITY]],
       // CHECK: st.shared::cta.b32
-      // CHECK: nvvm.barrier0
+      // CHECK: nvvm.barrier
       ttng.cluster_barrier
       ttg.warp_yield
     }
@@ -705,6 +705,32 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       %c1_i32 = arith.constant 1 : i32
       %0 = tt.atomic_cas acq_rel, gpu, %arg0, %c0_i32, %c1_i32 {allocation.offset = 0 : i32} : (!tt.ptr<i32>, i32, i32) -> i32
       tt.store %arg0, %0 : !tt.ptr<i32>
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#blockedBroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 512 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: ttg.ws_cluster_barrier_count = 1 : i32
+  // CHECK-LABEL: @tensor_atomic_cluster_barrier_created_during_conversion
+  // CHECK: mbarrier.init.shared::cta.b64
+  // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
+  tt.func @tensor_atomic_cluster_barrier_created_during_conversion(%arg0: !tt.ptr<i32>) {
+    ttg.warp_specialize()
+    default {
+      %ptrs = tt.splat %arg0 : !tt.ptr<i32> -> tensor<128x!tt.ptr<i32>, #blockedBroadcast>
+      %zeros = arith.constant dense<0> : tensor<128xi32, #blockedBroadcast>
+      %ones = arith.constant dense<1> : tensor<128xi32, #blockedBroadcast>
+      %cas = tt.atomic_cas acq_rel, gpu, %ptrs, %zeros, %ones {allocation.offset = 0 : i32} : (tensor<128x!tt.ptr<i32>, #blockedBroadcast>, tensor<128xi32, #blockedBroadcast>, tensor<128xi32, #blockedBroadcast>) -> tensor<128xi32, #blockedBroadcast>
+      tt.store %ptrs, %cas : tensor<128x!tt.ptr<i32>, #blockedBroadcast>
       ttg.warp_yield
     }
     partition0() num_warps(4) {
