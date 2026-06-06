@@ -273,10 +273,23 @@ static bool getBackwardSliceToPartition(Value v,
         currentDim--;
     }
 
+    if (auto reshapeOp = dyn_cast<ReshapeOp>(op)) {
+      auto expandedAxis = reshapeOp.getExpandDimsAxis();
+      if (expandedAxis) {
+        // currentDim is the dim after expansion.
+        assert(*expandedAxis != currentDim &&
+               "expanded dim always has shape 1");
+        // Partition along currentDim - 1 for an expand-dims reshape.
+        if (*expandedAxis < currentDim)
+          currentDim--;
+      }
+    }
+
     // Recusively process operands backwards.
     if (op->hasTrait<OpTrait::Elementwise>() ||
         isa<arith::ConstantOp, arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp,
-            BroadcastOp, ExpandDimsOp, MakeRangeOp, SplatOp, ConvertLayoutOp,
+            BroadcastOp, ExpandDimsOp, ReshapeOp, MakeRangeOp, SplatOp,
+            ConvertLayoutOp,
             triton::gpu::LocalAllocOp, LoadOp, TransOp, MemDescTransOp,
             AtomicRMWOp, triton::AddPtrOp, DescriptorLoadOp,
             nvidia_gpu::TMEMAllocOp, nvidia_gpu::TMEMLoadOp, FpToFpOp, SplitOp,

@@ -165,9 +165,9 @@ tt.func @optimize_broadcast(%arg0: i32, %arg1: !tt.tensordesc<128x128xf32, #shar
     // CHECK: [[X:%.*]] = "producer"{{.*}}partition = array<i32: 0>
     %x = "producer"() {ttg.partition = array<i32: 0>, data} : () -> tensor<128xf32>
 
-    // CHECK-DAG: [[X0_P0:%.*]] = tt.expand_dims [[X]] {{.*}}partition = array<i32: 0>
-    // CHECK-DAG: [[X0_P1:%.*]] = tt.expand_dims [[X]] {{.*}}partition = array<i32: 1>
-    %x0 = tt.expand_dims %x {axis = 0 : i32} : tensor<128xf32> -> tensor<1x128xf32>
+    // CHECK-DAG: [[X0_P0:%.*]] = tt.reshape [[X]] {{.*}}partition = array<i32: 0>
+    // CHECK-DAG: [[X0_P1:%.*]] = tt.reshape [[X]] {{.*}}partition = array<i32: 1>
+    %x0 = tt.reshape %x : tensor<128xf32> -> tensor<1x128xf32>
     // CHECK-DAG: [[X1_P0:%.*]] = tt.broadcast [[X0_P0]] {{.*}}partition = array<i32: 0>
     // CHECK-DAG: [[X1_P1:%.*]] = tt.broadcast [[X0_P1]] {{.*}}partition = array<i32: 1>
     %x1 = tt.broadcast %x0 : tensor<1x128xf32> -> tensor<128x128xf32>

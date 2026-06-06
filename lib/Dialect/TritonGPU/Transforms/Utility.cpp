@@ -536,6 +536,18 @@ static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
 }
 
 static Attribute inferDstEncoding(triton::ReshapeOp op, Attribute encoding) {
+  // Preserve ExpandDimsOp's forward-propagation restriction for reshapes that
+  // have its layout signature. Ordinary reshapes may also insert a unit dim.
+  if (auto axis = op.getExpandDimsAxis()) {
+    auto srcSliceEncoding = mlir::dyn_cast<triton::gpu::SliceEncodingAttr>(
+        op.getSrc().getType().getEncoding());
+    if (srcSliceEncoding && *axis == srcSliceEncoding.getDim()) {
+      auto sliceEncoding =
+          mlir::dyn_cast<triton::gpu::SliceEncodingAttr>(encoding);
+      if (!sliceEncoding || *axis != sliceEncoding.getDim())
+        return {};
+    }
+  }
   return inferReshapeOpDstEncoding(
       op.getSrc().getType().getShape(), encoding, op.getType().getShape(),
       op.getType().getEncoding(), op.getAllowReorder());

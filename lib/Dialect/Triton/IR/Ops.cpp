@@ -911,6 +911,29 @@ LogicalResult CatOp::verify() {
 
 //-- ReshapeOp --
 
+bool ReshapeOp::isExpandDims(unsigned axis) {
+  if (getAllowReorder() || getEfficientLayout())
+    return false;
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+  if (srcTy.getRank() + 1 != dstTy.getRank() || axis >= dstTy.getRank())
+    return false;
+  auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
+  return dstShape[axis] == 1 &&
+         srcShape.take_front(axis) == dstShape.take_front(axis) &&
+         srcShape.drop_front(axis) == dstShape.drop_front(axis + 1);
+}
+
+std::optional<unsigned> ReshapeOp::getExpandDimsAxis() {
+  auto dstShape = getType().getShape();
+  for (unsigned axis = 0; axis < dstShape.size(); ++axis) {
+    if (isExpandDims(axis))
+      return axis;
+  }
+  return std::nullopt;
+}
+
 void ReshapeOp::build(OpBuilder &builder, OperationState &state,
                       ArrayRef<int64_t> shape, Value src, bool allowReorder) {
   auto srcTy = cast<RankedTensorType>(src.getType());

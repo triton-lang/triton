@@ -417,6 +417,38 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
                 rewriter, loc, nonUniform, expandOp.getAxis());
             return std::make_pair(uniform, expandNonUniform);
           })
+          .Case<tt::gpu::ConvertLayoutOp>([&](auto convertOp) {
+            auto reshapeOp =
+                convertOp.getSrc().template getDefiningOp<tt::ReshapeOp>();
+            if (!reshapeOp || !reshapeOp.getExpandDimsAxis()) {
+              Value scalarZero = arith::ConstantIntOp::create(
+                  rewriter, loc, static_cast<int64_t>(0),
+                  static_cast<unsigned>(bitness));
+              return std::make_pair(scalarZero, expr);
+            }
+            auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
+                rewriter, loc, convertOp.getSrc(), bitness, scalarToSplatMap);
+            auto convertNonUniform = tt::gpu::ConvertLayoutOp::create(
+                rewriter, loc, convertOp.getType(), nonUniform);
+            return std::make_pair(uniform, Value(convertNonUniform));
+          })
+          .Case<tt::ReshapeOp>([&](auto reshapeOp) {
+            if (!reshapeOp.getExpandDimsAxis()) {
+              Value scalarZero = arith::ConstantIntOp::create(
+                  rewriter, loc, static_cast<int64_t>(0),
+                  static_cast<unsigned>(bitness));
+              return std::make_pair(scalarZero, expr);
+            }
+            auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
+                rewriter, loc, reshapeOp.getSrc(), bitness, scalarToSplatMap);
+            auto resultTy =
+                cast<RankedTensorType>(reshapeOp.getType())
+                    .clone(getElementTypeOrSelf(nonUniform.getType()));
+            auto reshapeNonUniform = tt::ReshapeOp::create(
+                rewriter, loc, resultTy, nonUniform,
+                reshapeOp.getAllowReorder(), reshapeOp.getEfficientLayout());
+            return std::make_pair(uniform, Value(reshapeNonUniform));
+          })
           .Case<arith::AddIOp>([&](Operation *op) {
             return createDecomposeOffsetFromAdd(rewriter, loc, expr, bitness,
                                                 scalarToSplatMap);
@@ -1568,6 +1600,47 @@ public:
   }
 };
 
+/// Rewrite an expand-dims reshape(base, offset) -> base, reshape(offset).
+class ConvertExpandDimsReshape
+    : public PointerCanonicalizationPattern<tt::ReshapeOp> {
+public:
+  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+  LogicalResult
+  matchAndRewrite_(tt::ReshapeOp reshapeOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
+    if (!reshapeOp.getExpandDimsAxis())
+      return rewriter.notifyMatchFailure(reshapeOp,
+                                         "not an expand-dims reshape");
+    ValueRange remappedOperands = adaptor.getSrc();
+    if (remappedOperands.size() != 2)
+      return success();
+    Value fatPtrBase = remappedOperands[0];
+    if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
+      return rewriter.notifyMatchFailure(
+          reshapeOp, "only scalar base currently supported");
+    Value fatPtrOffset = remappedOperands[1];
+
+    RankedTensorType result =
+        llvm::cast<RankedTensorType>(reshapeOp->getResultTypes().front());
+    if (!llvm::isa<tt::PointerType>(result.getElementType()))
+      return rewriter.notifyMatchFailure(
+          reshapeOp,
+          "expected expand-dims reshape result to be tensor of tt.ptr");
+
+    RankedTensorType newResult = RankedTensorType::get(
+        result.getShape(),
+        llvm::cast<RankedTensorType>(fatPtrOffset.getType()).getElementType(),
+        result.getEncoding());
+    auto newOffset = tt::ReshapeOp::create(
+        rewriter, reshapeOp.getLoc(), newResult, fatPtrOffset,
+        reshapeOp.getAllowReorder(), reshapeOp.getEfficientLayout());
+    rewriter.replaceOpWithMultiple(reshapeOp, {{fatPtrBase, newOffset}});
+    fatPtrs[{fatPtrBase, newOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
+
+    return success();
+  }
+};
+
 /// convert integer offset, keep base
 class ConvertConvertLayoutOp
     : public PointerCanonicalizationPattern<tt::gpu::ConvertLayoutOp> {
@@ -2033,7 +2106,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       MaterializeFatPointerVariadic<tt::ExternElementwiseOp>,
       MaterializeFatPointerVariadic<tt::ElementwiseInlineAsmOp>,
       MaterializeFatPointerVariadic<tt::PrintOp>, ConvertSCFForOp,
-      ConvertExpandDims, ConvertSCFYieldOp, ConvertSCFIfOp,
+      ConvertExpandDims, ConvertExpandDimsReshape, ConvertSCFYieldOp,
+      ConvertSCFIfOp,
       ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
       ConvertCFBranch, ConvertArithSelectOp, ConvertReturnOp>(
       patterns.getContext(), opsToRewrite, fatPrs, convertedBlocks);

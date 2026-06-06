@@ -144,17 +144,22 @@ public:
     auto broadcastRhsOp = mulOp.getOperand(1).getDefiningOp<BroadcastOp>();
     if (!broadcastRhsOp)
       return failure();
-    // broadcast operand is expand dims
-    auto expandLhsOp = broadcastLhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
-    if (!expandLhsOp)
-      return failure();
-    auto expandRhsOp = broadcastRhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
-    if (!expandRhsOp)
+    auto getExpandDims = [](Value value)
+        -> std::optional<std::pair<Value, unsigned>> {
+      if (auto expandOp = value.getDefiningOp<ExpandDimsOp>())
+        return std::make_pair(expandOp.getSrc(), expandOp.getAxis());
+      if (auto reshapeOp = value.getDefiningOp<ReshapeOp>()) {
+        if (auto axis = reshapeOp.getExpandDimsAxis())
+          return std::make_pair(reshapeOp.getSrc(), *axis);
+      }
+      return std::nullopt;
+    };
+    auto expandLhs = getExpandDims(broadcastLhsOp.getSrc());
+    auto expandRhs = getExpandDims(broadcastRhsOp.getSrc());
+    if (!expandLhs || !expandRhs)
       return failure();
     // get not-broadcast dimensions
-    int expandLhsAxis = expandLhsOp.getAxis();
-    int expandRhsAxis = expandRhsOp.getAxis();
-    if (expandLhsAxis != 2 || expandRhsAxis != 0)
+    if (expandLhs->second != 2 || expandRhs->second != 0)
       return failure();
     auto broadcastLhsShape =
         cast<ShapedType>(broadcastLhsOp.getType()).getShape();
@@ -170,8 +175,8 @@ public:
         SplatOp::create(rewriter, op->getLoc(), newAccType,
                         arith::ConstantOp::create(rewriter, op->getLoc(),
                                                   rewriter.getF32FloatAttr(0)));
-    rewriter.replaceOpWithNewOp<DotOp>(op, expandLhsOp.getSrc(),
-                                       expandRhsOp.getSrc(), newAcc,
+    rewriter.replaceOpWithNewOp<DotOp>(op, expandLhs->first, expandRhs->first,
+                                       newAcc,
                                        InputPrecision::IEEE, 0);
     return success();
   }
