@@ -1569,6 +1569,46 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
     torch.testing.assert_close(ref, triton_output)
 
 
+@pytest.mark.skipif(not is_hip_cdna3(), reason="Requires CDNA3")
+@pytest.mark.parametrize("src_format", ["fp4", "fp8"])
+@pytest.mark.parametrize("out_dtype", ["float16", "bfloat16"])
+def test_amd_scaled_upcast_per_element_scale(src_format, out_dtype):
+
+    @gluon.jit
+    def kernel(x_ptr, scale_ptr, out_ptr, SRC_FORMAT: ttgl.constexpr, ELEM_TYPE: ttgl.constexpr):
+        input_layout: ttgl.constexpr = ttgl.BlockedLayout([4], [64], [1], [0])
+        input_offsets = ttgl.arange(0, 256, layout=input_layout)
+        x = ttgl.load(x_ptr + input_offsets)
+        if SRC_FORMAT == "fp4":
+            output_layout: ttgl.constexpr = ttgl.BlockedLayout([8], [64], [1], [0])
+            output_offsets = ttgl.arange(0, 512, layout=output_layout)
+            scale = ttgl.load(scale_ptr + output_offsets)
+            out = ttgl.amd.cdna3.scaled_upcast(x, scale, ELEM_TYPE, axis=0)
+        else:
+            output_offsets = input_offsets
+            scale = ttgl.load(scale_ptr + output_offsets)
+            out = ttgl.amd.cdna3.scaled_upcast(x, scale, ELEM_TYPE)
+        ttgl.store(out_ptr + output_offsets, out)
+
+    elem_type = ttgl.float16 if out_dtype == "float16" else ttgl.bfloat16
+    torch_dtype = torch.float16 if out_dtype == "float16" else torch.bfloat16
+    if src_format == "fp4":
+        x = torch.full((256, ), 0x22, dtype=torch.uint8, device="cuda")
+        scale_values = torch.tensor([127, 128, 129, 130, 131, 132, 133, 134],
+                                    dtype=torch.uint8,
+                                    device="cuda")
+    else:
+        x = torch.full((256, ), 0x38, dtype=torch.uint8, device="cuda").view(torch.float8_e4m3fn)
+        scale_values = torch.tensor([127, 128, 129, 130], dtype=torch.uint8, device="cuda")
+    scale = scale_values.repeat(64)
+    out = torch.empty_like(scale, dtype=torch_dtype)
+
+    kernel[(1, )](x, scale, out, SRC_FORMAT=src_format, ELEM_TYPE=elem_type, num_warps=1)
+
+    expected = torch.pow(2, scale.to(torch.int32) - 127).to(torch_dtype)
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+
+
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("M, N, K", [(32, 32, 128)])
 @pytest.mark.parametrize("a_type, b_type", [(a_type, b_type)
