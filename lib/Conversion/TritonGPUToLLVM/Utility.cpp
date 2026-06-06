@@ -593,8 +593,7 @@ computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
     assert(outputs.size() == 2);
     auto [offsetName, offset] = outputs[0];
     auto [blockName, blockId] = outputs[1];
-    assert(offsetName == kOffset);
-    assert(blockName == kBlock);
+    assert(offsetName == kOffset && blockName == kBlock);
 
     // For subslices, the physical offset is computed as:
     //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
