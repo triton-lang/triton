@@ -41,6 +41,10 @@ def is_consan_supported(arch):
     return arch in ["gfx1250"]
 
 
+def disable_real_true16_feature(arch):
+    return '-real-true16' if arch.startswith('gfx11') else ''
+
+
 def _parse_llvm_fn_attrs(attrs):
     if not isinstance(attrs, str):
         return tuple(attrs)
@@ -489,6 +493,7 @@ class HIPBackend(BaseBackend):
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
         # from memory.
+        #
         # TODO(tyb0807): Disabled when using MIR swap/dump because the value is
         # not serializable to/from MIR YAML
         if options.arch != "gfx1250" and not (knobs.amd.swap_mir or knobs.amd.dump_mir):
@@ -545,7 +550,7 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
-        features = ''
+        features = disable_real_true16_feature(options.arch)
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
         _ = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
@@ -568,10 +573,12 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        target_features = ''
+        target_features = []
         if knobs.compilation.enable_asan:
-            target_features = '+xnack'
-        hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
+            target_features.append('+xnack')
+        if true16 := disable_real_true16_feature(options.arch):
+            target_features.append(true16)
+        hsaco = amd.assemble_amdgcn(src, options.arch, ','.join(target_features))
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
                 with open(tmp_in.name, "wb") as fd_in:
