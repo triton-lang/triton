@@ -89,6 +89,8 @@ type_canonicalisation_dict = {
     "float8_e5m2": "fp8e5",
     "float8e5b16": "fp8e5b16",
     "float8_e5m2fnuz": "fp8e5b16",
+    "float8e8m0fnu": "fp8e8m0fnu",
+    "float8_e8m0fnu": "fp8e8m0fnu",
     "half": "fp16",
     "float16": "fp16",
     "bfloat16": "bf16",
@@ -131,7 +133,7 @@ BITWIDTH_DICT: Dict[str, int] = {
     **{f"fp{n}": n
        for n in (16, 32, 64)},
     **{f"fp8{suffix}": 8
-       for suffix in ("e4nv", "e4b15", "e4b8", "e5", "e5b16")},
+       for suffix in ("e4nv", "e4b15", "e4b8", "e5", "e5b16", "e8m0fnu")},
     "bf16": 16,
     "void": 0,
 }

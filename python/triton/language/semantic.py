@@ -1573,6 +1573,11 @@ class TritonSemantic(Generic[TensorTy]):
                 N, K // scale_factor
             ], f"rhs_scale must be a tensor of shape [..., {N}, {K // scale_factor}]. Got {rhs_scale_shape}"
 
+    def _canonicalize_dot_scale(self, scale: TensorTy) -> TensorTy:
+        if scale.dtype == tl.float8e8m0fnu:
+            return self.tensor(scale.handle, scale.type.with_element_ty(tl.uint8))
+        return scale
+
     def dot_scaled(self, lhs: TensorTy, lhs_scale: TensorTy, lhs_format: str, rhs: TensorTy,
                    rhs_scale: Optional[TensorTy], rhs_format: str, acc: TensorTy | None, fast_math: bool,
                    lhs_k_pack: bool, rhs_k_pack: bool, out_dtype: tl.dtype) -> TensorTy:
@@ -1590,6 +1595,10 @@ class TritonSemantic(Generic[TensorTy]):
         lhs_scale_is_none = lhs_scale is None or (isinstance(lhs_scale, tl.constexpr) and lhs_scale.value is None)
         lhs = self._bitcast_to_fp_type(lhs, lhs_format)
         rhs = self._bitcast_to_fp_type(rhs, rhs_format)
+        if not lhs_scale_is_none:
+            lhs_scale = self._canonicalize_dot_scale(lhs_scale)
+        if not rhs_scale_is_none:
+            rhs_scale = self._canonicalize_dot_scale(rhs_scale)
 
         assert lhs_k_pack or lhs_format == "e2m1", "only mxfp4 inputs can be packed along a dimension different than K"
         assert rhs_k_pack or rhs_format == "e2m1", "only mxfp4 inputs can be packed along a dimension different than K"
