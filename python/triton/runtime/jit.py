@@ -322,6 +322,8 @@ class KernelParam:
 
     @cached_property
     def annotation_type(self) -> str:
+        if self._param.annotation is int or self._param.annotation == "int":
+            return ""
         a = self.annotation
         if a.startswith("*k"):
             a = a[2:]

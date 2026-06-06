@@ -37,6 +37,33 @@ def test_int_annotation(signed, width, device):
     assert f'arith.{pfx}tofp' in h.asm["ttir"]
 
 
+def test_annotated_int_preserves_constexpr_specialization(device):
+
+    @triton.jit
+    def _kernel(X, stride: int, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        tl.store(X + offsets * stride, offsets)
+
+    @triton.jit
+    def _typed_kernel(X, stride: tl.int32, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        tl.store(X + offsets * stride, offsets)
+
+    def func_signature(ttir):
+        return next(line for line in ttir.splitlines() if "tt.func public" in line).split(" attributes ")[0]
+
+    x = torch.empty(16, dtype=torch.int32, device=device)
+
+    h = _kernel.warmup(x, 1, BLOCK=16, grid=(1, ))
+    assert "stride" not in func_signature(h.asm["ttir"])
+
+    h = _kernel.warmup(x, 2, BLOCK=16, grid=(1, ))
+    assert "%stride: i32" in func_signature(h.asm["ttir"])
+
+    h = _typed_kernel.warmup(x, 1, BLOCK=16, grid=(1, ))
+    assert "%stride: i32" in func_signature(h.asm["ttir"])
+
+
 # Test that unknown annotations do not emit an error
 def test_unknown_annotation(device):
 
