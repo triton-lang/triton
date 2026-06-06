@@ -616,11 +616,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @local_gather_scatter_two_ctas
-  // CHECK: ld.shared::cta
-  // CHECK: ld.shared::cluster
+  // CHECK: nvvm.mapa
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<7> -> i32
   // CHECK: nvvm.barrier0
-  // CHECK: st.shared::cta
-  // CHECK: st.shared::cluster
+  // CHECK: nvvm.mapa
+  // CHECK: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<7>
   tt.func @local_gather_scatter_two_ctas(%out: !tt.ptr<i32>, %vals: tensor<2x32xi32, #local_gather_scatter_blocked>) {
     %src = ttg.local_alloc {allocation.offset = [0 : i32, 256 : i32]} : () -> !ttg.memdesc<2x32xi32, #local_gather_scatter_shared, #ttg.shared_memory, mutable>
     %idx = arith.constant dense<0> : tensor<2x32xi32, #local_gather_scatter_blocked>
