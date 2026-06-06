@@ -193,6 +193,46 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
   return LinearLayout({{S("offset"), bases2D}}, outDimNames);
 }
 
+LinearLayout getCanonicalScaleSmemLinearLayout(MLIRContext *ctx,
+                                             ArrayRef<int64_t> shape) {
+  assert(shape.size() == 2 && "scale layout expects rank-2");
+  assert(shape[0] % 128 == 0 && "scale rows must be a multiple of 128");
+  assert(shape[1] % 4 == 0 && "scale columns must be a multiple of 4");
+
+  auto rows = shape[0];
+  auto cols = shape[1];
+  auto kOffset = S("offset");
+  auto kFlat = S("flat");
+  auto kColLo = S("colLo");
+  auto kRowMid = S("rowMid");
+  auto kRowLo = S("rowLo");
+  auto kOuterCol = S("outerCol");
+  auto kOuterRow = S("outerRow");
+  auto outDims = standardOutDimNames(ctx, 2);
+
+  int32_t outerRows = rows / (32 * 4);
+  int32_t outerCols = cols / 4;
+
+  // Reinterpret a flat row-major SMEM byte layout through the semantic
+  // pre-transpose scale tile [outerRow, outerCol, rowLo=32, rowMid=4, colLo=4],
+  // then map those chunked dimensions back to the final logical 2D tensor.
+  auto offsetToChunked = LinearLayout::identity1D(rows * cols, kOffset, kFlat)
+                             .reshapeOuts({{kColLo, 4},
+                                           {kRowMid, 4},
+                                           {kRowLo, 32},
+                                           {kOuterCol, outerCols},
+                                           {kOuterRow, outerRows}});
+
+  LinearLayout chunkedToLogical =
+      LinearLayout::identity1D(32, kRowLo, outDims[0]) *
+      LinearLayout::identity1D(4, kRowMid, outDims[0]) *
+      LinearLayout::identity1D(outerRows, kOuterRow, outDims[0]) *
+      LinearLayout::identity1D(4, kColLo, outDims[1]) *
+      LinearLayout::identity1D(outerCols, kOuterCol, outDims[1]);
+
+  return offsetToChunked.compose(chunkedToLogical).transposeOuts(outDims);
+}
+
 static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
     ArrayRef<int64_t> shape, NVMMASharedEncodingAttr shared,
     ArrayRef<int64_t> tmaShape, bool disableSwizzle, bool emitErrors) {
