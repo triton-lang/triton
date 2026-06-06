@@ -562,7 +562,7 @@ computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
 
   auto kOffset = str_attr("offset");
   auto kBlock = str_attr("block");
-  bool useBlockId = invSharedLayout.getOutDimSize(kBlock) > 1;
+  bool isMultiCTA = invSharedLayout.getOutDimSize(kBlock) > 1;
   // Get the subslice affine offset (non-zero for memdesc subslices)
   Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
   auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
@@ -622,7 +622,7 @@ computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
       ptr = b.gep(smemObj.getBase().getType(), llvmElemTy, smemObj.getBase(),
                   offset);
     }
-    addrs.push_back({ptr, useBlockId ? blockId : Value()});
+    addrs.push_back({ptr, isMultiCTA ? blockId : Value()});
   }
 
   return addrs;
