@@ -94,13 +94,6 @@ public:
   bool isCuda() const override { return true; }
 
 private:
-  void storeDSharedImpl(RewriterBase &rewriter, Location loc, Value ptr,
-                        std::optional<Value> ctaId, Value val,
-                        Value pred) const;
-  Value loadDSharedImpl(RewriterBase &rewriter, Location loc, Value ptr,
-                        std::optional<Value> ctaId, Type elemTy, Value pred,
-                        Operation *localLoadOp = nullptr) const;
-
   triton::nvidia_gpu::TargetFeatures targetFeatures;
   int ptxVersion;
 };

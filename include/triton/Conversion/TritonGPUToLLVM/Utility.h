@@ -618,13 +618,6 @@ SmallVector<LocalSharedMemoryAddress> computeLocalAddrs(
     SharedMemoryObject smemObj, Type llvmElemTy, ArrayRef<Value> idxValues,
     ArrayRef<SmallVector<Value>> coords, unsigned axis, RewriterBase &rewriter);
 
-SmallVector<Value> computeLocalPtrs(Location loc,
-                                    triton::gpu::MemDescType memDescTy,
-                                    SharedMemoryObject smemObj, Type llvmElemTy,
-                                    ArrayRef<Value> idxValues,
-                                    ArrayRef<SmallVector<Value>> coords,
-                                    unsigned axis, RewriterBase &rewriter);
-
 // Backend-agnostic preparation for lowering LocalAtomicScatterRMWOp.
 struct LocalAtomicScatterRMWInfo {
   RankedTensorType valuesTy;

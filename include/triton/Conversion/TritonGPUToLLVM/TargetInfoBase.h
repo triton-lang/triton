@@ -31,7 +31,7 @@ public:
   virtual void warpSync(Location loc, RewriterBase &rewriter) const = 0;
 
   // Store/load a value from shared memory, either in the same CTA or, if
-  // `ctaId` is non-nullopt, in the specified CTA in the same group.
+  // `ctaId` is non-nullopt, in another CTA in the same group.
   //
   // A target that does not support cross-CTA transfers will assert if ctaId is
   // non-nullopt.

@@ -206,26 +206,9 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
   }
 }
 
-void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                              std::optional<Value> ctaId, Value val,
-                              Value pred) const {
-  if (!ctaId) {
-    storeDSharedImpl(rewriter, loc, ptr, ctaId, val, pred);
-    return;
-  }
-
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value currentCtaId = getClusterCTAId(rewriter, loc);
-  Value isLocal = b.icmp_eq(*ctaId, currentCtaId);
-  storeDSharedImpl(rewriter, loc, ptr, std::nullopt, val,
-                   b.and_(pred, isLocal));
-  storeDSharedImpl(rewriter, loc, ptr, ctaId, val,
-                   b.and_(pred, b.icmp_ne(*ctaId, currentCtaId)));
-}
-
-void TargetInfo::storeDSharedImpl(RewriterBase &rewriter, Location loc,
-                                  Value ptr, std::optional<Value> ctaId,
-                                  Value val, Value pred) const {
+static void storeDSharedImpl(RewriterBase &rewriter, Location loc, Value ptr,
+                             std::optional<Value> ctaId, Value val,
+                             Value pred) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
@@ -344,37 +327,24 @@ void TargetInfo::storeDSharedImpl(RewriterBase &rewriter, Location loc,
   }
 }
 
-Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                              std::optional<Value> ctaId, Type loadTy,
-                              Value pred, Operation *localLoadOp) const {
+void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                              std::optional<Value> ctaId, Value val,
+                              Value pred) const {
   if (!ctaId)
-    return loadDSharedImpl(rewriter, loc, ptr, ctaId, loadTy, pred,
-                           localLoadOp);
+    return storeDSharedImpl(rewriter, loc, ptr, ctaId, val, pred);
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value currentCtaId = getClusterCTAId(rewriter, loc);
   Value isLocal = b.icmp_eq(*ctaId, currentCtaId);
-  Value local = loadDSharedImpl(rewriter, loc, ptr, std::nullopt, loadTy,
-                                b.and_(pred, isLocal), localLoadOp);
-  Value remote = loadDSharedImpl(rewriter, loc, ptr, ctaId, loadTy,
-                                 b.and_(pred, b.icmp_ne(*ctaId, currentCtaId)),
-                                 localLoadOp);
-  if (!isa<VectorType>(loadTy))
-    return b.select(isLocal, local, remote);
-
-  SmallVector<Value> selected;
-  for (auto [localVal, remoteVal] :
-       llvm::zip(unpackLLVector(loc, local, rewriter),
-                 unpackLLVector(loc, remote, rewriter))) {
-    selected.push_back(b.select(isLocal, localVal, remoteVal));
-  }
-  return packLLVector(loc, selected, rewriter);
+  storeDSharedImpl(rewriter, loc, ptr, std::nullopt, val,
+                   b.and_(pred, isLocal));
+  storeDSharedImpl(rewriter, loc, ptr, ctaId, val,
+                   b.and_(pred, b.icmp_ne(*ctaId, currentCtaId)));
 }
 
-Value TargetInfo::loadDSharedImpl(RewriterBase &rewriter, Location loc,
-                                  Value ptr, std::optional<Value> ctaId,
-                                  Type loadTy, Value pred,
-                                  Operation *localLoadOp) const {
+static Value loadDSharedImpl(RewriterBase &rewriter, Location loc, Value ptr,
+                             std::optional<Value> ctaId, Type loadTy,
+                             Value pred) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
@@ -500,6 +470,31 @@ Value TargetInfo::loadDSharedImpl(RewriterBase &rewriter, Location loc,
   }
   SmallVector<Value> resultVals = unpackLLElements(loc, load, rewriter);
   return packLLVector(loc, resultVals, rewriter);
+}
+
+Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                              std::optional<Value> ctaId, Type loadTy,
+                              Value pred, Operation *) const {
+  if (!ctaId)
+    return loadDSharedImpl(rewriter, loc, ptr, ctaId, loadTy, pred);
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value currentCtaId = getClusterCTAId(rewriter, loc);
+  Value isLocal = b.icmp_eq(*ctaId, currentCtaId);
+  Value local = loadDSharedImpl(rewriter, loc, ptr, std::nullopt, loadTy,
+                                b.and_(pred, isLocal));
+  Value remote = loadDSharedImpl(rewriter, loc, ptr, ctaId, loadTy,
+                                 b.and_(pred, b.icmp_ne(*ctaId, currentCtaId)));
+  if (!isa<VectorType>(loadTy))
+    return b.select(isLocal, local, remote);
+
+  SmallVector<Value> selected;
+  for (auto [localVal, remoteVal] :
+       llvm::zip(unpackLLVector(loc, local, rewriter),
+                 unpackLLVector(loc, remote, rewriter))) {
+    selected.push_back(b.select(isLocal, localVal, remoteVal));
+  }
+  return packLLVector(loc, selected, rewriter);
 }
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
