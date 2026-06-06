@@ -42,9 +42,9 @@ struct CircularStoreOpConversion
       mlir::LLVM::AMD::llStore(rewriter, loc, dataPack.ptr, dataPack.record,
                                dataPack.isWriter);
     } else if (addrSpace == 3) {
-      targetInfo.getTritonTargetInfo().storeDShared(
-          rewriter, loc, dataPack.ptr, std::nullopt, dataPack.record,
-          dataPack.isWriter);
+      targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, dataPack.ptr,
+                                                    Value(), dataPack.record,
+                                                    dataPack.isWriter);
     } else {
       llvm::report_fatal_error("unsupported address space in circular store");
     }
