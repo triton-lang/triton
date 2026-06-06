@@ -555,6 +555,7 @@ def test_shift_op(dtype_x, dtype_y, op, num_ctas, device):
 
 @pytest.mark.interpreter
 def test_interpreter_ashr_does_not_mutate_uint64_rhs(device):
+
     @triton.jit
     def kernel(Z, X, Y, BLOCK: tl.constexpr):
         off = tl.arange(0, BLOCK)
