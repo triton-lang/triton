@@ -2714,10 +2714,10 @@ def test_shared_gather(N, M):
 def shared_gather_scatter_two_ctas_kernel(
     inp,
     out,
-    GATHER: ttgl.constexpr,
     layout: ttgl.constexpr,
-    shared_layout: ttgl.constexpr,
+    GATHER: ttgl.constexpr,
 ):
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0], cga_layout=[[0, 1]])
     rows = ttgl.arange(0, 2, layout=ttgl.SliceLayout(1, layout))
     cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
     offsets = rows[:, None] * 32 + cols[None, :]
@@ -2738,29 +2738,15 @@ def shared_gather_scatter_two_ctas_kernel(
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("gather", [True, False], ids=["gather", "scatter"])
 def test_shared_gather_scatter_two_ctas(gather):
-    layout = ttgl.BlockedLayout(
-        size_per_thread=[1, 1],
-        threads_per_warp=[1, THREADS_PER_WARP],
-        warps_per_cta=[1, 4],
-        order=[1, 0],
-        cga_layout=[[0, 1]],
-    )
-    shared_layout = ttgl.SwizzledSharedLayout(
-        vec=1,
-        per_phase=1,
-        max_phase=1,
-        order=[1, 0],
-        cga_layout=[[0, 1]],
-    )
     inp = torch.arange(64, dtype=torch.int32, device="cuda").reshape(2, 32)
     out = torch.empty_like(inp)
+    layout = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0], cga_layout=[[0, 1]])
 
     shared_gather_scatter_two_ctas_kernel[(1, )](
         inp,
         out,
+        layout,
         GATHER=gather,
-        layout=layout,
-        shared_layout=shared_layout,
         num_warps=4,
         num_ctas=2,
     )
