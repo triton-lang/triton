@@ -787,83 +787,6 @@ LogicalResult UnsplatOp::inferReturnTypes(
   return success();
 }
 
-//-- ExpandDimsOp --
-LogicalResult ExpandDimsOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> loc, ValueRange operands,
-    DictionaryAttr attributes, PropertyRef properties, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
-  // infer shape
-  auto arg = operands[0];
-  auto argTy = cast<RankedTensorType>(arg.getType());
-  auto retShape = argTy.getShape().vec();
-  Properties *prop = properties.as<Properties *>();
-  int axis = prop->axis.getInt();
-  retShape.insert(retShape.begin() + axis, 1);
-  // infer encoding
-  Attribute argEncoding = argTy.getEncoding();
-  Attribute retEncoding;
-  if (argEncoding) {
-    Dialect &dialect = argEncoding.getDialect();
-    auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
-    if (failed(inferLayoutInterface->inferExpandDimsOpEncoding(
-            argEncoding, axis, retEncoding, loc)))
-      return emitOptionalError(loc, "failed to infer layout for ExpandDimsOp");
-  }
-  // create type
-  auto argEltTy = argTy.getElementType();
-  inferredReturnTypes.push_back(
-      RankedTensorType::get(retShape, argEltTy, retEncoding));
-  return success();
-}
-
-LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
-                                         PatternRewriter &rewriter) {
-  auto definingOp = op.getSrc().getDefiningOp();
-  if (!definingOp) {
-    return failure();
-  }
-  // expand_dims(splat) -> splat
-  if (auto splat = dyn_cast<SplatOp>(definingOp)) {
-    rewriter.replaceOpWithNewOp<SplatOp>(op, op.getType(), splat.getSrc());
-    return success();
-  }
-  // expand_dims(broadcast(x)) -> broadcast(expand_dims(x))
-  //
-  // On its own this doesn't do much, but consider
-  //    broadcast(expand_dims(broadcast))
-  // -> broadcast(broadcast(expand_dims))
-  // -> broadcast(expand_dims)
-  if (auto broadcast = dyn_cast<BroadcastOp>(definingOp)) {
-    auto src = broadcast.getSrc();
-    auto srcTy = src.getType();
-    SmallVector<int64_t> newExpandShape(srcTy.getShape());
-    newExpandShape.insert(newExpandShape.begin() + op.getAxis(), 1);
-
-    // Infer the encoding of the new expand op, if encodings are present.
-    Attribute newExpandEnc;
-    if (auto srcEnc = srcTy.getEncoding()) {
-      Dialect &dialect = srcEnc.getDialect();
-      auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
-      if (failed(inferLayoutInterface->inferExpandDimsOpEncoding(
-              srcEnc, op.getAxis(), newExpandEnc, op.getLoc()))) {
-        return emitOptionalError(op.getLoc(),
-                                 "failed to infer layout for ExpandDimsOp");
-      }
-    }
-
-    auto newExpandTy = RankedTensorType::get(
-        newExpandShape, srcTy.getElementType(), newExpandEnc);
-    auto newExpand = ExpandDimsOp::create(rewriter, op.getLoc(), newExpandTy,
-                                          src, op.getAxis());
-    auto newBroadcast = BroadcastOp::create(
-        rewriter, broadcast.getLoc(), op.getType(), newExpand.getResult());
-    rewriter.replaceOp(op, {newBroadcast.getResult()});
-    return success();
-  }
-
-  return failure();
-}
-
 template <typename ViewLikeOp>
 static OpFoldResult foldViewLikeOp(ViewLikeOp op, Attribute value) {
   if (!value)
@@ -878,10 +801,6 @@ static OpFoldResult foldViewLikeOp(ViewLikeOp op, Attribute value) {
     }
   }
   return {};
-}
-
-OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
-  return foldViewLikeOp(*this, adaptor.getSrc());
 }
 
 //-- CatOp --
@@ -910,6 +829,29 @@ LogicalResult CatOp::verify() {
 }
 
 //-- ReshapeOp --
+
+bool ReshapeOp::isExpandDims(unsigned axis) {
+  if (getAllowReorder() || getEfficientLayout())
+    return false;
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+  if (srcTy.getRank() + 1 != dstTy.getRank() || axis >= dstTy.getRank())
+    return false;
+  auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
+  return dstShape[axis] == 1 &&
+         srcShape.take_front(axis) == dstShape.take_front(axis) &&
+         srcShape.drop_front(axis) == dstShape.drop_front(axis + 1);
+}
+
+std::optional<unsigned> ReshapeOp::getExpandDimsAxis() {
+  auto dstShape = getType().getShape();
+  for (unsigned axis = 0; axis < dstShape.size(); ++axis) {
+    if (isExpandDims(axis))
+      return axis;
+  }
+  return std::nullopt;
+}
 
 void ReshapeOp::build(OpBuilder &builder, OperationState &state,
                       ArrayRef<int64_t> shape, Value src, bool allowReorder) {

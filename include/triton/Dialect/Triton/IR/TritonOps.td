@@ -419,21 +419,6 @@ def TT_UnsplatOp : TT_Op<"unsplat", [Pure,
     let hasVerifier = 1;
 }
 
-def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
-                                            DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                                            SameOperandsAndResultElementType]> {
-    let summary = "expand_dims";
-
-    let arguments = (ins TT_Tensor:$src, I32Attr:$axis);
-
-    let results = (outs TT_Tensor:$result);
-
-    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
-
-    let hasCanonicalizeMethod = 1;
-    let hasFolder = 1;
-}
-
 def TT_ReshapeOp : TT_Op<"reshape", [Pure,
                                      SameOperandsAndResultElementType]> {
     let summary = "reinterpret a tensor to a different shape. It may change elements order if the attribute is set.";
@@ -457,6 +442,10 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
     let hasVerifier = 1;
+    let extraClassDeclaration = [{
+      bool isExpandDims(unsigned axis);
+      std::optional<unsigned> getExpandDimsAxis();
+    }];
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,

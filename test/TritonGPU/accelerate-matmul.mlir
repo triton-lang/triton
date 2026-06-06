@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file --tritongpu-accelerate-matmul -verify-diagnostics=only-expected | FileCheck %s
 // RUN: env TRITON_PREFER_TMEM_16x256_LAYOUT=1 triton-opt %s -split-input-file --tritongpu-accelerate-matmul | FileCheck %s --check-prefix=LAYOUT_16x256
+// RUN: triton-opt %s -split-input-file --tritongpu-accelerate-matmul --tritongpu-remove-layout-conversions -verify-diagnostics=only-expected | FileCheck %s --check-prefix=RLC
 
 // CHECK: #[[MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16]}>
 // CHECK: #[[MMA1:.+]] = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
@@ -169,7 +170,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
     // CHECK: tt.dot {{.*}} -> tensor<16x16xf32, #[[MMA]]>
     %3 = tt.dot %0, %1, %2, inputPrecision = tf32 : tensor<16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>> * tensor<16x16xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>> -> tensor<16x16xf32, #blocked1>
     %4 = ttg.convert_layout %3 : tensor<16x16xf32, #blocked1> -> tensor<16x16xf32, #ttg.slice<{dim = 0, parent = #blocked2}>>
-    %5 = tt.expand_dims %4 {axis = 0 : i32} : tensor<16x16xf32, #ttg.slice<{dim = 0, parent = #blocked2}>> -> tensor<1x16x16xf32, #blocked2>
+    %5 = tt.reshape %4 : tensor<16x16xf32, #ttg.slice<{dim = 0, parent = #blocked2}>> -> tensor<1x16x16xf32, #blocked2>
     %6 = ttg.convert_layout %5 : tensor<1x16x16xf32, #blocked2> -> tensor<1x16x16xf32, #blocked>
     %7 = tt.broadcast %6 : tensor<1x16x16xf32, #blocked> -> tensor<2x16x16xf32, #blocked>
     %8 = ttg.convert_layout %7 : tensor<2x16x16xf32, #blocked> -> tensor<2x16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked3}>>
@@ -425,6 +426,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: ttng.warp_group_dot
     %result = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %c lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = false, rhs_k_pack = false} : tensor<64x64xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<64x64xi8, #blocked>, tensor<128x2xi8, #blocked1> -> tensor<128x128xf32, #blocked>
     tt.return %result : tensor<128x128xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: mxfp8_mxfp4_rhs_scale
+  // RLC-LABEL: mxfp8_mxfp4_rhs_scale
+  tt.func @mxfp8_mxfp4_rhs_scale(
+    %a: tensor<128x256xf8E5M2, #blocked>,
+    %scale_a: tensor<128x8xi8, #blocked1>,
+    %b: tensor<128x256xi8, #blocked1>,
+    %scale_b: tensor<256x8xi8, #blocked1>,
+    %c: tensor<128x256xf32, #blocked1>
+    ) -> tensor<128x256xf32, #blocked1> {
+    // CHECK: %[[SCALE_B_BF16:.*]] = tt.bitcast {{.*}} : tensor<8x256xi16, #{{.*}}> -> tensor<8x256xbf16, #{{.*}}>
+    // CHECK: %[[SCALE_B_SLICE:.*]] = ttg.convert_layout %[[SCALE_B_BF16]] : tensor<8x256xbf16, #{{.*}}> -> tensor<8x256xbf16, #ttg.slice<{{.*}}>>
+    // CHECK: tt.reshape %[[SCALE_B_SLICE]] : tensor<8x256xbf16, #ttg.slice<{{.*}}>> -> tensor<8x256x1xbf16, #linear{{[0-9]*}}>
+    // RLC: %[[SCALE_B_BF16:.*]] = tt.bitcast {{.*}} : tensor<8x256xi16, #{{.*}}> -> tensor<8x256xbf16, #{{.*}}>
+    // RLC: %[[SCALE_B_LINEAR:.*]] = ttg.convert_layout %[[SCALE_B_BF16]] : tensor<8x256xbf16, #{{.*}}> -> tensor<8x256xbf16, #linear{{[0-9]*}}>
+    // RLC: tt.reshape %[[SCALE_B_LINEAR]] : tensor<8x256xbf16, #linear{{[0-9]*}}> -> tensor<8x256x1xbf16, #linear{{[0-9]*}}>
+    %result = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %c lhs = e5m2 rhs = e2m1 {fastMath = false} : tensor<128x256xf8E5M2, #blocked>, tensor<128x8xi8, #blocked1> * tensor<128x256xi8, #blocked1>, tensor<256x8xi8, #blocked1> -> tensor<128x256xf32, #blocked1>
+    tt.return %result : tensor<128x256xf32, #blocked1>
   }
 }
 

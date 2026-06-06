@@ -37,7 +37,7 @@ Flags getNodeFlags(Node *node);
 size_t computeCost(Operation *op);
 
 inline bool isViewOp(Operation *op) {
-  return isa<tt::BroadcastOp, tt::ExpandDimsOp, ttg::ConvertLayoutOp>(op) ||
+  return isa<tt::BroadcastOp, tt::ReshapeOp, ttg::ConvertLayoutOp>(op) ||
          op->hasTrait<OpTrait::MemDescViewTrait>();
 }
 
