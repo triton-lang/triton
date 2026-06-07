@@ -592,9 +592,8 @@ private:
     assert(cvt.isTrivialOver({kBlock}) && "NYI");
     auto lowerInst = [&](RewriterBase &rewriter, Location loc,
                          ArrayRef<Value> inVals, Value vecAddr, int idx,
-                         VectorType vTy,
-                         std::optional<Value> ctaId) -> SmallVector<Value> {
-      assert(!ctaId.has_value() && "NYI");
+                         VectorType vTy, Value ctaId) -> SmallVector<Value> {
+      assert(!ctaId && "NYI");
       auto numElemsI32 = (vTy.getNumElements() * bitWidth / 32);
       auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
       Value dsReadTr =

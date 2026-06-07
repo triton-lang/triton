@@ -382,8 +382,8 @@ static void lowerAsyncSharedStore(Location loc, MLIRContext *ctx,
   Value currentCTAId = targetInfo.getClusterCTAId(rewriter, loc);
   auto emitSt = [&](RewriterBase &, Location storeLoc, ArrayRef<Value> values,
                     Value shmemAddr, int idx, VectorType vecTy,
-                    std::optional<Value> ctaId) -> SmallVector<Value> {
-    Value targetCTAId = ctaId.value_or(currentCTAId);
+                    Value ctaId) -> SmallVector<Value> {
+    Value targetCTAId = ctaId ? ctaId : currentCTAId;
     Value dst = mapSharedToCluster(storeLoc, shmemAddr, targetCTAId, rewriter);
     Value mbarrier =
         mapSharedToCluster(storeLoc, mbarrierPtr, targetCTAId, rewriter);

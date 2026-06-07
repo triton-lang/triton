@@ -160,6 +160,68 @@ def test_nested2_change():
     assert baseline != updated
 
 
+ORDER_DEPENDENT_CONSTEXPR = tl.constexpr(42)
+
+
+@triton.jit
+def order_dependent_inner():
+    return ORDER_DEPENDENT_CONSTEXPR
+
+
+@triton.jit
+def order_dependent_outer():
+    order_dependent_inner()
+
+
+def test_cache_key_independent_of_dependency_hash_order():
+    functions = (order_dependent_inner, order_dependent_outer)
+
+    for function in functions:
+        function.hash = None
+        function.used_global_vals = {}
+    cold_key = order_dependent_outer.cache_key
+
+    for function in functions:
+        function.hash = None
+        function.used_global_vals = {}
+    order_dependent_inner.cache_key
+    prehashed_key = order_dependent_outer.cache_key
+
+    assert prehashed_key == cold_key
+
+
+def test_cache_key_independent_of_globals_dict_identity():
+
+    def make_child(value):
+        shared = tl.constexpr(value)
+
+        @triton.jit
+        def child():
+            return shared
+
+        return child
+
+    child_a = make_child(1)
+    child_b = make_child(2)
+
+    @triton.jit
+    def parent():
+        child_a()
+        child_b()
+
+    functions = (child_a, child_b, parent)
+
+    def key_after_prehashing(first, second):
+        for function in functions:
+            function.hash = None
+            function.used_global_vals = {}
+        first.cache_key
+        second.cache_key
+        return parent.cache_key
+
+    assert key_after_prehashing(child_a, child_b) == key_after_prehashing(child_b, child_a)
+
+
 def test_combine_fn_change():
     # Test that tl.reduce and associative_scan calls include
     # the combine_fn in the hash

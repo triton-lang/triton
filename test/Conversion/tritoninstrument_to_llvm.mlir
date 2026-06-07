@@ -145,7 +145,8 @@ tt.func private @experimental_fpsan_unembed(%arg0: i32) -> f32 {
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_local_gather
-// CHECK: ld.shared::cluster
+// CHECK: nvvm.mapa
+// CHECK: llvm.load {{.*}} : !llvm.ptr<7> -> i32
 tt.func private @experimental_local_gather(%out: !tt.ptr<i32>) {
   %src = ttg.local_alloc {allocation.offset = [0 : i32, 256 : i32]} : () -> !ttg.memdesc<2x32xi32, #local_gather_shared, #ttg.shared_memory, mutable>
   %idx = arith.constant dense<0> : tensor<2x32xi32, #local_gather_blocked>

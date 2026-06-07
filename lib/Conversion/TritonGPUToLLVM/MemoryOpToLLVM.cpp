@@ -24,26 +24,21 @@ lowerLocalScGt(Location loc, MLIRContext *ctx, MemDescType memDescTy,
                unsigned axis, ArrayRef<Value> storeVals, RewriterBase &rewriter,
                const TargetInfoBase &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  bool isScatter = !storeVals.empty();
   SmallVector<LocalSharedMemoryAddress> addrs = computeLocalAddrs(
       loc, memDescTy, smemObj, llvmElemTy, idxValues, coords, axis, rewriter);
-  if (storeVals.empty())
-    return loadLocalAddrs(loc, llvmElemTy, addrs, rewriter, targetInfo);
-
-  Value currentCtaId;
-  if (!addrs.empty() && addrs.front().ctaId)
-    currentCtaId = targetInfo.getClusterCTAId(rewriter, loc);
 
   SmallVector<Value> results;
+  if (!isScatter)
+    results.resize(coords.size());
+
   for (auto [i, addr] : llvm::enumerate(addrs)) {
-    if (addr.ctaId) {
-      Value isLocal = b.icmp_eq(*addr.ctaId, currentCtaId);
-      Value isRemote = b.icmp_ne(*addr.ctaId, currentCtaId);
-      targetInfo.storeShared(rewriter, loc, addr.ptr, storeVals[i], isLocal);
+    if (isScatter) {
       targetInfo.storeDShared(rewriter, loc, addr.ptr, addr.ctaId, storeVals[i],
-                              isRemote);
+                              b.true_val());
     } else {
-      targetInfo.storeShared(rewriter, loc, addr.ptr, storeVals[i],
-                             b.true_val());
+      results[i] = targetInfo.loadDShared(rewriter, loc, addr.ptr, addr.ctaId,
+                                          llvmElemTy, b.true_val());
     }
   }
 
@@ -273,6 +268,13 @@ public:
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
     auto memDescTy = cast<MemDescType>(op.getSrc().getType());
+    // TODO: PartitionedSharedEncoding lowering will be enabled in subsequent
+    // PRs.
+    if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
+            memDescTy.getEncoding())) {
+      return rewriter.notifyMatchFailure(
+          op, "PartitionedSharedEncoding not yet supported in lowering");
+    }
     auto regTy = cast<RankedTensorType>(op.getType());
     auto typeConverter = getTypeConverter();
 
@@ -315,6 +317,13 @@ public:
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
     auto memDescTy = cast<MemDescType>(op.getDst().getType());
+    // TODO: PartitionedSharedEncoding lowering will be enabled in subsequent
+    // PRs.
+    if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
+            memDescTy.getEncoding())) {
+      return rewriter.notifyMatchFailure(
+          op, "PartitionedSharedEncoding not yet supported in lowering");
+    }
     auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
     auto typeConverter = getTypeConverter();
 

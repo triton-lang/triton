@@ -376,7 +376,12 @@ struct LocalGatherOpConversion
     auto addrs =
         computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
                           dstIndices, op.getAxis(), rewriter, offsets);
-    auto results = loadLocalAddrs(loc, llvmElemTy, addrs, rewriter, targetInfo);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    SmallVector<Value> results =
+        llvm::map_to_vector(addrs, [&](const LocalSharedMemoryAddress &addr) {
+          return targetInfo.loadDShared(rewriter, loc, addr.ptr, addr.ctaId,
+                                        llvmElemTy, b.true_val());
+        });
     Value result = packLLElements(loc, typeConverter, results, rewriter, regTy);
 
     rewriter.replaceOp(op, result);
