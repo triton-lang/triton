@@ -194,7 +194,8 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 }
 
 LinearLayout getScaleSmemLayoutForTMEMCopy(MLIRContext *ctx,
-                                           ArrayRef<int64_t> shape) {
+                                           ArrayRef<int64_t> shape,
+                                           CGAEncodingAttr cgaLayout) {
   assert(shape.size() == 2 && "scale layout expects rank-2");
   assert(shape[0] % 128 == 0 && "scale rows must be a multiple of 128");
   assert(shape[1] % 4 == 0 && "scale columns must be a multiple of 4");
@@ -258,7 +259,9 @@ LinearLayout getScaleSmemLayoutForTMEMCopy(MLIRContext *ctx,
       LinearLayout::identity1D(4, kColLo, outDims[1]) *
       LinearLayout::identity1D(outerCols, kOuterCol, outDims[1]);
 
-  return offsetToChunked.compose(chunkedToLogical).transposeOuts(outDims);
+  return combineCtaCgaWithShape(
+      offsetToChunked.compose(chunkedToLogical).transposeOuts(outDims),
+      cgaLayout, shape);
 }
 
 static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(

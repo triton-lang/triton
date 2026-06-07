@@ -305,12 +305,9 @@ tryCreateTmemCopyCompatibleScaleOperand(Value scale,
     return Value();
 
   auto sharedMemory = SharedMemorySpaceAttr::get(scaleType.getContext());
-  auto sinkLayout = getScaleSmemLayoutForTMEMCopy(scaleType.getContext(),
-                                                  scaleType.getShape());
-  auto bases = sinkLayout.getBases();
-  bases[StringAttr::get(scaleType.getContext(), "block")] = {};
-  sinkLayout = LinearLayout(std::move(bases), sinkLayout.getOutDims(),
-                            /*requireSurjective=*/sinkLayout.isSurjective());
+  auto sinkLayout = getScaleSmemLayoutForTMEMCopy(
+      scaleType.getContext(), scaleType.getShape(),
+      getCGALayout(scaleType.getEncoding()));
   auto layout = SharedLinearEncodingAttr::get(scaleType.getContext(),
                                               std::move(sinkLayout),
                                               /*alignment=*/128);
