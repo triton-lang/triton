@@ -590,16 +590,10 @@ computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
       inputs.push_back({allDims[dim], indices[dim]});
 
     auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
-    Value offset;
-    Value blockId;
-    for (auto [name, value] : outputs) {
-      if (name == kOffset)
-        offset = value;
-      else if (name == kBlock)
-        blockId = value;
-    }
-    assert(offset && "expected offset output from inverted shared layout");
-    assert(blockId && "expected block output from inverted shared layout");
+    assert(outputs.size() == 2);
+    auto [offsetName, offset] = outputs[0];
+    auto [blockName, blockId] = outputs[1];
+    assert(offsetName == kOffset && blockName == kBlock);
 
     // For subslices, the physical offset is computed as:
     //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
