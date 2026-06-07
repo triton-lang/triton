@@ -505,6 +505,174 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#src_2d = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [1, 0], [2, 0], [4, 0]]}, alignment = 16>
+#dst_2d = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [4, 0], [0, 8], [1, 0], [2, 0]]}, alignment = 16>
+#src_3d = #ttg.shared_linear<{offset = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 1, 0], [0, 2, 0], [1, 0, 0], [2, 0, 0]]}, alignment = 16>
+#dst_rank3 = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [2, 0], [0, 16], [1, 0]]}, alignment = 16>
+#dst_indexed = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [2, 0], [0, 8], [1, 0], [4, 0]]}, alignment = 16>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: llvm.func @reshape_subview_offsets
+  // CHECK: %[[BASE:.*]] = llvm.extractvalue %arg0[0]
+  // CHECK: %[[ROW:.*]] = llvm.extractvalue %arg0[1]
+  // CHECK: %[[COL:.*]] = llvm.extractvalue %arg0[2]
+  // CHECK: %[[ROW_SHIFTED:.*]] = llvm.shl %[[ROW]], %{{.*}}
+  // CHECK: %[[ROW_PART:.*]] = llvm.or %{{.*}}, %[[ROW_SHIFTED]]
+  // CHECK: %[[C3:.*]] = llvm.mlir.constant(3 : i32)
+  // CHECK: %[[COL_SHIFTED:.*]] = llvm.shl %[[COL]], %[[C3]]
+  // CHECK: %[[FLAT:.*]] = llvm.or %[[ROW_PART]], %[[COL_SHIFTED]]
+  // Destination row is ((flat & 6) >> 1) | ((flat & 64) >> 4).
+  // CHECK: %[[C6:.*]] = llvm.mlir.constant(6 : i32)
+  // CHECK: %[[ROW_LOW_MASK:.*]] = llvm.and %[[FLAT]], %[[C6]]
+  // CHECK: %[[C1:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: %[[ROW_LOW:.*]] = llvm.lshr %[[ROW_LOW_MASK]], %[[C1]]
+  // CHECK: %[[C64:.*]] = llvm.mlir.constant(64 : i32)
+  // CHECK: %[[ROW_HIGH_MASK:.*]] = llvm.and %[[FLAT]], %[[C64]]
+  // CHECK: %[[C4:.*]] = llvm.mlir.constant(4 : i32)
+  // CHECK: %[[ROW_HIGH:.*]] = llvm.lshr %[[ROW_HIGH_MASK]], %[[C4]]
+  // CHECK: %[[ROW_BITS:.*]] = llvm.or disjoint %[[ROW_LOW]], %[[ROW_HIGH]]
+  // CHECK: %[[ROW_PAD:.*]] = llvm.or disjoint %[[ROW_BITS]], %{{.*}}
+  // CHECK: %[[OUT_ROW:.*]] = llvm.xor %{{.*}}, %[[ROW_PAD]]
+  // Destination column is ((flat & 56) >> 3) | ((flat & 1) << 3).
+  // CHECK: %[[C56:.*]] = llvm.mlir.constant(56 : i32)
+  // CHECK: %[[COL_LOW_MASK:.*]] = llvm.and %[[FLAT]], %[[C56]]
+  // CHECK: %[[C3B:.*]] = llvm.mlir.constant(3 : i32)
+  // CHECK: %[[COL_LOW:.*]] = llvm.lshr %[[COL_LOW_MASK]], %[[C3B]]
+  // CHECK: %[[C1B:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: %[[COL_HIGH_MASK:.*]] = llvm.and %[[FLAT]], %[[C1B]]
+  // CHECK: %[[C3C:.*]] = llvm.mlir.constant(3 : i32)
+  // CHECK: %[[COL_HIGH:.*]] = llvm.shl %[[COL_HIGH_MASK]], %[[C3C]]
+  // CHECK: %[[COL_BITS:.*]] = llvm.or disjoint %[[COL_LOW]], %[[COL_HIGH]]
+  // CHECK: %[[COL_PAD:.*]] = llvm.or disjoint %[[COL_BITS]], %{{.*}}
+  // CHECK: %[[OUT_COL:.*]] = llvm.xor %{{.*}}, %[[COL_PAD]]
+  // CHECK: %[[WITH_BASE:.*]] = llvm.insertvalue %[[BASE]], %{{.*}}[0]
+  // CHECK: %[[WITH_ROW:.*]] = llvm.insertvalue %[[OUT_ROW]], %[[WITH_BASE]][1]
+  // CHECK: llvm.insertvalue %[[OUT_COL]], %[[WITH_ROW]][2]
+  tt.func @reshape_subview_offsets(%arg0 : !ttg.memdesc<8x8xf32, #src_2d, #smem, 8x16>) {
+    %0 = ttg.memdesc_reshape %arg0 : !ttg.memdesc<8x8xf32, #src_2d, #smem, 8x16> -> !ttg.memdesc<4x16xf32, #dst_2d, #smem, 8x16>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @reshape_rank3_middle_gap
+  // CHECK: %[[BASE:.*]] = llvm.extractvalue %arg0[0]
+  // CHECK: %[[D0:.*]] = llvm.extractvalue %arg0[1]
+  // CHECK: %[[D1:.*]] = llvm.extractvalue %arg0[2]
+  // CHECK: %[[D2:.*]] = llvm.extractvalue %arg0[3]
+  // CHECK: %[[D0_SHIFTED:.*]] = llvm.shl %[[D0]], %{{.*}}
+  // CHECK: %[[D0_PART:.*]] = llvm.or %{{.*}}, %[[D0_SHIFTED]]
+  // CHECK: %[[C2:.*]] = llvm.mlir.constant(2 : i32)
+  // CHECK: %[[D1_SHIFTED:.*]] = llvm.shl %[[D1]], %[[C2]]
+  // CHECK: %[[D01:.*]] = llvm.or %[[D0_PART]], %[[D1_SHIFTED]]
+  // CHECK: %[[C4:.*]] = llvm.mlir.constant(4 : i32)
+  // CHECK: %[[D2_SHIFTED:.*]] = llvm.shl %[[D2]], %[[C4]]
+  // CHECK: %[[FLAT:.*]] = llvm.or %[[D01]], %[[D2_SHIFTED]]
+  // Destination row is ((flat & 2) >> 1) | ((flat & 8) >> 2).
+  // CHECK: %[[C2B:.*]] = llvm.mlir.constant(2 : i32)
+  // CHECK: %[[ROW_LOW_MASK:.*]] = llvm.and %[[FLAT]], %[[C2B]]
+  // CHECK: %[[C1:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: %[[ROW_LOW:.*]] = llvm.lshr %[[ROW_LOW_MASK]], %[[C1]]
+  // CHECK: %[[C8:.*]] = llvm.mlir.constant(8 : i32)
+  // CHECK: %[[ROW_HIGH_MASK:.*]] = llvm.and %[[FLAT]], %[[C8]]
+  // CHECK: %[[C2C:.*]] = llvm.mlir.constant(2 : i32)
+  // CHECK: %[[ROW_HIGH:.*]] = llvm.lshr %[[ROW_HIGH_MASK]], %[[C2C]]
+  // CHECK: %[[ROW_BITS:.*]] = llvm.or disjoint %[[ROW_LOW]], %[[ROW_HIGH]]
+  // CHECK: %[[ROW_PAD:.*]] = llvm.or disjoint %[[ROW_BITS]], %{{.*}}
+  // CHECK: %[[OUT_ROW:.*]] = llvm.xor %{{.*}}, %[[ROW_PAD]]
+  // Destination column is ((flat & 112) >> 4) | ((flat & 1) << 4) | ((flat & 4) << 1).
+  // CHECK: %[[C112:.*]] = llvm.mlir.constant(112 : i32)
+  // CHECK: %[[COL_LOW_MASK:.*]] = llvm.and %[[FLAT]], %[[C112]]
+  // CHECK: %[[C4B:.*]] = llvm.mlir.constant(4 : i32)
+  // CHECK: %[[COL_LOW:.*]] = llvm.lshr %[[COL_LOW_MASK]], %[[C4B]]
+  // CHECK: %[[C1B:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: %[[COL_MID_MASK:.*]] = llvm.and %[[FLAT]], %[[C1B]]
+  // CHECK: %[[C4C:.*]] = llvm.mlir.constant(4 : i32)
+  // CHECK: %[[COL_MID:.*]] = llvm.shl %[[COL_MID_MASK]], %[[C4C]]
+  // CHECK: %[[C4D:.*]] = llvm.mlir.constant(4 : i32)
+  // CHECK: %[[COL_HIGH_MASK:.*]] = llvm.and %[[FLAT]], %[[C4D]]
+  // CHECK: %[[C1C:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: %[[COL_HIGH:.*]] = llvm.shl %[[COL_HIGH_MASK]], %[[C1C]]
+  // CHECK: %[[COL_LOW_MID:.*]] = llvm.or disjoint %[[COL_LOW]], %[[COL_MID]]
+  // CHECK: %[[COL_BITS:.*]] = llvm.or disjoint %[[COL_LOW_MID]], %[[COL_HIGH]]
+  // CHECK: %[[COL_PAD:.*]] = llvm.or disjoint %[[COL_BITS]], %{{.*}}
+  // CHECK: %[[OUT_COL:.*]] = llvm.xor %{{.*}}, %[[COL_PAD]]
+  // CHECK: %[[WITH_BASE:.*]] = llvm.insertvalue %[[BASE]], %{{.*}}[0]
+  // CHECK: %[[WITH_ROW:.*]] = llvm.insertvalue %[[OUT_ROW]], %[[WITH_BASE]][1]
+  // CHECK: llvm.insertvalue %[[OUT_COL]], %[[WITH_ROW]][2]
+  tt.func @reshape_rank3_middle_gap(%arg0 : !ttg.memdesc<4x2x8xf32, #src_3d, #smem, 4x4x8>) {
+    %0 = ttg.memdesc_reshape %arg0 : !ttg.memdesc<4x2x8xf32, #src_3d, #smem, 4x4x8> -> !ttg.memdesc<2x32xf32, #dst_rank3, #smem, 4x32>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @reshape_indexed_subview
+  // Indexing selects a 128-element buffer and preserves that base through the
+  // following subslice and reshape.
+  // CHECK: %[[C128:.*]] = llvm.mlir.constant(128 : i32)
+  // CHECK: %[[BUFFER_OFFSET:.*]] = llvm.mul %arg1, %[[C128]]
+  // CHECK: %[[BASE:.*]] = llvm.extractvalue %arg0[0]
+  // CHECK: %[[ARG_ROW:.*]] = llvm.extractvalue %arg0[2]
+  // CHECK: %[[ARG_COL:.*]] = llvm.extractvalue %arg0[3]
+  // CHECK: %[[INDEXED_BASE:.*]] = llvm.getelementptr %[[BASE]][%[[BUFFER_OFFSET]]]
+  // CHECK: %[[INDEXED_DESC:.*]] = llvm.insertvalue %[[INDEXED_BASE]], %{{.*}}[0]
+  // CHECK: %[[INDEXED_DESC_ROW:.*]] = llvm.insertvalue %[[ARG_ROW]], %[[INDEXED_DESC]][1]
+  // CHECK: %[[INDEXED_DESC_FULL:.*]] = llvm.insertvalue %[[ARG_COL]], %[[INDEXED_DESC_ROW]][2]
+  // CHECK: %[[SUB_BASE:.*]] = llvm.extractvalue %[[INDEXED_DESC_FULL]][0]
+  // CHECK: %[[ROW:.*]] = llvm.extractvalue %[[INDEXED_DESC_FULL]][1]
+  // CHECK: %[[COL:.*]] = llvm.extractvalue %[[INDEXED_DESC_FULL]][2]
+  // CHECK: %[[C4:.*]] = llvm.mlir.constant(4 : i32)
+  // CHECK: %[[SUB_ROW:.*]] = llvm.add %[[ROW]], %[[C4]]
+  // CHECK: %[[C8:.*]] = llvm.mlir.constant(8 : i32)
+  // CHECK: %[[SUB_COL:.*]] = llvm.add %[[COL]], %[[C8]]
+  // CHECK: %[[SUB_DESC:.*]] = llvm.insertvalue %[[SUB_BASE]], %{{.*}}[0]
+  // CHECK: %[[SUB_DESC_ROW:.*]] = llvm.insertvalue %[[SUB_ROW]], %[[SUB_DESC]][1]
+  // CHECK: %[[SUB_DESC_FULL:.*]] = llvm.insertvalue %[[SUB_COL]], %[[SUB_DESC_ROW]][2]
+  // CHECK: %[[RESHAPE_BASE:.*]] = llvm.extractvalue %[[SUB_DESC_FULL]][0]
+  // CHECK: %[[RESHAPE_ROW:.*]] = llvm.extractvalue %[[SUB_DESC_FULL]][1]
+  // CHECK: %[[RESHAPE_COL:.*]] = llvm.extractvalue %[[SUB_DESC_FULL]][2]
+  // CHECK: %[[ROW_SHIFTED:.*]] = llvm.shl %[[RESHAPE_ROW]], %{{.*}}
+  // CHECK: %[[ROW_PART:.*]] = llvm.or %{{.*}}, %[[ROW_SHIFTED]]
+  // CHECK: %[[C3:.*]] = llvm.mlir.constant(3 : i32)
+  // CHECK: %[[COL_SHIFTED:.*]] = llvm.shl %[[RESHAPE_COL]], %[[C3]]
+  // CHECK: %[[FLAT:.*]] = llvm.or %[[ROW_PART]], %[[COL_SHIFTED]]
+  // Destination row is ((flat & 2) >> 1) | (flat & 4) | ((flat & 64) >> 5).
+  // CHECK: %[[C2:.*]] = llvm.mlir.constant(2 : i32)
+  // CHECK: %[[ROW_LOW_MASK:.*]] = llvm.and %[[FLAT]], %[[C2]]
+  // CHECK: %[[C1:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: %[[ROW_LOW:.*]] = llvm.lshr %[[ROW_LOW_MASK]], %[[C1]]
+  // CHECK: %[[C4B:.*]] = llvm.mlir.constant(4 : i32)
+  // CHECK: %[[ROW_MID:.*]] = llvm.and %[[FLAT]], %[[C4B]]
+  // CHECK: %[[C64:.*]] = llvm.mlir.constant(64 : i32)
+  // CHECK: %[[ROW_HIGH_MASK:.*]] = llvm.and %[[FLAT]], %[[C64]]
+  // CHECK: %[[C5:.*]] = llvm.mlir.constant(5 : i32)
+  // CHECK: %[[ROW_HIGH:.*]] = llvm.lshr %[[ROW_HIGH_MASK]], %[[C5]]
+  // CHECK: %[[ROW_LOW_MID:.*]] = llvm.or disjoint %[[ROW_LOW]], %[[ROW_MID]]
+  // CHECK: %[[ROW_BITS:.*]] = llvm.or disjoint %[[ROW_LOW_MID]], %[[ROW_HIGH]]
+  // CHECK: %[[ROW_PAD:.*]] = llvm.or disjoint %[[ROW_BITS]], %{{.*}}
+  // CHECK: %[[OUT_ROW:.*]] = llvm.xor %{{.*}}, %[[ROW_PAD]]
+  // Destination column is ((flat & 56) >> 3) | ((flat & 1) << 3).
+  // CHECK: %[[C56:.*]] = llvm.mlir.constant(56 : i32)
+  // CHECK: %[[COL_LOW_MASK:.*]] = llvm.and %[[FLAT]], %[[C56]]
+  // CHECK: %[[C3B:.*]] = llvm.mlir.constant(3 : i32)
+  // CHECK: %[[COL_LOW:.*]] = llvm.lshr %[[COL_LOW_MASK]], %[[C3B]]
+  // CHECK: %[[C1B:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: %[[COL_HIGH_MASK:.*]] = llvm.and %[[FLAT]], %[[C1B]]
+  // CHECK: %[[C3C:.*]] = llvm.mlir.constant(3 : i32)
+  // CHECK: %[[COL_HIGH:.*]] = llvm.shl %[[COL_HIGH_MASK]], %[[C3C]]
+  // CHECK: %[[COL_BITS:.*]] = llvm.or disjoint %[[COL_LOW]], %[[COL_HIGH]]
+  // CHECK: %[[COL_PAD:.*]] = llvm.or disjoint %[[COL_BITS]], %{{.*}}
+  // CHECK: %[[OUT_COL:.*]] = llvm.xor %{{.*}}, %[[COL_PAD]]
+  // CHECK: %[[WITH_BASE:.*]] = llvm.insertvalue %[[RESHAPE_BASE]], %{{.*}}[0]
+  // CHECK: %[[WITH_ROW:.*]] = llvm.insertvalue %[[OUT_ROW]], %[[WITH_BASE]][1]
+  // CHECK: llvm.insertvalue %[[OUT_COL]], %[[WITH_ROW]][2]
+  tt.func @reshape_indexed_subview(%arg0 : !ttg.memdesc<2x8x16xf32, #src_2d, #smem>, %index : i32) {
+    %0 = ttg.memdesc_index %arg0[%index] : !ttg.memdesc<2x8x16xf32, #src_2d, #smem> -> !ttg.memdesc<8x16xf32, #src_2d, #smem>
+    %1 = ttg.memdesc_subslice %0[4, 8] : !ttg.memdesc<8x16xf32, #src_2d, #smem> -> !ttg.memdesc<4x8xf32, #src_2d, #smem, 8x16>
+    %2 = ttg.memdesc_reshape %1 : !ttg.memdesc<4x8xf32, #src_2d, #smem, 8x16> -> !ttg.memdesc<2x16xf32, #dst_indexed, #smem, 8x16>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_program_id
   tt.func @basic_program_id() {

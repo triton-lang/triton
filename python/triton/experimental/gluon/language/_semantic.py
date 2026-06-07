@@ -459,9 +459,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         handle = self.builder.create_memdesc_reshape(mem_desc.handle, shape)
         layout = self.builder.get_gluon_layout_from_memdesc(handle)
-        alloc_shape = mem_desc.type.alloc_shape
-        prefix_len = len(alloc_shape) - mem_desc.rank
-        new_alloc_shape = alloc_shape[:prefix_len] + list(shape)
+        new_alloc_shape = self.builder.get_alloc_shape_from_memdesc(handle)
 
         return ttgl.shared_memory_descriptor(
             handle,

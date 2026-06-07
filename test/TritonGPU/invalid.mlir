@@ -169,6 +169,27 @@ tt.func public @subview_along_swizzling(%arg0: !ttg.memdesc<8x16xf32, #shared, #
 
 // -----
 
+#padded_src = #ttg.padded_shared<[4:+4] {order = [1, 0], shape = [8, 4]}>
+#padded_dst = #ttg.padded_shared<[4:+4] {order = [1, 0], shape = [2, 8]}>
+#smem = #ttg.shared_memory
+tt.func public @reshape_padded_subview(%arg0: !ttg.memdesc<4x4xf32, #padded_src, #smem, 8x4>) {
+    // expected-error @+1 {{memdesc reshape of padded shared memory subviews is not supported}}
+    %0 = ttg.memdesc_reshape %arg0 : !ttg.memdesc<4x4xf32, #padded_src, #smem, 8x4> -> !ttg.memdesc<2x8xf32, #padded_dst, #smem>
+    tt.return
+}
+
+// -----
+
+#shared_rank2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+tt.func public @reshape_subview_layout_rank_mismatch(%arg0 : !ttg.memdesc<2x4x8xf32, #shared_rank2, #smem, 2x8x8>) {
+  // expected-error @+1 {{memdesc subview reshape requires the layout rank to match the memdesc rank}}
+  %0 = ttg.memdesc_reshape %arg0 : !ttg.memdesc<2x4x8xf32, #shared_rank2, #smem, 2x8x8> -> !ttg.memdesc<4x16xf32, #shared_rank2, #smem, 8x16>
+  tt.return
+}
+
+// -----
+
 #linear = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [], block = []}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory

@@ -2159,6 +2159,167 @@ def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_of
     assert (output == ref_output).all()
 
 
+@gluon.jit
+def _make_2d_offsets(rows: ttgl.constexpr, cols: ttgl.constexpr, stride: ttgl.constexpr,
+                     layout: ttgl.constexpr):
+    row = ttgl.arange(0, rows, ttgl.SliceLayout(1, layout))
+    col = ttgl.arange(0, cols, ttgl.SliceLayout(0, layout))
+    return row[:, None] * stride + col[None, :]
+
+
+def test_shared_memory_subview_reshape():
+    m = 8
+    n = 16
+    num_warps = 1
+    layout = ttgl.BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [1, 1], [1, 0])
+    shared_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr,
+               shared_layout: ttgl.constexpr):
+        offsets = _make_2d_offsets(M, N, N, layout)
+
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [M, N], shared_layout)
+        smem.store(ttgl.load(in_ptr + offsets))
+        reshaped = smem.slice(N // 2, N // 2, dim=1).reshape([M // 2, N])
+
+        out_offsets = _make_2d_offsets(M // 2, N, N, layout)
+        ttgl.store(out_ptr + out_offsets, reshaped.load(layout))
+
+    input = torch.arange(m * n, device="cuda", dtype=torch.int32).reshape(m, n)
+    output = torch.empty((m // 2, n), device="cuda", dtype=torch.int32)
+
+    kernel[(1, )](input, output, m, n, layout, shared_layout, num_warps=num_warps)
+
+    torch.testing.assert_close(output, input[:, n // 2:].reshape(m // 2, n))
+
+
+def test_shared_memory_subview_reshape_chained_gaps_linear_layout():
+    shape = (16, 32)
+    offsets = (8, 16)
+    slice_shape = (8, 16)
+    mid_shape = (4, 32)
+    dst_shape = (2, 64)
+    num_warps = 1
+    layout = ttgl.BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [1, 1], [1, 0])
+    shared_layout = ttgl.SharedLinearLayout(
+        offset_bases=[[0, 1], [1, 0], [0, 2], [2, 0], [0, 4], [4, 0], [0, 8], [8, 0], [0, 16]])
+
+    @gluon.jit
+    def kernel(in_ptr, view_out_ptr, parent_out_ptr, M: ttgl.constexpr, N: ttgl.constexpr,
+               SLICE_M_OFFSET: ttgl.constexpr, SLICE_N_OFFSET: ttgl.constexpr, SLICE_M: ttgl.constexpr,
+               SLICE_N: ttgl.constexpr, MID_M: ttgl.constexpr, MID_N: ttgl.constexpr, DST_M: ttgl.constexpr,
+               DST_N: ttgl.constexpr, layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+        src_offsets = _make_2d_offsets(M, N, N, layout)
+
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [M, N], shared_layout)
+        smem.store(ttgl.load(in_ptr + src_offsets))
+        view = smem.slice(SLICE_M_OFFSET, SLICE_M, dim=0).slice(SLICE_N_OFFSET, SLICE_N, dim=1)
+        reshaped = view.reshape([MID_M, MID_N]).reshape([DST_M, DST_N])
+        other = smem.slice(0, SLICE_M, dim=0).slice(0, SLICE_N, dim=1).reshape([DST_M, DST_N])
+
+        out_offsets = _make_2d_offsets(DST_M, DST_N, DST_N, layout)
+        ttgl.store(view_out_ptr + out_offsets, reshaped.load(layout))
+
+        replacement = _make_2d_offsets(DST_M, DST_N, 1000, layout)
+        reshaped.store(replacement)
+        other.store(-replacement - 1)
+        ttgl.store(parent_out_ptr + src_offsets, smem.load(layout))
+
+    input = torch.arange(math.prod(shape), device="cuda", dtype=torch.int32).reshape(shape)
+    view_output = torch.empty(dst_shape, device="cuda", dtype=torch.int32)
+    parent_output = torch.empty_like(input)
+
+    kernel[(1, )](input, view_output, parent_output, *shape, *offsets, *slice_shape, *mid_shape, *dst_shape, layout,
+                  shared_layout, num_warps=num_warps)
+
+    torch.testing.assert_close(
+        view_output,
+        input[offsets[0]:offsets[0] + slice_shape[0], offsets[1]:offsets[1] + slice_shape[1]].reshape(dst_shape),
+    )
+    replacement = (torch.arange(dst_shape[0], device="cuda", dtype=torch.int32)[:, None] * 1000 +
+                   torch.arange(dst_shape[1], device="cuda", dtype=torch.int32)[None, :])
+    expected_parent = input.clone()
+    expected_parent[:slice_shape[0], :slice_shape[1]] = (-replacement - 1).reshape(slice_shape)
+    expected_parent[offsets[0]:offsets[0] + slice_shape[0],
+                    offsets[1]:offsets[1] + slice_shape[1]] = replacement.reshape(slice_shape)
+    torch.testing.assert_close(parent_output, expected_parent)
+
+
+def test_shared_memory_subview_reshape_rank_change_with_3d_gaps():
+    src_shape = (8, 16, 32)
+    offsets = (4, 8, 16)
+    slice_shape = (4, 8, 16)
+    dst_shape = (16, 32)
+    num_warps = 4
+    src_layout = ttgl.BlockedLayout([1, 1, 4], [8, THREADS_PER_WARP // 8, 1], [2, 1, 2], [1, 2, 0])
+    dst_layout = ttgl.BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0])
+    shared_layout = ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=4, order=[1, 2, 0])
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr, D0: ttgl.constexpr, D1: ttgl.constexpr, D2: ttgl.constexpr,
+               OFFSET0: ttgl.constexpr, OFFSET1: ttgl.constexpr, OFFSET2: ttgl.constexpr, SLICE0: ttgl.constexpr,
+               SLICE1: ttgl.constexpr, SLICE2: ttgl.constexpr, DST0: ttgl.constexpr, DST1: ttgl.constexpr,
+               src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+        src_i = ttgl.arange(0, D0, ttgl.SliceLayout(1, ttgl.SliceLayout(2, src_layout)))
+        src_j = ttgl.arange(0, D1, ttgl.SliceLayout(0, ttgl.SliceLayout(2, src_layout)))
+        src_k = ttgl.arange(0, D2, ttgl.SliceLayout(0, ttgl.SliceLayout(1, src_layout)))
+        src_offsets = src_i[:, None, None] * D1 * D2 + src_j[None, :, None] * D2 + src_k[None, None, :]
+
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [D0, D1, D2], shared_layout)
+        smem.store(ttgl.load(in_ptr + src_offsets))
+        view = smem.slice(OFFSET0, SLICE0, dim=0)
+        view = view.slice(OFFSET1, SLICE1, dim=1)
+        view = view.slice(OFFSET2, SLICE2, dim=2)
+        reshaped = view.reshape([1, SLICE0, SLICE1, SLICE2]).reshape([DST0, DST1])
+
+        dst_offsets = _make_2d_offsets(DST0, DST1, DST1, dst_layout)
+        ttgl.store(out_ptr + dst_offsets, reshaped.load(dst_layout))
+
+    input = torch.arange(math.prod(src_shape), device="cuda", dtype=torch.int32).reshape(src_shape)
+    output = torch.empty(dst_shape, device="cuda", dtype=torch.int32)
+
+    kernel[(1, )](input, output, *src_shape, *offsets, *slice_shape, *dst_shape, src_layout, dst_layout,
+                  shared_layout, num_warps=num_warps)
+
+    expected = input[offsets[0]:offsets[0] + slice_shape[0], offsets[1]:offsets[1] + slice_shape[1],
+                     offsets[2]:offsets[2] + slice_shape[2]].reshape(dst_shape)
+    torch.testing.assert_close(output, expected)
+
+
+def test_shared_memory_index_subview_repeated_reshape():
+    buffers = 2
+    m = 8
+    n = 16
+    index = 1
+    num_warps = 1
+    layout = ttgl.BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [1, 1], [1, 0])
+    shared_layout = ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=4, order=[1, 0])
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr, index, BUFFERS: ttgl.constexpr, M: ttgl.constexpr, N: ttgl.constexpr,
+               layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+        offsets = _make_2d_offsets(M, N, N, layout)
+
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [BUFFERS, M, N], shared_layout)
+        for buffer in ttgl.static_range(BUFFERS):
+            values = ttgl.load(in_ptr + buffer * M * N + offsets)
+            smem.index(buffer).store(values)
+
+        view = smem.index(index).slice(N // 2, N // 2, dim=1)
+        reshaped = view.reshape([1, 2, 2, 16]).reshape([M // 2, N])
+
+        out_offsets = _make_2d_offsets(M // 2, N, N, layout)
+        ttgl.store(out_ptr + out_offsets, reshaped.load(layout))
+
+    input = torch.arange(buffers * m * n, device="cuda", dtype=torch.int32).reshape(buffers, m, n)
+    output = torch.empty((m // 2, n), device="cuda", dtype=torch.int32)
+
+    kernel[(1, )](input, output, index, buffers, m, n, layout, shared_layout, num_warps=num_warps)
+
+    torch.testing.assert_close(output, input[index, :, n // 2:].reshape(m // 2, n))
+
+
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("op, tol", [("add", 0), ("sub", 0), ("mul", 0), ("fma", 1e-6)])
 def test_float2(op, tol):

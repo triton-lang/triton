@@ -1316,9 +1316,10 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
       triton::gpu::isPaddedEncoding(srcTy.getEncoding())
           ? triton::gpu::paddedLinearLayout(allocShape, srcTy.getEncoding())
           : triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
-  auto dimNames = standardOutDimNames(ctx, shape.size());
-  // Map from dimNames to offset, block
+  // Map logical coordinates to physical offset and block coordinates.
   auto invLl = totalLl.pseudoinvert();
+  auto offsetIdx = invLl.getOutDimIndex(StringAttr::get(ctx, "offset"));
+  auto blockIdx = invLl.getOutDimIndex(StringAttr::get(ctx, "block"));
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
   for (auto dim : standardOutDimNames(srcTy.getContext(), shape.size())) {
     logicalOffsets.push_back({dim, 0});
@@ -1329,9 +1330,9 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
     auto [shape, allocShape] = shapes;
     for (int j = llvm::Log2_32(shape); j < llvm::Log2_32(allocShape); ++j) {
       logicalOffsets[dim].second = 1 << j;
-      auto offsetAndBlock = invLl.apply(logicalOffsets);
-      ret |= offsetAndBlock[0].second;
-      assert(offsetAndBlock[1].second == 0);
+      auto physicalOffsets = invLl.apply(logicalOffsets);
+      ret |= physicalOffsets[offsetIdx].second;
+      assert(physicalOffsets[blockIdx].second == 0);
     }
     // Reset the offset for the next dimension
     logicalOffsets[dim].second = 0;
@@ -1368,10 +1369,10 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
   // We don't allow for non-trivial block dimensions in the shared memory
   // layout. We have in practice that offsetAndBlock[1].second is zero, but we
   // cannot assert that without constant propagation so we just discard it.
-  auto offset =
-      applyLinearLayout(loc, rewriter, ll.pseudoinvert(), logicalOffsets)[0]
-          .second;
-  return offset;
+  auto invLl = ll.pseudoinvert();
+  auto offsetIdx = invLl.getOutDimIndex(StringAttr::get(ctx, "offset"));
+  return applyLinearLayout(loc, rewriter, invLl, logicalOffsets)[offsetIdx]
+      .second;
 }
 
 Value SharedMemoryObject::getShmemAffineBase(

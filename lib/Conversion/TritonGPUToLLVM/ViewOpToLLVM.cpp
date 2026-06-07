@@ -381,21 +381,30 @@ struct MemDescReshapeOpConversion
     auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                       llvmElemTy, rewriter);
     SmallVector<Value> offsets = srcSmemObj.getOffsets();
-    // FIXME: This should be done by composing a linear layout with its
-    // reshaped counterpart.
-    SmallVector<unsigned> srcShape;
-    for (int64_t d : op.getSrc().getType().getShape())
-      srcShape.push_back(d);
-    SmallVector<unsigned> dstShape;
-    for (int64_t d : op.getType().getShape())
-      dstShape.push_back(d);
-    Value linearOffset = LLVM::linearize(rewriter, loc, offsets, srcShape);
-    SmallVector<Value> delinearizedOffset =
-        LLVM::delinearize(rewriter, loc, linearOffset, dstShape);
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto srcTy = op.getSrc().getType();
+    bool isSubview = srcTy.getAllocShape().take_back(srcTy.getRank()) !=
+                     srcTy.getShape();
+    SmallVector<Value> reshapedOffsets;
+    if (isSubview) {
+      auto coordinateTransform = toLinearLayout(srcTy).pseudoinvert().compose(
+          toLinearLayout(op.getType()));
+      SmallVector<std::pair<StringAttr, Value>> namedOffsets;
+      for (auto [dim, offset] : llvm::zip(
+               standardOutDimNames(op.getContext(), srcTy.getRank()), offsets))
+        namedOffsets.push_back({dim, offset});
+      auto transformed = applyLinearLayout(
+          loc, rewriter, coordinateTransform, namedOffsets);
+      reshapedOffsets = llvm::to_vector(llvm::make_second_range(transformed));
+    } else {
+      auto srcShape = convertType<unsigned>(srcTy.getShape());
+      auto dstShape = convertType<unsigned>(op.getType().getShape());
+      Value linearOffset = LLVM::linearize(rewriter, loc, offsets, srcShape);
+      reshapedOffsets =
+          LLVM::delinearize(rewriter, loc, linearOffset, dstShape);
+    }
     auto dstSmemObj =
         SharedMemoryObject(srcSmemObj.getBases(), srcSmemObj.getBaseElemType(),
-                           delinearizedOffset);
+                           reshapedOffsets);
     auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();

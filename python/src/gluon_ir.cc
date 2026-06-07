@@ -606,6 +606,12 @@ void init_gluon_ir(py::module &&m) {
              check(ty.getEncoding(), "expected a memdesc with an encoding");
              return layoutToGluon(ty.getEncoding());
            })
+      .def("get_alloc_shape_from_memdesc",
+           [](GluonOpBuilder &self,
+              Value memdesc) -> std::vector<int64_t> {
+             auto ty = cast<ttg::MemDescType>(memdesc.getType());
+             return {ty.getAllocShape().begin(), ty.getAllocShape().end()};
+           })
       .def("get_tensor_descriptor_layout_type",
            [](GluonOpBuilder &self, Type blockType, bool isSigned,
               Attribute layout) -> Type {

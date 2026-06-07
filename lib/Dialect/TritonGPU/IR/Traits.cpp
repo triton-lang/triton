@@ -34,9 +34,15 @@ LogicalResult OpTrait::impl::verifyEquivalentMemDescType(Type typeA,
   if (static_cast<bool>(encodingA) != static_cast<bool>(encodingB))
     return failure();
 
+  auto layoutA = cast<LayoutEncodingTrait>(encodingA);
+  auto layoutB = cast<LayoutEncodingTrait>(encodingB);
+  if (layoutA.getRank() != layoutB.getRank())
+    return failure();
+
   auto layoutInterface =
       cast<triton::DialectInferLayoutInterface>(&encodingA.getDialect());
-  return layoutInterface->verifyLayoutsAreEqual(memdescA.getShape(), encodingA,
+  auto layoutShape = memdescA.getAllocShape().take_back(layoutA.getRank());
+  return layoutInterface->verifyLayoutsAreEqual(layoutShape, encodingA,
                                                 encodingB, {});
 }
 

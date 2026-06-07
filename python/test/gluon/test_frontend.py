@@ -328,9 +328,9 @@ def shared_memory_subview_kernel(XBLOCK: ttgl.constexpr, layout: ttgl.constexpr,
     XHALF: ttgl.constexpr = XBLOCK // 2
     smem = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK, XBLOCK], smem_layout)
     view = smem.slice(XHALF, XHALF, dim=1)
-    value = view.load(layout)
+    value = view.reshape([XHALF, XBLOCK]).load(layout)
     view = smem.slice(XHALF, XHALF, dim=0)
-    view.store(value.trans())
+    view.store(value)
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
@@ -345,17 +345,17 @@ def test_shared_memory_subview(target):
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#shared1 = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [128, 0], [0, 128], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]]}, alignment = 16>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @shared_memory_subview_kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<256x256xi32, #shared, #smem, mutable>
     %1 = ttg.memdesc_subslice %0[0, 128] : !ttg.memdesc<256x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<256x128xi32, #shared, #smem, mutable, 256x256>
-    %2 = ttg.local_load %1 : !ttg.memdesc<256x128xi32, #shared, #smem, mutable, 256x256> -> tensor<256x128xi32, #blocked>
-    %3 = ttg.memdesc_subslice %0[128, 0] : !ttg.memdesc<256x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256>
-    %4 = tt.trans %2 {order = array<i32: 1, 0>} : tensor<256x128xi32, #blocked> -> tensor<128x256xi32, #blocked1>
-    ttg.local_store %4, %3 : tensor<128x256xi32, #blocked1> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256>
+    %2 = ttg.memdesc_reshape %1 : !ttg.memdesc<256x128xi32, #shared, #smem, mutable, 256x256> -> !ttg.memdesc<128x256xi32, #shared1, #smem, mutable, 256x256>
+    %3 = ttg.local_load %2 : !ttg.memdesc<128x256xi32, #shared1, #smem, mutable, 256x256> -> tensor<128x256xi32, #blocked>
+    %4 = ttg.memdesc_subslice %0[128, 0] : !ttg.memdesc<256x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256>
+    ttg.local_store %3, %4 : tensor<128x256xi32, #blocked> -> !ttg.memdesc<128x256xi32, #shared, #smem, mutable, 256x256>
     tt.return
   }
 }

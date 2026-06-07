@@ -4398,8 +4398,26 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
   auto *ctx = srcTy.getContext();
   auto src = toLinearLayout(srcTy);
   assert(product(srcTy.getShape()) == product(dstShape));
-  auto dst = reshapeLayout(ctx, src, dstShape);
-  return dst;
+  auto memDesc = dyn_cast<MemDescType>(srcTy);
+  if (!memDesc ||
+      memDesc.getAllocShape().take_back(memDesc.getRank()) ==
+          memDesc.getShape())
+    return reshapeLayout(ctx, src, dstShape);
+
+  auto srcShape = memDesc.getShape();
+  auto srcAllocShape =
+      memDesc.getAllocShape().take_back(memDesc.getRank());
+  auto srcDimNames = standardOutDimNames(ctx, memDesc.getRank());
+  LinearLayout transform = LinearLayout::empty();
+  for (auto [dim, size] : llvm::zip(srcDimNames, srcShape))
+    transform *= LinearLayout::identity1D(size, dim, dim);
+  transform = reshapeLayout(ctx, transform, dstShape);
+
+  auto dstDim0 = standardOutDimNames(ctx, dstShape.size()).front();
+  for (int dim = memDesc.getRank() - 1; dim >= 0; --dim)
+    transform *= LinearLayout::identity1D(
+        srcAllocShape[dim] / srcShape[dim], srcDimNames[dim], dstDim0);
+  return src.compose(transform);
 }
 
 // Helper function for im2col mode block shape calculation.
