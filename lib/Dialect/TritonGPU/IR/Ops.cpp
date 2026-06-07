@@ -588,8 +588,11 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
             mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
             mmaEncoding.getFp4Padded(), CGALayout);
         auto srcLL = toLinearLayout(srcShape, srcEnc);
-        auto dstLL = toLinearLayout(dstShape, candidateEncoding);
-        if (reshapeLayout(ctx, srcLL, dstShape) == dstLL) {
+        auto dstLL = nvmmaSharedToLinearLayout(
+            dstShape, candidateEncoding, TMAMode::Tiled,
+            /*disableSwizzle=*/false, /*emitErrors=*/false);
+        if (succeeded(dstLL) &&
+            reshapeLayout(ctx, srcLL, dstShape) == *dstLL) {
           dstEnc = candidateEncoding;
           return success();
         }

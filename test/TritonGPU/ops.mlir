@@ -202,6 +202,24 @@ module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
+#src = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 32}>
+#dst = #ttg.shared_linear<{offset = [[1, 0, 0], [2, 0, 0], [4, 0, 0], [0, 1, 0], [0, 2, 0], [4, 4, 0], [8, 0, 0]]}, alignment = 256>
+#smem = #ttg.shared_memory
+
+module {
+  // CHECK-LABEL: @reshape_nvmma_subview_fallback
+  // CHECK: ttg.memdesc_reshape
+  tt.func @reshape_nvmma_subview_fallback(
+      %arg0: !ttg.memdesc<8x8xi32, #src, #smem, 16x8>) {
+    %0 = ttg.memdesc_reshape %arg0
+        : !ttg.memdesc<8x8xi32, #src, #smem, 16x8>
+       -> !ttg.memdesc<8x8x1xi32, #dst, #smem, 16x8x1>
+    tt.return
+  }
+}
+
+// -----
+
 #shared1d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared2d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
