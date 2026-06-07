@@ -43,34 +43,6 @@ LogicalResult validateStridesAndSharedOrder(triton::MakeTensorDescOp op,
   return success();
 }
 
-// Collects all users of the value beyond the basic block boundaries
-// defining a given value.
-void collectUsers(Value value, llvm::SetVector<Operation *> &users) {
-  for (OpOperand &use : value.getUses()) {
-    Operation *userOp = use.getOwner();
-    if (users.contains(userOp)) {
-      // stop recursion; avoid loops
-      return;
-    }
-    users.insert(userOp);
-    const unsigned argIdx = use.getOperandNumber();
-
-    if (auto unrealCast = dyn_cast<mlir::UnrealizedConversionCastOp>(userOp)) {
-      collectUsers(unrealCast->getResult(argIdx), users);
-    }
-
-    if (auto branch = dyn_cast<mlir::BranchOpInterface>(userOp)) {
-      auto successors = branch->getSuccessors();
-      for (auto [idx, successor] : llvm::enumerate(successors)) {
-        auto operands = branch.getSuccessorOperands(idx);
-        if (argIdx < operands.size()) {
-          collectUsers(successor->getArgument(argIdx), users);
-        }
-      }
-    }
-  }
-}
-
 struct MakeTensorDescOpConversion
     : public ConvertOpToLLVMPattern<triton::MakeTensorDescOp> {
   using ConvertOpToLLVMPattern<
@@ -104,7 +76,6 @@ struct MakeTensorDescOpConversion
     Type elementType =
         getTypeConverter()->convertType(tensorDescTy.getElementType());
     SmallVector<int64_t> blockShape = to_vector(tensorDescTy.getShape());
-    int numWarps = lookupNumWarps(op);
     auto shapePerCTA = triton::gpu::getShapePerCTA(sharedEnc, blockShape);
 
     if (failed(validateStridesAndSharedOrder(op, sharedEnc, shapePerCTA,
@@ -113,17 +84,15 @@ struct MakeTensorDescOpConversion
     }
     auto sharedOrder = triton::gpu::getOrder(
         cast<triton::gpu::SharedEncodingTrait>(sharedEnc), shapePerCTA);
-    bool isRowMajor = sharedOrder[0] == (sharedOrder.size() - 1);
-    // Create TDM descriptor for 2D-5D tensors
-    auto tdmDesc = LLVM::AMD::createTDMDescriptor(
-        rewriter, loc, getTypeConverter(), elementType, shapePerCTA, numWarps,
-        padInterval, padAmount, tensorShape, tensorStride, basePtr, sharedEnc);
-
-    // `getAllGroups()` returns 2 (2D) or 4 (3D-5D) vector Values; scalarize
-    // them into 12 or 20 i32 scalars to match the flat MLIR struct type
-    // returned by `convertTensorDescType` (which matches the host-side
-    // TDMDescriptor ABI).
-    SmallVector<Value> groups = tdmDesc.getAllGroups();
+    // Lower the tensor descriptor to a base TDM descriptor.  The final hardware
+    // descriptor is completed at each TDM op site because pred, LDS address,
+    // barrier, and tile_dim* are op-local.
+    // Returns 2 (2D) or 4 (3D-5D) vector groups; scalarize into 12 or 20
+    // i32 scalars to match the flat MLIR struct type from
+    // `convertTensorDescType` (matches the host-side TDMDescriptor ABI).
+    SmallVector<Value> groups = LLVM::AMD::createTDMDescriptor(
+        rewriter, loc, getTypeConverter(), elementType, blockShape.size(),
+        padInterval, padAmount, tensorShape, tensorStride, basePtr);
     SmallVector<Value> scalars =
         mlir::LLVM::AMD::scalarizeTDMDescriptor(rewriter, loc, groups);
 
@@ -134,11 +103,77 @@ struct MakeTensorDescOpConversion
     return success();
   }
 };
+
+struct UpdateTensorDescriptorOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::UpdateTensorDescriptorOp> {
+  using ConvertOpToLLVMPattern<
+      triton::amdgpu::UpdateTensorDescriptorOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::UpdateTensorDescriptorOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto tensorDescTy = op.getDesc().getType();
+    Type elementType =
+        getTypeConverter()->convertType(tensorDescTy.getElementType());
+    SmallVector<int64_t> blockShape = to_vector(tensorDescTy.getShape());
+
+    if (blockShape.size() != 2) {
+      return rewriter.notifyMatchFailure(
+          op, "UpdateTensorDescriptorOp lowering currently supports 2D only");
+    }
+
+    // Unpack the input descriptor into vector groups (group0: <4 x i32>,
+    // group1: <8 x i32> for 2D).
+    SmallVector<Value> groups =
+        mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, adaptor.getDesc());
+    assert(groups.size() == 2 && "2D descriptor expects 2 vector groups");
+    Value group0 = groups[0];
+    Value group1 = groups[1];
+
+    SmallVector<Value> addOffsets = llvm::to_vector(adaptor.getAddOffsets());
+    SmallVector<Value> setBounds = llvm::to_vector(adaptor.getSetBounds());
+
+    Value destPtr;
+    if (op.getDest()) {
+      auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+          loc, adaptor.getDest(), elementType, rewriter);
+      destPtr = smemObj.getBase();
+    }
+    Value barrierPtr;
+    if (op.getBarrier()) {
+      auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+          loc, adaptor.getBarrier(),
+          getTypeConverter()->convertType(
+              op.getBarrier().getType().getElementType()),
+          rewriter);
+      barrierPtr = smemObj.getBase();
+    }
+    Value pred = adaptor.getPred();
+
+    mlir::LLVM::AMD::updateTensorDescriptor(
+        rewriter, loc, elementType, blockShape, group0, group1, addOffsets,
+        setBounds, destPtr, pred, barrierPtr);
+
+    // Re-pack the mutated groups back into the flat MLIR struct that
+    // matches convertTensorDescType / the host-side TDMDescriptor ABI.
+    SmallVector<Value> mutated = {group0, group1};
+    SmallVector<Value> scalars =
+        mlir::LLVM::AMD::scalarizeTDMDescriptor(rewriter, loc, mutated);
+    Value newDesc = packLLElements(loc, getTypeConverter(), scalars, rewriter,
+                                   tensorDescTy);
+
+    rewriter.replaceOp(op, newDesc);
+    return success();
+  }
+};
 } // namespace
 
 void mlir::triton::AMD::populateTensorPtrOpsToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<MakeTensorDescOpConversion>(typeConverter, benefit);
+  patterns.add<UpdateTensorDescriptorOpConversion>(typeConverter, benefit);
   return;
 }

@@ -1,4 +1,5 @@
 #include "Data/Metric.h"
+#include "Utility/Errors.h"
 
 #include <cstring>
 #include <stdexcept>
@@ -46,16 +47,15 @@ MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
     if (nameIt != metricNameToId.end()) {
       auto &descriptor = metricDescriptors.at(nameIt->second);
       if (descriptor.typeIndex != typeIndex) {
-        throw std::runtime_error(
-            "[PROTON] MetricBuffer: type mismatch for metric " + name +
+        throw makeInvalidArgument(
+            "MetricBuffer: type mismatch for metric " + name +
             ": current=" + getTypeNameForIndex(descriptor.typeIndex) +
             ", new=" + getTypeNameForIndex(typeIndex));
       }
       if (descriptor.size != size) {
-        throw std::runtime_error(
-            "[PROTON] MetricBuffer: size mismatch for metric " + name +
-            ": current=" + std::to_string(descriptor.size) +
-            ", new=" + std::to_string(size));
+        throw makeInvalidArgument(
+            "MetricBuffer: size mismatch for metric " + name + ": current=" +
+            std::to_string(descriptor.size) + ", new=" + std::to_string(size));
       }
       return descriptor;
     }
@@ -68,16 +68,16 @@ MetricBuffer::getOrCreateMetricDescriptor(const std::string &name,
   if (nameIt != metricNameToId.end()) {
     auto &descriptor = metricDescriptors.at(nameIt->second);
     if (descriptor.typeIndex != typeIndex) {
-      throw std::runtime_error(
-          "[PROTON] MetricBuffer: type mismatch for metric " + name +
+      throw makeInvalidArgument(
+          "MetricBuffer: type mismatch for metric " + name +
           ": current=" + getTypeNameForIndex(descriptor.typeIndex) +
           ", new=" + getTypeNameForIndex(typeIndex));
     }
     if (descriptor.size != size) {
-      throw std::runtime_error(
-          "[PROTON] MetricBuffer: size mismatch for metric " + name +
-          ": current=" + std::to_string(descriptor.size) +
-          ", new=" + std::to_string(size));
+      throw makeInvalidArgument("MetricBuffer: size mismatch for metric " +
+                                name +
+                                ": current=" + std::to_string(descriptor.size) +
+                                ", new=" + std::to_string(size));
     }
     return descriptor;
   }
@@ -124,9 +124,8 @@ collectTensorMetrics(Runtime *runtime,
       }
       tensorMetricsHost[name] = std::move(values);
     } else {
-      throw std::runtime_error(
-          "[PROTON] Unsupported tensor metric type index: " +
-          std::to_string(tensorMetric.typeIndex));
+      throw makeInvalidArgument("Unsupported tensor metric type index: " +
+                                std::to_string(tensorMetric.typeIndex));
     }
   }
   return tensorMetricsHost;
@@ -163,11 +162,11 @@ void MetricBuffer::queue(uint64_t seqId, MetricValueType scalarMetric,
       [](auto &&value) -> uint64_t {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, std::string>) {
-          throw std::runtime_error(
-              "[PROTON] String metrics are not supported in MetricBuffer");
+          throw makeInvalidArgument(
+              "String metrics are not supported in MetricBuffer");
         } else if constexpr (is_std_vector_v<T>) {
-          throw std::runtime_error(
-              "[PROTON] Vector metrics are not supported in MetricBuffer");
+          throw makeInvalidArgument(
+              "Vector metrics are not supported in MetricBuffer");
         } else {
           static_assert(sizeof(T) == sizeof(uint64_t),
                         "MetricValueType alternative must be 8 bytes");

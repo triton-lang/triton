@@ -95,3 +95,21 @@ def test_tensor_metric_construction():
     metric = libproton.TensorMetric(123, libproton.metric_type_double_index)
     assert metric.ptr == 123
     assert metric.index == libproton.metric_type_double_index
+
+
+def test_select_profiling_backend_for_triton_backend():
+    selected_profiler = libproton.select_profiler_from_triton_backend("cuda")
+    assert selected_profiler == "cupti"
+    selected_profiler = libproton.select_profiler_from_triton_backend("hip")
+    assert selected_profiler == "rocprofiler"
+
+    with pytest.raises(ValueError, match="No profiler registered for triton backend invalid_triton_backend"):
+        libproton.select_profiler_from_triton_backend("invalid_triton_backend")
+
+
+def test_get_available_profiling_backends():
+    profilers = libproton.get_available_profilers()
+    assert "cupti" in profilers
+    assert "roctracer" in profilers
+    assert "rocprofiler" in profilers
+    assert "instrumentation" in profilers

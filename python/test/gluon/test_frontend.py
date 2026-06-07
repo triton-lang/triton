@@ -41,6 +41,7 @@ HIP_TARGET_CDNA4 = GPUTarget("hip", "gfx950", 64)
 HIP_TARGET_GFX1250 = GPUTarget("hip", "gfx1250", 32)
 
 ALL_TARGETS = [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET_RDNA4]
+ALL_MULTICTA_TARGETS = [HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET_GFX1250]
 
 
 def anonymize_ir(ir):
@@ -636,6 +637,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def async_shared_store_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])
+    values = ttgl.arange(0, 128, layout=layout).to(ttgl.int32)
+    dst = ttgl.allocate_shared_memory(ttgl.int32, [128], shared_layout)
+    bar = mbarrier.allocate_mbarrier()
+    hopper.async_store(dst, values, bar)
+
+
+@pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])
+def test_async_shared_store(target):
+    mod = run_parser(async_shared_store_kernel, *make_args(num_ctas=2), target=target)
+    assert "ttng.async_shared_store" in anonymize_ir(mod.str_nodebug())
+
+
+@gluon.jit
 def tcgen05_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr):
     a = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
     b = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
@@ -900,7 +917,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32_4 = arith.constant 0 : i32
     %c0_i32_5 = arith.constant 0 : i32
     ttng.async_tma_copy_local_to_global %arg0[%c0_i32_4, %c0_i32_5] %0 : !tt.tensordesc<128x128xf16, #shared>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-    ttng.async_tma_store_wait {pendings = 0 : i32}
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
     tt.return
   }
 }
@@ -959,7 +976,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.inval_barrier %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %c0_i32_3 = arith.constant 0 : i32
     ttng.async_tma_scatter %arg0[%2, %c0_i32_3] %0 : !tt.tensordesc<1x128xf16, #shared>, tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-    ttng.async_tma_store_wait {pendings = 0 : i32}
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
     tt.return
   }
 }
@@ -3350,6 +3367,18 @@ def infer_layout_for_padded_shared_kernel():
     ttgl.static_assert(reshaped.type.layout == ref_layout)
 
 
+@gluon.jit
+def test_convert_padded_shared_with_multicta_kernel():
+    shape: ttgl.constexpr = [512, 128]
+    initial_order: ttgl.constexpr = [0, 1]
+    layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for(interval_padding_pairs=[[256, 16]],
+                                                                       cga_layout=[[0, 1]], shape=shape,
+                                                                       order=initial_order)
+    smem = ttgl.allocate_shared_memory(ttgl.int32, shape, layout)
+    reshaped = smem.permute((0, 1))
+    ttgl.static_assert(reshaped.layout.cga_layout[0] == ttgl.constexpr([0, 1]))
+
+
 @pytest.mark.parametrize("target", ALL_TARGETS)
 def test_infer_layout_for_padded_shared(target):
     # This test is used to test the conversion to gluon object PaddedSharedLayout from PaddedSharedEncodingAttr.
@@ -3368,6 +3397,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@pytest.mark.parametrize("target", ALL_MULTICTA_TARGETS)
+def test_convert_padded_shared_with_multicta(target):
+    # It is to make sure layoutToGluon() handle CGA layout correctly when
+    # converting a PaddedSharedEncodingAttr to a PaddedSharedLayout object.
+    run_parser(test_convert_padded_shared_with_multicta_kernel, *make_args(num_ctas=2), target=target)
 
 
 @filecheck_test
@@ -4161,6 +4197,7 @@ def test_nv_tma_descriptor_store_kernel(target):
         smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], smem_layout)
         tma.async_copy_shared_to_global(input_desc, [0, 0], smem)
         tma.store_wait(0)
+        tma.store_wait(0, read_only=True)
 
     ptr = MockTensor(ttgl.float32)
     module = run_parser(nv_tma_descriptor_store_kernel, *make_args(ptr), target)
@@ -4179,7 +4216,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
     %c0_i32_1 = arith.constant 0 : i32
     ttng.async_tma_copy_local_to_global %0[%c0_i32, %c0_i32_1] %1 : !tt.tensordesc<128x128xf32, #shared>, !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
-    ttng.async_tma_store_wait {pendings = 0 : i32}
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
     tt.return
   }
 }
@@ -4346,3 +4384,65 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+def test_compute_efficient_padded_shared_layout_op_a_fp16():
+
+    @gluon.jit
+    def kernel():
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 32], transposed=True,
+                                                             warps_per_cta=[2, 2])
+        dot_op_a: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=8)
+        shared_a: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
+            dot_op_a, [128, 64], ttgl.float16)
+        ttgl.allocate_shared_memory(ttgl.float16, [128, 64], shared_a)
+
+    module = run_parser(kernel, *make_args(num_warps=4), target=HIP_TARGET_CDNA4)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#shared = #ttg.padded_shared<[512:+16] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [16, 0], [32, 0], [64, 0], [1, 0], [2, 0], [4, 0], [8, 0]], block = []}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+""")
+
+
+def test_compute_efficient_padded_shared_layout_op_b_fp8():
+
+    @gluon.jit
+    def kernel():
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
+                                                             warps_per_cta=[2, 2])
+        dot_op_b: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=16)
+        shared_b: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
+            dot_op_b, [128, 128], ttgl.float8e4nv)
+        ttgl.allocate_shared_memory(ttgl.float8e4nv, [128, 128], shared_b)
+
+    module = run_parser(kernel, *make_args(num_warps=4), target=HIP_TARGET_CDNA4)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#shared = #ttg.padded_shared<[1024:+32] {offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0], [0, 16], [0, 32], [0, 64], [0, 1], [0, 2], [0, 4], [0, 8]], block = []}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf8E4M3FN, #shared, #smem, mutable>
+    tt.return
+  }
+}
+""")
+
+
+def test_compute_efficient_padded_shared_layout_invalid_returns_none():
+    mfma_layout = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 32], transposed=True, warps_per_cta=[2, 2])
+    dot_op = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=8)
+
+    # k_width=2 is outside {4, 8, 16}.
+    bad_kwidth_dot_op = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=2)
+    assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(bad_kwidth_dot_op, [128, 64], ttgl.float16) is None
+
+    # fp32 has bitwidth 32, outside the supported {4, 8, 16}.
+    assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(dot_op, [128, 64], ttgl.float32) is None

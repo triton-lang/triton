@@ -761,6 +761,33 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     swizzling.
     The operation can also take an optional 64bit LDS barrier address, in which case
     it sends an "LDS atomic arrive" to signal its completion.
+
+    `warp_used_hint` is an optional i32 bitmask performance hint for
+    partial TDM copy: bit `n` (LSB = warp 0) means warp `n` issues the
+    instruction; bits above `num_warps - 1` must be zero.  Same data
+    lands in shared memory either way -- only emission changes:
+    `K = popcount(hint)` warps cover the block, the rest are pred-off.
+
+    For "all warps participate", omit the attribute (preferred) or pass
+    a full bitmask `K = num_warps`; an explicit `warp_used_hint = 0` is
+    rejected by the verifier.
+
+    Restriction: the hint must be *axis-aligned*.  Pin some warpId bit
+    positions to fixed values and leave the others free; the active
+    warps are exactly those with the pinned bits set accordingly.
+    K = `popcount(hint)` is therefore a power of two (= 2^(number of
+    free bits)).  Legal: `0x0F` (warps 0..3), `0xF0` (warps 4..7),
+    `0x55` / `0xAA` / `0xCC` (stride-by-`2^j`).  Rejected: non
+    axis-aligned patterns like `0x69` or `0x1B`.
+
+    Why this shape: power-of-two K keeps the per-warp tile recalc
+    (`block / K`) integer-clean, and the bit-pinning shape lets the
+    per-warp offset and active-mask predicate fall out of the same
+    `getFreeVariableMasks` LL machinery the no-hint path uses.
+
+    PartitionedSharedEncoding additionally requires `K = popcount(hint)`
+    to be a multiple of `numLogicalPieces` (the hinted path doesn't
+    support multi-instruction slicing).
   }];
 
   let arguments = (ins
@@ -769,14 +796,28 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
     I32:$pred,
     Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier,
-    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache
+    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
+    OptionalAttr<I32Attr>:$warp_used_hint
   );
 
   let results = (outs TTG_AsyncToken:$token);
 
   let builders = [
     OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred), [{
-      return build($_builder, $_state, desc, indices, result, pred, /*barrier=*/static_cast<mlir::Value>(nullptr));
+      return build($_builder, $_state, desc, indices, result, pred,
+                   /*barrier=*/static_cast<mlir::Value>(nullptr),
+                   /*cache=*/triton::CacheModifier::NONE,
+                   /*warp_used_hint=*/IntegerAttr());
+    }]>,
+    OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred, "Value":$barrier), [{
+      return build($_builder, $_state, desc, indices, result, pred, barrier,
+                   /*cache=*/triton::CacheModifier::NONE,
+                   /*warp_used_hint=*/IntegerAttr());
+    }]>,
+    OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred,
+                   "Value":$barrier, "::mlir::triton::CacheModifier":$cache), [{
+      return build($_builder, $_state, desc, indices, result, pred, barrier, cache,
+                   /*warp_used_hint=*/IntegerAttr());
     }]>
   ];
 
@@ -992,7 +1033,76 @@ def TDMPrefetchOp : TT_AMDGPU_Op<"tdm_prefetch", [
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// UpdateTensorDescriptorOp
+//===----------------------------------------------------------------------===//
 
+def UpdateTensorDescriptorOp : TT_AMDGPU_Op<"update_tensor_descriptor", [Pure,
+    AttrSizedOperandSegments,
+    TypesMatchWith<"result type matches desc type", "desc", "result", "$_self">]> {
+  let summary = "Update selected fields of a TDM descriptor; produce a new descriptor SSA value";
+
+  let description = [{
+    Returns a new TDM descriptor with selected fields rewritten.  Each
+    parameter is independently optional; only the fields the caller names
+    are written.  Everything else is inherited from the input descriptor.
+
+    | parameter      | kind        | effect on descriptor                                            |
+    |----------------|-------------|-----------------------------------------------------------------|
+    | `add_offsets`  | incremental | `global_addr += sum(add_offsets[i] * stride[i] * elem_size)`    |
+    | `set_bounds`   | rewrite     | `tensor_dim[i] = set_bounds[i]` (absolute)                      |
+    | `dest`         | rewrite     | `lds_addr = dest`                                               |
+    | `pred`         | rewrite     | `pred = pred`                                                   |
+    | `barrier`      | rewrite     | `barrier_addr = barrier`                                        |
+
+    `add_offsets` is incremental (deltas in element units) and does not
+    touch `tensor_dim` — for OOB-correct loops, set `set_bounds` once
+    outside the loop (interior tiles see a loop-invariant tensor_dim
+    that hoists), or set `set_bounds` per iteration when OOB must fire.
+
+    Examples:
+    ```
+    // K-loop interior: bump tile position only
+    %d1 = amdg.update_tensor_descriptor %d, add_offsets=[%c0, %BLOCK_K]
+            : !tt.tensordesc<64x64xf16, #shared>
+
+    // Prologue: position at first tile + wire LDS and barrier
+    %d1 = amdg.update_tensor_descriptor %d,
+            add_offsets=[%pid_m_off, %c0],
+            dest=%a_shared, barrier=%a_bar
+            : !tt.tensordesc<64x64xf16, #shared>
+
+    // Peel epilogue: install real OOB extent for the partial last tile
+    %d1 = amdg.update_tensor_descriptor %d, set_bounds=[%m_remain, %k_remain]
+            : !tt.tensordesc<64x64xf16, #shared>
+    ```
+  }];
+
+  let arguments = (ins
+    TT_TensorDescType:$desc,
+    Variadic<I32>:$add_offsets,
+    Variadic<I32>:$set_bounds,
+    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$dest,
+    Optional<I32>:$pred,
+    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
+  );
+
+  let results = (outs TT_TensorDescType:$result);
+
+  let assemblyFormat = [{
+    $desc
+    oilist(
+        `add_offsets` `=` `[` $add_offsets `]`
+      | `set_bounds` `=` `[` $set_bounds `]`
+      | `dest` `=` $dest `:` qualified(type($dest))
+      | `pred` `=` $pred
+      | `barrier` `=` $barrier `:` qualified(type($barrier))
+    )
+    attr-dict `:` qualified(type($desc))
+  }];
+
+  let hasVerifier = 1;
+}
 
 //===----------------------------------------------------------------------===//
 // AsyncWait

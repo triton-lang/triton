@@ -142,8 +142,7 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
 
   // Go through region ops in the thenBlock. updateAccumLoopCount takes current
   // accumCnt value and returns the value at the end of the thenBlock.
-  Value endAccum =
-      updateAccumLoopCount(opList, taskTopOps, regionsWithChannels, prevAccum);
+  updateAccumLoopCount(opList, taskTopOps, regionsWithChannels, prevAccum);
 
   SmallVector<Value> ifYieldOperands = newIfOp.thenYield().getOperands();
 
@@ -482,8 +481,7 @@ scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
     if (auto tOp = dyn_cast<scf::IfOp>(&op))
       opList.push_back(&op);
   }
-  Value endAccum =
-      updateAccumLoopCount(opList, taskTopOps, regionsWithChannels, prevAccum);
+  updateAccumLoopCount(opList, taskTopOps, regionsWithChannels, prevAccum);
   LLVM_DEBUG({
     LDBG("-- before replacing yieldOp ");
     newForOp.dump();

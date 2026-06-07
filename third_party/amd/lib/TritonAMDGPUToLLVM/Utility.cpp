@@ -2,9 +2,9 @@
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -12,8 +12,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
-using mlir::triton::AMD::DppCtrl;
-using mlir::triton::AMD::ISAFamily;
+using mlir::triton::amdgpu::ISAFamily;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 
 namespace mlir::LLVM::AMD {
@@ -27,7 +26,7 @@ enum class ShflKind : uint32_t {
 
 Value emitDpp(Location loc, RewriterBase &rewriter, Value old, Value src,
               DppCtrl dppCtrl, uint32_t rowMask = 0xf, uint32_t bankMask = 0xf,
-              bool boundCtrl = false) {
+              bool boundCtrl = true) {
   return ROCDL::DPPUpdateOp::create(
       rewriter, loc, src.getType(), old, src,
       rewriter.getI32IntegerAttr(static_cast<uint32_t>(dppCtrl)),
@@ -52,6 +51,25 @@ Value emitPermlaneX16Xor(Location loc, RewriterBase &rewriter, Value val,
   Value hiSel = b.i32_val(buildSelectorMask(8));
   return ROCDL::PermlaneX16Op::create(rewriter, loc, val.getType(), val, val,
                                       loSel, hiSel, true, false);
+}
+
+Value emitPermlaneSwapXor(Location loc, RewriterBase &rewriter, Value val,
+                          uint32_t laneMask) {
+  assert((laneMask == 16 || laneMask == 32) && "Expected a power of 2 mask");
+  assert(val.getType().isInteger(32) && "permlane_swap operates on i32 values");
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  MLIRContext *ctx = rewriter.getContext();
+  const char *intrinsic = laneMask == 32 ? "llvm.amdgcn.permlane32.swap"
+                                         : "llvm.amdgcn.permlane16.swap";
+  Type retTy = struct_ty({i32_ty, i32_ty});
+  Value f = b.false_val();
+  Value perm = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, retTy,
+                                               ValueRange{val, val, f, f})
+                   ->getResult(0);
+  Value v0 = b.extract_val(i32_ty, perm, 0);
+  Value v1 = b.extract_val(i32_ty, perm, 1);
+  Value isOriginalVal = b.icmp_eq(v0, val);
+  return b.select(isOriginalVal, v1, v0);
 }
 
 Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
@@ -140,15 +158,17 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
         ctrlBits |= (lane ^ quadMask) << (lane * 2);
       return static_cast<DppCtrl>(ctrlBits);
     };
+    bool usePermlaneSwap = isaFamily == ISAFamily::CDNA4 && (mask & 0x30);
 
-    if (isRDNA(isaFamily) || isaFamily == ISAFamily::GFX1250) {
+    if (triton::amdgpu::isRDNA(isaFamily) || isaFamily == ISAFamily::GFX1250) {
       if (mask < 16)
         return emitDpp(loc, rewriter, val, val,
                        makeDppCtrl(DppCtrl::ROW_XMASK0, mask));
       else if (mask < 32)
         return emitPermlaneX16Xor(loc, rewriter, val, mask & 0xf);
-    } else if ((isCDNA(isaFamily) || isaFamily == ISAFamily::GCN5_1) &&
-               mask < 16) {
+    } else if ((triton::amdgpu::isCDNA(isaFamily) ||
+                isaFamily == ISAFamily::GCN5_1) &&
+               (mask < 16 || usePermlaneSwap)) {
       Value result = val;
       uint32_t highBitsDppBasis = 0;
 
@@ -157,7 +177,7 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       if (mask & 8)
         highBitsDppBasis ^= 8;
 
-      uint32_t quadMask = mask ^ highBitsDppBasis;
+      uint32_t quadMask = (mask & 0xf) ^ highBitsDppBasis;
 
       if (highBitsDppBasis) {
         DppCtrl highBitsDppCtrl;
@@ -178,6 +198,13 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       if (quadMask) {
         result =
             emitDpp(loc, rewriter, result, result, makeQuadPermCtrl(quadMask));
+      }
+
+      if (usePermlaneSwap) {
+        if (mask & 16)
+          result = emitPermlaneSwapXor(loc, rewriter, result, 16);
+        if (mask & 32)
+          result = emitPermlaneSwapXor(loc, rewriter, result, 32);
       }
       return result;
     } else {
@@ -659,14 +686,14 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
     triton::CacheModifier cm, bool isLoad,
     const mlir::triton::AMD::TargetInfo &targetInfo) {
   switch (targetInfo.getISAFamily()) {
-  case triton::AMD::ISAFamily::CDNA3:
-  case triton::AMD::ISAFamily::CDNA4:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
     return getCtrlBitsForCacheModifierOn_CDNA3_CDNA4(cm, isLoad);
-  case triton::AMD::ISAFamily::RDNA3:
+  case ISAFamily::RDNA3:
     return getCtrlBitsForCacheModifierOnRDNA3(cm, isLoad);
-  case triton::AMD::ISAFamily::RDNA4:
+  case ISAFamily::RDNA4:
     return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ false);
-  case triton::AMD::ISAFamily::GFX1250:
+  case ISAFamily::GFX1250:
     return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ true);
   default:
     return getDefaultCtrlBitsForCacheModifier(cm);
@@ -798,7 +825,7 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
     // Without scattering support, padding can only be inserted at warp
     // boundaries. This means minInterval must be a multiple of (vectorSize *
     // warpSize) which becomes vectorSize <= minInterval / warpSize.
-    if (!targetInfo.supportsDirectToLDSScattering())
+    if (!targetInfo.supportsDirectToLdsScatter())
       maxAllowedVecSize = paddedEnc.getMinInterval() / targetInfo.getWarpSize();
 
     vectorSize = std::min(vectorSize, maxAllowedVecSize);
@@ -812,7 +839,7 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   }
 
   // Following checks are specific to architectures not supporting scattering
-  if (targetInfo.supportsDirectToLDSScattering())
+  if (targetInfo.supportsDirectToLdsScatter())
     return true;
 
   // Must support the full vector width; splitting would cause strided writes.
@@ -856,6 +883,20 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   return true;
 }
 
+// For a region iter arg of an scf.for, return the yield operand that feeds it
+// on the back-edge. Returns {} if the parent isn't scf.for or the arg is the
+// induction variable.
+static Value resolveLoopBackedge(BlockArgument bbArg) {
+  auto forOp = dyn_cast<scf::ForOp>(bbArg.getOwner()->getParentOp());
+  if (!forOp)
+    return {};
+  auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+  int iterArgIdx = bbArg.getArgNumber() - forOp.getNumInductionVars();
+  if (iterArgIdx < 0 || iterArgIdx >= (int)yieldOp.getNumOperands())
+    return {};
+  return yieldOp.getOperand(iterArgIdx);
+}
+
 bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
   auto isInSameRegion = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
@@ -874,6 +915,37 @@ bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
       }
     }
   }
+
+  // Cross-iteration: for each op in the forward slice (including dotOp itself)
+  // that is consumed by a scf.yield, resolve to the corresponding iter arg and
+  // check that iter arg's forward slice for a dot.
+  fwdSlices.insert(dotOp);
+  for (Operation *op : fwdSlices) {
+    for (Value result : op->getResults()) {
+      for (OpOperand &use : result.getUses()) {
+        auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner());
+        if (!yieldOp)
+          continue;
+        auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp());
+        if (!forOp)
+          continue;
+        BlockArgument nextIterArg =
+            forOp.getRegionIterArg(use.getOperandNumber());
+        SetVector<Operation *> argFwdSlices;
+        getForwardSlice(nextIterArg, &argFwdSlices, fwdOpt);
+        for (Operation *argOp : argFwdSlices) {
+          auto dOp = dyn_cast<tt::DotOpInterface>(argOp);
+          if (!dOp || dOp == dotOp)
+            continue;
+          Value dotOperand = (opIdx == 0) ? dOp.getA() : dOp.getB();
+          if (dotOperand == nextIterArg ||
+              (dotOperand.getDefiningOp() &&
+               argFwdSlices.contains(dotOperand.getDefiningOp())))
+            return true;
+        }
+      }
+    }
+  }
   return false;
 }
 
@@ -886,13 +958,44 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   bwdOpt.filter = isInSameRegion;
   SetVector<Operation *> bwdSlices;
   Operation *opA = dotOp.getA().getDefiningOp();
-  if (!opA)
-    return false;
-  (void)getBackwardSlice(opA, &bwdSlices, bwdOpt);
-  if (llvm::find_if(bwdSlices, [](Operation *op) {
-        return isa<tt::DotOpInterface>(op);
-      }) != bwdSlices.end())
-    return true;
+  if (opA) {
+    (void)getBackwardSlice(opA, &bwdSlices, bwdOpt);
+    if (llvm::find_if(bwdSlices, [](Operation *op) {
+          return isa<tt::DotOpInterface>(op);
+        }) != bwdSlices.end())
+      return true;
+  }
+
+  // Cross-iteration: if operand A (or its backward slice) touches a block
+  // arg, resolve via the yield back-edge and check the backward slice of
+  // the yielded value for a dot (mirrors the intra-iteration check above).
+  SmallVector<BlockArgument, 4> bbArgs;
+  if (auto bbArg = dyn_cast<BlockArgument>(dotOp.getA())) {
+    bbArgs.push_back(bbArg);
+  } else if (opA) {
+    bwdSlices.insert(opA);
+    for (Operation *sliceOp : bwdSlices)
+      for (Value operand : sliceOp->getOperands())
+        if (auto bbArg = dyn_cast<BlockArgument>(operand))
+          bbArgs.push_back(bbArg);
+  }
+
+  for (BlockArgument bbArg : bbArgs) {
+    Value yieldVal = resolveLoopBackedge(bbArg);
+    if (!yieldVal)
+      continue;
+    Operation *yieldDef = yieldVal.getDefiningOp();
+    if (!yieldDef)
+      continue;
+    SetVector<Operation *> yieldBwdSlices;
+    (void)getBackwardSlice(yieldDef, &yieldBwdSlices, bwdOpt);
+    yieldBwdSlices.insert(yieldDef);
+    if (llvm::find_if(yieldBwdSlices, [&dotOp](Operation *op) {
+          return isa<tt::DotOpInterface>(op) && op != dotOp;
+        }) != yieldBwdSlices.end())
+      return true;
+  }
+
   return false;
 }
 

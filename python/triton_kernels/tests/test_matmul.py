@@ -21,7 +21,7 @@ from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdn
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
-from triton_kernels.tensor import Tensor, convert_layout, wrap_torch_tensor
+from triton_kernels.tensor import Tensor, convert_layout, make_ragged_tensor_metadata, wrap_torch_tensor
 from triton_kernels.tensor_details.dtype import FP32
 
 # ---------------
@@ -113,11 +113,27 @@ class Case:
 def _build_test_op_cases():
     test_cases = []
     # zero-sized
+    zero_sized_shapes = ((0, 5, 7), (5, 0, 7), (5, 7, 0))
+    # split_k=1 preserves existing constrained coverage; None exercises automatic split-K selection.
+    for split_k in (1, None):
+        test_cases.extend([
+            Case(m, n, k, mode, "float16", "float16", split_k=split_k)
+            for mode in ("plain", "ragged", "batched")
+            for (m, n, k) in zero_sized_shapes
+        ])
+    test_cases.append(Case(5, 11, 7, "batched", "float16", "float16", n_slices=0, split_k=None))
+    empty_output_shapes = ((0, 256, 256), (256, 0, 256))
     test_cases.extend([
-        Case(m, n, k, mode, "float16", "float16")
-        for mode in ("ragged", "batched")
-        for (m, n, k) in ((0, 5, 7), (5, 0, 7), (5, 7, 0))
+        Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1", b_hbm_swizzling=True)
+        for shape in empty_output_shapes
     ])
+    test_cases.extend([
+        Case(*shape, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1",
+             a_hbm_swizzling=True, b_hbm_swizzling=True, c_hbm_swizzling=True)
+        for shape in empty_output_shapes
+    ])
+    test_cases.append(Case(256, 256, 256, "batched", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1",
+                           n_slices=0, a_hbm_swizzling=True, b_hbm_swizzling=True, c_hbm_swizzling=True))
     odd_shape1 = (727, 577, 859)
     odd_shape2 = (720, 576, 768)
     even_shape = (768, 512, 1024)
@@ -153,6 +169,7 @@ def _build_test_op_cases():
             Case(*shape, "ragged", "bfloat16", "mxfloat8_e4m3fn"),
             Case(*shape, "ragged", "bfloat16", "mxfloat8_e4m3fn", b_hbm_swizzling=True)
         ])
+    test_cases.append(Case(64, 256, 32, "plain", "bfloat16", "mxfloat4_e2m1", b_hbm_swizzling=True))
     # float8 x mxfloat
     test_cases.extend([
         Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", b_hbm_swizzling=True),
@@ -182,6 +199,22 @@ def _build_test_op_cases():
         Case(300, 400, 416, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
         Case(300, 400, 416, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", b_hbm_swizzling=True),
         Case(300, 400, 416, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn"),
+        Case(64, 128, 96, "ragged", "mxfloat8_e4m3fn", "bfloat16", "bfloat16"),
+        Case(64, 128, 96, "batched", "mxfloat8_e4m3fn", "bfloat16", "bfloat16"),
+        Case(1024, 1024, 1024, "batched", "mxfloat8_e4m3fn", "bfloat16", "bfloat16", split_k=9),
+        Case(64, 128, 96, "ragged", "mxfloat8_e4m3fn", "float16", "bfloat16"),
+        Case(64, 128, 96, "batched", "mxfloat8_e4m3fn", "float16", "bfloat16"),
+        Case(1024, 1024, 1024, "batched", "mxfloat8_e4m3fn", "float16", "bfloat16", split_k=9),
+        Case(64, 128, 96, "ragged", "mxfloat8_e4m3fn", "bfloat16", "bfloat16", a_hbm_swizzling=True),
+        Case(64, 128, 96, "ragged", "mxfloat8_e4m3fn", "float16", "bfloat16", a_hbm_swizzling=True),
+        Case(64, 128, 96, "ragged", "mxfloat4_e2m1", "bfloat16", "bfloat16"),
+        Case(64, 128, 96, "batched", "mxfloat4_e2m1", "bfloat16", "bfloat16"),
+        Case(1024, 1024, 1024, "batched", "mxfloat4_e2m1", "bfloat16", "bfloat16", split_k=9),
+        Case(64, 128, 96, "ragged", "mxfloat4_e2m1", "float16", "bfloat16"),
+        Case(64, 128, 96, "batched", "mxfloat4_e2m1", "float16", "bfloat16"),
+        Case(1024, 1024, 1024, "batched", "mxfloat4_e2m1", "float16", "bfloat16", split_k=9),
+        Case(64, 128, 96, "ragged", "mxfloat4_e2m1", "bfloat16", "bfloat16", a_hbm_swizzling=True),
+        Case(64, 128, 96, "ragged", "mxfloat4_e2m1", "float16", "bfloat16", a_hbm_swizzling=True),
         Case(1024, 1024, 1024, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", b_hbm_swizzling=True),
         Case(256, 256, 256, "plain", "mxfloat4_e2m1", "mxfloat4_e2m1", "bfloat16"),
         Case(256, 256, 256, "plain", "mxfloat4_e2m1", "mxfloat4_e2m1", "bfloat16", b_hbm_swizzling=True),
@@ -304,6 +337,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("NYI: float8 x mxfloat8 not tested on AMD GPU")
         if a_dtype.has_mx_scale and b_dtype.has_mx_scale:
             pytest.skip("NYI: mx x mx not tested on AMD GPU")
+        if a_dtype.name == "mxfloat4_e2m1" and weight_dtype_str in {"bfloat16", "float16"}:
+            pytest.skip("NYI: MXFP4 x dense FP16/BF16 not tested on AMD GPU")
         if is_persistent:
             pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
         # FIXME: this works on nvidia; looks like some sort of bug on AMD?
@@ -504,6 +539,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if c_dtype.has_global_scale:
             tri_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
+        if is_persistent and c.numel() == 0:
+            raise
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     # --- torch implementation ---
     # Fused NVFP4 output quantizes the float32 activation result and applies
@@ -560,12 +597,67 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
+def test_k_ragged_mxfp8_act_scale_swizzling(device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    m, n, k = 64, 128, 96
+    a_dtype = DType("mxfloat8_e4m3fn")
+
+    def make_a(scale_layout):
+        torch.manual_seed(0)
+        return make_random_tensor(
+            shape=(m, k),
+            n_slices=10,
+            ragged_dim=1,
+            ragged_padding=True,
+            device=device,
+            dtype=a_dtype,
+            mxfp_dim=-1,
+            transpose=False,
+            squeeze_batch_dim=False,
+            scale_hbm_swizzling=scale_layout,
+        )
+
+    # A scale layout is supplied in both cases so K-ragged values get identical padding.
+    canonical_a, canonical_scale, canonical_metadata = make_a(layout.StridedLayout(-1))
+    swizzled_a, swizzled_scale, swizzled_metadata = make_a(layout.make_default_matmul_mx_act_scale_layout)
+    b = torch.randn((k, n), dtype=torch.bfloat16, device=device)
+    b_metadata = make_ragged_tensor_metadata(canonical_metadata.slice_sizes, k)
+
+    def run(a, scale, metadata):
+        return matmul(
+            a,
+            b,
+            None,
+            metadata,
+            b_metadata,
+            precision_config=PrecisionConfig(
+                a_mx_scale=scale,
+                a_microblock_size=MXFP_BLOCK_SIZE.value,
+                out_dtype=torch.bfloat16,
+            ),
+        )
+
+    with opt_flags.scoped_opt_flags_constraints({"block_m": 128, "is_persistent": True}):
+        swizzled = run(swizzled_a, swizzled_scale, swizzled_metadata)
+        canonical = run(canonical_a, canonical_scale, canonical_metadata)
+    torch.testing.assert_close(swizzled, canonical)
+
+
 def test_set_idle_sms():
     if not is_cuda():
         pytest.skip("Only supported on CUDA")
     from triton_kernels.matmul_details.opt_flags import make_opt_flags
     num_idle_sms = 24
     matmul_set_idle_sms(num_idle_sms)
-    flags = make_opt_flags(FP32, FP32, FP32, PrecisionConfig(), \
-                           1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
-    assert flags.idle_sms == num_idle_sms
+    try:
+        flags = make_opt_flags(FP32, FP32, FP32, PrecisionConfig(), \
+                               1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
+        assert flags.idle_sms == num_idle_sms
+        with opt_flags.scoped_opt_flags_constraints({"idle_sms": num_idle_sms + 1}):
+            flags = make_opt_flags(FP32, FP32, FP32, PrecisionConfig(), \
+                                   1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
+            assert flags.idle_sms == num_idle_sms + 1
+    finally:
+        matmul_set_idle_sms(0)

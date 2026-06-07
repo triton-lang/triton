@@ -17,7 +17,7 @@ implementation:
 ConSan currently supports one public entry point in the module. It uses
 BufferRegion analysis to collect shared-memory buffers, tensor-memory buffers,
 and barrier allocations, then creates auxiliary state in distributed tensors and
-shared-cluster global scratch memory. Most state has a leading CTA dimension so
+shared-cluster global scratch memory. Most scratch state is CTA-qualified so
 cluster and multicast effects can be modeled explicitly.
 
 ## Visibility Model
@@ -58,6 +58,24 @@ At a `ttg.warp_specialize`, the pass copies the default thread's read and write
 visibility to the destination partition peer masks so partition-local execution
 starts with the visibility frontier that existed before specialization.
 
+## CTA Model
+
+The single-CTA case is the degenerate form of the multiCTA model: every
+CTA-qualified axis has one row, so the usual per-buffer and per-barrier rules
+apply unchanged.
+
+For multiCTA kernels, each CTA is modeled as its own set of logical threads.
+Buffer and barrier descriptors stay CTA-agnostic, while shadow state records the
+CTA whose buffer row, barrier row, logical thread, or visibility mask a fact
+belongs to. This keeps the single-CTA visibility rules intact and adds only the
+question of which CTA rows an operation reads, writes, or synchronizes.
+
+A multicast-layout barrier has one live barrier row per multicast group, owned
+by the group's lead CTA. Every CTA in the group may `arrive` or `expect` on that
+row, but only the lead CTA initializes, waits on, and invalidates it. This is
+the same model as several independent logical threads arriving on one barrier
+while only one logical thread waits on it; non-leader barrier rows are not live.
+
 ## Runtime State
 
 ConSan keeps enough runtime state to answer two questions at each instrumented
@@ -74,7 +92,7 @@ At a high level, the pass maintains:
 - Optional alias metadata when tracked buffer regions overlap.
 - A shared-cluster lock that serializes instrumentation updates.
 
-Most runtime state is CTA-indexed so cluster, multicast, and cross-CTA effects
+Most runtime state is CTA-qualified so cluster, multicast, and cross-CTA effects
 can be represented directly. Scratch state is zero-initialized once before the
 instrumented body runs, and the initialization is followed by a CTA or cluster
 barrier before any instrumented operation can use it.
@@ -94,7 +112,8 @@ selected buffer.
 The runtime checks account for aliasing and CTA recipients. A check against one
 buffer is expanded through the alias metadata when BufferRegion analysis found
 overlapping tracked regions, and multi-CTA operations only inspect the CTA rows
-that the operation can affect.
+that the operation can affect. Aliasing remains intra-CTA: overlapping
+descriptors may alias within one CTA row, but not across different CTA rows.
 
 After a barrier-tracked read, ConSan records that the current peer thread mask
 can see that read. After a barrier-tracked write, ConSan records the current
@@ -105,28 +124,28 @@ All normal instrumentation emitted around one IR operation is wrapped in the
 ConSan lock. Barrier waits are split into a locked pre-wait section and a locked
 post-wait section.
 
-## CTA Recipients and Multicast
+## CTA Issuers, Effects, and Recipients
 
-Most multi-CTA instrumentation computes a CTA recipient bitset. That bitset is
-converted to a mask over the CTA dimension so only relevant CTA rows are checked
-or updated.
+Single-CTA operations implicitly use the current CTA for all three roles. In a
+multiCTA kernel those roles can differ:
 
-The target hooks compute recipients from the operation:
+- The issuer predicate selects which CTA actually executes the instrumented op.
+- The memory-effect CTA bitset selects the buffer rows that the op reads or
+  writes.
+- The barrier-recipient CTA bitset selects the live barrier rows that arrivals,
+  expectations, and completion signals update.
 
-- Non-multicast operations usually target the current CTA.
-- Multicast TMA loads update all result-recipient CTAs, while barrier arrivals
-  route to the leader barrier CTA.
-- NVIDIA two-CTA Tensor Core operations are predicated to the issuing CTA pair
-  leader.
-- TMA load effects that write one set of CTAs and signal a different leader
-  barrier remember the effect-recipient CTA rows so a later wait can transfer
-  write visibility to both the waiting CTA and the written CTA rows.
-- CLC try-cancel effects use all CTA rows for the barrier and memory effect,
-  with diagonal recipient handling for the written result rows.
+For example, a multicast TMA load is issued by the multicast-group leader,
+writes every result-recipient CTA row, and signals the leader barrier row. A
+two-CTA Tensor Core operation is issued by the even CTA in the pair, but its
+memory effects cover both CTA rows in that pair. CLC try-cancel is issued once
+for the cluster and touches all CTA rows.
 
 ## Barrier Synchronization
 
-ConSan separates barrier tracking from visibility transfer.
+ConSan separates barrier tracking from visibility transfer. Ordinary mbarrier
+operations follow the live-row rule from the CTA model above: all participating
+CTAs address the lead barrier row, and only the lead CTA performs the wait.
 
 For frontier-tracked barriers, an arrive or commit snapshots the current
 thread's visible writes and reads into the barrier's tracking state. A later
@@ -153,6 +172,10 @@ On a barrier wait, ConSan:
 Write transfers also consult the recorded effect-recipient CTA rows, which lets
 TMA-style and CLC cross-CTA writes become visible in the CTA rows reached by the
 memory effect. Read transfers update the current CTA row.
+
+A non-relaxed cluster barrier is different from an mbarrier wait: it publishes
+synchronous work from base threads to all CTA rows directly (i.e., just the generic
+proxy).
 
 ## Barrier Lifecycle and Deadlock Checks
 

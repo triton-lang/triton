@@ -19,6 +19,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 
@@ -507,13 +508,25 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 };
 
 void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
-                   int numCTAs) {
+                   int numCTAs, Operation *sourceOp) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (numCTAs == 1) {
     b.barrier(ttg::AddrSpace::Local);
   } else {
-    triton::nvidia_gpu::ClusterBarrierOp::create(rewriter, loc);
+    auto barrier = triton::nvidia_gpu::ClusterBarrierOp::create(rewriter, loc);
+    triton::nvidia_gpu::copyClusterBarrierMbarOffset(sourceOp, barrier);
   }
+}
+
+Value loadScalarAtomicResult(ConversionPatternRewriter &rewriter, Location loc,
+                             const NVIDIA::TargetInfo &targetInfo,
+                             Value atomPtr, Type valueTy, int numCTAs) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (numCTAs == 1)
+    return b.load(valueTy, atomPtr);
+  // Scalar atomics are issued by CTA 0, so read CTA 0's scratch allocation.
+  return targetInfo.loadDShared(rewriter, loc, atomPtr, b.i32_val(0), valueTy,
+                                b.true_val());
 }
 
 struct AtomicCASOpConversion
@@ -596,8 +609,9 @@ struct AtomicCASOpConversion
         st(dstOprStore, valOprStore).maybePredicate(threadPred);
         auto ASMReturnTy = void_ty(ctx);
         ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
-        createBarrier(rewriter, loc, numCTAs);
-        Value ret = b.load(valueElemTy, atomPtr);
+        createBarrier(rewriter, loc, numCTAs, op);
+        Value ret = loadScalarAtomicResult(rewriter, loc, targetInfo, atomPtr,
+                                           valueElemTy, numCTAs);
         rewriter.replaceOp(op, {ret});
         return success();
       }
@@ -790,8 +804,9 @@ public:
         atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
         targetInfo.storeShared(rewriter, loc, atomPtr, loadAcquireOp, pred);
-        createBarrier(rewriter, loc, numCTAs);
-        Value ret = b.load(valueElemTy, atomPtr);
+        createBarrier(rewriter, loc, numCTAs, op);
+        Value ret = loadScalarAtomicResult(rewriter, loc, targetInfo, atomPtr,
+                                           valueElemTy, numCTAs);
         rewriter.replaceOp(op, {ret});
         return success();
       }
@@ -925,8 +940,9 @@ public:
         atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
         targetInfo.storeShared(rewriter, loc, atomPtr, *old, pred);
-        createBarrier(rewriter, loc, numCTAs);
-        Value ret = b.load(valueElemTy, atomPtr);
+        createBarrier(rewriter, loc, numCTAs, op);
+        Value ret = loadScalarAtomicResult(rewriter, loc, targetInfo, atomPtr,
+                                           valueElemTy, numCTAs);
         rewriter.replaceOp(op, {ret});
         return success();
       }
@@ -1103,7 +1119,6 @@ static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty,
                                                ttg::TMAMode mode) {
   auto ctx = ty.getContext();
   auto kMsg = str_attr("msg");
-  auto kBlock = str_attr("block");
   auto shapePerCTA = ttg::getShapePerCTA(ty);
   int rank = shapePerCTA.size();
   auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true, mode);
@@ -1194,7 +1209,6 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto kMsg = str_attr("msg");
     auto kBlock = str_attr("block");
     const auto numCopies = msgToOffset.getInDimSize(kMsg);
-    auto zero = b.i32_val(0);
     auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
     // We multicast if the flag is on and the block layout has broadcasting
     bool multicast = op.getMulticast();
@@ -1220,10 +1234,13 @@ struct AsyncTMACopyGlobalToLocalOpConversion
           LLVM::NVIDIA::getLeaderAddress(loc, rewriter, barrierPtr, barrierTy);
     }
 
-    // Don't set cta_group::1 as it doesn't exist pre-Blackwell
     std::string ctaGroup;
     if (getModuleTwoCTAs(op)) {
-      ctaGroup = "cta_group::2.";
+      auto oneCTACGALayout = ttg::CGAEncodingAttr::get1DLayout(
+          op->getContext(), ttg::lookupNumCTAs(op));
+      bool oneCTABarrier =
+          getCGALayout(barrierTy.getEncoding()) == oneCTACGALayout;
+      ctaGroup = oneCTABarrier ? "cta_group::1." : "cta_group::2.";
     }
 
     // The bounding box inner dimension must be less than or equal to the
@@ -1647,8 +1664,13 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
   }
 
   std::string ctaGroup;
-  if (getModuleTwoCTAs(op))
-    ctaGroup = ".cta_group::2";
+  if (getModuleTwoCTAs(op)) {
+    auto oneCTACGALayout = ttg::CGAEncodingAttr::get1DLayout(
+        op->getContext(), ttg::lookupNumCTAs(op));
+    bool oneCTABarrier =
+        getCGALayout(barrierTy.getEncoding()) == oneCTACGALayout;
+    ctaGroup = oneCTABarrier ? ".cta_group::1" : ".cta_group::2";
+  }
 
   // Callback to generate the gather4 instruction.
   auto callback = [&](Value pred, Value shMemPtr, Value yOffset,
@@ -1826,10 +1848,8 @@ struct TMAStoreWaitOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMAStoreWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto ctx = op.getContext();
-    auto isRead = UnitAttr::get(ctx);
     rewriter.replaceOpWithNewOp<NVVM::CpAsyncBulkWaitGroupOp>(
-        op, op.getPendingsAttr(), isRead);
+        op, op.getPendingsAttr(), op.getReadOnlyAttr());
     return success();
   }
 };

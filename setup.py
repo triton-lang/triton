@@ -37,7 +37,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from python.build_helpers import get_base_dir, get_cmake_dir
+from python.build_helpers import check_env_flag, get_base_dir, get_cmake_dir
 
 
 def is_git_repo() -> bool:
@@ -124,11 +124,6 @@ class BackendInstaller:
             BackendInstaller.prepare(backend_name, backend_src_dir=backend_src_dir, is_external=True)
             for backend_name, backend_src_dir in zip(backend_names, backend_dirs)
         ]
-
-
-# Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
-def check_env_flag(name: str, default: str = "") -> bool:
-    return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
 
 
 def get_build_type():
@@ -260,10 +255,10 @@ class CMakeBuild(build_ext):
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
         cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_include_dir]
-        roctracer_include_dir = get_env_with_keys(["TRITON_ROCTRACER_INCLUDE_PATH"])
-        if roctracer_include_dir == "":
-            roctracer_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
-        cmake_args += ["-DROCTRACER_INCLUDE_DIR=" + roctracer_include_dir]
+        rocm_include_dir = get_env_with_keys(["TRITON_ROCM_INCLUDE_PATH"])
+        if rocm_include_dir == "":
+            rocm_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
+        cmake_args += ["-DROCM_INCLUDE_DIR=" + rocm_include_dir]
         return cmake_args
 
     def build_extension(self, ext):

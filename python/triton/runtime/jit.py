@@ -95,14 +95,9 @@ class DependenciesFinder(ast.NodeVisitor):
     def ret(self):
         return self.hasher.hexdigest()
 
-    def _is_triton_builtin(self, node, func):
-        if inspect.isbuiltin(node.func):
-            return True
-        module = getattr(func, "__module__", "")
-        return module.startswith(TRITON_MODULE)
-
     def _update_hash(self, func):
         assert isinstance(func, JITCallable)
+        func_key = func.cache_key
         # Merge our used_global_vals with those of the called function,
         # after checking that all overlapping values are consistent.
         for k in self.used_global_vals.keys() & func.used_global_vals.keys():
@@ -115,7 +110,6 @@ class DependenciesFinder(ast.NodeVisitor):
                 )
         self.used_global_vals.update(func.used_global_vals)
         # update hash
-        func_key = func.cache_key
         func_key += str(getattr(func, "noinline", False))
         self.hasher.update(func_key.encode("utf-8"))
 
@@ -531,9 +525,11 @@ class JITCallable:
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
 
             from triton.language.core import constexpr
-            self.hash += str([(name, val)
-                              for (name, _), (val, _) in self.used_global_vals.items()
-                              if isinstance(val, constexpr)])
+            constexpr_globals = [(name, val)
+                                 for (name, _), (val, _) in self.used_global_vals.items()
+                                 if isinstance(val, constexpr)]
+            constexpr_globals.sort(key=lambda item: (item[0], repr(item[1])))
+            self.hash += str(constexpr_globals)
             self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
         return self.hash
 

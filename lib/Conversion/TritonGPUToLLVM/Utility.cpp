@@ -553,7 +553,7 @@ SmallVector<Value> computeLocalPtrs(Location loc,
   auto sharedLayout = triton::gpu::isPaddedEncoding(memDescTy.getEncoding())
                           ? paddedLinearLayout(memDescTy)
                           : toLinearLayout(memDescTy);
-  LinearLayout invSharedLayout = sharedLayout.invert();
+  LinearLayout invSharedLayout = sharedLayout.pseudoinvert();
 
   // Get layout dimension names for all dims
   SmallVector<StringAttr> allDims;
@@ -630,6 +630,53 @@ SmallVector<Value> computeLocalPtrs(Location loc,
   }
 
   return ptrs;
+}
+
+FailureOr<LocalAtomicScatterRMWInfo> prepareLocalAtomicScatterRMW(
+    triton::gpu::LocalAtomicScatterRMWOp op, Value dst, Value indices,
+    Value inputValues, Value mask, ConversionPatternRewriter &rewriter,
+    const TargetInfoBase &targetInfo, const LLVMTypeConverter *typeConverter) {
+  auto loc = op.getLoc();
+  auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
+  auto memDescTy = cast<triton::gpu::MemDescType>(op.getDst().getType());
+  if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
+          memDescTy.getEncoding())) {
+    return failure();
+  }
+
+  auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+  auto smemObj =
+      LLVM::getSharedMemoryObjectFromStruct(loc, dst, llvmElemTy, rewriter);
+  SmallVector<Value> idxValues = unpackLLElements(loc, indices, rewriter);
+  SmallVector<Value> values = unpackLLElements(loc, inputValues, rewriter);
+  SmallVector<Value> maskValues;
+  if (mask)
+    maskValues = unpackLLElements(loc, mask, rewriter);
+
+  LinearLayout regLayout = triton::gpu::toLinearLayout(valuesTy);
+  auto freeVarMasks = regLayout.getFreeVariableMasks();
+  auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
+  Value threadPred = triton::gpu::emitRedundantThreadPredicate(
+      freeVarMasks, rewriter, loc, targetInfo);
+  LinearLayout activeRegLayout = regLayout;
+  if (!removeBroadcast.isIdentity()) {
+    activeRegLayout = removeBroadcast.apply(regLayout);
+    values = removeBroadcast.apply(values);
+    idxValues = removeBroadcast.apply(idxValues);
+    if (!maskValues.empty())
+      maskValues = removeBroadcast.apply(maskValues);
+  }
+  SmallVector<SmallVector<Value>> srcIndices =
+      emitIndices(loc, rewriter, targetInfo, activeRegLayout, valuesTy,
+                  /*withCTAOffset=*/true);
+
+  SmallVector<Value> ptrs =
+      computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
+                       srcIndices, op.getAxis(), rewriter);
+
+  return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,
+                                   removeBroadcast, threadPred, values,
+                                   maskValues,      ptrs};
 }
 
 SmallVector<std::pair<unsigned, unsigned>>
@@ -1271,7 +1318,7 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
           : triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
   auto dimNames = standardOutDimNames(ctx, shape.size());
   // Map from dimNames to offset, block
-  auto invLl = totalLl.invert();
+  auto invLl = totalLl.pseudoinvert();
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
   for (auto dim : standardOutDimNames(srcTy.getContext(), shape.size())) {
     logicalOffsets.push_back({dim, 0});
@@ -1318,11 +1365,12 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
     logicalOffsets.push_back({dim, offset});
   }
 
-  // We don't allow for non-trivial block dimensions in the shared memory layout
-  // We have in practice that offsetAndBlock[1].second is zero, but we cannot
-  // know assert that without constant propagation so we just discard it :)
+  // We don't allow for non-trivial block dimensions in the shared memory
+  // layout. We have in practice that offsetAndBlock[1].second is zero, but we
+  // cannot assert that without constant propagation so we just discard it.
   auto offset =
-      applyLinearLayout(loc, rewriter, ll.invert(), logicalOffsets)[0].second;
+      applyLinearLayout(loc, rewriter, ll.pseudoinvert(), logicalOffsets)[0]
+          .second;
   return offset;
 }
 
@@ -1956,18 +2004,34 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
     return;
   }
 
-  // Yanky way of "composing with the associated contiguous shmem layout"
   auto kOffset = str_attr("offset");
   auto kBlock = str_attr("block");
-  auto dstLayout = triton::gpu::toLinearLayout(tensorTy);
-  auto dimOut = dstLayout.getTotalOutDimSize();
-  auto dimBlock = dstLayout.getInDimSize(kBlock);
-  // You should create a Shared linear layout with kBlock bases equal to the
-  // kBlock of dstLayout and then put all the other bases in order in the
-  // offsets.
-  assert(dimBlock == 1 && "NYI");
-  dstLayout = dstLayout.flattenOuts().reshapeOuts(
-      {{kOffset, dimOut / dimBlock}, {kBlock, dimBlock}});
+  auto kOwnerBlock = str_attr("owner_block");
+  auto regLayout = triton::gpu::toLinearLayout(tensorTy);
+  auto removeRegBroadcast = actionRemoveBroadcastedRegs(regLayout);
+  auto uniqueRegLayout = removeRegBroadcast.apply(regLayout);
+  auto uniqueResultVals = removeRegBroadcast.apply(resultVals);
+
+  auto shapePerCTA =
+      convertType<unsigned>(triton::gpu::getShapePerCTA(tensorTy));
+  auto ctaShared =
+      identityStandardND(kOffset, shapePerCTA, triton::gpu::getOrder(tensorTy));
+  auto sharedLayout = triton::gpu::combineCtaCgaWithShape(
+      ctaShared, triton::gpu::getCGALayout(tensorTy.getEncoding()),
+      tensorTy.getShape());
+  auto dimOffset = sharedLayout.getInDimSize(kOffset);
+  auto dimBlock = sharedLayout.getInDimSize(kBlock);
+
+  // Preserve CTA identity for stores so producers write to their local
+  // allocation. Rename the shared block dimension for loads so the inverse
+  // maps broadcast CTA bits to the canonical owner CTA instead.
+  auto storeCvt = uniqueRegLayout.invertAndCompose(sharedLayout);
+  assert(storeCvt.isTrivialOver({kBlock}));
+  auto ownerShared =
+      sharedLayout.reshapeIns({{kOffset, dimOffset}, {kOwnerBlock, dimBlock}});
+  auto loadCvt = uniqueRegLayout.invertAndCompose(ownerShared);
+  loadCvt = loadCvt.reshapeOuts({{kOffset, dimOffset}, {kBlock, dimBlock}});
+  bool crossCTA = !loadCvt.isTrivialOver({kBlock});
   auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
 
   auto emitSt = [&](RewriterBase &rewriter, Location loc, ArrayRef<Value> vals,
@@ -1991,17 +2055,22 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   SmallVector<Value> smemBases = {smemBase};
-  lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBases,
+  lowerLdSt(loc, ctx, storeCvt, uniqueResultVals, valueElemTy, smemBases,
             /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
             /*maskSpanAffineOffset=*/0, laneId, warpId, rewriter, targetInfo,
             /*maybeMaxVecElems=*/{}, emitSt);
-  b.barrier(triton::gpu::AddrSpace::Local);
+  if (crossCTA)
+    targetInfo.clusterBarrier(loc, rewriter, op);
+  else
+    targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
 
   resultVals =
-      lowerLdSt(loc, ctx, dstLayout, resultVals, valueElemTy, smemBases,
+      lowerLdSt(loc, ctx, loadCvt, /*valsArray=*/{}, valueElemTy, smemBases,
                 /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
                 /*maskSpanAffineOffset=*/0, laneId, warpId, rewriter,
                 targetInfo, /*maybeMaxVecElems=*/{}, emitLd);
+  if (!removeRegBroadcast.isIdentity())
+    resultVals = broadcastAs(resultVals, regLayout);
 
   // Create the result struct and replace the operation
   Value resultStruct =

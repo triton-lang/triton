@@ -265,10 +265,41 @@ std::pair<int, int> bankConflicts(ArrayRef<int32_t> tileSrc,
   return {read - 1, write - 1};
 }
 
-std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
-                                      const LinearLayout &dst,
-                                      const LinearLayout &smem,
-                                      int32_t bitwidth) {
+SmallVector<int32_t> LocalMemOpTile::getLaneAddr(ArrayRef<int32_t> lane) const {
+  SmallVector<int32_t> ret;
+  ret.reserve(laneAddr.size());
+  for (int32_t idx : laneAddr) {
+    ret.push_back(lane[idx]);
+  }
+  return ret;
+}
+
+SmallVector<int32_t> getLaneTile(const LocalMemOpTile &tile,
+                                 ArrayRef<int32_t> lane, int32_t vecSize,
+                                 int32_t bitwidth, int32_t numBanks) {
+  auto log2Vec = llvm::Log2_32(std::max<int32_t>(1, (vecSize * bitwidth) / 32));
+  auto log2Bank = llvm::Log2_32(numBanks);
+  auto log2Phase = std::max<int32_t>(0, log2Vec + lane.size() - log2Bank);
+  SmallVector<int32_t> res;
+  if (!tile.laneAddr.empty()) {
+    // The laneAddr field explicitly defines the lane basis indices for
+    // load/store instructions with non-sequential lane IDs within a single
+    // phase, like ds_read_b128.
+    res = tile.getLaneAddr(lane);
+  } else {
+    // If laneAddr is empty, we fall back to the standard assumption for
+    // regular loads/stores: lane IDs are sequential within a single phase.
+    res = to_vector(lane.drop_back(log2Phase));
+  }
+  assert(res.size() == lane.size() - log2Phase &&
+         "Both paths should return the expected number of elements");
+  return res;
+}
+
+std::pair<int, int>
+bankConflictsLdSt(const LinearLayout &src, const LinearLayout &dst,
+                  const LinearLayout &smem, int32_t bitwidth, int32_t numBanks,
+                  LocalMemOpTile srcTile, LocalMemOpTile dstTile) {
   auto srcFlat = src.flattenOuts();
   auto dstFlat = dst.flattenOuts();
   auto *ctx = smem.getOutDimNames().begin()->getContext();
@@ -276,15 +307,15 @@ std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
   auto kVec = S("vector");
   auto srcLane = flatten(srcFlat, S("lane"));
   auto dstLane = flatten(dstFlat, S("lane"));
-  auto log2Vec =
-      llvm::Log2_32(std::max(smem.getInDimSize(kVec) * bitwidth / 32, 1));
-  srcLane.resize(srcLane.size() - log2Vec);
-  dstLane.resize(dstLane.size() - log2Vec);
-  return bankConflicts(srcLane, dstLane, smem);
+  auto vecSize = smem.getInDimSize(kVec);
+  auto tileSrc = getLaneTile(srcTile, srcLane, vecSize, bitwidth, numBanks);
+  auto tileDst = getLaneTile(dstTile, dstLane, vecSize, bitwidth, numBanks);
+  return bankConflicts(tileSrc, tileDst, smem);
 }
 
 int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
-                         int32_t bitwidth) {
+                         int32_t bitwidth, int32_t numBanks,
+                         LocalMemOpTile laneTile) {
   auto *ctx = smem.getInDimNames().begin()->getContext();
   auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
 
@@ -299,7 +330,7 @@ int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
 
   int32_t vecSize = elemsPerVec;
   int32_t bankSize =
-      std::min(32 * 32 / (vecSize * bitwidth), smem.getTotalInDimSize());
+      std::min(numBanks * 32 / (vecSize * bitwidth), smem.getTotalInDimSize());
   int32_t segmentSize = smem.getTotalInDimSize() / (bankSize * vecSize);
   SmallVector<std::pair<StringAttr, int32_t>> newInDims = {
       {S("vector"), vecSize},
@@ -308,7 +339,7 @@ int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
   };
   auto smemReshaped = smem.reshapeIns(newInDims);
   return bankConflictsLdSt(regNoBroadcast, regNoBroadcast, smemReshaped,
-                           bitwidth)
+                           bitwidth, numBanks, laneTile, laneTile)
       .first;
 }
 
@@ -396,7 +427,7 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
                               ArrayRef<int32_t> tileDst,
                               ArrayRef<int32_t> blockBases,
                               ArrayRef<std::pair<StringAttr, int32_t>> outDims,
-                              int32_t leaveReps = 0) {
+                              int32_t leaveReps = 0, int32_t numBanks = 32) {
   // We work on the flattened tensors as the tensor dimensions are not relevant
   assert(src.getNumOutDims() == 1 && dst.getNumOutDims() == 1 &&
          "src and dst must have a single output dimension");
@@ -425,8 +456,8 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   bankDst.append(vbasis.begin(), vbasis.end());
   bankDst.append(tileDst.begin(), tileDst.end());
 
-  // Bits in a bank segment: 32 banks x 32 bits
-  constexpr int32_t bankBits = 32 * 32;
+  // Bits in a bank segment: num banks x 32 bits
+  int32_t bankBits = numBanks * 32;
   // Bases needed to cover a whole bank segment
   const int32_t lenBbasis = std::min<int32_t>(
       llvm::Log2_32(bankBits / ((1 << vbasis.size()) * bitwidth)),
@@ -465,21 +496,18 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
 
   return basis1D.reshapeOuts(outDims);
 }
-LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
-                                  const LinearLayout &dst, int32_t bitwidth) {
-  auto *ctx = src.getInDimNames().begin()->getContext();
+
+std::pair<SmallVector<int32_t>, std::optional<bool>>
+getVecBasisLdSt(const LinearLayout &srcFlat, const LinearLayout &dstFlat,
+                int32_t bitwidth) {
+  auto *ctx = srcFlat.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
-  auto kLane = StringAttr::get(ctx, "lane");
   auto kBlock = StringAttr::get(ctx, "block");
-  auto srcFlat = src.flattenOuts();
-  auto dstFlat = dst.flattenOuts();
   auto regSrc = flatten(srcFlat, kReg);
   auto regDst = flatten(dstFlat, kReg);
-  auto laneSrc = flatten(srcFlat, kLane);
-  auto laneDst = flatten(dstFlat, kLane);
   auto blockSrc = flatten(srcFlat, kBlock);
 
-  auto dim = src.getTotalOutDimSizeLog2();
+  auto dim = srcFlat.getTotalOutDimSizeLog2();
   SmallVector<int32_t> vbasis = intersectionBasis(regSrc, regDst, dim);
   // Restrict the vectorisation to the maximum we can use
   auto maxVecBases = llvm::Log2_32(128 / bitwidth);
@@ -558,12 +586,41 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
       vbasis.resize(basesPerBank);
     }
   }
-  auto log2Vec = llvm::Log2_32(
-      std::max<int32_t>(1, ((1 << vbasis.size()) * bitwidth) / 32));
-  auto tileSrc = to_vector(ArrayRef(laneSrc).drop_back(log2Vec));
-  auto tileDst = to_vector(ArrayRef(laneDst).drop_back(log2Vec));
-  auto smem = optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc,
-                               tileDst, blockSrc, src.getOutDims());
+  return {vbasis, srcFillsBank};
+}
+
+int32_t getVecBitwidthLdSt(const LinearLayout &src, const LinearLayout &dst,
+                           int32_t bitwidth) {
+  auto srcFlat = src.flattenOuts();
+  auto dstFlat = dst.flattenOuts();
+  auto vbasis = getVecBasisLdSt(srcFlat, dstFlat, bitwidth).first;
+  return (1 << vbasis.size()) * bitwidth;
+}
+
+LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
+                                  const LinearLayout &dst, int32_t bitwidth,
+                                  int32_t numBanks, LocalMemOpTile srcTile,
+                                  LocalMemOpTile dstTile) {
+  auto *ctx = src.getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto srcFlat = src.flattenOuts();
+  auto dstFlat = dst.flattenOuts();
+  auto regSrc = flatten(srcFlat, kReg);
+  auto regDst = flatten(dstFlat, kReg);
+  auto laneSrc = flatten(srcFlat, kLane);
+  auto laneDst = flatten(dstFlat, kLane);
+  auto blockSrc = flatten(srcFlat, kBlock);
+
+  auto [vbasis, srcFillsBank] = getVecBasisLdSt(srcFlat, dstFlat, bitwidth);
+  auto vecSize = 1 << vbasis.size();
+  auto log2Vec = llvm::Log2_32(std::max<int32_t>(1, (vecSize * bitwidth) / 32));
+  auto tileSrc = getLaneTile(srcTile, laneSrc, vecSize, bitwidth, numBanks);
+  auto tileDst = getLaneTile(dstTile, laneDst, vecSize, bitwidth, numBanks);
+  auto smem =
+      optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc, tileDst,
+                       blockSrc, src.getOutDims(), 0, numBanks);
 
   // We might be able to vectorise a bit more the load or the store
   // This may happen when there is broadcasting
@@ -661,9 +718,8 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
     if (regNeeded > 0) {
       return std::nullopt;
     }
-    for (auto i : instr.laneAddr) {
-      tile.push_back(lane[i]);
-    }
+    auto laneBases = instr.getLaneAddr(lane);
+    tile.append(laneBases.begin(), laneBases.end());
     return tile;
   };
 

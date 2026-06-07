@@ -1,26 +1,30 @@
 #ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TARGETINFO_H_
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TARGETINFO_H_
 
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
-#include "llvm/TargetParser/TargetParser.h"
-#include <string>
+#include "llvm/TargetParser/AMDGPUTargetParser.h"
+#include <optional>
 
 namespace mlir::triton::AMD {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  explicit TargetInfo(std::string arch) : arch(std::move(arch)) {}
+  explicit TargetInfo(std::optional<StringRef> arch) : targetFeatures(arch) {}
 
   llvm::AMDGPU::IsaVersion getIsaVersion() const;
 
-  StringRef getArch() const { return arch; }
-  ISAFamily getISAFamily() const { return deduceISAFamily(arch); }
+  StringRef getArch() const { return targetFeatures.getArch(); }
+  amdgpu::ISAFamily getISAFamily() const {
+    return targetFeatures.getISAFamily();
+  }
 
   llvm::AMDGPU::GPUKind getGPUKind() const;
 
   int getWarpSize() const;
 
   int getSharedMemorySize() const;
+
+  int getSharedMemoryBanks() const override;
 
   size_t getSharedMemoryPartitionSize() const override;
 
@@ -35,7 +39,8 @@ public:
 
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;
-  void clusterBarrier(Location loc, RewriterBase &rewriter) const override;
+  void clusterBarrier(Location loc, RewriterBase &rewriter,
+                      Operation *sourceOp) const override;
 
   void warpSync(Location loc, RewriterBase &rewriter) const override;
 
@@ -46,21 +51,9 @@ public:
                     std::optional<Value> ctaId, Type elemTy, Value pred,
                     Operation *localLoadOp = nullptr) const override;
 
-  enum class TileKind {
-    Standard,         // 16x16 tile layout
-    DoubleContiguity, // 16x16 with doubled B8 contiguity requirement
-  };
-
-  struct LDSTransLoadParams {
-    // Number of lanes that cooperate in the instruction
-    unsigned numLanesInShuffleGroup;
-    // Number of bits that each lane reads per issued instruction
-    unsigned instBitWidth;
-    // Number of elements that the instruction needs to be contiguous in LDS
-    unsigned tileSize;
-    // Distribution of base tile in the full instruction
-    TileKind tileKind;
-  };
+  // Describes the parameters of ds_read_tr for a particular data type.
+  using TileKind = amdgpu::TargetFeatures::TileKind;
+  using LDSTransLoadParams = amdgpu::TargetFeatures::LDSTransLoadParams;
   // Get the ds_read_tr parameters for the instruction that operates on the
   // element granularity specified by bitWidth. Returns candidates ordered from
   // largest (most restrictive) to smallest, so the lowering can try the more
@@ -112,7 +105,7 @@ public:
   // Returns true if the target supports per lane addresses into LDS for
   // direct-to-lds loads. Some architectures (e.g. GFX9) do not support
   // scattering and instead have to write warp coalesced into LDS
-  bool supportsDirectToLDSScattering() const;
+  bool supportsDirectToLdsScatter() const;
 
   // Some architectures (GFX9) require alias information on direct-to-lds loads
   // and loads from LDS so LLVM does not add conservative waits between those
@@ -157,12 +150,18 @@ public:
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                              Operation *llLoadOp) const override;
 
+  // Returns the hardware-specific tiles for shared memory loads and stores.
+  // The returned pair is in the format {LoadTile, StoreTile}.
+  std::pair<mlir::triton::gpu::LocalMemOpTile,
+            mlir::triton::gpu::LocalMemOpTile>
+  getSharedLdStTiles(int32_t vecBitwidth) const override;
+
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   ArrayRef<bool> isSigned, RewriterBase &rewriter,
                   bool useStdErr) const;
 
-  std::string arch;
+  amdgpu::TargetFeatures targetFeatures;
 };
 } // namespace mlir::triton::AMD
 

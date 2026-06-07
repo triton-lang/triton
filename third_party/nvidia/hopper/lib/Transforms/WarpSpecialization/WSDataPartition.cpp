@@ -1080,8 +1080,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     for (unsigned i = 0; i < forOp.getInitArgs().size(); i++) {
       auto initArg = forOp.getInitArgs()[i];
       Value newInitArg;
-      auto newInitArgOp =
-          sliceOp(initArg, offset, mappings, reverseMappings, partitionScheme);
+      sliceOp(initArg, offset, mappings, reverseMappings, partitionScheme);
       if (auto bbArg = dyn_cast<BlockArgument>(initArg)) {
         // find the corresponding new block argument
         Block *parentBlock = bbArg.getOwner();
@@ -1095,8 +1094,6 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
         assert(argIndex < parentBlock->getNumArguments() &&
                "new init argment not found");
         Region *parentRegion = parentBlock->getParent();
-        Region &newParentRegion =
-            newInitArgOp->getRegion(parentRegion->getRegionNumber());
         newInitArg = parentRegion->getArgument(argIndex);
       } else {
         newInitArg = mappings.lookupOrNull(initArg);

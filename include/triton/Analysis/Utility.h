@@ -69,7 +69,14 @@ public:
 
   bool isAssociative();
 
-  unsigned getScratchSizeInBytes();
+  // Callback to allow backends to specify target-specific getter for scratch
+  // elements.
+  using GetNumScratchElemsFn = std::function<unsigned(
+      const triton::LinearLayout &src, const triton::LinearLayout &dst,
+      unsigned bitwidth)>;
+
+  unsigned
+  getScratchSizeInBytes(GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
   InThreadVectorizeOpKind
   getInThreadVectorizeOpKind(unsigned axisPack,
@@ -244,6 +251,8 @@ unsigned getNumScratchElements(ArrayRef<unsigned> shape);
 bool supportWMMA(triton::DotOp op);
 
 bool supportMMA(triton::DotOp op, int version);
+
+bool supportMMA(triton::DotOpInterface op, int version);
 
 bool supportMMA(Value value, int version);
 

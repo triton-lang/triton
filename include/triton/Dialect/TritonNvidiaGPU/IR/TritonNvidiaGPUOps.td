@@ -96,8 +96,9 @@ def TTNG_ClusterBarrierOp : TTNG_Op<"cluster_barrier", []> {
     Lowers to a cluster arrive/wait pair.
 
     In warp-specialized kernels, lowering wraps the barrier in a synthetic
-    `ttg.warp_specialize` region so worker warps also execute the barrier.
-    This op cannot be placed inside an existing `ttg.warp_specialize`.
+    `ttg.warp_specialize` region so worker warps also execute a barrier outside
+    existing warp-specialized code. A barrier inside `ttg.warp_specialize`
+    lowers through a cluster-scoped mbarrier.
   }];
   let assemblyFormat = "attr-dict";
   let hasVerifier = 1;
@@ -409,6 +410,37 @@ def TTNG_AsyncCopyMbarrierArriveOp : TTNG_Op<"async_copy_mbarrier_arrive", [
 }
 
 
+def TTNG_AsyncSharedStoreOp : TTNG_Op<"async_shared_store", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
+  let summary = "store a distributed tensor to shared memory asynchronously";
+
+  let description = [{
+    Store a distributed tensor into shared memory using PTX st.async.shared.
+    The store completion decrements the transaction count of `mbarrier`.
+    This op requires a CTA cluster with at least two CTAs.
+  }];
+
+  let arguments = (ins
+    TT_Tensor:$src,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$mbarrier
+  );
+
+  let assemblyFormat = [{
+    $src `,` $dst `,` $mbarrier attr-dict `:` type($src) `->`
+    qualified(type($dst)) `,` qualified(type($mbarrier))
+  }];
+  let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    static bool isSupported(int computeCapability) {
+      return ::mlir::triton::nvidia_gpu::TargetFeatures(computeCapability)
+          .supportClusterOps();
+    }
+  }];
+}
+
+
 def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [
     AttrSizedOperandSegments, DeclareOpInterfaceMethods<MBarrierOpInterface>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>, TMALoadLikeOpInterface]> {
@@ -584,11 +616,12 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [
 }
 
 def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait", [MemWaitOpTrait]> {
-  let summary = "wait until all the inputs are read.";
-  let arguments = (ins I32Attr:$pendings);
+  let summary = "wait for pending TMA store operations.";
+  let arguments = (ins I32Attr:$pendings, UnitAttr:$read_only);
   let description = [{
-    Wait until all the read operations are done from the associated store operations.
-    This is needed before the shared memory can be written to.
+    Wait for the associated store operations to complete. When `read_only` is
+    set, only wait until their reads from shared memory have completed. This is
+    needed before shared memory can be written to again.
   }];
 
   let assemblyFormat = "attr-dict";

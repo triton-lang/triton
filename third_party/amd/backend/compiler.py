@@ -25,7 +25,7 @@ def is_pingpong_schedule_enabled(arch, use_async_copy):
 
 
 def is_in_thread_transpose_enabled(arch):
-    return (arch == "gfx942" or "gfx120" in arch) \
+    return (arch == "gfx942" or "gfx110" in arch or "gfx115" in arch or "gfx120" in arch) \
         if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
 
 
@@ -39,6 +39,22 @@ def is_fpsan_supported(arch):
 
 def is_consan_supported(arch):
     return arch in ["gfx1250"]
+
+
+def disable_real_true16_feature(arch):
+    return '-real-true16' if arch.startswith('gfx11') else ''
+
+
+def _parse_llvm_fn_attrs(attrs):
+    if not isinstance(attrs, str):
+        return tuple(attrs)
+    parsed = []
+    for attr in attrs.split(","):
+        name, sep, value = attr.partition("=")
+        name = name.strip()
+        if name:
+            parsed.append((name, value.strip() if sep else ""))
+    return tuple(parsed)
 
 
 @dataclass(frozen=True)
@@ -89,6 +105,11 @@ class HIPOptions:
     # schedule_hint="attention,memory-bound-attention"
     schedule_hint: str = 'none'
 
+    # Experimental: intended for development and debugging; may change or be removed without notice.
+    # Comma-separated LLVM function attributes; bare names are emitted as valueless attributes.
+    # Example: llvm_fn_attrs="amdgpu-sched-strategy=iterative-ilp,noinline"
+    llvm_fn_attrs: str | Tuple[Tuple[str, str], ...] = ""
+
     def __post_init__(self):
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
@@ -101,6 +122,8 @@ class HIPOptions:
                 f"kpack is deprecated starting from gfx950 and will be removed in later releases. So for now kpack = {self.kpack} will be overwritten to 1 to make transitioning easier."
             )
             object.__setattr__(self, 'kpack', 1)
+
+        object.__setattr__(self, 'llvm_fn_attrs', _parse_llvm_fn_attrs(self.llvm_fn_attrs))
 
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
@@ -296,6 +319,10 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_prepare_if_combining(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
+        if knobs.amd.use_buffer_ops:
+            # Run after CSE so matching assume and loop-bound expressions
+            # share SSA, letting range analysis prove both non-negative.
+            amd.passes.ttgpuir.add_annotate_buffer_op_split_safety(pm)
         passes.common.add_symbol_dce(pm)
         if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
@@ -324,6 +351,8 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
             passes.ttgpuir.add_fp_sanitizer(pm)
 
+        amd.passes.ttgpuir.add_annotate_buffer_op_split_safety(pm)
+
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
@@ -343,7 +372,7 @@ class HIPBackend(BaseBackend):
         # Reserve LDS space for ConSan captures before allocation computes offsets.
         if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):
             passes.ttgpuir.add_prepare_consan_captures(pm, "amd")
-        amd.passes.ttgpuir.add_allocate_shared_memory(pm)
+        amd.passes.ttgpuir.add_allocate_shared_memory(pm, options.arch)
         # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after shared
         if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
@@ -457,10 +486,14 @@ class HIPBackend(BaseBackend):
         if knobs.compilation.enable_asan:
             kernel_fn.add_fn_target_feature("+xnack")
             kernel_fn.add_fn_asan_attr()
+        for name, value in options.llvm_fn_attrs:
+            kernel_fn.remove_fn_attr(name)
+            kernel_fn.add_fn_attr(name, value)
 
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
         # from memory.
+        #
         # TODO(tyb0807): Disabled when using MIR swap/dump because the value is
         # not serializable to/from MIR YAML
         if options.arch != "gfx1250" and not (knobs.amd.swap_mir or knobs.amd.dump_mir):
@@ -517,7 +550,7 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
-        features = '-real-true16' if 'gfx11' in options.arch else ''
+        features = disable_real_true16_feature(options.arch)
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
         _ = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
@@ -532,7 +565,7 @@ class HIPBackend(BaseBackend):
                                                options.enable_fp_fusion, False, knobs.amd.swap_mir_enable_misched)
         else:
             amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags,
-                                           options.enable_fp_fusion, False)
+                                           options.enable_fp_fusion, False, False)
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
@@ -540,12 +573,12 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        target_features = ''
+        target_features = []
         if knobs.compilation.enable_asan:
-            target_features = '+xnack'
-        if 'gfx11' in options.arch:
-            target_features += ',-real-true16'
-        hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
+            target_features.append('+xnack')
+        if true16 := disable_real_true16_feature(options.arch):
+            target_features.append(true16)
+        hsaco = amd.assemble_amdgcn(src, options.arch, ','.join(target_features))
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
                 with open(tmp_in.name, "wb") as fd_in:

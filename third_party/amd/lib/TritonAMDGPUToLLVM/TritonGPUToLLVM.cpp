@@ -5,6 +5,10 @@
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "TritonAMDGPUToLLVM/TypeConverter.h"
+#include "TritonAMDGPUToLLVM/UniformityAnalysis.h"
+#include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
+#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -91,7 +95,7 @@ struct ConvertTritonAMDGPUToLLVM
     ModuleOp mod = getOperation();
 
     AMD::TargetInfo targetInfo(this->gfxArch.getValue());
-    if (targetInfo.getISAFamily() == AMD::ISAFamily::Unknown) {
+    if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::Unknown) {
       mod.emitError("unsupported target: '") << this->gfxArch.getValue() << "'";
       return signalPassFailure();
     }
@@ -103,7 +107,10 @@ struct ConvertTritonAMDGPUToLLVM
     TritonLLVMConversionTarget convTarget(*context);
 
     // Allocate shared memory and set barrier
-    ModuleAllocation allocation(mod, AMD::AMDAllocationAnalysisScratchSizeFn,
+    auto allocationFn = [&targetInfo](Operation *op) {
+      return AMD::AMDAllocationAnalysisScratchSizeFn(op, targetInfo);
+    };
+    ModuleAllocation allocation(mod, allocationFn,
                                 targetInfo.getSharedMemoryPartitionSize());
 
     if (targetInfo.requiresAliasInfoForAsyncOps())
@@ -153,18 +160,8 @@ struct ConvertTritonAMDGPUToLLVM
     // Make benefit for AMD specific patterns higher so they apply before common
     // patterns
     int AMDBenefit = commonBenefit + 1;
-    auto populatePatterns1 = [&](auto populateFunc, int benefit) {
-      populateFunc(typeConverter, patterns, axisInfoAnalysis, allocation,
-                   benefit);
-    };
-
     auto populatePatterns5 = [&](auto populateFunc, int benefit) {
       populateFunc(typeConverter, patterns, benefit);
-    };
-
-    auto populatePatterns6 = [&](auto populateFunc, int benefit) {
-      populateFunc(typeConverter, patterns, axisInfoAnalysis, allocation,
-                   targetInfo, benefit);
     };
 
     auto populatePatterns7 = [&](auto populateFunc, int benefit) {
@@ -180,8 +177,22 @@ struct ConvertTritonAMDGPUToLLVM
     AMD::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ftz,
                                              axisInfoAnalysis, allocation,
                                              targetInfo, AMDBenefit);
+    AMD::populateFpCastOpToLLVMPatterns(typeConverter, patterns, ftz,
+                                        axisInfoAnalysis, allocation,
+                                        targetInfo, AMDBenefit);
+    // Run a dataflow analysis that classifies every SSA value as
+    // wave-uniform or per-lane. The buffer-ops splitter queries this
+    // to decide which offset components can move to the SGPR soffset.
+    DataFlowSolver uniformitySolver;
+    uniformitySolver.load<dataflow::DeadCodeAnalysis>();
+    uniformitySolver.load<dataflow::SparseConstantPropagation>();
+    AMD::loadUniformityAnalysis(uniformitySolver);
+    if (failed(uniformitySolver.initializeAndRun(mod)))
+      return signalPassFailure();
+
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
-                                           axisInfoAnalysis, AMDBenefit);
+                                           axisInfoAnalysis, &uniformitySolver,
+                                           AMDBenefit);
     AMD::populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
     AMD::populateBarrierOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
     AMD::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
@@ -271,9 +282,10 @@ private:
     // Ask for 16B alignment on global_smem because that's the largest we should
     // ever need (4xi32).
     auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
-    auto global = LLVM::GlobalOp::create(
+    LLVM::GlobalOp::create(
         b, loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
-        "global_smem", /*value=*/Attribute(), /*alignment=*/16,
+        "global_smem",
+        /*value=*/Attribute(), /*alignment=*/16,
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));
   }

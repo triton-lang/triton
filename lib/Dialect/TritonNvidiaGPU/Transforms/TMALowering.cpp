@@ -113,7 +113,8 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   Value alloc = gpu::LocalAllocOp::create(rewriter, loc, memDescType, src);
   triton::nvidia_gpu::FenceAsyncSharedOp::create(rewriter, loc, false);
   createStore(desc, alloc);
-  triton::nvidia_gpu::TMAStoreWaitOp::create(rewriter, loc, 0);
+  triton::nvidia_gpu::TMAStoreWaitOp::create(rewriter, loc, 0,
+                                             /*read_only=*/false);
   rewriter.eraseOp(op);
 }
 
@@ -168,7 +169,6 @@ public:
 
   LogicalResult matchAndRewrite(MakeTensorDescOp op,
                                 PatternRewriter &rewriter) const override {
-    MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     auto alloc = triton::gpu::GlobalScratchAllocOp::create(
         rewriter, loc, getPointerType(rewriter.getI8Type()), TMA_SIZE_BYTES,

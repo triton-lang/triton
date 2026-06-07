@@ -9,7 +9,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <set>
 #include <shared_mutex>
 #include <unordered_map>
@@ -45,7 +44,7 @@ struct GraphState {
   // Capture tag to identify captured call paths
   static constexpr const char *captureTag = "<captured_at>";
   static constexpr const char *metricTag = "<metric>";
-  static constexpr const char *metadataTag = "__proton_launch_metadata";
+
   struct NodeState {
     // The graph node id for this node
     uint64_t nodeId{};
@@ -74,6 +73,8 @@ struct GraphState {
     uint64_t seqId{};
     uint64_t metricId{};
     size_t numWords{};
+    // Attributing flexible metrics written by metric kernels.
+    std::map<Data *, size_t> dataToEntryId;
   };
   // Metric nodes and their CPU-side metric state, ordered by node id.
   std::map<uint64_t, MetricNodeState> metricNodeIdToState;
