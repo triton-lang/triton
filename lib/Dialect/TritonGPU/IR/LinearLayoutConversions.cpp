@@ -194,7 +194,7 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 }
 
 LinearLayout getCanonicalScaleSmemLinearLayout(MLIRContext *ctx,
-                                             ArrayRef<int64_t> shape) {
+                                               ArrayRef<int64_t> shape) {
   assert(shape.size() == 2 && "scale layout expects rank-2");
   assert(shape[0] % 128 == 0 && "scale rows must be a multiple of 128");
   assert(shape[1] % 4 == 0 && "scale columns must be a multiple of 4");
@@ -213,9 +213,17 @@ LinearLayout getCanonicalScaleSmemLinearLayout(MLIRContext *ctx,
   int32_t outerRows = rows / (32 * 4);
   int32_t outerCols = cols / 4;
 
-  // Reinterpret a flat row-major SMEM byte layout through the semantic
-  // pre-transpose scale tile [outerRow, outerCol, rowLo=32, rowMid=4, colLo=4],
-  // then map those chunked dimensions back to the final logical 2D tensor.
+  // Build the semantic pre-transpose chunked view that the user/kernel
+  // convention exposes before flattening back to 2D.
+  //
+  // Scale example:
+  //   shape         = [256, 16]
+  //   innerColSize  = 4
+  //   rowMidSize    = 4
+  //   rowLoSize     = 32
+  //
+  // The logical 2D scale tensor is interpreted as:
+  //   [outerRow=2, outerCol=4, rowLo=32, rowMid=4, colLo=4]
   auto offsetToChunked = LinearLayout::identity1D(rows * cols, kOffset, kFlat)
                              .reshapeOuts({{kColLo, 4},
                                            {kRowMid, 4},
@@ -223,6 +231,23 @@ LinearLayout getCanonicalScaleSmemLinearLayout(MLIRContext *ctx,
                                            {kOuterCol, outerCols},
                                            {kOuterRow, outerRows}});
 
+  // Start from a flat row-major SMEM layout over `rows * cols` bytes and
+  // reinterpret it as the chunked view above.
+  //
+  // Scale example:
+  //   offset -> flat[4096]
+  //          -> [colLo=4, rowMid=4, rowLo=32, outerCol=4, outerRow=2]
+
+  // Map each chunked dimension back to the final logical 2D tensor:
+  //   - colLo and outerCol both contribute to dim1
+  //   - rowLo, rowMid, and outerRow all contribute to dim0
+  //
+  // Scale example:
+  //   colLo    = 4      -> dim1 low bits
+  //   rowLo    = 32     -> dim0 low bits
+  //   rowMid   = 4      -> dim0 middle bits
+  //   outerCol = 4      -> dim1 high bits
+  //   outerRow = 2      -> dim0 high bits
   LinearLayout chunkedToLogical =
       LinearLayout::identity1D(32, kRowLo, outDims[0]) *
       LinearLayout::identity1D(4, kRowMid, outDims[0]) *
