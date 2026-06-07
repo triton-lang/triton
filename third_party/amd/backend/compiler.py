@@ -85,25 +85,8 @@ class HIPOptions:
     instrumentation_mode: str = ""
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
-    # for all `tt.dot` operations in a kernel. The "none" variant preserves the default
-    # instruction scheduling of the AMDGPU backend which aims at maximizing occupancy.
-    # The option is experimental and may change at any time regarding its semantics and/or may
-    # be gone entirely anytime.
-    #
-    # Current experimental scheduling variants:
-    #
-    # attention: enables a bunch of optimizations for attention kernels, including:
-    #            - iglp 2 and sched.barrier around it
-    #            - sink-insts-to-avoid-spills flag to avoid register spills
-    # memory-bound-attention: enables custom scheduling strategy in llvm backend,
-    #            This option targets special FA variant, which is memory bound and
-    #            has a lot of elementwise operations from fused operand dequantizations.
-    #            Note that this option is highly experimental,
-    #            and will be removed as soon as default sceduler algorithm is fixed.
-    #
-    # Option allows to set multiple variants divided by commas:
-    # schedule_hint="attention,memory-bound-attention"
-    schedule_hint: str = 'none'
+    # for all `tt.dot` operations in a kernel. Experimental; right now no effect.
+    schedule_hint: str = ''
 
     # Experimental: intended for development and debugging; may change or be removed without notice.
     # Comma-separated LLVM function attributes; bare names are emitted as valueless attributes.
@@ -292,9 +275,6 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
         amd.passes.ttgpuir.add_convert_to_tensor_ops(pm)
         passes.common.add_canonicalizer(pm)
-        if options.schedule_hint.lower() != "none":
-            for hint in options.schedule_hint.split(","):
-                amd.passes.ttgpuir.insert_instruction_sched_hints(pm, hint)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if is_in_thread_transpose_enabled(options.arch):
@@ -402,9 +382,6 @@ class HIPBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
 
-        if options.schedule_hint.lower() != "none":
-            amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
-
         # This can not be moved below the di_scope pass
         if HIPBackend.instrumentation:
             HIPBackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
@@ -468,8 +445,6 @@ class HIPBackend(BaseBackend):
         if total_num_warps is not None:
             total_warps_num = total_num_warps
         kernel_fn.add_fn_attr("amdgpu-flat-work-group-size", f"1,{total_warps_num*options.warp_size}")
-        if "memory-bound-attention" in options.schedule_hint.split(','):
-            kernel_fn.add_fn_attr("amdgpu-sched-strategy", "iterative-ilp")
         kernel_fn.add_fn_attr("uniform-work-group-size", "true")
         # LLVM AMDGPU backend supports the attribute "amdgpu-waves-per-eu"="<min>[, <max>]".
         # This attribute may be attached to a kernel function definition and is an optimization hint.
