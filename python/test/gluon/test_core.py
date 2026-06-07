@@ -2160,8 +2160,7 @@ def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_of
 
 
 @gluon.jit
-def _make_2d_offsets(rows: ttgl.constexpr, cols: ttgl.constexpr, stride: ttgl.constexpr,
-                     layout: ttgl.constexpr):
+def _make_2d_offsets(rows: ttgl.constexpr, cols: ttgl.constexpr, stride: ttgl.constexpr, layout: ttgl.constexpr):
     row = ttgl.arange(0, rows, ttgl.SliceLayout(1, layout))
     col = ttgl.arange(0, cols, ttgl.SliceLayout(0, layout))
     return row[:, None] * stride + col[None, :]
@@ -2257,10 +2256,10 @@ def test_shared_memory_subview_reshape_rank_change_with_3d_gaps():
     shared_layout = ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=4, order=[1, 2, 0])
 
     @gluon.jit
-    def kernel(in_ptr, out_ptr, D0: ttgl.constexpr, D1: ttgl.constexpr, D2: ttgl.constexpr,
-               OFFSET0: ttgl.constexpr, OFFSET1: ttgl.constexpr, OFFSET2: ttgl.constexpr, SLICE0: ttgl.constexpr,
-               SLICE1: ttgl.constexpr, SLICE2: ttgl.constexpr, DST0: ttgl.constexpr, DST1: ttgl.constexpr,
-               src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+    def kernel(in_ptr, out_ptr, D0: ttgl.constexpr, D1: ttgl.constexpr, D2: ttgl.constexpr, OFFSET0: ttgl.constexpr,
+               OFFSET1: ttgl.constexpr, OFFSET2: ttgl.constexpr, SLICE0: ttgl.constexpr, SLICE1: ttgl.constexpr,
+               SLICE2: ttgl.constexpr, DST0: ttgl.constexpr, DST1: ttgl.constexpr, src_layout: ttgl.constexpr,
+               dst_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
         src_i = ttgl.arange(0, D0, ttgl.SliceLayout(1, ttgl.SliceLayout(2, src_layout)))
         src_j = ttgl.arange(0, D1, ttgl.SliceLayout(0, ttgl.SliceLayout(2, src_layout)))
         src_k = ttgl.arange(0, D2, ttgl.SliceLayout(0, ttgl.SliceLayout(1, src_layout)))
@@ -2279,8 +2278,8 @@ def test_shared_memory_subview_reshape_rank_change_with_3d_gaps():
     input = torch.arange(math.prod(src_shape), device="cuda", dtype=torch.int32).reshape(src_shape)
     output = torch.empty(dst_shape, device="cuda", dtype=torch.int32)
 
-    kernel[(1, )](input, output, *src_shape, *offsets, *slice_shape, *dst_shape, src_layout, dst_layout,
-                  shared_layout, num_warps=num_warps)
+    kernel[(1, )](input, output, *src_shape, *offsets, *slice_shape, *dst_shape, src_layout, dst_layout, shared_layout,
+                  num_warps=num_warps)
 
     expected = input[offsets[0]:offsets[0] + slice_shape[0], offsets[1]:offsets[1] + slice_shape[1],
                      offsets[2]:offsets[2] + slice_shape[2]].reshape(dst_shape)

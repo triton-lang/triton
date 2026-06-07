@@ -4399,14 +4399,12 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
   auto src = toLinearLayout(srcTy);
   assert(product(srcTy.getShape()) == product(dstShape));
   auto memDesc = dyn_cast<MemDescType>(srcTy);
-  if (!memDesc ||
-      memDesc.getAllocShape().take_back(memDesc.getRank()) ==
-          memDesc.getShape())
+  if (!memDesc || memDesc.getAllocShape().take_back(memDesc.getRank()) ==
+                      memDesc.getShape())
     return reshapeLayout(ctx, src, dstShape);
 
   auto srcShape = memDesc.getShape();
-  auto srcAllocShape =
-      memDesc.getAllocShape().take_back(memDesc.getRank());
+  auto srcAllocShape = memDesc.getAllocShape().take_back(memDesc.getRank());
   auto srcDimNames = standardOutDimNames(ctx, memDesc.getRank());
   LinearLayout transform = LinearLayout::empty();
   for (auto [dim, size] : llvm::zip(srcDimNames, srcShape))
@@ -4415,8 +4413,8 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
 
   auto dstDim0 = standardOutDimNames(ctx, dstShape.size()).front();
   for (int dim = memDesc.getRank() - 1; dim >= 0; --dim)
-    transform *= LinearLayout::identity1D(
-        srcAllocShape[dim] / srcShape[dim], srcDimNames[dim], dstDim0);
+    transform *= LinearLayout::identity1D(srcAllocShape[dim] / srcShape[dim],
+                                          srcDimNames[dim], dstDim0);
   return src.compose(transform);
 }
 

@@ -382,8 +382,8 @@ struct MemDescReshapeOpConversion
                                                       llvmElemTy, rewriter);
     SmallVector<Value> offsets = srcSmemObj.getOffsets();
     auto srcTy = op.getSrc().getType();
-    bool isSubview = srcTy.getAllocShape().take_back(srcTy.getRank()) !=
-                     srcTy.getShape();
+    bool isSubview =
+        srcTy.getAllocShape().take_back(srcTy.getRank()) != srcTy.getShape();
     SmallVector<Value> reshapedOffsets;
     if (isSubview) {
       auto coordinateTransform = toLinearLayout(srcTy).pseudoinvert().compose(
@@ -392,8 +392,8 @@ struct MemDescReshapeOpConversion
       for (auto [dim, offset] : llvm::zip(
                standardOutDimNames(op.getContext(), srcTy.getRank()), offsets))
         namedOffsets.push_back({dim, offset});
-      auto transformed = applyLinearLayout(
-          loc, rewriter, coordinateTransform, namedOffsets);
+      auto transformed =
+          applyLinearLayout(loc, rewriter, coordinateTransform, namedOffsets);
       reshapedOffsets = llvm::to_vector(llvm::make_second_range(transformed));
     } else {
       auto srcShape = convertType<unsigned>(srcTy.getShape());
@@ -402,9 +402,8 @@ struct MemDescReshapeOpConversion
       reshapedOffsets =
           LLVM::delinearize(rewriter, loc, linearOffset, dstShape);
     }
-    auto dstSmemObj =
-        SharedMemoryObject(srcSmemObj.getBases(), srcSmemObj.getBaseElemType(),
-                           reshapedOffsets);
+    auto dstSmemObj = SharedMemoryObject(
+        srcSmemObj.getBases(), srcSmemObj.getBaseElemType(), reshapedOffsets);
     auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();

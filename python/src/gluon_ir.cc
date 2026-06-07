@@ -607,8 +607,7 @@ void init_gluon_ir(py::module &&m) {
              return layoutToGluon(ty.getEncoding());
            })
       .def("get_alloc_shape_from_memdesc",
-           [](GluonOpBuilder &self,
-              Value memdesc) -> std::vector<int64_t> {
+           [](GluonOpBuilder &self, Value memdesc) -> std::vector<int64_t> {
              auto ty = cast<ttg::MemDescType>(memdesc.getType());
              return {ty.getAllocShape().begin(), ty.getAllocShape().end()};
            })
