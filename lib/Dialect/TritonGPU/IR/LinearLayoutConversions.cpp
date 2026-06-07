@@ -224,12 +224,13 @@ LinearLayout getCanonicalScaleSmemLinearLayout(MLIRContext *ctx,
   //
   // The logical 2D scale tensor is interpreted as:
   //   [outerRow=2, outerCol=4, rowLo=32, rowMid=4, colLo=4]
-  auto offsetToChunked = LinearLayout::identity1D(rows * cols, kOffset, kFlat)
-                             .reshapeOuts({{kColLo, 4},
-                                           {kRowMid, 4},
-                                           {kRowLo, 32},
-                                           {kOuterCol, outerCols},
-                                           {kOuterRow, outerRows}});
+  SmallVector<std::pair<StringAttr, int32_t>> chunkedDims = {
+      {kColLo, 4},
+      {kRowMid, 4},
+      {kRowLo, 32},
+      {kOuterCol, outerCols},
+      {kOuterRow, outerRows},
+  };
 
   // Start from a flat row-major SMEM layout over `rows * cols` bytes and
   // reinterpret it as the chunked view above.
@@ -237,6 +238,8 @@ LinearLayout getCanonicalScaleSmemLinearLayout(MLIRContext *ctx,
   // Scale example:
   //   offset -> flat[4096]
   //          -> [colLo=4, rowMid=4, rowLo=32, outerCol=4, outerRow=2]
+  auto offsetToChunked = LinearLayout::identity1D(rows * cols, kOffset, kFlat)
+                             .reshapeOuts(chunkedDims);
 
   // Map each chunked dimension back to the final logical 2D tensor:
   //   - colLo and outerCol both contribute to dim1
