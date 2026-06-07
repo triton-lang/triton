@@ -219,7 +219,7 @@ TEST_F(LinearLayoutConversionsTest, ShapeLargerThanLayout2DDegenerate) {
 
 TEST_F(LinearLayoutConversionsTest, CanonicalScaleSmemLayout) {
   LinearLayout layout =
-      getCanonicalScaleSmemLinearLayout(&ctx, /*shape=*/{256, 16});
+      getScaleSmemLayoutForTMEMCopy(&ctx, /*shape=*/{256, 16});
   LinearLayout expected = LinearLayout({{S("offset"),
                                          {{0, 1},
                                           {0, 2},

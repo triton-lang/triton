@@ -193,8 +193,8 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
   return LinearLayout({{S("offset"), bases2D}}, outDimNames);
 }
 
-LinearLayout getCanonicalScaleSmemLinearLayout(MLIRContext *ctx,
-                                               ArrayRef<int64_t> shape) {
+LinearLayout getScaleSmemLayoutForTMEMCopy(MLIRContext *ctx,
+                                           ArrayRef<int64_t> shape) {
   assert(shape.size() == 2 && "scale layout expects rank-2");
   assert(shape[0] % 128 == 0 && "scale rows must be a multiple of 128");
   assert(shape[1] % 4 == 0 && "scale columns must be a multiple of 4");

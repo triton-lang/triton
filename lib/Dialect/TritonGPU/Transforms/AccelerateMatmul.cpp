@@ -198,21 +198,6 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
   return LocalAllocOp::create(rewriter, arg.getLoc(), newType, arg);
 }
 
-static MemDescType getCanonicalScaleMemDescType(RankedTensorType type) {
-  auto sharedMemory = SharedMemorySpaceAttr::get(type.getContext());
-  auto sinkLayout =
-      getCanonicalScaleSmemLinearLayout(type.getContext(), type.getShape());
-  auto bases = sinkLayout.getBases();
-  bases[StringAttr::get(type.getContext(), "block")] = {};
-  sinkLayout = LinearLayout(std::move(bases), sinkLayout.getOutDims(),
-                            /*requireSurjective=*/sinkLayout.isSurjective());
-  auto layout =
-      SharedLinearEncodingAttr::get(type.getContext(), std::move(sinkLayout),
-                                    /*alignment=*/128);
-  return MemDescType::get(type.getShape(), type.getElementType(), layout,
-                          sharedMemory, /*mutableMemory=*/false);
-}
-
 static bool isTmemCopyCompatibleScale(RankedTensorType argType,
                                       bool usesTMAload) {
   assert(argType.getEncoding() && "unexpected tensor type");
@@ -319,11 +304,22 @@ tryCreateTmemCopyCompatibleScaleOperand(Value scale,
   if (!isTmemCopyCompatibleScale(packedScaleType, usesTMAload))
     return Value();
 
-  Value logicalScale = reshape2D.getResult();
-  auto sinkType = getCanonicalScaleMemDescType(scaleType);
-  rewriter.setInsertionPointAfterValue(logicalScale);
+  auto sharedMemory = SharedMemorySpaceAttr::get(scaleType.getContext());
+  auto sinkLayout = getScaleSmemLayoutForTMEMCopy(scaleType.getContext(),
+                                                  scaleType.getShape());
+  auto bases = sinkLayout.getBases();
+  bases[StringAttr::get(scaleType.getContext(), "block")] = {};
+  sinkLayout = LinearLayout(std::move(bases), sinkLayout.getOutDims(),
+                            /*requireSurjective=*/sinkLayout.isSurjective());
+  auto layout = SharedLinearEncodingAttr::get(scaleType.getContext(),
+                                              std::move(sinkLayout),
+                                              /*alignment=*/128);
+  auto sinkType =
+      MemDescType::get(scaleType.getShape(), scaleType.getElementType(), layout,
+                       sharedMemory, /*mutableMemory=*/false);
+  rewriter.setInsertionPointAfterValue(reshape2D.getResult());
   return LocalAllocOp::create(rewriter, reshape2D.getLoc(), sinkType,
-                              logicalScale);
+                              reshape2D.getResult());
 }
 
 static Value createTmemScaleOperand(Value tensor, Attribute tmemEncoding,

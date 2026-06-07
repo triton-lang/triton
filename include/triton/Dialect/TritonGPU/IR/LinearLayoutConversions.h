@@ -169,8 +169,8 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 // Create the canonical 2D SMEM linear layout for scales.
 // This is the shared-memory layout for the 32x4x4 TMEM scale-tile convention
 // recognized between the user kernel and the compiler.
-LinearLayout getCanonicalScaleSmemLinearLayout(MLIRContext *ctx,
-                                               ArrayRef<int64_t> shape);
+LinearLayout getScaleSmemLayoutForTMEMCopy(MLIRContext *ctx,
+                                           ArrayRef<int64_t> shape);
 
 // Create a TDM (Tensor DMA) LinearLayout: (message, warp, block) ->
 // (dim0, dim1, ...).  TDM is warp-granular.  The "warp" sublayout is an
