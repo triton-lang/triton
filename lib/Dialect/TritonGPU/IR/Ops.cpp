@@ -591,8 +591,7 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
         auto dstLL = nvmmaSharedToLinearLayout(
             dstShape, candidateEncoding, TMAMode::Tiled,
             /*disableSwizzle=*/false, /*emitErrors=*/false);
-        if (succeeded(dstLL) &&
-            reshapeLayout(ctx, srcLL, dstShape) == *dstLL) {
+        if (succeeded(dstLL) && reshapeLayout(ctx, srcLL, dstShape) == *dstLL) {
           dstEnc = candidateEncoding;
           return success();
         }
