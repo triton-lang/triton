@@ -617,64 +617,6 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
   return success();
 }
 
-static LogicalResult inferMemDescSubviewReshapeOpEncoding(
-    MemDescType srcTy, ArrayRef<int64_t> dstShape,
-    const LinearLayout &dstLayout, Attribute &dstEnc,
-    std::optional<Location> loc) {
-  auto srcEnc = srcTy.getEncoding();
-  auto *ctx = srcTy.getContext();
-  auto dstAllocShape =
-      convertType<int64_t>(llvm::to_vector(dstLayout.getOutDimSizes()));
-
-  if (isa<NVMMASharedEncodingAttr>(srcEnc)) {
-    Attribute candidate;
-    if (succeeded(inferMemDescReshapeOpEncoding(srcTy.getShape(), srcEnc,
-                                                dstShape, candidate)) &&
-        isa<NVMMASharedEncodingAttr>(candidate) &&
-        toLinearLayout(dstAllocShape, candidate) == dstLayout) {
-      dstEnc = candidate;
-      return success();
-    }
-  }
-
-  if (auto partitioned = dyn_cast<PartitionedSharedEncodingAttr>(srcEnc)) {
-    auto kOffset = StringAttr::get(ctx, "offset");
-    auto kPartition = StringAttr::get(ctx, "partition");
-    for (auto [partitionDim, outDim] :
-         llvm::enumerate(standardOutDimNames(ctx, dstAllocShape.size()))) {
-      if (dstAllocShape[partitionDim] % partitioned.getNumLogicalPieces())
-        continue;
-
-      auto pieces = LinearLayout::identity1D(partitioned.getNumPartitions(),
-                                             kPartition, outDim);
-      pieces *=
-          LinearLayout::identity1D(partitioned.getNumGroups(), kOffset, outDim);
-      auto inner =
-          divideRight(dstLayout, pieces.transposeIns({kOffset, kPartition}));
-      if (!inner || inner->getInDimSize(kPartition) != 1)
-        continue;
-
-      auto innerEnc = SharedLinearEncodingAttr::get(
-          ctx, inner->squeezeIns(kPartition),
-          partitioned.getPartitionLayout().getAlignment());
-      auto candidate = PartitionedSharedEncodingAttr::get(
-          ctx, partitioned.getNumPartitions(), partitioned.getNumGroups(),
-          partitionDim, innerEnc);
-      if (toLinearLayout(dstAllocShape, candidate) == dstLayout) {
-        dstEnc = candidate;
-        return success();
-      }
-    }
-    return emitOptionalError(loc,
-                             "memdesc subview reshape is not representable by "
-                             "PartitionedSharedEncodingAttr");
-  }
-
-  dstEnc = SharedLinearEncodingAttr::get(
-      ctx, dstLayout, cast<SharedEncodingTrait>(srcEnc).getAlignment());
-  return success();
-}
-
 LogicalResult MemDescReshapeOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> loc, MemDescType srcTy,
     ArrayRef<int64_t> dstShape, MemDescType &inferredReturnType) {
@@ -689,15 +631,19 @@ LogicalResult MemDescReshapeOp::inferReturnTypes(
       to_vector(srcTy.getAllocShape().drop_back(srcTy.getRank()));
   bool isSubview = srcAllocShape != srcShape;
   if (isSubview) {
-    if (!isa_and_nonnull<SharedEncodingTrait>(srcTy.getEncoding()))
+    auto srcEnc = srcTy.getEncoding();
+    if (!isa_and_nonnull<SharedEncodingTrait>(srcEnc))
       return emitOptionalError(
           loc, "memdesc subview reshape requires a shared memory encoding");
-    if (isPaddedEncoding(srcTy.getEncoding()))
+    if (isa<PartitionedSharedEncodingAttr>(srcEnc))
+      return emitOptionalError(
+          loc, "memdesc reshape of partitioned shared memory subviews is not "
+               "supported");
+    if (isPaddedEncoding(srcEnc))
       return emitOptionalError(
           loc, "memdesc reshape of padded shared memory subviews is not "
                "supported");
-    if (cast<LayoutEncodingTrait>(srcTy.getEncoding()).getRank() !=
-        srcTy.getRank())
+    if (cast<LayoutEncodingTrait>(srcEnc).getRank() != srcTy.getRank())
       return emitOptionalError(
           loc, "memdesc subview reshape requires the layout rank to match "
                "the memdesc rank");
@@ -710,11 +656,20 @@ LogicalResult MemDescReshapeOp::inferReturnTypes(
                "allocation, and destination shapes");
     auto dstLayout =
         inferReshapeLinearLayout(cast<TensorOrMemDesc>(srcTy), dstShape);
-    if (failed(inferMemDescSubviewReshapeOpEncoding(srcTy, dstShape, dstLayout,
-                                                    dstEncoding, loc)))
-      return failure();
-    llvm::append_range(dstAllocShape, convertType<int64_t>(llvm::to_vector(
-                                          dstLayout.getOutDimSizes())));
+    auto dstLayoutShape =
+        convertType<int64_t>(llvm::to_vector(dstLayout.getOutDimSizes()));
+    if (isa<NVMMASharedEncodingAttr>(srcEnc)) {
+      Attribute candidate;
+      if (succeeded(inferMemDescReshapeOpEncoding(srcShape, srcEnc, dstShape,
+                                                  candidate)) &&
+          isa<NVMMASharedEncodingAttr>(candidate) &&
+          toLinearLayout(dstLayoutShape, candidate) == dstLayout)
+        dstEncoding = candidate;
+    }
+    if (!dstEncoding)
+      dstEncoding = SharedLinearEncodingAttr::get(
+          context, dstLayout, cast<SharedEncodingTrait>(srcEnc).getAlignment());
+    llvm::append_range(dstAllocShape, dstLayoutShape);
   } else {
     if (Attribute srcEnc = srcTy.getEncoding()) {
       if (failed(inferMemDescReshapeOpEncoding(srcShape, srcEnc, dstShape,

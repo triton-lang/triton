@@ -143,9 +143,6 @@ module attributes {"ttg.target" = "gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 #shared_linear_equiv = #ttg.shared_linear<{offset = [[0, 0, 1, 0], [0, 1, 0, 0], [0, 2, 0, 0], [0, 4, 0, 0], [0, 0, 0, 1], [0, 2, 0, 2], [0, 4, 0, 4], [0, 0, 0, 8]]}, alignment = 512>
 #subview_src = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #subview_dst = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [4, 0], [0, 8], [1, 0], [2, 0]]}, alignment = 16>
-#partition_src = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #subview_src}>
-#partition_dst_inner = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [1, 0], [2, 0]]}, alignment = 16>
-#partition_dst = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #partition_dst_inner}>
 #subview_src_3d = #ttg.shared_linear<{offset = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 1, 0], [0, 2, 0], [1, 0, 0], [2, 0, 0]]}, alignment = 16>
 #subview_dst_2d = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [2, 0], [0, 16], [1, 0]]}, alignment = 16>
 #smem = #ttg.shared_memory
@@ -176,14 +173,6 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
   tt.func @memdesc_reshape_subview(%arg0 : !ttg.memdesc<8x16xf32, #subview_src, #smem>) {
     %0 = ttg.memdesc_subslice %arg0[0, 8] : !ttg.memdesc<8x16xf32, #subview_src, #smem> -> !ttg.memdesc<8x8xf32, #subview_src, #smem, 8x16>
     %1 = ttg.memdesc_reshape %0 : !ttg.memdesc<8x8xf32, #subview_src, #smem, 8x16> -> !ttg.memdesc<4x16xf32, #subview_dst, #smem, 8x16>
-    tt.return
-  }
-
-  // CHECK-LABEL: memdesc_reshape_partitioned_subview
-  // CHECK: ttg.memdesc_reshape %{{.*}} : !ttg.memdesc<8x8xf16, #{{.*}}, #smem, 16x8> -> !ttg.memdesc<4x16xf16, #{{.*}}, #smem, 8x16>
-  tt.func @memdesc_reshape_partitioned_subview(%arg0 : !ttg.memdesc<16x8xf16, #partition_src, #smem>) {
-    %0 = ttg.memdesc_subslice %arg0[8, 0] : !ttg.memdesc<16x8xf16, #partition_src, #smem> -> !ttg.memdesc<8x8xf16, #partition_src, #smem, 16x8>
-    %1 = ttg.memdesc_reshape %0 : !ttg.memdesc<8x8xf16, #partition_src, #smem, 16x8> -> !ttg.memdesc<4x16xf16, #partition_dst, #smem, 8x16>
     tt.return
   }
 

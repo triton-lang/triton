@@ -180,6 +180,17 @@ tt.func public @reshape_padded_subview(%arg0: !ttg.memdesc<4x4xf32, #padded_src,
 
 // -----
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #shared}>
+#smem = #ttg.shared_memory
+tt.func public @reshape_partitioned_subview(%arg0: !ttg.memdesc<8x8xf16, #partitioned, #smem, 16x8>) {
+    // expected-error @+1 {{memdesc reshape of partitioned shared memory subviews is not supported}}
+    %0 = ttg.memdesc_reshape %arg0 : !ttg.memdesc<8x8xf16, #partitioned, #smem, 16x8> -> !ttg.memdesc<4x16xf16, #partitioned, #smem, 8x16>
+    tt.return
+}
+
+// -----
+
 #shared_rank2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 tt.func public @reshape_subview_layout_rank_mismatch(%arg0 : !ttg.memdesc<2x4x8xf32, #shared_rank2, #smem, 2x8x8>) {
