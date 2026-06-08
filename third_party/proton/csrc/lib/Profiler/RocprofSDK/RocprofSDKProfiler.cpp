@@ -596,12 +596,6 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
   static void handleStreamCaptureBegin();
   static void
   handleCapturedKernelEnter(rocprofiler_tracing_operation_t operation);
-  static void
-  handleGraphLaunchEnter(rocprofiler_callback_tracing_record_t record,
-                         rocprofiler_tracing_operation_t operation,
-                         rocprofiler_callback_tracing_hip_api_data_t *payload,
-                         RocprofSDKProfilerPimpl *impl,
-                         DataToEntryMap &dataToEntry, size_t &numInstances);
   static void handleSuccessfulRuntimeExit(
       rocprofiler_tracing_operation_t operation,
       rocprofiler_callback_tracing_hip_api_data_t *payload,
@@ -719,33 +713,6 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleCapturedKernelEnter(
   }
 }
 
-void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleGraphLaunchEnter(
-    rocprofiler_callback_tracing_record_t record,
-    rocprofiler_tracing_operation_t operation,
-    rocprofiler_callback_tracing_hip_api_data_t *payload,
-    RocprofSDKProfilerPimpl *impl, DataToEntryMap &dataToEntry,
-    size_t &numInstances) {
-  hipGraphExec_t graphExec =
-      operation == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch
-          ? payload->args.hipGraphLaunch.graphExec
-          : payload->args.hipGraphLaunch_spt.graphExec;
-  uint64_t graphExecId = 0;
-  impl->graphExecToGraphExecId.withRead(
-      graphExec, [&](const uint64_t &value) { graphExecId = value; });
-  if (graphExecId != 0 && impl->graphStates.contain(graphExecId)) {
-    auto &graphState = impl->graphStates[graphExecId];
-    numInstances = graphState.nodeIdToState.size();
-    buildGraphNodeEntries(dataToEntry, graphState,
-                          threadState.profiler.correlation.externIdToState,
-                          threadState.scopeStack.back().scopeId);
-  } else {
-    std::cerr << "[PROTON] Cannot find graph state for graphExec "
-                 "and graph replay attribution may be incomplete. "
-                 "Please start profiling before the graph is captured."
-              << std::endl;
-  }
-}
-
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeEnter(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_tracing_operation_t operation,
@@ -771,15 +738,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeEnter(
     return;
   }
 
-  size_t numInstances = 1;
-  if (isGraphLaunchOperation(operation)) {
-    handleGraphLaunchEnter(record, operation, payload, impl, dataToEntry,
-                           numInstances);
-  }
   auto &scope = threadState.scopeStack.back();
   auto isMissingName = scope.name.empty();
   profiler.correlation.correlate(record.correlation_id.internal, scope.scopeId,
-                                 numInstances, isMissingName, dataToEntry);
+                                 /*numNodes=*/1, isMissingName, dataToEntry);
   impl->corrIdToStreamId[record.correlation_id.internal] =
       extractStreamId(operation, payload);
 }
