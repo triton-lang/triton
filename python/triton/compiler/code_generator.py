@@ -1127,6 +1127,8 @@ class CodeGenerator(ast.NodeVisitor):
             before_block = self.builder.create_block_with_parent(while_op.get_before(), init_tys)
             self.builder.set_insertion_point_to_start(before_block)
             block_args = [before_block.arg(i) for i in range(len(init_handles))]
+            for arg, init in zip(block_args, init_handles):
+                arg.set_loc(init.get_loc())
             condition_args = unflatten_ir_values(block_args, init_fe_tys)
             for name, val in zip(names, condition_args):
                 self.lscope[name] = val
@@ -1146,6 +1148,8 @@ class CodeGenerator(ast.NodeVisitor):
             # generate loop body
             self.builder.set_insertion_point_to_start(after_block)
             body_handles = [after_block.arg(i) for i in range(len(init_handles))]
+            for arg, init in zip(body_handles, init_handles):
+                arg.set_loc(init.get_loc())
             body_args = unflatten_ir_values(body_handles, init_fe_tys)
             for name, val in zip(names, body_args):
                 self.lscope[name] = val
