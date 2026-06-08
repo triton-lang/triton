@@ -5813,11 +5813,11 @@ def test_constexpr_if_return_separate(device):
     out = torch.empty(1, device=device, dtype=torch.int32)
 
     # constexpr True: first branch taken, static_assert skipped
-    early_return_kernel[(1,)](out, True)
+    early_return_kernel[(1, )](out, True)
     assert out[0].item() == 0
 
     # constexpr False: first branch skipped, static_assert(True) passes
-    early_return_kernel[(1,)](out, False)
+    early_return_kernel[(1, )](out, False)
     assert out[0].item() == 1
 
 

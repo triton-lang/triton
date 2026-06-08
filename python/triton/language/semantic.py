@@ -1858,9 +1858,8 @@ class TritonSemantic(Generic[TensorTy]):
         if len(block_shape) != ndim:
             raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(strides)}")
         if not isinstance(base.dtype, tl.pointer_type):
-            raise ValueError(
-                f"make_tensor_descriptor expects a pointer-type base argument, "
-                f"but got base.dtype={base.dtype} ({type(base.dtype).__name__})")
+            raise ValueError(f"make_tensor_descriptor expects a pointer-type base argument, "
+                             f"but got base.dtype={base.dtype} ({type(base.dtype).__name__})")
         elem_size = base.dtype.element_ty.primitive_bitwidth // 8
         contig_dim_size = tl._unwrap_if_constexpr(block_shape[-1])
         if contig_dim_size * elem_size < 16:
@@ -1879,9 +1878,8 @@ class TritonSemantic(Generic[TensorTy]):
         block_shape = tl._unwrap_shape(block_shape)
 
         if not isinstance(base.type, tl.pointer_type):
-            raise ValueError(
-                f"make_tensor_descriptor expects a pointer-type base argument, "
-                f"but got base.type={base.type} ({type(base.type).__name__})")
+            raise ValueError(f"make_tensor_descriptor expects a pointer-type base argument, "
+                             f"but got base.type={base.type} ({type(base.type).__name__})")
         type = tl.block_type(base.type.element_ty, block_shape)
         base_handle = base.handle
         is_signed_int = base.type.element_ty.is_int_signed()
