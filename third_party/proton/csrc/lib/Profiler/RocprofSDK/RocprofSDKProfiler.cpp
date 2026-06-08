@@ -805,19 +805,6 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleSuccessfulRuntimeExit(
     }
     break;
   }
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphAddKernelNode: {
-    auto &profiler = threadState.profiler;
-    auto graph = payload->args.hipGraphAddKernelNode.graph;
-    auto nodePtr = payload->args.hipGraphAddKernelNode.pGraphNode;
-    if (graph && nodePtr && *nodePtr && profiler.isOpInProgress()) {
-      auto &graphState = impl->graphToState[graph];
-      auto &scope = threadState.scopeStack.back();
-      const auto nodeId = graphState.nodeIdToState.size();
-      recordGraphKernelNode(profiler.dataSet, graphState, nodeId, scope.name,
-                            scope.name.empty());
-    }
-    break;
-  }
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiate:
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithFlags:
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithParams: {
@@ -840,14 +827,6 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleSuccessfulRuntimeExit(
     }
     break;
   }
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphExecDestroy:
-    impl->graphExecToGraph.erase(payload->args.hipGraphExecDestroy.graphExec);
-    impl->graphExecToGraphExecId.erase(
-        payload->args.hipGraphExecDestroy.graphExec);
-    break;
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphDestroy:
-    impl->graphToState.erase(payload->args.hipGraphDestroy.graph);
-    break;
   default:
     break;
   }
@@ -1192,12 +1171,9 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
       ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamBeginCapture_spt,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture_spt,
-      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphAddKernelNode,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiate,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithFlags,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithParams,
-      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphExecDestroy,
-      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphDestroy,
   };
 
   rocprofiler::configureCallbackTracingService<true>(
