@@ -4,6 +4,7 @@ Each test should invoke one or more GPU kernels and check the validity of their 
 """
 
 import pathlib
+import os
 
 import triton
 import triton.profiler as proton
@@ -30,6 +31,10 @@ def _find_frame_by_name(frame, name):
             return current
         queue.extend(current["children"])
     return None
+
+
+def _enable_hip_cudagraph_test():
+    return os.environ.get("PROTON_ENABLE_HIP_CUDAGRAPH_TEST", "0") == "1"
 
 
 @contextmanager
@@ -106,7 +111,10 @@ def test_triton(tmp_path: pathlib.Path, device: str):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
-@pytest.mark.skipif(not (is_cuda() or is_hip()), reason="Only CUDA/HIP backends support cudagraph replay")
+@pytest.mark.skipif(
+    not (is_cuda() or (is_hip() and _enable_hip_cudagraph_test())),
+    reason="Only CUDA enables cudagraph replay by default; set PROTON_ENABLE_HIP_CUDAGRAPH_TEST=1 for HIP",
+)
 def test_cudagraph(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
