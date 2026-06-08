@@ -6,7 +6,9 @@
 #include "rocprofiler-sdk/buffer.h"
 #include "rocprofiler-sdk/buffer_tracing.h"
 #include "rocprofiler-sdk/callback_tracing.h"
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 #include "rocprofiler-sdk/external_correlation.h"
+#endif
 #include "rocprofiler-sdk/fwd.h"
 #include "rocprofiler-sdk/hip/api_args.h"
 #include "rocprofiler-sdk/hip/runtime_api_id.h"
@@ -68,12 +70,14 @@ rocprofiler_status_t configureCallbackTracingService(
     const rocprofiler_tracing_operation_t *operations, size_t operationCount,
     rocprofiler_callback_tracing_cb_t callback, void *userData);
 
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 template <bool CheckSuccess>
 rocprofiler_status_t configureExternalCorrelationIdRequestService(
     rocprofiler_context_id_t context,
     const rocprofiler_external_correlation_id_request_kind_t *kinds,
     size_t kindsCount,
     rocprofiler_external_correlation_id_request_cb_t callback, void *userData);
+#endif
 
 template <bool CheckSuccess>
 rocprofiler_status_t

@@ -16,7 +16,9 @@
 #include "rocprofiler-sdk/agent.h"
 #include "rocprofiler-sdk/buffer_tracing.h"
 #include "rocprofiler-sdk/callback_tracing.h"
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 #include "rocprofiler-sdk/external_correlation.h"
+#endif
 #include "rocprofiler-sdk/hip/api_args.h"
 #include "rocprofiler-sdk/hip/runtime_api_id.h"
 #include "rocprofiler-sdk/marker/api_id.h"
