@@ -442,7 +442,6 @@ void processKernelRecord(
   }
 }
 
-
 RocprofSDKProfiler::ExternIdState *
 buildGraphNodeEntries(const DataToEntryMap &dataToEntry, GraphState &graphState,
                       RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
@@ -843,7 +842,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
     // record.phase == ROCPROFILER_CALLBACK_PHASE_NONE
     impl->graphExecToGraphExecId[graphExec] = graphExecId;
   } else if (record.operation ==
-      ROCPROFILER_HIP_GRAPH_OPERATION_HIP_GRAPH_EXEC_DESTROY) {
+             ROCPROFILER_HIP_GRAPH_OPERATION_HIP_GRAPH_EXEC_DESTROY) {
     // record.phase == ROCPROFILER_CALLBACK_PHASE_NONE
     impl->graphExecToGraph.erase(graphExec);
     impl->graphExecToGraphExecId.erase(graphExec);
