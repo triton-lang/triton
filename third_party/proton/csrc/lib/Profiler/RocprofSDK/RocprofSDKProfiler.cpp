@@ -1077,27 +1077,26 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
       maxCorrelationId =
           std::max(maxCorrelationId, record->correlation_id.internal);
       auto kernelName = impl->getKernelName(record->dispatch_info.kernel_id);
+      uint64_t streamId =
+          static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
       if (record->correlation_id.external.ptr != nullptr) {
+        // For now, it's only graph dispatch records that carry external
+        // correlation data.
         auto *graphCorrelation = static_cast<GraphDispatchCorrelation *>(
             record->correlation_id.external.ptr);
-        uint64_t streamId =
-            static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
         processGraphKernelRecord(correlation.externIdToState, dataPhases,
                                  kernelName, record, *graphCorrelation,
                                  streamId);
         correlation.corrIdToExternId.erase(record->correlation_id.internal);
+        // Release the heap allocation for graph correlation data created in
+        // graphNodeCorrelationCallback
         delete graphCorrelation;
         record->correlation_id.external.value = 0;
-        continue;
+      } else {
+        processKernelRecord(profiler, correlation.corrIdToExternId,
+                            correlation.externIdToState, dataPhases, kernelName,
+                            record, streamId);
       }
-      uint64_t streamId =
-          static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
-      impl->corrIdToStreamId.withRead(
-          record->correlation_id.internal,
-          [&](const uint64_t &sid) { streamId = sid; });
-      processKernelRecord(profiler, correlation.corrIdToExternId,
-                          correlation.externIdToState, dataPhases, kernelName,
-                          record, streamId);
       impl->corrIdToStreamId.erase(record->correlation_id.internal);
     }
   }
