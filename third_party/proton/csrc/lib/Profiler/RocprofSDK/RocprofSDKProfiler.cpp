@@ -54,6 +54,7 @@ constexpr const char *UnknownKernelName = "<unknown>";
 
 struct RocprofSDKProfilerPimpl;
 
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 // Payload attached to each graph replay kernel dispatch through
 // rocprofiler-sdk's external-correlation request service. The dispatch buffer
 // callback later recovers this pointer from
@@ -85,6 +86,7 @@ thread_local std::vector<ActiveGraphLaunch> graphLaunchStack;
 // hipStreamBeginCapture/hipStreamEndCapture. It is keyed by hipGraph_t at
 // capture end, then rebound to rocprofiler-sdk's graph_exec_id at instantiate.
 thread_local GraphState streamCaptureGraphState;
+#endif
 
 // ---- SDK runtime state (singleton, outlives any profiler instance) ----
 
@@ -393,6 +395,7 @@ bool isKernelLaunchOperation(rocprofiler_tracing_operation_t op) {
   }
 }
 
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 bool isStreamCaptureBeginOperation(rocprofiler_tracing_operation_t op) {
   return op == ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamBeginCapture ||
          op == ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamBeginCapture_spt;
@@ -402,6 +405,7 @@ bool isStreamCaptureEndOperation(rocprofiler_tracing_operation_t op) {
   return op == ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture ||
          op == ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture_spt;
 }
+#endif
 
 // ---- Kernel dispatch processing (matches main's GPUProfiler interface) ----
 
@@ -459,6 +463,7 @@ void processKernelRecord(
   }
 }
 
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 RocprofSDKProfiler::ExternIdState *
 buildGraphNodeEntries(const DataToEntryMap &dataToEntry, GraphState &graphState,
                       RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
@@ -545,6 +550,7 @@ void processGraphKernelRecord(
   if (complete)
     externIdToState.erase(externId);
 }
+#endif
 
 } // namespace
 
@@ -574,17 +580,22 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
   handleRuntimeExit(rocprofiler_callback_tracing_record_t record,
                     rocprofiler_tracing_operation_t operation,
                     rocprofiler_callback_tracing_hip_api_data_t *payload);
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   static void handleStreamCaptureBegin();
   static void handleCapturedKernelEnter();
+#endif
   static void handleSuccessfulRuntimeExit(
       rocprofiler_tracing_operation_t operation,
       rocprofiler_callback_tracing_hip_api_data_t *payload,
       RocprofSDKProfilerPimpl *impl);
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   static void handleStreamCaptureEnd(rocprofiler_tracing_operation_t operation);
+#endif
   static void handleKernelExit(rocprofiler_callback_tracing_record_t record,
                                rocprofiler_tracing_operation_t operation);
   static void markerCallback(rocprofiler_callback_tracing_record_t record,
                              rocprofiler_user_data_t *userData, void *arg);
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   static void hipGraphCallback(rocprofiler_callback_tracing_record_t record,
                                rocprofiler_user_data_t *userData, void *arg);
   static int graphNodeCorrelationCallback(
@@ -592,6 +603,7 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
       rocprofiler_external_correlation_id_request_kind_t kind,
       rocprofiler_tracing_operation_t operation, uint64_t internalCorrelationId,
       rocprofiler_user_data_t *externalCorrelationId, void *userData);
+#endif
   static void roctxCallback(uint32_t operationId, void *data);
   static void codeObjectCallback(rocprofiler_callback_tracing_record_t record,
                                  rocprofiler_user_data_t *userData, void *arg);
@@ -633,6 +645,7 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
   ThreadSafeMap<uint64_t, uint64_t, std::unordered_map<uint64_t, uint64_t>>
       corrIdToStreamId;
 
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   // Captured graph metadata keyed by the HIP graph handle returned by
   // hipStreamEndCapture. rocprofiler-sdk graph callbacks only expose
   // hipGraphExec_t/graph_exec_id, so this is an intermediate key.
@@ -654,8 +667,10 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
   // Final graph metadata used at replay time, keyed by SDK graph_exec_id from
   // ROCPROFILER_CALLBACK_TRACING_HIP_GRAPH.
   ThreadSafeMap<uint64_t, GraphState> graphStates;
+#endif
 };
 
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 void tryBindGraphExecState(RocprofSDKProfiler::RocprofSDKProfilerPimpl *impl,
                            hipGraphExec_t graphExec) {
   if (!impl || !graphExec)
@@ -685,9 +700,11 @@ void tryBindGraphExecState(RocprofSDKProfiler::RocprofSDKProfilerPimpl *impl,
   }
   impl->graphStates.insert(graphExecId, graphState);
 }
+#endif
 
 // ---- HIP Runtime API callback (correlation tracking) ----
 
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleStreamCaptureBegin() {
   threadState.isStreamCapturing = true;
   streamCaptureGraphState = GraphState{};
@@ -725,15 +742,18 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleCapturedKernelEnter() {
     }
   }
 }
+#endif
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeEnter(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_tracing_operation_t operation,
     rocprofiler_callback_tracing_hip_api_data_t *payload) {
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   if (isStreamCaptureBeginOperation(operation)) {
     handleStreamCaptureBegin();
     return;
   }
+#endif
 
   if (!isKernelLaunchOperation(operation))
     return;
@@ -746,10 +766,12 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeEnter(
       resolvedName ? std::string(resolvedName) : std::string();
   threadState.enterOp(Scope(kernelName));
   auto &dataToEntry = threadState.dataToEntry;
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   if (threadState.isStreamCapturing) {
     handleCapturedKernelEnter();
     return;
   }
+#endif
 
   auto &scope = threadState.scopeStack.back();
   auto isMissingName = scope.name.empty();
@@ -763,6 +785,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleSuccessfulRuntimeExit(
     rocprofiler_tracing_operation_t operation,
     rocprofiler_callback_tracing_hip_api_data_t *payload,
     RocprofSDKProfilerPimpl *impl) {
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   switch (operation) {
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture:
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture_spt: {
@@ -809,8 +832,14 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleSuccessfulRuntimeExit(
   default:
     break;
   }
+#else
+  (void)operation;
+  (void)payload;
+  (void)impl;
+#endif
 }
 
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleStreamCaptureEnd(
     rocprofiler_tracing_operation_t operation) {
   if (isStreamCaptureEndOperation(operation)) {
@@ -818,6 +847,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleStreamCaptureEnd(
     streamCaptureGraphState = GraphState{};
   }
 }
+#endif
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleKernelExit(
     rocprofiler_callback_tracing_record_t record,
@@ -826,10 +856,12 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleKernelExit(
     return;
 
   auto &profiler = threadState.profiler;
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   if (threadState.isStreamCapturing) {
     threadState.exitOp();
     return;
   }
+#endif
 
   threadState.exitOp();
   profiler.correlation.submit(record.correlation_id.internal);
@@ -845,7 +877,9 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeExit(
   if (payload && payload->retval.hipError_t_retval == hipSuccess) {
     handleSuccessfulRuntimeExit(operation, payload, impl);
   }
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
   handleStreamCaptureEnd(operation);
+#endif
   handleKernelExit(record, operation);
 }
 
@@ -870,6 +904,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
   }
 }
 
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
@@ -963,6 +998,7 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
   threadState.profiler.correlation.submit(internalCorrelationId);
   return 0;
 }
+#endif
 
 // ---- ROCTx marker callback via rocprofiler-sdk ----
 //
@@ -1077,6 +1113,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
       maxCorrelationId =
           std::max(maxCorrelationId, record->correlation_id.internal);
       auto kernelName = impl->getKernelName(record->dispatch_info.kernel_id);
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
       if (record->correlation_id.external.ptr != nullptr) {
         auto *graphCorrelation = static_cast<GraphDispatchCorrelation *>(
             record->correlation_id.external.ptr);
@@ -1090,6 +1127,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         record->correlation_id.external.value = 0;
         continue;
       }
+#endif
       uint64_t streamId =
           static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
       impl->corrIdToStreamId.withRead(
@@ -1149,6 +1187,7 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
       ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchKernel,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernel,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernelMultiDevice,
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
       ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamBeginCapture,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamBeginCapture_spt,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture,
@@ -1156,6 +1195,7 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiate,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithFlags,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphInstantiateWithParams,
+#endif
   };
 
   rocprofiler::configureCallbackTracingService<true>(
@@ -1164,7 +1204,8 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
       &RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback,
       nullptr);
 
-  // Mark the start and the end of graph launches using graphLaunchStack
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
+  // Mark the start and the end of graph launches using graphLaunchStack.
   rocprofiler::configureCallbackTracingService<true>(
       state->profilingContext, ROCPROFILER_CALLBACK_TRACING_HIP_GRAPH, nullptr,
       0, &RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback,
@@ -1184,6 +1225,7 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
             graphNodeCorrelationCallback,
         nullptr);
   }
+#endif
 
   // Marker tracing: always configure MARKER_CORE_API so we intercept roctx
   // calls that go through librocprofiler-sdk-roctx.so (TheRock/torch
