@@ -629,6 +629,53 @@ struct FPToSIOpConversion
   }
 };
 
+struct TanhApproxOpConversion
+    : ElementwiseOpConversionBase<triton::TanhApproxOp,
+                                  TanhApproxOpConversion> {
+  using Base = ElementwiseOpConversionBase<triton::TanhApproxOp,
+                                           TanhApproxOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(triton::TanhApproxOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    auto *ctx = rewriter.getContext();
+    Value input = operands[0][0];
+
+    if (elemTy.isF64()) {
+      Type funcType = getFunctionType(elemTy, operands[0]);
+      LLVM::LLVMFuncOp funcOp =
+          appendOrGetExternFuncOp(rewriter, op, "__nv_tanh", funcType);
+      return {LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0])
+                  .getResult()};
+    }
+
+    StringRef asmStr;
+    StringRef constraints;
+    if (elemTy.isF32()) {
+      asmStr = "tanh.approx.f32 $0, $1;";
+      constraints = "=f,f";
+    } else if (elemTy.isF16()) {
+      asmStr = "tanh.approx.f16 $0, $1;";
+      constraints = "=h,h";
+    } else if (elemTy.isBF16()) {
+      asmStr = "tanh.approx.bf16 $0, $1;";
+      constraints = "=h,h";
+    } else {
+      llvm::report_fatal_error("tanh_approx: unsupported element type");
+    }
+
+    auto asmOp = LLVM::InlineAsmOp::create(
+        rewriter, loc, elemTy, ValueRange{input}, asmStr, constraints, false,
+        false, LLVM::TailCallKind::None,
+        LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
+        ArrayAttr::get(ctx, {}));
+    return {asmOp.getRes()};
+  }
+};
+
 struct ExpOpConversionApprox
     : ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox> {
   using Base = ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox>;
@@ -842,6 +889,8 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
                                    computeCapability, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
+
+  patterns.add<TanhApproxOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and

@@ -1372,6 +1372,10 @@ void init_triton_ir(py::module &&m) {
               PropagateNan propagateNan) -> Value {
              return Value(self.create<ClampFOp>(input, min, max, propagateNan));
            })
+      .def("create_tanh_approx",
+           [](TritonOpBuilder &self, Value &input) -> Value {
+             return Value(self.create<TanhApproxOp>(input));
+           })
       .def("create_precise_sqrt",
            [](TritonOpBuilder &self, Value &input) -> Value {
              return Value(self.create<PreciseSqrtOp>(input));

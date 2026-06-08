@@ -142,6 +142,23 @@ def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
 // Math Ops
 //
 
+def TT_TanhApproxOp : TT_Op<"tanh_approx", [Elementwise,
+                                            SameOperandsAndResultType,
+                                            Pure]> {
+    let summary = "Approximate tanh for floating point types";
+
+    let description = [{
+        Fast approximate tanh using hardware tanh.approx instruction (PTX).
+        Lower precision but significantly faster than libdevice tanh.
+    }];
+
+    let arguments = (ins TT_FloatLike:$x);
+
+    let results = (outs TT_FloatLike:$result);
+
+    let assemblyFormat = "$x attr-dict `:` type($x)";
+}
+
 def TT_PreciseSqrtOp : TT_Op<"precise_sqrt", [Elementwise,
                                               SameOperandsAndResultType,
                                               Pure]> {

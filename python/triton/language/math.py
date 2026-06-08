@@ -92,6 +92,15 @@ def umulhi(x, y, _semantic=None):
 
 
 @core.builtin
+@_check_dtype(dtypes=["fp16", "bf16", "fp32"])
+@_add_math_1arg_docstr("approximate tanh (hardware tanh.approx instruction)")
+@core._tensor_member_fn
+def tanh_approx(x, _semantic=None):
+    x = _semantic.to_tensor(x)
+    return core.tensor(_semantic.builder.create_tanh_approx(x.handle), x.type)
+
+
+@core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("exponential")
 @core._tensor_member_fn
