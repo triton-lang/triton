@@ -256,6 +256,19 @@ def test_passing_tuple_with_constexpr(device):
     torch.testing.assert_close(x, expected_x, rtol=0, atol=0)
 
 
+def test_passing_tuple_with_mixed_constexpr_and_non_constexpr_values(device):
+
+    @triton.jit
+    def kernel(out_ptr, values):
+        tl.static_assert(values[1].type == tl.constexpr_type(3))
+        tl.store(out_ptr, tl.load(values[0]) + values[1])
+
+    x = torch.tensor([8], dtype=torch.int32, device=device)
+    out = torch.empty_like(x)
+    kernel[(1, )](out, (x, tl.constexpr(3)))
+    assert out.item() == 11
+
+
 @triton.jit
 def _nested_tuple_kernel(x):
     # This creates a new scope, which will force a copy of liveins. It's
