@@ -15,9 +15,13 @@ void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      PatternBenefit benefit,
                                      NVIDIA::TargetInfo &info);
 
+void createFenceMBarrierInitReleaseCluster(OpBuilder &builder, Location loc,
+                                           Value pred);
+
 void populateClusterOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
-                                      PatternBenefit benefit);
+                                      PatternBenefit benefit,
+                                      const NVIDIA::TargetInfo &targetInfo);
 
 void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            const TargetInfo &targetInfo,

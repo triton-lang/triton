@@ -1,6 +1,8 @@
 #include "AsyncUtility.h"
+#include "AtomicRMWOpsEmitter.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -13,6 +15,20 @@ using mlir::triton::amdgpu::ISAFamily;
 using ::mlir::triton::gpu::MemDescType;
 
 namespace {
+
+static LLVM::FenceOp createAMDGPUMemoryFence(OpBuilder &builder, Location loc,
+                                             LLVM::AtomicOrdering ordering,
+                                             StringRef synchronizeAddrSpace) {
+  auto fence =
+      LLVM::FenceOp::create(builder, loc, ordering, /*syncscope=*/"workgroup");
+  if (!synchronizeAddrSpace.empty()) {
+    Attribute mmra = builder.getAttr<LLVM::MMRATagAttr>("amdgpu-synchronize-as",
+                                                        synchronizeAddrSpace);
+    fence->setDiscardableAttr(LLVM::LLVMDialect::getMmraAttrName(), mmra);
+  }
+  return fence;
+}
+
 class TransLocalLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
 public:
@@ -226,6 +242,10 @@ private:
     assert(addrToOffset.getInDimSizeLog2(kAddr) >= 3 &&
            addrToOffset.getInDimSizeLog2(kAddr) <= 6);
 
+    // ds_read_tr* shuffles data across lanes so the lane issuing the load
+    // matches the kAddr decomposition of fullTile. Using addrToOffset's
+    // kAddr bases as the kLane bases of this layout lets us use laneId
+    // to get the LDS offset each lane should read.
     LinearLayout addrLayout =
         LinearLayout({{kLane, addrToOffset.getBases().lookup(kAddr)},
                       {kWarp, reps.getBases().lookup(kWarp)}},
@@ -251,6 +271,83 @@ private:
         if (partitionLayout.getBasis(kReg, pos, kPartition) != 0)
           return failure();
       }
+
+      // partitionLayout's kLane is the destination lane which is the lane that
+      // owns the loaded data in the destination tensor. The laneId is the
+      // source lane issuing the load. For ds_read_tr* the hardware shuffles
+      // data across lanes, so the two differ: we need to remap.
+      //
+      // Example: ds_load_tr8_b64 on gfx1250 (DoubleContiguity), from the test
+      // `ds_transpose_partitioned_uses_double_contiguity`.
+      //
+      //  fullTile:
+      //   - lane=1 -> (1, 0)
+      //     lane=2 -> (2, 0)
+      //     lane=4 -> (4, 0)
+      //     lane=8 -> (0, 4)
+      //     lane=16 -> (0, 16)
+      //   - register=1 -> (0, 1)
+      //     register=2 -> (0, 2)
+      //     register=4 -> (0, 8)
+      //   where out dims are: [offset (size 8), addr (size 32)]
+      //
+      // `addr` is the non-contiguous part of the source lane's access.
+      // `lane` in the inverse tile is the destination lane after the hardware
+      // transpose. `fullTile.invert().sublayout({kAddr}, {kLane})` gives:
+      //
+      //   - addr=1 -> (0)
+      //     addr=2 -> (0)
+      //     addr=4 -> (8)
+      //     addr=8 -> (0)
+      //     addr=16 -> (16)
+      //   where out dims are: [lane (size 32)]
+      //
+      // Then rename the input dimension from `addr` to `lane` so the map can
+      // compose with partitionLayout.
+      //
+      // For this test, partitionLayout would choose the partition from the
+      // destination-lane basis `lane=8`:
+      //
+      //   - register=1 -> (0)
+      //     ...
+      //     register=32 -> (0)
+      //   - lane=1 -> (0)
+      //     lane=2 -> (0)
+      //     lane=4 -> (0)
+      //     lane=8 -> (1)
+      //     lane=16 -> (0)
+      //   - warp=1 -> (0)
+      //     warp=2 -> (0)
+      //   where out dims are: [partition (size 2)]
+      //
+      // Querying this with the runtime source lane asks for the partition of
+      // the wrong lane. Composing with laneRemap rewrites the partition basis
+      // through the transpose:
+      //
+      //   - register=1 -> (0)
+      //     ...
+      //     register=32 -> (0)
+      //   - lane=1 -> (0)
+      //     lane=2 -> (0)
+      //     lane=4 -> (1)
+      //     lane=8 -> (0)
+      //     lane=16 -> (0)
+      //   - warp=1 -> (0)
+      //     warp=2 -> (0)
+      //   where out dims are: [partition (size 2)]
+      //
+      // Destination basis `lane=8` is reached from source basis `addr=4`, so
+      // each source lane selects the LDS base expected by its destination lane.
+
+      auto regIdentity = LinearLayout::identity1D(
+          partitionLayout.getInDimSize(kReg), kReg, kReg);
+      auto srcToDstLaneMap = fullTile.invert()
+                                 .sublayout({kAddr}, {kLane})
+                                 .renameInDim(kAddr, kLane);
+      auto warpIdentity = LinearLayout::identity1D(
+          partitionLayout.getInDimSize(kWarp), kWarp, kWarp);
+      auto laneRemap = regIdentity * srcToDstLaneMap * warpIdentity;
+      partitionLayout = laneRemap.compose(partitionLayout);
     }
 
     // Perform computation in bytes, LLVM optimises this better
@@ -526,6 +623,78 @@ private:
   const AMD::TargetInfo &targetInfo;
 };
 
+struct LocalAtomicScatterRMWOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalAtomicScatterRMWOp> {
+
+  LocalAtomicScatterRMWOpConversion(const LLVMTypeConverter &converter,
+                                    const AMD::TargetInfo &targetInfo,
+                                    PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::LocalAtomicScatterRMWOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    auto lowering = prepareLocalAtomicScatterRMW(
+        op, adaptor.getDst(), adaptor.getIndices(), adaptor.getValues(),
+        op.getMask() ? adaptor.getMask() : Value(), rewriter, targetInfo,
+        getTypeConverter());
+    if (failed(lowering))
+      return failure();
+    LocalAtomicScatterRMWInfo &info = *lowering;
+
+    auto binOp = matchAtomicOp(op.getAtomicRmwOp());
+    if (!binOp)
+      return rewriter.notifyMatchFailure(op, "Unsupported RMW operation");
+
+    // Lower to per-element llvm.atomicrmw on addrspace(3) with
+    // syncscope("workgroup") monotonic.
+    const auto memOrder = LLVM::AtomicOrdering::monotonic;
+    const StringRef scope = "workgroup";
+    LLVM::AMD::AtomicRMWEmitter emitter(targetInfo, *binOp, memOrder, scope);
+
+    bool returnOld = !op.getResult().use_empty();
+
+    SmallVector<Value> results;
+    if (returnOld)
+      results.reserve(info.ptrs.size());
+
+    for (auto [i, ptrAndValue] :
+         llvm::enumerate(llvm::zip(info.ptrs, info.values))) {
+      auto [ptr, value] = ptrAndValue;
+      Value rmwMask = triton::gpu::maybeAnd(
+          rewriter, loc, info.threadPred,
+          info.maskValues.empty() ? Value() : info.maskValues[i]);
+      // emitAtomicRMW requires a non-null predicate, default to true if null.
+      if (!rmwMask)
+        rmwMask = b.true_val();
+
+      Value old = emitter.emitAtomicRMW(rewriter, ptr, value, rmwMask,
+                                        /*sharedMemBase=*/std::nullopt,
+                                        /*enableIntraWaveReduce=*/false);
+      if (returnOld)
+        results.push_back(old);
+    }
+
+    if (!returnOld) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    if (!info.removeBroadcast.isIdentity())
+      results = broadcastAs(results, info.regLayout);
+    finalizeTensorAtomicResults(op, info.valuesTy, rewriter, results,
+                                info.llvmElemTy, b, info.threadPred, targetInfo,
+                                getTypeConverter());
+    return success();
+  }
+
+private:
+  const AMD::TargetInfo &targetInfo;
+};
+
 class BarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::BarrierOp> {
 public:
@@ -549,21 +718,27 @@ public:
                 triton::gpu::AddrSpace::TensorWrite;
     if ((op.getAddrSpace() & ~mask) != triton::gpu::AddrSpace::None)
       return failure();
-    // We can lower barrier to MemoryCounterWaitOp + s_barrier
-    // - MemoryCounterWaitOp specifies how many operations to
-    //   VMEM(Read)/VMEM(Write)/LDS can be outstanding when
-    //   the instruction completes.
-    // - s_barrier synchronizes the execution for the CTA
-    IntegerAttr zero = rewriter.getI32IntegerAttr(0);
     bool localBarrier = op.hasLocal();
     bool globalBarrier = op.hasGlobalRead() || op.hasGlobalWrite();
     if (localBarrier || globalBarrier) {
-      amdgpu::MemoryCounterWaitOp::create(
-          rewriter, op->getLoc(),
-          /* load= */ op.hasGlobalRead() ? zero : nullptr,
-          /* store= */ op.hasGlobalWrite() ? zero : nullptr,
-          /* ds= */ localBarrier ? zero : nullptr);
+      StringRef mmraAddrSpace = "";
+      if (localBarrier && !globalBarrier)
+        mmraAddrSpace = "local";
+      else if (!localBarrier && globalBarrier)
+        mmraAddrSpace = "global";
+
+      // Local/global barriers use LLVM fences so the AMDGPU memory legalizer
+      // selects target-specific waits. Mixed local+global barriers are left
+      // untagged so LLVM conservatively synchronizes every relevant space.
+      createAMDGPUMemoryFence(rewriter, op->getLoc(),
+                              LLVM::AtomicOrdering::release, mmraAddrSpace);
+      ROCDL::SBarrierOp::create(rewriter, op->getLoc());
+      createAMDGPUMemoryFence(rewriter, op->getLoc(),
+                              LLVM::AtomicOrdering::acquire, mmraAddrSpace);
+      rewriter.eraseOp(op);
+      return success();
     }
+
     rewriter.replaceOpWithNewOp<ROCDL::SBarrierOp>(op);
 
     return success();
@@ -703,6 +878,8 @@ void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
                                            transBenefit);
   patterns.add<LocalLoadPackedTransposedOpConversion>(typeConverter, targetInfo,
                                                       benefit);
+  patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
+                                                  benefit.getBenefit() + 1);
   patterns.add<BarrierOpConversion, MemoryCounterWaitOpConversion>(
       typeConverter, targetInfo, barrierBenefit);
 }

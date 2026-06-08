@@ -96,6 +96,8 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
 
 
 def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:
+    if grid_size == 0:
+        return 1
     device_props = torch.cuda.get_device_properties(0)
     n_sms = device_props.multi_processor_count
     split_k = n_sms // grid_size
@@ -134,6 +136,7 @@ def compute_num_stages(
     *,
     epilogue_subtile,
     occupancy_target,
+    w_transpose=False,
 ):
     if precision_config.max_num_imprecise_acc is not None:
         return 3
@@ -199,11 +202,11 @@ def compute_num_stages(
         smem_capacity -= epilogue_smem
         if x_transpose:
             smem_capacity -= int(block_m * block_k * act_size)
-
-    # Persistent fp32 kernels need extra smem headroom (metadata/barriers/TMA state)
-    # that is not fully captured by the simple stage_size model above.
-    if is_persistent and (lhs_dtype == FP32 or rhs_dtype == FP32):
-        smem_capacity -= 32 * 1024
+        if rhs_dtype == FP32 and not w_transpose:
+            # For fp32 B, a non-transposed input requires a transpose after its
+            # TMA load before MMA. Persistent lowering materializes one extra
+            # BLOCK_K x BLOCK_N tile for that conversion.
+            smem_capacity -= int(block_k * block_n * weight_size)
     if is_persistent and not has_native_mxfp and epilogue_reduction_n > 1:
         # Hopper fused reductions materialize an additional reduced-N output
         # tile in smem.
@@ -219,9 +222,6 @@ def compute_num_stages(
         # exceed H100's launch limit.
         max_stages = 4
     num_stages = min(smem_capacity // int(stage_size), max_stages)
-    # Keep one stage of headroom for persistent fp32 to avoid launch-time OOR.
-    if is_persistent and (lhs_dtype == FP32 or rhs_dtype == FP32):
-        num_stages = min(num_stages, 3)
     if num_stages == 0:
         num_stages = 1
     return num_stages

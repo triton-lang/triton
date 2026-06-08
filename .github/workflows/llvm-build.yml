@@ -3,16 +3,18 @@ name: LLVM Build
 on:
   push:
     branches:
-      - llvm-head
+      - main
     paths:
-      - cmake/llvm-hash.txt
+      - cmake/llvm-build-info.json
   pull_request:
     paths:
       - .github/workflows/llvm-build.yml
+      - cmake/llvm-build-info.json
   workflow_dispatch:
 
 env:
   SCCACHE_DIR: ${{ github.workspace }}/sccache
+  LLVM_DISTRIBUTION_COMPONENTS: "llvm-headers;llvm-libraries;cmake-exports;mlir-headers;mlir-libraries;mlir-cmake-exports;lld-headers;lld-libraries;lld-cmake-exports;clang;clang-resource-headers;FileCheck;not;split-file;llc;opt;llvm-config;mlir-tblgen;mlir-translate"
 
 permissions:
   contents: read
@@ -44,20 +46,42 @@ jobs:
       with:
         path: llvm-build
 
-    - name: Fetch LLVM Commit Hash
+    - name: Install System Prerequisites (AlmaLinux)
+      if: matrix.config.target-os == 'almalinux'
+      run: |
+        rpm --import https://packages.microsoft.com/keys/microsoft.asc
+        dnf install --assumeyes https://packages.microsoft.com/config/rhel/8/packages-microsoft-prod.rpm
+        dnf install --assumeyes azure-cli llvm-toolset-20.1.8 python38-pip python38-devel git jq tar gzip
+        alternatives --set python3 /usr/bin/python3.8
+        echo "extra_cmake_flags=-DCMAKE_ASM_COMPILER=clang -DCMAKE_CXX_FLAGS=-Wno-everything -DPython3_EXECUTABLE=/usr/bin/python3.8 -DPython_EXECUTABLE=/usr/bin/python3.8" >> "$GITHUB_ENV"
+
+    - name: Fetch LLVM Build Metadata
       shell: bash
       run: |
-        LLVM_COMMIT_HASH="$(cat llvm-build/cmake/llvm-hash.txt)"
+        LLVM_COMMIT_HASH="$(jq -r '.llvm_hash' llvm-build/cmake/llvm-build-info.json)"
         echo "Found LLVM commit hash: ${LLVM_COMMIT_HASH}"
         echo "llvm_commit_hash=${LLVM_COMMIT_HASH}" >> ${GITHUB_ENV}
+
+        LLVM_BUILD_NUMBER="$(jq -r '.build_number' llvm-build/cmake/llvm-build-info.json)"
+        echo "Found LLVM build number: ${LLVM_BUILD_NUMBER}"
 
         SHORT_LLVM_COMMIT_HASH="${LLVM_COMMIT_HASH:0:8}"
         echo "Short LLVM commit hash: ${SHORT_LLVM_COMMIT_HASH}"
         echo "short_llvm_commit_hash=${SHORT_LLVM_COMMIT_HASH}" >> ${GITHUB_ENV}
 
-        INSTALL_DIR="llvm-${SHORT_LLVM_COMMIT_HASH}-${{ matrix.config.target-os }}-${{ matrix.config.arch }}"
+        INSTALL_DIR="llvm-${SHORT_LLVM_COMMIT_HASH}-${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${LLVM_BUILD_NUMBER}"
         echo "LLVM installation directory name: ${INSTALL_DIR}"
         echo "llvm_install_dir=${INSTALL_DIR}" >> ${GITHUB_ENV}
+
+    - name: Check LLVM Build Does Not Exist
+      shell: bash
+      run: |
+        URL="https://oaitriton.blob.core.windows.net/public/llvm-builds/${{ env.llvm_install_dir }}.tar.gz"
+        HTTP_STATUS="$(curl --head --silent --show-error --output /dev/null --write-out "%{http_code}" "${URL}")"
+        if [ "${HTTP_STATUS}" != "404" ]; then
+          echo "LLVM build already exists or could not be checked: ${URL} returned ${HTTP_STATUS}"
+          exit 1
+        fi
 
     - name: Checkout LLVM
       uses: actions/checkout@v6
@@ -77,15 +101,6 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1.13.0
       with:
         arch: amd64
-
-    - name: Install System Prerequisites (AlmaLinux)
-      if: matrix.config.target-os == 'almalinux'
-      run: |
-        rpm --import https://packages.microsoft.com/keys/microsoft.asc
-        dnf install --assumeyes https://packages.microsoft.com/config/rhel/8/packages-microsoft-prod.rpm
-        dnf install --assumeyes azure-cli llvm-toolset python38-pip python38-devel git tar gzip
-        alternatives --set python3 /usr/bin/python3.8
-        echo "extra_cmake_flags=-DCMAKE_ASM_COMPILER=clang -DCMAKE_CXX_FLAGS=-Wno-everything -DPython3_EXECUTABLE=/usr/bin/python3.8 -DPython_EXECUTABLE=/usr/bin/python3.8" >> "$GITHUB_ENV"
 
     - name: Install Prerequisites
       shell: bash
@@ -126,13 +141,14 @@ jobs:
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
         -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld;clang"
+        -DLLVM_DISTRIBUTION_COMPONENTS="${{ env.LLVM_DISTRIBUTION_COMPONENTS }}"
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_ZSTD=OFF
         $extra_cmake_flags
         llvm-project/llvm
 
-        ninja -C llvm-project/build check-mlir install
+        ninja -C llvm-project/build check-mlir install-distribution
 
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
@@ -148,13 +164,14 @@ jobs:
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
         -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld;clang"
+        -DLLVM_DISTRIBUTION_COMPONENTS="${{ env.LLVM_DISTRIBUTION_COMPONENTS }}"
         -DLLVM_ENABLE_DIA_SDK=OFF
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_ZSTD=OFF
         llvm-project/llvm
 
-        ninja -C llvm-project/build check-mlir install
+        ninja -C llvm-project/build check-mlir install-distribution
 
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
@@ -164,10 +181,10 @@ jobs:
       with:
         name: llvm-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
         path: |
-          ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}.tar.gz
+          ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}-*.tar.gz
 
     - name: Azure login
-      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'main' }}
       uses: azure/login@v2
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID_LLVM }}
@@ -175,16 +192,18 @@ jobs:
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_LLVM }}
 
     - name: Upload LLVM Artifacts to Azure
-      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'main' }}
       shell: bash -el {0}
       run: |
-        az storage blob upload --account-name oaitriton --auth-mode login --container-name public --file "${{ env.llvm_install_dir }}.tar.gz" --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz" --overwrite
+        sha256sum "${{ env.llvm_install_dir }}.tar.gz"
+
+        az storage blob upload --account-name oaitriton --auth-mode login --container-name public --file "${{ env.llvm_install_dir }}.tar.gz" --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz"
 
         URL=$(az storage blob url --account-name oaitriton --auth-mode login --container-name public --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz")
         echo "Blob URL: ${URL}"
 
     - name: Azure Logout
-      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'main' }}
       run: |
         az logout
         az cache purge

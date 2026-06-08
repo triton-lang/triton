@@ -376,6 +376,8 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
         fp32_tensor = tensor.to(torch.float32)
 
     logical_quant_dim = tensor.shape[-1] * (2 if tensor.dtype == torch.uint8 else 1)
+    if logical_quant_dim == 0:
+        return fp32_tensor.to(target_dtype).transpose(axis, tensor.ndim - 1).contiguous()
     if scale.dtype == torch.uint8:
         dq_scale = (scale.to(torch.int32) << 23).view(torch.float32)
         scale_block_size = MXFP_BLOCK_SIZE.value

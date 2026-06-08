@@ -203,11 +203,26 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
   auto shapePerCTA = getShapePerCTA(shared, shape);
   auto kOffset = S("offset");
   if (shared.getSwizzlingByteWidth() == 0) {
+    SmallVector<int64_t> maybeTransposedTmaShape(tmaShape.begin(),
+                                                 tmaShape.end());
+    if (shared.getTransposed()) {
+      std::rotate(maybeTransposedTmaShape.begin(),
+                  maybeTransposedTmaShape.begin() + 1,
+                  maybeTransposedTmaShape.end());
+    }
     auto outDimNames = standardOutDimNames(ctx, rank);
-    LinearLayout layout = LinearLayout::identity1D(tmaShape[rank - 1], kOffset,
-                                                   outDimNames[rank - 1]);
+    LinearLayout layout = LinearLayout::identity1D(
+        maybeTransposedTmaShape[rank - 1], kOffset, outDimNames[rank - 1]);
     for (int i = rank - 2; i >= 0; --i) {
-      layout *= LinearLayout::identity1D(tmaShape[i], kOffset, outDimNames[i]);
+      layout *= LinearLayout::identity1D(maybeTransposedTmaShape[i], kOffset,
+                                         outDimNames[i]);
+    }
+    if (shared.getTransposed()) {
+      SmallVector<int> order = {rank - 1};
+      for (int i = 0; i < rank - 1; i++) {
+        order.push_back(i);
+      }
+      layout = transposeLinearLayout(layout, order);
     }
     layout = ensureLayoutNotSmallerThan(layout, outDimNames, shapePerCTA);
     return combineCtaCgaWithShape(layout, shared.getCGALayout(), shape);

@@ -14,6 +14,8 @@ import torch
 # Torch tests
 # ------------------------------------------------------------
 
+ZERO_SIZED_SHAPES = [(0, 64), (64, 0), (2, 0), (0, 2), (0, 64, 64)]
+
 
 @pytest.mark.parametrize("shape", [(16, 32), (16, 64), (32, 32), (32, 64), (64, 128), (128, 128)])
 @pytest.mark.parametrize("trans", [False, True])
@@ -33,6 +35,33 @@ def test_mxfp4_value_roundtrip(shape, trans, mx_axis, mma_version):
     assert (res == x).all()
 
 
+@pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("mma_version", [2, 3])
+@pytest.mark.parametrize("device", ["cpu", "meta"])
+def test_mxfp4_value_zero_sized_roundtrip(shape, mx_axis, mma_version, device):
+    x = torch.empty(shape, dtype=torch.uint8, device=device)
+    src = wrap_torch_tensor(x, dtype=FP4)
+    layout = HopperMXValueLayout(mx_axis=mx_axis, mma_version=mma_version)
+
+    swizzled = convert_layout(src, layout)
+    roundtrip = convert_layout(swizzled, src.storage.layout)
+
+    assert roundtrip.storage.data.shape == x.shape
+
+
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+def test_mxfp4_value_convert_layout_roundtrip(mx_axis):
+    x = torch.randint(0, 256, (64, 64), dtype=torch.uint8)
+    src = wrap_torch_tensor(x, dtype=FP4)
+    layout = HopperMXValueLayout(mx_axis=mx_axis, mma_version=3)
+
+    swizzled = convert_layout(src, layout)
+    roundtrip = convert_layout(swizzled, src.storage.layout)
+
+    assert torch.equal(roundtrip.storage.data, x)
+
+
 @pytest.mark.parametrize("mx_axis", [0, 1])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("shape", [(256, 64), (256, 128), (256, 256)])
@@ -44,18 +73,12 @@ def test_mxfp4_scale_roundtrip(shape, mx_axis, num_warps):
     assert (res[:shape[0], :shape[1]] == x).all()
 
 
-@pytest.mark.parametrize(
-    ("shape", "mx_axis"),
-    [
-        ((0, 64), -2),
-        ((64, 0), -1),
-        ((2, 0), -2),
-        ((0, 2), -1),
-    ],
-)
+@pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)
+@pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("num_warps", [4, 8])
-def test_mxfp4_scale_zero_sized_roundtrip(shape, mx_axis, num_warps):
-    x = torch.empty(shape, dtype=torch.uint8)
+@pytest.mark.parametrize("device", ["cpu", "meta"])
+def test_mxfp4_scale_zero_sized_roundtrip(shape, mx_axis, num_warps, device):
+    x = torch.empty(shape, dtype=torch.uint8, device=device)
     src = wrap_torch_tensor(x)
     layout = HopperMXScaleLayout(mx_axis=mx_axis, num_warps=num_warps)
 

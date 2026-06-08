@@ -17,6 +17,8 @@ from triton_kernels.numerics_details.mxfp import (
 )
 from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile
 from triton_kernels.target_info import is_cuda
+from triton_kernels.tensor import convert_layout, wrap_torch_tensor
+from triton_kernels.tensor_details.layout import StridedLayout
 from triton_kernels.testing import assert_close, assert_equal
 
 
@@ -203,6 +205,21 @@ def test_mxfp_quant_dequant(src_dtype, dst_dtype, device):
     assert_equal(weight, dequant)
 
 
+def test_downcast_to_mxfp_accepts_pitched_strided_input(device):
+    torch.manual_seed(0)
+    dense = torch.randn((64, 128), device=device, dtype=torch.bfloat16)
+    pitched = torch.empty_strided(dense.shape, (256, 1), device=device, dtype=dense.dtype)
+    pitched.copy_(dense)
+
+    tensor = convert_layout(wrap_torch_tensor(pitched), StridedLayout(-1))
+    quant, scale = downcast_to_mxfp(tensor, torch.uint8, axis=-1)
+    expected_quant, expected_scale = downcast_to_mxfp(dense, torch.uint8, axis=-1)
+
+    assert tensor.storage.data.stride() == (256, 1)
+    assert_equal(expected_quant, quant)
+    assert_equal(expected_scale, scale)
+
+
 # fmt: off
 @pytest.mark.parametrize(
     "shape, axis, quant_dtype, rounding_mode, scale_dtype, microblock_size",
@@ -212,6 +229,7 @@ def test_mxfp_quant_dequant(src_dtype, dst_dtype, device):
         ((3, 4096, 0), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
         ((10, 0, 1024), 2, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP, torch.uint8, MXFP_BLOCK_SIZE.value),
         ((0, 0, 1024), 2, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((3, 1024, 0), 2, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP, torch.float8_e4m3fn, NVFP_BLOCK_SIZE.value),
 
         ((3, 4096, 1024), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP, torch.uint8, MXFP_BLOCK_SIZE.value),
         ((32, 254, 60), 0, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),

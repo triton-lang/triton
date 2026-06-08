@@ -72,7 +72,7 @@ def do_setup_and_execute(target_args):
 def run_profiling(args, target_args):
     backend = args.backend if args.backend else _select_backend()
 
-    start(args.name, context=args.context, data=args.data, backend=backend, hook=args.hook)
+    start(args.name, context=args.context, data=args.data, backend=backend, mode=args.mode, hook=args.hook)
 
     exitcode = do_setup_and_execute(target_args)
 

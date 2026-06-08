@@ -1146,6 +1146,24 @@ tt.func @select_same_value_constancy() {
 
 // -----
 
+// Regression: SelectOp must clamp divisibility when condConstancy reduces the
+// output contiguity below either input's contiguity. Otherwise the helper
+// getDivisibilityFromContiguity overestimates divisibility because it does not
+// see condConstancy. See issue triton-lang/triton#10067.
+tt.func @select_cond_constancy_clamps_divisibility(%arg0: tensor<8xi1>) {
+  // expected-remark @below {{contiguity = [8], divisibility = [8], constancy = [1], constant_value = <none>}}
+  %lhs = tt.make_range {end = 16 : i32, start = 8 : i32} : tensor<8xi32>
+  // expected-remark @below {{contiguity = [8], divisibility = [16], constancy = [1], constant_value = <none>}}
+  %rhs = tt.make_range {end = 24 : i32, start = 16 : i32} : tensor<8xi32>
+  // %arg0 has unknown contents, so condConstancy = 1. Output contiguity must
+  // collapse to gcd(8, 8, 1) = 1; divisibility must clamp to 1 (not gcd(8, 16) = 8).
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %sel = arith.select %arg0, %lhs, %rhs : tensor<8xi1>, tensor<8xi32>
+  tt.return
+}
+
+// -----
+
 tt.func @cmp_after_max_constancy() {
   %c5 = arith.constant dense<5> : tensor<4xi32>
   %c7 = arith.constant dense<7> : tensor<4xi32>

@@ -315,7 +315,7 @@ def tl_scatter_tensor_descriptor(desc, value, x_offsets, y_offset):
     )
     x_offsets = ttgl.convert_layout(x_offsets, x_offsets_layout)
     tma_blackwell.async_scatter(desc, x_offsets, y_offset, alloc)
-    tma.store_wait(0)
+    tma.store_wait(0, read_only=False)
 
 
 # ---- NVIDIA obj dispatch ----

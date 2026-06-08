@@ -144,6 +144,64 @@ def test_local_store_transposed_cga_to_non_transposed_alloc():
 
 
 @gluon.jit
+def async_shared_store_kernel(out, BLOCK: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])
+
+    offsets = ttgl.arange(0, BLOCK, layout=layout)
+    values = offsets.to(ttgl.int32)
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [BLOCK], shared_layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, smem.nbytes_per_cta)
+    hopper.async_store(smem, values, bar)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+    result = smem.load(layout)
+    mbarrier.invalidate(bar)
+    ttgl.store(out + offsets, result)
+
+
+@gluon.jit
+def async_shared_store_f16_kernel(out, BLOCK: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0], cga_layout=[[0]])
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])
+
+    offsets = ttgl.arange(0, BLOCK, layout=layout)
+    values = offsets.to(ttgl.float16)
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [BLOCK], shared_layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, smem.nbytes_per_cta)
+    hopper.async_store(smem, values, bar)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+    result = smem.load(layout)
+    mbarrier.invalidate(bar)
+    ttgl.store(out + offsets, result)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_async_shared_store():
+    block = 128
+    out = torch.empty((block, ), device="cuda", dtype=torch.int32)
+
+    compiled = async_shared_store_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
+
+    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes" in compiled.asm["ptx"]
+    torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.int32))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_async_shared_store_packed_f16():
+    block = 256
+    out = torch.empty((block, ), device="cuda", dtype=torch.float16)
+
+    compiled = async_shared_store_f16_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
+
+    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32" in compiled.asm["ptx"]
+    torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.float16))
+
+
+@gluon.jit
 def tma_kernel(desc):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
     value = ttgl.full(desc.block_shape, 0, desc.dtype, layout)
@@ -844,6 +902,65 @@ def test_warpgroup_mma(ASYNC):
     ref = torch.matmul(a, b)
 
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tcgen05_mma_two_ctas_transposed_lhs_shared_layout():
+    torch.manual_seed(0)
+    BLOCK_M, N, K = 64, 128, 256
+    M = 2 * BLOCK_M
+    warps = [4, 1]
+    cga_layout_a = ((1, 0), )
+    cga_layout_b = ((0, 1), )
+    cga_layout_c = ((1, 0), )
+
+    block_layout_a = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[0, 1],
+                                        cga_layout=cga_layout_a)
+    block_layout_b = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
+                                        cga_layout=cga_layout_b)
+    shared_layout_a = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=128,
+        transposed=True,
+        element_bitwidth=16,
+        rank=2,
+        cga_layout=cga_layout_a,
+    )
+    shared_layout_b = ttgl.NVMMASharedLayout.get_default_for([K, N], ttgl.float16, cga_layout=cga_layout_b)
+    acc_layout = TensorMemoryLayout(
+        block=(BLOCK_M, N),
+        col_stride=1,
+        cga_layout=cga_layout_c,
+        two_ctas=True,
+    )
+
+    device = triton.runtime.driver.active.get_current_device()
+    a = torch.randn((M, K), device=device, dtype=torch.float16)
+    b = torch.randn((K, N), device=device, dtype=torch.float16)
+    out = torch.empty((M, N), device=device, dtype=torch.float32)
+
+    compiled = mma_kernel[(1, )](
+        a,
+        b,
+        out,
+        M,
+        N,
+        K,
+        block_layout_a,
+        block_layout_b,
+        cga_layout_c,
+        acc_layout,
+        shared_layout_a,
+        shared_layout_b,
+        ttgl.float32,
+        False,
+        True,
+        num_warps=warps[0] * warps[1],
+        num_ctas=2,
+    )
+
+    assert "tcgen05.mma.cta_group::2" in compiled.asm["ptx"]
+    ref = torch.matmul(a.to(out.dtype), b.to(out.dtype))
+    torch.testing.assert_close(out, ref, atol=5e-2, rtol=5e-1)
 
 
 @gluon.jit
@@ -2882,9 +2999,6 @@ def _shared_atomic_scatter_rmw_cases():
 )
 def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_dtype, use_constant_values, N, M, axis,
                                    rhs_shape):
-    if is_hip_cdna() or is_hip_rdna():
-        pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
-
     device = torch.device("cuda")
     rhs_n, rhs_m = rhs_shape
 
@@ -2975,9 +3089,6 @@ def shared_atomic_scatter_rmw_broadcast_kernel(
 
 
 def test_shared_atomic_scatter_rmw_broadcast():
-    if is_hip_cdna() or is_hip_rdna():
-        pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
-
     device = torch.device("cuda")
     N, M = 16, 32
     values = torch.arange(N, dtype=torch.float32, device=device) + 1.0
