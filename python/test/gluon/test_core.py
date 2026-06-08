@@ -2999,9 +2999,6 @@ def _shared_atomic_scatter_rmw_cases():
 )
 def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_dtype, use_constant_values, N, M, axis,
                                    rhs_shape):
-    if is_hip_cdna() or is_hip_rdna():
-        pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
-
     device = torch.device("cuda")
     rhs_n, rhs_m = rhs_shape
 
@@ -3092,9 +3089,6 @@ def shared_atomic_scatter_rmw_broadcast_kernel(
 
 
 def test_shared_atomic_scatter_rmw_broadcast():
-    if is_hip_cdna() or is_hip_rdna():
-        pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
-
     device = torch.device("cuda")
     N, M = 16, 32
     values = torch.arange(N, dtype=torch.float32, device=device) + 1.0

@@ -278,6 +278,12 @@ SmallVector<int64_t> getAllocationShapePerCTA(Type type);
 
 unsigned getNumCTAs(Attribute layout);
 
+// Returns the MMAv2 warp distribution for a matrix tile. This does not apply
+// dot-chain policy and may oversubscribe tiles with fewer instruction
+// repetitions than warps.
+SmallVector<unsigned> getMmaV2WarpsPerCTA(ArrayRef<int64_t> shape,
+                                          int numWarps);
+
 // Return the order that represents that the batch is in row-major or
 // column-major order for a batch of matrices of shape [*, m, n] with
 // len(shape) == rank.

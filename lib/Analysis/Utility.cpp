@@ -1242,6 +1242,12 @@ bool supportMMA(triton::DotOp op, int version) {
   return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }
 
+bool supportMMA(triton::DotOpInterface op, int version) {
+  if (auto dotOp = dyn_cast<triton::DotOp>(op.getOperation()))
+    return supportMMA(dotOp, version);
+  return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
+}
+
 bool supportMMA(Value value, int version) {
   // Tell whether a DotOp support MMA by the operand type(either $a or $b).
   // We cannot get both the operand types(in TypeConverter), here we assume the

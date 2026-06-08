@@ -345,6 +345,36 @@ TEST_F(SwizzleTest, Test16x16Bf16BlockedMma) {
   EXPECT_EQ(w, 0);
 }
 
+TEST_F(BankConflictTest, F64MmaV2BSharedLayout) {
+  using mlir::triton::gpu::DotOperandEncodingAttr;
+  using mlir::triton::gpu::SwizzledSharedEncodingAttr;
+
+  SmallVector<int64_t> shape = {4, 16};
+  auto src = blocked(/*spt=*/{1, 1}, /*tpw=*/{2, 16}, /*wpcta=*/{4, 1},
+                     /*order=*/{1, 0});
+  auto mmaV2 = mma({2, 0}, {4, 1}, {8, 8});
+  auto dst = DotOperandEncodingAttr::get(&ctx, /*opIdx=*/1, mmaV2,
+                                         /*kWidth=*/1);
+  auto cta = mlir::triton::gpu::CGAEncodingAttr::get1CTALayout(&ctx, 2);
+  auto shared = SwizzledSharedEncodingAttr::get(
+      &ctx, dst, shape, /*order=*/{1, 0}, cta, /*typeWidthInBit=*/64);
+  EXPECT_EQ(shared.getVec(), 4);
+  EXPECT_EQ(shared.getPerPhase(), 1);
+  EXPECT_EQ(shared.getMaxPhase(), 4);
+  EXPECT_EQ(computeConflicts(shape, src, shared, /*bitwidth=*/64), 0);
+  EXPECT_EQ(computeConflicts(shape, dst, shared, /*bitwidth=*/64), 0);
+
+  auto srcLL =
+      actionRemoveBroadcastedRegs(toLL(shape, src)).apply(toLL(shape, src));
+  auto dstLL =
+      actionRemoveBroadcastedRegs(toLL(shape, dst)).apply(toLL(shape, dst));
+  auto optimal = optimalSwizzlingLdSt(srcLL, dstLL, /*bitwidth=*/64);
+  auto [readConflicts, writeConflicts] =
+      bankConflictsLdSt(srcLL, dstLL, optimal, /*bitwidth=*/64);
+  EXPECT_EQ(readConflicts, 0);
+  EXPECT_EQ(writeConflicts, 0);
+}
+
 TEST_F(SwizzleTest, Test16x256U4Mma) {
   // 16×256 u4 MMA
   LinearLayout blocked(

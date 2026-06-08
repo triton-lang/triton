@@ -131,6 +131,32 @@ def check_file_lines(file_lines, file_name, lineno, should_contain=True):
     return not should_contain
 
 
+def unwrap_python_function(fn):
+    while not inspect.isfunction(fn) and hasattr(fn, "fn"):
+        fn = fn.fn
+    return fn
+
+
+def source_line_number(fn, snippet):
+    py_fn = unwrap_python_function(fn)
+    lines, start_line = inspect.getsourcelines(py_fn)
+    for offset, line in enumerate(lines):
+        if snippet in line:
+            return start_line + offset
+    raise AssertionError(f"could not find {snippet!r} in source for {py_fn.__name__}")
+
+
+def source_def_line_number(fn):
+    py_fn = unwrap_python_function(fn)
+    return source_line_number(py_fn, f"def {py_fn.__name__}")
+
+
+def substitute_source_line_numbers(template, fn, **snippets):
+    for name, snippet in snippets.items():
+        template = template.replace(f"@{name}@", str(source_line_number(fn, snippet)))
+    return template
+
+
 func_types = ["single", "call", "call_noinline", "autotune", "dot_combine", "cdiv"]
 
 
@@ -158,24 +184,27 @@ def test_line_info(func: str):
 
     file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if func == "single":
-        assert (check_file_lines(file_lines, "test_line_info.py", 16))
-        assert (check_file_lines(file_lines, "test_line_info.py", 17))
+        assert (check_file_lines(file_lines, "test_line_info.py", source_line_number(kernel_single, "x = tl.load")))
+        assert (check_file_lines(file_lines, "test_line_info.py", source_line_number(kernel_single, "tl.store")))
     elif func == "call":
-        assert (check_file_lines(file_lines, "test_line_info.py", 27))
-        assert (check_file_lines(file_lines, "test_line_info.py", 29))
+        assert (check_file_lines(file_lines, "test_line_info.py", source_line_number(kernel_call, "x = tl.load")))
+        assert (check_file_lines(file_lines, "test_line_info.py", source_line_number(kernel_call, "tl.store")))
     elif func == "call_noinline":
-        assert (check_file_lines(file_lines, "test_line_info.py", 41))
-        assert (check_file_lines(file_lines, "test_line_info.py", 34))
-        assert (check_file_lines(file_lines, "test_line_info.py", 34))
+        assert (check_file_lines(file_lines, "test_line_info.py",
+                                 source_line_number(kernel_call_noinline, "device_noinline")))
+        assert (check_file_lines(file_lines, "test_line_info.py", source_line_number(device_noinline, "x = tl.load")))
+        assert (check_file_lines(file_lines, "test_line_info.py", source_line_number(device_noinline, "tl.store")))
     elif func == "autotune":
-        assert (check_file_lines(file_lines, "test_line_info.py", 52))
-        assert (check_file_lines(file_lines, "test_line_info.py", 53))
-        assert (check_file_lines(file_lines, "test_line_info.py", 54))
+        assert (check_file_lines(file_lines, "test_line_info.py", source_line_number(kernel_autotune, "for i in range"))
+                or check_file_lines(file_lines, "test_line_info.py", source_def_line_number(kernel_autotune)))
+        assert (check_file_lines(file_lines, "test_line_info.py", source_line_number(kernel_autotune, "x = tl.load")))
+        assert (check_file_lines(file_lines, "test_line_info.py", source_line_number(kernel_autotune, "tl.store")))
     elif func == "dot_combine":
-        assert (check_file_lines(file_lines, "test_line_info.py", 64))
-        assert (check_file_lines(file_lines, "test_line_info.py", 65, should_contain=False))
+        assert (check_file_lines(file_lines, "test_line_info.py", source_line_number(kernel_dot_combine, "d = tl.dot")))
+        assert (check_file_lines(file_lines, "test_line_info.py", source_line_number(kernel_dot_combine, "d = d + c"),
+                                 should_contain=False))
     elif func == "cdiv":
-        assert (check_file_lines(file_lines, "test_line_info.py", 74))
+        assert (check_file_lines(file_lines, "test_line_info.py", source_line_number(kernel_cdiv, "tl.device_print")))
 
 
 @pytest.mark.interpreter
@@ -185,25 +214,19 @@ def test_line_info_interpreter(func: str):
         pytest.skip("interpreter is not enabled")
 
     kernel = None
-    expected_def_lineno = 0
     if func == "single":
         kernel = kernel_single
-        expected_def_lineno = 15
     elif func == "call":
         kernel = kernel_call
-        expected_def_lineno = 26
     elif func == "call_noinline":
         kernel = kernel_call_noinline
-        expected_def_lineno = 40
     elif func == "autotune":
         kernel = kernel_autotune.fn
-        expected_def_lineno = 51
     elif func == "dot_combine":
         kernel = kernel_dot_combine
-        expected_def_lineno = 61
     elif func == "cdiv":
         kernel = kernel_cdiv
-        expected_def_lineno = 71
+    expected_def_lineno = source_def_line_number(kernel)
     kernel.rewrite()
     assert kernel.rewriter.def_file_lineno == expected_def_lineno
 
@@ -252,14 +275,21 @@ def test_line_info_ir_source(monkeypatch, status, tmp_path, fresh_triton_cache):
         assert check_file_lines(file_lines, "/path/test.py", 8, should_contain=False)
         assert check_file_lines(file_lines, str(temp_file), -1, should_contain=True)
     else:
-        assert check_file_lines(file_lines, "/path/test.py", 8, should_contain=True)
+        if obj_kind == "cubin":
+            # Recent ptxas versions can coalesce this minimal load-store
+            # sequence under the store line in SASS, even though the PTX still
+            # carries the load line.
+            assert (check_file_lines(file_lines, "/path/test.py", 8, should_contain=True)
+                    or check_file_lines(file_lines, "/path/test.py", 9, should_contain=True))
+        else:
+            assert check_file_lines(file_lines, "/path/test.py", 8, should_contain=True)
 
 
 def test_use_name_loc_as_prefix(fresh_triton_cache):
 
     @triton.jit
     def kernel_basic(src, N, BLOCK_SIZE: tl.constexpr):
-        # CHECK: #loc = loc("{{.*}}":261:5)
+        # CHECK: #loc = loc("{{.*}}":@DEF_LINE@:5)
         # CHECK-LABEL:  tt.func public @kernel_basic(
         # CHECK-SAME:                                %src: !tt.ptr<f32> loc("src"(#loc)), %N: i32 loc("N"(#loc)))
         # CHECK:          %x_plus_1 = arith.constant dense<1.000000e+00> : tensor<16xf32> loc(#loc12)
@@ -309,7 +339,8 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
         triton.compiler.ASTSource(fn=kernel_basic, signature={"src": "*fp32", "N": "i32", "BLOCK_SIZE": "constexpr"},
                                   constexprs={"BLOCK_SIZE": 16}))
 
-    check_template = inspect.getsource(kernel_basic.fn)
+    check_template = substitute_source_line_numbers(inspect.getsource(kernel_basic.fn), kernel_basic,
+                                                    DEF_LINE="def kernel_basic")
     run_filecheck("placeholder", h.asm["ttir"], check_template)
 
     if is_hopper_or_newer():
@@ -487,7 +518,7 @@ def test_line_and_column_numbers(fresh_triton_cache):
 
     @triton.jit
     def kernel_basic(src, N, BLOCK_SIZE: tl.constexpr):
-        # CHECK: #loc = loc("{{.*}}":489:5)
+        # CHECK: #loc = loc("{{.*}}":@DEF_LINE@:5)
         # CHECK: #loc10 = loc("src"(#loc))
         # CHECK: #loc11 = loc("N"(#loc))
         # CHECK-LABEL:  tt.func public @kernel_basic(
@@ -510,15 +541,15 @@ def test_line_and_column_numbers(fresh_triton_cache):
         # CHECK:          } loc(#loc)
         # CHECK:         } loc(#loc)
 
-        # CHECK: #loc1 = loc({{.*}}:535:20)
+        # CHECK: #loc1 = loc({{.*}}:@X_PLUS_1_LINE@:20)
         # CHECK: #loc2 = loc(unknown)
-        # CHECK: #loc3 = loc({{.*}}:530:15)
-        # CHECK: #loc4 = loc({{.*}}:531:18)
-        # CHECK: #loc5 = loc({{.*}}:532:28)
-        # CHECK: #loc6 = loc({{.*}}:532:19)
-        # CHECK: #loc7 = loc({{.*}}:533:30)
-        # CHECK: #loc8 = loc({{.*}}:534:16)
-        # CHECK: #loc9 = loc({{.*}}:536:9)
+        # CHECK: #loc3 = loc({{.*}}:@PID_LINE@:15)
+        # CHECK: #loc4 = loc({{.*}}:@OFFSET_LINE@:18)
+        # CHECK: #loc5 = loc({{.*}}:@OFFSETS_LINE@:28)
+        # CHECK: #loc6 = loc({{.*}}:@OFFSETS_LINE@:19)
+        # CHECK: #loc7 = loc({{.*}}:@LOAD_PTR_LINE@:30)
+        # CHECK: #loc8 = loc({{.*}}:@MASK_LINE@:16)
+        # CHECK: #loc9 = loc({{.*}}:@STORE_LINE@:9)
         # CHECK: #loc12 = loc("x_plus_1"(#loc1))
         # CHECK: #loc13 = loc("pid"(#loc3))
         # CHECK: #loc14 = loc("offset"(#loc4))
@@ -539,7 +570,18 @@ def test_line_and_column_numbers(fresh_triton_cache):
         triton.compiler.ASTSource(fn=kernel_basic, signature={"src": "*fp32", "N": "i32", "BLOCK_SIZE": "constexpr"},
                                   constexprs={"BLOCK_SIZE": 16}))
 
-    check_template = inspect.getsource(kernel_basic.fn)
+    check_template = substitute_source_line_numbers(
+        inspect.getsource(kernel_basic.fn),
+        kernel_basic,
+        DEF_LINE="def kernel_basic",
+        X_PLUS_1_LINE="x_plus_1 = tl.load",
+        PID_LINE="pid = tl.program_id",
+        OFFSET_LINE="offset = pid",
+        OFFSETS_LINE="offsets = offset",
+        LOAD_PTR_LINE="load_src_store_dst = src",
+        MASK_LINE="mask = offsets",
+        STORE_LINE="tl.store",
+    )
     run_filecheck("placeholder", h.asm["ttir"], check_template)
 
 

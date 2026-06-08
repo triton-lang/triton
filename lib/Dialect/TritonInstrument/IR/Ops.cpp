@@ -16,6 +16,30 @@ namespace instrument {
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
+LogicalResult DotI8Op::verify() {
+  auto aEnc =
+      dyn_cast<ttg::DotOperandEncodingAttr>(getA().getType().getEncoding());
+  auto bEnc =
+      dyn_cast<ttg::DotOperandEncodingAttr>(getB().getType().getEncoding());
+  if (!aEnc || !bEnc)
+    return emitError("requires dot operand encodings for A and B");
+
+  auto aMma = dyn_cast<ttg::NvidiaMmaEncodingAttr>(aEnc.getParent());
+  auto bMma = dyn_cast<ttg::NvidiaMmaEncodingAttr>(bEnc.getParent());
+  auto dMma =
+      dyn_cast<ttg::NvidiaMmaEncodingAttr>(getD().getType().getEncoding());
+  if (!aMma || !bMma || !dMma || aMma.getVersionMajor() != 2 ||
+      bMma.getVersionMajor() != 2 || dMma.getVersionMajor() != 2)
+    return emitError("requires NVIDIA MMAv2 operand and result layouts");
+  if (aMma != bMma || aMma != dMma)
+    return emitError("requires matching NVIDIA MMAv2 layouts");
+
+  auto layoutInterface =
+      cast<tt::DialectInferLayoutInterface>(&dMma.getDialect());
+  return layoutInterface->verifyDotOpEncodingCompatibility(getOperation(), aEnc,
+                                                           bEnc);
+}
+
 template <typename ViewOp, typename FPSanOp>
 struct PushFPSanThroughViewPattern : public OpRewritePattern<ViewOp> {
   using OpRewritePattern<ViewOp>::OpRewritePattern;
