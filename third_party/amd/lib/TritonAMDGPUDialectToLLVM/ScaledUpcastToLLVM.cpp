@@ -80,14 +80,14 @@ struct ScaledUpcastFp4OpPattern
         SmallVector<Value> v8vals =
             upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec, isaFamily);
 
-        // The bf16 scale was left-shifted by 7 (scaleTo16); shift by 16 more
-        // to get f32.
-        Value scaleBf16 = scaleVals[i * 2];
-        Value scaleF32 = b.bitcast(
-            b.shl(b.zext(i32_ty, b.bitcast(scaleBf16, i16_ty)), b.i32_val(16)),
-            f32_ty);
-
         for (int j : llvm::seq(8)) {
+          // The bf16 scale was left-shifted by 7 (scaleTo16); shift by 16 more
+          // to get f32.
+          Value scaleBf16 = scaleVals[i * 2 + j];
+          Value scaleF32 =
+              b.bitcast(b.shl(b.zext(i32_ty, b.bitcast(scaleBf16, i16_ty)),
+                              b.i32_val(16)),
+                        f32_ty);
           Value vF32;
           if (toFp16) {
             vF32 = b.fpext(f32_ty, v8vals[j]);
@@ -188,14 +188,14 @@ struct ScaledUpcastFp8OpPattern
       bool isE4M3FN = isa<Float8E4M3FNType>(fp8ElemType);
       bool toFp16 = elemType.isF16();
       for (size_t i = 0; i < inputVals.size(); i += 4) {
-        // The bf16 scale was left-shifted by 7 (scaleTo16); shift by 16 more
-        // to get f32.
-        Value scaleBf16 = scaleVals[i];
-        Value scaleF32 = b.bitcast(
-            b.shl(b.zext(i32_ty, b.bitcast(scaleBf16, i16_ty)), b.i32_val(16)),
-            f32_ty);
-
         for (int j : llvm::seq(4)) {
+          // The bf16 scale was left-shifted by 7 (scaleTo16); shift by 16 more
+          // to get f32.
+          Value scaleBf16 = scaleVals[i + j];
+          Value scaleF32 =
+              b.bitcast(b.shl(b.zext(i32_ty, b.bitcast(scaleBf16, i16_ty)),
+                              b.i32_val(16)),
+                        f32_ty);
           Value f32Val =
               convertF8ToF32_SW(rewriter, loc, inputVals[i + j], isE4M3FN);
           Value mulF32 = b.fmul(f32Val, scaleF32);
