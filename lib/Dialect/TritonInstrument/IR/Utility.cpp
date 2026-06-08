@@ -330,7 +330,8 @@ Value expandOuterSlicedDim(OpBuilder &b, Location loc, Value tensor) {
     newShape.insert(newShape.begin() + dim, 1);
     auto newType = RankedTensorType::get(newShape, type.getElementType(),
                                          sliceEncoding.getParent());
-    tensor = ExpandDimsOp::create(b, loc, newType, tensor, dim);
+    tensor = ReshapeOp::create(b, loc, newShape, tensor);
+    tensor = ConvertLayoutOp::create(b, loc, newType, tensor);
   }
   return tensor;
 }

@@ -147,8 +147,18 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             isinstance(layout, (AutoLayout, CoalescedLayout)) or layout.dim == axis,
             lambda: f"expected expand_dims input layout to be sliced in axis {axis} but got {layout.dim}")
 
+        if isinstance(layout, SliceLayout):
+            ret_ty = ttgl.distributed_type(input.type.scalar, dst_shape, layout.parent)
+            ret_ty_ir = ret_ty.to_ir(self.builder)
+            if self.builder.is_reshape_layout_valid(ret_ty_ir, input.handle):
+                handle = self.builder.create_expand_dims(input.handle, axis, ret_ty_ir)
+                return self.tensor(handle, ret_ty)
+
         handle = self.builder.create_expand_dims(input.handle, axis)
-        return self._wrap_handle_infer_layout(handle, input.type.scalar, dst_shape)
+        value = self._wrap_handle_infer_layout(handle, input.type.scalar, dst_shape)
+        if isinstance(layout, SliceLayout):
+            value = self.convert_layout(value, layout.parent)
+        return value
 
     def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
         a, b = self.broadcast_impl_value(a, b)

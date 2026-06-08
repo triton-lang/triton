@@ -50,8 +50,7 @@ void addPushFPSanThroughViewPatterns(RewritePatternSet &patterns,
   patterns.add<PushFPSanThroughViewPattern<ttg::ConvertLayoutOp, FPSanOp>,
                PushFPSanThroughViewPattern<tt::TransOp, FPSanOp>,
                PushFPSanThroughViewPattern<tt::ReshapeOp, FPSanOp>,
-               PushFPSanThroughViewPattern<tt::BroadcastOp, FPSanOp>,
-               PushFPSanThroughViewPattern<tt::ExpandDimsOp, FPSanOp>>(context);
+               PushFPSanThroughViewPattern<tt::BroadcastOp, FPSanOp>>(context);
 }
 
 void ExperimentalFPSanEmbedOp::getCanonicalizationPatterns(
