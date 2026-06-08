@@ -952,6 +952,15 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
     return failure();
   }
 
+  // reshape(expand_dims(x)) -> x
+  if (auto expandDims = dyn_cast<ExpandDimsOp>(definingOp)) {
+    if (!op.getAllowReorder() &&
+        op.getType() == expandDims.getSrc().getType()) {
+      rewriter.replaceOp(op, expandDims.getSrc());
+      return success();
+    }
+  }
+
   // reshape(reshape) -> reshape
   if (auto parentReshape = dyn_cast<ReshapeOp>(definingOp)) {
     // Allow reorder if either reshape allowed it
