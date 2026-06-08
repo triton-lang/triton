@@ -842,14 +842,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
-  if (record.kind != ROCPROFILER_CALLBACK_TRACING_HIP_GRAPH)
-    return;
-
   auto *payload = static_cast<rocprofiler_callback_tracing_hip_graph_data_t *>(
       record.payload);
-  if (!payload)
-    return;
-
   auto *impl = static_cast<RocprofSDKProfilerPimpl *>(arg);
   auto graphExec = reinterpret_cast<hipGraphExec_t>(
       const_cast<void *>(payload->graph_exec_value.ptr));
@@ -857,30 +851,23 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
 
   if (record.operation ==
       ROCPROFILER_HIP_GRAPH_OPERATION_HIP_GRAPH_EXEC_CREATE) {
-    if (impl && graphExec && graphExecId != 0) {
-      impl->graphExecToGraphExecId[graphExec] = graphExecId;
-      tryBindGraphExecState(impl, graphExec);
-    }
+    impl->graphExecToGraphExecId[graphExec] = graphExecId;
+    tryBindGraphExecState(impl, graphExec);
     return;
   }
 
   if (record.operation ==
       ROCPROFILER_HIP_GRAPH_OPERATION_HIP_GRAPH_EXEC_DESTROY) {
-    if (impl && graphExec) {
-      impl->graphExecToGraph.erase(graphExec);
-      impl->graphExecToGraphExecId.erase(graphExec);
-    }
+    impl->graphExecToGraph.erase(graphExec);
+    impl->graphExecToGraphExecId.erase(graphExec);
     return;
   }
-
-  if (record.operation != ROCPROFILER_HIP_GRAPH_OPERATION_HIP_GRAPH_LAUNCH)
-    return;
 
   if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
     auto externId = currentGraphLaunchExternId;
     if (externId == Scope::DummyScopeId && !threadState.scopeStack.empty())
       externId = threadState.scopeStack.back().scopeId;
-    if (impl && graphExecId != 0 && impl->graphStates.contain(graphExecId) &&
+    if (impl->graphStates.contain(graphExecId) &&
         externId != Scope::DummyScopeId && !threadState.dataToEntry.empty()) {
       auto &graphState = impl->graphStates[graphExecId];
       auto &profiler = threadState.profiler;
@@ -893,8 +880,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
     }
     graphLaunchStack.push_back(
         ActiveGraphLaunch{externId, graphExecId, /*nextNodeId=*/0});
-  } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_EXIT &&
-             !graphLaunchStack.empty()) {
+  } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_EXIT) {
     graphLaunchStack.pop_back();
   }
 }
