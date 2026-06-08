@@ -327,12 +327,6 @@ extractStreamId(rocprofiler_tracing_operation_t op,
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernel:
     stream = payload->args.hipModuleLaunchCooperativeKernel.stream;
     break;
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch:
-    stream = payload->args.hipGraphLaunch.stream;
-    break;
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch_spt:
-    stream = payload->args.hipGraphLaunch_spt.stream;
-    break;
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipExtLaunchMultiKernelMultiDevice: {
     const auto *p =
         payload->args.hipExtLaunchMultiKernelMultiDevice.launchParamsList;
@@ -374,19 +368,12 @@ bool isKernelLaunchOperation(rocprofiler_tracing_operation_t op) {
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchCooperativeKernelMultiDevice:
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipLaunchKernel:
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchKernel:
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch:
-  case ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch_spt:
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernel:
   case ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernelMultiDevice:
     return true;
   default:
     return false;
   }
-}
-
-bool isGraphLaunchOperation(rocprofiler_tracing_operation_t op) {
-  return op == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch ||
-         op == ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch_spt;
 }
 
 bool isStreamCaptureBeginOperation(rocprofiler_tracing_operation_t op) {
@@ -702,7 +689,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleStreamCaptureBegin() {
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleCapturedKernelEnter(
     rocprofiler_tracing_operation_t operation) {
-  if (!threadState.isStreamCapturing || isGraphLaunchOperation(operation))
+  if (!threadState.isStreamCapturing)
     return;
   auto &profiler = threadState.profiler;
   if (profiler.isOpInProgress()) {
@@ -733,7 +720,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeEnter(
       resolvedName ? std::string(resolvedName) : std::string();
   threadState.enterOp(Scope(kernelName));
   auto &dataToEntry = threadState.dataToEntry;
-  if (threadState.isStreamCapturing && !isGraphLaunchOperation(operation)) {
+  if (threadState.isStreamCapturing) {
     handleCapturedKernelEnter(operation);
     return;
   }
@@ -804,7 +791,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleKernelExit(
     return;
 
   auto &profiler = threadState.profiler;
-  if (threadState.isStreamCapturing && !isGraphLaunchOperation(operation)) {
+  if (threadState.isStreamCapturing) {
     threadState.exitOp();
     return;
   }
@@ -872,24 +859,30 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
   }
 
   if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
+    threadState.enterOp(Scope(""));
     auto externId = threadState.scopeStack.empty()
                         ? Scope::DummyScopeId
                         : threadState.scopeStack.back().scopeId;
+    auto &profiler = threadState.profiler;
+    auto &dataToEntry = threadState.dataToEntry;
+    size_t numNodes = 1;
     if (impl->graphStates.contain(graphExecId) &&
-        externId != Scope::DummyScopeId && !threadState.dataToEntry.empty()) {
+        externId != Scope::DummyScopeId && !dataToEntry.empty()) {
       auto &graphState = impl->graphStates[graphExecId];
-      auto &profiler = threadState.profiler;
-      buildGraphNodeEntries(threadState.dataToEntry, graphState,
+      numNodes = graphState.nodeIdToState.size();
+      buildGraphNodeEntries(dataToEntry, graphState,
                             profiler.correlation.externIdToState, externId);
-      profiler.correlation.externIdToState.withWrite(
-          externId, [&](RocprofSDKProfiler::ExternIdState &state) {
-            state.numNodes = graphState.nodeIdToState.size();
-          });
+    }
+    if (externId != Scope::DummyScopeId && !dataToEntry.empty()) {
+      auto &scope = threadState.scopeStack.back();
+      profiler.correlation.correlate(record.correlation_id.internal, externId,
+                                     numNodes, scope.name.empty(), dataToEntry);
     }
     graphLaunchStack.push_back(
         ActiveGraphLaunch{externId, graphExecId, /*nextNodeId=*/0});
   } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_EXIT) {
     graphLaunchStack.pop_back();
+    threadState.exitOp();
   }
 }
 
@@ -911,6 +904,7 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::externalCorrelationCallback(
   }
   if (externId == Scope::DummyScopeId)
     return 0;
+  threadState.profiler.correlation.submit(internalCorrelationId);
   if (!threadState.dataToEntry.empty()) {
     auto &profiler = threadState.profiler;
     auto isMissingName = threadState.scopeStack.empty()
@@ -1048,14 +1042,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
             record->correlation_id.external.ptr);
         uint64_t streamId =
             static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
-        impl->corrIdToStreamId.withRead(
-            record->correlation_id.internal,
-            [&](const uint64_t &sid) { streamId = sid; });
         if (processGraphKernelRecord(correlation.externIdToState, dataPhases,
                                      kernelName, record, *graphCorrelation,
                                      streamId)) {
           correlation.corrIdToExternId.erase(record->correlation_id.internal);
-          impl->corrIdToStreamId.erase(record->correlation_id.internal);
         }
         delete graphCorrelation;
         record->correlation_id.external.value = 0;
@@ -1120,8 +1110,6 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
       ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchKernel,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernel,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipModuleLaunchCooperativeKernelMultiDevice,
-      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch,
-      ROCPROFILER_HIP_RUNTIME_API_ID_hipGraphLaunch_spt,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamBeginCapture,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamBeginCapture_spt,
       ROCPROFILER_HIP_RUNTIME_API_ID_hipStreamEndCapture,
