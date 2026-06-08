@@ -44,6 +44,9 @@ public:
     auto srcLayout = srcType.getEncoding();
     auto accTMemEncoding = dyn_cast<TensorMemoryEncodingAttr>(
         tcGen5MMAOp.getD().getType().getEncoding());
+    if (!accTMemEncoding)
+      return failure();
+    auto dstPerCTA = ttg::getShapePerCTA(tcGen5MMAOp.getD().getType());
     auto cgaLayout = triton::gpu::getCGALayout(srcLayout);
     // TMem encoding for A operand is the same as for D (Acc), but packed for
     // bitwidth=16
@@ -63,6 +66,14 @@ public:
         lhs.getType().getShape(), lhs.getType().getElementType(), aTMemEncoding,
         tensorMemorySpace,
         /*mutableMemory=*/false);
+    if (getTmemAllocSizes(lhsMemDescType).numRows == 64 &&
+        accTMemEncoding.getBlockN() < dstPerCTA[1]) {
+      // For 64-row TMEM LHS allocations, the LHS and accumulator slices need
+      // to stay on the same row. When blockN is smaller than the result N dim,
+      // the MMA is split across N and later accumulator slices no longer share
+      // rows with the fixed LHS allocation.
+      return failure();
+    }
     bool layoutTmemCompatible =
         isDistributedLayoutTMemCompatible(tcGen5MMAOp, srcType, lhsMemDescType);
     Attribute newLayout = srcLayout;
