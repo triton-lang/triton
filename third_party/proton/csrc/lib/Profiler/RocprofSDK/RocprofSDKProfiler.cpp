@@ -16,6 +16,7 @@
 #include "rocprofiler-sdk/agent.h"
 #include "rocprofiler-sdk/buffer_tracing.h"
 #include "rocprofiler-sdk/callback_tracing.h"
+#include "rocprofiler-sdk/external_correlation.h"
 #include "rocprofiler-sdk/hip/api_args.h"
 #include "rocprofiler-sdk/hip/runtime_api_id.h"
 #include "rocprofiler-sdk/marker/api_id.h"
@@ -53,11 +54,19 @@ constexpr const char *UnknownKernelName = "<unknown>";
 
 struct RocprofSDKProfilerPimpl;
 
-struct GraphLaunchCorrelation {
+struct GraphDispatchCorrelation {
   size_t externId{Scope::DummyScopeId};
+  uint64_t graphExecId{};
+  uint64_t graphNodeId{};
+};
+
+struct ActiveGraphLaunch {
+  size_t externId{Scope::DummyScopeId};
+  uint64_t graphExecId{};
   uint64_t nextNodeId{};
 };
 
+thread_local std::vector<ActiveGraphLaunch> graphLaunchStack;
 thread_local GraphState streamCaptureGraphState;
 
 // ---- SDK runtime state (singleton, outlives any profiler instance) ----
@@ -501,7 +510,8 @@ bool processGraphKernelRecord(
     std::map<Data *, std::pair<size_t, size_t>> &dataPhases,
     const std::string &kernelName,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record,
-    size_t externId, uint64_t graphNodeId, uint64_t streamId) {
+    const GraphDispatchCorrelation &graphCorrelation, uint64_t streamId) {
+  auto externId = graphCorrelation.externId;
   if (externId == Scope::DummyScopeId)
     return false;
   auto externStateRef = externIdToState.find(externId);
@@ -511,7 +521,7 @@ bool processGraphKernelRecord(
   auto *nodeIdToState = externState.nodeIdToState;
   bool handledByGraphState = false;
   if (nodeIdToState) {
-    auto nodeStateIt = nodeIdToState->find(graphNodeId);
+    auto nodeStateIt = nodeIdToState->find(graphCorrelation.graphNodeId);
     if (nodeStateIt != nodeIdToState->end()) {
       handledByGraphState = true;
       const auto &nodeState = nodeStateIt->second;
@@ -603,6 +613,11 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
                              rocprofiler_user_data_t *userData, void *arg);
   static void hipGraphCallback(rocprofiler_callback_tracing_record_t record,
                                rocprofiler_user_data_t *userData, void *arg);
+  static int externalCorrelationCallback(
+      rocprofiler_thread_id_t threadId, rocprofiler_context_id_t contextId,
+      rocprofiler_external_correlation_id_request_kind_t kind,
+      rocprofiler_tracing_operation_t operation, uint64_t internalCorrelationId,
+      rocprofiler_user_data_t *externalCorrelationId, void *userData);
   static void roctxCallback(uint32_t operationId, void *data);
   static void codeObjectCallback(rocprofiler_callback_tracing_record_t record,
                                  rocprofiler_user_data_t *userData, void *arg);
@@ -656,9 +671,8 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
 
   ThreadSafeMap<uint64_t, GraphState> graphStates;
 
-  ThreadSafeMap<uint64_t, GraphLaunchCorrelation,
-                std::unordered_map<uint64_t, GraphLaunchCorrelation>>
-      graphLaunchCorrIdToCorrelation;
+  ThreadSafeMap<size_t, uint64_t, std::unordered_map<size_t, uint64_t>>
+      graphExternIdToCorrId;
 };
 
 void tryBindGraphExecState(RocprofSDKProfiler::RocprofSDKProfilerPimpl *impl,
@@ -733,6 +747,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleGraphLaunchEnter(
                  "Please start profiling before the graph is captured."
               << std::endl;
   }
+  impl->graphExternIdToCorrId[threadState.scopeStack.back().scopeId] =
+      record.correlation_id.internal;
 }
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeEnter(
@@ -913,9 +929,48 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
             state.numNodes = graphState.nodeIdToState.size();
           });
     }
-    impl->graphLaunchCorrIdToCorrelation[record.correlation_id.internal] =
-        GraphLaunchCorrelation{externId, /*nextNodeId=*/0};
+    graphLaunchStack.push_back(
+        ActiveGraphLaunch{externId, graphExecId, /*nextNodeId=*/0});
+  } else if (record.phase == ROCPROFILER_CALLBACK_PHASE_EXIT) {
+    graphLaunchStack.pop_back();
   }
+}
+
+int RocprofSDKProfiler::RocprofSDKProfilerPimpl::externalCorrelationCallback(
+    rocprofiler_thread_id_t threadId, rocprofiler_context_id_t contextId,
+    rocprofiler_external_correlation_id_request_kind_t kind,
+    rocprofiler_tracing_operation_t operation, uint64_t internalCorrelationId,
+    rocprofiler_user_data_t *externalCorrelationId, void *userData) {
+  externalCorrelationId->value = 0;
+  if (kind != ROCPROFILER_EXTERNAL_CORRELATION_REQUEST_KERNEL_DISPATCH)
+    return 0;
+  if (graphLaunchStack.empty())
+    return 0;
+
+  auto &graphLaunch = graphLaunchStack.back();
+  auto externId = graphLaunch.externId;
+  if (externId == Scope::DummyScopeId && !threadState.scopeStack.empty()) {
+    externId = threadState.scopeStack.back().scopeId;
+  }
+  if (externId == Scope::DummyScopeId)
+    return 0;
+  if (!threadState.dataToEntry.empty()) {
+    auto &profiler = threadState.profiler;
+    auto isMissingName = threadState.scopeStack.empty()
+                             ? true
+                             : threadState.scopeStack.back().name.empty();
+    profiler.correlation.externIdToState.upsert(
+        externId, [&](RocprofSDKProfiler::ExternIdState &state) {
+          if (!state.dataToEntry.empty())
+            return;
+          state.numNodes = 1;
+          state.dataToEntry = threadState.dataToEntry;
+          state.isMissingName = isMissingName;
+        });
+  }
+  externalCorrelationId->ptr = new GraphDispatchCorrelation{
+      externId, graphLaunch.graphExecId, graphLaunch.nextNodeId++};
+  return 0;
 }
 
 // ---- ROCTx marker callback via rocprofiler-sdk ----
@@ -1031,20 +1086,24 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
       maxCorrelationId =
           std::max(maxCorrelationId, record->correlation_id.internal);
       auto kernelName = impl->getKernelName(record->dispatch_info.kernel_id);
-      auto graphCorrelationRef = impl->graphLaunchCorrIdToCorrelation.find(
-          record->correlation_id.internal);
-      if (graphCorrelationRef) {
-        auto &graphCorrelation = graphCorrelationRef->get();
-        auto graphNodeId = graphCorrelation.nextNodeId++;
+      if (record->correlation_id.external.ptr != nullptr) {
+        auto *graphCorrelation = static_cast<GraphDispatchCorrelation *>(
+            record->correlation_id.external.ptr);
         uint64_t streamId =
             static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
-        if (processGraphKernelRecord(
-                correlation.externIdToState, dataPhases, kernelName, record,
-                graphCorrelation.externId, graphNodeId, streamId)) {
-          correlation.corrIdToExternId.erase(record->correlation_id.internal);
-          impl->graphLaunchCorrIdToCorrelation.erase(
-              record->correlation_id.internal);
+        if (processGraphKernelRecord(correlation.externIdToState, dataPhases,
+                                     kernelName, record, *graphCorrelation,
+                                     streamId)) {
+          uint64_t graphLaunchCorrId = 0;
+          if (impl->graphExternIdToCorrId.withRead(
+                  graphCorrelation->externId,
+                  [&](const uint64_t &value) { graphLaunchCorrId = value; })) {
+            correlation.corrIdToExternId.erase(graphLaunchCorrId);
+            impl->graphExternIdToCorrId.erase(graphCorrelation->externId);
+          }
         }
+        delete graphCorrelation;
+        record->correlation_id.external.value = 0;
         continue;
       }
       uint64_t streamId =
@@ -1127,6 +1186,19 @@ int protonToolInit(rocprofiler_client_finalize_t finiFunc, void *toolData) {
       state->profilingContext, ROCPROFILER_CALLBACK_TRACING_HIP_GRAPH, nullptr,
       0, &RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback,
       static_cast<void *>(state->pimpl));
+
+  {
+    constexpr rocprofiler_external_correlation_id_request_kind_t
+        kExternalCorrelationKinds[] = {
+            ROCPROFILER_EXTERNAL_CORRELATION_REQUEST_KERNEL_DISPATCH,
+        };
+    rocprofiler::configureExternalCorrelationIdRequestService<true>(
+        state->profilingContext, kExternalCorrelationKinds,
+        std::size(kExternalCorrelationKinds),
+        &RocprofSDKProfiler::RocprofSDKProfilerPimpl::
+            externalCorrelationCallback,
+        nullptr);
+  }
 
   // Marker tracing: always configure MARKER_CORE_API so we intercept roctx
   // calls that go through librocprofiler-sdk-roctx.so (TheRock/torch
