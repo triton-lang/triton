@@ -787,10 +787,17 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   dstPtr = b.gep(sharedPtrTy, elementType, dstPtr, dstOffset);
 
   // Update tensor shapes based on offset
+  Value zero = b.i32_val(0);
   for (size_t i = 0; i < numDims; ++i) {
-    auto diff = b.sub(tensorShape[i], offset[i]);
-    Value inBounds = b.icmp_ule(diff, tensorShape[i]);
-    tensorShape[i] = b.select(inBounds, diff, b.i32_val(0));
+    // Clamp in this specific way to avoid suboptimal codegen by LLVM.
+    // In some cases, LLVM InstCombine match and fold patterns into instructions
+    // that only have VALU target instructions. Thus extra v_readfirstlane_b32
+    // instructions are emitted to copy the value to sgpr after VALU
+    // instructions.
+    Value diff = b.sub(tensorShape[i], offset[i]);
+    Value clamped = b.smax(diff, zero);
+    Value isNeg = b.icmp_slt(offset[i], zero);
+    tensorShape[i] = b.select(isNeg, zero, clamped);
   }
 
   // TDM store does not support padding in general. However, if the padding
@@ -964,7 +971,18 @@ void fillTDMDescriptorForGatherScatter(
 
   // Adjust column tensor shape for OOB handling - subtract column offset to
   // get remaining elements.
-  tensorShape[1] = b.smax(b.i32_val(0), b.sub(tensorShape[1], globalColOffset));
+  {
+    // Clamp in this specific way to avoid suboptimal codegen by LLVM.
+    // In some cases, LLVM InstCombine match and fold patterns into instructions
+    // that only have VALU target instructions. Thus extra v_readfirstlane_b32
+    // instructions are emitted to copy the value to sgpr after VALU
+    // instructions.
+    Value zero = b.i32_val(0);
+    Value diff = b.sub(tensorShape[1], globalColOffset);
+    Value clamped = b.smax(diff, zero);
+    Value isNeg = b.icmp_slt(globalColOffset, zero);
+    tensorShape[1] = b.select(isNeg, zero, clamped);
+  }
 
   // For scatter with padding (store-from-LDS): clamp tensor_dim0 to the
   // original column width so OOB checking drops padding elements before they
