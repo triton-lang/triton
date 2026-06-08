@@ -766,6 +766,12 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleSuccessfulRuntimeExit(
       graphExecPtr = payload->args.hipGraphInstantiateWithParams.pGraphExec;
     }
     if (graphExecPtr && *graphExecPtr) {
+      // rocprofiler-sdk fires HIP_GRAPH_EXEC_CREATE after the real
+      // hipGraphInstantiate* succeeds and before the HIP runtime API EXIT
+      // callback returns. Therefore graphExecToGraphExecId should already
+      // contain this graphExec here; this callback supplies the missing
+      // graphExec -> graph link so captured GraphState can be bound to the
+      // SDK graph_exec_id.
       impl->graphExecToGraph[*graphExecPtr] = graph;
       tryBindGraphExecState(impl, *graphExecPtr);
     }
@@ -847,6 +853,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
 
   if (record.operation ==
       ROCPROFILER_HIP_GRAPH_OPERATION_HIP_GRAPH_EXEC_CREATE) {
+    // Fired by rocprofiler-sdk's hipGraphInstantiate* wrapper after the real
+    // API succeeds. It provides graphExec -> graph_exec_id; the HIP runtime
+    // instantiate EXIT callback provides graphExec -> graph and completes the
+    // binding.
     impl->graphExecToGraphExecId[graphExec] = graphExecId;
     return;
   }
