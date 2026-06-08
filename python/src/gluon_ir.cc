@@ -627,6 +627,28 @@ void init_gluon_ir(py::module &&m) {
              auto dstTy = cast<RankedTensorType>(resultTy);
              return isConvertLayoutTrivial(dstTy, value);
            })
+      .def("is_reshape_layout_valid",
+           [](GluonOpBuilder &self, Type resultTy, Value value) -> bool {
+             auto srcTy = cast<RankedTensorType>(value.getType());
+             auto dstTy = cast<RankedTensorType>(resultTy);
+             auto srcEnc = srcTy.getEncoding();
+             auto dstEnc = dstTy.getEncoding();
+             if (!!srcEnc != !!dstEnc)
+               return false;
+             if (!srcEnc)
+               return true;
+
+             auto inferredDstEnc = dstEnc;
+             auto *layoutInterface =
+                 cast<tt::DialectInferLayoutInterface>(&srcEnc.getDialect());
+             if (failed(layoutInterface->inferReshapeOpEncoding(
+                     srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc,
+                     /*allowReorder=*/false, std::nullopt))) {
+               return false;
+             }
+             return succeeded(layoutInterface->verifyLayoutsAreEqual(
+                 dstTy.getShape(), inferredDstEnc, dstEnc, std::nullopt));
+           })
       .def("create_histogram",
            [](GluonOpBuilder &self, Value operand, int numBins,
               std::optional<Value> mask, Attribute layout) -> Value {
