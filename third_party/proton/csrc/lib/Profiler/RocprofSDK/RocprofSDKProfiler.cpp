@@ -1086,10 +1086,14 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
             record->correlation_id.external.ptr);
         uint64_t streamId =
             static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
+        impl->corrIdToStreamId.withRead(
+            record->correlation_id.internal,
+            [&](const uint64_t &sid) { streamId = sid; });
         if (processGraphKernelRecord(correlation.externIdToState, dataPhases,
                                      kernelName, record, *graphCorrelation,
                                      streamId)) {
           correlation.corrIdToExternId.erase(record->correlation_id.internal);
+          impl->corrIdToStreamId.erase(record->correlation_id.internal);
         }
         delete graphCorrelation;
         record->correlation_id.external.value = 0;
