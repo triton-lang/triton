@@ -687,7 +687,6 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
 
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value zero = b.i32_val(0);
 
   Type globalPtrTy = ptr_ty(ctx, 1);
   Type sharedPtrTy = ptr_ty(ctx, 3);
@@ -788,6 +787,7 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   dstPtr = b.gep(sharedPtrTy, elementType, dstPtr, dstOffset);
 
   // Update tensor shapes based on offset
+  Value zero = b.i32_val(0);
   for (size_t i = 0; i < numDims; ++i) {
     // Clamp in this specific way to avoid suboptimal codegen by LLVM.
     // In some cases, LLVM InstCombine match and fold patterns into instructions
@@ -977,6 +977,7 @@ void fillTDMDescriptorForGatherScatter(
     // that only have VALU target instructions. Thus extra v_readfirstlane_b32
     // instructions are emitted to copy the value to sgpr after VALU
     // instructions.
+    Value zero = b.i32_val(0);
     Value diff = b.sub(tensorShape[1], globalColOffset);
     Value clamped = b.smax(diff, zero);
     Value isNeg = b.icmp_slt(globalColOffset, zero);
