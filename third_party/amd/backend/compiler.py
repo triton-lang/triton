@@ -33,6 +33,10 @@ def is_async_copy_enabled(arch):
     return (arch in ["gfx950", "gfx1250"]) if knobs.amd.use_async_copy is None else knobs.amd.use_async_copy
 
 
+def is_expert_sched_supported(arch):
+    return arch in ["gfx1250"]
+
+
 def is_fpsan_supported(arch):
     return arch in ["gfx942", "gfx950", "gfx1250"]
 
@@ -437,6 +441,7 @@ class HIPBackend(BaseBackend):
         if not kernel_fn:
             raise RuntimeError("Could not find kernel function")
         kernel_fn.set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
+
         cluster_dim = metadata["num_ctas"]
         kernel_fn.add_fn_attr("amdgpu-cluster-dims", f"{cluster_dim},1,1")
         # warp-specialization mutates num_warps
@@ -456,8 +461,13 @@ class HIPBackend(BaseBackend):
         # Specifying N, N forces LLVM to focus on a single register count, simplifies some heuristics
         # and may improve scheduling.
         kernel_fn.add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}, {options.waves_per_eu}")
+
+        if is_expert_sched_supported(options.arch) and options.num_warps <= 4:
+            kernel_fn.add_fn_attr("amdgpu-sched-strategy", "coexec")
+
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         kernel_fn.add_fn_attr("denormal-fp-math-f32", denormal_mode)
+
         if knobs.compilation.enable_asan:
             kernel_fn.add_fn_target_feature("+xnack")
             kernel_fn.add_fn_asan_attr()
@@ -471,7 +481,7 @@ class HIPBackend(BaseBackend):
         #
         # TODO(tyb0807): Disabled when using MIR swap/dump because the value is
         # not serializable to/from MIR YAML
-        if options.arch != "gfx1250" and not (knobs.amd.swap_mir or knobs.amd.dump_mir):
+        if not (knobs.amd.swap_mir or knobs.amd.dump_mir):
             amd.set_all_fn_arg_inreg(kernel_fn)
 
         if knobs.compilation.enable_asan:
@@ -526,6 +536,8 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
+        if is_expert_sched_supported(options.arch):
+            flags.append("amdgpu-expert-scheduling-mode")
         features = disable_real_true16_feature(options.arch)
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
