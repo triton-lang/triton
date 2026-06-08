@@ -925,7 +925,6 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
   if (record.operation ==
       ROCPROFILER_HIP_GRAPH_OPERATION_HIP_GRAPH_EXEC_CREATE) {
     impl->graphExecToGraphExecId[graphExec] = graphExecId;
-    tryBindGraphExecState(impl, graphExec);
     return;
   }
 
