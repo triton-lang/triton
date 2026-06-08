@@ -1,18 +1,28 @@
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/stl/list.h>
+#include <nanobind/stl/map.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
+#include <vector>
 
-namespace py = pybind11;
+namespace py = nanobind;
 
 namespace {
 
-struct npy_half {
+// Bit-compatible half storage used by the interpreter's atomic fadd path.
+struct triton_half {
   uint16_t value;
 };
 
@@ -272,18 +282,18 @@ constexpr uint32_t ToFloatBits(uint16_t h) {
   }
 }
 
-npy_half npy_float_to_half(float f) {
+triton_half npy_float_to_half(float f) {
   return {FromFloatBits(BitCast<uint32_t>(f))};
 }
 
-float npy_half_to_float(npy_half h) {
+float npy_half_to_float(triton_half h) {
   return BitCast<float>(ToFloatBits(h.value));
 }
 
 template <>
-npy_half atomic_fadd<npy_half>(npy_half *loc, npy_half value,
-                               std::memory_order order) {
-  npy_half old_value;
+triton_half atomic_fadd<triton_half>(triton_half *loc, triton_half value,
+                                     std::memory_order order) {
+  triton_half old_value;
 
   const std::lock_guard<std::mutex> lock(atomic_op_guard);
   old_value = *loc;
@@ -317,7 +327,7 @@ protected:
 template <typename DType> class AtomicRMWOpBase : public AtomicOp {
 public:
   AtomicRMWOpBase(const uint64_t *ptr, const void *val, void *ret,
-                  const bool *mask, size_t numel, std::memory_order order)
+                  const uint8_t *mask, size_t numel, std::memory_order order)
       : AtomicOp(ptr, numel, order), val(val), ret(ret), mask(mask) {}
 
 protected:
@@ -334,7 +344,7 @@ protected:
 
   const void *val;
   void *ret;
-  const bool *mask;
+  const uint8_t *mask;
 };
 
 template <typename DType, RMWOp Op, typename = void>
@@ -554,45 +564,127 @@ private:
   size_t itemsize;
 };
 
+using AnyArray = py::ndarray<py::numpy, py::ro>;
+using MutableArray = py::ndarray<py::numpy>;
+using ByteStorage = std::vector<uint64_t>;
+
+template <typename... Args>
+py::list shape_list(const py::ndarray<Args...> &array) {
+  py::list shape;
+  for (size_t i = 0; i < array.ndim(); ++i)
+    shape.append(array.shape(i));
+  return shape;
+}
+
+py::object numpy_empty(size_t numel, py::handle dtype) {
+  py::module_ np = py::module_::import_("numpy");
+  return np.attr("empty")(py::make_tuple(numel), dtype);
+}
+
+template <typename... Args>
+std::ptrdiff_t element_byte_offset(const py::ndarray<Args...> &array,
+                                   size_t i) {
+  std::ptrdiff_t offset = 0;
+  for (size_t dim = array.ndim(); dim > 0; --dim) {
+    size_t axis = dim - 1;
+    size_t extent = array.shape(axis);
+    size_t index = extent == 0 ? 0 : i % extent;
+    i = extent == 0 ? 0 : i / extent;
+    offset += static_cast<std::ptrdiff_t>(index) *
+              static_cast<std::ptrdiff_t>(array.stride(axis));
+  }
+  return offset * static_cast<std::ptrdiff_t>(array.itemsize());
+}
+
+char *element_data(const MutableArray &array, size_t i) {
+  return static_cast<char *>(array.data()) + element_byte_offset(array, i);
+}
+
+const char *const_element_data(const AnyArray &array, size_t i) {
+  return static_cast<const char *>(array.data()) +
+         element_byte_offset(array, i);
+}
+
+ByteStorage copy_bytes(const AnyArray &array) {
+  // Atomic helpers cast value storage to typed pointers, so copy through
+  // uint64_t-backed storage to keep the temporary buffer suitably aligned.
+  size_t itemsize = array.itemsize();
+  size_t byte_size = array.size() * itemsize;
+  ByteStorage data((byte_size + sizeof(uint64_t) - 1) / sizeof(uint64_t));
+  char *data_bytes = reinterpret_cast<char *>(data.data());
+  for (size_t i = 0; i < array.size(); ++i)
+    memcpy(data_bytes + i * itemsize, const_element_data(array, i), itemsize);
+  return data;
+}
+
+bool dtype_matches(const py::dlpack::dtype &dtype, py::dlpack::dtype_code code,
+                   uint8_t bits) {
+  return dtype.code == static_cast<uint8_t>(code) && dtype.bits == bits &&
+         dtype.lanes == 1;
+}
+
+template <typename T> bool dtype_matches(const py::dlpack::dtype &dtype) {
+  // nanobind exposes ndarray dtype through DLPack metadata. Match float16
+  // manually so the local triton_half storage still accepts NumPy float16.
+  if constexpr (std::is_same_v<T, triton_half>) {
+    return dtype_matches(dtype, py::dlpack::dtype_code::Float, 16);
+  } else {
+    return dtype == py::dtype<T>();
+  }
+}
+
+template <typename T>
+void require_dtype(const AnyArray &array, const char *name) {
+  if (!dtype_matches<T>(array.dtype()))
+    throw std::invalid_argument(std::string(name) + " has unsupported dtype");
+}
+
+std::vector<uint64_t> copy_uint64_array(const AnyArray &array) {
+  std::vector<uint64_t> data(array.size());
+  for (size_t i = 0; i < array.size(); ++i)
+    memcpy(&data[i], const_element_data(array, i), sizeof(uint64_t));
+  return data;
+}
+
+std::vector<uint8_t> copy_bool_array(const AnyArray &array) {
+  // Use byte storage instead of vector<bool> so atomic helpers can take a
+  // stable pointer to mask values.
+  std::vector<uint8_t> data(array.size());
+  for (size_t i = 0; i < array.size(); ++i)
+    data[i] = *reinterpret_cast<const bool *>(const_element_data(array, i));
+  return data;
+}
+
 // This is a workaround because explicit template parameter list for lambdas is
 // a C++20 extension:
 // auto try_make_op = [&]<typename T>() {
-//   if (dtype.is(pybind11::dtype::of<T>())) {
+//   if (dtype_matches<T>(dtype)) {
 //     atomic_op = std::make_unique<AtomicRMWOp<T, Op>>(ptr, val, ret, mask,
 //                                                      numel, order);
 //   }
 // };
 template <RMWOp Op> struct OpCreator {
-  pybind11::dtype dtype;
+  py::dlpack::dtype dtype;
   const uint64_t *ptr;
   const void *val;
   void *ret;
-  const bool *mask;
+  const uint8_t *mask;
   size_t numel;
   std::memory_order order;
   std::unique_ptr<AtomicOp> &atomic_op;
 
   template <typename T> void create() {
-    if (!atomic_op && dtype.is(pybind11::dtype::of<T>())) {
+    if (!atomic_op && dtype_matches<T>(dtype)) {
       atomic_op = std::make_unique<AtomicRMWOp<T, Op>>(ptr, val, ret, mask,
                                                        numel, order);
     }
   }
 };
 
-template <> template <> void OpCreator<RMWOp::FADD>::create<npy_half>() {
-  if (!atomic_op && dtype.char_() == 'e') { // float16
-    // workaround until https://github.com/pybind/pybind11/issues/4061 is
-    // implemented
-    atomic_op = std::make_unique<AtomicRMWOp<npy_half, RMWOp::FADD>>(
-        ptr, val, ret, mask, numel, order);
-  }
-};
-
 template <RMWOp Op, typename... SupportedDTypes>
 std::unique_ptr<AtomicOp>
-makeAtomicRMWOp(pybind11::dtype dtype, const uint64_t *ptr, const void *val,
-                void *ret, const bool *mask, size_t numel,
+makeAtomicRMWOp(py::dlpack::dtype dtype, const uint64_t *ptr, const void *val,
+                void *ret, const uint8_t *mask, size_t numel,
                 std::memory_order order) {
   // Iterate over all supported data types, make one that matches, and return
   std::unique_ptr<AtomicOp> atomic_op;
@@ -609,15 +701,15 @@ makeAtomicRMWOp(pybind11::dtype dtype, const uint64_t *ptr, const void *val,
 
 } // namespace
 
-void init_triton_interpreter(py::module &&m) {
-  py::enum_<MemSemantic>(m, "MEM_SEMANTIC", py::module_local())
+void init_triton_interpreter(py::module_ &m) {
+  py::enum_<MemSemantic>(m, "MEM_SEMANTIC")
       .value("ACQUIRE_RELEASE", MemSemantic::ACQUIRE_RELEASE)
       .value("ACQUIRE", MemSemantic::ACQUIRE)
       .value("RELEASE", MemSemantic::RELEASE)
       .value("RELAXED", MemSemantic::RELAXED)
       .export_values();
 
-  py::enum_<RMWOp>(m, "RMW_OP", py::module_local())
+  py::enum_<RMWOp>(m, "RMW_OP")
       .value("ADD", RMWOp::ADD)
       .value("FADD", RMWOp::FADD)
       .value("AND", RMWOp::AND)
@@ -631,69 +723,80 @@ void init_triton_interpreter(py::module &&m) {
       .export_values();
 
   m.def("load",
-        [](py::array_t<uint64_t> ptr, py::array_t<bool> mask, py::array other,
-           py::dtype ret_dtype) -> py::array {
-          int numel = ptr.size();
-          auto shape =
-              std::vector<ptrdiff_t>(ptr.shape(), ptr.shape() + ptr.ndim());
-          py::array ret(ret_dtype, py::array::ShapeContainer{numel});
-          py::array_t<uint64_t> reshaped_ptr = ptr.reshape({numel});
-          py::array_t<bool> reshaped_mask = mask.reshape({numel});
-          py::array reshaped_others = other.reshape({numel});
-          for (size_t i = 0; i < ptr.size(); ++i) {
-            if (reshaped_mask.at(i))
-              memcpy(ret.mutable_data(i),
-                     reinterpret_cast<void *>(reshaped_ptr.at(i)),
-                     ret_dtype.itemsize());
+        [](py::object ptr_obj, py::object mask_obj, py::object other_obj,
+           py::object ret_dtype_obj) -> py::object {
+          AnyArray ptr = py::cast<AnyArray>(ptr_obj);
+          AnyArray mask = py::cast<AnyArray>(mask_obj);
+          AnyArray other = py::cast<AnyArray>(other_obj);
+          require_dtype<uint64_t>(ptr, "ptr");
+          require_dtype<bool>(mask, "mask");
+          size_t numel = ptr.size();
+          py::object ret = numpy_empty(numel, ret_dtype_obj);
+          auto ret_array = py::cast<MutableArray>(ret);
+          size_t itemsize = ret_array.itemsize();
+          std::vector<uint64_t> ptr_data = copy_uint64_array(ptr);
+          std::vector<uint8_t> mask_data = copy_bool_array(mask);
+
+          for (size_t i = 0; i < numel; ++i) {
+            void *dest = element_data(ret_array, i);
+            if (mask_data[i])
+              memcpy(dest, reinterpret_cast<void *>(ptr_data[i]), itemsize);
             else
-              memcpy(ret.mutable_data(i), reshaped_others.data(i),
-                     ret_dtype.itemsize());
+              memcpy(dest, const_element_data(other, i), itemsize);
           }
-          return ret.reshape(shape);
+          return ret.attr("reshape")(shape_list(ptr));
         });
 
   m.def("store",
-        [](py::array_t<uint64_t> ptr, py::array value, py::array_t<bool> mask) {
-          int numel = ptr.size();
-          py::array_t<uint64_t> reshaped_ptr = ptr.reshape({numel});
-          py::array_t<int8_t> reshaped_mask = mask.reshape({numel});
-          py::array reshaped_value = value.reshape({numel});
-          for (size_t i = 0; i < ptr.size(); ++i) {
-            if (reshaped_mask.at(i)) {
-              memcpy(reinterpret_cast<void *>(reshaped_ptr.mutable_at(i)),
-                     reshaped_value.data(i), value.dtype().itemsize());
-            }
+        [](py::object ptr_obj, py::object value_obj, py::object mask_obj) {
+          AnyArray ptr = py::cast<AnyArray>(ptr_obj);
+          AnyArray value = py::cast<AnyArray>(value_obj);
+          AnyArray mask = py::cast<AnyArray>(mask_obj);
+          require_dtype<uint64_t>(ptr, "ptr");
+          require_dtype<bool>(mask, "mask");
+          size_t numel = ptr.size();
+          size_t itemsize = value.itemsize();
+          std::vector<uint64_t> ptr_data = copy_uint64_array(ptr);
+          std::vector<uint8_t> mask_data = copy_bool_array(mask);
+
+          for (size_t i = 0; i < numel; ++i) {
+            if (mask_data[i])
+              memcpy(reinterpret_cast<void *>(ptr_data[i]),
+                     const_element_data(value, i), itemsize);
           }
         });
 
   m.def("atomic_rmw",
-        [](RMWOp rmw_op, py::array_t<uint64_t> ptr, py::array val,
-           py::array_t<bool> mask, MemSemantic sem) -> py::array {
+        [](RMWOp rmw_op, py::object ptr_obj, py::object val_obj,
+           py::object mask_obj, MemSemantic sem) -> py::object {
+          AnyArray ptr = py::cast<AnyArray>(ptr_obj);
+          AnyArray val = py::cast<AnyArray>(val_obj);
+          AnyArray mask = py::cast<AnyArray>(mask_obj);
+          require_dtype<uint64_t>(ptr, "ptr");
+          require_dtype<bool>(mask, "mask");
           std::memory_order order = mem_semantic_map[sem];
-          int numel = ptr.size();
-          auto shape =
-              std::vector<ptrdiff_t>(ptr.shape(), ptr.shape() + ptr.ndim());
+          size_t numel = ptr.size();
+          py::object ret = numpy_empty(numel, val.cast().attr("dtype"));
+          auto ret_array = py::cast<MutableArray>(ret);
+
+          std::vector<uint64_t> ptr_data = copy_uint64_array(ptr);
+          std::vector<uint8_t> mask_data = copy_bool_array(mask);
+          ByteStorage val_data = copy_bytes(val);
+          auto *ret_data = static_cast<void *>(ret_array.data());
           auto ret_dtype = val.dtype();
-          py::array ret(ret_dtype, py::array::ShapeContainer{numel});
-          py::array_t<uint64_t> reshaped_ptr = ptr.reshape({numel});
-          py::array_t<bool> reshaped_mask = mask.reshape({numel});
-          py::array reshaped_val = val.reshape({numel});
-          auto *ptr_data = reshaped_ptr.data();
-          auto *mask_data = reshaped_mask.data();
-          auto *val_data = static_cast<const void *>(reshaped_val.data());
-          auto *ret_data = static_cast<void *>(ret.mutable_data());
 
           std::unique_ptr<AtomicOp> atomic_op;
 
 #define MAKE_ATOMIC_RMW_OP(OP_NAME, ...)                                       \
   case OP_NAME:                                                                \
     atomic_op = makeAtomicRMWOp<OP_NAME, __VA_ARGS__>(                         \
-        ret_dtype, ptr_data, val_data, ret_data, mask_data, numel, order);     \
+        ret_dtype, ptr_data.data(), val_data.data(), ret_data,                 \
+        mask_data.data(), numel, order);                                       \
     break;
 
           switch (rmw_op) {
             MAKE_ATOMIC_RMW_OP(RMWOp::ADD, int32_t, uint32_t, int64_t, uint64_t)
-            MAKE_ATOMIC_RMW_OP(RMWOp::FADD, npy_half, float, double)
+            MAKE_ATOMIC_RMW_OP(RMWOp::FADD, triton_half, float, double)
             MAKE_ATOMIC_RMW_OP(RMWOp::AND, int32_t, uint32_t, int64_t, uint64_t)
             MAKE_ATOMIC_RMW_OP(RMWOp::OR, int32_t, uint32_t, int64_t, uint64_t)
             MAKE_ATOMIC_RMW_OP(RMWOp::XOR, int32_t, uint32_t, int64_t, uint64_t)
@@ -710,29 +813,32 @@ void init_triton_interpreter(py::module &&m) {
 #undef MAKE_ATOMIC_RMW_OP
 
           atomic_op->apply();
-          return ret.reshape(shape);
+          return ret.attr("reshape")(shape_list(ptr));
         });
 
   m.def("atomic_cas",
-        [](py::array_t<uint64_t> ptr, py::array &cmp, py::array &val,
-           MemSemantic sem) -> py::array {
+        [](py::object ptr_obj, py::object cmp_obj, py::object val_obj,
+           MemSemantic sem) -> py::object {
+          AnyArray ptr = py::cast<AnyArray>(ptr_obj);
+          AnyArray cmp = py::cast<AnyArray>(cmp_obj);
+          AnyArray val = py::cast<AnyArray>(val_obj);
+          require_dtype<uint64_t>(ptr, "ptr");
           std::memory_order order = mem_semantic_map[sem];
-          int numel = ptr.size();
-          auto shape =
-              std::vector<ptrdiff_t>(ptr.shape(), ptr.shape() + ptr.ndim());
-          auto ret_dtype = cmp.dtype();
-          py::array ret(ret_dtype, py::array::ShapeContainer{numel});
-          py::array_t<uint64_t> reshaped_ptr = ptr.reshape({numel});
-          py::array reshaped_cmp = cmp.reshape({numel});
-          py::array reshaped_val = val.reshape({numel});
-          auto itemsize = cmp.itemsize();
-          memcpy(static_cast<void *>(ret.mutable_data()),
-                 static_cast<const void *>(reshaped_cmp.data()),
-                 itemsize * numel);
-          AtomicCASOp(reshaped_ptr.data(), ret.mutable_data(),
-                      static_cast<const void *>(reshaped_val.data()), itemsize,
-                      numel, order)
+          size_t numel = ptr.size();
+          py::object ret = numpy_empty(numel, cmp.cast().attr("dtype"));
+          auto ret_array = py::cast<MutableArray>(ret);
+
+          size_t itemsize = cmp.itemsize();
+          for (size_t i = 0; i < numel; ++i)
+            memcpy(element_data(ret_array, i), const_element_data(cmp, i),
+                   itemsize);
+
+          std::vector<uint64_t> ptr_data = copy_uint64_array(ptr);
+          ByteStorage val_data = copy_bytes(val);
+          AtomicCASOp(ptr_data.data(), ret_array.data(), val_data.data(),
+                      itemsize, numel, order)
               .apply();
-          return ret.reshape(shape);
+
+          return ret.attr("reshape")(shape_list(ptr));
         });
 }
