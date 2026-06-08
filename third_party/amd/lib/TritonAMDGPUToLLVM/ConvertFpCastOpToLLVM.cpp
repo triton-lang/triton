@@ -1617,33 +1617,31 @@ class ConverterInterface {
 public:
   explicit ConverterInterface(ISAFamily isaFamily,
                               std::optional<RoundingMode> roundingMode)
-      : isaFamily(isaFamily), roundingMode(roundingMode), numElements(0) {}
+      : isaFamily(isaFamily), roundingMode(roundingMode) {}
   virtual ~ConverterInterface() = default;
   virtual std::optional<SmallVector<Value>>
   convert(Location loc, ConversionPatternRewriter &rewriter,
           const SmallVector<Value> &v) = 0;
 
-  size_t getNumElements() {
-    assert(numElements != 0 && "num conversion elements must be initialized");
-    return numElements;
-  }
+  virtual size_t getNumElements() = 0;
 
 protected:
   bool isRoundingUndefined() { return !roundingMode.has_value(); }
 
   ISAFamily isaFamily;
   std::optional<RoundingMode> roundingMode;
-  size_t numElements;
 };
 
 class CvtFp8E4M3ToFp16 : public ConverterInterface {
 public:
   explicit CvtFp8E4M3ToFp16(Type srcTy, ISAFamily isaFamily,
                             std::optional<RoundingMode> roundingMode)
-      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
-    numElements =
-        isa<Float8E4M3FNType>(srcTy) && (isaFamily == ISAFamily::GFX1250) ? 8
-                                                                          : 4;
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {}
+
+  size_t getNumElements() override {
+    return isa<Float8E4M3FNType>(srcTy) && (isaFamily == ISAFamily::GFX1250)
+               ? 8
+               : 4;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
@@ -1680,12 +1678,15 @@ class CvtFp8E5M2ToFp16 : public ConverterInterface {
 public:
   explicit CvtFp8E5M2ToFp16(Type srcTy, ISAFamily isaFamily,
                             std::optional<RoundingMode> roundingMode)
-      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {}
+
+  size_t getNumElements() override {
     if (isa<Float8E5M2FNUZType>(srcTy)) {
-      numElements = 4;
+      return 4;
     } else if (isa<Float8E5M2Type>(srcTy)) {
-      numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+      return isaFamily == ISAFamily::GFX1250 ? 8 : 4;
     }
+    return 0;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
@@ -1722,12 +1723,15 @@ class CvtFp8E4M3ToBf16 : public ConverterInterface {
 public:
   explicit CvtFp8E4M3ToBf16(Type srcTy, ISAFamily isaFamily,
                             std::optional<RoundingMode> roundingMode)
-      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {}
+
+  size_t getNumElements() override {
     if (isa<Float8E4M3FNUZType>(srcTy)) {
-      numElements = isCDNA4(isaFamily) ? 2 : 4;
+      return isCDNA4(isaFamily) ? 2 : 4;
     } else if (isa<Float8E4M3FNType>(srcTy)) {
-      numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+      return isaFamily == ISAFamily::GFX1250 ? 8 : 4;
     }
+    return 0;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
@@ -1764,8 +1768,10 @@ class CvtFp8E5M2ToBf16 : public ConverterInterface {
 public:
   explicit CvtFp8E5M2ToBf16(Type srcTy, ISAFamily isaFamily,
                             std::optional<RoundingMode> roundingMode)
-      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
-    numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {}
+
+  size_t getNumElements() override {
+    return isaFamily == ISAFamily::GFX1250 ? 8 : 4;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
@@ -1802,8 +1808,10 @@ class CvtFp8E4M3ToFp32 : public ConverterInterface {
 public:
   explicit CvtFp8E4M3ToFp32(Type srcTy, ISAFamily isaFamily,
                             std::optional<RoundingMode> roundingMode)
-      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
-    numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {}
+
+  size_t getNumElements() override {
+    return isaFamily == ISAFamily::GFX1250 ? 8 : 4;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
@@ -1852,8 +1860,10 @@ class CvtFp8E5M2ToFp32 : public ConverterInterface {
 public:
   explicit CvtFp8E5M2ToFp32(Type srcTy, ISAFamily isaFamily,
                             std::optional<RoundingMode> roundingMode)
-      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
-    numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {}
+
+  size_t getNumElements() override {
+    return isaFamily == ISAFamily::GFX1250 ? 8 : 4;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
@@ -1902,13 +1912,15 @@ class CvtFp16ToFp8E4M3 : public ConverterInterface {
 public:
   explicit CvtFp16ToFp8E4M3(Type dstTy, ISAFamily isaFamily,
                             std::optional<RoundingMode> roundingMode)
-      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {
+      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {}
 
+  size_t getNumElements() override {
     if (isa<Float8E4M3FNType>(dstTy)) {
-      numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+      return isaFamily == ISAFamily::GFX1250 ? 8 : 4;
     } else if (isa<Float8E4M3FNUZType>(dstTy)) {
-      numElements = isCDNA3OrHigher(isaFamily) ? 4 : 2;
+      return hasFnuzFp8HW(isaFamily) ? 4 : 2;
     }
+    return 0;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
@@ -1946,18 +1958,20 @@ class CvtFp16ToFp8E5M2 : public ConverterInterface {
 public:
   explicit CvtFp16ToFp8E5M2(Type dstTy, ISAFamily isaFamily,
                             std::optional<RoundingMode> roundingMode)
-      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {
+      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {}
 
+  size_t getNumElements() override {
     if (roundingMode == RoundingMode::RTNE) {
       if (isa<Float8E5M2FNUZType>(dstTy)) {
-        numElements = (isaFamily == ISAFamily::CDNA3) ? 4 : 2;
+        return (isaFamily == ISAFamily::CDNA3) ? 4 : 2;
       }
       if (isa<Float8E5M2Type>(dstTy)) {
-        numElements = (isaFamily == ISAFamily::GFX1250) ? 8 : 4;
+        return (isaFamily == ISAFamily::GFX1250) ? 8 : 4;
       }
     } else if (roundingMode == RoundingMode::RTZ) {
-      numElements = 4;
+      return 4;
     }
+    return 0;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
@@ -1995,13 +2009,15 @@ class CvtBf16ToFp8E4M3 : public ConverterInterface {
 public:
   explicit CvtBf16ToFp8E4M3(Type dstTy, ISAFamily isaFamily,
                             std::optional<RoundingMode> roundingMode)
-      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {
+      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {}
 
+  size_t getNumElements() override {
     if (isa<Float8E4M3FNType>(dstTy)) {
-      numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+      return isaFamily == ISAFamily::GFX1250 ? 8 : 4;
     } else if (isa<Float8E4M3FNUZType>(dstTy)) {
-      numElements = 4;
+      return 4;
     }
+    return 0;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
@@ -2039,13 +2055,15 @@ class CvtBf16ToFp8E5M2 : public ConverterInterface {
 public:
   explicit CvtBf16ToFp8E5M2(Type dstTy, ISAFamily isaFamily,
                             std::optional<RoundingMode> roundingMode)
-      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {
+      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {}
 
+  size_t getNumElements() override {
     if (isa<Float8E5M2Type>(dstTy)) {
-      numElements = isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+      return isaFamily == ISAFamily::GFX1250 ? 8 : 4;
     } else if (isa<Float8E5M2FNUZType>(dstTy)) {
-      numElements = 4;
+      return 4;
     }
+    return 0;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
@@ -2083,9 +2101,9 @@ class CvtFP16ToFp32 : public ConverterInterface {
 public:
   explicit CvtFP16ToFp32(Type srcTy, ISAFamily isaFamily,
                          std::optional<RoundingMode> roundingMode)
-      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {
-    numElements = 4;
-  }
+      : srcTy(srcTy), ConverterInterface(isaFamily, roundingMode) {}
+
+  size_t getNumElements() override { return 4; }
 
   std::optional<SmallVector<Value>>
   convert(Location loc, ConversionPatternRewriter &rewriter,
@@ -2110,9 +2128,9 @@ class CvtFp32ToFp16 : public ConverterInterface {
 public:
   explicit CvtFp32ToFp16(ISAFamily isaFamily,
                          std::optional<RoundingMode> roundingMode)
-      : ConverterInterface(isaFamily, roundingMode) {
-    numElements = 2;
-  }
+      : ConverterInterface(isaFamily, roundingMode) {}
+
+  size_t getNumElements() override { return 2; }
 
   std::optional<SmallVector<Value>>
   convert(Location loc, ConversionPatternRewriter &rewriter,
@@ -2122,7 +2140,7 @@ public:
       if (isCDNA4OrHigher(isaFamily))
         return convertFp32ToFp16rtne(loc, rewriter, inVals, dstTy);
       else {
-        SmallVector<Value> outVals(inVals.size());
+        SmallVector<Value> outVals;
         for (const Value &v : inVals) {
           outVals.push_back(LLVM::FPTruncOp::create(rewriter, loc, dstTy, v));
         }
@@ -2139,18 +2157,21 @@ class CvtFp32ToBf16 : public ConverterInterface {
 public:
   explicit CvtFp32ToBf16(ISAFamily isaFamily,
                          std::optional<RoundingMode> roundingMode)
-      : ConverterInterface(isaFamily, roundingMode) {
+      : ConverterInterface(isaFamily, roundingMode) {}
+
+  size_t getNumElements() override {
     if (roundingMode == RoundingMode::RTNE) {
-      numElements = isCDNA4OrHigher(isaFamily) ? 2 : 1;
+      return isCDNA4OrHigher(isaFamily) ? 2 : 1;
     } else if (roundingMode == RoundingMode::RTZ)
-      numElements = 1;
+      return 1;
+    return 0;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
     Type dstTy = Float16Type::get(rewriter.getContext());
-    ;
+
     if (roundingMode == RoundingMode::RTNE) {
       if (isCDNA4OrHigher(isaFamily))
         return convertFp32ToFp16rtne(loc, rewriter, v, dstTy);
@@ -2172,12 +2193,15 @@ class CvtFp32ToFp8E4M3 : public ConverterInterface {
 public:
   explicit CvtFp32ToFp8E4M3(Type dstTy, ISAFamily isaFamily,
                             std::optional<RoundingMode> roundingMode)
-      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {
+      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {}
+
+  size_t getNumElements() override {
     if (isa<Float8E4M3FNUZType>(dstTy)) {
-      numElements = hasFnuzFp8HW(isaFamily) ? 4 : 2;
+      return hasFnuzFp8HW(isaFamily) ? 4 : 2;
     } else if (isa<Float8E4M3FNType>(dstTy)) {
-      numElements = (isaFamily == ISAFamily::GFX1250) ? 8 : 4;
+      return (isaFamily == ISAFamily::GFX1250) ? 8 : 4;
     }
+    return 0;
   }
 
   std::optional<SmallVector<Value>>
@@ -2239,21 +2263,21 @@ class CvtFp32ToFp8E5M2 : public ConverterInterface {
 public:
   explicit CvtFp32ToFp8E5M2(Type dstTy, ISAFamily isaFamily,
                             std::optional<RoundingMode> roundingMode)
-      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {
+      : dstTy(dstTy), ConverterInterface(isaFamily, roundingMode) {}
 
+  size_t getNumElements() override {
     if (roundingMode == RoundingMode::RTNE) {
       if (isa<Float8E5M2FNUZType>(dstTy)) {
-        numElements = hasFnuzFp8HW(isaFamily) ? 4 : 2;
+        return hasFnuzFp8HW(isaFamily) ? 4 : 2;
       } else if (isa<Float8E5M2Type>(dstTy)) {
-        numElements = (isaFamily == ISAFamily::GFX1250) ? 8
-                      : (isaFamily == ISAFamily::CDNA4) ? 4
-                                                        : 2;
+        return (isaFamily == ISAFamily::GFX1250) ? 8 : 4;
       }
     }
     if (roundingMode == RoundingMode::RTZ) {
       if (isa<Float8E5M2Type>(dstTy))
-        numElements = 4;
+        return 4;
     }
+    return 0;
   }
 
   std::optional<SmallVector<Value>>
@@ -2371,6 +2395,23 @@ struct FpToFpOpConversion
     return nullptr;
   }
 
+  void setFunctionAttributes(triton::FpToFpOp op) const {
+    auto dstElementType = getElementTypeOrSelf(op.getResult());
+
+    // set clamping attribute for FP8 data types
+    if (dstElementType.isFloat() &&
+        (dstElementType.getIntOrFloatBitWidth() == 8)) {
+      auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
+      if (func) {
+        using attrType = triton::amdgpu::SetFP8ClampingAttr;
+        auto attrName = attrType::getMnemonic();
+        if (!func->hasAttrOfType<attrType>(attrName)) {
+          func->setAttr(attrName, attrType::get(op->getContext()));
+        }
+      }
+    }
+  }
+
   SmallVector<Value> createDestOps(triton::FpToFpOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
@@ -2392,20 +2433,10 @@ struct FpToFpOpConversion
       return SmallVector<Value>{};
     }
 
-    // set clamping attribute for FP8 data types
-    if (dstElementType.isFloat() &&
-        (dstElementType.getIntOrFloatBitWidth() == 8)) {
-      auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
-      if (func) {
-        using attrType = triton::amdgpu::SetFP8ClampingAttr;
-        auto attrName = attrType::getMnemonic();
-        if (!func->hasAttrOfType<attrType>(attrName)) {
-          func->setAttr(attrName, attrType::get(op->getContext()));
-        }
-      }
-    }
+    setFunctionAttributes(op);
 
     const size_t numElements = converter->getNumElements();
+    assert(numElements && "number of elements must be greater than zero");
 
     // extract a chunk of input element defined by the converter (i.e., the
     // instruction property) filled the rest of the values with undefs if the
