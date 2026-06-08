@@ -870,20 +870,30 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
 
   if (record.phase == ROCPROFILER_CALLBACK_PHASE_ENTER) {
     threadState.enterOp(Scope(""));
-    auto externId = threadState.scopeStack.empty()
-                        ? Scope::DummyScopeId
-                        : threadState.scopeStack.back().scopeId;
+    auto externId = threadState.scopeStack.back().scopeId;
     auto &profiler = threadState.profiler;
     auto &dataToEntry = threadState.dataToEntry;
-    size_t numNodes = 1;
-    if (impl->graphStates.contain(graphExecId) &&
-        externId != Scope::DummyScopeId && !dataToEntry.empty()) {
+    size_t numNodes = std::numeric_limits<size_t>::max();
+    auto findGraph = false;
+    if (impl->graphStates.contain(graphExecId)) {
       auto &graphState = impl->graphStates[graphExecId];
-      numNodes = graphState.nodeIdToState.size();
+      if (!graphState.captureStatusChecked)
+        numNodes = graphState.nodeIdToState.size();
+      findGraph = true;
+    }
+    if (!findGraph && !impl->graphStates[graphExecId].captureStatusChecked) {
+      impl->graphStates[graphExecId].captureStatusChecked = true;
+      std::cerr << "[PROTON] Cannot find graph for graphExecId: " << graphExecId
+                << ", and graph replay attribution may be incomplete. "
+                   "Please start profiling before the graph is captured."
+                << std::endl;
+    } else if (findGraph &&
+               !impl->graphStates[graphExecId].captureStatusChecked) {
+      auto &graphState = impl->graphStates[graphExecId];
       buildGraphNodeEntries(dataToEntry, graphState,
                             profiler.correlation.externIdToState, externId);
     }
-    if (externId != Scope::DummyScopeId && !dataToEntry.empty()) {
+    if (!dataToEntry.empty()) {
       auto &scope = threadState.scopeStack.back();
       profiler.correlation.correlate(record.correlation_id.internal, externId,
                                      numNodes, scope.name.empty(), dataToEntry);
