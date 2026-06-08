@@ -670,9 +670,6 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
       graphExecToGraphExecId;
 
   ThreadSafeMap<uint64_t, GraphState> graphStates;
-
-  ThreadSafeMap<size_t, uint64_t, std::unordered_map<size_t, uint64_t>>
-      graphExternIdToCorrId;
 };
 
 void tryBindGraphExecState(RocprofSDKProfiler::RocprofSDKProfilerPimpl *impl,
@@ -747,8 +744,6 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleGraphLaunchEnter(
                  "Please start profiling before the graph is captured."
               << std::endl;
   }
-  impl->graphExternIdToCorrId[threadState.scopeStack.back().scopeId] =
-      record.correlation_id.internal;
 }
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeEnter(
@@ -1094,13 +1089,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         if (processGraphKernelRecord(correlation.externIdToState, dataPhases,
                                      kernelName, record, *graphCorrelation,
                                      streamId)) {
-          uint64_t graphLaunchCorrId = 0;
-          if (impl->graphExternIdToCorrId.withRead(
-                  graphCorrelation->externId,
-                  [&](const uint64_t &value) { graphLaunchCorrId = value; })) {
-            correlation.corrIdToExternId.erase(graphLaunchCorrId);
-            impl->graphExternIdToCorrId.erase(graphCorrelation->externId);
-          }
+          correlation.corrIdToExternId.erase(record->correlation_id.internal);
         }
         delete graphCorrelation;
         record->correlation_id.external.value = 0;
