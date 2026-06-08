@@ -919,26 +919,7 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::externalCorrelationCallback(
 
   auto &graphLaunch = graphLaunchStack.back();
   auto externId = graphLaunch.externId;
-  if (externId == Scope::DummyScopeId && !threadState.scopeStack.empty()) {
-    externId = threadState.scopeStack.back().scopeId;
-  }
-  if (externId == Scope::DummyScopeId)
-    return 0;
   threadState.profiler.correlation.submit(internalCorrelationId);
-  if (!threadState.dataToEntry.empty()) {
-    auto &profiler = threadState.profiler;
-    auto isMissingName = threadState.scopeStack.empty()
-                             ? true
-                             : threadState.scopeStack.back().name.empty();
-    profiler.correlation.externIdToState.upsert(
-        externId, [&](RocprofSDKProfiler::ExternIdState &state) {
-          if (!state.dataToEntry.empty())
-            return;
-          state.numNodes = 1;
-          state.dataToEntry = threadState.dataToEntry;
-          state.isMissingName = isMissingName;
-        });
-  }
   externalCorrelationId->ptr = new GraphDispatchCorrelation{
       externId, graphLaunch.graphExecId, graphLaunch.nextNodeId++};
   return 0;
