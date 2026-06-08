@@ -124,8 +124,8 @@ from .core import (
     void,
     where,
 )
-from .math import (umulhi, exp, exp2, fma, log, log2, cos, rsqrt, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor,
-                   ceil)
+from .math import (umulhi, mul_f32x2, add_f32x2, sub_f32x2, fma_f32x2, exp, exp2, fma, log, log2, cos, rsqrt, sin,
+                   sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor, ceil)
 from .random import (
     pair_uniform_to_normal,
     philox,

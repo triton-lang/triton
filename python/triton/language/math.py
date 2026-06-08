@@ -92,6 +92,91 @@ def umulhi(x, y, _semantic=None):
 
 
 @core.builtin
+def mul_f32x2(a, b, _semantic=None):
+    return core.inline_asm_elementwise(
+        """
+        {
+            .reg .b64 ra, rb, rc;
+            mov.b64 ra, { $2, $3 };
+            mov.b64 rb, { $4, $5 };
+            mul.f32x2 rc, ra, rb;
+            mov.b64 { $0, $1 }, rc;
+        }
+        """,
+        "=r,=r,r,r,r,r",
+        [a, b],
+        dtype=core.float32,
+        is_pure=True,
+        pack=2,
+        _semantic=_semantic,
+    )
+
+
+@core.builtin
+def add_f32x2(a, b, _semantic=None):
+    return core.inline_asm_elementwise(
+        """
+        {
+            .reg .b64 ra, rb, rc;
+            mov.b64 ra, { $2, $3 };
+            mov.b64 rb, { $4, $5 };
+            add.f32x2 rc, ra, rb;
+            mov.b64 { $0, $1 }, rc;
+        }
+        """,
+        "=r,=r,r,r,r,r",
+        [a, b],
+        dtype=core.float32,
+        is_pure=True,
+        pack=2,
+        _semantic=_semantic,
+    )
+
+
+@core.builtin
+def sub_f32x2(a, b, _semantic=None):
+    return core.inline_asm_elementwise(
+        """
+        {
+            .reg .b64 ra, rb, rc;
+            mov.b64 ra, { $2, $3 };
+            mov.b64 rb, { $4, $5 };
+            sub.f32x2 rc, ra, rb;
+            mov.b64 { $0, $1 }, rc;
+        }
+        """,
+        "=r,=r,r,r,r,r",
+        [a, b],
+        dtype=core.float32,
+        is_pure=True,
+        pack=2,
+        _semantic=_semantic,
+    )
+
+
+@core.builtin
+def fma_f32x2(a, b, c, _semantic=None):
+    return core.inline_asm_elementwise(
+        """
+        {
+            .reg .b64 ra, rb, rc, rd;
+            mov.b64 ra, { $2, $3 };
+            mov.b64 rb, { $4, $5 };
+            mov.b64 rc, { $6, $7 };
+            fma.rn.f32x2 rd, ra, rb, rc;
+            mov.b64 { $0, $1 }, rd;
+        }
+        """,
+        "=r,=r,r,r,r,r,r,r",
+        [a, b, c],
+        dtype=core.float32,
+        is_pure=True,
+        pack=2,
+        _semantic=_semantic,
+    )
+
+
+@core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("exponential")
 @core._tensor_member_fn
