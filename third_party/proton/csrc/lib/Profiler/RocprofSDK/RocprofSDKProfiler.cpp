@@ -1133,15 +1133,13 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
                             record, streamId);
       }
 #endif
-      uint64_t streamId =
-          static_cast<uint64_t>(record->dispatch_info.queue_id.handle);
-      impl->corrIdToStreamId.withRead(
-          record->correlation_id.internal,
-          [&](const uint64_t &sid) { streamId = sid; });
-      processKernelRecord(profiler, correlation.corrIdToExternId,
-                          correlation.externIdToState, dataPhases, kernelName,
-                          record, streamId);
-      impl->corrIdToStreamId.erase(record->correlation_id.internal);
+        processKernelRecord(profiler, correlation.corrIdToExternId,
+                            correlation.externIdToState, dataPhases, kernelName,
+                            record, streamId);
+        impl->corrIdToStreamId.erase(record->correlation_id.internal);
+#ifdef PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
+      }
+#endif
     }
   }
   profiler.flushDataPhases(dataPhases, profiler.pendingGraphPool.get());
