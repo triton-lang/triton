@@ -120,7 +120,7 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         data = data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
         data = data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
         data = data.view(*self.storage_shape)
-        return data
+        return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data):
         data = data.reshape(self.B, self.M_pad // 128, self.K_pad // 4, 32, 4, 4)
@@ -178,7 +178,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
                                 self.K_pad // self.SWIZZLE_K, self.SWIZZLE_K)
             data = data.transpose(2, 4).contiguous()
             data = data.view(*self.storage_shape)
-            return data
+            return self._validate_storage_shape(data)
 
         # The following code is equivalent to the above, but faster for GPU tensors.
 
@@ -188,7 +188,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
 
         out = torch.empty(self.storage_shape, dtype=torch.uint8, device=data.device)
         if not out.numel():
-            return out
+            return self._validate_storage_shape(out)
 
         block_k = 64
         grid = (self.B * triton.cdiv(self.N_pad, self.ALIGN_N) * triton.cdiv(self.K_pad, block_k), )
@@ -203,7 +203,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
             BLOCK_K=block_k,
             num_warps=4,
         )
-        return out.view(data.dtype)
+        return self._validate_storage_shape(out.view(data.dtype))
 
     def unswizzle_data(self, data):
         data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 32, self.ALIGN_N // 32,

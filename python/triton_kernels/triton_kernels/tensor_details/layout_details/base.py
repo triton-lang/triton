@@ -13,6 +13,10 @@ class LayoutTransformation(ABC):
         """Physical storage shape produced by this transformation."""
         raise NotImplementedError
 
+    def _validate_storage_shape(self, data):
+        assert list(data.shape) == self.storage_shape
+        return data
+
     @abstractmethod
     def swizzle_data(self, data):
         pass

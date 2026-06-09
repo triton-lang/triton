@@ -164,8 +164,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         # twiddle the bits
         data = _pack_bits(data, self.mx_axis)
         data = self._maybe_mT(data)
-        assert list(data.shape) == self.storage_shape
-        return data
+        return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data):
         data = self._maybe_mT(data)

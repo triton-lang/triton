@@ -55,7 +55,7 @@ class GFX1250MXScaleLayoutTransformation(LayoutTransformation):
                          self.K_SCALE_pad // self.ALIGN_K_SCALE, self.ALIGN_K_SCALE)
         data = data.permute(0, 1, 4, 3, 2, 5).contiguous()
         data = data.reshape(self.B, self.storage_shape[2], self.storage_shape[1])
-        return data.transpose(-1, -2)
+        return self._validate_storage_shape(data.transpose(-1, -2))
 
     def unswizzle_data(self, data):
         data = data.transpose(-1, -2)

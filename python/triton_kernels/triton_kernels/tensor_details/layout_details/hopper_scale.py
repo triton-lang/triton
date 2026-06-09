@@ -96,7 +96,7 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         assert data.shape[-2] == M // 32
         assert data.shape[-1] == K * 32
         data = self._maybe_mT(data)
-        return data
+        return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data):
         data = self._maybe_mT(data)

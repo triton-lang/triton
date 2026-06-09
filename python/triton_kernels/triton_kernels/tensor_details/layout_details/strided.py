@@ -73,7 +73,7 @@ class StridedLayoutTransformation(LayoutTransformation):
         assert data.numel() == 0 or data.stride(-1) == 1
         r = len(self.shape)
         if r == 0:
-            return data
+            return self._validate_storage_shape(data)
         pd = self.order[0]  # packed/contiguous dim in output
         out_shape = self.storage_shape
         # dense strides in minor->major `self.order`
@@ -82,7 +82,7 @@ class StridedLayoutTransformation(LayoutTransformation):
             stride[d], s = s, s * out_shape[d]
         out = torch.empty_strided(out_shape, stride, dtype=data.dtype, device=data.device)
         repack(data, -1, pd, self.is_fp4, out=out)
-        return out
+        return self._validate_storage_shape(out)
 
     def unswizzle_data(self, data):
         assert data.stride(self.order[0]) == 1

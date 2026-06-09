@@ -54,7 +54,7 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         repacked_shape[-1] *= 2
         repacked_shape[-2] //= 2
         repack(data, -1, -2, self.is_fp4, out=ret[..., :repacked_shape[-2], :])
-        return ret
+        return self._validate_storage_shape(ret)
 
     def unswizzle_data(self, data: torch.Tensor):
         assert data.stride(-2) == 1

@@ -65,7 +65,7 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         data = data.reshape(self.B, self.storage_shape[2], self.storage_shape[1])
         data = data.transpose(-1, -2)
         assert data.stride(-2) == 1
-        return data
+        return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data):
         data = data.transpose(-1, -2)

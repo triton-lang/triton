@@ -137,7 +137,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         # This puts K tiles first (for inner loop locality) and arranges
         # inner dims as [tile_n, tile_k_packed] to match baseline TMA block.
         data = data.permute(0, 3, 1, 2, 4).contiguous()
-        return data
+        return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data: torch.Tensor) -> torch.Tensor:
         """
