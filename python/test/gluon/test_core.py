@@ -25,7 +25,7 @@ from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2
-from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
+from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
 from triton.experimental.gluon.language.extra import libdevice
@@ -476,7 +476,6 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
 
     if USE_TCGEN05:
         two_ctas: ttgl.constexpr = acc_layout.two_ctas
-        fence_async_shared(cluster=two_ctas)
         mma_barrier = mbarrier.allocate_mbarrier()
         mbarrier.init(mma_barrier, count=1)
         # Need to synchronise all the CTAs after the mbarrier initialisation
@@ -499,7 +498,6 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
         )
         acc = acc_tmem.load(tmem_reg_layout)
     else:
-        fence_async_shared()
         acc = ttgl.zeros([M, N], dtype=acc_dtype, layout=acc_layout)
         acc = hopper.warpgroup_mma(smem_a, smem_b, acc, is_async=ASYNC)
 
@@ -1341,7 +1339,6 @@ def test_tmem_copy_2d():
         mbarrier.init(barrier, count=1)
 
         smem.store(value)
-        fence_async_shared()
         tcgen05_copy(smem, tmem)
         tcgen05_commit(barrier)
         mbarrier.wait(barrier, phase=0)
