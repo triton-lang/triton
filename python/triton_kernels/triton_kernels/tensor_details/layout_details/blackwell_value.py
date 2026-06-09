@@ -37,13 +37,13 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
 
     @property
     def storage_shape(self) -> list[int]:
-        shape = list(self.shape)
+        *leading_shape, M, K = self.shape
         if self.is_fp4:
-            shape[-1] //= 2
-        shape[-1] *= 2
-        shape[-2] //= 2
-        shape[-2] += -shape[-2] % 128
-        return shape
+            K //= 2
+        K *= 2
+        M //= 2
+        M += -M % 128
+        return [*leading_shape, M, K]
 
     def swizzle_data(self, data):
         assert data.stride(-1) == 1

@@ -37,11 +37,12 @@ def test_mxfp4_value_roundtrip(shape, trans, mx_axis, mma_version):
 
 def test_mxfp4_value_swizzle_uses_data_shape():
     x = torch.randint(0, 256, (64, 128), dtype=torch.uint8)
-    transformation = HopperMXValueLayout(-1, 3).make_transformation([64, 256], is_fp4=False)
+    transformation = HopperMXValueLayout(-1, 3).make_transformation([64, 256], is_fp4=True)
 
     swizzled = transformation.swizzle_data(x)
 
     assert swizzled.shape == (64, 512)
+    assert transformation.storage_shape == list(swizzled.shape)
     assert torch.equal(transformation.unswizzle_data(swizzled), x)
 
 

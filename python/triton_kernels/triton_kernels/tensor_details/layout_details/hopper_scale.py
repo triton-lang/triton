@@ -53,14 +53,13 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
 
     @property
     def _padded_shape(self) -> list[int]:
-        shape = list(self.shape)
-        if self.mx_axis == len(self.leading_shape):
-            shape[-2], shape[-1] = shape[-1], shape[-2]
-        M, K = shape[-2:]
+        *leading_shape, M, K = self.shape
+        if self.mx_axis == len(leading_shape):
+            M, K = K, M
         align_m = 32 * self.num_warps
-        shape[-2] = (M + align_m - 1) // align_m * align_m
-        shape[-1] = (K + 1) // 2 * 2
-        return shape
+        M = (M + align_m - 1) // align_m * align_m
+        K = (K + 1) // 2 * 2
+        return [*leading_shape, M, K]
 
     @property
     def storage_shape(self) -> list[int]:
@@ -84,8 +83,11 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         if data.numel():
             data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
         assert data.is_contiguous()
+        assert M % (
+            2 * self.num_warps * 2 *
+            8) == 0 and K % 2 == 0, f"Input tensor must have a subtile of shape (..., {2 * self.num_warps * 2 * 8}, 2)"
         b = len(batch)
-        data = data.reshape(*batch, M // (32 * self.num_warps), 2, self.num_warps, 2, 8, K // 2, 2)
+        data = data.reshape(*batch, M // (2 * self.num_warps * 2 * 8), 2, self.num_warps, 2, 8, K // 2, 2)
         perm = [0, 2, 5, 1, 4, 6, 3]
         perm = list(range(b)) + [b + p for p in perm]
         data = data.permute(*perm)

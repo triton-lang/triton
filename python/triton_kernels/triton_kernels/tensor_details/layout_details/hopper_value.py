@@ -54,25 +54,24 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "N", N)
 
     def _padded_shape(self, shape) -> list[int]:
-        shape = list(shape)
         *leading_shape, M, K = shape
         if self.mx_axis == len(leading_shape):
             align_m, align_k = 64, 256
         else:
             align_m, align_k = 256, 64
-        shape[-2] = (M + align_m - 1) // align_m * align_m
-        shape[-1] = (K + align_k - 1) // align_k * align_k
-        return shape
+        M = (M + align_m - 1) // align_m * align_m
+        K = (K + align_k - 1) // align_k * align_k
+        return [*leading_shape, M, K]
 
     @property
     def storage_shape(self) -> list[int]:
-        shape = list(self.shape)
+        *leading_shape, M, K = self.shape
         if self.is_fp4:
-            shape[-1] //= 2
-            if self.mx_axis != len(shape) - 1:
-                shape[-1] *= 2
-                shape[self.mx_axis] //= 2
-        *leading_shape, M, K = self._padded_shape(shape)
+            K //= 2
+            if self.mx_axis == len(leading_shape):
+                M //= 2
+                K *= 2
+        *leading_shape, M, K = self._padded_shape((*leading_shape, M, K))
         if self.mx_axis == len(leading_shape):
             return [*leading_shape, M * 4, K // 4]
         return [*leading_shape, M // 4, K * 4]

@@ -2,6 +2,7 @@ import math
 from dataclasses import dataclass
 
 import torch
+from torch._subclasses.fake_tensor import is_fake
 import triton
 import triton.language as tl
 
@@ -167,12 +168,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         return [1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256]
 
     def swizzle_data(self, data):
-        need_torch = data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1
-        try:
-            from torch._subclasses.fake_tensor import is_fake
-            need_torch = need_torch or is_fake(data)
-        except ImportError:
-            pass
+        need_torch = data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1 or is_fake(data)
 
         if need_torch:
             if data.numel():
