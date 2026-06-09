@@ -75,9 +75,7 @@ class StridedLayoutTransformation(LayoutTransformation):
         if r == 0:
             return data
         pd = self.order[0]  # packed/contiguous dim in output
-        out_shape = list(self.shape)
-        if self.is_fp4:
-            out_shape[pd] //= 2
+        out_shape = self.storage_shape
         # dense strides in minor->major `self.order`
         stride, s = [0] * r, 1
         for d in self.order:

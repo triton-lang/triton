@@ -51,8 +51,7 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         out_shape = list(data.shape)
         out_shape[-1] *= 2
         out_shape[-2] //= 2
-        padded_shape = list(out_shape)
-        padded_shape[-2] += (-out_shape[-2]) % 128
+        padded_shape = self.storage_shape
         ret = torch.empty_strided(padded_shape, strides_major_dim_m2(padded_shape), device=data.device,
                                   dtype=data.dtype)
         repack(data, -1, -2, self.is_fp4, out=ret[..., :out_shape[-2], :])
