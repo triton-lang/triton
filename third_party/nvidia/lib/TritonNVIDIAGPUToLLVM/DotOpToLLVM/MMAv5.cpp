@@ -42,8 +42,7 @@ public:
     // MMAv5 supplies a logical K coordinate, while byte-backed FP4 memdescs
     // use packed K coordinates. This applies to both dense and fp4Padded FP4;
     // the memdesc layout handles any additional physical padding.
-    unsigned packingFactor =
-        storageElementBitWidth / logicalElementBitWidth;
+    unsigned packingFactor = storageElementBitWidth / logicalElementBitWidth;
     assert(b % packingFactor == 0 &&
            "logical K coordinate must be aligned to packed storage");
     b /= packingFactor;
