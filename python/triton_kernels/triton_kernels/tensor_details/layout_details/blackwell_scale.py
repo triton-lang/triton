@@ -96,6 +96,10 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "mode", mode)
         object.__setattr__(self, "added_leading_batch_dim", added_leading_batch_dim)
 
+    @property
+    def storage_shape(self) -> list[int]:
+        return [1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256]
+
     def swizzle_data(self, data):
         if data.numel():
             if self.mode == "batched":
@@ -114,7 +118,7 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
 
         data = data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
         data = data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
-        data = data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
+        data = data.view(*self.storage_shape)
         return data
 
     def unswizzle_data(self, data):
@@ -158,6 +162,10 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "K_pad", (K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K)
         object.__setattr__(self, "N_pad", (N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N)
 
+    @property
+    def storage_shape(self) -> list[int]:
+        return [1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256]
+
     def swizzle_data(self, data):
         need_torch = data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1
         try:
@@ -173,7 +181,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
             data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32,
                                 self.K_pad // self.SWIZZLE_K, self.SWIZZLE_K)
             data = data.transpose(2, 4).contiguous()
-            data = data.view(1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256)
+            data = data.view(*self.storage_shape)
             return data
 
         # The following code is equivalent to the above, but faster for GPU tensors.
@@ -182,11 +190,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         assert tuple(data.shape) == tuple(self.shape)
         data = data.reshape((self.B, self.K, self.N))
 
-        out = torch.empty(
-            (1, self.B * self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 2, 256),
-            dtype=torch.uint8,
-            device=data.device,
-        )
+        out = torch.empty(self.storage_shape, dtype=torch.uint8, device=data.device)
         if not out.numel():
             return out
 

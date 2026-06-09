@@ -48,6 +48,10 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "K_SCALE", K_SCALE)
         object.__setattr__(self, "N", N)
 
+    @property
+    def storage_shape(self) -> list[int]:
+        return [self.B, self.K_SCALE_pad * NON_K_PRESHUFFLE_BLOCK_SIZE, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE]
+
     def swizzle_data(self, data):
         assert data.numel() == 0 or data.stride(-1) == 1
         # re-pack as column-major

@@ -61,6 +61,16 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
     block_k: int = 128
     block_n: int = 256
 
+    @property
+    def storage_shape(self) -> list[int]:
+        if not self.is_fp4:
+            raise ValueError("BlackwellMX4ValueShuffledLayout only supports fp4 values")
+        E = math.prod(self.shape[:-2])
+        K_packed = self.shape[-2] // 2
+        N = self.shape[-1]
+        tile_k_packed, tile_n, _, _, num_tiles_k, num_tiles_n = self._compute_params(E, K_packed, N)
+        return [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
+
     def _compute_params(self, E, K_packed, N):
         """Compute tiling parameters from the physical shape."""
         packed_block_k = self.block_k // 2
