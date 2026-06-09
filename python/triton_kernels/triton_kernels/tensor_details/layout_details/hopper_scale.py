@@ -52,7 +52,7 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "K", K)
 
     @property
-    def _padded_shape(self) -> list[int]:
+    def storage_shape(self) -> list[int]:
         shape = list(self.shape)
         if self.mx_axis == len(self.leading_shape):
             shape[-2], shape[-1] = shape[-1], shape[-2]
@@ -60,11 +60,7 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         align_m = 32 * self.num_warps
         shape[-2] = (M + align_m - 1) // align_m * align_m
         shape[-1] = (K + 1) // 2 * 2
-        return shape
-
-    @property
-    def storage_shape(self) -> list[int]:
-        *leading_shape, M, K = self._padded_shape
+        *leading_shape, M, K = shape
         if self.mx_axis == len(leading_shape):
             return [*leading_shape, K * 32, M // 32]
         return [*leading_shape, M // 32, K * 32]
@@ -77,15 +73,21 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
     def swizzle_data(self, data):
         assert data.shape == (*self.leading_shape, self.M, self.K)
         data = self._maybe_mT(data).contiguous()
-        *batch, M_in, K_in = data.shape
-        *_, M, K = self._padded_shape
-        pad_m = M - M_in
-        pad_k = K - K_in
+        *batch, M, K = data.shape
+        SWIZZLE_ALIGN_M = 2 * self.num_warps * 2 * 8
+        SWIZZLE_ALIGN_K = 2
+        pad_m = (SWIZZLE_ALIGN_M - (M % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
+        pad_k = (SWIZZLE_ALIGN_K - (K % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
         if data.numel():
             data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
+        M += pad_m
+        K += pad_k
         assert data.is_contiguous()
+        assert M % (
+            2 * self.num_warps * 2 *
+            8) == 0 and K % 2 == 0, f"Input tensor must have a subtile of shape (..., {2 * self.num_warps * 2 * 8}, 2)"
         b = len(batch)
-        data = data.reshape(*batch, M // (32 * self.num_warps), 2, self.num_warps, 2, 8, K // 2, 2)
+        data = data.reshape(*batch, M // (2 * self.num_warps * 2 * 8), 2, self.num_warps, 2, 8, K // 2, 2)
         perm = [0, 2, 5, 1, 4, 6, 3]
         perm = list(range(b)) + [b + p for p in perm]
         data = data.permute(*perm)

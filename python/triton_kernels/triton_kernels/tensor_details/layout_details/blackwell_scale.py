@@ -118,7 +118,7 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
 
         data = data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
         data = data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
-        data = data.view(*self.storage_shape)
+        data = data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
         return data
 
     def unswizzle_data(self, data):
@@ -181,7 +181,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
             data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32,
                                 self.K_pad // self.SWIZZLE_K, self.SWIZZLE_K)
             data = data.transpose(2, 4).contiguous()
-            data = data.view(*self.storage_shape)
+            data = data.view(1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256)
             return data
 
         # The following code is equivalent to the above, but faster for GPU tensors.
@@ -190,7 +190,11 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         assert tuple(data.shape) == tuple(self.shape)
         data = data.reshape((self.B, self.K, self.N))
 
-        out = torch.empty(self.storage_shape, dtype=torch.uint8, device=data.device)
+        out = torch.empty(
+            (1, self.B * self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 2, 256),
+            dtype=torch.uint8,
+            device=data.device,
+        )
         if not out.numel():
             return out
 
