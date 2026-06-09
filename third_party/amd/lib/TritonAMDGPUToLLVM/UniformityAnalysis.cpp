@@ -12,6 +12,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/Support/TypeID.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -93,6 +94,8 @@ bool isKernelEntry(LLVM::LLVMFuncOp func) { return func.isPublic(); }
 class UniformityAnalysis
     : public SparseForwardDataFlowAnalysis<UniformityLattice> {
 public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(UniformityAnalysis)
+
   using SparseForwardDataFlowAnalysis::SparseForwardDataFlowAnalysis;
 
   LogicalResult visitOperation(Operation *op,

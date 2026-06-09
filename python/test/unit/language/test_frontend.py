@@ -385,6 +385,42 @@ def test_tuple_assignment_respects_prior_constexpr_annotation():
     run_parser(kernel)
 
 
+def test_tuple_assignment_constexpr_tuple_matches_annassign():
+
+    @triton.jit
+    def kernel():
+        a: tl.constexpr
+        a, b = (0, 1), 2
+
+        assigned_a: tl.constexpr = (0, 1)
+        assigned_b = 2
+
+        tl.static_assert(a == assigned_a)
+        tl.static_assert(a.type == ((0, 1)).type)
+        tl.static_assert(assigned_a.type == ((0, 1)).type)
+        tl.static_assert(b.dtype == tl.int32)
+        tl.static_assert(assigned_b.dtype == tl.int32)
+
+    run_parser(kernel)
+
+
+def test_tuple_assignment_constexpr_tuple_normalizes_recursively():
+
+    @triton.jit
+    def kernel():
+        a: tl.constexpr
+        a, b = ((0, 1), (2, 3)), 4
+
+        assigned_a: tl.constexpr = ((0, 1), (2, 3))
+
+        tl.static_assert(a == assigned_a)
+        tl.static_assert(a.type == (((0, 1), (2, 3))).type)
+        tl.static_assert(assigned_a.type == (((0, 1), (2, 3))).type)
+        tl.static_assert(b.dtype == tl.int32)
+
+    run_parser(kernel)
+
+
 def test_named_expr_respects_prior_constexpr_annotation():
 
     @triton.jit

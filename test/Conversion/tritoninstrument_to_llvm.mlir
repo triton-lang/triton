@@ -38,7 +38,7 @@ tt.func private @experimental_buffer_descriptors_shared() {
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_lock_acquire
 // CHECK: 09atom.global.acquire.gpu.cas.b32
-// CHECK: nvvm.barrier0
+// CHECK: nvvm.barrier
 tt.func private @experimental_lock_acquire(
   %lock: !tt.ptr<i32>,
   %pred: i1
@@ -55,7 +55,7 @@ tt.func private @experimental_lock_acquire(
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_lock_release
-// CHECK: nvvm.barrier0
+// CHECK: nvvm.barrier
 // CHECK: atom.global.release.gpu.exch.b32
 tt.func private @experimental_lock_release(
   %lock: !tt.ptr<i32>,
