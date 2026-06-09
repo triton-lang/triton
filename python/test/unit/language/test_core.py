@@ -553,6 +553,29 @@ def test_shift_op(dtype_x, dtype_y, op, num_ctas, device):
     _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas, y_low=0, y_high=bw)
 
 
+@pytest.mark.interpreter
+def test_interpreter_ashr_does_not_mutate_uint64_rhs(device):
+
+    @triton.jit
+    def kernel(Z, X, Y, BLOCK: tl.constexpr):
+        off = tl.arange(0, BLOCK)
+        x = tl.load(X + off)
+        y = tl.load(Y + off)
+        _ = x >> y
+        z = y + (1 << 63)
+        tl.store(Z + off, z)
+
+    x = np.array([-1, -8, -(1 << 62), 2], dtype=np.int64)
+    y = np.array([0, 1, 63, 1], dtype=np.uint64)
+    z = np.empty_like(y)
+
+    z_tri = to_triton(z, device=device, dst_type="uint64")
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device, dst_type="uint64")
+    kernel[(1, )](z_tri, x_tri, y_tri, BLOCK=y.size)
+    np.testing.assert_equal(to_numpy(z_tri), y + np.uint64(1 << 63))
+
+
 # ---------------
 # test compare ops
 # ---------------
@@ -1733,6 +1756,44 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
     if not is_cuda():
         return
     assert f"atom.global.{sem_str}" in h.asm["ptx"]
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
+                    reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
+def test_scalar_atomic_cas_multicta_result(device):
+
+    @triton.jit
+    def kernel(lock, output, BLOCK_SIZE: tl.constexpr):
+        old = tl.atomic_cas(lock, 0, 1)
+        offsets = tl.arange(0, BLOCK_SIZE)
+        tl.store(output + offsets, old)
+
+    block_size = 512
+    lock = torch.full((1, ), 7, device=device, dtype=torch.int32)
+    output = torch.empty((block_size, ), device=device, dtype=torch.int32)
+    kernel[(1, )](lock, output, BLOCK_SIZE=block_size, num_ctas=4)
+    torch.testing.assert_close(output, torch.full_like(output, 7))
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
+                    reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
+@pytest.mark.parametrize("size", [1, 4, 16, 128, 512])
+def test_tensor_atomic_cas_multicta_result(size, device):
+
+    @triton.jit
+    def kernel(lock, output, SIZE: tl.constexpr):
+        offsets = tl.arange(0, SIZE)
+        old = tl.atomic_cas(
+            lock + offsets,
+            tl.zeros((SIZE, ), tl.int32),
+            tl.full((SIZE, ), 1, tl.int32),
+        )
+        tl.store(output + offsets, old)
+
+    lock = torch.arange(7, size + 7, device=device, dtype=torch.int32)
+    output = torch.empty_like(lock)
+    kernel[(1, )](lock, output, SIZE=size, num_ctas=4)
+    torch.testing.assert_close(output, lock)
 
 
 @pytest.mark.interpreter
@@ -3341,6 +3402,21 @@ def get_test_dot_small_mn_mfma_cases():
             for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]]
 
 
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype,
+# out_dtype, kpack, mma_nonk_size
+def get_test_dot_kpack_kwidth_mfma_cases():
+    if not is_hip_cdna():
+        return []
+    return [
+        # Small K with kpack=2 forces the kPack guard for symmetric MFMA shapes.
+        (64, 64, 16, 4, False, False, 'None', 'ieee', 'float16', 'float32', 2, 16),
+        (64, 64, 16, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 2, 16),
+        # Asymmetric 64x4 / 4x64 MFMA shapes with kpack=2.
+        (64, 4, 32, 1, False, False, 'None', 'ieee', 'float32', 'float32', 2, None),
+        (4, 64, 32, 1, False, False, 'None', 'ieee', 'float32', 'float32', 2, None),
+    ]
+
+
 def get_test_dot_double_rate_cases():
     if not (is_hip_cdna() or is_hip_gfx1250()):
         return []
@@ -3395,6 +3471,7 @@ def get_test_small_dots_cases():
     get_test_dot_fp8_output_cases() + \
     get_test_dot_small_k_mfma_cases() + \
     get_test_dot_small_mn_mfma_cases() + \
+    get_test_dot_kpack_kwidth_mfma_cases() + \
     get_test_dot_small_mn_wmma_cases() + \
     get_test_dot_small_k_wmma_cases() + \
     get_test_dot_softmax() + \
@@ -5728,15 +5805,16 @@ def test_constexpr_assignment(literal, tensor_ty):
     def kernel(input_literal: tl.constexpr, tensor_type: tl.constexpr):
         patched_literal: tl.constexpr = PATCHED
         # Sanity checks
-        tl.static_assert(patched_literal.type == constexpr_type(PATCHED))
-        tl.static_assert(input_literal.type == constexpr_type(PATCHED))
+        tl.static_assert(patched_literal.type == (PATCHED).type)
+        tl.static_assert(input_literal.type == (PATCHED).type)
 
         assigned_literal: tl.constexpr = input_literal
-        tl.static_assert(assigned_literal.type == constexpr_type(PATCHED))
+        tl.static_assert(assigned_literal.type == (PATCHED).type)
         tl.static_assert(assigned_literal == patched_literal)
 
         if tensor_type is not None:
             assigned_variable = input_literal
+            tl.static_assert(input_literal.type == constexpr_type(PATCHED))
             tl.static_assert(assigned_variable.type == tensor_type)
 
     kernel_patched = patch_kernel(kernel, {'PATCHED': f"{literal}"})

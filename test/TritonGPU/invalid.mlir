@@ -326,6 +326,46 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#mma0 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1], instrShape = [16, 8]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#mma0, kWidth=4}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#mma0, kWidth=4}>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  tt.func @dot_i8_invalid_operand_type(%A: tensor<16x32xi16, #dot_operand_a>, %B: tensor<32x8xi8, #dot_operand_b>, %C: tensor<16x8xi32, #mma0>) {
+    // expected-error@+1 {{operand #0 must be ranked tensor of 8-bit signless integer values}}
+    %D = "tti.dot_i8"(%A, %B, %C) {aSigned = true, bSigned = true} : (tensor<16x32xi16, #dot_operand_a>, tensor<32x8xi8, #dot_operand_b>, tensor<16x8xi32, #mma0>) -> tensor<16x8xi32, #mma0>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#blocked}>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  tt.func @dot_i8_non_mma_layout(%A: tensor<16x32xi8, #dot_operand_a>, %B: tensor<32x8xi8, #dot_operand_b>, %C: tensor<16x8xi32, #blocked>) {
+    // expected-error@+1 {{requires NVIDIA MMAv2 operand and result layouts}}
+    %D = tti.dot_i8 %A, %B, %C, aSigned = true, bSigned = true : tensor<16x32xi8, #dot_operand_a> * tensor<32x8xi8, #dot_operand_b> -> tensor<16x8xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#mma0 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1], instrShape = [16, 8]}>
+#mma1 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1], instrShape = [32, 8]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#mma0, kWidth=4}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#mma1, kWidth=4}>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  tt.func @dot_i8_mismatched_layout(%A: tensor<16x32xi8, #dot_operand_a>, %B: tensor<32x8xi8, #dot_operand_b>, %C: tensor<16x8xi32, #mma0>) {
+    // expected-error@+1 {{requires matching NVIDIA MMAv2 layouts}}
+    %D = tti.dot_i8 %A, %B, %C, aSigned = true, bSigned = true : tensor<16x32xi8, #dot_operand_a> * tensor<32x8xi8, #dot_operand_b> -> tensor<16x8xi32, #mma0>
+    tt.return
+  }
+}
+
+// -----
+
 tt.func @warp_specialize_no_holder() {
   // expected-error @below {{'ttg.warp_specialize' op expected to find only a `ttg.warp_specialize.partitions` op inside its second region}}
   "ttg.warp_specialize"() ({

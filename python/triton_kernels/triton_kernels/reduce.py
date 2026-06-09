@@ -736,6 +736,8 @@ def reduce_forward(
     y_mxscale = None
     if y_has_mx:
         y_mxscale = torch.empty((S0, triton.cdiv(Y_S1, y_microblock_size)), device=x.device, dtype=y_mx_scale_dtype)
+    if S0 == 0 or Y_S1 == 0:
+        return y, y_mxscale
     # Strides for X along reduced and non-reduced dims
     stride_xr = x.stride(dim)
     stride_x0 = x.stride(nonred[0])
@@ -978,6 +980,8 @@ def reduce_backward(
     reduction_n = (postprocess_fn1.specs.reduction_n if postprocess_fn1 is not None else FnSpecs.default().reduction_n)
     Y_S1 = X_S1 // reduction_n
     assert dy.shape == (S0, Y_S1), f"dY shape {dy.shape} mismatch with (S0={S0}, Y_S1={Y_S1})"
+    if S0 == 0 or X_S1 == 0:
+        return
 
     # Strides for dX must match the element size of the tensor passed to the kernel.
     # If we reinterpret the dtype (e.g., flex/float8), use the reinterpreted view's strides.

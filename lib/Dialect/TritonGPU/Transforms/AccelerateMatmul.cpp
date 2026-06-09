@@ -88,7 +88,7 @@ SmallVector<unsigned> warpsPerTileV2(DotOpInterface dotOp,
   auto rank = shape.size();
   // Early exit for batched matmul
   if (rank == 3)
-    return {(unsigned)numWarps, 1, 1};
+    return getMmaV2WarpsPerCTA(shape, numWarps);
 
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion() &&
@@ -117,33 +117,7 @@ SmallVector<unsigned> warpsPerTileV2(DotOpInterface dotOp,
     }
   }
 
-  assert(rank == 2);
-  SmallVector<int64_t> shapePerWarp = {16, 8};
-  SmallVector<int64_t> warps = {1, 1};
-  // Compute repM and repN
-  SmallVector<int64_t> reps = {ceil(shape[0], shapePerWarp[0]),
-                               ceil(shape[1], shapePerWarp[1])};
-  // The formula for the number of registers given the reps is
-  // repM * 4 * repK + repN * 2 * repK + regsC
-  // where regsC = repM * repN * 4, which does not depend on the warp shape
-  //
-  // As such, to minimize the register pressure, we need to balance
-  // repM and repN. We then untie towards M, as the lhs tile has 4 elements,
-  // and the rhs tile has just 2.
-  while (product(warps) < numWarps) {
-    if (reps[0] >= reps[1]) {
-      warps[0] *= 2;
-      // Too many warps for this mma (repM == repN == 1).
-      // We allocate the remaining warps to the left (arbitrary choice)
-      if (reps[0] != 1) {
-        reps[0] /= 2;
-      }
-    } else {
-      warps[1] *= 2;
-      reps[1] /= 2;
-    }
-  }
-  return {(unsigned)warps[0], (unsigned)warps[1]};
+  return getMmaV2WarpsPerCTA(shape, numWarps);
 }
 SmallVector<unsigned, 2>
 warpsPerTileV3(DotOpInterface dotOp, const ArrayRef<int64_t> shape,
@@ -224,26 +198,140 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
   return LocalAllocOp::create(rewriter, arg.getLoc(), newType, arg);
 }
 
-static LocalAllocOp
-getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
-  OpBuilder::InsertionGuard g(rewriter);
-  auto argType = cast<RankedTensorType>(arg.getType());
+static bool isTmemCopyCompatibleScale(RankedTensorType argType,
+                                      bool usesTMAload) {
   assert(argType.getEncoding() && "unexpected tensor type");
-  auto newOrder = getOrderForMemory(argType);
+  {
+    auto shmemLayout = NVMMASharedEncodingAttr::get(
+        argType.getContext(), /*swizzlingByteWidth=*/0,
+        /*transposed=*/false,
+        /*elementBitWidth=*/8,
+        /*fp4Padded=*/false, getCGALayout(argType.getEncoding()));
+    auto type = MemDescType::get(
+        argType.getShape(), argType.getElementType(), shmemLayout,
+        SharedMemorySpaceAttr::get(argType.getContext()));
+    if (!isInnermostContiguous(type, 512)) {
+      // TMEM copy expects metadata "chunks" in SMEM to be stored contiguously
+      // in the innermost axes.
+      return false;
+    }
+  }
 
-  Attribute SharedMemorySpace =
-      SharedMemorySpaceAttr::get(argType.getContext());
-  auto CGALayout = getCGALayout(argType.getEncoding());
-  // No swizzling for scale for now
-  auto newLayout = NVMMASharedEncodingAttr::get(
-      argType.getContext(), /*swizzlingByteWidth=*/0,
-      /*transposed=*/false,
-      /*elementBitWidth=*/argType.getElementType().getIntOrFloatBitWidth(),
-      /*fp4Padded=*/false, CGALayout);
-  auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
-                                  newLayout, SharedMemorySpace);
-  rewriter.setInsertionPointAfterValue(arg);
-  return LocalAllocOp::create(rewriter, loc, newType, arg);
+  if (usesTMAload)
+    return true;
+
+  if (argType.getRank() != 2) {
+    // TODO: Add support for higher rank when 5D coalesced load is fixed.
+    return false;
+  }
+
+  auto innermostBits = argType.getDimSize(argType.getRank() - 1) * 8;
+  return innermostBits % (32 * 128) == 0;
+}
+
+template <typename OpTy>
+static OpTy getDefiningOpSkippingConvertLayout(Value value) {
+  while (auto cvtOp = value.getDefiningOp<ConvertLayoutOp>())
+    value = cvtOp.getSrc();
+  return value.getDefiningOp<OpTy>();
+}
+
+static Value stripConvertLayout(Value value) {
+  while (auto cvtOp = value.getDefiningOp<ConvertLayoutOp>())
+    value = cvtOp.getSrc();
+  return value;
+}
+
+static Value
+tryCreateTmemCopyCompatibleScaleOperand(Value scale,
+                                        mlir::PatternRewriter &rewriter) {
+  OpBuilder::InsertionGuard g(rewriter);
+  // The final reshape to conform to the logical shape requirement of
+  // dot_scaled.
+  auto reshape2D = getDefiningOpSkippingConvertLayout<ReshapeOp>(scale);
+  if (!reshape2D)
+    return Value();
+
+  auto scaleType = dyn_cast<RankedTensorType>(reshape2D.getResult().getType());
+  if (!scaleType || scaleType.getShape().size() != 2)
+    return Value();
+
+  auto scale2DShape = scaleType.getShape();
+  auto blockMN = scale2DShape[0];
+  auto numScales = scale2DShape[1];
+  if (blockMN % 128 != 0 || numScales % 4 != 0)
+    return Value();
+
+  // Permute to expose the 32x4x4 interleaving used by scale blocks in TMEM.
+  auto transOp =
+      getDefiningOpSkippingConvertLayout<TransOp>(reshape2D.getSrc());
+  if (!transOp || transOp.getOrder() != ArrayRef<int32_t>({0, 3, 2, 1, 4}))
+    return Value();
+
+  // A logical scale tensor has shape [block_mn, num_scales]. The tensor view
+  // chain in a user kernel signals TMEMCopy compatibility by exposing the
+  // underlying 128x4 scale block as
+  //     --reshape
+  //   [mn_copy_tiles, k_copy_tiles, 32, 4, 4]
+  //     --trans {0, 3, 2, 1, 4}-->
+  //   [mn_copy_tiles, 4, 32, k_copy_tiles, 4]
+  //     --flatten-->
+  //   [block_mn, num_scales]
+  //
+  // The block shape with which the scale tensor is loaded is flexible:
+  // For example, [.., 2, 256], [.., 512], and [.., 32, 4, 4] are all acceptable
+  // as long as a reshape exposes the same 32x4x4 blocks before the transpose.
+  auto mnCopyTiles = blockMN / 128;
+  auto kCopyTiles = numScales / 4;
+  SmallVector<int64_t> tiledScaleShape = {mnCopyTiles, kCopyTiles, 32, 4, 4};
+
+  Value tiledScale = stripConvertLayout(transOp.getSrc());
+  auto reshapeTiled = tiledScale.getDefiningOp<ReshapeOp>();
+  if (!reshapeTiled ||
+      reshapeTiled.getType().getShape() != ArrayRef<int64_t>(tiledScaleShape))
+    return Value();
+
+  Value packedScale = stripConvertLayout(reshapeTiled.getSrc());
+  auto packedScaleType = dyn_cast<RankedTensorType>(packedScale.getType());
+  if (!packedScaleType)
+    return Value();
+
+  auto *loadOp = packedScale.getDefiningOp();
+  if (!isa_and_nonnull<LoadOp, DescriptorLoadLikeOpInterface>(loadOp))
+    return Value();
+
+  bool usesTMAload = isa<DescriptorLoadLikeOpInterface>(loadOp);
+  if (!isTmemCopyCompatibleScale(packedScaleType, usesTMAload))
+    return Value();
+
+  auto sharedMemory = SharedMemorySpaceAttr::get(scaleType.getContext());
+  auto sinkLayout = getScaleSmemLayoutForTMEMCopy(
+      scaleType.getContext(), scaleType.getShape(),
+      getCGALayout(scaleType.getEncoding()));
+  auto layout = SharedLinearEncodingAttr::get(scaleType.getContext(),
+                                              std::move(sinkLayout),
+                                              /*alignment=*/128);
+  auto sinkType =
+      MemDescType::get(scaleType.getShape(), scaleType.getElementType(), layout,
+                       sharedMemory, /*mutableMemory=*/false);
+  rewriter.setInsertionPointAfterValue(reshape2D.getResult());
+  return LocalAllocOp::create(rewriter, reshape2D.getLoc(), sinkType,
+                              reshape2D.getResult());
+}
+
+static Value createTmemScaleOperand(Value tensor, Attribute tmemEncoding,
+                                    Attribute tensorMemorySpace, int numWarps,
+                                    Location loc, PatternRewriter &rewriter) {
+  auto tensorType = cast<RankedTensorType>(tensor.getType());
+  auto tmemType =
+      MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
+                       tmemEncoding, tensorMemorySpace,
+                       /*mutableMemory=*/false);
+  auto tmemLayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(tmemType, numWarps);
+  auto stagedType = tensorType.cloneWithEncoding(tmemLayout);
+  Value converted = ConvertLayoutOp::create(rewriter, loc, stagedType, tensor);
+  return triton::nvidia_gpu::TMEMAllocOp::create(rewriter, loc, tmemType,
+                                                 /*token=*/Type(), converted);
 }
 
 SmallVector<unsigned, 3>
@@ -401,12 +489,13 @@ public:
     auto oldBType = cast<RankedTensorType>(b.getType());
     auto oldRetType = cast<RankedTensorType>(dotOp.getType());
 
-    // Enable F64 MMA only on SM80/SM90 with high performance F64 tensorcore.
+    // Enable F64 MMA only on targets with high performance F64 tensor cores.
     // Otherwise, fallback to F64 FMA for better performance.
     if ((oldAType.getElementType().isF64() ||
          oldBType.getElementType().isF64() ||
          oldRetType.getElementType().isF64()) &&
-        !(computeCapability == 80 || computeCapability == 90)) {
+        !(computeCapability == 80 || computeCapability == 90 ||
+          (computeCapability >= 100 && computeCapability < 120))) {
       return failure();
     }
 
@@ -588,60 +677,6 @@ public:
   }
 };
 
-Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
-  /*
-    Rewrite load(scale) -> local_load(local_alloc(load(scale))).
-    This function does not add anything to the final IR when num_stages > 1,
-    but it makes it easy to apply TMEM copy rewriting later.
-
-    Since scales are stored in TMEM for MMAv5 scaled dot, loading of scales do
-    not needs to be put into SMEM. But in practice, the software pipeliner puts
-    loading of scales into multi-buffered SMEM. At that point, the SMEM
-    allocation created here is eliminated.
-   */
-  OpBuilder::InsertionGuard g(rewriter);
-  auto op = scale.getDefiningOp();
-  Operation *loadConsumer = nullptr;
-
-  if (!op)
-    return scale;
-
-  while (!isa<LoadOp, DescriptorLoadLikeOpInterface>(op)) {
-    if (auto reshape = dyn_cast<ReshapeOp>(op)) {
-      op = reshape.getSrc().getDefiningOp();
-      loadConsumer = reshape;
-    } else if (auto trans = dyn_cast<TransOp>(op)) {
-      op = trans.getSrc().getDefiningOp();
-      loadConsumer = trans;
-    } else if (auto cvt = dyn_cast<ConvertLayoutOp>(op)) {
-      op = cvt.getSrc().getDefiningOp();
-      loadConsumer = cvt;
-    } else {
-      // Unrecognized pattern, bail out. In practice, this implies that MMA
-      // pipelining will not apply to the scaled dot op, since scales will not
-      // be in passed through SMEM to tc_gen5_mma_scaled.
-      return scale;
-    }
-  }
-
-  auto scaleAfterLoad = op->getResult(0);
-  auto scaleSmemAlloc =
-      getSharedMemoryScale(scaleAfterLoad, rewriter, op->getLoc());
-
-  rewriter.setInsertionPointAfterValue(scaleSmemAlloc);
-  auto localLoad = LocalLoadOp::create(
-      rewriter, op->getLoc(), scaleAfterLoad.getType(), scaleSmemAlloc);
-
-  rewriter.replaceAllUsesExcept(scaleAfterLoad, localLoad.getResult(),
-                                scaleSmemAlloc);
-
-  if (loadConsumer) {
-    return scale;
-  } else {
-    return localLoad;
-  }
-}
-
 class ScaledBlockedToMMA : public mlir::OpRewritePattern<triton::DotScaledOp> {
   int computeCapability;
 
@@ -815,7 +850,7 @@ public:
     auto bitwidth = oldRetType.getElementType().getIntOrFloatBitWidth();
     unsigned colStride = 32 / bitwidth;
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
-        context, m, n, colStride, CGALayout, false);
+        context, m, n, colStride, CGALayout);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     MemDescType accMemDescType =
@@ -837,43 +872,25 @@ public:
     Attribute scaleEncoding =
         triton::nvidia_gpu::TensorMemoryScalesEncodingAttr::get(context,
                                                                 CGALayout);
-    MemDescType scaleAType = triton::gpu::MemDescType::get(
-        oldScaleAType.getShape(), oldScaleAType.getElementType(), scaleEncoding,
-        tensorMemorySpace,
-        /*mutableMemory=*/false);
-    MemDescType scaleBType = triton::gpu::MemDescType::get(
-        oldScaleBType.getShape(), oldScaleBType.getElementType(), scaleEncoding,
-        tensorMemorySpace,
-        /*mutableMemory=*/false);
-    Attribute scaleALayout =
-        nvidia_gpu::getDefaultLayoutForTmemLdSt(scaleAType, numWarps);
-    Attribute scaleBLayout =
-        nvidia_gpu::getDefaultLayoutForTmemLdSt(scaleBType, numWarps);
-    RankedTensorType newScaleAType =
-        oldScaleAType.cloneWithEncoding(scaleALayout);
-    RankedTensorType newScaleBType =
-        oldScaleBType.cloneWithEncoding(scaleBLayout);
-
-    auto lhsScale = addSmemStageToScaleLoad(dotOp.getAScale(), rewriter);
-    auto rhsScale = addSmemStageToScaleLoad(dotOp.getBScale(), rewriter);
-
-    Value newScaleA =
-        ConvertLayoutOp::create(rewriter, loc, newScaleAType, lhsScale);
-    Value newScaleB =
-        ConvertLayoutOp::create(rewriter, loc, newScaleBType, rhsScale);
-
-    // We don't need to track memory dependencies for the scale operands since
-    // they are not pipelined.
-    auto scaleA = triton::nvidia_gpu::TMEMAllocOp::create(
-        rewriter, loc, scaleAType, /*token=*/Type(), newScaleA);
-    auto scaleB = triton::nvidia_gpu::TMEMAllocOp::create(
-        rewriter, loc, scaleBType, /*token=*/Type(), newScaleB);
+    Value scaleA =
+        tryCreateTmemCopyCompatibleScaleOperand(dotOp.getAScale(), rewriter);
+    if (!scaleA) {
+      scaleA =
+          createTmemScaleOperand(dotOp.getAScale(), scaleEncoding,
+                                 tensorMemorySpace, numWarps, loc, rewriter);
+    }
+    Value scaleB =
+        tryCreateTmemCopyCompatibleScaleOperand(dotOp.getBScale(), rewriter);
+    if (!scaleB) {
+      scaleB =
+          createTmemScaleOperand(dotOp.getBScale(), scaleEncoding,
+                                 tensorMemorySpace, numWarps, loc, rewriter);
+    }
 
     auto vTrue = arith::ConstantIntOp::create(rewriter, dotOp.getLoc(), 1, 1);
     auto mmaOp = triton::nvidia_gpu::TCGen5MMAScaledOp::create(
-        rewriter, loc, tokType, a, b, acc.getResult(), acc.getToken(),
-        scaleA.getResult(), scaleB.getResult(), dotOp.getAElemType(),
-        dotOp.getBElemType(),
+        rewriter, loc, tokType, a, b, acc.getResult(), acc.getToken(), scaleA,
+        scaleB, dotOp.getAElemType(), dotOp.getBElemType(),
         /*useD=*/vTrue, /*pred=*/vTrue);
 
     auto ld = triton::nvidia_gpu::TMEMLoadOp::create(

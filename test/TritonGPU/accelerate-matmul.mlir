@@ -325,6 +325,99 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 4], threadsPerWarp = [1, 1, 1, 8, 4], warpsPerCTA = [1, 1, 1, 4, 1], order = [4, 3, 2, 1, 0]}>
+#blocked4 = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 4], threadsPerWarp = [1, 1, 8, 4, 1], warpsPerCTA = [1, 1, 4, 1, 1], order = [4, 3, 2, 1, 0]}>
+#blocked5 = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 4], threadsPerWarp = [1, 4, 8, 1, 1], warpsPerCTA = [1, 1, 4, 1, 1], order = [4, 1, 2, 3, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[32, 0], [64, 0], [1, 0], [2, 0], [4, 0]], warp = [[8, 0], [16, 0]], block = []}>
+
+// CHECK-LABEL: {{#shared2 = #ttg\.shared_linear<\{offset = \[\[0, 1\], \[0, 2\], \[32, 0\], \[64, 0\], \[1, 0\], \[2, 0\], \[4, 0\], \[8, 0\], \[16, 0\]\]\}, alignment = 128>}}
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @mmav5_scale_desc_tma
+  // CHECK-DAG: %[[A_SMEM:.+]] = ttg.local_alloc %arg0 : (tensor<128x128xi8, #{{.*}}>) -> !ttg.memdesc<128x128xi8, #{{.*}}, #smem>
+  // CHECK-DAG: %[[B_SMEM:.+]] = ttg.local_alloc %arg1 : (tensor<64x128xi8, #{{.*}}>) -> !ttg.memdesc<64x128xi8, #{{.*}}, #smem>
+  // CHECK: %[[SCALE_A_LOAD:.+]] = tt.descriptor_load %arg2[%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : !tt.tensordesc<1x1x1x32x16xi8> -> tensor<1x1x1x32x16xi8, #{{.*}}>
+  // CHECK: %[[SCALE_A_RS0:.+]] = tt.reshape %[[SCALE_A_LOAD]] : tensor<1x1x1x32x16xi8, #{{.*}}> -> tensor<1x1x32x4x4xi8, #{{.*}}>
+  // CHECK: %[[SCALE_A_TR0:.+]] = tt.trans %[[SCALE_A_RS0]] {order = array<i32: 0, 3, 2, 1, 4>} : tensor<1x1x32x4x4xi8, #{{.*}}> -> tensor<1x4x32x1x4xi8, #{{.*}}>
+  // CHECK: %[[SCALE_A_FINAL:.+]] = tt.reshape %[[SCALE_A_TR0]] : tensor<1x4x32x1x4xi8, #{{.*}}> -> tensor<128x4xi8, #{{.*}}>
+  // CHECK: %[[SCALE_A_SMEM:.+]] = ttg.local_alloc %[[SCALE_A_FINAL]] : (tensor<128x4xi8, #{{.*}}>) -> !ttg.memdesc<128x4xi8, #shared2, #smem>
+  // CHECK: %[[SCALE_B_LOAD:.+]] = tt.descriptor_load %arg3[%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : !tt.tensordesc<1x1x1x32x16xi8> -> tensor<1x1x1x32x16xi8, #{{.*}}>
+  // CHECK: %[[SCALE_B_RS0:.+]] = tt.reshape %[[SCALE_B_LOAD]] : tensor<1x1x1x32x16xi8, #{{.*}}> -> tensor<1x1x32x4x4xi8, #{{.*}}>
+  // CHECK: %[[SCALE_B_TR0:.+]] = tt.trans %[[SCALE_B_RS0]] {order = array<i32: 0, 3, 2, 1, 4>} : tensor<1x1x32x4x4xi8, #{{.*}}> -> tensor<1x4x32x1x4xi8, #{{.*}}>
+  // CHECK: %[[SCALE_B_FINAL:.+]] = tt.reshape %[[SCALE_B_TR0]] : tensor<1x4x32x1x4xi8, #{{.*}}> -> tensor<128x4xi8, #{{.*}}>
+  // CHECK: %[[SCALE_B_SMEM:.+]] = ttg.local_alloc %[[SCALE_B_FINAL]] : (tensor<128x4xi8, #{{.*}}>) -> !ttg.memdesc<128x4xi8, #shared2, #smem>
+  // CHECK-NOT: ttng.tmem_alloc %{{.*}} : (tensor<128x4xi8
+  // CHECK: ttng.tc_gen5_mma_scaled %[[A_SMEM]], %[[B_SMEM]], %{{.*}}, %[[SCALE_A_SMEM]], %[[SCALE_B_SMEM]], %{{.*}}, %{{.*}} lhs = e4m3 rhs = e2m1
+  tt.func public @mmav5_scale_desc_tma(
+      %a: tensor<128x128xi8, #blocked2>,
+      %b: tensor<64x128xi8, #blocked>,
+      %scale_a_desc: !tt.tensordesc<1x1x1x32x16xi8>,
+      %scale_b_desc: !tt.tensordesc<1x1x1x32x16xi8>,
+      %c: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %scale_a0 = tt.descriptor_load %scale_a_desc[%c0_i32, %c0_i32, %c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x1x1x32x16xi8> -> tensor<1x1x1x32x16xi8, #blocked3>
+    %scale_a1 = tt.reshape %scale_a0 : tensor<1x1x1x32x16xi8, #blocked3> -> tensor<1x1x32x4x4xi8, #blocked4>
+    %scale_a2 = tt.trans %scale_a1 {order = array<i32: 0, 3, 2, 1, 4>} : tensor<1x1x32x4x4xi8, #blocked4> -> tensor<1x4x32x1x4xi8, #blocked5>
+    %scale_a3 = tt.reshape %scale_a2 : tensor<1x4x32x1x4xi8, #blocked5> -> tensor<128x4xi8, #linear>
+    %scale_a4 = ttg.convert_layout %scale_a3 : tensor<128x4xi8, #linear> -> tensor<128x4xi8, #blocked1>
+    %scale_b0 = tt.descriptor_load %scale_b_desc[%c0_i32, %c0_i32, %c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x1x1x32x16xi8> -> tensor<1x1x1x32x16xi8, #blocked3>
+    %scale_b1 = tt.reshape %scale_b0 : tensor<1x1x1x32x16xi8, #blocked3> -> tensor<1x1x32x4x4xi8, #blocked4>
+    %scale_b2 = tt.trans %scale_b1 {order = array<i32: 0, 3, 2, 1, 4>} : tensor<1x1x32x4x4xi8, #blocked4> -> tensor<1x4x32x1x4xi8, #blocked5>
+    %scale_b3 = tt.reshape %scale_b2 : tensor<1x4x32x1x4xi8, #blocked5> -> tensor<128x4xi8, #linear>
+    %scale_b4 = ttg.convert_layout %scale_b3 : tensor<128x4xi8, #linear> -> tensor<128x4xi8, #blocked1>
+    %d = tt.dot_scaled %a scale %scale_a4, %b scale %scale_b4, %c lhs = e4m3 rhs = e2m1 {fastMath = false} : tensor<128x128xi8, #blocked2>, tensor<128x4xi8, #blocked1> * tensor<64x128xi8, #blocked>, tensor<128x4xi8, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.return %d : tensor<128x128xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked4 = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 4], threadsPerWarp = [1, 1, 8, 4, 1], warpsPerCTA = [1, 1, 4, 1, 1], order = [4, 3, 2, 1, 0]}>
+#blocked5 = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 4], threadsPerWarp = [1, 4, 8, 1, 1], warpsPerCTA = [1, 1, 4, 1, 1], order = [4, 1, 2, 3, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[32, 0], [64, 0], [1, 0], [2, 0], [4, 0]], warp = [[8, 0], [16, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @mmav5_scale_load_2d_tmem_copy
+  // CHECK-DAG: %[[A_SMEM:.+]] = ttg.local_alloc %arg0 : (tensor<128x128xi8, #{{.*}}>) -> !ttg.memdesc<128x128xi8, #{{.*}}, #smem>
+  // CHECK-DAG: %[[B_SMEM:.+]] = ttg.local_alloc %arg1 : (tensor<64x128xi8, #{{.*}}>) -> !ttg.memdesc<64x128xi8, #{{.*}}, #smem>
+  // CHECK: %[[SCALE_A_LOAD:.+]] = tt.load %arg2 : tensor<1x512x!tt.ptr<i8>, #{{.*}}>
+  // CHECK: %[[SCALE_A_RS0:.+]] = tt.reshape %[[SCALE_A_LOAD]] : tensor<1x512xi8, #{{.*}}> -> tensor<1x1x32x4x4xi8, #{{.*}}>
+  // CHECK: %[[SCALE_A_TR0:.+]] = tt.trans %[[SCALE_A_RS0]] {order = array<i32: 0, 3, 2, 1, 4>} : tensor<1x1x32x4x4xi8, #{{.*}}> -> tensor<1x4x32x1x4xi8, #{{.*}}>
+  // CHECK: %[[SCALE_A_FINAL:.+]] = tt.reshape %[[SCALE_A_TR0]] : tensor<1x4x32x1x4xi8, #{{.*}}> -> tensor<128x4xi8, #{{.*}}>
+  // CHECK: %[[SCALE_A_SMEM:.+]] = ttg.local_alloc %[[SCALE_A_FINAL]] : (tensor<128x4xi8, #{{.*}}>) -> !ttg.memdesc<128x4xi8, #{{.*}}, #smem>
+  // CHECK: %[[SCALE_B_LOAD:.+]] = tt.load %arg3 : tensor<1x512x!tt.ptr<i8>, #{{.*}}>
+  // CHECK: %[[SCALE_B_RS0:.+]] = tt.reshape %[[SCALE_B_LOAD]] : tensor<1x512xi8, #{{.*}}> -> tensor<1x1x32x4x4xi8, #{{.*}}>
+  // CHECK: %[[SCALE_B_TR0:.+]] = tt.trans %[[SCALE_B_RS0]] {order = array<i32: 0, 3, 2, 1, 4>} : tensor<1x1x32x4x4xi8, #{{.*}}> -> tensor<1x4x32x1x4xi8, #{{.*}}>
+  // CHECK: %[[SCALE_B_FINAL:.+]] = tt.reshape %[[SCALE_B_TR0]] : tensor<1x4x32x1x4xi8, #{{.*}}> -> tensor<128x4xi8, #{{.*}}>
+  // CHECK: %[[SCALE_B_SMEM:.+]] = ttg.local_alloc %[[SCALE_B_FINAL]] : (tensor<128x4xi8, #{{.*}}>) -> !ttg.memdesc<128x4xi8, #{{.*}}, #smem>
+  // CHECK-NOT: ttng.tmem_alloc %{{.*}} : (tensor<128x4xi8
+  // CHECK: ttng.tc_gen5_mma_scaled %[[A_SMEM]], %[[B_SMEM]], %{{.*}}, %[[SCALE_A_SMEM]], %[[SCALE_B_SMEM]], %{{.*}}, %{{.*}} lhs = e4m3 rhs = e2m1
+  tt.func public @mmav5_scale_load_2d_tmem_copy(
+      %a: tensor<128x128xi8, #blocked2>,
+      %b: tensor<64x128xi8, #blocked>,
+      %scale_a_ptr: tensor<1x512x!tt.ptr<i8>, #blocked3>,
+      %scale_b_ptr: tensor<1x512x!tt.ptr<i8>, #blocked3>,
+      %c: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
+    %scale_a0 = tt.load %scale_a_ptr : tensor<1x512x!tt.ptr<i8>, #blocked3>
+    %scale_a1 = tt.reshape %scale_a0 : tensor<1x512xi8, #blocked3> -> tensor<1x1x32x4x4xi8, #blocked4>
+    %scale_a2 = tt.trans %scale_a1 {order = array<i32: 0, 3, 2, 1, 4>} : tensor<1x1x32x4x4xi8, #blocked4> -> tensor<1x4x32x1x4xi8, #blocked5>
+    %scale_a3 = tt.reshape %scale_a2 : tensor<1x4x32x1x4xi8, #blocked5> -> tensor<128x4xi8, #linear>
+    %scale_b0 = tt.load %scale_b_ptr : tensor<1x512x!tt.ptr<i8>, #blocked3>
+    %scale_b1 = tt.reshape %scale_b0 : tensor<1x512xi8, #blocked3> -> tensor<1x1x32x4x4xi8, #blocked4>
+    %scale_b2 = tt.trans %scale_b1 {order = array<i32: 0, 3, 2, 1, 4>} : tensor<1x1x32x4x4xi8, #blocked4> -> tensor<1x4x32x1x4xi8, #blocked5>
+    %scale_b3 = tt.reshape %scale_b2 : tensor<1x4x32x1x4xi8, #blocked5> -> tensor<128x4xi8, #linear>
+    %d = tt.dot_scaled %a scale %scale_a3, %b scale %scale_b3, %c lhs = e4m3 rhs = e2m1 {fastMath = false} : tensor<128x128xi8, #blocked2>, tensor<128x4xi8, #linear> * tensor<64x128xi8, #blocked>, tensor<128x4xi8, #linear> -> tensor<128x128xf32, #blocked>
+    tt.return %d : tensor<128x128xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-DAG: #[[$TMEM:.+]] = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
   // CHECK-DAG: #[[$TMEM1:.+]] = #ttng.tensor_memory_scales_encoding
@@ -332,10 +425,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   //   CHECK-DAG:   %[[TRUE:.+]] = arith.constant true
   //   CHECK-DAG:   %[[A:.+]] = ttg.local_alloc %{{.*}} : (tensor<128x64xi8, #{{.*}}>) -> !ttg.memdesc<128x64xi8, #{{.*}}, #smem
   //   CHECK-DAG:   %[[B:.+]] = ttg.local_alloc %{{.*}} : (tensor<64x128xi8, #{{.*}}>) -> !ttg.memdesc<64x128xi8, #{{.*}}, #smem
-  //   CHECK-DAG:   %[[SCALEA_LOCAL:.+]] = ttg.local_alloc %{{.*}} : (tensor<128x2xi8, #{{.*}}>) -> !ttg.memdesc<128x2xi8, #{{.*}}, #smem>
-  //   CHECK:       ttg.local_load %[[SCALEA_LOCAL]] : !ttg.memdesc<128x2xi8, #{{.*}}, #smem> -> tensor<128x2xi8, #{{.*}}>
-  //   CHECK-DAG:   %[[SCALEB_LOCAL:.+]] = ttg.local_alloc %{{.*}} : (tensor<128x2xi8, #{{.*}}>) -> !ttg.memdesc<128x2xi8, #{{.*}}, #smem>
-  //   CHECK:       ttg.local_load %[[SCALEB_LOCAL]] : !ttg.memdesc<128x2xi8, #{{.*}}, #smem> -> tensor<128x2xi8, #{{.*}}>
   //   CHECK-DAG:   %[[ACC:.+]], %[[ACC_TOK:.+]] = ttng.tmem_alloc %{{.*}} : (tensor<128x128xf32, #{{.*}}>) -> (!ttg.memdesc<128x128xf32, #{{.*}}, #ttng.tensor_memory, mutable>, !ttg.async.token)
   //       CHECK:   %[[SCALEA:.+]] = ttng.tmem_alloc %{{.*}} : (tensor<128x2xi8, #{{.*}}>) -> !ttg.memdesc<128x2xi8, #[[$TMEM1]], #ttng.tensor_memory>
   //       CHECK:   %[[SCALEB:.+]] = ttng.tmem_alloc %{{.*}} : (tensor<128x2xi8, #{{.*}}>) -> !ttg.memdesc<128x2xi8, #[[$TMEM1]], #ttng.tensor_memory>
@@ -482,14 +571,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   //   CHECK-DAG:   %[[TRUE:.+]] = arith.constant true
   //   CHECK-DAG:   %[[B:.+]] = ttg.local_alloc %{{.*}} : (tensor<128x128xi8, #{{.*}}>) -> !ttg.memdesc<128x128xi8, #{{.*}}, #smem
   //   CHECK-DAG:   %[[A:.+]] = ttg.local_alloc %{{.*}} : (tensor<128x128xi8, #{{.*}}>) -> !ttg.memdesc<128x128xi8, #{{.*}}, #smem
-  //   CHECK-DAG:   %[[SCALEA_LOCAL:.+]] = ttg.local_alloc
-  //   CHECK:       ttg.local_load %[[SCALEA_LOCAL]]
-  //   CHECK-DAG:   %[[SCALEB_LOCAL:.+]] = ttg.local_alloc
-  //   CHECK:       ttg.local_load %[[SCALEB_LOCAL]]
   //   CHECK-DAG:   %[[ACC:.+]], %[[ACC_TOK:.+]] = ttng.tmem_alloc %{{.*}} : (tensor<128x128xf32, #{{.*}}>) -> (!ttg.memdesc<128x128xf32, #{{.*}}, #ttng.tensor_memory, mutable>, !ttg.async.token)
-  //       CHECK:   %[[SCALEA:.+]] = ttng.tmem_alloc %{{.*}} : (tensor<128x4xi8, #{{.*}}>) -> !ttg.memdesc<128x4xi8, #[[$TMEM1]], #ttng.tensor_memory>
-  //       CHECK:   %[[SCALEB:.+]] = ttng.tmem_alloc %{{.*}} : (tensor<128x4xi8, #{{.*}}>) -> !ttg.memdesc<128x4xi8, #[[$TMEM1]], #ttng.tensor_memory>
-  //       CHECK:   ttng.tc_gen5_mma_scaled %[[A]], %[[B]], %[[ACC]][%[[ACC_TOK]]], %[[SCALEA]], %[[SCALEB]], %[[TRUE]], %[[TRUE]] lhs = e4m3 rhs = e4m3
+  //       CHECK:   ttng.tc_gen5_mma_scaled %[[A]], %[[B]], %[[ACC]][%[[ACC_TOK]]], %{{.*}}, %{{.*}}, %[[TRUE]], %[[TRUE]] lhs = e4m3 rhs = e4m3
   tt.func public @mmav5_block_scaled_5d_scale(%a: tensor<128x128xi8, #blocked2>, %scale_a_ptr: tensor<1x1x32x4x4x!tt.ptr<i8>, #blocked3>, %b: tensor<128x128xi8, #blocked>, %scale_b_ptr: tensor<1x1x32x4x4x!tt.ptr<i8>, #blocked3>) -> tensor<128x128xf32, #blocked> {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
     %scale_a_5d = tt.load %scale_a_ptr: tensor<1x1x32x4x4x!tt.ptr<i8>, #blocked3>
@@ -882,11 +965,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:103", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @mmav5_f64_sm103_fallback
+  // CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 4], instrShape = [8, 8]}>
+  // CHECK-LABEL: @fp64_sm103_fallback_to_mmav2
   //  CHECK-NOT: ttng.tc_gen5_mma
-  //      CHECK: tt.dot %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x128xf64
-  // CHECK-SAME: -> tensor<128x256xf64
-  tt.func public @mmav5_f64_sm103_fallback(%a: tensor<128x128xf64, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<128x256xf64, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %c: tensor<128x256xf64, #blocked>)
+  //      CHECK: tt.dot %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x128xf64, #ttg.dot_op<{opIdx = 0, parent = #[[$MMA]], kWidth = 1}>> * tensor<128x256xf64, #ttg.dot_op<{opIdx = 1, parent = #[[$MMA]], kWidth = 1}>> -> tensor<128x256xf64, #[[$MMA]]>
+  tt.func public @fp64_sm103_fallback_to_mmav2(%a: tensor<128x128xf64, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %b: tensor<128x256xf64, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %c: tensor<128x256xf64, #blocked>)
         -> tensor<128x256xf64, #blocked> {
       %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<128x128xf64, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x256xf64, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf64, #blocked>
     tt.return %d : tensor<128x256xf64, #blocked>

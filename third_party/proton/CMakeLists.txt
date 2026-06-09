@@ -32,6 +32,7 @@ function(add_proton_library name)
   # Use system to skip warnings caused by legacy clang compilers
   target_include_directories(${name}
     SYSTEM PRIVATE
+      ${ROCPROFILER_SDK_INCLUDE_DIR}
       "${ROCM_INCLUDE_DIR}"
   )
 
