@@ -104,7 +104,6 @@ jobs:
 
           export CIBW_BUILD="cp3{10,11,12,13,14,14t}-manylinux_${{ matrix.config.arch }}"
           export CIBW_SKIP="cp{35,36,37,38,39}-*"
-          export CIBW_ENABLE=cpython-freethreading
           python3 -m cibuildwheel . --output-dir wheelhouse
 
       - uses: actions/upload-artifact@v7
