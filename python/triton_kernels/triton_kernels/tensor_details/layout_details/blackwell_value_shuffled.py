@@ -115,12 +115,11 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         This matches the baseline TMA block shape [block_n, packed_block_k] after swapping.
         """
         data = self._canonical_to_physical(data)
-        leading_shape = data.shape[:-2]
-        E = math.prod(leading_shape)
+        E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed = self.storage_shape
         K_packed, N = data.shape[-2:]
         data = data.reshape(E, K_packed, N)
-        tile_k_packed, tile_n, padded_K_packed, padded_N, num_tiles_k, num_tiles_n = \
-            self._compute_params(E, K_packed, N)
+        padded_K_packed = num_tiles_k * tile_k_packed
+        padded_N = num_tiles_n * tile_n
 
         # Pad to tile boundaries if needed (in original [E, K_packed, N] space)
         if K_packed != padded_K_packed or N != padded_N:
