@@ -29,7 +29,7 @@ These examples can be found in ``python/examples/gluon``.
         :link: example_attention-forward
         :link-type: ref
         :shadow: md
-        :class-card: msg-sd-card sd-rounded-2 sd-border-0
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -45,7 +45,7 @@ These examples can be found in ``python/examples/gluon``.
         :link: example_conv-dgrad
         :link-type: ref
         :shadow: md
-        :class-card: msg-sd-card sd-rounded-2 sd-border-0
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -61,7 +61,7 @@ These examples can be found in ``python/examples/gluon``.
         :link: example_conv-fprop
         :link-type: ref
         :shadow: md
-        :class-card: msg-sd-card sd-rounded-2 sd-border-0
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -77,7 +77,7 @@ These examples can be found in ``python/examples/gluon``.
         :link: example_conv-wgrad
         :link-type: ref
         :shadow: md
-        :class-card: msg-sd-card sd-rounded-2 sd-border-0
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -93,7 +93,7 @@ These examples can be found in ``python/examples/gluon``.
         :link: example_matmul-multicta
         :link-type: ref
         :shadow: md
-        :class-card: msg-sd-card sd-rounded-2 sd-border-0
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -109,7 +109,7 @@ These examples can be found in ``python/examples/gluon``.
         :link: example_2cta-block-scale-matmul
         :link-type: ref
         :shadow: md
-        :class-card: msg-sd-card sd-rounded-2 sd-border-0
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -125,7 +125,7 @@ These examples can be found in ``python/examples/gluon``.
         :link: example_moe-bmm1-fused-gather
         :link-type: ref
         :shadow: md
-        :class-card: msg-sd-card sd-rounded-2 sd-border-0
+        :class-card: sd-rounded-2 sd-border-0 msg-sd-card
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top

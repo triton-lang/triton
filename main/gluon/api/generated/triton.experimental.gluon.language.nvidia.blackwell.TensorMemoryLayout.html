@@ -138,7 +138,7 @@
 <h1>triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout<a class="headerlink" href="#triton-experimental-gluon-language-nvidia-blackwell-tensormemorylayout" title="Link to this heading"></a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout">
-<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.blackwell.</span></span><span class="sig-name descname"><span class="pre">TensorMemoryLayout</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">self,</span> <span class="pre">block:</span> <span class="pre">~typing.Tuple[int,</span> <span class="pre">int],</span> <span class="pre">col_stride:</span> <span class="pre">int,</span> <span class="pre">cga_layout:</span> <span class="pre">~typing.List[~typing.List[int]]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">two_ctas:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False</span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout" title="Link to this definition"></a></dt>
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.blackwell.</span></span><span class="sig-name descname"><span class="pre">TensorMemoryLayout</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">self,</span> <span class="pre">block:</span> <span class="pre">~typing.Tuple[int,</span> <span class="pre">int],</span> <span class="pre">col_stride:</span> <span class="pre">int,</span> <span class="pre">cga_layout:</span> <span class="pre">~typing.List[~typing.List[int]]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">two_ctas:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">fp4_padded:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False</span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout" title="Link to this definition"></a></dt>
 <dd><p>Describes the layout for tensor memory in Blackwell architecture.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
@@ -149,12 +149,16 @@ adjacent columns. Packed layouts use a stride of 1. Unpacked
 layouts use <code class="docutils literal notranslate"><span class="pre">32</span> <span class="pre">/</span> <span class="pre">bitwidth</span></code>.</p></li>
 <li><p><strong>cga_layout</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>List</em><em>[</em><em>int</em><em>]</em><em>]</em><em>]</em>) – CGA layout bases. Defaults to [].</p></li>
 <li><p><strong>two_ctas</strong> (<em>bool</em>) – Whether the layout is for two-CTA mode. Defaults to False.</p></li>
+<li><p><strong>fp4_padded</strong> (<em>bool</em>) – Whether byte-backed operand A uses the padded MMAv5
+FP4 layout. Its descriptor keeps the packed <code class="docutils literal notranslate"><span class="pre">Mx(K/2)xi8</span></code> shape,
+MMAv5 treats logical K as twice descriptor K, and physical TMEM
+reserves one byte per logical FP4 element. Defaults to False.</p></li>
 </ul>
 </dd>
 </dl>
 <dl class="py method">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout.__init__">
-<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">self,</span> <span class="pre">block:</span> <span class="pre">~typing.Tuple[int,</span> <span class="pre">int],</span> <span class="pre">col_stride:</span> <span class="pre">int,</span> <span class="pre">cga_layout:</span> <span class="pre">~typing.List[~typing.List[int]]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">two_ctas:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout.__init__" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">self,</span> <span class="pre">block:</span> <span class="pre">~typing.Tuple[int,</span> <span class="pre">int],</span> <span class="pre">col_stride:</span> <span class="pre">int,</span> <span class="pre">cga_layout:</span> <span class="pre">~typing.List[~typing.List[int]]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">two_ctas:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">fp4_padded:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.TensorMemoryLayout.__init__" title="Link to this definition"></a></dt>
 <dd></dd></dl>
 
 <p class="rubric">Methods</p>
@@ -171,16 +175,19 @@ layouts use <code class="docutils literal notranslate"><span class="pre">32</spa
 <p class="rubric">Attributes</p>
 <table class="autosummary longtable docutils align-default">
 <tbody>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">two_ctas</span></code></p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">fp4_padded</span></code></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">block</span></code></p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">two_ctas</span></code></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">col_stride</span></code></p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">block</span></code></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">cga_layout</span></code></p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">col_stride</span></code></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">cga_layout</span></code></p></td>
 <td><p></p></td>
 </tr>
 </tbody>

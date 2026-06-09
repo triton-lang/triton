@@ -24,6 +24,7 @@
 
    .. autosummary::
    
+      ~TensorMemoryLayout.fp4_padded
       ~TensorMemoryLayout.two_ctas
       ~TensorMemoryLayout.block
       ~TensorMemoryLayout.col_stride
