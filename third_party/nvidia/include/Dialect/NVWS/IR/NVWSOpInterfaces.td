@@ -15,19 +15,19 @@ def NVWS_DescriptorLoadOpInterface : OpInterface<"DescriptorLoadOpInterface", [T
   ];
 }
 
-def NVWS_ArefStageInterface : OpInterface<"ArefStageInterface"> {
+def NVWS_SemaphoreStageInterface : OpInterface<"SemaphoreStageInterface"> {
   let cppNamespace = "::mlir::triton::nvws";
 
   let description = [{
-     This interface implements setStage/getStage for aref ops
+     This interface implements setStage/getStage for semaphore ops
   }];
 
   // We can add more methods as needed.
   let methods = [
-    InterfaceMethod<"Return aref stage",
+    InterfaceMethod<"Return semaphore stage",
                     "::mlir::Value",
                     "getStage">,
-    InterfaceMethod<"Set aref stage",
+    InterfaceMethod<"Set semaphore stage",
                     "void",
                     "setStage",
                     (ins "::mlir::Value":$stage)>,

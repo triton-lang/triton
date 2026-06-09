@@ -41,131 +41,75 @@ include "NVWSOpInterfaces.td"
 class NVWS_Op<string mnemonic, list<Trait> traits = []> :
     Op<NVWS_Dialect, mnemonic, traits>;
 
-def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
-    RangedTypesMatchWith<"input types match Aref output type",
-                        "result", "buffers", "::llvm::cast<ArefType>($_self).getBaseType()">, Pure]> {
-  let summary = "Create an asynchronous reference.";
-  let description = [{
-    Create an asynchronous reference.
-
-    Takes as inputs a variadic number of buffers, and returns an ARef.
-    The inputs are expected to be array-like (i.e., Tensor, MemDesc, etc)
-    and the first axis of the shape should match between all inputs, representing
-    multi-buffering of the values.
+def NVWS_SemaphoreCreateOp : NVWS_Op<"semaphore.create", [
+    RangedTypesMatchWith<"input types match Semaphore output type",
+                         "result", "buffers",
+                         "::llvm::cast<SemaphoreType>($_self).getBaseType()">]> {
+  let summary = "Create a semaphore guarding a multi-buffered allocation.";
+  let arguments = (ins Variadic<TTG_MemDescType>:$buffers,
+                       I1Attr:$is_released);
+  let results = (outs NVWS_SemaphoreType:$result);
+  let assemblyFormat = [{
+    $buffers $is_released attr-dict `:` type($result)
   }];
-  let arguments = (ins Variadic<TTG_MemDescType>:$buffers);
-
-  let results = (outs NVWS_ArefType:$result);
-
-  let assemblyFormat = [{$buffers attr-dict `:` type($result)}];
   let hasVerifier = 1;
 }
 
-def NVWS_ArefBufferOp : NVWS_Op<"aref.buffer", [DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
-  let summary = "Get buffer from aref";
+def NVWS_SemaphoreAcquireOp : NVWS_Op<"semaphore.acquire", [
+    AttrSizedOperandSegments,
+    DeclareOpInterfaceMethods<NVWS_SemaphoreStageInterface>]> {
+  let summary = "Acquire a semaphore. Returns a token proving ownership.";
+  let arguments = (ins NVWS_SemaphoreType:$semaphore,
+                       Optional<I32>:$stage,
+                       Optional<I32>:$phase);
+  let results = (outs TTG_AsyncToken:$token);
+  let assemblyFormat = [{
+    $semaphore (`[` $stage^ `,` $phase `]`)? attr-dict
+    `:` type($semaphore) `->` type($token)
+  }];
+  let builders = [
+    OpBuilder<(ins "Value":$semaphore, "Type":$tokenType), [{
+      build($_builder, $_state, tokenType, semaphore, Value(), Value());
+    }]>
+  ];
+}
 
-  let arguments = (ins NVWS_ArefType:$aref,
-                        TTG_AsyncToken:$token,
-                        Optional<I32>:$stage);
+def NVWS_SemaphoreReleaseOp : NVWS_Op<"semaphore.release", [
+    DeclareOpInterfaceMethods<NVWS_SemaphoreStageInterface>]> {
+  let summary = "Release a semaphore, signaling the next partition.";
+  let arguments = (ins NVWS_SemaphoreType:$semaphore,
+                       TTG_AsyncToken:$token,
+                       Optional<I32>:$stage,
+                       NVWS_AsyncOpArrayAttr:$async_ops);
+  let assemblyFormat = [{
+    $semaphore (`[` $stage^ `]`)? `,` $token $async_ops attr-dict
+    `:` type($semaphore) `,` type($token)
+  }];
+  let builders = [
+    OpBuilder<(ins "Value":$semaphore, "Value":$token, "ArrayAttr":$async_ops), [{
+      build($_builder, $_state, semaphore, token, Value(), async_ops);
+    }]>
+  ];
+  let hasVerifier = 1;
+}
+
+def NVWS_SemaphoreBufferOp : NVWS_Op<"semaphore.buffer", [
+    DeclareOpInterfaceMethods<NVWS_SemaphoreStageInterface>]> {
+  let summary = "Get buffer view from semaphore at a given stage.";
+  let arguments = (ins NVWS_SemaphoreType:$semaphore,
+                       TTG_AsyncToken:$token,
+                       Optional<I32>:$stage);
   let results = (outs Variadic<TTG_MemDescType>:$buffers);
   let assemblyFormat = [{
-    $aref (`[` $stage^ `]`)? `,` $token attr-dict
-    `:` type($aref) `,` type($token) `->` type(results)
+    $semaphore (`[` $stage^ `]`)? `,` $token attr-dict
+    `:` type($semaphore) `,` type($token) `->` type(results)
   }];
-
   let builders = [
-    OpBuilder<(ins "Value":$aref, "TypeRange":$bufferTypes, "Value":$token), [{
-      build($_builder, $_state, bufferTypes, aref, token, Value());
+    OpBuilder<(ins "Value":$semaphore, "TypeRange":$bufferTypes, "Value":$token), [{
+      build($_builder, $_state, bufferTypes, semaphore, token, Value());
     }]>
   ];
-}
-
-def NVWS_ArefGetEnterOp : NVWS_Op<"aref.get.enter", [AttrSizedOperandSegments, DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
-  let summary = "Enter ArefGet region where the buffer can be used to read data";
-  let description = [{ Enter a "region" where you can freely read from the buffer)
-                      These ArefGet "regions" can span multiple iterations. }];
-
-  let arguments = (ins NVWS_ArefType:$aref,
-                       Optional<I32>:$stage,
-                       Optional<I32>:$phase);
-  let results = (outs Variadic<TTG_MemDescType>:$buffers,
-                      TTG_AsyncToken:$token);
-  let hasVerifier=1;
-  let assemblyFormat = [{
-    $aref ( `[` $stage^ `,` $phase `]`)? attr-dict
-    `:` type($aref) `->` type(results)
-  }];
-
-  let builders = [
-    OpBuilder<(ins "Value":$aref, "TypeRange":$bufferTypes, "Type":$tokenType), [{
-      build($_builder, $_state, bufferTypes, tokenType, aref, Value(), Value());
-    }]>
-  ];
-}
-
-def NVWS_ArefGetExitOp : NVWS_Op<"aref.get.exit", [DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
-  let summary = "Exit ArefGet region, where the buffer should no longer be used";
-  let description = [{ Leave the region where you can freely read from the buffer).
-                      These ArefGet "regions" can span multiple iterations. }];
-
-  let arguments = (ins NVWS_ArefType:$aref,
-                       TTG_AsyncToken:$token,
-                       Optional<I32>:$stage,
-                       NVWS_AsyncOpArrayAttr:$async_ops);
-  let assemblyFormat = [{
-    $aref (`[` $stage^ `]`)? `,` $token $async_ops attr-dict
-    `:` type($aref) `,` type($token)
- }];
-
-  let builders = [
-    OpBuilder<(ins "Value":$aref, "Value":$token, "ArrayAttr":$async_ops), [{
-      build($_builder, $_state, aref, token, Value(), async_ops);
-    }]>
-  ];
-}
-
-def NVWS_ArefPutEnterOp : NVWS_Op<"aref.put.enter", [AttrSizedOperandSegments, DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
-  let summary = "Enter ArefPut region where the buffer can be used to read data";
-  let description = [{ Enter a "region" where you can freely write to the buffer)
-                      These ArefPut "regions" can span multiple iterations. }];
-
-  let arguments = (ins NVWS_ArefType:$aref,
-                       Optional<I32>:$stage,
-                       Optional<I32>:$phase);
-  let results = (outs Variadic<TTG_MemDescType>:$buffers,
-                      TTG_AsyncToken:$token);
-  let hasVerifier=1;
-  let assemblyFormat = [{
-    $aref ( `[` $stage^ `,` $phase `]`)? attr-dict
-    `:` type($aref) `->` type(results)
-  }];
-
-  let builders = [
-    OpBuilder<(ins "Value":$aref, "TypeRange":$bufferTypes, "Type":$tokenType), [{
-      build($_builder, $_state, bufferTypes, tokenType, aref, Value(), Value());
-    }]>
-  ];
-}
-
-def NVWS_ArefPutExitOp : NVWS_Op<"aref.put.exit", [DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
-  let summary = "Exit ArefPut region, where the buffer should no longer be used";
-  let description = [{ Leave the region where you can freely write to the buffer).
-                      These ArefPut "regions" can span multiple iterations. }];
-
-  let arguments = (ins NVWS_ArefType:$aref,
-                       TTG_AsyncToken:$token,
-                       Optional<I32>:$stage,
-                       NVWS_AsyncOpArrayAttr:$async_ops);
-  let assemblyFormat = [{
-    $aref (`[` $stage^ `]`)? `,` $token  $async_ops attr-dict
-    `:` type($aref) `,` type($token)
- }];
-
-  let builders = [
-    OpBuilder<(ins "Value":$aref, "Value":$token, "ArrayAttr":$async_ops), [{
-      build($_builder, $_state, aref, token, Value(), async_ops);
-    }]>
-  ];
+  let hasVerifier = 1;
 }
 
 def NVWS_WarpGroupOp : NVWS_Op<"warp_group", [

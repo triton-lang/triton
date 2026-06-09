@@ -21,17 +21,27 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 
 // clang-format off
 #include "Dialect/NVWS/IR/Dialect.h"
 #include "Dialect/NVWS/IR/Dialect.cpp.inc"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h" // required by `Types.cpp.inc`
 // clang-format on
 
 using namespace mlir;
 using namespace mlir::triton::nvws;
+
+static int getSemaphoreDepthFromBaseType(Type type) {
+  auto memTy = cast<triton::gpu::MemDescType>(type);
+  if (isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+          memTy.getEncoding()))
+    return 1;
+  return memTy.getShape().front();
+}
 
 void mlir::triton::nvws::NVWSDialect::initialize() {
   addAttributes<
@@ -55,3 +65,16 @@ void mlir::triton::nvws::NVWSDialect::initialize() {
 
 #define GET_TYPEDEF_CLASSES
 #include "Dialect/NVWS/IR/Types.cpp.inc"
+
+LogicalResult
+SemaphoreType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
+                      TypeArrayAttr baseType) {
+  auto depths = llvm::map_range(baseType, getSemaphoreDepthFromBaseType);
+  if (!llvm::all_equal(depths))
+    return emitError() << "inconsistent semaphore buffer depths";
+  return success();
+}
+
+int SemaphoreType::getNumStages() const {
+  return getSemaphoreDepthFromBaseType(getBaseType().front());
+}
