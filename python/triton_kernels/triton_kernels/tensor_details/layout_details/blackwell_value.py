@@ -48,12 +48,11 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
     def swizzle_data(self, data):
         assert data.stride(-1) == 1
         # Move FP4 packing to the second-to-last axis.
+        storage = torch.empty_strided(self.storage_shape, strides_major_dim_m2(self.storage_shape), device=data.device,
+                                      dtype=data.dtype)
         repacked_shape = list(data.shape)
         repacked_shape[-1] *= 2
         repacked_shape[-2] //= 2
-        storage_shape = self.storage_shape
-        storage = torch.empty_strided(storage_shape, strides_major_dim_m2(storage_shape), device=data.device,
-                                      dtype=data.dtype)
         repack(data, -1, -2, self.is_fp4, out=storage[..., :repacked_shape[-2], :])
         return storage
 
