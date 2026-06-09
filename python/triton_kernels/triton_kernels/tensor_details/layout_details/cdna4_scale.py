@@ -62,7 +62,7 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         data = data.transpose(-1, -2)
         data = data.view(self.B, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE, 2, 16, self.K_SCALE_pad // 8, 2, 4, 1)
         data = data.permute(0, 1, 4, 6, 3, 5, 2, 7).contiguous()
-        data = data.reshape(self.B, *reversed(self.storage_shape[1:]))
+        data = data.reshape(self.B, self.storage_shape[2], self.storage_shape[1])
         data = data.transpose(-1, -2)
         assert data.stride(-2) == 1
         return data

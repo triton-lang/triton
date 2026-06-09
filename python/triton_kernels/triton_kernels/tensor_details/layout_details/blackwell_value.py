@@ -47,25 +47,25 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
 
     def swizzle_data(self, data):
         assert data.stride(-1) == 1
-        # Move FP4 packing to the second-to-last axis.
-        storage = torch.empty_strided(self.storage_shape, strides_major_dim_m2(self.storage_shape), device=data.device,
-                                      dtype=data.dtype)
+        # re-pack as column-major
+        ret = torch.empty_strided(self.storage_shape, strides_major_dim_m2(self.storage_shape), device=data.device,
+                                  dtype=data.dtype)
         repacked_shape = list(data.shape)
         repacked_shape[-1] *= 2
         repacked_shape[-2] //= 2
-        repack(data, -1, -2, self.is_fp4, out=storage[..., :repacked_shape[-2], :])
-        return storage
+        repack(data, -1, -2, self.is_fp4, out=ret[..., :repacked_shape[-2], :])
+        return ret
 
     def unswizzle_data(self, data: torch.Tensor):
         assert data.stride(-2) == 1
         # unpad
-        repacked_shape = [self.shape[i] for i in range(data.ndim)]
-        repacked_shape[-2] //= 2
-        data = data[tuple(slice(0, size) for size in repacked_shape)]
+        sizes = [self.shape[i] for i in range(data.ndim)]
+        sizes[-2] //= 2
+        data = data[tuple(slice(0, s) for s in sizes)]
         # repack
-        canonical_shape = list(self.shape)
-        canonical_shape[-1] //= 2
-        canonical = torch.empty(canonical_shape, device=data.device, dtype=data.dtype)
-        repack(data, -2, -1, self.is_fp4, out=canonical)
-        assert canonical.stride(-1) == 1
-        return canonical
+        out_shape = list(self.shape)
+        out_shape[-1] //= 2
+        out = torch.empty(out_shape, device=data.device, dtype=data.dtype)
+        repack(data, -2, -1, self.is_fp4, out=out)
+        assert out.stride(-1) == 1
+        return out

@@ -52,7 +52,7 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "K", K)
 
     @property
-    def _padded_swizzle_input_shape(self) -> list[int]:
+    def _padded_shape(self) -> list[int]:
         *leading_shape, M, K = self.shape
         if self.mx_axis == len(leading_shape):
             M, K = K, M
@@ -63,10 +63,10 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
 
     @property
     def storage_shape(self) -> list[int]:
-        *leading_shape, M_pad, K_pad = self._padded_swizzle_input_shape
+        *leading_shape, M, K = self._padded_shape
         if self.mx_axis == len(leading_shape):
-            return [*leading_shape, K_pad * 32, M_pad // 32]
-        return [*leading_shape, M_pad // 32, K_pad * 32]
+            return [*leading_shape, K * 32, M // 32]
+        return [*leading_shape, M // 32, K * 32]
 
     def _maybe_mT(self, data):
         if self.mx_axis == len(self.leading_shape):
@@ -77,7 +77,7 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         assert data.shape == (*self.leading_shape, self.M, self.K)
         data = self._maybe_mT(data).contiguous()
         *batch, M_in, K_in = data.shape
-        *_, M, K = self._padded_swizzle_input_shape
+        *_, M, K = self._padded_shape
         pad_m = M - M_in
         pad_k = K - K_in
         if data.numel():

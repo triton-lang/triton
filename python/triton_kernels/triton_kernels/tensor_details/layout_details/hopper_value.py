@@ -53,7 +53,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "K", K)
         object.__setattr__(self, "N", N)
 
-    def _padded_repacked_shape(self, shape) -> list[int]:
+    def _padded_shape(self, shape) -> list[int]:
         *leading_shape, M, K = shape
         if self.mx_axis == len(leading_shape):
             align_m, align_k = 64, 256
@@ -71,10 +71,10 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
             if self.mx_axis == len(leading_shape):
                 M //= 2
                 K *= 2
-        *leading_shape, M_pad, K_pad = self._padded_repacked_shape((*leading_shape, M, K))
+        *leading_shape, M, K = self._padded_shape((*leading_shape, M, K))
         if self.mx_axis == len(leading_shape):
-            return [*leading_shape, M_pad * 4, K_pad // 4]
-        return [*leading_shape, M_pad // 4, K_pad * 4]
+            return [*leading_shape, M * 4, K // 4]
+        return [*leading_shape, M // 4, K * 4]
 
     def _maybe_mT(self, data):
         if self.mx_axis == len(self.leading_shape):
@@ -107,17 +107,17 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         assert batch >= 0
         assert self.mma_version in (2, 3)
         # Align the dimension packed by four to a 64-byte load extent.
-        *_, M, K = data.shape
-        *_, M_pad, K_pad = self._padded_repacked_shape(data.shape)
-        pad_m = M_pad - M
-        pad_k = K_pad - K
+        *_, M_in, K_in = data.shape
+        *_, M, K = self._padded_shape(data.shape)
+        pad_m = M - M_in
+        pad_k = K - K_in
         if data.numel():
             data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
         else:
-            data = data.reshape(*data.shape[:-2], M_pad, K_pad)
+            data = data.reshape(*data.shape[:-2], M_in + pad_m, K_in + pad_k)
 
         data = self._maybe_mT(data)
-        swizzle_input_shape = data.shape
+        init_shape = data.shape
 
         # We are loading 8 bf16 elements per thread to use ld.global.v4
         # Every u8 represents 2 mxfp4 elements
@@ -159,8 +159,8 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         data = data.flatten(-10, -1)
         data = data.flatten(-3, -2)
         assert data.is_contiguous()
-        assert data.shape[-2] == swizzle_input_shape[-2] // 4
-        assert data.shape[-1] == swizzle_input_shape[-1] * 4
+        assert data.shape[-2] == init_shape[-2] // 4
+        assert data.shape[-1] == init_shape[-1] * 4
         # twiddle the bits
         data = _pack_bits(data, self.mx_axis)
         data = self._maybe_mT(data)

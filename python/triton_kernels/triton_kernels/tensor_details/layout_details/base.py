@@ -5,7 +5,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class LayoutTransformation(ABC):
 
-    shape: list[int]  # Logical element shape, before FP4 byte packing.
+    shape: list[int]
     is_fp4: bool
 
     @property
