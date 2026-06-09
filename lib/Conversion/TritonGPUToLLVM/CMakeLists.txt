@@ -9,6 +9,7 @@ add_triton_library(TritonGPUToLLVM
     ControlFlowOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
+    Fp4ToFpOpToLLVMBase.cpp
     FuncOpToLLVM.cpp
     GatherOpToLLVM.cpp
     GlobalScratchMemoryAllocation.cpp
