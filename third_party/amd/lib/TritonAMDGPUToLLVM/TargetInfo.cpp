@@ -183,9 +183,8 @@ void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                              std::optional<Value> ctaId, Value val,
-                              Value pred) const {
-  if (ctaId.has_value()) {
+                              Value ctaId, Value val, Value pred) const {
+  if (ctaId) {
     llvm::report_fatal_error(
         "AMDGPU does not support cross-CTA shared memory transfers");
   }
@@ -201,9 +200,9 @@ TargetInfo::queryLDSTransLoadParams(int bitWidth) const {
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                              std::optional<Value> ctaId, Type elemTy,
-                              Value pred, Operation *localLoadOp) const {
-  if (ctaId.has_value()) {
+                              Value ctaId, Type elemTy, Value pred,
+                              Operation *localLoadOp) const {
+  if (ctaId) {
     llvm::report_fatal_error(
         "AMDGPU does not support cross-CTA shared memory transfers");
   }

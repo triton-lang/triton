@@ -21,22 +21,35 @@ class DotOpMmaV5TmemLoader : public DotOpMmaMemLoader {
 public:
   static DotOpMmaV5TmemLoader build(Location loc, RewriterBase &rewriter,
                                     mlir::triton::gpu::MemDescType memTy,
-                                    Value tmemBase) {
+                                    Value tmemBase,
+                                    unsigned logicalElementBitWidth) {
     // We take the full layout even when it is a subview
     // We'll just iterate the real shape when calling tmemLoad tho
-    auto ll = toLinearLayout(memTy);
-    auto bitwidth = memTy.getElementTypeBitWidth();
+    unsigned storageElementBitWidth = memTy.getElementTypeBitWidth();
+    assert(logicalElementBitWidth > 0 &&
+           storageElementBitWidth % logicalElementBitWidth == 0 &&
+           "logical element bit width must divide TMEM storage bit width");
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     Value address = tb.ptrtoint(i32_ty, tmemBase);
-    return DotOpMmaV5TmemLoader(ll.pseudoinvert(), address, bitwidth);
+
+    auto llInv = toLinearLayout(memTy).pseudoinvert();
+    return DotOpMmaV5TmemLoader(llInv, address, storageElementBitWidth,
+                                logicalElementBitWidth);
   }
 
   MemDescOperand tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
                           Location loc) const {
+    // MMAv5 supplies a logical K coordinate, while byte-backed FP4 memdescs
+    // use packed K coordinates. This applies to both dense and fp4Padded FP4;
+    // the memdesc layout handles any additional physical padding.
+    unsigned packingFactor = storageElementBitWidth / logicalElementBitWidth;
+    assert(b % packingFactor == 0 &&
+           "logical K coordinate must be aligned to packed storage");
+    b /= packingFactor;
     auto dims = to_vector(ll.getInDimNames());
     auto rowCol = ll.apply({{dims[0], a}, {dims[1], b}});
     int row = rowCol[0].second;
-    int col = rowCol[1].second * bitwidth / 32;
+    int col = rowCol[1].second * storageElementBitWidth / 32;
     int offset = col | (row << 16);
     return {address, offset};
   }
@@ -47,12 +60,16 @@ public:
   }
 
 private:
-  DotOpMmaV5TmemLoader(LinearLayout ll, Value address, int bitwidth)
-      : ll(std::move(ll)), address(address), bitwidth(bitwidth) {}
+  DotOpMmaV5TmemLoader(LinearLayout ll, Value address,
+                       int storageElementBitWidth, int logicalElementBitWidth)
+      : ll(std::move(ll)), address(address),
+        storageElementBitWidth(storageElementBitWidth),
+        logicalElementBitWidth(logicalElementBitWidth) {}
 
   LinearLayout ll;
   Value address;
-  int bitwidth;
+  int storageElementBitWidth;
+  int logicalElementBitWidth;
 };
 
 //===----------------------------------------------------------------------===//
@@ -467,11 +484,12 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   std::unique_ptr<DotOpMmaMemLoader> aLoader;
   bool transA = false;
+  auto isFp4a = op.numBitsPerElementA == 4;
   if (aInTmem) {
-    aLoader = std::make_unique<DotOpMmaV5TmemLoader>(
-        DotOpMmaV5TmemLoader::build(loc, rewriter, aTensorTy, baseA));
+    aLoader =
+        std::make_unique<DotOpMmaV5TmemLoader>(DotOpMmaV5TmemLoader::build(
+            loc, rewriter, aTensorTy, baseA, op.numBitsPerElementA));
   } else {
-    auto isFp4a = op.numBitsPerElementA == 4;
     auto loader = DotOpMmaSmemLoader::build(loc, rewriter, aTensorTy, baseA,
                                             aOperandShape, 0, 5, isFp4a);
     if (failed(loader)) {
@@ -554,7 +572,8 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
   dot.numBitsPerElementB = bTensorTy.getElementTypeBitWidth();
 
   DotOpMmaV5TmemLoader dLoader =
-      DotOpMmaV5TmemLoader::build(loc, rewriter, dTensorTy, adaptor.getD());
+      DotOpMmaV5TmemLoader::build(loc, rewriter, dTensorTy, adaptor.getD(),
+                                  dTensorTy.getElementTypeBitWidth());
   dot.getAccAddress = [&](ConversionPatternRewriter &rewriter, Location loc,
                           int m, int n, const DotConversion::InstDesc &desc) {
     return dLoader.tmemLoad(m * desc.mmaSizeM, n * desc.mmaSizeN, rewriter,

@@ -66,7 +66,7 @@ namespace tt = mlir::triton;
 namespace {
 
 constexpr int64_t kDefaultMaxTripCount = 1024;
-constexpr uint64_t kDefaultMaxPrograms = 1L << 31; // 2147483648
+constexpr uint64_t kDefaultMaxPrograms = 1ULL << 31; // 2147483648
 
 void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   Operation *currOp = op.getParentOp();
