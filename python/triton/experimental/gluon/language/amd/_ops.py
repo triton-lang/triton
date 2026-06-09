@@ -16,6 +16,37 @@ def _wrap_scaled_upcast_result(handle, elem_type, semantic):
     return ttgl.tensor(handle, ret_ty)
 
 
+def _extract_slice(source, shape, offsets, semantic):
+    """Shared implementation for the AMD ``extract_slice`` Gluon builtin.
+
+    Extracts a register-resident slice of ``source`` with the given ``shape``
+    starting at ``offsets``. The result keeps the source's distributed layout,
+    so the slice is a no-op view (no cross-thread data movement); the op
+    verifier enforces that the requested slice is a multiple of CTA tiles for
+    the source layout.
+    """
+    _check(isinstance(source.type, ttgl.distributed_type),
+           lambda: f"Expected source to have a distributed_type but got {source.type}")
+
+    shape = [_unwrap_if_constexpr(s) for s in shape]
+    offsets = [_unwrap_if_constexpr(o) for o in offsets]
+
+    rank = len(source.type.shape)
+    _check(len(shape) == rank, lambda: f"extract_slice: shape must have rank {rank}, got {len(shape)}")
+    _check(len(offsets) == rank, lambda: f"extract_slice: offsets must have rank {rank}, got {len(offsets)}")
+
+    src_shape = source.type.shape
+    for i in range(rank):
+        _check(shape[i] <= src_shape[i],
+               lambda: f"extract_slice: result shape {shape} cannot exceed source shape {src_shape}")
+        _check(offsets[i] + shape[i] <= src_shape[i],
+               lambda: f"extract_slice: offset {offsets} + shape {shape} exceeds source shape {src_shape}")
+
+    ret_ty = ttgl.distributed_type(source.dtype, shape, source.type.layout)
+    handle = semantic.builder.create_extract_slice(ret_ty.to_ir(semantic.builder), source.handle, offsets)
+    return ttgl.tensor(handle, ret_ty)
+
+
 def _verify_wmma(version, a, b, acc):
     _check(acc is not None, lambda: "acc is required")
 
