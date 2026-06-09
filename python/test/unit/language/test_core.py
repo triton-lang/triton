@@ -5837,15 +5837,16 @@ def test_constexpr_assignment(literal, tensor_ty):
     def kernel(input_literal: tl.constexpr, tensor_type: tl.constexpr):
         patched_literal: tl.constexpr = PATCHED
         # Sanity checks
-        tl.static_assert(patched_literal.type == constexpr_type(PATCHED))
-        tl.static_assert(input_literal.type == constexpr_type(PATCHED))
+        tl.static_assert(patched_literal.type == (PATCHED).type)
+        tl.static_assert(input_literal.type == (PATCHED).type)
 
         assigned_literal: tl.constexpr = input_literal
-        tl.static_assert(assigned_literal.type == constexpr_type(PATCHED))
+        tl.static_assert(assigned_literal.type == (PATCHED).type)
         tl.static_assert(assigned_literal == patched_literal)
 
         if tensor_type is not None:
             assigned_variable = input_literal
+            tl.static_assert(input_literal.type == constexpr_type(PATCHED))
             tl.static_assert(assigned_variable.type == tensor_type)
 
     kernel_patched = patch_kernel(kernel, {'PATCHED': f"{literal}"})

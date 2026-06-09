@@ -1,20 +1,8 @@
-#include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/TypeUtilities.h"
-
 #include "PatternTritonGPUOpToLLVM.h"
 
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
-#include "mlir/IR/Value.h"
-#include "mlir/IR/ValueRange.h"
-#include "mlir/Transforms/DialectConversion.h"
+#include "triton/Conversion/TritonGPUToLLVM/Fp4ToFpOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
-#include <array>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -82,53 +70,32 @@ static Value createInlineAsmUpcast(Location loc, RewriterBase &rewriter,
 }
 
 namespace {
-class Fp4ToFpOpPattern : public ConvertOpToLLVMPattern<Fp4ToFpOp> {
+class Fp4ToFpOpPattern : public Fp4ToFpOpConversionBase {
 public:
   Fp4ToFpOpPattern(LLVMTypeConverter &typeConverter, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<Fp4ToFpOp>(typeConverter, benefit) {}
+      : Fp4ToFpOpConversionBase(typeConverter, benefit) {}
 
-  LogicalResult
-  matchAndRewrite(Fp4ToFpOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-
+protected:
+  std::array<Value, 8> upcastPackedFp4(Fp4ToFpOp op,
+                                       ConversionPatternRewriter &rewriter,
+                                       Value packedVec,
+                                       Type elemType) const override {
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
-    auto elemType = op.getType().getElementType();
-    assert(elemType == f16_ty || elemType == bf16_ty);
     bool toFp16 = elemType == f16_ty;
-
-    auto xVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-
-    SmallVector<Value> results;
-    results.reserve(xVals.size() * 2);
-    assert(xVals.size() % 4 == 0);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    for (int i = 0; i < xVals.size(); i += 4) {
-      Value v0 = xVals[i];
-      Value v1 = xVals[i + 1];
-      Value v2 = xVals[i + 2];
-      Value v3 = xVals[i + 3];
-      Value packedVec = b.undef(vec_ty(i8_ty, 4));
-      packedVec = b.insert_element(packedVec, v0, b.i32_val(0));
-      packedVec = b.insert_element(packedVec, v1, b.i32_val(1));
-      packedVec = b.insert_element(packedVec, v2, b.i32_val(2));
-      packedVec = b.insert_element(packedVec, v3, b.i32_val(3));
-      SmallVector<Type> rets(4, i32_ty);
-      Type retType = struct_ty(rets);
-      Value ret =
-          createInlineAsmUpcast(loc, rewriter, toFp16, retType, packedVec);
-      for (int i = 0; i < 4; i++) {
-        Value extractI32 = b.extract_val(ret, i);
-        Value elements = b.bitcast(extractI32, vec_ty(elemType, 2));
-        results.push_back(b.extract_element(elements, b.i32_val(0)));
-        results.push_back(b.extract_element(elements, b.i32_val(1)));
-      }
+    SmallVector<Type> rets(4, i32_ty);
+    Type retType = struct_ty(rets);
+    Value ret =
+        createInlineAsmUpcast(loc, rewriter, toFp16, retType, packedVec);
+    std::array<Value, 8> results;
+    for (int i = 0; i < 4; i++) {
+      Value extractI32 = b.extract_val(ret, i);
+      Value elements = b.bitcast(extractI32, vec_ty(elemType, 2));
+      results[2 * i] = b.extract_element(elements, b.i32_val(0));
+      results[2 * i + 1] = b.extract_element(elements, b.i32_val(1));
     }
-
-    Value result = packLLElements(loc, getTypeConverter(), results, rewriter,
-                                  op.getType());
-    rewriter.replaceOp(op, result);
-    return success();
+    return results;
   }
 };
 } // anonymous namespace

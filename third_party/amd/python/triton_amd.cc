@@ -54,15 +54,6 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
         [](mlir::PassManager &pm, const std::string &arch, bool ftz) {
           pm.addPass(createConvertBuiltinFuncToLLVMPass(arch, ftz));
         });
-  m.def("insert_instruction_sched_hints", [](mlir::PassManager &pm,
-                                             const std::string &variant) {
-    pm.addPass(createTritonAMDGPUInsertInstructionSchedHintsPass(variant));
-  });
-  m.def("lower_instruction_sched_hints",
-        [](mlir::PassManager &pm, const std::string &arch, int32_t numStages) {
-          pm.addPass(createTritonAMDGPULowerInstructionSchedHintsPass(
-              arch, numStages));
-        });
   m.def("add_prepare_consan_captures", [](mlir::PassManager &pm) {
     mlir::triton::instrument::TritonInstrumentPrepareConSanCapturesOptions
         options;
