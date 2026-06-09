@@ -33,9 +33,8 @@ public:
     Value address = tb.ptrtoint(i32_ty, tmemBase);
 
     auto llInv = toLinearLayout(memTy).pseudoinvert();
-    unsigned packingFactor = storageElementBitWidth / logicalElementBitWidth;
     return DotOpMmaV5TmemLoader(llInv, address, storageElementBitWidth,
-                                packingFactor);
+                                logicalElementBitWidth);
   }
 
   MemDescOperand tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
@@ -43,6 +42,8 @@ public:
     // MMAv5 supplies a logical K coordinate, while byte-backed FP4 memdescs
     // use packed K coordinates. This applies to both dense and fp4Padded FP4;
     // the memdesc layout handles any additional physical padding.
+    unsigned packingFactor =
+        storageElementBitWidth / logicalElementBitWidth;
     assert(b % packingFactor == 0 &&
            "logical K coordinate must be aligned to packed storage");
     b /= packingFactor;
@@ -61,15 +62,15 @@ public:
 
 private:
   DotOpMmaV5TmemLoader(LinearLayout ll, Value address,
-                       int storageElementBitWidth, int packingFactor)
+                       int storageElementBitWidth, int logicalElementBitWidth)
       : ll(std::move(ll)), address(address),
         storageElementBitWidth(storageElementBitWidth),
-        packingFactor(packingFactor) {}
+        logicalElementBitWidth(logicalElementBitWidth) {}
 
   LinearLayout ll;
   Value address;
   int storageElementBitWidth;
-  int packingFactor;
+  int logicalElementBitWidth;
 };
 
 //===----------------------------------------------------------------------===//
