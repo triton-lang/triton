@@ -47,26 +47,26 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
 
     def swizzle_data(self, data):
         assert data.stride(-1) == 1
-        # re-pack as column-major
-        out_shape = list(data.shape)
-        out_shape[-1] *= 2
-        out_shape[-2] //= 2
-        padded_shape = self.storage_shape
-        ret = torch.empty_strided(padded_shape, strides_major_dim_m2(padded_shape), device=data.device,
-                                  dtype=data.dtype)
-        repack(data, -1, -2, self.is_fp4, out=ret[..., :out_shape[-2], :])
-        return ret
+        # Move FP4 packing to the second-to-last axis.
+        repacked_shape = list(data.shape)
+        repacked_shape[-1] *= 2
+        repacked_shape[-2] //= 2
+        storage_shape = self.storage_shape
+        storage = torch.empty_strided(storage_shape, strides_major_dim_m2(storage_shape), device=data.device,
+                                      dtype=data.dtype)
+        repack(data, -1, -2, self.is_fp4, out=storage[..., :repacked_shape[-2], :])
+        return storage
 
     def unswizzle_data(self, data: torch.Tensor):
         assert data.stride(-2) == 1
         # unpad
-        sizes = [self.shape[i] for i in range(data.ndim)]
-        sizes[-2] //= 2
-        data = data[tuple(slice(0, s) for s in sizes)]
+        repacked_shape = [self.shape[i] for i in range(data.ndim)]
+        repacked_shape[-2] //= 2
+        data = data[tuple(slice(0, size) for size in repacked_shape)]
         # repack
-        out_shape = list(self.shape)
-        out_shape[-1] //= 2
-        out = torch.empty(out_shape, device=data.device, dtype=data.dtype)
-        repack(data, -2, -1, self.is_fp4, out=out)
-        assert out.stride(-1) == 1
-        return out
+        canonical_shape = list(self.shape)
+        canonical_shape[-1] //= 2
+        canonical = torch.empty(canonical_shape, device=data.device, dtype=data.dtype)
+        repack(data, -2, -1, self.is_fp4, out=canonical)
+        assert canonical.stride(-1) == 1
+        return canonical

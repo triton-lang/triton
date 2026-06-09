@@ -75,21 +75,21 @@ class StridedLayoutTransformation(LayoutTransformation):
         if r == 0:
             return data
         pd = self.order[0]  # packed/contiguous dim in output
-        out_shape = self.storage_shape
+        storage_shape = self.storage_shape
         # dense strides in minor->major `self.order`
         stride, s = [0] * r, 1
         for d in self.order:
-            stride[d], s = s, s * out_shape[d]
-        out = torch.empty_strided(out_shape, stride, dtype=data.dtype, device=data.device)
-        repack(data, -1, pd, self.is_fp4, out=out)
-        return out
+            stride[d], s = s, s * storage_shape[d]
+        storage = torch.empty_strided(storage_shape, stride, dtype=data.dtype, device=data.device)
+        repack(data, -1, pd, self.is_fp4, out=storage)
+        return storage
 
     def unswizzle_data(self, data):
         assert data.stride(self.order[0]) == 1
-        out_shape = list(self.shape)
+        canonical_shape = list(self.shape)
         if self.is_fp4:
-            out_shape[-1] //= 2
-        ret = torch.empty(out_shape, dtype=data.dtype, device=data.device)
-        repack(data, self.order[0], -1, self.is_fp4, out=ret)
-        assert ret.stride(-1) == 1
-        return ret
+            canonical_shape[-1] //= 2
+        canonical = torch.empty(canonical_shape, dtype=data.dtype, device=data.device)
+        repack(data, self.order[0], -1, self.is_fp4, out=canonical)
+        assert canonical.stride(-1) == 1
+        return canonical

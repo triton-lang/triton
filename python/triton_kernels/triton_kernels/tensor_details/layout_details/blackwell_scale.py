@@ -165,7 +165,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
 
     @property
     def storage_shape(self) -> list[int]:
-        return [1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256]
+        return [1, self.B * self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 2, 256]
 
     def swizzle_data(self, data):
         need_torch = data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1 or is_fake(data)

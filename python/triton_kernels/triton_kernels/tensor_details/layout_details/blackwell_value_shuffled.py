@@ -11,8 +11,8 @@ class BlackwellMX4ValueShuffledLayout(Layout):
     """
     Shuffled weight layout for MX4 matmul on Blackwell GPUs.
 
-    Physical packed storage for mxfp4 is column-major with shape [E, K_packed, N],
-    where K_packed = K // 2 (two FP4 values per byte).
+    The transformation first repacks canonical FP4 storage into an intermediate
+    K-packed shape [E, K_packed, N], where K_packed = K // 2.
 
     Baseline TMA loads operate on the swapped view [E, N, K_packed] with block
     shape [block_n, packed_block_k], then the kernel transposes to
@@ -72,7 +72,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         return [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
 
     def _compute_params(self, E, K_packed, N):
-        """Compute tiling parameters from the physical shape."""
+        """Compute tiling parameters from the K-packed shape."""
         packed_block_k = self.block_k // 2
         tile_k_packed = packed_block_k
         tile_n = self.block_n
@@ -86,26 +86,26 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
 
         return tile_k_packed, tile_n, padded_K_packed, padded_N, num_tiles_k, num_tiles_n
 
-    def _canonical_to_physical(self, data: torch.Tensor) -> torch.Tensor:
-        """Repack canonical [..., K, N_packed] storage to physical [E, K_packed, N]."""
+    def _canonical_to_k_packed(self, data: torch.Tensor) -> torch.Tensor:
+        """Move FP4 packing from N to K."""
         if not self.is_fp4:
             raise ValueError("BlackwellMX4ValueShuffledLayout only supports fp4 values")
         assert data.stride(-1) == 1
-        out_shape = list(data.shape)
-        out_shape[-1] *= 2
-        out_shape[-2] //= 2
-        out = torch.empty(out_shape, dtype=data.dtype, device=data.device)
-        return repack(data, -1, -2, self.is_fp4, out=out)
+        k_packed_shape = list(data.shape)
+        k_packed_shape[-1] *= 2
+        k_packed_shape[-2] //= 2
+        k_packed = torch.empty(k_packed_shape, dtype=data.dtype, device=data.device)
+        return repack(data, -1, -2, self.is_fp4, out=k_packed)
 
-    def _physical_to_canonical(self, data: torch.Tensor) -> torch.Tensor:
-        """Repack physical [E, K_packed, N] storage to canonical [..., K, N_packed]."""
+    def _k_packed_to_canonical(self, data: torch.Tensor) -> torch.Tensor:
+        """Move FP4 packing from K back to N."""
         if not self.is_fp4:
             raise ValueError("BlackwellMX4ValueShuffledLayout only supports fp4 values")
-        out_shape = list(data.shape)
-        out_shape[-2] *= 2
-        out_shape[-1] //= 2
-        out = torch.empty(out_shape, dtype=data.dtype, device=data.device)
-        return repack(data, -2, -1, self.is_fp4, out=out)
+        canonical_shape = list(data.shape)
+        canonical_shape[-2] *= 2
+        canonical_shape[-1] //= 2
+        canonical = torch.empty(canonical_shape, dtype=data.dtype, device=data.device)
+        return repack(data, -2, -1, self.is_fp4, out=canonical)
 
     def swizzle_data(self, data: torch.Tensor) -> torch.Tensor:
         """
@@ -114,7 +114,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         Target layout: [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
         This matches the baseline TMA block shape [block_n, packed_block_k] after swapping.
         """
-        data = self._canonical_to_physical(data)
+        data = self._canonical_to_k_packed(data)
         leading_shape = data.shape[:-2]
         E = math.prod(leading_shape)
         K_packed, N = data.shape[-2:]
@@ -122,7 +122,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         tile_k_packed, tile_n, padded_K_packed, padded_N, num_tiles_k, num_tiles_n = \
             self._compute_params(E, K_packed, N)
 
-        # Pad to tile boundaries if needed (in original [E, K_packed, N] space)
+        # Pad to tile boundaries in K-packed [E, K_packed, N] space.
         if K_packed != padded_K_packed or N != padded_N:
             padded = torch.zeros((E, padded_K_packed, padded_N), dtype=data.dtype, device=data.device)
             padded[:, :K_packed, :N] = data
@@ -162,12 +162,12 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         # Back to swapped view [E, padded_N, padded_K_packed]
         data = data.view(E, padded_N, padded_K_packed)
 
-        # Transpose back to physical [E, padded_K_packed, padded_N]
+        # Transpose back to K-packed [E, padded_K_packed, padded_N].
         data = data.transpose(1, 2).contiguous()
 
         # Trim padding back to original shape
         data = data[:, :orig_K_packed, :orig_N].contiguous()
-        data = self._physical_to_canonical(data)
+        data = self._k_packed_to_canonical(data)
         if not leading_shape:
             return data.squeeze(0)
         return data.reshape(*leading_shape, data.shape[-2], data.shape[-1])
