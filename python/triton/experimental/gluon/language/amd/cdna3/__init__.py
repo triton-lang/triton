@@ -5,33 +5,15 @@ from triton import knobs
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
 from ..._core import builtin, int8, uint8, uint16, bfloat16, _unwrap_if_constexpr
-from .._ops import _scaled_upcast, _extract_slice
+from .._ops import _scaled_upcast
 
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
 __all__ = [
     "buffer_atomic_add", "buffer_atomic_and", "buffer_atomic_min", "buffer_atomic_max", "buffer_atomic_or",
-    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast", "extract_slice"
+    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast"
 ]
-
-
-@builtin
-def extract_slice(source, shape, offsets, _semantic=None):
-    """Extract a register-resident slice of a tensor.
-
-    Returns a view of ``source`` of the requested ``shape`` starting at
-    ``offsets``, keeping the source's distributed layout. Because the layout is
-    preserved, the slice introduces no cross-thread data movement; the slice
-    extent and offsets must align to the source layout's CTA tiling.
-
-    Args:
-        source (tensor): The tensor to slice. Must have a distributed layout.
-        shape (List[int]): Shape of the extracted slice (same rank as source).
-        offsets (List[int]): Per-dimension start offsets into ``source``.
-    """
-    return _extract_slice(source, shape, offsets, _semantic)
-
 
 _atomic_op_str_to_op = {
     "smax": ir.ATOMIC_OP.MAX, "smin": ir.ATOMIC_OP.MIN, "umax": ir.ATOMIC_OP.UMAX, "umin": ir.ATOMIC_OP.UMIN, "fadd":

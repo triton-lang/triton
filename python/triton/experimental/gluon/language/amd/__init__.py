@@ -3,7 +3,7 @@ from ._layouts import AMDMFMALayout, AMDWMMALayout
 from . import cdna3, cdna4
 from . import rdna3, rdna4
 from . import gfx1250
-from .cdna3 import extract_slice
+from .extract_slice import extract_slice
 from .warp_pipeline import warp_pipeline_stage
 
 __all__ = [

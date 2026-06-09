@@ -2,7 +2,7 @@ from triton.runtime.jit import constexpr_function
 from triton._C.libtriton.gluon_ir import get_amd_wmma_scale_layout as _get_wmma_scale_layout
 
 from ..._core import builtin, int8, uint8, int32, float8e4nv, tensor, _unwrap_if_constexpr
-from .._ops import _wmma, _verify_wmma, _mma_scaled, _scaled_upcast, _extract_slice
+from .._ops import _wmma, _verify_wmma, _mma_scaled, _scaled_upcast
 from .._layouts import AMDWMMALayout
 from ..cdna3 import buffer_load, buffer_store
 from ._layouts import PartitionedSharedLayout, make_partitioned_dot_layouts
@@ -13,25 +13,8 @@ from . import cluster
 
 __all__ = [
     "async_copy", "tdm", "mbarrier", "cluster", "wmma", "wmma_scaled", "scaled_upcast", "buffer_load", "buffer_store",
-    "get_wmma_scale_layout", "PartitionedSharedLayout", "make_partitioned_dot_layouts", "extract_slice"
+    "get_wmma_scale_layout", "PartitionedSharedLayout", "make_partitioned_dot_layouts"
 ]
-
-
-@builtin
-def extract_slice(source, shape, offsets, _semantic=None):
-    """Extract a register-resident slice of a tensor.
-
-    Returns a view of ``source`` of the requested ``shape`` starting at
-    ``offsets``, keeping the source's distributed layout. Because the layout is
-    preserved, the slice introduces no cross-thread data movement; the slice
-    extent and offsets must align to the source layout's CTA tiling.
-
-    Args:
-        source (tensor): The tensor to slice. Must have a distributed layout.
-        shape (List[int]): Shape of the extracted slice (same rank as source).
-        offsets (List[int]): Per-dimension start offsets into ``source``.
-    """
-    return _extract_slice(source, shape, offsets, _semantic)
 
 
 @builtin
