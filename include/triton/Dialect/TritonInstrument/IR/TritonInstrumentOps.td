@@ -5,6 +5,7 @@ include "triton/Dialect/TritonInstrument/IR/TritonInstrumentDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
+include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
@@ -209,6 +210,32 @@ def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryE
 
 // ===== FPSan ops =====
 
+
+def TTI_DotI8Op : TTI_Op<"dot_i8", [
+  Pure,
+  DeclareOpInterfaceMethods<DotOpInterface>,
+  TypesMatchWith<"result's type matches accumulator's type",
+                 "d", "c", "$_self">
+]> {
+  let summary = "non-saturating NVIDIA MMAv2 i8 dot";
+  let description = [{
+    Performs a wrapping i8 matrix multiplication into an i32 accumulator using
+    NVIDIA MMAv2. The A and B operands have independent signedness.
+  }];
+  let arguments = (ins
+    RankedTensorOf<[I8]>:$a,
+    RankedTensorOf<[I8]>:$b,
+    RankedTensorOf<[I32]>:$c,
+    BoolAttr:$aSigned,
+    BoolAttr:$bSigned
+  );
+  let results = (outs RankedTensorOf<[I32]>:$d);
+  let assemblyFormat = [{
+    $a `,` $b `,` $c `,` `aSigned` `=` $aSigned `,` `bSigned` `=` $bSigned
+    attr-dict `:` type($a) `*` type($b) `->` type($d)
+  }];
+  let hasVerifier = 1;
+}
 
 def TTI_ExperimentalFPSanEmbedOp : TTI_Op<"experimental_fpsan_embed", [
   Pure,

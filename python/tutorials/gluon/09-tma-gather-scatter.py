@@ -563,7 +563,7 @@ def matmul_fused_gather_scatter_kernel(X_desc, W_desc, out_desc, X_gather_indx_p
         mma = mma.wait_num_outstanding(0)
         out, mma = mma.take_result()
         out = out.to(dtype)
-        # Pipeline the async scatter by waiting for the previous store to complete.
+        # Pipeline the async scatter by waiting for the previous scatter to complete.
         tma.store_wait(pendings=0)
         out_smem.store(out)
         fence_async_shared()

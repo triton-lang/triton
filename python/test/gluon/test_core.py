@@ -2711,6 +2711,50 @@ def test_shared_gather(N, M):
 
 
 @gluon.jit
+def shared_gather_scatter_two_ctas_kernel(
+    inp,
+    out,
+    layout: ttgl.constexpr,
+    GATHER: ttgl.constexpr,
+):
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0], cga_layout=[[0, 1]])
+    rows = ttgl.arange(0, 2, layout=ttgl.SliceLayout(1, layout))
+    cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+    offsets = rows[:, None] * 32 + cols[None, :]
+    values = ttgl.load(inp + offsets)
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [2, 32], shared_layout, value=values)
+    ttgl.barrier(cluster=True)
+
+    peer_cols = (cols ^ 1)[None, :] + rows[:, None] * 0
+    if GATHER:
+        result = smem.gather(peer_cols, axis=1)
+    else:
+        smem.scatter(values, peer_cols, axis=1)
+        ttgl.barrier(cluster=True)
+        result = smem.load(layout)
+    ttgl.store(out + offsets, result)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("gather", [True, False], ids=["gather", "scatter"])
+def test_shared_gather_scatter_two_ctas(gather):
+    inp = torch.arange(64, dtype=torch.int32, device="cuda").reshape(2, 32)
+    out = torch.empty_like(inp)
+    layout = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0], cga_layout=[[0, 1]])
+
+    shared_gather_scatter_two_ctas_kernel[(1, )](
+        inp,
+        out,
+        layout,
+        GATHER=gather,
+        num_warps=4,
+        num_ctas=2,
+    )
+
+    torch.testing.assert_close(out, inp.reshape(2, 16, 2).flip(-1).reshape(2, 32))
+
+
+@gluon.jit
 def shared_scatter_kernel(
     indices_ptr,
     values_ptr,
@@ -2999,9 +3043,6 @@ def _shared_atomic_scatter_rmw_cases():
 )
 def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_dtype, use_constant_values, N, M, axis,
                                    rhs_shape):
-    if is_hip_cdna() or is_hip_rdna():
-        pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
-
     device = torch.device("cuda")
     rhs_n, rhs_m = rhs_shape
 
@@ -3092,9 +3133,6 @@ def shared_atomic_scatter_rmw_broadcast_kernel(
 
 
 def test_shared_atomic_scatter_rmw_broadcast():
-    if is_hip_cdna() or is_hip_rdna():
-        pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
-
     device = torch.device("cuda")
     N, M = 16, 32
     values = torch.arange(N, dtype=torch.float32, device=device) + 1.0

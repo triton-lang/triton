@@ -1370,7 +1370,7 @@ class TritonSemantic(Generic[TensorTy]):
                                            self.and_(mask, pos).handle, sem, scope), i_val.type)
         neg_ret = self.tensor(
             self.builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX, ui_ptr.handle, ui_val.handle,
-                                           self.and_(mask, neg).handle, sem, scope), ui_ptr.type)
+                                           self.and_(mask, neg).handle, sem, scope), ui_val.type)
         ret = self.where(pos, pos_ret, neg_ret)
         return self.bitcast(ret, sca_ty)
 

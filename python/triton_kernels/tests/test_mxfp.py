@@ -229,6 +229,7 @@ def test_downcast_to_mxfp_accepts_pitched_strided_input(device):
         ((3, 4096, 0), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
         ((10, 0, 1024), 2, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP, torch.uint8, MXFP_BLOCK_SIZE.value),
         ((0, 0, 1024), 2, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((3, 1024, 0), 2, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP, torch.float8_e4m3fn, NVFP_BLOCK_SIZE.value),
 
         ((3, 4096, 1024), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP, torch.uint8, MXFP_BLOCK_SIZE.value),
         ((32, 254, 60), 0, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),

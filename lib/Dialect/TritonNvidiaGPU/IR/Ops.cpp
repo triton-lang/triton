@@ -149,13 +149,6 @@ bool WarpGroupDotOp::needsPartialAccumulator() {
   return isFP8 && accFP32 && maxNumImpreciseAcc <= aTensorTy.getShape()[1];
 }
 
-bool WarpGroupDotOp::verifyDims() {
-  auto aShape = this->getA().getType().getShape();
-  auto bShape = this->getB().getType().getShape();
-
-  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
-}
-
 // -- WarpGroupDotWaitOp --
 LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
@@ -297,18 +290,21 @@ TypedValue<MemDescType> AsyncSharedStoreOp::getBarrier() {
   return getMbarrier();
 }
 
-// -- FenceMBarrierInitReleaseClusterOp --
-LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
-  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
-  if (numCTAs <= 1)
-    return emitOpError("requires ttg.num-ctas > 1");
-  return success();
-}
-
-static LogicalResult verifyClusterSyncOp(Operation *op) {
+static LogicalResult verifyClusterIsMultiCTA(Operation *op) {
   int numCTAs = triton::gpu::lookupNumCTAs(op);
   if (numCTAs <= 1)
     return op->emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
+// -- FenceMBarrierInitReleaseClusterOp --
+LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
+  return verifyClusterIsMultiCTA(getOperation());
+}
+
+static LogicalResult verifyClusterSyncOp(Operation *op) {
+  if (failed(verifyClusterIsMultiCTA(op)))
+    return failure();
   if (op->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>())
     return op->emitOpError("cannot be used inside `ttg.warp_specialize`");
   return success();
@@ -326,7 +322,21 @@ LogicalResult ClusterWaitOp::verify() {
 
 // -- ClusterBarrierOp --
 LogicalResult ClusterBarrierOp::verify() {
-  return verifyClusterSyncOp(getOperation());
+  if (failed(verifyClusterIsMultiCTA(getOperation())))
+    return failure();
+  auto func = getOperation()->getParentOfType<FunctionOpInterface>();
+  if (!func)
+    return emitOpError("must be inside a kernel function");
+  if (triton::isKernel(func))
+    return success();
+  // Inlineable Triton helpers are verified before the inliner moves their
+  // bodies into the kernel.
+  if (auto tritonFunc = dyn_cast<triton::FuncOp>(func.getOperation())) {
+    auto noinline = tritonFunc->getAttrOfType<BoolAttr>("noinline");
+    if (!noinline || !noinline.getValue())
+      return success();
+  }
+  return emitOpError("must be inside a kernel function");
 }
 
 // -- TMA operation verifiers --
@@ -958,13 +968,6 @@ void TCGen5MMAOp::getEffects(
   for (auto &barrierMutable : getBarriersMutable())
     effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
                          SharedMemory::get());
-}
-
-bool TCGen5MMAOp::verifyDims() {
-  auto aShape = this->getA().getType().getShape();
-  auto bShape = this->getB().getType().getShape();
-
-  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
 }
 
 Value TCGen5MMAOp::useAccumulator() { return getUseD(); }
