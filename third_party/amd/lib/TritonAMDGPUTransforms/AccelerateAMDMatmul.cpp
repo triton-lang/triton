@@ -2,6 +2,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "TritonAMDGPUTransforms/WmmaGroup.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -1437,6 +1438,54 @@ FailureOr<WmmaIntrinsic> chooseWmmaInstruction(tt::DotOp dot,
       operandTypes[1], operandTypes[2], dot.getA().getType().getShape().back());
 }
 
+// Follow the dot result forward to the global store(s) that consume it and
+// return the store's in-memory `order` (set by Coalesce from the pointer
+// contiguity; it lives on the stored value, not the dot result). The walk
+// follows every non-dot user forward, crossing out of loops/conditionals via
+// scf.yield, and stops at another dot (a chain-dot head keeps its default
+// layout). Only same-shaped stores count. Returns std::nullopt when no store is
+// reachable or when reachable stores disagree.
+static std::optional<SmallVector<unsigned>> getConsumerStoreOrder(Value root) {
+  ArrayRef<int64_t> rootShape =
+      cast<RankedTensorType>(root.getType()).getShape();
+  std::optional<SmallVector<unsigned>> order;
+  SmallVector<Value> worklist{root};
+  llvm::SmallPtrSet<Value, 8> seen;
+
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (!seen.insert(v).second)
+      continue;
+
+    for (OpOperand &use : v.getUses()) {
+      Operation *user = use.getOwner();
+
+      if (auto storeOp = dyn_cast<tt::StoreOp>(user)) {
+        auto ty = dyn_cast<RankedTensorType>(storeOp.getValue().getType());
+        // The blocked `order` attribute is the in-memory contiguity order.
+        auto enc =
+            ty ? dyn_cast<ttg::BlockedEncodingAttr>(ty.getEncoding()) : nullptr;
+        if (!enc || ty.getShape() != rootShape)
+          continue;
+        SmallVector<unsigned> storeOrder = llvm::to_vector(enc.getOrder());
+        if (order && *order != storeOrder)
+          return std::nullopt; // conflicting stores
+        order = std::move(storeOrder);
+      } else if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        // A yielded value becomes the tied parent result. Only scf.for/scf.if
+        // map yield operand index to result index (not scf.while).
+        if (isa<scf::ForOp, scf::IfOp>(yieldOp->getParentOp()))
+          worklist.push_back(
+              yieldOp->getParentOp()->getResult(use.getOperandNumber()));
+      } else if (!isa<tt::DotOpInterface>(user)) {
+        // Follow the value through any other (elementwise/cast/convert) op.
+        worklist.append(user->result_begin(), user->result_end());
+      }
+    }
+  }
+  return order;
+}
+
 class BlockedToWMMA : public OpRewritePattern<tt::DotOp> {
   int wmmaVersion;
 
@@ -1509,9 +1558,19 @@ public:
     auto warpsPerTile =
         planWarps(dotOp, retShapePerCTA, numWarps, {mDim, nDim});
 
-    // Use transposed wmma layout to enable larger vectorization for global
-    // store instructions.
-    bool isTransposed = true;
+    // Pick the result transposition to best vectorize/coalesce the consuming
+    // store. v2/3 vectorize per-lane with a transposed layout; v1 can't (padded
+    // 32-bit VGPRs) and instead coalesces the 16-lane group, so the choice
+    // flips with version and store order:
+    //   row-major store (N fastest): isTransposed = (version > 1)
+    //   col-major store (M fastest): isTransposed = (version == 1)
+    // With no consuming store (e.g. a chain-dot head), keep the default.
+    bool isTransposed = (wmmaVersion > 1);
+    if (auto storeOrder = getConsumerStoreOrder(dotOp.getResult())) {
+      bool outRowMajor =
+          storeOrder->front() == static_cast<unsigned>(retShape.size() - 1);
+      isTransposed = outRowMajor ? (wmmaVersion > 1) : (wmmaVersion == 1);
+    }
     SmallVector<unsigned> tilesPerWarp(retShape.size(), 1u);
     auto ctaLayout = ttg::chooseWmmaCTALinearLayout(ctx, retShape.size(),
                                                     warpsPerTile, tilesPerWarp);

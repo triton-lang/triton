@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="gfx-arch=gfx1100 matrix-instruction-size=0" | FileCheck %s
 
 // CHECK: #[[DOT_OP_PARENT:.+]] = #ttg.blocked<{{.*}}>
-// CHECK: #[[WMMA_0:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = true, ctaLayout = {warp = {{\[\[0, 1\], \[0, 2\]\]}}}}>
+// CHECK: #[[WMMA_0:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = false, ctaLayout = {warp = {{\[\[0, 1\], \[0, 2\]\]}}}}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @wmma_dot_cf32(
@@ -32,7 +32,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 // CHECK: #[[DOT_OP_PARENT:.+]] = #ttg.blocked<{{.*}}>
-// CHECK: #[[WMMA_1:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = true, ctaLayout = {warp = {{\[\[0, 1\], \[1, 0\]\]}}}}>
+// CHECK: #[[WMMA_1:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = false, ctaLayout = {warp = {{\[\[0, 1\], \[1, 0\]\]}}}}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @wmma_dot_cf16(
@@ -66,7 +66,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 // CHECK: #[[DOT_OP_PARENT:.+]] = #ttg.blocked<{{.*}}>
-// CHECK: #[[WMMA_0:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = true, ctaLayout = {warp = {{\[\[0, 1\], \[0, 2\]\]}}}}>
+// CHECK: #[[WMMA_0:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = false, ctaLayout = {warp = {{\[\[0, 1\], \[0, 2\]\]}}}}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @wmma_dot_ab8_cf16(
@@ -104,7 +104,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 // CHECK: #[[DOT_OP_PARENT:.+]] = #ttg.blocked<{{.*}}>
-// CHECK: #[[WMMA_1:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = true, ctaLayout = {warp = {{\[\[0, 1\], \[1, 0\]\]}}}}>
+// CHECK: #[[WMMA_1:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = false, ctaLayout = {warp = {{\[\[0, 1\], \[1, 0\]\]}}}}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @wmma_dot_i8_i32(
@@ -155,5 +155,47 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-SAME: to tensor<128x32xi16, #[[DOT_OP_PARENT]]>
     tt.store %2, %4 : tensor<128x32x!tt.ptr<i16>, #blocked>
     tt.return
+  }
+}
+
+// -----
+
+// Column-major output store (order = [0, 1]): for WMMA v1 the result layout is
+// isTranspose = true, which lets the 16-lane group coalesce on write-back.
+// CHECK: #[[BLOCKED_COL:.+]] = #ttg.blocked<{{.*}}order = {{\[0, 1\]}}}>
+// CHECK: #[[WMMA:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = true,{{.*}}}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_cf32_colmajor(
+   %0: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+   %1: tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+   %2: tensor<128x256x!tt.ptr<f32>, #blocked1>) {
+    %3 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked>
+    // CHECK: tt.dot {{.*}} -> tensor<128x256xf32, #[[WMMA]]>
+    %4 = tt.dot %0, %1, %3 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
+    // CHECK: tt.store {{.*}} : tensor<128x256x!tt.ptr<f32>, #[[BLOCKED_COL]]>
+    %5 = ttg.convert_layout %4 : tensor<128x256xf32, #blocked> -> tensor<128x256xf32, #blocked1>
+    tt.store %2, %5 : tensor<128x256x!tt.ptr<f32>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// No reachable store (the result is returned): getConsumerStoreOrder yields
+// nothing, so the default layout is kept (isTranspose = version > 1, i.e. false
+// for v1).
+// CHECK: #[[WMMA:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = false,{{.*}}}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_cf32_no_store(
+   %0: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+   %1: tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>)
+   -> tensor<128x256xf32, #blocked> {
+    %2 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked>
+    // CHECK: tt.dot {{.*}} -> tensor<128x256xf32, #[[WMMA]]>
+    %3 = tt.dot %0, %1, %2 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
+    tt.return %3 : tensor<128x256xf32, #blocked>
   }
 }

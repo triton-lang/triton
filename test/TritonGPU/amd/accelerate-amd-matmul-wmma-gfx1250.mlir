@@ -467,3 +467,54 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Column-major output store (order = [0, 1]): for WMMA v3 the result layout is
+// isTranspose = false, matching the store's in-memory order for vectorization.
+// CHECK: #[[BLOCKED_COL:.+]] = #ttg.blocked<{{.*}}order = {{\[0, 1\]}}}>
+// CHECK: #[[WMMA:.+]] = #ttg.amd_wmma<{version = 3, isTranspose = false,{{.*}}}>
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0] }>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#op0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#op1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_f16_f32_colmajor(
+      %arg0: tensor<32x8x!tt.ptr<f16>, #op0>,
+      %arg1: tensor<8x32x!tt.ptr<f16>, #op1>,
+      %arg2: tensor<32x32x!tt.ptr<f32>, #blocked1>
+      ) {
+    %a = tt.load %arg0 : tensor<32x8x!tt.ptr<f16>, #op0>
+    %b = tt.load %arg1 : tensor<8x32x!tt.ptr<f16>, #op1>
+    %c = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    // CHECK: tt.dot {{.*}} -> tensor<32x32xf32, #[[WMMA]]>
+    %res = tt.dot %a, %b, %c : tensor<32x8xf16, #op0> * tensor<8x32xf16, #op1> -> tensor<32x32xf32, #blocked>
+    // CHECK: tt.store {{.*}} : tensor<32x32x!tt.ptr<f32>, #[[BLOCKED_COL]]>
+    %cvt = ttg.convert_layout %res : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #blocked1>
+    tt.store %arg2, %cvt : tensor<32x32x!tt.ptr<f32>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// No reachable store (the result is returned): getConsumerStoreOrder yields
+// nothing, so the default layout is kept (isTranspose = version > 1, i.e. true
+// for v3).
+// CHECK: #[[WMMA:.+]] = #ttg.amd_wmma<{version = 3, isTranspose = true,{{.*}}}>
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0] }>
+#op0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#op1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_f16_f32_no_store(
+      %arg0: tensor<32x8x!tt.ptr<f16>, #op0>,
+      %arg1: tensor<8x32x!tt.ptr<f16>, #op1>
+      ) -> tensor<32x32xf32, #blocked> {
+    %a = tt.load %arg0 : tensor<32x8x!tt.ptr<f16>, #op0>
+    %b = tt.load %arg1 : tensor<8x32x!tt.ptr<f16>, #op1>
+    %c = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    // CHECK: tt.dot {{.*}} -> tensor<32x32xf32, #[[WMMA]]>
+    %res = tt.dot %a, %b, %c : tensor<32x8xf16, #op0> * tensor<8x32xf16, #op1> -> tensor<32x32xf32, #blocked>
+    tt.return %res : tensor<32x32xf32, #blocked>
+  }
+}
