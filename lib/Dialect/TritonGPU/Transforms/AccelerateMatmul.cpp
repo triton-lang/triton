@@ -375,13 +375,13 @@ public:
     auto oldBType = cast<RankedTensorType>(b.getType());
     auto oldRetType = cast<RankedTensorType>(dotOp.getType());
 
-    // Enable F64 MMA only on targets with high performance F64 tensor cores.
-    // Otherwise, fallback to F64 FMA for better performance.
+    // Enable F64 MMA only on SM80, SM90, and SM100, which have high
+    // performance F64 tensor cores. Otherwise, fallback to F64 FMA.
     if ((oldAType.getElementType().isF64() ||
          oldBType.getElementType().isF64() ||
          oldRetType.getElementType().isF64()) &&
         !(computeCapability == 80 || computeCapability == 90 ||
-          (computeCapability >= 100 && computeCapability < 120))) {
+          computeCapability == 100)) {
       return failure();
     }
 
