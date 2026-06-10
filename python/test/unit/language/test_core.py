@@ -1738,7 +1738,8 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
 @pytest.mark.parametrize("dtype_str", ['float16', 'float32', 'uint32', 'int32', 'uint64', 'int64', 'float64'])
-def test_atomic_cas_mask_false_is_noop(sem, dtype_str, device):
+@pytest.mark.parametrize("mask_type", ['const', 'scalar', 'dyn'])
+def test_atomic_cas_mask_false_is_noop(sem, dtype_str, mask_type, device):
     @triton.jit
     def masked_noop_const(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr):
         offsets = tl.arange(0, 1)
@@ -1768,13 +1769,14 @@ def test_atomic_cas_mask_false_is_noop(sem, dtype_str, device):
 
     Lock = torch.full((1, ), 2, device=device, dtype=torch_dtype)
 
-    masked_noop_const[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
-    assert Lock[0] == 2
-
-    masked_noop_scalar[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
-    assert Lock[0] == 2
-
-    masked_noop_dyn[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+    if mask_type == 'const':
+        masked_noop_const[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+    elif mask_type == 'scalar':
+        masked_noop_scalar[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+    elif mask_type == 'dyn':
+        masked_noop_dyn[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+    else:
+        raise ValueError(f"Invalid mask_type: {mask_type}")
     assert Lock[0] == 2
 
 
