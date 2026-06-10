@@ -28,11 +28,24 @@ def test_mxfp4_value_roundtrip(shape, trans, mx_axis, mma_version):
     if x.shape[1 - mx_axis] < 32:
         pytest.skip("Not enough elements along non-mx axis")
     layout = HopperMXValueLayout(mx_axis - 2, mma_version)
-    shape = list(x.shape)
-    shape[-1] *= 2
-    transformation = layout.make_transformation(shape, is_fp4=False)
-    res = transformation.unswizzle_data(transformation.swizzle_data(x))
+    logical_shape = list(x.shape)
+    logical_shape[-1] *= 2
+    transformation = layout.make_transformation(logical_shape, is_fp4=True)
+    swizzled = transformation.swizzle_data(x)
+    assert list(swizzled.shape) == transformation.storage_shape
+    res = transformation.unswizzle_data(swizzled)
     assert (res == x).all()
+
+
+def test_mxfp4_value_storage_shape_matches_swizzle():
+    x = torch.randint(0, 256, (64, 128), dtype=torch.uint8)
+    transformation = HopperMXValueLayout(-1, 3).make_transformation([64, 256], is_fp4=True)
+
+    swizzled = transformation.swizzle_data(x)
+
+    assert swizzled.shape == (64, 512)
+    assert transformation.storage_shape == list(swizzled.shape)
+    assert torch.equal(transformation.unswizzle_data(swizzled), x)
 
 
 @pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)

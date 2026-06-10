@@ -43,6 +43,10 @@ class GFX1250MXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "K_SCALE", K_SCALE)
         object.__setattr__(self, "N", N)
 
+    @property
+    def storage_shape(self) -> list[int]:
+        return [self.B, self.K_SCALE_pad * self.ALIGN_N, self.N_pad // self.ALIGN_N]
+
     def swizzle_data(self, data):
         if data.numel():
             data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_SCALE_pad - self.K_SCALE))
@@ -50,8 +54,8 @@ class GFX1250MXScaleLayoutTransformation(LayoutTransformation):
         data = data.view(self.B, self.N_pad // self.ALIGN_N, 4, self.ALIGN_N // 4,
                          self.K_SCALE_pad // self.ALIGN_K_SCALE, self.ALIGN_K_SCALE)
         data = data.permute(0, 1, 4, 3, 2, 5).contiguous()
-        data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.K_SCALE_pad * self.ALIGN_N)
-        return data.transpose(-1, -2)
+        data = data.reshape(self.B, self.storage_shape[2], self.storage_shape[1])
+        return self._validate_storage_shape(data.transpose(-1, -2))
 
     def unswizzle_data(self, data):
         data = data.transpose(-1, -2)
