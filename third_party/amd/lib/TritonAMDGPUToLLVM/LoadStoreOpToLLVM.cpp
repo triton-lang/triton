@@ -1875,7 +1875,7 @@ struct BufferAtomicCASOpConversion
     SmallVector<Value> cmpElems = unpackLLElements(loc, llCmp, rewriter);
 
     SmallVector<Value> maskElems =
-      getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
+        getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
     SmallVector<Value> loadedVals;
@@ -1900,7 +1900,8 @@ struct BufferAtomicCASOpConversion
 
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Type vecTy = LLVM::getVectorType(valueElemTy, vec);
-      Value pred = llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
+      Value pred =
+          llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
       // Create the store val
       Value casStoreVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),

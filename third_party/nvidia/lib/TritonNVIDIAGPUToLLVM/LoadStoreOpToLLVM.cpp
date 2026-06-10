@@ -577,12 +577,12 @@ struct AtomicCASOpConversion
       Value casVal = valElements[i];
       Value casCmp = cmpElements[i];
       Value casPtr = ptrElements[i];
-      Value pred = llMask ? ttg::maybeAnd(rewriter, loc, threadPred,
-                                          maskElements[i])
-                          : threadPred;
-      Value old = NVIDIA::emitPtxAtomicCAS(rewriter, loc, valueElemTy, casPtr,
-                                           casCmp, casVal, op.getSem(),
-                                           op.getScope(), pred);
+      Value pred =
+          llMask ? ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i])
+                 : threadPred;
+      Value old =
+          NVIDIA::emitPtxAtomicCAS(rewriter, loc, valueElemTy, casPtr, casCmp,
+                                   casVal, op.getSem(), op.getScope(), pred);
 
       if (tensorTy) {
         resultVals[i] = old;

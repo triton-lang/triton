@@ -1639,8 +1639,8 @@ void init_triton_ir(py::module &&m) {
                auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
                dstType = ptrType.getPointeeType();
              }
-             return self.create<AtomicCASOp>(dstType, ptr, cmp, val, mask,
-                                             sem, scope);
+             return self.create<AtomicCASOp>(dstType, ptr, cmp, val, mask, sem,
+                                             scope);
            })
       .def("create_atomic_rmw",
            [](TritonOpBuilder &self, RMWOp rmwOp, Value &ptr, Value &val,

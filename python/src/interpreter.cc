@@ -541,13 +541,13 @@ protected:
       atomic_compare_exchange_strong<uint8_t>(loc, expected, desired, i, order);
     } else if (itemsize == 2) {
       atomic_compare_exchange_strong<uint16_t>(loc, expected, desired, i,
-                                              order);
+                                               order);
     } else if (itemsize == 4) {
       atomic_compare_exchange_strong<uint32_t>(loc, expected, desired, i,
-                                              order);
+                                               order);
     } else if (itemsize == 8) {
       atomic_compare_exchange_strong<uint64_t>(loc, expected, desired, i,
-                                              order);
+                                               order);
     } else {
       throw std::invalid_argument("Invalid byte size");
     }
@@ -736,7 +736,7 @@ void init_triton_interpreter(py::module &&m) {
                  static_cast<const void *>(reshaped_cmp.data()),
                  itemsize * numel);
           AtomicCASOp(reshaped_ptr.data(), ret.mutable_data(),
-                      static_cast<const void *>(reshaped_val.data()), 
+                      static_cast<const void *>(reshaped_val.data()),
                       mask.data(), itemsize, numel, order)
               .apply();
           return ret.reshape(shape);

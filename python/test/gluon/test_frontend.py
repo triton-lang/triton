@@ -2018,6 +2018,7 @@ def test_atomic_cas():
     ttgl.atomic_cas(offset + ptr, old, new, sem="relaxed")
     ttgl.atomic_cas(offset + ptr, old, new)
 
+
 @filecheck_test
 @gluon.jit
 def test_atomic_cas_masks():

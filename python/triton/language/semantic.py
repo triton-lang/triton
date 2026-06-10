@@ -1201,7 +1201,7 @@ class TritonSemantic(Generic[TensorTy]):
         if ptr_shape != ptr.shape:
             raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
         return ptr, val, mask
-    
+
     def _broadcast_ptr_cmp_val_mask(self, ptr, cmp, val, mask):
         ptr_shape = ptr.shape
         if mask is None:
@@ -1284,7 +1284,8 @@ class TritonSemantic(Generic[TensorTy]):
             mask = self.tensor(mask_ir, mask_ty)
         elif not mask.type.scalar.is_bool():
             raise ValueError("Mask must have boolean scalar type")
-        return self.tensor(self.builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle, mask.handle, sem, scope), val.type)
+        return self.tensor(self.builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle, mask.handle, sem, scope),
+                           val.type)
 
     def atom_red_typechecking_impl(self, ptr: TensorTy, val: TensorTy, mask: TensorTy,
                                    op: str) -> Tuple[TensorTy, TensorTy, TensorTy]:
