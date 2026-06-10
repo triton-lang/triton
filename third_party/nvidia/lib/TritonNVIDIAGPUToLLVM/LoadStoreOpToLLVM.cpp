@@ -24,11 +24,6 @@
 #include "triton/Tools/LayoutUtils.h"
 
 #include <cassert>
-#include <functional>
-#include <iterator>
-#include <limits>
-#include <queue>
-#include <vector>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -36,93 +31,7 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-
-static int countTMAStoreLikeOps(Block::iterator begin, Block::iterator end) {
-  int count = 0;
-  for (auto it = begin; it != end; ++it) {
-    if (isa<ttng::TMAStoreLikeOpInterface>(&*it))
-      ++count;
-  }
-  return count;
-}
-
-static int countTMAStoreLikeOpsBefore(Block *block, Operation *endOp) {
-  return countTMAStoreLikeOps(block->begin(), Block::iterator(endOp));
-}
-
-static int countTMAStoreLikeOpsInBlock(Block *block) {
-  return countTMAStoreLikeOps(block->begin(), block->end());
-}
-
-static FailureOr<int> computePendingCount(Operation *producer,
-                                          Operation *waitOp) {
-  Block *producerBlock = producer->getBlock();
-  Block *waitBlock = waitOp->getBlock();
-  if (producerBlock == waitBlock) {
-    auto begin = std::next(Block::iterator(producer));
-    return countTMAStoreLikeOps(begin, Block::iterator(waitOp));
-  }
-
-  constexpr int kInf = std::numeric_limits<int>::max();
-  llvm::DenseMap<Block *, int> dist;
-  using QueueItem = std::pair<int, Block *>;
-  std::priority_queue<QueueItem, std::vector<QueueItem>,
-                      std::greater<QueueItem>>
-      worklist;
-
-  int initial = countTMAStoreLikeOps(std::next(Block::iterator(producer)),
-                                     producerBlock->end());
-  for (Block *succ : producerBlock->getSuccessors()) {
-    int cost = initial;
-    cost += succ == waitBlock ? countTMAStoreLikeOpsBefore(succ, waitOp)
-                              : countTMAStoreLikeOpsInBlock(succ);
-    auto it = dist.find(succ);
-    if (it == dist.end() || cost < it->second) {
-      dist[succ] = cost;
-      worklist.push({cost, succ});
-    }
-  }
-
-  while (!worklist.empty()) {
-    auto [cost, block] = worklist.top();
-    worklist.pop();
-    if (dist.lookup(block) != cost)
-      continue;
-    if (block == waitBlock)
-      return cost;
-    for (Block *succ : block->getSuccessors()) {
-      if (cost == kInf)
-        continue;
-      int nextCost =
-          cost + (succ == waitBlock ? countTMAStoreLikeOpsBefore(succ, waitOp)
-                                    : countTMAStoreLikeOpsInBlock(succ));
-      auto it = dist.find(succ);
-      if (it == dist.end() || nextCost < it->second) {
-        dist[succ] = nextCost;
-        worklist.push({nextCost, succ});
-      }
-    }
-  }
-  return failure();
-}
-
-void mlir::triton::NVIDIA::computeTMAStoreWaitPendings(
-    ModuleOp mod, llvm::DenseMap<Operation *, int> &tmaStoreWaitPendings) {
-  mod.walk([&](ttng::TMAStoreWaitOp waitOp) {
-    Value token = waitOp.getToken();
-    if (!token)
-      return;
-    Operation *producer = token.getDefiningOp();
-    if (!producer)
-      return;
-    FailureOr<int> pendingCount = computePendingCount(producer, waitOp);
-    if (succeeded(pendingCount))
-      tmaStoreWaitPendings[waitOp.getOperation()] = *pendingCount;
-  });
-}
-using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getCGALayout;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
@@ -1932,30 +1841,15 @@ struct AsyncCommitGroupOpConversion
 
 struct TMAStoreWaitOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMAStoreWaitOp> {
-  TMAStoreWaitOpConversion(
-      const LLVMTypeConverter &typeConverter,
-      const llvm::DenseMap<Operation *, int> &tmaStoreWaitPendings,
-      PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(typeConverter, benefit),
-        tmaStoreWaitPendings(tmaStoreWaitPendings) {}
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMAStoreWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    IntegerAttr pendings = op.getPendingsAttr();
-    if (!pendings) {
-      auto it = tmaStoreWaitPendings.find(op.getOperation());
-      if (it == tmaStoreWaitPendings.end())
-        return op.emitError("could not resolve token wait pending count");
-      pendings = rewriter.getI32IntegerAttr(it->second);
-    }
     rewriter.replaceOpWithNewOp<NVVM::CpAsyncBulkWaitGroupOp>(
-        op, pendings, op.getReadOnlyAttr());
+        op, op.getPendingsAttr(), op.getReadOnlyAttr());
     return success();
   }
-
-private:
-  const llvm::DenseMap<Operation *, int> &tmaStoreWaitPendings;
 };
 
 } // namespace
@@ -1963,9 +1857,7 @@ private:
 void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     int computeCapability, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    const llvm::DenseMap<Operation *, int> &tmaStoreWaitPendings,
-    PatternBenefit benefit) {
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<AsyncCopyGlobalToLocalOpConversion, AtomicCASOpConversion,
                AtomicRMWOpConversion>(typeConverter, targetInfo,
                                       axisInfoAnalysis, benefit);
@@ -1976,8 +1868,6 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
   patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
                AsyncTMACopyLocalToGlobalOpConversion,
                AsyncTMAReduceOpConversion, AsyncTMAGatherOpConversion,
-               AsyncTMAScatterOpConversion>(
+               AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(
       typeConverter, benefit);
-  patterns.add<TMAStoreWaitOpConversion>(typeConverter, tmaStoreWaitPendings,
-                                         benefit);
 }

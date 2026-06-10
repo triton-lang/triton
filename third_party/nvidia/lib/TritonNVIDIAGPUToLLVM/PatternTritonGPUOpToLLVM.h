@@ -4,7 +4,6 @@
 #include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "llvm/ADT/DenseMap.h"
 
 namespace mlir {
 namespace triton {
@@ -56,12 +55,7 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        int computeCapability,
                                        RewritePatternSet &patterns,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                       const llvm::DenseMap<Operation *, int>
-                                           &tmaStoreWaitPendings,
                                        PatternBenefit benefit);
-
-void computeTMAStoreWaitPendings(
-    ModuleOp mod, llvm::DenseMap<Operation *, int> &tmaStoreWaitPendings);
 
 void populateTMAToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                const TargetInfo &targetInfo,

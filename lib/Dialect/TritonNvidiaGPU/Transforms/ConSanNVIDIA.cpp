@@ -76,12 +76,14 @@ public:
 
   std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const override {
     if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op)) {
+      // TODO: Lower token-based waits to pendings before ConSan (or extend
+      // ConSan to handle the token logic) so they can be verified here too.
       if (!tmaStoreWaitOp.getPendingsAttr())
         return std::nullopt;
-      return WaitOpInfo{tti::CommitKind::TmaStore,
-                        static_cast<int>(
-                            tmaStoreWaitOp.getPendingsAttr().getInt()),
-                        /*transferWrites=*/false, /*transferReads=*/true};
+      return WaitOpInfo{
+          tti::CommitKind::TmaStore,
+          static_cast<int>(tmaStoreWaitOp.getPendingsAttr().getInt()),
+          /*transferWrites=*/false, /*transferReads=*/true};
     }
     return std::nullopt;
   }
