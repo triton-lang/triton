@@ -31,7 +31,7 @@ from collections import defaultdict
 from itertools import count
 from pathlib import Path
 
-import sphinx_rtd_theme
+
 from myst_sphinx_gallery import GalleryConfig
 from sphinx_gallery.sorting import FileNameSortKey
 
