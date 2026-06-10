@@ -209,14 +209,6 @@ public:
     if (rewriteOperand(dotOp.getB(), rewriter).succeeded())
       changed = true;
 
-    if (auto mmaScaledOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(
-            dotOp.getOperation())) {
-      if (rewriteOperand(mmaScaledOp.getAScale(), rewriter).succeeded())
-        changed = true;
-      if (rewriteOperand(mmaScaledOp.getBScale(), rewriter).succeeded())
-        changed = true;
-    }
-
     return success(changed);
   }
 
@@ -300,6 +292,143 @@ private:
   }
 };
 
+// Inject TMEM copy instructions into IR to efficiently load blocked scales for
+// scaled dot
+class UseShmemForScales
+    : public OpRewritePattern<triton::nvidia_gpu::TCGen5MMAScaledOp> {
+public:
+  using OpRewritePattern<
+      triton::nvidia_gpu::TCGen5MMAScaledOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::nvidia_gpu::TCGen5MMAScaledOp mmaOp,
+                                PatternRewriter &rewriter) const override {
+    auto aScale = mmaOp.getAScale();
+    auto bScale = mmaOp.getBScale();
+    LogicalResult ret = failure();
+    if (aScale && isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+                      aScale.getType().getEncoding())) {
+      if (rewriteOperand(mmaOp.getAScaleMutable(), rewriter).succeeded())
+        ret = success();
+    }
+    if (bScale && isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+                      bScale.getType().getEncoding())) {
+      if (rewriteOperand(mmaOp.getBScaleMutable(), rewriter).succeeded())
+        ret = success();
+    }
+    return ret;
+  }
+
+private:
+  LogicalResult rewriteOperand(OpOperand &opOperand,
+                               PatternRewriter &rewriter) const {
+    auto src = cast<TypedValue<MemDescType>>(opOperand.get());
+    auto tmemAlloc = src.getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
+    if (!tmemAlloc) {
+      return failure();
+    }
+    auto dstType = tmemAlloc.getResult().getType();
+
+    if (!tmemAlloc.getSrc()) {
+      return failure();
+    }
+
+    // Look for a sequence
+    //    local_load
+    // -> reshape(..., (BLOCK_MN / 128, BLOCK_K / scale_vec_size / 4, 32, 4,
+    // 4)
+    // -> transpose(..., (0, 3, 2, 1, 4))
+    // -> reshape(..., (BLOCK_MN, BLOCK_K / scale_vec_size)
+    // -> tmem_alloc
+    // -> tc_gen_mma_scaled
+    // and replace it with local_alloc -> tc_gen_mma_scaled
+    auto scale2DShape = dstType.getShape();
+    auto blockMN = scale2DShape[0];
+    auto numScales = scale2DShape[1];
+    const SmallVector<int> transposeOrder{0, 3, 2, 1, 4};
+    const SmallVector<int64_t> reshape5DShape{blockMN / 128, numScales / 4, 32,
+                                              4, 4};
+
+    auto reshapeOp2D = getNextOp<triton::ReshapeOp>(tmemAlloc.getSrc());
+    if (!reshapeOp2D ||
+        reshapeOp2D.getResult().getType().getShape() != scale2DShape) {
+      return failure();
+    }
+
+    auto transOp = getNextOp<triton::TransOp>(reshapeOp2D.getSrc());
+    if (!transOp || transOp.getOrder() != ArrayRef<int>(transposeOrder)) {
+      return failure();
+    }
+
+    auto reshapeOp5D = getNextOp<triton::ReshapeOp>(transOp.getSrc());
+    if (!reshapeOp5D || reshapeOp5D.getResult().getType().getShape() !=
+                            ArrayRef<int64_t>(reshape5DShape)) {
+      return failure();
+    }
+
+    auto localLoad = getNextOp<triton::gpu::LocalLoadOp>(reshapeOp5D.getSrc());
+    if (!localLoad) {
+      return failure();
+    }
+    auto localAlloc = getNextOp<LocalAllocOp>(localLoad.getSrc());
+    bool usesTMAload =
+        localAlloc && localAlloc.getSrc() &&
+        getNextOp<DescriptorLoadLikeOpInterface>(localAlloc.getSrc());
+    if (!isTmemCopyCompatible(localLoad.getSrc().getType(), usesTMAload))
+      return failure();
+
+    PatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(tmemAlloc);
+
+    Value shared = localLoad.getSrc();
+
+    Value reshaped5D = MemDescReshapeOp::create(rewriter, reshapeOp5D.getLoc(),
+                                                shared, reshape5DShape);
+    SmallVector<int32_t> transposeOrder32(transposeOrder.begin(),
+                                          transposeOrder.end());
+    Value transposed = MemDescTransOp::create(rewriter, transOp.getLoc(),
+                                              reshaped5D, transposeOrder32);
+    SmallVector<int64_t> scale2DShapeVec(scale2DShape.begin(),
+                                         scale2DShape.end());
+    Value reshaped2D = MemDescReshapeOp::create(rewriter, reshapeOp2D.getLoc(),
+                                                transposed, scale2DShapeVec);
+
+    opOperand.assign(reshaped2D);
+    rewriter.eraseOp(tmemAlloc);
+    return success();
+  }
+
+  template <typename Op> Op getNextOp(Value op) const {
+    while (auto cvtOp = op.getDefiningOp<ConvertLayoutOp>()) {
+      op = cvtOp.getSrc();
+    }
+    return op.getDefiningOp<Op>();
+  }
+
+  bool isTmemCopyCompatible(triton::gpu::MemDescType scaleType,
+                            bool usesTMAload) const {
+    // TMEM copy expects that blocked scale "chunks" in SMEM are stored in
+    // innermost axes contiguously.
+    if (!isInnermostContiguous(scaleType, 512))
+      return false;
+
+    if (usesTMAload) {
+      return true;
+    }
+
+    if (scaleType.getRank() != 2) {
+      // TODO: Add support for higher rank when 5D coalesced load is fixed
+      return false;
+    }
+
+    auto elemBits = scaleType.getElementType().getIntOrFloatBitWidth();
+
+    // We assume that 32x128b chunks are flattened into the inner most axis.
+    auto innerMostBits =
+        scaleType.getDimSize(scaleType.getRank() - 1) * elemBits;
+    return innerMostBits % (32 * 128) == 0;
+  }
+};
+
 } // namespace
 
 #define GEN_PASS_DEF_TRITONGPUOPTIMIZEDOTOPERANDS
@@ -325,6 +454,7 @@ public:
     patterns.add<SwizzleShmemConvert>(context);
     patterns.add<FuseTransMMAV3Plus, ReshapeMemDesc>(context);
     patterns.add<RewriteMmaOperandViewsToMemDescForDotOp>(context);
+    patterns.add<UseShmemForScales>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
