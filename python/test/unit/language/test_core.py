@@ -1811,19 +1811,32 @@ def test_atomic_cas_mask_false_is_noop(sem, dtype_str, mask_type, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 @pytest.mark.parametrize("size", [4, 128, 512, 1024])
 @pytest.mark.parametrize("dtype_str", ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64'])
-def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
+@pytest.mark.parametrize("mask_type", ['none', 'const', 'scalar', 'dyn'])
+def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, mask_type, device):
     check_type_supported(dtype_str, device)
     if is_hip_cdna2():
         pytest.skip("Disabled due to being flaky on CDNA2")
 
     @triton.jit
-    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, dtype: tl.constexpr):
+    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, dtype: tl.constexpr, mask_type: tl.constexpr):
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         t1 = tl.full((BLOCK_SIZE, ), 0, dtype=dtype)
         t2 = tl.full((BLOCK_SIZE, ), 2, dtype=dtype)
-        tl.atomic_cas(X + offsets, t1, t2, sem=sem)
+
+        if mask_type == 'none':
+            mask = None
+        elif mask_type == 'const':
+            mask = tl.full((BLOCK_SIZE, ), True, dtype=tl.int1)
+        elif mask_type == 'scalar':
+            mask = True
+        elif mask_type == 'dyn':
+            mask = offsets >= 0
+        else:
+            raise ValueError(f"Invalid mask_type: {mask_type}")
+
+        tl.atomic_cas(X + offsets, t1, t2, sem=sem, mask=mask)
 
     torch_dtype = getattr(torch, dtype_str)
     X = torch.zeros((size, ), device=device, dtype=torch_dtype)
@@ -1832,7 +1845,7 @@ def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
     Y[0::2] = 2
 
     tl_dtype = getattr(tl, dtype_str)
-    change_value[(2, )](X, BLOCK_SIZE=size // 2, sem=sem, dtype=tl_dtype)
+    change_value[(2, )](X, BLOCK_SIZE=size // 2, sem=sem, dtype=tl_dtype, mask_type=mask_type)
     assert torch.equal(X, Y)
 
 
