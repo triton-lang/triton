@@ -1201,6 +1201,17 @@ class TritonSemantic(Generic[TensorTy]):
         if ptr_shape != ptr.shape:
             raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
         return ptr, val, mask
+    
+    def _broadcast_ptr_cmp_val_mask(self, ptr, cmp, val, mask):
+        ptr_shape = ptr.shape
+        if mask is None:
+            ptr, cmp, val = self.broadcast_tensors(ptr, cmp, val)
+        else:
+            mask = self.to_tensor(mask)
+            ptr, cmp, val, mask = self.broadcast_tensors(ptr, cmp, val, mask)
+        if ptr_shape != ptr.shape:
+            raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
+        return ptr, cmp, val, mask
 
     def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], boundary_check, cache_modifier: str,
               eviction_policy: str) -> TensorTy:
@@ -1260,6 +1271,10 @@ class TritonSemantic(Generic[TensorTy]):
         element_ty = ptr.type.scalar.element_ty
         if element_ty.primitive_bitwidth not in [16, 32, 64]:
             raise ValueError("atomic_cas only supports elements with width {16, 32, 64}")
+        if ptr.type.is_block():
+            ptr, cmp, val, mask = self._broadcast_ptr_cmp_val_mask(ptr, cmp, val, mask)
+        cmp = self.cast(cmp, element_ty)
+        val = self.cast(val, element_ty)
         if mask is None:
             mask_ir = self.builder.get_int1(True)
             mask_ty = tl.int1
