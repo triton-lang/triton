@@ -1168,7 +1168,7 @@ class tensor(base_value):
     def advance(self, offsets) -> tensor:
         ...
 
-    def atomic_cas(self, cmp, val, mask=None, sem=None, scope=None) -> tensor:
+    def atomic_cas(self, cmp, val, sem=None, scope=None, mask=None) -> tensor:
         ...
 
     def atomic_xchg(self, val, mask=None, sem=None, scope=None) -> tensor:
