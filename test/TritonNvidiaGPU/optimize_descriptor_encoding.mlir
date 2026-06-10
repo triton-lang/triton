@@ -187,3 +187,34 @@ tt.func public @descriptor_arg_from_4d_shared_linear_use(%arg0: !tt.tensordesc<1
   tt.return
 }
 }
+
+// -----
+
+#shared_linear_scale_base = #ttg.shared_linear<{offset = [[0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 0, 0, 0, 4], [0, 0, 0, 0, 8], [0, 0, 0, 1, 0], [0, 0, 0, 2, 0], [0, 0, 0, 4, 0], [0, 0, 0, 8, 0], [0, 0, 0, 16, 0], [0, 1, 0, 0, 0]]}, alignment = 128>
+#shared_linear_scale_rs = #ttg.shared_linear<{offset = [[0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 0, 0, 1, 0], [0, 0, 0, 2, 0], [0, 0, 1, 0, 0], [0, 0, 2, 0, 0], [0, 0, 4, 0, 0], [0, 0, 8, 0, 0], [0, 0, 16, 0, 0], [1, 0, 0, 0, 0]]}, alignment = 128>
+#shared_linear_scale_tr = #ttg.shared_linear<{offset = [[0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 1, 0, 0, 0], [0, 2, 0, 0, 0], [0, 0, 1, 0, 0], [0, 0, 2, 0, 0], [0, 0, 4, 0, 0], [0, 0, 8, 0, 0], [0, 0, 16, 0, 0], [1, 0, 0, 0, 0]]}, alignment = 128>
+#shared_linear_scale_final = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [32, 0], [64, 0], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [128, 0]]}, alignment = 128>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-DAG: #[[NVMMA_0_5D:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, rank = 5}>
+// CHECK-DAG: #[[SL_SCALE_BASE:.*]] = #ttg.shared_linear<{{.*}}alignment = 128>
+// CHECK-DAG: #[[SL_SCALE_RS:.*]] = #ttg.shared_linear<{{.*}}alignment = 128>
+// CHECK-DAG: #[[SL_SCALE_TR:.*]] = #ttg.shared_linear<{{.*}}alignment = 128>
+// CHECK-DAG: #[[SL_SCALE_FINAL:.*]] = #ttg.shared_linear<{{.*}}alignment = 128>
+tt.func public @scale_descriptor_arg_from_shared_linear_use(%arg0: !tt.tensordesc<1x2x1x32x16xi8>) {
+  // CHECK: %arg0: !tt.tensordesc<1x2x1x32x16xi8, #[[NVMMA_0_5D]]>
+  // CHECK: %[[LOAD:.*]] = tt.descriptor_load %arg0[%{{.*}}] : !tt.tensordesc<1x2x1x32x16xi8, #[[NVMMA_0_5D]]> -> tensor<1x2x1x32x16xi8>
+  // CHECK: %[[SCALE_LA:.*]] = ttg.local_alloc %[[LOAD]] : (tensor<1x2x1x32x16xi8>) -> !ttg.memdesc<1x2x1x32x16xi8, #[[SL_SCALE_BASE]], #smem, mutable>
+  // CHECK: %[[SCALE_RS:.*]] = ttg.memdesc_reshape %[[SCALE_LA]] : !ttg.memdesc<1x2x1x32x16xi8, #[[SL_SCALE_BASE]], #smem, mutable> -> !ttg.memdesc<2x1x32x4x4xi8, #[[SL_SCALE_RS]], #smem, mutable>
+  // CHECK: %[[SCALE_TR:.*]] = ttg.memdesc_trans %[[SCALE_RS]] {order = array<i32: 0, 3, 2, 1, 4>} : !ttg.memdesc<2x1x32x4x4xi8, #[[SL_SCALE_RS]], #smem, mutable> -> !ttg.memdesc<2x4x32x1x4xi8, #[[SL_SCALE_TR]], #smem, mutable>
+  // CHECK: ttg.memdesc_reshape %[[SCALE_TR]] : !ttg.memdesc<2x4x32x1x4xi8, #[[SL_SCALE_TR]], #smem, mutable> -> !ttg.memdesc<256x4xi8, #[[SL_SCALE_FINAL]], #smem, mutable>
+  %c0_i32 = arith.constant 0 : i32
+  %0 = tt.descriptor_load %arg0[%c0_i32, %c0_i32, %c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x2x1x32x16xi8> -> tensor<1x2x1x32x16xi8>
+  %1 = ttg.local_alloc %0 : (tensor<1x2x1x32x16xi8>) -> !ttg.memdesc<1x2x1x32x16xi8, #shared_linear_scale_base, #smem, mutable>
+  %2 = ttg.memdesc_reshape %1 : !ttg.memdesc<1x2x1x32x16xi8, #shared_linear_scale_base, #smem, mutable> -> !ttg.memdesc<2x1x32x4x4xi8, #shared_linear_scale_rs, #smem, mutable>
+  %3 = ttg.memdesc_trans %2 {order = array<i32: 0, 3, 2, 1, 4>} : !ttg.memdesc<2x1x32x4x4xi8, #shared_linear_scale_rs, #smem, mutable> -> !ttg.memdesc<2x4x32x1x4xi8, #shared_linear_scale_tr, #smem, mutable>
+  %4 = ttg.memdesc_reshape %3 : !ttg.memdesc<2x4x32x1x4xi8, #shared_linear_scale_tr, #smem, mutable> -> !ttg.memdesc<256x4xi8, #shared_linear_scale_final, #smem, mutable>
+  tt.return
+}
+}

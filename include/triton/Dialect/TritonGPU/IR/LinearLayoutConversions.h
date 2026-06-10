@@ -166,6 +166,13 @@ std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
                                        bool disableSwizzle);
 
+// Create the canonical 2D SMEM linear layout for scales.
+// This is the shared-memory layout for the 32x4x4 TMEM scale-tile convention
+// recognized between the user kernel and the compiler.
+LinearLayout getScaleSmemLayoutForTMEMCopy(MLIRContext *ctx,
+                                           ArrayRef<int64_t> shape,
+                                           CGAEncodingAttr cgaLayout);
+
 // Create a TDM (Tensor DMA) LinearLayout: (message, warp, block) ->
 // (dim0, dim1, ...).  TDM is warp-granular.  The "warp" sublayout is an
 // identity over `warpsPerCTA`, zero-padded up to log2(numWarps) so the

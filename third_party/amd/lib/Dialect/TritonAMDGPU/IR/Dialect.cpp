@@ -649,10 +649,6 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   if (failed(verifyResult))
     return verifyResult;
 
-  if (tensorDescTy.getSharedLayout() != smemTy.getEncoding())
-    return emitOpError(
-        "Mismatch between TDM descriptor and destination smem encodings");
-
   auto swizzledEnc =
       llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());
   if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
@@ -753,10 +749,6 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
   if (failed(verifyResult))
     return verifyResult;
-
-  if (tensorDescTy.getSharedLayout() != smemTy.getEncoding())
-    return emitOpError(
-        "Mismatch between TDM descriptor and source smem encodings");
 
   auto swizzledEnc =
       llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());
