@@ -123,10 +123,12 @@ Value mixFloatToInt(ConversionPatternRewriter &rewriter, Location loc, Value u,
   PayloadMixConfig cfg = getPayloadMixConfig(floatTy);
   Value signFlip =
       selectUIntConstantOnSign(rewriter, loc, u, cfg.signMask, 0, cfg.signMask);
-  Value x = b.xor_(u, signFlip);
   Value mulA = createUIntConstant(rewriter, loc, u.getType(), cfg.mulA);
   Value magMask = createUIntConstant(rewriter, loc, u.getType(), cfg.magMask);
-  Value yMul = b.mul(x, mulA);
+  // The sign-bit contribution to the product is discarded by magMask. Using
+  // the raw bits also prevents LLVM from folding the sign clear into fabs,
+  // which would canonicalize NaN-shaped FPSan payloads.
+  Value yMul = b.mul(u, mulA);
   Value y = b.and_(yMul, magMask);
   Value z = xorShiftRight(rewriter, loc, y, cfg.shift);
   Value mulB = selectUIntConstantOnSign(rewriter, loc, u, cfg.signMask,

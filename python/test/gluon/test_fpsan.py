@@ -2359,6 +2359,55 @@ def test_reduction_matches_loop(device, fresh_knobs):
     _assert_payload_equal(reduce_out, loop_out)
 
 
+def test_dot_loop_accumulator_add_zero_preserves_payload(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    def allocator(size: int, alignment: int, stream):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(allocator)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @triton.jit(do_not_specialize=["k_size"])
+    def kernel(a_ptr, b_ptr, out_ptr, out_plus_zero_ptr, k_size):
+        rows = tl.arange(0, 16)
+        cols = tl.arange(0, 16)
+        inner = tl.arange(0, 16)
+        acc = tl.zeros((16, 16), tl.float32)
+        for tile in range(0, tl.cdiv(k_size, 16)):
+            k = tile * 16 + inner
+            a = tl.load(a_ptr + rows[:, None] * k_size + k[None, :], mask=k[None, :] < k_size)
+            b = tl.load(b_ptr + k[:, None] * 16 + cols[None, :], mask=k[:, None] < k_size)
+            acc = tl.dot(a, b, acc, allow_tf32=False)
+        offsets = rows[:, None] * 16 + cols[None, :]
+        tl.store(out_ptr + offsets, acc)
+        tl.store(out_plus_zero_ptr + offsets, acc + 0.0)
+
+    a_bits = np.zeros((16, 16), dtype=np.int32)
+    a_bits[:4, 0] = np.array([0x7FC00001, 0x7F800001, 0xFFC00001, 0xFF800001], dtype=np.uint32).view(np.int32)
+    b_bits = np.zeros((16, 16), dtype=np.int32)
+    b_bits[0, 0] = 0x3F800000
+    expected = np.zeros((16, 16), dtype=np.int32)
+    expected[:4, 0] = a_bits[:4, 0]
+
+    a = torch.tensor(a_bits, device="cuda")
+    b = torch.tensor(b_bits, device="cuda")
+    out = torch.empty((16, 16), device="cuda", dtype=torch.int32)
+    out_plus_zero = torch.empty_like(out)
+    kernel[(1, )](
+        triton.TensorWrapper(a, dtype=torch.float32),
+        triton.TensorWrapper(b, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        triton.TensorWrapper(out_plus_zero, dtype=torch.float32),
+        16,
+        num_warps=1,
+        num_stages=1,
+    )
+
+    _assert_payload_equal(out, expected)
+    _assert_payload_equal(out_plus_zero, expected)
+
+
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 def test_mfma_dot(device, fresh_knobs):
     _require_cuda_backend(device)
