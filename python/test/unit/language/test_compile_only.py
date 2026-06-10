@@ -21,6 +21,35 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
+def test_compile_only_ws_cluster_barrier_shared_memory(tmp_path) -> None:
+    src = """
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @ws_cluster_barrier() {
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<5xi8, #shared, #ttg.shared_memory, mutable>
+    ttg.warp_specialize()
+    default {
+      ttng.cluster_barrier
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+"""
+    temp_file = tmp_path / "ws_cluster_barrier.ttgir"
+    temp_file.write_text(src)
+    k = triton.compile(str(temp_file), target=GPUTarget("cuda", 90, 32))
+    ptx = k.asm["ptx"]
+    assert "mbarrier.arrive.release.cluster.shared::cluster.b64" in ptx
+    assert "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64" in ptx
+    assert "mapa" not in ptx
+    assert k.metadata.shared == 24
+    assert k.asm["cubin"] != b""
+
+
 def test_compile_only_expect_zero() -> None:
 
     @triton.jit

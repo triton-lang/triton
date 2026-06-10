@@ -118,7 +118,7 @@ def make_default_opt_flags_amd(
     elif can_use_split_k and not enforce_bitwise_invariance:
         grid_size = grid_m * ((n + block_n - 1) // block_n)
         n_cu = torch.cuda.get_device_properties(0).multi_processor_count
-        split_k = max(1, n_cu // grid_size)
+        split_k = 1 if grid_size == 0 else max(1, n_cu // grid_size)
     # w_cache_modifier:
     w_cache_modifier = ".cg" if block_m <= 32 else None
     # num_warps, num_stages
@@ -475,6 +475,8 @@ def make_opt_flags(
     rhs_layout=None,
     epilogue_reduction_n=1,
 ):
+    # Empty outputs do not launch a kernel, so persistent TMA constraints are vacuous.
+    can_use_persistent_tma = can_use_persistent_tma or batch_size * m * n == 0
     opt_flags_constraints = _get_opt_flags_constraints()
     if opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")

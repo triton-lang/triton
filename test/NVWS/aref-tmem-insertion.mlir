@@ -841,6 +841,39 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     } {tt.disallow_acc_multi_buffer, tt.num_stages = 3 : i32, tt.scheduled_max_stage = 3 : i32, tt.warp_specialize, ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs = [array<i32: 1>, array<i32: 1>, array<i32: 1>], ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 2 : i32}
     tt.return
   }
+
+  // CHECK-LABEL: @if_split_workaround_nondefault_partitions
+  tt.func @if_split_workaround_nondefault_partitions() {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %result, %token = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %0 = ttng.tmem_store %cst, %result[%token], %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %1 = scf.for %arg0 = %c0_i32 to %c1_i32 step %c1_i32 iter_args(%arg1 = %0) -> (!ttg.async.token)  : i32 {
+      %2 = ttng.tmem_store %cst, %result[%arg1], %true {ttg.partition = array<i32: 3>} : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %3 = arith.cmpi eq, %arg0, %c0_i32 {ttg.partition = array<i32: 2, 3>} : i32
+      // CHECK: scf.if
+      // CHECK-NEXT: nvws.aref.put.exit {{.*}} {ttg.partition = array<i32: 3>}
+      // CHECK: } {ttg.partition = array<i32: 3>}
+      // CHECK: scf.if {{.*}} -> (tensor<128x128xf32, #blocked{{.*}}>, !ttg.async.token)
+      // CHECK-NEXT: {{.*}} = nvws.aref.get.enter {{.*}} {ttg.partition = array<i32: 2>}
+      // CHECK: } {ttg.partition = array<i32: 2>, ttg.partition.outputs = [array<i32: 2>, array<i32: 2>]}
+      // CHECK: scf.if {{.*}} -> (!ttg.async.token)
+      // CHECK-NEXT: {{.*}} = nvws.aref.put.enter {{.*}} {ttg.partition = array<i32: 3>}
+      // CHECK: } {ttg.partition = array<i32: 3>, ttg.partition.outputs = [array<i32: 3>]}
+      %4:2 = scf.if %3 -> (tensor<128x128xf32, #blocked>, !ttg.async.token) {
+        %5, %6 = ttng.tmem_load %result[%2] {ttg.partition = array<i32: 2>} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+        "acc_user"(%5) {ttg.partition = array<i32: 2>} : (tensor<128x128xf32, #blocked>) -> ()
+        scf.yield {ttg.partition = array<i32: 2, 3>} %5, %6 : tensor<128x128xf32, #blocked>, !ttg.async.token
+      } else {
+        scf.yield {ttg.partition = array<i32: 2, 3>} %cst, %2 : tensor<128x128xf32, #blocked>, !ttg.async.token
+      } {ttg.partition = array<i32: 2, 3>, ttg.partition.outputs = [array<i32: 2>, array<i32: 3>]}
+      "use"(%4#0) {ttg.partition = array<i32: 2>} : (tensor<128x128xf32, #blocked>) -> ()
+      scf.yield {ttg.partition = array<i32: 0, 1, 2, 3>} %4#1 : !ttg.async.token
+    } {tt.num_stages = 2 : i32, tt.warp_specialize, ttg.partition = array<i32: 0, 1, 2, 3>, ttg.partition.outputs = [array<i32: 3>], ttg.partition.stages = [0 : i32, 0 : i32, 0 : i32, 0 : i32], ttg.warp_specialize.tag = 8 : i32}
+    tt.return
+  }
 }
 
 // -----

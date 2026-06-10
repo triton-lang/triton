@@ -203,11 +203,26 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
   auto shapePerCTA = getShapePerCTA(shared, shape);
   auto kOffset = S("offset");
   if (shared.getSwizzlingByteWidth() == 0) {
+    SmallVector<int64_t> maybeTransposedTmaShape(tmaShape.begin(),
+                                                 tmaShape.end());
+    if (shared.getTransposed()) {
+      std::rotate(maybeTransposedTmaShape.begin(),
+                  maybeTransposedTmaShape.begin() + 1,
+                  maybeTransposedTmaShape.end());
+    }
     auto outDimNames = standardOutDimNames(ctx, rank);
-    LinearLayout layout = LinearLayout::identity1D(tmaShape[rank - 1], kOffset,
-                                                   outDimNames[rank - 1]);
+    LinearLayout layout = LinearLayout::identity1D(
+        maybeTransposedTmaShape[rank - 1], kOffset, outDimNames[rank - 1]);
     for (int i = rank - 2; i >= 0; --i) {
-      layout *= LinearLayout::identity1D(tmaShape[i], kOffset, outDimNames[i]);
+      layout *= LinearLayout::identity1D(maybeTransposedTmaShape[i], kOffset,
+                                         outDimNames[i]);
+    }
+    if (shared.getTransposed()) {
+      SmallVector<int> order = {rank - 1};
+      for (int i = 0; i < rank - 1; i++) {
+        order.push_back(i);
+      }
+      layout = transposeLinearLayout(layout, order);
     }
     layout = ensureLayoutNotSmallerThan(layout, outDimNames, shapePerCTA);
     return combineCtaCgaWithShape(layout, shared.getCGALayout(), shape);
@@ -1104,9 +1119,17 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   assert(blockM == 64 || blockM == 128);
   LinearLayout tile =
       LinearLayout::zeros1D(encoding.getColStride(), kCol, dims[1]);
+
+  LinearLayout colLayout;
+  if (encoding.getFp4Padded()) {
+    // The physical low column bit selects the real/padded half, so the logical
+    // column bits start one bit later than they do for dense TMEM layouts.
+    colLayout *= LinearLayout::zeros1D(2, kCol, dims[1]);
+  }
+  colLayout *= LinearLayout::identity1D(blockN, kCol, dims[1]);
+
   if (blockM == 64 && !encoding.getTwoCTAs()) {
-    tile *= LinearLayout::identity1D(16, kRow, dims[0]) *
-            LinearLayout::identity1D(blockN, kCol, dims[1]);
+    tile *= LinearLayout::identity1D(16, kRow, dims[0]) * colLayout;
     auto bases = tile.getBases();
     if (shapePerCTA[0] > blockM) {
       bases[kRow].push_back({64, 0});
@@ -1120,8 +1143,7 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     bases[kRow].push_back({32, 0});
     tile = LinearLayout(std::move(bases), dims);
   } else {
-    tile *= LinearLayout::identity1D(blockM, kRow, dims[0]) *
-            LinearLayout::identity1D(blockN, kCol, dims[1]);
+    tile *= LinearLayout::identity1D(blockM, kRow, dims[0]) * colLayout;
     if (isM64TwoCTA) {
       auto bases = tile.getBases();
       bases[kRow].push_back(bases[kCol].back());

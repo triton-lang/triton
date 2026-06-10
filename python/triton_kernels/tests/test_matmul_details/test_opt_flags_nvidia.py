@@ -112,7 +112,8 @@ def _hopper_rhs_packed_n_extent(out, n: tl.constexpr):
     tl.store(out, _compute_packed_n_w(n, 4, "HOPPER_VALUE"))
 
 
-def test_matmul_hopper_mxfp4_rhs_packed_n_padding(device):
+@pytest.mark.parametrize("n", [258, 320])
+def test_matmul_hopper_mxfp4_rhs_packed_n_padding(device, n):
     if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
         pytest.skip("requires CUDA")
     if torch.cuda.get_device_capability()[0] != 9:
@@ -122,7 +123,6 @@ def test_matmul_hopper_mxfp4_rhs_packed_n_padding(device):
     # Hopper MXFP4 RHS values are stored with N packed by 4 and then padded in
     # packed space. The generic kernel must ceil-divide before padding and wrap
     # using that padded packed width.
-    n = 258
     packed_n = torch.empty((1, ), dtype=torch.int32, device=device)
     _hopper_rhs_packed_n_extent[(1, )](packed_n, n)
     assert packed_n.item() == 128
@@ -135,6 +135,7 @@ def test_matmul_hopper_mxfp4_rhs_packed_n_padding(device):
     scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=-2, num_warps=8)
     b = convert_layout(wrap_torch_tensor(weight_val, dtype=FP4), value_layout)
     b_scale = convert_layout(wrap_torch_tensor(weight_scale, dtype=UINT8), scale_layout)
+    assert b.storage.data.shape[-1] == packed_n.item()
     precision_config = PrecisionConfig(
         b_mx_scale=b_scale,
         b_microblock_size=MXFP_BLOCK_SIZE.value,

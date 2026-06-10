@@ -612,14 +612,19 @@ def test_compile_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, AS
 
     k = triton.compile(src=gluon._runtime.GluonASTSource(fn, signature, constexprs, attrs=attrs),
                        target=GPUTarget("hip", 'gfx1250', 32))
+    ttgir = k.asm["ttgir"]
     amdgcn = k.asm["amdgcn"]
 
     assert re.search("v_wmma_f32_16x16x32_f16", amdgcn)
 
     if ASYNC_LOAD_TYPE == "TDM":
+        # LLVM may duplicate the dynamic loop body while optimizing the final
+        # assembly. Check the exact TDM copy count before LLVM backend loop
+        # transforms, and only require the final ISA to contain the lowering.
+        assert len(re.findall("amdg.async_tdm_copy_global_to_local", ttgir)) == NUM_BUFFERS * 2
         for cnt in range(NUM_BUFFERS - 1, -1, -1):
             assert re.search(f"s_wait_tensorcnt 0x{(cnt * 2):x}", amdgcn)
-        assert len(re.findall("tensor_load_to_lds", amdgcn)) == NUM_BUFFERS * 2
+        assert len(re.findall("tensor_load_to_lds", amdgcn)) >= NUM_BUFFERS * 2
     else:
         copy_instr_for_A = BLOCK_M // 4 // 4
         b_rows = BLOCK_N if B_K_CONTIG else BLOCK_K
@@ -1601,7 +1606,8 @@ def test_runtime_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYP
 def partitioned_tdm_copy_kernel(a_ptr, b_ptr, M, N,  #
                                 BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,  #
                                 NUM_PARTITIONS: ttgl.constexpr, NUM_GROUPS: ttgl.constexpr,  #
-                                PARTITION_DIM: ttgl.constexpr):
+                                PARTITION_DIM: ttgl.constexpr,  #
+                                INSTR_SHAPE_K: ttgl.constexpr = 32):
     """TDM load with PartitionedSharedLayout; LDS read uses WMMA dot layout (transpose path)."""
     num_warps: ttgl.constexpr = ttgl.num_warps()
 
@@ -1617,7 +1623,7 @@ def partitioned_tdm_copy_kernel(a_ptr, b_ptr, M, N,  #
     smem_layout: ttgl.constexpr = PartitionedSharedLayout(NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, inner_layout)
 
     block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
-    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, 32])
+    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, INSTR_SHAPE_K])
     DOT_RHS_LAYOUT: ttgl.constexpr = ttgl.DotOperandLayout(1, WMMA_LAYOUT, 8)
 
     pid_m = ttgl.program_id(axis=0)
@@ -1661,18 +1667,28 @@ _PARTITIONED_TDM_PARAMS = [
     (64, 128, 2, 4, 1),
     # 2 partitions x 8 groups = 16 pieces along dim1 -> 4 warps < 16 -> 4 instructions
     (64, 256, 2, 8, 1),
+    # 2 partitions x 4 groups = 8 pieces along dim1; partition select lands on a kLane basis (lane remap path)
+    (64, 64, 2, 4, 1),
 ]
+
+_PARTITIONED_TDM_DTYPE_CONFIG = {
+    # dtype -> (torch_dtype, triton pointer-type string, WMMA instr K, ds_load_tr* regex)
+    "f16": (torch.float16, "fp16", 32, r"ds_load_tr16"),
+    "i8": (torch.int8, "i8", 64, r"ds_load_tr8"),
+}
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("DTYPE", list(_PARTITIONED_TDM_DTYPE_CONFIG.keys()))
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,NUM_PARTITIONS,NUM_GROUPS,PARTITION_DIM", _PARTITIONED_TDM_PARAMS)
-def test_runtime_partitioned_tdm_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM):
+def test_runtime_partitioned_tdm_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, DTYPE):
     """Test correctness of TDM async_load + transpose LDS load with PartitionedSharedEncodingAttr."""
+    torch_dtype, _, instr_k, _ = _PARTITIONED_TDM_DTYPE_CONFIG[DTYPE]
     M, N = 256, 256
     num_warps = 4
 
     torch.manual_seed(42)
-    a = torch.randn((M, N), dtype=torch.float16)
+    a = torch.randint(-128, 128, (M, N)).to(torch_dtype)
     b = torch.zeros_like(a)
 
     a_device = a.cuda()
@@ -1681,22 +1697,26 @@ def test_runtime_partitioned_tdm_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROU
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     partitioned_tdm_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
                                       NUM_PARTITIONS=NUM_PARTITIONS, NUM_GROUPS=NUM_GROUPS, PARTITION_DIM=PARTITION_DIM,
-                                      num_warps=num_warps)
+                                      INSTR_SHAPE_K=instr_k, num_warps=num_warps)
 
     b_triton = b_device.cpu()
     mismatched = (b_triton != a).sum().item()
     total = a.numel()
     assert mismatched == 0, (f"Mismatch: {mismatched}/{total} ({100*mismatched/total:.1f}%) elements differ. "
-                             f"partitionDim={PARTITION_DIM}, numPartitions={NUM_PARTITIONS}, numGroups={NUM_GROUPS}")
+                             f"dtype={DTYPE}, partitionDim={PARTITION_DIM}, "
+                             f"numPartitions={NUM_PARTITIONS}, numGroups={NUM_GROUPS}")
 
 
+@pytest.mark.parametrize("DTYPE", list(_PARTITIONED_TDM_DTYPE_CONFIG.keys()))
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,NUM_PARTITIONS,NUM_GROUPS,PARTITION_DIM", _PARTITIONED_TDM_PARAMS)
-def test_compile_partitioned_tdm_transpose_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM):
+def test_compile_partitioned_tdm_transpose_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, DTYPE):
     """Check that LDS load from PartitionedSharedEncodingAttr lowers to ds_load_tr16 when appropriate."""
+    _, triton_dtype, instr_k, ds_load_tr_re = _PARTITIONED_TDM_DTYPE_CONFIG[DTYPE]
     num_warps = 4
+    ptr_ty = f"*{triton_dtype}"
     signature = {
-        "a_ptr": "*fp16",
-        "b_ptr": "*fp16",
+        "a_ptr": ptr_ty,
+        "b_ptr": ptr_ty,
         "M": "i32",
         "N": "i32",
         "BLOCK_M": "constexpr",
@@ -1704,6 +1724,7 @@ def test_compile_partitioned_tdm_transpose_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS
         "NUM_PARTITIONS": "constexpr",
         "NUM_GROUPS": "constexpr",
         "PARTITION_DIM": "constexpr",
+        "INSTR_SHAPE_K": "constexpr",
     }
     constexprs = {
         "BLOCK_M": BLOCK_M,
@@ -1711,13 +1732,15 @@ def test_compile_partitioned_tdm_transpose_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS
         "NUM_PARTITIONS": NUM_PARTITIONS,
         "NUM_GROUPS": NUM_GROUPS,
         "PARTITION_DIM": PARTITION_DIM,
+        "INSTR_SHAPE_K": instr_k,
     }
     k = triton.compile(
         src=gluon._runtime.GluonASTSource(partitioned_tdm_copy_kernel, signature, constexprs),
         target=GPUTarget("hip", 'gfx1250', 32),
         options={"num_warps": num_warps},
     )
-    assert re.search(r"ds_load_tr16", k.asm["amdgcn"]), "expected transpose LDS loads (ds_load_tr16) in amdgcn"
+    assert re.search(ds_load_tr_re, k.asm["amdgcn"]), \
+        f"expected transpose LDS loads ({ds_load_tr_re}) in amdgcn for dtype={DTYPE}"
 
 
 @gluon.jit

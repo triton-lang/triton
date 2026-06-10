@@ -9,7 +9,7 @@ from triton.experimental.gluon.language._semantic import _check, _compute_tmem_r
 
 from . import tma
 from . import clc
-from ..hopper import fence_async_shared, mbarrier
+from ..hopper import async_store, fence_async_shared, mbarrier
 from ..ampere import async_copy, mma_v2
 
 from triton._C.libtriton import ir
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 __all__ = [
     "allocate_tensor_memory",
     "async_copy",
+    "async_store",
     "clc",
     "fence_async_shared",
     "mbarrier",
@@ -46,17 +47,23 @@ class TensorMemoryLayout:
             layouts use ``32 / bitwidth``.
         cga_layout (Optional[List[List[int]]]): CGA layout bases. Defaults to [].
         two_ctas (bool): Whether the layout is for two-CTA mode. Defaults to False.
+        fp4_padded (bool): Whether byte-backed operand A uses the padded MMAv5
+            FP4 layout. Its descriptor keeps the packed ``Mx(K/2)xi8`` shape,
+            MMAv5 treats logical K as twice descriptor K, and physical TMEM
+            reserves one byte per logical FP4 element. Defaults to False.
     """
     block: Tuple[int, int]
     col_stride: int
     cga_layout: List[List[int]] = field(default_factory=list)
     two_ctas: bool = False
+    fp4_padded: bool = False
 
     def __post_init__(self):
         super().__setattr__("block", _unwrap_if_constexpr(self.block))
         super().__setattr__("col_stride", _unwrap_if_constexpr(self.col_stride))
         super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
         super().__setattr__("two_ctas", _unwrap_if_constexpr(self.two_ctas))
+        super().__setattr__("fp4_padded", _unwrap_if_constexpr(self.fp4_padded))
         assert len(self.block) == 2
         assert all(len(basis) == 2 for basis in self.cga_layout)
         assert self.col_stride >= 1 and (self.col_stride &
@@ -68,6 +75,7 @@ class TensorMemoryLayout:
             self.col_stride,
             [list(basis) for basis in self.cga_layout],
             self.two_ctas,
+            self.fp4_padded,
         )
 
     def mangle(self) -> str:
@@ -75,10 +83,13 @@ class TensorMemoryLayout:
         stride_str = f"C{self.col_stride}"
         cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout)
         two_ctas_str = "2CT" if self.two_ctas else ""
-        return f"TL{block_str}{stride_str}{cga_layout_str}{two_ctas_str}TL"
+        fp4_padded_str = "FP4P" if self.fp4_padded else ""
+        return f"TL{block_str}{stride_str}{cga_layout_str}{two_ctas_str}{fp4_padded_str}TL"
 
     def __hash__(self):
-        return hash((self.block, self.col_stride, tuple(tuple(b) for b in self.cga_layout), self.two_ctas))
+        return hash(
+            (tuple(self.block), self.col_stride, tuple(tuple(b)
+                                                       for b in self.cga_layout), self.two_ctas, self.fp4_padded))
 
 
 @dataclass(frozen=True, eq=True)

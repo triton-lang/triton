@@ -144,6 +144,64 @@ def test_local_store_transposed_cga_to_non_transposed_alloc():
 
 
 @gluon.jit
+def async_shared_store_kernel(out, BLOCK: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])
+
+    offsets = ttgl.arange(0, BLOCK, layout=layout)
+    values = offsets.to(ttgl.int32)
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [BLOCK], shared_layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, smem.nbytes_per_cta)
+    hopper.async_store(smem, values, bar)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+    result = smem.load(layout)
+    mbarrier.invalidate(bar)
+    ttgl.store(out + offsets, result)
+
+
+@gluon.jit
+def async_shared_store_f16_kernel(out, BLOCK: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0], cga_layout=[[0]])
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])
+
+    offsets = ttgl.arange(0, BLOCK, layout=layout)
+    values = offsets.to(ttgl.float16)
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [BLOCK], shared_layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, smem.nbytes_per_cta)
+    hopper.async_store(smem, values, bar)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+    result = smem.load(layout)
+    mbarrier.invalidate(bar)
+    ttgl.store(out + offsets, result)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_async_shared_store():
+    block = 128
+    out = torch.empty((block, ), device="cuda", dtype=torch.int32)
+
+    compiled = async_shared_store_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
+
+    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes" in compiled.asm["ptx"]
+    torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.int32))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_async_shared_store_packed_f16():
+    block = 256
+    out = torch.empty((block, ), device="cuda", dtype=torch.float16)
+
+    compiled = async_shared_store_f16_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
+
+    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32" in compiled.asm["ptx"]
+    torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.float16))
+
+
+@gluon.jit
 def tma_kernel(desc):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
     value = ttgl.full(desc.block_shape, 0, desc.dtype, layout)
@@ -2419,6 +2477,153 @@ def test_tcgen05_mma_scaled_minimal():
     assert "ttng.tc_gen5_mma_scaled" in ttgir
 
 
+@pytest.mark.parametrize(
+    "a_format, a_torch_dtype, b_format, b_torch_dtype, a_is_fp4, b_is_fp4, a_fp4_padded, scale_vec_size, nvfp4",
+    [
+        pytest.param("e4m3", torch.float8_e4m3fn, "e4m3", torch.float8_e4m3fn, False, False, False, 32, False,
+                     id="fp8_e4m3_e4m3"),
+        pytest.param("e4m3", torch.float8_e4m3fn, "e5m2", torch.float8_e5m2, False, False, False, 32, False,
+                     id="fp8_e4m3_e5m2"),
+        pytest.param("e5m2", torch.float8_e5m2, "e4m3", torch.float8_e4m3fn, False, False, False, 32, False,
+                     id="fp8_e5m2_e4m3"),
+        pytest.param("e5m2", torch.float8_e5m2, "e5m2", torch.float8_e5m2, False, False, False, 32, False,
+                     id="fp8_e5m2_e5m2"),
+        pytest.param("e2m1", None, "e4m3", torch.float8_e4m3fn, True, False, True, 32, False, id="padded_fp4_e4m3"),
+        pytest.param("e2m1", None, "e5m2", torch.float8_e5m2, True, False, True, 32, False, id="padded_fp4_e5m2"),
+        pytest.param("e2m1", None, "e2m1", None, True, True, False, 32, False, id="mxfp4_mxfp4"),
+        pytest.param("e2m1", None, "e2m1", None, True, True, False, 16, True, id="nvfp4_nvfp4"),
+    ],
+)
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_dtype, a_is_fp4, b_is_fp4, a_fp4_padded,
+                                     scale_vec_size, nvfp4):
+    torch.manual_seed(0)
+    M = 128
+    N = 128
+    K = 256 if b_is_fp4 else 128
+    threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
+
+    @gluon.jit
+    def kernel(out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, a, b, a_scale, b_scale,
+               A_FORMAT: ttgl.constexpr, B_FORMAT: ttgl.constexpr, A_IS_FP4: ttgl.constexpr, B_IS_FP4: ttgl.constexpr,
+               A_FP4_PADDED: ttgl.constexpr, SCALE_VEC_SIZE: ttgl.constexpr):
+        store_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [threads_per_warp, 1], [ttgl.num_warps(), 1], [1, 0])
+
+        A_K_INPUT: ttgl.constexpr = K // 2 if A_IS_FP4 else K
+        A_K_TMEM: ttgl.constexpr = K if A_FP4_PADDED else A_K_INPUT
+        B_K_STORAGE: ttgl.constexpr = K // 2 if B_IS_FP4 else K
+        a_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, A_K_TMEM], col_stride=1)
+        a_tmem = allocate_tensor_memory(a.dtype.element_ty, [M, A_K_TMEM], a_tmem_layout)
+        a_reg_layout: ttgl.constexpr = a_tmem.get_reg_layout()
+        a_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, a_reg_layout))[:, None]
+        a_offs_k = ttgl.arange(0, A_K_TMEM, layout=ttgl.SliceLayout(0, a_reg_layout))[None, :]
+        if A_FP4_PADDED:
+            a_packed = ttgl.load(a + a_offs_m * A_K_INPUT + (a_offs_k // 2))
+            # mxf8f6f4 TMEM E2M1 stores S:E2:M1 in bits [5:2].
+            a_lo = (a_packed & 0x0F) << 2
+            a_hi = (a_packed & 0xF0) >> 2
+            a_values = ttgl.where((a_offs_k & 1) == 0, a_lo, a_hi)
+        else:
+            a_values = ttgl.load(a + a_offs_m * A_K_INPUT + a_offs_k)
+        a_tmem.store(a_values)
+
+        if B_IS_FP4:
+            b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([N, B_K_STORAGE], ttgl.uint8)
+            b_reg_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [ttgl.num_warps(), 1], [1, 0])
+            b_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, b_reg_layout))[:, None]
+            b_offs_k = ttgl.arange(0, B_K_STORAGE, layout=ttgl.SliceLayout(0, b_reg_layout))[None, :]
+            b_smem = ttgl.allocate_shared_memory(ttgl.uint8, [N, B_K_STORAGE], b_layout,
+                                                 ttgl.load(b + b_offs_n * B_K_STORAGE + b_offs_k))
+        else:
+            b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, transposed=False,
+                                                              element_bitwidth=8, rank=2)
+            b_reg_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [ttgl.num_warps(), 1], [1, 0])
+            b_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(1, b_reg_layout))[:, None]
+            b_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, b_reg_layout))[None, :]
+            b_smem = ttgl.allocate_shared_memory(b.dtype.element_ty, [K, N], b_layout,
+                                                 ttgl.load(b + b_offs_k * N + b_offs_n))
+
+        acc_layout: ttgl.constexpr = TensorMemoryLayout([M, N], col_stride=1)
+        acc_tmem = allocate_tensor_memory(ttgl.float32, [M, N], acc_layout)
+        acc_reg_layout: ttgl.constexpr = acc_tmem.get_reg_layout()
+        acc_tmem.store(ttgl.zeros([M, N], ttgl.float32, layout=acc_reg_layout))
+
+        scale_layout: ttgl.constexpr = TensorMemoryScalesLayout()
+        a_scale_tmem = allocate_tensor_memory(a_scale.dtype.element_ty, [M, K // SCALE_VEC_SIZE], scale_layout)
+        b_scale_tmem = allocate_tensor_memory(b_scale.dtype.element_ty, [N, K // SCALE_VEC_SIZE], scale_layout)
+        scale_layout_m: ttgl.constexpr = a_scale_tmem.get_reg_layout()
+        scale_layout_n: ttgl.constexpr = b_scale_tmem.get_reg_layout()
+        scale_offs_k_m = ttgl.arange(0, K // SCALE_VEC_SIZE, layout=ttgl.SliceLayout(0, scale_layout_m))[None, :]
+        scale_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, scale_layout_m))[:, None]
+        scale_offs_k_n = ttgl.arange(0, K // SCALE_VEC_SIZE, layout=ttgl.SliceLayout(0, scale_layout_n))[None, :]
+        scale_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, scale_layout_n))[:, None]
+        a_scale_tmem.store(ttgl.load(a_scale + scale_offs_m * (K // SCALE_VEC_SIZE) + scale_offs_k_m))
+        b_scale_tmem.store(ttgl.load(b_scale + scale_offs_n * (K // SCALE_VEC_SIZE) + scale_offs_k_n))
+
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+        if A_FP4_PADDED:
+            padded_layout: ttgl.constexpr = TensorMemoryLayout([M, A_K_INPUT], col_stride=1, fp4_padded=True)
+            a_tmem = a_tmem._reinterpret(a.dtype.element_ty, [M, A_K_INPUT], padded_layout)
+        if B_IS_FP4:
+            b_smem = b_smem.permute((1, 0))
+        tcgen05_mma_scaled(a_tmem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, A_FORMAT, B_FORMAT, use_acc=False,
+                           mbarriers=[bar])
+        mbarrier.wait(bar, phase=0, deps=[b_smem])
+
+        out = acc_tmem.load()
+        offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, store_layout))[:, None]
+        offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, store_layout))[None, :]
+        ttgl.store(out_ptr + offs_m * N + offs_n, ttgl.convert_layout(out, store_layout))
+
+    out = torch.empty((M, N), dtype=torch.float32, device="cuda")
+    if nvfp4:
+        a_scale = torch.ones((M, K // scale_vec_size), dtype=torch.float32, device="cuda").to(torch.float8_e4m3fn)
+        b_scale = torch.ones((N, K // scale_vec_size), dtype=torch.float32, device="cuda").to(torch.float8_e4m3fn)
+        a_scale_ref = a_scale.to(torch.float32)
+        b_scale_ref = b_scale.to(torch.float32)
+    else:
+        a_scale = None
+        b_scale = None
+        a_scale_ref = None
+        b_scale_ref = None
+    if a_is_fp4:
+        if a_scale is None:
+            a_scale = torch.full((M, K // scale_vec_size), 127, dtype=torch.uint8, device="cuda")
+            a_scale_ref = fp8e8m0_to_float32(a_scale)
+        a_mx = MXFP4Tensor(size=(M, K), device="cuda").random()
+        a = a_mx.to_packed_tensor(dim=1)
+        a_ref = a_mx.to(torch.float32)
+    else:
+        a_scale = torch.randint(64, 130, (M, K // scale_vec_size), dtype=torch.uint8, device="cuda")
+        a_scale_ref = fp8e8m0_to_float32(a_scale)
+        a = torch.randint(20, 40, (M, K), dtype=torch.uint8, device="cuda").view(a_torch_dtype)
+        a_ref = a.to(torch.float32)
+
+    if b_is_fp4:
+        if b_scale is None:
+            b_scale = torch.full((N, K // scale_vec_size), 127, dtype=torch.uint8, device="cuda")
+            b_scale_ref = fp8e8m0_to_float32(b_scale)
+        b_mx = MXFP4Tensor(size=(N, K), device="cuda").random()
+        b = b_mx.to_packed_tensor(dim=1)
+        b_ref = b_mx.to(torch.float32)
+        b_ref = b_ref * b_scale_ref.repeat_interleave(scale_vec_size, dim=1)
+        b_ref = b_ref.T.contiguous()
+    else:
+        b_scale = torch.randint(64, 130, (N, K // scale_vec_size), dtype=torch.uint8, device="cuda")
+        b_scale_ref = fp8e8m0_to_float32(b_scale)
+        b = torch.randint(20, 40, (K, N), dtype=torch.uint8, device="cuda").view(b_torch_dtype)
+        b_ref = b.to(torch.float32) * b_scale_ref.repeat_interleave(scale_vec_size, dim=1).T.contiguous()
+
+    a_ref = a_ref * a_scale_ref.repeat_interleave(scale_vec_size, dim=1)
+    ref = torch.matmul(a_ref, b_ref)
+    atol, rtol = (1e-3, 1e-3) if a_is_fp4 or b_is_fp4 else (1e-6, 1e-6)
+
+    kernel[(1, )](out, M, N, K, a, b, a_scale, b_scale, a_format, b_format, a_is_fp4, b_is_fp4, a_fp4_padded,
+                  scale_vec_size)
+    torch.testing.assert_close(out, ref, atol=atol, rtol=rtol)
+
+
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
 def test_coalesced_layout():
 
@@ -2650,6 +2855,50 @@ def test_shared_gather(N, M):
     )
 
     torch.testing.assert_close(output, expected)
+
+
+@gluon.jit
+def shared_gather_scatter_two_ctas_kernel(
+    inp,
+    out,
+    layout: ttgl.constexpr,
+    GATHER: ttgl.constexpr,
+):
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0], cga_layout=[[0, 1]])
+    rows = ttgl.arange(0, 2, layout=ttgl.SliceLayout(1, layout))
+    cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+    offsets = rows[:, None] * 32 + cols[None, :]
+    values = ttgl.load(inp + offsets)
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [2, 32], shared_layout, value=values)
+    ttgl.barrier(cluster=True)
+
+    peer_cols = (cols ^ 1)[None, :] + rows[:, None] * 0
+    if GATHER:
+        result = smem.gather(peer_cols, axis=1)
+    else:
+        smem.scatter(values, peer_cols, axis=1)
+        ttgl.barrier(cluster=True)
+        result = smem.load(layout)
+    ttgl.store(out + offsets, result)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("gather", [True, False], ids=["gather", "scatter"])
+def test_shared_gather_scatter_two_ctas(gather):
+    inp = torch.arange(64, dtype=torch.int32, device="cuda").reshape(2, 32)
+    out = torch.empty_like(inp)
+    layout = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0], cga_layout=[[0, 1]])
+
+    shared_gather_scatter_two_ctas_kernel[(1, )](
+        inp,
+        out,
+        layout,
+        GATHER=gather,
+        num_warps=4,
+        num_ctas=2,
+    )
+
+    torch.testing.assert_close(out, inp.reshape(2, 16, 2).flip(-1).reshape(2, 32))
 
 
 @gluon.jit
@@ -2941,9 +3190,6 @@ def _shared_atomic_scatter_rmw_cases():
 )
 def test_shared_atomic_scatter_rmw(op, init_value, use_mask, torch_dtype, gluon_dtype, use_constant_values, N, M, axis,
                                    rhs_shape):
-    if is_hip_cdna() or is_hip_rdna():
-        pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
-
     device = torch.device("cuda")
     rhs_n, rhs_m = rhs_shape
 
@@ -3034,9 +3280,6 @@ def shared_atomic_scatter_rmw_broadcast_kernel(
 
 
 def test_shared_atomic_scatter_rmw_broadcast():
-    if is_hip_cdna() or is_hip_rdna():
-        pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
-
     device = torch.device("cuda")
     N, M = 16, 32
     values = torch.arange(N, dtype=torch.float32, device=device) + 1.0
@@ -4440,21 +4683,21 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
 
 @pytest.mark.parametrize("M, N, K", [(2048, 2048, 4096)])
 @pytest.mark.parametrize("BLOCK_K", [128, 256])
-@pytest.mark.parametrize("a_format, b_format", [
-    ("mxfp8", "mxfp8"),
-    ("nvfp4", "nvfp4"),
-    ("mxfp8", "mxfp4"),
+@pytest.mark.parametrize("a_format, b_format, VEC_SIZE", [
+    pytest.param("mxfp8", "mxfp8", 32, id="mxfp8_mxfp8_block32"),
+    pytest.param("nvfp4", "nvfp4", 16, id="nvfp4_nvfp4_block16"),
+    pytest.param("mxfp4", "mxfp8", 32, id="mxfp4_mxfp8_block32"),
+    pytest.param("mxfp8", "mxfp4", 32, id="mxfp8_mxfp4_block32"),
 ])
 @pytest.mark.parametrize("ctas_per_cga", [(1, 1), (2, 1), (4, 1), (2, 2), (4, 2), (4, 4)])
 @pytest.mark.parametrize("multicast", [True, False])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, ctas_per_cga, multicast):
+def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE, ctas_per_cga, multicast):
     BLOCK_M = 128 * ctas_per_cga[0]
     BLOCK_N = 128 * ctas_per_cga[1]
     torch.manual_seed(0)
     A, A_scale, A_ref = random_quantized_tensor(M, K, a_format)
     B, B_scale, B_ref = random_quantized_tensor(N, K, b_format)
-    VEC_SIZE = 16 if a_format == "nvfp4" else 32
     A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
     B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
     C_ref = A_ref @ B_ref.T

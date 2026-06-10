@@ -27,6 +27,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
@@ -39,6 +40,7 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace mlir::triton::gpu;
@@ -147,13 +149,6 @@ bool WarpGroupDotOp::needsPartialAccumulator() {
   return isFP8 && accFP32 && maxNumImpreciseAcc <= aTensorTy.getShape()[1];
 }
 
-bool WarpGroupDotOp::verifyDims() {
-  auto aShape = this->getA().getType().getShape();
-  auto bShape = this->getB().getType().getShape();
-
-  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
-}
-
 // -- WarpGroupDotWaitOp --
 LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
@@ -257,18 +252,59 @@ Type ArriveBarrierOp::getPredicateOperandTypeLike() {
   return IntegerType::get(getContext(), 1);
 }
 
-// -- FenceMBarrierInitReleaseClusterOp --
-LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
-  int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
-  if (numCTAs <= 1)
-    return emitOpError("requires ttg.num-ctas > 1");
+// -- AsyncSharedStoreOp --
+LogicalResult AsyncSharedStoreOp::verify() {
+  // PTX defines weak shared::cluster st.async as UB for a one-CTA cluster.
+  if (gpu::lookupNumCTAs(getOperation()) < 2)
+    return emitOpError("requires at least two CTAs in the cluster");
+  if (!getDst().getType().getMutableMemory())
+    return emitOpError("cannot store into immutable memory");
+  if (failed(triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(),
+                                              getDst().getType())))
+    return failure();
+  if (failed(verifyBarrierType(*this, getMbarrier().getType())))
+    return failure();
+
+  auto srcTy = getSrc().getType();
+  auto dstTy = getDst().getType();
+  unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
+
+  auto regLayout = toLinearLayout(srcTy);
+  auto sharedLayout = isPaddedEncoding(dstTy.getEncoding())
+                          ? paddedLinearLayout(dstTy)
+                          : toLinearLayout(dstTy);
+  auto cvt = regLayout.invertAndCompose(sharedLayout);
+  std::optional<int> maybeMaxVecElems;
+  if (isPaddedEncoding(dstTy.getEncoding()))
+    maybeMaxVecElems = getMinInterval(dstTy.getEncoding());
+  auto vectorization =
+      largestVectorisation(getContext(), cvt, bitwidth, maybeMaxVecElems);
+  unsigned elemsPerVec = vectorization.first;
+  if (elemsPerVec * bitwidth < 32)
+    return emitOpError("requires a layout vectorizing stores to at least 32 "
+                       "bits");
   return success();
 }
 
-static LogicalResult verifyClusterSyncOp(Operation *op) {
+TypedValue<MemDescType> AsyncSharedStoreOp::getBarrier() {
+  return getMbarrier();
+}
+
+static LogicalResult verifyClusterIsMultiCTA(Operation *op) {
   int numCTAs = triton::gpu::lookupNumCTAs(op);
   if (numCTAs <= 1)
     return op->emitOpError("requires ttg.num-ctas > 1");
+  return success();
+}
+
+// -- FenceMBarrierInitReleaseClusterOp --
+LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
+  return verifyClusterIsMultiCTA(getOperation());
+}
+
+static LogicalResult verifyClusterSyncOp(Operation *op) {
+  if (failed(verifyClusterIsMultiCTA(op)))
+    return failure();
   if (op->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>())
     return op->emitOpError("cannot be used inside `ttg.warp_specialize`");
   return success();
@@ -286,7 +322,21 @@ LogicalResult ClusterWaitOp::verify() {
 
 // -- ClusterBarrierOp --
 LogicalResult ClusterBarrierOp::verify() {
-  return verifyClusterSyncOp(getOperation());
+  if (failed(verifyClusterIsMultiCTA(getOperation())))
+    return failure();
+  auto func = getOperation()->getParentOfType<FunctionOpInterface>();
+  if (!func)
+    return emitOpError("must be inside a kernel function");
+  if (triton::isKernel(func))
+    return success();
+  // Inlineable Triton helpers are verified before the inliner moves their
+  // bodies into the kernel.
+  if (auto tritonFunc = dyn_cast<triton::FuncOp>(func.getOperation())) {
+    auto noinline = tritonFunc->getAttrOfType<BoolAttr>("noinline");
+    if (!noinline || !noinline.getValue())
+      return success();
+  }
+  return emitOpError("must be inside a kernel function");
 }
 
 // -- TMA operation verifiers --
@@ -788,11 +838,16 @@ LogicalResult TCGen5MMAOp::verify() {
   auto retEnc = dyn_cast<TensorMemoryEncodingAttr>(retType.getEncoding());
   if (!retEnc)
     return emitOpError("Return operand must have a TensorMemory encoding");
+  if (retEnc.getFp4Padded())
+    return emitOpError("Accumulator must not be fp4_padded");
 
   // Check colStride of TMEM operands
   if (auto tmem = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
     if (tmem.getColStride() != 1)
       return emitOpError("The col stride of the LHS operand must be 1");
+    if (tmem.getFp4Padded())
+      return emitOpError(
+          "fp4_padded tensor memory LHS is only supported by scaled MMA");
   }
   if (retEnc.getColStride() != 32 / retType.getElementTypeBitWidth())
     return emitOpError("The col stride of the return operand must be 32 / ")
@@ -920,13 +975,6 @@ void TCGen5MMAOp::getEffects(
                          SharedMemory::get());
 }
 
-bool TCGen5MMAOp::verifyDims() {
-  auto aShape = this->getA().getType().getShape();
-  auto bShape = this->getB().getType().getShape();
-
-  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
-}
-
 Value TCGen5MMAOp::useAccumulator() { return getUseD(); }
 
 void TCGen5MMAOp::setUseAccumulator(Value flag) {
@@ -1037,6 +1085,37 @@ static Type getScaledMMAOperandType(Type elementType,
   llvm_unreachable("Unsupported type.");
 };
 
+static LogicalResult verifyScaledLHSOperand(Operation *op, Type elementType,
+                                            TensorMemoryEncodingAttr encoding,
+                                            ScaleDotElemType aType,
+                                            ScaleDotElemType bType) {
+  if (aType == ScaleDotElemType::E2M1) {
+    if (!elementType.isInteger(8))
+      return op->emitOpError("expected e2m1 LHS operand to have i8 storage");
+    if (encoding.getFp4Padded() &&
+        !llvm::is_contained({ScaleDotElemType::E4M3, ScaleDotElemType::E5M2},
+                            bType))
+      return op->emitOpError("can only use fp4_padded LHS when RHS is float8");
+    if (llvm::is_contained({ScaleDotElemType::E4M3, ScaleDotElemType::E5M2},
+                           bType) &&
+        !encoding.getFp4Padded())
+      return op->emitOpError(
+          "expected e2m1 LHS operand to be fp4_padded when RHS is float8");
+    return success();
+  }
+
+  if (isa<Float8E4M3FNType, Float8E5M2Type>(elementType)) {
+    if (!llvm::is_contained({ScaleDotElemType::E4M3, ScaleDotElemType::E5M2},
+                            aType)) {
+      return op->emitOpError(
+          "expected float8 LHS operand to have e4m3 or e5m2 format");
+    }
+    return success();
+  }
+
+  return op->emitOpError("unsupported LHS operand type for scaled MMA");
+}
+
 LogicalResult TCGen5MMAScaledOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
@@ -1060,8 +1139,17 @@ LogicalResult TCGen5MMAScaledOp::verify() {
     return emitOpError(
         "expected accumulator layout to be a TensorMemoryLayout");
   }
+  if (enc.getFp4Padded())
+    return emitOpError("accumulator layout must not be fp4_padded");
   if (enc.getBlockM() != 128)
     return emitOpError("only supports instruction shape blockM=128");
+  if (auto lhsEnc =
+          dyn_cast<TensorMemoryEncodingAttr>(getA().getType().getEncoding())) {
+    if (failed(verifyScaledLHSOperand(getOperation(),
+                                      getA().getType().getElementType(), lhsEnc,
+                                      getAType(), getBType())))
+      return failure();
+  }
   return success();
 }
 

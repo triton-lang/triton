@@ -79,6 +79,8 @@ def _check(cond, msg_fn, category=TypeError):
 def _apply_to_tuple_values(value, fn):
     if is_namedtuple(type(value)):
         fields = value._fields
+    elif isinstance(value, builtins.tuple):
+        fields = None
     elif isinstance(value, language.tuple):
         fields = value.type.fields
     else:
@@ -88,6 +90,14 @@ def _apply_to_tuple_values(value, fn):
     vals = [constexpr(v) if v is None else v for v in vals]
     types = [v.type for v in vals]
     return language.tuple(vals, language.tuple_type(types, fields))
+
+
+def normalize_value(value):
+    if isinstance(value, (builtins.tuple, language.tuple)):
+        return _apply_to_tuple_values(value, normalize_value)
+    if _is_triton_value(value):
+        return value
+    return constexpr(value)
 
 
 def flatten_values_to_ir(values: Iterable[base_value]):
@@ -695,7 +705,7 @@ class CodeGenerator(ast.NodeVisitor):
             if target in self.lscope:
                 raise ValueError(f'{target} is already defined.'
                                  f' constexpr cannot be reassigned.')
-            value = constexpr(value)
+            value = normalize_value(value)
             self.lscope[target] = value
             return self.lscope[target]
         # default: call visit_Assign
@@ -736,7 +746,7 @@ class CodeGenerator(ast.NodeVisitor):
             if isinstance(target, ast.Name):
                 annotation = self.pending_annotations.pop(target.id, None)
                 if annotation == constexpr:
-                    return constexpr(value)
+                    return normalize_value(value)
             return _sanitize_value(value)
 
         targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
@@ -1127,6 +1137,8 @@ class CodeGenerator(ast.NodeVisitor):
             before_block = self.builder.create_block_with_parent(while_op.get_before(), init_tys)
             self.builder.set_insertion_point_to_start(before_block)
             block_args = [before_block.arg(i) for i in range(len(init_handles))]
+            for arg, init in zip(block_args, init_handles):
+                arg.set_loc(init.get_loc())
             condition_args = unflatten_ir_values(block_args, init_fe_tys)
             for name, val in zip(names, condition_args):
                 self.lscope[name] = val
@@ -1146,6 +1158,8 @@ class CodeGenerator(ast.NodeVisitor):
             # generate loop body
             self.builder.set_insertion_point_to_start(after_block)
             body_handles = [after_block.arg(i) for i in range(len(init_handles))]
+            for arg, init in zip(body_handles, init_handles):
+                arg.set_loc(init.get_loc())
             body_args = unflatten_ir_values(body_handles, init_fe_tys)
             for name, val in zip(names, body_args):
                 self.lscope[name] = val
@@ -1347,15 +1361,8 @@ class CodeGenerator(ast.NodeVisitor):
         args = bound_args.arguments
         args = [args[name] for name in fn.arg_names]
 
-        def normalize_arg(arg):
-            if isinstance(arg, language.tuple):
-                return _apply_to_tuple_values(arg, normalize_arg)
-            if not isinstance(arg, base_value) or isinstance(arg, JITCallable):
-                return language.core.constexpr(arg)
-            return arg
-
         for i, arg in enumerate(args):
-            args[i] = normalize_arg(arg)
+            args[i] = normalize_value(arg)
         # mangle
         caller_context = caller_context or self.caller_context
         arg_types = [arg.type for arg in args]
@@ -1438,14 +1445,7 @@ class CodeGenerator(ast.NodeVisitor):
             args = map(_unwrap_if_constexpr, args)
         ret = fn(*args, **kws)
 
-        def wrap_constexpr(x):
-            if _is_triton_value(x):
-                return x
-            return constexpr(x)
-
-        if isinstance(ret, (builtins.tuple, language.tuple)):
-            return _apply_to_tuple_values(ret, wrap_constexpr)
-        return wrap_constexpr(ret)
+        return normalize_value(ret)
 
     def call_Method(self, node, fn, fn_self, args, kws):
         if isinstance(fn, JITFunction):
@@ -1464,7 +1464,8 @@ class CodeGenerator(ast.NodeVisitor):
         for arg in node.args:
             if isinstance(arg, ast.Starred):
                 arg = self.visit(arg.value)
-                arg = _unwrap_if_constexpr(arg)
+                if isinstance(arg, constexpr):
+                    arg = arg.value
                 if isinstance(arg, tuple):
                     arg = language.core.tuple(arg)
                 assert isinstance(arg, language.core.tuple)
@@ -1665,13 +1666,19 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
         idx = fn.arg_names.index(k)
         arg_types[idx] = str_to_ty(v, None)
 
+    def constexpr_type(value):
+        if isinstance(value, builtins.tuple):
+            fields = value._fields if is_namedtuple(type(value)) else None
+            return language.tuple_type([constexpr_type(v) for v in value], fields)
+        return constexpr(value).type
+
     def apply_constexpr_types(argument, indices, value):
         index = indices.pop()
         if len(indices) == 0:
             if isinstance(argument, list):
-                argument[index] = constexpr(value).type
+                argument[index] = constexpr_type(value)
             else:
-                argument.types[index] = constexpr(value).type
+                argument.types[index] = constexpr_type(value)
         else:
             apply_constexpr_types(argument[index], indices, value)
 
