@@ -3,6 +3,7 @@ import torch
 from triton_kernels.tensor_details.dtype import BIT, FP4, UINT8
 from triton_kernels.tensor import (
     convert_layout,
+    empty,
     make_ragged_tensor_metadata,
     make_ragged_tensor_metadata_torch,
     remap_ragged_tensor_metadata,
@@ -23,6 +24,49 @@ from triton_kernels.tensor_details.layout import (
     HopperMXValueLayout,
     StridedLayout,
 )
+
+
+@pytest.mark.parametrize(
+    ("logical_shape", "is_fp4", "layout", "storage_shape"),
+    [
+        ((3, 258, 514), True, StridedLayout(-2), [3, 129, 514]),
+        ((0, 64), True, StridedLayout(-2), [0, 64]),
+        ((3, 258, 514), True, HopperMXValueLayout(-2, 3), [3, 768, 192]),
+        ((3, 258, 514), True, HopperMXValueLayout(-1, 3), [3, 128, 1280]),
+        ((0, 64), True, HopperMXValueLayout(-2, 3), [0, 64]),
+        ((3, 70, 65), False, HopperMXScaleLayout(-2, 4), [3, 2240, 4]),
+        ((3, 70, 65), False, HopperMXScaleLayout(-1, 4), [3, 4, 2112]),
+        ((0, 64), False, HopperMXScaleLayout(-2, 4), [0, 4]),
+        ((3, 258, 514), True, BlackwellMXValueLayout(), [3, 256, 514]),
+        ((0, 64), True, BlackwellMXValueLayout(), [0, 64]),
+        ((3, 258, 514), True, BlackwellMX4ValueShuffledLayout(), [3, 4, 3, 256, 64]),
+        ((0, 64), True, BlackwellMX4ValueShuffledLayout(), [1, 0, 1, 256, 64]),
+        ((3, 254, 60), False, BlackwellMXScaleLayout(), [1, 3, 64, 2, 256]),
+        ((0, 64), False, BlackwellMXScaleLayout(), [1, 1, 0, 2, 256]),
+        ((130, 65), False, BlackwellActMXScaleLayout(None), [1, 2, 18, 2, 256]),
+        ((3, 130, 65), False, BlackwellActMXScaleLayout(None), [1, 6, 18, 2, 256]),
+        ((0, 64), False, BlackwellActMXScaleLayout(None), [1, 0, 16, 2, 256]),
+        ((3, 254, 60), False, CDNA4MXScaleLayout(), [3, 8192, 2]),
+        ((0, 64), False, CDNA4MXScaleLayout(), [1, 0, 2]),
+        ((3, 254, 60), False, GFX1250MXScaleLayout(), [3, 32768, 1]),
+        ((0, 64), False, GFX1250MXScaleLayout(), [1, 0, 1]),
+    ],
+)
+def test_layout_storage_shape_matches_conversion(logical_shape, is_fp4, layout, storage_shape):
+    dtype = FP4 if is_fp4 else UINT8
+    tensor = empty(logical_shape, dtype=dtype, device="meta")
+
+    converted = convert_layout(tensor, layout)
+
+    assert layout.storage_shape(list(logical_shape), is_fp4) == storage_shape
+    assert list(converted.storage.data.shape) == storage_shape
+
+
+def test_ragged_layout_storage_shape():
+    slice_sizes = torch.tensor([17, 0, 33, 5], dtype=torch.int32)
+    metadata = make_ragged_tensor_metadata_torch(slice_sizes, 100)
+
+    assert BlackwellActMXScaleLayout(metadata).storage_shape([100, 94], False) == [1, 4, 24, 2, 256]
 
 
 @pytest.mark.parametrize(

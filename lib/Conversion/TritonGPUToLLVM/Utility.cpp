@@ -540,12 +540,12 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return emitIndices(loc, rewriter, target, ll, type, withCTAOffset);
 }
 
-SmallVector<Value> computeLocalPtrs(Location loc,
-                                    triton::gpu::MemDescType memDescTy,
-                                    SharedMemoryObject smemObj, Type llvmElemTy,
-                                    ArrayRef<Value> idxValues,
-                                    ArrayRef<SmallVector<Value>> coords,
-                                    unsigned axis, RewriterBase &rewriter) {
+SmallVector<LocalSharedMemoryAddress>
+computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
+                  SharedMemoryObject smemObj, Type llvmElemTy,
+                  ArrayRef<Value> idxValues,
+                  ArrayRef<SmallVector<Value>> coords, unsigned axis,
+                  RewriterBase &rewriter) {
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -561,12 +561,14 @@ SmallVector<Value> computeLocalPtrs(Location loc,
     allDims.push_back(str_attr("dim" + Twine(dim)));
 
   auto kOffset = str_attr("offset");
+  auto kBlock = str_attr("block");
+  bool isMultiCTA = invSharedLayout.getOutDimSize(kBlock) > 1;
   // Get the subslice affine offset (non-zero for memdesc subslices)
   Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
   auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
 
-  SmallVector<Value> ptrs;
-  ptrs.reserve(coords.size());
+  SmallVector<LocalSharedMemoryAddress> addrs;
+  addrs.reserve(coords.size());
 
   for (auto [i, idxVal] : llvm::enumerate(idxValues)) {
     Value idx = idxVal;
@@ -588,16 +590,10 @@ SmallVector<Value> computeLocalPtrs(Location loc,
       inputs.push_back({allDims[dim], indices[dim]});
 
     auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
-
-    // Extract the offset value
-    Value offset = nullptr;
-    for (auto [name, value] : outputs) {
-      if (name == kOffset) {
-        offset = value;
-        break;
-      }
-    }
-    assert(offset && "expected offset output from inverted shared layout");
+    assert(outputs.size() == 2);
+    auto [offsetName, offset] = outputs[0];
+    auto [blockName, blockId] = outputs[1];
+    assert(offsetName == kOffset && blockName == kBlock);
 
     // For subslices, the physical offset is computed as:
     //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
@@ -626,10 +622,10 @@ SmallVector<Value> computeLocalPtrs(Location loc,
       ptr = b.gep(smemObj.getBase().getType(), llvmElemTy, smemObj.getBase(),
                   offset);
     }
-    ptrs.push_back(ptr);
+    addrs.push_back({ptr, isMultiCTA ? blockId : Value()});
   }
 
-  return ptrs;
+  return addrs;
 }
 
 FailureOr<LocalAtomicScatterRMWInfo> prepareLocalAtomicScatterRMW(
@@ -670,9 +666,10 @@ FailureOr<LocalAtomicScatterRMWInfo> prepareLocalAtomicScatterRMW(
       emitIndices(loc, rewriter, targetInfo, activeRegLayout, valuesTy,
                   /*withCTAOffset=*/true);
 
-  SmallVector<Value> ptrs =
-      computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
-                       srcIndices, op.getAxis(), rewriter);
+  SmallVector<Value> ptrs = llvm::map_to_vector(
+      computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
+                        srcIndices, op.getAxis(), rewriter),
+      [](const LocalSharedMemoryAddress &addr) { return addr.ptr; });
 
   return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,
                                    removeBroadcast, threadPred, values,
@@ -737,8 +734,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
 
   auto emitLdSt = [&](RewriterBase &rewriter, Location loc,
                       ArrayRef<Value> vals, Value shmemAddr, int idx,
-                      VectorType vecTy,
-                      std::optional<Value> ctaId) -> SmallVector<Value> {
+                      VectorType vecTy, Value ctaId) -> SmallVector<Value> {
     auto length = vecTy.getNumElements();
     if (isStore) {
       Value valsVec =
@@ -760,18 +756,17 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                    warpId, rewriter, targetInfo, maybeMaxVecElems, emitLdSt);
 }
 
-SmallVector<Value>
-lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
-          ArrayRef<Value> valsArray, // Input for store, output for load
-          Type llvmElemTy, ArrayRef<Value> smemBases,
-          ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
-          Value affineOffset, uint64_t maskSpanAffineOffset, Value laneId,
-          Value warpId, RewriterBase &rewriter,
-          const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
-          std::function<SmallVector<Value>(RewriterBase &, Location,
-                                           ArrayRef<Value>, Value, int,
-                                           VectorType, std::optional<Value>)>
-              lowerInst) {
+SmallVector<Value> lowerLdSt(
+    Location loc, MLIRContext *ctx, LinearLayout cvt,
+    ArrayRef<Value> valsArray, // Input for store, output for load
+    Type llvmElemTy, ArrayRef<Value> smemBases,
+    ArrayRef<std::pair<unsigned, unsigned>> paddingShifts, Value affineOffset,
+    uint64_t maskSpanAffineOffset, Value laneId, Value warpId,
+    RewriterBase &rewriter, const TargetInfoBase &targetInfo,
+    std::optional<int> maybeMaxVecElems,
+    std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
+                                     Value, int, VectorType, Value)>
+        lowerInst) {
   assert(!smemBases.empty() && "smemBases cannot be empty");
   auto vals = to_vector(valsArray);
   bool isStore = !vals.empty();
@@ -917,7 +912,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
         smemBase = b.extract_element(basesVec, partitionIdx);
       }
 
-      std::optional<Value> innerCtaOffset;
+      Value innerCtaOffset;
       if (useBlockId) {
         innerCtaOffset = b.add(ctaOffset, b.i32_val(idxAndBlockAdd[1].second));
       }
@@ -2036,7 +2031,7 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
 
   auto emitSt = [&](RewriterBase &rewriter, Location loc, ArrayRef<Value> vals,
                     Value shmemAddr, int idx, VectorType vecTy,
-                    std::optional<Value> ctaId) -> SmallVector<Value> {
+                    Value ctaId) -> SmallVector<Value> {
     auto length = vecTy.getNumElements();
     Value valsVec =
         packLLVector(loc, ArrayRef<Value>(vals).slice(idx, length), rewriter);
@@ -2047,7 +2042,7 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
 
   auto emitLd = [&](RewriterBase &rewriter, Location loc, ArrayRef<Value> vals,
                     Value shmemAddr, int idx, VectorType vecTy,
-                    std::optional<Value> ctaId) -> SmallVector<Value> {
+                    Value ctaId) -> SmallVector<Value> {
     Value loadedVec = targetInfo.loadDShared(rewriter, loc, shmemAddr, ctaId,
                                              vecTy, b.true_val());
     return unpackLLVector(loc, loadedVec, rewriter);
