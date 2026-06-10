@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-resolve-tma-store-tokens --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 -reconcile-unrealized-casts | FileCheck %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=85' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=85' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX85 %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX86 %s
+// RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-resolve-tma-store-tokens --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=85' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=85' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX85 %s
+// RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-resolve-tma-store-tokens --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX86 %s
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory

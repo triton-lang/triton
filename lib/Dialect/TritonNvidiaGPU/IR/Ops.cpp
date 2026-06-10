@@ -21,10 +21,10 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -39,6 +39,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -687,6 +688,38 @@ LogicalResult AsyncTMAScatterOp::verify() {
 }
 
 // -- TMAStoreWaitOp --
+static bool isTraceableTMAStoreToken(Value token,
+                                     llvm::SmallPtrSetImpl<Value> &visited) {
+  if (!visited.insert(token).second)
+    return false;
+
+  Operation *defOp = token.getDefiningOp();
+  if (!defOp)
+    return false;
+  if (isa<TMAStoreLikeOpInterface>(defOp))
+    return true;
+
+  auto result = dyn_cast<OpResult>(token);
+  if (!result || !isa<RegionBranchOpInterface>(defOp))
+    return false;
+
+  unsigned resultIdx = result.getResultNumber();
+  bool sawYield = false;
+  for (Region &region : defOp->getRegions()) {
+    for (Block &block : region) {
+      Operation *terminator = block.getTerminator();
+      if (!terminator || !isa<RegionBranchTerminatorOpInterface>(terminator))
+        continue;
+      if (resultIdx >= terminator->getNumOperands())
+        return false;
+      sawYield = true;
+      if (!isTraceableTMAStoreToken(terminator->getOperand(resultIdx), visited))
+        return false;
+    }
+  }
+  return sawYield;
+}
+
 LogicalResult TMAStoreWaitOp::verify() {
   bool hasToken = static_cast<bool>(getToken());
   bool hasPendings = static_cast<bool>(getPendingsAttr());
@@ -696,22 +729,11 @@ LogicalResult TMAStoreWaitOp::verify() {
   if (!hasToken)
     return success();
 
-  Operation *defOp = getToken().getDefiningOp();
-  if (!defOp)
+  llvm::SmallPtrSet<Value, 8> visited;
+  if (!isTraceableTMAStoreToken(getToken(), visited)) {
     return emitOpError(
-        "token waits currently require a token defined by a TMA store op; "
-        "use explicit pendings for block-argument tokens");
-  if (!isa<TMAStoreLikeOpInterface>(defOp)) {
-    if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
-      unsigned resultIdx = cast<OpResult>(getToken()).getResultNumber();
-      Operation *yieldedDef =
-          forOp.getYieldedValues()[resultIdx].getDefiningOp();
-      if (yieldedDef && isa<TMAStoreLikeOpInterface>(yieldedDef))
-        return success();
-    }
-    return emitOpError(
-        "token must be produced by a TMA store op or an scf.for result yielded "
-        "from a TMA store op");
+        "token must be produced by a TMA store op or trace through "
+        "control-flow yields to a TMA store op");
   }
   return success();
 }
