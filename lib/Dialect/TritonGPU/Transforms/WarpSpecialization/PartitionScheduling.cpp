@@ -428,10 +428,17 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        }
 
        if (node_isa<tt::DescriptorLoadLikeOpInterface>(edge.getFromNode())) {
-         // require layouts to match for TMA load + alloc
          auto load = edge.getFromNode()->getOp();
          auto alloc = cast<ttg::LocalAllocOp>(edge.getToNode()->getOp());
-         return getSharedEncoding(load) == alloc.getType().getEncoding();
+         auto loadEnc = getSharedEncoding(load);
+         auto allocEnc = alloc.getType().getEncoding();
+         if (loadEnc == allocEnc)
+           return true;
+
+         auto loadLayoutEnc = cast<ttg::LayoutEncodingTrait>(loadEnc);
+         auto allocLayoutEnc = cast<ttg::LayoutEncodingTrait>(allocEnc);
+         return ttg::areLayoutsEquivalent(alloc.getType().getShape(),
+                                          loadLayoutEnc, allocLayoutEnc);
        }
 
        if (node_isa<tt::LoadOp>(edge.getFromNode())) {

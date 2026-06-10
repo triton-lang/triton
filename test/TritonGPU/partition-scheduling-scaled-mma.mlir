@@ -70,3 +70,76 @@ tt.func public @scaled_mma_with_loads(
 }
 
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 1], threadsPerWarp = [1, 1, 1, 32, 1], warpsPerCTA = [1, 2, 2, 1, 1], order = [3, 2, 1, 0, 4]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = []}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#shared_T = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>
+#shared_scale_tma = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, rank = 5}>
+#shared_scale_a = #ttg.shared_linear<{offset = [[0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 0, 0, 0, 4], [0, 0, 0, 0, 8], [0, 0, 0, 0, 16], [0, 0, 0, 0, 32], [0, 0, 0, 0, 64], [0, 0, 0, 0, 128], [0, 0, 0, 1, 0], [0, 0, 1, 0, 0], [0, 0, 2, 0, 0], [0, 1, 0, 0, 0]]}, alignment = 128>
+#shared_scale_a_rs = #ttg.shared_linear<{offset = [[0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 0, 0, 1, 0], [0, 0, 0, 2, 0], [0, 0, 1, 0, 0], [0, 0, 2, 0, 0], [0, 0, 4, 0, 0], [0, 0, 8, 0, 0], [0, 0, 16, 0, 0], [0, 1, 0, 0, 0], [0, 2, 0, 0, 0], [1, 0, 0, 0, 0]]}, alignment = 128>
+#shared_scale_a_tr = #ttg.shared_linear<{offset = [[0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 1, 0, 0, 0], [0, 2, 0, 0, 0], [0, 0, 1, 0, 0], [0, 0, 2, 0, 0], [0, 0, 4, 0, 0], [0, 0, 8, 0, 0], [0, 0, 16, 0, 0], [0, 0, 0, 1, 0], [0, 0, 0, 2, 0], [1, 0, 0, 0, 0]]}, alignment = 128>
+#shared_scale_a_final = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [32, 0], [64, 0], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4], [0, 8], [128, 0]]}, alignment = 128>
+#shared_scale_b = #ttg.shared_linear<{offset = [[0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 0, 0, 0, 4], [0, 0, 0, 0, 8], [0, 0, 0, 0, 16], [0, 0, 0, 0, 32], [0, 0, 0, 0, 64], [0, 0, 0, 0, 128], [0, 0, 0, 1, 0], [0, 0, 1, 0, 0], [0, 0, 2, 0, 0]]}, alignment = 128>
+#shared_scale_b_rs = #ttg.shared_linear<{offset = [[0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 0, 0, 1, 0], [0, 0, 0, 2, 0], [0, 0, 1, 0, 0], [0, 0, 2, 0, 0], [0, 0, 4, 0, 0], [0, 0, 8, 0, 0], [0, 0, 16, 0, 0], [0, 1, 0, 0, 0], [0, 2, 0, 0, 0]]}, alignment = 128>
+#shared_scale_b_tr = #ttg.shared_linear<{offset = [[0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 1, 0, 0, 0], [0, 2, 0, 0, 0], [0, 0, 1, 0, 0], [0, 0, 2, 0, 0], [0, 0, 4, 0, 0], [0, 0, 8, 0, 0], [0, 0, 16, 0, 0], [0, 0, 0, 1, 0], [0, 0, 0, 2, 0]]}, alignment = 128>
+#shared_scale_b_final = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [32, 0], [64, 0], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4], [0, 8]]}, alignment = 128>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+// CHECK-LABEL: @scaled_mma_descriptor_scales
+tt.func public @scaled_mma_descriptor_scales(
+  %A_shared: !ttg.memdesc<256x128xi8, #shared, #smem>,
+  %B_shared: !ttg.memdesc<128x128xi8, #shared_T, #smem>,
+  %A_scale_desc: !tt.tensordesc<1x2x4x2x256xf8E4M3FN, #shared_scale_tma>,
+  %B_scale_desc: !tt.tensordesc<1x1x4x2x256xf8E4M3FN, #shared_scale_tma>,
+  %n_tiles: i32
+) {
+  %true = arith.constant true
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+
+  %acc_tmem, %acc_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+
+  %loop_out = scf.for %i = %c0_i32 to %n_tiles step %c1_i32 iter_args(
+    %iter_acc_tok = %acc_tok
+  ) -> (!ttg.async.token) : i32 {
+    // CHECK: %[[A_SCALE:[0-9]+]] = tt.descriptor_load {{.*}} {ttg.partition = array<i32: 2>}
+    %A_scale = tt.descriptor_load %A_scale_desc[%c0_i32, %c0_i32, %i, %c0_i32, %c0_i32] : !tt.tensordesc<1x2x4x2x256xf8E4M3FN, #shared_scale_tma> -> tensor<1x2x4x2x256xf8E4M3FN, #blocked>
+    // CHECK: %[[B_SCALE:[0-9]+]] = tt.descriptor_load {{.*}} {ttg.partition = array<i32: 2>}
+    %B_scale = tt.descriptor_load %B_scale_desc[%c0_i32, %c0_i32, %i, %c0_i32, %c0_i32] : !tt.tensordesc<1x1x4x2x256xf8E4M3FN, #shared_scale_tma> -> tensor<1x1x4x2x256xf8E4M3FN, #blocked>
+    // CHECK: ttg.local_alloc %[[A_SCALE]] {ttg.partition = array<i32: 2>} : (tensor<1x2x4x2x256xf8E4M3FN, #blocked>) -> !ttg.memdesc<1x2x4x2x256xf8E4M3FN, {{#[A-Za-z0-9_]+}}, #smem>
+    %A_scale_shared = ttg.local_alloc %A_scale : (tensor<1x2x4x2x256xf8E4M3FN, #blocked>) -> !ttg.memdesc<1x2x4x2x256xf8E4M3FN, #shared_scale_a, #smem>
+    // CHECK: ttg.local_alloc %[[B_SCALE]] {ttg.partition = array<i32: 2>} : (tensor<1x1x4x2x256xf8E4M3FN, #blocked>) -> !ttg.memdesc<1x1x4x2x256xf8E4M3FN, {{#[A-Za-z0-9_]+}}, #smem>
+    %B_scale_shared = ttg.local_alloc %B_scale : (tensor<1x1x4x2x256xf8E4M3FN, #blocked>) -> !ttg.memdesc<1x1x4x2x256xf8E4M3FN, #shared_scale_b, #smem>
+
+    // CHECK: ttg.memdesc_reshape {{.*}} {ttg.partition = array<i32: 1>}
+    %A_scale_rs = ttg.memdesc_reshape %A_scale_shared : !ttg.memdesc<1x2x4x2x256xf8E4M3FN, #shared_scale_a, #smem> -> !ttg.memdesc<2x4x32x4x4xf8E4M3FN, #shared_scale_a_rs, #smem>
+    // CHECK: ttg.memdesc_trans {{.*}} {order = array<i32: 0, 3, 2, 1, 4>, ttg.partition = array<i32: 1>}
+    %A_scale_tr = ttg.memdesc_trans %A_scale_rs {order = array<i32: 0, 3, 2, 1, 4>} : !ttg.memdesc<2x4x32x4x4xf8E4M3FN, #shared_scale_a_rs, #smem> -> !ttg.memdesc<2x4x32x4x4xf8E4M3FN, #shared_scale_a_tr, #smem>
+    %A_scale_final = ttg.memdesc_reshape %A_scale_tr : !ttg.memdesc<2x4x32x4x4xf8E4M3FN, #shared_scale_a_tr, #smem> -> !ttg.memdesc<256x16xf8E4M3FN, #shared_scale_a_final, #smem>
+    %B_scale_rs = ttg.memdesc_reshape %B_scale_shared : !ttg.memdesc<1x1x4x2x256xf8E4M3FN, #shared_scale_b, #smem> -> !ttg.memdesc<1x4x32x4x4xf8E4M3FN, #shared_scale_b_rs, #smem>
+    %B_scale_tr = ttg.memdesc_trans %B_scale_rs {order = array<i32: 0, 3, 2, 1, 4>} : !ttg.memdesc<1x4x32x4x4xf8E4M3FN, #shared_scale_b_rs, #smem> -> !ttg.memdesc<1x4x32x4x4xf8E4M3FN, #shared_scale_b_tr, #smem>
+    %B_scale_final = ttg.memdesc_reshape %B_scale_tr : !ttg.memdesc<1x4x32x4x4xf8E4M3FN, #shared_scale_b_tr, #smem> -> !ttg.memdesc<128x16xf8E4M3FN, #shared_scale_b_final, #smem>
+
+    // CHECK: ttng.tc_gen5_mma_scaled {{.*}} {ttg.partition = array<i32: 1>}
+    %mma_tok = ttng.tc_gen5_mma_scaled %A_shared, %B_shared, %acc_tmem[%iter_acc_tok], %A_scale_final, %B_scale_final, %true, %true lhs = e2m1 rhs = e2m1 : !ttg.memdesc<256x128xi8, #shared, #smem>, !ttg.memdesc<128x128xi8, #shared_T, #smem>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<256x16xf8E4M3FN, #shared_scale_a_final, #smem>, !ttg.memdesc<128x16xf8E4M3FN, #shared_scale_b_final, #smem>
+
+    // CHECK-COUNT-2: ttg.partition = array<i32: 0>
+    %acc, %load_tok = ttng.tmem_load %acc_tmem[%mma_tok] : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x128xf32, #linear>
+    "use"(%acc) {data} : (tensor<256x128xf32, #linear>) -> ()
+
+    // CHECK: scf.yield {ttg.partition = array<i32: 0, 1, 2>}
+    scf.yield %load_tok : !ttg.async.token
+    // CHECK: ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs = [array<i32: 1>]
+  } {tt.warp_specialize}
+
+  "use"(%loop_out) : (!ttg.async.token) -> ()
+  tt.return
+}
+
+}
