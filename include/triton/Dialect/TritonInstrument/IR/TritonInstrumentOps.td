@@ -162,19 +162,23 @@ def TTI_ExperimentalGSanAtomicCASOp : TTI_Op<"experimental_gsan_atomic_cas", [
   TypesMatchWith<"ptr type matches cmp type", "cmp", "ptr",
                  "getPointerTypeSameShape($_self)">,
   TypesMatchWith<"ptr type matches value type", "val", "ptr",
-                 "getPointerTypeSameShape($_self)">
+                 "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"mask type matches value type",
+                 "val", "mask", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">
 ]> {
   let summary = "Lower a GSan-instrumented atomic cas";
   let arguments = (ins
     Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
     TT_Type:$cmp,
     TT_Type:$val,
+    Optional<TT_BoolLike>:$mask,
     TT_MemSemanticAttr:$sem,
     TT_MemSyncScopeAttr:$scope
   );
   let results = (outs TT_Type:$result);
   let assemblyFormat = [{
-    $sem `,` $scope `,` $ptr `,` $cmp `,` $val attr-dict `:`
+    $sem `,` $scope `,` $ptr `,` $cmp `,` $val (`,` $mask^)? attr-dict `:`
     functional-type(operands, $result)
   }];
 }
