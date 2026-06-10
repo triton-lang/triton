@@ -37,6 +37,9 @@ class tma_store_token_type(base_type):
     def __eq__(self, other) -> bool:
         return type(self) is type(other)
 
+    def __hash__(self) -> int:
+        return hash(type(self))
+
     def __str__(self) -> str:
         return "tma_store_token"
 
@@ -389,8 +392,8 @@ def async_atomic_or(tensor_desc, coord, src, _semantic=None):
         coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
         src (ttgl.shared_memory_descriptor): Source memory descriptor.
     """
-    return _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.OR, tensor_desc, coord, src,
-                                          "async_atomic_or", _semantic=_semantic)
+    return _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.OR, tensor_desc, coord, src, "async_atomic_or",
+                                          _semantic=_semantic)
 
 
 @builtin
