@@ -2741,7 +2741,7 @@ def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
 @_tensor_member_fn
 @builtin
 @_add_atomic_docstr("compare-and-swap", has_cmp=True)
-def atomic_cas(pointer, cmp, val, mask=None, sem=None, scope=None, _semantic=None):
+def atomic_cas(pointer, cmp, val, sem=None, scope=None, _semantic=None, mask=None):
     cmp = _semantic.to_tensor(cmp)
     val = _semantic.to_tensor(val)
     sem = _unwrap_if_constexpr(sem)
