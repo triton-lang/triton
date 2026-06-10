@@ -1,6 +1,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
+#include "mlir/Dialect/SCF/IR/SCF.h"
+
 #include <functional>
 #include <iterator>
 #include <queue>
@@ -86,6 +88,35 @@ static FailureOr<int> computePendingCount(Operation *producer,
   return failure();
 }
 
+static FailureOr<int> computePendingCountFromLoopResult(scf::ForOp forOp,
+                                                        unsigned resultIdx,
+                                                        Operation *waitOp) {
+  Value yielded = forOp.getYieldedValues()[resultIdx];
+  Operation *producer = yielded.getDefiningOp();
+  if (!producer || !isa<TMAStoreLikeOpInterface>(producer))
+    return failure();
+
+  int count = countTMAStoreLikeOps(std::next(Block::iterator(producer)),
+                                   producer->getBlock()->end());
+  FailureOr<int> afterLoop = computePendingCount(forOp, waitOp);
+  if (failed(afterLoop))
+    return failure();
+  return count + *afterLoop;
+}
+
+static FailureOr<int> computePendingCount(Value token, Operation *waitOp) {
+  Operation *producer = token.getDefiningOp();
+  if (!producer)
+    return failure();
+  if (isa<TMAStoreLikeOpInterface>(producer))
+    return computePendingCount(producer, waitOp);
+  if (auto forOp = dyn_cast<scf::ForOp>(producer)) {
+    unsigned resultIdx = cast<OpResult>(token).getResultNumber();
+    return computePendingCountFromLoopResult(forOp, resultIdx, waitOp);
+  }
+  return failure();
+}
+
 } // anonymous namespace
 
 class TritonNvidiaGPUResolveTMAStoreTokensPass
@@ -102,21 +133,15 @@ public:
       Value token = waitOp.getToken();
       if (!token)
         return;
-      Operation *producer = token.getDefiningOp();
-      if (!producer) {
-        waitOp.emitError("could not resolve token wait pending count");
-        failed = true;
-        return;
-      }
-      FailureOr<int> pendingCount = computePendingCount(producer, waitOp);
+      FailureOr<int> pendingCount = computePendingCount(token, waitOp);
       if (::mlir::failed(pendingCount)) {
         waitOp.emitError("could not resolve token wait pending count");
         failed = true;
         return;
       }
       OpBuilder b(waitOp);
-      auto newWait =
-          b.create<TMAStoreWaitOp>(*pendingCount, waitOp.getReadOnly());
+      auto newWait = TMAStoreWaitOp::create(b, waitOp.getLoc(), *pendingCount,
+                                            waitOp.getReadOnly());
       waitOp.erase();
     });
     if (failed)

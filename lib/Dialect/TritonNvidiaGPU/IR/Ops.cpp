@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
@@ -700,8 +701,18 @@ LogicalResult TMAStoreWaitOp::verify() {
     return emitOpError(
         "token waits currently require a token defined by a TMA store op; "
         "use explicit pendings for block-argument tokens");
-  if (!isa<TMAStoreLikeOpInterface>(defOp))
-    return emitOpError("token must be produced by a TMA store op");
+  if (!isa<TMAStoreLikeOpInterface>(defOp)) {
+    if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
+      unsigned resultIdx = cast<OpResult>(getToken()).getResultNumber();
+      Operation *yieldedDef =
+          forOp.getYieldedValues()[resultIdx].getDefiningOp();
+      if (yieldedDef && isa<TMAStoreLikeOpInterface>(yieldedDef))
+        return success();
+    }
+    return emitOpError(
+        "token must be produced by a TMA store op or an scf.for result yielded "
+        "from a TMA store op");
+  }
   return success();
 }
 
