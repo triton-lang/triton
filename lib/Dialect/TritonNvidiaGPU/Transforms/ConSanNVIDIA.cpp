@@ -75,10 +75,14 @@ public:
   }
 
   std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const override {
-    if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op))
+    if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op)) {
+      if (!tmaStoreWaitOp.getPendingsAttr())
+        return std::nullopt;
       return WaitOpInfo{tti::CommitKind::TmaStore,
-                        static_cast<int>(tmaStoreWaitOp.getPendings()),
+                        static_cast<int>(
+                            tmaStoreWaitOp.getPendingsAttr().getInt()),
                         /*transferWrites=*/false, /*transferReads=*/true};
+    }
     return std::nullopt;
   }
 

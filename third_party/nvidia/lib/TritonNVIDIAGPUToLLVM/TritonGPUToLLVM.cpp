@@ -148,6 +148,9 @@ struct ConvertTritonGPUToLLVM
     // function
     initSharedMemory(typeConverter);
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    llvm::DenseMap<Operation *, int> tmaStoreWaitPendings;
+    mlir::triton::NVIDIA::computeTMAStoreWaitPendings(
+        mod, tmaStoreWaitPendings);
 
     RewritePatternSet patterns(context);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
@@ -167,7 +170,8 @@ struct ConvertTritonGPUToLLVM
                                   patternBenefitClampOptimizedPattern);
     populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
                                       computeCapability, patterns,
-                                      axisInfoAnalysis, benefit);
+                                      axisInfoAnalysis, tmaStoreWaitPendings,
+                                      benefit);
     mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
                                                  targetInfo, benefit);
     mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,

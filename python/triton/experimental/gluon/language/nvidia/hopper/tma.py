@@ -23,12 +23,35 @@ __all__ = [
     "async_load_im2col",
     "async_store",
     "store_wait",
+    "tma_store_token",
     "tensor_descriptor",
     "tensor_descriptor_im2col",
     "tensor_descriptor_type",
     "tensor_descriptor_im2col_type",
     "make_tensor_descriptor",
 ]
+
+
+class tma_store_token_type(base_type):
+
+    def __eq__(self, other) -> bool:
+        return type(self) is type(other)
+
+    def __str__(self) -> str:
+        return "tma_store_token"
+
+
+class tma_store_token(base_value):
+
+    def __init__(self, handle):
+        self.handle = handle
+        self.type = tma_store_token_type()
+
+    def _set_name(self, builder: "ir.builder", name: str) -> None:
+        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
+
+    def _flatten_ir(self, handles: List["ir.value"]) -> None:
+        handles.append(self.handle)
 
 
 @dataclass(eq=True)
@@ -283,7 +306,8 @@ def async_store(tensor_desc, coord, src, _semantic=None):
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_store", "innermost coordinate", _semantic=_semantic)
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
-    _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle)
+    return tma_store_token(
+        _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle))
 
 
 # Backward-compatible aliases
@@ -296,7 +320,7 @@ def _async_atomic_shared_to_global(kind, tensor_desc, coord, src, fn_name: str, 
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, fn_name, "innermost coordinate", _semantic=_semantic)
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
-    _semantic.builder.create_async_tma_reduce(kind, tensor_desc.handle, coord, src.handle)
+    return tma_store_token(_semantic.builder.create_async_tma_reduce(kind, tensor_desc.handle, coord, src.handle))
 
 
 @builtin
@@ -309,8 +333,8 @@ def async_atomic_add(tensor_desc, coord, src, _semantic=None):
         coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
         src (ttgl.shared_memory_descriptor): Source memory descriptor.
     """
-    _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.ADD, tensor_desc, coord, src, "async_atomic_add",
-                                   _semantic=_semantic)
+    return _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.ADD, tensor_desc, coord, src,
+                                          "async_atomic_add", _semantic=_semantic)
 
 
 @builtin
@@ -323,8 +347,8 @@ def async_atomic_min(tensor_desc, coord, src, _semantic=None):
         coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
         src (ttgl.shared_memory_descriptor): Source memory descriptor.
     """
-    _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.MIN, tensor_desc, coord, src, "async_atomic_min",
-                                   _semantic=_semantic)
+    return _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.MIN, tensor_desc, coord, src,
+                                          "async_atomic_min", _semantic=_semantic)
 
 
 @builtin
@@ -337,8 +361,8 @@ def async_atomic_max(tensor_desc, coord, src, _semantic=None):
         coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
         src (ttgl.shared_memory_descriptor): Source memory descriptor.
     """
-    _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.MAX, tensor_desc, coord, src, "async_atomic_max",
-                                   _semantic=_semantic)
+    return _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.MAX, tensor_desc, coord, src,
+                                          "async_atomic_max", _semantic=_semantic)
 
 
 @builtin
@@ -351,8 +375,8 @@ def async_atomic_and(tensor_desc, coord, src, _semantic=None):
         coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
         src (ttgl.shared_memory_descriptor): Source memory descriptor.
     """
-    _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.AND, tensor_desc, coord, src, "async_atomic_and",
-                                   _semantic=_semantic)
+    return _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.AND, tensor_desc, coord, src,
+                                          "async_atomic_and", _semantic=_semantic)
 
 
 @builtin
@@ -365,8 +389,8 @@ def async_atomic_or(tensor_desc, coord, src, _semantic=None):
         coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
         src (ttgl.shared_memory_descriptor): Source memory descriptor.
     """
-    _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.OR, tensor_desc, coord, src, "async_atomic_or",
-                                   _semantic=_semantic)
+    return _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.OR, tensor_desc, coord, src,
+                                          "async_atomic_or", _semantic=_semantic)
 
 
 @builtin
@@ -379,8 +403,8 @@ def async_atomic_xor(tensor_desc, coord, src, _semantic=None):
         coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
         src (ttgl.shared_memory_descriptor): Source memory descriptor.
     """
-    _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.XOR, tensor_desc, coord, src, "async_atomic_xor",
-                                   _semantic=_semantic)
+    return _async_atomic_shared_to_global(ttgl.ir.DESCRIPTOR_REDUCE_KIND.XOR, tensor_desc, coord, src,
+                                          "async_atomic_xor", _semantic=_semantic)
 
 
 @builtin
@@ -389,7 +413,8 @@ def store_wait(pendings, read_only=True, _semantic=None):
     Wait for pending TMA stores.
 
     Args:
-        pendings (int | ttgl.constexpr): Maximum number of TMA stores allowed to remain pending.
+        pendings (int | ttgl.constexpr | tma_store_token): Maximum number of TMA stores allowed to remain pending,
+            or a token returned by a TMA store operation.
         read_only (bool | ttgl.constexpr): If true, wait only until the pending stores have finished reading
             their shared-memory sources, but writes may not be visible in HBM. Defaults to true.
 
@@ -399,9 +424,12 @@ def store_wait(pendings, read_only=True, _semantic=None):
         messages between CTAs, or between nvlink devices then you will need to use ``read_only=False`` before any
         release operation.
     """
-    pendings = _unwrap_if_constexpr(pendings)
     read_only = _unwrap_if_constexpr(read_only)
-    _semantic.builder.create_async_tma_store_wait(pendings, read_only)
+    if isinstance(pendings, tma_store_token):
+        _semantic.builder.create_async_tma_store_wait(pendings.handle, read_only)
+    else:
+        pendings = _unwrap_if_constexpr(pendings)
+        _semantic.builder.create_async_tma_store_wait(pendings, read_only)
 
 
 @builtin

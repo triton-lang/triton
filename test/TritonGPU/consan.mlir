@@ -462,7 +462,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_check_outstanding_commits
     // CHECK: tt.call @__triton_consan_stage_access_for_commit
     // CHECK: tt.call @__triton_consan_commit_accesses
-    ttng.async_tma_copy_local_to_global %arg0[%c0_i32, %c0_i32] %0 : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+%tma_tok13 = ttng.async_tma_copy_local_to_global %arg0[%c0_i32, %c0_i32] %0 : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -550,7 +550,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 	    // CHECK: tt.call @__triton_consan_check_outstanding_commits
 	    // CHECK: tt.call @__triton_consan_stage_access_for_commit
 	    // CHECK: tt.call @__triton_consan_commit_accesses
-	    ttng.async_tma_scatter %arg0[%x_offsets, %c0_i32] %0 : !tt.tensordesc<1x32xf32, #shared>, tensor<32xi32>, i32, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+%tma_tok14 = ttng.async_tma_scatter %arg0[%x_offsets, %c0_i32] %0 : !tt.tensordesc<1x32xf32, #shared>, tensor<32xi32>, i32, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
 	    tt.return
 	  }
 }
@@ -574,7 +574,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_check_outstanding_commits
     // CHECK: tt.call @__triton_consan_stage_access_for_commit
     // CHECK: tt.call @__triton_consan_commit_accesses
-    ttng.async_tma_reduce add, %arg0[%c0_i32, %c0_i32] %0 : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+%tma_tok15 = ttng.async_tma_reduce add, %arg0[%c0_i32, %c0_i32] %0 : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
   }
 }

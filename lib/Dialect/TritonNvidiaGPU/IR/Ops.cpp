@@ -685,6 +685,26 @@ LogicalResult AsyncTMAScatterOp::verify() {
       getXOffsets().getType());
 }
 
+// -- TMAStoreWaitOp --
+LogicalResult TMAStoreWaitOp::verify() {
+  bool hasToken = static_cast<bool>(getToken());
+  bool hasPendings = static_cast<bool>(getPendingsAttr());
+  if (hasToken == hasPendings)
+    return emitOpError("requires exactly one of token or pendings");
+
+  if (!hasToken)
+    return success();
+
+  Operation *defOp = getToken().getDefiningOp();
+  if (!defOp)
+    return emitOpError(
+        "token waits currently require a token defined by a TMA store op; "
+        "use explicit pendings for block-argument tokens");
+  if (!isa<TMAStoreLikeOpInterface>(defOp))
+    return emitOpError("token must be produced by a TMA store op");
+  return success();
+}
+
 // -- TCGen5MMAOp --
 
 // barrier-and-pred := `,` ssa-value `[` ssa-value `]`
