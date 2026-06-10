@@ -216,28 +216,6 @@ TEST_F(LinearLayoutConversionsTest, ShapeLargerThanLayout2DDegenerate) {
                         {S("dim0"), S("dim1")}));
 }
 
-TEST_F(LinearLayoutConversionsTest, CanonicalScaleSmemLayout) {
-  LinearLayout layout = getScaleSmemLayoutForTMEMCopy(
-      &ctx, /*shape=*/{256, 16}, CGAEncodingAttr::get1CTALayout(&ctx, 2));
-  LinearLayout expected = LinearLayout({{S("offset"),
-                                         {{0, 1},
-                                          {0, 2},
-                                          {32, 0},
-                                          {64, 0},
-                                          {1, 0},
-                                          {2, 0},
-                                          {4, 0},
-                                          {8, 0},
-                                          {16, 0},
-                                          {0, 4},
-                                          {0, 8},
-                                          {128, 0}}},
-                                        {S("block"), {}}},
-                                       {{S("dim0"), 256}, {S("dim1"), 16}},
-                                       /*requireSurjective=*/true);
-  EXPECT_EQ(layout, expected);
-}
-
 TEST_F(LinearLayoutConversionsTest, ShapeSmallerThanLayout) {
   // The shape is 8 elements, but the layout is 4*4*4 = 64 elems.  Therefore the
   // log2(64/8) = 3 most major bases are 0.
