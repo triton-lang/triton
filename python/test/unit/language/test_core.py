@@ -5068,18 +5068,19 @@ def test_trans_reshape(device, with_allocator):
 
     k = kernel[(1, )](input, actual, shape[0], shape[1])
     assert k.asm['ttgir'].count(
-        'ttg.convert_layout') <= 1, "Expected at most one convert_layout op in the TTGIR after optimization"
+        'ttg.convert_layout') == 1, "Expected exactly one convert_layout op in the TTGIR after optimization"
 
     np.testing.assert_equal(to_numpy(expected), to_numpy(actual))
 
 
-# Regression test: OptimizeTransLayout should eliminate the post-trans
+# Regression test: backward rematerialization in remove-layout-conversions
+# should retype the small load through the permute and eliminate the
 # ttg.convert_layout that would otherwise lower to shared memory.
 # num_warps=1 only: at higher warp counts the coalescing check refuses the
 # rewrite for this specific access pattern.
 def test_permute_eliminates_smem(device, with_allocator):
     if not is_cuda():
-        pytest.skip("OptimizeTransLayout currently wired only for CUDA backend")
+        pytest.skip("PTX-specific assertions")
 
     @triton.jit
     def kernel(in_ptr, out_ptr):
@@ -5101,8 +5102,8 @@ def test_permute_eliminates_smem(device, with_allocator):
     k = kernel[(1, )](x, y, num_warps=1)
     torch.testing.assert_close(y, ref)
     ptx = k.asm['ptx']
-    assert ptx.count('st.shared') == 0, "expected no st.shared after OptimizeTransLayout"
-    assert ptx.count('ld.shared') == 0, "expected no ld.shared after OptimizeTransLayout"
+    assert ptx.count('st.shared') == 0, "expected the convert_layout to be eliminated, not lowered to smem"
+    assert ptx.count('ld.shared') == 0, "expected the convert_layout to be eliminated, not lowered to smem"
 
 
 # -------------
