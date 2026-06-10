@@ -1736,19 +1736,46 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 
 
 @pytest.mark.interpreter
-def test_atomic_cas_mask_false_is_noop(device):
+@pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
+@pytest.mark.parametrize("dtype_str", ['float16', 'float32', 'uint32', 'int32', 'uint64', 'int64', 'float64'])
+def test_atomic_cas_mask_false_is_noop(sem, dtype_str, device):
     @triton.jit
-    def masked_noop(Lock, triton_dtype: tl.constexpr):
+    def masked_noop_const(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr):
         offsets = tl.arange(0, 1)
-        num0 = tl.full((1, ), 0, dtype=triton_dtype)
+        num0 = tl.full((1, ), 2, dtype=triton_dtype)
         num1 = tl.full((1, ), 1, dtype=triton_dtype)
         mask = tl.full((1, ), False, dtype=tl.int1)
-        tl.atomic_cas(Lock + offsets, num0, num1, mask=mask)
+        tl.atomic_cas(Lock + offsets, num0, num1, mask=mask, sem=sem)
 
-    Lock = torch.zeros((1, ), device=device, dtype=torch.int32)
-    masked_noop[(1, )](Lock, triton_dtype=tl.int32)
+    @triton.jit
+    def masked_noop_scalar(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr):
+        offsets = tl.arange(0, 1)
+        num0 = tl.full((1, ), 2, dtype=triton_dtype)
+        num1 = tl.full((1, ), 1, dtype=triton_dtype)
+        mask = False
+        tl.atomic_cas(Lock + offsets, num0, num1, mask=mask, sem=sem)
 
-    assert Lock[0] == 0
+    @triton.jit
+    def masked_noop_dyn(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr):
+        offsets = tl.arange(0, 1)
+        num0 = tl.full((1, ), 2, dtype=triton_dtype)
+        num1 = tl.full((1, ), 1, dtype=triton_dtype)
+        mask = offsets < 0 
+        tl.atomic_cas(Lock + offsets, num0, num1, mask=mask, sem=sem)
+
+    torch_dtype = getattr(torch, dtype_str)
+    tl_dtype = getattr(tl, dtype_str)
+
+    Lock = torch.full((1, ), 2, device=device, dtype=torch_dtype)
+
+    masked_noop_const[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+    assert Lock[0] == 2
+
+    masked_noop_scalar[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+    assert Lock[0] == 2
+
+    masked_noop_dyn[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+    assert Lock[0] == 2
 
 
 @pytest.mark.interpreter
