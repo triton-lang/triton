@@ -1394,19 +1394,38 @@ public:
 
     // If both have been traversed, then we can rewrite select of pointers as a
     // select of base and offset
+    Value cond = selectOp.getCondition();
+    Value baseTrue = fatPtrTrue[0], offsetTrue = fatPtrTrue[1];
+    Value baseFalse = fatPtrFalse[0], offsetFalse = fatPtrFalse[1];
 
-    // Rewrite to select(fatBaseT, fatBaseF) and select(fatOffsetT, fatOffsetF)
-    auto newBase = arith::SelectOp::create(rewriter, selectOp.getLoc(),
-                                           selectOp.getCondition(),
-                                           fatPtrTrue[0], fatPtrFalse[0]);
-    auto newOffset = arith::SelectOp::create(rewriter, selectOp.getLoc(),
-                                             selectOp.getCondition(),
-                                             fatPtrTrue[1], fatPtrFalse[1]);
+    // A tensor condition can't select between differing scalar bases, so
+    // materialize both arms and select the full tensor pointers instead.
+    if (isa<RankedTensorType>(cond.getType()) && baseTrue != baseFalse) {
+      Value truePtr =
+          createTensorPointer(rewriter, baseTrue, offsetTrue, selectOp.getLoc(),
+                              fatPtrs.at({baseTrue, offsetTrue}));
+      Value falsePtr = createTensorPointer(
+          rewriter, baseFalse, offsetFalse, selectOp.getLoc(),
+          fatPtrs.at({baseFalse, offsetFalse}));
+      rewriter.replaceOp(selectOp,
+                         arith::SelectOp::create(rewriter, selectOp.getLoc(),
+                                                 cond, truePtr, falsePtr));
+      return success();
+    }
+
+    // Select base and offset separately. Reuse the base when both arms share
+    // it, so only the offset needs a select.
+    Value newBase = baseTrue;
+    if (baseTrue != baseFalse)
+      newBase = arith::SelectOp::create(rewriter, selectOp.getLoc(), cond,
+                                        baseTrue, baseFalse);
+    Value newOffset = arith::SelectOp::create(rewriter, selectOp.getLoc(), cond,
+                                              offsetTrue, offsetFalse);
 
     rewriter.replaceOpWithMultiple(selectOp, {{newBase, newOffset}});
     fatPtrs[{newBase, newOffset}] = FatPointers::FatPtrAttrs::intersect(
-        fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}),
-        fatPtrs.at({fatPtrFalse[0], fatPtrFalse[1]}));
+        fatPtrs.at({baseTrue, offsetTrue}),
+        fatPtrs.at({baseFalse, offsetFalse}));
 
     return success();
   }
