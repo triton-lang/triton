@@ -320,32 +320,6 @@ getSingleDimSliceEncoding(DistributedEncodingTrait encoding, int dim) {
   return sliceEncoding;
 }
 
-Value expandOuterSlicedDim(OpBuilder &b, Location loc, Value tensor) {
-  auto type = cast<RankedTensorType>(tensor.getType());
-  auto sliceEncoding = dyn_cast<SliceEncodingAttr>(type.getEncoding());
-  if (sliceEncoding) {
-    int dim = sliceEncoding.getDim();
-    auto shape = type.getShape();
-    auto newShape = SmallVector<int64_t>(shape);
-    newShape.insert(newShape.begin() + dim, 1);
-    auto newType = RankedTensorType::get(newShape, type.getElementType(),
-                                         sliceEncoding.getParent());
-    tensor = ExpandDimsOp::create(b, loc, newType, tensor, dim);
-  }
-  return tensor;
-}
-
-static Value expandAllSlicedDims(OpBuilder &b, Location loc, Value tensor) {
-  auto type = cast<RankedTensorType>(tensor.getType());
-  auto sliceEncoding = dyn_cast<SliceEncodingAttr>(type.getEncoding());
-  while (sliceEncoding) {
-    tensor = expandOuterSlicedDim(b, loc, tensor);
-    type = cast<RankedTensorType>(tensor.getType());
-    sliceEncoding = dyn_cast<SliceEncodingAttr>(type.getEncoding());
-  }
-  return tensor;
-}
-
 static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
                                  RankedTensorType tensorType) {
   auto encoding = cast<DistributedEncodingTrait>(tensorType.getEncoding());
@@ -355,38 +329,43 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
       base);
   auto offsetsType =
       RankedTensorType::get(tensorType.getShape(), b.getI32Type(), encoding);
-  SmallVector<int> strides(tensorType.getRank());
-  strides[0] = 1;
-  for (int i = 1; i < tensorType.getRank(); ++i) {
-    strides[i] = strides[i - 1] * tensorType.getShape()[i - 1];
-  }
-  for (int i = 0; i < tensorType.getRank(); ++i) {
-    auto partialEncoding = getSingleDimSliceEncoding(encoding, i);
-    auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
-                                            b.getI32Type(), partialEncoding);
-    auto arange =
-        MakeRangeOp::create(b, loc, arangeType, 0, arangeType.getShape()[0]);
-    auto cstStride = createConstIntTensor(b, loc, strides[i], arangeType);
-    auto arangeTimesStride =
-        arith::MulIOp::create(b, loc, arangeType, arange, cstStride);
-    auto expandDims = expandAllSlicedDims(b, loc, arangeTimesStride);
-    if (cast<RankedTensorType>(expandDims.getType()).getShape() !=
-        tensorType.getShape()) {
-      expandDims = BroadcastOp::create(b, loc, offsetsType, expandDims);
-    }
-    ptrTensor =
-        AddPtrOp::create(b, loc, ptrTensor.getType(), ptrTensor, expandDims);
-  }
-  return ptrTensor;
+  // Infer the source layout we need for the MakeRange in order for the reshape
+  // to produce the desired encoding.
+  Attribute offsets1DEncoding;
+  auto result = encoding.getDialect()
+                    .getRegisteredInterface<DialectInferLayoutInterface>()
+                    ->inferReshapeOpEncoding(tensorType.getShape(), encoding,
+                                             {tensorType.getNumElements()},
+                                             offsets1DEncoding,
+                                             /*allowReorder=*/false, loc);
+  assert(succeeded(result));
+  auto offsets1DType = RankedTensorType::get({tensorType.getNumElements()},
+                                             b.getI32Type(), offsets1DEncoding);
+  Value offsets = MakeRangeOp::create(b, loc, offsets1DType, 0,
+                                      tensorType.getNumElements());
+  offsets = ReshapeOp::create(b, loc, offsetsType, offsets,
+                              /*allowReorder=*/false,
+                              /*efficientLayout=*/false);
+  return AddPtrOp::create(b, loc, ptrTensor.getType(), ptrTensor, offsets);
 }
 
 static Value createCurrentCTAMask(OpBuilder &b, Location loc,
                                   RankedTensorType tensorType) {
   assert(tensorType.getRank() > 0 && "expected ranked tensor");
   auto encoding = cast<DistributedEncodingTrait>(tensorType.getEncoding());
-  auto sliceEncoding = getSingleDimSliceEncoding(encoding, /*dim=*/0);
+  // Infer the source layout we need for the MakeRange in order for the reshape
+  // to produce the desired encoding.
+  SmallVector<int64_t> expandedShape(tensorType.getRank(), 1);
+  expandedShape[0] = tensorType.getShape()[0];
+  Attribute indexEncoding;
+  auto result = encoding.getDialect()
+                    .getRegisteredInterface<DialectInferLayoutInterface>()
+                    ->inferReshapeOpEncoding(
+                        expandedShape, encoding, {tensorType.getShape()[0]},
+                        indexEncoding, /*allowReorder=*/false, loc);
+  assert(succeeded(result));
   auto indexType = RankedTensorType::get({tensorType.getShape()[0]},
-                                         b.getI32Type(), sliceEncoding);
+                                         b.getI32Type(), indexEncoding);
   Value range = MakeRangeOp::create(b, loc, indexType, /*start=*/0,
                                     tensorType.getShape()[0]);
   Value ctaId = ExperimentalClusterCTAIdOp::create(b, loc);
@@ -395,11 +374,14 @@ static Value createCurrentCTAMask(OpBuilder &b, Location loc,
                                        ctaIdTensor);
   auto maskType =
       RankedTensorType::get(tensorType.getShape(), b.getI1Type(), encoding);
-  Value mask = expandAllSlicedDims(b, loc, mask1D);
-  if (cast<RankedTensorType>(mask.getType()).getShape() !=
-      tensorType.getShape())
-    mask = BroadcastOp::create(b, loc, maskType, mask);
-  return mask;
+  auto expandedType =
+      RankedTensorType::get(expandedShape, b.getI1Type(), encoding);
+  Value expanded = ReshapeOp::create(b, loc, expandedType, mask1D,
+                                     /*allowReorder=*/false,
+                                     /*efficientLayout=*/false);
+  if (expandedShape == tensorType.getShape())
+    return expanded;
+  return BroadcastOp::create(b, loc, maskType, expanded);
 }
 
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,

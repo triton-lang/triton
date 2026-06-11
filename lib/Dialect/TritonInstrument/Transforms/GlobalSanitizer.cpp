@@ -103,18 +103,6 @@ getInstrumentationEncoding(OpBuilder &builder, ArrayRef<int64_t> shape,
                                        order, base.getCGALayout());
 }
 
-static Value expandAllSlicedDims(OpBuilder &builder, Location loc,
-                                 Value tensor) {
-  auto type = cast<RankedTensorType>(tensor.getType());
-  auto sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
-  while (sliceEncoding) {
-    tensor = expandOuterSlicedDim(builder, loc, tensor);
-    type = cast<RankedTensorType>(tensor.getType());
-    sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
-  }
-  return tensor;
-}
-
 static DescriptorInfo getDescriptorInfo(Value desc, OpBuilder &builder) {
   if (!isa<tt::TensorDescType>(desc.getType())) {
     std::string msg;
@@ -149,13 +137,23 @@ static Value createExpandedOffsetRange(OpBuilder &builder, Location loc,
                                        Value offset, unsigned dim) {
   auto fullEncoding =
       cast<ttg::DistributedEncodingTrait>(fullI64Type.getEncoding());
-  auto sliceEncoding = getSingleDimSliceEncoding(fullEncoding, dim);
   int64_t dimSize = fullI64Type.getShape()[dim];
+  SmallVector<int64_t> expandedShape(fullI64Type.getRank(), 1);
+  expandedShape[dim] = dimSize;
+  // Compute the source layout such that reshaping to the full rank produces
+  // fullEncoding.
+  Attribute rangeEncoding;
+  auto inferenceResult =
+      fullEncoding.getDialect()
+          .getRegisteredInterface<DialectInferLayoutInterface>()
+          ->inferReshapeOpEncoding(expandedShape, fullEncoding, {dimSize},
+                                   rangeEncoding, /*allowReorder=*/false, loc);
+  assert(succeeded(inferenceResult));
 
   auto sliceI32Type =
-      RankedTensorType::get({dimSize}, builder.getI32Type(), sliceEncoding);
+      RankedTensorType::get({dimSize}, builder.getI32Type(), rangeEncoding);
   auto sliceI64Type =
-      RankedTensorType::get({dimSize}, builder.getI64Type(), sliceEncoding);
+      RankedTensorType::get({dimSize}, builder.getI64Type(), rangeEncoding);
 
   Value range = tt::MakeRangeOp::create(builder, loc, sliceI32Type, 0, dimSize);
   Value rangeI64 = arith::ExtSIOp::create(builder, loc, sliceI64Type, range);
@@ -164,11 +162,13 @@ static Value createExpandedOffsetRange(OpBuilder &builder, Location loc,
       tt::SplatOp::create(builder, loc, sliceI64Type, offsetI64);
   Value result =
       arith::AddIOp::create(builder, loc, sliceI64Type, offsetSplat, rangeI64);
-  result = expandAllSlicedDims(builder, loc, result);
-  if (cast<RankedTensorType>(result.getType()).getShape() !=
-      fullI64Type.getShape()) {
+  auto expandedType =
+      RankedTensorType::get(expandedShape, builder.getI64Type(), fullEncoding);
+  result = tt::ReshapeOp::create(builder, loc, expandedType, result,
+                                 /*allowReorder=*/false,
+                                 /*efficientLayout=*/false);
+  if (expandedShape != fullI64Type.getShape())
     result = tt::BroadcastOp::create(builder, loc, fullI64Type, result);
-  }
   return result;
 }
 
@@ -176,12 +176,13 @@ static Value convertAndBroadcast(OpBuilder &builder, Location loc, Value tensor,
                                  int dim, RankedTensorType dstType) {
   auto tensorType = cast<RankedTensorType>(tensor.getType());
   auto encoding = cast<ttg::DistributedEncodingTrait>(dstType.getEncoding());
-  auto sliceEncoding = getSingleDimSliceEncoding(encoding, dim);
-  auto sliceType = RankedTensorType::get(
-      tensorType.getShape(), tensorType.getElementType(), sliceEncoding);
-  tensor = ttg::ConvertLayoutOp::create(builder, loc, sliceType, tensor);
-  tensor = expandAllSlicedDims(builder, loc, tensor);
-  if (cast<RankedTensorType>(tensor.getType()).getShape() != dstType.getShape())
+  SmallVector<int64_t> expandedShape(dstType.getRank(), 1);
+  expandedShape[dim] = tensorType.getShape()[0];
+  auto expandedType = RankedTensorType::get(
+      expandedShape, tensorType.getElementType(), encoding);
+  tensor = tt::ReshapeOp::create(builder, loc, expandedShape, tensor);
+  tensor = ttg::ConvertLayoutOp::create(builder, loc, expandedType, tensor);
+  if (expandedShape != dstType.getShape())
     tensor = tt::BroadcastOp::create(builder, loc, dstType, tensor);
   return tensor;
 }

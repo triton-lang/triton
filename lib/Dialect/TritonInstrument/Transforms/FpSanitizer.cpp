@@ -13,6 +13,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 
 namespace mlir {
@@ -953,18 +954,6 @@ Value createAsyncToken(PatternRewriter &rewriter, Location loc,
   return ttg::AsyncCommitGroupOp::create(rewriter, loc, deps).getResult();
 }
 
-Value expandAllSlicedDims(PatternRewriter &rewriter, Location loc,
-                          Value tensor) {
-  auto type = cast<RankedTensorType>(tensor.getType());
-  auto sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
-  while (sliceEncoding) {
-    tensor = expandOuterSlicedDim(rewriter, loc, tensor);
-    type = cast<RankedTensorType>(tensor.getType());
-    sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
-  }
-  return tensor;
-}
-
 Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
                                    Value base, RankedTensorType resultTy,
                                    int64_t stride0, int64_t stride1) {
@@ -976,29 +965,44 @@ Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
   auto i32Ty = rewriter.getI32Type();
   auto offsetsTy = RankedTensorType::get(shape, i32Ty, encoding);
 
-  auto dim0Enc = getSingleDimSliceEncoding(encoding, 0);
+  Attribute dim0Enc;
+  auto result =
+      encoding.getDialect()
+          .getRegisteredInterface<DialectInferLayoutInterface>()
+          ->inferReshapeOpEncoding({shape[0], 1}, encoding, {shape[0]}, dim0Enc,
+                                   /*allowReorder=*/false, loc);
+  assert(succeeded(result));
   auto dim0Ty = RankedTensorType::get({shape[0]}, i32Ty, dim0Enc);
   auto range0 = tt::MakeRangeOp::create(rewriter, loc, dim0Ty, 0, shape[0]);
   auto stride0Const = createConstIntTensor(rewriter, loc, stride0, dim0Ty);
   auto off0 =
       arith::MulIOp::create(rewriter, loc, dim0Ty, range0, stride0Const);
-  auto off0Exp = expandAllSlicedDims(rewriter, loc, off0);
-  if (cast<RankedTensorType>(off0Exp.getType()).getShape() != shape) {
+  auto off0ExpandedTy = RankedTensorType::get({shape[0], 1}, i32Ty, encoding);
+  Value off0Exp = tt::ReshapeOp::create(rewriter, loc, off0ExpandedTy, off0,
+                                        /*allowReorder=*/false,
+                                        /*efficientLayout=*/false);
+  if (off0ExpandedTy.getShape() != shape)
     off0Exp = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off0Exp);
-  }
   ptrTensor =
       tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off0Exp);
 
-  auto dim1Enc = getSingleDimSliceEncoding(encoding, 1);
+  Attribute dim1Enc;
+  result = encoding.getDialect()
+               .getRegisteredInterface<DialectInferLayoutInterface>()
+               ->inferReshapeOpEncoding({1, shape[1]}, encoding, {shape[1]},
+                                        dim1Enc, /*allowReorder=*/false, loc);
+  assert(succeeded(result));
   auto dim1Ty = RankedTensorType::get({shape[1]}, i32Ty, dim1Enc);
   auto range1 = tt::MakeRangeOp::create(rewriter, loc, dim1Ty, 0, shape[1]);
   auto stride1Const = createConstIntTensor(rewriter, loc, stride1, dim1Ty);
   auto off1 =
       arith::MulIOp::create(rewriter, loc, dim1Ty, range1, stride1Const);
-  auto off1Exp = expandAllSlicedDims(rewriter, loc, off1);
-  if (cast<RankedTensorType>(off1Exp.getType()).getShape() != shape) {
+  auto off1ExpandedTy = RankedTensorType::get({1, shape[1]}, i32Ty, encoding);
+  Value off1Exp = tt::ReshapeOp::create(rewriter, loc, off1ExpandedTy, off1,
+                                        /*allowReorder=*/false,
+                                        /*efficientLayout=*/false);
+  if (off1ExpandedTy.getShape() != shape)
     off1Exp = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off1Exp);
-  }
   ptrTensor =
       tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off1Exp);
 
@@ -1325,8 +1329,6 @@ Value loadScaledScaleK32(PatternRewriter &rewriter, Location loc, bool isLhs,
 
   auto broadcastLayout = getOptimizedBlockedEncoding(
       rewriter, broadcastShape, scaleTileTy.getElementType());
-  auto compactSliceLayout = ttg::SliceEncodingAttr::get(
-      rewriter.getContext(), expandAxis, broadcastLayout);
   auto compactLoadLayout = getOptimizedBlockedEncoding(
       rewriter, compactShape, scaleTileTy.getElementType());
   auto compactLoadTy = RankedTensorType::get(
@@ -1347,12 +1349,13 @@ Value loadScaledScaleK32(PatternRewriter &rewriter, Location loc, bool isLhs,
                                        /*stride1=*/isLhs ? scaleStride : 1);
   compact = castDotScaledScaleToComputePayload(rewriter, loc, compact,
                                                scale.computeElem);
-  auto compactSliceTy = cast<RankedTensorType>(compact.getType())
-                            .cloneWithEncoding(compactSliceLayout);
-  compact =
-      ttg::ConvertLayoutOp::create(rewriter, loc, compactSliceTy, compact);
 
-  Value expanded = tt::ExpandDimsOp::create(rewriter, loc, compact, expandAxis);
+  auto expandedShape = compactShape;
+  expandedShape.insert(expandedShape.begin() + expandAxis, 1);
+  auto expandedTy = RankedTensorType::get(
+      expandedShape, getElementTypeOrSelf(compact.getType()), broadcastLayout);
+  Value expanded = tt::ReshapeOp::create(rewriter, loc, expandedShape, compact);
+  expanded = ttg::ConvertLayoutOp::create(rewriter, loc, expandedTy, expanded);
   auto broadcastTy =
       cast<RankedTensorType>(expanded.getType()).clone(broadcastShape);
   Value broadcast =

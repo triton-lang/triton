@@ -268,22 +268,20 @@ Value createConvertLayout(ImplicitLocOpBuilder &b, Value tensor,
 
 Value convertAndBroadcast(ImplicitLocOpBuilder &b, Value tensor,
                           ArrayRef<int> keptDims, RankedTensorType dstType) {
-  auto loc = b.getLoc();
   auto tensorType = cast<RankedTensorType>(tensor.getType());
   auto encoding = cast<ttg::DistributedEncodingTrait>(dstType.getEncoding());
   assert(static_cast<size_t>(tensorType.getRank()) == keptDims.size() &&
          "expected one kept dimension per source tensor rank");
-  llvm::SmallDenseSet<int> keptDimsSet(keptDims.begin(), keptDims.end());
-  Attribute sliceEncoding = encoding;
-  for (int dim = encoding.getRepOrder().size() - 1; dim >= 0; --dim) {
-    if (!keptDimsSet.contains(dim))
-      sliceEncoding = ttg::SliceEncodingAttr::get(
-          b.getContext(), dim,
-          cast<ttg::DistributedEncodingTrait>(sliceEncoding));
-  }
-  tensor = createConvertLayout(b, tensor, sliceEncoding);
-  while (cast<RankedTensorType>(tensor.getType()).getRank() < dstType.getRank())
-    tensor = tti::expandOuterSlicedDim(b, loc, tensor);
+  // Construct the new shape by moving the existing dims as per keptDims and
+  // introducing new dims of size 1 for the rest.
+  SmallVector<int64_t> expandedShape(dstType.getRank(), 1);
+  for (auto [srcDim, dstDim] : llvm::enumerate(keptDims))
+    expandedShape[dstDim] = tensorType.getShape()[srcDim];
+  auto expandedType = RankedTensorType::get(
+      expandedShape, tensorType.getElementType(), encoding);
+  // Reshape to the expanded shape.
+  tensor = triton::ReshapeOp::create(b, expandedShape, tensor);
+  tensor = ttg::ConvertLayoutOp::create(b, expandedType, tensor);
   auto resultType = RankedTensorType::get(
       dstType.getShape(), tensorType.getElementType(), encoding);
   if (cast<RankedTensorType>(tensor.getType()) == resultType)
