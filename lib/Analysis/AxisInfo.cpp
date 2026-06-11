@@ -257,6 +257,39 @@ public:
   }
 };
 
+class BitcastOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::BitcastOp> {
+public:
+  using AxisInfoVisitorImpl<triton::BitcastOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(triton::BitcastOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    AxisInfo srcInfo = operands[0]->getValue();
+    auto srcTy = dyn_cast<RankedTensorType>(op.getSrc().getType());
+    auto dstTy = dyn_cast<RankedTensorType>(op.getType());
+    if (!srcTy || !dstTy)
+      return srcInfo;
+    auto srcPtrTy = dyn_cast<triton::PointerType>(srcTy.getElementType());
+    auto dstPtrTy = dyn_cast<triton::PointerType>(dstTy.getElementType());
+    if (!srcPtrTy || !dstPtrTy)
+      return srcInfo;
+    int64_t srcElemSize =
+        std::max<int64_t>(1, triton::getPointeeBitWidth(srcTy) / 8);
+    int64_t dstElemSize =
+        std::max<int64_t>(1, triton::getPointeeBitWidth(dstTy) / 8);
+    if (srcElemSize == dstElemSize)
+      return srcInfo;
+
+    // Pointer contiguity is measured in pointee elements, whereas pointer
+    // divisibility is measured in bytes. A pointee-size change therefore
+    // preserves divisibility and constancy, but not contiguity.
+    return AxisInfo(AxisInfo::DimVectorT(srcInfo.getRank(), 1),
+                    srcInfo.getDivisibility(), srcInfo.getConstancy(),
+                    srcInfo.getConstantValue());
+  }
+};
+
 class UnrealizedConversionCastOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<mlir::UnrealizedConversionCastOp> {
 public:
@@ -1484,7 +1517,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   IntCastOpAxisInfoVisitor<arith::ExtUIOp>,
                   IntCastOpAxisInfoVisitor<arith::TruncIOp>,
                   ForwardAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
-                  ForwardAxisInfoVisitor<triton::BitcastOp>,
+                  BitcastOpAxisInfoVisitor,
                   ForwardAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();

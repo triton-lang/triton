@@ -1441,3 +1441,23 @@ tt.func @reshape_allow_reorder() {
   %reordered_even = tt.reshape %even allow_reorder : tensor<4xi32> -> tensor<2x2xi32>
   tt.return
 }
+
+// -----
+
+// These byte addresses are [base, base+4, base+8, base+12]. They are
+// contiguous as ptr<i32>, but have a four-element stride as ptr<i8>.
+tt.func @pointer_bitcast_pointee_size(
+    %base: !tt.ptr<i32> {tt.divisibility = 16 : i32},
+    %base_i1: !tt.ptr<i1> {tt.divisibility = 16 : i32}) {
+  %splat = tt.splat %base : !tt.ptr<i32> -> tensor<4x!tt.ptr<i32>>
+  %range = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32>
+  %ptr = tt.addptr %splat, %range : tensor<4x!tt.ptr<i32>>, tensor<4xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>}}
+  %result = tt.bitcast %ptr : tensor<4x!tt.ptr<i32>> -> tensor<4x!tt.ptr<i8>>
+  %splat_i1 = tt.splat %base_i1 : !tt.ptr<i1> -> tensor<4x!tt.ptr<i1>>
+  %ptr_i1 = tt.addptr %splat_i1, %range : tensor<4x!tt.ptr<i1>>, tensor<4xi32>
+  // Sub-byte and i8 pointers both use an effective one-byte element size.
+  // expected-remark @below {{contiguity = [4], divisibility = [4], constancy = [1], constant_value = <none>}}
+  %same_size = tt.bitcast %ptr_i1 : tensor<4x!tt.ptr<i1>> -> tensor<4x!tt.ptr<i8>>
+  tt.return
+}
