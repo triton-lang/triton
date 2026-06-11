@@ -704,8 +704,16 @@ public:
     auto srcSuffixProducts = getSuffixProducts(srcShape);
     auto dstSuffixProducts = getSuffixProducts(dstShape);
 
+    // Unit contiguity makes every element a group base, so divisibility from
+    // such a dimension applies globally.
+    int64_t globalDivisibility = 1;
+    for (int dim = 0; dim < srcTy.getRank(); ++dim)
+      if (srcInfo.getContiguity(dim) == 1)
+        globalDivisibility =
+            std::max(globalDivisibility, srcInfo.getDivisibility(dim));
+
     AxisInfo::DimVectorT contiguity(dstTy.getRank(), 1);
-    AxisInfo::DimVectorT divisibility(dstTy.getRank(), 1);
+    AxisInfo::DimVectorT divisibility(dstTy.getRank(), globalDivisibility);
     AxisInfo::DimVectorT constancy(dstTy.getRank(), 1);
 
     for (int dstDim = 0; dstDim < dstTy.getRank(); ++dstDim) {
@@ -747,9 +755,11 @@ public:
           // unchanged. When the run is truncated, later group bases can start
           // inside the original run, so divisibility must be clamped
           // accordingly.
-          divisibility[dstDim] = dstContiguity == srcContiguity
-                                     ? srcDivisibility
-                                     : std::min(srcDivisibility, dstContiguity);
+          int64_t dstDivisibility =
+              dstContiguity == srcContiguity
+                  ? srcDivisibility
+                  : std::min(srcDivisibility, dstContiguity);
+          divisibility[dstDim] = std::max(globalDivisibility, dstDivisibility);
         }
         continue;
       }
@@ -777,9 +787,6 @@ public:
         }
         constancy[dstDim] = dstConstancy;
       }
-      // Divisibility stays the same when the constant block is split
-      // even for constancy == 1.
-      divisibility[dstDim] = srcDivisibility;
     }
 
     return AxisInfo(contiguity, divisibility, constancy,
