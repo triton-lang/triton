@@ -1421,3 +1421,23 @@ tt.func @masked_load_other(
   %unknown = tt.load %ptr, %unknown_mask, %other : tensor<4x!tt.ptr<i32>>
   tt.return
 }
+
+// -----
+
+// allow_reorder permits a column-major permutation, for which the rows of the
+// result below are [[0, 2], [1, 3]].
+tt.func @reshape_allow_reorder() {
+  %src = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32>
+  %two = arith.constant dense<2> : tensor<4xi32>
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
+  %result = tt.reshape %src allow_reorder : tensor<4xi32> -> tensor<2x2xi32>
+  %blocks = arith.divui %src, %two : tensor<4xi32>
+  // Partial source constancy does not survive an arbitrary permutation.
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
+  %reordered_blocks = tt.reshape %blocks allow_reorder : tensor<4xi32> -> tensor<2x2xi32>
+  %even = arith.muli %src, %two : tensor<4xi32>
+  // Per-element divisibility does survive an arbitrary permutation.
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [2, 2], constancy = [1, 1], constant_value = <none>}}
+  %reordered_even = tt.reshape %even allow_reorder : tensor<4xi32> -> tensor<2x2xi32>
+  tt.return
+}

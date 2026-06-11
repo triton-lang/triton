@@ -950,6 +950,15 @@ public:
         globalDivisibility =
             std::max(globalDivisibility, srcInfo.getDivisibility(dim));
 
+    if (op.getAllowReorder()) {
+      // Without layouts there is no single element permutation to analyze.
+      // Only properties that hold for every element survive every legal
+      // reorder.
+      return AxisInfo(AxisInfo::DimVectorT(dstTy.getRank(), 1),
+                      AxisInfo::DimVectorT(dstTy.getRank(), globalDivisibility),
+                      AxisInfo::DimVectorT(dstTy.getRank(), 1));
+    }
+
     AxisInfo::DimVectorT contiguity(dstTy.getRank(), 1);
     AxisInfo::DimVectorT divisibility(dstTy.getRank(), globalDivisibility);
     AxisInfo::DimVectorT constancy(dstTy.getRank(), 1);
