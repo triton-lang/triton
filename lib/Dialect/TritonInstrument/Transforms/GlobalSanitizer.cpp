@@ -103,18 +103,6 @@ getInstrumentationEncoding(OpBuilder &builder, ArrayRef<int64_t> shape,
                                        order, base.getCGALayout());
 }
 
-static Value expandAllSlicedDims(OpBuilder &builder, Location loc,
-                                 Value tensor) {
-  auto type = cast<RankedTensorType>(tensor.getType());
-  auto sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
-  while (sliceEncoding) {
-    tensor = expandOuterSlicedDim(builder, loc, tensor);
-    type = cast<RankedTensorType>(tensor.getType());
-    sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
-  }
-  return tensor;
-}
-
 static DescriptorInfo getDescriptorInfo(Value desc, OpBuilder &builder) {
   if (!isa<tt::TensorDescType>(desc.getType())) {
     std::string msg;
@@ -147,15 +135,12 @@ static DescriptorInfo getDescriptorInfo(Value desc, OpBuilder &builder) {
 static Value createExpandedOffsetRange(OpBuilder &builder, Location loc,
                                        RankedTensorType fullI64Type,
                                        Value offset, unsigned dim) {
-  auto fullEncoding =
-      cast<ttg::DistributedEncodingTrait>(fullI64Type.getEncoding());
-  auto sliceEncoding = getSingleDimSliceEncoding(fullEncoding, dim);
   int64_t dimSize = fullI64Type.getShape()[dim];
 
-  auto sliceI32Type =
-      RankedTensorType::get({dimSize}, builder.getI32Type(), sliceEncoding);
-  auto sliceI64Type =
-      RankedTensorType::get({dimSize}, builder.getI64Type(), sliceEncoding);
+  auto sliceI32Type = getSlicedTensorType(fullI64Type, {static_cast<int>(dim)},
+                                          builder.getI32Type());
+  auto sliceI64Type = getSlicedTensorType(fullI64Type, {static_cast<int>(dim)},
+                                          builder.getI64Type());
 
   Value range = tt::MakeRangeOp::create(builder, loc, sliceI32Type, 0, dimSize);
   Value rangeI64 = arith::ExtSIOp::create(builder, loc, sliceI64Type, range);
@@ -164,26 +149,17 @@ static Value createExpandedOffsetRange(OpBuilder &builder, Location loc,
       tt::SplatOp::create(builder, loc, sliceI64Type, offsetI64);
   Value result =
       arith::AddIOp::create(builder, loc, sliceI64Type, offsetSplat, rangeI64);
-  result = expandAllSlicedDims(builder, loc, result);
-  if (cast<RankedTensorType>(result.getType()).getShape() !=
-      fullI64Type.getShape()) {
-    result = tt::BroadcastOp::create(builder, loc, fullI64Type, result);
-  }
-  return result;
+  return reshapeAndBroadcast(builder, loc, result, {static_cast<int>(dim)},
+                             fullI64Type);
 }
 
 static Value convertAndBroadcast(OpBuilder &builder, Location loc, Value tensor,
                                  int dim, RankedTensorType dstType) {
   auto tensorType = cast<RankedTensorType>(tensor.getType());
-  auto encoding = cast<ttg::DistributedEncodingTrait>(dstType.getEncoding());
-  auto sliceEncoding = getSingleDimSliceEncoding(encoding, dim);
-  auto sliceType = RankedTensorType::get(
-      tensorType.getShape(), tensorType.getElementType(), sliceEncoding);
+  auto sliceType =
+      getSlicedTensorType(dstType, {dim}, tensorType.getElementType());
   tensor = ttg::ConvertLayoutOp::create(builder, loc, sliceType, tensor);
-  tensor = expandAllSlicedDims(builder, loc, tensor);
-  if (cast<RankedTensorType>(tensor.getType()).getShape() != dstType.getShape())
-    tensor = tt::BroadcastOp::create(builder, loc, dstType, tensor);
-  return tensor;
+  return reshapeAndBroadcast(builder, loc, tensor, {dim}, dstType);
 }
 
 static Value createMaskFromRanges(OpBuilder &builder, Location loc,
