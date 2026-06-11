@@ -295,7 +295,7 @@ kernel launched with grid size (1, ) that performs MMA on a small tensor.</p>
     <span class="c1"># Copy operands into TMEM.</span>
     <span class="c1"># TODO: Use `tcgen05.cp` when it is exposed in Gluon.</span>
     <span class="n">acc_tmem_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">TensorMemoryLayout</span><span class="p">(</span>
-        <span class="n">tmem_block</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+        <span class="n">tmem_block</span><span class="p">,</span>
         <span class="n">col_stride</span><span class="o">=</span><span class="mi">32</span> <span class="o">//</span> <span class="n">d_desc</span><span class="o">.</span><span class="n">dtype</span><span class="o">.</span><span class="n">primitive_bitwidth</span><span class="p">,</span>
     <span class="p">)</span>
     <span class="n">acc_tmem</span> <span class="o">=</span> <span class="n">allocate_tensor_memory</span><span class="p">(</span><span class="n">d_desc</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">],</span> <span class="n">acc_tmem_layout</span><span class="p">)</span>
@@ -306,7 +306,7 @@ kernel launched with grid size (1, ) that performs MMA on a small tensor.</p>
     <span class="k">if</span> <span class="n">LHS_IN_TMEM</span><span class="p">:</span>
         <span class="c1"># When the LHS operand is fp16 or fp8, it is packed in TMEM.</span>
         <span class="n">lhs_tmem_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">TensorMemoryLayout</span><span class="p">(</span>
-            <span class="n">tmem_block</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+            <span class="n">tmem_block</span><span class="p">,</span>
             <span class="n">col_stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="n">lhs_tmem</span> <span class="o">=</span> <span class="n">allocate_tensor_memory</span><span class="p">(</span><span class="n">a_desc</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="p">[</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">],</span> <span class="n">lhs_tmem_layout</span><span class="p">)</span>

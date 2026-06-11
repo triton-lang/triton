@@ -308,9 +308,6 @@ multi-kernel approach once the row becomes too wide for a single CTA.</p>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">benchmark_multicta_softmax_f32</span><span class="p">():</span>
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">is_hopper_or_newer</span><span class="p">():</span>
-        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;softmax benchmark requires Hopper or newer&quot;</span><span class="p">)</span>
-
     <span class="n">SOFTMAX_BENCH_SHAPES</span> <span class="o">=</span> <span class="p">[</span>
         <span class="p">(</span><span class="mi">2</span><span class="o">**</span><span class="mi">15</span><span class="p">,</span> <span class="mi">2</span><span class="o">**</span><span class="mi">8</span><span class="p">),</span>
         <span class="p">(</span><span class="mi">2</span><span class="o">**</span><span class="mi">15</span><span class="p">,</span> <span class="mi">2</span><span class="o">**</span><span class="mi">9</span><span class="p">),</span>
@@ -336,7 +333,8 @@ multi-kernel approach once the row becomes too wide for a single CTA.</p>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">M</span><span class="si">:</span><span class="s2">&gt;6</span><span class="si">}</span><span class="s2"> x </span><span class="si">{</span><span class="n">N</span><span class="si">:</span><span class="s2">&lt;6</span><span class="si">}</span><span class="s2">  </span><span class="si">{</span><span class="n">cfg</span><span class="p">[</span><span class="s1">&#39;num_ctas&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">&gt;4</span><span class="si">}</span><span class="s2">  </span><span class="si">{</span><span class="n">cfg</span><span class="p">[</span><span class="s1">&#39;num_warps&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">&gt;5</span><span class="si">}</span><span class="s2">  </span><span class="si">{</span><span class="n">ms</span><span class="si">:</span><span class="s2">&gt;9.3f</span><span class="si">}</span><span class="s2">  </span><span class="si">{</span><span class="n">gbps</span><span class="p">(</span><span class="n">ms</span><span class="p">,</span><span class="w"> </span><span class="n">num_bytes</span><span class="p">)</span><span class="si">:</span><span class="s2">&gt;16.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 
-<span class="n">benchmark_multicta_softmax_f32</span><span class="p">()</span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span> <span class="ow">and</span> <span class="n">is_hopper_or_newer</span><span class="p">():</span>
+    <span class="n">benchmark_multicta_softmax_f32</span><span class="p">()</span>
 </pre></div>
 </div>
 <p>Softmax benchmark results</p>
