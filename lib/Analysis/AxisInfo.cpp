@@ -40,6 +40,15 @@ int64_t getCanonicalConstant(const APInt &value) {
   return value.getBitWidth() == 1 ? value.getZExtValue() : value.getSExtValue();
 }
 
+int64_t getSignedBoundaryDivisor(Type type) {
+  unsigned bitWidth = getIntegerBitWidth(type);
+  if (bitWidth <= 1)
+    return 1;
+  if (bitWidth - 1 >= 62)
+    return kMaxDivisor;
+  return int64_t(1) << (bitWidth - 1);
+}
+
 std::optional<unsigned> getShiftAmount(int64_t value, Type valueType,
                                        Type resultType) {
   APInt shift = getAPInt(value, valueType);
@@ -169,7 +178,75 @@ protected:
 };
 
 template <typename OpTy>
-class CastOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
+class IntCastOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
+public:
+  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(OpTy op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    AxisInfo srcInfo = operands[0]->getValue();
+    unsigned dstBitWidth = getIntegerBitWidth(op.getType());
+
+    if (srcInfo.getConstantValue().has_value()) {
+      APInt value =
+          getAPInt(*srcInfo.getConstantValue(), op->getOperand(0).getType());
+      if constexpr (std::is_same_v<OpTy, arith::ExtSIOp>)
+        value = value.sext(dstBitWidth);
+      else if constexpr (std::is_same_v<OpTy, arith::ExtUIOp>)
+        value = value.zext(dstBitWidth);
+      else
+        value = value.trunc(dstBitWidth);
+      int64_t constantValue = getCanonicalConstant(value);
+      return AxisInfo(AxisInfo::DimVectorT(srcInfo.getRank(), 1),
+                      AxisInfo::DimVectorT(srcInfo.getRank(),
+                                           highestPowOf2Divisor(constantValue)),
+                      srcInfo.getConstancy(), constantValue);
+    }
+
+    if constexpr (std::is_same_v<OpTy, arith::ExtSIOp>) {
+      if (getIntegerBitWidth(op->getOperand(0).getType()) != 1)
+        return srcInfo;
+      // AxisInfo represents booleans as 0/1, but signed extension maps i1 one
+      // to -1, so no nontrivial integer-contiguous run survives.
+      return AxisInfo(AxisInfo::DimVectorT(srcInfo.getRank(), 1),
+                      AxisInfo::DimVectorT(srcInfo.getRank(), 1),
+                      srcInfo.getConstancy());
+    }
+
+    if constexpr (std::is_same_v<OpTy, arith::ExtUIOp>) {
+      if (auto range =
+              op->getOperand(0).template getDefiningOp<triton::MakeRangeOp>())
+        if (range.getStartAttr().getInt() >= 0 ||
+            range.getEndAttr().getInt() <= 0)
+          return srcInfo;
+    }
+
+    AxisInfo::DimVectorT contiguity = srcInfo.getContiguity();
+    AxisInfo::DimVectorT divisibility = srcInfo.getDivisibility();
+    for (int dim = 0; dim < srcInfo.getRank(); ++dim) {
+      int64_t srcContiguity = srcInfo.getContiguity(dim);
+      int64_t dstContiguity;
+      if constexpr (std::is_same_v<OpTy, arith::ExtUIOp>) {
+        // Unsigned extension is discontinuous between -1 and 0. Source group
+        // bases are divisible by srcDivisibility, so splitting groups by it
+        // places that boundary between groups.
+        dstContiguity = gcd(srcContiguity, srcInfo.getDivisibility(dim));
+      } else {
+        // Truncation is discontinuous at every signed destination boundary.
+        dstContiguity = gcd(srcContiguity, srcInfo.getDivisibility(dim),
+                            getSignedBoundaryDivisor(op.getType()));
+      }
+      contiguity[dim] = dstContiguity;
+      if (dstContiguity != srcContiguity)
+        divisibility[dim] = gcd(srcInfo.getDivisibility(dim), dstContiguity);
+    }
+    return AxisInfo(contiguity, divisibility, srcInfo.getConstancy());
+  }
+};
+
+template <typename OpTy>
+class ForwardAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
 public:
   using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
 
@@ -1277,12 +1354,12 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   // in the process of a PartialConversion, where UnrealizedConversionCast
   // may exist
   visitors.append<UnrealizedConversionCastOpAxisInfoVisitor>();
-  visitors.append<CastOpAxisInfoVisitor<arith::ExtSIOp>,
-                  CastOpAxisInfoVisitor<arith::ExtUIOp>,
-                  CastOpAxisInfoVisitor<arith::TruncIOp>,
-                  CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
-                  CastOpAxisInfoVisitor<triton::BitcastOp>,
-                  CastOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
+  visitors.append<IntCastOpAxisInfoVisitor<arith::ExtSIOp>,
+                  IntCastOpAxisInfoVisitor<arith::ExtUIOp>,
+                  IntCastOpAxisInfoVisitor<arith::TruncIOp>,
+                  ForwardAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
+                  ForwardAxisInfoVisitor<triton::BitcastOp>,
+                  ForwardAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor>();

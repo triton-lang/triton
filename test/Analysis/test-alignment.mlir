@@ -1299,6 +1299,11 @@ tt.func @typed_integer_constants() {
   %sum = arith.addi %max, %one : tensor<4xi8>
   // expected-remark @below {{contiguity = [1], divisibility = [2], constancy = [4], constant_value = -2}}
   %shl = arith.shli %max, %one : tensor<4xi8>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [4], constant_value = 255}}
+  %wide = arith.extui %neg1 : tensor<4xi8> to tensor<4xi16>
+  %large = arith.constant dense<257> : tensor<4xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [4], constant_value = 1}}
+  %trunc = arith.trunci %large : tensor<4xi32> to tensor<4xi8>
   tt.return
 }
 
@@ -1313,5 +1318,27 @@ tt.func @boolean_known_constants() {
   %true = arith.constant dense<true> : tensor<4xi1>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [4], constant_value = 1}}
   %eq = arith.cmpi eq, %pred, %true : tensor<4xi1>
+  tt.return
+}
+
+// -----
+
+// Truncation wraps [124, ..., 131] at the i8 signed boundary, and unsigned
+// extension maps a valid contiguous i8 tensor [-1, 0] to [255, 0].
+tt.func @integer_cast_boundaries(
+    %arg0: tensor<2xi8> {tt.contiguity = 2 : i32, tt.divisibility = 1 : i32, tt.constancy = 1 : i32},
+    %arg1: tensor<2xi1> {tt.contiguity = 2 : i32, tt.divisibility = 2 : i32, tt.constancy = 1 : i32}) {
+  %src = tt.make_range {start = 124 : i32, end = 132 : i32} : tensor<8xi32>
+  // expected-remark @below {{contiguity = [4], divisibility = [4], constancy = [1], constant_value = <none>}}
+  %trunc = arith.trunci %src : tensor<8xi32> to tensor<8xi8>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %ext = arith.extui %arg0 : tensor<2xi8> to tensor<2xi32>
+  // Signed extension maps the valid Boolean run [0, 1] to [0, -1].
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %sext_i1 = arith.extsi %arg1 : tensor<2xi1> to tensor<2xi32>
+  %positive = tt.make_range {start = 1 : i32, end = 5 : i32} : tensor<4xi32>
+  // A direct range that does not cross zero keeps its contiguity.
+  // expected-remark @below {{contiguity = [4], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %positive_ext = arith.extui %positive : tensor<4xi32> to tensor<4xi64>
   tt.return
 }
