@@ -48,15 +48,21 @@ jobs:
         run: |
           GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
           REPO_NAME="${{ github.repository }}"
-          # ID of integration-tests workflow
-          WORKFLOW_ID="11678186"
+          # Workflow file for integration tests
+          WORKFLOW_FILE="ci.yml"
 
           # Fetch the last run time of this workflow
           LAST_RUN=$(curl -s \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/$REPO_NAME/actions/workflows/$WORKFLOW_ID/runs?branch=main&status=success&per_page=1" \
+            "https://api.github.com/repos/$REPO_NAME/actions/workflows/$WORKFLOW_FILE/runs?branch=main&event=push&status=success&per_page=1" \
             | jq -r '.workflow_runs[0].updated_at')
+
+          if [ "$LAST_RUN" = "null" ]; then
+            echo "No successful post-submit run found; will run CI."
+            echo "n_hours_since_last_run=true" >> $GITHUB_ENV
+            exit 0
+          fi
 
           # Convert to timestamp
           LAST_RUN_TS=$(date -d "$LAST_RUN" +%s)
