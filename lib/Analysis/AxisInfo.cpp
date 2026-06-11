@@ -357,6 +357,45 @@ public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
+  bool hasNoSignedWrap(OpTy op, const AxisInfo &lhs,
+                       const AxisInfo &rhs) const {
+    if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
+      return true;
+    } else {
+      if (op.hasNoSignedWrap())
+        return true;
+      if constexpr (std::is_same_v<OpTy, arith::AddIOp>) {
+        if (lhs.getConstantValue() == 0 || rhs.getConstantValue() == 0)
+          return true;
+      } else if (rhs.getConstantValue() == 0) {
+        return true;
+      }
+      auto checkRange = [&](Value value,
+                            std::optional<int64_t> constant) -> bool {
+        auto range = value.getDefiningOp<triton::MakeRangeOp>();
+        if (!range || !constant)
+          return false;
+        APInt constantValue = getAPInt(*constant, op.getType());
+        auto overflows = [&](int64_t value) {
+          APInt rangeValue = getAPInt(value, op.getType());
+          bool overflow;
+          if constexpr (std::is_same_v<OpTy, arith::AddIOp>)
+            (void)rangeValue.sadd_ov(constantValue, overflow);
+          else
+            (void)rangeValue.ssub_ov(constantValue, overflow);
+          return overflow;
+        };
+        return !overflows(range.getStartAttr().getInt()) &&
+               !overflows(range.getEndAttr().getInt() - 1);
+      };
+      if (checkRange(op.getLhs(), rhs.getConstantValue()))
+        return true;
+      if constexpr (std::is_same_v<OpTy, arith::AddIOp>)
+        return checkRange(op.getRhs(), lhs.getConstantValue());
+      return false;
+    }
+  }
+
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
     if (isa<arith::SubIOp>(op)) {
@@ -373,7 +412,15 @@ private:
       // block, so contiguity is 1.
       // Case 4: If contiguity(lhs) == 1 and contiguity(rhs) == 1,
       // x - y = base_x - base_y, so contiguity is 1.
-      return gcd(lhs.getContiguity(dim), rhs.getConstancy(dim));
+      int64_t contiguity = gcd(lhs.getContiguity(dim), rhs.getConstancy(dim));
+      // arith.subi wraps at the signed integer boundary. Split a candidate
+      // run at every boundary that is not ruled out by the group-base
+      // divisibility.
+      if (!hasNoSignedWrap(op, lhs, rhs))
+        contiguity =
+            gcd(contiguity, lhs.getDivisibility(dim), rhs.getDivisibility(dim),
+                getSignedBoundaryDivisor(op.getType()));
+      return contiguity;
     }
     // For AddIOp and AddPtrOp
     // Case 1: If contiguity(lhs) > 1 and contiguity(rhs) > 1,
@@ -387,12 +434,32 @@ private:
     // It's symmetric to case B.
     // Case 4: If contiguity(lhs) == 1 and contiguity(rhs) == 1,
     // It's trivial that contiguity is 1
-    return std::max(gcd(lhs.getConstancy(dim), rhs.getContiguity(dim)),
-                    gcd(lhs.getContiguity(dim), rhs.getConstancy(dim)));
+    int64_t contiguity =
+        std::max(gcd(lhs.getConstancy(dim), rhs.getContiguity(dim)),
+                 gcd(lhs.getContiguity(dim), rhs.getConstancy(dim)));
+    if constexpr (std::is_same_v<OpTy, arith::AddIOp>) {
+      // arith.addi wraps at the signed integer boundary. Split a candidate
+      // run at every boundary that is not ruled out by the group-base
+      // divisibility.
+      if (!hasNoSignedWrap(op, lhs, rhs))
+        contiguity =
+            gcd(contiguity, lhs.getDivisibility(dim), rhs.getDivisibility(dim),
+                getSignedBoundaryDivisor(op.getType()));
+    }
+    return contiguity;
   }
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
+    if constexpr (std::is_same_v<OpTy, arith::AddIOp>) {
+      if (lhs.getConstantValue() == 0)
+        return rhs.getDivisibility(dim);
+      if (rhs.getConstantValue() == 0)
+        return lhs.getDivisibility(dim);
+    } else if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
+      if (rhs.getConstantValue() == 0)
+        return lhs.getDivisibility(dim);
+    }
     int64_t elemSize = 1;
     auto lhsDivisibility = lhs.getDivisibility(dim);
     auto rhsDivisibility = rhs.getDivisibility(dim);

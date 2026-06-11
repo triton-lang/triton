@@ -135,7 +135,8 @@ tt.func @sub(%arg0: tensor<128xi32> {tt.contiguity = 1 : i32, tt.divisibility = 
   // divisible by 2.
   // expected-remark @below {{contiguity = [1], divisibility = [2], constancy = [1], constant_value = <none>}}
   %even_even_diff_contig = arith.subi %0, %arg1 : tensor<128xi32>
-  // expected-remark @below {{contiguity = [4], divisibility = [1], constancy = [1], constant_value = <none>}}
+  // Unknown values may wrap at the signed boundary after adding one.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %arg1_plus_one = arith.addi %arg1, %1 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
   %6 = arith.subi %0, %0 : tensor<128xi32>
@@ -1340,5 +1341,27 @@ tt.func @integer_cast_boundaries(
   // A direct range that does not cross zero keeps its contiguity.
   // expected-remark @below {{contiguity = [4], divisibility = [1], constancy = [1], constant_value = <none>}}
   %positive_ext = arith.extui %positive : tensor<4xi32> to tensor<4xi64>
+  tt.return
+}
+
+// -----
+
+// [0, 1, 2, 3] + 127 and [0, 1, 2, 3] - (-127) both cross the i8
+// signed boundary after their first element.
+tt.func @add_sub_signed_wrap() {
+  %src = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32>
+  %narrow = arith.trunci %src : tensor<4xi32> to tensor<4xi8>
+  %pos = arith.constant dense<127> : tensor<4xi8>
+  %neg = arith.constant dense<-127> : tensor<4xi8>
+  %zero = arith.constant dense<0> : tensor<4xi8>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %add = arith.addi %narrow, %pos : tensor<4xi8>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %sub = arith.subi %narrow, %neg : tensor<4xi8>
+  // Exact zero identities do not need a range proof.
+  // expected-remark @below {{contiguity = [4], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
+  %add_zero = arith.addi %narrow, %zero : tensor<4xi8>
+  // expected-remark @below {{contiguity = [4], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
+  %sub_zero = arith.subi %narrow, %zero : tensor<4xi8>
   tt.return
 }
