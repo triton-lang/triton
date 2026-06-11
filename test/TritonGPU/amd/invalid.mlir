@@ -458,8 +458,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @update_tensor_descriptor_no_kwargs(
     %desc: !tt.tensordesc<64x64xf16, #shared>
   ) -> !tt.tensordesc<64x64xf16, #shared> {
-    // expected-error @+1 {{must provide at least one of add_offsets, set_bounds, dest, pred, or barrier}}
+    // expected-error @+1 {{must provide at least one of add_offsets, set_bounds, or pred}}
     %result = amdg.update_tensor_descriptor %desc : !tt.tensordesc<64x64xf16, #shared>
+    tt.return %result : !tt.tensordesc<64x64xf16, #shared>
+  }
+}
+
+// -----
+
+// clamp_bounds requires add_offsets (it derives bounds from the advance).
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @clamp_bounds_requires_add_offsets(
+    %desc: !tt.tensordesc<64x64xf16, #shared>, %p: i32
+  ) -> !tt.tensordesc<64x64xf16, #shared> {
+    // expected-error @+1 {{clamp_bounds requires add_offsets}}
+    %result = amdg.update_tensor_descriptor %desc pred = %p {clamp_bounds} : !tt.tensordesc<64x64xf16, #shared>
+    tt.return %result : !tt.tensordesc<64x64xf16, #shared>
+  }
+}
+
+// -----
+
+// clamp_bounds and set_bounds are mutually exclusive (both write tensor_dim).
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @clamp_bounds_excludes_set_bounds(
+    %desc: !tt.tensordesc<64x64xf16, #shared>, %i: i32, %j: i32, %m: i32, %k: i32
+  ) -> !tt.tensordesc<64x64xf16, #shared> {
+    // expected-error @+1 {{clamp_bounds and set_bounds are mutually exclusive}}
+    %result = amdg.update_tensor_descriptor %desc add_offsets = [%i, %j] set_bounds = [%m, %k] {clamp_bounds} : !tt.tensordesc<64x64xf16, #shared>
     tt.return %result : !tt.tensordesc<64x64xf16, #shared>
   }
 }

@@ -231,6 +231,53 @@ def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
                         f"HINT_B=0b{HINT_B:08b}, got {n_tdm}\n{amdgcn}")
 
 
+@gluon.jit
+def update_clamp_bounds_kernel(a_ptr, c_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
+    """Pre-position a descriptor with update_tensor_descriptor(clamp_bounds=True)
+    (so the descriptor carries the advanced tile's OOB extent), then load it."""
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+
+    off_m = ttgl.program_id(axis=0) * BLOCK_M
+    off_n = ttgl.program_id(axis=1) * BLOCK_N
+
+    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    a_buf = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
+
+    a_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, off_n], pred=1,
+                                                           clamp_bounds=True)
+    ttgl.amd.gfx1250.tdm.async_load(a_desc, [0, 0], a_buf)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    a = a_buf.load(layout=BLOCKED_LAYOUT)
+    offs_m = off_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
+    offs_n = off_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+    offs = (offs_m[:, None] * N) + offs_n[None, :]
+    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+    ttgl.store(c_ptr + offs, a, mask=mask)
+
+
+def test_compile_update_clamp_bounds():
+    """Compile-only: exercises the update_tensor_descriptor(clamp_bounds=True) gluon
+    binding end-to-end (the lit test covers the lowering bit-layout)."""
+    signature = {
+        "a_ptr": "*fp16", "c_ptr": "*fp16", "M": "i32", "N": "i32", "BLOCK_M": "constexpr", "BLOCK_N": "constexpr"
+    }
+    constexprs = {"BLOCK_M": 64, "BLOCK_N": 64}
+    k = triton.compile(
+        gluon._runtime.GluonASTSource(
+            fn=update_clamp_bounds_kernel,
+            signature=signature,
+            constexprs=constexprs,
+        ),
+        target=GPUTarget("hip", "gfx1250", 32),
+        options={"num_warps": 4},
+    )
+    assert "tensor_load_to_lds" in k.asm["amdgcn"], k.asm["amdgcn"]
+
+
 _RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
 
 

@@ -1110,10 +1110,14 @@ void init_gluon_ir(py::module &&m) {
       .def("create_update_tensor_descriptor",
            [](GluonOpBuilder &self, Value descPtr,
               std::vector<Value> &addOffsets, std::vector<Value> &setBounds,
-              Value dest, Value pred, Value barrier) -> Value {
-             return self.create<ttag::UpdateTensorDescriptorOp>(
+              Value pred, bool clampBounds) -> Value {
+             Value res = self.create<ttag::UpdateTensorDescriptorOp>(
                  descPtr.getType(), descPtr, ValueRange(addOffsets),
-                 ValueRange(setBounds), dest, pred, barrier);
+                 ValueRange(setBounds), pred);
+             if (clampBounds)
+               res.getDefiningOp()->setAttr("clamp_bounds",
+                                            self.getBuilder().getUnitAttr());
+             return res;
            })
       .def("create_async_tdm_scatter",
            [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,
