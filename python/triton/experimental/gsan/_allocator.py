@@ -40,6 +40,45 @@ def get_allocator():
     return CUDAPluggableAllocator(so_name, "gsanMalloc", "gsanFree")
 
 
+def configure(
+    *,
+    device_ranks: dict[int, int] | None = None,
+    num_devices: int | None = None,
+    rng_seed: int | None = None,
+    clock_buffer_size: int | None = None,
+) -> None:
+    """Configures the process-local GSan state.
+
+    GSan keeps one allocator configuration per process. Call this before the
+    allocator initializes runtime state, or before calling :func:`freeze_config`.
+    Once frozen, later calls to :func:`configure` raise ``RuntimeError``.
+
+    Args:
+        device_ranks (dict[int, int], optional): Mapping from local CUDA device index to the
+            logical GSan device id. This enables gsan to be used with multi-node nvlink domains,
+            or simply processes with different CUDA_VISIBLE_DEVICES settings. Each value must be
+            unique and in ``[0, num_devices)``. If None, defaults to a 1:1 mapping from device
+            index to device id.
+        num_devices (int, optional): Total number of logical GSan devices in the topology. If
+            None, defaults to the number of visible CUDA devices.
+        rng_seed (int, optional): Optional seed for GSan's stochastic read-clock sampling. Use this
+            to make sampling decisions reproducible across runs when debugging sanitizer behavior.
+            If omitted, GSan first checks ``TRITON_GSAN_SEED`` and otherwise generates a random
+            seed when the allocator runtime state is initialized.
+        clock_buffer_size (int, optional): When doing an atomic release operation, GSan uses a
+            circular buffer to record what memory accesses have been released. If the writing CTA
+            has done more release writes than there are circular buffer entries, then the atomic
+            flag cannot be read and you will need to increase the buffer size. If omitted, GSan
+            first checks ``TRITON_GSAN_CLOCK_BUFFER_SIZE`` and otherwise defaults to 1024.
+    """
+    _load_gsan_module().configure(device_ranks, num_devices, rng_seed, clock_buffer_size)
+
+
+def freeze_config() -> None:
+    """Prevents later `configure(...)` calls from changing allocator configuration."""
+    _load_gsan_module().freeze_config()
+
+
 def create_mem_pool():
     from torch.cuda.memory import MemPool
     return MemPool(get_allocator().allocator())
@@ -65,6 +104,10 @@ def get_reserve_size() -> int:
 
 def get_global_state_pointer() -> int:
     return _load_gsan_module().get_global_state_pointer()
+
+
+def get_device_rank(device: int) -> int:
+    return _load_gsan_module().get_device_rank(device)
 
 
 def get_runtime_state_layout(device: int) -> dict[str, int]:
