@@ -284,6 +284,8 @@ tt.func @expanddims() {
   %2 = arith.muli %0, %1 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [2, 2], constancy = [1, 1], constant_value = <none>}}
   %3 = tt.expand_dims %2 {axis = 1 : i32} : tensor<128xi32> -> tensor<128x1xi32>
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [2, 2], constancy = [1, 1], constant_value = <none>}}
+  %4 = tt.reshape %2 : tensor<128xi32> -> tensor<128x1xi32>
   tt.return
 }
 
