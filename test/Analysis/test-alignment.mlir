@@ -735,7 +735,7 @@ tt.func @for_if_for(%i1: i1, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %
 // -----
 
 tt.func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}) {
-  // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 128], constant_value = -1}}
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 128], constant_value = 1}}
   %cst = arith.constant dense<true> : tensor<128x128xi1>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
   %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
@@ -1266,5 +1266,52 @@ tt.func @variable_shl_divisibility() {
   %shifts = arith.subi %one, %idx : tensor<2xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %result = arith.shli %lhs, %shifts : tensor<2xi32>
+  tt.return
+}
+
+// -----
+
+// Known constants must be evaluated with the operation's width and signedness,
+// not with host int64_t arithmetic.
+tt.func @typed_integer_constants() {
+  %neg1 = arith.constant dense<-1> : tensor<4xi8>
+  %neg2 = arith.constant dense<-2> : tensor<4xi8>
+  %neg4 = arith.constant dense<-4> : tensor<4xi8>
+  %zero = arith.constant dense<0> : tensor<4xi8>
+  %one = arith.constant dense<1> : tensor<4xi8>
+  %two = arith.constant dense<2> : tensor<4xi8>
+  %max = arith.constant dense<127> : tensor<4xi8>
+  // unsigned(-2) / unsigned(-4) == 1.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [4], constant_value = 1}}
+  %div = arith.divui %neg2, %neg4 : tensor<4xi8>
+  // unsigned(-4) % unsigned(-2) == unsigned(-4).
+  // expected-remark @below {{contiguity = [1], divisibility = [4], constancy = [4], constant_value = -4}}
+  %rem = arith.remui %neg4, %neg2 : tensor<4xi8>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [4], constant_value = -1}}
+  %maxui = arith.maxui %neg1, %zero : tensor<4xi8>
+  // expected-remark @below {{contiguity = [1], divisibility = [2], constancy = [4], constant_value = 2}}
+  %minui = arith.minui %neg4, %two : tensor<4xi8>
+  // Logical i8 shift of -2 produces 127, not -1.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [4], constant_value = 127}}
+  %shr = arith.shrui %neg2, %one : tensor<4xi8>
+  // Fixed-width addition and shift wrap.
+  // expected-remark @below {{contiguity = [1], divisibility = [128], constancy = [4], constant_value = -128}}
+  %sum = arith.addi %max, %one : tensor<4xi8>
+  // expected-remark @below {{contiguity = [1], divisibility = [2], constancy = [4], constant_value = -2}}
+  %shl = arith.shli %max, %one : tensor<4xi8>
+  tt.return
+}
+
+// -----
+
+// Dense i1 true and a true comparison must use the same known-constant value.
+tt.func @boolean_known_constants() {
+  %one = arith.constant dense<1> : tensor<4xi8>
+  %zero = arith.constant dense<0> : tensor<4xi8>
+  %pred = arith.cmpi sgt, %one, %zero : tensor<4xi8>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [4], constant_value = 1}}
+  %true = arith.constant dense<true> : tensor<4xi1>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [4], constant_value = 1}}
+  %eq = arith.cmpi eq, %pred, %true : tensor<4xi1>
   tt.return
 }

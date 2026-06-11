@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/bit.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -19,6 +20,39 @@ namespace mlir::triton {
 namespace {
 
 constexpr int64_t kMaxDivisor = highestPowOf2Divisor<int64_t>(0);
+
+unsigned getIntegerBitWidth(Type type) {
+  if (auto shapedType = dyn_cast<ShapedType>(type))
+    type = shapedType.getElementType();
+  if (type.isIndex())
+    return 64;
+  return cast<IntegerType>(type).getWidth();
+}
+
+APInt getAPInt(int64_t value, Type type) {
+  APInt bits(64, static_cast<uint64_t>(value));
+  return bits.sextOrTrunc(getIntegerBitWidth(type));
+}
+
+int64_t getCanonicalConstant(const APInt &value) {
+  assert(value.getBitWidth() <= 64);
+  // Keep booleans consistent with comparison results and BoolAttr.
+  return value.getBitWidth() == 1 ? value.getZExtValue() : value.getSExtValue();
+}
+
+std::optional<unsigned> getShiftAmount(int64_t value, Type valueType,
+                                       Type resultType) {
+  APInt shift = getAPInt(value, valueType);
+  unsigned bitWidth = getIntegerBitWidth(resultType);
+  uint64_t amount = shift.getLimitedValue(bitWidth);
+  if (amount >= bitWidth)
+    return std::nullopt;
+  return static_cast<unsigned>(amount);
+}
+
+int64_t getShiftDivisor(unsigned shift) {
+  return shift >= 62 ? kMaxDivisor : int64_t(1) << shift;
+}
 
 template <typename... Args> int64_t gcd(int64_t a, int64_t b, Args... args) {
   if (a == 0)
@@ -194,10 +228,11 @@ public:
     auto boolAttr = dyn_cast<BoolAttr>(op.getValue());
     if (intAttr || boolAttr) {
       int64_t value{};
-      if (intAttr)
-        value = intAttr.getValue().getSExtValue();
-      else
+      if (intAttr) {
+        value = getCanonicalConstant(intAttr.getValue());
+      } else {
         value = boolAttr.getValue() ? 1 : 0;
+      }
       return AxisInfo(/*contiguity=*/{1},
                       /*divisibility=*/{highestPowOf2Divisor(value)},
                       /*constancy=*/{1},
@@ -206,7 +241,8 @@ public:
     // TODO: generalize to dense attr
     auto splatAttr = dyn_cast<SplatElementsAttr>(op.getValue());
     if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
-      int64_t value = splatAttr.template getSplatValue<APInt>().getSExtValue();
+      int64_t value =
+          getCanonicalConstant(splatAttr.template getSplatValue<APInt>());
       TensorType ty = cast<TensorType>(splatAttr.getType());
       return AxisInfo(
           /*contiguity=*/AxisInfo::DimVectorT(ty.getRank(), 1),
@@ -341,11 +377,17 @@ private:
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value()) {
       if constexpr (std::is_same_v<OpTy, arith::AddIOp>) {
-        return {lhs.getConstantValue().value() +
-                rhs.getConstantValue().value()};
+        APInt lhsValue =
+            getAPInt(*lhs.getConstantValue(), op.getLhs().getType());
+        APInt rhsValue =
+            getAPInt(*rhs.getConstantValue(), op.getRhs().getType());
+        return getCanonicalConstant(lhsValue + rhsValue);
       } else if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
-        return {lhs.getConstantValue().value() -
-                rhs.getConstantValue().value()};
+        APInt lhsValue =
+            getAPInt(*lhs.getConstantValue(), op.getLhs().getType());
+        APInt rhsValue =
+            getAPInt(*rhs.getConstantValue(), op.getRhs().getType());
+        return getCanonicalConstant(lhsValue - rhsValue);
       } else if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
         auto elemSize = std::max<int64_t>(
             1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
@@ -400,8 +442,11 @@ private:
                                           const AxisInfo &rhs) override {
     auto lhsConst = lhs.getConstantValue();
     auto rhsConst = rhs.getConstantValue();
-    if (lhsConst.has_value() && rhsConst.has_value())
-      return {lhsConst.value() * rhsConst.value()};
+    if (lhsConst.has_value() && rhsConst.has_value()) {
+      APInt lhsValue = getAPInt(*lhsConst, op.getLhs().getType());
+      APInt rhsValue = getAPInt(*rhsConst, op.getRhs().getType());
+      return getCanonicalConstant(lhsValue * rhsValue);
+    }
     if ((lhsConst.has_value() && lhsConst.value() == 0) ||
         (rhsConst.has_value() && rhsConst.value() == 0))
       return 0;
@@ -460,11 +505,16 @@ private:
         rhs.getConstantValue().value() == 1)
       return lhs.getDivisibility(dim);
     // Case 3: lhs has contiguity of 1 in this dimension and rhs is a power of 2
-    if (rhs.getConstantValue().has_value() &&
-        llvm::isPowerOf2_64(std::abs(rhs.getConstantValue().value())) &&
-        lhs.getContiguity(dim) == 1) {
-      int64_t absRhs = std::abs(rhs.getConstantValue().value());
-      return std::max<int64_t>(1, lhs.getDivisibility(dim) / absRhs);
+    if (rhs.getConstantValue().has_value() && lhs.getContiguity(dim) == 1) {
+      APInt rhsValue = getAPInt(*rhs.getConstantValue(), op.getRhs().getType());
+      APInt divisor =
+          std::is_same_v<OpTy, arith::DivUIOp> ? rhsValue : rhsValue.abs();
+      if (divisor.isPowerOf2()) {
+        uint64_t divisorValue = divisor.getLimitedValue();
+        if (divisorValue > static_cast<uint64_t>(lhs.getDivisibility(dim)))
+          return 1;
+        return std::max<int64_t>(1, lhs.getDivisibility(dim) / divisorValue);
+      }
     }
     // otherwise: return 1
     return 1;
@@ -473,8 +523,19 @@ private:
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
-      return {lhs.getConstantValue().value() / rhs.getConstantValue().value()};
+        rhs.getConstantValue().has_value()) {
+      APInt lhsValue = getAPInt(*lhs.getConstantValue(), op.getLhs().getType());
+      APInt rhsValue = getAPInt(*rhs.getConstantValue(), op.getRhs().getType());
+      if (rhsValue.isZero())
+        return {};
+      if constexpr (std::is_same_v<OpTy, arith::DivSIOp>) {
+        if (lhsValue.isMinSignedValue() && rhsValue.isAllOnes())
+          return {};
+        return getCanonicalConstant(lhsValue.sdiv(rhsValue));
+      } else {
+        return getCanonicalConstant(lhsValue.udiv(rhsValue));
+      }
+    }
     return {};
   }
 };
@@ -541,10 +602,20 @@ private:
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
-      return {lhs.getConstantValue().value() % rhs.getConstantValue().value()};
-    else if (rhs.getConstantValue().has_value() &&
-             rhs.getConstantValue().value() == 1)
+        rhs.getConstantValue().has_value()) {
+      APInt lhsValue = getAPInt(*lhs.getConstantValue(), op.getLhs().getType());
+      APInt rhsValue = getAPInt(*rhs.getConstantValue(), op.getRhs().getType());
+      if (rhsValue.isZero())
+        return {};
+      if constexpr (std::is_same_v<OpTy, arith::RemSIOp>) {
+        if (lhsValue.isMinSignedValue() && rhsValue.isAllOnes())
+          return {};
+        return getCanonicalConstant(lhsValue.srem(rhsValue));
+      } else {
+        return getCanonicalConstant(lhsValue.urem(rhsValue));
+      }
+    } else if (rhs.getConstantValue().has_value() &&
+               rhs.getConstantValue().value() == 1)
       return {0};
     return {};
   }
@@ -817,11 +888,10 @@ public:
       if (lhsInfo.getConstantValue().has_value() &&
           rhsInfo.getConstantValue().has_value()) {
         constHint = shape[d];
-        constantValue =
-            compare(getPredicate(op), lhsInfo.getConstantValue().value(),
-                    rhsInfo.getConstantValue().value())
-                ? 1
-                : 0;
+        constantValue = compare(op, lhsInfo.getConstantValue().value(),
+                                rhsInfo.getConstantValue().value())
+                            ? 1
+                            : 0;
       } else {
         // Case 1: lhs and rhs are both partial constants
         constHint = gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d));
@@ -892,29 +962,30 @@ private:
            predicate == arith::CmpIPredicate::ule;
   }
 
-  static bool compare(arith::CmpIPredicate predicate, int64_t lhs,
-                      int64_t rhs) {
-    switch (predicate) {
+  static bool compare(arith::CmpIOp op, int64_t lhs, int64_t rhs) {
+    APInt lhsValue = getAPInt(lhs, op.getLhs().getType());
+    APInt rhsValue = getAPInt(rhs, op.getRhs().getType());
+    switch (op.getPredicate()) {
     case arith::CmpIPredicate::eq:
-      return lhs == rhs;
+      return lhsValue == rhsValue;
     case arith::CmpIPredicate::ne:
-      return lhs != rhs;
+      return lhsValue != rhsValue;
     case arith::CmpIPredicate::slt:
-      return lhs < rhs;
+      return lhsValue.slt(rhsValue);
     case arith::CmpIPredicate::sle:
-      return lhs <= rhs;
+      return lhsValue.sle(rhsValue);
     case arith::CmpIPredicate::sgt:
-      return lhs > rhs;
+      return lhsValue.sgt(rhsValue);
     case arith::CmpIPredicate::sge:
-      return lhs >= rhs;
+      return lhsValue.sge(rhsValue);
     case arith::CmpIPredicate::ult:
-      return (uint64_t)lhs < (uint64_t)rhs;
+      return lhsValue.ult(rhsValue);
     case arith::CmpIPredicate::ule:
-      return (uint64_t)lhs <= (uint64_t)rhs;
+      return lhsValue.ule(rhsValue);
     case arith::CmpIPredicate::ugt:
-      return (uint64_t)lhs > (uint64_t)rhs;
+      return lhsValue.ugt(rhsValue);
     case arith::CmpIPredicate::uge:
-      return (uint64_t)lhs >= (uint64_t)rhs;
+      return lhsValue.uge(rhsValue);
     default:
       break;
     }
@@ -1002,15 +1073,14 @@ private:
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value()) {
+      APInt lhsValue = getAPInt(*lhs.getConstantValue(), op.getLhs().getType());
+      APInt rhsValue = getAPInt(*rhs.getConstantValue(), op.getRhs().getType());
       if constexpr (std::is_same_v<OpTy, arith::AndIOp>) {
-        return {lhs.getConstantValue().value() &
-                rhs.getConstantValue().value()};
+        return getCanonicalConstant(lhsValue & rhsValue);
       } else if constexpr (std::is_same_v<OpTy, arith::OrIOp>) {
-        return {lhs.getConstantValue().value() |
-                rhs.getConstantValue().value()};
+        return getCanonicalConstant(lhsValue | rhsValue);
       } else if constexpr (std::is_same_v<OpTy, arith::XOrIOp>) {
-        return {lhs.getConstantValue().value() ^
-                rhs.getConstantValue().value()};
+        return getCanonicalConstant(lhsValue ^ rhsValue);
       }
     }
     return {};
@@ -1035,20 +1105,29 @@ private:
                           const AxisInfo &rhs, int dim) override {
     if (!rhs.getConstantValue().has_value())
       return lhs.getContiguity(dim) == 1 ? lhs.getDivisibility(dim) : 1;
-    auto shift = rhs.getConstantValue().value();
+    auto shift = getShiftAmount(*rhs.getConstantValue(), op.getRhs().getType(),
+                                op.getType());
+    if (!shift)
+      return 1;
     auto lhsDivisibility = lhs.getDivisibility(dim);
-    if (lhs.getContiguity(dim) > 1 && shift) {
+    if (lhs.getContiguity(dim) > 1 && *shift) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
-    return multiplyDivisor(lhsDivisibility, 1ll << shift);
+    return multiplyDivisor(lhsDivisibility, getShiftDivisor(*shift));
   }
 
   std::optional<int64_t> getConstantValue(arith::ShLIOp op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
-      return {lhs.getConstantValue().value() << rhs.getConstantValue().value()};
+        rhs.getConstantValue().has_value()) {
+      auto shift = getShiftAmount(*rhs.getConstantValue(),
+                                  op.getRhs().getType(), op.getType());
+      if (!shift)
+        return {};
+      APInt lhsValue = getAPInt(*lhs.getConstantValue(), op.getLhs().getType());
+      return getCanonicalConstant(lhsValue.shl(*shift));
+    }
     return {};
   }
 };
@@ -1072,20 +1151,32 @@ private:
                           int dim) override {
     if (!rhs.getConstantValue().has_value())
       return 1;
-    auto shift = rhs.getConstantValue().value();
+    auto shift = getShiftAmount(*rhs.getConstantValue(), op.getRhs().getType(),
+                                op.getType());
+    if (!shift)
+      return 1;
     auto lhsDivisibility = lhs.getDivisibility(dim);
-    if (lhs.getContiguity(dim) > 1 && shift) {
+    if (lhs.getContiguity(dim) > 1 && *shift) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
-    return std::max<int64_t>(1, lhsDivisibility / (int64_t(1) << shift));
+    return std::max<int64_t>(1, lhsDivisibility / getShiftDivisor(*shift));
   }
 
   std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value())
-      return {lhs.getConstantValue().value() >> rhs.getConstantValue().value()};
+        rhs.getConstantValue().has_value()) {
+      auto shift = getShiftAmount(*rhs.getConstantValue(),
+                                  op.getRhs().getType(), op.getType());
+      if (!shift)
+        return {};
+      APInt lhsValue = getAPInt(*lhs.getConstantValue(), op.getLhs().getType());
+      if constexpr (std::is_same_v<OpTy, arith::ShRUIOp>)
+        return getCanonicalConstant(lhsValue.lshr(*shift));
+      else
+        return getCanonicalConstant(lhsValue.ashr(*shift));
+    }
     return {};
   }
 };
@@ -1104,15 +1195,20 @@ public:
     std::optional<int64_t> constantValue;
     if (lhsInfo.getConstantValue().has_value() &&
         rhsInfo.getConstantValue().has_value()) {
-      if constexpr (std::is_same_v<OpTy, arith::MaxSIOp> ||
-                    std::is_same_v<OpTy, arith::MaxUIOp>) {
-        constantValue = {std::max(lhsInfo.getConstantValue().value(),
-                                  rhsInfo.getConstantValue().value())};
-      } else if constexpr (std::is_same_v<OpTy, arith::MinSIOp> ||
-                           std::is_same_v<OpTy, arith::MinUIOp>) {
-        constantValue = {std::min(lhsInfo.getConstantValue().value(),
-                                  rhsInfo.getConstantValue().value())};
-      }
+      APInt lhsValue =
+          getAPInt(*lhsInfo.getConstantValue(), op.getLhs().getType());
+      APInt rhsValue =
+          getAPInt(*rhsInfo.getConstantValue(), op.getRhs().getType());
+      bool takeLhs;
+      if constexpr (std::is_same_v<OpTy, arith::MaxSIOp>)
+        takeLhs = lhsValue.sge(rhsValue);
+      else if constexpr (std::is_same_v<OpTy, arith::MaxUIOp>)
+        takeLhs = lhsValue.uge(rhsValue);
+      else if constexpr (std::is_same_v<OpTy, arith::MinSIOp>)
+        takeLhs = lhsValue.sle(rhsValue);
+      else
+        takeLhs = lhsValue.ule(rhsValue);
+      constantValue = getCanonicalConstant(takeLhs ? lhsValue : rhsValue);
       auto resTy = dyn_cast<RankedTensorType>(op.getType());
       assert(resTy || rank == 1);
       AxisInfo::DimVectorT constancy =
