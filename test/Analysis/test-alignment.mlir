@@ -1383,3 +1383,24 @@ tt.func @rem_partial_constancy() {
   %result = arith.remui %x, %denom : tensor<8xi32>
   tt.return
 }
+
+// -----
+
+// Unsigned ordering changes when a signed-contiguous run crosses from -1 to
+// zero. maxui([-1, 0], [1, 2]) is [-1, 2], and minui is [1, 0].
+tt.func @unsigned_minmax_cross_zero() {
+  %lhs = tt.make_range {start = -1 : i32, end = 1 : i32} : tensor<2xi32>
+  %rhs = tt.make_range {start = 1 : i32, end = 3 : i32} : tensor<2xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %max = arith.maxui %lhs, %rhs : tensor<2xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %min = arith.minui %lhs, %rhs : tensor<2xi32>
+  // Identical operands preserve all facts even though the run crosses zero.
+  // expected-remark @below {{contiguity = [2], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %identity = arith.maxui %lhs, %lhs : tensor<2xi32>
+  %positive = tt.make_range {start = 3 : i32, end = 5 : i32} : tensor<2xi32>
+  // Both one-sided ranges are affine under unsigned ordering.
+  // expected-remark @below {{contiguity = [2], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %one_sided = arith.maxui %rhs, %positive : tensor<2xi32>
+  tt.return
+}

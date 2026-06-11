@@ -1349,6 +1349,20 @@ public:
     auto lhsInfo = operands[0]->getValue();
     auto rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
+    bool unsignedOrderIsAffine = false;
+    if constexpr (std::is_same_v<OpTy, arith::MaxUIOp> ||
+                  std::is_same_v<OpTy, arith::MinUIOp>) {
+      if (op.getLhs() == op.getRhs())
+        return lhsInfo;
+      auto lhsRange = op.getLhs().template getDefiningOp<triton::MakeRangeOp>();
+      auto rhsRange = op.getRhs().template getDefiningOp<triton::MakeRangeOp>();
+      auto isOneSided = [](triton::MakeRangeOp range) {
+        return range.getStartAttr().getInt() >= 0 ||
+               range.getEndAttr().getInt() <= 0;
+      };
+      unsignedOrderIsAffine =
+          lhsRange && rhsRange && isOneSided(lhsRange) && isOneSided(rhsRange);
+    }
     std::optional<int64_t> constantValue;
     if (lhsInfo.getConstantValue().has_value() &&
         rhsInfo.getConstantValue().has_value()) {
@@ -1381,10 +1395,23 @@ public:
       for (auto d = 0; d < rank; ++d) {
         constancy.push_back(
             gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
-        divisibility.push_back(
-            getDivisibilityFromContiguity(lhsInfo, rhsInfo, d));
-        contiguity.push_back(
-            gcd(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
+        int64_t resultContiguity =
+            gcd(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d));
+        if constexpr (std::is_same_v<OpTy, arith::MaxUIOp> ||
+                      std::is_same_v<OpTy, arith::MinUIOp>) {
+          // Unsigned ordering is discontinuous between -1 and 0. Splitting
+          // by each input's group-base divisibility aligns that boundary.
+          if (!unsignedOrderIsAffine)
+            resultContiguity = gcd(resultContiguity, lhsInfo.getDivisibility(d),
+                                   rhsInfo.getDivisibility(d));
+        }
+        contiguity.push_back(resultContiguity);
+        int64_t resultDivisibility =
+            getDivisibilityFromContiguity(lhsInfo, rhsInfo, d);
+        if (resultContiguity < lhsInfo.getContiguity(d) ||
+            resultContiguity < rhsInfo.getContiguity(d))
+          resultDivisibility = gcd(resultDivisibility, resultContiguity);
+        divisibility.push_back(resultDivisibility);
       }
       return AxisInfo(contiguity, divisibility, constancy, std::nullopt);
     }
