@@ -1365,3 +1365,21 @@ tt.func @add_sub_signed_wrap() {
   %sub_zero = arith.subi %narrow, %zero : tensor<4xi8>
   tt.return
 }
+
+// -----
+
+// The divisor is [8, 8, 8, 8, 16, 16, 16, 16], so the result is
+// [0, 1, 2, 3, 12, 13, 14, 15]. When remainder reduces the dividend's
+// contiguity, divisibility must be clamped at the new group boundaries.
+tt.func @rem_partial_constancy() {
+  %i = tt.make_range {start = 0 : i32, end = 8 : i32} : tensor<8xi32>
+  %four = arith.constant dense<4> : tensor<8xi32>
+  %q = arith.divui %i, %four : tensor<8xi32>
+  %eight = arith.constant dense<8> : tensor<8xi32>
+  %scaled = arith.muli %q, %eight : tensor<8xi32>
+  %denom = arith.addi %scaled, %eight : tensor<8xi32>
+  %x = tt.make_range {start = 8 : i32, end = 16 : i32} : tensor<8xi32>
+  // expected-remark @below {{contiguity = [4], divisibility = [4], constancy = [1], constant_value = <none>}}
+  %result = arith.remui %x, %denom : tensor<8xi32>
+  tt.return
+}

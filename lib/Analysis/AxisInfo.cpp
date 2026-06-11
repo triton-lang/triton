@@ -711,6 +711,14 @@ private:
       contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                        rhs.getDivisibility(dim));
     }
+    if constexpr (std::is_same_v<OpTy, arith::RemUIOp>) {
+      // The same argument applies within partially constant rhs blocks. The
+      // divisibility terms align both modulo wrap points and the unsigned
+      // discontinuity between -1 and 0 with result group boundaries.
+      contiguity = std::max(
+          contiguity, gcd(lhs.getContiguity(dim), rhs.getConstancy(dim),
+                          lhs.getDivisibility(dim), rhs.getDivisibility(dim)));
+    }
     return contiguity;
   }
 
@@ -721,7 +729,12 @@ private:
       // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
       // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
       // r must be divisible by gcd(d_lhs, d_rhs)
-      return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+      int64_t divisibility =
+          gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+      int64_t contiguity = getContiguity(op, lhs, rhs, dim);
+      if (contiguity < lhs.getContiguity(dim))
+        divisibility = gcd(divisibility, contiguity);
+      return divisibility;
     }
     // Otherwise we shouldn't assume any divisibility.
     // For example:
