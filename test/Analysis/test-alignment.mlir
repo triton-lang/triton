@@ -1404,3 +1404,20 @@ tt.func @unsigned_minmax_cross_zero() {
   %one_sided = arith.maxui %rhs, %positive : tensor<2xi32>
   tt.return
 }
+
+// -----
+
+// With a false mask, the loaded value is exactly other=[0, 1, 2, 3].
+tt.func @masked_load_other(
+    %base: !tt.ptr<i32>,
+    %unknown_mask: tensor<4xi1> {tt.constancy = 4 : i32}) {
+  %ptr = tt.splat %base : !tt.ptr<i32> -> tensor<4x!tt.ptr<i32>>
+  %mask = arith.constant dense<false> : tensor<4xi1>
+  %other = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32>
+  // expected-remark @below {{contiguity = [4], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
+  %result = tt.load %ptr, %mask, %other : tensor<4x!tt.ptr<i32>>
+  // The unknown mask is block-constant, but other is not.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %unknown = tt.load %ptr, %unknown_mask, %other : tensor<4x!tt.ptr<i32>>
+  tt.return
+}
