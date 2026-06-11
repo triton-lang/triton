@@ -16,8 +16,14 @@ from triton._internal_testing import (
     is_hip_cdna4,
     is_hip_gfx1250,
     is_hip_cdna3_or_newer,
+    is_hip_rdna,
 )
 from triton.language.target_info import current_target
+
+pytestmark = pytest.mark.skipif(
+    is_hip_rdna(),
+    reason="triton-to-gluon translator does not support AMD RDNA3/RDNA4",
+)
 
 
 def _convert_host_descriptor(desc):

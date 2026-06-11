@@ -2,6 +2,7 @@ import math
 from dataclasses import dataclass
 
 import torch
+from torch._subclasses.fake_tensor import is_fake
 import triton
 import triton.language as tl
 
@@ -33,6 +34,9 @@ class BlackwellMXScaleLayout(Layout):
 class BlackwellActMXScaleLayout(Layout):
 
     ragged_metadata: RaggedTensorMetadata | None
+
+    def can_preserve_storage_as(self, other: Layout, rank: int) -> bool:
+        return isinstance(other, BlackwellActMXScaleLayout) and self.ragged_metadata is other.ragged_metadata
 
     @property
     def name(self):
@@ -93,6 +97,10 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "mode", mode)
         object.__setattr__(self, "added_leading_batch_dim", added_leading_batch_dim)
 
+    @property
+    def storage_shape(self) -> list[int]:
+        return [1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256]
+
     def swizzle_data(self, data):
         if data.numel():
             if self.mode == "batched":
@@ -111,8 +119,8 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
 
         data = data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
         data = data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
-        data = data.view(1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256)
-        return data
+        data = data.view(*self.storage_shape)
+        return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data):
         data = data.reshape(self.B, self.M_pad // 128, self.K_pad // 4, 32, 4, 4)
@@ -127,6 +135,8 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
 
         # ragged path: map padded blocks back into the original ragged rows
         assert self.B == 1, "ragged scale layout only supports 2D input"
+        if not data.numel():
+            return data.reshape(self.M, self.K)
         data = unpad_segments_triton(
             data.squeeze(0),
             self.ragged_metadata,
@@ -153,15 +163,47 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "K_pad", (K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K)
         object.__setattr__(self, "N_pad", (N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N)
 
+    @property
+    def storage_shape(self) -> list[int]:
+        return [1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256]
+
     def swizzle_data(self, data):
-        if data.numel():
-            data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
-        data = data.transpose(-1, -2).contiguous()
-        data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K,
-                            self.SWIZZLE_K)
-        data = data.transpose(2, 4).contiguous()
-        data = data.view(1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256)
-        return data
+        need_torch = data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1 or is_fake(data)
+
+        if need_torch:
+            if data.numel():
+                data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
+            data = data.transpose(-1, -2).contiguous()
+            data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32,
+                                self.K_pad // self.SWIZZLE_K, self.SWIZZLE_K)
+            data = data.transpose(2, 4).contiguous()
+            data = data.view(*self.storage_shape)
+            return self._validate_storage_shape(data)
+
+        # The following code is equivalent to the above, but faster for GPU tensors.
+
+        # Ensure that `leading_shape` can be collapsed into a single B dim.
+        assert tuple(data.shape) == tuple(self.shape)
+        data = data.reshape((self.B, self.K, self.N))
+
+        out = torch.empty(self.storage_shape, dtype=torch.uint8, device=data.device)
+        if not out.numel():
+            return self._validate_storage_shape(out)
+
+        block_k = 64
+        grid = (self.B * triton.cdiv(self.N_pad, self.ALIGN_N) * triton.cdiv(self.K_pad, block_k), )
+        _swizzle_blackwell_mx_scale[grid](
+            data.view(torch.uint8),
+            self.K,
+            self.N,
+            self.K_pad,
+            self.N_pad,
+            *data.stride(),
+            out,
+            BLOCK_K=block_k,
+            num_warps=4,
+        )
+        return self._validate_storage_shape(out.view(data.dtype))
 
     def unswizzle_data(self, data):
         data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 32, self.ALIGN_N // 32,
@@ -176,6 +218,8 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
 SWIZZLE_ALIGN_INNER = tl.constexpr(8)
 SWIZZLE_SIZE_INNER = tl.constexpr(4)
 SWIZZLE_SIZE_OUTER = tl.constexpr(128)
+SWIZZLE_SIZE_LANE = tl.constexpr(32)
+SWIZZLE_SIZE_HALF = tl.constexpr(256)
 
 
 @triton.jit
@@ -409,26 +453,104 @@ def unswizzle_mx_scale_bw(
     x,
     SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
     SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,
+    SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
     ALIGN_INNER: tl.constexpr = SWIZZLE_ALIGN_INNER,
 ):
     shape_0: tl.constexpr = x.shape[0]
     shape_1: tl.constexpr = x.shape[1]
     tl.static_assert(shape_1 % SIZE_OUTER == 0)
-    tl.static_assert(shape_1 // SIZE_OUTER <= ALIGN_INNER)
-    x = x.reshape(shape_0, (shape_1 // SIZE_OUTER) // SIZE_INNER, 32, SIZE_OUTER // 32, SIZE_INNER)
+    tl.static_assert((shape_1 // SIZE_OUTER) % SIZE_INNER == 0)
+    x = x.reshape(shape_0, (shape_1 // SIZE_OUTER) // SIZE_INNER, SIZE_LANE, SIZE_OUTER // SIZE_LANE, SIZE_INNER)
     x = x.trans(0, 3, 2, 1, 4).reshape(shape_0 * SIZE_OUTER, shape_1 // SIZE_OUTER)
     return x
 
 
 @triton.jit
-def unswizzle_act_mx_scale_bw(x, SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,  # 128
-                              SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,  # 4
-                              ):
+def unswizzle_act_mx_scale_bw(
+    x,
+    SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,  # 128
+    SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,  # 4
+    SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
+):
     # input block shape is [1, BLOCK_M//128, BLOCK_K//32//4, 2, 256] and we want to unswizzle it to [BLOCK_M, BLOCK_K//32]
     shape_1: tl.constexpr = x.shape[1]
     shape_2: tl.constexpr = x.shape[2]
     unswizzled_block_m: tl.constexpr = shape_1 * SIZE_OUTER  # BLOCK_M
     unswizzled_block_k: tl.constexpr = shape_2 * SIZE_INNER  # BLOCK_K // 32
 
-    x = x.reshape(shape_1, shape_2, 32, 4, 4).trans(0, 3, 2, 1, 4).reshape(unswizzled_block_m, unswizzled_block_k)
+    x = x.reshape(shape_1, shape_2, SIZE_LANE, SIZE_OUTER // SIZE_LANE, SIZE_INNER)
+    x = x.trans(0, 3, 2, 1, 4).reshape(unswizzled_block_m, unswizzled_block_k)
     return x
+
+
+@triton.jit
+def swizzle_mx_scale_bw_store_ptr(base, rows, cols, leading_idx, n_cols, stride_outer, stride_inner, stride_half,
+                                  stride_lane, SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
+                                  SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,
+                                  SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
+                                  SIZE_HALF: tl.constexpr = SWIZZLE_SIZE_HALF, INDEX_TYPE: tl.constexpr = tl.int64):
+    col_block = cols // SIZE_OUTER
+    outer = leading_idx * tl.cdiv(n_cols, SIZE_OUTER) + col_block
+    inner_group = rows // SIZE_INNER
+    col_lane = cols - col_block * SIZE_OUTER
+    col_quad = col_lane // SIZE_LANE
+    col_lane_inner = col_lane - col_quad * SIZE_LANE
+    row_lane = rows - inner_group * SIZE_INNER
+    inner_linear = ((col_lane_inner[None, :] * (SIZE_OUTER // SIZE_LANE) + col_quad[None, :]) * SIZE_INNER +
+                    row_lane[:, None])
+    half = inner_linear // SIZE_HALF
+    inner = inner_linear - half * SIZE_HALF
+    return (base + outer.to(INDEX_TYPE)[None, :] * stride_outer + inner_group.to(INDEX_TYPE)[:, None] * stride_inner +
+            half.to(INDEX_TYPE) * stride_half + inner.to(INDEX_TYPE) * stride_lane)
+
+
+@triton.jit
+def _swizzle_blackwell_mx_scale(Data, K, N, K_PAD, N_PAD, stride_b, stride_k, stride_n, Out, BLOCK_K: tl.constexpr):
+    tl.static_assert(BLOCK_K % 4 == 0)
+    BLKSIZE: tl.constexpr = 4 * 128
+
+    k_blocks = tl.cdiv(K_PAD, BLOCK_K)
+    n_blocks = tl.cdiv(N_PAD, 128)
+    pid = tl.program_id(0)
+    k_block = (pid % k_blocks).to(tl.int64)
+    pid //= k_blocks
+    n_block = (pid % n_blocks).to(tl.int64)
+    b = (pid // n_blocks).to(tl.int64)
+
+    # `vals` contains BLOCK_K rows and 128 columns: a swizzle block is 4x128,
+    # and blocks are arranged in column-major order, so it contains (BLOCK_K // 4)
+    # blocks which we can write to a contiguous region.
+    rows = k_block * BLOCK_K + tl.arange(0, BLOCK_K)[:, None]
+    cols = n_block * 128 + tl.arange(0, 128)[None, :]
+    vals = tl.load(
+        Data + b * stride_b + rows * stride_k + cols * stride_n,
+        mask=(rows < K) & (cols < N),
+        other=0,
+    )
+    vals = vals.reshape(BLOCK_K // 4, 4, 4, 32).trans(0, 3, 2, 1).ravel()  # reshape(BLOCK_K // 4, BLKSIZE)
+    Out += b * K_PAD * N_PAD
+    Out += (n_block * (K_PAD // 4) + k_block * (BLOCK_K // 4)) * BLKSIZE
+    inner_idx = tl.arange(0, (BLOCK_K // 4) * BLKSIZE)
+    mask = (k_block * (BLOCK_K // 4) + inner_idx // BLKSIZE) < (K_PAD // 4)
+    tl.store(Out + inner_idx, vals, mask=mask)
+
+
+@triton.jit
+def swizzle_act_mx_scale_bw_store_ptr(base, rows, cols, leading_m_block, stride_outer, stride_inner, stride_half,
+                                      stride_lane, SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
+                                      SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,
+                                      SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
+                                      SIZE_HALF: tl.constexpr = SWIZZLE_SIZE_HALF, INDEX_TYPE: tl.constexpr = tl.int64):
+    row_block = rows // SIZE_OUTER
+    outer = leading_m_block + row_block
+    inner_group = cols // SIZE_INNER
+    col_lane = cols - inner_group * SIZE_INNER
+    row_lane = rows - row_block * SIZE_OUTER
+    row_quad = row_lane // SIZE_LANE
+    row_lane_inner = row_lane - row_quad * SIZE_LANE
+    inner_linear = ((row_lane_inner[:, None] * (SIZE_OUTER // SIZE_LANE) + row_quad[:, None]) * SIZE_INNER +
+                    col_lane[None, :])
+    half = inner_linear // SIZE_HALF
+    inner = inner_linear - half * SIZE_HALF
+    return (base + outer.to(INDEX_TYPE)[:, None] * stride_outer + inner_group.to(INDEX_TYPE)[None, :] * stride_inner +
+            half.to(INDEX_TYPE) * stride_half + inner.to(INDEX_TYPE) * stride_lane)

@@ -1,7 +1,7 @@
 #ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTRANSFORMS_UTILITY_H_
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTRANSFORMS_UTILITY_H_
 
-#include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -33,15 +33,33 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 // operand. Note the CDNA4 path requires both dotOpEnc (parent MFMA encoding's
 // instruction shape) and useAsyncCopy.
 triton::gpu::PaddedSharedEncodingAttr
-composePaddedLayout(const triton::AMD::TargetInfo &targetInfo, int opIdx,
-                    unsigned vecWidth, triton::gpu::TensorOrMemDesc srcTy,
+composePaddedLayout(const triton::amdgpu::TargetFeatures &targetFeatures,
+                    int opIdx, unsigned vecWidth,
+                    triton::gpu::TensorOrMemDesc srcTy,
                     ArrayRef<unsigned> sharedOrder,
                     triton::gpu::DotOperandEncodingAttr dotOpEnc = {},
                     bool useAsyncCopy = false);
 
+// Returns null when useAsyncCopy is false or when the operand's MFMA shape,
+// kWidth, or element bitwidth fall outside the supported set.
+triton::gpu::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
+    triton::gpu::DotOperandEncodingAttr dotOpEnc,
+    triton::gpu::TensorOrMemDesc srcTy, ArrayRef<unsigned> sharedOrder,
+    bool useAsyncCopy, unsigned warpSize);
+
 triton::gpu::SharedEncodingTrait
 getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
                           Value desc);
+
+// Build the index encoding for TDM gather/scatter.
+//
+// Layout: BlockedLayout([1, M], [threadsPerWarp, 1], [1, numWarps], [0, 1])
+// sliced along dim 0 to produce a 1D encoding. M is the max number of row
+// indices per TDM instruction (256 bits / index element bitwidth). The
+// freeVarMasks mechanism in the LLVM lowering adapts the number of active
+// warps and gathers per warp to the actual problem size.
+triton::gpu::SliceEncodingAttr
+getTDMGatherScatterIndexEncoding(Operation *op, RankedTensorType indicesType);
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // and |vecSize| with which dot operand |inputValue| is fed into if possible.

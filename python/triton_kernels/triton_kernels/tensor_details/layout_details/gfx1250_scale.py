@@ -30,7 +30,7 @@ class GFX1250MXScaleLayoutTransformation(LayoutTransformation):
     def __post_init__(self) -> None:
         *leading_shape, K_SCALE, N = self.shape
         B = math.prod(leading_shape)
-        ALIGN_K_SCALE = 4 if K_SCALE > 4 else K_SCALE
+        ALIGN_K_SCALE = min(4, max(K_SCALE, 1))
         ALIGN_N = NON_K_PRESHUFFLE_BLOCK_SIZE
         K_SCALE_pad = math.ceil(K_SCALE / ALIGN_K_SCALE) * ALIGN_K_SCALE
         N_pad = math.ceil(N / ALIGN_N) * ALIGN_N
@@ -43,19 +43,24 @@ class GFX1250MXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "K_SCALE", K_SCALE)
         object.__setattr__(self, "N", N)
 
+    @property
+    def storage_shape(self) -> list[int]:
+        return [self.B, self.K_SCALE_pad * self.ALIGN_N, self.N_pad // self.ALIGN_N]
+
     def swizzle_data(self, data):
-        data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_SCALE_pad - self.K_SCALE))
+        if data.numel():
+            data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_SCALE_pad - self.K_SCALE))
         data = data.transpose(-1, -2)
-        data = data.view(-1, self.N_pad // self.ALIGN_N, 4, self.ALIGN_N // 4, self.K_SCALE_pad // self.ALIGN_K_SCALE,
-                         self.ALIGN_K_SCALE)
+        data = data.view(self.B, self.N_pad // self.ALIGN_N, 4, self.ALIGN_N // 4,
+                         self.K_SCALE_pad // self.ALIGN_K_SCALE, self.ALIGN_K_SCALE)
         data = data.permute(0, 1, 4, 3, 2, 5).contiguous()
-        data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.K_SCALE_pad * self.ALIGN_N)
-        return data.transpose(-1, -2)
+        data = data.reshape(self.B, self.storage_shape[2], self.storage_shape[1])
+        return self._validate_storage_shape(data.transpose(-1, -2))
 
     def unswizzle_data(self, data):
         data = data.transpose(-1, -2)
-        data = data.view(-1, self.N_pad // self.ALIGN_N, self.K_SCALE_pad // self.ALIGN_K_SCALE, self.ALIGN_N // 4, 4,
-                         self.ALIGN_K_SCALE)
+        data = data.view(self.B, self.N_pad // self.ALIGN_N, self.K_SCALE_pad // self.ALIGN_K_SCALE, self.ALIGN_N // 4,
+                         4, self.ALIGN_K_SCALE)
         data = data.permute(0, 1, 4, 3, 2, 5)
         data = data.reshape(*self.leading_shape, self.N_pad, self.K_SCALE_pad)
         return data.transpose(-1, -2)[..., :self.K_SCALE, :self.N].contiguous()

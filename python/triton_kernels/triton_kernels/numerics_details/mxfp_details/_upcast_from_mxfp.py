@@ -5,6 +5,87 @@ from ._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq
 
 
+@triton.jit
+def _upcast_mxfp4_values(tensor, dst_dtype: tl.constexpr):
+    tl.static_assert(tensor.dtype == tl.uint8)
+    tl.static_assert(dst_dtype == tl.float16 or dst_dtype == tl.bfloat16 or dst_dtype == tl.float32)
+    intermediate_dtype: tl.constexpr = tl.bfloat16 if dst_dtype == tl.float32 else dst_dtype
+    if cuda_capability_geq(10, 0):
+        packed_u32 = tl.inline_asm_elementwise(
+            asm="""
+            {
+            .reg .b8 in_8;
+            .reg .f16x2 out;
+            cvt.u8.u32 in_8, $1;
+            cvt.rn.f16x2.e2m1x2 out, in_8;
+            mov.b32 $0, out;
+            }
+            """,
+            constraints="=r,r",
+            args=[tensor],
+            dtype=tl.uint32,
+            is_pure=True,
+            pack=1,
+        )
+        lo_u16 = (packed_u32 & 0xFFFF).to(tl.uint16)
+        hi_u16 = (packed_u32 >> 16).to(tl.uint16)
+        lo_f16 = lo_u16.to(tl.float16, bitcast=True)
+        hi_f16 = hi_u16.to(tl.float16, bitcast=True)
+        if intermediate_dtype == tl.float16:
+            x0, x1 = lo_f16, hi_f16
+        else:
+            x0 = lo_f16.to(intermediate_dtype)
+            x1 = hi_f16.to(intermediate_dtype)
+        dst_tensor = tl.interleave(x0, x1)
+    else:
+        dst_bias: tl.constexpr = 127 if intermediate_dtype == tl.bfloat16 else 15
+        dst_0p5: tl.constexpr = 16128 if intermediate_dtype == tl.bfloat16 else 0x3800
+        dst_m_bits: tl.constexpr = 7 if intermediate_dtype == tl.bfloat16 else 10
+        em0 = tensor & 0x07
+        em1 = tensor & 0x70
+        x0 = (em0.to(tl.uint16) << (dst_m_bits - 1)) | ((tensor & 0x08).to(tl.uint16) << 12)
+        x1 = (em1.to(tl.uint16) << (dst_m_bits - 5)) | ((tensor & 0x80).to(tl.uint16) << 8)
+        x0 = tl.where((em0 & 0x06) != 0, x0 + ((dst_bias - 1) << dst_m_bits), x0)
+        x1 = tl.where((em1 & 0x60) != 0, x1 + ((dst_bias - 1) << dst_m_bits), x1)
+        x0 = tl.where(em0 == 0x01, dst_0p5 | (x0 & 0x8000), x0)
+        x1 = tl.where(em1 == 0x10, dst_0p5 | (x1 & 0x8000), x1)
+        dst_tensor = tl.interleave(x0, x1).to(intermediate_dtype, bitcast=True)
+    return dst_tensor.to(dst_dtype)
+
+
+@triton.jit
+def upcast_mxfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
+    tl.static_assert(len(tensor.shape) == 2)
+    tl.static_assert(len(scale.shape) == 2)
+    tl.static_assert(tensor.dtype == tl.uint8)
+    tl.static_assert(scale.dtype == tl.uint8)
+    tl.static_assert(tensor.shape[0] == scale.shape[0])
+    tl.static_assert(tensor.shape[1] * 2 == scale.shape[1] * MXFP_BLOCK_SIZE)
+
+    if dst_dtype == tl.bfloat16:
+        dst_scale = (scale.to(tl.uint16) << 7).to(dst_dtype, bitcast=True)
+    else:
+        dst_scale = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
+        if dst_dtype == tl.float16:
+            dst_scale = dst_scale.to(tl.float16)
+
+    dst_tensor = _upcast_mxfp4_values(tensor, dst_dtype)
+    dst_tensor = dst_tensor.reshape([tensor.shape[0], scale.shape[1], MXFP_BLOCK_SIZE])
+    dst_scale = dst_scale.reshape([scale.shape[0], scale.shape[1], 1])
+    scale = scale.reshape(dst_scale.shape)
+    out_tensor = dst_tensor * dst_scale
+    if dst_dtype == tl.float32:
+        max_fin = 3.4028234663852886e+38
+    elif dst_dtype == tl.bfloat16:
+        max_fin = 3.3895313892515355e+38
+    else:
+        tl.static_assert(dst_dtype == tl.float16)
+        max_fin = 65504
+    out_tensor = tl.clamp(out_tensor, min=-max_fin, max=max_fin)
+    out_tensor = tl.where(scale == 0xFF, float("nan"), out_tensor)
+    return out_tensor.to(dst_dtype).reshape([tensor.shape[0], tensor.shape[1] * 2])
+
+
 # fmt: off
 @triton.jit
 def _upcast_from_mxfp(
@@ -93,58 +174,9 @@ def _upcast_from_mxfp(
                 dst_tensor,
             )
 
-    elif cuda_capability_geq(10, 0):
-        assert is_fp4
-        packed_u32 = tl.inline_asm_elementwise(
-            asm="""
-            {
-            .reg .b8 in_8;
-            .reg .f16x2 out;
-            cvt.u8.u32 in_8, $1;
-            cvt.rn.f16x2.e2m1x2 out, in_8;
-            mov.b32 $0, out;
-            }
-            """,
-            constraints="=r,r",
-            args=[tensor],  # tl.uint8 passed in as a 32-bit reg with value in low 8 bits
-            dtype=tl.uint32,
-            is_pure=True,
-            pack=1,
-        )
-        lo_u16 = (packed_u32 & 0xFFFF).to(tl.uint16)
-        hi_u16 = (packed_u32 >> 16).to(tl.uint16)
-        lo_f16 = lo_u16.to(tl.float16, bitcast=True)
-        hi_f16 = hi_u16.to(tl.float16, bitcast=True)
-
-        if intermediate_dtype == tl.float16:
-            x0, x1 = lo_f16, hi_f16
-        else:
-            x0 = lo_f16.to(intermediate_dtype)
-            x1 = hi_f16.to(intermediate_dtype)
-
-        dst_tensor = tl.interleave(x0, x1)
-
     else:
         assert is_fp4
-        dst_bias: tl.constexpr = 127 if intermediate_dtype == tl.bfloat16 else 15
-        dst_0p5: tl.constexpr = 16128 if intermediate_dtype == tl.bfloat16 else 0x3800
-        dst_m_bits: tl.constexpr = 7 if intermediate_dtype == tl.bfloat16 else 10
-        # e2m1
-        em0 = tensor & 0x07
-        em1 = tensor & 0x70
-        x0 = (em0.to(tl.uint16) << (dst_m_bits - 1)) | ((tensor & 0x08).to(tl.uint16) << 12)
-        x1 = (em1.to(tl.uint16) << (dst_m_bits - 5)) | ((tensor & 0x80).to(tl.uint16) << 8)
-        # Three cases:
-        # 1) x is normal and non-zero: Correct bias
-        x0 = tl.where((em0 & 0x06) != 0, x0 + ((dst_bias - 1) << dst_m_bits), x0)
-        x1 = tl.where((em1 & 0x60) != 0, x1 + ((dst_bias - 1) << dst_m_bits), x1)
-        # 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in the dst type
-        x0 = tl.where(em0 == 0x01, dst_0p5 | (x0 & 0x8000), x0)
-        x1 = tl.where(em1 == 0x10, dst_0p5 | (x1 & 0x8000), x1)
-        # 3) x is zero, do nothing
-        dst_tensor = tl.interleave(x0, x1).to(intermediate_dtype, bitcast=True)
-
-    dst_tensor = dst_tensor.to(dst_dtype)
+        dst_tensor = _upcast_mxfp4_values(tensor, dst_dtype)
 
     # Reshape for proper broadcasting over the microscale block.
     dst_tensor = dst_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE, MX_BLOCK_SIZE])

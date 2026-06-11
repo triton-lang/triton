@@ -146,6 +146,11 @@ def _expected_sub_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     return _payload_u32_to_f32_bits_i32(x_u32 - y_u32)
 
 
+def _expected_neg_i32(x_i32: np.ndarray) -> np.ndarray:
+    x_u32 = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
+    return _payload_u32_to_f32_bits_i32(np.uint64(0) - x_u32)
+
+
 def _expected_mul_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     x_u32 = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
     y_u32 = _mix_f32_bits_to_payload_u32(y_i32).astype(np.uint64)
@@ -473,6 +478,40 @@ def _reciprocal_involution_kernel(x_ptr, out_ptr, n_elements, BLOCK: gl.constexp
     gl.store(out_ptr + offs, z, mask=mask)
 
 
+@gluon.jit
+def _expect_zero_upper_triangle_kernel(x_ptr, out_ptr, N: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [4, 1], [1, 0])
+    row = gl.arange(0, N, layout=gl.SliceLayout(1, layout))[:, None]
+    col = gl.arange(0, N, layout=gl.SliceLayout(0, layout))[None, :]
+    upper_triangle = col > row
+    x = gl.load(x_ptr + row * N + col)
+    x = gl.where(upper_triangle, x - 1.0e30, x)
+    y = gl.exp(x)
+    y = gl.expect_zero(y, upper_triangle)
+    gl.store(out_ptr + row * N + col, y)
+
+
+def test_expect_zero_upper_triangle_exp(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    N = 32
+    torch.manual_seed(0)
+    x = torch.randn((N, N), dtype=torch.float32, device="cuda")
+    regular_out = torch.empty_like(x)
+    fpsan_out = torch.empty_like(x)
+    upper_triangle = torch.triu(torch.ones_like(x, dtype=torch.bool), diagonal=1)
+
+    fresh_knobs.compilation.instrumentation_mode = ""
+    _expect_zero_upper_triangle_kernel[(1, )](x, regular_out, N=N, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    _expect_zero_upper_triangle_kernel[(1, )](x, fpsan_out, N=N, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    assert torch.equal(regular_out[upper_triangle], torch.zeros_like(regular_out[upper_triangle]))
+    assert torch.equal(fpsan_out[upper_triangle], torch.zeros_like(fpsan_out[upper_triangle]))
+    assert not torch.equal(regular_out, fpsan_out)
+
+
 @pytest.mark.parametrize("op", ["mul_one", "add_zero"])
 def test_constant_identity_noop(device, op, fresh_knobs):
     _require_cuda_backend(device)
@@ -610,7 +649,10 @@ def _unary_math_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.c
     offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
     mask = offs < n_elements
     x = gl.load(x_ptr + offs, mask=mask, other=0.0)
-    z = getattr(gl, OP)(x)
+    if OP == "neg":
+        z = -x
+    else:
+        z = getattr(gl, OP)(x)
     gl.store(out_ptr + offs, z, mask=mask)
 
 
@@ -711,6 +753,7 @@ def _cossin_identity_kernel(x_ptr, y_ptr, lhs_ptr, rhs_ptr, n_elements, MODE: gl
     [
         "exp",
         "exp2",
+        "neg",
         "log",
         "log2",
         "cos",
@@ -752,6 +795,8 @@ def test_unary_math_identity(device, op, fresh_knobs):
         exp_bits = _expected_exp_i32(x_bits)
     elif op == "exp2":
         exp_bits = _expected_exp2_i32(x_bits)
+    elif op == "neg":
+        exp_bits = _expected_neg_i32(x_bits)
     elif op == "cos":
         exp_bits = _expected_cos_i32(x_bits)
     elif op == "sin":
@@ -1250,6 +1295,19 @@ def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = No
     return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
 
 
+def _bmm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = None) -> np.ndarray:
+    assert a_i32.ndim == 3
+    assert b_i32.ndim == 3
+    assert c_i32 is None or c_i32.ndim == 3
+    assert a_i32.shape[0] == b_i32.shape[0]
+    assert c_i32 is None or a_i32.shape[0] == c_i32.shape[0]
+    out = np.empty((a_i32.shape[0], a_i32.shape[1], b_i32.shape[2]), dtype=np.int32)
+    for batch in range(a_i32.shape[0]):
+        c_batch = c_i32[batch] if c_i32 is not None else None
+        out[batch] = _mm_payload_u32(a_i32[batch], b_i32[batch], c_batch)
+    return out
+
+
 def _unpack_element(data: np.ndarray, row: int, col: int, pack: int, pack_axis: int = 1) -> np.uint64:
     if pack_axis == 1:
         raw = np.uint64(data[row, col // pack])
@@ -1444,7 +1502,66 @@ def test_dot_fma(device, fresh_knobs):
     cw = triton.TensorWrapper(c, dtype=torch.float32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
-    kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+    compiled = kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+    ttgir = compiled.asm["ttgir"]
+    assert "ttng.tc_gen5_mma" not in ttgir
+    assert "ttng.warp_group_dot" not in ttgir
+
+    _assert_payload_equal(out, exp_bits)
+
+
+def test_dot_fma_batched(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    BATCH_SIZE = 2
+    B = 16
+    BATCH = gl.constexpr(BATCH_SIZE)
+    BLOCK = gl.constexpr(B)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, THREADS_PER_WARP: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([1, 1, 1], [1, THREADS_PER_WARP, 1], [1, 4, 1], [2, 1, 0])
+        lhs_layout: gl.constexpr = gl.DotOperandLayout(parent=layout, operand_index=0, k_width=0)
+        rhs_layout: gl.constexpr = gl.DotOperandLayout(parent=layout, operand_index=1, k_width=0)
+
+        offs_batch = gl.arange(0, BATCH, layout=gl.SliceLayout(1, parent=gl.SliceLayout(2, layout)))[:, None, None]
+        offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, parent=gl.SliceLayout(2, layout)))[None, :, None]
+        offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, parent=gl.SliceLayout(1, layout)))[None, None, :]
+        offs_k_a = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, parent=gl.SliceLayout(1, layout)))[None, None, :]
+        offs_k_b = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, parent=gl.SliceLayout(2, layout)))[None, :, None]
+
+        a_offs = offs_batch * BLOCK * BLOCK + offs_m * BLOCK + offs_k_a
+        b_offs = offs_batch * BLOCK * BLOCK + offs_k_b * BLOCK + offs_n
+        out_offs = offs_batch * BLOCK * BLOCK + offs_m * BLOCK + offs_n
+
+        a = gl.convert_layout(gl.load(a_ptr + a_offs), lhs_layout)
+        b = gl.convert_layout(gl.load(b_ptr + b_offs), rhs_layout)
+        c = gl.load(c_ptr + out_offs)
+        out = gl.dot_fma(a, b, c)
+        gl.store(out_ptr + out_offs, out)
+
+    rs = np.random.RandomState(1)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(BATCH_SIZE, B, B), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(BATCH_SIZE, B, B), dtype=np.int32)
+    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(BATCH_SIZE, B, B), dtype=np.int32)
+    exp_bits = _bmm_payload_u32(a_bits, b_bits, c_bits)
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
+    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
+    out = torch.empty((BATCH_SIZE, B, B), device="cuda", dtype=torch.int32)
+
+    aw = triton.TensorWrapper(a, dtype=torch.float32)
+    bw = triton.TensorWrapper(b, dtype=torch.float32)
+    cw = triton.TensorWrapper(c, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    compiled = kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+    ttgir = compiled.asm["ttgir"]
+    assert "ttng.tc_gen5_mma" not in ttgir
+    assert "ttng.warp_group_dot" not in ttgir
 
     _assert_payload_equal(out, exp_bits)
 
@@ -1654,6 +1771,149 @@ def test_tcgen05_mma(device, use_acc, fresh_knobs):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("partition_warps", [4, 2, 1])
+def test_tcgen05_mma_warp_specialize_partition(device, partition_warps, fresh_knobs):
+    _require_cuda_backend(device)
+
+    M = gl.constexpr(64)
+    N = gl.constexpr(32)
+    K = gl.constexpr(32)
+    PARTITION_WARPS = gl.constexpr(partition_warps)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def default_partition():
+        pass
+
+    @gluon.jit
+    def mma_partition(smem_a, smem_b, acc_tmem, bar):
+        tcgen05_mma(smem_a, smem_b.permute((1, 0)), acc_tmem, use_acc=False, pred=True, mbarriers=[bar])
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, out_ptr):
+        layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
+        offs_m = gl.arange(0, M, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_n = gl.arange(0, N, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_k = gl.arange(0, K, layout=gl.SliceLayout(0, layout))[None, :]
+        out_offs_n = gl.arange(0, N, layout=gl.SliceLayout(0, layout))[None, :]
+
+        a = gl.load(a_ptr + offs_m * K + offs_k)
+        b = gl.load(b_ptr + offs_n * K + offs_k)
+        smem_a = gl.allocate_shared_memory(gl.float32, [M, K], gl.NVMMASharedLayout.get_default_for([M, K], gl.float32),
+                                           a)
+        smem_b = gl.allocate_shared_memory(gl.float32, [N, K], gl.NVMMASharedLayout.get_default_for([N, K], gl.float32),
+                                           b)
+        acc_tmem = allocate_tensor_memory(gl.float32, [M, N], layout=TensorMemoryLayout((M, N), col_stride=1))
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+
+        gl.warp_specialize([
+            (default_partition, ()),
+            (mma_partition, (smem_a, smem_b, acc_tmem, bar)),
+        ], [PARTITION_WARPS])
+
+        mbarrier.wait(bar, phase=0, deps=[smem_a, smem_b])
+        mbarrier.invalidate(bar)
+        out = gl.convert_layout(acc_tmem.load(), layout)
+        gl.store(out_ptr + offs_m * N + out_offs_n, out)
+
+    rs = np.random.RandomState(0)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(M.value, K.value), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(N.value, K.value), dtype=np.int32)
+    exp_bits = _mm_payload_u32(a_bits, b_bits.T)
+    a = torch.tensor(a_bits, device=device, dtype=torch.int32)
+    b = torch.tensor(b_bits, device=device, dtype=torch.int32)
+    out = torch.empty((M.value, N.value), device=device, dtype=torch.int32)
+
+    kernel[(1, )](
+        triton.TensorWrapper(a, dtype=torch.float32),
+        triton.TensorWrapper(b, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        num_warps=4,
+    )
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("use_acc", [False, True])
+def test_tcgen05_mma_two_ctas(device, use_acc, fresh_knobs):
+    _require_cuda_backend(device)
+
+    M = 256
+    N = 128
+    K = 64
+    BLOCK_M = gl.constexpr(M)
+    BLOCK_N = gl.constexpr(N)
+    BLOCK_K = gl.constexpr(K)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, USE_ACC: gl.constexpr):
+        a_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=((1, 0), ))
+        b_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=((0, 1), ))
+        out_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=((1, 0), ))
+
+        offs_m = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, a_layout))[:, None]
+        offs_k_a = gl.arange(0, BLOCK_K, layout=gl.SliceLayout(0, a_layout))[None, :]
+        offs_k_b = gl.arange(0, BLOCK_K, layout=gl.SliceLayout(1, b_layout))[:, None]
+        offs_n = gl.arange(0, BLOCK_N, layout=gl.SliceLayout(0, b_layout))[None, :]
+        out_offs_m = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, out_layout))[:, None]
+        out_offs_n = gl.arange(0, BLOCK_N, layout=gl.SliceLayout(0, out_layout))[None, :]
+
+        a_tile = gl.load(a_ptr + offs_m * BLOCK_K + offs_k_a)
+        b_tile = gl.load(b_ptr + offs_k_b * BLOCK_N + offs_n)
+
+        smem_layout_a: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float32,
+                                                                           cga_layout=((1, 0), ))
+        smem_layout_b: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float32,
+                                                                           cga_layout=((0, 1), ))
+        smem_a = gl.allocate_shared_memory(gl.float32, [BLOCK_M, BLOCK_K], smem_layout_a, a_tile)
+        smem_b = gl.allocate_shared_memory(gl.float32, [BLOCK_K, BLOCK_N], smem_layout_b, b_tile)
+
+        tmem_layout: gl.constexpr = TensorMemoryLayout((128, BLOCK_N), col_stride=1, cga_layout=((1, 0), ),
+                                                       two_ctas=True)
+        acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], layout=tmem_layout)
+        if USE_ACC:
+            c_tile = gl.load(c_ptr + out_offs_m * BLOCK_N + out_offs_n)
+            acc_tmem.store(gl.convert_layout(c_tile, acc_tmem.get_reg_layout()))
+
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=USE_ACC, pred=True, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0, deps=[smem_a, smem_b])
+        mbarrier.invalidate(bar)
+
+        out = gl.convert_layout(acc_tmem.load(), out_layout)
+        store_offs_m = gl.arange(0, BLOCK_M)[:, None]
+        store_offs_n = gl.arange(0, BLOCK_N)[None, :]
+        gl.store(out_ptr + store_offs_m * BLOCK_N + store_offs_n, out)
+
+    rs = np.random.RandomState(0)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(M, K), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(K, N), dtype=np.int32)
+    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(M, N), dtype=np.int32)
+    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits if use_acc else None)
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
+    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
+    out = torch.empty((M, N), device="cuda", dtype=torch.int32)
+
+    kernel[(1, )](
+        triton.TensorWrapper(a, dtype=torch.float32),
+        triton.TensorWrapper(b, dtype=torch.float32),
+        triton.TensorWrapper(c, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        USE_ACC=use_acc,
+        num_warps=4,
+        num_ctas=2,
+    )
+
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("elem_type", ["e2m1", "e4m3", "e5m2"])
 def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
     _require_cuda_backend(device)
@@ -1756,6 +2016,104 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tcgen05_mma_scaled_two_ctas(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    M = 256
+    N = 128
+    K = 128
+    BLOCK_M = gl.constexpr(M)
+    BLOCK_N = gl.constexpr(N)
+    BLOCK_K = gl.constexpr(K)
+    SCALE_K = gl.constexpr(K // 32)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, a_scale_ptr, b_scale_ptr, c_ptr, out_ptr):
+        a_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=((1, 0), ))
+        b_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=((1, 0), ))
+        out_layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=((1, 0), ))
+
+        offs_m = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, a_layout))[:, None]
+        offs_k_a = gl.arange(0, BLOCK_K, layout=gl.SliceLayout(0, a_layout))[None, :]
+        offs_n_b = gl.arange(0, BLOCK_N, layout=gl.SliceLayout(1, b_layout))[:, None]
+        offs_k_b = gl.arange(0, BLOCK_K, layout=gl.SliceLayout(0, b_layout))[None, :]
+        out_offs_m = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, out_layout))[:, None]
+        out_offs_n = gl.arange(0, BLOCK_N, layout=gl.SliceLayout(0, out_layout))[None, :]
+
+        a_tile = gl.load(a_ptr + offs_m * BLOCK_K + offs_k_a)
+        b_tile = gl.load(b_ptr + offs_n_b * BLOCK_K + offs_k_b)
+        c_tile = gl.load(c_ptr + out_offs_m * BLOCK_N + out_offs_n)
+
+        a_smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float8e5,
+                                                                           cga_layout=((1, 0), ))
+        b_smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_N, BLOCK_K], gl.float8e5,
+                                                                           cga_layout=((1, 0), ))
+        a_smem = gl.allocate_shared_memory(gl.float8e5, [BLOCK_M, BLOCK_K], a_smem_layout, a_tile)
+        b_smem = gl.allocate_shared_memory(gl.float8e5, [BLOCK_N, BLOCK_K], b_smem_layout, b_tile)
+
+        acc_layout: gl.constexpr = TensorMemoryLayout((128, BLOCK_N), col_stride=1, cga_layout=((1, 0), ),
+                                                      two_ctas=True)
+        acc = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], acc_layout)
+        acc.store(gl.convert_layout(c_tile, acc.get_reg_layout()))
+
+        a_scale_layout: gl.constexpr = TensorMemoryScalesLayout(cga_layout=((1, 0), ))
+        b_scale_layout: gl.constexpr = TensorMemoryScalesLayout(cga_layout=((0, 0), ))
+        a_scale = allocate_tensor_memory(gl.int8, [BLOCK_M, SCALE_K], a_scale_layout)
+        b_scale = allocate_tensor_memory(gl.int8, [BLOCK_N, SCALE_K], b_scale_layout)
+        a_scale_reg_layout: gl.constexpr = a_scale.get_reg_layout()
+        b_scale_reg_layout: gl.constexpr = b_scale.get_reg_layout()
+        a_scale_offs_k = gl.arange(0, SCALE_K, layout=gl.SliceLayout(0, a_scale_reg_layout))[None, :]
+        b_scale_offs_k = gl.arange(0, SCALE_K, layout=gl.SliceLayout(0, b_scale_reg_layout))[None, :]
+        scale_offs_m = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, a_scale_reg_layout))[:, None]
+        scale_offs_n = gl.arange(0, BLOCK_N, layout=gl.SliceLayout(1, b_scale_reg_layout))[:, None]
+        a_scale.store(gl.load(a_scale_ptr + scale_offs_m * SCALE_K + a_scale_offs_k))
+        b_scale.store(gl.load(b_scale_ptr + scale_offs_n * SCALE_K + b_scale_offs_k))
+
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc, a_scale, b_scale, "e5m2", "e5m2", use_acc=True,
+                           mbarriers=[bar])
+        mbarrier.wait(bar, phase=0, deps=[a_smem, b_smem])
+        mbarrier.invalidate(bar)
+
+        out = gl.convert_layout(acc.load(), out_layout)
+        store_offs_m = gl.arange(0, BLOCK_M)[:, None]
+        store_offs_n = gl.arange(0, BLOCK_N)[None, :]
+        gl.store(out_ptr + store_offs_m * BLOCK_N + store_offs_n, out)
+
+    rs = np.random.RandomState(0)
+    a_bits = rs.randint(20, 40, size=(M, K), dtype=np.uint8)
+    b_bits = rs.randint(20, 40, size=(N, K), dtype=np.uint8)
+    a_scale_bits = rs.randint(1, 4, size=(M, K // 32), dtype=np.int8)
+    b_scale_bits = rs.randint(1, 4, size=(N, K // 32), dtype=np.int8)
+    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(M, N), dtype=np.int32)
+    exp_bits = _mm_scaled_payload_u32(a_bits, b_bits.T, a_scale_bits.view(np.uint8), b_scale_bits.view(np.uint8),
+                                      c_bits, a_pack=1, b_pack=1, elem_type="e5m2")
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.uint8).view(torch.float8_e5m2)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.uint8).view(torch.float8_e5m2)
+    a_scale = torch.tensor(a_scale_bits, device="cuda", dtype=torch.int8)
+    b_scale = torch.tensor(b_scale_bits, device="cuda", dtype=torch.int8)
+    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
+    out = torch.empty((M, N), device="cuda", dtype=torch.int32)
+
+    kernel[(1, )](
+        a,
+        b,
+        a_scale,
+        b_scale,
+        triton.TensorWrapper(c, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        num_warps=4,
+        num_ctas=2,
+    )
+
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_index_subslice(device, fresh_knobs):
     _require_cuda_backend(device)
 
@@ -1802,7 +2160,8 @@ def test_tmem_index_subslice(device, fresh_knobs):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_tmem_copy_scales_in_warp_specialize_partition(device, fresh_knobs):
+@pytest.mark.parametrize("two_ctas", [False, True])
+def test_tmem_copy_scales_in_warp_specialize_partition(device, two_ctas, fresh_knobs):
     _require_cuda_backend(device)
 
     smem_h = 64
@@ -1822,29 +2181,45 @@ def test_tmem_copy_scales_in_warp_specialize_partition(device, fresh_knobs):
         pass
 
     @gluon.jit
-    def kernel(in_ptr, out_ptr):
-        blocked: gl.constexpr = gl.BlockedLayout([1, 4], [32, 1], [gl.num_warps(), 1], [1, 0])
+    def kernel(in_ptr, out_ptr, TWO_CTAS: gl.constexpr):
+        if TWO_CTAS:
+            mma_a_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([256, 64], gl.float32,
+                                                                              cga_layout=((1, 0), ))
+            mma_b_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([64, 128], gl.float32,
+                                                                              cga_layout=((0, 1), ))
+            mma_a = gl.allocate_shared_memory(gl.float32, [256, 64], mma_a_layout)
+            mma_b = gl.allocate_shared_memory(gl.float32, [64, 128], mma_b_layout)
+            mma_acc_layout: gl.constexpr = TensorMemoryLayout((128, 128), col_stride=1, cga_layout=((1, 0), ),
+                                                              two_ctas=True)
+            mma_acc = allocate_tensor_memory(gl.float32, [256, 128], mma_acc_layout)
+            tcgen05_mma(mma_a, mma_b, mma_acc, use_acc=False)
+
+        cga_layout: gl.constexpr = ((0, 0), ) if TWO_CTAS else ()
+        blocked: gl.constexpr = gl.BlockedLayout([1, 4], [32, 1], [gl.num_warps(), 1], [1, 0], cga_layout=cga_layout)
         in_ptrs = (in_ptr + gl.arange(0, SMEM_H)[:, None] * SMEM_W + gl.arange(0, SMEM_W)[None, :])
         value = gl.load(gl.set_auto_layout(in_ptrs, blocked))
 
-        smem_layout: gl.constexpr = gl.SharedLinearLayout(offset_bases=[
-            [0, 1],
-            [0, 2],
-            [32, 0],
-            [0, 4],
-            [1, 0],
-            [2, 0],
-            [4, 0],
-            [8, 0],
-            [16, 0],
-            [0, 8],
-        ])
+        smem_layout: gl.constexpr = gl.SharedLinearLayout(
+            offset_bases=[
+                [0, 1],
+                [0, 2],
+                [32, 0],
+                [0, 4],
+                [1, 0],
+                [2, 0],
+                [4, 0],
+                [8, 0],
+                [16, 0],
+                [0, 8],
+            ],
+            block_bases=cga_layout,
+        )
         smem = gl.allocate_shared_memory(gl.int8, (SMEM_H, SMEM_W), layout=smem_layout)
         smem.store(value)
 
-        tmem_layout: gl.constexpr = TensorMemoryScalesLayout()
+        tmem_layout: gl.constexpr = TensorMemoryScalesLayout(cga_layout=cga_layout)
         tmem = allocate_tensor_memory(gl.int8, (SMEM_H, SMEM_W), layout=tmem_layout)
-        bar = gl.allocate_shared_memory(gl.int64, [1], gl.constexpr(mbarrier.MBarrierLayout()))
+        bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
 
         gl.warp_specialize(
@@ -1862,7 +2237,7 @@ def test_tmem_copy_scales_in_warp_specialize_partition(device, fresh_knobs):
 
     x = torch.randint(size=(smem_h, smem_w), low=-100, high=100, dtype=torch.int8, device=device)
     out = torch.empty((), device=device, dtype=torch.int32)
-    kernel[(1, )](x, out, num_warps=4)
+    kernel[(1, )](x, out, TWO_CTAS=two_ctas, num_warps=4, num_ctas=2 if two_ctas else 1)
     torch.testing.assert_close(out, torch.ones_like(out))
 
 

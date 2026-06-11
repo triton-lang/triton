@@ -32,6 +32,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/FormatVariadic.h"
 #include <limits>
 
 // clang-format off
@@ -468,8 +469,6 @@ LogicalResult ConcatOp::verify() {
     // 3.   find, which input tile holds the dst value
     auto multiDimOperandIdx = LLVM::AMD::multiDimElementwise<int32_t, int64_t>(
         elemCoordsArray, srcShape, std::divides<unsigned>());
-    auto linearOperandIdx =
-        mlir::LLVM::linearize(multiDimOperandIdx, srcToDstShape, defaultOrder);
 
     // 4.   subtract dst coordinates and start coordinates of the tile
 
@@ -504,8 +503,8 @@ LogicalResult BufferLoadToLocalOp::verify() {
   if (!mod)
     return success();
 
-  auto arch = mlir::getAMDArch(mod);
-  if (!arch || AMD::TargetInfo(arch->str()).supportsBufferLoadToLocal())
+  TargetFeatures features = TargetFeatures::fromModuleOp(mod);
+  if (features.getArch().empty() || features.supportsBufferLoadToLocal())
     return success();
   return emitError() << "BufferLoadToLocal unsupported on target architecture";
 }
@@ -584,6 +583,62 @@ void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
   patterns.add(foldConcatOpFromSingleSource);
 }
 
+namespace {
+// Validate `warp_used_hint` against the axis-aligned hint rule (see
+// TritonAMDGPUOps.td).  Encoding-specific rules (e.g.
+// PartitionedSharedEncoding) live in verify() since they need the result type.
+LogicalResult validateWarpUsedHint(AsyncTDMCopyGlobalToLocalOp op,
+                                   uint32_t hint, int64_t numWarps) {
+  if (!llvm::isPowerOf2_64(numWarps))
+    return op.emitOpError("num_warps must be a power of two when using "
+                          "warp_used_hint, got ")
+           << numWarps;
+
+  if (numWarps >= 32)
+    return op.emitOpError("num_warps must be less than 32 when using "
+                          "warp_used_hint, got ")
+           << numWarps;
+
+  if (hint == 0)
+    return op.emitOpError("warp_used_hint must have at least one bit set");
+
+  // Bits above num_warps - 1 must be zero (no warp at those positions).
+  uint32_t numWarpsMask = (uint32_t{1} << numWarps) - 1;
+  if ((hint & ~numWarpsMask) != 0)
+    return op.emitOpError("warp_used_hint = ")
+           << llvm::formatv("{0:x}", hint)
+           << " sets bits beyond num_warps = " << numWarps;
+
+  unsigned K = llvm::popcount(hint);
+  if (!llvm::isPowerOf2_32(K))
+    return op.emitOpError("popcount(warp_used_hint) = ")
+           << K << " must be a power of two (got hint "
+           << llvm::formatv("{0:x}", hint) << ")";
+
+  // Axis-aligned check.  Anchor at i0 = lsb(hint) and OR the shifted
+  // warp indices: `support` is the bits that vary across the active
+  // set.  Legal iff popcount(support) == log2(K) -- pigeonhole forces
+  // the K shifted indices to hit every subset of `support`, i.e. the
+  // active set is selectable by a single mask check.
+  unsigned i0 = llvm::countr_zero(hint);
+  uint32_t support = 0;
+  for (uint32_t mask = hint; mask != 0; mask &= mask - 1) {
+    unsigned w = llvm::countr_zero(mask);
+    support |= static_cast<uint32_t>(w ^ i0);
+  }
+  unsigned logK = llvm::Log2_32(K);
+  unsigned spanned = static_cast<unsigned>(llvm::popcount(support));
+  if (spanned != logK)
+    return op.emitOpError("warp_used_hint = ")
+           << llvm::formatv("{0:x}", hint) << " is not axis-aligned: K = " << K
+           << " active warps span " << spanned
+           << " warpId bit positions, but an axis-aligned hint "
+           << "spans exactly log2(K) = " << logK;
+
+  return success();
+}
+} // namespace
+
 LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   auto tensorDescTy = getDesc().getType();
   auto smemTy = getResult().getType();
@@ -644,6 +699,31 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
       auto paddingInDwords = padding * elementBitWidth / dwordSize;
       if (paddingInDwords < 1)
         return emitOpError("TDM padding amount must be at least 1 dword");
+    }
+  }
+
+  if (auto warpUsedHintAttr = getWarpUsedHintAttr()) {
+    int numWarps = gpu::lookupNumWarps(*this);
+    uint32_t hint = static_cast<uint32_t>(warpUsedHintAttr.getInt());
+    if (failed(validateWarpUsedHint(*this, hint, numWarps)))
+      return failure();
+
+    // PartitionedSharedEncoding: hinted path = single instruction, so
+    // numLogicalPieces must divide K (equivalent to K >= numLogicalPieces
+    // since K is a power of two).
+    if (partitionedEnc) {
+      unsigned partitionDim = partitionedEnc.getPartitionDim();
+      unsigned numLogicalPieces = partitionedEnc.getNumLogicalPieces();
+      assert(numLogicalPieces > 0 &&
+             "PartitionedSharedEncoding must have numLogicalPieces >= 1");
+      unsigned K = llvm::popcount(hint);
+      if (K % numLogicalPieces != 0)
+        return emitOpError(
+                   "warp_used_hint with a partitioned shared encoding must "
+                   "select K active warps such that numLogicalPieces divides "
+                   "K so the copy fits in a single TDM instruction (got K = ")
+               << K << ", numLogicalPieces = " << numLogicalPieces
+               << ", partitionDim = " << partitionDim << ")";
     }
   }
 
@@ -827,6 +907,31 @@ LogicalResult AsyncTDMGatherOp::verify() {
           "incompatible with the warp-level TDM instruction. Change layout "
           "to broadcast the same indices to all lanes in a warp.");
   }
+
+  return success();
+}
+
+// -- UpdateTensorDescriptorOp --
+LogicalResult UpdateTensorDescriptorOp::verify() {
+  auto descTy = getDesc().getType();
+  size_t rank = descTy.getShape().size();
+
+  if (!getAddOffsets().empty() && getAddOffsets().size() != rank)
+    return emitOpError("expected ")
+           << rank << " add_offsets to match descriptor rank, got "
+           << getAddOffsets().size();
+
+  if (!getSetBounds().empty() && getSetBounds().size() != rank)
+    return emitOpError("expected ")
+           << rank << " set_bounds to match descriptor rank, got "
+           << getSetBounds().size();
+
+  // At least one mutation parameter must be provided -- a no-op update is
+  // either a user mistake or should be folded by canonicalizer.
+  if (getAddOffsets().empty() && getSetBounds().empty() && !getDest() &&
+      !getPred() && !getBarrier())
+    return emitOpError("must provide at least one of add_offsets, set_bounds, "
+                       "dest, pred, or barrier");
 
   return success();
 }

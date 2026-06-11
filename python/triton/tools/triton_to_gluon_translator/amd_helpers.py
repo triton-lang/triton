@@ -342,16 +342,6 @@ def tl_obj_scatter(obj, value, x_offsets, y_offset):
 
 
 def convert_host_descriptor(desc):
-
-    def torch_dtype_to_triton(dtype):
-        import torch
-
-        if dtype == torch.float8_e5m2:
-            return ttgl.float8e5
-        if dtype == torch.float8_e4m3fn:
-            return ttgl.float8e4nv
-        return getattr(ttgl, str(dtype).split(".")[1])
-
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     assert isinstance(desc, TensorDescriptor)

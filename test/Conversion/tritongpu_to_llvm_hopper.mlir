@@ -239,6 +239,49 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK-LABEL: clamp_splat_negf
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @clamp_splat_negf(%x : tensor<1024xf32, #blocked>, %limit : f32) {
+    %neg_limit = arith.negf %limit : f32
+    %lower = tt.splat %neg_limit : f32 -> tensor<1024xf32, #blocked>
+    %upper = tt.splat %limit : f32 -> tensor<1024xf32, #blocked>
+
+    // CHECK-COUNT-8: nvvm.fmin.xorsign.abs.f
+    %12 = tt.clampf %x, %lower, %upper, propagateNan = none : tensor<1024xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK-LABEL: clamp_negf
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @clamp_negf(%x : tensor<1024xf32, #blocked>, %limit : tensor<1024xf32, #blocked>) {
+    %neg_limit = arith.negf %limit : tensor<1024xf32, #blocked>
+
+    // CHECK-COUNT-8: nvvm.fmin.xorsign.abs.f
+    %12 = tt.clampf %x, %neg_limit, %limit, propagateNan = none : tensor<1024xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: clamp_negf_scalar
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @clamp_negf_scalar(%x : f32, %limit : f32) {
+    %neg_limit = arith.negf %limit : f32
+
+    // CHECK: nvvm.fmin.xorsign.abs.f
+    %12 = tt.clampf %x, %neg_limit, %limit, propagateNan = none : f32
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: clamp_scalar
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @clamp_scalar(%x : f32, %limit : f32) {
@@ -259,11 +302,11 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @convert_mma_to_blocked(%a: tensor<128x256xf16, #mma>) {
     // CHECK-COUNT-8: llvm.store
-    //          CHECK: nvvm.barrier0
+    //          CHECK: nvvm.barrier
     // CHECK-COUNT-8: nvvm.ldmatrix
-    //          CHECK: nvvm.barrier0
+    //          CHECK: nvvm.barrier
     // CHECK-COUNT-8: llvm.store
-    //          CHECK: nvvm.barrier0
+    //          CHECK: nvvm.barrier
     // CHECK-COUNT-8: nvvm.ldmatrix
     %c = ttg.convert_layout %a : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
     tt.return
@@ -277,19 +320,19 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @convert_mma_to_blocked(%a: tensor<128x64xbf16, #linear>) {
     // CHECK: llvm.store {{.*}} : vector<4xi32>
-    // CHECK: nvvm.barrier0
+    // CHECK: nvvm.barrier
     // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK: nvvm.barrier0
+    // CHECK: nvvm.barrier
     // CHECK: llvm.store {{.*}} : vector<4xi32>
-    // CHECK: nvvm.barrier0
+    // CHECK: nvvm.barrier
     // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK: nvvm.barrier0
+    // CHECK: nvvm.barrier
     // CHECK: llvm.store {{.*}} : vector<4xi32>
-    // CHECK: nvvm.barrier0
+    // CHECK: nvvm.barrier
     // CHECK: llvm.load {{.*}} -> vector<4xi32>
-    // CHECK: nvvm.barrier0
+    // CHECK: nvvm.barrier
     // CHECK: llvm.store {{.*}} : vector<4xi32>
-    // CHECK: nvvm.barrier0
+    // CHECK: nvvm.barrier
     // CHECK: llvm.load {{.*}} -> vector<4xi32>
     // CHECK-NOT: llvm.store
     // CHECK-NOT: llvm.load
@@ -307,19 +350,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: convert_blocked_to_dot_rhs
   tt.func @convert_blocked_to_dot_rhs(%a: tensor<64x64xf16, #blocked>) {
     // CHECK-COUNT-1: llvm.store
-    //          CHECK: nvvm.barrier0
+    //          CHECK: nvvm.barrier
     // CHECK-COUNT-4: nvvm.ldmatrix
-    //          CHECK: nvvm.barrier0
+    //          CHECK: nvvm.barrier
     // CHECK-COUNT-1: llvm.store
-    //          CHECK: nvvm.barrier0
+    //          CHECK: nvvm.barrier
     // CHECK-COUNT-4: nvvm.ldmatrix
-    //          CHECK: nvvm.barrier0
+    //          CHECK: nvvm.barrier
     // CHECK-COUNT-1: llvm.store
-    //          CHECK: nvvm.barrier0
+    //          CHECK: nvvm.barrier
     // CHECK-COUNT-4: nvvm.ldmatrix
-    //          CHECK: nvvm.barrier0
+    //          CHECK: nvvm.barrier
     // CHECK-COUNT-1: llvm.store
-    //          CHECK: nvvm.barrier0
+    //          CHECK: nvvm.barrier
     // CHECK-COUNT-4: nvvm.ldmatrix
     %b = ttg.convert_layout %a  : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
     tt.return

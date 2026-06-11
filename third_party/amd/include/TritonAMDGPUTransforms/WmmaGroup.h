@@ -49,7 +49,7 @@ struct WmmaScaleIntrinsic {
   static FailureOr<WmmaScaleIntrinsic> get(int version, unsigned mDim,
                                            unsigned nDim, Type aElemType,
                                            Type bElemType, Type dElemType,
-                                           bool isScale16);
+                                           bool isScale16, bool isTransposed);
 
   WmmaScaleIntrinsic(StringRef symbol, unsigned m, unsigned n, unsigned kDim,
                      unsigned kBaseAVal, unsigned kBaseBVal, Type dET)

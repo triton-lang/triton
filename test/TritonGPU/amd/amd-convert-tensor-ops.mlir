@@ -1,5 +1,109 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-tensor-ops | FileCheck %s
 
+// Gather i32: indices arrive with the NVIDIA-oriented slice encoding (#nv_slice)
+// from the shared TritonToTritonGPU pass. The pass re-layouts them to AMD's TDM
+// encoding and lowers to amdg.async_tdm_gather.
+
+#nv_slice = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked_res = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#padded_desc = #ttg.padded_shared<[32:+16] {order = [1, 0], shape = [1, 32]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-DAG: #[[$AMD_IDX_I32:.*]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+// CHECK-LABEL: @test_gather_i32
+// CHECK: ttg.convert_layout %{{.*}} -> tensor<32xi32, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_I32]]}>>
+// CHECK: ttg.local_alloc
+// CHECK: amdg.async_tdm_gather {{.*}} pred = %{{.*}} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_I32]]
+// CHECK: amdg.async_tdm_wait {num = 0 : i32}
+// CHECK: ttg.local_load
+tt.func public @test_gather_i32(%desc: !tt.tensordesc<1x32xi8, #padded_desc>,
+                                %indices: tensor<32xi32, #ttg.slice<{dim = 0, parent = #nv_slice}>>,
+                                %y_off: i32) -> tensor<32x32xi8, #blocked_res> {
+  %0 = tt.descriptor_gather %desc[%indices, %y_off] : (!tt.tensordesc<1x32xi8, #padded_desc>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #nv_slice}>>, i32) -> tensor<32x32xi8, #blocked_res>
+  tt.return %0 : tensor<32x32xi8, #blocked_res>
+}
+}
+
+// -----
+
+// Gather i16: same NVIDIA-oriented slice encoding on the indices (the shared
+// pass doesn't special-case index element type).
+
+#nv_slice16 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked_res16 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#padded_desc16 = #ttg.padded_shared<[32:+16] {order = [1, 0], shape = [1, 32]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-DAG: #[[$AMD_IDX_I16:.*]] = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+// CHECK-LABEL: @test_gather_i16
+// CHECK: ttg.convert_layout %{{.*}} -> tensor<32xi16, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_I16]]}>>
+// CHECK: ttg.local_alloc
+// CHECK: amdg.async_tdm_gather {{.*}} pred = %{{.*}} : tensor<32xi16, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_I16]]
+// CHECK: amdg.async_tdm_wait {num = 0 : i32}
+// CHECK: ttg.local_load
+tt.func public @test_gather_i16(%desc: !tt.tensordesc<1x32xi8, #padded_desc16>,
+                                %indices: tensor<32xi16, #ttg.slice<{dim = 0, parent = #nv_slice16}>>,
+                                %y_off: i32) -> tensor<32x32xi8, #blocked_res16> {
+  %0 = tt.descriptor_gather %desc[%indices, %y_off] : (!tt.tensordesc<1x32xi8, #padded_desc16>, tensor<32xi16, #ttg.slice<{dim = 0, parent = #nv_slice16}>>, i32) -> tensor<32x32xi8, #blocked_res16>
+  tt.return %0 : tensor<32x32xi8, #blocked_res16>
+}
+}
+
+// -----
+
+// Scatter i32: indices arrive with the NVIDIA-oriented slice encoding (#nv_slice)
+// from the shared TritonToTritonGPU pass. The pass re-layouts them to AMD's TDM
+// encoding and lowers to amdg.async_tdm_scatter.
+
+#nv_slice_s = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked_src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#padded_desc_s = #ttg.padded_shared<[32:+16] {order = [1, 0], shape = [1, 32]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-DAG: #[[$AMD_IDX_S_I32:.*]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+// CHECK-LABEL: @test_scatter_i32
+// CHECK: ttg.convert_layout %{{.*}} -> tensor<32xi32, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_S_I32]]}>>
+// CHECK: ttg.local_alloc {{.*}} : (tensor<32x32xi8
+// CHECK: amdg.async_tdm_scatter {{.*}} from {{.*}} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_S_I32]]
+// CHECK: amdg.async_tdm_wait {num = 0 : i32}
+// CHECK-NOT: ttg.local_load
+tt.func public @test_scatter_i32(%desc: !tt.tensordesc<1x32xi8, #padded_desc_s>,
+                                 %indices: tensor<32xi32, #ttg.slice<{dim = 0, parent = #nv_slice_s}>>,
+                                 %y_off: i32,
+                                 %src: tensor<32x32xi8, #blocked_src>) {
+  tt.descriptor_scatter %desc[%indices, %y_off], %src : !tt.tensordesc<1x32xi8, #padded_desc_s>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #nv_slice_s}>>, i32, tensor<32x32xi8, #blocked_src>
+  tt.return
+}
+}
+
+// -----
+
+// Scatter i16: same NVIDIA-oriented slice encoding on the indices (the shared
+// pass doesn't special-case index element type).
+
+#nv_slice_s16 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked_src16 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#padded_desc_s16 = #ttg.padded_shared<[32:+16] {order = [1, 0], shape = [1, 32]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-DAG: #[[$AMD_IDX_S_I16:.*]] = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+// CHECK-LABEL: @test_scatter_i16
+// CHECK: ttg.convert_layout %{{.*}} -> tensor<32xi16, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_S_I16]]}>>
+// CHECK: ttg.local_alloc {{.*}} : (tensor<32x32xi8
+// CHECK: amdg.async_tdm_scatter {{.*}} from {{.*}} : tensor<32xi16, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_S_I16]]
+// CHECK: amdg.async_tdm_wait {num = 0 : i32}
+// CHECK-NOT: ttg.local_load
+tt.func public @test_scatter_i16(%desc: !tt.tensordesc<1x32xi8, #padded_desc_s16>,
+                                 %indices: tensor<32xi16, #ttg.slice<{dim = 0, parent = #nv_slice_s16}>>,
+                                 %y_off: i32,
+                                 %src: tensor<32x32xi8, #blocked_src16>) {
+  tt.descriptor_scatter %desc[%indices, %y_off], %src : !tt.tensordesc<1x32xi8, #padded_desc_s16>, tensor<32xi16, #ttg.slice<{dim = 0, parent = #nv_slice_s16}>>, i32, tensor<32x32xi8, #blocked_src16>
+  tt.return
+}
+}
+
+// -----
+
 // CHECK-LABEL: test_cvt1
 // CHECK: amdg.async_tdm_copy_global_to_local {{.*}}: !tt.tensordesc<128x16xf16, #shared> -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
 // CHECK: amdg.async_tdm_wait  {num = 0 : i32}

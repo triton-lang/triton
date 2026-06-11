@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -convert-triton-amdgpu-to-llvm="arch=gfx942" -cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file -convert-triton-amdgpu-to-llvm="gfx-arch=gfx942" -cse | FileCheck %s
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @atomic_cas_0(%arg3: !tt.ptr<i32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {

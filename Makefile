@@ -34,13 +34,15 @@ test-cpp:
 
 .PHONY: test-unit
 test-unit: all
-	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) --ignore-glob='plugins/*' --ignore=test_debug.py
-	$(PYTEST) -n $(NUM_PROCS) python/test/unit/test_debug.py
+	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) --ignore-glob='plugins/*'
 	$(PYTEST) -n 6 python/triton_kernels/tests/
 	# Run attention separately to avoid out of gpu memory
 	$(PYTEST) python/tutorials/06-fused-attention.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
+
+.PHONY: test-plugins
+test-plugins: all
 	TRITON_PLUGIN_PATHS=python/triton/plugins/libTritonPluginsTestLib.so \
 		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
 	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
@@ -80,7 +82,7 @@ test-proton: all
 	$(PYTEST) third_party/proton/test/test_instrumentation.py::test_overhead
 
 .PHONY: test-python
-test-python: test-unit test-regression test-interpret test-proton
+test-python: test-unit test-plugins test-regression test-interpret test-proton
 
 .PHONY: test-nogpu
 test-nogpu: test-lit test-cpp

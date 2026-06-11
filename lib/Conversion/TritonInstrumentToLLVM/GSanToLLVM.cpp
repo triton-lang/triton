@@ -200,16 +200,6 @@ void emitAtomicTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
                     sourceLoc.line});
 }
 
-void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
-                   int numCTAs, const TargetInfoBase &targetInfo) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (numCTAs == 1) {
-    b.barrier(ttg::AddrSpace::Local);
-  } else {
-    targetInfo.clusterBarrier(loc, rewriter);
-  }
-}
-
 unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return index & ~freeVarMask;
 }

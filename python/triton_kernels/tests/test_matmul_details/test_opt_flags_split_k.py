@@ -6,15 +6,17 @@ import types
 import torch
 
 import triton_kernels.matmul_details.opt_flags as opt_flags
-from triton_kernels.tensor_details.dtype import FP16
+from triton_kernels.matmul import FusedActivation, PrecisionConfig, init_allocation
+from triton_kernels.tensor_details.dtype import BF16, FP16, FP32
 
 class _DummyPrecisionConfig:
-    def __init__(self):
+    def __init__(self, intermediate_out_dtype=torch.float32):
         self.b_mx_scale = None
         self.max_num_imprecise_acc = None
         self.a_mx_scale = None
         self.c_mx_scale = None
         self.enforce_bitwise_invariance = False
+        self.intermediate_out_dtype = intermediate_out_dtype
 
 
 def _stub_cuda_props(*_args, **_kwargs):
@@ -129,6 +131,44 @@ def test_make_default_opt_flags_nvidia_split_k_constraint(monkeypatch):
     )
 
     assert flags.split_k == 3
+
+
+def test_split_k_uses_intermediate_out_dtype(monkeypatch):
+    setup_nvidia(monkeypatch)
+
+    x = torch.empty((7, 11), dtype=torch.bfloat16)
+    w = torch.empty((11, 13), dtype=torch.bfloat16)
+    seen = {}
+
+    def capture_num_stages(*args, **kwargs):
+        seen["out_dtype"] = args[5]
+        return 2
+
+    monkeypatch.setattr(opt_flags.opt_flags_nvidia, "compute_num_stages", capture_num_stages)
+
+    cases = [
+        (PrecisionConfig(), _DummyPrecisionConfig(), torch.float32, FP32),
+        (
+            PrecisionConfig(intermediate_out_dtype=torch.bfloat16),
+            _DummyPrecisionConfig(torch.bfloat16),
+            torch.bfloat16,
+            BF16,
+        ),
+    ]
+    for precision_config, dummy_config, scratch_dtype, opt_dtype in cases:
+        allocation = init_allocation(
+            x, w, precision_config, FusedActivation(), None, None, 1, 1,
+            types.SimpleNamespace(split_k=3),
+        )
+        assert allocation.scratchpads["matmul"] == ((3, 1, 7, 13), scratch_dtype)
+
+        opt_flags.make_default_opt_flags_nvidia(
+            torch.float16, torch.float16, torch.float16, dummy_config,
+            4, 256, 128, 64, None, False, False, False, 0, False, False,
+            {"split_k": 3, "epilogue_subtile": 1},
+        )
+        assert seen["out_dtype"] == opt_dtype
+
 
 def test_max_allowable_mn_and_split_k_constraints(monkeypatch):
     setup_nvidia(monkeypatch)

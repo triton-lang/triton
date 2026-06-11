@@ -58,9 +58,14 @@ class Autotuner(KernelInterface):
 
             def _pre_hook(kwargs, reset_only=False):
                 for name in self.reset_to_zero:
-                    kwargs[name].zero_()
+                    if kwargs[name] is not None:
+                        kwargs[name].zero_()
                 if not reset_only:
-                    self.restore_copies = {name: kwargs[name].clone() for name in self.restore_value}
+                    self.restore_copies = {
+                        name: kwargs[name].clone()
+                        for name in self.restore_value
+                        if kwargs[name] is not None
+                    }
 
             self.pre_hook = _pre_hook
 
@@ -70,8 +75,8 @@ class Autotuner(KernelInterface):
         elif len(self.restore_value) > 0:
 
             def _post_hook(kwargs, exception):
-                for name in self.restore_value:
-                    kwargs[name].copy_(self.restore_copies[name])
+                for name, value in self.restore_copies.items():
+                    kwargs[name].copy_(value)
                 self.restore_copies = {}
 
             self.post_hook = _post_hook
@@ -238,6 +243,19 @@ class Autotuner(KernelInterface):
                     used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
                 else:
                     benchmark()
+
+                if knobs.autotuning.listener is not None:
+                    jit_fn = self.fn
+                    while not isinstance(jit_fn, JITFunction):
+                        jit_fn = jit_fn.fn
+                    knobs.autotuning.listener(
+                        fn=jit_fn,
+                        key=key,
+                        best_config=self.cache[key],
+                        configs_timings=self.configs_timings,
+                        duration=getattr(self, 'bench_time', None) if not used_cached_result else None,
+                        cache_hit=used_cached_result,
+                    )
 
             config = self.cache[key]
         else:

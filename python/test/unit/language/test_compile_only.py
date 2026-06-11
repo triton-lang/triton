@@ -21,6 +21,64 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
+def test_compile_only_ws_cluster_barrier_shared_memory(tmp_path) -> None:
+    src = """
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @ws_cluster_barrier() {
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<5xi8, #shared, #ttg.shared_memory, mutable>
+    ttg.warp_specialize()
+    default {
+      ttng.cluster_barrier
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+"""
+    temp_file = tmp_path / "ws_cluster_barrier.ttgir"
+    temp_file.write_text(src)
+    k = triton.compile(str(temp_file), target=GPUTarget("cuda", 90, 32))
+    ptx = k.asm["ptx"]
+    assert "mbarrier.arrive.release.cluster.shared::cluster.b64" in ptx
+    assert "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64" in ptx
+    assert "mapa" not in ptx
+    assert k.metadata.shared == 24
+    assert k.asm["cubin"] != b""
+
+
+def test_compile_only_expect_zero() -> None:
+
+    @triton.jit
+    def expect_zero_kernel(x_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + offsets)
+        y = tl.expect_zero(x, offsets < 8)
+        tl.store(out_ptr + offsets, y)
+
+    src = triton.compiler.ASTSource(
+        fn=expect_zero_kernel,
+        signature={"x_ptr": "*fp32", "out_ptr": "*fp32", "BLOCK_SIZE": "constexpr"},
+        constexprs={"BLOCK_SIZE": 16},
+    )
+    target = GPUTarget("cuda", 100, 32)
+
+    regular = triton.compile(src, target=target)
+    assert "arith.select" not in regular.asm["ttir"]
+    assert "tt.assert" not in regular.asm["ttir"]
+
+    debug = triton.compile(src, target=target, options={"debug": True})
+    assert "arith.select" not in debug.asm["ttir"]
+    assert "tt.assert" in debug.asm["ttir"]
+
+    fpsan = triton.compile(src, target=target, options={"instrumentation_mode": "fpsan"})
+    assert "arith.select" in fpsan.asm["ttir"]
+    assert "tt.assert" not in fpsan.asm["ttir"]
+
+
 def test_compile_only_dot() -> None:
 
     @triton.jit

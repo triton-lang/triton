@@ -58,7 +58,13 @@ def DotOpInterface : OpInterface<"DotOpInterface"> {
       /*desc=*/"Verify the dimensions of the A and B DotOp operands.",
       /*retType=*/"bool",
       /*methodName=*/"verifyDims",
-      /*args=*/(ins)>,
+      /*args=*/(ins),
+      /*methodBody=*/[{}],
+      /*defaultImpl=*/ [{
+        auto aShape = cast<ShapedType>($_op.getA().getType()).getShape();
+        auto bShape = cast<ShapedType>($_op.getB().getType()).getShape();
+        return aShape.back() == bShape[bShape.size() - 2];
+      }]>,
   InterfaceMethod<
       /*desc=*/"Verify the dimensions of the DotOp output.",
       /*retType=*/"bool",
@@ -69,7 +75,6 @@ def DotOpInterface : OpInterface<"DotOpInterface"> {
         auto aTy = cast<ShapedType>($_op.getA().getType());
         auto bTy = cast<ShapedType>($_op.getB().getType());
         auto cTy = cast<ShapedType>($_op->getOperand(2).getType());
-        auto dTy = cast<ShapedType>($_op.getD().getType());
         auto aShape = aTy.getShape();
         auto bShape = bTy.getShape();
         auto cShape = cTy.getShape();

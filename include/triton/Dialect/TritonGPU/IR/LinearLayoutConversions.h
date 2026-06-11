@@ -72,6 +72,10 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        NVMMASharedEncodingAttr shared,
                                        TMAMode mode,
                                        bool disableSwizzle = false);
+FailureOr<LinearLayout>
+nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
+                          NVMMASharedEncodingAttr shared, TMAMode mode,
+                          bool disableSwizzle, bool emitErrors);
 
 // Given a linear layout where the input dimensions contain a "block" dimension,
 // this method sets the "block" dimension to 0 and removes the corresponding
@@ -137,12 +141,10 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<unsigned> tilesPerWarp,
                                          ArrayRef<unsigned> warpsPerCTA);
 
-LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
-                                         ArrayRef<int64_t> dotOperandShape,
-                                         unsigned wmmaMDim,
-                                         unsigned scaleFactor,
-                                         LinearLayout ctaLayout,
-                                         CGAEncodingAttr cgaLayout);
+LinearLayout chooseScaledWmmaScaleLayout(
+    MLIRContext *ctx, int dotOperandIdx, ArrayRef<int64_t> dotOperandShape,
+    unsigned wmmaMDim, unsigned wmmaNDim, bool isTransposed,
+    unsigned scaleFactor, LinearLayout ctaLayout, CGAEncodingAttr cgaLayout);
 
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
                                           ArrayRef<int64_t> shape, int opIdx,
@@ -164,16 +166,23 @@ std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
                                        bool disableSwizzle);
 
-// Create a LinearLayout for TDM (Tensor DMA) block shapes.
-// Returns a (message, warp, block) -> (dim0, dim1, ...) layout.
+// Create a TDM (Tensor DMA) LinearLayout: (message, warp, block) ->
+// (dim0, dim1, ...).  TDM is warp-granular.  The "warp" sublayout is an
+// identity over `warpsPerCTA`, zero-padded up to log2(numWarps) so the
+// full module warpId is covered; padded rows expose the redundant bits
+// as free variables (via getFreeVariableMasks("warp")) so partial copies
+// (K < numWarps) can pred-off inactive warps.  "message" covers the
+// per-warp tile (surjectivity); "block" comes from `cgaLayout`.
 //
-// TDM operates at warp granularity. The warp dimension distributes warps across
-// output dimensions according to warpsPerCTA. The message dimension covers each
-// warp's portion of the block (blockShape / warpsPerCTA) for surjectivity. The
-// block dimension comes from cgaLayout.
+// `warpUsedHint`: power-of-two-popcount bitmask whose K = popcount(hint)
+// set bits select active warps.  The varying warpId bit positions in the
+// active set are the warp bits that contribute to per-warp offsets; all
+// other warpId bits become free variables for predicating inactive warps.
+// Empty = no-hint default (lowest log2(K) bits, K = prod(warpsPerCTA)).
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
-                                const LinearLayout &cgaLayout);
+                                const LinearLayout &cgaLayout, int totalWarps,
+                                std::optional<uint32_t> warpUsedHint = {});
 
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

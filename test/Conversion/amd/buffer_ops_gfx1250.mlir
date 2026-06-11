@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx1250 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s
 
 // Test buffer atomic RMW fadd with f32 on gfx1250
 // Verifies correct cache policy with SCOPE_DEV and fence generation

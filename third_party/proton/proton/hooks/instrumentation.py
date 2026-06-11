@@ -13,7 +13,7 @@ from triton.backends import backends
 
 from .hook import Hook
 from ..flags import flags
-from ..state import enter_state, exit_state, COMPUTE_METADATA_SCOPE_NAME
+from ..state import metadata_state
 from .. import mode
 
 # TODO(fywkevin): add support for major.minor
@@ -38,9 +38,8 @@ class CudaAllocator:
 
         # Create the buffer
         import torch
-        enter_state(COMPUTE_METADATA_SCOPE_NAME)
-        buffer = torch.zeros((aligned_size, ), dtype=torch.uint8, device="cuda")
-        exit_state()
+        with metadata_state():
+            buffer = torch.zeros((aligned_size, ), dtype=torch.uint8, device="cuda")
         self.instrumentation_hook.buffer = buffer
         return buffer
 

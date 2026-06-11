@@ -80,9 +80,10 @@ make dev-install-llvm
 Alternatively, follow these steps to build LLVM from source manually.
 </summary>
 
-1. Find the version of LLVM that Triton builds against.  Check
-`cmake/llvm-hash.txt` to see the current version. For example, if it says:
-       49af6502c6dcb4a7f7520178bd14df396f78240c.
+1. Find the version of LLVM that Triton builds against. Check the `llvm_hash`
+field in `cmake/llvm-info.json` to see the current version. For example, if it
+says:
+       "llvm_hash": "49af6502c6dcb4a7f7520178bd14df396f78240c"
 
    This means that the version of Triton you have builds against
    [LLVM](https://github.com/llvm/llvm-project) 49af6502.

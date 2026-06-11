@@ -77,6 +77,7 @@ def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
     let results = (outs TT_Type:$result);
 
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+    let hasFolder = 1;
     let hasVerifier = 1;
 }
 
@@ -737,7 +738,6 @@ def TT_ReduceOp: TT_Op<"reduce",
     let extraClassDeclaration = [{
       llvm::SmallVector<RankedTensorType> getInputTypes();
       llvm::SmallVector<Type> getElementTypes();
-      unsigned getNumOperands();
 
       // Returns the CombineOp iff this ReduceOp's region contains only
       // one CombineOp other than the return, or nullptr if not applicable.
@@ -773,7 +773,6 @@ def TT_ScanOp: TT_Op<"scan",
     let extraClassDeclaration = [{
       llvm::SmallVector<RankedTensorType> getInputTypes();
       llvm::SmallVector<Type> getElementTypes();
-      unsigned getNumOperands();
     }];
 }
 
@@ -1306,7 +1305,7 @@ def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorLoadLikeOpI
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
-    RankedTensorOf<[I32]>:$x_offsets,
+    RankedTensorOf<[I16, I32]>:$x_offsets,
     I32:$y_offset
   );
   let results = (outs TT_Tensor:$result);
@@ -1332,7 +1331,7 @@ def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [TT_DescriptorStoreLike
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
-    RankedTensorOf<[I32]>:$x_offsets,
+    RankedTensorOf<[I16, I32]>:$x_offsets,
     I32:$y_offset,
     TT_Tensor:$src
   );

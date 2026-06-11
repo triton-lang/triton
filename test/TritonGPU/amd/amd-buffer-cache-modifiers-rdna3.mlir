@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx1150 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1150 | FileCheck %s
 
 // Verify that RDNA3 (and 3.5) cache modifier qualifiers emit the correct cachepolicy
 // aux values in rocdl.raw.ptr.buffer.load/store operations.

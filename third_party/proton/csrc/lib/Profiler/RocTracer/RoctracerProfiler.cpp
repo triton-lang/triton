@@ -6,11 +6,12 @@
 #include "Driver/GPU/RoctracerApi.h"
 #include "Runtime/HipRuntime.h"
 #include "Utility/Env.h"
+#include "Utility/Errors.h"
 
+#include "Driver/GPU/RoctxTypes.h"
 #include "hip/amd_detail/hip_runtime_prof.h"
 #include "roctracer/roctracer_ext.h"
 #include "roctracer/roctracer_hip.h"
-#include "roctracer/roctracer_roctx.h"
 
 #include <algorithm>
 #include <iostream>
@@ -302,6 +303,9 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       const char *kernelName = getKernelName(cid, data);
       threadState.enterOp(Scope(kernelName ? kernelName : ""));
       auto &dataToEntry = threadState.dataToEntry;
+      if (dataToEntry.empty()) {
+        return;
+      }
       size_t numInstances = 1;
       if (cid == HIP_API_ID_hipGraphLaunch) {
         pImpl->corrIdToIsHipGraph[data->correlation_id] = true;
@@ -387,7 +391,11 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
         break;
       }
       }
+      const bool deactivated = threadState.dataToEntry.empty();
       threadState.exitOp();
+      if (deactivated) {
+        return;
+      }
       // Track outstanding op for flush
       profiler.correlation.submit(data->correlation_id);
     }
@@ -410,7 +418,6 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
       profiler.pImpl.get());
   auto &correlation = profiler.correlation;
 
-  static thread_local std::map<Data *, size_t> dataFlushedPhases;
   const roctracer_record_t *record =
       reinterpret_cast<const roctracer_record_t *>(begin);
   const roctracer_record_t *endRecord =
@@ -439,8 +446,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);
-  profiler.flushDataPhases(dataFlushedPhases, dataPhases,
-                           profiler.pendingGraphPool.get());
+  profiler.flushDataPhases(dataPhases, profiler.pendingGraphPool.get());
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
@@ -495,8 +501,7 @@ void RoctracerProfiler::doSetMode(
                                     periodicFlushingFormat, modeAndOptions,
                                     "RoctracerProfiler");
   } else if (!mode.empty()) {
-    throw std::invalid_argument(
-        "[PROTON] RoctracerProfiler: unsupported mode: " + mode);
+    throw makeInvalidArgument("RoctracerProfiler: unsupported mode: " + mode);
   }
 }
 

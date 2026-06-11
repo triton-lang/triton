@@ -2,6 +2,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -537,28 +538,63 @@ struct MemDescSubsliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto *ctx = op.getContext();
     auto srcTy = op.getSrc().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-
-    // PartitionedSharedEncoding is not yet supported for memdesc_subslice
-    if (isa<PartitionedSharedEncodingAttr>(srcTy.getEncoding())) {
-      return rewriter.notifyMatchFailure(
-          op,
-          "PartitionedSharedEncoding not yet supported in memdesc_subslice");
-    }
 
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     auto opOffsetVals = op.getOffsets();
 
-    auto base = smemObj.getBase();
     // Accumulate the logical offsets
     SmallVector<Value> offsetVals;
     for (auto [oldOffVal, opOff] :
          llvm::zip(smemObj.getOffsets(), opOffsetVals)) {
       offsetVals.push_back(b.add(oldOffVal, b.i32_val(opOff)));
     }
-    smemObj = SharedMemoryObject(base, llvmElemTy, offsetVals);
+
+    // For PartitionedSharedEncoding we need to pick the right base at load
+    // time. Let
+    //   o     = this op's static subslice offsets (one per dim),
+    //   c     = a logical base indices to the current subslice op,
+    //   L     = the shared LL (inputs: offset, partition, block;
+    //                          outputs: dim0, dim1, ...).
+    //
+    //   (1) c_src = c + o
+    //   (2) verifier makes o's bits disjoint from c's bits per dim, so:
+    //         c + o = c ^ o                                   (bit-disjoint)
+    //   (3) L^-1 is linear, so projecting (2) onto the partition component:
+    //         partition(L^-1(c_src)) = partition(L^-1(c)) ^ S
+    //       where  S = partition(L^-1(o))
+    //   (4) the existing lowering already computes i = partition(L^-1(c))
+    //       and indexes bases[i]; from (3) the correct base is:
+    //         bases[i ^ S]
+    //   (5) precompute that rotation once here
+    //         newBases[i] = oldBases[i ^ S]
+    //
+    // The offset component of (3) is already XORed in by getShmemOffset at
+    // load time; only the partition component needs this fix.
+    SmallVector<Value> newBases = llvm::to_vector(smemObj.getBases());
+    if (newBases.size() > 1) {
+      LinearLayout ll = triton::gpu::isPaddedEncoding(srcTy.getEncoding())
+                            ? triton::gpu::paddedLinearLayout(srcTy)
+                            : triton::gpu::toLinearLayout(srcTy);
+      auto kPartition = StringAttr::get(ctx, "partition");
+      assert(ll.hasInDim(kPartition) &&
+             "multiple bases require a partition input dim");
+      auto dimNames = standardOutDimNames(ctx, opOffsetVals.size());
+      SmallVector<std::pair<StringAttr, int32_t>> namedOffsets;
+      for (auto [dim, off] : llvm::zip(dimNames, opOffsetVals))
+        namedOffsets.push_back({dim, off});
+      auto partitionLayout = ll.invert().sublayout(dimNames, {kPartition});
+      int32_t partitionShift = partitionLayout.apply(namedOffsets)[0].second;
+      SmallVector<Value> rotated(newBases.size());
+      for (size_t i = 0; i < newBases.size(); ++i)
+        rotated[i] = newBases[i ^ partitionShift];
+      newBases = std::move(rotated);
+    }
+
+    smemObj = SharedMemoryObject(newBases, llvmElemTy, offsetVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();

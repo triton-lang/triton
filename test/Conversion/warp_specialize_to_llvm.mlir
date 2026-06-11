@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -split-input-file -mlir-print-local-scope -allow-unregistered-dialect -convert-warp-specialize-to-llvm -canonicalize=region-simplify=disabled | FileCheck %s --check-prefixes=COMMON,CHECK
-// RUN: triton-opt %s -split-input-file -mlir-print-local-scope -allow-unregistered-dialect -triton-amdgpu-convert-warp-specialize-to-llvm=arch=gfx1250 -canonicalize=region-simplify=disabled | FileCheck %s --check-prefixes=COMMON,AMD
+// RUN: triton-opt %s -split-input-file -mlir-print-local-scope -allow-unregistered-dialect -triton-amdgpu-convert-warp-specialize-to-llvm=gfx-arch=gfx1250 -canonicalize=region-simplify=disabled | FileCheck %s --check-prefixes=COMMON,AMD
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 11 : i32} {
 
@@ -20,27 +20,27 @@ llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
 
   // CHECK: bb{{[0-9]+}}:
   // CHECK-NEXT: nvvm.barrier id = [[C0]] number_of_threads = [[C128]]
-  nvvm.barrier0
+  nvvm.barrier
   ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4, 8, 10>}
   default {
     // CHECK: nvvm.barrier id = [[C0]] number_of_threads = [[C128]]
-    nvvm.barrier0
+    nvvm.barrier
     ttg.warp_yield
   }
   partition0() num_warps(4) {
-    nvvm.barrier0
+    nvvm.barrier
     ttg.warp_return
   }
   partition1() num_warps(2) {
-    nvvm.barrier0
+    nvvm.barrier
     ttg.warp_return
   }
   partition2() num_warps(1) {
-    nvvm.barrier0
+    nvvm.barrier
     ttg.warp_return
   } : () -> ()
   // CHECK: nvvm.barrier id = [[C0]] number_of_threads = [[C128]]
-  nvvm.barrier0
+  nvvm.barrier
   llvm.return
 }
 
@@ -104,7 +104,7 @@ llvm.func internal @inner_func_nw4() attributes {"ws_num_warps" = 4 : i32} {
   // CHECK: [[C128:%.*]] = llvm.mlir.constant(128 : i32)
   // CHECK: nvvm.barrier id = %arg0 number_of_threads = [[C128]]
   // CHECK: llvm.call @inner_func_nw4_ws(%arg0) : (i32) -> ()
-  nvvm.barrier0
+  nvvm.barrier
   llvm.call @inner_func_nw4() : () -> ()
   llvm.return
 }
@@ -113,14 +113,14 @@ llvm.func internal @inner_func_nw4() attributes {"ws_num_warps" = 4 : i32} {
 llvm.func internal @inner_func_nw2(%arg0: f32 {some.attr = "some_value"}) attributes {"ws_num_warps" = 2 : i32} {
   // CHECK: [[C64:%.*]] = llvm.mlir.constant(64 : i32)
   // CHECK: nvvm.barrier id = %arg1 number_of_threads = [[C64]]
-  nvvm.barrier0
+  nvvm.barrier
   llvm.return
 }
 
 // CHECK: llvm.func internal @inner_func_nw1_ws(%arg0: i32)
 llvm.func internal @inner_func_nw1() attributes {"ws_num_warps" = 1 : i32} {
   // CHECK: nvvm.bar.warp.sync
-  nvvm.barrier0
+  nvvm.barrier
   llvm.return
 }
 
@@ -260,7 +260,7 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: llvm.br [[AFTER:\^.*]]
 
-  // AMD: [[WID:%.*]] = llvm.call_intrinsic "llvm.amdgcn.wave.id"
+  // AMD: [[WID:%.*]] = rocdl.wave.id : i32
   // AMD-NEXT: [[IS_DEFAULT:%.*]] = llvm.icmp "ult" [[WID]], [[C4]]
   // AMD-NEXT: llvm.cond_br [[IS_DEFAULT]], [[BODY:\^bb[0-9]+]], [[SWITCH_LOOP:\^bb[0-9]+]]
 

@@ -83,6 +83,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUReduceDataDuplication);
   ADD_PASS_WRAPPER_0("add_allocate_warp_groups",
                      createTritonGPUAllocateWarpGroups);
+  ADD_PASS_OPTION_WRAPPER_1("add_allocate_warp_groups",
+                            createTritonGPUAllocateWarpGroups, bool);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory", createAllocateSharedMemory);
   ADD_PASS_WRAPPER_0("add_allocate_global_scratch_memory",
                      createTritonGPUGlobalScratchAllocationPass);
@@ -95,6 +97,12 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUCoalesceAsyncCopy);
   ADD_PASS_WRAPPER_0("add_global_sanitizer",
                      createTritonInstrumentGlobalSanitizer);
+  m.def("add_prepare_consan_captures",
+        [](PassManager &pm, const std::string &target) {
+          TritonInstrumentPrepareConSanCapturesOptions options;
+          options.target = target;
+          pm.addPass(createTritonInstrumentPrepareConSanCaptures(options));
+        });
   ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
                      createTritonInstrumentConcurrencySanitizer);
   ADD_PASS_WRAPPER_0("add_fp_sanitizer", createTritonInstrumentFpSanitizer);

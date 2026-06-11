@@ -24,6 +24,7 @@
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 
 #include "Allocation.h"
 #include "PatternTritonGPUOpToLLVM.h"
@@ -112,13 +113,16 @@ struct ConvertTritonGPUToLLVM
     if (enableConcurrencySanitizer) {
       auto hooks = mlir::triton::instrument::createConSanHooks("nvidia");
       assert(hooks && "no ConSan hooks registered for nvidia");
-      mlir::triton::instrument::runConcurrencySanitizer(mod, hooks.get());
+      if (failed(mlir::triton::instrument::runConcurrencySanitizer(
+              mod, hooks.get())))
+        return signalPassFailure();
       mlir::PassManager cleanupPm(context);
       cleanupPm.addPass(mlir::triton::gluon::createGluonCanonicalize());
       cleanupPm.addPass(mlir::createCSEPass());
       if (failed(cleanupPm.run(mod)))
         return signalPassFailure();
     }
+    mlir::triton::nvidia_gpu::runClusterBarrierMbarAllocator(mod);
     bool hasGlobalScratchAlloc = false;
     mod.walk([&](triton::gpu::GlobalScratchAllocOp) {
       hasGlobalScratchAlloc = true;
@@ -172,7 +176,8 @@ struct ConvertTritonGPUToLLVM
                                                  targetInfo, benefit);
     populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit,
                                     targetInfo);
-    populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
+    populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit,
+                                     targetInfo);
     mlir::triton::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
                                                     targetInfo, benefit);
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
@@ -207,6 +212,7 @@ struct ConvertTritonGPUToLLVM
                                                         benefit);
     mlir::triton::populateInstrumentationToLLVMPatterns(typeConverter, patterns,
                                                         targetInfo);
+    mlir::triton::populateFpSanToLLVMPatterns(typeConverter, patterns);
     mlir::triton::populateGSanToLLVMPatterns(typeConverter, patterns,
                                              axisInfoAnalysis, targetInfo);
 

@@ -321,7 +321,7 @@ getIntrinsicFamily(Type aElemType, Type bElemType, unsigned mDim) {
 FailureOr<WmmaScaleIntrinsic>
 WmmaScaleIntrinsic::get(int version, unsigned mDim, unsigned nDim,
                         Type aElemType, Type bElemType, Type dElemType,
-                        bool isScale16) {
+                        bool isScale16, bool isTransposed) {
   const auto intrinsicFamily = getIntrinsicFamily(aElemType, bElemType, mDim);
   const WmmaScaleMap &wmmaScaleMap =
       WmmaScaleDatabase::get(dElemType.getContext());
@@ -337,6 +337,9 @@ WmmaScaleIntrinsic::get(int version, unsigned mDim, unsigned nDim,
   auto [symbol, kDim] = values.back();
   auto [kBaseA, kBaseB] =
       kBaseForWmmaScale(aElemType, bElemType, mDim, nDim, kDim);
+  // On asymmetric and transposed we swap the operands, layouts and kBase.
+  if (isTransposed && mDim != nDim)
+    std::swap(kBaseA, kBaseB);
   return WmmaScaleIntrinsic(symbol, mDim, nDim, kDim, kBaseA, kBaseB,
                             dElemType);
 }

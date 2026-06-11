@@ -2,6 +2,7 @@
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 
 #include "triton/Conversion/MLIRTypes.h"
+#include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/ArrayRef.h"
 
 namespace mlir::triton {
@@ -21,7 +22,8 @@ public:
   virtual void barrier(Location loc, RewriterBase &rewriter,
                        triton::gpu::AddrSpace targets) const = 0;
   // Emit a cluster-level barrier when supported. Defaults to CTA barrier.
-  virtual void clusterBarrier(Location loc, RewriterBase &rewriter) const = 0;
+  virtual void clusterBarrier(Location loc, RewriterBase &rewriter,
+                              Operation *sourceOp) const = 0;
   // Insert a warp syncronization barrier that also guarantees local address
   // space visibility at warp level when supported by the backend.
   // Backends that do not support warp-level barriers should conservatively
@@ -29,27 +31,25 @@ public:
   virtual void warpSync(Location loc, RewriterBase &rewriter) const = 0;
 
   // Store/load a value from shared memory, either in the same CTA or, if
-  // `ctaId` is non-nullopt, in another CTA in the same group.
+  // `ctaId` is non-null, in another CTA in the same group.
   //
   // A target that does not support cross-CTA transfers will assert if ctaId is
-  // non-nullopt.
+  // non-null.
   //
   // Assumes the address is aligned to the width of `val`.
   virtual void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                            std::optional<Value> ctaId, Value val,
-                            Value pred) const = 0;
+                            Value ctaId, Value val, Value pred) const = 0;
   virtual Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                            std::optional<Value> ctaId, Type elemTy, Value pred,
+                            Value ctaId, Type elemTy, Value pred,
                             Operation *localLoadOp = nullptr) const = 0;
 
   void storeShared(RewriterBase &rewriter, Location loc, Value ptr, Value val,
                    Value pred) const {
-    storeDShared(rewriter, loc, ptr, /*ctaId=*/std::nullopt, val, pred);
+    storeDShared(rewriter, loc, ptr, /*ctaId=*/Value(), val, pred);
   }
   Value loadShared(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
                    Value pred) const {
-    return loadDShared(rewriter, loc, ptr, /*ctaId=*/std::nullopt, elemTy,
-                       pred);
+    return loadDShared(rewriter, loc, ptr, /*ctaId=*/Value(), elemTy, pred);
   }
 
   virtual Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
@@ -95,6 +95,8 @@ public:
                           StringRef message, StringRef file, StringRef func,
                           int line) const = 0;
 
+  virtual int getSharedMemoryBanks() const { return 32; }
+
   virtual int getSharedAddressSpace() const = 0;
 
   virtual int getAddressSpace(Attribute addressSpace) const = 0;
@@ -124,6 +126,13 @@ public:
   // lowering to LLVM. `llLoadOp` is the generated LLVM load op.
   virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                      Operation *llLoadOp) const {}
+
+  // Returns bases of lanes {LoadBases, StoreBases} that are active in a
+  // single hardware cycle for shared memory loads and stores.
+  virtual std::pair<gpu::LocalMemOpTile, gpu::LocalMemOpTile>
+  getSharedLdStTiles(int32_t vecBitwidth) const {
+    return {{}, {}};
+  }
 
   virtual ~TargetInfoBase() {}
 };

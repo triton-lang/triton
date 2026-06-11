@@ -254,6 +254,11 @@ class PartitionArgs:
     X_GATHER_MULTICAST: gl.constexpr
     W_SCALE_MULTICAST: gl.constexpr
     FORCE_EPILOGUE_WARPS_N1: gl.constexpr
+    REUSE_GATHER_INDICES: gl.constexpr
+    INLINE_MMA_INPUT_RELEASE: gl.constexpr
+
+    # This optional config is only used to test FPSAN.
+    REVERSE_K_TILES: gl.constexpr
 
     @gluon.jit
     def apply_block_schedule(self, block_id: gl.tensor) -> tuple[gl.tensor, gl.tensor, gl.tensor, gl.tensor]:
@@ -265,6 +270,35 @@ class PartitionArgs:
             block_schedule=self.x_block_schedule,
             BAND_N=self.BAND_N,
         )
+
+
+@gluon.jit
+def issue_activation_tile(
+    p: PartitionArgs,
+    idx,
+    phase,
+    issued,
+    offs_x_m,
+    off_k_x,
+    tile_x_bytes: gl.constexpr,
+):
+    empty_bar = p.x_empty_bars.index(idx)
+    ready_bar = p.x_ready_bars.index(idx)
+    x_buf = p.x_bufs.index(idx)
+
+    mbarrier.wait(empty_bar, phase, pred=issued >= p.x_num_bufs)
+    mbarrier.expect(ready_bar, tile_x_bytes)
+    tma.async_gather(
+        p.x_desc,
+        offs_x_m,
+        off_k_x,
+        ready_bar,
+        x_buf,
+        multicast=p.USE_2CTA and p.X_GATHER_MULTICAST,
+    )
+
+    idx, phase = advance(idx, phase, p.x_num_bufs)
+    return idx, phase, issued + 1
 
 
 @gluon.jit
@@ -280,38 +314,44 @@ def load_activations(p: PartitionArgs):
     phase = 1
     issued = 0
 
+    if p.REUSE_GATHER_INDICES:
+        cached_pid_m = gl.full((), -1, dtype=gl.int32)
+        cached_slice_idx = gl.full((), -1, dtype=gl.int32)
+        cached_shape_m = gl.full((), 0, dtype=gl.int32)
+        cached_offs_x_m = gl.full((p.BLOCK_M, ), p.x_desc.shape[0], dtype=gl.int32, layout=offs_layout)
+
     for block_id in range(gl.program_id(0), p.num_blocks, p.NUM_SMS):
         pid_m, _, slice_idx, slice_offset = p.apply_block_schedule(block_id)
         off_m = pid_m * p.BLOCK_M
-        shape_m = gl.load(p.x_slice_sizes + slice_idx)
         offs_m = off_m + gl.arange(0, p.BLOCK_M, layout=offs_layout)
-        mask_m = offs_m < shape_m
-        offs_x_m = gl.load(
-            p.gather_indx_ptr + slice_offset + offs_m,
-            mask=mask_m,
-            other=p.x_desc.shape[0],
-        )
 
-        for ki in range(p.K_TILES):
-            off_k_x = ki * p.BLOCK_K
-
-            empty_bar = p.x_empty_bars.index(idx)
-            ready_bar = p.x_ready_bars.index(idx)
-            x_buf = p.x_bufs.index(idx)
-
-            mbarrier.wait(empty_bar, phase, pred=issued >= p.x_num_bufs)
-            mbarrier.expect(ready_bar, tile_x_bytes)
-            tma.async_gather(
-                p.x_desc,
-                offs_x_m,
-                off_k_x,
-                ready_bar,
-                x_buf,
-                multicast=p.USE_2CTA and p.X_GATHER_MULTICAST,
+        if p.REUSE_GATHER_INDICES:
+            reuse_gather = (pid_m == cached_pid_m) & (slice_idx == cached_slice_idx)
+            load_gather = ~reuse_gather
+            shape_m = gl.load(p.x_slice_sizes + slice_idx, mask=load_gather, other=cached_shape_m)
+            mask_m = (offs_m < shape_m) & load_gather
+            offs_x_m = gl.load(
+                p.gather_indx_ptr + slice_offset + offs_m,
+                mask=mask_m,
+                other=cached_offs_x_m,
+            )
+            cached_pid_m = pid_m
+            cached_slice_idx = slice_idx
+            cached_shape_m = shape_m
+            cached_offs_x_m = offs_x_m
+        else:
+            shape_m = gl.load(p.x_slice_sizes + slice_idx)
+            mask_m = offs_m < shape_m
+            offs_x_m = gl.load(
+                p.gather_indx_ptr + slice_offset + offs_m,
+                mask=mask_m,
+                other=p.x_desc.shape[0],
             )
 
-            idx, phase = advance(idx, phase, p.x_num_bufs)
-            issued += 1
+        for ki in range(p.K_TILES):
+            tile_k = p.K_TILES - 1 - ki if p.REVERSE_K_TILES else ki
+            off_k_x = tile_k * p.BLOCK_K
+            idx, phase, issued = issue_activation_tile(p, idx, phase, issued, offs_x_m, off_k_x, tile_x_bytes)
 
 
 @gluon.jit
@@ -329,7 +369,8 @@ def load_weights(p: PartitionArgs):
 
         scale_idx = slice_idx * p.SCALE_FLAT_N + pid_n * p.SCALE_BLOCK_N_DIV
         for ki in range(p.K_TILES):
-            off_k_scale = ki * p.BLOCK_K // (p.MXFP_BLOCK_SIZE * p.SCALE_SIZE_INNER)
+            tile_k = p.K_TILES - 1 - ki if p.REVERSE_K_TILES else ki
+            off_k_scale = tile_k * p.BLOCK_K // (p.MXFP_BLOCK_SIZE * p.SCALE_SIZE_INNER)
 
             w_empty_bar = p.w_empty_bars.index(idx)
             w_ready_bar = p.w_ready_bars.index(idx)
@@ -338,7 +379,7 @@ def load_weights(p: PartitionArgs):
 
             mbarrier.wait(w_empty_bar, phase, pred=issued >= p.w_num_bufs)
             mbarrier.expect(w_ready_bar, bytes_per_stage)
-            tma.async_copy_global_to_shared(p.w_desc, [slice_idx, ki, pid_n, 0, 0], w_ready_bar, w_buf)
+            tma.async_copy_global_to_shared(p.w_desc, [slice_idx, tile_k, pid_n, 0, 0], w_ready_bar, w_buf)
             tma.async_copy_global_to_shared(
                 p.scale_desc,
                 [0, scale_idx, off_k_scale, 0, 0],
@@ -384,6 +425,7 @@ def mma_partition(p: PartitionArgs):
             x_buf = p.x_bufs.index(x_idx)
             mbarrier.wait(x_ready_bar, x_phase)
 
+            mma_release_bars = [x_empty_bar, w_empty_bar] if p.INLINE_MMA_INPUT_RELEASE else None
             blackwell.tcgen05_mma_scaled(
                 w_buf.reshape((p.BLOCK_N, p.BLOCK_K // 2)),
                 x_buf.permute((1, 0)),
@@ -393,9 +435,11 @@ def mma_partition(p: PartitionArgs):
                 a_type="e2m1",
                 b_type="e4m3",
                 use_acc=use_acc,
+                mbarriers=mma_release_bars,
             )
-            blackwell.tcgen05_commit(x_empty_bar)
-            blackwell.tcgen05_commit(w_empty_bar)
+            if not p.INLINE_MMA_INPUT_RELEASE:
+                blackwell.tcgen05_commit(x_empty_bar)
+                blackwell.tcgen05_commit(w_empty_bar)
 
             x_idx, x_phase = advance(x_idx, x_phase, p.x_num_bufs)
             w_idx, w_phase = advance(w_idx, w_phase, p.w_num_bufs)
@@ -431,7 +475,7 @@ def store_packed_out(
 def _swiglu_step1(acc_packed, limit):
     gelu, linear = float2.unpack2(acc_packed)
     gelu = gl.minimum(gelu.to(gl.float32), limit)
-    linear = gl.minimum(gl.maximum(linear.to(gl.float32), -limit), limit)
+    linear = gl.clamp(linear.to(gl.float32), -limit, limit)
     return gelu, linear
 
 
@@ -493,10 +537,14 @@ def epilogue_direct_store(
 @gluon.jit
 def apply_bias_and_scale(
     p: PartitionArgs,
+    acc_fpsan_probe_ptr: gl.tensor | None,
     idx,
     phase,
     pid_n,
     slice_idx,
+    off_m,
+    shape_m,
+    slice_offset,
     split_layout: gl.constexpr,
     bias_layout: gl.constexpr,
     acc_scale,
@@ -513,6 +561,13 @@ def apply_bias_and_scale(
     )
     mbarrier.wait(acc_ready_bar, phase)
     acc_regs = acc_buf.load().permute((1, 0))
+    if acc_fpsan_probe_ptr is not None:
+        probe_layout: gl.constexpr = acc_regs.type.layout
+        probe_offs_m = off_m + gl.arange(0, p.BLOCK_M, layout=gl.SliceLayout(1, probe_layout))[:, None]
+        probe_offs_n = off_n + gl.arange(0, p.BLOCK_N, layout=gl.SliceLayout(0, probe_layout))[None, :]
+        probe_mask = (probe_offs_m < shape_m) & (probe_offs_n < p.out_desc.shape[1] * p.REDUCTION_N)
+        probe_ptrs = acc_fpsan_probe_ptr + (slice_offset + probe_offs_m) * (p.out_desc.shape[1] * p.REDUCTION_N)
+        gl.store(probe_ptrs + probe_offs_n, acc_regs, mask=probe_mask)
     mbarrier.arrive(acc_empty_bar)
     idx, phase = advance(idx, phase, p.acc_num_bufs)
     acc = gl.convert_layout(acc_regs, split_layout)
@@ -524,7 +579,7 @@ def apply_bias_and_scale(
 
 
 @gluon.jit
-def epilogue_partition(p: PartitionArgs):
+def epilogue_partition(p: PartitionArgs, acc_fpsan_probe_ptr: gl.tensor | None):
     idx = 0
     phase = 0
 
@@ -553,10 +608,14 @@ def epilogue_partition(p: PartitionArgs):
         out_off_n_packed = pid_n * (p.BLOCK_N // p.REDUCTION_N // 4)
         idx, phase, acc_packed = apply_bias_and_scale(
             p,
+            acc_fpsan_probe_ptr,
             idx,
             phase,
             pid_n,
             slice_idx,
+            off_m,
+            shape_m,
+            slice_offset,
             split_layout,
             bias_layout,
             acc_scale,
@@ -624,9 +683,15 @@ def ws_matmul_kernel(
     X_GATHER_MULTICAST: gl.constexpr,
     W_SCALE_MULTICAST: gl.constexpr,
     FORCE_EPILOGUE_WARPS_N1: gl.constexpr,
+    REUSE_GATHER_INDICES: gl.constexpr,
+    INLINE_MMA_INPUT_RELEASE: gl.constexpr,
     SCALE_SIZE_OUTER: gl.constexpr,
     SCALE_SIZE_INNER: gl.constexpr,
     MXFP_BLOCK_SIZE: gl.constexpr,
+
+    # These optional configs are only used to test FPSAN.
+    REVERSE_K_TILES: gl.constexpr,
+    acc_fpsan_probe_ptr: gl.tensor | None,
 ):
     use_2cta: gl.constexpr = gl.num_ctas() > 1
     gl.static_assert(gl.num_ctas() == 1 or gl.num_ctas() == 2, "kernel supports at most 2 CTAs")
@@ -747,11 +812,14 @@ def ws_matmul_kernel(
         X_GATHER_MULTICAST=X_GATHER_MULTICAST,
         W_SCALE_MULTICAST=W_SCALE_MULTICAST,
         FORCE_EPILOGUE_WARPS_N1=FORCE_EPILOGUE_WARPS_N1,
+        REUSE_GATHER_INDICES=REUSE_GATHER_INDICES,
+        INLINE_MMA_INPUT_RELEASE=INLINE_MMA_INPUT_RELEASE,
+        REVERSE_K_TILES=REVERSE_K_TILES,
     )
 
     gl.warp_specialize(
         [
-            (epilogue_partition, (p, )),
+            (epilogue_partition, (p, acc_fpsan_probe_ptr)),
             (load_activations, (p, )),
             (load_weights, (p, )),
             (mma_partition, (p, )),
@@ -845,6 +913,9 @@ class KernelConfig:
     X_GATHER_MULTICAST: bool = True
     W_SCALE_MULTICAST: bool = True
     FORCE_EPILOGUE_WARPS_N1: bool = False
+    REUSE_GATHER_INDICES: bool = False
+    INLINE_MMA_INPUT_RELEASE: bool = False
+    REVERSE_K_TILES: bool = False
 
     LOAD_ACTIVATION_REGS: int = 112
     LOAD_WEIGHT_REGS: int = 48
@@ -869,95 +940,187 @@ class KernelConfig:
         return (self.BLOCK_M // self.SWIGLU_SUBTILE_FACTOR) * (self.BLOCK_N // reduction_n)
 
 
-def _select_base_config(slice_size: int) -> KernelConfig:
-    if slice_size <= 14:
-        block_m = 16
-    elif slice_size <= 32:
-        block_m = 32
-    elif slice_size <= 64:
-        block_m = 64
-    else:
-        block_m = 128
+def _select_tiny16_config(slice_size: int) -> KernelConfig | None:
+    if slice_size not in (4, 5, 6, 7, 8, 10, 12, 14):
+        return None
 
-    if slice_size <= 64:
-        x_num_bufs, w_num_bufs = {
-            16: (10, 5),
-            32: (5, 5),
-            64: (4, 4),
-        }[block_m]
-        return KernelConfig(
-            BLOCK_M=block_m,
-            BLOCK_N=128,
-            X_NUM_BUFS=x_num_bufs,
-            W_NUM_BUFS=w_num_bufs,
-            SWIGLU_SUBTILE_FACTOR=min(8, block_m // 8),
-            OCCUPANCY=2,
-            MAXNREG=64,
-            LOAD_ACTIVATION_REGS=48,
-            LOAD_WEIGHT_REGS=32,
-            MMA_REGS=32,
-        )
+    p = KernelConfig(
+        BLOCK_M=16,
+        NUM_CTAS=2,
+        BLOCK_N=256,
+        X_NUM_BUFS=10,
+        W_NUM_BUFS=6,
+        ACC_NUM_BUFS=2,
+        NUM_WARPS=4,
+        LOAD_ACTIVATION_WARPS=1,
+        SWIGLU_SUBTILE_FACTOR=1,
+        BAND_N=26,
+        FORCE_EPILOGUE_WARPS_N1=True,
+        LOAD_ACTIVATION_REGS=40,
+        LOAD_WEIGHT_REGS=32,
+        MMA_REGS=32,
+        MAXNREG=52,
+        OCCUPANCY=2,
+    )
+    if slice_size == 4:
+        return replace(p, ACC_NUM_BUFS=1)
+    if slice_size == 12:
+        return replace(p, BAND_N=30)
+    return p
+
+
+def _select_low32_config(slice_size: int) -> KernelConfig | None:
+    if slice_size not in (16, 20, 24, 32):
+        return None
+
+    p = KernelConfig(
+        BLOCK_M=32,
+        NUM_CTAS=2,
+        BLOCK_N=256,
+        W_NUM_BUFS=6,
+        ACC_NUM_BUFS=2,
+        NUM_WARPS=4,
+        LOAD_ACTIVATION_WARPS=2,
+        SWIGLU_SUBTILE_FACTOR=1,
+        BAND_N=26,
+        X_GATHER_MULTICAST=False,
+        W_SCALE_MULTICAST=False,
+        FORCE_EPILOGUE_WARPS_N1=True,
+        LOAD_ACTIVATION_REGS=40,
+        LOAD_WEIGHT_REGS=32,
+        MMA_REGS=32,
+        MAXNREG=48,
+        OCCUPANCY=2,
+    )
+    if slice_size == 16:
+        return replace(p, BAND_N=32)
+    if slice_size == 24:
+        return replace(p, ACC_NUM_BUFS=1, BAND_N=28)
+    return p
+
+
+def _select_slice28_config(slice_size: int) -> KernelConfig | None:
+    if slice_size != 28:
+        return None
 
     return KernelConfig(
-        BLOCK_M=block_m,
-        SWIGLU_SUBTILE_FACTOR=min(8, block_m // 8),
+        BLOCK_M=32,
+        NUM_CTAS=2,
+        BLOCK_N=256,
+        W_NUM_BUFS=6,
+        ACC_NUM_BUFS=2,
+        NUM_WARPS=4,
+        LOAD_ACTIVATION_WARPS=2,
+        SWIGLU_SUBTILE_FACTOR=1,
+        BAND_N=28,
+        LOAD_ACTIVATION_REGS=32,
+        LOAD_WEIGHT_REGS=32,
+        MMA_REGS=32,
+        MAXNREG=48,
+        OCCUPANCY=2,
     )
 
 
-def select_kernel_config(slice_size: int) -> KernelConfig:
-    p = _select_base_config(slice_size)
+def _select_mid64_config(slice_size: int) -> KernelConfig | None:
+    if not 36 <= slice_size <= 72:
+        return None
 
-    if p.BLOCK_M == 32 and p.BLOCK_N == 128 and slice_size in (16, 20, 24, 32):
-        p = replace(
-            p,
-            BLOCK_N=256,
-            NUM_CTAS=2,
-            NUM_WARPS=4,
-            W_NUM_BUFS=5,
-            SWIGLU_SUBTILE_FACTOR=1,
-            LOAD_ACTIVATION_WARPS=2,
-            LOAD_WEIGHT_WARPS=1,
-            MMA_WARPS=1,
-            LOAD_ACTIVATION_REGS=40,
-            LOAD_WEIGHT_REGS=32,
-            MMA_REGS=32,
-            MAXNREG=52,
-            BAND_N=32,
-            FORCE_EPILOGUE_WARPS_N1=True,
-        )
-        if slice_size == 16:
-            p = replace(p, X_NUM_BUFS=5)
-        elif slice_size in (20, 24):
-            p = replace(p, X_NUM_BUFS=6)
-        else:
-            p = replace(p, X_NUM_BUFS=6, X_GATHER_MULTICAST=False, W_SCALE_MULTICAST=False)
-    elif 36 <= slice_size <= 72:
-        p = replace(
-            p,
-            BLOCK_M=64,
-            BLOCK_N=256,
-            NUM_CTAS=2,
-            OCCUPANCY=2,
-            X_NUM_BUFS=6,
-            W_NUM_BUFS=5,
-            SWIGLU_SUBTILE_FACTOR=4,
-            LOAD_ACTIVATION_REGS=64,
-            LOAD_WEIGHT_REGS=48,
-            MMA_REGS=48,
-            MAXNREG=64,
-        )
-    elif p.BLOCK_M == 128 and p.BLOCK_N == 256 and slice_size >= 80:
-        p = replace(p, BLOCK_N=512, NUM_CTAS=2, W_NUM_BUFS=5)
+    p = KernelConfig(
+        BLOCK_M=64,
+        NUM_CTAS=2,
+        BLOCK_N=256,
+        W_NUM_BUFS=5,
+        SWIGLU_SUBTILE_FACTOR=2,
+        BAND_N=24,
+        FORCE_EPILOGUE_WARPS_N1=True,
+        LOAD_ACTIVATION_REGS=64,
+        MAXNREG=64,
+        OCCUPANCY=2,
+    )
+    if slice_size == 36:
+        return replace(p, ACC_NUM_BUFS=2, REUSE_GATHER_INDICES=True, INLINE_MMA_INPUT_RELEASE=True)
+    if slice_size == 40:
+        return replace(p, BAND_N=22, MAXNREG=56)
+    if slice_size == 48:
+        return replace(p, MAXNREG=56)
+    if slice_size == 56:
+        return replace(p, LOAD_ACTIVATION_REGS=72)
+    if slice_size == 64:
+        return replace(p, X_GATHER_MULTICAST=False, W_SCALE_MULTICAST=False, REUSE_GATHER_INDICES=True)
+    if slice_size == 72:
+        return p
+    return None
 
-    if p.BLOCK_M == 32 and p.BLOCK_N == 256 and p.NUM_CTAS == 2 and slice_size <= 32:
-        return replace(p, BAND_N=32)
-    if p.BLOCK_M == 64 and p.BLOCK_N == 256 and p.NUM_CTAS == 2 and 36 <= slice_size <= 72:
-        return replace(p, BAND_N=26)
-    if slice_size < 32:
+
+def _select_high128_config(slice_size: int) -> KernelConfig | None:
+    if slice_size < 80:
+        return None
+
+    p = KernelConfig(
+        BLOCK_N=512,
+        NUM_CTAS=2,
+        X_NUM_BUFS=6,
+        W_NUM_BUFS=5,
+        BAND_N=18,
+        FORCE_EPILOGUE_WARPS_N1=True,
+    )
+    if slice_size in (96, 544, 576, 608, 640):
+        return p
+    if slice_size in (112, 128, 256, 704, 768, 800, 864):
+        return replace(p, BAND_N=20)
+    if slice_size in (192, 672, 928):
+        return replace(p, BAND_N=24)
+    if slice_size in (288, 320, 352, 480):
+        return replace(p, X_NUM_BUFS=5, BAND_N=26, LOAD_ACTIVATION_REGS=104)
+    if slice_size in (160, 512, 992):
+        return replace(p, X_NUM_BUFS=5)
+    if slice_size == 80:
+        return replace(p, X_NUM_BUFS=5, BAND_N=24, LOAD_ACTIVATION_REGS=104)
+    if slice_size == 224:
+        return replace(p, X_NUM_BUFS=5, BAND_N=24)
+    if slice_size == 384:
+        return replace(p, LOAD_ACTIVATION_REGS=104)
+    if slice_size == 416:
+        return replace(p, REUSE_GATHER_INDICES=True)
+    if slice_size == 448:
         return replace(p, BAND_N=22)
-    if slice_size < 416:
-        return replace(p, BAND_N=18)
-    return replace(p, BAND_N=26)
+    if slice_size == 736:
+        return replace(p, BAND_N=20, LOAD_ACTIVATION_REGS=104)
+    if slice_size == 832:
+        return p
+    if slice_size == 896:
+        return replace(
+            p,
+            BAND_N=24,
+            FORCE_EPILOGUE_WARPS_N1=False,
+            W_SCALE_MULTICAST=False,
+            REUSE_GATHER_INDICES=True,
+            INLINE_MMA_INPUT_RELEASE=True,
+        )
+    if slice_size == 960:
+        return replace(p, BAND_N=24, LOAD_ACTIVATION_REGS=104)
+    return None
+
+
+def _select_best_batch_config(slice_size: int) -> KernelConfig | None:
+    for selector in (
+            _select_tiny16_config,
+            _select_low32_config,
+            _select_slice28_config,
+            _select_mid64_config,
+            _select_high128_config,
+    ):
+        p = selector(slice_size)
+        if p is not None:
+            return p
+    return None
+
+
+def select_kernel_config(slice_size: int) -> KernelConfig:
+    p = _select_best_batch_config(slice_size)
+    if p is not None:
+        return p
+    return KernelConfig()
 
 
 def matmul(
@@ -970,6 +1133,7 @@ def matmul(
     c: torch.Tensor,
     fused_activation: FusedActivation,
     p: KernelConfig | None = None,
+    acc_fpsan_probe: torch.Tensor | None = None,
 ):
     specs = fused_activation.specs
     assert specs.name == "swiglu"
@@ -1088,10 +1252,15 @@ def matmul(
         X_GATHER_MULTICAST=p.X_GATHER_MULTICAST,
         W_SCALE_MULTICAST=p.W_SCALE_MULTICAST,
         FORCE_EPILOGUE_WARPS_N1=p.FORCE_EPILOGUE_WARPS_N1,
+        REUSE_GATHER_INDICES=p.REUSE_GATHER_INDICES,
+        INLINE_MMA_INPUT_RELEASE=p.INLINE_MMA_INPUT_RELEASE,
         #
         SCALE_SIZE_OUTER=p.SCALE_SIZE_OUTER,
         SCALE_SIZE_INNER=p.SCALE_SIZE_INNER,
         MXFP_BLOCK_SIZE=p.MXFP_BLOCK_SIZE,
+        #
+        REVERSE_K_TILES=p.REVERSE_K_TILES,
+        acc_fpsan_probe_ptr=acc_fpsan_probe,
         #
         num_warps=p.NUM_WARPS,
         num_ctas=p.NUM_CTAS,
@@ -1224,14 +1393,14 @@ def init_routing_data(c: MLPConfig, batch_size: int, local_rank: int, device: st
 
 
 def prepare_case(c: MLPConfig, batch_size: int, device: str, seed: int = 0, uniform_routing: bool = False,
-                 reference: bool = False) -> PreparedCase:
+                 reference: bool = False, p: KernelConfig | None = None) -> PreparedCase:
     torch.manual_seed(seed)
 
     local_rank = int(torch.randint(0, c.num_expert_shards, size=()).item())
     k, n = c.hidden_size, c.intermediate_size
     n_expts_local = c.num_experts // c.num_expert_shards
     ragged_metadata, gather_indx = init_routing_data(c, batch_size, local_rank, device, uniform_routing)
-    p = None if reference else select_kernel_config(ragged_metadata.expected_slice_size)
+    p = None if reference else (p or select_kernel_config(ragged_metadata.expected_slice_size))
     x = alloc_randn((batch_size, k), dtype=torch.float8_e4m3fn, device=device)
     w, w_scale = alloc_randn_fp4((n_expts_local, k, n), device=device, p=p)
     bias = alloc_randn((n_expts_local, n), dtype=torch.float32, device=device)
@@ -1353,7 +1522,7 @@ def is_blackwell():
 @pytest.mark.parametrize("c", [GPT_OSS_120B_CONFIG])
 @pytest.mark.parametrize("batch_size", get_batch_sizes(GPT_OSS_120B_CONFIG))
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon MoE BMM1 fused-gather is only supported on Blackwell GPUs")
-def test_op(c: MLPConfig, batch_size: tuple[int, ...]):
+def test_op(c: MLPConfig, batch_size: int):
     prepared = prepare_case(c, batch_size, device=f"cuda:{torch.cuda.current_device()}")
     ref_y, ref_precision = run_provider(prepared, "reference")
     cand_y, cand_precision = run_provider(prepared, "example")
@@ -1378,6 +1547,61 @@ def test_op(c: MLPConfig, batch_size: tuple[int, ...]):
             description=f"{description}:out_scale",
             verbose=False,
         )
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Gluon MoE BMM1 fused-gather is only supported on Blackwell GPUs")
+def test_op_consan():
+    with triton.knobs.compilation.scope():
+        triton.knobs.compilation.instrumentation_mode = "consan"
+        test_op(GPT_OSS_120B_CONFIG, batch_size=128)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Gluon MoE BMM1 fused-gather is only supported on Blackwell GPUs")
+def test_op_fpsan():
+    p0 = _select_tiny16_config(4)
+    assert p0 is not None
+    p0 = replace(p0, X_NUM_BUFS=2, W_NUM_BUFS=2)
+    p1 = replace(
+        p0,
+        BLOCK_M=32,
+        X_GATHER_MULTICAST=False,
+        W_SCALE_MULTICAST=False,
+        REUSE_GATHER_INDICES=True,
+        INLINE_MMA_INPUT_RELEASE=True,
+        REVERSE_K_TILES=True,
+    )
+    configs = (p0, p1)
+
+    def run(p: KernelConfig) -> torch.Tensor:
+        prepared = prepare_case(
+            GPT_OSS_120B_CONFIG,
+            batch_size=128,
+            device=f"cuda:{torch.cuda.current_device()}",
+            p=p,
+        )
+        for off_k in range(0, prepared.x.shape[1], p.BLOCK_K):
+            prepared.x[:, off_k:off_k + p.BLOCK_K] = (448.0, 0.015625, -448.0, 1.0)[(off_k // p.BLOCK_K) % 4]
+        precision_config = make_precision_config(prepared)
+        acc_fpsan_probe = torch.zeros(
+            (prepared.out_shape[0], prepared.out_shape[1] * prepared.fused_activation.specs.reduction_n),
+            dtype=torch.float32,
+            device=prepared.x.device,
+        )
+        run_kernel(
+            prepared,
+            lambda **kwargs: matmul(**kwargs, p=p, acc_fpsan_probe=acc_fpsan_probe),
+            precision_config,
+            make_output_buffer(prepared),
+        )
+        return acc_fpsan_probe.view(torch.int32)
+
+    normal = tuple(run(p) for p in configs)
+    assert not torch.equal(*normal)
+
+    with triton.knobs.compilation.scope():
+        triton.knobs.compilation.instrumentation_mode = "fpsan"
+        fpsan = tuple(run(p) for p in configs)
+    assert torch.equal(*fpsan)
 
 
 # ===-----------------------------------------------------------------------===#

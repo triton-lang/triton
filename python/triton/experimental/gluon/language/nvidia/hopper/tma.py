@@ -207,7 +207,9 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
     Args:
         tensor_desc: Tensor descriptor (tiled)
         coord: Coordinates in the source tensor
-        barrier: Barrier for synchronization
+        barrier: Barrier for synchronization. In a two-CTA kernel, use a
+            two-CTA barrier when this TMA load feeds a tcgen05 op; otherwise
+            use a barrier allocated with ``two_ctas=False``.
         result: Destination memory descriptor
         pred: Predicate for conditional execution
         multicast: Enable multicast
@@ -242,7 +244,9 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
             - For 3D tensors: 1 offset
             - For 4D tensors: 2 offsets
             - For 5D tensors: 3 offsets
-        barrier: Barrier for synchronization
+        barrier: Barrier for synchronization. In a two-CTA kernel, use a
+            two-CTA barrier when this TMA load feeds a tcgen05 op; otherwise
+            use a barrier allocated with ``two_ctas=False``.
         result: Destination memory descriptor
         pred: Predicate for conditional execution
         multicast: Enable multicast
@@ -380,9 +384,24 @@ def async_atomic_xor(tensor_desc, coord, src, _semantic=None):
 
 
 @builtin
-def store_wait(pendings, _semantic=None):
+def store_wait(pendings, read_only=True, _semantic=None):
+    """
+    Wait for pending TMA stores.
+
+    Args:
+        pendings (int | ttgl.constexpr): Maximum number of TMA stores allowed to remain pending.
+        read_only (bool | ttgl.constexpr): If true, wait only until the pending stores have finished reading
+            their shared-memory sources, but writes may not be visible in HBM. Defaults to true.
+
+    Notes:
+        By default, ``tma.store_wait`` only waits for the TMA store to finish reading from the shared memory,
+        however this does not mean that the write has been fully flushed to HBM. If your kernel uses TMA to pass
+        messages between CTAs, or between nvlink devices then you will need to use ``read_only=False`` before any
+        release operation.
+    """
     pendings = _unwrap_if_constexpr(pendings)
-    _semantic.builder.create_async_tma_store_wait(pendings)
+    read_only = _unwrap_if_constexpr(read_only)
+    _semantic.builder.create_async_tma_store_wait(pendings, read_only)
 
 
 @builtin

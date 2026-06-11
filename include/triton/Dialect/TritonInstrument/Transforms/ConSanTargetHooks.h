@@ -45,18 +45,6 @@ struct MemEffectsOpInfo {
     int count;
     BarrierTrackingMode trackingMode = BarrierTrackingMode::Frontier;
     int txCount = 0;
-    // For EffectWrites, effectRecipientCTAs identifies the CTA rows where the
-    // op wrote its explicit result. By default, for
-    // diagonalEffectRecipientCTAs=false, waiting on a barrier publishes the CTA
-    // rows in effectRecipientCTAs, which is the full mask. This is the
-    // behaviour of TMA multicast. If diagonalEffectRecipientCTAs is true,
-    // waiting on a barrier publishes only the CTA rows in effectRecipientCTAs,
-    // which is the diagonal mask. e.g. effectRecipientCTAs = 0b1101 If
-    // DiagonalEffectRecipientCTAs is false, waiting on the barrier publishes
-    // the following CTA rows: CTA0 0b1101 CTA1 0b1101 CTA2 0b1101 CTA3 0b1101
-    // If diagonalEffectRecipientCTAs is true, waiting on the barrier publishes
-    // the following CTA rows: CTA0 0b1000 CTA1 0b0100 CTA2 0b0000 CTA3 0b0001
-    bool diagonalEffectRecipientCTAs = false;
   };
   enum class TrackingKind {
     None,
@@ -183,7 +171,8 @@ public:
   getRequiredCommitKinds(ModuleOp module) const = 0;
 };
 
-void runConcurrencySanitizer(ModuleOp module, const ConSanTargetHooks *hooks);
+LogicalResult runConcurrencySanitizer(ModuleOp module,
+                                      const ConSanTargetHooks *hooks);
 
 using ConSanHooksFactory = std::function<std::unique_ptr<ConSanTargetHooks>()>;
 void registerConSanHooks(llvm::StringRef key, ConSanHooksFactory factory);

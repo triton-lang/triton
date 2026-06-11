@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx942" | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx942" | FileCheck %s
 
 // Test that tt.load with i64 offsets derived from provably bounded non-negative
 // expressions is converted to amdg.buffer_load with an arith.trunci from i64 to i32.

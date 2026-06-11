@@ -6,17 +6,27 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonInstrument/IR/ConSanConstants.h"
 
 #include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
 
 namespace mlir::triton::AMD {
 
 unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
-                                        RankedTensorType dstTy) {
+                                        RankedTensorType dstTy,
+                                        TargetInfoBase &targetInfo) {
   if (!cvtNeedsSharedMemory(srcTy, dstTy))
     return 0;
-  unsigned elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
-  return elems * getBitwidth(srcTy) / 8;
+  int numBanks = targetInfo.getSharedMemoryBanks();
+  auto srcLayout = gpu::toLinearLayout(srcTy);
+  auto dstLayout = gpu::toLinearLayout(dstTy);
+  auto bitwidth = getBitwidth(srcTy);
+  auto vecBitwidth =
+      triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
+  auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
+  unsigned elems = getNumScratchElemsSwizzledCvt(srcLayout, dstLayout, bitwidth,
+                                                 numBanks, srcTile, dstTile);
+  return elems * bitwidth / 8;
 }
 
 static unsigned getBufferAtomicScratchSizeInBytes(Operation *op) {
@@ -39,12 +49,28 @@ static unsigned getBufferAtomicScratchSizeInBytes(Operation *op) {
   return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
 }
 
-unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op) {
+unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
+                                            TargetInfoBase &targetInfo) {
+
+  if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
+    ReduceOpHelper::GetNumScratchElemsFn AMDGetNumScratchElemsFn =
+        [&targetInfo](const triton::LinearLayout &src,
+                      const triton::LinearLayout &dst, unsigned bitwidth) {
+          int numBanks = targetInfo.getSharedMemoryBanks();
+          auto vecBitwidth =
+              triton::gpu::getVecBitwidthLdSt(src, dst, bitwidth);
+          auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
+          return getNumScratchElemsSwizzledCvt(src, dst, bitwidth, numBanks,
+                                               srcTile, dstTile);
+        };
+    return ReduceOpHelper(reduceOp).getScratchSizeInBytes(
+        AMDGetNumScratchElemsFn);
+  }
 
   if (auto cvtLayout = dyn_cast<mlir::triton::gpu::ConvertLayoutOp>(op)) {
     auto srcTy = cvtLayout.getSrc().getType();
     auto dstTy = cvtLayout.getType();
-    return getConvertLayoutScratchInBytes(srcTy, dstTy);
+    return getConvertLayoutScratchInBytes(srcTy, dstTy, targetInfo);
   }
 
   if (auto ws = dyn_cast<mlir::triton::gpu::WarpSpecializeOp>(op)) {
@@ -57,10 +83,10 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op) {
       else
         captureSize += mlir::triton::gpu::getSharedMemorySize(type);
     }
-    // ConSan adds captures after allocation; reserve space pre-computed by
-    // the PrepareConSanCaptures pass.
-    if (auto extra =
-            ws->getAttrOfType<IntegerAttr>("consan.extra_capture_bytes"))
+    // ConSan adds captures after allocation; reserve space pre-computed by the
+    // common TritonInstrumentPrepareConSanCaptures pass.
+    if (auto extra = ws->getAttrOfType<IntegerAttr>(
+            mlir::triton::instrument::kConSanExtraCaptureBytesAttr))
       captureSize += extra.getInt();
     return captureSize;
   }

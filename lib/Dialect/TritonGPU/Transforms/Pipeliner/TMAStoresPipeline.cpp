@@ -32,6 +32,24 @@ static SmallVector<TMAStore> getTMAStores(scf::ForOp forOp) {
   return tmaStores;
 }
 
+static bool hasAcquireOrReleaseSemantic(tt::MemSemantic sem) {
+  return sem != tt::MemSemantic::RELAXED;
+}
+
+static bool hasAcquireOrReleaseOp(scf::ForOp forOp) {
+  bool hasAcquireOrRelease = false;
+  forOp.getBody()->walk([&](Operation *op) {
+    if (auto atomicRMW = dyn_cast<tt::AtomicRMWOp>(op)) {
+      hasAcquireOrRelease = hasAcquireOrReleaseSemantic(atomicRMW.getSem());
+    } else if (auto atomicCAS = dyn_cast<tt::AtomicCASOp>(op)) {
+      hasAcquireOrRelease = hasAcquireOrReleaseSemantic(atomicCAS.getSem());
+    }
+    return hasAcquireOrRelease ? WalkResult::interrupt()
+                               : WalkResult::advance();
+  });
+  return hasAcquireOrRelease;
+}
+
 static Value createAlloc(scf::ForOp &forOp, const TMAStore &store) {
   OpBuilder builder(forOp);
   RankedTensorType ty = store.src.getType();
@@ -52,9 +70,9 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
   OpBuilder builder(store.op);
   Location loc = store.op->getLoc();
 
-  // Put wait before the local_store make the store truly async. We know
-  // that we are the only user of the CopyLocalToGlobal.
-  ttng::TMAStoreWaitOp::create(builder, loc, 0);
+  // Put wait before the local_store to make the store truly async. We only
+  // need the TMA read from the allocation to complete before reusing it.
+  ttng::TMAStoreWaitOp::create(builder, loc, 0, /*read_only=*/true);
   ttg::LocalStoreOp::create(builder, loc, store.src, alloc);
   ttng::FenceAsyncSharedOp::create(builder, loc, false);
   auto desc = store.desc;
@@ -66,7 +84,9 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
                                    reduceOp.getIndices(), alloc);
   } else {
     auto scatterOp = cast<tt::DescriptorScatterOp>(store.op);
-    ttng::AsyncTMAScatterOp::create(builder, loc, desc, scatterOp.getXOffsets(),
+    Value xOffsets =
+        ttng::sextI16ToI32Indices(scatterOp.getXOffsets(), builder, loc);
+    ttng::AsyncTMAScatterOp::create(builder, loc, desc, xOffsets,
                                     scatterOp.getYOffset(), alloc);
   }
 
@@ -82,6 +102,8 @@ static void lowerTMADescriptorCreation(scf::ForOp forOp) {
 bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
   SmallVector<TMAStore> tmaStores = getTMAStores(forOp);
   if (tmaStores.empty())
+    return false;
+  if (hasAcquireOrReleaseOp(forOp))
     return false;
 
   DenseMap<Operation *, Value> storeToAlloc;
@@ -110,7 +132,8 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
   // Deallocate shared memory buffers.
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
-  ttng::TMAStoreWaitOp::create(builder, forOp->getLoc(), 0);
+  ttng::TMAStoreWaitOp::create(builder, forOp->getLoc(), 0,
+                               /*read_only=*/false);
   for (auto it : storeToAlloc) {
     ttg::LocalDeallocOp::create(builder, forOp->getLoc(), it.second);
   }

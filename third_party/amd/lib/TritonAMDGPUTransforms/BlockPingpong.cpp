@@ -1,6 +1,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -9,6 +10,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -25,6 +27,16 @@ namespace mlir {
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
 namespace {
+
+static LLVM::FenceOp createLocalMMRAFence(OpBuilder &builder, Location loc,
+                                          LLVM::AtomicOrdering ordering) {
+  Attribute mmra =
+      builder.getAttr<LLVM::MMRATagAttr>("amdgpu-synchronize-as", "local");
+  auto fence =
+      LLVM::FenceOp::create(builder, loc, ordering, /*syncscope=*/"workgroup");
+  fence->setDiscardableAttr(LLVM::LLVMDialect::getMmraAttrName(), mmra);
+  return fence;
+}
 
 // This pass transforms a for-loop calculating a GEMM. Main purpose of the
 // transform is improve the efficiency of the GPU dot instruction (mfma)
@@ -720,28 +732,30 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
 // Typical `s_xxx` instructions include:
 //   - Control flow: `s_cbranch`
 //   - Priority control: `s_setprio`
-//   - Synchronization and dependency: `s_waitcnt`
+//   - Synchronization and dependency: MMRA-tagged local fences, lowered by LLVM
+//     to target-specific wait instructions.
 //
 // These are usually inserted near `s_barrier` boundaries, and the current
 // implementation carefully places them to ensure they belong to the memory
 // cluster, improving overall overlap and utilization.
 //
 //
-// 3. Placement of `s_waitcnt lgkmcnt(0)`
-// --------------------------------------
-// We place `s_waitcnt lgkmcnt(0)` at the *end* of the memory cluster to ensure
-// that all shared-memory load (`ds_read`) instructions have completed before
-// entering the compute cluster.
+// 3. Placement of local MMRA fences
+// ---------------------------------
+// We place local MMRA release fences at the *end* of the memory cluster to
+// ensure that all shared-memory load (`ds_read`) instructions have completed
+// before entering the compute cluster. LLVM lowers these fences to the
+// appropriate target-specific wait instructions.
 //
 // This placement prevents the LLVM backend from inserting additional
-// `s_waitcnt lgkmcnt()` instructions inside the compute cluster based on
+// wait instructions inside the compute cluster based on
 // inferred dependencies between `mfma` and `ds_read` operations.
 //
 // This approach is consistent with the previous design goal: to eliminate all
 // `s_xxx` instructions from the compute cluster so it can run uninterrupted
-// MFMA and VALU operations. Keeping `s_waitcnt lgkmcnt(0)` at the cluster
-// boundary enforces data dependency correctness while preserving the clean
-// separation between memory and compute phases.
+// MFMA and VALU operations. Keeping the local fence at the cluster boundary
+// enforces data dependency correctness while preserving the clean separation
+// between memory and compute phases.
 LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
                                                       Location loc) {
   assert(dotOps.size() == 2);
@@ -784,10 +798,10 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   // Ideally we want the memory cluster to start with
   //
   // s_barrier
-  // s_waitcnt vmcnt(x) lgkmcnt(0)
+  // local wait
   // s_setprio 1
   //
-  // However, the membar pass will put s_waitcnt before s_barrier.
+  // However, the membar path will put the local MMRA fence before s_barrier.
   // But we can at least put s_setprio in the memory cluster.
   prependOp(ROCDL::SetPrioOp::create(builder, loc, highPriority), false);
 
@@ -795,19 +809,18 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   // We want the 2nd compute cluster to start with
   //
   // s_setprio 0
-  // s_waitcnt lgkmcnt(0)
+  // local MMRA release fence
   // s_barrier
   //
   // Check note 2 and 3 for details.
   updateOpInsertion(dotOps[1]);
   prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
-  auto dsAttr = builder.getI32IntegerAttr(0);
-  prependOp(tt::amdgpu::MemoryCounterWaitOp::create(
-                builder, loc, /* load= */ nullptr, /* store= */ nullptr,
-                /* ds= */ dsAttr),
+  prependOp(createLocalMMRAFence(builder, loc, LLVM::AtomicOrdering::release),
             false);
   prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
+  prependOp(createLocalMMRAFence(builder, loc, LLVM::AtomicOrdering::acquire),
+            false);
   prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
 
   // MemoryCluster2
@@ -827,7 +840,7 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   // stays in the memory cluster.
   //
   // s_setprio 0
-  // s_waitcnt lgkmcnt(0)
+  // local MMRA release fence
   // s_cbranch
   // s_barrier
   //
@@ -839,9 +852,7 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
   prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
-  prependOp(tt::amdgpu::MemoryCounterWaitOp::create(
-                builder, loc, /* load= */ nullptr, /* store= */ nullptr,
-                /* ds= */ dsAttr),
+  prependOp(createLocalMMRAFence(builder, loc, LLVM::AtomicOrdering::release),
             false);
 
   return success();
@@ -870,7 +881,10 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
         tokens.push_back(token);
       }
     }
-    newAsyncWaitOp = ttg::AsyncWaitOp::create(builder, loc, tokens, 0);
+    // Drop pre-calculated mark_num and conservatively set 0 before
+    // updateWaits (in runOnOperation) re-evaluates against the token chain
+    // post-reorder.
+    newAsyncWaitOp = ttg::AsyncWaitOp::create(builder, loc, tokens, /*num=*/0);
     for (auto asyncWaitOp : asyncWaitOps) {
       asyncWaitOp.getResult().replaceAllUsesWith(newAsyncWaitOp.getResult());
       asyncWaitOp->erase();
@@ -935,13 +949,11 @@ void Pingponger::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
                                        warpIDX, constZero);
   auto warpHigh = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne,
                                         warpIDX, constZero);
-  auto condBarrierHigh =
-      tt::amdgpu::CondBarrierOp::create(builder, loc, warpHigh);
+  tt::amdgpu::CondBarrierOp::create(builder, loc, warpHigh);
 
   // Insert condbarrier::first_half after the end of the loop
   builder.setInsertionPointAfter(forOp);
-  auto condBarrierLow =
-      tt::amdgpu::CondBarrierOp::create(builder, loc, warpLow);
+  tt::amdgpu::CondBarrierOp::create(builder, loc, warpLow);
 }
 
 void Pingponger::getDotPingponged() {
@@ -953,7 +965,6 @@ void Pingponger::getDotPingponged() {
   }
 
   OpBuilder builder(forOp);
-  MLIRContext *ctx = forOp.getContext();
   Location loc = forOp.getLoc();
 
   forOp->walk([&](Operation *op) {
@@ -1265,12 +1276,19 @@ struct TritonAMDGPUBlockPingpongPass
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
+    bool transformed = false;
     for (auto funcOp : m.getOps<tt::FuncOp>()) {
       funcOp.walk([&](scf::ForOp forOp) {
         Pingponger pingponger(forOp, ttg::lookupNumWarps(forOp), numStages);
         pingponger.getDotPingponged();
+        transformed = true;
       });
     }
+    // Pingpong reorders async copies/commits around the merged ttg.async_wait,
+    // invalidating any `num` Pipeline.cpp set earlier. Recompute against the
+    // post-reorder IR.
+    if (transformed)
+      mlir::triton::updateWaits(m);
   }
 };
 

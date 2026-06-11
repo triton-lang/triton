@@ -162,7 +162,9 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
         // This packs a few rows together for small K
         int perPhase = std::max<int>(1024 / (bitwidth * K), 1);
 
-        int mmaStride = 8;
+        // FP64 MMAv2 uses an m8n8k4 tile rather than the m16n8 tile used by
+        // the other MMAv2 variants.
+        int mmaStride = bitwidth == 64 ? 4 : 8;
         int vec = 4 * kWidth;
         // needsTrans is equiv. to flipping the opIdx
         if (needTrans)
@@ -1249,6 +1251,11 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
     static SmallVector<unsigned, 3> getDefaultInstrShape() {
       return {16, 16, 16};
     }
+
+    // Returns nonK dim of operand opIdx (swapped for asymmetric transposed WMMA).
+    unsigned getOperandNonKDim(unsigned opIdx) const;
+    static unsigned getOperandNonKDim(unsigned mDim, unsigned nDim,
+                                      bool isTransposed, unsigned opIdx);
 
     // Returns a swizzled shared layout matching this WMMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.

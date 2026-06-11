@@ -16,6 +16,13 @@ if(TRITON_BUILD_PYTHON_MODULE)
     message(FATAL_ERROR "clang++ is required to build gsan.ll")
   endif()
 
+  set(TRITON_GSAN_INCLUDE_FLAGS "")
+  foreach(include_path IN ITEMS "${TRITON_CUDACRT_PATH}" "${TRITON_CUDART_PATH}")
+    if(NOT "${include_path}" STREQUAL "")
+      list(APPEND TRITON_GSAN_INCLUDE_FLAGS "-I${include_path}")
+    endif()
+  endforeach()
+
   # Keep the device runtime freestanding: do not pull in Clang's CUDA wrapper,
   # vendored CUDA headers, host SDK headers, or the host C++ standard library.
   add_custom_command(
@@ -32,6 +39,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
               -fno-exceptions
               -fcuda-flush-denormals-to-zero
               --cuda-gpu-arch=sm_80
+              --cuda-feature=+ptx70
+              ${TRITON_GSAN_INCLUDE_FLAGS}
               "${GSAN_RUNTIME_SRC}" -o "${GSAN_RUNTIME_IR}"
       DEPENDS "${GSAN_RUNTIME_SRC}" ${GSAN_RUNTIME_HDRS}
       COMMENT "Building GSan runtime"

@@ -22,6 +22,8 @@ getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
 
 bool hasCGABroadcast(gpu::MemDescType memDescType);
 
+Value sextI16ToI32Indices(Value indices, OpBuilder &builder, Location loc);
+
 inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
                                              ArrayRef<int64_t> shapePerCTA,
                                              bool packedSize,

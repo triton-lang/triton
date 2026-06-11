@@ -5,6 +5,10 @@
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "TritonAMDGPUToLLVM/TypeConverter.h"
+#include "TritonAMDGPUToLLVM/UniformityAnalysis.h"
+#include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
+#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -63,7 +67,6 @@ public:
     addIllegalDialect<triton::instrument::TritonInstrumentDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
-    addLegalOp<triton::amdgpu::InstructionSchedHint>();
     // Warp specialization is lowered later.
     addLegalOp<triton::gpu::WarpSpecializeOp>();
     addLegalOp<triton::gpu::WarpYieldOp>();
@@ -75,8 +78,8 @@ public:
 struct ConvertTritonAMDGPUToLLVM
     : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
           ConvertTritonAMDGPUToLLVM> {
-  explicit ConvertTritonAMDGPUToLLVM(StringRef targetArch, bool ftz) {
-    this->arch = targetArch.str();
+  explicit ConvertTritonAMDGPUToLLVM(StringRef gfxArch, bool ftz) {
+    this->gfxArch = gfxArch.str();
     this->ftz = ftz;
   }
 
@@ -90,9 +93,9 @@ struct ConvertTritonAMDGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
-    AMD::TargetInfo targetInfo(this->arch.getValue());
-    if (targetInfo.getISAFamily() == AMD::ISAFamily::Unknown) {
-      mod.emitError("unsupported target: '") << this->arch.getValue() << "'";
+    AMD::TargetInfo targetInfo(this->gfxArch.getValue());
+    if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::Unknown) {
+      mod.emitError("unsupported target: '") << this->gfxArch.getValue() << "'";
       return signalPassFailure();
     }
 
@@ -103,7 +106,10 @@ struct ConvertTritonAMDGPUToLLVM
     TritonLLVMConversionTarget convTarget(*context);
 
     // Allocate shared memory and set barrier
-    ModuleAllocation allocation(mod, AMD::AMDAllocationAnalysisScratchSizeFn,
+    auto allocationFn = [&targetInfo](Operation *op) {
+      return AMD::AMDAllocationAnalysisScratchSizeFn(op, targetInfo);
+    };
+    ModuleAllocation allocation(mod, allocationFn,
                                 targetInfo.getSharedMemoryPartitionSize());
 
     if (targetInfo.requiresAliasInfoForAsyncOps())
@@ -153,18 +159,8 @@ struct ConvertTritonAMDGPUToLLVM
     // Make benefit for AMD specific patterns higher so they apply before common
     // patterns
     int AMDBenefit = commonBenefit + 1;
-    auto populatePatterns1 = [&](auto populateFunc, int benefit) {
-      populateFunc(typeConverter, patterns, axisInfoAnalysis, allocation,
-                   benefit);
-    };
-
     auto populatePatterns5 = [&](auto populateFunc, int benefit) {
       populateFunc(typeConverter, patterns, benefit);
-    };
-
-    auto populatePatterns6 = [&](auto populateFunc, int benefit) {
-      populateFunc(typeConverter, patterns, axisInfoAnalysis, allocation,
-                   targetInfo, benefit);
     };
 
     auto populatePatterns7 = [&](auto populateFunc, int benefit) {
@@ -180,8 +176,22 @@ struct ConvertTritonAMDGPUToLLVM
     AMD::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ftz,
                                              axisInfoAnalysis, allocation,
                                              targetInfo, AMDBenefit);
+    AMD::populateFpCastOpToLLVMPatterns(typeConverter, patterns, ftz,
+                                        axisInfoAnalysis, allocation,
+                                        targetInfo, AMDBenefit);
+    // Run a dataflow analysis that classifies every SSA value as
+    // wave-uniform or per-lane. The buffer-ops splitter queries this
+    // to decide which offset components can move to the SGPR soffset.
+    DataFlowSolver uniformitySolver;
+    uniformitySolver.load<dataflow::DeadCodeAnalysis>();
+    uniformitySolver.load<dataflow::SparseConstantPropagation>();
+    AMD::loadUniformityAnalysis(uniformitySolver);
+    if (failed(uniformitySolver.initializeAndRun(mod)))
+      return signalPassFailure();
+
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
-                                           axisInfoAnalysis, AMDBenefit);
+                                           axisInfoAnalysis, &uniformitySolver,
+                                           AMDBenefit);
     AMD::populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
     AMD::populateBarrierOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
     AMD::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
@@ -228,10 +238,10 @@ struct ConvertTritonAMDGPUToLLVM
                                                      patterns, commonBenefit);
 
     FailureOr<mlir::amdgpu::Chipset> maybeChipset =
-        mlir::amdgpu::Chipset::parse(this->arch);
+        mlir::amdgpu::Chipset::parse(this->gfxArch);
     if (failed(maybeChipset)) {
       emitError(UnknownLoc::get(&getContext()),
-                "Invalid AMDGPU chipset name: " + this->arch);
+                "Invalid AMDGPU chipset name: " + this->gfxArch);
       return signalPassFailure();
     }
     // Native lowering patterns
@@ -246,6 +256,7 @@ struct ConvertTritonAMDGPUToLLVM
 
     mlir::triton::populateInstrumentationToLLVMPatterns(typeConverter, patterns,
                                                         targetInfo);
+    mlir::triton::populateFpSanToLLVMPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
@@ -270,9 +281,10 @@ private:
     // Ask for 16B alignment on global_smem because that's the largest we should
     // ever need (4xi32).
     auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
-    auto global = LLVM::GlobalOp::create(
+    LLVM::GlobalOp::create(
         b, loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
-        "global_smem", /*value=*/Attribute(), /*alignment=*/16,
+        "global_smem",
+        /*value=*/Attribute(), /*alignment=*/16,
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));
   }
@@ -283,8 +295,8 @@ private:
 namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz) {
-  return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch, ftz);
+createConvertTritonAMDGPUToLLVMPass(StringRef gfxArch, bool ftz) {
+  return std::make_unique<ConvertTritonAMDGPUToLLVM>(gfxArch, ftz);
 }
 
 } // namespace mlir::triton

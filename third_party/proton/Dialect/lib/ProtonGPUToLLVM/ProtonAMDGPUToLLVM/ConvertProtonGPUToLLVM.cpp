@@ -42,15 +42,17 @@ public:
 struct ConvertProtonAMDGPUToLLVM
     : public mlir::triton::proton::gpu::impl::ConvertProtonAMDGPUToLLVMBase<
           ConvertProtonAMDGPUToLLVM> {
-  explicit ConvertProtonAMDGPUToLLVM(std::string arch) { this->arch = arch; }
+  explicit ConvertProtonAMDGPUToLLVM(std::string gfxArch) {
+    this->gfxArch = gfxArch;
+  }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     ModuleOp mod = getOperation();
-    auto tritonTargetInfo = mlir::triton::AMD::TargetInfo(arch);
+    auto tritonTargetInfo = mlir::triton::AMD::TargetInfo(gfxArch);
     auto protonTargetInfo =
-        mlir::triton::proton::gpu::AMD::TargetInfo(tritonTargetInfo, arch);
+        mlir::triton::proton::gpu::AMD::TargetInfo(tritonTargetInfo, gfxArch);
     mlir::LowerToLLVMOptions option(context);
     TritonGPUToLLVMTypeConverter typeConverter(context, option,
                                                tritonTargetInfo);
@@ -64,10 +66,10 @@ struct ConvertProtonAMDGPUToLLVM
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
 
     FailureOr<mlir::amdgpu::Chipset> maybeChipset =
-        mlir::amdgpu::Chipset::parse(this->arch);
+        mlir::amdgpu::Chipset::parse(this->gfxArch);
     if (failed(maybeChipset)) {
       emitError(UnknownLoc::get(&getContext()),
-                "Invalid AMDGPU chipset name: " + this->arch);
+                "Invalid AMDGPU chipset name: " + this->gfxArch);
       return signalPassFailure();
     }
     mlir::populateGpuToROCDLConversionPatterns(
@@ -89,8 +91,8 @@ namespace triton::proton {
 namespace gpu {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertProtonAMDGPUToLLVMPass(std::string arch) {
-  return std::make_unique<ConvertProtonAMDGPUToLLVM>(arch);
+createConvertProtonAMDGPUToLLVMPass(std::string gfxArch) {
+  return std::make_unique<ConvertProtonAMDGPUToLLVM>(gfxArch);
 }
 
 } // namespace gpu

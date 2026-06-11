@@ -6,7 +6,10 @@ import triton
 import triton.language as tl
 from triton.tools.ragged_tma import load_ragged, store_ragged
 from triton_kernels import target_info
-from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw, unswizzle_act_mx_scale_bw
+from triton_kernels.tensor_details.layout_details.blackwell_scale import (
+    unswizzle_mx_scale_bw,
+    unswizzle_act_mx_scale_bw,
+)
 from triton_kernels.numerics_details.flexpoint import (
     float_to_flex,
     load_scale,
@@ -14,6 +17,7 @@ from triton_kernels.numerics_details.flexpoint import (
     compute_scale,
 )
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from ._common import (
@@ -22,6 +26,7 @@ from ._common import (
     make_matmul_repr,
     matmul_launch_metadata,
     compute_pids,
+    output_mx_scale_store_ptr,
 )
 
 
@@ -74,6 +79,7 @@ def _p_matmul(
              WriteBackIndx, writeback_size,
              RAGGED_DIMENSION: tl.constexpr,
              XSliceSizes, XSliceOffs, XBlockOffs, XBlockSchedule, X_EXPECTED_SLICE_SIZE: tl.constexpr, X_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
+             XOutputScaleBlockOffs,
              WSliceSizes, WSliceOffs, WBlockOffs, WBlockSchedule, W_EXPECTED_SLICE_SIZE: tl.constexpr, W_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
              # true grid size
              batch_size, grid_m, grid_n,
@@ -105,6 +111,8 @@ def _p_matmul(
              NUM_SMS: tl.constexpr,
              X_TMA_MODE: tl.constexpr,
              Y_TMA_MODE: tl.constexpr,
+             Y_MX_SCALE_LAYOUT: tl.constexpr = None,
+             OUT_N_TILE_ALIGNED: tl.constexpr = False,
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES: tl.constexpr=False,
              SWAP_XW: tl.constexpr = False,
@@ -130,6 +138,8 @@ def _p_matmul(
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
+    if is_x_microscaled or is_w_microscaled:
+        MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
     if is_w_microscaled:
         tl.static_assert(MX_BLOCK_SIZE == NVFP_BLOCK_SIZE or MX_BLOCK_SIZE == MXFP_BLOCK_SIZE,
                          "Unsupported microscale factor")
@@ -144,7 +154,6 @@ def _p_matmul(
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
 
         # We have pack 2 fp4 values in a byte
-        MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
         if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
             tl.static_assert(is_w_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
             # We have pack 2 fp4 values in a byte but we divide the dimension by 2
@@ -169,6 +178,9 @@ def _p_matmul(
             PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
             PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_K_DIVISOR
     else:
+        W_K_DIVISOR: tl.constexpr = 1
+        W_K_MULTIPLIER: tl.constexpr = 1
+        W_N_DIVISOR: tl.constexpr = 1
         PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
         PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N
         tl.static_assert(SWIZZLE_MX_SCALE == "STRIDED")
@@ -347,7 +359,7 @@ def _p_matmul(
                     # already divided by W_K_DIVISOR (2 for mxfp4 where 2 fp4
                     # values are packed per Byte along K)
                     off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_K_DIVISOR)
-                    if EVEN_K:
+                    if EVEN_K and SPLIT_K == 1:
                         mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
                     else:
                         mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
@@ -404,19 +416,34 @@ def _p_matmul(
                     w_scales = tl.reshape(w_scales, *w_scales.shape[1:])
                     num_warps: tl.constexpr = tl.extra.cuda.num_warps()
                     w_scales = unswizzle_mxfp4_scale_hopper(w_scales, mx_axis=1, num_warps=num_warps)
+                    mask_k_scale = off_k_x + tl.arange(0, MX_SCALE_BLOCK_K) * MX_PACK_DIVISOR < off_k_x0 + loop_k
+                    scale_zero = tl.full(w_scales.shape, 0, dtype=w_scales.dtype)
+                    w_scales = tl.where(mask_k_scale[None, :], w_scales, scale_zero)
                 else:
                     w_scales = WMxScale.load([off_w_z, off_k_mx, off_n])
                     w_scales = tl.reshape(w_scales, *w_scales.shape[1:]).T
+            else:
+                w_scales: tl.constexpr = None
 
             # --- update accumulator ---
-            if is_w_microscaled:
-                if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
-                    tl.static_assert(x_format == "bf16")
+            if is_x_microscaled or is_w_microscaled:
+                if is_x_fp4 and not is_w_microscaled and not cuda_capability_geq(10, 0):
+                    tl.static_assert(w_format == "fp16" or w_format == "bf16")
+                    x_dense = upcast_mxfp4_tile(x, x_scales, w.dtype)
+                    if SWAP_XW:
+                        acc = tl.dot(w.T, x_dense.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                    else:
+                        acc = tl.dot(x_dense, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                elif SWIZZLE_MX_VALUE == "HOPPER_VALUE":
                     tl.static_assert(w_format == "e2m1")
                     tl.static_assert(SWAP_XW)
                     wT = mxfp4_to_bf16_triton(w.T, w_scales, mx_axis=1)
                     tl.static_assert(wT.dtype == tl.bfloat16)
-                    acc = tl.dot(wT, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                    if is_x_microscaled:
+                        acc = tl.dot_scaled(wT, None, "bf16", x.T, x_scales, x_format, acc=acc, fast_math=True)
+                    else:
+                        tl.static_assert(x_format == "bf16")
+                        acc = tl.dot(wT, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
                 else:
                     if SWAP_XW:
                         acc = tl.dot_scaled(w.T, w_scales, w_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
@@ -437,8 +464,8 @@ def _p_matmul(
         if INDEPENDENT_EPILOGUE:
             tile_id1 += NUM_SMS
             pid_s1, pid_m1, pid_n1, pid_k1 = compute_pids(tile_id1, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
-            expt_id1, _, start_z1, start_m1, _, off_m1, _, _ = compute_offsets(
-                pid_z, pid_m, pid_k,
+            expt_id1, _, start_z1, start_m1, slice_block_off_m1, off_m1, _, _ = compute_offsets(
+                pid_s1, pid_m1, pid_k1,
                 XBlockSchedule, XSliceOffs, XBlockOffs, X_SLICE_SIZES_DIVISIBILITY,
                 WBlockSchedule, WSliceOffs, W_SLICE_SIZES_DIVISIBILITY,
                 RAGGED_DIMENSION,
@@ -451,7 +478,7 @@ def _p_matmul(
                 eM1 = M
         else:
             tile_id1, expt_id1, start_z1, start_m1, eM1 = block_id, off_w_z, off_y_z, slice_off_m, shape_m
-            off_m1, off_n1, pid_k1 = off_m, off_n, pid_k
+            _, off_m1, off_n1, pid_k1 = slice_block_off_m, off_m, off_n, pid_k
 
         offs_m = off_m1 + tl.arange(0, BLOCK_M)
         mask_m = offs_m < eM1
@@ -569,7 +596,7 @@ def _p_matmul(
                     mask_n = offs_y_n < yN
 
                     AccPtrs = YPtr + pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
-                    mask = mask_m[:, None] & mask_n[None, :]
+                    mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
                     acc = tl.load(AccPtrs, mask=mask, other=0.0)
                     out += acc * load_scale(ScalePtr)
 
@@ -581,6 +608,7 @@ def _p_matmul(
                 tl.static_assert(EPILOGUE_FN is not None)
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                 mask_n = offs_y_n < yN
+                out_mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
                 if PER_BATCH_OUT_SCALE:
                     ExpectedScale = YExpectedScale + start_z1
                 else:
@@ -594,33 +622,42 @@ def _p_matmul(
                     ExpectedScale,
                     None,
                     None,
-                    mask_m[:, None] & mask_n[None, :],
+                    out_mask,
                     YPtr,
                     False,
                 )
-                out, out_scale = EPILOGUE_FN(out, mask_m[:, None] & mask_n[None, :], *epilogue_fn_args)
+                out, out_scale = EPILOGUE_FN(out, out_mask, *epilogue_fn_args)
                 tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")
                 offs_y_n_scale = off_n1 // ACTIVATION_REDUCTION_N // MX_BLOCK_SIZE + a_i * MX_SCALE_BLOCK_N + tl.arange(0, MX_SCALE_BLOCK_N)
-                mask_n_scale = offs_y_n_scale < tl.cdiv(yN, MX_BLOCK_SIZE)
-                offs_y_mx_k = 0
-                if USE_SCATTER_TMA:
-                    # Convert -1 offsets to INT_MAX. We do this by clearing the leading bit. Note that
-                    # there shouldn't be any other negative values.
-                    offs_y_mx_z = 0
-                    offs_y_mx_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
-                elif Y_TMA_MODE == "dense":
-                    offs_y_mx_z = pid_k * batch_size + start_z1
-                    offs_y_mx_m = off_m1 + tl.arange(0, BLOCK_M)
-                elif Y_TMA_MODE == "ragged":
-                    offs_y_mx_z = pid_k
-                    offs_y_mx_m = start_m1 + off_m1 + tl.arange(0, BLOCK_M)
-                else:
-                    tl.static_assert(Y_TMA_MODE is None)
-                    offs_y_mx_k = pid_k1
-                    offs_y_mx_z = start_z1
-                    offs_y_mx_m = offs_y_m
-                YActualScalePtrs = YActualScale + offs_y_mx_k.to(index_type) * stride_y_mx_k + offs_y_mx_z.to(index_type) * stride_y_mx_z + offs_y_mx_m.to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
-                tl.store(YActualScalePtrs, out_scale, mask=mask_m[:, None] & mask_n_scale[None, :])
+                n_mx_blocks = tl.cdiv(yN, MX_BLOCK_SIZE)
+                YActualScalePtrs = output_mx_scale_store_ptr(
+                    YActualScale,
+                    offs_m,
+                    offs_y_m,
+                    offs_y_n_scale,
+                    start_z1,
+                    start_m1,
+                    M,
+                    n_mx_blocks,
+                    XOutputScaleBlockOffs,
+                    expt_id1,
+                    pid_k,
+                    pid_k1,
+                    batch_size,
+                    stride_y_mx_k,
+                    stride_y_mx_z,
+                    stride_y_mx_m,
+                    stride_y_mx_n,
+                    HAS_SCATTER,
+                    USE_SCATTER_TMA,
+                    Y_TMA_MODE,
+                    RAGGED_DIMENSION,
+                    Y_MX_SCALE_LAYOUT,
+                    INDEX_TYPE=index_type,
+                )
+                mask_n_scale = offs_y_n_scale < n_mx_blocks
+                scale_store_mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n_scale[None, :]
+                tl.store(YActualScalePtrs, out_scale, mask=scale_store_mask)
             else:
                 # Flexpoint
                 if USE_LOCAL_ABSMAX:
@@ -644,7 +681,6 @@ def _p_matmul(
 
             out = out.to(YPtr.dtype.element_ty)
             if is_out_fp4:
-                tl.static_assert(Y_TMA_MODE is None, "FP4 outputs are only supported without output TMA")
                 out_off_n = out_off_n // 2
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N // 2)
                 mask_n = offs_y_n < tl.cdiv(yN, 2)
@@ -669,7 +705,7 @@ def _p_matmul(
                     if is_out_fp4:
                         offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N // 2)
                         mask_n = offs_y_n < tl.cdiv(yN, 2)
-                    mask = mask_m[:, None] & mask_n[None, :]
+                    mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
                     offs_kzmn = pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
                     tl.store(YPtr + offs_kzmn, out, mask=mask)
             else:
@@ -677,7 +713,7 @@ def _p_matmul(
                 tl.static_assert(Y_TMA_MODE is None, "TMA is not supported with fused comms")
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                 mask_n = offs_y_n < yN
-                mask = mask_m[:, None] & mask_n[None, :]
+                mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
 
                 dst_shard_idx, dst_y_m, dst_y_n = map_dst_coord.fn(
                     start_m1 + off_m1 if WriteBackIndx is None else None, offs_y_m,

@@ -4,15 +4,18 @@ import triton.runtime.driver as driver
 import triton.language as tl
 import triton
 from triton import MockTensor
-from .state import exit_state, enter_state, COMPUTE_METADATA_SCOPE_NAME
 
 
 @triton.jit
-def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_id: tl.uint64, metric_value_ptr,
+def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, seq_id: tl.uint64, metric_value_ptr,
                          metric_value_size: tl.uint64):
+    # Record layout is {seq_id, <metric_values>}.
     BLOCK_SIZE: tl.constexpr = 128
-    device_offset = tl.load(device_offset_ptr)
-    tl.store(device_ptr + device_offset, metric_id)
+    record_size = metric_value_size + 1
+    # Reserve the full record atomically so replayed graph streams can append
+    # concurrently.
+    device_offset = tl.atomic_add(device_offset_ptr, record_size, sem="relaxed") % size
+    tl.store(device_ptr + device_offset, seq_id)
     device_offset = (device_offset + 1) % size
     num_iters = tl.cdiv(metric_value_size, BLOCK_SIZE)
     offsets = tl.arange(0, BLOCK_SIZE)
@@ -21,20 +24,15 @@ def tensor_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_
         mask = cur_offsets < metric_value_size
         metric_value = tl.load(metric_value_ptr + cur_offsets, mask=mask)
         tl.store(device_ptr + (device_offset + cur_offsets) % size, metric_value, mask=mask)
-    tl.debug_barrier()
-    device_offset = (device_offset + metric_value_size) % size
-    tl.store(device_offset_ptr, device_offset)
 
 
 @triton.jit
-def scalar_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, metric_id: tl.uint64, metric_value: tl.uint64):
-    device_offset = tl.load(device_offset_ptr)
-    tl.store(device_ptr + device_offset, metric_id)
+def scalar_metric_kernel(device_ptr, device_offset_ptr, size: tl.uint64, seq_id: tl.uint64, metric_value: tl.uint64):
+    # Record layout is {seq_id, metric_value}.
+    device_offset = tl.atomic_add(device_offset_ptr, 2, sem="relaxed") % size
+    tl.store(device_ptr + device_offset, seq_id)
     device_offset = (device_offset + 1) % size
     tl.store(device_ptr + device_offset, metric_value)
-    device_offset = (device_offset + 1) % size
-    tl.debug_barrier()
-    tl.store(device_offset_ptr, device_offset)
 
 
 def _get_kernel(kernel_fn, *args):
@@ -50,7 +48,7 @@ def _get_kernel(kernel_fn, *args):
 
 def set_metric_kernels():
     mock_ptr = MockTensor(tl.uint64)
-    mock_metric_id = 0
+    mock_seq_id = 0
     mock_size = 1
     mock_metric_value_size = 1
     tensor_metric_kernel_fn, tensor_metric_kernel_num_threads, tensor_metric_kernel_shared = _get_kernel(
@@ -58,7 +56,7 @@ def set_metric_kernels():
         mock_ptr,
         mock_ptr,
         mock_size,
-        mock_metric_id,
+        mock_seq_id,
         mock_ptr,
         mock_metric_value_size,
     )
@@ -67,8 +65,8 @@ def set_metric_kernels():
         mock_ptr,
         mock_ptr,
         mock_size,
-        mock_metric_id,
-        mock_metric_id,
+        mock_seq_id,
+        mock_metric_value_size,
     )
     device = driver.active.get_current_device()
     stream = driver.active.get_current_stream(device)
@@ -91,30 +89,66 @@ class _TensorMetric(libproton.TensorMetric):
         self._value = value
 
 
+FLOPS_WIDTHS = (8, 16, 32, 64)
+FLOPS_DTYPES = {
+    **{"flops": (float, libproton.metric_type_double_index, libproton.metric_type_vector_double_index)},
+    **{
+        f"flops{width}": (float, libproton.metric_type_double_index, libproton.metric_type_vector_double_index)
+        for width in FLOPS_WIDTHS
+    },
+}
+ROOFLINE_DTYPES = {
+    **FLOPS_DTYPES,
+    "bytes": (int, libproton.metric_type_int64_index, libproton.metric_type_vector_int64_index),
+}
+
+
+def _scalar_or_vector_value(value: Any, convert: type) -> Any:
+    if hasattr(value, "data_ptr"):
+        value = value.tolist() if value.numel() > 1 else value.item()
+    if isinstance(value, (list, tuple)):
+        return [convert(v) for v in value]
+    return convert(value)
+
+
+def _scalar_metric_value(key: str, value: Any) -> Any:
+    # Proton's built-in roofline metrics should have stable dtypes regardless of
+    # whether launch_metadata produced a Python scalar or a device tensor.
+    if key in ROOFLINE_DTYPES:
+        convert, _, _ = ROOFLINE_DTYPES[key]
+        return _scalar_or_vector_value(value, convert)
+    return value
+
+
+def _tensor_metric_value_and_index(key: str, value: Any) -> tuple[Any, int]:
+    if key in ROOFLINE_DTYPES:
+        _, scalar_index, vector_index = ROOFLINE_DTYPES[key]
+        value = value.long() if key == "bytes" else value.double()
+        return value, vector_index if value.numel() > 1 else scalar_index
+
+    # implicit casting to double or int64 tensors
+    if value.is_floating_point():
+        value = value.double()
+        if value.numel() > 1:
+            return value, libproton.metric_type_vector_double_index
+        return value, libproton.metric_type_double_index
+
+    value = value.long()
+    if value.numel() > 1:
+        return value, libproton.metric_type_vector_int64_index
+    return value, libproton.metric_type_int64_index
+
+
 def transform_tensor_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], dict[str, libproton.TensorMetric]]:
     tensor_metrics = {}
     scalar_metrics: dict[str, Any] = {}
     for key, value in metrics.items():
         if hasattr(value, "data_ptr"):  # tensor
             if value.device.type == "cpu":
-                scalar_metrics[key] = value
+                scalar_metrics[key] = _scalar_metric_value(key, value)
             else:  # device tensor
-                enter_state(COMPUTE_METADATA_SCOPE_NAME)
-                # implicit casting to double or int64 tensors
-                if value.is_floating_point():
-                    value = value.double()
-                    if value.numel() > 1:
-                        metric_index = libproton.metric_type_vector_double_index
-                    else:
-                        metric_index = libproton.metric_type_double_index
-                else:
-                    value = value.long()
-                    if value.numel() > 1:
-                        metric_index = libproton.metric_type_vector_int64_index
-                    else:
-                        metric_index = libproton.metric_type_int64_index
-                exit_state()
+                value, metric_index = _tensor_metric_value_and_index(key, value)
                 tensor_metrics[key] = _TensorMetric(value, metric_index)
         else:
-            scalar_metrics[key] = value
+            scalar_metrics[key] = _scalar_metric_value(key, value)
     return scalar_metrics, tensor_metrics

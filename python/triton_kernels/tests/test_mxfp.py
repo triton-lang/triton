@@ -4,6 +4,7 @@ from functools import partial
 import pytest
 import torch
 import triton
+import triton.language as tl
 from triton_kernels.numerics_details.mxfp import (
     MXFP_BLOCK_SIZE,
     NVFP_BLOCK_SIZE,
@@ -14,12 +15,78 @@ from triton_kernels.numerics_details.mxfp import (
     upcast_from_mxfp,
     upcast_from_mxfp_torch,
 )
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile
 from triton_kernels.target_info import is_cuda
+from triton_kernels.tensor import convert_layout, wrap_torch_tensor
+from triton_kernels.tensor_details.layout import StridedLayout
 from triton_kernels.testing import assert_close, assert_equal
 
 
 def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
     return torch.uint8 if dtype_str == "float4_e2m1" else getattr(torch, dtype_str)
+
+
+@triton.jit
+def _upcast_mxfp4_tile_kernel(
+    out,
+    tensor,
+    scale,
+    stride_out_m,
+    stride_out_k,
+    stride_tensor_m,
+    stride_tensor_k,
+    stride_scale_m,
+    stride_scale_k,
+    BLOCK_M: tl.constexpr,
+    PACKED_K: tl.constexpr,
+    SCALE_K: tl.constexpr,
+    dst_dtype: tl.constexpr,
+):
+    offs_m = tl.arange(0, BLOCK_M)[:, None]
+    offs_packed_k = tl.arange(0, PACKED_K)[None, :]
+    tensor = tl.load(tensor + offs_m * stride_tensor_m + offs_packed_k * stride_tensor_k)
+
+    offs_scale_k = tl.arange(0, SCALE_K)[None, :]
+    scale = tl.load(scale + offs_m * stride_scale_m + offs_scale_k * stride_scale_k)
+
+    out_tile = upcast_mxfp4_tile(tensor, scale, dst_dtype)
+    offs_k = tl.arange(0, PACKED_K * 2)[None, :]
+    tl.store(out + offs_m * stride_out_m + offs_k * stride_out_k, out_tile)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
+@pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
+def test_mxfp4_tile_upcast_matches_reference(dst_dtype, device):
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+    dst_dtype = dtype_str_to_torch(dst_dtype)
+    rows, k = 64, 128
+    block_scales = torch.tensor([0.125, 1.0, 8.0, 64.0], dtype=dst_dtype, device=device)
+    block_scales = block_scales.repeat_interleave(MXFP_BLOCK_SIZE.value)
+    x = torch.randn((rows, k), dtype=dst_dtype, device=device) * block_scales
+    tensor, scale = downcast_to_mxfp(x, torch.uint8, axis=-1)
+
+    ref = upcast_from_mxfp(tensor, scale, dst_dtype, axis=-1)
+    out = torch.empty_like(ref)
+    tile_dtype = {
+        torch.float16: tl.float16,
+        torch.bfloat16: tl.bfloat16,
+        torch.float32: tl.float32,
+    }[dst_dtype]
+    _upcast_mxfp4_tile_kernel[(1, )](
+        out,
+        tensor,
+        scale,
+        *out.stride(),
+        *tensor.stride(),
+        *scale.stride(),
+        rows,
+        tensor.shape[-1],
+        scale.shape[-1],
+        tile_dtype,
+    )
+
+    assert_equal(ref, out)
 
 
 @pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
@@ -138,6 +205,21 @@ def test_mxfp_quant_dequant(src_dtype, dst_dtype, device):
     assert_equal(weight, dequant)
 
 
+def test_downcast_to_mxfp_accepts_pitched_strided_input(device):
+    torch.manual_seed(0)
+    dense = torch.randn((64, 128), device=device, dtype=torch.bfloat16)
+    pitched = torch.empty_strided(dense.shape, (256, 1), device=device, dtype=dense.dtype)
+    pitched.copy_(dense)
+
+    tensor = convert_layout(wrap_torch_tensor(pitched), StridedLayout(-1))
+    quant, scale = downcast_to_mxfp(tensor, torch.uint8, axis=-1)
+    expected_quant, expected_scale = downcast_to_mxfp(dense, torch.uint8, axis=-1)
+
+    assert tensor.storage.data.stride() == (256, 1)
+    assert_equal(expected_quant, quant)
+    assert_equal(expected_scale, scale)
+
+
 # fmt: off
 @pytest.mark.parametrize(
     "shape, axis, quant_dtype, rounding_mode, scale_dtype, microblock_size",
@@ -147,6 +229,7 @@ def test_mxfp_quant_dequant(src_dtype, dst_dtype, device):
         ((3, 4096, 0), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
         ((10, 0, 1024), 2, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP, torch.uint8, MXFP_BLOCK_SIZE.value),
         ((0, 0, 1024), 2, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((3, 1024, 0), 2, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP, torch.float8_e4m3fn, NVFP_BLOCK_SIZE.value),
 
         ((3, 4096, 1024), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP, torch.uint8, MXFP_BLOCK_SIZE.value),
         ((32, 254, 60), 0, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),

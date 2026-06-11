@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx950 | FileCheck %s --check-prefix=GFX950
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx942 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --check-prefix=GFX950
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -330,6 +330,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // We slice into the slowest dim which does not break coalesced writes into LDS
     // CHECK: rocdl.global.load.async.lds
     %3 = ttg.async_copy_global_to_local %1, %2 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable, 64x32>
+    tt.return
+  }
+}
+
+// -----
+
+// Load 64 elements with 4 warps so we end up with redundant warps which should be masked out via LDS out-of-range address since we do not have masking
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @async_copy_warp_uniform_thread_pred
+  tt.func @async_copy_warp_uniform_thread_pred(%ptr: !tt.ptr<f32>, %lds: !ttg.memdesc<64xf32, #shared, #smem, mutable>) {
+    %src = tt.splat %ptr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>, #blocked>
+    // CHECK: %[[OOB_I32:.*]] = llvm.mlir.constant(2147483647 : i32) : i32
+    // CHECK: %[[OOB_PTR:.*]] = llvm.inttoptr %[[OOB_I32]] : i32 to !llvm.ptr<3>
+    // CHECK: %[[PRED_ADDR:.*]] = llvm.select {{.*}}, {{.*}}, %[[OOB_PTR]] : i1, !llvm.ptr<3>
+    // CHECK: rocdl.global.load.async.lds {{.*}}, %[[PRED_ADDR]], {{.*}}
+    %0 = ttg.async_copy_global_to_local %src, %lds : tensor<64x!tt.ptr<f32>, #blocked> -> <64xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Load 64 elements with 4 warps to get warp-uniform threadPred but we should still see the branch because of the explicit mask.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @async_copy_warp_uniform_thread_pred_with_per_lane_mask
+  tt.func @async_copy_warp_uniform_thread_pred_with_per_lane_mask(%ptr: !tt.ptr<f32>, %lds: !ttg.memdesc<64xf32, #shared, #smem, mutable>, %mask: tensor<64xi1, #blocked>) {
+    %src = tt.splat %ptr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>, #blocked>
+    %other = arith.constant dense<0.000000e+00> : tensor<64xf32, #blocked>
+    // CHECK: %[[PRED:.*]] = llvm.and {{.*}} : i1
+    // CHECK: llvm.cond_br %[[PRED]], ^[[LOAD_BLOCK:bb[0-9]+]]
+    // CHECK-NEXT: ^[[LOAD_BLOCK]]:
+    // CHECK-NEXT: rocdl.global.load.async.lds
+    %0 = ttg.async_copy_global_to_local %src, %lds mask %mask other %other : tensor<64x!tt.ptr<f32>, #blocked> -> <64xf32, #shared, #smem, mutable>
     tt.return
   }
 }
