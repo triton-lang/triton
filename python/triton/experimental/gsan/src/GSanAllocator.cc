@@ -738,6 +738,44 @@ int gsanExportAllocationHandles(void *void_ptr, int *realFd, int *shadowFd,
   return 0;
 }
 
+int gsanExportAllocationMemhandleRegions(void *void_ptr, uintptr_t *realPtr,
+                                         size_t *realSize, uintptr_t *shadowPtr,
+                                         size_t *shadowSize) {
+  if (realPtr == nullptr || realSize == nullptr || shadowPtr == nullptr ||
+      shadowSize == nullptr) {
+    return -1;
+  }
+  *realPtr = 0;
+  *realSize = 0;
+  *shadowPtr = 0;
+  *shadowSize = 0;
+
+  const auto ptr = reinterpret_cast<CUdeviceptr>(void_ptr);
+  if (ptr == 0)
+    return -1;
+
+  std::lock_guard lg(mut);
+  if (alloc == nullptr)
+    return -1;
+
+  AllocNode *node = findNodeByAddress(&alloc->treeRoot, ptr);
+  if (node == nullptr || node->maxFreeBlockSize != 0 ||
+      ptr < node->virtualAddress ||
+      ptr >= node->virtualAddress + node->allocSize) {
+    fprintf(
+        stderr,
+        "gsanExportAllocationMemhandleRegions called with invalid pointer\n");
+    return -1;
+  }
+
+  *realPtr = static_cast<uintptr_t>(node->virtualAddress);
+  *realSize = node->allocSize;
+  *shadowPtr =
+      static_cast<uintptr_t>(gsan::getShadowAddress(node->virtualAddress));
+  *shadowSize = getShadowSize(node->allocSize);
+  return 0;
+}
+
 int gsanExportRuntimeStateHandle(int device, int *fd, size_t *allocSize) {
   if (fd == nullptr || allocSize == nullptr)
     return -1;
@@ -1273,6 +1311,40 @@ PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
                        static_cast<unsigned long long>(allocSize));
 }
 
+PyObject *pyExportAllocationMemhandleRegions(PyObject *self,
+                                             PyObject *const *args,
+                                             Py_ssize_t nargs) {
+  (void)self;
+  if (nargs != 1) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.export_allocation_memhandle_regions expected 1 positional "
+                 "argument, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  void *ptr = nullptr;
+  if (!parseVoidPtrArg(args[0], &ptr))
+    return nullptr;
+
+  uintptr_t realPtr = 0;
+  uintptr_t shadowPtr = 0;
+  size_t realSize = 0;
+  size_t shadowSize = 0;
+  int rc = gsanExportAllocationMemhandleRegions(ptr, &realPtr, &realSize,
+                                                &shadowPtr, &shadowSize);
+  if (rc != 0) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "gsanExportAllocationMemhandleRegions failed.");
+    return nullptr;
+  }
+
+  return Py_BuildValue("(KKKK)", static_cast<unsigned long long>(realPtr),
+                       static_cast<unsigned long long>(realSize),
+                       static_cast<unsigned long long>(shadowPtr),
+                       static_cast<unsigned long long>(shadowSize));
+}
+
 PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
                                     Py_ssize_t nargs) {
   (void)self;
@@ -1392,6 +1464,10 @@ PyMethodDef kGSanAllocatorMethods[] = {
     {"export_allocation_handles",
      reinterpret_cast<PyCFunction>(pyExportAllocationHandles), METH_FASTCALL,
      "Export allocation handles for an existing allocation pointer."},
+    {"export_allocation_memhandle_regions",
+     reinterpret_cast<PyCFunction>(pyExportAllocationMemhandleRegions),
+     METH_FASTCALL,
+     "Export real and shadow allocation regions for an existing pointer."},
     {"import_allocation_handles",
      reinterpret_cast<PyCFunction>(pyImportAllocationHandles), METH_FASTCALL,
      "Import allocation handles and map into this process's VA space."},
