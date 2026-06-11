@@ -429,4 +429,7 @@ def test_export_import_fabric_handles(explicit_config, allocator_config):
         args=(explicit_config, ),
         env={"PYTORCH_CUDA_ALLOC_CONF": allocator_config},
     )
+    if (isinstance(result.exc, RuntimeError) and str(result.exc) == "gsanExportRuntimeStateHandle failed."
+            and "operation not permitted" in result.driver_stderr_output.lower()):
+        pytest.skip("CUDA fabric handles require an accessible NVIDIA IMEX channel")
     assert result.exc is None
