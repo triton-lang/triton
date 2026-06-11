@@ -179,7 +179,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     # Copy operands into TMEM.
     # TODO: Use `tcgen05.cp` when it is exposed in Gluon.
     acc_tmem_layout: gl.constexpr = TensorMemoryLayout(
-        tmem_block.value,
+        tmem_block,
         col_stride=32 // d_desc.dtype.primitive_bitwidth,
     )
     acc_tmem = allocate_tensor_memory(d_desc.dtype, [M, N], acc_tmem_layout)
@@ -190,7 +190,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     if LHS_IN_TMEM:
         # When the LHS operand is fp16 or fp8, it is packed in TMEM.
         lhs_tmem_layout: gl.constexpr = TensorMemoryLayout(
-            tmem_block.value,
+            tmem_block,
             col_stride=1,
         )
         lhs_tmem = allocate_tensor_memory(a_desc.dtype, [M, K], lhs_tmem_layout)
