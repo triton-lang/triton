@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import triton
 
-from triton._internal_testing import is_hip
+from triton.language.target_info import is_hip
 
 if not is_hip():
     pytest.skip(allow_module_level=True)

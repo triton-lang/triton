@@ -28,6 +28,17 @@ from triton._internal_testing import (
     is_cuda,
     is_interpreter,
     is_hopper,
+    get_arch,
+    is_xpu,
+    torch_float8_dtypes,
+    torch_dtypes,
+    numpy_random,
+    to_triton,
+    torch_dtype_name,
+    to_numpy,
+)
+
+from triton.language.target_info import (
     is_hip,
     is_hip_cdna,
     is_hip_cdna2,
@@ -36,13 +47,17 @@ from triton._internal_testing import (
     is_hip_rdna3,
     is_hip_rdna4,
     is_hip_gfx1250,
-    is_xpu,
-    torch_float8_dtypes,
-    torch_dtypes,
-    numpy_random,
-    to_triton,
-    torch_dtype_name,
-    to_numpy,
+    hip_supports_bf16xX,
+    hip_supports_float8_uz,
+    hip_supports_f8e4m3fn_cast,
+    hip_supports_vdot,
+    hip_supports_f8e5,
+    hip_supports_f8e4nv,
+    hip_supports_f8e4m3,
+    hip_supports_kpack,
+    hip_supports_scaled_dot,
+    hip_wmma_version,
+    hip_supports_mxfp_dot,
 )
 from triton.runtime.errors import InterpreterError
 
@@ -77,7 +92,7 @@ elif is_hip():
     # 0 is a special value for automatic heuristic
     if is_hip_cdna():
         mma_nonk_sizes = [0, 16, 32]
-    elif is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250():
+    else:
         mma_nonk_sizes = [16]
 else:
     THREADS_PER_WARP = 32
@@ -1963,12 +1978,12 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         check_type_supported(dtype_z, device)
 
     if is_hip():
-        if not is_hip_cdna3() and not is_hip_cdna4() and not is_hip_gfx1250() and (dtype_x == 'float8_e4m3fn'
-                                                                                   or dtype_z == 'float8_e4m3fn'):
-            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA3/CDNA4 and above.')
-        if (not (is_hip_cdna4() or is_hip_gfx1250())) and ((dtype_x == 'bfloat16' and dtype_z == "float8_e4m3fn") or
-                                                           (dtype_x == "float8_e4m3fn" and dtype_z == 'bfloat16')):
-            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA4 and above.')
+        if (dtype_x == 'float8_e4m3fn' or dtype_z == 'float8_e4m3fn'):
+            if not hip_supports_f8e4m3fn_cast():
+                pytest.skip(f'test_cast{(dtype_x, dtype_z)} is not supported on {get_arch()} architecture.')
+            # following checks bfloat16<->float8_e4m3fn cast cases
+            if ('bfloat16' in [dtype_x, dtype_z]) and is_hip_cdna3():
+                pytest.skip(f'test_cast{(dtype_x, dtype_z)} is not supported on HIP CDNA3.')
 
     torch.manual_seed(0)
     # This is tricky because numpy doesn't have bfloat, and torch doesn't have uints.
@@ -3367,7 +3382,7 @@ def get_test_dot_h100_shortcut_cases():
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 # introduced in #3908
 def get_test_dot_mfma_edge_cases():
-    if not (is_hip_cdna() or is_hip_gfx1250()):
+    if not is_hip_cdna():
         return []
     return [(16, 16, 8, 4, False, False, 'None', 'ieee', 'float32', 'float32', 1, None),
             (32, 16, 8, 4, False, False, 'None', 'ieee', 'float16', 'float16', 1, None)]
@@ -3383,7 +3398,7 @@ def get_test_dot_fp8_output_cases():
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 # introduced in #5406
 def get_test_dot_small_k_mfma_cases():
-    if not (is_hip_cdna() or is_hip_gfx1250()):
+    if not is_hip_cdna():
         return []
     return [(32, 32, k_size, 4, False, False, 'None', 'ieee', in_dtype, out_dtype, 1, mma_nonk_size)
             for k_size in [1, 2, 4, 8]
@@ -3394,7 +3409,7 @@ def get_test_dot_small_k_mfma_cases():
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 # introduced in #4516
 def get_test_dot_small_mn_mfma_cases():
-    if not (is_hip_cdna() or is_hip_gfx1250()):
+    if not is_hip_cdna():
         return []
     return [(*shape_nw, False, False, epilogue, 'ieee', in_dtype, out_dtype, 1, None)
             for shape_nw in [(4, 64, 64, 1), (64, 4, 64, 1)]
@@ -3418,7 +3433,8 @@ def get_test_dot_kpack_kwidth_mfma_cases():
 
 
 def get_test_dot_double_rate_cases():
-    if not (is_hip_cdna() or is_hip_gfx1250()):
+    # Test double rate MFMA instrucitons introduced in CDNA4
+    if not is_hip_cdna4():
         return []
     return [(32, 32, 16, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
             (32, 32, 16, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None),
@@ -3427,21 +3443,21 @@ def get_test_dot_double_rate_cases():
 
 
 def get_test_dot_vdot2_cases():
-    if not (is_hip_cdna() or is_hip_gfx1250()):
+    if not hip_supports_vdot():
         return []
     return [(4, 32, 32, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
             (4, 32, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
 
 
 def get_test_dot_small_mn_wmma_cases():
-    if not is_hip_gfx1250():
+    if hip_wmma_version() < 3:
         return []
     return [(*shape_nw, False, False, 'none', 'ieee', 'float16', 'float32', 1, None)
             for shape_nw in [(8, 8, 32, 1), (8, 32, 32, 1), (32, 8, 32, 1)]]
 
 
 def get_test_dot_small_k_wmma_cases():
-    if not is_hip_gfx1250():
+    if hip_wmma_version() < 3:
         return []
     return [(16, 64, k_size, 4, False, False, 'none', 'ieee', 'float32', 'float32', 1, None) for k_size in [2]] + \
            [(16, 64, k_size, 4, False, False, 'none', 'ieee', 'float16', 'float32', 1, None) for k_size in [2, 4, 8, 16, 32]] + \
@@ -3512,11 +3528,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip("Only IEEE precision is supported for float64 dot")
 
         if is_hip():
-            if in_dtype in ("float8e5", "float8e4nv") and not (is_hip_gfx1250() or is_hip_cdna4() or is_hip_rdna4()):
+            if (in_dtype == "float8e5" and not hip_supports_f8e5()) or (in_dtype == "float8e4nv"
+                                                                        and not hip_supports_f8e4nv()):
                 pytest.skip(f"{in_dtype} only supported on CDNA4, RDNA4 and above")
-            if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
+            if in_dtype in ("float8e5b16", "float8e4b8") and not hip_supports_float8_uz():
                 pytest.skip(f"{in_dtype} only supported on CDNA3")
-            if input_precision in ("bf16x3", "bf16x6") and is_hip_gfx1250():
+            if input_precision in ("bf16x3", "bf16x6") and not hip_supports_bf16xX():
                 pytest.skip(f"{input_precision} not fully supported on gfx1250")
             if not ((input_precision in ("bf16x3", "bf16x6")) or (input_precision == "ieee") or
                     (input_precision == "tf32" and is_hip_cdna3())):
@@ -3672,10 +3689,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         # added atol, to loose precision for float16xfloat16->float32 case
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
 
-    if not (is_cuda() or is_hip_cdna() or is_hip_gfx1250()):
+    if not (is_cuda() or is_hip_cdna()):
         return
 
-    if is_hip_cdna() or is_hip_gfx1250():
+    if is_hip_cdna():
         amdgcn = pgm.asm['amdgcn']
 
         if is_hip_cdna() and ((M, N) == (4, 64) or (M, N) == (64, 4)):
@@ -3683,7 +3700,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         elif is_hip_cdna() and (M, N) == (4, 32):
             if in_dtype == 'float16':
                 assert 'v_dot2c_f32_f16' in amdgcn
-            elif (in_dtype == 'bfloat16') and (is_hip_cdna4() or is_hip_gfx1250()):
+            elif in_dtype == 'bfloat16' and is_hip_cdna4():
                 assert 'v_dot2c_f32_bf16' in amdgcn
         return
 
@@ -3765,7 +3782,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for mxfp_type in ["e2m1", "e4m3", "e5m2"]
                           for normal_type in ["e4m3", "e5m2", "bf16", "fp16"]
                           for mma in (mma_nonk_sizes if is_hip() else [16])
-                          for kpack in ([1, 2] if (is_hip() and not (is_hip_cdna4() or is_hip_gfx1250())) else [1])])
+                          for kpack in ([1, 2] if hip_supports_kpack() else [1])])
 def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack, device):
     if is_interpreter() and normal_type != "fp16":
         pytest.skip("bfloat16 is not supported in the interpreter")
@@ -3777,14 +3794,12 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
         is_SM120 = cc >= (12, 0)
     if is_hip():
-        if not (is_hip_cdna() or is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250()):
-            pytest.skip("scaled_dot only implemented for HIP CDNA, RDNA3, RDNA4 and above")
+        if not hip_supports_scaled_dot():
+            pytest.skip(f"scaled_dot is not supported on {get_arch()} architecture")
         if "e4m3" in (mxfp_type, normal_type):
-            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4() or is_hip_gfx1250()):
-                pytest.skip(
-                    f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, RDNA3, RDNA4, and above"
-                )
-        if mma == 16 and K == 64 and not (is_hip_rdna4() or is_hip_rdna3() or is_hip_gfx1250()):
+            if not hip_supports_f8e4m3():
+                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) is not supported on {get_arch()} architecture")
+        if mma == 16 and K == 64 and is_hip_cdna():
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
     @triton.jit
@@ -3956,7 +3971,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             # Clamp to avoid relative error issues
             ret.clamp_(-2**comp_dtype_max_exp, 2**comp_dtype_max_exp - 1)
         else:
-            if is_hip_cdna4() or is_hip_gfx1250():
+            if hip_supports_mxfp_dot():
                 # On other chips, the A/B operands are upcasted to fp16/bf16
                 # before matmul, which has larger range to avoid overflow.
                 # On CDNA4, we use the V_MFMA_*_F8F6F4 instructions to
@@ -6057,10 +6072,11 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     elif is_hip():
         num_stages = 2
-        if in_type_str in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
+        if in_type_str in ("float8e5b16", "float8e4b8") and not hip_supports_float8_uz():
             pytest.skip(f"{in_type_str} only supported on CDNA3")
-        if in_type_str in ("float8e5", "float8e4nv") and not (is_hip_cdna4() or is_hip_rdna4() or is_hip_gfx1250()):
-            pytest.skip(f"{in_type_str} only supported on CDNA4, RDNA4 and above")
+        if (in_type_str == "float8e4nv" and not hip_supports_f8e4nv()) or (in_type_str == "float8e5"
+                                                                           and not hip_supports_f8e5()):
+            pytest.skip(f"{in_type_str} is not supported on {get_arch()} architecture")
 
     check_type_supported(in_type_str, device)
     A = numpy_random((M, K), dtype_str=in_type_str)

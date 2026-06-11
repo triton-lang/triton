@@ -8,7 +8,7 @@ import subprocess
 import sys
 import os
 
-from triton._internal_testing import is_hip_gfx1250
+from triton.language.target_info import is_hip_gfx1250
 
 
 def _run_consan_subprocess(test_name, *args, timeout=120):

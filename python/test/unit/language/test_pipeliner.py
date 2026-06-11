@@ -5,7 +5,8 @@ import torch
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip
+from triton._internal_testing import is_cuda, is_hopper_or_newer
+from triton.language.target_info import is_hip_cdna, is_hip_cdna2, is_hip
 
 
 def check_capabilities():

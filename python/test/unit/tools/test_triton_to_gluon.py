@@ -13,9 +13,11 @@ from triton._internal_testing import (
     is_blackwell,
     is_hopper_or_newer,
     is_cuda,
+)
+from triton.language.target_info import (
     is_hip_cdna4,
     is_hip_gfx1250,
-    is_hip_cdna3_or_newer,
+    get_cdna_version,
     is_hip_rdna,
 )
 from triton.language.target_info import current_target
@@ -98,7 +100,7 @@ def matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.c
 
 
 def test_triton_to_gluon_dot_minimal(tmp_path):
-    if not (is_hopper_or_newer() or is_hip_cdna3_or_newer() or is_hip_gfx1250()):
+    if not (is_hopper_or_newer() or get_cdna_version() >= 3 or is_hip_gfx1250()):
         pytest.skip("Requires Hopper, Blackwell, CDNA3+, or gfx1250")
     kernel = convert_kernel(matmul_tile_kernel, "matmul_tile_kernel", tmp_path)
     M, N, K = 128, 128, 128

@@ -13,7 +13,7 @@ from triton.profiler.hooks.hook import HookManager
 from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler.hooks.instrumentation import InstrumentationHook
 from triton.profiler.metric import transform_tensor_metrics
-from triton._internal_testing import is_hip
+from triton.language.target_info import is_hip
 
 
 def test_profile_single_session(tmp_path: pathlib.Path):

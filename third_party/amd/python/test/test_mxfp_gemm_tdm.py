@@ -19,7 +19,7 @@ import triton.language as tl
 import argparse
 import pytest
 from triton.tools.mxfp import MXScaleTensor, MXFP4Tensor
-from triton._internal_testing import is_hip_gfx1250
+from triton.language.target_info import is_hip_gfx1250
 
 # ============================================================================
 # Constants

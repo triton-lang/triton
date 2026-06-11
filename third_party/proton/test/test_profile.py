@@ -18,7 +18,8 @@ import triton.language as tl
 import triton.profiler.hooks.launch as proton_launch
 from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.viewer as viewer
-from triton._internal_testing import is_hip, is_cuda, is_blackwell
+from triton._internal_testing import is_blackwell
+from triton.language.target_info import is_hip, is_cuda
 
 
 def _find_frame_by_name(frame, name):

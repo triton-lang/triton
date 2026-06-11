@@ -11,14 +11,16 @@ from triton._internal_testing import (
     is_ampere_or_newer,
     is_blackwell,
     is_blackwell_ultra,
+    is_hopper_or_newer,
+    is_hopper,
+)
+from triton.language.target_info import (
     is_hip_rdna,
     is_hip_rdna3,
     is_hip_rdna4,
     is_hip_cdna,
     is_hip_cdna3,
     is_hip_cdna4,
-    is_hopper_or_newer,
-    is_hopper,
 )
 from triton.compiler import max_shared_mem
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor

@@ -3,7 +3,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hip_gfx1250
+from triton.language.target_info import is_hip_gfx1250
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 

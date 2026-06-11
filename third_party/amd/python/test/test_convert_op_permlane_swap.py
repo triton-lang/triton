@@ -4,7 +4,8 @@ import pathlib
 
 import triton
 
-from triton._internal_testing import is_hip_cdna4, is_hip_gfx1250, to_triton, numpy_random
+from triton._internal_testing import to_triton, numpy_random
+from triton.language.target_info import is_hip_cdna4, is_hip_gfx1250
 
 num_ctas_list = [1]
 
