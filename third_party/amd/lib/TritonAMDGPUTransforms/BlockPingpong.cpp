@@ -39,7 +39,8 @@ static LLVM::FenceOp createLocalMMRAFence(OpBuilder &builder, Location loc,
 }
 
 // Returns true if `val` is not loop-invariant with respect to `forOp`.
-// Traversal stops at values defined outside the loop, which are invariant roots.
+// Traversal stops at values defined outside the loop, which are invariant
+// roots.
 static bool isLoopVariant(Value val, scf::ForOp forOp) {
   SmallVector<Value> worklist{val};
   llvm::DenseSet<Value> visited;
