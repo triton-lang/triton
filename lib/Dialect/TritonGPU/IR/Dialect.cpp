@@ -106,8 +106,6 @@ bool isGenericLinearEncoding(Attribute attr) {
 Attribute inferEncodingFromLinearLayout(MLIRContext *ctx, LinearLayout ll,
                                         Attribute srcEnc) {
   if (isGenericLinearEncoding(srcEnc)) {
-    assert(!isPermutationMatrixLayout(ll) &&
-           "Expected non-permutation layout from this source encoding");
     return GenericLinearEncodingAttr::get(ctx, std::move(ll));
   }
   return LinearEncodingAttr::get(ctx, std::move(ll));
