@@ -264,19 +264,10 @@ static bool getBackwardSliceToPartition(Value v,
           currentDim, memDescTransOp.getOrder(), false);
     }
 
-    if (auto expandDimsOp = dyn_cast<ExpandDimsOp>(op)) {
-      // currentDim is the dim after expansion.
-      assert(expandDimsOp.getAxis() != currentDim &&
-             "expanded dim always has shape 1");
-      // Parition along currentDim - 1 for ExpandDimsOp.
-      if (expandDimsOp.getAxis() < currentDim)
-        currentDim--;
-    }
-
     // Recusively process operands backwards.
     if (op->hasTrait<OpTrait::Elementwise>() ||
         isa<arith::ConstantOp, arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp,
-            BroadcastOp, ExpandDimsOp, MakeRangeOp, SplatOp, ConvertLayoutOp,
+            BroadcastOp, MakeRangeOp, SplatOp, ConvertLayoutOp,
             triton::gpu::LocalAllocOp, LoadOp, TransOp, MemDescTransOp,
             AtomicRMWOp, triton::AddPtrOp, DescriptorLoadOp,
             nvidia_gpu::TMEMAllocOp, nvidia_gpu::TMEMLoadOp, FpToFpOp, SplitOp,
@@ -853,8 +844,8 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
   Operation *newOp;
   if ((dim == DataPartitionScheme::noOpPartitionDim) ||
       op->hasTrait<OpTrait::Elementwise>() ||
-      isa<ConvertLayoutOp, BroadcastOp, SplatOp, ExpandDimsOp, FpToFpOp,
-          AtomicRMWOp, LocalAllocOp, SplitOp, JoinOp, ReshapeOp>(op)) {
+      isa<ConvertLayoutOp, BroadcastOp, SplatOp, FpToFpOp, AtomicRMWOp,
+          LocalAllocOp, SplitOp, JoinOp, ReshapeOp>(op)) {
     for (Value operand : op->getOperands())
       sliceOp(operand, offset, mappings, reverseMappings, partitionScheme);
     newOp = cloneAndSetResultType(op);

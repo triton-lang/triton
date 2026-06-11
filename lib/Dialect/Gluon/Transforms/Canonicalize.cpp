@@ -56,7 +56,6 @@ void Canonicalize::runOnOperation() {
   LoadOp::getCanonicalizationPatterns(patterns, ctx);
   StoreOp::getCanonicalizationPatterns(patterns, ctx);
   BroadcastOp::getCanonicalizationPatterns(patterns, ctx);
-  ExpandDimsOp::getCanonicalizationPatterns(patterns, ctx);
   ReshapeOp::getCanonicalizationPatterns(patterns, ctx);
   IntToPtrOp::getCanonicalizationPatterns(patterns, ctx);
   ttg::WarpSpecializeOp::getCanonicalizationPatterns(patterns, ctx);

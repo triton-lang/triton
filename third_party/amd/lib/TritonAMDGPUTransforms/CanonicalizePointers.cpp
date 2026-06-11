@@ -410,13 +410,6 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
                 rewriter, loc, broadcastOp.getType(), nonUniform);
             return std::make_pair(uniform, broadcastNonUniform);
           })
-          .Case<tt::ExpandDimsOp>([&](auto expandOp) {
-            auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
-                rewriter, loc, expandOp.getSrc(), bitness, scalarToSplatMap);
-            auto expandNonUniform = tt::ExpandDimsOp::create(
-                rewriter, loc, nonUniform, expandOp.getAxis());
-            return std::make_pair(uniform, expandNonUniform);
-          })
           .Case<arith::AddIOp>([&](Operation *op) {
             return createDecomposeOffsetFromAdd(rewriter, loc, expr, bitness,
                                                 scalarToSplatMap);
@@ -1531,37 +1524,41 @@ public:
   }
 };
 
-/// Rewrite to expand(base, offset) -> base, expand(offset)
-class ConvertExpandDims
-    : public PointerCanonicalizationPattern<tt::ExpandDimsOp> {
+
+/// Rewrite expand-dims reshape(base, offset) -> base, reshape(offset).
+class ConvertExpandDims : public PointerCanonicalizationPattern<tt::ReshapeOp> {
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
   LogicalResult
-  matchAndRewrite_(tt::ExpandDimsOp expandOp, OneToNOpAdaptor adaptor,
+  matchAndRewrite_(tt::ReshapeOp reshapeOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
+    if (!reshapeOp.getExpandDimsAxis())
+      return rewriter.notifyMatchFailure(reshapeOp,
+                                         "not an expand-dims reshape");
     ValueRange remappedOperands = adaptor.getSrc();
     if (remappedOperands.size() != 2)
       return success();
     Value fatPtrBase = remappedOperands[0];
     if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
       return rewriter.notifyMatchFailure(
-          expandOp, "only scalar base currently supported");
+          reshapeOp, "only scalar base currently supported");
     Value fatPtrOffset = remappedOperands[1];
 
     RankedTensorType result =
-        llvm::cast<RankedTensorType>(expandOp->getResultTypes().front());
+        llvm::cast<RankedTensorType>(reshapeOp->getResultTypes().front());
     if (!llvm::isa<tt::PointerType>(result.getElementType()))
       return rewriter.notifyMatchFailure(
-          expandOp, "expected expand_dim result to be tensor of tt.ptr");
+          reshapeOp,
+          "expected expand-dims reshape result to be tensor of tt.ptr");
 
     RankedTensorType newResult = RankedTensorType::get(
         result.getShape(),
         llvm::cast<RankedTensorType>(fatPtrOffset.getType()).getElementType(),
         result.getEncoding());
-    auto newOffset =
-        tt::ExpandDimsOp::create(rewriter, expandOp.getLoc(), newResult,
-                                 fatPtrOffset, adaptor.getAxis());
-    rewriter.replaceOpWithMultiple(expandOp, {{fatPtrBase, newOffset}});
+    auto newOffset = tt::ReshapeOp::create(
+        rewriter, reshapeOp.getLoc(), newResult, fatPtrOffset,
+        reshapeOp.getAllowReorder(), reshapeOp.getEfficientLayout());
+    rewriter.replaceOpWithMultiple(reshapeOp, {{fatPtrBase, newOffset}});
     fatPtrs[{fatPtrBase, newOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
 
     return success();
