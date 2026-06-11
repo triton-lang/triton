@@ -1609,7 +1609,6 @@ def _resolve_aggregate_fields(cls):
 
     # Add cls's own fields, resolving string annotations via typing.get_type_hints.
     own_names = inspect.get_annotations(cls)
-
     hints = typing.get_type_hints(cls)
     for name in own_names:
         all_annotations[name] = hints[name]
