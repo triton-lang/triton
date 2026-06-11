@@ -74,7 +74,10 @@ gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
                              int64_t sizeInBytes, int64_t alignment,
                              bool sharedClusterState = false);
-Value expandOuterSlicedDim(OpBuilder &b, Location loc, Value tensor);
+RankedTensorType getSlicedTensorType(RankedTensorType tensorType,
+                                     ArrayRef<int> keptDims, Type elementType);
+Value reshapeAndBroadcast(OpBuilder &b, Location loc, Value tensor,
+                          ArrayRef<int> keptDims, RankedTensorType dstType);
 RankedTensorType getIntTensorType(Region *region, ArrayRef<int64_t> shape,
                                   unsigned bitWidth);
 TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
@@ -83,8 +86,6 @@ TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   bool isSigned = false);
 uint32_t getMemDescLength(Value buf);
 FuncOp getEntryPoint(ModuleOp module);
-gpu::DistributedEncodingTrait
-getSingleDimSliceEncoding(gpu::DistributedEncodingTrait encoding, int dim);
 
 inline Value maybeAnd(ImplicitLocOpBuilder &b, Value lhs, Value rhs) {
   if (!lhs)

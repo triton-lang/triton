@@ -953,18 +953,6 @@ Value createAsyncToken(PatternRewriter &rewriter, Location loc,
   return ttg::AsyncCommitGroupOp::create(rewriter, loc, deps).getResult();
 }
 
-Value expandAllSlicedDims(PatternRewriter &rewriter, Location loc,
-                          Value tensor) {
-  auto type = cast<RankedTensorType>(tensor.getType());
-  auto sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
-  while (sliceEncoding) {
-    tensor = expandOuterSlicedDim(rewriter, loc, tensor);
-    type = cast<RankedTensorType>(tensor.getType());
-    sliceEncoding = dyn_cast<ttg::SliceEncodingAttr>(type.getEncoding());
-  }
-  return tensor;
-}
-
 Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
                                    Value base, RankedTensorType resultTy,
                                    int64_t stride0, int64_t stride1) {
@@ -976,29 +964,21 @@ Value createPointerTensorStrided2D(PatternRewriter &rewriter, Location loc,
   auto i32Ty = rewriter.getI32Type();
   auto offsetsTy = RankedTensorType::get(shape, i32Ty, encoding);
 
-  auto dim0Enc = getSingleDimSliceEncoding(encoding, 0);
-  auto dim0Ty = RankedTensorType::get({shape[0]}, i32Ty, dim0Enc);
+  auto dim0Ty = getSlicedTensorType(offsetsTy, {0}, i32Ty);
   auto range0 = tt::MakeRangeOp::create(rewriter, loc, dim0Ty, 0, shape[0]);
   auto stride0Const = createConstIntTensor(rewriter, loc, stride0, dim0Ty);
   auto off0 =
       arith::MulIOp::create(rewriter, loc, dim0Ty, range0, stride0Const);
-  auto off0Exp = expandAllSlicedDims(rewriter, loc, off0);
-  if (cast<RankedTensorType>(off0Exp.getType()).getShape() != shape) {
-    off0Exp = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off0Exp);
-  }
+  auto off0Exp = reshapeAndBroadcast(rewriter, loc, off0, {0}, offsetsTy);
   ptrTensor =
       tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off0Exp);
 
-  auto dim1Enc = getSingleDimSliceEncoding(encoding, 1);
-  auto dim1Ty = RankedTensorType::get({shape[1]}, i32Ty, dim1Enc);
+  auto dim1Ty = getSlicedTensorType(offsetsTy, {1}, i32Ty);
   auto range1 = tt::MakeRangeOp::create(rewriter, loc, dim1Ty, 0, shape[1]);
   auto stride1Const = createConstIntTensor(rewriter, loc, stride1, dim1Ty);
   auto off1 =
       arith::MulIOp::create(rewriter, loc, dim1Ty, range1, stride1Const);
-  auto off1Exp = expandAllSlicedDims(rewriter, loc, off1);
-  if (cast<RankedTensorType>(off1Exp.getType()).getShape() != shape) {
-    off1Exp = tt::BroadcastOp::create(rewriter, loc, offsetsTy, off1Exp);
-  }
+  auto off1Exp = reshapeAndBroadcast(rewriter, loc, off1, {1}, offsetsTy);
   ptrTensor =
       tt::AddPtrOp::create(rewriter, loc, ptrTensorTy, ptrTensor, off1Exp);
 
