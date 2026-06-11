@@ -1033,7 +1033,9 @@ private:
 
   int64_t getDivisibility(arith::ShLIOp op, const AxisInfo &lhs,
                           const AxisInfo &rhs, int dim) override {
-    auto shift = rhs.getConstantValue().value_or(0);
+    if (!rhs.getConstantValue().has_value())
+      return lhs.getContiguity(dim) == 1 ? lhs.getDivisibility(dim) : 1;
+    auto shift = rhs.getConstantValue().value();
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 && shift) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n

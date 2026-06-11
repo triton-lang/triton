@@ -1255,3 +1255,16 @@ tt.func @negative_constants() {
   %sum = arith.addi %neg8_dense, %sixteen : tensor<128xi32>
   tt.return
 }
+
+// -----
+
+// [4, 5] << [1, 0] is [8, 5], whose per-element divisibility is one.
+tt.func @variable_shl_divisibility() {
+  %lhs = tt.make_range {start = 4 : i32, end = 6 : i32} : tensor<2xi32>
+  %idx = tt.make_range {start = 0 : i32, end = 2 : i32} : tensor<2xi32>
+  %one = arith.constant dense<1> : tensor<2xi32>
+  %shifts = arith.subi %one, %idx : tensor<2xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %result = arith.shli %lhs, %shifts : tensor<2xi32>
+  tt.return
+}
