@@ -705,12 +705,10 @@ public:
     auto dstSuffixProducts = getSuffixProducts(dstShape);
 
     // Unit contiguity makes every element a group base, so divisibility from
-    // such a dimension applies globally.
-    int64_t globalDivisibility = 1;
-    for (int dim = 0; dim < srcTy.getRank(); ++dim)
-      if (srcInfo.getContiguity(dim) == 1)
-        globalDivisibility =
-            std::max(globalDivisibility, srcInfo.getDivisibility(dim));
+    // such a dimension applies globally. AxisInfo normalization propagates
+    // this fact within one value, but reshape can lose the source axis that
+    // carries it, so seed every destination axis before refining it below.
+    int64_t globalDivisibility = srcInfo.getGlobalDivisibility();
 
     AxisInfo::DimVectorT contiguity(dstTy.getRank(), 1);
     AxisInfo::DimVectorT divisibility(dstTy.getRank(), globalDivisibility);
