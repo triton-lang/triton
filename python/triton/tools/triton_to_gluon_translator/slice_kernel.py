@@ -628,6 +628,12 @@ def is_stdlib_module(module: ModuleType) -> bool:
         return True
 
     origin_path = Path(origin)
+    # A virtual environment can load packages from its base Python installation.
+    # Those packages live below the base stdlib path, but are not included in the
+    # active environment's purelib or platlib paths.
+    if any(part in {"site-packages", "dist-packages"} for part in origin_path.parts):
+        return False
+
     sys_paths = sysconfig.get_paths()
     site_package_paths = [Path(sys_paths[key]) for key in ("purelib", "platlib") if key in sys_paths]
     if any(origin_path.is_relative_to(site_path) for site_path in site_package_paths):
