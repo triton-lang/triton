@@ -1480,9 +1480,27 @@ void replaceUsesAndPropagateType(
       newVal = ttg::MemDescTransOp::create(builder, trans.getLoc(), val,
                                            trans.getOrder());
     } else if (auto reshape = dyn_cast<ttg::MemDescReshapeOp>(user)) {
-      auto shape = reshape.getType().getShape();
-      newVal =
-          ttg::MemDescReshapeOp::create(builder, reshape.getLoc(), val, shape);
+      // Use inferReturnTypes to compute the correct allocShape and mutability
+      // from the new source, but preserve the original reshape's encoding
+      // rather than re-inferring it (which can change e.g. nvmma_shared to
+      // shared_linear).
+      ttg::MemDescType inferredType;
+      LogicalResult result = ttg::MemDescReshapeOp::inferReturnTypes(
+          builder.getContext(), reshape.getLoc(),
+          cast<ttg::MemDescType>(val.getType()),
+          reshape.getType().getShape(), inferredType);
+      assert(succeeded(result) && "failed to infer reshape return type");
+      assert(ttg::areLayoutsEquivalent(
+                 inferredType.getShape(),
+                 cast<ttg::LayoutEncodingTrait>(reshape.getType().getEncoding()),
+                 cast<ttg::LayoutEncodingTrait>(inferredType.getEncoding())) &&
+             "preserved encoding is not equivalent to inferred encoding");
+      Type newDstType = ttg::MemDescType::get(
+          inferredType.getShape(), inferredType.getElementType(),
+          reshape.getType().getEncoding(), inferredType.getMemorySpace(),
+          inferredType.getMutableMemory(), inferredType.getAllocShape());
+      newVal = ttg::MemDescReshapeOp::create(builder, reshape.getLoc(),
+                                             newDstType, val);
     }
     assert(newVal && "unhandled memdesc view");
     newVal.getDefiningOp()->setAttrs(user->getAttrs());

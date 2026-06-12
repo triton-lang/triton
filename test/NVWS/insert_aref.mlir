@@ -779,3 +779,32 @@ tt.func @aref_result_outside_scheduled_loop(%lb: i32, %ub: i32, %step: i32) {
   tt.return
 }
 }
+
+// -----
+
+// Test that memdesc_reshape preserves nvmma_shared encoding after aref insertion.
+// A 3D shared_linear alloc is reshaped to 2D nvmma_shared and fed to a TMA store.
+// Without the fix, replaceUsesAndPropagateType re-infers the encoding as
+// shared_linear, which fails the TMA store verifier ("TMA descriptor must have
+// NVMMA shared layout").
+
+#blocked3d = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [2, 2, 1], order = [2, 1, 0]}>
+#sl3d = #ttg.shared_linear<{offset = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 0, 16], [0, 0, 32], [1, 0, 8], [2, 0, 16], [4, 0, 32], [8, 0, 0], [16, 0, 0], [32, 0, 0], [64, 0, 0], [0, 1, 0]]}, alignment = 1024>
+#nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @reshape_preserves_encoding
+  tt.func @reshape_preserves_encoding(%src: tensor<128x2x64xbf16, #blocked3d>,
+      %desc: !tt.tensordesc<128x128xbf16, #nvmma>,
+      %lb: i32, %ub: i32, %step: i32) {
+    %c0 = arith.constant 0 : i32
+    scf.for %iv = %lb to %ub step %step : i32 {
+      %alloc = ttg.local_alloc %src {ttg.partition = array<i32: 0>} : (tensor<128x2x64xbf16, #blocked3d>) -> !ttg.memdesc<128x2x64xbf16, #sl3d, #smem>
+      %reshaped = ttg.memdesc_reshape %alloc {ttg.partition = array<i32: 1>} : !ttg.memdesc<128x2x64xbf16, #sl3d, #smem> -> !ttg.memdesc<128x128xbf16, #nvmma, #smem>
+      // CHECK: ttng.async_tma_copy_local_to_global
+      ttng.async_tma_copy_local_to_global %desc[%c0, %c0] %reshaped {ttg.partition = array<i32: 1>} : !tt.tensordesc<128x128xbf16, #nvmma>, !ttg.memdesc<128x128xbf16, #nvmma, #smem>
+    } {tt.warp_specialize, ttg.partition = array<i32: 0, 1>, ttg.partition.stages = [0, 2], ttg.warp_specialize.tag = 0 : i32}
+    tt.return
+  }
+}
