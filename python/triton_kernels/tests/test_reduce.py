@@ -178,6 +178,23 @@ def test_unpadded_batch_size_rowidxs_subtile():
     assert torch.equal(y_tri[unpadded:], torch.full_like(y_tri[unpadded:], sentinel))
 
 
+def test_fp8_broadcast_mask_skips_rowidxs():
+    if not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("float8 requires CUDA")
+    if torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("float8 requires CUDA capability >= 9")
+
+    torch.manual_seed(0)
+    device = "cuda"
+    x = torch.randn((4, 73, 257), device=device, dtype=torch.float32).to(torch.float8_e4m3fn)
+    mask = init_mask("broadcast_n", *x.shape, device)
+
+    with scoped_opt_flags_constraints({"use_rowidxs": False}):
+        y_tri, _ = reduce(x, dim=0, mask=mask, x_flex=None, y_flex=None)
+    y_ref, _ = reduce_torch(x, dim=0, mask=mask, x_flex=None, y_flex=None)
+    assert torch.allclose(y_tri.float(), y_ref.float(), atol=1e-3, rtol=1e-3)
+
+
 def bench_reduce(B: int = 4, M: int = 4096, N: int = 4096, *, dim: int = 0, dtype: torch.dtype = torch.float16,
                  iters: int = 200, mask_mode: str = "none"):
     torch.manual_seed(0)
