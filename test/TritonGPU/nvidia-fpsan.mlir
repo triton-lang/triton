@@ -160,11 +160,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.tensor_memory_size = 0 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tcgen05_mma_scaled
   tt.func public @tcgen05_mma_scaled() {
-    // CHECK: ttg.global_scratch_alloc
+    // CHECK-COUNT-3: ttg.global_scratch_alloc
+    // CHECK-NOT: ttg.global_scratch_alloc
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: scf.for
-    // CHECK: tti.experimental_local_gather
-    // CHECK: tti.experimental_local_gather
+    // CHECK: tti.experimental_local_gather {{.*}}#ttg.dot_op<{{.*}}opIdx = 0{{.*}}kWidth = 2
+    // CHECK: tti.experimental_local_gather {{.*}}#ttg.dot_op<{{.*}}opIdx = 1{{.*}}kWidth = 2
     // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = true
     // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = true
     // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = false
@@ -385,11 +386,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.tensor_memory_size = 0 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tcgen05_mma_scaled_two_ctas
   tt.func public @tcgen05_mma_scaled_two_ctas() {
-    // CHECK: ttg.global_scratch_alloc {{.*}}shared_cluster_state
+    // CHECK-COUNT-3: ttg.global_scratch_alloc {{.*}}shared_cluster_state
+    // CHECK-NOT: ttg.global_scratch_alloc
     // CHECK: ttng.cluster_barrier
     // CHECK-NEXT: scf.for
-    // CHECK: tti.experimental_local_gather
-    // CHECK: tti.experimental_local_gather
+    // CHECK: tti.experimental_local_gather {{.*}}#ttg.dot_op<{{.*}}opIdx = 0{{.*}}kWidth = 2
+    // CHECK: tti.experimental_local_gather {{.*}}#ttg.dot_op<{{.*}}opIdx = 1{{.*}}kWidth = 2
     // CHECK: tt.store
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: ttng.cluster_barrier
