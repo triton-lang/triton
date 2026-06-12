@@ -158,10 +158,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c64_i32 = arith.constant 64 : i32
     // CHECK: %[[A:.+]] = ttg.local_alloc : () -> !ttg.memdesc<64x32xf32
     %0 = tt.descriptor_load %arg0[%c64_i32, %c32_i32] : !tt.tensordesc<64x32xf32, #shared> -> tensor<64x32xf32, #blocked>
-    // CHECK: %[[B:.+]] = ttg.local_load %[[A]]
-    // CHECK: %[[C:.+]] = ttg.local_alloc %[[B]]
     %1 = ttg.local_alloc %0 : (tensor<64x32xf32, #blocked>) -> !ttg.memdesc<64x32xf32, #shared1, #smem>
-    // CHECK: %[[D:.+]] = ttg.memdesc_trans %[[C]]
+    // CHECK: %[[D:.+]] = ttg.memdesc_trans %[[A]]
     %2 = ttg.memdesc_trans %1 {order = array<i32: 1, 0>} : !ttg.memdesc<64x32xf32, #shared1, #smem> -> !ttg.memdesc<32x64xf32, #shared2, #smem>
     %3 = ttg.local_alloc %0 : (tensor<64x32xf32, #blocked>) -> !ttg.memdesc<64x32xf32, #shared, #smem>
     // CHECK: %[[E:.+]] = ttg.local_load %[[D]]
