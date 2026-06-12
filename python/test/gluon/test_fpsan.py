@@ -1146,14 +1146,15 @@ def test_extern_ternary_payload_semantics(device, op, symbol, fresh_knobs):
     _extern_ternary_math_kernel[grid](xw, yw, zw, outw, n_elements, OP=op, BLOCK=BLOCK,
                                       THREADS_PER_WARP=THREADS_PER_WARP)
 
-    exp_bits = _expected_extern_variadic_tag_i32(
-        [
-            x.cpu().numpy().astype(np.int32, copy=False),
-            y.cpu().numpy().astype(np.int32, copy=False),
-            z.cpu().numpy().astype(np.int32, copy=False),
-        ],
-        symbol,
-    )
+    input_bits = [
+        x.cpu().numpy().astype(np.int32, copy=False),
+        y.cpu().numpy().astype(np.int32, copy=False),
+        z.cpu().numpy().astype(np.int32, copy=False),
+    ]
+    if symbol == "__nv_fmaf":
+        exp_bits = _expected_fma_i32(*input_bits)
+    else:
+        exp_bits = _expected_extern_variadic_tag_i32(input_bits, symbol)
     _assert_payload_equal(out, exp_bits)
 
 

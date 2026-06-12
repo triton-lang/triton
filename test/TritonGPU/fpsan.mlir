@@ -496,8 +496,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// CHECK-LABEL: @extern_unary
-tt.func public @extern_unary(%a: tensor<4xf32>) -> tensor<4xf32> {
+// CHECK-LABEL: @extern_unary_fallback
+tt.func public @extern_unary_fallback(%a: tensor<4xf32>) -> tensor<4xf32> {
   // CHECK: tti.experimental_fpsan_embed
   // CHECK: arith.xori
   // CHECK-NOT: tt.extern_elementwise
@@ -507,8 +507,21 @@ tt.func public @extern_unary(%a: tensor<4xf32>) -> tensor<4xf32> {
 
 // -----
 
-// CHECK-LABEL: @extern_binary
-tt.func public @extern_binary(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+// CHECK-LABEL: @extern_unary_known
+tt.func public @extern_unary_known(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.muli
+  // CHECK: arith.xori
+  // CHECK: arith.muli
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "__nv_logf"} : (tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_binary_fallback
+tt.func public @extern_binary_fallback(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
   // CHECK: tti.experimental_fpsan_embed
   // CHECK: arith.addi
   // CHECK: arith.xori
@@ -519,13 +532,41 @@ tt.func public @extern_binary(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4x
 
 // -----
 
-// CHECK-LABEL: @extern_ternary
-tt.func public @extern_ternary(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
+// CHECK-LABEL: @extern_binary_known
+tt.func public @extern_binary_known(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK-NOT: arith.xori
+  // CHECK: tti.experimental_fpsan_unembed
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_fdiv_rn"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_ternary_known
+tt.func public @extern_ternary_known(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: %[[A:.*]] = tti.experimental_fpsan_embed
+  // CHECK: %[[B:.*]] = tti.experimental_fpsan_embed
+  // CHECK: %[[C:.*]] = tti.experimental_fpsan_embed
+  // CHECK: %[[MUL:.*]] = arith.muli %[[A]], %[[B]]
+  // CHECK: %[[SUM:.*]] = arith.addi %[[MUL]], %[[C]]
+  // CHECK: tti.experimental_fpsan_unembed %[[SUM]]
+  // CHECK-NOT: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b, %c {libname = "", libpath = "", pure = true, symbol = "__nv_fmaf"} : (tensor<4xf32>, tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_ternary_fallback
+tt.func public @extern_ternary_fallback(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
   // CHECK: tti.experimental_fpsan_embed
   // CHECK: arith.addi
   // CHECK: arith.xori
   // CHECK-NOT: tt.extern_elementwise
-  %0 = tt.extern_elementwise %a, %b, %c {libname = "", libpath = "", pure = true, symbol = "__nv_fmaf"} : (tensor<4xf32>, tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  %0 = tt.extern_elementwise %a, %b, %c {libname = "", libpath = "", pure = true, symbol = "__nv_norm3df"} : (tensor<4xf32>, tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
   tt.return %0 : tensor<4xf32>
 }
 
