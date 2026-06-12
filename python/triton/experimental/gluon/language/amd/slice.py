@@ -5,11 +5,11 @@ from triton.experimental.gluon.language._semantic import _check
 
 from .._core import builtin, _unwrap_if_constexpr
 
-__all__ = ["extract_slice"]
+__all__ = ["slice"]
 
 
 @builtin
-def extract_slice(source, shape, offsets, _semantic=None):
+def slice(source, shape, offsets, _semantic=None):
     """Extract a register only slice of a tensor.
 
     Returns a view of ``source`` of the requested ``shape`` starting at
@@ -29,15 +29,14 @@ def extract_slice(source, shape, offsets, _semantic=None):
     offsets = [_unwrap_if_constexpr(o) for o in offsets]
 
     rank = len(source.type.shape)
-    _check(len(shape) == rank, lambda: f"extract_slice: shape must have rank {rank}, got {len(shape)}")
-    _check(len(offsets) == rank, lambda: f"extract_slice: offsets must have rank {rank}, got {len(offsets)}")
+    _check(len(shape) == rank, lambda: f"slice: shape must have rank {rank}, got {len(shape)}")
+    _check(len(offsets) == rank, lambda: f"slice: offsets must have rank {rank}, got {len(offsets)}")
 
     src_shape = source.type.shape
     for i in range(rank):
-        _check(shape[i] <= src_shape[i],
-               lambda: f"extract_slice: result shape {shape} cannot exceed source shape {src_shape}")
+        _check(shape[i] <= src_shape[i], lambda: f"slice: result shape {shape} cannot exceed source shape {src_shape}")
         _check(offsets[i] + shape[i] <= src_shape[i],
-               lambda: f"extract_slice: offset {offsets} + shape {shape} exceeds source shape {src_shape}")
+               lambda: f"slice: offset {offsets} + shape {shape} exceeds source shape {src_shape}")
 
     ret_ty = ttgl.distributed_type(source.dtype, shape, source.type.layout)
     handle = _semantic.builder.create_extract_slice(ret_ty.to_ir(_semantic.builder), source.handle, offsets)
