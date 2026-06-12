@@ -877,8 +877,7 @@ public:
         scale = TransOp::create(rewriter, loc, scale, order);
       }
 
-      reshapeScale = broadcastScale(
-          rewriter, dotOp, dotOp->getParentOfType<ModuleOp>(), scale, kDim);
+      reshapeScale = broadcastScale(rewriter, dotOp, scale, kDim);
 
       auto newScaleType = resultType.clone(scale.getType().getElementType());
       reshapeScale = mlir::triton::gpu::ConvertLayoutOp::create(
