@@ -75,7 +75,7 @@ class HIPOptions:
     # we software emulate the support for them.
     # UZ fp8 variants (fp8e4b8 and fp8e5b16) are natively supported for CDNA3. For other
     # architectures they are software emulated.
-    supported_fp8_dtypes: Tuple[str] = ("fp8e4nv", "fp8e5", "fp8e5b16", "fp8e4b8")
+    supported_fp8_dtypes: Tuple[str] = ("fp8e4nv", "fp8e5", "fp8e5b16", "fp8e4b8", "fp8e8m0fnu")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", 'bf16x3', 'bf16x6')
