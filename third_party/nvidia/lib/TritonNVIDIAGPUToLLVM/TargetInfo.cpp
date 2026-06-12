@@ -192,6 +192,11 @@ static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
   return builder.launch(rewriter, loc, clusterPtrTy, /*hasSideEffect=*/false);
 }
 
+Value TargetInfo::mapDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                             Value ctaId, Value pred) const {
+  return ctaId ? mapa(rewriter, loc, ptr, ctaId, pred) : ptr;
+}
+
 static std::string getConstraintForBitwidth(unsigned bitwidth) {
   switch (bitwidth) {
   case 8:
