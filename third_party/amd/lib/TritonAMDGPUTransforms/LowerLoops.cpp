@@ -763,7 +763,10 @@ void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
   // later UpdateAsyncWaitCount pass can deduce better waitcnts
   schedule.insert(commitOp, loadStage, loadCluster);
 
-  if (loadStage == STAGE_GLOBAL_LOAD_1) {
+  // Route by cluster (not stage) since K and V may share the same global
+  // load stage.
+  bool isDot1Load = (loadCluster == clusters[CLUSTER_GLOBAL_LOAD_1]);
+  if (isDot1Load) {
     schedule.insert(waitOp, STAGE_LOCAL_LOAD_1, clusters[CLUSTER_ASYNC_WAIT_1]);
     if (maybeLocalLoadOp)
       scheduleLocalLoad(maybeLocalLoadOp, schedule, STAGE_LOCAL_LOAD_1,
@@ -783,7 +786,10 @@ void scheduleStreamCopy(const StreamCopyChainOps &streamOps, tt::LoadOp loadOp,
   auto [copyOp, subviewOp, localStoreOp, maybeLocalLoadOp] = streamOps;
   schedule.insert(copyOp, loadStage, loadCluster);
 
-  if (loadStage == STAGE_GLOBAL_LOAD_1) {
+  // Route by cluster (not stage) since K and V may share the same global
+  // load stage.
+  bool isDot1Load = (loadCluster == clusters[CLUSTER_GLOBAL_LOAD_1]);
+  if (isDot1Load) {
     schedule.insert(subviewOp, STAGE_LOCAL_WRITE_1,
                     clusters[CLUSTER_LOCAL_WRITE_1]);
     schedule.insert(localStoreOp, STAGE_LOCAL_WRITE_1,
