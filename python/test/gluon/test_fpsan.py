@@ -300,15 +300,24 @@ def _expected_div_payload_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarra
 
 
 def _expected_exp2_i32(x_i32: np.ndarray) -> np.ndarray:
-    c = np.uint64(0xa343836d)
     mask = np.uint64(0xFFFFFFFF)
     x = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
-    y = np.ones_like(x, dtype=np.uint64)
-    for i in range(32):
-        y = (y * y) & mask
-        factor = np.where((x & np.uint64(1 << (31 - i))) == 0, np.uint64(1), c)
-        y = (y * factor) & mask
+    x_minus_one = (x + mask) & mask
+    choose2 = ((x * x_minus_one) & mask) >> np.uint64(1)
+    x_low = (x & np.uint64(0x1FF)).astype(np.int64)
+    choose3 = (x_low * (x_low - 1) * (x_low - 2) // 6).astype(np.uint64)
+    y = (np.uint64(1) + (x << np.uint64(8)) + (choose2 << np.uint64(16)) + (choose3 << np.uint64(24))) & mask
     return _unmix_payload_u32_to_f32_bits_i32(y.astype(np.uint32))
+
+
+def _expected_exp2_i64(x_i64: np.ndarray) -> np.ndarray:
+    x = _mix_float_bits(x_i64, "f64")
+    with np.errstate(over="ignore"):
+        choose2 = (x * (x - np.uint64(1))) >> np.uint64(1)
+        x_low = (x & np.uint64(0x1FFFF)).astype(np.int64)
+        choose3 = (x_low * (x_low - 1) * (x_low - 2) // 6).astype(np.uint64)
+        y = (np.uint64(1) + (x << np.uint64(16)) + (choose2 << np.uint64(32)) + (choose3 << np.uint64(48)))
+    return _unmix_payload_to_float_bits(y, "f64")
 
 
 def _expected_exp_i32(x_i32: np.ndarray) -> np.ndarray:
@@ -864,6 +873,30 @@ def test_unary_math_identity(device, op, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
+def test_exp2_payload_f64(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 256
+    block = 256
+    rs = np.random.RandomState(31)
+    x_bits = _random_float_bits(rs, (n_elements, ), "f64")
+    _, x = _as_float_bits_tensor(x_bits, "f64")
+    out = torch.empty((n_elements, ), dtype=torch.int64, device="cuda")
+
+    _unary_math_kernel[(1, )](
+        x,
+        triton.TensorWrapper(out, dtype=torch.float64),
+        n_elements,
+        OP="exp2",
+        BLOCK=block,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+
+    _assert_payload_equal(out, _expected_exp2_i64(x_bits))
+
+
 def test_exp_add_mul_identity(device, fresh_knobs):
     _require_cuda_backend(device)
 
@@ -889,6 +922,44 @@ def test_exp_add_mul_identity(device, fresh_knobs):
                                       THREADS_PER_WARP=THREADS_PER_WARP)
     _exp_binary_identity_kernel[grid](xw, yw, out_mul_w, n_elements, MODE="exp_mul", BLOCK=BLOCK,
                                       THREADS_PER_WARP=THREADS_PER_WARP)
+
+    _assert_payload_equal(out_add, out_mul)
+
+
+def test_exp_add_mul_identity_f64(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 256
+    block = 256
+    rs = np.random.RandomState(29)
+    x_bits = _random_float_bits(rs, (n_elements, ), "f64")
+    y_bits = _random_float_bits(rs, (n_elements, ), "f64")
+    _, x = _as_float_bits_tensor(x_bits, "f64")
+    _, y = _as_float_bits_tensor(y_bits, "f64")
+    out_add = torch.empty((n_elements, ), dtype=torch.int64, device="cuda")
+    out_mul = torch.empty_like(out_add)
+
+    grid = (1, )
+    _exp_binary_identity_kernel[grid](
+        x,
+        y,
+        triton.TensorWrapper(out_add, dtype=torch.float64),
+        n_elements,
+        MODE="exp_add",
+        BLOCK=block,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+    _exp_binary_identity_kernel[grid](
+        x,
+        y,
+        triton.TensorWrapper(out_mul, dtype=torch.float64),
+        n_elements,
+        MODE="exp_mul",
+        BLOCK=block,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
 
     _assert_payload_equal(out_add, out_mul)
 

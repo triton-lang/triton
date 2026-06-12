@@ -423,18 +423,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @exp_ops(%a: tensor<4xf32>) -> (tensor<4xf32>, tensor<4xf32>) {
     // CHECK-DAG: arith.constant dense<594471359>
     // CHECK-DAG: arith.constant dense<1>
-    // CHECK-DAG: arith.constant dense<0>
-    // CHECK-DAG: arith.constant dense<-1555856531>
     // CHECK: tti.experimental_fpsan_embed
     // CHECK: arith.muli
-    // CHECK: arith.andi
-    // CHECK: arith.cmpi
-    // CHECK: arith.select
+    // CHECK-NOT: scf.for
     // CHECK-NOT: math.exp
     // CHECK-NOT: math.exp2
     %0 = math.exp %a : tensor<4xf32>
     %1 = math.exp2 %a : tensor<4xf32>
     tt.return %0, %1 : tensor<4xf32>, tensor<4xf32>
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @exp2_all_widths
+  tt.func public @exp2_all_widths(%a8: f8E4M3FN, %a16: f16, %ab16: bf16, %a32: f32, %a64: f64) -> (f8E4M3FN, f16, bf16, f32, f64) {
+    // CHECK-NOT: scf.for
+    // CHECK-NOT: math.exp2
+    %r8 = math.exp2 %a8 : f8E4M3FN
+    %r16 = math.exp2 %a16 : f16
+    %rb16 = math.exp2 %ab16 : bf16
+    %r32 = math.exp2 %a32 : f32
+    %r64 = math.exp2 %a64 : f64
+    // CHECK: tt.return
+    tt.return %r8, %r16, %rb16, %r32, %r64 : f8E4M3FN, f16, bf16, f32, f64
   }
 }
 
