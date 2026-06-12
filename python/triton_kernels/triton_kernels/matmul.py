@@ -28,6 +28,7 @@ from .matmul_details.opt_flags import (
     scoped_opt_flags as scoped_opt_flags,
     scoped_opt_flags_constraints as scoped_opt_flags_constraints,
     set_idle_sms,
+    update_opt_flags_constraints as update_opt_flags_constraints,
 )
 from .matmul_details.opt_flags_details import opt_flags_nvidia
 from .specialize import FnSpecs, SpecializationModule, ClosureArg

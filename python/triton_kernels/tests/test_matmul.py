@@ -10,7 +10,7 @@ from triton._internal_testing import is_hopper
 # matmul utilities
 import triton_kernels.matmul_details.opt_flags as opt_flags
 from triton_kernels.matmul import FlexCtx, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
-from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
+from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch, update_opt_flags_constraints
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, quantize_nvfp4_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
@@ -661,3 +661,7 @@ def test_set_idle_sms():
             assert flags.idle_sms == num_idle_sms + 1
     finally:
         matmul_set_idle_sms(0)
+
+
+def test_update_opt_flags_constraints_export():
+    assert update_opt_flags_constraints is opt_flags.update_opt_flags_constraints
