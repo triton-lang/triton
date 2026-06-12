@@ -97,6 +97,17 @@ private:
 bool isCDNA(ISAFamily isaFamily);
 bool isRDNA(ISAFamily isaFamily);
 
+// Returns false on RDNA3 silicon where LLVM's AMDGPU DPP combiner fuses
+// `v_mov_dpp` into a VOP3 consumer with immediate src1/src2 (e.g.
+// `v_bfe_i32_e64_dpp v, v, 0, 16`), which gfx1100/1101/1102/1103 reject.
+// gfx1150/1151 accept the fused form; so do RDNA4, GFX1250 and
+// CDNA. Used to gate `bound_ctrl:1` on DPP emissions, which is what
+// unlocks the broken fusion.
+//
+// The arch string is only inspected when isaFamily == RDNA3 (gfx110x vs.
+// gfx115x disambiguation); for all other targets the moduleOp is unused.
+bool isDppBoundCtrlSafe(ModuleOp moduleOp, ISAFamily isaFamily);
+
 } // namespace mlir::triton::amdgpu
 
 #endif // TRITON_THIRD_PARTY_AMD_INCLUDE_DIALECT_TRITONAMDGPU_IR_TARGETFEATURES_H_
