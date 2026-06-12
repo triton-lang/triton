@@ -1801,10 +1801,20 @@ void init_triton_ir(py::module &&m) {
       .def("create_inline_asm",
            [](TritonOpBuilder &self, const std::string &inlineAsm,
               const std::string &constraints, const std::vector<Value> &values,
-              const std::vector<Type> &types, bool isPure,
-              int pack) -> OpState {
+              const std::vector<Type> &types, bool isPure, int pack,
+              const std::vector<int32_t> &operandVecSizes,
+              const std::vector<int32_t> &resultVecSizes) -> OpState {
+             DenseI32ArrayAttr operandVecSizesAttr;
+             DenseI32ArrayAttr resultVecSizesAttr;
+             if (!operandVecSizes.empty())
+               operandVecSizesAttr =
+                   DenseI32ArrayAttr::get(self.getContext(), operandVecSizes);
+             if (!resultVecSizes.empty())
+               resultVecSizesAttr =
+                   DenseI32ArrayAttr::get(self.getContext(), resultVecSizes);
              return self.create<ElementwiseInlineAsmOp>(
-                 types, inlineAsm, constraints, isPure, pack, values);
+                 types, inlineAsm, constraints, isPure, pack,
+                 operandVecSizesAttr, resultVecSizesAttr, values);
            })
       .def("create_print",
            [](TritonOpBuilder &self, const std::string &prefix, bool hex,
