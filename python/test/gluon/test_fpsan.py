@@ -9,6 +9,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton import language as tl
 from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250, is_hopper, is_interpreter
+from triton._internal_testing import is_blackwell_ultra
 from triton.experimental.gluon.language.nvidia.ampere import mma_v2
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia.blackwell import (
@@ -2301,8 +2302,33 @@ def test_tcgen05_mma_scaled_two_ctas(device, fresh_knobs):
         b_scale_offs_k = gl.arange(0, SCALE_K, layout=gl.SliceLayout(0, b_scale_reg_layout))[None, :]
         scale_offs_m = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, a_scale_reg_layout))[:, None]
         scale_offs_n = gl.arange(0, BLOCK_N, layout=gl.SliceLayout(1, b_scale_reg_layout))[:, None]
-        a_scale.store(gl.load(a_scale_ptr + scale_offs_m * SCALE_K + a_scale_offs_k))
-        b_scale.store(gl.load(b_scale_ptr + scale_offs_n * SCALE_K + b_scale_offs_k))
+        a_scale_values = gl.load(a_scale_ptr + scale_offs_m * SCALE_K + a_scale_offs_k)
+        b_scale_values = gl.load(b_scale_ptr + scale_offs_n * SCALE_K + b_scale_offs_k)
+        scale_smem_offset_bases: gl.constexpr = [
+            [0, 1],
+            [0, 2],
+            [32, 0],
+            [64, 0],
+            [1, 0],
+            [2, 0],
+            [4, 0],
+            [8, 0],
+            [16, 0],
+        ]
+        a_scale_smem_layout: gl.constexpr = gl.SharedLinearLayout(
+            offset_bases=scale_smem_offset_bases,
+            block_bases=((128, 0), ),
+        )
+        b_scale_smem_layout: gl.constexpr = gl.SharedLinearLayout(
+            offset_bases=scale_smem_offset_bases,
+            block_bases=((0, 0), ),
+        )
+        a_scale_smem = gl.allocate_shared_memory(gl.int8, [BLOCK_M, SCALE_K], a_scale_smem_layout)
+        b_scale_smem = gl.allocate_shared_memory(gl.int8, [BLOCK_N, SCALE_K], b_scale_smem_layout)
+        a_scale_smem.store(a_scale_values)
+        b_scale_smem.store(b_scale_values)
+        tcgen05_copy(a_scale_smem, a_scale)
+        tcgen05_copy(b_scale_smem, b_scale)
 
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
@@ -2392,15 +2418,72 @@ def test_tmem_index_subslice(device, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("two_ctas", [False, True])
-def test_tmem_copy_scales_in_warp_specialize_partition(device, two_ctas, fresh_knobs):
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires Blackwell Ultra")
+@pytest.mark.parametrize("red_op,use_abs", [("min", False), ("max", True)])
+def test_tmem_load_reduce(device, red_op, use_abs, fresh_knobs):
     _require_cuda_backend(device)
 
-    smem_h = 64
-    smem_w = 16
+    m = 128
+    n = 128
+    M = gl.constexpr(m)
+    N = gl.constexpr(n)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(x_ptr, out_ptr, RED_OP: gl.constexpr, USE_ABS: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
+        red_layout: gl.constexpr = gl.SliceLayout(1, layout)
+        offs_m = gl.arange(0, M, layout=red_layout)
+        offs_n = gl.arange(0, N, layout=gl.SliceLayout(0, layout))
+        offs = offs_m[:, None] * N + offs_n[None, :]
+
+        value = gl.load(x_ptr + offs)
+        tmem_layout: gl.constexpr = TensorMemoryLayout((M, N), col_stride=1)
+        tmem = allocate_tensor_memory(gl.float32, [M, N], layout=tmem_layout)
+        tmem.store(gl.convert_layout(value, tmem.get_reg_layout()))
+
+        if RED_OP == "min":
+            _, reduced = tmem.load_min(abs=USE_ABS)
+        else:
+            _, reduced = tmem.load_max(abs=USE_ABS)
+        gl.store(out_ptr + offs_m, gl.convert_layout(reduced, red_layout))
+
+    rs = np.random.RandomState(0)
+    x_bits = rs.uniform(-100.0, 100.0, size=(m, n)).astype(np.float32).view(np.int32)
+    reduction_bits = x_bits
+    if use_abs:
+        reduction_bits = _u32_to_i32(_as_u32(x_bits) & np.uint32(0x7FFFFFFF))
+    payload = _u32_to_i32(_mix_f32_bits_to_payload_u32(reduction_bits))
+    reduced_payload = (payload.min(axis=1) if red_op == "min" else payload.max(axis=1)).astype(np.int32)
+    exp_bits = _unmix_payload_u32_to_f32_bits_i32(reduced_payload.view(np.uint32))
+
+    x = torch.tensor(x_bits, device=device, dtype=torch.int32)
+    out = torch.empty((m, ), device=device, dtype=torch.int32)
+    kernel[(1, )](
+        triton.TensorWrapper(x, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        RED_OP=red_op,
+        USE_ABS=use_abs,
+        num_warps=4,
+    )
+
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("scale_shape", [(64, 16), (256, 4)])
+@pytest.mark.parametrize("two_ctas", [False, True])
+def test_tmem_copy_scales_in_warp_specialize_partition(device, scale_shape, two_ctas, fresh_knobs):
+    _require_cuda_backend(device)
+
+    smem_h, smem_w = scale_shape
     SMEM_H = gl.constexpr(smem_h)
     SMEM_W = gl.constexpr(smem_w)
+    tmem_rows = 128
+    tmem_cols = 32
+    TMEM_ROWS = gl.constexpr(tmem_rows)
+    TMEM_COLS = gl.constexpr(tmem_cols)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
@@ -2408,6 +2491,15 @@ def test_tmem_copy_scales_in_warp_specialize_partition(device, two_ctas, fresh_k
     def copy_partition(smem, tmem, bar):
         tcgen05_copy(smem, tmem)
         tcgen05_commit(bar)
+
+    @gluon.jit
+    def load_partition(physical, bar, out_ptr):
+        mbarrier.wait(bar, phase=0)
+        mbarrier.invalidate(bar)
+        physical_reg_layout: gl.constexpr = physical.get_reg_layout()
+        copied = physical.load(physical_reg_layout)
+        out_ptrs = out_ptr + gl.arange(0, TMEM_ROWS)[:, None] * TMEM_COLS + gl.arange(0, TMEM_COLS)[None, :]
+        gl.store(gl.set_auto_layout(out_ptrs, physical_reg_layout), copied)
 
     @gluon.jit
     def default_partition():
@@ -2432,8 +2524,8 @@ def test_tmem_copy_scales_in_warp_specialize_partition(device, two_ctas, fresh_k
         in_ptrs = (in_ptr + gl.arange(0, SMEM_H)[:, None] * SMEM_W + gl.arange(0, SMEM_W)[None, :])
         value = gl.load(gl.set_auto_layout(in_ptrs, blocked))
 
-        smem_layout: gl.constexpr = gl.SharedLinearLayout(
-            offset_bases=[
+        if SMEM_H == 64:
+            smem_offset_bases: gl.constexpr = [
                 [0, 1],
                 [0, 2],
                 [32, 0],
@@ -2444,7 +2536,22 @@ def test_tmem_copy_scales_in_warp_specialize_partition(device, two_ctas, fresh_k
                 [8, 0],
                 [16, 0],
                 [0, 8],
-            ],
+            ]
+        else:
+            smem_offset_bases: gl.constexpr = [
+                [0, 1],
+                [0, 2],
+                [32, 0],
+                [64, 0],
+                [1, 0],
+                [2, 0],
+                [4, 0],
+                [8, 0],
+                [16, 0],
+                [128, 0],
+            ]
+        smem_layout: gl.constexpr = gl.SharedLinearLayout(
+            offset_bases=smem_offset_bases,
             block_bases=cga_layout,
         )
         smem = gl.allocate_shared_memory(gl.int8, (SMEM_H, SMEM_W), layout=smem_layout)
@@ -2454,24 +2561,28 @@ def test_tmem_copy_scales_in_warp_specialize_partition(device, two_ctas, fresh_k
         tmem = allocate_tensor_memory(gl.int8, (SMEM_H, SMEM_W), layout=tmem_layout)
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
+        physical_layout: gl.constexpr = TensorMemoryLayout((TMEM_ROWS, TMEM_COLS), col_stride=1, cga_layout=cga_layout)
+        physical = tmem._reinterpret(shape=(TMEM_ROWS, TMEM_COLS), layout=physical_layout)
 
         gl.warp_specialize(
             [
                 (default_partition, ()),
                 (copy_partition, (smem, tmem, bar)),
+                (load_partition, (physical, bar, out_ptr)),
             ],
-            [1],
-            [32],
+            [1, 4],
+            [32, 32],
         )
 
-        mbarrier.wait(bar, phase=0)
-        mbarrier.invalidate(bar)
-        gl.store(out_ptr, 1)
+    rs = np.random.RandomState(0)
+    x_np = rs.randint(-100, 100, size=(smem_h, smem_w), dtype=np.int8)
+    warp_tile = x_np.reshape(smem_h // 32, 32, smem_w // 4, 4).transpose(1, 2, 0, 3).reshape(32, -1)
+    expected = np.tile(warp_tile, (4, 1))
 
-    x = torch.randint(size=(smem_h, smem_w), low=-100, high=100, dtype=torch.int8, device=device)
-    out = torch.empty((), device=device, dtype=torch.int32)
+    x = torch.tensor(x_np, device=device, dtype=torch.int8)
+    out = torch.empty((tmem_rows, tmem_cols), device=device, dtype=torch.int8)
     kernel[(1, )](x, out, TWO_CTAS=two_ctas, num_warps=4, num_ctas=2 if two_ctas else 1)
-    torch.testing.assert_close(out, torch.ones_like(out))
+    torch.testing.assert_close(out, torch.tensor(expected, device=device))
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
