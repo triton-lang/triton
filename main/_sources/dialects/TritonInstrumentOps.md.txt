@@ -373,6 +373,44 @@ Effects: `MemoryEffects::Effect{}`
 
 
 
+### `tti.experimental_local_gather` (triton::instrument::ExperimentalLocalGatherOp)
+
+_Gather elements from shared memory with logical base offsets_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_local_gather` $src `[` $indices `]` `offsets` `=` `[` $offsets `]`
+              attr-dict `:` qualified(type($src)) `,` type($indices) `->` type($result)
+```
+
+Gather elements from a shared memory descriptor using an index tensor along
+one axis, after shifting the logical source coordinates by rank-sized scalar
+offsets. This is intentionally private to instrumentation passes.
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>axis</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `indices` | ranked tensor of integer values |
+| `offsets` | variadic of 32-bit signless integer |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of floating-point or integer or ptr values |
+
+
+
 ### `tti.experimental_lock_acquire` (triton::instrument::ExperimentalLockAcquireOp)
 
 _Acquire a lock._
