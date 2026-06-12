@@ -32,10 +32,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: @dot_i8_decomposition
   tt.func public @dot_i8_decomposition() -> tensor<32x32xf32, #blocked> {
     // CHECK: scf.for
-    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = true
-    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = true
-    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = false
-    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = false
+    // CHECK-COUNT-8: tti.dot_i8
     // CHECK-NOT: tti.dot_i8
     %one = arith.constant 1.000000e+00 : f16
     %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
@@ -48,15 +45,113 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @dot_i8_to_i16_decomposition
+  tt.func public @dot_i8_to_i16_decomposition() -> tensor<16x8xf16, #blocked> {
+    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = true
+    // CHECK-NOT: tti.dot_i8
+    %one = arith.constant 1.000000e+00 : f8E4M3FN
+    %zero = arith.constant dense<0.000000e+00> : tensor<16x8xf16, #blocked>
+    %a = tt.splat %one : f8E4M3FN -> tensor<16x32xf8E4M3FN, #dot_operand_a>
+    %b = tt.splat %one : f8E4M3FN -> tensor<32x8xf8E4M3FN, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<16x32xf8E4M3FN, #dot_operand_a> * tensor<32x8xf8E4M3FN, #dot_operand_b> -> tensor<16x8xf16, #blocked>
+    tt.return %out : tensor<16x8xf16, #blocked>
+  }
+
+  // CHECK-LABEL: @dot_i8_to_i32_decomposition
+  tt.func public @dot_i8_to_i32_decomposition() -> tensor<16x8xf32, #blocked> {
+    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = true
+    // CHECK-NOT: tti.dot_i8
+    %one = arith.constant 1.000000e+00 : f8E4M3FN
+    %zero = arith.constant dense<0.000000e+00> : tensor<16x8xf32, #blocked>
+    %a = tt.splat %one : f8E4M3FN -> tensor<16x32xf8E4M3FN, #dot_operand_a>
+    %b = tt.splat %one : f8E4M3FN -> tensor<32x8xf8E4M3FN, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<16x32xf8E4M3FN, #dot_operand_a> * tensor<32x8xf8E4M3FN, #dot_operand_b> -> tensor<16x8xf32, #blocked>
+    tt.return %out : tensor<16x8xf32, #blocked>
+  }
+
+  // CHECK-LABEL: @dot_i16_to_i16_decomposition
+  tt.func public @dot_i16_to_i16_decomposition() -> tensor<16x8xf16, #blocked> {
+    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = false
+    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = true
+    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = false
+    // CHECK-NOT: tti.dot_i8
+    %one = arith.constant 1.000000e+00 : f16
+    %zero = arith.constant dense<0.000000e+00> : tensor<16x8xf16, #blocked>
+    %a = tt.splat %one : f16 -> tensor<16x32xf16, #dot_operand_a>
+    %b = tt.splat %one : f16 -> tensor<32x8xf16, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<16x32xf16, #dot_operand_a> * tensor<32x8xf16, #dot_operand_b> -> tensor<16x8xf16, #blocked>
+    tt.return %out : tensor<16x8xf16, #blocked>
+  }
+
+  // CHECK-LABEL: @dot_i16_to_i32_decomposition
+  tt.func public @dot_i16_to_i32_decomposition() -> tensor<16x8xf32, #blocked> {
+    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = false
+    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = true
+    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = false
+    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = true
+    // CHECK-NOT: tti.dot_i8
+    %one = arith.constant 1.000000e+00 : f16
+    %zero = arith.constant dense<0.000000e+00> : tensor<16x8xf32, #blocked>
+    %a = tt.splat %one : f16 -> tensor<16x32xf16, #dot_operand_a>
+    %b = tt.splat %one : f16 -> tensor<32x8xf16, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<16x32xf16, #dot_operand_a> * tensor<32x8xf16, #dot_operand_b> -> tensor<16x8xf32, #blocked>
+    tt.return %out : tensor<16x8xf32, #blocked>
+  }
+
+  // CHECK-LABEL: @dot_i32_to_i32_decomposition
+  tt.func public @dot_i32_to_i32_decomposition() -> tensor<16x8xf32, #blocked> {
+    // CHECK-COUNT-10: tti.dot_i8
+    // CHECK-NOT: tti.dot_i8
+    %one = arith.constant 1.000000e+00 : f32
+    %zero = arith.constant dense<0.000000e+00> : tensor<16x8xf32, #blocked>
+    %a = tt.splat %one : f32 -> tensor<16x32xf32, #dot_operand_a>
+    %b = tt.splat %one : f32 -> tensor<32x8xf32, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<16x32xf32, #dot_operand_a> * tensor<32x8xf32, #dot_operand_b> -> tensor<16x8xf32, #blocked>
+    tt.return %out : tensor<16x8xf32, #blocked>
+  }
+
+  // CHECK-LABEL: @dot_i64_to_i64_decomposition
+  tt.func public @dot_i64_to_i64_decomposition() -> tensor<16x8xf64, #blocked> {
+    // CHECK-COUNT-36: tti.dot_i8
+    // CHECK-NOT: tti.dot_i8
+    // CHECK: arith.extsi {{.*}} : tensor<{{.*}}xi32, #{{.*}}> to tensor<{{.*}}xi64, #{{.*}}>
+    // CHECK-NOT: tti.dot_i8
+    %one = arith.constant 1.000000e+00 : f64
+    %zero = arith.constant dense<0.000000e+00> : tensor<16x8xf64, #blocked>
+    %a = tt.splat %one : f64 -> tensor<16x32xf64, #dot_operand_a>
+    %b = tt.splat %one : f64 -> tensor<32x8xf64, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<16x32xf64, #dot_operand_a> * tensor<32x8xf64, #dot_operand_b> -> tensor<16x8xf64, #blocked>
+    tt.return %out : tensor<16x8xf64, #blocked>
+  }
+
+  // CHECK-LABEL: @dot_i8_single_warp_tile
+  tt.func public @dot_i8_single_warp_tile() -> tensor<64x64xf32, #blocked> {
+    // CHECK: tensor<32x32x!tt.ptr<i32>
+    %one = arith.constant 1.000000e+00 : f8E4M3FN
+    %zero = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+    %a = tt.splat %one : f8E4M3FN -> tensor<64x32xf8E4M3FN, #dot_operand_a>
+    %b = tt.splat %one : f8E4M3FN -> tensor<32x64xf8E4M3FN, #dot_operand_b>
+    %out = tt.dot %a, %b, %zero : tensor<64x32xf8E4M3FN, #dot_operand_a> * tensor<32x64xf8E4M3FN, #dot_operand_b> -> tensor<64x64xf32, #blocked>
+    tt.return %out : tensor<64x64xf32, #blocked>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @dot_f64_i8_decomposition
   tt.func public @dot_f64_i8_decomposition() -> tensor<32x32xf64, #blocked> {
-    // CHECK-COUNT-36: tti.dot_i8
+    // CHECK-COUNT-72: tti.dot_i8
     // CHECK-NOT: tti.dot_i8
     // CHECK: arith.extsi {{.*}} : tensor<{{.*}}xi32, #{{.*}}> to tensor<{{.*}}xi64, #{{.*}}>
+    // CHECK-NOT: tti.dot_i8
     %one = arith.constant 1.000000e+00 : f64
     %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf64, #blocked>
     %a = tt.splat %one : f64 -> tensor<32x32xf64, #dot_operand_a>
@@ -138,10 +233,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: @dot_scaled_i8_decomposition
   tt.func public @dot_scaled_i8_decomposition() -> tensor<32x32xf32, #blocked> {
     // CHECK: scf.for
-    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = true
-    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = true
-    // CHECK: tti.dot_i8 {{.*}} aSigned = true, bSigned = false
-    // CHECK: tti.dot_i8 {{.*}} aSigned = false, bSigned = false
+    // CHECK-COUNT-8: tti.dot_i8
     // CHECK-NOT: tti.dot_i8
     // CHECK-NOT: ttg.dot_scaled
     %one = arith.constant 1.000000e+00 : f16
@@ -166,7 +258,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: tt.store
     // CHECK: ttg.barrier global_read|global_write
     // CHECK: scf.for
-    // CHECK-COUNT-10: tti.dot_i8
+    // CHECK-COUNT-40: tti.dot_i8
     // CHECK-NOT: tti.dot_i8
     // CHECK: ttg.barrier global_read|global_write
     // CHECK: %[[RAW:.*]] = tt.load

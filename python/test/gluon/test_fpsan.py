@@ -148,28 +148,17 @@ def _float_dtype_info(dtype: str):
 
 
 def _float_payload_edges(bitwidth: int) -> np.ndarray:
-    if bitwidth == 8:
-        return np.asarray([0x00, 0x01, 0x7F, 0x80, 0x81, 0xFF], dtype=np.uint64)
-    if bitwidth == 16:
-        return np.asarray([0x0000, 0x0001, 0x00FF, 0x0100, 0x7FFF, 0x8000, 0x8001, 0xFFFF], dtype=np.uint64)
-    if bitwidth == 32:
-        return np.asarray([
-            0x00000000, 0x00000001, 0x000000FF, 0x00000100, 0x0000FFFF, 0x00010000, 0x7FFFFFFF, 0x80000000, 0x80000001,
-            0xFFFFFFFF
-        ], dtype=np.uint64)
-    assert bitwidth == 64
-    return np.asarray([
-        0x0000000000000000,
-        0x0000000000000001,
-        0x00000000000000FF,
-        0x0000000000000100,
-        0x00000000FFFFFFFF,
-        0x0000000100000000,
-        0x7FFFFFFFFFFFFFFF,
-        0x8000000000000000,
-        0x8000000000000001,
-        0xFFFFFFFFFFFFFFFF,
-    ], dtype=np.uint64)
+    assert bitwidth in (8, 16, 32, 64)
+    boundaries = [8]
+    if bitwidth > 16:
+        boundaries.append(bitwidth // 2)
+    edges = [0, 1]
+    for boundary in boundaries:
+        if boundary < bitwidth:
+            edges.extend([(1 << boundary) - 1, 1 << boundary])
+    sign = 1 << (bitwidth - 1)
+    edges.extend([sign - 1, sign, sign + 1, (1 << bitwidth) - 1])
+    return np.asarray(edges, dtype=np.uint64)
 
 
 def _random_float_bits(rs: np.random.RandomState, shape, dtype: str) -> np.ndarray:
@@ -1353,36 +1342,17 @@ def _mm_payload_bits(a_bits: np.ndarray, b_bits: np.ndarray, c_bits: np.ndarray,
     a_u = _signed_cast_payload_u64(_mix_float_bits(a_bits, type_a), a_width, acc_width)
     b_u = _signed_cast_payload_u64(_mix_float_bits(b_bits, type_b), b_width, acc_width)
     c_u = _mix_float_bits(c_bits, acc_type) if c_bits is not None else None
-    m, k = a_u.shape
-    k2, n = b_u.shape
-    assert k == k2
-    out = np.empty((m, n), dtype=np.uint64)
-    mask = _low_mask_u64(acc_width)
+    assert a_u.shape[-1] == b_u.shape[-2]
     with np.errstate(over="ignore"):
-        for i in range(m):
-            for j in range(n):
-                s = c_u[i, j] if c_u is not None else 0
-                for kk in range(k):
-                    s = (s + (a_u[i, kk] * b_u[kk, j])) & mask
-                out[i, j] = s
+        out = a_u @ b_u
+        if c_u is not None:
+            out += c_u
+        out &= _low_mask_u64(acc_width)
     return _unmix_payload_to_float_bits(out, acc_type)
 
 
 def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = None) -> np.ndarray:
     return _mm_payload_bits(a_i32, b_i32, c_i32, "f32", "f32", "f32")
-
-
-def _bmm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = None) -> np.ndarray:
-    assert a_i32.ndim == 3
-    assert b_i32.ndim == 3
-    assert c_i32 is None or c_i32.ndim == 3
-    assert a_i32.shape[0] == b_i32.shape[0]
-    assert c_i32 is None or a_i32.shape[0] == c_i32.shape[0]
-    out = np.empty((a_i32.shape[0], a_i32.shape[1], b_i32.shape[2]), dtype=np.int32)
-    for batch in range(a_i32.shape[0]):
-        c_batch = c_i32[batch] if c_i32 is not None else None
-        out[batch] = _mm_payload_u32(a_i32[batch], b_i32[batch], c_batch)
-    return out
 
 
 def _unpack_element(data: np.ndarray, row: int, col: int, pack: int, pack_axis: int = 1) -> np.uint64:
@@ -1777,7 +1747,7 @@ def test_dot_fma_batched(device, fresh_knobs):
     a_bits = rs.randint(-(2**31), 2**31 - 1, size=(BATCH_SIZE, B, B), dtype=np.int32)
     b_bits = rs.randint(-(2**31), 2**31 - 1, size=(BATCH_SIZE, B, B), dtype=np.int32)
     c_bits = rs.randint(-(2**31), 2**31 - 1, size=(BATCH_SIZE, B, B), dtype=np.int32)
-    exp_bits = _bmm_payload_u32(a_bits, b_bits, c_bits)
+    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits)
 
     a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
     b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
@@ -2254,13 +2224,11 @@ def test_tcgen05_mma_scaled(device, type_a, type_b, m, n, k, scale_factor, scale
     if type_a == "e2m1":
         a = torch.tensor(a_bits, device="cuda", dtype=torch.uint8)
     else:
-        torch_dtype_a = torch.float8_e4m3fn if type_a == "e4m3" else torch.float8_e5m2
-        a = torch.tensor(a_bits, device="cuda", dtype=torch.uint8).view(torch_dtype_a)
+        a = torch.tensor(a_bits, device="cuda", dtype=torch.uint8).view(_float_dtype_info(type_a)[4])
     if type_b == "e2m1":
         b = torch.tensor(b_bits, device="cuda", dtype=torch.uint8)
     else:
-        torch_dtype_b = torch.float8_e4m3fn if type_b == "e4m3" else torch.float8_e5m2
-        b = torch.tensor(b_bits, device="cuda", dtype=torch.uint8).view(torch_dtype_b)
+        b = torch.tensor(b_bits, device="cuda", dtype=torch.uint8).view(_float_dtype_info(type_b)[4])
     if scale_type == "e4m3":
         a_scale = torch.tensor(a_scale_bits, device="cuda", dtype=torch.uint8).view(torch.float8_e4m3fn)
         b_scale = torch.tensor(b_scale_bits, device="cuda", dtype=torch.uint8).view(torch.float8_e4m3fn)
