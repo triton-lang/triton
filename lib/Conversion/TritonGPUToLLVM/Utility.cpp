@@ -545,7 +545,7 @@ computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
                   SharedMemoryObject smemObj, Type llvmElemTy,
                   ArrayRef<Value> idxValues,
                   ArrayRef<SmallVector<Value>> coords, unsigned axis,
-                  RewriterBase &rewriter) {
+                  RewriterBase &rewriter, ArrayRef<Value> offsets) {
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -580,9 +580,12 @@ computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
       idx = b.zext(i32_ty, idx);
     }
 
-    // Copy coordinates and replace the axis coordinate with the index value
+    // Copy coordinates, replace the axis coordinate with the index value, and
+    // then shift all logical coordinates by the optional base offsets.
     SmallVector<Value> indices(coords[i]);
     indices[axis] = idx;
+    for (auto [dim, offset] : llvm::enumerate(offsets))
+      indices[dim] = b.add(indices[dim], offset);
 
     // Apply inverted shared layout to compute offset
     SmallVector<std::pair<StringAttr, Value>> inputs;

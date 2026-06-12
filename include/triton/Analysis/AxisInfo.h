@@ -7,6 +7,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 
+#include <algorithm>
 #include <optional>
 
 namespace mlir::triton {
@@ -33,6 +34,9 @@ public:
         constancy(constancy), constantValue(constantValue) {
     assert(divisibility.size() == contiguity.size());
     assert(constancy.size() == contiguity.size());
+    int64_t globalDivisibility = getGlobalDivisibility();
+    for (int64_t &dimDivisibility : this->divisibility)
+      dimDivisibility = std::max(dimDivisibility, globalDivisibility);
   }
 
   // contiguity[d] is the length of the shortest sequence of contiguous integers
@@ -84,6 +88,16 @@ public:
   // has divisibility 1 because its contiguity is 1.
   int64_t getDivisibility(size_t dim) const { return divisibility[dim]; }
   const DimVectorT &getDivisibility() const { return divisibility; }
+
+  // Unit contiguity makes every element a group base, so divisibility from
+  // such a dimension applies globally.
+  int64_t getGlobalDivisibility() const {
+    int64_t globalDivisibility = 1;
+    for (int dim = 0; dim < getRank(); ++dim)
+      if (getContiguity(dim) == 1)
+        globalDivisibility = std::max(globalDivisibility, getDivisibility(dim));
+    return globalDivisibility;
+  }
 
   // constancy[d] is the length of the shortest sequence of repeating integers
   // along dimension d.

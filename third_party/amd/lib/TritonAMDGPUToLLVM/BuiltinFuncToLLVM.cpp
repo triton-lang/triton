@@ -203,7 +203,7 @@ struct ConvertBuiltinFuncToLLVM
     ModuleOp mod = getOperation();
 
     GreedyRewriteConfig config;
-    config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Aggressive);
+    config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Normal);
 
     AMD::TargetInfo targetInfo(this->gfxArch.getValue());
     RewritePatternSet patterns(context);
