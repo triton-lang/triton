@@ -294,8 +294,8 @@ class CudaLauncher(object):
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
         self.launch_pdl = metadata.launch_pdl
 
-    def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
-                 launch_exit_hook, *args):
+    def __call__(self, gridX, gridY, gridZ, stream, device, function, kernel_metadata, launch_metadata,
+                 launch_enter_hook, launch_exit_hook, *args):
         active_driver = triton.runtime.driver.active
 
         def allocate_scratch(size, align, allocator):
@@ -310,7 +310,7 @@ class CudaLauncher(object):
             if size > 0:
                 grid_size = gridX * gridY * gridZ
                 alloc_size = grid_size * self.num_ctas * size
-                return active_driver.allocate_default_profile_scratch(alloc_size, align, stream)
+                return active_driver.allocate_default_profile_scratch(alloc_size, align, stream, device)
             return None
 
         global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
@@ -363,16 +363,17 @@ class CudaDriver(GPUDriver):
     def _set_current_device(self, device):
         self.utils.set_current_device(device)
 
-    def get_current_target(self):
-        device = self.get_current_device()
+    def get_current_target(self, device=None):
+        device = self.get_current_device() if device is None else device
         capability = self.get_device_capability(device)
         capability = capability[0] * 10 + capability[1]
         warp_size = 32
         return GPUTarget("cuda", capability, warp_size)
 
-    def get_active_torch_device(self):
+    def get_active_torch_device(self, device=None):
         import torch
-        return torch.device("cuda", self.get_current_device())
+        device = self.get_current_device() if device is None else device
+        return torch.device("cuda", device)
 
     def get_device_interface(self):
         import torch
