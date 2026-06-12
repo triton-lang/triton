@@ -142,8 +142,6 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
 int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
                           int segmentNum) {
   const int bytesPerEntry = gpu::getBytesPerClockEntry();
-  const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
-  const int circularHeaderSize = gpu::getCircularHeaderSize(); // byte size
   sharedMemUsed = llvm::alignTo(sharedMemUsed, bytesPerEntry);
   if (sharedMemUsed >= maxSharedMemSize) {
     // We just assume there's enough shared memory and error out if not during
@@ -280,7 +278,8 @@ public:
 
     Value profileMem = triton::gpu::GlobalScratchAllocOp::create(
         builder, loc, triton::getPointerType(builder.getI32Type()),
-        allocProfileScratchSize, profileScratchAlignment, "proton");
+        allocProfileScratchSize, profileScratchAlignment,
+        builder.getUnitAttr());
     gpu::InitializeOp::create(builder, loc, profileMem);
 
     Value segment;

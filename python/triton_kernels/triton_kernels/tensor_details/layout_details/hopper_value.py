@@ -53,6 +53,29 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "K", K)
         object.__setattr__(self, "N", N)
 
+    def _padded_shape(self, shape) -> list[int]:
+        *leading_shape, M, K = shape
+        if self.mx_axis == len(leading_shape):
+            align_m, align_k = 64, 256
+        else:
+            align_m, align_k = 256, 64
+        M = (M + align_m - 1) // align_m * align_m
+        K = (K + align_k - 1) // align_k * align_k
+        return [*leading_shape, M, K]
+
+    @property
+    def storage_shape(self) -> list[int]:
+        *leading_shape, M, K = self.shape
+        if self.is_fp4:
+            K //= 2
+            if self.mx_axis == len(leading_shape):
+                M //= 2
+                K *= 2
+        *leading_shape, M, K = self._padded_shape((*leading_shape, M, K))
+        if self.mx_axis == len(leading_shape):
+            return [*leading_shape, M * 4, K // 4]
+        return [*leading_shape, M // 4, K * 4]
+
     def _maybe_mT(self, data):
         if self.mx_axis == len(self.leading_shape):
             return data.mT
@@ -83,13 +106,15 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         batch = data.ndim - 2
         assert batch >= 0
         assert self.mma_version in (2, 3)
-        # Pre-pad both matrix dims to multiples of 64
+        # Align the dimension packed by four to a 64-byte load extent.
         *_, M_in, K_in = data.shape
-        SWIZZLE_ALIGN_M = 64
-        SWIZZLE_ALIGN_K = 64
-        pad_m = (SWIZZLE_ALIGN_M - (M_in % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
-        pad_k = (SWIZZLE_ALIGN_K - (K_in % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
-        data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
+        *_, M, K = self._padded_shape(data.shape)
+        pad_m = M - M_in
+        pad_k = K - K_in
+        if data.numel():
+            data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
+        else:
+            data = data.reshape(*data.shape[:-2], M_in + pad_m, K_in + pad_k)
 
         data = self._maybe_mT(data)
         init_shape = data.shape
@@ -106,19 +131,13 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         k_tile = (1, 4 // u8_kwidth)
 
         sizes = list(data.shape[:-2])
-        pads = []
         # [rest, K, tile, threads] per dimension
         for i, (a, b, c, s, d) in enumerate(zip(k_tile, warp_tile, threads, scott_trick, contig)):
             packed = a * b * c * s * d
             size = data.shape[batch + i]
-            pad = (packed - size % packed) % packed
-            pads += [(0, pad)]
-            sizes.append((size + pad) // packed)
+            sizes.append(size // packed)
             sizes += [a, b, c, s, d]
 
-        pads = tuple(x for t in pads[::-1] for x in t)
-        data = torch.nn.functional.pad(data, pads)
-        init_shape = data.shape
         # 0: rest[0]
         # 1: k_tile[0]
         # 2: warp_tile[0]
@@ -145,7 +164,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         # twiddle the bits
         data = _pack_bits(data, self.mx_axis)
         data = self._maybe_mT(data)
-        return data
+        return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data):
         data = self._maybe_mT(data)
@@ -165,7 +184,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         data = data.permute(*perm)
         data = data.reshape(*batch, M * 4, K // 4)
         data = self._maybe_mT(data)
-        data = repack(data, -2, -1, self.is_fp4)
+        data = repack(data, self.mx_axis, -1, self.is_fp4)
         data = data[..., :self.K, :self.N // 2]
         data = data.contiguous()
         return data

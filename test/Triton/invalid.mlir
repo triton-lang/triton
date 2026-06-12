@@ -367,7 +367,7 @@ tt.func public @fn(%arg0: tensor<16x32xf32>) {
 // Invalid tensor with shared encoding.
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1, 2]}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 0, 1]}>
-module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 64 : i32, "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 64 : i32, "ttg.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<16x32x64xf32, #shared>) {
     // expected-error @+1 {{Non-distributed layout is not allowed in tensor type.}}
     %a = tt.trans %arg0 {order = array<i32: 1, 0, 2>} : tensor<16x32x64xf32, #shared> -> tensor<32x16x64xf32, #shared1>
@@ -428,84 +428,84 @@ tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32>) {
 
 // -----
 
-tt.func @invalid_desc_load(%arg0: !tt.tensordesc<tensor<16x16xf32>>) {
+tt.func @invalid_desc_load(%arg0: !tt.tensordesc<16x16xf32>) {
   %c = arith.constant 0 : i32
   // expected-error @below {{descriptor block and tensor must have the same number of elements}}
-  tt.descriptor_load %arg0[%c, %c] : !tt.tensordesc<tensor<16x16xf32>> -> tensor<16xf32>
+  tt.descriptor_load %arg0[%c, %c] : !tt.tensordesc<16x16xf32> -> tensor<16xf32>
   tt.return
 }
 
 // -----
 
-tt.func @invalid_desc_load(%arg0: !tt.tensordesc<tensor<16x16xf32>>) {
+tt.func @invalid_desc_load(%arg0: !tt.tensordesc<16x16xf32>) {
   %c = arith.constant 0 : i32
   // expected-error @below {{descriptor block and tensor element types must match}}
-  tt.descriptor_load %arg0[%c, %c] : !tt.tensordesc<tensor<16x16xf32>> -> tensor<16x16xf16>
+  tt.descriptor_load %arg0[%c, %c] : !tt.tensordesc<16x16xf32> -> tensor<16x16xf16>
   tt.return
 }
 
 // -----
 
-tt.func @invalid_desc_store(%arg0: !tt.tensordesc<tensor<16x16xf32>>, %arg1: tensor<32x16xf32>) {
+tt.func @invalid_desc_store(%arg0: !tt.tensordesc<16x16xf32>, %arg1: tensor<32x16xf32>) {
   %c = arith.constant 0 : i32
   // expected-error @below {{descriptor block and tensor must have the same number of elements}}
-  tt.descriptor_store %arg0[%c, %c], %arg1 : !tt.tensordesc<tensor<16x16xf32>>, tensor<32x16xf32>
+  tt.descriptor_store %arg0[%c, %c], %arg1 : !tt.tensordesc<16x16xf32>, tensor<32x16xf32>
   tt.return
 }
 
 // -----
 
-tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<tensor<128xbf16>>, %arg1: tensor<32xi32>, %arg2: i32) {
+tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
   // expected-error @below {{block must be a 2D tensor}}
-  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<128xbf16>>, tensor<32xi32>, i32) -> tensor<32xbf16>
+  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<128xbf16>, tensor<32xi32>, i32) -> tensor<32xbf16>
   tt.return
 }
 
 // -----
 
-tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<tensor<2x128xbf16>>, %arg1: tensor<32xi32>, %arg2: i32) {
+tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<2x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
   // expected-error @below {{block must have exactly 1 row}}
-  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<2x128xbf16>>, tensor<32xi32>, i32) -> tensor<32x128xbf16>
+  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<2x128xbf16>, tensor<32xi32>, i32) -> tensor<32x128xbf16>
   tt.return
 }
 
 // -----
 
-tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<tensor<1x128xbf16>>, %arg1: tensor<1x32xi32>, %arg2: i32) {
+tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<1x32xi32>, %arg2: i32) {
   // expected-error @below {{x offsets must be a 1D tensor}}
-  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<1x128xbf16>>, tensor<1x32xi32>, i32) -> tensor<32x128xbf16>
+  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<1x32xi32>, i32) -> tensor<32x128xbf16>
   tt.return
 }
 
 // -----
 
-tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<tensor<1x128xbf16>>, %arg1: tensor<32xi32>, %arg2: i32) {
+tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
   // expected-error @below {{result must be a 2D tensor}}
-  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<1x128xbf16>>, tensor<32xi32>, i32) -> tensor<128xbf16>
+  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<128xbf16>
   tt.return
 }
 
 // -----
 
-tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<tensor<1x128xbf16>>, %arg1: tensor<32xi32>, %arg2: i32) {
+tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
   // expected-error @below {{result tensor number of columns must match block (128)}}
-  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<1x128xbf16>>, tensor<32xi32>, i32) -> tensor<32x64xbf16>
+  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<32x64xbf16>
   tt.return
 }
 
 // -----
 
-tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<tensor<1x128xbf16>>, %arg1: tensor<32xi32>, %arg2: i32) {
+tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
   // expected-error @below {{result tensor must have as many rows as indices (32)}}
-  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<1x128xbf16>>, tensor<32xi32>, i32) -> tensor<64x128xbf16>
+  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<64x128xbf16>
   tt.return
 }
 
 // -----
 
-tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<tensor<1x128xbf16>>, %arg1: tensor<32xi32>, %arg2: i32) {
+tt.func @invalid_tma_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
   // expected-error @below {{result tensor element type must match block ('bf16')}}
-  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<1x128xbf16>>, tensor<32xi32>, i32) -> tensor<32x128xf32>
+  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<32x128xf32>
   tt.return
 }
 
@@ -560,7 +560,7 @@ module {
     %a_scale: tensor<128x128xi8>,
     %b_scale: tensor<128x4xi8>) -> tensor<128x128xf32> {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
-    // expected-error @below {{scales K dimension must match the operand K divided by the scale factor}}
+    // expected-error @below {{scale factor must be 16 or 32. Got 1}}
     %result = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %cst lhs = e4m3 rhs = e4m3 {fastMath = true} : tensor<128x128xf8E4M3FN>, tensor<128x128xi8>  * tensor<128x128xf8E4M3FN>, tensor<128x4xi8>-> tensor<128x128xf32>
     tt.return %result : tensor<128x128xf32>
   }

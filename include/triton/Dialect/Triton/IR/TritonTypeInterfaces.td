@@ -26,25 +26,48 @@ def TT_TensorDescInterface : TypeInterface<"TensorDescInterface"> {
 
   let methods = [
     InterfaceMethod<
-      /*desc=*/"Returns the block type of the tensor descriptor",
-      /*retType=*/"mlir::RankedTensorType",
-      /*methodName=*/"getBlockType",
+      /*desc=*/"Returns the shape of the descriptor block",
+      /*retType=*/"llvm::ArrayRef<int64_t>",
+      /*methodName=*/"getShape",
       /*args=*/(ins)
     >,
     InterfaceMethod<
-      /*desc=*/"Returns the block type with signless integer element type",
+      /*desc=*/"Returns the element type of the descriptor block",
+      /*retType=*/"mlir::Type",
+      /*methodName=*/"getElementType",
+      /*args=*/(ins)
+    >,
+    InterfaceMethod<
+      /*desc=*/"Returns the optional shared memory layout encoding",
+      /*retType=*/"mlir::Attribute",
+      /*methodName=*/"getSharedLayout",
+      /*args=*/(ins)
+    >,
+    InterfaceMethod<
+      /*desc=*/"Returns a block tensor type constructed from shape and element type",
+      /*retType=*/"mlir::RankedTensorType",
+      /*methodName=*/"getBlockType",
+      /*args=*/(ins),
+      /*methodBody=*/"",
+      /*defaultImpl=*/[{
+        return mlir::RankedTensorType::get($_type.getShape(),
+                                           $_type.getElementType());
+      }]
+    >,
+    InterfaceMethod<
+      /*desc=*/"Returns a block tensor type constructed with signless integer element type",
       /*retType=*/"mlir::RankedTensorType",
       /*methodName=*/"getSignlessBlockType",
       /*args=*/(ins),
       /*methodBody=*/"",
       /*defaultImpl=*/[{
-        auto resTy = $_type.getBlockType();
-        if (auto intTy = llvm::dyn_cast<mlir::IntegerType>(resTy.getElementType())) {
-          auto width = resTy.getElementTypeBitWidth();
-          auto signlessTy = mlir::IntegerType::get($_type.getContext(), width);
-          resTy = resTy.clone(signlessTy);
+        auto shape = $_type.getShape();
+        auto elemTy = $_type.getElementType();
+        if (auto intTy = llvm::dyn_cast<mlir::IntegerType>(elemTy)) {
+          auto width = intTy.getWidth();
+          elemTy = mlir::IntegerType::get($_type.getContext(), width);
         }
-        return resTy;
+        return mlir::RankedTensorType::get(shape, elemTy);
       }]
     >,
   ];

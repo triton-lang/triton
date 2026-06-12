@@ -17,11 +17,21 @@ from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXSc
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
+from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
-from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout
-from .matmul_details.opt_flags import make_opt_flags, update_opt_flags_constraints
+from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, SWIZZLE_SIZE_OUTER
+from .tensor_details.layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
+from .matmul_details.opt_flags import (
+    InapplicableConstraint,
+    OptFlags as OptFlags,
+    make_opt_flags,
+    scoped_opt_flags as scoped_opt_flags,
+    scoped_opt_flags_constraints as scoped_opt_flags_constraints,
+    set_idle_sms,
+)
+from .matmul_details.opt_flags_details import opt_flags_nvidia
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
-from .tensor import Storage, Tensor, FP4, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma
+from .tensor import Storage, Tensor, UINT8, FP4, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma, convert_layout
 from .tensor import dtype_to_torch_dtype, torch_dtype_to_dtype
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
@@ -42,6 +52,8 @@ class Epilogue:
 
 class FnName(Enum):
     QUANTIZE_MXFP8 = auto()
+    QUANTIZE_MXFP4 = auto()
+    QUANTIZE_NVFP4 = auto()
 
 
 @dataclass(frozen=True)
@@ -116,24 +128,21 @@ class PrecisionConfig:
     flexpoint_saturate_inf: bool = False
     report_quantization_err_fn: Callable | None = None
     a_mx_scale: torch.Tensor | Tensor | None = None
+    a_microblock_size: int | None = None
     b_mx_scale: torch.Tensor | Tensor | None = None
+    b_microblock_size: int | None = None
     c_mx_scale: torch.Tensor | Tensor | None = None
+    c_microblock_size: int | None = None
+    c_value_pack_factor: int = 1
     out_dtype: torch.dtype | None = None
+    intermediate_out_dtype: torch.dtype = torch.float32
     enforce_bitwise_invariance: bool = False
 
-
 # TODO: merge in opt_flags
-def get_swap_xw(precision_config, opt_flags):
-    if target_info.cuda_capability_geq(10, 0):
-        if precision_config.b_mx_scale is not None:
-            return opt_flags.block_m <= 64 and opt_flags.is_persistent
-        else:
-            return opt_flags.block_m < 64 and opt_flags.is_persistent
-    elif target_info.cuda_capability_geq(9, 0):
-        b_scale_layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
-        return isinstance(b_scale_layout, HopperMXScaleLayout)
-
-    return False
+def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
+    if triton.runtime.driver.active.get_current_target().backend != "cuda":
+        return False
+    return opt_flags_nvidia.compute_swap_xw(precision_config, opt_flags.block_m, opt_flags.is_persistent, lhs_dtype, rhs_dtype)
 
 # ---------------------
 # Allocation
@@ -161,16 +170,21 @@ def init_allocation(x, w, precision_config, fused_activation,
     y_rows *= n_reduce_shards
     out_shape = (batch_dim, y_rows, N // fused_activation.specs.reduction_n)
     out_dtype = precision_config.out_dtype or x.dtype
+    out_shape = out_shape[:-1] + (out_shape[-1] // precision_config.c_value_pack_factor, )
     output = (out_shape, out_dtype)
     # ---- scratchpad -----#
     scratchpad = dict()
     N_scratch = N // fused_activation.specs.reduction_n if opt_flags.split_k == 1 else N
     if opt_flags.split_k > 1:
-        scratch_out_dtype = torch.float32 if opt_flags.split_k > 1 else out_dtype
+        scratch_out_dtype = dtype_to_torch_dtype(precision_config.intermediate_out_dtype)
         scratchpad["matmul"] = ((opt_flags.split_k, batch_dim, M, N_scratch), scratch_out_dtype)
     if "matmul" in scratchpad and precision_config.c_mx_scale is not None:
         assert batch_dim == 1, "batch_dim > 1 not supported yet"
-        scratchpad["mx_c_mx_scale"] = ((opt_flags.split_k, 1, M, triton.cdiv(N_scratch, MXFP_BLOCK_SIZE)), torch.uint8)
+        scale_dtype = precision_config.c_mx_scale.storage.data.dtype if isinstance(precision_config.c_mx_scale, Tensor) else precision_config.c_mx_scale.dtype
+        scratchpad["mx_c_mx_scale"] = (
+            (opt_flags.split_k, 1, M, triton.cdiv(N_scratch, precision_config.c_microblock_size)),
+            scale_dtype,
+        )
     return MatmulAllocation(x.device, output, scratchpad)
 
 def apply_allocation(allocation: MatmulAllocation, output):
@@ -221,7 +235,7 @@ def matmul_set_idle_sms(num_idle_sms):
     """
     persistent kernels will leave `num_idle_sms` idle
     """
-    update_opt_flags_constraints({"idle_sms": num_idle_sms})
+    set_idle_sms(num_idle_sms)
 
 def matmul(a, b, bias,
     a_ragged_metadata: RaggedTensorMetadata | None = None,
@@ -267,6 +281,8 @@ def matmul(a, b, bias,
         fused_activation = FusedActivation(FnSpecs.default(), tuple())
     if epilogue is None:
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
+    if fused_comm is not None and precision_config.c_mx_scale is not None:
+        raise NotImplementedError("fused comm with output MX scales is not supported")
     n_slices = max(1, b.shape[0]) if a_ragged_metadata is None else a_ragged_metadata.n_slices
     # unpack b scale
     b_scale = precision_config.b_mx_scale
@@ -274,12 +290,15 @@ def matmul(a, b, bias,
     if not isinstance(b, Tensor):
         dtype = FP4 if b.dtype == torch.uint8 else None
         b = wrap_torch_tensor(b, dtype=dtype)
-    if b_has_mx and (torch.cuda.get_device_capability()[0] < 10 or b.storage.layout is not None and not isinstance(b.storage.layout, StridedLayout)):
-        assert b.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
+    b_is_shuffled = isinstance(b.storage.layout, BlackwellMX4ValueShuffledLayout)
     if b_scale is not None and not isinstance(b_scale, Tensor):
         b_scale = wrap_torch_tensor(b_scale)
-    if b_scale is not None:
-        b_scale.storage.data = b_scale.data.view(torch.uint8)
+    b_scale_layout = None if b_scale is None else b_scale.storage.layout
+    if b_has_mx and (
+            b.storage.layout is not None and not isinstance(b.storage.layout, StridedLayout)
+            or isinstance(b_scale_layout, HopperMXScaleLayout)):
+        if not b_is_shuffled:
+            assert b.stride(-2) == 1, "`w` must be column-major with Hopper-swizzled MX scales or non-strided MX value layouts"
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
     if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     # unpack a scale
@@ -289,8 +308,57 @@ def matmul(a, b, bias,
     if a_scale is not None and not isinstance(a_scale, Tensor):
         a_scale = wrap_torch_tensor(a_scale)
     if not isinstance(a, Tensor):
-        a = wrap_torch_tensor(a)
+        dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
+        a = wrap_torch_tensor(a, dtype=dtype)
+    a_scale_dtype = None if a_scale is None else a_scale.storage.data.dtype
+    b_scale_dtype = None if b_scale is None else b_scale.storage.data.dtype
+    # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8_e4m3fn.
+    if a_scale_dtype is not None:
+        assert a_scale_dtype == torch.uint8 or a_scale_dtype == torch.float8_e4m3fn, (
+            f"Unsupported microscale dtype {a_scale_dtype}"
+        )
+    a_microblock_size = precision_config.a_microblock_size
+    if a_microblock_size is not None:
+        assert a_microblock_size == int(MXFP_BLOCK_SIZE) or a_microblock_size == int(NVFP_BLOCK_SIZE), (
+            f"Unsupported microscale block size {a_microblock_size}"
+        )
+    assert a_scale is None or a_microblock_size is not None, (
+        "precision_config.a_microblock_size is required when precision_config.a_mx_scale is set"
+    )
+    if b_scale_dtype is not None:
+        assert b_scale_dtype == torch.uint8 or b_scale_dtype == torch.float8_e4m3fn, (
+            f"Unsupported microscale dtype {b_scale_dtype}"
+        )
+    b_microblock_size = precision_config.b_microblock_size
+    if b_microblock_size is not None:
+        assert b_microblock_size == int(MXFP_BLOCK_SIZE) or b_microblock_size == int(NVFP_BLOCK_SIZE), (
+            f"Unsupported microscale block size {b_microblock_size}"
+        )
+    assert b_scale is None or b_microblock_size is not None, (
+        "precision_config.b_microblock_size is required when precision_config.b_mx_scale is set"
+    )
+    if a_microblock_size is not None and b_microblock_size is not None:
+        assert a_microblock_size == b_microblock_size, (
+            f"Microscaled operands must share a block size. Got {a_microblock_size} and {b_microblock_size}"
+        )
+    mx_block_size = (
+        a_microblock_size or b_microblock_size or precision_config.c_microblock_size or int(MXFP_BLOCK_SIZE)
+    )
+    assert all(
+        size is None or size == mx_block_size
+        for size in (a_microblock_size, b_microblock_size, precision_config.c_microblock_size)
+    ), (
+        "Microscaled operands/output must share a block size. "
+        f"Got a={a_microblock_size}, b={b_microblock_size}, c={precision_config.c_microblock_size}"
+    )
+    if precision_config.c_mx_scale is not None and precision_config.c_microblock_size is None:
+        precision_config.c_microblock_size = mx_block_size
+    precision_config.c_value_pack_factor = 2 if precision_config.c_mx_scale is not None and epilogue.specs.name in (
+        FnName.QUANTIZE_MXFP4.name,
+        FnName.QUANTIZE_NVFP4.name,
+    ) else 1
     a_transpose = a.stride(-1) != 1
+    b_transpose = b_is_shuffled or b.storage.data.stride()[-2] == 1
     # determine shapes
     has_gather = gather_indx is not None
     has_scatter = scatter_indx is not None
@@ -316,6 +384,8 @@ def matmul(a, b, bias,
     # compute optimization flags
     out_dtype = precision_config.out_dtype or a.dtype
     out_dtype = torch_dtype_to_dtype(out_dtype)
+    if out_dtype == UINT8 and precision_config.c_mx_scale is not None:
+        out_dtype = FP4
     can_use_tma = (
         a.numel() > 0 and is_tma_compliant(a) and
         b.numel() > 0 and is_tma_compliant(b) and
@@ -334,16 +404,38 @@ def matmul(a, b, bias,
         # which is too big.
         can_use_tma = False
     has_gather_tma = has_gather and target_info.has_tma_gather()
-    can_use_split_k = scatter_indx is None and not a_has_mx and not b_has_mx and ragged_dimension != "K"
+    is_ragged_mx = (a_has_mx or b_has_mx) and (is_a_ragged or is_b_ragged)
+    can_use_split_k = scatter_indx is None and not is_ragged_mx and ragged_dimension != "K" and c_acc_in is None and precision_config.c_mx_scale is None
     block_k = None
     if ragged_dimension == "K":
         block_k = a_ragged_metadata.slice_sizes_divisibility or b_ragged_metadata.slice_sizes_divisibility
+        a_uses_tma_when_persistent = a.stride(-1) != 1 or (a_ragged_metadata.slice_sizes_divisibility is not None)
+    else:
+        a_uses_tma_when_persistent = has_gather_tma or not has_gather
     opt_flags = make_opt_flags(out_dtype, a.dtype, b.dtype, precision_config,
         batch_size, M, N, b.shape[-2], a_ragged_metadata,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
         a_transpose, c_acc_in is not None,
         block_k = block_k,
+        mx_block_size = mx_block_size,
+        x_uses_tma_when_persistent = a_uses_tma_when_persistent,
+        w_transpose = b_transpose,
+        rhs_layout=b.storage.layout,
+        epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
+    if b_is_shuffled:
+        if b.dtype.bitwidth != 4:
+            raise ValueError("Shuffled weights are only supported for mxfp4 values")
+        if not opt_flags.is_persistent:
+            raise InapplicableConstraint("Shuffled weights require the persistent TMA kernel")
+        b_layout = b.storage.layout
+        if b_layout.block_k != opt_flags.block_k or b_layout.block_n != opt_flags.block_n:
+            raise ValueError(
+                f"Shuffled weight layout uses block_k={b_layout.block_k} and "
+                f"block_n={b_layout.block_n}, but kernel selected "
+                f"block_k={opt_flags.block_k}, block_n={opt_flags.block_n}. "
+                f"Use disable_mx4_block_swap constraint to match the layout."
+            )
     # there seems to be a bug on A100
     # pytest -vs test_matmul.py::test_op[False-False-False-False-pad_b-16-768-512-1024-ragged-float16-float16-10-1-False-None-False-False-False-True-None]
     if ragged_dimension == "K" and torch.cuda.get_device_capability()[0] < 9:
@@ -388,13 +480,13 @@ def matmul(a, b, bias,
     has_scratchpad = "matmul" in memory["scratchpad"]
     # Canonical output tensor (matmul scratchpad if present, otherwise final output tensor)
     out_matmul = memory["scratchpad"].get("matmul", memory["output"])
-    out_matmul_flex = OutFlexData() if out_matmul.dtype == torch.float32 else precision_config.flex_ctx.out_data
+    out_matmul_flex = OutFlexData() if has_scratchpad or out_matmul.dtype == torch.float32 else precision_config.flex_ctx.out_data
     # Unified mx-scale pointer; when scratchpad exists, prefer its mx buffer
     out_matmul_scale = precision_config.c_mx_scale
     if out_matmul_scale is not None:
-        out_matmul_scale = out_matmul_scale.data.view(torch.uint8)
+        out_matmul_scale = out_matmul_scale if isinstance(out_matmul_scale, Tensor) else wrap_torch_tensor(out_matmul_scale)
         if has_scratchpad and "mx_c_mx_scale" in memory["scratchpad"]:
-            out_matmul_scale = memory["scratchpad"]["mx_c_mx_scale"]
+            out_matmul_scale = wrap_torch_tensor(memory["scratchpad"]["mx_c_mx_scale"])
     out_matmul_has_mx = out_matmul_scale is not None and out_matmul.element_size() == 1
     # matrix multiplication
     flex = precision_config.flex_ctx
@@ -415,8 +507,9 @@ def matmul(a, b, bias,
     has_scatter_tma = scatter_indx is not None and target_info.has_tma_gather()
     c = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
     a = Tensor(_canonicalize_storage(a.storage, 2 if has_gather_tma else 3, flex.lhs_data), dtype=a.dtype, shape=a.shape, shape_max=a.shape_max)
-    b = Tensor(_canonicalize_storage(b.storage, 3, flex.rhs_data), dtype=b.dtype, shape=b.shape, shape_max=b.shape_max)
-    c = Tensor(_canonicalize_storage(c.storage, 2 if has_scatter_tma else 3, flex.out_data), dtype=c.dtype, shape=c.shape, shape_max=c.shape_max)
+    b_storage_ndim = 5 if b_is_shuffled else 3
+    b = Tensor(_canonicalize_storage(b.storage, b_storage_ndim, flex.rhs_data), dtype=b.dtype, shape=b.shape, shape_max=b.shape_max)
+    c = Tensor(_canonicalize_storage(c.storage, 2 if has_scatter_tma else 3, out_matmul_flex), dtype=c.dtype, shape=c.shape, shape_max=c.shape_max)
     # create tma descriptor for x
     if c_acc_in is not None:
         assert opt_flags.split_k == 1, "c_acc_in + split_k is not supported."
@@ -436,11 +529,18 @@ def matmul(a, b, bias,
     # create tma descriptor for y
     c_has_tma = (
         opt_flags.is_persistent and (scatter_indx is None or has_scatter_tma)
+        and is_tma_compliant(c)
         and (c_acc_in is None or c_acc_is_c)
         and fused_comm is None
+        and (
+            precision_config.c_value_pack_factor == 1
+            or matmul_fused_activation.specs.reduction_n == 1
+        )
     )
-    block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
-    c_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
+    c_logical_block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
+    c_tma_block_n = c_logical_block_n // precision_config.c_value_pack_factor
+    out_tile_n = opt_flags.block_n // matmul_fused_activation.specs.reduction_n
+    c_tma_block_size = [1, c_tma_block_n] if has_scatter_tma else [1, opt_flags.block_m, c_tma_block_n]
     c_tma_mode = None if not c_has_tma else "ragged" if is_c_ragged and not has_scatter_tma else "dense"
     c_tensor_or_tma = make_tma(c, c_tma_block_size, c_tma_mode) if c_has_tma else c.storage.data
     # create tma descriptor for w
@@ -450,15 +550,25 @@ def matmul(a, b, bias,
         b_tensor_or_tma.round_f32_to_tf32 = True
     # create tma descriptor for w_scale
     b_scale_has_tma = opt_flags.is_persistent and b_scale is not None
-    b_transpose = b.storage.data.stride()[-2] == 1
     if b_scale_has_tma:
-        scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
+        scale_block_k = opt_flags.block_k // mx_block_size
         b_scale_storage = b_scale.storage
         b_scale_tma_block_size = [scale_block_k, opt_flags.block_n]
         if isinstance(b_scale_storage.layout, (StridedLayout, HopperMXScaleLayout)):
-            b_scale = Tensor(_canonicalize_storage(b_scale.storage, 3, None), dtype=b_scale.dtype, shape=b_scale.shape, shape_max=b_scale.shape_max)
             b_scale_tma_block_size = [1] + b_scale_tma_block_size
-        b_scale_tensor_or_tma = make_tma(b_scale, b_scale_tma_block_size, "dense", is_scale=True)
+            b_scale_tensor_or_tma = make_tma(
+                Tensor(
+                    _canonicalize_storage(b_scale.storage, 3, None),
+                    dtype=b_scale.dtype,
+                    shape=b_scale.shape,
+                    shape_max=b_scale.shape_max,
+                ),
+                b_scale_tma_block_size,
+                "dense",
+                is_scale=True,
+            )
+        else:
+            b_scale_tensor_or_tma = make_tma(b_scale, b_scale_tma_block_size, "dense", is_scale=True)
     else:
         b_scale_tensor_or_tma = None if b_scale is None else b_scale.storage.data
     # create tma descriptor for x_scale
@@ -469,12 +579,11 @@ def matmul(a, b, bias,
         assert opt_flags.block_m == 128 and opt_flags.block_k >= 128, "block_m and block_k must be at least 128 if x scale is swizzled"
         a_scale_has_tma = True
     if a_scale_has_tma:
-        a_scale.storage.data = a_scale.storage.data.view(torch.uint8)
-        scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
+        scale_block_k = opt_flags.block_k // mx_block_size
         a_scale_tma_block_size = [opt_flags.block_m, scale_block_k]
         a_scale_tensor_or_tma = make_tma(a_scale, a_scale_tma_block_size, "dense", is_scale=True)
     else:
-        a_scale_tensor_or_tma = None if a_scale is None else a_scale.data.view(torch.uint8)
+        a_scale_tensor_or_tma = None if a_scale is None else a_scale.storage.data
     # canonicalize strides
     a_strides = [0]*(3 - a.storage.data.ndim) + list(a.storage.data.stride())
     a_scale_strides = a_scale.stride() if a_has_mx and not a_scale_has_tma else (None, None, None)
@@ -482,8 +591,19 @@ def matmul(a, b, bias,
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
     b_scale_strides = (0, ) * (3 - len(b_scale_strides)) + b_scale_strides
 
-    out_matmul_scale_strides = out_matmul_scale.stride() if out_matmul_has_mx else (None, None, None, None)
+    out_matmul_scale_strides = out_matmul_scale.storage.data.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
+    out_matmul_scale_layout = None if out_matmul_scale is None else out_matmul_scale.storage.layout.name
+    if (
+        scatter_indx is not None
+        and out_matmul_scale is not None
+        and isinstance(out_matmul_scale.storage.layout, BlackwellActMXScaleLayout)
+        and out_matmul_scale.storage.layout.ragged_metadata is not None
+    ):
+        raise NotImplementedError("scatter with ragged Blackwell ACT output MX scales is not supported")
+    output_scale_block_offs = None
+    if ragged_dimension == "M" and out_matmul_scale_layout == "BLACKWELL_ACT_SCALE":
+        output_scale_block_offs = a_ragged_metadata.block_offs(int(SWIZZLE_SIZE_OUTER))
     # launch kernel
     kernels = specializations.get(epilogue=epilogue.specs, activation=matmul_fused_activation.specs)
     # When stride(-2) == stride(-1) == 1, it's ambiguous whether W is transposed
@@ -497,15 +617,17 @@ def matmul(a, b, bias,
         "reduce_rank": fused_comm.reduce_rank,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
+    b_strides = b.storage.data.stride()[:3] if b_is_shuffled else b.storage.data.stride()
+    extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    c_tensor_or_tma, c.storage.data, *out_matmul.stride(),
-                   *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
+                   *((out_matmul_flex.expected_scale, out_matmul_scale.storage.data, None) if out_matmul_has_mx else out_matmul_flex),
                    *out_matmul_scale_strides[-4:],
                    a_tensor_or_tma, a.storage.data, *a_strides, a_transpose,
                    flex.lhs_data.scale,
                    a_scale_tensor_or_tma, *a_scale_strides,
-                   b_tensor_or_tma, b.storage.data, *b.storage.data.stride(), b_transpose,
+                   b_tensor_or_tma, b.storage.data, *b_strides, b_transpose,
                    flex.rhs_data.scale,
                    b_scale_tensor_or_tma, *b_scale_strides,
                    flex.acc_data.reinterpret(c_acc_in), *c_acc_strides,
@@ -514,11 +636,12 @@ def matmul(a, b, bias,
                    None if ragged_dimension == "M" else a.shape[-2],
                    N, K, K_W,
                    betas, gammas,
-                   gather_indx,
+                   None if K == 0 else gather_indx,
                    scatter_indx,
                    None if scatter_indx is None else scatter_indx.shape[0],
                    ragged_dimension,
                    *expt_data_x,
+                   output_scale_block_offs,
                    *expt_data_w,
                    batch_size, grid_m, grid_n,
                    out_alpha,
@@ -538,6 +661,7 @@ def matmul(a, b, bias,
                    XCD_SWIZZLE=opt_flags.xcd_swizzle,
                    SWIZZLE_MX_VALUE=b.storage.layout.name,
                    SWIZZLE_MX_SCALE="STRIDED" if b_scale is None else b_scale.storage.layout.name,
+                   MX_BLOCK_SIZE=mx_block_size,
                    EPILOGUE_SUBTILE=opt_flags.epilogue_subtile,
                    SPLIT_K=opt_flags.split_k,
                    EVEN_K=even_K,
@@ -549,11 +673,19 @@ def matmul(a, b, bias,
                    UPCAST_INDICES=should_upcast_indices(a, b, out_matmul),
                    X_TMA_MODE=a_tma_mode,
                    Y_TMA_MODE=c_tma_mode,
-                   SWAP_XW=get_swap_xw(precision_config, opt_flags),
-                   IS_EPILOGUE_QUANT_MXFP8=epilogue.specs.name == FnName.QUANTIZE_MXFP8.name,
+                   Y_MX_SCALE_LAYOUT=out_matmul_scale_layout,
+                   OUT_N_TILE_ALIGNED=(N // matmul_fused_activation.specs.reduction_n) % out_tile_n == 0,
+                   SWAP_XW=get_swap_xw(precision_config, opt_flags, a.dtype, b.dtype),
+                   IS_EPILOGUE_QUANT_MX=epilogue.specs.name in (
+                       FnName.QUANTIZE_MXFP8.name,
+                       FnName.QUANTIZE_MXFP4.name,
+                       FnName.QUANTIZE_NVFP4.name,
+                   ),
+                   Y_VALUE_PACK_FACTOR=precision_config.c_value_pack_factor,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **fused_comm_kwargs,
-                   **opt_flags.target_kernel_kwargs)
+                   **opt_flags.target_kernel_kwargs,
+                   **extra_kernel_kwargs)
 
     assert not (opt_flags.split_k > 1 and scatter_indx is not None)
     out_final_mx_scale = None
@@ -570,17 +702,24 @@ def matmul(a, b, bias,
             y_flex = precision_config.flex_ctx.out_data,
             y_flex_saturate_inf = precision_config.flexpoint_saturate_inf,
             y_has_mx = precision_config.c_mx_scale is not None,
+            y_mx_scale_dtype = None if precision_config.c_mx_scale is None else precision_config.c_mx_scale.storage.data.dtype if isinstance(precision_config.c_mx_scale, Tensor) else precision_config.c_mx_scale.dtype,
+            y_microblock_size = precision_config.c_microblock_size,
+            y_value_pack_factor = precision_config.c_value_pack_factor,
             # fused functions
             postprocess_fn1 = postprocess_fn1,
             postprocess_fn2 = postprocess_fn2,
         )
-        y_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
-        out_final = c.view(*y_shape)
+        logical_out_n = out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n
+        out_final = c.view(*memory["output"].shape[1:])
         if y_mx_scale is not None:
-            out_final_mx_scale = y_mx_scale.view(out_matmul.shape[-2], triton.cdiv(out_matmul.shape[-1], 32))
+            out_final_mx_scale = y_mx_scale.view(*memory["output"].shape[1:-1], triton.cdiv(logical_out_n, precision_config.c_microblock_size))
     else:
         out_final = out_matmul.squeeze(0)
-        out_final_mx_scale = out_matmul_scale
+        out_final_mx_scale = (
+            None if out_matmul_scale is None
+            else out_matmul_scale if isinstance(precision_config.c_mx_scale, Tensor)
+            else out_matmul_scale.storage.data
+        )
 
     if not (is_input_batched or b_ragged_metadata is not None):
         out_final = out_final.squeeze(0)
@@ -593,7 +732,6 @@ def matmul(a, b, bias,
 # -----------------------------------------------------------------------------
 
 def apply_precision(x_tri, w_tri, precision_config):
-    from .tensor import convert_layout
     from .tensor_details import layout
     from .numerics_details.mxfp import upcast_from_mxfp
 
@@ -606,7 +744,7 @@ def apply_precision(x_tri, w_tri, precision_config):
 
     if precision_config.a_mx_scale is not None:
         a_scale = precision_config.a_mx_scale
-        mx_axis = x_tri.storage.data.ndim -1
+        mx_axis = x_tri.ndim - 1
         canonical_layout = layout.StridedLayout(major_dim=mx_axis)
         x_tri = convert_layout(x_tri, canonical_layout)
         x_tri_scale = convert_layout(a_scale, canonical_layout)
@@ -616,7 +754,7 @@ def apply_precision(x_tri, w_tri, precision_config):
 
     if precision_config.b_mx_scale is not None:
         b_scale = precision_config.b_mx_scale
-        mx_axis = w_tri.storage.data.ndim - 2
+        mx_axis = w_tri.ndim - 2
         canonical_layout = layout.StridedLayout(major_dim=mx_axis)
         w_tri = convert_layout(w_tri, canonical_layout)
         w_tri_scale = convert_layout(b_scale, canonical_layout)

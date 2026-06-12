@@ -34,7 +34,7 @@ jobs:
       - name: Compute cache keys
         id: cache-key
         run: |
-          llvm_file="cmake/llvm-hash.txt"
+          llvm_file="cmake/llvm-info.json"
           nvidia_file="cmake/nvidia-toolchain-version.json"
           json_file="cmake/json-version.txt"
 
@@ -45,12 +45,13 @@ jobs:
           fi
 
           # Process the files if they exist
-          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "llvm=$(sha256sum $llvm_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
-      - name: Cache build dependencies
-        uses: actions/cache@v4
+      - name: Restore build dependencies cache
+        id: restore-build-deps-cache
+        uses: actions/cache/restore@v4
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -69,8 +70,7 @@ jobs:
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-      - name: Setup Python environment for GB200
-        if: ${{ startsWith(matrix.config.runner_type, 'nvidia-gb200') }}
+      - name: Setup Python environment for NVIDIA self-hosted runners
         run: |
           echo "/venv/bin" >> $GITHUB_PATH
           echo "VIRTUAL_ENV=/venv" >> $GITHUB_ENV
@@ -88,8 +88,12 @@ jobs:
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
-      - name: Run python tests on CUDA
+      - name: Run triton tests
         run: make NUM_PROCS=24 test-unit
+      - name: Run gluon tests
+        run: make NUM_PROCS=24 test-gluon
+      - name: Run gsan tests
+        run: make NUM_PROCS=24 test-gsan
       - name: Run interpreter tests
         if: ${{ matrix.config.runner_type == 'nvidia-h100' }}
         run: make test-interpret
@@ -109,3 +113,12 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
+      - name: Save build dependencies cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ steps.restore-build-deps-cache.outputs.cache-primary-key }}

@@ -3,6 +3,7 @@ import tracemalloc
 import pytest
 import pathlib
 import os
+import numpy as np
 
 import torch
 import triton
@@ -229,3 +230,13 @@ def test_pre_run_hooks(device):
     a = torch.ones(n_elements, device=device, dtype=torch.int32)
     add_kernel.run(a, n_elements, grid=(1, ), warmup=False)
     assert torch.all(a == 2)
+
+
+def test_interpreter_implicit_cvt_bool() -> None:
+    from triton.runtime.interpreter import _implicit_cvt
+
+    value = _implicit_cvt(True)
+
+    assert value.dtype == tl.int1
+    assert value.handle.data.dtype == np.bool_
+    assert bool(value.handle.data[0]) is True

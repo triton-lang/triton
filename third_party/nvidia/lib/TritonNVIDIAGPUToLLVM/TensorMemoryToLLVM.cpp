@@ -21,13 +21,6 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::nvidia_gpu;
 using namespace mlir::triton::NVIDIA;
 
-// The maximum number of tensor memory registers that can be accessed
-// by a single message regardless of shape or repetitions
-static constexpr int largestTmemLoadStore = 128;
-// The maximum number of thread registers that can be populated by
-// multiple messages
-static constexpr int maxRegisters = 256;
-
 namespace {
 
 struct TMemCopyAtom {
@@ -356,7 +349,6 @@ std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
-  auto kBlock = str_attr("block");
 
   auto kCol = str_attr("col");
   auto kRow = str_attr("row");
@@ -380,11 +372,9 @@ std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
   // The block offset is already added to the tmemBase
   // Add warp groups to tmemBase
   if (reps.getInDimSize(kWarp) > 4) {
-    auto rowCol = applyLinearLayout(loc, rewriter, reps,
-                                    {{kReg, b.i32_val(0)},
-                                     {kLane, b.i32_val(0)},
-                                     {kWarp, warpId},
-                                     {kBlock, b.i32_val(0)}});
+    auto rowCol = applyLinearLayout(
+        loc, rewriter, reps,
+        {{kReg, b.i32_val(0)}, {kLane, b.i32_val(0)}, {kWarp, warpId}});
     auto [row, col] = getRowCol(rowCol);
     tmemBase = b.add(tmemBase,
                      b.or_(b.shl(row, b.i32_val(16)), col, /*disjoint*/ true));
@@ -393,7 +383,7 @@ std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
   SmallVector<Value> resultVals, redvalVals;
   for (int i = 0; i < reps.getInDimSize(kReg); i += valsPerMessage) {
     auto [row, col] =
-        getRowCol(reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}}));
+        getRowCol(reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}}));
     // Encode row into the base address and pass col as an immediate colOffset.
     int staticOffset = col | (row << 16);
     if (isStore) {
@@ -412,29 +402,6 @@ std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
           unpackResults(outVals, llvmElemTy, valsPerMessage, loc, rewriter));
       if (redval)
         redvalVals.push_back(redval);
-    }
-  }
-
-  // Combine partial reductions into one value per thread
-  if (redvalVals.size() > 1) {
-    auto isMin = *redOp == TMEMLoadReduceModifier::MIN;
-    auto applyMinMax = [&](Value lhs, Value rhs) {
-      return useNaN ? (isMin ? LLVM::MinimumOp::create(rewriter, loc, lhs, rhs)
-                             : LLVM::MaximumOp::create(rewriter, loc, lhs, rhs))
-                          ->getResult(0)
-                    : (isMin ? LLVM::MinNumOp::create(rewriter, loc, lhs, rhs)
-                             : LLVM::MaxNumOp::create(rewriter, loc, lhs, rhs))
-                          ->getResult(0);
-    };
-    // Use tree reduction: pair up elements at each level
-    while (redvalVals.size() > 1) {
-      SmallVector<Value> reduced;
-      assert(redvalVals.size() % 2 == 0 &&
-             "redvalVals must be a multiple of 2");
-      for (size_t i = 0; i < redvalVals.size(); i += 2) {
-        reduced.push_back(applyMinMax(redvalVals[i], redvalVals[i + 1]));
-      }
-      redvalVals = std::move(reduced);
     }
   }
 
@@ -522,6 +489,34 @@ static std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdStFromTypes(
                                vals, tmemBase, redOp, useAbs, useNaN);
 }
 
+// Combine partial reductions into one value per thread via tree reduction.
+static void combinePartialReductions(Location loc,
+                                     ConversionPatternRewriter &rewriter,
+                                     SmallVector<Value> &redvalVals,
+                                     TMEMLoadReduceModifier redOp,
+                                     bool useNaN) {
+  if (redvalVals.size() <= 1)
+    return;
+  auto isMin = redOp == TMEMLoadReduceModifier::MIN;
+  auto applyMinMax = [&](Value lhs, Value rhs) {
+    return useNaN ? (isMin ? LLVM::MinimumOp::create(rewriter, loc, lhs, rhs)
+                           : LLVM::MaximumOp::create(rewriter, loc, lhs, rhs))
+                        ->getResult(0)
+                  : (isMin ? LLVM::MinNumOp::create(rewriter, loc, lhs, rhs)
+                           : LLVM::MaxNumOp::create(rewriter, loc, lhs, rhs))
+                        ->getResult(0);
+  };
+  // Use tree reduction: pair up elements at each level
+  while (redvalVals.size() > 1) {
+    SmallVector<Value> reduced;
+    assert(redvalVals.size() % 2 == 0 && "redvalVals must be a multiple of 2");
+    for (size_t i = 0; i < redvalVals.size(); i += 2) {
+      reduced.push_back(applyMinMax(redvalVals[i], redvalVals[i + 1]));
+    }
+    redvalVals = std::move(reduced);
+  }
+}
+
 struct TensorMemoryLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMLoadOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -530,7 +525,6 @@ struct TensorMemoryLoadOpConversion
   matchAndRewrite(triton::nvidia_gpu::TMEMLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto ctx = op.getContext();
     auto llvmElemTy =
         getTypeConverter()->convertType(op.getSrc().getType().getElementType());
     auto tmemBase = adaptor.getSrc();
@@ -559,6 +553,10 @@ struct TensorMemoryLoadOpConversion
     // Wait insertion could be moved to the TTGIR level if needed.
     NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::LOAD);
 
+    // tcgen05.ld.red is async, redval registers aren't valid until the wait
+    if (redOp)
+      combinePartialReductions(loc, rewriter, redvalVals, *redOp, useNaN);
+
     // Handle reduction output if present
     SmallVector<Value> results = {resultStruct};
     if (redOp) {
@@ -582,7 +580,6 @@ struct TensorMemoryStoreOpConversion
   matchAndRewrite(triton::nvidia_gpu::TMEMStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto ctx = op.getContext();
     auto llvmElemTy =
         getTypeConverter()->convertType(op.getDst().getType().getElementType());
 
@@ -590,7 +587,6 @@ struct TensorMemoryStoreOpConversion
     Value pred = adaptor.getPred();
     auto memTy = cast<MemDescType>(op.getDst().getType());
     auto regTy = cast<RankedTensorType>(op.getSrc().getType());
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     SmallVector<Value> srcValues =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
@@ -598,12 +594,6 @@ struct TensorMemoryStoreOpConversion
     lowerTMemLdStFromTypes(loc, rewriter, regTy, memTy, tmemBase, maxnreg, pred,
                            llvmElemTy, srcValues);
     NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::STORE);
-
-    // Emit a barrier to ensure all threads have finished writing to tensor
-    // memory before any use of the tensor memory.
-    // Can be AddrSpace::TensorWrite if we emit
-    // NVVM::Tcgen05WaitKind::STORE during barrier lowering
-    b.barrier(triton::gpu::AddrSpace::None);
 
     rewriter.eraseOp(op);
     return success();
@@ -619,7 +609,6 @@ struct TensorMemoryAllocOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto ctx = op.getContext();
     Value base = nvgpu::TensorMemoryBaseAddress::create(rewriter, loc);
     Value baseInt = b.ptrtoint(i32_ty, base);
     int colOffset = cast<IntegerAttr>(op->getAttr("tensor_memory_col_offset"))
@@ -632,7 +621,6 @@ struct TensorMemoryAllocOpConversion
     SmallVector<unsigned> order(op.getType().getRank());
     std::iota(order.begin(), order.end(), 0);
     std::reverse(order.begin(), order.end());
-    auto shape = op.getType().getShape();
 
     if (op.getSrc()) {
       auto regTy = cast<RankedTensorType>(op.getSrc().getType());
@@ -645,11 +633,6 @@ struct TensorMemoryAllocOpConversion
       lowerTMemLdStFromTypes(loc, rewriter, regTy, memTy, ptr, maxnreg,
                              b.i1_val(true), llvmElemTy, srcValues);
       NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::STORE);
-      // Emit a barrier to ensure all threads have finished writing to tensor
-      // memory before any use of the tensor memory.
-      // Can be AddrSpace::TensorWrite if we emit
-      // NVVM::Tcgen05WaitKind::STORE during barrier lowering
-      b.barrier(triton::gpu::AddrSpace::None);
     }
     // Cast to address space 3 as the shared memory object uses 3.
     // TODO: clean this up and use either a int or ptr address space 6
@@ -659,18 +642,6 @@ struct TensorMemoryAllocOpConversion
     return success();
   }
 };
-
-static void createCommit(ConversionPatternRewriter &rewriter, Location loc,
-                         Value barrier, Value pred, bool twoCTAs) {
-  PTXBuilder ptxBuilder;
-  auto *barrierOperand = ptxBuilder.newAddrOperand(barrier, "r");
-  std::string opcode =
-      "tcgen05.commit.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
-      ".mbarrier::arrive::one.shared::cluster.b64";
-  auto &barrierOp = *ptxBuilder.create(opcode);
-  barrierOp(barrierOperand).predicate(pred);
-  ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
-}
 
 static void createTcgen05Cp(ConversionPatternRewriter &rewriter, Location loc,
                             Value tmem_address, Value src_desc, Value pred,
@@ -704,6 +675,7 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
   auto kOffset = str_attr("offset");
   auto kRow = str_attr("row");
   auto kCol = str_attr("col");
+  auto kBlock = str_attr("block");
 
   MemDescType srcTy = op.getSrc().getType();
   MemDescType dstTy = op.getDst().getType();
@@ -725,9 +697,11 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
   // once we have access to the lbo/sbo
   const SmallVector<unsigned> instrShape = {32, atom.bCol / bitwidth};
   auto kWarp = str_attr("warp");
-  auto cvtWarp =
-      cvt.reshapeIns({{kRow, 32}, {kWarp, 4}, {kCol, cvt.getInDimSize(kCol)}})
-          .sublayout({kRow, kCol}, to_vector(cvt.getOutDimNames()));
+  auto cvtWarp = cvt.reshapeIns({{kRow, 32},
+                                 {kWarp, 4},
+                                 {kCol, cvt.getInDimSize(kCol)},
+                                 {kBlock, cvt.getInDimSize(kBlock)}})
+                     .sublayout({kRow, kCol}, to_vector(cvt.getOutDimNames()));
 
   auto loader = DotOpMmaSmemLoader::build(loc, rewriter, cvtWarp, bitwidth,
                                           smemBase, instrShape, 0, 5);
@@ -767,19 +741,19 @@ struct TensorMemoryCopyOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMCopyOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    assert(lookupNumCTAs(rewriter) == 1 && "NYI");
     Location loc = op->getLoc();
     Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
     bool twoCTAs = getModuleTwoCTAs(op);
+    // Similar to twoCTA tcgen05.mma, the 2CTA version of this op should only be
+    // emitted from the lead CTA.
+    if (twoCTAs) {
+      Value cluster0 = LLVM::NVIDIA::createLeadCTAPredicate(loc, rewriter);
+      pred = TritonLLVMOpBuilder(loc, rewriter).and_(pred, cluster0);
+    }
+
     if (failed(copySharedToTmem(rewriter, loc, typeConverter, op,
                                 adaptor.getSrc(), adaptor.getDst(), pred)))
       return failure();
-
-    if (op.getBarrier()) {
-      auto barrier = LLVM::getSharedMemoryObjectFromStruct(
-          op.getLoc(), adaptor.getBarrier(), i64_ty, rewriter);
-      createCommit(rewriter, loc, barrier.getBase(), pred, twoCTAs);
-    }
 
     rewriter.eraseOp(op);
     return success();
@@ -798,7 +772,6 @@ struct MemDescIndexOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
     if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
             srcTy.getEncoding())) {
@@ -850,46 +823,11 @@ struct TMEMSubSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-
-    auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-        srcTy.getEncoding());
-    auto shapePerCTA = getShapePerCTA(srcTy);
-    int blockN = encoding.getBlockN();
-    int blockM = encoding.getBlockM();
-    int offsetCol = 0;
-    int offsetRow = 0;
-    assert(llvm::is_contained({64, 128}, blockM) && "checked by the verifier");
-    offsetCol = op.getN();
-
-    if (blockM == 64) {
-      // The layout interleaves blocks along the N dimension with the rows, such
-      // that the odd numbered blocks are in lanes [16, 32), below the previous
-      // even-numbered block.
-      int blockOffset = op.getN() / blockN;
-      if (blockOffset % 2) {
-        // Offset into rows [16, 32).
-        offsetRow = 16;
-        // Normalize column offset to the even block.
-        offsetCol -= blockN;
-      }
-      offsetCol -= blockN * (blockOffset / 2);
-    }
-
-    unsigned elementBitWidth = srcTy.getElementTypeBitWidth();
-    if (encoding.getColStride() * elementBitWidth != 32) {
-      // Adjust the column offset based on the element size.
-      int numElementsPer32B = 32 / (encoding.getColStride() * elementBitWidth);
-      if (offsetCol % numElementsPer32B != 0) {
-        return failure();
-      }
-      offsetCol /= numElementsPer32B;
-    }
+    auto dstTy = cast<MemDescType>(op.getResult().getType());
+    uint32_t offset = getTMemSubSliceOffset(dstTy, op.getN());
 
     Value tmemBase = adaptor.getSrc();
-    Value offsetVal = b.i32_val(offsetCol | offsetRow << 16);
+    Value offsetVal = b.i32_val(offset);
     Value newBase = b.add(b.ptrtoint(i32_ty, tmemBase), offsetVal);
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     rewriter.replaceOp(op, b.inttoptr(elemPtrTy, newBase));
@@ -902,15 +840,14 @@ struct TMEMSubSliceOpConversion
 void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<TensorMemoryCopyOpConversion, TMEMSubSliceOpConversion,
-               TensorMemoryLoadOpConversion, TensorMemoryStoreOpConversion,
-               TensorMemoryAllocOpConversion>(typeConverter, benefit);
+  patterns.add<TensorMemoryCopyOpConversion, TensorMemoryLoadOpConversion,
+               TensorMemoryStoreOpConversion, TensorMemoryAllocOpConversion>(
+      typeConverter, benefit);
 }
 
 void mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<MemDescIndexOpConversion>(typeConverter, benefit);
-  patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
-  return;
+  patterns.add<MemDescReinterpretOpConversion, MemDescIndexOpConversion,
+               TMEMSubSliceOpConversion>(typeConverter, benefit);
 }

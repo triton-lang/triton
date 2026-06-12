@@ -343,8 +343,10 @@ def fp8e8m0_to_float32(scale):
     return scale
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
-                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128), (128, 16, 256)])
+                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128), (128, 16, 256),
+                                                       (128, 16, 64)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))
@@ -612,6 +614,7 @@ def _gemm_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scales_ptr, b_s
     tl.store(c_ptrs, c, mask=c_mask, cache_modifier=".wt")
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [(1024, 1024, 1024)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 256), (64, 64, 512), [32, 32, 64]])
 @pytest.mark.parametrize("DTYPE_A, DTYPE_B, FAST_MATH", [("mxfp4", "mxfp4", False), ("fp16", "mxfp8e5", False),
@@ -741,6 +744,7 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
             assert "tilesPerWarp" not in k.asm["ttgir"]
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 512), (998, 111, 512), (63, 128, 512)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 128, 256), (128, 256, 256)])
@@ -884,6 +888,7 @@ def lhs_in_tmem_kernel_mxfp(  #
     tl.store(output_ptrs, accumulator)
 
 
+@pytest.mark.interpreter
 @pytest.mark.skipif(is_hip() or torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
 def test_lhs_in_tmem_mxfp(device, monkeypatch):
     _knob_promote_lhs_to_tmem(monkeypatch)
@@ -976,9 +981,11 @@ def block_scale_fp4_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 256)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
-                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128)])
+                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128), (16, 256, 256),
+                                                       (32, 256, 256), (64, 256, 256)])
 @pytest.mark.parametrize("with_a_scale", [True, False])
 @pytest.mark.parametrize("with_b_scale", [True, False])
 @pytest.mark.parametrize("pack_along_k", [True, False])
@@ -990,13 +997,16 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     assert M % BLOCK_M == 0
     assert N % BLOCK_N == 0
     assert K % BLOCK_K == 0
+
     if is_cuda():
+        if BLOCK_M < 128 and not pack_along_k:
+            pytest.skip("Packing along M/N with BLOCK_M < 128 is not supported on CUDA")
         if scale_type == "float8_e4m3fn" and not pack_along_k:
             pytest.skip("Packing along K is required for float8_e4m3fn")
-        if torch.cuda.get_device_capability()[0] != 10 and torch.cuda.get_device_capability()[0] != 12:
-            pytest.skip("Requires compute capability == 10 or 12")
-        if torch.cuda.get_device_capability()[0] == 12 and pack_along_k is False:
-            pytest.skip("Packing along M, N is not supported on SM120")
+        if scale_type == "float8_e4m3fn" and torch.cuda.get_device_capability()[0] < 9:
+            pytest.skip("fp8e4nv not supported on Ampere or older")
+        if BLOCK_N == 256 and BLOCK_K == 256 and torch.cuda.get_device_capability()[0] < 9:
+            pytest.skip("Insufficient SMEM Ampere or older")
         if not (with_a_scale and with_b_scale):
             pytest.skip("None aScale/bScale is only tested on AMD backend for now")
     elif is_hip():
@@ -1055,8 +1065,9 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
                                      b.stride(0), b.stride(1), output.stride(0), output.stride(1), VEC_SIZE, BLOCK_M,
                                      BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, PACK_ALONG_K=pack_along_k,
                                      **kernel_kwargs)
-    torch.testing.assert_close(ref_out, output, atol=1e-2, rtol=1e-2)
-    if is_cuda():
+    torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
+    nvfp4_fallback = BLOCK_M < 128
+    if is_cuda() and torch.cuda.get_device_capability()[0] in (10, 12) and not nvfp4_fallback:
         ptx = k.asm["ptx"]
         if pack_along_k:
             assert "kind::mxf4" in ptx
@@ -1134,6 +1145,7 @@ def mxfp8_mxfp4_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 512)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
@@ -1303,6 +1315,7 @@ def batched_mxfp_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("BATCH_SIZE, BLOCK_BATCH_SIZE", [(1, 1), (16, 1), (16, 4)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 64), (128, 64, 128), (64, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 2 if is_hip() else 3])

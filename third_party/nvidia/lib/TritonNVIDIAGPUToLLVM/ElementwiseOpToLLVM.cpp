@@ -413,7 +413,6 @@ struct FpToFpOpConversion
     auto F16TyID = TypeID::get<Float16Type>();
     auto BF16TyID = TypeID::get<BFloat16Type>();
     auto F32TyID = TypeID::get<Float32Type>();
-    auto F64TyID = TypeID::get<Float64Type>();
 
     auto undefRounding = static_cast<RoundingMode>(-1);
 
@@ -472,8 +471,8 @@ struct FpToFpOpConversion
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto srcElementType = getElementType(op.getSrc());
-    auto dstElementType = getElementType(op.getResult());
+    auto srcElementType = getElementTypeOrSelf(op.getSrc());
+    auto dstElementType = getElementTypeOrSelf(op.getResult());
     auto roundingMode = op.getRounding();
 
     if (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(dstElementType)) {
@@ -595,8 +594,8 @@ struct SIToFPOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    Type inElemTy = getElementType(op.getIn());
-    Type outElemTy = getElementType(op.getOut());
+    Type inElemTy = getElementTypeOrSelf(op.getIn());
+    Type outElemTy = getElementTypeOrSelf(op.getOut());
     if (outElemTy.isBF16() && inElemTy.isInteger(8) && operands.size() >= 4) {
       auto cvtFunc = makeConverterFromPtx(
           computeCapability >= 90 ? S8_to_Bf16_sm90 : S8_to_Bf16,
@@ -626,7 +625,6 @@ struct FPToSIOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    auto inElemTy = getElementType(op.getIn());
     return {LLVM::FPToSIOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
 };
@@ -690,7 +688,7 @@ struct ClampFOpConversion
     //   %160 = tt.clamp %158, %cst_6, %cst_7
 
     auto getSplatInitializer = [](Value v) -> std::optional<double> {
-      DenseIntOrFPElementsAttr denseAttr;
+      DenseTypedElementsAttr denseAttr;
       if (matchPattern(v, m_Constant(&denseAttr))) {
         if (denseAttr.isSplat()) {
           return denseAttr.getSplatValue<APFloat>().convertToDouble();
@@ -703,6 +701,20 @@ struct ClampFOpConversion
       }
       return std::nullopt;
     };
+
+    // clampf %x (negf %max) %max
+    if (auto negOp = op.getOperand(1).getDefiningOp<arith::NegFOp>()) {
+      if (negOp.getOperand() == op.getOperand(2)) {
+        return true;
+      }
+    }
+    auto lowerSplat = op.getOperand(1).getDefiningOp<SplatOp>();
+    auto upperSplat = op.getOperand(2).getDefiningOp<SplatOp>();
+    if (lowerSplat && upperSplat) {
+      auto negOp = lowerSplat.getSrc().getDefiningOp<arith::NegFOp>();
+      if (negOp && negOp.getOperand() == upperSplat.getSrc())
+        return true;
+    }
 
     // clampf %x (sub 0.0 %max) %max
     if (auto subOp = op.getOperand(1).getDefiningOp<arith::SubFOp>()) {

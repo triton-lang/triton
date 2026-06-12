@@ -28,7 +28,8 @@ public:
     Operation *firstMatmul = nullptr;
     bool firstTwoCTA = false;
 
-    WalkResult result = mod.walk([&](ttng::TCGen5MMAOp op) {
+    // Walk all MMAv5 ops using the interface
+    WalkResult result = mod.walk([&](ttng::MMAv5OpInterface op) -> WalkResult {
       bool currentTwoCTA = op.getTwoCtas();
       if (!firstMatmul) {
         firstMatmul = op;
@@ -53,6 +54,10 @@ public:
       return;
     }
 
+    // FPSAN rewrites all `tcgen05` MMA ops but sets the flag so it can be
+    // propagated.
+    if (!firstMatmul && mod->hasAttr(AttrTwoCTAsName))
+      return;
     bool twoCTAValue = firstMatmul ? firstTwoCTA : false;
     mod->setAttr(AttrTwoCTAsName, BoolAttr::get(mod.getContext(), twoCTAValue));
   }

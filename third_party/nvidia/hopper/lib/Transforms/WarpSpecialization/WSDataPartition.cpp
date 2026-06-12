@@ -188,8 +188,7 @@ static SmallVector<int64_t> getShape(Type type) {
   else if (auto tensorType = dyn_cast<RankedTensorType>(type))
     return {tensorType.getShape().begin(), tensorType.getShape().end()};
   else if (auto tensorDescType = dyn_cast<TensorDescType>(type))
-    return {tensorDescType.getBlockType().getShape().begin(),
-            tensorDescType.getBlockType().getShape().end()};
+    return {tensorDescType.getShape().begin(), tensorDescType.getShape().end()};
   else if (auto ptrType = dyn_cast<PointerType>(type))
     return getShape(ptrType.getPointeeType());
   return {};
@@ -553,7 +552,6 @@ static bool computePartitionScheme(triton::FuncOp &funcOp,
     return true;
 
   // Checking if all dots can be partitioned in the same way
-  int numWarps = mlir::triton::gpu::lookupNumWarps(funcOp);
   for (auto op : dots) {
     if (partitionScheme.isPartitioned(op) || partitionScheme.isSkipped(op)) {
       continue;
@@ -816,8 +814,8 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
                     builder.getContext(),
                     dim == 0 ? tmem.getBlockM() / 2 : tmem.getBlockM(),
                     dim == 1 ? tmem.getBlockN() / 2 : tmem.getBlockN(),
-                    tmem.getColStride(), tmem.getCTASplitM(),
-                    tmem.getCTASplitN(), tmem.getTwoCTAs());
+                    tmem.getColStride(), tmem.getCGALayout(), tmem.getTwoCTAs(),
+                    tmem.getFp4Padded());
             auto newType = MemDescType::get(shape, type.getElementType(),
                                             accEncoding, type.getMemorySpace(),
                                             type.getMutableMemory());
@@ -837,15 +835,11 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
                                                type.getEncoding());
           newV.setType(newType);
         } else if (auto type = dyn_cast<TensorDescType>(v.getType())) {
-          auto blockType = type.getBlockType();
-          SmallVector<int64_t> shape{blockType.getShape().begin(),
-                                     blockType.getShape().end()};
+          SmallVector<int64_t> shape(type.getShape());
           int sliceSize = shape[dim] / numOfPartitions;
           shape[dim] = sliceSize;
-          auto newBlockType = RankedTensorType::get(
-              shape, blockType.getElementType(), blockType.getEncoding());
-          auto newType =
-              TensorDescType::get(builder.getContext(), newBlockType);
+          auto newType = TensorDescType::get(shape, type.getElementType(),
+                                             type.getSharedLayout());
           newV.setType(newType);
         }
       }
@@ -869,18 +863,16 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
       sliceOp(operand, offset, mappings, reverseMappings, partitionScheme);
     auto srcTy = mappings.lookupOrNull(tmemLdOp.getSrc()).getType();
     auto type = cast<MemDescType>(srcTy);
-    auto tmem = cast<nvidia_gpu::TensorMemoryEncodingAttr>(type.getEncoding());
 
     RankedTensorType oldRetType = tmemLdOp.getType();
     auto retShapePerCTA = getShapePerCTA(oldRetType);
     int numWarps = mlir::triton::gpu::lookupNumWarps(op);
-    auto CGALayout = getCGALayout(oldRetType.getEncoding());
     builder.setInsertionPoint(op);
     // The source op is already sliced at this point, so srcTy, type, tmem is
     // sliced. We use getTmemCompatibleLayout to get a block layout that is for
     // the sliced tmem here.
     auto newDistributedEncoding =
-        nvidia_gpu::getDefaultLayoutForTmemLdSt(type, numWarps, CGALayout);
+        nvidia_gpu::getDefaultLayoutForTmemLdSt(type, numWarps);
 
     // oldRetType is the desired output, we slice it and convert from the
     // compatible layout to the sliced desired output.
@@ -914,9 +906,9 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
       // convert from srcTy to a compatible blocked layout.
       auto retShapePerCTA = getShapePerCTA(srcTy);
       int numWarps = mlir::triton::gpu::lookupNumWarps(op);
-      auto CGALayout = getCGALayout(srcTy.getEncoding());
       builder.setInsertionPoint(op);
 
+      // TODO: This should probably be written as memdesc_subslice
       // calculate new tmem type.
       auto retType = cast<MemDescType>(tmemAllocOp.getType());
       SmallVector<int64_t> shape{retType.getShape().begin(),
@@ -929,14 +921,14 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
           builder.getContext(),
           dim == 0 ? tmem.getBlockM() / 2 : tmem.getBlockM(),
           dim == 1 ? tmem.getBlockN() / 2 : tmem.getBlockN(),
-          tmem.getColStride(), tmem.getCTASplitM(), tmem.getCTASplitN(),
-          tmem.getTwoCTAs());
+          tmem.getColStride(), tmem.getCGALayout(), tmem.getTwoCTAs(),
+          tmem.getFp4Padded());
       auto newType = MemDescType::get(shape, retType.getElementType(),
                                       accEncoding, retType.getMemorySpace(),
                                       retType.getMutableMemory());
 
       auto newDistributedEncoding =
-          nvidia_gpu::getDefaultLayoutForTmemLdSt(retType, numWarps, CGALayout);
+          nvidia_gpu::getDefaultLayoutForTmemLdSt(retType, numWarps);
       auto newAccType = RankedTensorType::get(
           srcTy.getShape(), srcTy.getElementType(), newDistributedEncoding);
       auto cvtOp = builder.createWithAsyncTaskIds<ConvertLayoutOp>(
@@ -1089,8 +1081,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     for (unsigned i = 0; i < forOp.getInitArgs().size(); i++) {
       auto initArg = forOp.getInitArgs()[i];
       Value newInitArg;
-      auto newInitArgOp =
-          sliceOp(initArg, offset, mappings, reverseMappings, partitionScheme);
+      sliceOp(initArg, offset, mappings, reverseMappings, partitionScheme);
       if (auto bbArg = dyn_cast<BlockArgument>(initArg)) {
         // find the corresponding new block argument
         Block *parentBlock = bbArg.getOwner();
@@ -1104,8 +1095,6 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
         assert(argIndex < parentBlock->getNumArguments() &&
                "new init argment not found");
         Region *parentRegion = parentBlock->getParent();
-        Region &newParentRegion =
-            newInitArgOp->getRegion(parentRegion->getRegionNumber());
         newInitArg = parentRegion->getArgument(argIndex);
       } else {
         newInitArg = mappings.lookupOrNull(initArg);
@@ -1299,8 +1288,8 @@ static bool doDeepCleanup(triton::FuncOp &funcOp,
     });
 
     // delete block arguments
+    runDeadIterArgElimination(funcOp);
     RewritePatternSet cleanUpPatterns(funcOp.getContext());
-    populateForOpDeadArgumentElimination(cleanUpPatterns);
     scf::ForOp::getCanonicalizationPatterns(cleanUpPatterns,
                                             funcOp.getContext());
     scf::IfOp::getCanonicalizationPatterns(cleanUpPatterns,

@@ -25,6 +25,7 @@ struct SimplifyControlFlow
 } // namespace
 
 void SimplifyControlFlow::runOnOperation() {
+  runDeadIterArgElimination(getOperation());
   MLIRContext *ctx = &getContext();
   RewritePatternSet patterns(&getContext());
 
@@ -39,7 +40,6 @@ void SimplifyControlFlow::runOnOperation() {
   for (mlir::RegisteredOperationName op : ctx->getRegisteredOperationsByDialect(
            cf::ControlFlowDialect::getDialectNamespace()))
     op.getCanonicalizationPatterns(patterns, ctx);
-  populateForOpDeadArgumentElimination(patterns);
 
   GreedyRewriteConfig config;
   // This is intended to run before AutoLayouts are resolved, in which case

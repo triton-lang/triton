@@ -1,5 +1,7 @@
 import argparse
 import contextlib
+import hashlib
+import io
 import json
 import os
 import platform
@@ -9,10 +11,12 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
+import time
+import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass
-from io import BytesIO
+from functools import cached_property
 from pathlib import Path
 from typing import Optional
 
@@ -35,7 +39,7 @@ def get_cmake_dir():
     return cmake_dir
 
 
-@dataclass
+@dataclass(frozen=True)
 class BuildHelperArgs:
     cache_path: str
     offline_build: bool
@@ -52,10 +56,9 @@ class BuildHelperArgs:
     cupti_lib_path: Optional[str]
     cupti_lib_blackwell_path: Optional[str]
 
-
-def _normalize_bool(value: str, default: str = "") -> bool:
-    effective_value = value if value is not None else default
-    return effective_value.upper() in ["ON", "1", "YES", "TRUE", "Y"]
+    @cached_property
+    def archives_path(self):
+        return os.path.join(self.cache_path, "archives")
 
 
 def _normalize_optional(value: str) -> Optional[str]:
@@ -63,6 +66,11 @@ def _normalize_optional(value: str) -> Optional[str]:
         return None
     value = value.strip()
     return value if value else None
+
+
+# Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
+def check_env_flag(name: str, default: str = "") -> bool:
+    return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
 
 
 def _normalize_optional_path(value: str) -> Optional[str]:
@@ -87,6 +95,174 @@ def open_url(url):
     request = urllib.request.Request(url, None, headers)
     # Set timeout to 300 seconds to prevent the request from hanging forever.
     return urllib.request.urlopen(request, timeout=300)
+
+
+def _download_file_with_curl(curl: str, url: str, path: str, label: str):
+    print(f"{label}:", file=sys.stdout, flush=True)
+    command = [
+        curl,
+        "--fail",
+        "--location",
+        "--show-error",
+        "--continue-at",
+        "-",
+        "--output",
+        path,
+        "--url",
+        url,
+    ]
+    hostname = urllib.parse.urlparse(url).hostname
+    if hostname is not None and hostname.endswith(".blob.core.windows.net"):
+        # Anonymous Azure Blob requests default to 2009-09-19, which ignores Range requests.
+        command.extend(["--header", "x-ms-version: 2011-08-18"])
+    subprocess.run(
+        command,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+        check=True,
+    )
+
+
+def _download_file_with_urllib(url: str, path: str, label: str):
+    with open(path, "wb") as file:
+        with open_url(url) as response:
+            progress_reader = DownloadProgressReader(response, label)
+            shutil.copyfileobj(progress_reader, file)
+
+
+def _download_file(url: str, path: str, label: str):
+    curl = shutil.which("curl")
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    if curl is not None:
+        _download_file_with_curl(curl, url, path, label)
+    else:
+        _download_file_with_urllib(url, path, label)
+
+
+def _get_archive_path(download_dir: str, url: str):
+    archive_name = os.path.basename(urllib.parse.urlparse(url).path)
+    return os.path.join(download_dir, archive_name)
+
+
+def _format_byte_count(num_bytes: int) -> str:
+    units = ["KiB", "MiB", "GiB", "TiB"]
+    if num_bytes < 1024:
+        return f"{num_bytes}B"
+    value = float(num_bytes)
+    for unit in units:
+        value /= 1024
+        if value < 1024:
+            break
+    return f"{value:.1f}{unit}"
+
+
+class DownloadProgressReader:
+    """Wraps a urllib response object with a download progress bar"""
+
+    _BAR_WIDTH = 30
+    _UPDATE_PERIOD = 0.5  # seconds
+
+    def __init__(self, response, label: str):
+        self.response = response
+        self.label = label
+        self.total_bytes = self._get_total_bytes()
+        self.downloaded_bytes = 0
+        self._last_rendered = None
+        self._last_timestamp = 0
+        self._render()
+
+    def _get_total_bytes(self) -> Optional[int]:
+        content_length = self.response.headers.get("Content-Length")
+        if content_length is None:
+            return None
+        with contextlib.suppress(TypeError, ValueError):
+            return int(content_length)
+        return None
+
+    def _build_line(self) -> str:
+        if self.total_bytes and self.total_bytes > 0:
+            downloaded = min(self.downloaded_bytes, self.total_bytes)
+            percent = int(downloaded * 100 / self.total_bytes)
+            filled = int(self._BAR_WIDTH * (downloaded / self.total_bytes))
+            bar = "#" * filled + "-" * (self._BAR_WIDTH - filled)
+            return (f"\r{self.label}: [{bar}] {percent:3d}% "
+                    f"({_format_byte_count(downloaded)}/{_format_byte_count(self.total_bytes)})")
+        return f"\r{self.label}: {_format_byte_count(self.downloaded_bytes)}"
+
+    def _render(self):
+        timestamp = time.monotonic()
+        if (timestamp - self._last_timestamp) < self._UPDATE_PERIOD:
+            return
+        line = self._build_line()
+        if line == self._last_rendered:
+            return
+        print(line, end="", file=sys.stderr, flush=True)
+        self._last_rendered = line
+        self._last_timestamp = timestamp
+
+    def read(self, size=-1):
+        chunk = self.response.read(size)
+        if chunk:
+            self.downloaded_bytes += len(chunk)
+            self._render()
+        return chunk
+
+    def readinto(self, buffer):
+        bytes_read = self.response.readinto(buffer)
+        if bytes_read is None:
+            return None
+        if bytes_read > 0:
+            self.downloaded_bytes += bytes_read
+            self._render()
+        return bytes_read
+
+    def __getattr__(self, name):
+        return getattr(self.response, name)
+
+
+def _extract_archive(archive_path, download_dir):
+    with contextlib.ExitStack() as stack:
+        if archive_path.endswith(".zip"):
+            file = stack.enter_context(zipfile.ZipFile(archive_path, "r"))
+            file.extractall(path=download_dir)
+        else:
+            file = stack.enter_context(tarfile.open(archive_path, mode="r:*"))
+            # Use extractall without filter for Python version < 3.12 compatibility
+            if hasattr(tarfile, "data_filter"):
+                file.extractall(path=download_dir, filter="data")
+            else:
+                file.extractall(path=download_dir)
+
+
+def _validate_sha256(archive_path, url, expected_sha256):
+    if expected_sha256 is None:
+        return
+    digest = hashlib.sha256()
+    with open(archive_path, "rb") as file:
+        while chunk := file.read(io.DEFAULT_BUFFER_SIZE):
+            digest.update(chunk)
+    actual_sha256 = digest.hexdigest()
+    if actual_sha256 == expected_sha256:
+        return
+    message = (f"LLVM download from {url} failed checksum validation. "
+               f"Expected SHA256 {expected_sha256}, got {actual_sha256}.")
+    if check_env_flag("TRITON_UNSAFE_DISABLE_SHA_CHECK"):
+        print(f"WARNING: {message}", file=sys.stderr)
+        return
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(archive_path)
+    raise RuntimeError(message)
+
+
+def _download_and_extract(url, download_dir, label, archives_path, expected_sha256=None):
+    archive_path = _get_archive_path(archives_path, url)
+    _download_file(url, archive_path, f"downloading {label}")
+    _validate_sha256(archive_path, url, expected_sha256)
+    with contextlib.suppress(Exception):
+        shutil.rmtree(download_dir)
+    os.makedirs(download_dir, exist_ok=True)
+    _extract_archive(archive_path, download_dir)
+    os.remove(archive_path)
 
 
 def update_symlink(link_path, source_path):
@@ -115,6 +291,7 @@ class Package:
     lib_flag: str
     syspath_var_name: str
     sym_name: Optional[str] = None
+    sha256sum: Optional[str] = None
 
 
 def get_json_package_info():
@@ -170,14 +347,26 @@ def get_llvm_package_info(helper_args: BuildHelperArgs):
             f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
         )
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
-    llvm_hash_path = os.path.join(get_base_dir(), "cmake", "llvm-hash.txt")
-    with open(llvm_hash_path, "r") as llvm_hash_file:
-        rev = llvm_hash_file.read(8)
-    name = f"llvm-{rev}-{system_suffix}"
+    llvm_info_path = os.path.join(get_base_dir(), "cmake", "llvm-info.json")
+    with open(llvm_info_path, "r") as llvm_info_file:
+        llvm_info = json.load(llvm_info_file)
+    rev = llvm_info["llvm_hash"][:8]
+    build_number = llvm_info["build_number"]
+    name = f"llvm-{rev}-{system_suffix}-{build_number}"
     # Create a stable symlink that doesn't include revision
     sym_name = f"llvm-{system_suffix}"
     url = f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{name}.tar.gz"
-    return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH", sym_name=sym_name)
+    sha256sum = llvm_info["sha256sum"][system_suffix]
+    return Package(
+        "llvm",
+        name,
+        url,
+        "LLVM_INCLUDE_DIRS",
+        "LLVM_LIBRARY_DIR",
+        "LLVM_SYSPATH",
+        sym_name=sym_name,
+        sha256sum=sha256sum,
+    )
 
 
 def _get_syspath_override(package_syspath_var_name: str, helper_args: BuildHelperArgs) -> Optional[str]:
@@ -204,22 +393,7 @@ def _get_thirdparty_package_cmake_vars(package: Package, helper_args: BuildHelpe
     if helper_args.offline_build and not input_defined:
         raise RuntimeError(f"Requested an offline build but {package.syspath_var_name} is not set")
     if not helper_args.offline_build and not input_defined and not input_compatible:
-        with contextlib.suppress(Exception):
-            shutil.rmtree(package_root_dir)
-        os.makedirs(package_root_dir, exist_ok=True)
-        print(f"downloading and extracting {package.url} ...")
-        with open_url(package.url) as response:
-            if package.url.endswith(".zip"):
-                file_bytes = BytesIO(response.read())
-                with zipfile.ZipFile(file_bytes, "r") as file:
-                    file.extractall(path=package_root_dir)
-            else:
-                with tarfile.open(fileobj=response, mode="r|*") as file:
-                    # Use extractall without filter for Python version < 3.12 compatibility
-                    if hasattr(tarfile, "data_filter"):
-                        file.extractall(path=package_root_dir, filter="data")
-                    else:
-                        file.extractall(path=package_root_dir)
+        _download_and_extract(package.url, package_root_dir, package.name, helper_args.archives_path, package.sha256sum)
         # write version url to package_dir
         with open(os.path.join(package_dir, "version.txt"), "w") as file:
             file.write(package.url)
@@ -295,13 +469,7 @@ def download_and_copy(name, src_func, dst_path, override_path, version, url_func
         assert curr_version is not None, f"No version information for {dst_path}"
         download = download or curr_version.group(1) != version
     if download:
-        print(f"downloading and extracting {url} ...")
-        with open_url(url) as url_file, tarfile.open(fileobj=url_file, mode="r|*") as tar_file:
-            # Use extractall without filter for Python version < 3.12 compatibility
-            if hasattr(tarfile, "data_filter"):
-                tar_file.extractall(path=tmp_path, filter="data")
-            else:
-                tar_file.extractall(path=tmp_path)
+        _download_and_extract(url, tmp_path, name, helper_args.archives_path)
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
     print(f"copy {src_path} to {dst_path} ...")
     if os.path.isdir(src_path):
@@ -331,7 +499,7 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
 
     # We download a separate ptxas for blackwell, since there are some bugs when using it for hopper
     download_and_copy(
-        name="nvcc",
+        name="nvcc-blackwell",
         src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
         dst_path="bin/ptxas-blackwell",
         override_path=helper_args.ptxas_blackwell_path,
@@ -364,7 +532,7 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
     )
     crt = "crt" if int(nvidia_toolchain_version["cudacrt"].split(".")[0]) >= 13 else "nvcc"
     download_and_copy(
-        name="nvcc",
+        name="nvcc-crt",
         src_func=lambda system, arch, version: f"cuda_{crt}-{system}-{arch}-{version}-archive/include",
         dst_path="include",
         override_path=helper_args.cudacrt_path,
@@ -404,7 +572,7 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
         helper_args=helper_args,
     )
     download_and_copy(
-        name="cupti",
+        name="cupti-blackwell",
         src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/lib",
         dst_path="lib/cupti-blackwell",
         override_path=helper_args.cupti_lib_blackwell_path,
@@ -490,6 +658,8 @@ def main(argv=None):
         download_and_copy_dependencies(helper_args)
     elif parsed_args.command == "write_thirdparty_cmake_vars":
         write_thirdparty_cmake_vars(output=parsed_args.output, packages=parsed_args.packages, helper_args=helper_args)
+    if os.path.exists(helper_args.archives_path):
+        shutil.rmtree(helper_args.archives_path)
 
 
 if __name__ == "__main__":

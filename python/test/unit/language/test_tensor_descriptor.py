@@ -1309,6 +1309,7 @@ def mxfp8_mxfp4_matmul_tma(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (8192, 8192, 8192)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 256), (128, 256, 128),
                                                        (128, 256, 256)])
@@ -1376,8 +1377,9 @@ def torch_gather_rows(input, idx, y, block_y):
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128), (512, 16)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
+@pytest.mark.parametrize("idx_dtype", [torch.int32, torch.int16])
 @pytest.mark.skipif(is_hopper(), reason="TMA Scatter is not supported on hopper")
-def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
+def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, idx_dtype, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.skip()
 
@@ -1388,7 +1390,7 @@ def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
         input = torch.arange(X * Y, dtype=dtype, device=device).reshape(X, Y)
     output = torch.empty((BLOCK_X, BLOCK_Y), dtype=dtype, device=device)
 
-    idx = torch.randint(BLOCK_X, (BLOCK_X, ), dtype=torch.int32, device=device)
+    idx = torch.randint(BLOCK_X, (BLOCK_X, ), dtype=idx_dtype, device=device)
 
     def alloc_fn(size: int, align: int, steam):
         return torch.empty(size, dtype=torch.int8, device=device)
@@ -1475,9 +1477,10 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128), (512, 16)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
+@pytest.mark.parametrize("idx_dtype", [torch.int32, torch.int16])
 @pytest.mark.skipif(is_hopper(), reason="TMA Scatter is not supported on hopper")
 @pytest.mark.skipif(is_sm12x(), reason="TMA Scatter is not supported on sm120")
-def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
+def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, idx_dtype, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.skip()
 
@@ -1485,7 +1488,7 @@ def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
     input = torch.arange(BLOCK_X * BLOCK_Y, dtype=dtype, device=device).reshape(BLOCK_X, BLOCK_Y)
     output = torch.zeros((X, Y), dtype=dtype, device=device)
 
-    idx = torch.randperm(BLOCK_X, dtype=torch.int32, device=device)
+    idx = torch.randperm(BLOCK_X, dtype=idx_dtype, device=device)
 
     def alloc_fn(size: int, align: int, steam):
         return torch.empty(size, dtype=torch.int8, device=device)
@@ -1659,6 +1662,55 @@ def test_host_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK, devi
     kernel[(1, )](out, inp_desc, M, N, M_BLOCK, N_BLOCK, num_ctas=num_ctas)
 
     expect = unwrap_tensor(inp)[1 * M_BLOCK:2 * M_BLOCK, 2 * N_BLOCK:3 * N_BLOCK]
+    torch.testing.assert_close(expect, unwrap_tensor(out))
+
+
+@pytest.mark.interpreter()
+@pytest.mark.parametrize("dtype_str", tma_dtypes)
+def test_host_tensor_descriptor_in_tuple(dtype_str, device):
+
+    @triton.jit(debug=True)
+    def kernel(out_ptr, payload, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        desc0 = payload[0]
+        desc1 = payload[1]
+        m_idx = payload[2]
+
+        assert desc0.shape[0] == M
+        assert desc0.shape[1] == N
+        assert desc0.strides[0] == N
+        assert desc0.strides[1] == 1
+        assert desc0.block_shape == [M_BLOCK, N_BLOCK]
+
+        assert desc1.shape[0] == M * 2
+        assert desc1.shape[1] == N + 16
+        assert desc1.strides[0] == N + 16
+        assert desc1.strides[1] == 1
+        assert desc1.block_shape == [M_BLOCK, N_BLOCK]
+
+        block0 = desc0.load([m_idx * M_BLOCK, N_BLOCK])
+        block1 = desc1.load([m_idx * M_BLOCK, 2 * N_BLOCK])
+        block = block0 + block1
+        idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
+        tl.store(out_ptr + idx, block)
+
+    M_BLOCK, N_BLOCK = 8, 16
+    m_idx = 2
+    M, N = M_BLOCK * 4, N_BLOCK * 4
+    # Keep ranges small to avoid integer overflow
+    inp0_np = numpy_random((M, N), dtype_str, low=0, high=32)
+    inp1_np = numpy_random((M * 2, N + 16), dtype_str, low=0, high=32)
+
+    inp0 = to_triton(inp0_np, device=device, dst_type=dtype_str)
+    inp1 = to_triton(inp1_np, device=device, dst_type=dtype_str)
+    out = inp0.new_empty((M_BLOCK, N_BLOCK))
+
+    inp_desc0 = TensorDescriptor.from_tensor(inp0, [M_BLOCK, N_BLOCK])
+    inp_desc1 = TensorDescriptor.from_tensor(inp1, [M_BLOCK, N_BLOCK])
+    kernel[(1, )](out, (inp_desc0, inp_desc1, m_idx), M, N, M_BLOCK, N_BLOCK)
+
+    expect0 = unwrap_tensor(inp0)[m_idx * M_BLOCK:(m_idx + 1) * M_BLOCK, N_BLOCK:2 * N_BLOCK]
+    expect1 = unwrap_tensor(inp1)[m_idx * M_BLOCK:(m_idx + 1) * M_BLOCK, 2 * N_BLOCK:3 * N_BLOCK]
+    expect = expect0 + expect1
     torch.testing.assert_close(expect, unwrap_tensor(out))
 
 

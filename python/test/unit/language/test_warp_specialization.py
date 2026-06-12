@@ -272,6 +272,8 @@ def test_warp_specialize_tma_matmul(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
                                     a_use_tma, b_use_tma):
     if is_hopper() and not (a_use_tma and b_use_tma):
         pytest.skip("Hopper warp specialization requires all TMA loads")
+    if is_blackwell() and not a_use_tma and not b_use_tma:
+        pytest.skip("Blackwell warp specialization requires at least one TMA load")
     if exceeds_smem_capacity(num_stages, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, use_fp8=use_fp8):
         pytest.skip("uses too much shared memory")
     if num_stages == 0 and a_use_tma and b_use_tma and not use_fp8 and (BLOCK_SIZE_N, BLOCK_SIZE_K) == (256, 128):

@@ -192,97 +192,12 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     ifOp.getConditionMutable().assign(cnd);
     return op;
   }
-  if (auto asyncCopyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
-    rewriter.setInsertionPoint(asyncCopyOp);
-    Value mask = getPredMask(rewriter, asyncCopyOp.getSrc().getType(),
-                             asyncCopyOp.getMask(), pred);
-    asyncCopyOp.getMaskMutable().assign(mask);
-    return op;
-  }
-  if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-    rewriter.setInsertionPoint(loadOp);
-    Value mask = getPredMask(rewriter, loadOp.getPtr().getType(),
-                             loadOp.getMask(), pred);
-    loadOp.getMaskMutable().assign(mask);
-    return op;
-  }
-  if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-    rewriter.setInsertionPoint(copyOp);
-    Value mask = getPredMask(rewriter, copyOp.getPred().getType(),
-                             copyOp.getPred(), pred);
-    copyOp.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
-    rewriter.setInsertionPoint(gatherOp);
-    Value mask = getPredMask(rewriter, gatherOp.getPred().getType(),
-                             gatherOp.getPred(), pred);
-    gatherOp.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
-    rewriter.setInsertionPoint(expectOp);
-    Value mask = getPredMask(rewriter, expectOp.getPred().getType(),
-                             expectOp.getPred(), pred);
-    expectOp.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-    rewriter.setInsertionPoint(mmav5Op);
-    auto currPred = mmav5Op.getPredicate();
-    Value mask = getPredMask(rewriter, currPred.getType(), currPred, pred);
-    mmav5Op.setPredicate(mask);
-    return op;
-  }
-  if (auto tmemStoreOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
-    rewriter.setInsertionPoint(tmemStoreOp);
-    Value mask = getPredMask(rewriter, tmemStoreOp.getPred().getType(),
-                             tmemStoreOp.getPred(), pred);
-    tmemStoreOp.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto waitBarrier = dyn_cast<ttng::WaitBarrierOp>(op)) {
-    rewriter.setInsertionPoint(waitBarrier);
-    Value mask = pred;
-    Value currentPred = waitBarrier.getPred();
-    if (currentPred) {
-      mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
-    }
-    waitBarrier.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto arriveBarrier = dyn_cast<ttng::ArriveBarrierOp>(op)) {
-    rewriter.setInsertionPoint(arriveBarrier);
-    Value mask = pred;
-    Value currentPred = arriveBarrier.getPred();
-    if (currentPred) {
-      mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
-    }
-    arriveBarrier.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    rewriter.setInsertionPoint(commit);
-    Value mask = pred;
-    Value currentPred = commit.getPred();
-    if (currentPred) {
-      mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
-    }
-    commit.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
-    rewriter.setInsertionPoint(storeOp);
-    Value mask = getPredMask(rewriter, storeOp.getPtr().getType(),
-                             storeOp.getMask(), pred);
-    storeOp.getMaskMutable().assign(mask);
-    return op;
-  }
-  if (auto atomicRMWOp = dyn_cast<tt::AtomicRMWOp>(op)) {
-    rewriter.setInsertionPoint(atomicRMWOp);
-    Value mask = getPredMask(rewriter, atomicRMWOp.getPtr().getType(),
-                             atomicRMWOp.getMask(), pred);
-    atomicRMWOp.getMaskMutable().assign(mask);
+  if (auto predicatedOp = dyn_cast<tt::PredicatedOpInterface>(op)) {
+    rewriter.setInsertionPoint(op);
+    Value mask =
+        getPredMask(rewriter, predicatedOp.getPredicateOperandTypeLike(),
+                    predicatedOp.getPredicateOperand(), pred);
+    predicatedOp.setPredicateOperand(mask);
     return op;
   }
   if (!op->isRegistered()) {
@@ -379,8 +294,6 @@ int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
 
 bool mlir::triton::canBeConvertedToAsyncLoad(
     tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
-  assert(!isLoadFromTensorPtr(loadOp) &&
-         "Block ptr should have been lowered before this pass.");
   auto ptr = loadOp.getPtr();
   unsigned vec = axisInfoAnalysis.getContiguity(ptr);
   if (auto mask = loadOp.getMask())
@@ -492,10 +405,6 @@ Value mlir::triton::createAlloc(Operation *insertBefore, RankedTensorType ty,
   return alloc;
 }
 
-bool mlir::triton::isTMALoad(Operation *op) {
-  return isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op);
-}
-
 bool mlir::triton::canBeAsyncLoad(Operation *op) {
   if (mlir::triton::isTMALoad(op)) {
     return true;
@@ -513,39 +422,48 @@ bool mlir::triton::canBeAsyncLoad(Operation *op) {
 }
 
 void mlir::triton::combineRedundantWaitOps(
-    llvm::SmallSetVector<ttg::AsyncWaitOp, 8> &waitOps) {
-  llvm::MapVector<ttg::AsyncWaitOp, ttg::AsyncWaitOp> toDelete;
-  for (auto waitOp : waitOps) {
+    llvm::SmallSetVector<Operation *, 8> &waitOps,
+    llvm::function_ref<bool(Operation *)> isCounterBarrier,
+    llvm::function_ref<Operation *(OpBuilder &, Location, ValueRange, unsigned)>
+        createWait) {
+  llvm::MapVector<Operation *, Operation *> toDelete;
+  for (Operation *waitOp : waitOps) {
     if (toDelete.count(waitOp))
       continue;
-    SmallVector<ttg::AsyncWaitOp> waitGroup = {waitOp};
-    SmallVector<Value> depTokens = waitOp.getOperands();
-    unsigned minWaitNumber = waitOp.getNum();
+    StringRef waitName = waitOp->getName().getStringRef();
+    auto getNum = [](Operation *op) {
+      return static_cast<unsigned>(
+          op->getAttrOfType<IntegerAttr>("num").getInt());
+    };
+    SmallVector<Operation *> waitGroup = {waitOp};
+    SmallVector<Value> depTokens(waitOp->getOperands().begin(),
+                                 waitOp->getOperands().end());
+    unsigned minWaitNumber = getNum(waitOp);
     Operation *next = waitOp->getNextNode();
-    // Stop if we reach the end of the block or if there is another commit group
-    // or a branching op (forOp, ifOp, whileOp) in between the waits
-    while (next &&
-           !isa<ttg::AsyncCommitGroupOp, RegionBranchOpInterface>(next)) {
-      if (auto nextWait = dyn_cast<ttg::AsyncWaitOp>(next)) {
-        waitGroup.push_back(nextWait);
-        minWaitNumber = std::min(minWaitNumber, nextWait.getNum());
-        depTokens.append(nextWait.getOperands().begin(),
-                         nextWait.getOperands().end());
+    // Stop at the end of the block, at any branching op (forOp, ifOp, whileOp),
+    // or at any caller-declared counter barrier.
+    while (next && !isa<RegionBranchOpInterface>(next) &&
+           !isCounterBarrier(next)) {
+      if (next->getName().getStringRef() == waitName) {
+        waitGroup.push_back(next);
+        minWaitNumber = std::min(minWaitNumber, getNum(next));
+        depTokens.append(next->getOperands().begin(),
+                         next->getOperands().end());
       }
       next = next->getNextNode();
     }
     if (waitGroup.size() == 1)
       continue;
     OpBuilder builder(waitGroup.front());
-    auto newWaitOp = ttg::AsyncWaitOp::create(builder, waitOp.getLoc(),
-                                              depTokens, minWaitNumber);
-    for (auto waitOp : waitGroup) {
-      toDelete[waitOp] = newWaitOp;
+    Operation *newWaitOp =
+        createWait(builder, waitOp->getLoc(), depTokens, minWaitNumber);
+    for (Operation *wo : waitGroup) {
+      toDelete[wo] = newWaitOp;
     }
   }
-  for (auto waitOp : toDelete) {
-    waitOp.first->replaceAllUsesWith(waitOp.second);
-    waitOp.first->erase();
+  for (auto entry : toDelete) {
+    entry.first->replaceAllUsesWith(entry.second);
+    entry.first->erase();
   }
 }
 
@@ -605,18 +523,9 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
   auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
   auto cgaLayout = ttg::getCGALayout(ty.getEncoding());
   auto order = ttg::getOrder(ty);
-  if (isTMALoad(op)) {
+  if (auto load = dyn_cast<tt::DescriptorLoadLikeOpInterface>(op)) {
     // TMA encoding is set on the descriptor type
-    TypedValue<tt::TensorDescType> desc;
-    if (auto load = dyn_cast<tt::DescriptorLoadOp>(op)) {
-      desc = load.getDesc();
-    } else if (auto gather = dyn_cast<tt::DescriptorGatherOp>(op)) {
-      desc = gather.getDesc();
-    } else {
-      op->emitError() << "unrecognized tma load type";
-      llvm::report_fatal_error("unrecognized tma load type");
-    }
-    return ttng::getEncodingFromDescriptor(op, ty, desc);
+    return ttng::getEncodingFromDescriptor(op, ty, load.getDesc());
   }
 
   if (localAllocEnc)
@@ -698,7 +607,7 @@ allocTMABuffers(scf::ForOp forOp,
     auto loc = op.getLoc();
     Value alloc = triton::gpu::GlobalScratchAllocOp::create(
         rewriter, loc, triton::getPointerType(rewriter.getI8Type()),
-        maxStage * ttng::TMA_SIZE_BYTES, ttng::TMA_ALIGN);
+        maxStage * ttng::TMA_SIZE_BYTES, ttng::TMA_ALIGN, UnitAttr());
     tmaBufferMapping[op.getOperation()] = alloc;
   });
 }

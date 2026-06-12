@@ -98,7 +98,7 @@ void GatherOpConversion::emitGatherInShared(
     Value offset = LLVM::linearize(rewriter, loc, indices, srcShapePerCTA);
     // Emit the offset into the shared memory and then store the value.
     Value ptr = b.gep(smemBase.getType(), elemType, smemBase, offset);
-    b.store(value, ptr);
+    targetInfo.storeShared(rewriter, loc, ptr, value, b.true_val());
   }
 
   // Synchronize the whole CTA.
@@ -127,7 +127,8 @@ void GatherOpConversion::emitGatherInShared(
     indices[axis] = convertIndexToI32(loc, idx, rewriter);
     Value offset = LLVM::linearize(rewriter, loc, indices, srcShapePerCTA);
     Value ptr = b.gep(smemBase.getType(), elemType, smemBase, offset);
-    results[i] = b.load(elemType, ptr);
+    results[i] =
+        targetInfo.loadShared(rewriter, loc, ptr, elemType, b.true_val());
   }
 
   Value packed =

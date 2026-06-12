@@ -16,7 +16,7 @@ from .._C.libtriton import ir, gluon_ir
 from ..language import constexpr, str_to_ty, tensor, tuple as tl_tuple
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 # ideally we wouldn't need any runtime component
-from ..runtime.jit import get_jit_fn_file_line, get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction
+from ..runtime.jit import get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction
 from .._utils import apply_with_path, set_iterable_path, is_namedtuple
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
@@ -79,6 +79,8 @@ def _check(cond, msg_fn, category=TypeError):
 def _apply_to_tuple_values(value, fn):
     if is_namedtuple(type(value)):
         fields = value._fields
+    elif isinstance(value, builtins.tuple):
+        fields = None
     elif isinstance(value, language.tuple):
         fields = value.type.fields
     else:
@@ -88,6 +90,14 @@ def _apply_to_tuple_values(value, fn):
     vals = [constexpr(v) if v is None else v for v in vals]
     types = [v.type for v in vals]
     return language.tuple(vals, language.tuple_type(types, fields))
+
+
+def normalize_value(value):
+    if isinstance(value, (builtins.tuple, language.tuple)):
+        return _apply_to_tuple_values(value, normalize_value)
+    if _is_triton_value(value):
+        return value
+    return constexpr(value)
 
 
 def flatten_values_to_ir(values: Iterable[base_value]):
@@ -117,6 +127,7 @@ class enter_sub_region:
         # record lscope & local_defs in the parent scope
         self.liveins = dict(self.generator.lscope)
         self.prev_defs = dict(self.generator.local_defs)
+        self.prev_pending_annotations = dict(self.generator.pending_annotations)
         self.generator.local_defs = {}
         self.insert_block = self.generator.builder.get_insertion_block()
         self.insert_point = self.generator.builder.get_insertion_point()
@@ -126,6 +137,7 @@ class enter_sub_region:
         self.generator.builder.restore_insertion_point(self.insert_point)
         self.generator.lscope = self.liveins
         self.generator.local_defs = self.prev_defs
+        self.generator.pending_annotations = self.prev_pending_annotations
 
 
 # Check if the given syntax node has an "early" return
@@ -275,7 +287,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, *, options, codegen_fns,
                  module_map, is_gluon, module=None, is_kernel=False, function_types: Optional[Dict] = None,
-                 noinline=False, caller_context=None, file_name: Optional[str] = None, begin_line=0):
+                 noinline=False, caller_context=None, file_name: Optional[str] = None, begin_line=0, begin_col=1):
         self.context = context
         self.is_gluon = is_gluon
         if is_gluon:
@@ -291,7 +303,8 @@ class CodeGenerator(ast.NodeVisitor):
         self.file_name = file_name
         # node.lineno starts from 1, so we need to subtract 1
         self.begin_line = begin_line - 1
-        self.builder.set_loc(file_name, begin_line, 0)
+        self.begin_col = begin_col
+        self.builder.set_loc(file_name, begin_line, begin_col)
         self.builder.options = options
         # dict of functions provided by the backend. Below are the list of possible functions:
         # Convert custom types not natively supported on HW.
@@ -333,6 +346,8 @@ class CodeGenerator(ast.NodeVisitor):
         # SSA-construction
         # name => language.tensor
         self.local_defs: Dict[str, tensor] = {}
+        # Bare local annotations such as `x: tl.constexpr`
+        self.pending_annotations: Dict[str, Any] = {}
         self.dereference_name: Callable[[str], Any] = self._define_name_lookup()
         self.fn = None
         # Are we currently visiting an ast.arg's default value?  These have some
@@ -611,9 +626,11 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
 
     def visit_FunctionDef(self, node):
-        arg_names, kwarg_names = self.visit(node.args)
         if self.fn:
-            raise self._unsupported(node, "nested function definition is not supported.")
+            raise self._unsupported(
+                node, "nested function definitions are not allowed inside a @triton.jit kernel. "
+                "Move the helper function to module level and decorate it with @triton.jit.")
+        arg_names, kwarg_names = self.visit(node.args)
         # initialize defaults
         for i, default_value in enumerate(node.args.defaults[::-1]):
             arg_node = node.args.args[-i - 1]
@@ -659,6 +676,8 @@ class CodeGenerator(ast.NodeVisitor):
         arg_names = []
         for arg in node.args:
             arg_names += [self.visit(arg)]
+        if node.vararg is not None:
+            arg_names += [self.visit(node.vararg)]
         kwarg_names = self.visit(node.kwarg)
         return arg_names, kwarg_names
 
@@ -677,12 +696,16 @@ class CodeGenerator(ast.NodeVisitor):
         annotation = self.visit(node.annotation)
         target = self.visit(node.target)
         value = self.visit(node.value)
+        # Bare annotation, without assigment
+        if node.value is None:
+            self.pending_annotations[target] = annotation
+            return None
         # constexpr
         if annotation == constexpr:
             if target in self.lscope:
                 raise ValueError(f'{target} is already defined.'
                                  f' constexpr cannot be reassigned.')
-            value = constexpr(value)
+            value = normalize_value(value)
             self.lscope[target] = value
             return self.lscope[target]
         # default: call visit_Assign
@@ -714,14 +737,26 @@ class CodeGenerator(ast.NodeVisitor):
                 value = self.semantic.to_tensor(value)
             return value
 
+        def _sanitize_target_value(target, value):
+            if isinstance(target, ast.Tuple) and isinstance(value, language.tuple):
+                vals = [_sanitize_target_value(elt, val) for elt, val in zip(target.elts, value.values)]
+                vals = [constexpr(val) if val is None else val for val in vals]
+                types = [val.type for val in vals]
+                return language.tuple(vals, language.tuple_type(types, value.type.fields))
+            if isinstance(target, ast.Name):
+                annotation = self.pending_annotations.pop(target.id, None)
+                if annotation == constexpr:
+                    return normalize_value(value)
+            return _sanitize_value(value)
+
         targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
         assert len(targets) == 1
         target = targets[0]
         if isinstance(target, ast.Name):
             with self._name_loc_prefix(target.id):
-                values = _sanitize_value(self.visit(node.value))
+                values = _sanitize_target_value(target, self.visit(node.value))
         else:
-            values = _sanitize_value(self.visit(node.value))
+            values = _sanitize_target_value(target, self.visit(node.value))
         self.assignTarget(target, values)
 
     def visit_AugAssign(self, node):
@@ -736,6 +771,11 @@ class CodeGenerator(ast.NodeVisitor):
                 setattr(assign, x, y)
         self.visit(assign)
         return self.visit(lhs)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr):
+        # Named expressions are simple and can only be of the form x := value
+        self.visit_Assign(ast.Assign(targets=[node.target], value=node.value))
+        return self.dereference_name(node.target.id)
 
     def visit_Name(self, node):
         if type(node.ctx) is ast.Store:
@@ -792,6 +832,7 @@ class CodeGenerator(ast.NodeVisitor):
     }
 
     def visit_then_else_blocks(self, node, liveins, then_block, else_block):
+        pending_annotations = self.pending_annotations.copy()
         # then block
         self.builder.set_insertion_point_to_start(then_block)
         self.visit_compound_statement(node.body)
@@ -805,6 +846,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.set_insertion_point_to_start(else_block)
             self.lscope = liveins.copy()
             self.local_defs = {}
+            self.pending_annotations = pending_annotations.copy()
             self.visit_compound_statement(node.orelse)
             else_defs = self.local_defs.copy()
             else_block = self.builder.get_insertion_block()
@@ -1095,6 +1137,8 @@ class CodeGenerator(ast.NodeVisitor):
             before_block = self.builder.create_block_with_parent(while_op.get_before(), init_tys)
             self.builder.set_insertion_point_to_start(before_block)
             block_args = [before_block.arg(i) for i in range(len(init_handles))]
+            for arg, init in zip(block_args, init_handles):
+                arg.set_loc(init.get_loc())
             condition_args = unflatten_ir_values(block_args, init_fe_tys)
             for name, val in zip(names, condition_args):
                 self.lscope[name] = val
@@ -1114,6 +1158,8 @@ class CodeGenerator(ast.NodeVisitor):
             # generate loop body
             self.builder.set_insertion_point_to_start(after_block)
             body_handles = [after_block.arg(i) for i in range(len(init_handles))]
+            for arg, init in zip(body_handles, init_handles):
+                arg.set_loc(init.get_loc())
             body_args = unflatten_ir_values(body_handles, init_fe_tys)
             for name, val in zip(names, body_args):
                 self.lscope[name] = val
@@ -1314,9 +1360,9 @@ class CodeGenerator(ast.NodeVisitor):
         bound_args.apply_defaults()
         args = bound_args.arguments
         args = [args[name] for name in fn.arg_names]
+
         for i, arg in enumerate(args):
-            if not isinstance(arg, base_value) or isinstance(arg, JITCallable):
-                args[i] = language.core.constexpr(arg)
+            args[i] = normalize_value(arg)
         # mangle
         caller_context = caller_context or self.caller_context
         arg_types = [arg.type for arg in args]
@@ -1324,14 +1370,13 @@ class CodeGenerator(ast.NodeVisitor):
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             # If the callee is not set, we use the same debug setting as the caller
-            file_name, begin_line = get_jit_fn_file_line(fn)
             prototype = ASTFunction([], arg_types, dict())
             generator = CodeGenerator(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
-                                      noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
-                                      options=self.builder.options, codegen_fns=self.builder.codegen_fns,
-                                      module_map=self.builder.module_map, caller_context=caller_context,
-                                      is_gluon=self.is_gluon)
+                                      noinline=fn.noinline, file_name=fn.file_name, begin_line=fn.def_file_line_number,
+                                      begin_col=fn.def_file_col_number, options=self.builder.options,
+                                      codegen_fns=self.builder.codegen_fns, module_map=self.builder.module_map,
+                                      caller_context=caller_context, is_gluon=self.is_gluon)
             try:
                 generator.visit(fn.parse())
             except Exception as e:
@@ -1400,14 +1445,7 @@ class CodeGenerator(ast.NodeVisitor):
             args = map(_unwrap_if_constexpr, args)
         ret = fn(*args, **kws)
 
-        def wrap_constexpr(x):
-            if _is_triton_value(x):
-                return x
-            return constexpr(x)
-
-        if isinstance(ret, (builtins.tuple, language.tuple)):
-            return _apply_to_tuple_values(ret, wrap_constexpr)
-        return wrap_constexpr(ret)
+        return normalize_value(ret)
 
     def call_Method(self, node, fn, fn_self, args, kws):
         if isinstance(fn, JITFunction):
@@ -1426,6 +1464,10 @@ class CodeGenerator(ast.NodeVisitor):
         for arg in node.args:
             if isinstance(arg, ast.Starred):
                 arg = self.visit(arg.value)
+                if isinstance(arg, constexpr):
+                    arg = arg.value
+                if isinstance(arg, tuple):
+                    arg = language.core.tuple(arg)
                 assert isinstance(arg, language.core.tuple)
                 args.extend(arg.values)
             else:
@@ -1543,12 +1585,12 @@ class CodeGenerator(ast.NodeVisitor):
         last_loc = self.builder.get_loc()
         self.cur_node = node
         if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
-            here_loc = self.builder.create_loc(self.file_name, self.begin_line + node.lineno, node.col_offset)
+            here_loc = self.builder.create_loc(self.file_name, self.begin_line + node.lineno,
+                                               self.begin_col + node.col_offset)
             if self.name_loc_as_prefix is not None:
                 self.builder.set_loc(self.builder.create_name_loc(self.name_loc_as_prefix, here_loc))
             else:
                 self.builder.set_loc(here_loc)
-            last_loc = self.builder.get_loc()
         try:
             ret = super().visit(node)
         except CompilationError:
@@ -1562,6 +1604,9 @@ class CodeGenerator(ast.NodeVisitor):
 
         # Reset the location to the last one before the visit
         if last_loc:
+            # If last_loc doesn't already have a name, set its name.
+            if self.name_loc_as_prefix is not None and last_loc.get_name() is None:
+                last_loc.set_name(self.name_loc_as_prefix)
             self.cur_node = last_node
             self.builder.set_loc(last_loc)
         return ret
@@ -1621,13 +1666,19 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
         idx = fn.arg_names.index(k)
         arg_types[idx] = str_to_ty(v, None)
 
+    def constexpr_type(value):
+        if isinstance(value, builtins.tuple):
+            fields = value._fields if is_namedtuple(type(value)) else None
+            return language.tuple_type([constexpr_type(v) for v in value], fields)
+        return constexpr(value).type
+
     def apply_constexpr_types(argument, indices, value):
         index = indices.pop()
         if len(indices) == 0:
             if isinstance(argument, list):
-                argument[index] = constexpr(value).type
+                argument[index] = constexpr_type(value)
             else:
-                argument.types[index] = constexpr(value).type
+                argument.types[index] = constexpr_type(value)
         else:
             apply_constexpr_types(argument[index], indices, value)
 
@@ -1635,7 +1686,6 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
         apply_constexpr_types(arg_types, list(path)[::-1], value)
 
     prototype = ASTFunction([], arg_types, src.attrs)
-    file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation
     from collections import namedtuple
     leaves = filter(lambda v: len(v) == 1, src.constants)
@@ -1643,8 +1693,9 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     signature = src.signature
     proxy = namedtuple("SpecializationProxy", ["constants", "signature"])(constants, signature)
     generator = CodeGenerator(context, prototype, gscope=fn.get_capture_scope(), function_name=fn.repr(proxy),
-                              jit_fn=fn, is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
-                              codegen_fns=codegen_fns, module_map=module_map, module=module, is_gluon=fn.is_gluon())
+                              jit_fn=fn, is_kernel=True, file_name=fn.file_name, begin_line=fn.def_file_line_number,
+                              begin_col=fn.def_file_col_number, options=options, codegen_fns=codegen_fns,
+                              module_map=module_map, module=module, is_gluon=fn.is_gluon())
     generator.visit(fn.parse())
     module = generator.module
     # module takes ownership of the context

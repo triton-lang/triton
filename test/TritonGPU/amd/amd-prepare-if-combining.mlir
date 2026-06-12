@@ -122,6 +122,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// CHECK-LABEL: sibling_ifs_with_nested_if
+//       CHECK: %[[LOAD:.+]] = ttg.local_load
+//  CHECK-NEXT: tt.trans %[[LOAD]]
+//  CHECK-NEXT: scf.if
+// CANON-LABEL: sibling_ifs_with_nested_if
+//       CANON: scf.if %arg0
+//       CANON:   scf.if %arg1
+//   CANON-NOT: scf.if
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked_transposed = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @sibling_ifs_with_nested_if(%cond: i1, %cond2: i1, %smem: !ttg.memdesc<32x32xf32, #shared, #smem>, %a: tensor<32x32xf32, #blocked>) -> tensor<32x32xf32, #blocked> {
+    %x = ttg.local_load %smem : !ttg.memdesc<32x32xf32, #shared, #smem> -> tensor<32x32xf32, #blocked>
+    %0 = scf.if %cond -> tensor<32x32xf32, #blocked> {
+      %inner = scf.if %cond2 -> tensor<32x32xf32, #blocked> {
+        %mul = arith.mulf %a, %a : tensor<32x32xf32, #blocked>
+        scf.yield %mul : tensor<32x32xf32, #blocked>
+      } else {
+        scf.yield %a : tensor<32x32xf32, #blocked>
+      }
+      scf.yield %inner : tensor<32x32xf32, #blocked>
+    } else {
+      %div = arith.divf %a, %a : tensor<32x32xf32, #blocked>
+      scf.yield %div : tensor<32x32xf32, #blocked>
+    }
+    %1 = tt.trans %x {order = array<i32: 1, 0>} : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #blocked_transposed>
+    %2 = scf.if %cond -> tensor<32x32xf32, #blocked_transposed> {
+      %add = arith.addf %1, %1 : tensor<32x32xf32, #blocked_transposed>
+      scf.yield %add : tensor<32x32xf32, #blocked_transposed>
+    } else {
+      %sub = arith.subf %1, %1 : tensor<32x32xf32, #blocked_transposed>
+      scf.yield %sub : tensor<32x32xf32, #blocked_transposed>
+    }
+    %3 = ttg.convert_layout %2 : tensor<32x32xf32, #blocked_transposed> -> tensor<32x32xf32, #blocked>
+    %4 = arith.addf %3, %0 : tensor<32x32xf32, #blocked>
+    tt.return %4 : tensor<32x32xf32, #blocked>
+  }
+}
+
+// -----
+
 // Negative test: ifs in different blocks
 // CHECK-LABEL: ifs_in_different_blocks
 //       CHECK: scf.if

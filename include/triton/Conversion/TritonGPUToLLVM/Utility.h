@@ -347,6 +347,18 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x);
 
 // Whether the convert layout should be forced to use warp shuffles.
 bool cvtAlwaysUseWarpShuffle(triton::gpu::ConvertLayoutOp cvt);
+
+// Return a predicate that is true only if the current thread holds unique data,
+// according to freeVarsMask. The predicate may be null to indicate no
+// predication is required.
+Value emitRedundantThreadPredicate(
+    const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    ConversionPatternRewriter &rewriter, Location loc,
+    const TargetInfoBase &targetInfo);
+
+// Takes two values that may be boolean, or null to represent constant True.
+Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b);
+
 } // namespace gpu
 
 } // namespace triton
@@ -444,6 +456,11 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
                                                    Type elemTy,
                                                    RewriterBase &rewriter);
 
+// Build a vector of shared-memory base pointers for dynamic partition
+// indexing (expects at least two bases).
+Value buildBasePtrVector(Location loc, RewriterBase &rewriter,
+                         ArrayRef<Value> smemBases);
+
 // Convert an \param index to a multi-dim coordinate given \param shape and
 // \param order.
 SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
@@ -490,10 +507,12 @@ Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp);
 
 Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &targetInfo,
-                          FunctionOpInterface funcOp, Value allocOffset);
+                          FunctionOpInterface funcOp, Value allocOffset = {});
 
 Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
-                           FunctionOpInterface funcOp);
+                           const TargetInfoBase &targetInfo,
+                           FunctionOpInterface funcOp, Value allocOffset = {},
+                           bool currentCTA = true);
 
 Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                           const TargetInfoBase &target, Operation *op);
@@ -581,6 +600,43 @@ SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
 
+SmallVector<SmallVector<Value>>
+emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+            const LinearLayout &layout, RankedTensorType type,
+            bool withCTAOffset);
+
+struct LocalSharedMemoryAddress {
+  Value ptr;
+  Value ctaId;
+};
+
+// Compute per-element shared-memory addresses for a local atomic/ldst update by
+// replacing `coords[*][axis]` with `idxValues[*]` and mapping the resulting
+// logical coordinates back to shared-memory offsets and target CTAs.
+SmallVector<LocalSharedMemoryAddress>
+computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
+                  SharedMemoryObject smemObj, Type llvmElemTy,
+                  ArrayRef<Value> idxValues,
+                  ArrayRef<SmallVector<Value>> coords, unsigned axis,
+                  RewriterBase &rewriter, ArrayRef<Value> offsets = {});
+
+// Backend-agnostic preparation for lowering LocalAtomicScatterRMWOp.
+struct LocalAtomicScatterRMWInfo {
+  RankedTensorType valuesTy;
+  Type llvmElemTy;
+  LinearLayout regLayout;
+  ColumnAction removeBroadcast;
+  Value threadPred;
+  SmallVector<Value> values;
+  SmallVector<Value> maskValues;
+  SmallVector<Value> ptrs;
+};
+
+FailureOr<LocalAtomicScatterRMWInfo> prepareLocalAtomicScatterRMW(
+    triton::gpu::LocalAtomicScatterRMWOp op, Value dst, Value indices,
+    Value inputValues, Value mask, ConversionPatternRewriter &rewriter,
+    const TargetInfoBase &targetInfo, const LLVMTypeConverter *typeConverter);
+
 // Calculates the required interval chunking and padding logical-shift values
 // for shared memory padding, depending on elements' bit width and whether
 // offsets count the number of bytes or number of elements.
@@ -616,18 +672,17 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
 // and computes a new offset (mlir::Value) by applying padding based on
 // shared memory layout.
 // cvt: Maps (reg, lane, warp, block) → (offset[, partition]).
-SmallVector<Value>
-lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
-          ArrayRef<Value> valsArray, // Input for store, output for load
-          Type llvmElemTy, ArrayRef<Value> smemBases,
-          ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
-          Value affineOffset, uint64_t maskSpanAffineOffset, Value laneId,
-          Value warpId, RewriterBase &rewriter,
-          const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
-          std::function<SmallVector<Value>(RewriterBase &, Location,
-                                           ArrayRef<Value>, Value, int,
-                                           VectorType, std::optional<Value>)>
-              lowerInst);
+SmallVector<Value> lowerLdSt(
+    Location loc, MLIRContext *ctx, LinearLayout cvt,
+    ArrayRef<Value> valsArray, // Input for store, output for load
+    Type llvmElemTy, ArrayRef<Value> smemBases,
+    ArrayRef<std::pair<unsigned, unsigned>> paddingShifts, Value affineOffset,
+    uint64_t maskSpanAffineOffset, Value laneId, Value warpId,
+    RewriterBase &rewriter, const TargetInfoBase &targetInfo,
+    std::optional<int> maybeMaxVecElems,
+    std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
+                                     Value, int, VectorType, Value)>
+        lowerInst);
 
 // Lower local_load/local_store via ld.shared/st.shared
 SmallVector<Value>

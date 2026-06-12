@@ -1,7 +1,7 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx942  | FileCheck %s --check-prefixes=CHECK,GFX9
-// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx950  | FileCheck %s --check-prefixes=CHECK,GFX9
-// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx1200 | FileCheck %s --check-prefixes=CHECK,GFX12
-// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx1250 | FileCheck %s --check-prefixes=CHECK,GFX12
+// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942  | FileCheck %s --check-prefixes=CHECK,GFX9
+// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950  | FileCheck %s --check-prefixes=CHECK,GFX9
+// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1200 | FileCheck %s --check-prefixes=CHECK,GFX12
+// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --check-prefixes=CHECK,GFX12
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32, "ttg.threads-per-warp" = 64 : i32} {
 
@@ -14,7 +14,7 @@ tt.func public @wave_id() {
   //  GFX9-NEXT: %[[DIV:.+]] = llvm.udiv %[[AND]], %[[C64]] : i32
   //  GFX9-NEXT: %{{.+}} = rocdl.readfirstlane %[[DIV]] : i32
 
-  // GFX12-NEXT: llvm.call_intrinsic "llvm.amdgcn.wave.id"
+  // GFX12-NEXT: rocdl.wave.id
   //      CHECK: scf.for
 
   %c0 = arith.constant 0 : index

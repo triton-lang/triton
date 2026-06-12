@@ -1,5 +1,7 @@
 project(Proton LANGUAGES CXX)
 
+include(Backend.cmake)
+
 set(PROTON_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csrc")
 set(PROTON_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/common")
 
@@ -7,8 +9,8 @@ set(PROTON_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/common")
 if(NOT CUPTI_INCLUDE_DIR)
   message(FATAL_ERROR "CUPTI include directory not defined")
 endif()
-if(NOT ROCTRACER_INCLUDE_DIR)
-  message(FATAL_ERROR "ROCTRACER include directory not defined")
+if(NOT ROCM_INCLUDE_DIR)
+  message(FATAL_ERROR "ROCM include directory not defined")
 endif()
 if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
@@ -30,7 +32,8 @@ function(add_proton_library name)
   # Use system to skip warnings caused by legacy clang compilers
   target_include_directories(${name}
     SYSTEM PRIVATE
-      "${ROCTRACER_INCLUDE_DIR}"
+      ${ROCPROFILER_SDK_INCLUDE_DIR}
+      "${ROCM_INCLUDE_DIR}"
   )
 
   target_include_directories(${name}
@@ -54,6 +57,12 @@ add_subdirectory("${PROTON_SRC_DIR}")
 
 # ============ Add subdirectory with proton tests ============
 add_subdirectory(test)
+
+# ============ Discover any Triton backends registering Proton backends ============
+discover_proton_backends()
+
+# ============ Codegen the templates allowing for Proton backend registration ============
+codegen_proton_backend_templates()
 
 # ============ Possibly handle macOS specifics ============
 if(APPLE)
@@ -82,3 +91,6 @@ target_link_libraries(proton PRIVATE Python3::Module)
 if(PROTON_PYTHON_LDFLAGS)
   target_link_options(proton PRIVATE ${PROTON_PYTHON_LDFLAGS})
 endif()
+
+# ============ Link any external libs required by Proton backends ============
+link_proton_backend_external_libs()

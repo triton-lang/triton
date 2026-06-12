@@ -4,6 +4,9 @@
 include "triton/Dialect/TritonInstrument/IR/TritonInstrumentDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
+include "triton/Dialect/Triton/IR/TritonInterfaces.td"
+include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
+include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
@@ -12,6 +15,7 @@ include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
 // Interfaces
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
 //
 // Ops
@@ -56,12 +60,148 @@ def TTI_ExperimentalMemDescToI32Op : TTI_Op<"experimental_memdesc_to_i32", [Pure
   }];
   let arguments = (ins TTG_MemDescType:$memdesc);
   let results = (outs I32:$result);
+  let assemblyFormat = "$memdesc attr-dict `:` type($memdesc)";
+}
+
+def TTI_ExperimentalClusterCTAIdOp
+    : TTI_Op<"experimental_cluster_cta_id", [Pure]> {
+  let summary = "Get the CTA id within the current cluster";
+  let description = [{
+    Return the cluster-local CTA id used to index ConSan's multi-CTA scratch
+    slabs. For single-CTA kernels this is always zero.
+  }];
+  let results = (outs I32:$result);
   let builders = [
-    OpBuilder<(ins "Value":$memdesc), [{
-      build($_builder, $_state, $_builder.getI32Type(), memdesc);
+    OpBuilder<(ins), [{
+      build($_builder, $_state, $_builder.getI32Type());
     }]>
   ];
-  let assemblyFormat = "$memdesc attr-dict `:` type($memdesc)";
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+def TTI_ExperimentalLocalGatherOp
+    : TTI_Op<"experimental_local_gather"> {
+  let summary = "Gather elements from shared memory with logical base offsets";
+  let description = [{
+    Gather elements from a shared memory descriptor using an index tensor along
+    one axis, after shifting the logical source coordinates by rank-sized scalar
+    offsets. This is intentionally private to instrumentation passes.
+  }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    TT_IntTensor:$indices,
+    Variadic<I32>:$offsets,
+    I32Attr:$axis
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $src `[` $indices `]` `offsets` `=` `[` $offsets `]`
+    attr-dict `:` qualified(type($src)) `,` type($indices) `->` type($result)
+  }];
+  let hasVerifier = 1;
+}
+
+def TTI_ExperimentalGSanInitOp
+    : TTI_Op<"experimental_gsan_init"> {
+  let summary = "Initialize GSan thread";
+  let arguments = (ins);
+}
+
+def TTI_ExperimentalGSanTensorDescInfoOp
+    : TTI_Op<"experimental_gsan_tensordesc_info", [Pure]> {
+  let summary = "Decode GSan descriptor metadata from a native tensor descriptor";
+  let description = [{
+    Decodes a native tensor descriptor into the underlying
+    base pointer, shape and stride values.
+  }];
+  let arguments = (ins TT_AnyTensorDescType:$desc);
+  let results = (outs Variadic<AnyType>:$result);
+  let assemblyFormat = [{
+    $desc attr-dict `:` qualified(type($desc)) `->` type($result)
+  }];
+}
+
+def TTI_ExperimentalGSanTensorAccessOp
+    : TTI_Op<"experimental_gsan_tensor_access",
+             [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                             "getI1SameShape(getPointeeType($_self))",
+                             "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
+  let summary = "Instrument a tensor load/store access for GSan";
+  let description = [{
+    Emits runtime instrumentation for a tensor pointer access. The pointer and
+    optional mask are consumed by the GSan runtime.
+  }];
+  let arguments = (ins Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+                   Optional<TT_BoolLike>:$mask, BoolAttr:$isStore);
+  let assemblyFormat = [{
+    $ptr `,` $isStore (`,` $mask^)? attr-dict `:` type($ptr)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicTensorAccessOp
+    : TTI_Op<"experimental_gsan_atomic_tensor_access",
+             [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                             "getI1SameShape(getPointeeType($_self))",
+                             "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
+  let summary = "Instrument a tensor atomic access for GSan";
+  let description = [{
+    Emits runtime instrumentation for a tensor pointer access whose individual
+    elements are atomic read-modify-write operations.
+  }];
+  let arguments = (ins Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+                   Optional<TT_BoolLike>:$mask, TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:` type($ptr)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicRMWOp : TTI_Op<"experimental_gsan_atomic_rmw", [
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding,
+  TypesMatchWith<"ptr type matches value type", "val", "ptr",
+                 "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"mask type matches value type",
+                 "val", "mask", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+  let summary = "Lower a GSan-instrumented atomic rmw";
+  let arguments = (ins
+    TT_AtomicRMWAttr:$atomic_rmw_op,
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    TT_Type:$val,
+    Optional<TT_BoolLike>:$mask,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let results = (outs TT_Type:$result);
+  let assemblyFormat = [{
+    $atomic_rmw_op `,` $sem `,` $scope `,` $ptr `,` $val (`,` $mask^)? attr-dict `:`
+    functional-type(operands, $result)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicCASOp : TTI_Op<"experimental_gsan_atomic_cas", [
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding,
+  TypesMatchWith<"ptr type matches cmp type", "cmp", "ptr",
+                 "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"ptr type matches value type", "val", "ptr",
+                 "getPointerTypeSameShape($_self)">
+]> {
+  let summary = "Lower a GSan-instrumented atomic cas";
+  let arguments = (ins
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    TT_Type:$cmp,
+    TT_Type:$val,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let results = (outs TT_Type:$result);
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr `,` $cmp `,` $val attr-dict `:`
+    functional-type(operands, $result)
+  }];
 }
 
 
@@ -89,6 +229,70 @@ def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryE
   let assemblyFormat = [{
     $lock (`,` $pred^)? attr-dict `:` type($lock)
   }];
+}
+
+
+// ===== FPSan ops =====
+
+
+def TTI_DotI8Op : TTI_Op<"dot_i8", [
+  Pure,
+  DeclareOpInterfaceMethods<DotOpInterface>,
+  TypesMatchWith<"result's type matches accumulator's type",
+                 "d", "c", "$_self">
+]> {
+  let summary = "non-saturating NVIDIA MMAv2 i8 dot";
+  let description = [{
+    Performs a wrapping i8 matrix multiplication into an i32 accumulator using
+    NVIDIA MMAv2. The A and B operands have independent signedness.
+  }];
+  let arguments = (ins
+    RankedTensorOf<[I8]>:$a,
+    RankedTensorOf<[I8]>:$b,
+    RankedTensorOf<[I32]>:$c,
+    BoolAttr:$aSigned,
+    BoolAttr:$bSigned
+  );
+  let results = (outs RankedTensorOf<[I32]>:$d);
+  let assemblyFormat = [{
+    $a `,` $b `,` $c `,` `aSigned` `=` $aSigned `,` `bSigned` `=` $bSigned
+    attr-dict `:` type($a) `*` type($b) `->` type($d)
+  }];
+  let hasVerifier = 1;
+}
+
+def TTI_ExperimentalFPSanEmbedOp : TTI_Op<"experimental_fpsan_embed", [
+  Pure,
+  Elementwise,
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding
+]> {
+  let summary = "Embed float value in the fpsan integer ring";
+  let arguments = (ins TT_FloatLike:$val);
+  let results = (outs TT_IntLike:$result);
+  let assemblyFormat = [{
+    $val attr-dict `:` functional-type(operands, $result)
+  }];
+
+  let hasCanonicalizer = true;
+  let hasFolder = true;
+}
+
+def TTI_ExperimentalFPSanUnembedOp : TTI_Op<"experimental_fpsan_unembed", [
+  Pure,
+  Elementwise,
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding
+]> {
+  let summary = "Unembed fpsan integer payload as a float value";
+  let arguments = (ins TT_IntLike:$val);
+  let results = (outs TT_FloatLike:$result);
+  let assemblyFormat = [{
+    $val attr-dict `:` functional-type(operands, $result)
+  }];
+
+  let hasCanonicalizer = true;
+  let hasFolder = true;
 }
 
 #endif // TRITONINSTRUMENT_OPS

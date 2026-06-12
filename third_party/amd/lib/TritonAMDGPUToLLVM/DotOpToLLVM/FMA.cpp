@@ -1,4 +1,3 @@
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/FMADotUtility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -24,34 +23,27 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
   DotIntrinsic chooseIntrinsic(DotOp op) {
     auto aOpTy = cast<RankedTensorType>(op.getA().getType());
     auto aElemTy = aOpTy.getElementType();
-    auto bOpTy = cast<RankedTensorType>(op.getA().getType());
     auto bElemTy = aOpTy.getElementType();
     assert(aElemTy == bElemTy);
     auto dOpTy = cast<RankedTensorType>(op.getD().getType());
     auto dElemTy = dOpTy.getElementType();
-    auto mod = op->getParentOfType<ModuleOp>();
-    auto arch = getAMDArch(mod);
-    assert(arch.has_value() && "expected arch");
     DotIntrinsic chosenOp;
 
-    bool dotAvailable = AMD::supportsVDot(*arch);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    if (dotAvailable) {
-      if ((aElemTy.isF16() || aElemTy.isBF16()) && dElemTy.isF32()) {
-        chosenOp.vectorSize = 2;
-        chosenOp.outElemTy = f32_ty;
-        chosenOp.intrinsicName = aElemTy.isF16() ? "llvm.amdgcn.fdot2"
-                                                 : "llvm.amdgcn.fdot2.f32.bf16";
-        chosenOp.additionalArgs = {b.false_val()};
-        return chosenOp;
-      }
-      if (aElemTy.isInteger(8) && dElemTy.isInteger(32)) {
-        chosenOp.vectorSize = 4;
-        chosenOp.outElemTy = i32_ty;
-        chosenOp.intrinsicName = "llvm.amdgcn.sdot4";
-        chosenOp.additionalArgs = {b.false_val()};
-        return chosenOp;
-      }
+    if ((aElemTy.isF16() || aElemTy.isBF16()) && dElemTy.isF32()) {
+      chosenOp.vectorSize = 2;
+      chosenOp.outElemTy = f32_ty;
+      chosenOp.intrinsicName =
+          aElemTy.isF16() ? "llvm.amdgcn.fdot2" : "llvm.amdgcn.fdot2.f32.bf16";
+      chosenOp.additionalArgs = {b.false_val()};
+      return chosenOp;
+    }
+    if (aElemTy.isInteger(8) && dElemTy.isInteger(32)) {
+      chosenOp.vectorSize = 4;
+      chosenOp.outElemTy = i32_ty;
+      chosenOp.intrinsicName = "llvm.amdgcn.sdot4";
+      chosenOp.additionalArgs = {b.false_val()};
+      return chosenOp;
     }
     // choose one of FMA intrinsics
     assert(aElemTy.isIntOrFloat() && !aElemTy.isIntOrIndex());
@@ -97,7 +89,6 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
     SmallVector<Type> argTypes;
     for (auto arg : args)
       argTypes.push_back(arg.getType());
-    auto funcType = LLVM::LLVMFunctionType::get(intrinsic.outElemTy, argTypes);
     auto d = LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, intrinsic.intrinsicName, intrinsic.outElemTy, args);
     return d.getResult(0);

@@ -68,13 +68,11 @@ import triton.experimental.gluon as gluon
 import triton.experimental.gluon.language as gl
 from dataclasses import replace
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
-from triton.language.core import _aggregate as aggregate
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
-    get_tmem_reg_layout,
     fence_async_shared,
     tensor_memory_descriptor,
     tcgen05_copy,
@@ -175,8 +173,8 @@ def simple_mma_scaled_kernel(a_desc, b_desc, c_desc, a_scale_ptr, a_scale_stride
 
         # Load the A and B tiles.
         mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], bar, b_smem)
+        tma.async_load(a_desc, [off_m, off_k_a], bar, a_smem)
+        tma.async_load(b_desc, [off_n, off_k_b], bar, b_smem)
         mbarrier.wait(bar, phase)
 
         # Load the scales. We must always feed `b_scales` into `tcgen05_mma_scaled`
@@ -198,10 +196,8 @@ def simple_mma_scaled_kernel(a_desc, b_desc, c_desc, a_scale_ptr, a_scale_stride
 
         # We have to write the scales to tensor memory. Convert them into a the right
         # layout so we can write into tensor memory with layout `TensorMemoryScalesLayout`.
-        a_scale_layout: gl.constexpr = get_tmem_reg_layout(a_scale.dtype, a_scale.type.shape, scale_layout,
-                                                           gl.num_warps())
-        b_scale_layout: gl.constexpr = get_tmem_reg_layout(b_scale.dtype, b_scale.type.shape, scale_layout,
-                                                           gl.num_warps())
+        a_scale_layout: gl.constexpr = a_scale_tmem.get_reg_layout()
+        b_scale_layout: gl.constexpr = b_scale_tmem.get_reg_layout()
         a_scale = gl.convert_layout(a_scale, a_scale_layout)
         b_scale = gl.convert_layout(b_scale, b_scale_layout)
         a_scale_tmem.store(a_scale)
@@ -232,8 +228,7 @@ def simple_mma_scaled_kernel(a_desc, b_desc, c_desc, a_scale_ptr, a_scale_stride
     mbarrier.invalidate(mma_bar)
 
     # Load the accumulator tile from tensor memory and convert it to the output dtype.
-    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK_M, BLOCK_N), tmem_layout, gl.num_warps())
-    acc = acc_tmem.load(acc_reg_layout)
+    acc = acc_tmem.load()
     acc = acc.to(c_desc.dtype)
 
     # Write the accumulator via TMA store.
@@ -485,8 +480,8 @@ def mma_scaled_contig_kernel(a_desc, b_desc, c_desc, a_scale_ptr, b_scale_ptr, V
         off_k_b = k // B_ELEM_PER_BYTE
 
         mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], bar, b_smem)
+        tma.async_load(a_desc, [off_m, off_k_a], bar, a_smem)
+        tma.async_load(b_desc, [off_n, off_k_b], bar, b_smem)
         mbarrier.wait(bar, phase)
 
         # ======= End unchanged code from `simple_mma_scaled_kernel` =======
@@ -513,10 +508,8 @@ def mma_scaled_contig_kernel(a_desc, b_desc, c_desc, a_scale_ptr, b_scale_ptr, V
         b_scale = b_scale.reshape(BLOCK_N, SCALE_BLOCK_K)
 
         # ======= Begin unchanged code from `simple_mma_scaled_kernel` =======
-        a_scale_layout: gl.constexpr = get_tmem_reg_layout(a_scale.dtype, a_scale.type.shape, scale_layout,
-                                                           gl.num_warps())
-        b_scale_layout: gl.constexpr = get_tmem_reg_layout(b_scale.dtype, b_scale.type.shape, scale_layout,
-                                                           gl.num_warps())
+        a_scale_layout: gl.constexpr = a_scale_tmem.get_reg_layout()
+        b_scale_layout: gl.constexpr = b_scale_tmem.get_reg_layout()
         a_scale = gl.convert_layout(a_scale, a_scale_layout)
         b_scale = gl.convert_layout(b_scale, b_scale_layout)
         a_scale_tmem.store(a_scale)
@@ -533,8 +526,7 @@ def mma_scaled_contig_kernel(a_desc, b_desc, c_desc, a_scale_ptr, b_scale_ptr, V
 
     mbarrier.invalidate(bar)
     mbarrier.invalidate(mma_bar)
-    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK_M, BLOCK_N), tmem_layout, gl.num_warps())
-    acc = acc_tmem.load(acc_reg_layout)
+    acc = acc_tmem.load()
     acc = acc.to(c_desc.dtype)
     acc_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
     acc_smem.store(acc)
@@ -732,10 +724,10 @@ def mma_scaled_packed_block_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         mbarrier.expect(
             bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + a_scale_desc.block_type.nbytes +
             b_scale_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], bar, b_smem)
-        tma.async_copy_global_to_shared(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_smem)
-        tma.async_copy_global_to_shared(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_smem)
+        tma.async_load(a_desc, [off_m, off_k_a], bar, a_smem)
+        tma.async_load(b_desc, [off_n, off_k_b], bar, b_smem)
+        tma.async_load(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_smem)
+        tma.async_load(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_smem)
         mbarrier.wait(bar, phase)
 
         # We know the destination 2D layout of the scales required to store them
@@ -743,10 +735,8 @@ def mma_scaled_packed_block_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         # which to load the scales from shared memory such that after unswizzling,
         # they have the right 2D layout for the store to TMEM. Instead, we will use
         # AutoLayout to let the compiler backwards propagate the layout.
-        a_scale_layout: gl.constexpr = get_tmem_reg_layout(a_scale_desc.dtype, [BLOCK_M, BLOCK_K // VEC_SIZE],
-                                                           scale_layout, gl.num_warps())
-        b_scale_layout: gl.constexpr = get_tmem_reg_layout(b_scale_desc.dtype, [BLOCK_N, BLOCK_K // VEC_SIZE],
-                                                           scale_layout, gl.num_warps())
+        a_scale_layout: gl.constexpr = a_scale_tmem.get_reg_layout()
+        b_scale_layout: gl.constexpr = b_scale_tmem.get_reg_layout()
 
         # Load the scales with AutoLayout. Subsequent operations, including the unswizzling,
         # will be generic over the layout.
@@ -775,8 +765,7 @@ def mma_scaled_packed_block_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
 
     mbarrier.invalidate(bar)
     mbarrier.invalidate(mma_bar)
-    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK_M, BLOCK_N), tmem_layout, gl.num_warps())
-    acc = acc_tmem.load(acc_reg_layout)
+    acc = acc_tmem.load()
     acc = acc.to(c_desc.dtype)
     acc_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
     acc_smem.store(acc)
@@ -1015,10 +1004,10 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         mbarrier.expect(
             bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + a_scale_desc.block_type.nbytes +
             b_scale_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], bar, b_smem)
-        tma.async_copy_global_to_shared(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_smem)
-        tma.async_copy_global_to_shared(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_smem)
+        tma.async_load(a_desc, [off_m, off_k_a], bar, a_smem)
+        tma.async_load(b_desc, [off_n, off_k_b], bar, b_smem)
+        tma.async_load(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_smem)
+        tma.async_load(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_smem)
         mbarrier.wait(bar, phase)
 
         # ======= End unchanged code from `mma_scaled_packed_block_kernel` =======
@@ -1045,8 +1034,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
 
     mbarrier.invalidate(bar)
     mbarrier.invalidate(mma_bar)
-    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK_M, BLOCK_N), tmem_layout, gl.num_warps())
-    acc = acc_tmem.load(acc_reg_layout)
+    acc = acc_tmem.load()
     acc = acc.to(c_desc.dtype)
     acc_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
     acc_smem.store(acc)
@@ -1197,12 +1185,10 @@ def issue_loads(producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale
     mbarrier.expect(
         bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + a_scale_desc.block_type.nbytes +
         b_scale_desc.block_type.nbytes, pred)
-    tma.async_copy_global_to_shared(a_desc, [off_m, off_k_a], bar, a_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(b_desc, [off_n, off_k_b], bar, b_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar,
-                                    a_scale_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar,
-                                    b_scale_bufs.index(index), pred)
+    tma.async_load(a_desc, [off_m, off_k_a], bar, a_bufs.index(index), pred)
+    tma.async_load(b_desc, [off_n, off_k_b], bar, b_bufs.index(index), pred)
+    tma.async_load(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_bufs.index(index), pred)
+    tma.async_load(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_bufs.index(index), pred)
     return producer.next(pred)
 
 
@@ -1246,7 +1232,6 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
     # of tensor memory, which leaves no room for the scales' tensor memory.
     num_acc_buffers: gl.constexpr = 2 if BLOCK_N < 256 else 1
     tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
-    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK_M, BLOCK_N), tmem_layout, gl.num_warps())
     acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
     acc_idx = 0
 
@@ -1320,7 +1305,7 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
                                                     acc_bufs.index(acc_idx), use_acc=False, pred=has_next_tile)
         mbarrier.wait(mma_bars.index(mma_consumer.index), mma_consumer.phase)
         mma_consumer = mma_consumer.next()
-        acc = cur_acc_buf.load(acc_reg_layout)
+        acc = cur_acc_buf.load()
         if num_acc_buffers == 1:
             # Wait for all threads to finish loading from accumulator
             gl.barrier()
@@ -1348,7 +1333,7 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
 # wrote simplify writing the warp-specialized code.
 
 
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     a_desc: tma.tensor_descriptor
     b_desc: tma.tensor_descriptor
@@ -1405,15 +1390,13 @@ def mma_scaled_mma_partition(p):
 
 @gluon.jit
 def mma_scaled_epilogue_partition(p):
-    acc_layout: gl.constexpr = get_tmem_reg_layout(p.c_desc.dtype, (p.BLOCK_M, p.BLOCK_N), p.acc_bufs.type.layout,
-                                                   gl.num_warps())
     acc_state = t8.Counter.create(0, p.acc_empty_bars.shape[0])
     acc_smem = gl.allocate_shared_memory(p.c_desc.dtype, p.c_desc.block_type.shape, p.c_desc.layout)
     scheduler = p.SchedulerImpl.initialize(p.M, p.N, p.BLOCK_M, p.BLOCK_N)
     for idx in range(scheduler.get_num_tiles()):
         pid_m, pid_n = scheduler.get_tile(idx)
         mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
-        acc = p.acc_bufs.index(acc_state.index).load(acc_layout)
+        acc = p.acc_bufs.index(acc_state.index).load()
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
         acc_state = acc_state.next()
 

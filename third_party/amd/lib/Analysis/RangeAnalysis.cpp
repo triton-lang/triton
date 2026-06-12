@@ -66,7 +66,7 @@ namespace tt = mlir::triton;
 namespace {
 
 constexpr int64_t kDefaultMaxTripCount = 1024;
-constexpr uint64_t kDefaultMaxPrograms = 1L << 31; // 2147483648
+constexpr uint64_t kDefaultMaxPrograms = 1ULL << 31; // 2147483648
 
 void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   Operation *currOp = op.getParentOp();
@@ -342,17 +342,17 @@ collectRanges(const DataFlowSolver &solver, ValueRange values) {
   return ranges;
 }
 
-bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp) {
+std::optional<bool> evaluateCmpI(const DataFlowSolver &solver,
+                                 arith::CmpIOp cmpOp) {
   if (auto inputRanges =
           collectRanges(solver, ValueRange{cmpOp.getOperands()})) {
     intrange::CmpPredicate pred =
         static_cast<intrange::CmpPredicate>(cmpOp.getPredicate());
     if (!(*inputRanges)[0] || !(*inputRanges)[1])
-      return false;
-    return intrange::evaluatePred(pred, *(*inputRanges)[0], *(*inputRanges)[1])
-        .value_or(false);
+      return std::nullopt;
+    return intrange::evaluatePred(pred, *(*inputRanges)[0], *(*inputRanges)[1]);
   }
-  return false;
+  return std::nullopt;
 }
 
 LogicalResult TritonIntegerRangeAnalysis::initialize(Operation *top) {
@@ -542,7 +542,11 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
           op)) {
     llvm::TypeSwitch<Operation *>(op)
         .Case<GetProgramIdOp>([&](auto getPIDOp) {
-          inferResultRangesPID(getPIDOp, kDefaultMaxPrograms - 1, joinCallback);
+          int axis = getPIDOp.getAxisAsInt();
+          auto it = pidBounds.find(axis);
+          uint64_t maxPID =
+              it != pidBounds.end() ? it->second : kDefaultMaxPrograms - 1;
+          inferResultRangesPID(getPIDOp, maxPID, joinCallback);
         })
         .Case<GetNumProgramsOp>([&](auto getPIDOp) {
           inferResultRangesPID(getPIDOp, kDefaultMaxPrograms, joinCallback);
@@ -710,36 +714,32 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
     assert(inputs.size() == operands->size() &&
            "expected the same number of successor inputs as operands");
 
+    auto valueToLattices = [&](Value v) { return getLatticeElement(v); };
     unsigned firstIndex = 0;
     if (inputs.size() != lattices.size()) {
-      auto appendNonSuccessorInputs = [&](ValueRange allInputs) {
-        SmallVector<Value> nonSuccessorInputs;
-        SmallVector<dataflow::IntegerValueRangeLattice *> nonSuccessorLattices;
-        auto appendRange = [&](unsigned start, unsigned end) {
-          for (unsigned i = start; i < end; ++i) {
-            nonSuccessorInputs.push_back(allInputs[i]);
-            nonSuccessorLattices.push_back(lattices[i]);
-          }
-        };
-
-        appendRange(0, firstIndex);
-        appendRange(firstIndex + inputs.size(), allInputs.size());
-
-        if (!nonSuccessorInputs.empty())
-          visitNonControlFlowArguments(branch, successor, nonSuccessorInputs,
-                                       nonSuccessorLattices);
-      };
-
-      if (successor.isParent()) {
-        if (!inputs.empty()) {
+      if (!point->isBlockStart()) {
+        if (!inputs.empty())
           firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
-        }
-        appendNonSuccessorInputs(branch->getResults());
+        SmallVector<Value> nonSuccessorInputs =
+            branch.getNonSuccessorInputs(RegionSuccessor::parent());
+        SmallVector<dataflow::IntegerValueRangeLattice *>
+            nonSuccessorInputLattices =
+                llvm::map_to_vector(nonSuccessorInputs, valueToLattices);
+        visitNonControlFlowArguments(branch, RegionSuccessor::parent(),
+                                     nonSuccessorInputs,
+                                     nonSuccessorInputLattices);
       } else {
-        if (!inputs.empty()) {
+        if (!inputs.empty())
           firstIndex = cast<BlockArgument>(inputs.front()).getArgNumber();
-        }
-        appendNonSuccessorInputs(successor.getSuccessor()->getArguments());
+        Region *region = point->getBlock()->getParent();
+        SmallVector<Value> nonSuccessorInputs =
+            branch.getNonSuccessorInputs(RegionSuccessor(region));
+        SmallVector<dataflow::IntegerValueRangeLattice *>
+            nonSuccessorInputLattices =
+                llvm::map_to_vector(nonSuccessorInputs, valueToLattices);
+        visitNonControlFlowArguments(branch, RegionSuccessor(region),
+                                     nonSuccessorInputs,
+                                     nonSuccessorInputLattices);
       }
     }
 
@@ -766,14 +766,17 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
         // further changes/updates are possible).
         changed = argLat->join(IntegerValueRange::getMaxRange(oper));
       } else {
-        // Else, propagate pred operands.
-        auto operLat = *getLatticeElementFor(point, oper);
-        changed = argLat->join(operLat);
+        // Else, propagate pred operands. Known-trip-count loops are bounded by
+        // loopVisits, so join the value directly and avoid LLVM's generic
+        // merge-site widening for long-but-finite loop simulations.
+        auto *operLat = getLatticeElementFor(point, oper);
+        changed =
+            loop ? argLat->join(operLat->getValue()) : argLat->join(*operLat);
         LLVM_DEBUG({
           if (changed == ChangeResult::Change) {
             DBGS() << "Operand lattice ";
             oper.printAsOperand(llvm::dbgs(), {});
-            llvm::dbgs() << " --> " << operLat.getValue() << "\n";
+            llvm::dbgs() << " --> " << operLat->getValue() << "\n";
           }
         });
       }
@@ -813,16 +816,13 @@ struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
 
   LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
                                 PatternRewriter &rewriter) const override {
-    if (llvm::isa<IntegerType, IndexType>(cmpOp.getType()) &&
-        cmpIIsStaticallyTrue(*solver, cmpOp)) {
-      if (failed(mlir::dataflow::maybeReplaceWithConstant(*solver, rewriter,
-                                                          cmpOp.getResult()))) {
-        LDBG("failed to replace with constant op: " << cmpOp);
-        return failure();
-      }
-    } else {
+    auto result = evaluateCmpI(*solver, cmpOp);
+    if (!result)
       return failure();
-    }
+
+    TypedAttr constAttr = *result ? rewriter.getOneAttr(cmpOp.getType())
+                                  : rewriter.getZeroAttr(cmpOp.getType());
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(cmpOp, constAttr);
     return success();
   }
 

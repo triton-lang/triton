@@ -116,7 +116,7 @@ if __name__ == "__main__" and not is_hopper():
 # a = a_smem.load(dot_operand_layout)
 # d = warpgroup_mma(a, b_smem, c, is_async=True)
 # d = warpgroup_mma_wait(num_outstanding=0, deps=(d, ))
-# tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)
+# tma.async_load(a_desc, [0, 0], bar, a_smem)
 # ```
 
 # %%
@@ -138,9 +138,9 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc,  #
     c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
 
     mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + c_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)
-    tma.async_copy_global_to_shared(b_desc, [0, 0], bar, b_smem)
-    tma.async_copy_global_to_shared(c_desc, [0, 0], bar, c_smem)
+    tma.async_load(a_desc, [0, 0], bar, a_smem)
+    tma.async_load(b_desc, [0, 0], bar, b_smem)
+    tma.async_load(c_desc, [0, 0], bar, c_smem)
     mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
 
@@ -351,11 +351,11 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc,  #
     for k in range(0, K, BLOCK_K):
         # Load tiles of A and B.
         mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_smem)
+        tma.async_load(a_desc, [off_m, k], bar, a_smem)
         if TRANSPOSE_B:
-            tma.async_copy_global_to_shared(b_desc, [off_n, k], bar, b_smem)
+            tma.async_load(b_desc, [off_n, k], bar, b_smem)
         else:
-            tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_smem)
+            tma.async_load(b_desc, [k, off_n], bar, b_smem)
         mbarrier.wait(bar, phase=phase)
         phase ^= 1  # toggle the parity phase between 0 and 1
 
@@ -552,8 +552,8 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
         b = b_smem.index(index)
 
         mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a)
-        tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b)
+        tma.async_load(a_desc, [off_m, k], bar, a)
+        tma.async_load(b_desc, [k, off_n], bar, b)
         mbarrier.wait(bar, phase=phase)
         phase ^= 1
 

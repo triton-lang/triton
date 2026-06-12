@@ -31,19 +31,13 @@ namespace nvidia_gpu {
 namespace {
 
 bool isAsyncProxyWrite(Operation *op) {
-  return isa<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
-             triton::nvidia_gpu::AsyncTMAGatherOp,
+  return isa<triton::nvidia_gpu::TMALoadLikeOpInterface,
              triton::nvidia_gpu::CLCTryCancelOp>(op);
 }
 
 Value getSmemDest(Operation *op) {
-  if (auto asyncTMACopyGlobalToLocalOp =
-          dyn_cast<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(op)) {
-    return asyncTMACopyGlobalToLocalOp.getResult();
-  }
-  if (auto asyncTMAGatherOp =
-          dyn_cast<triton::nvidia_gpu::AsyncTMAGatherOp>(op)) {
-    return asyncTMAGatherOp.getResult();
+  if (auto tmaLoad = dyn_cast<triton::nvidia_gpu::TMALoadLikeOpInterface>(op)) {
+    return tmaLoad.getResult();
   }
   if (auto clcTryCancelOp = dyn_cast<triton::nvidia_gpu::CLCTryCancelOp>(op)) {
     return clcTryCancelOp.getResult();
@@ -53,11 +47,30 @@ Value getSmemDest(Operation *op) {
 
 bool isAsyncProxyRead(Operation *op) {
   return isa<triton::nvidia_gpu::WarpGroupDotOp,
-             triton::nvidia_gpu::TCGen5MMAOp,
-             triton::nvidia_gpu::TCGen5MMAScaledOp,
-             triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
-             triton::nvidia_gpu::AsyncTMAScatterOp,
-             triton::nvidia_gpu::AsyncTMAReduceOp>(op);
+             triton::nvidia_gpu::MMAv5OpInterface,
+             triton::nvidia_gpu::TMEMCopyOp,
+             triton::nvidia_gpu::TMAStoreLikeOpInterface>(op);
+}
+
+bool isAsyncProxyReadSource(Operation *op, Value value) {
+  auto memDescType = dyn_cast<triton::gpu::MemDescType>(value.getType());
+  if (!memDescType ||
+      !isa<triton::gpu::SharedMemorySpaceAttr>(memDescType.getMemorySpace()))
+    return false;
+  if (auto tmaStore =
+          dyn_cast<triton::nvidia_gpu::TMAStoreLikeOpInterface>(op)) {
+    return value == tmaStore.getSrc();
+  }
+  if (auto warpGroupDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
+    return value == warpGroupDotOp.getA() || value == warpGroupDotOp.getB();
+  }
+  if (auto mma = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
+    return value == mma.getA() || value == mma.getB();
+  }
+  if (auto tmemCopyOp = dyn_cast<triton::nvidia_gpu::TMEMCopyOp>(op)) {
+    return value == tmemCopyOp.getSrc();
+  }
+  return false;
 }
 
 bool ignoreOpForProxyFence(Operation *op) {
@@ -125,16 +138,16 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
         if (auto value = effectInstance.getValue()) {
           for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
-              // TODO: handle proxy read cases. Those are currently handled in
-              // FenceInsertionPass where it can generate better placement for
-              // the fence. But we should support a safe fallback here.
               auto interval = allocation->getAllocatedInterval(bufferId);
               auto slice = AllocationSlice(value, interval, bufferId);
 
-              if (isAsyncProxyWrite(op)) {
-                if (value == getSmemDest(op)) {
-                  proxyBlockInfo.syncWriteSlices[slice].insert(op);
-                }
+              if (isAsyncProxyWrite(op) && value == getSmemDest(op)) {
+                proxyBlockInfo.syncWriteSlices[slice].insert(op);
+              } else if (isAsyncProxyRead(op) &&
+                         isAsyncProxyReadSource(op, value)) {
+                // Safe fallback for async-proxy reads from shared memory when
+                // the earlier FenceInsertionPass did not place a fence.
+                proxyBlockInfo.syncReadSlices[slice].insert(op);
               } else if (isa<MemoryEffects::Write>(
                              effectInstance.getEffect())) {
                 curBlockInfo.syncWriteSlices[slice].insert(op);

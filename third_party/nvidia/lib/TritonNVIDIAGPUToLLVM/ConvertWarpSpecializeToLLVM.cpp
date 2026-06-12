@@ -1,5 +1,4 @@
 #include "TargetInfo.h"
-#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Conversion/Passes.h"
@@ -8,7 +7,6 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -23,6 +21,9 @@ namespace mlir::triton {
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
+
+static constexpr const char kDisableSetMaxRegisterAttr[] =
+    "tti.disable_setmaxregister";
 
 //===----------------------------------------------------------------------===//
 // Utilities
@@ -44,7 +45,7 @@ public:
       : numThreadsPerWarp(numThreadsPerWarp) {}
 
   bool isBarrierOp(Operation *op) const override {
-    return isa<NVVM::Barrier0Op>(op);
+    return isa<NVVM::BarrierOp>(op);
   }
 
   Type getBarrierHandleType(MLIRContext *ctx) const override {
@@ -75,14 +76,37 @@ public:
     if (numThreads == 32) {
       LLVM::NVIDIA::createSyncWarp(b.getLoc(), b);
     } else {
-      NVVM::BarrierOp::create(b, b.getLoc(), TypeRange{}, handle,
-                              b.i32_val(numThreads), {}, Value{});
+      NVVM::BarrierOp::create(b, b.getLoc(), handle, b.i32_val(numThreads));
     }
   }
 
 private:
   unsigned numThreadsPerWarp;
 };
+
+static void rewriteWarpSpecializeWarpIdsOnce(ModuleOp mod) {
+  SmallVector<mlir::triton::gpu::WarpIdOp> wsWarpIds;
+  mod.walk([&](mlir::triton::gpu::WarpIdOp op) {
+    if (getWarpGroupStartWarpId(op->getBlock()))
+      wsWarpIds.push_back(op);
+  });
+
+  for (mlir::triton::gpu::WarpIdOp op : wsWarpIds) {
+    std::optional<int> startWarpId = getWarpGroupStartWarpId(op->getBlock());
+    assert(startWarpId &&
+           "expected warp-specialize warp_id to have a start warp ID");
+
+    auto loc = op.getLoc();
+    TritonLLVMIRRewriter b(loc, op);
+
+    // Keep `ttg.warp_id` for NVGPUToLLVM and only make it relative here.
+    Value absWarpId =
+        mlir::triton::gpu::WarpIdOp::create(b, loc, op.getOmitUniformHint());
+    Value relWarpId =
+        LLVM::SubOp::create(b, loc, absWarpId, b.i32_val(*startWarpId));
+    b.replaceOp(op, relWarpId);
+  }
+}
 
 //===----------------------------------------------------------------------===//
 // lowerWarpSpecialize
@@ -116,15 +140,19 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     return mlir::emitError(module.getLoc(),
                            "module missing 'ttg.total-num-warps' attribute");
   }
-  unsigned totalNumThreads = totalNumWarpsAttr.getInt() * threadsPerWarp;
 
   // Determine how many registers the worker warps can surrender before they
   // begin execution.
   auto maxnreg = func->getParentOfType<ModuleOp>()->getAttrOfType<IntegerAttr>(
       AttrMaxRegistersName);
+  // Disable dynamic register allocation if requested
+  bool emitDynamicRegRealloc = llvm::none_of(wsOps, [](WarpSpecializeOp ws) {
+    return ws->hasAttr(kDisableSetMaxRegisterAttr);
+  });
+
   int lowRegs = -1;
   int defRegs = -1;
-  if (maxnreg) {
+  if (emitDynamicRegRealloc && maxnreg) {
     int numWorkerWarps = totalNumWarpsAttr.getInt() - defaultNumWarps;
     int startRegs = maxnreg.getInt();
 
@@ -173,7 +201,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     oldArg.replaceAllUsesWith(arg);
   entry->eraseArguments([](auto) { return true; });
   b.setInsertionPointToStart(entry);
-  if (maxnreg)
+  if (emitDynamicRegRealloc && maxnreg)
     createRegRealloc(b, maxnreg.getInt(), defRegs);
 
   WarpSpecializeCallbacks callbacks;
@@ -186,6 +214,9 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   callbacks.reallocRegisters = [&](TritonLLVMIRRewriter &b, WarpSpecializeOp ws,
                                    RegisterReallocPhase phase,
                                    unsigned regionNumber) {
+    if (!emitDynamicRegRealloc)
+      return;
+
     if (phase == RegisterReallocPhase::SwitchLoopStart) {
       if (maxnreg)
         createRegRealloc(b, maxnreg.getInt(), lowRegs);
@@ -249,6 +280,8 @@ struct ConvertWarpSpecializeToLLVM
     pm.addPass(createReconcileUnrealizedCastsPass());
     if (failed(runPipeline(pm, mod)))
       return signalPassFailure();
+
+    rewriteWarpSpecializeWarpIdsOnce(mod);
 
     unsigned threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
     NVIDIAWarpSpecializeBarrierHelper barrierHelper(threadsPerWarp);

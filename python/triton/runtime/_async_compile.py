@@ -61,7 +61,7 @@ class AsyncCompileMode:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        active_mode.set(None)
         # Finalize any outstanding compiles
         for future in as_completed(self.raw_futures):
             self.future_kernels[future._key].result(self.ignore_errors)
-        active_mode.set(None)

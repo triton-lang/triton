@@ -6,13 +6,12 @@
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "third_party/amd/include/TritonAMDGPUToLLVM/TargetUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
-using mlir::triton::AMD::ISAFamily;
+using triton::amdgpu::ISAFamily;
 
 namespace {
 
@@ -43,9 +42,7 @@ public:
     Value warpId;
 
     if (targetInfo.supportsWaveId()) {
-      auto warpIdOp = LLVM::createLLVMIntrinsicCallOp(
-          rewriter, loc, "llvm.amdgcn.wave.id", {i32_ty}, ValueRange{});
-      warpId = warpIdOp.getResult(0);
+      warpId = ROCDL::WaveId::create(rewriter, loc, i32_ty);
     } else {
       int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
       Value warpSizeVal = b.i32_val(threadsPerWarp);

@@ -1,42 +1,7 @@
 #ifndef TRITONGPU_ATTRDEFS
 #define TRITONGPU_ATTRDEFS
 
-include "triton/Dialect/TritonGPU/IR/TritonGPUAttrBase.td"
-
-//===----------------------------------------------------------------------===//
-// Traits, Interfaces and shared Parameters
-//===----------------------------------------------------------------------===//
-
-def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
-  let cppNamespace = "::mlir::triton::gpu";
-  let description = [{
-    Common trait for all TTGIR layouts.
-  }];
-  let methods = [
-    InterfaceMethod<"Get the CGA layout backing this encoding.",
-                    "CGAEncodingAttr", "getCGALayout">,
-    InterfaceMethod<"Get the rank of the layout.", "unsigned", "getRank",
-                    (ins), [{}], [{
-      return $_attr.getCGALayout().getRank();
-    }]>
-  ];
-}
-def DeclareLayoutEncodingMethods : DeclareAttrInterfaceMethods<
-  LayoutEncodingTrait, ["getCGALayout"]>;
-
-def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
-  let cppNamespace = "::mlir::triton::gpu";
-
-  let description = [{
-    Common trait describing shared memory.
-  }];
-  let methods = [
-    InterfaceMethod<"Return the default alignment for the layout.",
-                    "int32_t", "getAlignment", (ins), [{}], [{ return 16; }]>,
-  ];
-}
-def DeclareSharedEncodingMethods : DeclareAttrInterfaceMethods<
-  SharedEncodingTrait, ["getAlignment"]>;
+include "triton/Dialect/TritonGPU/IR/TritonGPUAttrInterfaces.td"
 
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
@@ -197,7 +162,9 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
         // This packs a few rows together for small K
         int perPhase = std::max<int>(1024 / (bitwidth * K), 1);
 
-        int mmaStride = 8;
+        // FP64 MMAv2 uses an m8n8k4 tile rather than the m16n8 tile used by
+        // the other MMAv2 variants.
+        int mmaStride = bitwidth == 64 ? 4 : 8;
         int vec = 4 * kWidth;
         // needsTrans is equiv. to flipping the opIdx
         if (needTrans)
@@ -336,7 +303,7 @@ For identity mappings a short form based on order and shape is used to increase 
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
     // Returns the order of the dimensions `dimName` of the layout.
-    // If more than dimension is of size one, it uses defaultOrder to determine
+    // If more than one dimension is of size one, it uses defaultOrder to determine
     // the order of the dimensions of size one.
     SmallVector<unsigned> orderPerDim(StringAttr dimName,
                                       ArrayRef<unsigned> defaultOrder) const;
@@ -627,58 +594,6 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
 }
 
 
-//===----------------------------------------------------------------------===//
-// Distributed Layout Encoding
-//===----------------------------------------------------------------------===//
-
-def DistributedEncodingTrait : AttrInterface<"DistributedEncodingTrait"> {
-  let cppNamespace = "::mlir::triton::gpu";
-
-  let description = [{
-The Distributed encoding describes the layout L with the 4-level compute hierarchy on GPU.
-It is abstracted from the top to the bottom as CTAs Per CGA->Warps Per CTA->Threads Per Warp->Values Per Thread.
-
-For CTAs Per CGA and Warps Per CTA level, the linear id is distributed contiguously with the shape and order.
-For example, for a shape/order pair defines a distribution layout
-shape = [4, 4]
-order = [0, 1] // The fastest-changing axis first
-->
-layout = [0  4  8  12]
-         [1  5  9  13]
-         [2  6  10 14]
-         [3  7  11 15]
-
-For the Threads Per Warp and Values Per Thread level, the linear id distribution is variant for each sub-class encoding.
-
-If the layout does not completely cover the tensor, we tile it until we cover the entire tensor.
-We call each individual tile "rep".
-  }];
-
-  let methods = [
-    InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getRepOrder">,
-    InterfaceMethod<"Return total element size per thread.",
-                    "unsigned",
-                    "getTotalElemsPerThread",
-                     (ins "ArrayRef<int64_t>":$shape),
-                     /*defaultImplementation=*/[{
-                         return toLinearEncoding($_self, shape).getTotalElemsPerThread(shape);
-                     }]>,
-    InterfaceMethod<"Return element size per thread in each dimension.",
-                    "SmallVector<unsigned>",
-                    "getElemsPerThread",
-                     (ins "ArrayRef<int64_t>":$shape),
-                     /*defaultImplementation=*/[{
-                         return toLinearEncoding($_self, shape).getElemsPerThread(shape);
-                     }]>,
-    InterfaceMethod<"Convert to LinearLayout.",
-                    "LinearLayout",
-                    "toLinearLayout",
-                    (ins "ArrayRef<int64_t>":$shape)>,
-  ];
-}
-
 class DistributedEncoding<string name, string attrMnemonic, list<Trait> traits = []>
   : TritonGPU_Attr<name, attrMnemonic,
                    !listconcat([DistributedEncodingTrait, LayoutEncodingTrait,
@@ -727,50 +642,54 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 }
 
 //===----------------------------------------------------------------------===//
-// Linear Layout Encoding
+// Linear Layout Encodings (common base class)
 //===----------------------------------------------------------------------===//
 
-def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"> {
-  let mnemonic = "linear";
-
-  let description = [{
-    See the docs in LinearLayout.h for the definition of linear layouts.
-  }];
+class LinearDistributedEncoding<string name, string attrMnemonic,
+                                list<Trait> traits = []>
+  : DistributedEncoding<name, attrMnemonic,
+      !listconcat([LinearEncodingTrait, DeclareLinearEncodingMethods],
+                  traits)> {
 
   let parameters = (ins LinearLayoutParam:$linearLayout);
 
-  let extraClassDeclaration = extraDistributedDeclaration # [{
-    // Generic distributed encoding methods
-    unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape) const;
-    SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape) const;
-
-    SmallVector<unsigned int> getContig(const char *, SmallVector<unsigned int>) const;
-    SmallVector<unsigned> getContigPerThread() const;
-    SmallVector<unsigned> getContigPerWarp() const;
-    SmallVector<unsigned> getOrder() const;
-    SmallVector<unsigned> getWarpOrder() const;
-    SmallVector<unsigned> getThreadOrder() const;
-
-
-    // Generalizes get{Warp,Thread,CTA}Order to linear layouts.
-    // Returns the order of the dimensions `dimName` of the layout.
-    // If more than dimension is of size one, it uses defaultOrder to determine
-    // the order of the dimensions of size one.
-    SmallVector<unsigned> orderPerDim(StringAttr dimName,
-                                      ArrayRef<unsigned> defaultOrder) const;
-
-    // Generalizes getThreadsPerWarp, getWarpsPerCTA, getCTAsPerCGA to linear layouts.
-    // Returns the bases of the dimensions `dimName` of the layout.
-    // If skipBroadcast is false, we count a base zero
-    SmallVector<unsigned> basesPerDim(StringAttr dimName,
-                                      bool skipBroadcast = true) const;
-    SmallVector<unsigned> getThreadsPerWarp() const;
-    SmallVector<unsigned> getWarpsPerCTA() const;
-
+  code extraLinearDistributedDeclaration = [{
     unsigned getRank() const { return getLinearLayout().getNumOutDims(); }
+  }];
+}
 
-    // [FIXME LL] Supports legacy behaviour. We should remove these functions
-    SmallVector<unsigned> getSizePerThread() const;
+//===----------------------------------------------------------------------===//
+// Linear Layout Encoding
+//===----------------------------------------------------------------------===//
+
+def LinearEncodingAttr
+    : LinearDistributedEncoding<"LinearEncoding", "linear_encoding"> {
+  let mnemonic = "linear";
+
+  let description = [{
+    An encoding backed by a LinearLayout with input dims
+    {register, lane, warp, block} and output dims {dim0, dim1, ...}. See the
+    docs in LinearLayout.h for the general definition of linear layouts;
+    this attribute is a strictly more restricted form of that abstraction.
+
+    Compared to GenericLinearEncodingAttr, this is more constrained
+    LinearLayout-based encoding:
+    - Every basis vector (register, lane, warp, and block) must be
+      non-swizzled, i.e. have at most one non-zero output component (the
+      basis either moves along a single output dim, or is a broadcast/zero
+      basis).
+    - After removing broadcast bases the layout must be bijective.
+
+    GenericLinearEncodingAttr relaxes the above in two ways:
+    - Warp bases MAY be swizzled (non-zero in multiple output dims).
+      Register, lane, and block bases must still be non-swizzled.
+    - The layout is only required to be surjective (not bijective) after
+      removing broadcast bases.
+  }];
+
+  let extraClassDeclaration = extraLinearDistributedDeclaration # [{
+    SmallVector<unsigned> getWarpsPerCTA() const;
+    SmallVector<unsigned> getWarpOrder() const;
   }];
 
   let genVerifyDecl = 1;
@@ -782,6 +701,35 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
   let hasCustomAssemblyFormat = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Generic Linear Layout Encoding
+//===----------------------------------------------------------------------===//
+
+def GenericLinearEncodingAttr
+    : LinearDistributedEncoding<"GenericLinearEncoding",
+                                "generic_linear_encoding"> {
+  let mnemonic = "generic_linear";
+
+  let description = [{
+    A linear layout encoding with relaxed constraints compared to LinearEncoding.
+    Like LinearEncoding, it wraps a LinearLayout with input dims
+    {register, lane, warp, block} and output dims {dim0, dim1, ...}.
+
+    Unlike LinearEncoding:
+    - Warp bases MAY be swizzled (non-zero in multiple output dims).
+    - The layout is NOT required to be bijective after removing broadcast bases,
+      but it's still required to be surjective.
+
+    Register, lane, and block bases must still be non-swizzled (at most one
+    non-zero output component per basis vector), which preserves existing
+    within-thread, within-warp, and CGA lowering paths.
+  }];
+
+  let extraClassDeclaration = extraLinearDistributedDeclaration;
+
+  let genVerifyDecl = 1;
+  let hasCustomAssemblyFormat = 1;
+}
 
 //===----------------------------------------------------------------------===//
 // Blocked Layout Encoding
@@ -949,20 +897,6 @@ for
   let extraClassDeclaration = extraDistributedDeclaration;
 
   let hasCustomAssemblyFormat = 1;
-}
-
-//===----------------------------------------------------------------------===//
-// MMA Layout Encoding
-//===----------------------------------------------------------------------===//
-
-def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
-  let cppNamespace = "::mlir::triton::gpu";
-  let methods = [
-    InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getRepOrderForOperand",
-                    (ins "int":$opIdx)>,
-  ];
 }
 
 def AMDMfmaEncodingAttr : DistributedEncoding<"AMDMfmaEncoding", "amd_mfma_encoding", [MmaEncodingTrait]> {
@@ -1318,6 +1252,11 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
       return {16, 16, 16};
     }
 
+    // Returns nonK dim of operand opIdx (swapped for asymmetric transposed WMMA).
+    unsigned getOperandNonKDim(unsigned opIdx) const;
+    static unsigned getOperandNonKDim(unsigned mDim, unsigned nDim,
+                                      bool isTransposed, unsigned opIdx);
+
     // Returns a swizzled shared layout matching this WMMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.
     SwizzledSharedEncodingAttr composeSharedLayoutForOperand(
@@ -1479,6 +1418,10 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let extraClassDeclaration = extraDistributedDeclaration # [{
     template<class T>
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
+
+    unsigned getRank() const {
+      return mlir::cast<LayoutEncodingTrait>(getParent()).getRank() - 1;
+    }
   }];
 
   let hasCustomAssemblyFormat = 1;

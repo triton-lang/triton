@@ -1,3 +1,4 @@
+#include "PartitionAttrs.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -105,12 +106,10 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
 
           // init iter args
           {
-            size_t idx = 0;
-            for (auto operand : forOp.getInitArgs()) {
+            for (size_t idx = 0; idx < forOp.getInitArgs().size(); ++idx) {
               auto iter_arg_node = node->getDefines()[idx + 1];
               operands[std::make_pair(op, idx + 3)] =
                   InputPort(iter_arg_node, 0);
-              idx++;
             }
           }
 
@@ -218,7 +217,7 @@ SmallVector<OutputPort> initialDataValues(Graph *graph) {
   graph->walk([&](Node *node) {
     if (node->isOp()) {
       auto op = node->getOp();
-      if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
+      if (isa<tt::DescriptorLoadLikeOpInterface>(op)) {
         node->setDataValue(0);
         values.push_back({node, 0});
       }
@@ -228,7 +227,7 @@ SmallVector<OutputPort> initialDataValues(Graph *graph) {
         node->setDataValue(1);
         values.push_back({node, 1});
       }
-      if (isa<nvidia_gpu::TCGen5MMAOp>(op)) {
+      if (isa<nvidia_gpu::TCGen5MMAOp, nvidia_gpu::TCGen5MMAScaledOp>(op)) {
         node->setDataValue(0);
         values.push_back({node, 0});
       }
@@ -377,6 +376,19 @@ bool isTMEM(Node *node) {
   return flags & Flags::TMEM;
 }
 
+bool hasEligibleMemoryOps(Graph *graph) {
+  bool found = false;
+  graph->walk([&](Node *node) {
+    if (!node->isOp() || found)
+      return;
+    auto flags = getNodeFlags(node);
+    // We cannot handle none descriptor memory operations
+    if (flags & (Flags::LOAD | Flags::STORE))
+      found = true;
+  });
+  return found;
+}
+
 bool isSFU(Node *node) {
   auto partition = node->getPartition();
   auto flags = partition->getFlags();
@@ -415,8 +427,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
          return false;
        }
 
-       if (node_isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
-               edge.getFromNode())) {
+       if (node_isa<tt::DescriptorLoadLikeOpInterface>(edge.getFromNode())) {
          // require layouts to match for TMA load + alloc
          auto load = edge.getFromNode()->getOp();
          auto alloc = cast<ttg::LocalAllocOp>(edge.getToNode()->getOp());
@@ -447,7 +458,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        if (!isView(edge.getToNode())) {
          return false;
        }
-       auto from = getNodeFlags(edge.getFromNode());
        auto to = getNodeFlags(edge.getToNode());
        if (!(to & Flags::VIEW)) {
          return false;
@@ -472,7 +482,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
          return false;
        }
        auto from = getNodeFlags(edge.getFromNode());
-       auto to = getNodeFlags(edge.getToNode());
        if (!(from & Flags::VIEW)) {
          return false;
        }
@@ -502,7 +511,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
     {"for_op_iter_arg_token",
      [](Edge edge) {
        auto from = edge.getFromNode();
-       auto to = edge.getToNode();
        if (!isForIterArg(from))
          // skip if not from an iter arg
          return false;
@@ -564,7 +572,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
     {"tmem_load",
      [](Edge edge) {
        auto from = edge.getFromNode();
-       auto to = edge.getToNode();
        return node_isa<ttng::TMEMLoadOp>(from);
      }},
 
@@ -647,7 +654,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
     {"load_epilog",
      [](Edge edge) {
        auto from = edge.getFromNode();
-       auto to = edge.getToNode();
        if (!isLoad(from))
          return false;
 
@@ -990,7 +996,6 @@ void propagatePartitions(Graph *graph, std::string funcName,
     while (!nodes.empty()) {
       // try propagating partitions forward to nodes with no partition
       int start_size = nodes.size();
-      bool changed = false;
       for (auto node : nodes) {
         for (auto edge : node->getInEdges()) {
           if (!edge.getFromNode())
@@ -1444,7 +1449,14 @@ struct PartitionScheduling
     size_t idx = 0;
     for (auto op : ops) {
       analyze(idx, op);
-      cloneMultiPartitionDataOps(op);
+      if (hasPartition(op))
+        cloneMultiPartitionDataOps(op);
+      if (auto loop = dyn_cast<scf::ForOp>(op);
+          loop && loop->hasAttr(kPartitionStagesAttrName) &&
+          failed(verifyPartitionedLoop(loop))) {
+        signalPassFailure();
+        return;
+      }
       idx++;
     }
   }
@@ -1496,6 +1508,9 @@ private:
       for (auto &partition : graph->getPartitions())
         partition->dump();
     });
+
+    if (!hasEligibleMemoryOps(graph.get()))
+      return;
 
     serialize(idx, op, graph.get());
   }

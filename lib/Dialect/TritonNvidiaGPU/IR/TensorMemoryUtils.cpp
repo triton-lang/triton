@@ -117,7 +117,7 @@ int getContextualMaxNReg(Operation *op) {
 }
 
 FailureOr<TMemLdStEncodingInfo>
-lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
+lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth,
               std::function<InFlightDiagnostic()> emitError,
               bool unpacked = false) {
   // We will fill in the returned value recursively (if it exists)
@@ -126,8 +126,7 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
   auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
   if (!removeBroadcastSrc.isIdentity()) {
     auto prmtCvt = removeBroadcastSrc.apply(cvt);
-    auto info = lowerTMemLdSt(prmtCvt, maxnreg, bitwidth, isScales, emitError,
-                              unpacked);
+    auto info = lowerTMemLdSt(prmtCvt, maxnreg, bitwidth, emitError, unpacked);
     if (failed(info))
       return failure();
     info->broadcast = std::move(removeBroadcastSrc);
@@ -186,8 +185,7 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
     if (unpacked) {
       quot = LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth) * quot;
     }
-    auto info = lowerTMemLdSt(quot, maxnreg, newBitwidth, isScales, emitError,
-                              unpacked);
+    auto info = lowerTMemLdSt(quot, maxnreg, newBitwidth, emitError, unpacked);
     if (failed(info))
       return failure();
     if (bestContig > 1) {
@@ -236,19 +234,6 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
       auto row = reps.getBasis(kLane, 4, kRow);
       auto col = reps.getBasis(kLane, 4, kCol);
       secondHalfOffset = (row << 16) | col;
-      if (*secondHalfOffset == 0) {
-        // Workaround for ptxas bug, we cannot use secondHalfOffset = 0 to write
-        // only 16 elements. We use secondHalfOffset = 1 instead and we pad the
-        // allocation.
-        if (!isScales) {
-          if (emitError) {
-            emitError()
-                << "Only supported for scales as we pad the allocation.";
-          }
-          return failure();
-        }
-        secondHalfOffset = 1;
-      }
       // We "quotient it out", meaning we remove the last basis from reps
       auto basis = reps.getBases();
       basis[kLane][4] = {0, 0};
@@ -277,11 +262,23 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
                             std::function<InFlightDiagnostic()> emitError) {
   auto memLayout = toLinearLayout(memTy);
   auto regLayout = toLinearLayout(regTy);
-  auto cvt = regLayout.invertAndCompose(memLayout);
   auto *ctx = regTy.getContext();
   auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
+  auto kBlock = S("block");
   auto kWarp = S("warp");
   auto kRow = S("row");
+  auto cvt = regLayout.invertAndCompose(memLayout);
+  auto maybeSublayout = cvt.quotient({kBlock});
+  if (!maybeSublayout) {
+    if (emitError) {
+      emitError() << "The cga_layout of the register and memory layout must be "
+                     "the same. Got:\n"
+                  << regLayout.toString() << "\n"
+                  << memLayout.toString();
+    }
+    return failure();
+  }
+  cvt = maybeSublayout.value();
   // Warps 0-3 must map to row=32 and row=64 whether with broadcasting or not
   if (!(regLayout.getBasis(kWarp, 0) == memLayout.getBasis(kRow, 5) &&
         regLayout.getBasis(kWarp, 1) == memLayout.getBasis(kRow, 6))) {
@@ -301,9 +298,8 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   cvt = LinearLayout(std::move(bases), cvt.getOutDims(),
                      /*isSurjective=*/cvt.isSurjective());
 
-  bool isScales = isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding());
   int bitwidth = memTy.getElementTypeBitWidth();
-  return lowerTMemLdSt(cvt, maxnreg, bitwidth, isScales, emitError);
+  return lowerTMemLdSt(cvt, maxnreg, bitwidth, emitError);
 }
 
 } // namespace mlir::triton::nvidia_gpu

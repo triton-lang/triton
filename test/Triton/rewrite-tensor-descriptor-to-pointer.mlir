@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --triton-rewrite-tensor-descriptor-to-pointer --canonicalize --cse --split-input-file | FileCheck %s --implicit-check-not \!tt.tensordesc
+// RUN: triton-opt %s --triton-rewrite-tensor-descriptor-to-pointer --canonicalize --cse --mlir-print-debuginfo --split-input-file | FileCheck %s --implicit-check-not \!tt.tensordesc
 
 module {
   tt.func public @load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<128x128xf32>) {
@@ -7,8 +7,8 @@ module {
     %c0_i32 = arith.constant 0 : i32
     %c128_i32 = arith.constant 128 : i32
     %c256_i32 = arith.constant 256 : i32
-    %0 = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c1_i64, %c256_i64] {order = array<i32: 0>} : <f32>, <tensor<128x128xf32>>
-    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<tensor<128x128xf32>> -> tensor<128x128xf32>
+    %0 = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c1_i64, %c256_i64] {order = array<i32: 0>} : <f32>, <128x128xf32>
+    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
     tt.return %3 : tensor<128x128xf32>
   }
 }
@@ -62,8 +62,8 @@ module {
     %c0_i32 = arith.constant 0 : i32
     %c128_i32 = arith.constant 128 : i32
     %c256_i32 = arith.constant 256 : i32
-    %0 = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c1_i64, %c256_i64] {order = array<i32: 0>} : <f32>, <tensor<128x128xf32>>
-    tt.descriptor_store %0[%arg1, %arg2], %arg3 : !tt.tensordesc<tensor<128x128xf32>>, tensor<128x128xf32>
+    %0 = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c1_i64, %c256_i64] {order = array<i32: 0>} : <f32>, <128x128xf32>
+    tt.descriptor_store %0[%arg1, %arg2], %arg3 : !tt.tensordesc<128x128xf32>, tensor<128x128xf32>
     tt.return
   }
 }
@@ -109,29 +109,37 @@ module {
 
 // -----
 
+#loc2 = loc("rewrite-tensor-descriptor-to-pointer.mlir":147:28)
 module {
-  tt.func public @callee(%tensordesc: !tt.tensordesc<tensor<128x128xf32>>) -> !tt.tensordesc<tensor<128x128xf32>> {
-    tt.return %tensordesc : !tt.tensordesc<tensor<128x128xf32>>
+  tt.func public @callee(%tensordesc: !tt.tensordesc<128x128xf32> loc("tensordesc"(#loc2))) -> !tt.tensordesc<128x128xf32> {
+    tt.return %tensordesc : !tt.tensordesc<128x128xf32>
   }
 
   tt.func public @caller(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     %c1_i64 = arith.constant 1 : i64
     %c256_i32 = arith.constant 256 : i32
     %c256_i64 = arith.constant 256 : i64
-    %0 = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <f32>, <tensor<128x128xf32>>
-    %1 = tt.call @callee(%0) : (!tt.tensordesc<tensor<128x128xf32>>) -> !tt.tensordesc<tensor<128x128xf32>>
+    %0 = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <f32>, <128x128xf32>
+    %1 = tt.call @callee(%0) : (!tt.tensordesc<128x128xf32>) -> !tt.tensordesc<128x128xf32>
     tt.return
   }
 }
 
 // CHECK-LABEL: @callee
 // CHECK-SAME: %[[PTR:[^:]*]]
+// CHECK-SAME: loc("tensordesc"(#loc{{[^,]*}}))
 // CHECK-SAME: %[[SHAPE0:[^:]*]]
+// CHECK-SAME: loc("tensordesc.shape.0"(#loc{{[^,]*}}))
 // CHECK-SAME: %[[SHAPE1:[^:]*]]
+// CHECK-SAME: loc("tensordesc.shape.1"(#loc{{[^,]*}}))
 // CHECK-SAME: %[[STRIDE0:[^:]*]]
+// CHECK-SAME: loc("tensordesc.stride.0"(#loc{{[^,]*}}))
 // CHECK-SAME: %[[STRIDE1:[^:]*]]
+// CHECK-SAME: loc("tensordesc.stride.1"(#loc{{[^,]*}}))
 // CHECK-SAME: %[[PAD:[^:]*]]
+// CHECK-SAME: loc("tensordesc.padding"(#loc{{[^,]*}}))
 // CHECK-SAME: %[[ROUND:[^:]*]]
+// CHECK-SAME: loc("tensordesc.roundF32ToTF32"(#loc{{[^,]*}}))
 // CHECK-NEXT: tt.return %[[PTR]], %[[SHAPE0]], %[[SHAPE1]], %[[STRIDE0]], %[[STRIDE1]], %[[PAD]], %[[ROUND]]
 
 // CHECK-LABEL: @caller
@@ -144,10 +152,10 @@ module {
 // -----
 
 module {
-  tt.func public @arg_attr(%arg0: !tt.tensordesc<tensor<128x128xf32>>, %arg1: i32 {tt.divisibility = 16 : i32}) {
+  tt.func public @arg_attr(%arg0: !tt.tensordesc<128x128xf32>, %arg1: i32 {tt.divisibility = 16 : i32}) {
     tt.return
   }
 }
 
 // CHECK-LABEL: @arg_attr
-// CHECK-SAME: %arg7: i32 {tt.divisibility = 16 : i32}) {
+// CHECK-SAME: %arg7: i32 {tt.divisibility = 16 : i32} loc({{.*}})) {

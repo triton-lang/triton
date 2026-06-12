@@ -35,8 +35,10 @@ const CircularLayoutParserConfig &CircularLayoutParser::getConfig() const {
   return static_cast<const CircularLayoutParserConfig &>(config);
 }
 
-void CircularLayoutParser::parseMetadata() {
+bool CircularLayoutParser::parseMetadata() {
   uint32_t preamble = decoder.decode<I32Entry>()->value;
+  if (preamble == 0)
+    return false;
   if (preamble != kPreamble)
     throw PreambleException("Invalid preamble");
   auto &bt = result->blockTraces.emplace_back();
@@ -72,6 +74,7 @@ void CircularLayoutParser::parseMetadata() {
     trace.uid = uid;
     trace.count = count;
   }
+  return true;
 }
 
 void CircularLayoutParser::parseProfileEvents() {
@@ -91,7 +94,6 @@ void CircularLayoutParser::parseProfileEvents() {
 void CircularLayoutParser::parseSegment(
     int segmentByteSize, CircularLayoutParserResult::Trace &trace) {
 
-  auto state = ParseState::INIT;
   int idealSize = trace.count * kWordSize;
   int byteSize = std::min(idealSize, segmentByteSize);
   const int maxNumEntries = byteSize / (kWordSize * kWordsPerEntry);
@@ -143,8 +145,9 @@ void CircularLayoutParser::parseSegment(
 
 void CircularLayoutParser::parseBlock() {
   try {
-    parseMetadata();
-    parseProfileEvents();
+    if (parseMetadata()) {
+      parseProfileEvents();
+    } // else skip this block since it's not profiled
   } catch (const PreambleException &e) {
     reportException(e, buffer.position());
   }
@@ -196,7 +199,7 @@ proton::readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift) {
   assert(version == 1 && "Version mismatch");
   buffer.skip(8);
   uint32_t payloadOffset = decoder.decode<I32Entry>()->value;
-  uint32_t payloadSize = decoder.decode<I32Entry>()->value;
+  [[maybe_unused]] uint32_t payloadSize = decoder.decode<I32Entry>()->value;
   uint32_t device = decoder.decode<I32Entry>()->value;
   config.device = decodeDevice(device);
   config.numBlocks = decoder.decode<I32Entry>()->value;

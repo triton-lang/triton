@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx1250 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 8, order = [1, 0]}>
@@ -81,7 +81,7 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: async_load_multicast_to_half_ctas
   tt.func public @async_load_multicast_to_half_ctas(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
                                 %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
-    // CHECK: %[[CTA_ID:.*]] = {{.*}}llvm.amdgcn.cluster.workgroup.id.x
+    // CHECK: %[[CTA_ID:.*]] = rocdl.cluster.workgroup.id.x
     // CHECK: %[[NON_FREE_BITS:.*]] = llvm.mlir.constant(-7 : i32) : i32
     // CHECK: %[[SHIFT_AMOUNT:.*]] = llvm.and %[[CTA_ID]], %[[NON_FREE_BITS]]
     // CHECK: %[[GROUP_MASK:.*]] = llvm.mlir.constant(85 : i32) : i32
@@ -103,7 +103,7 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, ttg.sha
   tt.func public @async_load_multicast_group_of_2_strided_by_8(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
                                 %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
     // Skip the first cluster id because it's emitted for address calculation
-    // CHECK: %[[CTA_ID:.*]] = {{.*}}llvm.amdgcn.cluster.workgroup.id.x
+    // CHECK: %[[CTA_ID:.*]] = rocdl.cluster.workgroup.id.x
     // CHECK: %[[NON_FREE_BITS:.*]] = llvm.mlir.constant(-9 : i32) : i32
     // CHECK: %[[SHIFT_AMOUNT:.*]] = llvm.and %[[CTA_ID]], %[[NON_FREE_BITS]]
     // CHECK: %[[GROUP_MASK:.*]] = llvm.mlir.constant(257 : i32) : i32
@@ -144,7 +144,7 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, ttg.sha
   tt.func public @async_load_multi_cta_linear_layout(%arg0: tensor<32x32x!tt.ptr<f32>, #linear> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
                                 %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
     // Skip the first cluster id because it's emitted for address calculation
-    // CHECK: %[[CTA_ID:.*]] = {{.*}}llvm.amdgcn.cluster.workgroup.id.x
+    // CHECK: %[[CTA_ID:.*]] = rocdl.cluster.workgroup.id.x
     // CHECK: %[[NON_FREE_BITS:.*]] = llvm.mlir.constant(-9 : i32) : i32
     // CHECK: %[[SHIFT_AMOUNT:.*]] = llvm.and %[[CTA_ID]], %[[NON_FREE_BITS]]
     // CHECK: %[[GROUP_MASK:.*]] = llvm.mlir.constant(257 : i32) : i32
@@ -275,3 +275,70 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: async_copy_masking
+  tt.func public @async_copy_masking(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                %arg1: i32 {tt.divisibility = 16 : i32},
+                                %arg2: !ttg.memdesc<4x32xf32, #shared, #smem, mutable>,
+                                %arg3: i32 {tt.divisibility = 16 : i32}) {
+    // We need the splat to allow the AxisAnalysis to work during lowering
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<4x32xf32, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c31_i32 = arith.constant 31 : i32
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<4x32x!tt.ptr<f32>, #blocked>
+    %29 = arith.addi %arg3, %c31_i32 : i32
+    %30 = arith.divsi %29, %c32_i32 : i32
+    %31 = arith.cmpi sgt, %30, %c0_i32 : i32
+
+    %51 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %52 = tt.expand_dims %51 {axis = 1 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<4x1xi32, #blocked>
+    %65 = tt.splat %arg3 : i32 -> tensor<4x1xi32, #blocked>
+    %66 = arith.cmpi slt, %52, %65 : tensor<4x1xi32, #blocked>
+    %67 = tt.broadcast %66 : tensor<4x1xi1, #blocked> -> tensor<4x32xi1, #blocked>
+
+    %70 = tt.splat %31 : i1 -> tensor<4x32xi1, #blocked>
+    %71 = arith.andi %70, %67 : tensor<4x32xi1, #blocked>
+
+    // CHECK: %[[NEG1:.*]] = llvm.mlir.constant(2147483647 : i32)
+    // CHECK-NEXT: %[[OOB_LDS:.*]] = llvm.inttoptr %[[NEG1]] :
+    // CHECK-NEXT: %[[LDS_PTR:.*]] = llvm.select %{{.*}}, %{{.*}}, %[[OOB_LDS]]
+    // CHECK-NEXT: rocdl.global.load.async.to.lds{{.*}} %{{.*}}, %[[LDS_PTR]],
+
+    // CHECK: %[[INV_MASK:.*]] = llvm.icmp "ne" %{{.*}}, %{{.*}} : i1
+    // CHECK: %[[OTHER_NEG1:.*]] = llvm.mlir.constant(2147483647 : i32)
+    // CHECK-NEXT: %[[OTHER_OOB_LDS:.*]] = llvm.inttoptr %[[OTHER_NEG1]] :
+    // CHECK-NEXT: %[[OTHER_LDS_PTR:.*]] = llvm.select %[[INV_MASK]], %{{.*}}, %[[OTHER_OOB_LDS]]
+    // CHECK: llvm.store %{{.*}}, %[[OTHER_LDS_PTR]]
+    %2 = ttg.async_copy_global_to_local %1, %arg2 mask %67 other %cst_0 : tensor<4x32x!tt.ptr<f32>, #blocked> -> <4x32xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Test async_copy_local_to_global with 16-bit data type.
+// On gfx1250, 16-bit stores are not directly supported, so they should be split into two 8-bit stores.
+// sizePerThread = [1] with f16 (16-bit) should generate two b8 stores per element.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {ttg.target = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 2048 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: async_copy_local_to_global_16bit_split
+  tt.func public @async_copy_local_to_global_16bit_split(%dst: tensor<128x!tt.ptr<f16>, #blocked>,
+                                                          %smem: !ttg.memdesc<128xf16, #shared, #smem, mutable>) {
+    // Each thread stores 1 element (16 bits), split into 2 x 8-bit stores
+    // CHECK-COUNT-2: llvm.amdgcn.global.store.async.from.lds.b8
+    // CHECK-NOT: llvm.amdgcn.global.store.async.from.lds
+    %0 = amdg.async_copy_local_to_global %smem, %dst : !ttg.memdesc<128xf16, #shared, #smem, mutable> -> tensor<128x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----

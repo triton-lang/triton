@@ -1,6 +1,7 @@
 #ifndef TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_TYPECONVERTER_H
 #define TRITON_CONVERSION_TRITONAMDGPU_TO_LLVM_TYPECONVERTER_H
 
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
@@ -26,15 +27,13 @@ public:
 
   Type convertTensorDescType(triton::TensorDescType type) {
     auto ctx = type.getContext();
-    auto blockType = type.getBlockType();
-    auto shape = blockType.getShape();
+    int numDwords = amdgpu::getTensorDescNumDwords(type);
 
-    // Determine the number of dwords based on tensor dimensions
-    // 2D tensors: group0 (4) + group1 (8) = 12 dwords
-    // 3D-5D tensors: group0 (4) + group1 (8) + group2 (4) + group3 (4) = 20
-    // dwords
-    int numDwords = (shape.size() > 2) ? (4 + 8 + 4 + 4) : (4 + 8);
-
+    // Keep the MLIR-visible descriptor type as a flat `{i32 × N}` struct so
+    // that its in-memory ABI matches the host-side `TDMDescriptor` layout in
+    // third_party/amd/backend/driver.c (N consecutive uint32_t).  Inside the
+    // lowering we pack these scalars into vector groups (<4 × i32>,
+    // <8 × i32>) for cleaner intra-function code.
     auto types = SmallVector<Type>(numDwords, IntegerType::get(ctx, 32));
     return LLVM::LLVMStructType::getLiteral(ctx, types);
   }

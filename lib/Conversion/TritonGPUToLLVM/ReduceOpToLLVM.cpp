@@ -13,6 +13,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -79,7 +80,7 @@ public:
 
       // Emit a barrier if we are reusing the shmem
       if (i > 0) {
-        sync(rewriter, loc, lastCvtCrossesCTAs);
+        sync(rewriter, loc, lastCvtCrossesCTAs, op);
       }
       accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs);
       lastCvtCrossesCTAs = !mlir::isCvtDimSync(regLl, tmpLl, kBlock);
@@ -99,7 +100,7 @@ public:
       auto outputLayout = triton::gpu::toLinearLayout(resultTy);
       if (regLl != outputLayout) {
         // Reuse the shmem
-        sync(rewriter, loc, lastCvtCrossesCTAs);
+        sync(rewriter, loc, lastCvtCrossesCTAs, op);
         accs =
             convertLayoutValues(loc, rewriter, op, regLl, outputLayout, accs);
       }
@@ -112,18 +113,28 @@ public:
 private:
   const TargetInfoBase &targetInfo;
 
-  SmallVector<Value>
-  treeReduceBinary(Location loc, ConversionPatternRewriter &rewriter,
-                   Region &combineOp,
-                   SmallVector<SmallVector<Value>> values) const {
-    // The number of elements is always a power of two
-    assert(llvm::isPowerOf2_64(values.size()) && !values.empty());
+  // Reduce values using a tree of the given arity. Arity=3 generates
+  // combine(combine(a, b), c) groups that LLVM folds into ternary
+  // instructions (e.g. v_maximum3_f32 on AMD).
+  SmallVector<Value> treeReduce(Location loc,
+                                ConversionPatternRewriter &rewriter,
+                                Region &combineOp,
+                                SmallVector<SmallVector<Value>> values,
+                                unsigned arity) const {
+    assert(!values.empty() && arity >= 2);
     while (values.size() > 1) {
       SmallVector<SmallVector<Value>> next;
-      for (size_t i = 0; i + 1 < values.size(); i += 2) {
-        SmallVector<Value> acc = values[i];
-        accumulate(loc, rewriter, combineOp, acc, values[i + 1]);
-        next.push_back(std::move(acc));
+      for (size_t i = 0; i < values.size(); i += arity) {
+        size_t remaining = values.size() - i;
+        size_t groupSize = std::min(static_cast<size_t>(arity), remaining);
+        if (groupSize == 1) {
+          next.push_back(std::move(values[i]));
+        } else {
+          SmallVector<Value> acc = std::move(values[i]);
+          for (size_t j = 1; j < groupSize; ++j)
+            accumulate(loc, rewriter, combineOp, acc, values[i + j]);
+          next.push_back(std::move(acc));
+        }
       }
       values = std::move(next);
     }
@@ -153,10 +164,10 @@ private:
     return srcValues;
   }
 
-  void sync(ConversionPatternRewriter &rewriter, Location loc,
-            bool crossCTA) const {
+  void sync(ConversionPatternRewriter &rewriter, Location loc, bool crossCTA,
+            Operation *sourceOp) const {
     if (crossCTA) {
-      targetInfo.clusterBarrier(loc, rewriter);
+      targetInfo.clusterBarrier(loc, rewriter, sourceOp);
     } else {
       targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
     }
@@ -271,6 +282,9 @@ private:
     Region &combineRegion =
         vectorCombineRegion ? *vectorCombineRegion : op.getCombineOp();
 
+    Operation &combinerOp = combineRegion.front().front();
+    unsigned arity = targetInfo.getReductionTreeArity(&combinerOp);
+
     // Perform a tree reduction
     unsigned numOperands = accs.size();
     SmallVector<SmallVector<Value>> reduced(numOperands);
@@ -286,7 +300,7 @@ private:
         vals.push_back(std::move(cur));
       }
       auto acc =
-          treeReduceBinary(loc, rewriter, combineRegion, std::move(vals));
+          treeReduce(loc, rewriter, combineRegion, std::move(vals), arity);
       for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
         reduced[opIdx].push_back(acc[opIdx]);
       }
@@ -420,6 +434,7 @@ private:
               .getResult(0);
       auto cvt =
           triton::gpu::ConvertLayoutOp::create(rewriter, loc, dstTy, srcTensor);
+      triton::nvidia_gpu::copyClusterBarrierMbarOffset(op, cvt);
       cvt->setAttr("allocation.offset",
                    IntegerAttr::get(offsetTy, baseOffset + smemBaseOffsets[i]));
       Type packedDstTy = getTypeConverter()->convertType(dstTy);
@@ -461,12 +476,17 @@ private:
     });
     SmallVector<int64_t> offsets(op.getNumOperands());
     int64_t offset = 0;
+    int numBanks = targetInfo.getSharedMemoryBanks();
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       unsigned idx = indices[i];
       offsets[idx] = offset;
       auto inputTy = op.getInputTypes()[idx];
+      auto vecBitwidth = triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout,
+                                                         getBitwidth(inputTy));
+      auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
       auto bytes = getNumScratchElemsSwizzledCvt(srcLayout, dstLayout,
-                                                 getBitwidth(inputTy)) *
+                                                 getBitwidth(inputTy), numBanks,
+                                                 srcTile, dstTile) *
                    (getBitwidth(inputTy) / 8);
       offset += bytes;
     }

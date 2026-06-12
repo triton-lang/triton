@@ -1,3 +1,4 @@
+#include "PartitionAttrs.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
@@ -23,6 +24,25 @@ namespace mlir::triton::gpu {
 } // namespace mlir::triton::gpu
 
 namespace {
+struct VerifyWarpSpecializationPartitions
+    : PassWrapper<VerifyWarpSpecializationPartitions, OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      VerifyWarpSpecializationPartitions)
+
+  void runOnOperation() override {
+    WalkResult result = getOperation().walk([&](scf::ForOp loop) {
+      if (!loop->hasAttr(kPartitionStagesAttrName))
+        return WalkResult::advance();
+      if (failed(verifyPartitionedLoop(loop))) {
+        signalPassFailure();
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    (void)result;
+  }
+};
+
 struct AutomaticWarpSpecialization
     : triton::gpu::impl::TritonGPUAutomaticWarpSpecializationBase<
           AutomaticWarpSpecialization> {
@@ -57,20 +77,38 @@ void multiBufferTMADescriptors(ModuleOp mod, int numStages) {
   }
 }
 
+void clearInternalWarpSpecializationAttrs(ModuleOp mod) {
+  mod.walk([](Operation *op) {
+    op->removeAttr(kPartitionAttrName);
+    op->removeAttr(kPartitionOutputsAttrName);
+    op->removeAttr(kPartitionStagesAttrName);
+    op->removeAttr(kWarpSpecializeTagAttrName);
+  });
+}
+
+std::unique_ptr<Pass> createVerifyWarpSpecializationPartitionsPass() {
+  return std::make_unique<VerifyWarpSpecializationPartitions>();
+}
+
 } // namespace
 
 void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
-  pm.addPass(createTritonGPUPartitionScheduling());
-  pm.addPass(createNVWSHoistTmemStore());
-  pm.addPass(createNVWSInsertAref());
-  pm.addPass(createNVWSInsertTmemAref());
+  auto addPassWithPartitionVerifier = [&](std::unique_ptr<Pass> pass) {
+    pm.addPass(std::move(pass));
+    pm.addPass(createVerifyWarpSpecializationPartitionsPass());
+  };
+
+  addPassWithPartitionVerifier(createTritonGPUPartitionScheduling());
+  addPassWithPartitionVerifier(createNVWSHoistTmemStore());
+  addPassWithPartitionVerifier(createNVWSInsertAref());
+  addPassWithPartitionVerifier(createNVWSInsertTmemAref());
   // `int-range-optimizations` and SCCP are good at cleaning up loop arithmetic.
   // FIXME: Re-enable integer range analysis once it is fixed.
   // pm.addPass(arith::createIntRangeOptimizationsPass());
-  pm.addPass(createSCCPPass());
-  pm.addPass(createCSEPass());
-  pm.addPass(createNVWSLowerAref({numStages}));
+  addPassWithPartitionVerifier(createSCCPPass());
+  addPassWithPartitionVerifier(createCSEPass());
+  addPassWithPartitionVerifier(createNVWSLowerAref({numStages}));
   pm.addPass(createTritonGPUPartitionLoops());
   pm.addPass(createNVWSLowerWarpGroup());
   pm.addPass(createTritonGPUScheduleLoops());
@@ -80,4 +118,5 @@ void AutomaticWarpSpecialization::runOnOperation() {
   // Multi-buffer TMA descriptors. We cannot rely on SWP to do it, to support
   // desc updates in nested loops.
   multiBufferTMADescriptors(getOperation(), numStages);
+  clearInternalWarpSpecializationAttrs(getOperation());
 }

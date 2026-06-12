@@ -75,7 +75,7 @@ def test_cacheable(device, fresh_triton_cache, monkeypatch):
     for line in ttir.split("\n"):
         if loc and loc in line:
             assert "test_specialize.py" in line
-            assert ":18" in line
+            assert ":18:5" in line
         if "store" in line:
             loc = line.split("(", 1)[1].split(")", 1)[0]
     assert loc is not None, f"Expected to find a store instruction with location info, got: {ttir}"

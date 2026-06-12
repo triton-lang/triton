@@ -65,6 +65,8 @@ LogicalResult lowerLdStMatrix(
 Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
                              uint16_t broadcastBits);
 
+uint32_t getCGABroadcastMask(mlir::triton::gpu::MemDescType barrierTy);
+
 // Returns the lead CTA predicate for this barrier layout when lowering through
 // cluster scope. Returns std::nullopt for CTA-local lowering.
 std::optional<Value>
@@ -76,6 +78,9 @@ getLeaderCTAPredicate(Location loc, ConversionPatternRewriter &rewriter,
 Value getLeaderAddress(Location loc, ConversionPatternRewriter &rewriter,
                        Value barrierPtr,
                        mlir::triton::gpu::MemDescType barrierTy);
+
+/// Create a predicate where only the lead CTA is active for two CTA mode.
+Value createLeadCTAPredicate(Location loc, RewriterBase &rewriter);
 } // namespace NVIDIA
 } // namespace LLVM
 

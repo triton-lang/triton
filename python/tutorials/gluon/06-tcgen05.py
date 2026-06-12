@@ -1,5 +1,5 @@
 """
-The 5th Generation TensorCore^TM
+The 5th Generation TensorCore{sup}`TM`
 ================================
 
 This tutorial covers the APIs for interacting with Tensor Cores on Blackwell
@@ -23,7 +23,6 @@ from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
-    get_tmem_reg_layout,
     tma,
     mbarrier,
     tcgen05_mma,
@@ -77,6 +76,7 @@ if __name__ == "__main__" and not is_blackwell():
 #     block=(blockM, blockN),
 #     unpacked=True,
 # )
+# ```
 #
 # The tensor is divided into (blockM, blockN) blocks, where blockM must be 64
 # or 128. blockN must be a power of 2 between [1, 256]. For dtypes smaller than
@@ -116,17 +116,12 @@ def tmem_example_kernel(in_ptr, out_ptr, M: gl.constexpr, N: gl.constexpr, num_w
         layout=tmem_layout,
     )
 
-    # Get the register layout needed to access the tensor memory using a helper.
-    tmem_reg_layout: gl.constexpr = get_tmem_reg_layout(
-        in_ptr.dtype.element_ty,
-        (M, N),
-        tmem_layout,
-        num_warps=num_warps,
-    )
+    # Get the register layout needed to access the tensor memory from the descriptor.
+    tmem_reg_layout: gl.constexpr = tmem.get_reg_layout()
 
     input = gl.convert_layout(input, tmem_reg_layout)
     tmem.store(input)
-    output = tmem.load(tmem_reg_layout)
+    output = tmem.load()
     output = gl.convert_layout(output, global_memory_layout)
 
     gl.store(out_ptr + offs, output)
@@ -164,9 +159,9 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
 
     mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + c_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)
-    tma.async_copy_global_to_shared(b_desc, [0, 0], bar, b_smem)
-    tma.async_copy_global_to_shared(c_desc, [0, 0], bar, c_smem)
+    tma.async_load(a_desc, [0, 0], bar, a_smem)
+    tma.async_load(b_desc, [0, 0], bar, b_smem)
+    tma.async_load(c_desc, [0, 0], bar, c_smem)
     mbarrier.wait(bar, phase=0)
 
     # Re-using an mbarrier for TMAs and tcgen05_mma can lead to undefined
@@ -184,33 +179,23 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     # Copy operands into TMEM.
     # TODO: Use `tcgen05.cp` when it is exposed in Gluon.
     acc_tmem_layout: gl.constexpr = TensorMemoryLayout(
-        tmem_block.value,
+        tmem_block,
         col_stride=32 // d_desc.dtype.primitive_bitwidth,
     )
     acc_tmem = allocate_tensor_memory(d_desc.dtype, [M, N], acc_tmem_layout)
-    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(
-        d_desc.dtype,
-        (M, N),
-        acc_tmem_layout,
-        num_warps,
-    )
+    acc_reg_layout: gl.constexpr = acc_tmem.get_reg_layout()
     acc = c_smem.load(acc_reg_layout)
     acc_tmem.store(acc)
 
     if LHS_IN_TMEM:
         # When the LHS operand is fp16 or fp8, it is packed in TMEM.
         lhs_tmem_layout: gl.constexpr = TensorMemoryLayout(
-            tmem_block.value,
+            tmem_block,
             col_stride=1,
         )
         lhs_tmem = allocate_tensor_memory(a_desc.dtype, [M, K], lhs_tmem_layout)
 
-        lhs_reg_layout: gl.constexpr = get_tmem_reg_layout(
-            a_desc.dtype,
-            (M, K),
-            lhs_tmem_layout,
-            num_warps,
-        )
+        lhs_reg_layout: gl.constexpr = lhs_tmem.get_reg_layout()
         lhs = a_smem.load(lhs_reg_layout)
         lhs_tmem.store(lhs)
         a = lhs_tmem
@@ -261,7 +246,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     # way to zero the accumulator.
 
     d_smem = gl.allocate_shared_memory(d_desc.dtype, d_desc.block_type.shape, d_desc.layout)
-    acc = acc_tmem.load(acc_reg_layout)
+    acc = acc_tmem.load()
     d_smem.store(acc)
     fence_async_shared()
     tma.async_copy_shared_to_global(d_desc, [0, 0], d_smem)
@@ -339,8 +324,8 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc, TRANSPOSE_B: gl.constexpr, num
     use_acc = False
     for k in range(0, K, BLOCK_K):
         mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar, b_smem)
+        tma.async_load(a_desc, [off_m, k], tma_bar, a_smem)
+        tma.async_load(b_desc, [off_n, k] if TRANSPOSE_B else [k, off_n], tma_bar, b_smem)
         mbarrier.wait(tma_bar, phase=phase)
 
         # We can transpose B by creating a transposed view over tile of B in
@@ -362,13 +347,7 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc, TRANSPOSE_B: gl.constexpr, num
     mbarrier.invalidate(tma_bar)
     mbarrier.invalidate(mma_bar)
 
-    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(
-        gl.float32,
-        (BLOCK_M, BLOCK_N),
-        tmem_layout,
-        num_warps,
-    )
-    acc = acc_tmem.load(acc_reg_layout)
+    acc = acc_tmem.load()
 
     # Downcast accumulator and store tile of C.
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
@@ -537,24 +516,24 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     load_index, load_phase, load_counter = get_and_increment(load_counter)
     load_ub_bar = load_ub_bars.index(load_index)
     mbarrier.expect(load_ub_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
-    tma.async_copy_global_to_shared(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
+    tma.async_load(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
+    tma.async_load(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
     # V1
     load_v_bar = load_v_bars.index(load_index)
     mbarrier.expect(load_v_bar, a_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
+    tma.async_load(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
     k += BLOCK_K
 
     # U2, B2
     load_index, load_phase, load_counter = get_and_increment(load_counter)
     load_ub_bar = load_ub_bars.index(load_index)
     mbarrier.expect(load_ub_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
-    tma.async_copy_global_to_shared(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
+    tma.async_load(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
+    tma.async_load(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
     # V2
     load_v_bar = load_v_bars.index(load_index)
     mbarrier.expect(load_v_bar, a_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
+    tma.async_load(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
     k += BLOCK_K
 
     for _ in range(gl.cdiv(K, BLOCK_K) - 2):
@@ -575,22 +554,15 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
         mbarrier.wait(mma_ub_bars.index(mma_index), mma_phase)
         load_ub_bar = load_ub_bars.index(load_index)
         mbarrier.expect(load_ub_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
+        tma.async_load(a_desc, [off_m, k], load_ub_bar, u_bufs.index(load_index))
 
         # wait VBi, B(i+2), V(i+2)
         mbarrier.wait(mma_vb_bars.index(mma_index), mma_phase)
-        tma.async_copy_global_to_shared(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
+        tma.async_load(b_desc, [k, off_n], load_ub_bar, b_bufs.index(load_index))
         load_v_bar = load_v_bars.index(load_index)
         mbarrier.expect(load_v_bar, a_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
+        tma.async_load(a_desc, [off_m + BLOCK_M, k], load_v_bar, v_bufs.index(load_index))
         k += BLOCK_K
-
-    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(
-        gl.float32,
-        (BLOCK_M, BLOCK_N),
-        tmem_layout,
-        num_warps,
-    )
 
     mma_index, mma_phase, mma_counter = get_and_increment(mma_counter)
     ub_bar = mma_ub_bars.index(mma_index)
@@ -617,14 +589,14 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     # Wait UBN, UB epilogue
     mbarrier.wait(ub_bar, epilogue_phase)
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
-    ub = ub_tmem.load(acc_reg_layout)
+    ub = ub_tmem.load()
     c_smem.store(ub.to(dtype))
     fence_async_shared()
     tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
 
     # Wait VBN, VB epilogue
     mbarrier.wait(vb_bar, epilogue_phase)
-    vb = vb_tmem.load(acc_reg_layout)
+    vb = vb_tmem.load()
     tma.store_wait(pendings=0)
     c_smem.store(vb.to(dtype))
     fence_async_shared()

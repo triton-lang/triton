@@ -163,7 +163,6 @@ LinearLayout::LinearLayout(BasesT bases,
 
 std::optional<std::string>
 LinearLayout::checkInvariants(bool requireSurjective) {
-  LDBG("checkInvariants: " << toString());
   // Check that basis values are non-negative.
   for (const auto &[inDim, inDimBases] : bases) {
     for (const auto &basis : inDimBases) {
@@ -1062,9 +1061,11 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   // this dimension.
   SmallVector<StringAttr> identityDims;
   for (auto dim : A.getInDimNames()) {
-    if (B.hasInDim(dim) &&
-        A.sublayout(dim, outDims) == B.sublayout(dim, outDims)) {
-      identityDims.push_back(dim);
+    if (B.hasInDim(dim)) {
+      auto aSub = A.sublayout(dim, outDims);
+      auto bSub = B.sublayout(dim, outDims);
+      if (aSub.equalIgnoringOutDimSizes(bSub))
+        identityDims.push_back(dim);
     }
   }
   SmallVector<StringAttr> ANonIdentityInDims;
@@ -1117,7 +1118,7 @@ LinearLayout LinearLayout::pseudoinvert() const {
   return identity.invertAndCompose(*this);
 }
 
-LinearLayout LinearLayout::unsqueezeIn(StringAttr dim) const {
+LinearLayout LinearLayout::squeezeIns(StringAttr dim) const {
   assert(getInDimSize(dim) == 1);
   SmallVector<std::pair<StringAttr, int32_t>> newInDims;
   for (auto inDim : getInDimNames()) {
@@ -1128,7 +1129,7 @@ LinearLayout LinearLayout::unsqueezeIn(StringAttr dim) const {
   return reshapeIns(newInDims);
 }
 
-LinearLayout LinearLayout::unsqueezeOut(StringAttr dim) const {
+LinearLayout LinearLayout::squeezeOuts(StringAttr dim) const {
   assert(getOutDimSize(dim) == 1);
   SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
   for (auto [outDim, outDimSize] : getOutDims()) {
@@ -1136,7 +1137,7 @@ LinearLayout LinearLayout::unsqueezeOut(StringAttr dim) const {
       newOutDims.push_back({outDim, outDimSize});
     }
   }
-  return LinearLayout(bases, newOutDims, isSurjective());
+  return reshapeOuts(newOutDims);
 }
 
 llvm::MapVector<StringAttr, int32_t>

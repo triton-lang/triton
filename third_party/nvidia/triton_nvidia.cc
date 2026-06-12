@@ -11,12 +11,119 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/IR/Constants.h"
+#include <dlfcn.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
 namespace py = pybind11;
 namespace ttng = mlir::triton::nvidia_gpu;
+
+namespace {
+
+using CUresult = int;
+using CUdeviceptr = unsigned long long;
+
+constexpr CUresult CUDA_SUCCESS = 0;
+
+class CudaExampleUtils {
+private:
+  using cuMemAlloc_t = CUresult (*)(CUdeviceptr *, size_t);
+  using cuMemFree_t = CUresult (*)(CUdeviceptr);
+  using cuMemcpyHtoD_t = CUresult (*)(CUdeviceptr, const void *, size_t);
+  using cuMemcpyDtoH_t = CUresult (*)(void *, CUdeviceptr, size_t);
+  using cuCtxSynchronize_t = CUresult (*)();
+  using cuGetErrorString_t = CUresult (*)(CUresult, const char **);
+
+  void *dylibHandle = nullptr;
+  cuMemAlloc_t cuMemAlloc = nullptr;
+  cuMemFree_t cuMemFree = nullptr;
+  cuMemcpyHtoD_t cuMemcpyHtoD = nullptr;
+  cuMemcpyDtoH_t cuMemcpyDtoH = nullptr;
+  cuCtxSynchronize_t cuCtxSynchronize = nullptr;
+  cuGetErrorString_t cuGetErrorString = nullptr;
+
+  template <typename T> T loadSymbol(const char *name) {
+    dlerror();
+    auto *symbol = dlsym(dylibHandle, name);
+    if (const char *error = dlerror()) {
+      throw std::runtime_error(
+          "Could not load CUDA driver symbol `" + std::string(name) +
+          "`. Initialize the NVIDIA runtime before using this helper: " +
+          std::string(error));
+    }
+    return reinterpret_cast<T>(symbol);
+  }
+
+  void check(CUresult status, const char *call) {
+    if (status == CUDA_SUCCESS) {
+      return;
+    }
+    const char *error = nullptr;
+    if (cuGetErrorString) {
+      cuGetErrorString(status, &error);
+    }
+    throw std::runtime_error(
+        "Triton Error [CUDA]: " + std::string(call) + " failed: " +
+        (error ? std::string(error) : std::string("Unknown error")));
+  }
+
+public:
+  static CudaExampleUtils &get() {
+    static CudaExampleUtils instance;
+    return instance;
+  }
+
+  CudaExampleUtils() {
+    dylibHandle = dlopen("libcuda.so.1", RTLD_NOLOAD | RTLD_LAZY);
+    if (dylibHandle == nullptr) {
+      throw std::runtime_error(
+          "Could not find an already-loaded `libcuda.so.1`. Initialize "
+          "Triton's NVIDIA runtime before using this helper.");
+    }
+    cuMemAlloc = loadSymbol<cuMemAlloc_t>("cuMemAlloc_v2");
+    cuMemFree = loadSymbol<cuMemFree_t>("cuMemFree_v2");
+    cuMemcpyHtoD = loadSymbol<cuMemcpyHtoD_t>("cuMemcpyHtoD_v2");
+    cuMemcpyDtoH = loadSymbol<cuMemcpyDtoH_t>("cuMemcpyDtoH_v2");
+    cuCtxSynchronize = loadSymbol<cuCtxSynchronize_t>("cuCtxSynchronize");
+    cuGetErrorString = loadSymbol<cuGetErrorString_t>("cuGetErrorString");
+  }
+
+  ~CudaExampleUtils() {
+    if (dylibHandle) {
+      dlclose(dylibHandle);
+    }
+  }
+
+  uint64_t deviceMalloc(size_t size) {
+    CUdeviceptr ptr = 0;
+    check(cuMemAlloc(&ptr, size), "cuMemAlloc");
+    return ptr;
+  }
+
+  void deviceFree(uint64_t ptr) {
+    if (ptr == 0) {
+      return;
+    }
+    check(cuMemFree(static_cast<CUdeviceptr>(ptr)), "cuMemFree");
+  }
+
+  void copyHostToDevice(uint64_t dst, const py::bytes &src) {
+    std::string payload = src;
+    check(cuMemcpyHtoD(static_cast<CUdeviceptr>(dst), payload.data(),
+                       payload.size()),
+          "cuMemcpyHtoD");
+  }
+
+  py::bytes copyDeviceToHost(uint64_t src, size_t size) {
+    std::string payload(size, '\0');
+    check(cuMemcpyDtoH(payload.data(), static_cast<CUdeviceptr>(src), size),
+          "cuMemcpyDtoH");
+    return py::bytes(payload);
+  }
+
+  void synchronize() { check(cuCtxSynchronize(), "cuCtxSynchronize"); }
+};
 
 void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
@@ -28,24 +135,34 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
               capability, ptxVersion));
         });
   m.def("add_to_llvmir",
-        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion) {
+        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion,
+           bool enableConcurrencySanitizer) {
           pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
-              capability, ptxVersion));
+              capability, ptxVersion, enableConcurrencySanitizer));
         });
 }
 
-static std::unique_ptr<mlir::Pass>
+std::unique_ptr<mlir::Pass>
 createTritonGPUFenceInsertionWrapper(int32_t capability) {
   ttng::TritonGPUFenceInsertionOptions options;
   options.computeCapability = capability;
   return ttng::createTritonGPUFenceInsertion(options);
 }
 
-static std::unique_ptr<mlir::Pass>
+std::unique_ptr<mlir::Pass>
 createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
   ttng::TritonGPUProxyFenceInsertionOptions options;
   options.computeCapability = capability;
   return ttng::createTritonGPUProxyFenceInsertion(options);
+}
+
+std::unique_ptr<mlir::Pass>
+createInitializeWSClusterBarriersWrapper(int32_t capability,
+                                         int32_t ptxVersion) {
+  mlir::triton::InitializeWSClusterBarriersOptions options;
+  options.computeCapability = capability;
+  options.ptxVersion = ptxVersion;
+  return mlir::triton::createInitializeWSClusterBarriers(options);
 }
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
@@ -54,6 +171,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      createTritonGPUFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_1("add_proxy_fence_insertion",
                      createTritonGPUProxyFenceInsertionWrapper, int32_t);
+  ADD_PASS_WRAPPER_0("add_tmem_barrier_insertion",
+                     ttng::createTritonNvidiaGPUTMemBarrierInsertionPass);
   ADD_PASS_WRAPPER_0("add_tma_lowering",
                      ttng::createTritonNvidiaGPUTMALoweringPass);
   ADD_PASS_WRAPPER_0("add_promote_lhs_to_tmem",
@@ -64,6 +183,9 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      ttng::createTritonNvidiaGPUCheckMatmulTwoCTAPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVM);
+  ADD_PASS_WRAPPER_2("add_initialize_ws_cluster_barriers",
+                     createInitializeWSClusterBarriersWrapper, int32_t,
+                     int32_t);
   ADD_PASS_WRAPPER_0("add_warp_specialize_to_llvm",
                      mlir::triton::createConvertWarpSpecializeToLLVM);
   ADD_PASS_WRAPPER_0("add_allocate_tensor_memory",
@@ -76,6 +198,7 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      ttng::createTritonNvidiaGPUOptimizeTMemLayoutsPass);
   ADD_PASS_WRAPPER_0("add_interleave_tmem",
                      ttng::createTritonNvidiaGPUInterleaveTMemPass);
+  ttng::registerConSanNVIDIAHooks();
 }
 
 void init_triton_nvidia_passes_nvws(py::module &&m) {
@@ -94,12 +217,12 @@ void init_triton_hopper_passes(py::module &&m) {
                             mlir::createNVGPUWarpSpecialization, int, bool);
 }
 
-static void checkMatmulConstraints(const std::string &A_dtype,
-                                   const std::string &B_dtype,
-                                   const std::string &C_dtype,
-                                   const std::vector<int> &A_shape,
-                                   const std::vector<int> &B_shape,
-                                   const std::vector<int> &C_shape) {
+void checkMatmulConstraints(const std::string &A_dtype,
+                            const std::string &B_dtype,
+                            const std::string &C_dtype,
+                            const std::vector<int> &A_shape,
+                            const std::vector<int> &B_shape,
+                            const std::vector<int> &C_shape) {
   if (A_dtype != B_dtype || A_dtype != C_dtype) {
     throw std::runtime_error("Data types do not match.");
   }
@@ -141,6 +264,8 @@ static void checkMatmulConstraints(const std::string &A_dtype,
         "that B needs to be transposed.");
   }
 }
+
+} // namespace
 
 void init_triton_nvidia(py::module &&m) {
   auto passes = m.def_submodule("passes");
@@ -185,6 +310,18 @@ void init_triton_nvidia(py::module &&m) {
     auto *reflect = MDNode::get(ctx, {mdFour, mdName, mdOne});
     mod->addModuleFlag(reflect);
   });
+
+  m.def("device_malloc",
+        [](size_t size) { return CudaExampleUtils::get().deviceMalloc(size); });
+  m.def("device_free",
+        [](uint64_t ptr) { CudaExampleUtils::get().deviceFree(ptr); });
+  m.def("copy_host_to_device", [](uint64_t dst, const py::bytes &src) {
+    CudaExampleUtils::get().copyHostToDevice(dst, src);
+  });
+  m.def("copy_device_to_host", [](uint64_t src, size_t size) {
+    return CudaExampleUtils::get().copyDeviceToHost(src, size);
+  });
+  m.def("synchronize", []() { CudaExampleUtils::get().synchronize(); });
 
   // cublas
   auto cublas = m.def_submodule("cublas");

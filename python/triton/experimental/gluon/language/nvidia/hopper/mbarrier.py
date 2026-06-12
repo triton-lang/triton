@@ -1,13 +1,10 @@
 from ..ampere.mbarrier import MBarrierLayout, allocate_mbarrier, init, invalidate, wait
-from triton.experimental.gluon._runtime import jit
 from ..._core import _unwrap_if_constexpr, builtin
-from . import cluster
 
 __all__ = [
     "allocate_mbarrier",
     "arrive",
     "expect",
-    "sync_cluster_init",
     "fence_init_release_cluster",
     "init",
     "invalidate",
@@ -51,16 +48,6 @@ def fence_init_release_cluster(_semantic=None):
     """
     Fence that makes prior mbarrier initialization visible across the CTA cluster.
 
-    Needs to be called together with cluster.arrive(relaxed=True) and cluster.wait.
+    Needs to be called together with cluster.barrier(relaxed=True).
     """
     _semantic.builder.create_fence_mbarrier_init_release_cluster()
-
-
-@jit
-def sync_cluster_init():
-    """
-    Ensure mbarrier initialization is visible across the CTA cluster.
-    """
-    fence_init_release_cluster()
-    cluster.arrive(relaxed=True)
-    cluster.wait()

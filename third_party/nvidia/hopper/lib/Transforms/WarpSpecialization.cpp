@@ -3,9 +3,11 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/hopper/include/Transforms/Passes.h"
+#include "nvidia/hopper/lib/Transforms/WarpSpecialization/CodePartitionUtility.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Tools/Sys/Dump.h"
 
 #define DEBUG_TYPE "nvgpu-warp-specialization"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -47,9 +49,7 @@ public:
     bool hasElse = false;
     funcOp->walk([&](scf::IfOp ifOp) {
       if (ifOp.elseBlock()) {
-        for (Operation &op : ifOp.elseBlock()->getOperations()) {
-          hasElse = true;
-        }
+        hasElse = true;
       }
     });
     if (hasElse)
@@ -64,7 +64,7 @@ public:
       // Partition key ops into multiple async tasks.
       doTaskPartition(funcOp, numWarpGroups);
       if (dumpIntermediateSteps) {
-        llvm::dbgs()
+        ::mlir::triton::tools::mlirDumpsOrDbgs()
             << "// -----// WarpSpec internal IR Dump After: doTaskPartition\n"
             << moduleOp << "\n\n\n";
       }
@@ -73,7 +73,7 @@ public:
       if (retCode == -1)
         continue;
       if (dumpIntermediateSteps) {
-        llvm::dbgs()
+        ::mlir::triton::tools::mlirDumpsOrDbgs()
             << "// -----// WarpSpec internal IR Dump After: doTaskIdPropagate\n"
             << moduleOp << "\n\n\n";
       }
@@ -81,7 +81,7 @@ public:
       // Partition ops into parallel sub ops.
       if (doDataPartition(funcOp, numWarpGroups - 1)) {
         if (dumpIntermediateSteps) {
-          llvm::dbgs()
+          ::mlir::triton::tools::mlirDumpsOrDbgs()
               << "// -----// WarpSpec internal IR Dump After: doDataPartition\n"
               << moduleOp << "\n\n\n";
         }
@@ -99,11 +99,12 @@ public:
 
     doCodePartition(funcOp, numStages);
     if (dumpIntermediateSteps) {
-      llvm::dbgs()
+      ::mlir::triton::tools::mlirDumpsOrDbgs()
           << "// -----// WarpSpec internal IR Dump After: doCodePartition\n"
           << moduleOp << "\n\n\n";
     }
     doTokenLowering(funcOp, numWarpGroups - 1);
+    invalidateWarpSpecializeBarriers(funcOp);
     // Clear num_stages to disable SWP.
     funcOp->walk([&](scf::ForOp forOp) {
       forOp->setAttr(mlir::triton::kNumStagesAttrName,

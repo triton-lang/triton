@@ -10,7 +10,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include <tuple>
 
 using namespace mlir;
@@ -151,7 +151,7 @@ public:
     bool useDirectStore = mlir::matchPattern(mask, mlir::m_One());
 
     if (useDirectStore) {
-      auto llvmStoreOp = createStoreWithAttrs(loc);
+      createStoreWithAttrs(loc);
       rewriter.eraseOp(storeOp);
       return success();
     }
@@ -167,7 +167,7 @@ public:
     // LLVM::StoreOp | 0         | 0       | (cg) global store
     //               | 0         | 1       | (cs) global store nt
     //               | 1         | 0/1     | (wt) global store sc0 sc1
-    auto llvmStoreOp = createStoreWithAttrs(loc);
+    createStoreWithAttrs(loc);
     LLVM::BrOp::create(rewriter, loc, afterStore);
     rewriter.setInsertionPointToStart(afterStore);
     rewriter.eraseOp(storeOp);

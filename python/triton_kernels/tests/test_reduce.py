@@ -2,6 +2,7 @@ import pytest
 import torch
 from triton.testing import do_bench
 from triton_kernels.reduce import reduce, reduce_torch, PostprocessFn, FnSpecs
+from triton_kernels.reduce import scoped_opt_flags_constraints
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp_torch, downcast_to_mxfp_torch
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
@@ -44,6 +45,9 @@ def plus_a_reduce(x, a):
     (512, 512, 512, None),
     (512, 512, 512, "plus_ten"),
     (4, 4, 4, None),
+    (3, 15, 25, None),
+    (5, 9999, 2345, None),
+    (15, 345, 789, None),
 ])
 @pytest.mark.parametrize("dtype_str", [
     "float16",
@@ -116,6 +120,64 @@ def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
         assert torch.allclose(x_tri.grad.float(), x_ref.grad.float(), atol=1e-3, rtol=1e-3)
 
 
+@pytest.mark.parametrize("B, M, N", [
+    (5, 2, 0),
+    (0, 2, 5),
+])
+@pytest.mark.parametrize("dtype", [
+    torch.float16,
+    torch.float32,
+])
+@pytest.mark.parametrize("mask_mode", [
+    "none",
+    "full",
+    "broadcast_b",
+    "broadcast_m",
+    "broadcast_n",
+])
+def test_op_empty_forward_backward(B, M, N, dtype, mask_mode):
+    torch.manual_seed(0)
+    device = "cuda"
+    x = torch.randn((B, M, N), device=device, dtype=dtype, requires_grad=True)
+    mask = init_mask(mask_mode, B, M, N, device)
+    x_tri = x.clone().detach().requires_grad_(True)
+    x_ref = x.clone().detach().requires_grad_(True)
+
+    y_tri, _ = reduce(x_tri, dim=1, mask=mask)
+    y_ref, _ = reduce_torch(x_ref, dim=1, mask=mask, x_flex=None, y_flex=None)
+    assert torch.allclose(y_tri.float(), y_ref.float(), atol=1e-3, rtol=1e-3)
+
+    dy = torch.randn_like(y_tri)
+    y_tri.backward(dy)
+    y_ref.backward(dy)
+    assert torch.allclose(x_tri.grad.float(), x_ref.grad.float(), atol=1e-3, rtol=1e-3)
+
+
+def test_unpadded_batch_size_rowidxs_subtile():
+    if not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("rowidxs path requires CUDA")
+    if torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("rowidxs path requires CUDA capability >= 9")
+
+    torch.manual_seed(0)
+    device = "cuda"
+    B, M, N = 7, 73, 257
+    unpadded = 37
+    sentinel = -1234.0
+    x = torch.randn((B, M, N), device=device, dtype=torch.float16)
+    # K=7 selects the static-loop rowidxs path with heavy-block subtiles.
+    mask = torch.ones((B, M, 1), device=device, dtype=torch.int8).expand(B, M, N)
+    y = torch.full((M, N), sentinel, device=device, dtype=torch.float16)
+    unpadded_batch_size = torch.tensor(unpadded, device=device, dtype=torch.int32)
+
+    with scoped_opt_flags_constraints({"use_rowidxs": True, "subtile_heavy_blocks": True}):
+        y_tri, _ = reduce(x, dim=0, mask=mask, y=y, unpadded_batch_size=unpadded_batch_size)
+
+    y_ref = x[:, :unpadded, :].float().sum(dim=0).to(torch.float16)
+    assert torch.allclose(y_tri[:unpadded].float(), y_ref.float(), atol=1e-3, rtol=1e-3)
+    assert torch.equal(y_tri[unpadded:], torch.full_like(y_tri[unpadded:], sentinel))
+
+
 def bench_reduce(B: int = 4, M: int = 4096, N: int = 4096, *, dim: int = 0, dtype: torch.dtype = torch.float16,
                  iters: int = 200, mask_mode: str = "none"):
     torch.manual_seed(0)
@@ -136,5 +198,7 @@ def bench_reduce(B: int = 4, M: int = 4096, N: int = 4096, *, dim: int = 0, dtyp
 
 # bench_reduce(B=4, M=8192, N=8192, dim=0, dtype=torch.float16, mask_mode="none")
 # bench_reduce(B=8192, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_n")
+# bench_reduce(B=16384, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_n")
+# bench_reduce(B=65536, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_n")
 # bench_reduce(B=8192, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_m")
 # bench_reduce(B=8192, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_b")

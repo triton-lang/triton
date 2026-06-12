@@ -5,15 +5,18 @@
 
 namespace mlir::triton::AMD {
 
-struct AxisInfoExt {
-  static void addVisitors(mlir::triton::AxisInfoVisitorList &visitors);
+class AxisInfoAnalysisExt : public triton::AxisInfoAnalysis {
+public:
+  AxisInfoAnalysisExt(DataFlowSolver &solver);
+
+  static triton::AxisInfoAnalysis *loadAnalysis(DataFlowSolver *solver);
 };
 
 class ModuleAxisInfoAnalysis : public mlir::triton::ModuleAxisInfoAnalysis {
 public:
   explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp)
-      : mlir::triton::ModuleAxisInfoAnalysis(moduleOp,
-                                             AxisInfoExt::addVisitors) {}
+      : mlir::triton::ModuleAxisInfoAnalysis(
+            moduleOp, AxisInfoAnalysisExt::loadAnalysis) {}
 };
 } // namespace mlir::triton::AMD
 

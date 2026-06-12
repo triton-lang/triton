@@ -37,12 +37,21 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from python.build_helpers import get_base_dir, get_cmake_dir
+from python.build_helpers import check_env_flag, get_base_dir, get_cmake_dir
 
 
-def is_git_repo():
-    """Return True if this file resides in a git repository"""
-    return (Path(__file__).parent / ".git").is_dir()
+def is_git_repo() -> bool:
+    """Return True if this file resides at the root of a git repository."""
+    expected_toplevel = Path(__file__).parent.resolve()
+
+    try:
+        stdout: str = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], cwd=expected_toplevel,
+                                              stderr=subprocess.DEVNULL).strip().decode('utf-8')
+    except subprocess.CalledProcessError:
+        return False
+    actual_toplevel = Path(stdout).resolve()
+
+    return actual_toplevel == expected_toplevel
 
 
 @dataclass
@@ -115,11 +124,6 @@ class BackendInstaller:
             BackendInstaller.prepare(backend_name, backend_src_dir=backend_src_dir, is_external=True)
             for backend_name, backend_src_dir in zip(backend_names, backend_dirs)
         ]
-
-
-# Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
-def check_env_flag(name: str, default: str = "") -> bool:
-    return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
 
 
 def get_build_type():
@@ -251,10 +255,13 @@ class CMakeBuild(build_ext):
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
         cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_include_dir]
-        roctracer_include_dir = get_env_with_keys(["TRITON_ROCTRACER_INCLUDE_PATH"])
-        if roctracer_include_dir == "":
-            roctracer_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
-        cmake_args += ["-DROCTRACER_INCLUDE_DIR=" + roctracer_include_dir]
+        rocm_include_dir = get_env_with_keys(["TRITON_ROCM_INCLUDE_PATH"])
+        if rocm_include_dir == "":
+            rocm_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
+        cmake_args += ["-DROCM_INCLUDE_DIR=" + rocm_include_dir]
+        rocprofiler_sdk_include_dir = get_env_with_keys(["TRITON_ROCPROFILER_SDK_INCLUDE_PATH"])
+        if rocprofiler_sdk_include_dir:
+            cmake_args += ["-DROCPROFILER_SDK_INCLUDE_DIR=" + rocprofiler_sdk_include_dir]
         return cmake_args
 
     def build_extension(self, ext):
@@ -285,6 +292,7 @@ class CMakeBuild(build_ext):
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external]),
             "-DTRITON_WHEEL_DIR=" + wheeldir,
             f"-DTRITON_CACHE_PATH={get_triton_cache_path()}",
+            f"-DTRITON_VERSION={TRITON_VERSION}",
         ]
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
@@ -311,10 +319,10 @@ class CMakeBuild(build_ext):
                 "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld",
             ]
 
-        if check_env_flag("LLVM_BUILD_SHARED_LIBS"):
-            cmake_args += ["-DLLVM_BUILD_SHARED_LIBS=1"]
+        if check_env_flag("TRITON_EXT_ENABLED"):
+            cmake_args += ["-DTRITON_EXT_ENABLED=1"]
         else:
-            cmake_args += ["-DLLVM_BUILD_SHARED_LIBS=0"]
+            cmake_args += ["-DTRITON_EXT_ENABLED=0"]
 
         # Note that asan doesn't work with binaries that use the GPU, so this is
         # only useful for tools like triton-opt that don't run code on the GPU.
@@ -345,6 +353,8 @@ class CMakeBuild(build_ext):
             "TRITON_CUPTI_INCLUDE_PATH",
             "TRITON_CUPTI_LIB_PATH",
             "TRITON_CUPTI_LIB_BLACKWELL_PATH",
+            "TRITON_ROCPROFILER_SDK_INCLUDE_PATH",
+            "TRITON_ROCPROFILER_SDK_LIB_PATH",
             "TRITON_NVDISASM_PATH",
             "TRITON_PTXAS_PATH",
             "TRITON_PTXAS_BLACKWELL_PATH",
@@ -554,7 +564,7 @@ def get_triton_version_suffix():
 
 
 # keep it separate for easy substitution
-TRITON_VERSION = "3.6.0" + get_triton_version_suffix()
+TRITON_VERSION = "3.8.0" + get_triton_version_suffix()
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 10)
@@ -607,25 +617,4 @@ setup(
     url="https://github.com/triton-lang/triton/",
     python_requires=PYTHON_REQUIRES,
     classifiers=CLASSIFIERS,
-    extras_require={
-        "build": [
-            "cmake>=3.20,<4.0",
-            "lit",
-        ],
-        "tests": [
-            "autopep8",
-            "isort",
-            "numpy",
-            "pytest",
-            "pytest-forked",
-            "pytest-xdist",
-            "scipy>=1.7.1",
-            "llnl-hatchet",
-        ],
-        "tutorials": [
-            "matplotlib",
-            "pandas",
-            "tabulate",
-        ],
-    },
 )

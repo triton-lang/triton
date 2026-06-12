@@ -193,8 +193,6 @@ Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
 // Get the value of the induction variable at the end of the loop.
 Value getLastInductionValue(OpBuilder &b, scf::ForOp loop);
 
-MakeTensorPtrOp getMakeTensorPtrOp(Value v);
-
 bool isHostSideDescriptor(Value v);
 
 bool isKernel(FunctionOpInterface funcOp);

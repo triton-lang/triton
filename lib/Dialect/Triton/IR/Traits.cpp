@@ -34,17 +34,11 @@ LogicalResult OpTrait::impl::verifyEquivalentTensorType(Type typeA,
       ->verifyLayoutsAreEqual(shapeA, encodingA, encodingB, {});
 }
 
-static LogicalResult verifySameEncoding(Type typeA, Type typeB,
-                                        bool allowTensorPointerType) {
-  // TODO(Keren): the allowTensorPointerType argument is a hack to allow.
-  // The type checking code is kind of a mess with the current design.
+static LogicalResult verifySameEncoding(Type typeA, Type typeB) {
   auto getEncoding = [=](Type type) -> Attribute {
     Attribute ret;
     if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
       ret = tensorType.getEncoding();
-    }
-    if (!allowTensorPointerType) {
-      assert(!triton::isTensorPointerType(type));
     }
     return ret;
   };
@@ -55,22 +49,20 @@ static LogicalResult verifySameEncoding(Type typeA, Type typeB,
   return encodingA == encodingB ? success() : failure();
 }
 
-LogicalResult
-OpTrait::impl::verifySameOperandsEncoding(Operation *op,
-                                          bool allowTensorPointerType) {
+LogicalResult OpTrait::impl::verifySameOperandsEncoding(Operation *op) {
   if (failed(verifyAtLeastNOperands(op, 1)))
     return failure();
 
   auto type = op->getOperand(0).getType();
   for (auto opType : llvm::drop_begin(op->getOperandTypes(), 1))
-    if (failed(verifySameEncoding(opType, type, allowTensorPointerType)))
+    if (failed(verifySameEncoding(opType, type)))
       return op->emitOpError() << "requires the same encoding for all operands";
 
   return success();
 }
 
-LogicalResult OpTrait::impl::verifySameOperandsAndResultEncoding(
-    Operation *op, bool allowTensorPointerType) {
+LogicalResult
+OpTrait::impl::verifySameOperandsAndResultEncoding(Operation *op) {
   if (op->getNumOperands() == 0)
     return success();
 
@@ -80,11 +72,11 @@ LogicalResult OpTrait::impl::verifySameOperandsAndResultEncoding(
 
   auto type = op->getOperand(0).getType();
   for (auto resultType : op->getResultTypes())
-    if (failed(verifySameEncoding(resultType, type, allowTensorPointerType)))
+    if (failed(verifySameEncoding(resultType, type)))
       return op->emitOpError()
              << "requires the same encoding for all operands and results";
 
-  return verifySameOperandsEncoding(op, allowTensorPointerType);
+  return verifySameOperandsEncoding(op);
 }
 
 LogicalResult OpTrait::impl::verifyTensorSize(Operation *op) {

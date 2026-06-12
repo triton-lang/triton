@@ -80,9 +80,10 @@ make dev-install-llvm
 Alternatively, follow these steps to build LLVM from source manually.
 </summary>
 
-1. Find the version of LLVM that Triton builds against.  Check
-`cmake/llvm-hash.txt` to see the current version. For example, if it says:
-       49af6502c6dcb4a7f7520178bd14df396f78240c.
+1. Find the version of LLVM that Triton builds against. Check the `llvm_hash`
+field in `cmake/llvm-info.json` to see the current version. For example, if it
+says:
+       "llvm_hash": "49af6502c6dcb4a7f7520178bd14df396f78240c"
 
    This means that the version of Triton you have builds against
    [LLVM](https://github.com/llvm/llvm-project) 49af6502.
@@ -95,7 +96,7 @@ Alternatively, follow these steps to build LLVM from source manually.
        $ cd $HOME/llvm-project  # your clone of LLVM.
        $ mkdir build
        $ cd build
-       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
+       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld;clang" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
        $ ninja
 
 4. Grab a snack, this will take a while.

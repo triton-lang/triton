@@ -185,7 +185,8 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
       for (unsigned j = 0; j < helper.getNumOperands(); ++j) {
         auto elemTy = smemTypes[j];
         Value ptr = b.gep(smemBases[j].getType(), elemTy, smemBases[j], index);
-        partialReduce[j] = b.load(elemTy, ptr);
+        partialReduce[j] =
+            targetInfo.loadShared(rewriter, loc, ptr, elemTy, b.true_val());
       }
 
       if (accumulator.acc.size() == 0) {
@@ -253,8 +254,6 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
   unsigned parallelElementsPerThread = helper.getNonAxisNumElementsPerThread();
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
-  unsigned axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
-  unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
   unsigned scanDim = helper.getAxisNumThreadsPerWarpWithUniqueData();
   Value maskFirstWarp = b.icmp_eq(warpId, b.i32_val(0));
   Value maskFirstLane = b.icmp_eq(laneIdAxis, b.i32_val(0));

@@ -1,7 +1,9 @@
 #pragma once
 #include "mlir/IR/Builders.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "mlir/IR/DialectRegistry.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include <memory>
+#include <string>
 
 // A custom op builder that keeps track of the last location
 class TritonOpBuilder {

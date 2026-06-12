@@ -13,6 +13,7 @@ from triton.backends import backends
 
 from .hook import Hook
 from ..flags import flags
+from ..state import metadata_state
 from .. import mode
 
 # TODO(fywkevin): add support for major.minor
@@ -37,7 +38,8 @@ class CudaAllocator:
 
         # Create the buffer
         import torch
-        buffer = torch.empty((aligned_size, ), dtype=torch.uint8, device="cuda")
+        with metadata_state():
+            buffer = torch.zeros((aligned_size, ), dtype=torch.uint8, device="cuda")
         self.instrumentation_hook.buffer = buffer
         return buffer
 
@@ -174,7 +176,6 @@ class InstrumentationHook(Hook):
                 triton_proton.add_sched_barriers(pm)
 
         def to_llvm_passes(pm):
-            triton_proton.add_allocate_proton_global_scratch_buffer(pm)
             if backend_name == "nvidia":
                 triton_proton.add_convert_proton_nvidia_gpu_to_llvm(pm)
             elif backend_name == "amd":
@@ -246,6 +247,12 @@ class InstrumentationHook(Hook):
             libproton.init_function_metadata(function, name, scope_id_names, scope_id_parents, metadata_path)
         else:
             raise RuntimeError(f"IR path not found in metadata for function {function}")
+
+    def destroy_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
+        if not function:
+            return
+        self.metadata_path.pop(function, None)
+        libproton.destroy_function_metadata(function)
 
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()

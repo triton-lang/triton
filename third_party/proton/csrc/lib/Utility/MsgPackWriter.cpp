@@ -11,8 +11,11 @@ namespace {
 template <typename T> void writeBE(std::vector<uint8_t> &out, T value) {
   using U = std::make_unsigned_t<T>;
   U u = static_cast<U>(value);
-  for (int i = sizeof(U) - 1; i >= 0; --i) {
-    out.push_back(static_cast<uint8_t>((u >> (i * 8)) & 0xff));
+  const auto offset = out.size();
+  out.resize(offset + sizeof(U));
+  for (size_t i = 0; i < sizeof(U); ++i) {
+    const auto shift = (sizeof(U) - 1 - i) * 8;
+    out[offset + i] = static_cast<uint8_t>((u >> shift) & 0xff);
   }
 }
 
@@ -21,6 +24,12 @@ template <typename T> void writeBE(std::vector<uint8_t> &out, T value) {
 void MsgPackWriter::reserve(size_t bytes) { out.reserve(bytes); }
 
 std::vector<uint8_t> MsgPackWriter::take() && { return std::move(out); }
+
+void MsgPackWriter::appendBytes(const std::vector<uint8_t> &bytes) {
+  const auto offset = out.size();
+  out.resize(offset + bytes.size());
+  std::memcpy(out.data() + offset, bytes.data(), bytes.size());
+}
 
 void MsgPackWriter::packNil() { out.push_back(0xc0); }
 
@@ -88,7 +97,9 @@ void MsgPackWriter::packStr(std::string_view value) {
     out.push_back(0xdb);
     writeBE(out, static_cast<uint32_t>(size));
   }
-  out.insert(out.end(), value.begin(), value.end());
+  const auto offset = out.size();
+  out.resize(offset + size);
+  std::memcpy(out.data() + offset, value.data(), size);
 }
 
 void MsgPackWriter::packArray(uint32_t size) {

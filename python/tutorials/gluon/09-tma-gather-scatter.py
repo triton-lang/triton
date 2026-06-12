@@ -471,7 +471,7 @@ def issue_loads(producer, X_desc, W_desc, X_gather_indx_ptr, off_m, off_n, k, ba
     # The W tensor tile is loaded using a regular `async_copy_global_to_shared`.
     mbarrier.expect(bar, W_desc.block_type.nbytes + BLOCK_M * X_desc.block_type.nbytes)
     tma.async_gather(X_desc, offs_x_m, k, bar, x_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(W_desc, [k, off_n], bar, w_bufs.index(index), pred)
+    tma.async_load(W_desc, [k, off_n], bar, w_bufs.index(index), pred)
     return producer
 
 
@@ -563,7 +563,7 @@ def matmul_fused_gather_scatter_kernel(X_desc, W_desc, out_desc, X_gather_indx_p
         mma = mma.wait_num_outstanding(0)
         out, mma = mma.take_result()
         out = out.to(dtype)
-        # Pipeline the async scatter by waiting for the previous store to complete.
+        # Pipeline the async scatter by waiting for the previous scatter to complete.
         tma.store_wait(pendings=0)
         out_smem.store(out)
         fence_async_shared()

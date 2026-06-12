@@ -1,0 +1,3 @@
+matplotlib
+pandas
+tabulate

@@ -47,10 +47,10 @@
 // CHECK:           %[[VAL_32:.*]] = arith.remsi %[[VAL_20]], %[[VAL_25]] : i32
 // CHECK:           %[[VAL_33:.*]] = arith.divsi %[[VAL_32]], %[[VAL_29]] : i32
 // CHECK:           %[[VAL_34:.*]] = arith.extsi %[[VAL_5]] : i32 to i64
-// CHECK:           %[[VAL_35:.*]] = tt.make_tensor_descriptor %[[VAL_0]], {{\[}}%[[VAL_3]], %[[VAL_5]]], {{\[}}%[[VAL_34]], %[[VAL_14]]] : <f16>, <tensor<128x64xf16, #[[$ATTR_2]]>>
-// CHECK:           %[[VAL_36:.*]] = tt.make_tensor_descriptor %[[VAL_1]], {{\[}}%[[VAL_4]], %[[VAL_5]]], {{\[}}%[[VAL_34]], %[[VAL_14]]] : <f16>, <tensor<256x64xf16, #[[$ATTR_2]]>>
+// CHECK:           %[[VAL_35:.*]] = tt.make_tensor_descriptor %[[VAL_0]], {{\[}}%[[VAL_3]], %[[VAL_5]]], {{\[}}%[[VAL_34]], %[[VAL_14]]] : <f16>, <128x64xf16, #[[$ATTR_2]]>
+// CHECK:           %[[VAL_36:.*]] = tt.make_tensor_descriptor %[[VAL_1]], {{\[}}%[[VAL_4]], %[[VAL_5]]], {{\[}}%[[VAL_34]], %[[VAL_14]]] : <f16>, <256x64xf16, #[[$ATTR_2]]>
 // CHECK:           %[[VAL_37:.*]] = arith.extsi %[[VAL_4]] : i32 to i64
-// CHECK:           %[[VAL_38:.*]] = tt.make_tensor_descriptor %[[VAL_2]], {{\[}}%[[VAL_3]], %[[VAL_4]]], {{\[}}%[[VAL_37]], %[[VAL_14]]] : <f16>, <tensor<128x256xf16, #[[$ATTR_2]]>>
+// CHECK:           %[[VAL_38:.*]] = tt.make_tensor_descriptor %[[VAL_2]], {{\[}}%[[VAL_3]], %[[VAL_4]]], {{\[}}%[[VAL_37]], %[[VAL_14]]] : <f16>, <128x256xf16, #[[$ATTR_2]]>
 // CHECK:           %[[VAL_39:.*]] = arith.muli %[[VAL_31]], %[[VAL_10]] : i32
 // CHECK:           %[[VAL_40:.*]] = arith.muli %[[VAL_33]], %[[VAL_11]] : i32
 // CHECK:           %[[VAL_41:.*]] = arith.addi %[[VAL_5]], %[[VAL_18]] : i32
@@ -68,16 +68,16 @@
 // CHECK:           %[[VAL_50:.*]] = ttg.memdesc_index %[[VAL_45]]{{\[}}%[[VAL_12]]{{\]}} : !ttg.memdesc<3x1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:           ttng.barrier_expect %[[VAL_50]], 49152, %[[VAL_49]] : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_51:.*]] = ttg.memdesc_index %[[VAL_43]]{{\[}}%[[VAL_12]]{{\]}} : !ttg.memdesc<3x128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
-// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_35]]{{\[}}%[[VAL_39]], %[[VAL_12]]] %[[VAL_51]], %[[VAL_50]], %[[VAL_49]] : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
+// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_35]]{{\[}}%[[VAL_39]], %[[VAL_12]]] %[[VAL_51]], %[[VAL_50]], %[[VAL_49]] : !tt.tensordesc<128x64xf16, #[[$ATTR_2]]>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_52:.*]] = ttg.memdesc_index %[[VAL_44]]{{\[}}%[[VAL_12]]{{\]}} : !ttg.memdesc<3x256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
-// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_36]]{{\[}}%[[VAL_40]], %[[VAL_12]]] %[[VAL_52]], %[[VAL_50]], %[[VAL_49]] : !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
+// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_36]]{{\[}}%[[VAL_40]], %[[VAL_12]]] %[[VAL_52]], %[[VAL_50]], %[[VAL_49]] : !tt.tensordesc<256x64xf16, #[[$ATTR_2]]>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_53:.*]] = arith.cmpi sgt, %[[VAL_42]], %[[VAL_15]] : i32
 // CHECK:           %[[VAL_54:.*]] = ttg.memdesc_index %[[VAL_45]]{{\[}}%[[VAL_15]]{{\]}} : !ttg.memdesc<3x1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:           ttng.barrier_expect %[[VAL_54]], 49152, %[[VAL_53]] : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_55:.*]] = ttg.memdesc_index %[[VAL_43]]{{\[}}%[[VAL_15]]{{\]}} : !ttg.memdesc<3x128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
-// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_35]]{{\[}}%[[VAL_39]], %[[VAL_13]]] %[[VAL_55]], %[[VAL_54]], %[[VAL_53]] : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
+// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_35]]{{\[}}%[[VAL_39]], %[[VAL_13]]] %[[VAL_55]], %[[VAL_54]], %[[VAL_53]] : !tt.tensordesc<128x64xf16, #[[$ATTR_2]]>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_56:.*]] = ttg.memdesc_index %[[VAL_44]]{{\[}}%[[VAL_15]]{{\]}} : !ttg.memdesc<3x256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
-// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_36]]{{\[}}%[[VAL_40]], %[[VAL_13]]] %[[VAL_56]], %[[VAL_54]], %[[VAL_53]] : !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
+// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_36]]{{\[}}%[[VAL_40]], %[[VAL_13]]] %[[VAL_56]], %[[VAL_54]], %[[VAL_53]] : !tt.tensordesc<256x64xf16, #[[$ATTR_2]]>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_57:.*]]:5 = scf.for %[[VAL_58:.*]] = %[[VAL_12]] to %[[VAL_42]] step %[[VAL_15]] iter_args(%[[VAL_59:.*]] = %[[VAL_19]], %[[VAL_60:.*]] = %[[VAL_13]], %[[VAL_61:.*]] = %[[VAL_15]], %[[VAL_62:.*]] = %[[VAL_8]], %[[VAL_63:.*]] = %[[VAL_12]]) -> (tensor<128x256xf32, #[[$ATTR_1]]>, i32, i32, i32, i32)  : i32 {
 // CHECK:             %[[VAL_64:.*]] = arith.subi %[[VAL_42]], %[[VAL_7]] : i32
 // CHECK:             %[[VAL_65:.*]] = arith.cmpi slt, %[[VAL_58]], %[[VAL_64]] : i32
@@ -100,9 +100,9 @@
 // CHECK:             %[[VAL_81:.*]] = ttg.memdesc_index %[[VAL_45]]{{\[}}%[[VAL_80]]{{\]}} : !ttg.memdesc<3x1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:             ttng.barrier_expect %[[VAL_81]], 49152, %[[VAL_65]] : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:             %[[VAL_82:.*]] = ttg.memdesc_index %[[VAL_43]]{{\[}}%[[VAL_80]]{{\]}} : !ttg.memdesc<3x128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
-// CHECK:             ttng.async_tma_copy_global_to_local %[[VAL_35]]{{\[}}%[[VAL_39]], %[[VAL_77]]] %[[VAL_82]], %[[VAL_81]], %[[VAL_65]] : !tt.tensordesc<tensor<128x64xf16, #[[$ATTR_2]]>>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
+// CHECK:             ttng.async_tma_copy_global_to_local %[[VAL_35]]{{\[}}%[[VAL_39]], %[[VAL_77]]] %[[VAL_82]], %[[VAL_81]], %[[VAL_65]] : !tt.tensordesc<128x64xf16, #[[$ATTR_2]]>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:             %[[VAL_83:.*]] = ttg.memdesc_index %[[VAL_44]]{{\[}}%[[VAL_80]]{{\]}} : !ttg.memdesc<3x256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
-// CHECK:             ttng.async_tma_copy_global_to_local %[[VAL_36]]{{\[}}%[[VAL_40]], %[[VAL_77]]] %[[VAL_83]], %[[VAL_81]], %[[VAL_65]] : !tt.tensordesc<tensor<256x64xf16, #[[$ATTR_2]]>>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
+// CHECK:             ttng.async_tma_copy_global_to_local %[[VAL_36]]{{\[}}%[[VAL_40]], %[[VAL_77]]] %[[VAL_83]], %[[VAL_81]], %[[VAL_65]] : !tt.tensordesc<256x64xf16, #[[$ATTR_2]]>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:             scf.yield %[[VAL_76]]#0, %[[VAL_77]], %[[VAL_80]], %[[VAL_68]], %[[VAL_70]] : tensor<128x256xf32, #[[$ATTR_1]]>, i32, i32, i32, i32
 // CHECK:           }
 // CHECK:           %[[VAL_84:.*]] = ttng.warp_group_dot_wait %[[VAL_85:.*]]#0 {pendings = 0 : i32} : tensor<128x256xf32, #[[$ATTR_1]]>
@@ -117,7 +117,7 @@
 // CHECK:           ttg.local_dealloc %[[VAL_43]] : !ttg.memdesc<3x128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_89:.*]] = arith.truncf %[[VAL_84]] : tensor<128x256xf32, #[[$ATTR_1]]> to tensor<128x256xf16, #[[$ATTR_1]]>
 // CHECK:           %[[VAL_90:.*]] = ttg.convert_layout %[[VAL_89]] : tensor<128x256xf16, #[[$ATTR_1]]> -> tensor<128x256xf16, #[[$ATTR_0]]>
-// CHECK:           tt.descriptor_store %[[VAL_38]]{{\[}}%[[VAL_39]], %[[VAL_40]]], %[[VAL_90]] : !tt.tensordesc<tensor<128x256xf16, #[[$ATTR_2]]>>, tensor<128x256xf16, #[[$ATTR_0]]>
+// CHECK:           tt.descriptor_store %[[VAL_38]]{{\[}}%[[VAL_39]], %[[VAL_40]]], %[[VAL_90]] : !tt.tensordesc<128x256xf16, #[[$ATTR_2]]>, tensor<128x256xf16, #[[$ATTR_0]]>
 // CHECK:           tt.return
 // CHECK:         }
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
@@ -148,18 +148,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %12 = arith.remsi %0, %5 : i32
     %13 = arith.divsi %12, %9 : i32
     %14 = arith.extsi %arg5 : i32 to i64
-    %15 = tt.make_tensor_descriptor %arg0, [%arg3, %arg5], [%14, %c1_i64] : <f16>, <tensor<128x64xf16, #shared>>
-    %16 = tt.make_tensor_descriptor %arg1, [%arg4, %arg5], [%14, %c1_i64] : <f16>, <tensor<256x64xf16, #shared>>
+    %15 = tt.make_tensor_descriptor %arg0, [%arg3, %arg5], [%14, %c1_i64] : <f16>, <128x64xf16, #shared>
+    %16 = tt.make_tensor_descriptor %arg1, [%arg4, %arg5], [%14, %c1_i64] : <f16>, <256x64xf16, #shared>
     %17 = arith.extsi %arg4 : i32 to i64
-    %18 = tt.make_tensor_descriptor %arg2, [%arg3, %arg4], [%17, %c1_i64] : <f16>, <tensor<128x256xf16, #shared>>
+    %18 = tt.make_tensor_descriptor %arg2, [%arg3, %arg4], [%17, %c1_i64] : <f16>, <128x256xf16, #shared>
     %19 = arith.muli %11, %c128_i32 : i32
     %20 = arith.muli %13, %c256_i32 : i32
     %21 = arith.addi %arg5, %c63_i32 : i32
     %22 = arith.divsi %21, %c64_i32 : i32
     %23:2 = scf.for %arg6 = %c0_i32 to %22 step %c1_i32 iter_args(%arg7 = %cst, %arg8 = %c0_i32) -> (tensor<128x256xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 16]}>>, i32)  : i32 {
-      %26 = tt.descriptor_load %15[%19, %arg8] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>>
+      %26 = tt.descriptor_load %15[%19, %arg8] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>>
       %27 = ttg.local_alloc %26 : (tensor<128x64xf16, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>>) -> !ttg.memdesc<128x64xf16, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>, #ttg.shared_memory>
-      %28 = tt.descriptor_load %16[%20, %arg8] : !tt.tensordesc<tensor<256x64xf16, #shared>> -> tensor<256x64xf16, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>>
+      %28 = tt.descriptor_load %16[%20, %arg8] : !tt.tensordesc<256x64xf16, #shared> -> tensor<256x64xf16, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>>
       %29 = ttg.local_alloc %28 : (tensor<256x64xf16, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>>) -> !ttg.memdesc<256x64xf16, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>, #ttg.shared_memory>
       %30 = ttg.memdesc_trans %29 {order = array<i32: 1, 0>} : !ttg.memdesc<256x64xf16, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>, #ttg.shared_memory> -> !ttg.memdesc<64x256xf16, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>, #ttg.shared_memory>
       %31 = ttng.warp_group_dot %27, %30, %arg7 {inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>, #ttg.shared_memory> * !ttg.memdesc<64x256xf16, #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>, #ttg.shared_memory> -> tensor<128x256xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 16]}>>
@@ -168,7 +168,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     }
     %24 = arith.truncf %23#0 : tensor<128x256xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 16]}>> to tensor<128x256xf16, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 16]}>>
     %25 = ttg.convert_layout %24 : tensor<128x256xf16, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 16]}>> -> tensor<128x256xf16, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>>
-    tt.descriptor_store %18[%19, %20], %25 : !tt.tensordesc<tensor<128x256xf16, #shared>>, tensor<128x256xf16, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>>
+    tt.descriptor_store %18[%19, %20], %25 : !tt.tensordesc<128x256xf16, #shared>, tensor<128x256xf16, #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>>
     tt.return
   }
 }

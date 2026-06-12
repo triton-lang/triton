@@ -102,7 +102,6 @@ public:
 
     rewriter.replaceOpWithNewOp<LoadOp>(
         op, loadOp.getPtr(), loadOp.getMask(), /*other=*/falseValue,
-        loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
         loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
     return success();
   }
@@ -160,7 +159,7 @@ public:
     auto broadcastLhsShape =
         cast<ShapedType>(broadcastLhsOp.getType()).getShape();
     auto broadcastRhsShape =
-        cast<ShapedType>(broadcastLhsOp.getType()).getShape();
+        cast<ShapedType>(broadcastRhsOp.getType()).getShape();
     if (broadcastLhsShape[2] < 16 || broadcastRhsShape[0] < 16)
       return failure();
     Type newAccType = RankedTensorType::get(
@@ -173,7 +172,7 @@ public:
                                                   rewriter.getF32FloatAttr(0)));
     rewriter.replaceOpWithNewOp<DotOp>(op, expandLhsOp.getSrc(),
                                        expandRhsOp.getSrc(), newAcc,
-                                       InputPrecision::TF32, 0);
+                                       InputPrecision::IEEE, 0);
     return success();
   }
 };
@@ -231,17 +230,18 @@ public:
   }
 };
 
-template <typename OpTy>
-class CombineDotAddPattern : public mlir::OpRewritePattern<OpTy> {
+template <typename DotOpType, typename AddOpType>
+class CombineDotAddPattern : public mlir::OpRewritePattern<AddOpType> {
 public:
-  using OpRewritePattern<OpTy>::OpRewritePattern;
+  using OpRewritePattern<AddOpType>::OpRewritePattern;
 
   mlir::LogicalResult
-  matchAndRewrite(OpTy addOp, mlir::PatternRewriter &rewriter) const override {
-    auto dotOp = addOp.getRhs().template getDefiningOp<DotOp>();
+  matchAndRewrite(AddOpType addOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto dotOp = addOp.getRhs().template getDefiningOp<DotOpType>();
     bool isDotLHS = false;
     if (!dotOp) {
-      dotOp = addOp.getLhs().template getDefiningOp<DotOp>();
+      dotOp = addOp.getLhs().template getDefiningOp<DotOpType>();
       if (!dotOp) {
         return failure();
       }
@@ -252,7 +252,8 @@ public:
     }
     if (!isZero(dotOp.getC()))
       return failure();
-    if constexpr (std::is_same_v<OpTy, arith::AddFOp>) {
+    if constexpr (std::is_same_v<DotOpType, DotOp> &&
+                  std::is_same_v<AddOpType, arith::AddFOp>) {
       if (dotOp.getMaxNumImpreciseAcc() != 0) {
         return failure();
       }
@@ -270,8 +271,10 @@ public:
 // AddFOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
 // AddIOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
 // AddFOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
-using CombineDotAddIPattern = CombineDotAddPattern<arith::AddIOp>;
-using CombineDotAddFPattern = CombineDotAddPattern<arith::AddFOp>;
+using CombineDotAddIPattern = CombineDotAddPattern<DotOp, arith::AddIOp>;
+using CombineDotAddFPattern = CombineDotAddPattern<DotOp, arith::AddFOp>;
+using CombineDotScaledAddFPattern =
+    CombineDotAddPattern<DotScaledOp, arith::AddFOp>;
 
 } // anonymous namespace
 
@@ -284,6 +287,7 @@ public:
 
     patterns.add<CombineDotAddIPattern>(context);
     patterns.add<CombineDotAddFPattern>(context);
+    patterns.add<CombineDotScaledAddFPattern>(context);
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);

@@ -115,7 +115,7 @@ static PyTypeObject PyKernelArgType = {
 static bool encodeTDMDescriptor(TDMDescriptor *desc, int elementBitWidth,
                                 uint32_t *blockSize, int numWarps,
                                 int padInterval, int padAmount, uint32_t *shape,
-                                uint32_t *strides, uint64_t globalAddress,
+                                uint64_t *strides, uint64_t globalAddress,
                                 int rank) {
   if (rank < 1 || rank > 5)
     return false;
@@ -184,36 +184,46 @@ static bool encodeTDMDescriptor(TDMDescriptor *desc, int elementBitWidth,
   if (rank >= 3)
     desc->group1_4 |= (adjustedBlockSize[rank - 3] << 16);
 
-  // Strides
-  if (rank >= 2)
-    desc->group1_5 = strides[rank - 2];
+  // TDM strides are 48bit in 2 different groups so we mask against overflows
+  // into other fields.
+  const uint64_t kStrideHi16Mask = (uint64_t)0xFFFFu;
+  if (rank >= 2) {
+    uint64_t s0 = strides[rank - 2];
+    desc->group1_5 = (uint32_t)s0;
+    desc->group1_6 = (uint32_t)((s0 >> 32) & kStrideHi16Mask);
+  }
   if (rank >= 3) {
-    desc->group1_6 = (strides[rank - 3] << 16);
-    desc->group1_7 = (strides[rank - 3] >> 16);
+    uint64_t s1 = strides[rank - 3];
+    desc->group1_6 |= (uint32_t)((s1 & 0xFFFFu) << 16);
+    desc->group1_7 = (uint32_t)((s1 >> 16) & 0xFFFFFFFFu);
   }
 
   // group2 (128 bits / 4 dwords) for 3D-5D tensors:
   // [31:0]:    tensor_dim2 (3rd dimension from end)
   // [63:32]:   tensor_dim3 (4th dimension from end)
-  // [111:64]:  tensor_dim2_stride (48 bits, we use 32 bits)
+  // [111:64]:  tensor_dim2_stride (48 bits)
   // [127:112]: tile_dim3
   if (rank >= 3) {
     desc->group2_0 = shape[rank - 3];
     if (rank >= 4) {
+      uint64_t s2 = strides[rank - 4];
       desc->group2_1 = shape[rank - 4];
-      desc->group2_2 = strides[rank - 4];
-      desc->group2_3 = (adjustedBlockSize[rank - 4] << 16);
+      desc->group2_2 = (uint32_t)s2;
+      desc->group2_3 = (uint32_t)((s2 >> 32) & kStrideHi16Mask);
+      desc->group2_3 |= (adjustedBlockSize[rank - 4] << 16);
     }
   }
 
   // group3 (128 bits / 4 dwords) for 4D-5D tensors:
-  // [47:0]:    tensor_dim3_stride (48 bits, we use 32 bits)
+  // [47:0]:    tensor_dim3_stride (48 bits)
   // [79:48]:   tensor_dim4 (5th dimension from end)
   // [95:80]:   tile_dim4
   // [127:96]:  reserved
   if (rank == 5) {
-    desc->group3_0 = strides[rank - 5];
-    desc->group3_1 = (shape[rank - 5] << 16);
+    uint64_t s3 = strides[rank - 5];
+    desc->group3_0 = (uint32_t)s3;
+    desc->group3_1 = (uint32_t)((s3 >> 32) & kStrideHi16Mask);
+    desc->group3_1 |= (shape[rank - 5] << 16);
     desc->group3_2 = (shape[rank - 5] >> 16);
     desc->group3_2 |= (adjustedBlockSize[rank - 5] << 16);
   }
@@ -230,32 +240,34 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
 // |FOR_EACH_ERR_FN| is a macro to process APIs that return hipError_t;
 // |FOR_EACH_STR_FN| is a macro to process APIs that return const char *.
 #define HIP_SYMBOL_LIST(FOR_EACH_ERR_FN, FOR_EACH_STR_FN)                      \
-  FOR_EACH_STR_FN(hipGetLastError)                                             \
-  FOR_EACH_STR_FN(hipGetErrorString, hipError_t hipError)                      \
-  FOR_EACH_ERR_FN(hipGetDeviceProperties, hipDeviceProp_t *prop, int deviceId) \
-  FOR_EACH_ERR_FN(hipModuleLoadDataEx, hipModule_t *module, const void *image, \
-                  unsigned int numOptions, hipJitOption *options,              \
-                  void **optionValues)                                         \
-  FOR_EACH_ERR_FN(hipModuleUnload, hipModule_t module)                         \
-  FOR_EACH_ERR_FN(hipModuleGetFunction, hipFunction_t *function,               \
+  FOR_EACH_STR_FN(hipGetLastError, true)                                       \
+  FOR_EACH_STR_FN(hipGetErrorString, true, hipError_t hipError)                \
+  FOR_EACH_ERR_FN(hipGetDeviceProperties, true, hipDeviceProp_t *prop,         \
+                  int deviceId)                                                \
+  FOR_EACH_ERR_FN(hipModuleLoadDataEx, true, hipModule_t *module,              \
+                  const void *image, unsigned int numOptions,                  \
+                  hipJitOption *options, void **optionValues)                  \
+  FOR_EACH_ERR_FN(hipModuleUnload, true, hipModule_t module)                   \
+  FOR_EACH_ERR_FN(hipModuleGetFunction, true, hipFunction_t *function,         \
                   hipModule_t module, const char *kname)                       \
-  FOR_EACH_ERR_FN(hipFuncGetAttribute, int *, hipFunction_attribute attr,      \
-                  hipFunction_t function)                                      \
-  FOR_EACH_ERR_FN(hipDrvLaunchKernelEx, const HIP_LAUNCH_CONFIG *config,       \
-                  hipFunction_t f, void **kernelParams, void **extra)          \
-  FOR_EACH_ERR_FN(hipModuleLaunchKernel, hipFunction_t f,                      \
+  FOR_EACH_ERR_FN(hipFuncGetAttribute, true, int *,                            \
+                  hipFunction_attribute attr, hipFunction_t function)          \
+  FOR_EACH_ERR_FN(hipDrvLaunchKernelEx, false,                                 \
+                  const HIP_LAUNCH_CONFIG *config, hipFunction_t f,            \
+                  void **kernelParams, void **extra)                           \
+  FOR_EACH_ERR_FN(hipModuleLaunchKernel, true, hipFunction_t f,                \
                   unsigned int gridDimX, unsigned int gridDimY,                \
                   unsigned int gridDimZ, unsigned int blockDimX,               \
                   unsigned int blockDimY, unsigned int blockDimZ,              \
                   unsigned int sharedMemBytes, hipStream_t stream,             \
                   void **kernelParams, void **extra)                           \
-  FOR_EACH_ERR_FN(hipModuleLaunchCooperativeKernel, hipFunction_t f,           \
+  FOR_EACH_ERR_FN(hipModuleLaunchCooperativeKernel, true, hipFunction_t f,     \
                   unsigned int gridDimX, unsigned int gridDimY,                \
                   unsigned int gridDimZ, unsigned int blockDimX,               \
                   unsigned int blockDimY, unsigned int blockDimZ,              \
                   unsigned int sharedMemBytes, hipStream_t stream,             \
                   void **kernelParams, void **extra)                           \
-  FOR_EACH_ERR_FN(hipPointerGetAttribute, void *data,                          \
+  FOR_EACH_ERR_FN(hipPointerGetAttribute, true, void *data,                    \
                   hipPointer_attribute attribute, hipDeviceptr_t ptr)
 
 // HIP driver version format: HIP_VERSION_MAJOR * 10000000 + HIP_VERSION_MINOR *
@@ -288,9 +300,9 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
 
 // The HIP symbol table for holding resolved dynamic library symbols.
 struct HIPSymbolTable {
-#define DEFINE_EACH_ERR_FIELD(hipSymbolName, ...)                              \
+#define DEFINE_EACH_ERR_FIELD(hipSymbolName, required, ...)                    \
   hipError_t (*hipSymbolName)(__VA_ARGS__);
-#define DEFINE_EACH_STR_FIELD(hipSymbolName, ...)                              \
+#define DEFINE_EACH_STR_FIELD(hipSymbolName, required, ...)                    \
   const char *(*hipSymbolName)(__VA_ARGS__);
 
   HIP_SYMBOL_LIST(DEFINE_EACH_ERR_FIELD, DEFINE_EACH_STR_FIELD)
@@ -380,11 +392,11 @@ bool initSymbolTable() {
   uint64_t hipFlags = 0;
   hipDriverProcAddressQueryResult symbolStatus;
   hipError_t status = hipSuccess;
-#define QUERY_EACH_FN(hipSymbolName, ...)                                      \
+#define QUERY_EACH_FN(hipSymbolName, required, ...)                            \
   status = hipGetProcAddress(#hipSymbolName,                                   \
                              (void **)&hipSymbolTable.hipSymbolName,           \
                              hipVersion, hipFlags, &symbolStatus);             \
-  if (status != hipSuccess) {                                                  \
+  if (required && status != hipSuccess) {                                      \
     PyErr_SetString(PyExc_RuntimeError,                                        \
                     "cannot get address for '" #hipSymbolName                  \
                     "' from libamdhip64.so");                                  \
@@ -532,7 +544,7 @@ static PyObject *createTDMDescriptor(PyObject *self, PyObject *args) {
 
   uint32_t blockSizeInt[5];
   uint32_t shapeInt[5];
-  uint32_t stridesInt[5];
+  uint64_t stridesInt64[5];
 
   blockSizeFast = PySequence_Fast(blockSize, "blockSize must be a sequence");
   if (!blockSizeFast)
@@ -580,10 +592,22 @@ static PyObject *createTDMDescriptor(PyObject *self, PyObject *args) {
   for (int i = 0; i < rank; ++i) {
     PyObject *item = PySequence_Fast_GET_ITEM(stridesFast, i);
     if (!PyLong_Check(item)) {
-      PyErr_SetString(PyExc_TypeError, "shape must be an int");
+      PyErr_SetString(PyExc_TypeError, "stride must be an int");
       goto cleanup;
     }
-    stridesInt[i] = PyLong_AsLong(item);
+    unsigned long long s = PyLong_AsUnsignedLongLong(item);
+    if (PyErr_Occurred()) {
+      goto cleanup;
+    }
+    const uint32_t kTdmStrideMaxBits = 48;
+    if (s >= (1ULL << kTdmStrideMaxBits)) {
+      PyErr_Format(PyExc_ValueError,
+                   "TDM tensor descriptor stride[%d] = %llu is too large, must "
+                   "fit into %u bits (max %llu)",
+                   i, s, kTdmStrideMaxBits, (1ULL << kTdmStrideMaxBits) - 1);
+      goto cleanup;
+    }
+    stridesInt64[i] = (uint64_t)s;
   }
 
   Py_DECREF(blockSizeFast);
@@ -595,7 +619,7 @@ static PyObject *createTDMDescriptor(PyObject *self, PyObject *args) {
 
   bool success = encodeTDMDescriptor(
       &descObj->desc, elementBitWidth, blockSizeInt, numWarps, padInterval,
-      padAmount, shapeInt, stridesInt, globalAddress, rank);
+      padAmount, shapeInt, stridesInt64, globalAddress, rank);
   if (!success) {
     PyErr_SetString(PyExc_RuntimeError, "Failed to encode TDM descriptor");
     goto cleanup;

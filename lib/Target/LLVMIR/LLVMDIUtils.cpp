@@ -68,8 +68,9 @@ LLVM::DITypeAttr LLVMDIUtils::convertPtrType(MLIRContext *context,
   LLVM::DITypeAttr diElTypeAttr = convertType(context, pointeeType);
   LLVM::DITypeAttr diTypeAttr = mlir::LLVM::DIDerivedTypeAttr::get(
       context, llvm::dwarf::DW_TAG_pointer_type,
-      mlir::StringAttr::get(context, "pointer"), diElTypeAttr, sizeInBits,
-      /*alignInBits=*/0, /*offset=*/0, addrSpace, mlir::LLVM::DIFlags::Zero,
+      mlir::StringAttr::get(context, "pointer"), /*file=*/nullptr, /*line=*/0,
+      /*scope=*/nullptr, diElTypeAttr, sizeInBits, /*alignInBits=*/0,
+      /*offset=*/0, addrSpace, mlir::LLVM::DIFlags::Zero,
       /*extra data=*/nullptr);
   return diTypeAttr;
 }
@@ -95,7 +96,8 @@ LLVM::DITypeAttr LLVMDIUtils::convertStructType(MLIRContext *context,
       mlir::StringAttr::get(context, "struct"), fileAttr, /*line=*/line,
       /*scope=*/fileAttr, /*baseType=*/nullptr, mlir::LLVM::DIFlags::Zero,
       sizeInBits, /*alignInBits=*/0, /*dataLocation=*/nullptr, /*rank=*/nullptr,
-      /*allocated=*/nullptr, /*associated=*/nullptr, elTypes);
+      /*allocated=*/nullptr, /*associated=*/nullptr, /*identifier=*/nullptr,
+      /*discriminator=*/nullptr, elTypes);
 }
 
 LLVM::DITypeAttr LLVMDIUtils::convertArrayType(MLIRContext *context,
@@ -115,7 +117,8 @@ LLVM::DITypeAttr LLVMDIUtils::convertArrayType(MLIRContext *context,
       mlir::StringAttr::get(context, "array"), fileAttr, /*line=*/line,
       /*scope=*/fileAttr, /*baseType=*/baseType, mlir::LLVM::DIFlags::Zero,
       sizeInBits, /*alignInBits=*/0, /*dataLocation=*/nullptr, /*rank=*/nullptr,
-      /*allocated=*/nullptr, /*associated=*/nullptr, elTypes);
+      /*allocated=*/nullptr, /*associated=*/nullptr, /*identifier=*/nullptr,
+      /*discriminator=*/nullptr, elTypes);
 }
 
 std::optional<unsigned> LLVMDIUtils::calcBitWidth(mlir::Type type) {
@@ -125,7 +128,6 @@ std::optional<unsigned> LLVMDIUtils::calcBitWidth(mlir::Type type) {
     auto vectorType = dyn_cast<mlir::VectorType>(type);
     llvm::ArrayRef<int64_t> shape = vectorType.getShape();
     mlir::Type elementType = vectorType.getElementType();
-    llvm::ArrayRef<bool> scalableDims = vectorType.getScalableDims();
     unsigned size = 1;
     for (auto i : shape) {
       size *= i;

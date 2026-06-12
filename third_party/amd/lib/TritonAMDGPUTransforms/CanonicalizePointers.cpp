@@ -344,8 +344,6 @@ createDecomposeOffsetFromAdd(RewriterBase &rewriter, Location loc, Value expr,
       createAddOffsetsOfSameKind(rewriter, loc, uniformOffsetL, uniformOffsetR);
   Value nonUniformAdd = createAddOffsetsOfSameKind(
       rewriter, loc, nonUniformOffsetL, nonUniformOffsetR);
-  Value maybeDeadValue[] = {nonUniformOffsetL, nonUniformOffsetR,
-                            uniformOffsetL, uniformOffsetR};
   return {uniformAdd, nonUniformAdd};
 }
 
@@ -460,20 +458,21 @@ struct FatPointers {
     // for map default insert
     FatPtrAttrs() = default;
 
-    friend bool operator==(const FatPtrAttrs &lhs, const FatPtrAttrs &rhs) {
-      return lhs.canNarrow == rhs.canNarrow &&
-             lhs.attributes == rhs.attributes &&
-             lhs.smallTensorBase == rhs.smallTensorBase;
+    static FatPtrAttrs intersect(const FatPtrAttrs &lhs,
+                                 const FatPtrAttrs &rhs) {
+      FatPtrAttrs result;
+      result.canNarrow = lhs.canNarrow && rhs.canNarrow;
+      result.isSmallTensor = lhs.isSmallTensor && rhs.isSmallTensor;
+      for (const auto &attr : lhs.attributes) {
+        auto it = rhs.attributes.find(attr.first);
+        if (it != rhs.attributes.end() && it->second == attr.second)
+          result.attributes[attr.first] = attr.second;
+      }
+      return result;
     }
 
-    friend bool operator!=(const FatPtrAttrs &lhs, const FatPtrAttrs &rhs) {
-      return !(lhs == rhs);
-    }
-
-    llvm::DenseMap<StringRef, Attribute> attributes;
-    // If the fat-pointer points to somewhere in a small-tensor, keep track the
-    // base of the tensor.
-    Value smallTensorBase;
+    llvm::SmallMapVector<StringRef, Attribute, 2> attributes;
+    bool isSmallTensor = false;
     bool canNarrow = false;
   };
 
@@ -563,7 +562,7 @@ Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
     auto addPtrOp =
         tt::AddPtrOp::create(rewriter, loc, basePtr.getType(), basePtr, offset);
     for (const auto &attribute : fatPtrAttrs.attributes)
-      addPtrOp->setAttr(attribute.getFirst(), attribute.getSecond());
+      addPtrOp->setAttr(attribute.first, attribute.second);
     return addPtrOp.getResult();
   }
 
@@ -585,7 +584,7 @@ Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
       tt::AddPtrOp::create(rewriter, loc, tensorPtrType, tensorPtr, offset);
 
   for (const auto &attribute : fatPtrAttrs.attributes)
-    addPtrOp->setAttr(attribute.getFirst(), attribute.getSecond());
+    addPtrOp->setAttr(attribute.first, attribute.second);
   return addPtrOp.getResult();
 }
 
@@ -616,9 +615,11 @@ struct PointerCanonicalizationPattern : ConversionPattern {
   PointerCanonicalizationPattern(MLIRContext *context,
                                  llvm::SetVector<Operation *> &opsToRewrite,
                                  FatPointers &fatPtrs,
+                                 llvm::SmallPtrSet<Block *, 8> &convertedBlocks,
                                  PatternBenefit benefit = 1)
       : ConversionPattern(SourceOp::getOperationName(), benefit, context),
-        fatPtrs(fatPtrs), opToRewrite(opsToRewrite) {}
+        fatPtrs(fatPtrs), opToRewrite(opsToRewrite),
+        convertedBlocks(convertedBlocks) {}
 
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<ValueRange> operands,
@@ -637,6 +638,7 @@ struct PointerCanonicalizationPattern : ConversionPattern {
 
   FatPointers &fatPtrs;
   llvm::SetVector<Operation *> &opToRewrite;
+  llvm::SmallPtrSet<Block *, 8> &convertedBlocks;
 };
 
 /// splat integer offset, keep base
@@ -745,7 +747,7 @@ public:
     RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(addPtrOp);
 
-    if (fatPtrs.at({fatPtrBase, fatPtrOffset}).smallTensorBase)
+    if (fatPtrs.at({fatPtrBase, fatPtrOffset}).isSmallTensor)
       return rewriteSmallTensorPtr(addPtrOp, adaptor, rewriter);
 
     // Query all discardable attributes that we want to preserve
@@ -861,7 +863,7 @@ private:
     const auto &oldAttr = fatPtrs.at({fatPtrBase, fatPtrOffset});
 
     LDBG("smal-tensor addPtr: " << addPtrOp);
-    LDBG("   - with tensor-base: " << oldAttr.smallTensorBase);
+    LDBG("   - isSmallTensor: " << oldAttr.isSmallTensor);
     LDBG("   - with originl offset: " << origOffset);
     LDBG("   - fatPtr base: " << fatPtrBase);
     LDBG("   - fatPtr offst: " << fatPtrOffset);
@@ -1202,19 +1204,23 @@ public:
 /// Simple here means each block arg is replaced 1-1 with the remapped operand
 /// types (e.g., scf.for does not use this helper because scf.for needs to skip
 /// the 0th bb arg, the induction var).
-static void convertSimpleBlockSignature(Block *oldBlock,
-                                        ArrayRef<ValueRange> remappedOperands,
-                                        ConversionPatternRewriter &rewriter,
-                                        FatPointers &fatPtrs) {
-  auto oldBlockTypes = oldBlock->getArgumentTypes();
-  TypeConverter::SignatureConversion blockSigConversion(oldBlockTypes.size());
-  for (unsigned i = 0, e = oldBlockTypes.size(); i != e; ++i) {
-    SmallVector<Type> remappedInitTypes =
-        llvm::to_vector(remappedOperands[i].getTypes());
-    blockSigConversion.addInputs(i, remappedInitTypes);
+static void convertSimpleBlockSignature(
+    Block *oldBlock, ArrayRef<ValueRange> remappedOperands,
+    ConversionPatternRewriter &rewriter, FatPointers &fatPtrs,
+    llvm::SmallPtrSet<Block *, 8> &convertedBlocks) {
+  // Skip blocks already expanded by a prior predecessor; just update fatPtrs.
+  Block *newBlock = oldBlock;
+  if (!convertedBlocks.contains(oldBlock)) {
+    auto oldBlockTypes = oldBlock->getArgumentTypes();
+    TypeConverter::SignatureConversion blockSigConversion(oldBlockTypes.size());
+    for (unsigned i = 0, e = oldBlockTypes.size(); i != e; ++i) {
+      SmallVector<Type> remappedInitTypes =
+          llvm::to_vector(remappedOperands[i].getTypes());
+      blockSigConversion.addInputs(i, remappedInitTypes);
+    }
+    newBlock = rewriter.applySignatureConversion(oldBlock, blockSigConversion);
+    convertedBlocks.insert(newBlock);
   }
-  auto newBlock =
-      rewriter.applySignatureConversion(oldBlock, blockSigConversion);
 
   int offset = 0;
   for (auto operands : remappedOperands) {
@@ -1242,9 +1248,9 @@ public:
       valRangeLens.push_back(remappedInit.size());
 
     convertSimpleBlockSignature(whileOp.getBeforeBody(), remappedInits,
-                                rewriter, fatPtrs);
+                                rewriter, fatPtrs, convertedBlocks);
     convertSimpleBlockSignature(whileOp.getAfterBody(), remappedInits, rewriter,
-                                fatPtrs);
+                                fatPtrs, convertedBlocks);
 
     SmallVector<Value> initArgs = flattenValues(remappedInits);
     SmallVector<Type> resultTypes = llvm::map_to_vector(
@@ -1326,9 +1332,9 @@ public:
         falseOperands);
 
     convertSimpleBlockSignature(branchOp.getTrueDest(), remappedTrueOperands,
-                                rewriter, fatPtrs);
+                                rewriter, fatPtrs, convertedBlocks);
     convertSimpleBlockSignature(branchOp.getFalseDest(), remappedFalseOperands,
-                                rewriter, fatPtrs);
+                                rewriter, fatPtrs, convertedBlocks);
 
     rewriter.replaceOp(branchOp, newOp);
     return success();
@@ -1352,41 +1358,74 @@ public:
   LogicalResult
   matchAndRewrite_(arith::SelectOp selectOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
-    if (adaptor.getTrueValue().size() != 2 ||
-        adaptor.getFalseValue().size() != 2) {
-      assert(adaptor.getTrueValue().size() == adaptor.getFalseValue().size() &&
-             "expected both true and false operands to be the same size");
-      return success();
-    }
-    // If both have been traversed, then we can rewrite select of pointers as a
-    // select of base and offset
+
     ValueRange fatPtrFalse = adaptor.getFalseValue();
     ValueRange fatPtrTrue = adaptor.getTrueValue();
-    // Simple case of a scalar select: update the base pointer
-    if (!isa<RankedTensorType>(selectOp.getType())) {
+
+    assert((fatPtrTrue.size() == 1 || fatPtrTrue.size() == 2) &&
+           "expected 1 or 2 element fatPtrTrue");
+    assert((fatPtrFalse.size() == 1 || fatPtrFalse.size() == 2) &&
+           "expected 1 or 2 element fatPtrFalse");
+    if (fatPtrTrue.size() == 1 && fatPtrFalse.size() == 1)
+      return success();
+    if (fatPtrTrue.size() != 2 || fatPtrFalse.size() != 2) {
+      Value trueOp;
+      Value falseOp;
+      if (fatPtrTrue.size() == 2) {
+        trueOp = tt::AddPtrOp::create(rewriter, selectOp.getLoc(),
+                                      selectOp.getType(), fatPtrTrue[0],
+                                      fatPtrTrue[1]);
+      } else {
+        trueOp = fatPtrTrue[0];
+      }
+      if (fatPtrFalse.size() == 2) {
+        falseOp = tt::AddPtrOp::create(rewriter, selectOp.getLoc(),
+                                       selectOp.getType(), fatPtrFalse[0],
+                                       fatPtrFalse[1]);
+      } else {
+        falseOp = fatPtrFalse[0];
+      }
       auto newSelectOp = arith::SelectOp::create(
           rewriter, selectOp.getLoc(), selectOp.getType(),
-          selectOp.getCondition(), fatPtrTrue[0], selectOp.getFalseValue());
-      rewriter.replaceOpWithMultiple(selectOp, {{newSelectOp, fatPtrTrue[1]}});
-      fatPtrs[{newSelectOp, /*fatPtrOffset*/ fatPtrTrue[1]}] =
-          fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]});
+          selectOp.getCondition(), trueOp, falseOp);
+      rewriter.replaceOp(selectOp, newSelectOp);
       return success();
     }
 
-    // Rewrite to select(fatBaseT, fatBaseF) and select(fatOffsetT, fatOffsetF)
-    auto newBase = arith::SelectOp::create(rewriter, selectOp.getLoc(),
-                                           selectOp.getCondition(),
-                                           fatPtrTrue[0], fatPtrFalse[0]);
-    auto newOffset = arith::SelectOp::create(rewriter, selectOp.getLoc(),
-                                             selectOp.getCondition(),
-                                             fatPtrTrue[1], fatPtrFalse[1]);
+    // If both have been traversed, then we can rewrite select of pointers as a
+    // select of base and offset
+    Value cond = selectOp.getCondition();
+    Value baseTrue = fatPtrTrue[0], offsetTrue = fatPtrTrue[1];
+    Value baseFalse = fatPtrFalse[0], offsetFalse = fatPtrFalse[1];
 
-    assert((fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}) ==
-            fatPtrs.at({fatPtrFalse[0], fatPtrFalse[1]})) &&
-           "expected can narrow to be the same for both fatPtrT and fatPtrF");
+    // A tensor condition can't select between differing scalar bases, so
+    // materialize both arms and select the full tensor pointers instead.
+    if (isa<RankedTensorType>(cond.getType()) && baseTrue != baseFalse) {
+      Value truePtr =
+          createTensorPointer(rewriter, baseTrue, offsetTrue, selectOp.getLoc(),
+                              fatPtrs.at({baseTrue, offsetTrue}));
+      Value falsePtr = createTensorPointer(
+          rewriter, baseFalse, offsetFalse, selectOp.getLoc(),
+          fatPtrs.at({baseFalse, offsetFalse}));
+      rewriter.replaceOp(selectOp,
+                         arith::SelectOp::create(rewriter, selectOp.getLoc(),
+                                                 cond, truePtr, falsePtr));
+      return success();
+    }
+
+    // Select base and offset separately. Reuse the base when both arms share
+    // it, so only the offset needs a select.
+    Value newBase = baseTrue;
+    if (baseTrue != baseFalse)
+      newBase = arith::SelectOp::create(rewriter, selectOp.getLoc(), cond,
+                                        baseTrue, baseFalse);
+    Value newOffset = arith::SelectOp::create(rewriter, selectOp.getLoc(), cond,
+                                              offsetTrue, offsetFalse);
 
     rewriter.replaceOpWithMultiple(selectOp, {{newBase, newOffset}});
-    fatPtrs[{newBase, newOffset}] = fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]});
+    fatPtrs[{newBase, newOffset}] = FatPointers::FatPtrAttrs::intersect(
+        fatPtrs.at({baseTrue, offsetTrue}),
+        fatPtrs.at({baseFalse, offsetFalse}));
 
     return success();
   }
@@ -1434,14 +1473,6 @@ public:
           assert(i < ifOp.thenYield().getNumOperands() &&
                  i + 1 < ifOp.thenYield().getNumOperands() &&
                  "expected idx to be within bounds of IfOp's results");
-          Value thenFatPtrBase = ifOp.thenYield().getOperand(i);
-          Value thenFatPtrOffset = ifOp.thenYield().getOperand(i + 1);
-          Value elseFatPtrBase = ifOp.elseYield().getOperand(i);
-          Value elseFatPtrOffset = ifOp.elseYield().getOperand(i + 1);
-          assert((fatPtrs.at({thenFatPtrBase, thenFatPtrOffset}) ==
-                  fatPtrs.at({elseFatPtrBase, elseFatPtrOffset})) &&
-                 "expected then fat ptr canNarrow and else fat ptr canNarrow "
-                 "to be equal");
         }
       }
     }
@@ -1467,8 +1498,17 @@ public:
     for (int64_t idx : yieldPtrOffsets) {
       Value thenFatPtrBase = newIfOp.thenYield().getOperand(idx);
       Value thenFatPtrOffset = newIfOp.thenYield().getOperand(idx + 1);
-      fatPtrs[{newIfOp.getResult(idx), newIfOp.getResult(idx + 1)}] =
-          fatPtrs.at({thenFatPtrBase, thenFatPtrOffset});
+      const auto &thenAttrs = fatPtrs.at({thenFatPtrBase, thenFatPtrOffset});
+      if (withElseRegion) {
+        Value elseFatPtrBase = newIfOp.elseYield().getOperand(idx);
+        Value elseFatPtrOffset = newIfOp.elseYield().getOperand(idx + 1);
+        const auto &elseAttrs = fatPtrs.at({elseFatPtrBase, elseFatPtrOffset});
+        fatPtrs[{newIfOp.getResult(idx), newIfOp.getResult(idx + 1)}] =
+            FatPointers::FatPtrAttrs::intersect(thenAttrs, elseAttrs);
+      } else {
+        fatPtrs[{newIfOp.getResult(idx), newIfOp.getResult(idx + 1)}] =
+            thenAttrs;
+      }
     }
 
     ResultRange results = newIfOp.getResults();
@@ -1504,7 +1544,7 @@ public:
     auto newOp = cf::BranchOp::create(rewriter, branchOp.getLoc(),
                                       branchOp.getDest(), trueOperands);
     convertSimpleBlockSignature(branchOp.getDest(), remappedDestOperands,
-                                rewriter, fatPtrs);
+                                rewriter, fatPtrs, convertedBlocks);
     rewriter.replaceOp(branchOp, newOp);
     return success();
   }
@@ -1708,7 +1748,7 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
       rewriter.replaceAllUsesExcept(arg, dummyCast.getResult(0), dummyCast);
       fatPtrs[{arg, zeroOffset}].canNarrow = true;
       if (bitness != 64)
-        fatPtrs[{arg, zeroOffset}].smallTensorBase = arg;
+        fatPtrs[{arg, zeroOffset}].isSmallTensor = true;
     }
 
     newOp->setDiscardableAttr(kInitFuncArgsRewritten, rewriter.getUnitAttr());
@@ -1987,6 +2027,10 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   target.addDynamicallyLegalDialect<triton::amdgpu::TritonAMDGPUDialect>(
       isLegal);
 
+  // Tracks blocks whose signature has been expanded; prevents double-conversion
+  // when a block has multiple predecessors.
+  llvm::SmallPtrSet<Block *, 8> convertedBlocks;
+
   // Rewrite the rest of the ops.
   // Note we *do not* declare unrealized_cast an illegal op here in order that
   // the whole conversion passes, even if there are tt ops that we do not
@@ -2011,7 +2055,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       ConvertExpandDims, ConvertSCFYieldOp, ConvertSCFIfOp,
       ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
       ConvertCFBranch, ConvertArithSelectOp, ConvertReturnOp>(
-      patterns.getContext(), opsToRewrite, fatPrs);
+      patterns.getContext(), opsToRewrite, fatPrs, convertedBlocks);
   if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 
@@ -2019,8 +2063,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   // unsupported ops.
   target.addIllegalOp<UnrealizedConversionCastOp>();
   patterns.clear();
-  patterns.add<ConvertUnimplementedOpUnrealizedCasts>(patterns.getContext(),
-                                                      opsToRewrite, fatPrs);
+  patterns.add<ConvertUnimplementedOpUnrealizedCasts>(
+      patterns.getContext(), opsToRewrite, fatPrs, convertedBlocks);
   if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 

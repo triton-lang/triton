@@ -72,13 +72,14 @@ def TTNG_FenceMBarrierInitReleaseClusterOp : TTNG_Op<
 
   let extraClassDeclaration = [{
     static bool isSupported(int computeCapability) {
-      return computeCapability >= 90;
+      return ::mlir::triton::nvidia_gpu::TargetFeatures(computeCapability)
+          .supportClusterOps();
     }
   }];
 }
 
 def TTNG_ClusterArriveOp : TTNG_Op<"cluster_arrive", []> {
-  let arguments = (ins I1Attr:$relaxed);
+  let arguments = (ins DefaultValuedAttr<BoolAttr, "false">:$relaxed);
   let assemblyFormat = "attr-dict";
   let hasVerifier = 1;
 }
@@ -88,10 +89,26 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
   let hasVerifier = 1;
 }
 
+def TTNG_ClusterBarrierOp : TTNG_Op<"cluster_barrier", []> {
+  let arguments = (ins DefaultValuedAttr<BoolAttr, "false">:$relaxed);
+  let summary = "Synchronize all warps at cluster scope";
+  let description = [{
+    Lowers to a cluster arrive/wait pair.
+
+    In warp-specialized kernels, lowering wraps the barrier in a synthetic
+    `ttg.warp_specialize` region so worker warps also execute a barrier outside
+    existing warp-specialized code. A barrier inside `ttg.warp_specialize`
+    lowers through a cluster-scoped mbarrier.
+  }];
+  let assemblyFormat = "attr-dict";
+  let hasVerifier = 1;
+}
+
 //
 // Cluster Launch Control (CLC) Ops - Blackwell SM100+
 //
-def TTNG_CLCTryCancelOp : TTNG_Op<"clc_try_cancel", []> {
+def TTNG_CLCTryCancelOp : TTNG_Op<"clc_try_cancel", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "Issue CLC try_cancel to cancel a pending cluster";
 
   let description = [{
@@ -107,8 +124,7 @@ def TTNG_CLCTryCancelOp : TTNG_Op<"clc_try_cancel", []> {
 
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$mbarrier,
-    I1Attr:$multicast
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$mbarrier
   );
 
   let assemblyFormat = [{
@@ -237,7 +253,8 @@ def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterface
   let hasVerifier = 1;
 }
 
-def TTNG_InitBarrierOp : TTNG_Op<"init_barrier"> {
+def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "Initialize a barrier in the given shared memory allocation.";
 
   let description = [{
@@ -256,7 +273,8 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier"> {
   let hasVerifier = 1;
 }
 
-def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier"> {
+def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
   let summary = "Invalidate a barrier allocation.";
 
   let description = [{
@@ -271,7 +289,9 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier"> {
   let assemblyFormat = "$alloc attr-dict `:` qualified(type($alloc))";
 }
 
-def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect"> {
+def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Signal a barrier of an expected number of bytes to be copied.";
 
   let description = [{
@@ -289,9 +309,12 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect"> {
   let assemblyFormat = [{
     $alloc `,` $size attr-dict `,` $pred `:` qualified(type($alloc))
   }];
+
 }
 
-def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments]> {
+def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "wait until the mbarrier phase completes.";
 
   let description = [{
@@ -337,7 +360,9 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments]> {
   let hasVerifier = 1;
 }
 
-def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
+def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "perform the arrive operation on an mbarrier";
   let description = [{
     The `ttng.arrive_barrier` operation performs the "arrive" operation on an
@@ -374,7 +399,8 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier"> {
   let hasVerifier = 1;
 }
 
-def TTNG_AsyncCopyMbarrierArriveOp : TTNG_Op<"async_copy_mbarrier_arrive"> {
+def TTNG_AsyncCopyMbarrierArriveOp : TTNG_Op<"async_copy_mbarrier_arrive", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface>]> {
   let summary = "arrive on mbarrier once all previously issued copies are completed";
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
@@ -384,7 +410,40 @@ def TTNG_AsyncCopyMbarrierArriveOp : TTNG_Op<"async_copy_mbarrier_arrive"> {
 }
 
 
-def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [AttrSizedOperandSegments]> {
+def TTNG_AsyncSharedStoreOp : TTNG_Op<"async_shared_store", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>]> {
+  let summary = "store a distributed tensor to shared memory asynchronously";
+
+  let description = [{
+    Store a distributed tensor into shared memory using PTX st.async.shared.
+    The store completion decrements the transaction count of `mbarrier`.
+    This op requires a CTA cluster with at least two CTAs.
+  }];
+
+  let arguments = (ins
+    TT_Tensor:$src,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$mbarrier
+  );
+
+  let assemblyFormat = [{
+    $src `,` $dst `,` $mbarrier attr-dict `:` type($src) `->`
+    qualified(type($dst)) `,` qualified(type($mbarrier))
+  }];
+  let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    static bool isSupported(int computeCapability) {
+      return ::mlir::triton::nvidia_gpu::TargetFeatures(computeCapability)
+          .supportClusterOps();
+    }
+  }];
+}
+
+
+def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [
+    AttrSizedOperandSegments, DeclareOpInterfaceMethods<MBarrierOpInterface>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>, TMALoadLikeOpInterface]> {
   let summary = "copy data based on descriptor from global memory to local memory asynchronously";
 
   let description = [{
@@ -431,6 +490,9 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
                    CArg<"triton::CacheModifier", "triton::CacheModifier::NONE">:$cache,
                    CArg<"triton::EvictionPolicy", "triton::EvictionPolicy::NORMAL">:$evict,
                    CArg<"bool", "false">:$isVolatile), [{
+      multicast &= ::mlir::triton::nvidia_gpu::hasCGABroadcast(
+                                   ::mlir::cast<::mlir::triton::gpu::MemDescType>(
+                                       result.getType()));
       build($_builder, $_state, desc, coord, /*offsets=*/ValueRange{}, barrier,
             result, pred, multicast, cache, evict, isVolatile);
     }]>
@@ -441,9 +503,11 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
     attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
   }];
+
 }
 
-def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global"> {
+def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global", [
+    TMAStoreLikeOpInterface]> {
   let summary = "copy data based on descriptor from local memory to global memory asynchronously";
 
   let description = [{
@@ -467,7 +531,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global">
   let hasVerifier = 1;
 }
 
-def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
+def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [TMAStoreLikeOpInterface]> {
   let summary = "reduce result in gmem based on a TMA descriptor";
 
   let description = [{
@@ -479,7 +543,7 @@ def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [MemoryEffects<[MemRead<
 
   let arguments = (ins
     TT_DescriptorReduceKindAttr:$kind,
-    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
   );
@@ -488,10 +552,16 @@ def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [MemoryEffects<[MemRead<
     $kind `,` $desc `[` $coord `]` $src
     attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
   }];
+  let extraClassDeclaration = [{
+    static bool isSupportedReduceKind(::mlir::triton::DescriptorReduceKind kind,
+                                      ::mlir::Type elementType);
+  }];
   let hasVerifier = 1;
 }
 
-def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather"> {
+def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>, TMALoadLikeOpInterface]> {
   let summary = "gather data based on descriptor from global memory to local memory asynchronously";
 
   let description = [{
@@ -506,7 +576,8 @@ def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather"> {
     I32:$y_offset,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
-    I1:$pred
+    I1:$pred,
+    UnitAttr:$multicast
   );
 
   let assemblyFormat = [{
@@ -517,7 +588,8 @@ def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather"> {
   let hasVerifier = 1;
 }
 
-def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter"> {
+def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [
+    TMAStoreLikeOpInterface]> {
   let summary = "scatter data from local memory into global memory based on a descriptor asynchronously";
 
   let description = [{
@@ -544,11 +616,12 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter"> {
 }
 
 def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait", [MemWaitOpTrait]> {
-  let summary = "wait until all the inputs are read.";
-  let arguments = (ins I32Attr:$pendings);
+  let summary = "wait for pending TMA store operations.";
+  let arguments = (ins I32Attr:$pendings, UnitAttr:$read_only);
   let description = [{
-    Wait until all the read operations are done from the associated store operations.
-    This is needed before the shared memory can be written to.
+    Wait for the associated store operations to complete. When `read_only` is
+    set, only wait until their reads from shared memory have completed. This is
+    needed before shared memory can be written to again.
   }];
 
   let assemblyFormat = "attr-dict";
@@ -558,6 +631,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>,
+    DeclareOpInterfaceMethods<MBarrierOpInterface>,
     AttrSizedOperandSegments
 ]> {
   let summary = "block level op mapping to tensorcore gen5 mma";
@@ -572,6 +647,9 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     This operation takes and produces an optional token to indicate TMEM read
     and write on its accumulator operand. When the tokens are present, they can
     be used to check aliasing and modref on the accumulator memory.
+
+    The `isUnsigned` attribute is only relevant when performing an integer MMA operation.
+    If true, the integer values are treated as unsigned, otherwise they are treated as signed.
   }];
 
   let arguments = (ins
@@ -585,7 +663,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     Variadic<I1>:$barrier_preds,
     UnitAttr:$is_async,
     UnitAttr:$two_ctas,
-    UnitAttr:$multicast
+    UnitAttr:$multicast,
+    UnitAttr:$is_unsigned
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -596,7 +675,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
       CArg<"bool", "false">:$multicast,
       CArg<"ValueRange", "{}">:$barriers,
       CArg<"ValueRange", "{}">:$barrier_preds,
-      CArg<"bool", "false">:$is_async)>
+      CArg<"bool", "false">:$is_async,
+      CArg<"bool", "false">:$is_unsigned)>
   ];
 
   let assemblyFormat = [{
@@ -613,13 +693,17 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>,
+    DeclareOpInterfaceMethods<MBarrierOpInterface>,
     AttrSizedOperandSegments
 ]> {
   let summary = "block level op mapping to tensorcore gen5 mma";
 
   let description = [{
     $d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
-    if is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
+    If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs
+    and synchronize both CTAs if the op is synchronous.
+    If is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
     Otherwise, if a barrier is given, the op will trigger a commit/arrive on it.
     The result will be safe to read after a barrier wait.
 
@@ -641,6 +725,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
+    UnitAttr:$two_ctas,
+    UnitAttr:$multicast,
     UnitAttr:$is_async
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
@@ -662,7 +748,9 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
       "::mlir::Value":$useD, "::mlir::Value":$pred,
       CArg<"::mlir::ValueRange", "{}">:$barriers,
       CArg<"::mlir::ValueRange", "{}">:$barrier_preds,
-      CArg<"bool", "false">:$is_async)>
+      CArg<"bool", "false">:$two_ctas,
+      CArg<"bool", "false">:$is_async,
+      CArg<"bool", "false">:$multicast)>
   ];
 
   let assemblyFormat = [{
@@ -677,7 +765,9 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   let hasVerifier = 1;
 }
 
-def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments]> {
+def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
+    DeclareOpInterfaceMethods<MBarrierOpInterface>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
 
   let description = [{
@@ -688,7 +778,8 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments]> 
 
     If `descs` are provided, the commit will be multicast across the CTA cluster
     based on the shared layouts of those descriptors. This should be used when
-    the inputs to the tcgen5 MMA come from TMA descriptors using multicast.
+    the inputs to the tcgen5 MMA, including scaled-MMA scale inputs, come from
+    TMA descriptors using multicast.
 
     Note that the completion mechanisms are guaranteed to occur sequentially in
     the order the commit operations were issued. This means, for example:
@@ -820,7 +911,8 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
   }];
 }
 
-def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store"> {
+def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store", [
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Store a distributed tensor into a buffer in tensor memory";
 
   let description = [{
@@ -878,7 +970,8 @@ def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [DeclareOpInterfaceMethods<MemoryEf
   }];
 }
 
-def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure]> {
+def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
+                                                    MemDescViewTrait]> {
   let summary = "Take a subslice of a tensor memory allocation";
   let description = [{
     This operation takes a subslice of a tensor memory allocation and returns a new descriptor
@@ -904,11 +997,6 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
 
   let description = [{
     2D blocks stored contiguously in SMEM are copied into TMEM as specified by the destination address.
-    The completion of the copy can be observed by waiting on the optional barrier. If this op is used
-    together with an MMA op, one barrier can be used to wait for both copy and MMA. We do not need to wait
-    for the completion of the copy before MMA, since tcgen05.cp followed by tcgen05.mma is guaranteed to
-    execute in that order.
-
     This op lowers to the PTX instruction tcgen05.cp. This supports writing either to scales tmem layout as well as default tmem layout.
     Currently the semantic is different when writing to tmem scale layout.
 
@@ -950,11 +1038,10 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
-    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
-    Optional<TTG_MemDescType>:$barrier
+    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst
   );
 
-  let assemblyFormat = [{$src `,` $dst (`,` $barrier^)? attr-dict `:` qualified(type(operands))}];
+  let assemblyFormat = [{$src `,` $dst attr-dict `:` qualified(type(operands))}];
   let hasVerifier = 1;
 }
 

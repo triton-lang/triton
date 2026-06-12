@@ -6,6 +6,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
 
 using namespace mlir;
@@ -22,6 +23,10 @@ struct TestMembarPass
     return "print the result of the allocation pass";
   }
 
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
+  }
+
   void runOnOperation() override {
     Operation *operation = getOperation();
     ModuleOp moduleOp = cast<ModuleOp>(operation);
@@ -36,6 +41,9 @@ struct TestMembarPass
               targetInfo));
       triton::nvidia_gpu::runClusterBarrierInsertion(allocation,
                                                      computeCapability);
+      if (failed(triton::nvidia_gpu::runCrossCTAMBarrierInitSyncInsertion(
+              allocation, computeCapability)))
+        return signalPassFailure();
     }
     ModuleMembarAnalysis membarPass(&allocation,
                                     mlir::triton::NVIDIA::canSkipBarSync);

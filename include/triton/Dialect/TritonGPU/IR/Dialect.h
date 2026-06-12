@@ -5,6 +5,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 // TritonGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -13,6 +14,11 @@
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 
 #include <unordered_map>
+
+namespace mlir {
+class AsmParser;
+class AsmPrinter;
+} // namespace mlir
 
 // LinearLayoutCache Utils
 using CacheKey = std::tuple<std::vector<int64_t>, mlir::Attribute>;
@@ -45,11 +51,6 @@ constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
 constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
-// FIXME: rename to match above
-constexpr static char kPartitionAttrName[] = "ttg.partition";
-constexpr static char kPartitionOutputsAttrName[] = "ttg.partition.outputs";
-constexpr static char kPartitionStagesAttrName[] = "ttg.partition.stages";
-constexpr static char kWarpSpecializeTagAttrName[] = "ttg.warp_specialize.tag";
 
 // Find the contextual number of warps on which this operation is executed.
 int lookupNumWarps(Operation *op);
@@ -96,19 +97,52 @@ using LinearEncodingCache = Cache<CacheKey, LinearEncodingAttr>;
 
 namespace mlir::triton::gpu {
 struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
-  StringRef getName() final { return "<SharedMemory>"; }
+  StringRef getName() const final { return "<SharedMemory>"; }
+  SideEffects::Resource *getParent() const override { return nullptr; }
 };
+
+// Returns true iff every non-broadcast basis of `ll`, after flattening in and
+// out dimensions, maps to a single power-of-2 in the flattened output.
+bool hasPowerOfTwoBases(const LinearLayout &ll);
+
+// Check whether after removing broadcast bases the flattened layout is a
+// permutation matrix (each non-broadcast basis maps to a distinct power-of-2
+// and the remaining layout is bijective).
+bool isPermutationMatrixLayout(const LinearLayout &ll);
+
+// Returns whether the attribute is a GenericLinearEncoding, a WMMA with warp
+// swizzling or a slice or DotOp of one of these.
+bool isGenericLinearEncoding(Attribute attr);
+
+// Create a GenericLinearEncoding if the source isGenericLinearEncoding, and a
+// LinearEncoding otherwise.
+Attribute inferEncodingFromLinearLayout(MLIRContext *ctx, LinearLayout ll,
+                                        Attribute srcEnc);
 
 // Convert a distributed layout to a linear encoding
 LinearEncodingAttr toLinearEncoding(RankedTensorType type);
 LinearEncodingAttr toLinearEncoding(DistributedEncodingTrait layout,
                                     ArrayRef<int64_t> shape);
 
+// Convert a distributed layout to a generic linear encoding
+GenericLinearEncodingAttr toGenericLinearEncoding(RankedTensorType type);
+GenericLinearEncodingAttr
+toGenericLinearEncoding(DistributedEncodingTrait layout,
+                        ArrayRef<int64_t> shape);
+
 unsigned getTotalElemsPerThread(Type type);
 
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
 
+// Get the number of elements in each thread, ignoring register broadcasting.
+unsigned getUniqueElemsPerThread(Type type);
+unsigned getUniqueElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
+
 SmallVector<unsigned> getElemsPerThread(Type type);
+
+FailureOr<RankedTensorType> inferFp4ToFpResultType(RankedTensorType srcType,
+                                                   Type elemType, int32_t axis,
+                                                   std::optional<Location> loc);
 
 // Returns the number of warps per CTA that have access to non-replicated
 // elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,
@@ -210,6 +244,11 @@ inline SmallVector<unsigned> getThreadOrder(RankedTensorType type) {
                         type.getShape());
 }
 
+std::optional<CGAEncodingAttr> parseCGAAttr(AsmParser &parser, Attribute attr,
+                                            unsigned rank);
+
+void printCGAAttr(AsmPrinter &printer, CGAEncodingAttr layout);
+
 CGAEncodingAttr getCGALayout(Attribute layout);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
@@ -239,6 +278,12 @@ SmallVector<int64_t> getAllocationShapePerCTA(Type type);
 
 unsigned getNumCTAs(Attribute layout);
 
+// Returns the MMAv2 warp distribution for a matrix tile. This does not apply
+// dot-chain policy and may oversubscribe tiles with fewer instruction
+// repetitions than warps.
+SmallVector<unsigned> getMmaV2WarpsPerCTA(ArrayRef<int64_t> shape,
+                                          int numWarps);
+
 // Return the order that represents that the batch is in row-major or
 // column-major order for a batch of matrices of shape [*, m, n] with
 // len(shape) == rank.
@@ -250,10 +295,18 @@ SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
 SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
                                             bool kContig);
 
-bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
+// Return true if \p cat would be valid with result encoding \p targetEncoding.
+bool isLegalCatEncoding(CatOp cat, Attribute targetEncoding);
 
 // Return true if a view between the two types cannot be implemented as a no-op.
-bool isExpensiveView(Type srcType, Type dstType);
+bool isExpensiveView(ArrayRef<int64_t> srcShape, Attribute srcEncoding,
+                     ArrayRef<int64_t> dstShape, Attribute dstEncoding);
+inline bool isExpensiveView(Type srcType, Type dstType) {
+  auto tensorSrcType = cast<RankedTensorType>(srcType);
+  auto tensorDstType = cast<RankedTensorType>(dstType);
+  return isExpensiveView(tensorSrcType.getShape(), tensorSrcType.getEncoding(),
+                         tensorDstType.getShape(), tensorDstType.getEncoding());
+}
 
 // Return a blocked encoding where the shape is distributed contiguously amongst
 // the threads, warps, CTAs with 1 element per threads.
@@ -315,13 +368,8 @@ LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
                                   ShapedType dstTy);
 // Verify a memory allocation operation.
 LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy);
-
-SetVector<int> getPartitionIds(Operation *op);
-SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op);
-SetVector<int> getPartitionIds(OpOperand *use);
-bool hasPartition(Operation *op);
-bool hasWarpSpecializeTag(Operation *op);
-std::optional<int> getWarpSpecializeTag(Operation *op);
+/// Returns the size in bytes of a scalar type when stored in shared memory.
+size_t getSharedMemorySize(Type type);
 
 // Extract the PaddedSharedEncodingAttr from an encoding, whether standalone
 // or wrapped inside a PartitionedSharedEncodingAttr. Returns nullptr if the

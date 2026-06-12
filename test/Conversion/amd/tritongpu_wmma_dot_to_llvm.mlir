@@ -1,5 +1,6 @@
-// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx1100 --convert-builtin-func-to-llvm | FileCheck %s
-// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=GFX1250
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1100 --convert-builtin-func-to-llvm | FileCheck %s
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1200 --convert-builtin-func-to-llvm | FileCheck %s
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=GFX1250
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -180,6 +181,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
+  // Regression test: non-scaled WMMA v2 dot with i8 operands (kBase=8).
+  // Operands must be bitcast to i32, not i64 (i64 is only for scale operands).
+  //  CHECK-LABEL: wmma2_dot_int8_32
+  tt.func @wmma2_dot_int8_32(%arg0: tensor<16x16xi8, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>>, %arg1: tensor<16x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>>, %arg2: tensor<16x16xi32, #mma2>, %arg3: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
+    // CHECK: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
+    // CHECK-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
+    // CHECK: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
+    // CHECK: wmma.i32.16x16x16.iu8{{.*}} : (i1, vector<2xi32>, i1, vector<2xi32>, vector<8xi32>, i1) -> vector<8xi32>
+    %0 = tt.dot %arg0, %arg1, %arg2 {inputPrecision = 2 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<16x16xi8, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>> * tensor<16x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>> -> tensor<16x16xi32, #mma2>
+    // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<1xi32>
+    %ptr0 = tt.splat %arg3 : !tt.ptr<i32> -> tensor<16x16x!tt.ptr<i32>, #mma2>
+    tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<i32>, #mma2>
+    tt.return
+  }
+
+  // Regression test: non-scaled WMMA v2 dot with fp8 operands (kBase=8).
+  // Operands must be bitcast to i32, not i64 (i64 is only for scale operands).
+  //  CHECK-LABEL: wmma2_dot_fp8
+  tt.func @wmma2_dot_fp8(%arg0: tensor<16x16xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>>, %arg1: tensor<16x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>>, %arg2: tensor<16x16xf32, #mma2>, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
+    // CHECK: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
+    // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
+    // CHECK: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
+    // CHECK: wmma.f32.16x16x16.fp8.fp8{{.*}} : (vector<2xi32>, vector<2xi32>, vector<8xf32>) -> vector<8xf32>
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x16xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>> * tensor<16x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>> -> tensor<16x16xf32, #mma2>
+    // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
+    %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma2>
+    tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<f32>, #mma2>
+    tt.return
+  }
+
   //  CHECK-LABEL: wmma2_dot
   tt.func @wmma2_dot(%arg0: tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>>, %arg1: tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>>, %arg2: tensor<16x16xf16, #mma2>, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     // CHECK-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16)>
@@ -207,7 +244,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
     // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<16xbf16>
     // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<16xbf16>
-    // GFX1250: wmma.f32.16x16x32.bf16{{.*}} : (i1, vector<16xbf16>, i1, vector<16xbf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    // GFX1250: wmma.f32.16x16x32.bf16{{.*}} : (vector<16xbf16>, vector<16xbf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
     %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma3, kWidth = 8}>> * tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma3, kWidth = 8}>> -> tensor<16x16xf32, #mma3>
 
     %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma3>
@@ -221,7 +258,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
     // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<16xbf16>
     // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<16xbf16>
-    // GFX1250: wmma.f32.16x16x32.bf16{{.*}} : (i1, vector<16xbf16>, i1, vector<16xbf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    // GFX1250: wmma.f32.16x16x32.bf16{{.*}} : (vector<16xbf16>, vector<16xbf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
     %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma3_transposed, kWidth = 8}>> * tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma3_transposed, kWidth = 8}>> -> tensor<16x16xf32, #mma3_transposed>
 
     %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma3_transposed>
