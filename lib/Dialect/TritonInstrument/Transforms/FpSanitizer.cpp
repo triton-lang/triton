@@ -11,7 +11,6 @@
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include <cassert>
 
@@ -165,6 +164,7 @@ ttg::BlockedEncodingAttr getOptimizedBlockedEncoding(PatternRewriter &rewriter,
 struct ScratchInfo {
   Value ptr;
   RankedTensorType tensorType;
+  ttg::MemDescType scaleSourceType;
 };
 
 struct MmaOperandSource {
@@ -338,8 +338,7 @@ public:
         auto initTy = cast<RankedTensorType>(init.getType());
         if (!storeFpSanScratchMemory(rewriter, loc, ptr, init, initTy))
           return std::nullopt;
-        if (sharedClusterState)
-          createGlobalScratchBarrier(rewriter, loc, sharedClusterState);
+        createGlobalScratchBarrier(rewriter, loc, sharedClusterState);
       }
 
       state.canonical = ScratchInfo{ptr, tensorTy};
@@ -352,7 +351,7 @@ public:
 
     if (auto subslice = memdesc.getDefiningOp<ttng::TMEMSubSliceOp>()) {
       auto baseInfo = getOrCreate(subslice.getSrc(), rewriter, scope);
-      if (!baseInfo)
+      if (!baseInfo || baseInfo->scaleSourceType)
         return std::nullopt;
 
       auto baseTy = cast<ttg::MemDescType>(subslice.getSrc().getType());
@@ -385,7 +384,7 @@ public:
 
     if (auto view = memdesc.getDefiningOp<ttg::MemDescIndexOp>()) {
       auto baseInfo = getOrCreate(view.getSrc(), rewriter, scope);
-      if (!baseInfo)
+      if (!baseInfo || baseInfo->scaleSourceType)
         return std::nullopt;
 
       auto baseTy = cast<ttg::MemDescType>(view.getSrc().getType());
@@ -417,6 +416,16 @@ public:
       auto baseInfo = getOrCreate(view.getSrc(), rewriter, scope);
       if (!baseInfo)
         return std::nullopt;
+
+      auto baseTy = cast<ttg::MemDescType>(view.getSrc().getType());
+      if (isa<ttng::TensorMemoryScalesEncodingAttr>(baseTy.getEncoding()) &&
+          !isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding()))
+        return ScratchInfo{baseInfo->ptr, baseInfo->tensorType, baseTy};
+      if (baseInfo->scaleSourceType) {
+        if (isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding()))
+          return std::nullopt;
+        return baseInfo;
+      }
 
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(view);
@@ -917,7 +926,7 @@ createTmemOperandScratch(PatternRewriter &rewriter, Location loc,
   auto tensorTy =
       RankedTensorType::get(memTy.getShape(), memTy.getElementType(), layout);
   auto info = scratch.getOrCreate(memdesc, rewriter, scope);
-  if (!info)
+  if (!info || info->scaleSourceType)
     return std::nullopt;
   Value fullVal = loadFpSanScratchMemory(rewriter, loc, info->ptr, tensorTy);
   if (!fullVal)
@@ -2328,22 +2337,96 @@ struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
     auto resultTy = cast<RankedTensorType>(op.getResult().getType());
     if (!resultTy.getEncoding())
       return emitFpSanUnsupported(op.getOperation());
-    Value result = loadFpSanScratchMemory(rewriter, loc, info->ptr, resultTy);
+
+    Value result;
+    if (info->scaleSourceType) {
+      auto scaleMemTy = info->scaleSourceType;
+      auto physicalMemTy = cast<ttg::MemDescType>(op.getSrc().getType());
+      auto scaleShape = scaleMemTy.getShape();
+
+      constexpr int64_t physicalRows = 128;
+      auto physicalEncoding =
+          cast<ttng::TensorMemoryEncodingAttr>(physicalMemTy.getEncoding());
+      int64_t rows = scaleShape[0];
+      int64_t cols = scaleShape[1];
+      SmallVector<int64_t> physicalShape = {physicalRows, rows * cols / 32};
+      if (rows % 32 != 0 || cols % 4 != 0 ||
+          ttng::getTmemAllocSizes(scaleMemTy).numRows != physicalRows ||
+          physicalMemTy.getElementType().getIntOrFloatBitWidth() != 8 ||
+          physicalMemTy.getShape() != ArrayRef<int64_t>(physicalShape) ||
+          physicalEncoding.getBlockM() != physicalRows ||
+          physicalEncoding.getColStride() != 1)
+        return emitFpSanUnsupported(op.getOperation());
+
+      // Reconstruct the scale-copy hardware representation from the latest
+      // compact shadow at the point where the raw TMEM alias is consumed.
+      result = createLoadScratchMemory(rewriter, loc, info->ptr,
+                                       getScratchStorageType(info->tensorType));
+      SmallVector<int64_t> shape = {rows / 32, 32, cols / 4, 4};
+      result = tt::ReshapeOp::create(rewriter, loc, shape, result);
+      result = tt::TransOp::create(rewriter, loc, result, {1, 2, 0, 3});
+      shape = {32, physicalShape[1]};
+      result = tt::ReshapeOp::create(rewriter, loc, shape, result);
+      shape = {1, 32, physicalShape[1]};
+      result = tt::ReshapeOp::create(rewriter, loc, shape, result);
+      shape[0] = 4;
+      auto repeatedTy = cast<RankedTensorType>(result.getType()).clone(shape);
+      result = tt::BroadcastOp::create(rewriter, loc, repeatedTy, result);
+      result = tt::ReshapeOp::create(rewriter, loc, physicalShape, result);
+      result = ttg::ConvertLayoutOp::create(
+          rewriter, loc, getScratchStorageType(resultTy), result);
+      if (isFloatLike(resultTy))
+        result = unembedToFloat(rewriter, loc, result, resultTy);
+    } else {
+      result = loadFpSanScratchMemory(rewriter, loc, info->ptr, resultTy);
+    }
+
     if (!result)
       return emitFpSanCodegenError(op.getOperation());
+
+    Value reduced;
+    if (op.getRed()) {
+      Value reductionInput = result;
+      if (op.getAbs().value_or(false))
+        reductionInput =
+            math::AbsFOp::create(rewriter, loc, reductionInput).getResult();
+      reductionInput = embedToInt(rewriter, loc, reductionInput);
+
+      auto reduce =
+          tt::ReduceOp::create(rewriter, loc, ValueRange{reductionInput}, 1);
+      Block &block = reduce.getCombineOp().emplaceBlock();
+      Type elemTy = getElementTypeOrSelf(reductionInput.getType());
+      block.addArguments({elemTy, elemTy}, {loc, loc});
+
+      {
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPointToStart(&block);
+        Value lhs = block.getArgument(0);
+        Value rhs = block.getArgument(1);
+        // FPSAN gives both NaN modes the same signed-payload semantics.
+        Value combined =
+            *op.getRedOp() == ttng::TMEMLoadReduceModifier::MIN
+                ? arith::MinSIOp::create(rewriter, loc, lhs, rhs).getResult()
+                : arith::MaxSIOp::create(rewriter, loc, lhs, rhs).getResult();
+        tt::ReduceReturnOp::create(rewriter, loc, ValueRange{combined});
+      }
+      reduced = unembedToFloat(rewriter, loc, reduce.getResult().front(),
+                               op.getRed().getType());
+    }
 
     createGlobalScratchBarrier(rewriter, loc,
                                scratch->usesSharedClusterState());
 
-    if (op.getNumResults() == 1) {
-      rewriter.replaceOp(op, result);
-      return success();
+    SmallVector<Value> replacements{result};
+    if (op.getToken()) {
+      SmallVector<Value> deps;
+      if (op.getDep())
+        deps.push_back(op.getDep());
+      replacements.push_back(createAsyncToken(rewriter, loc, deps));
     }
-    SmallVector<Value> deps;
-    if (op.getDep())
-      deps.push_back(op.getDep());
-    Value token = createAsyncToken(rewriter, loc, deps);
-    rewriter.replaceOp(op, {result, token});
+    if (reduced)
+      replacements.push_back(reduced);
+    rewriter.replaceOp(op, replacements);
     return success();
   }
 
@@ -2361,12 +2444,23 @@ struct TMEMStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
     auto info = scratch->getOrCreate(op.getDst(), rewriter, scope);
     if (!info)
       return emitFpSanCodegenError(op.getOperation());
+    if (info->scaleSourceType)
+      return emitFpSanUnsupported(op.getOperation());
 
     auto loc = op.getLoc();
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     if (!srcTy.getEncoding())
       return emitFpSanUnsupported(op.getOperation());
-    if (!storeFpSanScratchMemory(rewriter, loc, info->ptr, op.getSrc(), srcTy))
+    auto storageTy = getScratchStorageType(srcTy);
+    Value stored = embedToInt(rewriter, loc, op.getSrc());
+    if (!matchPattern(op.getPred(), m_One())) {
+      Value previous =
+          createLoadScratchMemory(rewriter, loc, info->ptr, storageTy);
+      Value pred = castScalarIntToIntLike(
+          rewriter, loc, op.getPred(), storageTy.clone(rewriter.getI1Type()));
+      stored = arith::SelectOp::create(rewriter, loc, pred, stored, previous);
+    }
+    if (!createStoreScratchMemory(rewriter, loc, info->ptr, stored, storageTy))
       return emitFpSanCodegenError(op.getOperation());
 
     createGlobalScratchBarrier(rewriter, loc,
@@ -2398,6 +2492,8 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     auto info = scratch->getOrCreate(op.getDst(), rewriter, scope);
     if (!info)
       return emitFpSanCodegenError(op.getOperation());
+    if (info->scaleSourceType)
+      return emitFpSanUnsupported(op.getOperation());
 
     auto loc = op.getLoc();
     auto srcMemTy = cast<ttg::MemDescType>(op.getSrc().getType());
@@ -2561,7 +2657,7 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
 
     auto scope = getScratchScopeRegion(op);
     auto dInfo = scratch->getOrCreate(op.getD(), rewriter, scope);
-    if (!dInfo)
+    if (!dInfo || dInfo->scaleSourceType)
       return emitFpSanCodegenError(op.getOperation());
 
     auto loc = op.getLoc();
@@ -2735,7 +2831,7 @@ struct TCGen5MMAScaledPattern
 
     auto scope = getScratchScopeRegion(op);
     auto dInfo = scratch->getOrCreate(op.getD(), rewriter, scope);
-    if (!dInfo)
+    if (!dInfo || dInfo->scaleSourceType)
       return emitFpSanCodegenError(op.getOperation());
 
     auto loc = op.getLoc();
