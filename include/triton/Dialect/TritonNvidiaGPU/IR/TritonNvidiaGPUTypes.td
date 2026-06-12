@@ -39,8 +39,9 @@ class TTNG_TypeDef<string name, string _mnemonic, list<Trait> traits = []>
 // TensorDescIm2ColType
 //===----------------------------------------------------------------------===//
 
-def TTNG_TensorDescIm2ColType : TTNG_TypeDef<"TensorDescIm2Col", "tensordesc_im2col",
-                                              [TT_TensorDescInterface]> {
+def TTNG_TensorDescIm2ColType
+    : TTNG_TypeDef<"TensorDescIm2Col", "tensordesc_im2col",
+                   [TT_TensorDescInterface]> {
   let summary = "Im2col tensor descriptor type for NVIDIA TMA operations";
 
   let description = [{
