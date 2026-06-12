@@ -2997,6 +2997,101 @@ def test_shared_gather_cga(num_ctas, broadcast_mask):
 
 
 @gluon.jit
+def shared_subslice_two_ctas_kernel(
+    inp,
+    values,
+    result_out,
+    final_out,
+    OP: ttgl.constexpr,
+    alloc_layout: ttgl.constexpr,
+    tile_layout: ttgl.constexpr,
+):
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0], cga_layout=[[1, 0]])
+    alloc_rows = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, alloc_layout))
+    alloc_cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, alloc_layout))
+    alloc_offsets = alloc_rows[:, None] * 32 + alloc_cols[None, :]
+    initial = ttgl.load(inp + alloc_offsets)
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [4, 32], shared_layout, value=initial)
+    ttgl.barrier(cluster=True)
+
+    tile = smem.slice(2, 2, dim=0)
+    tile_rows = ttgl.arange(0, 2, layout=ttgl.SliceLayout(1, tile_layout))
+    tile_cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, tile_layout))
+    tile_offsets = tile_rows[:, None] * 32 + tile_cols[None, :]
+
+    if OP == "load":
+        result = tile.load(tile_layout)
+        ttgl.store(result_out + tile_offsets, result)
+    elif OP == "gather":
+        peer_cols = (tile_cols ^ 1)[None, :] + tile_rows[:, None] * 0
+        result = tile.gather(peer_cols, axis=1)
+        ttgl.store(result_out + tile_offsets, result)
+    else:
+        update = ttgl.load(values + tile_offsets)
+        if OP == "store":
+            tile.store(update)
+        elif OP == "scatter":
+            peer_cols = (tile_cols ^ 1)[None, :] + tile_rows[:, None] * 0
+            tile.scatter(update, peer_cols, axis=1)
+        else:
+            indices = tile_cols[None, :] + tile_rows[:, None] * 0
+            old = tile.atomic_scatter_add(update, indices, axis=1)
+            ones = ttgl.full([2, 32], 1, ttgl.int32, tile_layout)
+            tile.atomic_scatter_add(ones, indices, axis=1)
+            ttgl.store(result_out + tile_offsets, old)
+        ttgl.barrier(cluster=True)
+        final = smem.load(alloc_layout)
+        ttgl.store(final_out + alloc_offsets, final)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("op", ["load", "store", "gather", "scatter", "atomic"])
+def test_shared_subslice_two_ctas(op):
+    inp = torch.arange(4 * 32, dtype=torch.int32, device="cuda").reshape(4, 32)
+    values = torch.arange(2 * 32, dtype=torch.int32, device="cuda").reshape(2, 32) + 1000
+    if op == "atomic":
+        values.fill_(1)
+    result = torch.empty((2, 32), dtype=torch.int32, device="cuda")
+    final = torch.empty_like(inp)
+    alloc_layout = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0], cga_layout=[[1, 0]])
+    tile_layout = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0], cga_layout=[[0, 0]])
+
+    compiled = shared_subslice_two_ctas_kernel[(1, )](
+        inp,
+        values,
+        result,
+        final,
+        OP=op,
+        alloc_layout=alloc_layout,
+        tile_layout=tile_layout,
+        num_warps=4,
+        num_ctas=2,
+    )
+
+    ptx = compiled.asm["ptx"]
+    if op in ("load", "gather"):
+        assert "ld.shared::cluster" in ptx
+        expected = inp[2:4]
+        if op == "gather":
+            expected = expected.reshape(2, 16, 2).flip(-1).reshape(2, 32)
+        torch.testing.assert_close(result, expected, atol=0, rtol=0)
+    else:
+        expected = inp.clone()
+        if op == "store":
+            expected[2:4] = values
+            assert "st.shared::cluster" in ptx
+        elif op == "scatter":
+            expected[2:4] = values.reshape(2, 16, 2).flip(-1).reshape(2, 32)
+            assert "st.shared::cluster" in ptx
+        else:
+            expected[2:4] += values + 1
+            assert "atom.shared::cluster.cluster.relaxed.add.u32" in ptx
+            assert "red.shared::cluster.cluster.relaxed.inc.u32" in ptx
+            torch.testing.assert_close(result, inp[2:4], atol=0, rtol=0)
+        torch.testing.assert_close(final, expected, atol=0, rtol=0)
+
+
+@gluon.jit
 def shared_scatter_kernel(
     indices_ptr,
     values_ptr,
