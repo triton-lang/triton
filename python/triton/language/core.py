@@ -1111,12 +1111,16 @@ class tensor(base_value):
         if isinstance(slices, tuple):
             slices = slices.values
         ret = self
+        src_rank = len(self.shape)
+        indexed_dims = 0
         for dim, sl in enumerate(slices):
             if _unwrap_if_constexpr(sl) is None:
                 ret = _semantic.expand_dims(ret, dim)
             elif isinstance(sl, (builtins.slice, slice)) and all(
                     _unwrap_if_constexpr(arg) is None for arg in (sl.start, sl.stop, sl.step)):
-                pass  # an unsqueeze
+                indexed_dims += 1
+                if indexed_dims > src_rank:
+                    raise ValueError(f"too many indices for tensor of rank {src_rank}")
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
         return ret
