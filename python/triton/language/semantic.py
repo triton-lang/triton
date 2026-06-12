@@ -1202,6 +1202,17 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
         return ptr, val, mask
 
+    def _broadcast_ptr_cmp_val_mask(self, ptr, cmp, val, mask):
+        ptr_shape = ptr.shape
+        if mask is None:
+            ptr, cmp, val = self.broadcast_tensors(ptr, cmp, val)
+        else:
+            mask = self.to_tensor(mask)
+            ptr, cmp, val, mask = self.broadcast_tensors(ptr, cmp, val, mask)
+        if ptr_shape != ptr.shape:
+            raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
+        return ptr, cmp, val, mask
+
     def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], boundary_check, cache_modifier: str,
               eviction_policy: str) -> TensorTy:
         cache = self._str_to_store_cache_modifier(cache_modifier)
@@ -1254,13 +1265,27 @@ class TritonSemantic(Generic[TensorTy]):
 # atomic
 #########
 
-    def atomic_cas(self, ptr: TensorTy, cmp: TensorTy, val: TensorTy, sem: str, scope: str) -> TensorTy:
+    def atomic_cas(self, ptr: TensorTy, cmp: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
         sem = self._str_to_sem(sem)
         scope = self._str_to_scope(scope)
         element_ty = ptr.type.scalar.element_ty
         if element_ty.primitive_bitwidth not in [16, 32, 64]:
             raise ValueError("atomic_cas only supports elements with width {16, 32, 64}")
-        return self.tensor(self.builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle, sem, scope), val.type)
+        if ptr.type.is_block():
+            ptr, cmp, val, mask = self._broadcast_ptr_cmp_val_mask(ptr, cmp, val, mask)
+        cmp = self.cast(cmp, element_ty)
+        val = self.cast(val, element_ty)
+        if mask is None:
+            mask_ir = self.builder.get_int1(True)
+            mask_ty = tl.int1
+            if ptr.type.is_block():
+                mask_ty = ptr.type.with_element_ty(tl.int1)
+                mask_ir = self.builder.create_splat(mask_ty.to_ir(self.builder), mask_ir)
+            mask = self.tensor(mask_ir, mask_ty)
+        elif not mask.type.scalar.is_bool():
+            raise ValueError("Mask must have boolean scalar type")
+        return self.tensor(self.builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle, mask.handle, sem, scope),
+                           val.type)
 
     def atom_red_typechecking_impl(self, ptr: TensorTy, val: TensorTy, mask: TensorTy,
                                    op: str) -> Tuple[TensorTy, TensorTy, TensorTy]:

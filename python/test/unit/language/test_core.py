@@ -1711,31 +1711,57 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 @pytest.mark.parametrize("dtype_str", ["int32", "int64"])
-def test_atomic_cas(sem, num_ctas, dtype_str, device):
+@pytest.mark.parametrize("mask_type", ['none', 'const', 'scalar', 'dyn'])
+def test_atomic_cas(sem, num_ctas, dtype_str, mask_type, device):
     if is_hip_cdna2():
         pytest.skip("Disabled due to being flaky on CDNA2")
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
-    def change_value(Lock, triton_dtype: tl.constexpr):
+    def change_value(Lock, triton_dtype: tl.constexpr, mask_type: tl.constexpr):
         num0 = tl.full((1, ), 0, dtype=triton_dtype).item()
         num1 = tl.full((1, ), 1, dtype=triton_dtype).item()
-        tl.atomic_cas(Lock, num0, num1)
+
+        if mask_type == 'none':
+            mask = None
+        elif mask_type == 'const':
+            mask = tl.full((1, ), True, dtype=tl.int1).item()
+        elif mask_type == 'scalar':
+            mask = True
+        elif mask_type == 'dyn':
+            offsets = tl.arange(0, 1)
+            mask = (offsets >= 0).item()
+        else:
+            raise ValueError(f"Invalid mask_type: {mask_type}")
+
+        tl.atomic_cas(Lock, num0, num1, mask=mask)
 
     torch_dtype = getattr(torch, dtype_str)
     triton_dtype = getattr(tl, dtype_str)
     Lock = torch.zeros((1, ), device=device, dtype=torch_dtype)
-    change_value[(1, )](Lock, triton_dtype)
+    change_value[(1, )](Lock, triton_dtype, mask_type)
 
     assert (Lock[0] == 1)
 
     # 2. only one block enters the critical section
     @triton.jit
-    def serialized_add(data, Lock, triton_dtype: tl.constexpr, SEM: tl.constexpr):
+    def serialized_add(data, Lock, triton_dtype: tl.constexpr, SEM: tl.constexpr, mask_type: tl.constexpr):
         num0 = tl.full((1, ), 0, dtype=triton_dtype).item()
         num1 = tl.full((1, ), 1, dtype=triton_dtype).item()
 
+        if mask_type == 'none':
+            mask = None
+        elif mask_type == 'const':
+            mask = tl.full((1, ), True, dtype=tl.int1).item()
+        elif mask_type == 'scalar':
+            mask = True
+        elif mask_type == 'dyn':
+            offsets = tl.arange(0, 1)
+            mask = (offsets >= 0).item()
+        else:
+            raise ValueError(f"Invalid mask_type: {mask_type}")
+
         ptrs = data + tl.arange(0, 128)
-        while tl.atomic_cas(Lock, num0, num1, SEM) == 1:
+        while tl.atomic_cas(Lock, num0, num1, sem=SEM, mask=mask) == 1:
             pass
 
         tl.store(ptrs, tl.load(ptrs) + 1.0)
@@ -1750,7 +1776,7 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
     Lock = torch.zeros((1, ), device=device, dtype=torch_dtype)
     data = torch.zeros((128, ), device=device, dtype=torch.float32)
     ref = torch.full((128, ), 2000.0)
-    h = serialized_add[(2000, )](data, Lock, triton_dtype=triton_dtype, SEM=sem, num_ctas=num_ctas)
+    h = serialized_add[(2000, )](data, Lock, triton_dtype=triton_dtype, SEM=sem, mask_type=mask_type, num_ctas=num_ctas)
     sem_str = "acq_rel" if sem is None else sem
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
     if not is_cuda():
@@ -1798,22 +1824,81 @@ def test_tensor_atomic_cas_multicta_result(size, device):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
+@pytest.mark.parametrize("dtype_str", ['float16', 'float32', 'uint32', 'int32', 'uint64', 'int64', 'float64'])
+@pytest.mark.parametrize("mask_type", ['const', 'scalar', 'dyn'])
+def test_atomic_cas_mask_false_is_noop(sem, dtype_str, mask_type, device):
+
+    @triton.jit
+    def masked_noop_const(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr):
+        offsets = tl.arange(0, 1)
+        num0 = tl.full((1, ), 2, dtype=triton_dtype)
+        num1 = tl.full((1, ), 1, dtype=triton_dtype)
+        mask = tl.full((1, ), False, dtype=tl.int1)
+        tl.atomic_cas(Lock + offsets, num0, num1, mask=mask, sem=sem)
+
+    @triton.jit
+    def masked_noop_scalar(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr):
+        offsets = tl.arange(0, 1)
+        num0 = tl.full((1, ), 2, dtype=triton_dtype)
+        num1 = tl.full((1, ), 1, dtype=triton_dtype)
+        mask = False
+        tl.atomic_cas(Lock + offsets, num0, num1, mask=mask, sem=sem)
+
+    @triton.jit
+    def masked_noop_dyn(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr):
+        offsets = tl.arange(0, 1)
+        num0 = tl.full((1, ), 2, dtype=triton_dtype)
+        num1 = tl.full((1, ), 1, dtype=triton_dtype)
+        mask = offsets < 0
+        tl.atomic_cas(Lock + offsets, num0, num1, mask=mask, sem=sem)
+
+    torch_dtype = getattr(torch, dtype_str)
+    tl_dtype = getattr(tl, dtype_str)
+
+    Lock = torch.full((1, ), 2, device=device, dtype=torch_dtype)
+
+    if mask_type == 'const':
+        masked_noop_const[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+    elif mask_type == 'scalar':
+        masked_noop_scalar[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+    elif mask_type == 'dyn':
+        masked_noop_dyn[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+    else:
+        raise ValueError(f"Invalid mask_type: {mask_type}")
+    assert Lock[0] == 2
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 @pytest.mark.parametrize("size", [4, 128, 512, 1024])
 @pytest.mark.parametrize("dtype_str", ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64'])
-def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
+@pytest.mark.parametrize("mask_type", ['none', 'const', 'scalar', 'dyn'])
+def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, mask_type, device):
     check_type_supported(dtype_str, device)
     if is_hip_cdna2():
         pytest.skip("Disabled due to being flaky on CDNA2")
 
     @triton.jit
-    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, dtype: tl.constexpr):
+    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, dtype: tl.constexpr, mask_type: tl.constexpr):
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         t1 = tl.full((BLOCK_SIZE, ), 0, dtype=dtype)
         t2 = tl.full((BLOCK_SIZE, ), 2, dtype=dtype)
-        tl.atomic_cas(X + offsets, t1, t2, sem=sem)
+
+        if mask_type == 'none':
+            mask = None
+        elif mask_type == 'const':
+            mask = tl.full((BLOCK_SIZE, ), True, dtype=tl.int1)
+        elif mask_type == 'scalar':
+            mask = True
+        elif mask_type == 'dyn':
+            mask = offsets >= 0
+        else:
+            raise ValueError(f"Invalid mask_type: {mask_type}")
+
+        tl.atomic_cas(X + offsets, t1, t2, sem=sem, mask=mask)
 
     torch_dtype = getattr(torch, dtype_str)
     X = torch.zeros((size, ), device=device, dtype=torch_dtype)
@@ -1822,7 +1907,7 @@ def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
     Y[0::2] = 2
 
     tl_dtype = getattr(tl, dtype_str)
-    change_value[(2, )](X, BLOCK_SIZE=size // 2, sem=sem, dtype=tl_dtype)
+    change_value[(2, )](X, BLOCK_SIZE=size // 2, sem=sem, dtype=tl_dtype, mask_type=mask_type)
     assert torch.equal(X, Y)
 
 
