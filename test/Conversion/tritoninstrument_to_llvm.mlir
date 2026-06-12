@@ -115,8 +115,9 @@ tt.func private @experimental_gsan_tensordesc_info(
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_fpsan_embed
 // CHECK-NOT: tti.experimental_fpsan_embed
-// CHECK: llvm.bitcast %arg0 : f32 to i32
-// CHECK: llvm.mul
+// CHECK: %[[RAW:.*]] = llvm.bitcast %arg0 : f32 to i32
+// CHECK-NOT: llvm.inline_asm
+// CHECK: llvm.mul %[[RAW]],
 // CHECK: llvm.xor
 tt.func private @experimental_fpsan_embed(%arg0: f32) -> i32 {
   %0 = tti.experimental_fpsan_embed %arg0 : (f32) -> i32
@@ -129,7 +130,7 @@ tt.func private @experimental_fpsan_embed(%arg0: f32) -> i32 {
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_fpsan_unembed
 // CHECK-NOT: tti.experimental_fpsan_unembed
-// CHECK: llvm.mul
+// CHECK: llvm.mul %arg0,
 // CHECK: llvm.xor
 // CHECK: llvm.bitcast %{{.*}} : i32 to f32
 tt.func private @experimental_fpsan_unembed(%arg0: i32) -> f32 {

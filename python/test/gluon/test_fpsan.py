@@ -2703,6 +2703,43 @@ def test_reduction_matches_loop(device, fresh_knobs):
     _assert_payload_equal(reduce_out, loop_out)
 
 
+def test_f32_loop_preserves_snan_payload(device, fresh_knobs):
+    _require_cuda_backend(device)
+    if not is_cuda():
+        pytest.skip("regression is specific to NVPTX fabs lowering")
+
+    @triton.jit
+    def sum_kernel(x_ptr, out_ptr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        acc = tl.zeros((BLOCK, ), tl.float32)
+        for i in range(3):
+            acc += tl.load(x_ptr + i * BLOCK + offsets)
+        tl.store(out_ptr + offsets, acc)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    fresh_knobs.compilation.always_compile = True
+
+    block = 128
+    # The first two finite values sum to an sNaN; the zero row forces it through the next loop embed.
+    input_bits = np.zeros((3, block), dtype=np.int32)
+    input_bits[0].fill(0x1B0F577C)
+    input_bits[1].fill(0x65E031B7)
+    assert np.isfinite(input_bits.view(np.float32)).all()
+    x = torch.tensor(input_bits, dtype=torch.int32, device="cuda")
+    out = torch.empty((block, ), dtype=torch.int32, device="cuda")
+    sum_kernel[(1, )](
+        triton.TensorWrapper(x, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        BLOCK=block,
+        num_warps=1,
+    )
+
+    expected = _expected_add_i32(input_bits[0], input_bits[1])
+    expected = _expected_add_i32(expected, input_bits[2])
+    assert np.all(_as_u32(expected) == np.uint32(0x7FA12345))
+    _assert_payload_equal(out, expected)
+
+
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_m", "instr_n", "instr_k", "k_width"),
                          _MFMA_DOT_CASES)
