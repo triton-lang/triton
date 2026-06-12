@@ -4,6 +4,7 @@ import subprocess
 import triton
 from pathlib import Path
 from triton import knobs
+from triton._utils import find_library
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver, decompose_descriptor, expand_signature, wrap_handle_tensordesc_impl
 from triton.runtime import _allocation
@@ -142,12 +143,8 @@ def _get_path_to_hip_runtime_dylib():
             return rocm_lib_path
         paths.append(rocm_lib_path)
 
-    # Afterwards try to search the loader dynamic library resolution paths.
-    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
-    # each line looks like the following:
-    # libamdhip64.so.6 (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so.6
-    # libamdhip64.so (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so
-    locs = [line.split()[-1] for line in libs.splitlines() if line.strip().endswith(lib_name)]
+    # Afterwards try to search the loader library resolution paths via ld.so.conf.
+    locs = find_library(lib_name)
     for loc in locs:
         if os.path.exists(loc):
             return loc

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from functools import reduce
+import glob
+import os
+from functools import lru_cache, reduce
 from typing import Any, Callable, TYPE_CHECKING, Union, List, Dict
 
 if TYPE_CHECKING:
@@ -155,3 +157,74 @@ def _tuple_create(arg, contents):
     # between them, but only NamedTuple has "_fields" and apparently this is how
     # everyone does the check.
     return type(arg)(*contents) if hasattr(arg, "_fields") else type(arg)(contents)
+
+
+def _parse_ld_so_conf(conf_path: str, depth: int = 0) -> list[str]:
+    """Parse an ld.so.conf file, resolving 'include' directives recursively.
+
+    Returns a list of library search directories, in the order they appear.
+    """
+    dirs: list[str] = []
+    if depth > 20:
+        return dirs
+
+    try:
+        with open(conf_path) as f:
+            for line in f:
+                line = line.strip()
+                # Skip empty lines and comments.
+                if not line or line.startswith("#"):
+                    continue
+                # Handle 'include <glob-pattern>' directives.
+                if line.startswith("include "):
+                    pattern = line.split(None, 1)[1]
+                    # Patterns may be relative to the directory containing the
+                    # conf file (typically /etc).
+                    if not os.path.isabs(pattern):
+                        pattern = os.path.join(os.path.dirname(conf_path), pattern)
+                    for included in sorted(glob.glob(pattern)):
+                        dirs.extend(_parse_ld_so_conf(included, depth + 1))
+                else:
+                    # The line is a directory path.
+                    if os.path.isdir(line):
+                        dirs.append(line)
+    except OSError:
+        pass
+    return dirs
+
+
+@lru_cache()
+def _ld_so_conf_library_dirs() -> tuple[str, ...]:
+    """Return the list of library directories from /etc/ld.so.conf plus defaults.
+
+    The dynamic linker always searches a set of default directories
+    (``/lib``, ``/usr/lib`` and their 64-bit variants) regardless of what is
+    listed in ``ld.so.conf``.
+    """
+    import struct
+
+    dirs = _parse_ld_so_conf("/etc/ld.so.conf")
+
+    # Default search paths that the dynamic linker uses unconditionally.
+    defaults = []
+    if struct.calcsize("P") == 8:
+        defaults.extend(["/lib64", "/usr/lib64"])
+    defaults.extend(["/lib", "/usr/lib"])
+    for d in defaults:
+        if os.path.isdir(d) and d not in dirs:
+            dirs.append(d)
+
+    return tuple(dirs)
+
+
+def find_library_dirs(lib_name: str) -> list[str]:
+    """Find directories containing *lib_name* using the ld.so.conf search paths."""
+    return [d for d in _ld_so_conf_library_dirs() if os.path.exists(os.path.join(d, lib_name))]
+
+
+def find_library(lib_name: str) -> list[str]:
+    """Find full paths to *lib_name* using the ld.so.conf search paths.
+
+    Returns a list of paths to matching library files.
+    """
+    return [os.path.join(d, lib_name) for d in find_library_dirs(lib_name)]
