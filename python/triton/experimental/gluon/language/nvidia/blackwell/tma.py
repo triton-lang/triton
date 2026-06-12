@@ -17,6 +17,7 @@ from triton.experimental.gluon.language.nvidia.hopper.tma import (
     tensor_descriptor_type,
     make_tensor_descriptor,
     _emit_alignment_check,
+    tma_store_token,
 )
 
 __all__ = [
@@ -91,4 +92,5 @@ def async_scatter(tensor_desc, x_offsets, y_offset, src, _semantic=None):
         _emit_scatter_nonnegative_check(x_offsets, y_offset, _semantic=_semantic)
 
     y_offset = _semantic.to_tensor(y_offset)
-    _semantic.builder.create_async_tma_scatter(tensor_desc.handle, x_offsets.handle, y_offset.handle, src.handle)
+    return tma_store_token(
+        _semantic.builder.create_async_tma_scatter(tensor_desc.handle, x_offsets.handle, y_offset.handle, src.handle))
