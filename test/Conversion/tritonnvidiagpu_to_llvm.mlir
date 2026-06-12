@@ -1,6 +1,7 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 -reconcile-unrealized-casts | FileCheck %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=85' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=85' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX85 %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX86 %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 -reconcile-unrealized-casts -canonicalize | FileCheck --check-prefix=SUBSLICE %s
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -160,6 +161,37 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
   tt.func @async_shared_store(%src: tensor<128xi32, #blocked>, %dst: !ttg.memdesc<128xi32, #shared1, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #shared0, #smem, mutable>) {
     ttng.async_shared_store %src, %dst, %mbarrier : tensor<128xi32, #blocked> -> !ttg.memdesc<128xi32, #shared1, #smem, mutable>, !ttg.memdesc<2xi64, #shared0, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: async_shared_store_subslice_other_cta
+  // CHECK: nvvm.mapa
+  // CHECK: nvvm.mapa
+  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  // SUBSLICE-LABEL: @async_shared_store_subslice_other_cta
+  // SUBSLICE: %[[ASYNC_ONE:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // SUBSLICE: %[[ASYNC_TWO:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // SUBSLICE: %[[ASYNC_ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // SUBSLICE: %[[ASYNC_BLOCK_BITS:.*]] = llvm.and %{{.*}}, %[[ASYNC_TWO]] : i32
+  // SUBSLICE-NEXT: %[[ASYNC_BLOCK_BIT:.*]] = llvm.lshr %[[ASYNC_BLOCK_BITS]], %[[ASYNC_ONE]] : i32
+  // SUBSLICE-NEXT: %[[ASYNC_BLOCK_OR:.*]] = llvm.or disjoint %[[ASYNC_BLOCK_BIT]], %[[ASYNC_ZERO]] : i32
+  // SUBSLICE-NEXT: %[[ASYNC_BLOCK_OFFSET:.*]] = llvm.xor %[[ASYNC_ZERO]], %[[ASYNC_BLOCK_OR]] : i32
+  // SUBSLICE: llvm.xor %{{.*}}, %[[ASYNC_BLOCK_OFFSET]] : i32
+  // SUBSLICE: nvvm.mapa %{{.*}}, %[[ASYNC_TARGET_CTA:.*]]
+  // SUBSLICE-NEXT: nvvm.mapa %{{.*}}, %[[ASYNC_TARGET_CTA]]
+  tt.func @async_shared_store_subslice_other_cta(%src: tensor<2x32xi32, #blocked>) {
+    %dst = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #shared1, #smem, mutable>
+    %tile = ttg.memdesc_subslice %dst [2, 0] : !ttg.memdesc<4x32xi32, #shared1, #smem, mutable> -> !ttg.memdesc<2x32xi32, #shared1, #smem, mutable, 4x32>
+    %mbarrier = ttg.local_alloc {allocation.offset = 512 : i32} : () -> !ttg.memdesc<2xi64, #shared0, #smem, mutable>
+    ttng.async_shared_store %src, %tile, %mbarrier : tensor<2x32xi32, #blocked> -> !ttg.memdesc<2x32xi32, #shared1, #smem, mutable, 4x32>, !ttg.memdesc<2xi64, #shared0, #smem, mutable>
     tt.return
   }
 }
@@ -613,6 +645,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
 
 #local_gather_scatter_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
 #local_gather_scatter_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+#local_subslice_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+#local_subslice_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @local_gather_scatter_two_ctas
@@ -630,6 +664,92 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %offs = arith.constant dense<0> : tensor<2x32xi32, #local_gather_scatter_blocked>
     %out_ptrs = tt.addptr %ptrs, %offs : tensor<2x32x!tt.ptr<i32>, #local_gather_scatter_blocked>, tensor<2x32xi32, #local_gather_scatter_blocked>
     tt.store %out_ptrs, %g : tensor<2x32x!tt.ptr<i32>, #local_gather_scatter_blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @local_gather_subslice_other_cta
+  // CHECK: nvvm.mapa
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<7> -> i32
+  // SUBSLICE-LABEL: @local_gather_subslice_other_cta
+  // SUBSLICE: %[[ONE:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // SUBSLICE: %[[TWO:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // SUBSLICE: %[[MASKED_BLOCK:.*]] = llvm.and %{{.*}}, %[[TWO]] : i32
+  // SUBSLICE-NEXT: %[[SHIFTED_BLOCK:.*]] = llvm.lshr %[[MASKED_BLOCK]], %[[ONE]] : i32
+  // SUBSLICE-NEXT: %[[BLOCK_OFFSET_BITS:.*]] = llvm.or disjoint %[[SHIFTED_BLOCK]], %{{.*}} : i32
+  // SUBSLICE-NEXT: %[[BLOCK_OFFSET:.*]] = llvm.xor %{{.*}}, %[[BLOCK_OFFSET_BITS]] : i32
+  // SUBSLICE: %[[TARGET_CTA:.*]] = llvm.xor %{{.*}}, %[[BLOCK_OFFSET]] : i32
+  // SUBSLICE: nvvm.mapa %{{.*}}, %[[TARGET_CTA]]
+  tt.func @local_gather_subslice_other_cta(%out: !tt.ptr<i32>) {
+    %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable>
+    %tile = ttg.memdesc_subslice %src [2, 0] : !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>
+    %idx = arith.constant dense<0> : tensor<2x32xi32, #local_subslice_blocked>
+    %g = ttg.local_gather %tile[%idx] {axis = 1 : i32} : !ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>, tensor<2x32xi32, #local_subslice_blocked> -> tensor<2x32xi32, #local_subslice_blocked>
+    %ptrs = tt.splat %out : !tt.ptr<i32> -> tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>
+    %offs = arith.constant dense<0> : tensor<2x32xi32, #local_subslice_blocked>
+    %out_ptrs = tt.addptr %ptrs, %offs : tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>, tensor<2x32xi32, #local_subslice_blocked>
+    tt.store %out_ptrs, %g : tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @local_load_subslice_other_cta
+  // CHECK: nvvm.mapa
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<7>
+  tt.func @local_load_subslice_other_cta(%out: !tt.ptr<i32>) {
+    %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable>
+    %tile = ttg.memdesc_subslice %src [2, 0] : !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>
+    %loaded = ttg.local_load %tile : !ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32> -> tensor<2x32xi32, #local_subslice_blocked>
+    %ptrs = tt.splat %out : !tt.ptr<i32> -> tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>
+    %offs = arith.constant dense<0> : tensor<2x32xi32, #local_subslice_blocked>
+    %out_ptrs = tt.addptr %ptrs, %offs : tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>, tensor<2x32xi32, #local_subslice_blocked>
+    tt.store %out_ptrs, %loaded : tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @local_store_subslice_other_cta
+  // CHECK: nvvm.mapa
+  // CHECK: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<7>
+  tt.func @local_store_subslice_other_cta(%vals: tensor<2x32xi32, #local_subslice_blocked>) {
+    %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable>
+    %tile = ttg.memdesc_subslice %src [2, 0] : !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>
+    ttg.local_store %vals, %tile : tensor<2x32xi32, #local_subslice_blocked> -> !ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>
+    tt.return
+  }
+
+  // CHECK-LABEL: @local_scatter_subslice_other_cta
+  // CHECK: nvvm.mapa
+  // CHECK: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<7>
+  tt.func @local_scatter_subslice_other_cta(%vals: tensor<2x32xi32, #local_subslice_blocked>) {
+    %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable>
+    %tile = ttg.memdesc_subslice %src [2, 0] : !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>
+    %idx = arith.constant dense<0> : tensor<2x32xi32, #local_subslice_blocked>
+    ttg.local_scatter %tile[%idx], %vals {axis = 1 : i32} : !ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>, tensor<2x32xi32, #local_subslice_blocked>, tensor<2x32xi32, #local_subslice_blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @local_atomic_subslice_other_cta
+  // CHECK: mapa.shared::cluster.u32
+  // CHECK: atom.shared::cluster.cluster.relaxed.add.u32
+  tt.func @local_atomic_subslice_other_cta(%out: !tt.ptr<i32>, %vals: tensor<2x32xi32, #local_subslice_blocked>) {
+    %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable>
+    %tile = ttg.memdesc_subslice %src [2, 0] : !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>
+    %idx = arith.constant dense<0> : tensor<2x32xi32, #local_subslice_blocked>
+    %old = ttg.local_atomic_scatter_rmw add, %tile[%idx], %vals {axis = 1 : i32} : (!ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>, tensor<2x32xi32, #local_subslice_blocked>, tensor<2x32xi32, #local_subslice_blocked>) -> tensor<2x32xi32, #local_subslice_blocked>
+    %ptrs = tt.splat %out : !tt.ptr<i32> -> tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>
+    %offs = arith.constant dense<0> : tensor<2x32xi32, #local_subslice_blocked>
+    %out_ptrs = tt.addptr %ptrs, %offs : tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>, tensor<2x32xi32, #local_subslice_blocked>
+    tt.store %out_ptrs, %old : tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @local_atomic_inc_subslice_other_cta
+  // CHECK: mapa.shared::cluster.u32
+  // CHECK: red.shared::cluster.cluster.relaxed.inc.u32
+  tt.func @local_atomic_inc_subslice_other_cta() {
+    %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable>
+    %tile = ttg.memdesc_subslice %src [2, 0] : !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>
+    %idx = arith.constant dense<0> : tensor<2x32xi32, #local_subslice_blocked>
+    %one = arith.constant dense<1> : tensor<2x32xi32, #local_subslice_blocked>
+    %unused = ttg.local_atomic_scatter_rmw add, %tile[%idx], %one {axis = 1 : i32} : (!ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>, tensor<2x32xi32, #local_subslice_blocked>, tensor<2x32xi32, #local_subslice_blocked>) -> tensor<2x32xi32, #local_subslice_blocked>
     tt.return
   }
 }

@@ -16,7 +16,7 @@
 
 namespace mlir::triton::NVIDIA {
 
-enum class PtxAtomicAddrSpace { Global, Shared };
+enum class PtxAtomicAddrSpace { Global, Shared, SharedCluster };
 enum class PtxAtomicInstr { Atom, Red };
 
 inline std::string getPtxRegisterSizeCode(int size, bool isFloat) {
@@ -37,18 +37,18 @@ inline std::string getPtxRegisterSizeCode(int size, bool isFloat) {
 }
 
 inline FailureOr<Value>
-emitPtxAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
-                 Type valueElemTy, Value ptr, ArrayRef<Value> vals,
-                 RMWOp rmwOpAttr, MemSemantic sem, MemSyncScope scope,
-                 Value pred, unsigned vec = 1, unsigned packed = 1,
-                 PtxAtomicAddrSpace addrSpace = PtxAtomicAddrSpace::Global,
-                 PtxAtomicInstr instr = PtxAtomicInstr::Atom) {
+emitPtxAtomicRMWImpl(ConversionPatternRewriter &rewriter, Location loc,
+                     Type valueElemTy, Value ptr, ArrayRef<Value> vals,
+                     RMWOp rmwOpAttr, MemSemantic sem, std::string scope,
+                     Value pred, unsigned vec, unsigned packed,
+                     PtxAtomicAddrSpace addrSpace, PtxAtomicInstr instr) {
   assert((vec == 1 || packed == 1) && "packed or vec must be 1");
   assert(vals.size() == (vec > 1 ? vec : packed) &&
          "Expected atomic RMW operand count to match vectorization");
 
   bool isRed = instr == PtxAtomicInstr::Red;
   bool isGlobal = addrSpace == PtxAtomicAddrSpace::Global;
+  bool isSharedCluster = addrSpace == PtxAtomicAddrSpace::SharedCluster;
   assert((isGlobal || (vec == 1 && packed == 1)) &&
          "shared atomic RMW does not support vectorized lowering");
 
@@ -93,9 +93,11 @@ emitPtxAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
                                                         : std::string("atom"));
   if (isGlobal)
     atomicInstr.global();
+  else if (isSharedCluster)
+    atomicInstr.o("shared::cluster");
   else
     atomicInstr.shared();
-  atomicInstr.o(stringifyMemSyncScope(scope).str());
+  atomicInstr.o(scope);
 
   std::string rmwOp = stringifyRMWOp(rmwOpAttr).str();
   std::string suffix;
@@ -157,6 +159,30 @@ emitPtxAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
     retType = valueElemTy;
   }
   return ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+}
+
+inline FailureOr<Value>
+emitPtxAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
+                 Type valueElemTy, Value ptr, ArrayRef<Value> vals,
+                 RMWOp rmwOpAttr, MemSemantic sem, MemSyncScope scope,
+                 Value pred, unsigned vec = 1, unsigned packed = 1) {
+  return emitPtxAtomicRMWImpl(rewriter, loc, valueElemTy, ptr, vals, rmwOpAttr,
+                              sem, stringifyMemSyncScope(scope).str(), pred,
+                              vec, packed, PtxAtomicAddrSpace::Global,
+                              PtxAtomicInstr::Atom);
+}
+
+inline FailureOr<Value>
+emitPtxSharedAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
+                       Type valueElemTy, Value ptr, ArrayRef<Value> vals,
+                       RMWOp rmwOpAttr, Value pred, bool isCluster,
+                       PtxAtomicInstr instr) {
+  auto addrSpace = isCluster ? PtxAtomicAddrSpace::SharedCluster
+                             : PtxAtomicAddrSpace::Shared;
+  return emitPtxAtomicRMWImpl(rewriter, loc, valueElemTy, ptr, vals, rmwOpAttr,
+                              MemSemantic::RELAXED,
+                              isCluster ? "cluster" : "cta", pred, /*vec=*/1,
+                              /*packed=*/1, addrSpace, instr);
 }
 
 inline Value emitPtxAtomicCAS(ConversionPatternRewriter &rewriter, Location loc,
