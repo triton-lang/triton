@@ -1701,12 +1701,12 @@ def test_atomic_cas(sem, num_ctas, dtype_str, mask_type, device):
         if mask_type == 'none':
             mask = None
         elif mask_type == 'const':
-            mask = tl.full((1, ), True, dtype=tl.int1)
+            mask = tl.full((1, ), True, dtype=tl.int1).item()
         elif mask_type == 'scalar':
             mask = True
         elif mask_type == 'dyn':
             offsets = tl.arange(0, 1)
-            mask = offsets >= 0
+            mask = (offsets >= 0).item()
         else:
             raise ValueError(f"Invalid mask_type: {mask_type}")
 
@@ -1728,12 +1728,12 @@ def test_atomic_cas(sem, num_ctas, dtype_str, mask_type, device):
         if mask_type == 'none':
             mask = None
         elif mask_type == 'const':
-            mask = tl.full((1, ), True, dtype=tl.int1)
+            mask = tl.full((1, ), True, dtype=tl.int1).item()
         elif mask_type == 'scalar':
             mask = True
         elif mask_type == 'dyn':
             offsets = tl.arange(0, 1)
-            mask = offsets >= 0
+            mask = (offsets >= 0).item()
         else:
             raise ValueError(f"Invalid mask_type: {mask_type}")
 
