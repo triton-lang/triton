@@ -17,7 +17,7 @@ namespace mlir::triton::AMD {
 /// lower/upperbounds on integer constants) to our needs.
 /// Specifically there are 2 points of extension:
 ///
-/// 1. Support for GetProgramIdOp, MakeRangeOp, SplatOp, ExpandDimsOp. *Note*,
+/// 1. Support for GetProgramIdOp, MakeRangeOp, SplatOp, ReshapeOp. *Note*,
 /// upstream already supports range inference for shaped types such as tensors
 /// (here we just implement effectively implement the interfaces for our ops).
 ///    * Upstream's semantics for "range of shape type" is union over ranges of
