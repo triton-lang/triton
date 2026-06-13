@@ -8,7 +8,6 @@ __all__ = [
     "buffer_load_to_shared",
     "commit_group",
     "wait_group",
-    "load_shared_relaxed",
 ]
 
 
@@ -145,25 +144,3 @@ def wait_group(num_outstanding=0, _semantic=None):
     """
     num_outstanding = _unwrap_if_constexpr(num_outstanding)
     _semantic.builder.create_async_wait_group(num_outstanding)
-
-
-@builtin
-def load_shared_relaxed(smem, layout, _semantic=None):
-    """
-    Load a tensor from shared memory with extra hints for the underlying
-    compiler to avoid emitting unnecessary waits before loading from the target
-    shared memory.
-
-    Args:
-        smem (shared_memory_descriptor): Shared memory descriptor to load from.
-        layout (DistributedLayout): The destination layout of the tensor.
-
-    Returns:
-        tensor: A Gluon tensor containing the loaded data.
-    """
-    SYNCED_VIA_WAIT_ATTR_NAME = "ttg.amdg.syncedViaAsyncWait"
-
-    layout = _unwrap_if_constexpr(layout)
-    ret = _semantic.shared_load(smem, layout)
-    ret.handle.set_attr(SYNCED_VIA_WAIT_ATTR_NAME, _semantic.builder.get_bool_attr(True))
-    return ret

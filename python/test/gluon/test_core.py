@@ -1420,7 +1420,7 @@ def test_amd_direct_load_to_shared(use_buffer_load):
         cdna4_async_copy.commit_group()
 
         cdna4_async_copy.wait_group(0)
-        a = cdna4_async_copy.load_shared_relaxed(smem, blocked)
+        a = smem.load(blocked)
 
         ttgl.store(b_ptr + offsets, a)
 
@@ -1430,7 +1430,6 @@ def test_amd_direct_load_to_shared(use_buffer_load):
     pgm = kernel[(1, )](a, b, use_buffer_load)
 
     torch.testing.assert_close(a, b)
-    assert re.search(r'ttg\.local_load .* \{ttg\.amdg\.syncedViaAsyncWait = true\}', pgm.asm['ttgir'], re.MULTILINE)
     if use_buffer_load:
         assert re.search(r"buffer_load.*lds$", pgm.asm['amdgcn'], re.MULTILINE)
     else:
