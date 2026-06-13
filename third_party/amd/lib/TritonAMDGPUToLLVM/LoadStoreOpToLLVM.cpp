@@ -1304,7 +1304,11 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         loc, adaptor.getResult(), elementType, rewriter);
     // Get all base pointers (multiple for partitioned encoding)
     SmallVector<Value> dstPtrs = llvm::to_vector(dstMemObj.getBases());
-    SmallVector<Value> offset = adaptor.getIndices();
+    // The copy is pure: the descriptor is already positioned by
+    // update_tensor_descriptor, so pass a zero user offset and let the filler
+    // apply only the per-warp distribution and inherit pred from the
+    // descriptor.
+    SmallVector<Value> offset(blockShape.size(), b.i32_val(0));
     int numWarps = triton::gpu::lookupNumWarps(op);
 
     Value barrierPtr = nullptr;
@@ -1330,11 +1334,13 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
         cacheMod, /*isLoad*/ true, targetInfo);
 
+    // pred is inherited from the descriptor in pure form; pass a placeholder.
+    Value pred = b.i32_val(1);
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
-        padInterval, padAmount, offset, dstPtrs, op.getPred(), multicastMask,
+        padInterval, padAmount, offset, dstPtrs, pred, multicastMask,
         elementType, barrierPtr, /*isLoad=*/true, sharedLayout, encoding, ctaId,
-        auxBits, warpUsedHint);
+        auxBits, warpUsedHint, /*isPureForm=*/true);
 
     rewriter.eraseOp(op);
     return success();
@@ -1378,7 +1384,10 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
         loc, adaptor.getSrc(), elementType, rewriter);
     // Get all base pointers (multiple for partitioned encoding)
     SmallVector<Value> srcPtrs = llvm::to_vector(dstMemObj.getBases());
-    SmallVector<Value> offset = adaptor.getIndices();
+    // The copy is pure: the descriptor is already positioned by
+    // update_tensor_descriptor, so pass a zero user offset and let the filler
+    // apply only the per-warp distribution.
+    SmallVector<Value> offset(blockShape.size(), b.i32_val(0));
     int numWarps = triton::gpu::lookupNumWarps(op);
 
     Value barrierPtr = nullptr;
@@ -1413,12 +1422,14 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
         cacheMod, /*isLoad*/ false, targetInfo);
 
+    // pred is inherited from the descriptor in pure form; pass a placeholder.
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, srcPtrs, pred,
         /*multicastMask=*/{}, elementType, barrierPtr,
-        /*isLoad=*/false, sharedLayout, encoding, ctaId, auxBits);
+        /*isLoad=*/false, sharedLayout, encoding, ctaId, auxBits,
+        /*warpUsedHint=*/std::nullopt, /*isPureForm=*/true);
 
     rewriter.eraseOp(op);
     return success();
