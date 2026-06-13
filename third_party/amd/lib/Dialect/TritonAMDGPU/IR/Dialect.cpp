@@ -925,10 +925,16 @@ LogicalResult UpdateTensorDescriptorOp::verify() {
 
   // At least one mutation parameter must be provided -- a no-op update is
   // either a user mistake or should be folded by canonicalizer.
-  if (getAddOffsets().empty() && getSetBounds().empty() && !getDest() &&
-      !getPred() && !getBarrier())
+  if (getAddOffsets().empty() && getSetBounds().empty() && !getPred())
     return emitOpError("must provide at least one of add_offsets, set_bounds, "
-                       "dest, pred, or barrier");
+                       "or pred");
+
+  if (getClampBounds()) {
+    if (getAddOffsets().empty())
+      return emitOpError("clamp_bounds requires add_offsets");
+    if (!getSetBounds().empty())
+      return emitOpError("clamp_bounds and set_bounds are mutually exclusive");
+  }
 
   return success();
 }

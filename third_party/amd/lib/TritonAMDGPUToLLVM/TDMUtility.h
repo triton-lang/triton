@@ -35,18 +35,26 @@ SmallVector<Value> scalarizeTDMDescriptor(RewriterBase &rewriter, Location loc,
 // - addOffsets (incremental): bumps global_addr by
 //   sum(addOffsets[i]*stride[i]) scaled by element size.  Empty = skip.
 // - setBounds  (rewrite):     overwrites tensor_dim absolutely.  Empty = skip.
-// - dest       (rewrite):     overwrites lds_addr.  Null = skip.
 // - pred       (rewrite):     overwrites pred.  Null = skip.
-// - barrier    (rewrite):     enables barrier signaling and writes barrier
-//                             addr.  Null = skip.
+// - clampBounds: when true, also shrink tensor_dim by addOffsets
+//                (tensor_dim[d] = max(0, tensor_dim[d] - addOffsets[d]); a
+//                negative offset yields a zero extent) to derive the OOB extent
+//                of the advanced tile.  Requires addOffsets; mutually exclusive
+//                with setBounds.
 //
-// Currently 2D-only; 3D-5D support TBD.
+// The LDS address and the TDM barrier are intentionally NOT descriptor fields:
+// they are op-level operands on the async_tdm_copy ops (the LDS address is
+// re-stamped per warp from the copy's destination; the barrier is paired with
+// mbarrier_wait via SSA).
+//
+// `groups` is 2 (1D-2D) or 4 (3D-5D) vector entries, updated in place.
+// addOffsets/setBounds are in Triton dim order (index 0 = outermost).
 void updateTensorDescriptor(RewriterBase &rewriter, Location loc,
                             Type elementType, ArrayRef<int64_t> blockShape,
-                            Value &group0, Value &group1,
+                            MutableArrayRef<Value> groups,
                             ArrayRef<Value> addOffsets,
-                            ArrayRef<Value> setBounds, Value dest, Value pred,
-                            Value barrier);
+                            ArrayRef<Value> setBounds, Value pred,
+                            bool clampBounds = false);
 
 // Create the base TDM descriptor from tensor metadata: global base pointer,
 // tensor shape, strides, and padding.  Fields that depend on a particular TDM
