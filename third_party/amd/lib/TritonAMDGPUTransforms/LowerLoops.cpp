@@ -85,8 +85,14 @@ TDMChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
   return createTDMAsync(
       loadOp, alloc, extractIdx,
       [&](OpBuilder &builder, Location loc, Value view, Value pred) {
-        return triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(
-            builder, loc, loadOp.getDesc(), loadOp.getIndices(), view, pred);
+        // Pure form: pre-position the descriptor via update_tensor_descriptor
+        // (add_offsets + clamp_bounds + pred); the copy carries no
+        // indices/pred. The pipeliner masks prologue/epilogue by folding the
+        // loop predicate into that update (see streamPredication).
+        Value desc = buildPureTDMDescriptor(builder, loc, loadOp.getDesc(),
+                                            loadOp.getIndices(), /*pred=*/pred);
+        return triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(builder, loc,
+                                                                   desc, view);
       });
 }
 

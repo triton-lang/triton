@@ -72,6 +72,10 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // `groups` is 2 (1D-2D) or 4 (3D-5D) vector entries, updated in place.
 // Partitioned dst: `dstPtrs` holds per-partition bases, picked by partitionDim.
 // `warpUsedHint`: see TritonAMDGPUOps.td for the axis-aligned hint rule.
+// `isPureForm`: the descriptor is already positioned by
+// update_tensor_descriptor, so the filler stamps only the per-warp distribution
+// (offset is all zeros), inherits `pred` from the descriptor (group0[0])
+// instead of the `pred` arg, and leaves the barrier-enable bit untouched.
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> blockShape, int numWarps,
@@ -81,7 +85,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        Value barrierPtr,
                        const triton::LinearLayout &sharedLayout, Value ctaId,
                        bool isStore, ArrayRef<unsigned> warpsPerCTA,
-                       std::optional<uint32_t> warpUsedHint = std::nullopt);
+                       std::optional<uint32_t> warpUsedHint = std::nullopt,
+                       bool isPureForm = false);
 
 // Fill TDM descriptor for gather/scatter operations (2D only).
 // Gather reads from non-contiguous rows in global memory to LDS.
@@ -114,7 +119,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value barrierPtr, bool isLoad,
                       const triton::LinearLayout &sharedLayout,
                       Attribute encoding, Value ctaId, int32_t auxBits,
-                      std::optional<uint32_t> warpUsedHint = std::nullopt);
+                      std::optional<uint32_t> warpUsedHint = std::nullopt,
+                      bool isPureForm = false);
 
 // Returns (warpsPerCTA, numTDMInstructions) for a given shared encoding.
 // For PartitionedSharedEncodingAttr, computes a partition-aligned warp

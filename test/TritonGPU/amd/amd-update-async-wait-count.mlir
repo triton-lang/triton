@@ -411,8 +411,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
 
     // Each async_tdm_copy only emits a single instruction (-> counts 1)
-    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %mask : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
-    %2 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %mask : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
+    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
 
     // Do not wait on the second tdm => waitcnt 1
     // CHECK: amdg.async_tdm_intrinsic_wait {{.*}} {count = 1
@@ -543,12 +543,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
 
     // Each async_tdm_copy only emits a single instruction (-> counts 1)
-    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %mask : !tt.tensordesc<128x8xf16> -> !ttg.memdesc<128x8xf16, #shared, #smem, mutable>
+    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x8xf16> -> !ttg.memdesc<128x8xf16, #shared, #smem, mutable>
 
     %2 = ttg.async_copy_global_to_local %ptr, %memDesc : tensor<128x8x!tt.ptr<f16>, #blocked> -> <128x8xf16, #shared, #smem, mutable>
     %21 = ttg.async_commit_group tokens %2
 
-    %3 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %mask : !tt.tensordesc<128x8xf16> -> !ttg.memdesc<128x8xf16, #shared, #smem, mutable>
+    %3 = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x8xf16> -> !ttg.memdesc<128x8xf16, #shared, #smem, mutable>
 
     %4 = ttg.async_copy_global_to_local %ptr, %memDesc : tensor<128x8x!tt.ptr<f16>, #blocked> -> <128x8xf16, #shared, #smem, mutable>
     %5 = ttg.async_copy_global_to_local %ptr, %memDesc : tensor<128x8x!tt.ptr<f16>, #blocked> -> <128x8xf16, #shared, #smem, mutable>
@@ -706,8 +706,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // numLogicalPieces = numPartitions * numGroups = 2 * 4 = 8
     // warpsAlongPartition = gcd(numWarps=4, numLogicalPieces=8) = 4
     // Each async_tdm_copy emits divideCeil(8, 4) = 2 instructions
-    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %mask : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
-    %2 = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %mask : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
+    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
 
     // Skip second copy (2 instructions) => count = 2
     // CHECK: amdg.async_tdm_intrinsic_wait {{.*}} {count = 2

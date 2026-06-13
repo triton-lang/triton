@@ -45,8 +45,11 @@ public:
     Value alloc = LocalAllocOp::create(rewriter, loc, memDescType);
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
 
-    amdgpu::AsyncTDMCopyGlobalToLocalOp::create(rewriter, loc, op.getDesc(),
-                                                op.getIndices(), alloc, pred);
+    // Pure form: position the descriptor (add_offsets + clamp_bounds + pred),
+    // then a copy that carries no indices/pred.  Works for all ranks.
+    Value desc = buildPureTDMDescriptor(rewriter, loc, op.getDesc(),
+                                        op.getIndices(), /*pred=*/pred);
+    amdgpu::AsyncTDMCopyGlobalToLocalOp::create(rewriter, loc, desc, alloc);
     amdgpu::AsyncTDMWait::create(rewriter, loc, ArrayRef<Value>{}, 0);
     rewriter.replaceOpWithNewOp<LocalLoadOp>(op, op.getType(), alloc);
     return success();
@@ -120,8 +123,11 @@ public:
         MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                          encoding, sharedMemorySpace, /*mutableMemory=*/true);
     Value alloc = LocalAllocOp::create(rewriter, loc, memDescType, op.getSrc());
-    amdgpu::AsyncTDMCopyLocalToGlobalOp::create(rewriter, loc, op.getDesc(),
-                                                op.getIndices(), alloc,
+    // Pure form: position the descriptor (add_offsets + clamp_bounds); the copy
+    // carries no indices.  Stores are unconditional, so no pred.
+    Value copyDesc = buildPureTDMDescriptor(rewriter, loc, op.getDesc(),
+                                            op.getIndices(), /*pred=*/Value{});
+    amdgpu::AsyncTDMCopyLocalToGlobalOp::create(rewriter, loc, copyDesc, alloc,
                                                 /*barrier=*/Value{});
     amdgpu::AsyncTDMWait::create(rewriter, loc, ArrayRef<Value>{}, 0);
     rewriter.eraseOp(op);
