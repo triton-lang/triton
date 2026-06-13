@@ -1,23 +1,29 @@
 """Tests for adjacent TDM-copy merging on gfx1250.
 
-Adjacent `async_load`s with compatible `warp_used_hint` masks should fuse into
-one `tensor_load_to_lds`.  The prepare pass can also generate hints for adjacent
-unhinted copies unless `TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1` is set.
+Explicit `async_load_fused` calls, and adjacent `async_load`s with compatible
+`warp_used_hint` masks, should lower to one `tensor_load_to_lds`.  The prepare
+pass can also generate hints for adjacent unhinted copies unless
+`TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1` is set.
 
 Compile-only tests count AMDGCN instructions; runtime tests compare against a
 torch CPU reference and are skipped off gfx1250.
 """
 
 import re
+import os
 
 import pytest
 import torch
 
 import triton
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import is_hip_gfx1250
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
+
+
+def _require_tdm_runtime():
+    if os.environ.get("TRITON_AMD_RUN_TDM_RUNTIME_TESTS") != "1":
+        pytest.skip("TDM runtime tests require gfx1250; set TRITON_AMD_RUN_TDM_RUNTIME_TESTS=1 to run them")
 
 
 def _use_tdm_hint(request):
@@ -85,6 +91,40 @@ def vector_add_tdm_kernel(
     ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_m, off_n], a_buf, warp_used_hint=HINT_A)
     ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_m, off_n], b_buf, warp_used_hint=HINT_B)
     ttgl.amd.gfx1250.tdm.async_wait(0)  # "wait for everything"; correct under any merge
+
+    c = a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT)
+    _store_tile(c_ptr, c, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
+
+
+@gluon.jit
+def vector_add_tdm_explicit_fused_kernel(
+    a_ptr,
+    b_ptr,
+    c_ptr,
+    M,
+    N,
+    BLOCK_M: ttgl.constexpr,
+    BLOCK_N: ttgl.constexpr,
+    HINT_A: ttgl.constexpr,
+    HINT_B: ttgl.constexpr,
+):
+    """Two-tile vector add using the explicit fused TDM load API."""
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+
+    pid_m = ttgl.program_id(axis=0)
+    pid_n = ttgl.program_id(axis=1)
+    off_m = pid_m * BLOCK_M
+    off_n = pid_n * BLOCK_N
+
+    a_desc, a_buf = _stage_input(a_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
+    b_desc, b_buf = _stage_input(b_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
+    a_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, off_n], pred=True)
+    b_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(b_desc, add_offsets=[off_m, off_n], pred=True)
+
+    ttgl.amd.gfx1250.tdm.async_load_fused([(a_desc, a_buf, HINT_A), (b_desc, b_buf, HINT_B)])
+    ttgl.amd.gfx1250.tdm.async_wait(0)
 
     c = a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT)
     _store_tile(c_ptr, c, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
@@ -195,6 +235,15 @@ def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, expected_merge
     _assert_tensor_load_count(amdgcn, 1 if fused else 2, context)
 
 
+def test_compile_vector_add_tdm_explicit_fused():
+    """Compile-only: explicit fused Gluon API lowers to one TDM intrinsic."""
+    amdgcn = _compile_amdgcn(
+        vector_add_tdm_explicit_fused_kernel, ["a_ptr", "b_ptr", "c_ptr"], {
+            "BLOCK_M": 64, "BLOCK_N": 64, "HINT_A": 0b00001111, "HINT_B": 0b11110000
+        })
+    _assert_tensor_load_count(amdgcn, 1, "explicit async_load_fused")
+
+
 def test_compile_vector_add_tdm_auto_merge_env_toggle(monkeypatch):
     """Compile-only: env toggles generated hints for adjacent unhinted copies."""
     env_var = "TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS"
@@ -213,7 +262,6 @@ def test_compile_vector_add_tdm_auto_merge_env_toggle(monkeypatch):
 _RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on gfx1250.")
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
 @pytest.mark.parametrize(
     "HINT_A,HINT_B,expected_merge",
@@ -222,6 +270,7 @@ _RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
 )
 def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, expected_merge, request):
     """Runtime: c = a + b vs torch CPU reference; merging is perf-only."""
+    _require_tdm_runtime()
     _run_vector_add(vector_add_tdm_kernel, 2, (BLOCK_M, BLOCK_N), _hints(_use_tdm_hint(request), HINT_A, HINT_B))
 
 
@@ -381,7 +430,6 @@ def test_compile_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, H
     _assert_tensor_load_count(amdgcn, 1 if use_tdm_hint else 4, context)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on gfx1250.")
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
 @pytest.mark.parametrize(
     "HINT_A,HINT_B,HINT_C,HINT_D",
@@ -391,6 +439,7 @@ def test_compile_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, H
 def test_runtime_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, HINT_D, request):
     """Runtime: out = a+b+c+d; checks the 4-way fused intrinsic routes
     each member's bytes to its own buffer."""
+    _require_tdm_runtime()
     _run_vector_add(vector_add_tdm_kernel_4way, 4, (BLOCK_M, BLOCK_N),
                     _hints(_use_tdm_hint(request), HINT_A, HINT_B, HINT_C, HINT_D))
 
@@ -525,8 +574,8 @@ def test_compile_vector_add_tdm_cache(BLOCK_M, BLOCK_N, CACHE_A, CACHE_B, expect
 if __name__ == "__main__":
     # Smoke test: iterate all cookbook entries at one block size.
     # Run as `python test_tdm_merge.py` on a gfx1250 device.
-    if not is_hip_gfx1250():
-        raise SystemExit("This script requires a gfx1250 device.")
+    if os.environ.get("TRITON_AMD_RUN_TDM_RUNTIME_TESTS") != "1":
+        raise SystemExit("Set TRITON_AMD_RUN_TDM_RUNTIME_TESTS=1 on a gfx1250 device.")
     print("[2-way: vector_add_tdm_kernel]")
     for p in _HINT_PARAMS:
         ha, hb, em, ident = p

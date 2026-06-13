@@ -6,7 +6,6 @@
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "TritonAMDGPUToLLVM/TypeConverter.h"
 #include "TritonAMDGPUToLLVM/UniformityAnalysis.h"
-#include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlowFramework.h"
@@ -190,14 +189,9 @@ struct ConvertTritonAMDGPUToLLVM
     if (failed(uniformitySolver.initializeAndRun(mod)))
       return signalPassFailure();
 
-    // Read the merge grouping frozen by the tritonamdgpu-prepare-tdm-merge
-    // pass.  The map is queried by AsyncTDMCopyGlobalToLocalOp conversion to
-    // decide whether to fuse.  Lives on this stack frame, which encloses
-    // pattern application below.
-    auto tdmMergeGroups = mlir::triton::AMD::readTDMMergeGroups(mod);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
                                            axisInfoAnalysis, &uniformitySolver,
-                                           tdmMergeGroups, AMDBenefit);
+                                           AMDBenefit);
     AMD::populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
     AMD::populateBarrierOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
     AMD::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,

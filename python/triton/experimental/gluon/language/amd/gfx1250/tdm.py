@@ -12,7 +12,8 @@ if TYPE_CHECKING:
     from triton.experimental.gluon.language._core import shared_memory_descriptor
 
 __all__ = [
-    "update_tensor_descriptor", "async_load", "async_wait", "make_tensor_descriptor", "tensor_descriptor",
+    "update_tensor_descriptor", "async_load", "async_load_fused", "async_wait", "make_tensor_descriptor",
+    "tensor_descriptor",
     "tensor_descriptor_type", "prefetch", "async_scatter"
 ]
 
@@ -274,6 +275,46 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
 
     _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, offset_handles, dest.handle, pred.handle,
                                                             mbarrier_handle, cache_modifier, warp_used_hint)
+
+
+@builtin
+def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descriptor, ttgl.constexpr | int]],
+                     _semantic=None) -> None:
+    """Emit one explicit fused TDM load for 2-4 descriptor/destination pairs.
+
+    Each member is ``(desc, dest, warp_used_hint)``.  Use
+    :func:`update_tensor_descriptor` to encode offsets, predicates, and
+    bounds on each descriptor before passing it here.
+    """
+    members = _unwrap_if_constexpr(members)
+    if not 2 <= len(members) <= 4:
+        raise ValueError(f"tdm.async_load_fused requires 2 to 4 members, got {len(members)}")
+
+    desc_handles = []
+    dest_handles = []
+    warp_used_hints = []
+    rank = None
+    for idx, member in enumerate(members):
+        member = _unwrap_if_constexpr(member)
+        if len(member) != 3:
+            raise ValueError("tdm.async_load_fused members must be (desc, dest, warp_used_hint) tuples")
+        desc, dest, warp_used_hint = member
+        if not isinstance(desc, tensor_descriptor):
+            raise TypeError(f"tdm.async_load_fused member {idx}: expected tensor_descriptor")
+        if rank is None:
+            rank = len(desc.block_shape)
+        if len(desc.block_shape) != rank:
+            raise ValueError("tdm.async_load_fused requires all descriptors to have the same rank")
+
+        warp_used_hint = _unwrap_if_constexpr(warp_used_hint)
+        if warp_used_hint is None:
+            raise ValueError(f"tdm.async_load_fused member {idx}: warp_used_hint is required")
+
+        desc_handles.append(desc.handle)
+        dest_handles.append(dest.handle)
+        warp_used_hints.append(int(warp_used_hint))
+
+    _semantic.builder.create_async_tdm_fused_copy_global_to_local(desc_handles, dest_handles, warp_used_hints)
 
 
 @builtin

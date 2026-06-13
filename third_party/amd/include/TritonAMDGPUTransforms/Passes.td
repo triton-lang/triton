@@ -323,15 +323,15 @@ def TritonAMDGPUUpdateAsyncWaitCount: Pass<"tritonamdgpu-update-async-wait-count
 }
 
 def TritonAMDGPUPrepareTDMMerge: Pass<"tritonamdgpu-prepare-tdm-merge", "mlir::ModuleOp"> {
-  let summary = "Freeze TDM copy merge grouping into the IR";
+  let summary = "Materialize explicit fused TDM copy operations";
 
   let description = [{
-    Generates implicit TDM-copy `warp_used_hint` masks (unless disabled by
-    TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS), computes the merge groups, and
-    stamps each member with `amdgpu.tdm_merge_id`/`amdgpu.tdm_merge_index`
-    attributes. It runs before both the wait-count pass and the LLVM conversion,
-    which read this frozen grouping so the wait counts match the intrinsics
-    actually emitted.
+    Generates TDM-copy `warp_used_hint` masks for adjacent unhinted copies
+    (unless disabled by TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS), computes
+    compatible groups, and rewrites each group to an explicit
+    `amdgpu.async_tdm_fused_copy_global_to_local` operation. It runs before
+    both the wait-count pass and LLVM conversion so those passes see the same
+    explicit IR.
   }];
 
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];

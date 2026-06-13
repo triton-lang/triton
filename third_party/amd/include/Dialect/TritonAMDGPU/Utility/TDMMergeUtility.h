@@ -10,12 +10,12 @@
 
 namespace mlir::triton::AMD {
 
-// TDM copy merge groups are decided once by
-// `tritonamdgpu-prepare-tdm-merge`, then stored as attributes so wait-count
-// and LLVM lowering use the same grouping.  The pass may generate
+// TDM copy merge groups are materialized by
+// `tritonamdgpu-prepare-tdm-merge` as explicit
+// `amdgpu.async_tdm_fused_copy_global_to_local` ops.  The pass may generate
 // `warp_used_hint` masks for adjacent unhinted copies unless
 // TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS is set.  Copies that already have
-// compatible hints can still merge when auto-generation is disabled.
+// compatible hints can still fuse when auto-generation is disabled.
 //
 // Mergeability rules:
 //   1. Members must have verifier-legal `warp_used_hint` masks.
@@ -39,21 +39,16 @@ using TDMMergeGroupMap =
     llvm::DenseMap<Operation *, std::shared_ptr<TDMMergeGroupInfo>>;
 
 // Add generated hints to runs of adjacent unhinted copies when auto-merge is
-// enabled.  Only attributes are added; copy order is unchanged.
+// enabled.  Only warp_used_hint attributes are added; copy order is unchanged.
 void prepareGeneratedTDMMergeHints(ModuleOp mod);
 
-// Identify merge groups from copies that already carry compatible hints.  Ops
-// that do not belong to a group are absent from the result.
+// Identify merge groups from copies that carry compatible hints.  Ops that do
+// not belong to a group are absent from the result.
 TDMMergeGroupMap computeTDMMergeGroups(ModuleOp mod);
 
-// Generate hints, compute groups, and stamp `amdgpu.tdm_merge_id` plus
-// `amdgpu.tdm_merge_index` on each group member.  The index is the member's
-// position in program order.
-void assignTDMMergeGroupIds(ModuleOp mod);
-
-// Rebuild merge groups from the stamped attributes and validate that each group
-// still satisfies the merge rules.
-TDMMergeGroupMap readTDMMergeGroups(ModuleOp mod);
+// Generate hints, compute groups, and replace each compatible run with one
+// explicit fused TDM load op.
+void materializeTDMMergeGroups(ModuleOp mod);
 
 } // namespace mlir::triton::AMD
 

@@ -807,6 +807,33 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
   let hasVerifier = 1;
 }
 
+def AsyncTDMFusedCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_fused_copy_global_to_local", [
+    SameVariadicOperandSize]> {
+  let summary = "Fuse multiple TDM global-to-local copies into one async operation";
+
+  let description = [{
+    This operation represents an explicit 2-4 member fused TDM load.  Each
+    member provides a tensor descriptor, destination shared-memory descriptor,
+    and `warp_used_hint`.  Descriptors carry tile position and predicate state;
+    destinations remain op-level operands.
+  }];
+
+  let arguments = (ins
+    Variadic<TT_TensorDescType>:$descs,
+    Variadic<TTG_MemDescType>:$dests,
+    DenseI32ArrayAttr:$warp_used_hints,
+    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache
+  );
+
+  let results = (outs TTG_AsyncToken:$token);
+
+  let assemblyFormat = [{
+    $descs `into` $dests attr-dict `:` qualified(type($descs)) `->` qualified(type($dests))
+  }];
+
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // AsyncTDMCopyLocalToGlobalOp
 //===----------------------------------------------------------------------===//
@@ -947,7 +974,8 @@ def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait", [MemWaitOpTrait]> {
     This is necessary to ensure that data is available in the LDS (load, gather)
     or HBM (store, scatter) before it is used.
 
-    This operation counts the number of TDM IR operations (AsyncTDMCopyGlobalToLocalOp,
+    This operation counts the number of TDM IR operations
+    (AsyncTDMCopyGlobalToLocalOp, AsyncTDMFusedCopyGlobalToLocalOp,
     AsyncTDMCopyLocalToGlobalOp, AsyncTDMScatterOp, AsyncTDMGatherOp).
   }];
   let results = (outs TTG_AsyncToken:$retToken);

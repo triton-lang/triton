@@ -11,7 +11,7 @@ namespace {
 struct TritonAMDGPUPrepareTDMMergePass
     : impl::TritonAMDGPUPrepareTDMMergeBase<TritonAMDGPUPrepareTDMMergePass> {
   void runOnOperation() override {
-    mlir::triton::AMD::assignTDMMergeGroupIds(getOperation());
+    mlir::triton::AMD::materializeTDMMergeGroups(getOperation());
   }
 };
 

@@ -4,7 +4,6 @@
 #include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/Operation.h"
-#include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <optional>
 
@@ -132,15 +131,14 @@ struct TDMMergeMemberInfo {
   Value pred;                 // optional per-copy predicate
 };
 
-// Emit one fused TDM load intrinsic for a merge group, `select`ing each wave's
-// descriptor on an SGPR-uniform per-wave selector.  Merge rules are documented
-// in TDMMergeUtility.h: `auxBits` comes from any member (uniform by rule 7), and
-// no mbarrier is encoded (rule 2).
+// Emit one fused TDM load intrinsic, `select`ing each wave's descriptor on an
+// SGPR-uniform per-wave selector. `memberHints` must be pairwise disjoint and
+// verifier-legal; no mbarrier is encoded for fused loads.
 void emitTDMLoadMerged(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter,
                        ArrayRef<TDMMergeMemberInfo> members, int numWarps,
                        Value ctaId, int32_t auxBits,
-                       const ::mlir::triton::AMD::TDMMergeGroupInfo &groupInfo);
+                       ArrayRef<uint32_t> memberHints);
 
 // Effective warp count that drives TDM warp distribution and the resulting
 // physical instruction count.  A `warp_used_hint` restricts emission to

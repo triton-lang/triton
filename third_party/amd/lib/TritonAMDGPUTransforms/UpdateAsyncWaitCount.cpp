@@ -1,7 +1,6 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TDMUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
@@ -462,12 +461,9 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
       }
     }
 
-    // amdgpu.AsyncTDMWait should only count async tdm ops. Read the merge
-    // grouping frozen earlier by the tritonamdgpu-prepare-tdm-merge pass so the
-    // counted physical TDM intrinsics match exactly what the LLVM conversion
-    // (which reads the same grouping) will emit.
-    auto tdmMergeGroups = mlir::triton::AMD::readTDMMergeGroups(m);
-
+    // amdgpu.AsyncTDMWait should only count async tdm ops. Fused TDM copies are
+    // explicit IR operations by this point, so the count mirrors LLVM lowering
+    // directly.
     SmallVector<triton::amdgpu::AsyncTDMWait> waitTDMOps;
     getOperation()->walk([&](triton::amdgpu::AsyncTDMWait waitOp) {
       waitTDMOps.push_back(waitOp);
@@ -483,11 +479,6 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
       auto v = [&]() -> int {
         using namespace triton::amdgpu;
         if (auto copyOp = dyn_cast<AsyncTDMCopyGlobalToLocalOp>(op)) {
-          // Merged copies lower to a single fused intrinsic anchored at the
-          // last member; non-last members contribute zero intrinsics.
-          auto mergeIt = tdmMergeGroups.find(op);
-          if (mergeIt != tdmMergeGroups.end())
-            return op == mergeIt->second->lastInProgramOrder ? 1 : 0;
           auto smemTy = copyOp.getResult().getType();
           int numWarps = ttg::lookupNumWarps(op);
           std::optional<uint32_t> hint;
@@ -502,6 +493,8 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
               mlir::LLVM::AMD::distributeTDMWarpsAlignToPartition(
                   smemTy.getShape(), effectiveWarps, smemTy.getEncoding());
           return numInstr;
+        } else if (isa<AsyncTDMFusedCopyGlobalToLocalOp>(op)) {
+          return 1;
         } else if (auto copyOp = dyn_cast<AsyncTDMCopyLocalToGlobalOp>(op)) {
           auto smemTy = copyOp.getSrc().getType();
           int numWarps = ttg::lookupNumWarps(op);

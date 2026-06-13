@@ -896,6 +896,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   // Update group0 with addresses
   Value globalAddr = b.ptrtoint(i64_ty, srcPtr);
   Value ldsAddr = b.ptrtoint(i32_ty, dstPtr);
+  if (!pred)
+    pred = vecGet(b, groups[0], 0);
 
   // Predicate off redundant warps: `((warpId ^ i0) & warpFreeMask) == 0`.
   // `warpFreeMask` covers positions NOT in basisBits (or, without a hint,
@@ -1645,16 +1647,16 @@ void emitTDMLoadMerged(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter,
                        ArrayRef<TDMMergeMemberInfo> members, int numWarps,
                        Value ctaId, int32_t auxBits,
-                       const ::mlir::triton::AMD::TDMMergeGroupInfo &groupInfo) {
-  size_t N = groupInfo.members.size();
+                       ArrayRef<uint32_t> memberHints) {
+  size_t N = members.size();
   assert(N >= 2 && N <= 4 && members.size() == N &&
-         groupInfo.memberHints.size() == N && "merge group invariants");
+         memberHints.size() == N && "fused TDM load invariants");
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // canMergeWith guarantees a uniform rank across members, so every member
   // shares this descriptor group count (2 for rank <= 2, otherwise 4).
   size_t numGroups = members.front().desc.size();
-  ArrayRef<uint32_t> hintPerMember = groupInfo.memberHints;
+  ArrayRef<uint32_t> hintPerMember = memberHints;
 
   SmallVector<SmallVector<Value, 4>, 4> filledPerMember(N);
   for (size_t i = 0; i < N; ++i)

@@ -18,7 +18,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %dst0 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     %dst1 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
 
-    // Adjacent copies with disjoint explicit hints fuse.
+    // Adjacent copies with disjoint hints are materialized as one explicit
+    // fused op by the prepare pass, then lower to one intrinsic.
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"
     // CHECK-NOT: "llvm.amdgcn.tensor.load.to.lds"
     %0 = amdg.async_tdm_copy_global_to_local %desc0[%c0, %c0] into %dst0, pred = %pred {warp_used_hint = 3 : i32} : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
@@ -44,8 +45,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %dst_b = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
 
     // Adjacent unhinted copies get generated hints (and fuse) unless disabled.
-    // Auto hint generation only adds attributes, so the copies must already be
-    // consecutive; see tdm_auto_hints_skip_interleaved for the deferred case.
+    // Auto materialization requires consecutive copies; see
+    // tdm_auto_hints_skip_interleaved for the deferred case.
     // ENABLE: "llvm.amdgcn.tensor.load.to.lds"
     // ENABLE-NOT: "llvm.amdgcn.tensor.load.to.lds"
     // DISABLE: "llvm.amdgcn.tensor.load.to.lds"

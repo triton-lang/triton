@@ -3,10 +3,10 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
-#include "llvm/ADT/MapVector.h"
+#include "mlir/IR/Builders.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 #include <cassert>
 
@@ -227,85 +227,56 @@ TDMMergeGroupMap computeTDMMergeGroups(ModuleOp mod) {
   return result;
 }
 
-// Discardable attributes that freeze merge grouping in the IR.
-static constexpr llvm::StringLiteral kTDMMergeIdAttr = "amdgpu.tdm_merge_id";
-static constexpr llvm::StringLiteral kTDMMergeIndexAttr =
-    "amdgpu.tdm_merge_index";
+static void materializeTDMMergeGroup(const TDMMergeGroupInfo &group) {
+  assert(group.members.size() == group.memberHints.size());
+  OpBuilder builder(group.members.front());
 
-// Generate hints, compute groups, and stamp group id/index attributes.
-void assignTDMMergeGroupIds(ModuleOp mod) {
+  SmallVector<Value, 4> descs;
+  SmallVector<Value, 4> dests;
+  SmallVector<int32_t, 4> hints;
+  auto cache = cast<TDMCopyGlobalToLocalOp>(group.members.front()).getCache();
+  Type tokenType = cast<TDMCopyGlobalToLocalOp>(group.members.front())
+                       .getToken()
+                       .getType();
+  for (auto [member, hint] : llvm::zip_equal(group.members, group.memberHints)) {
+    auto copy = cast<TDMCopyGlobalToLocalOp>(member);
+    auto updatedDesc =
+        triton::amdgpu::UpdateTensorDescriptorOp::create(
+            builder, copy.getLoc(), copy.getDesc().getType(), copy.getDesc(),
+            copy.getIndices(), ValueRange(), copy.getPred());
+    descs.push_back(updatedDesc.getResult());
+    dests.push_back(copy.getResult());
+    hints.push_back(static_cast<int32_t>(hint));
+  }
+
+  auto fused = triton::amdgpu::AsyncTDMFusedCopyGlobalToLocalOp::create(
+      builder, group.members.front()->getLoc(), tokenType, descs, dests,
+      builder.getDenseI32ArrayAttr(hints), cache);
+
+  for (Operation *member : group.members)
+    cast<TDMCopyGlobalToLocalOp>(member).getToken().replaceAllUsesWith(
+        fused.getToken());
+
+  for (Operation *member : llvm::reverse(group.members))
+    member->erase();
+}
+
+void materializeTDMMergeGroups(ModuleOp mod) {
   prepareGeneratedTDMMergeHints(mod);
   auto groups = computeTDMMergeGroups(mod);
 
-  auto i32Ty = IntegerType::get(mod.getContext(), 32);
-  int32_t nextId = 0;
-  llvm::DenseMap<TDMMergeGroupInfo *, int32_t> groupId;
+  llvm::DenseSet<TDMMergeGroupInfo *> seen;
+  SmallVector<std::shared_ptr<TDMMergeGroupInfo>, 8> uniqueGroups;
   mod->walk([&](TDMCopyGlobalToLocalOp op) {
     auto it = groups.find(op);
     if (it == groups.end())
       return;
-    TDMMergeGroupInfo *info = it->second.get();
-    auto [idIt, inserted] = groupId.try_emplace(info, nextId);
-    if (inserted)
-      ++nextId;
-    int32_t id = idIt->second;
-    auto pos = llvm::find(info->members, op.getOperation()) -
-               info->members.begin();
-    op->setAttr(kTDMMergeIdAttr, IntegerAttr::get(i32Ty, id));
-    op->setAttr(kTDMMergeIndexAttr,
-                IntegerAttr::get(i32Ty, static_cast<int32_t>(pos)));
-  });
-}
-
-// Rebuild and validate merge groups from frozen group id/index attributes.
-TDMMergeGroupMap readTDMMergeGroups(ModuleOp mod) {
-  llvm::MapVector<int32_t, SmallVector<std::pair<int32_t, TDMCopyGlobalToLocalOp>>>
-      buckets;
-  mod->walk([&](TDMCopyGlobalToLocalOp op) {
-    auto idAttr = op->getAttrOfType<IntegerAttr>(kTDMMergeIdAttr);
-    if (!idAttr)
-      return;
-    auto idxAttr = op->getAttrOfType<IntegerAttr>(kTDMMergeIndexAttr);
-    assert(idxAttr && "merge-group member missing index attribute");
-    buckets[static_cast<int32_t>(idAttr.getInt())].push_back(
-        {static_cast<int32_t>(idxAttr.getInt()), op});
+    if (seen.insert(it->second.get()).second)
+      uniqueGroups.push_back(it->second);
   });
 
-  TDMMergeGroupMap result;
-  for (auto &kv : buckets) {
-    auto &members = kv.second;
-    llvm::sort(members,
-               [](const auto &a, const auto &b) { return a.first < b.first; });
-
-    size_t n = members.size();
-    assert(n >= 2 && n <= 4 && "TDM merge group must have 2..4 members");
-    Block *block = members.front().second->getBlock();
-    uint32_t hintUnion = 0;
-    TDMMergeGroupInfo info;
-    for (auto [pos, member] : llvm::enumerate(members)) {
-      TDMCopyGlobalToLocalOp op = member.second;
-      assert(member.first == static_cast<int32_t>(pos) &&
-             "TDM merge group indices must be contiguous");
-      assert(op->getBlock() == block &&
-             "TDM merge group members must stay in one block");
-      assert(isMergeableTDMCopy(op) &&
-             "TDM merge group member must stay hinted and mbarrier-free");
-      assert((pos == 0 || canMergeWith(info.members, op)) &&
-             "TDM merge group members must keep compatible rank/cache");
-
-      uint32_t hint = static_cast<uint32_t>(op.getWarpUsedHintAttr().getInt());
-      assert((hintUnion & hint) == 0 &&
-             "TDM merge group hints must stay pairwise-disjoint");
-      hintUnion |= hint;
-      info.members.push_back(op.getOperation());
-      info.memberHints.push_back(hint);
-    }
-    info.lastInProgramOrder = info.members.back();
-    auto shared = std::make_shared<TDMMergeGroupInfo>(std::move(info));
-    for (auto *op : shared->members)
-      result[op] = shared;
-  }
-  return result;
+  for (const auto &group : uniqueGroups)
+    materializeTDMMergeGroup(*group);
 }
 
 } // namespace mlir::triton::AMD
