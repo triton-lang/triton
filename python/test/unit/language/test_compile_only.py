@@ -256,7 +256,7 @@ def test_compile_only_dot_mxfp_e8m0_scale() -> None:
         ),
         target=GPUTarget("hip", "gfx950", 64),
     )
-    assert "f8E8M0FNU" not in k.asm["ttir"]
+    assert "f8E8M0FNU" in k.asm["ttir"]
     assert k.asm["amdgcn"] != ""
 
 

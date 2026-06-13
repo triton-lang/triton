@@ -597,7 +597,7 @@ class dtype(base_type):
         elif self.name in ('int8', 'uint8'):
             return builder.get_int8_ty()
         elif self.name == 'fp8e8m0fnu':
-            return builder.get_int8_ty()
+            return builder.get_fp8e8m0fnu_ty()
         elif self.name in ('int16', 'uint16'):
             return builder.get_int16_ty()
         elif self.name in ('int32', 'uint32'):
