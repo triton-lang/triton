@@ -6,6 +6,11 @@
 #layout2 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #layout3 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 
+#expand_layout0 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#expand_layout1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#expand_layout0_slice = #ttg.slice<{dim = 1, parent = #expand_layout0}>
+#expand_layout1_slice = #ttg.slice<{dim = 1, parent = #expand_layout1}>
+
 #layout4 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
 #layout5 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 32]], warp = [[16, 0], [32, 0]], block = []}>
@@ -156,6 +161,16 @@ tt.func @hoist_above_broadcast(%arg0: tensor<1024x1xf32, #layout2>, %arg1: f32) 
   tt.return %3 : tensor<1024x128xf32, #layout3>
 }
 
+// CHECK-LABEL: hoist_above_expand_dims_reshape
+tt.func @hoist_above_expand_dims_reshape(%arg0: tensor<1024xf32, #expand_layout0_slice>) -> tensor<1024x1xf32, #expand_layout1> {
+// CHECK: %[[CVT:.+]] = ttg.convert_layout %arg0 : tensor<1024xf32, #{{.*}}> -> tensor<1024xf32, #[[DST_LAYOUT:.*]]>
+// CHECK: tt.reshape %[[CVT]] : tensor<1024xf32, #[[DST_LAYOUT]]> -> tensor<1024x1xf32, #{{.*}}>
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.return
+  %0 = tt.reshape %arg0 : tensor<1024xf32, #expand_layout0_slice> -> tensor<1024x1xf32, #expand_layout0>
+  %1 = ttg.convert_layout %0 : tensor<1024x1xf32, #expand_layout0> -> tensor<1024x1xf32, #expand_layout1>
+  tt.return %1 : tensor<1024x1xf32, #expand_layout1>
+}
 
 // CHECK-LABEL: if
 tt.func @if(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
