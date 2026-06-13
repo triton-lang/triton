@@ -2563,7 +2563,7 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
             this case:
 
             - `mask` must also be scalar, and
-            - `boundary_check` and `padding_option` must be empty.
+            - `boundary_check` must be empty.
 
         (2) If `pointer` is an N-dimensional tensor of pointers, an
             N-dimensional block is stored.  In this case:
