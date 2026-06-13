@@ -5,6 +5,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton._internal_testing import run_in_process
 
 #####################################
 # Reference Philox Implementation
@@ -250,9 +251,7 @@ def test_randn(size, seed, dtype, device, const_seed):
 # tl.rand() should never produce >=1.0
 
 
-@pytest.mark.interpreter
-@pytest.mark.parametrize('dtype', ['int32', 'int64'])
-def test_rand_limits(dtype, device):
+def _run_rand_limits(dtype, device):
 
     @triton.jit
     def kernel(input, output, n: tl.constexpr):
@@ -271,3 +270,14 @@ def test_rand_limits(dtype, device):
 
     assert output[0] == output[1]
     assert 1.0 - torch.finfo(torch.float32).eps <= output[0].item() < 1.0
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize('dtype', ['int32', 'int64'])
+@pytest.mark.parametrize('debug', [False, True])
+def test_rand_limits(dtype, debug, device):
+    if debug:
+        result = run_in_process(_run_rand_limits, (dtype, device), env={"TRITON_DEBUG": "1"})
+        assert result.exc is None, result.exc
+    else:
+        _run_rand_limits(dtype, device)
