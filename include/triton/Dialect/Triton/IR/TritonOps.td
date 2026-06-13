@@ -72,9 +72,9 @@ def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
                                      Pure]> {
     let summary = "Cast between types of the same bitwidth";
 
-    let arguments = (ins TT_Type:$src);
+    let arguments = (ins TT_StorageLike:$src);
 
-    let results = (outs TT_Type:$result);
+    let results = (outs TT_StorageLike:$result);
 
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
     let hasFolder = 1;
@@ -230,13 +230,13 @@ def TT_LoadOp : TT_Op<"load", [
       ins
       TT_PtrLike:$ptr,
       Optional<TT_BoolLike>:$mask,
-      Optional<TT_Type>:$other,
+      Optional<TT_StorageLike>:$other,
       DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
       DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict,
       DefaultValuedAttr<BoolAttr, "false">:$isVolatile
     );
 
-    let results = (outs TT_Type:$result);
+    let results = (outs TT_StorageLike:$result);
 
     let builders = [
         // A tensor of pointers or a pointer to a scalar
@@ -286,7 +286,7 @@ def TT_StoreOp : TT_Op<"store", [
 
     let arguments = (ins
       Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>]>:$ptr,
-      TT_Type:$value,
+      TT_StorageLike:$value,
       Optional<TT_BoolLike>:$mask,
       DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
       DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
@@ -689,8 +689,8 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
       RankedTensorOf<[TT_Float,I8]>:$a,
       RankedTensorOf<[TT_Float,I8]>:$b,
       TT_FloatTensor:$c,
-      Optional<RankedTensorOf<[TT_Float, I8]>>:$a_scale,
-      Optional<RankedTensorOf<[TT_Float, I8]>>:$b_scale,
+      Optional<TT_DotScaleTensor>:$a_scale,
+      Optional<TT_DotScaleTensor>:$b_scale,
       TT_ScaleDotElemTypeAttr:$a_elem_type,
       TT_ScaleDotElemTypeAttr:$b_elem_type,
       BoolAttr:$fastMath,

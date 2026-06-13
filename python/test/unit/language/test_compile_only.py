@@ -217,6 +217,49 @@ def test_compile_only_dot_mxfp() -> None:
     assert k.asm["cubin"] != b""
 
 
+def test_compile_only_dot_mxfp_e8m0_scale() -> None:
+
+    @triton.jit
+    def simple_dot_mxfp_e8m0_scale(a_base, b_base, a_scale, b_scale, out, BLOCK_M: tl.constexpr,
+                                   BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+        a_ptr = a_base + tl.arange(0, BLOCK_M)[:, None] * BLOCK_K + tl.arange(0, BLOCK_K)[None, :]
+        b_ptr = b_base + tl.arange(0, BLOCK_K)[:, None] * BLOCK_N + tl.arange(0, BLOCK_N)[None, :]
+
+        SCALE_BLOCK_K: tl.constexpr = BLOCK_K // 16
+        scale_a_ptr = a_scale + tl.arange(0, BLOCK_M)[:, None] * SCALE_BLOCK_K + tl.arange(
+            0, SCALE_BLOCK_K)[None, :]
+        scale_b_ptr = b_scale + tl.arange(0, BLOCK_N)[:, None] * SCALE_BLOCK_K + tl.arange(
+            0, SCALE_BLOCK_K)[None, :]
+
+        a = tl.load(a_ptr)
+        b = tl.load(b_ptr)
+        a_scale = tl.load(scale_a_ptr)
+        b_scale = tl.load(scale_b_ptr)
+        c = tl.dot_scaled(a, a_scale, "e2m1", b, b_scale, "e2m1")
+        out_ptr = out + tl.arange(0, BLOCK_M)[:, None] * BLOCK_N + tl.arange(0, BLOCK_N)[None, :]
+        tl.store(out_ptr, c)
+
+    k = triton.compile(
+        ASTSource(
+            fn=simple_dot_mxfp_e8m0_scale,
+            signature={
+                "a_base": "*u8",
+                "b_base": "*u8",
+                "a_scale": "*fp8e8m0fnu",
+                "b_scale": "*fp8e8m0fnu",
+                "out": "*fp32",
+                "BLOCK_M": "constexpr",
+                "BLOCK_N": "constexpr",
+                "BLOCK_K": "constexpr",
+            },
+            constexprs={"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 64},
+        ),
+        target=GPUTarget("hip", "gfx950", 64),
+    )
+    assert "f8E8M0FNU" in k.asm["ttir"]
+    assert k.asm["amdgcn"] != ""
+
+
 def test_signature_ordering():
     """
     Checks that ASTSource always uses the argument order from
