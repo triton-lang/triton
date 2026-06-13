@@ -1029,14 +1029,24 @@ def UpdateTensorDescriptorOp : TT_AMDGPU_Op<"update_tensor_descriptor", [Pure,
     |----------------|-------------|-----------------------------------------------------------------|
     | `add_offsets`  | incremental | `global_addr += sum(add_offsets[i] * stride[i] * elem_size)`    |
     | `set_bounds`   | rewrite     | `tensor_dim[i] = set_bounds[i]` (absolute)                      |
-    | `dest`         | rewrite     | `lds_addr = dest`                                               |
     | `pred`         | rewrite     | `pred = pred`                                                   |
-    | `barrier`      | rewrite     | `barrier_addr = barrier`                                        |
+    | `clamp_bounds` | derive      | `tensor_dim[i] = max(0, tensor_dim[i] - add_offsets[i])`        |
+
+    The LDS destination and the TDM barrier (mbarrier) are op-level operands
+    on the async_tdm_copy ops, not descriptor fields, so they are not settable
+    here.
 
     `add_offsets` is incremental (deltas in element units) and does not
     touch `tensor_dim` — for OOB-correct loops, set `set_bounds` once
     outside the loop (interior tiles see a loop-invariant tensor_dim
     that hoists), or set `set_bounds` per iteration when OOB must fire.
+
+    `clamp_bounds` is a unit attribute that, when present, additionally
+    shrinks `tensor_dim` by `add_offsets` so the descriptor carries the
+    OOB extent of the advanced tile. It requires `add_offsets` and is
+    mutually exclusive with `set_bounds`. It lets a descriptor derive its
+    OOB bounds from the advance without a separate `set_bounds`, and works
+    for host-built descriptors whose shape is only known at runtime.
 
     Examples:
     ```
@@ -1044,10 +1054,10 @@ def UpdateTensorDescriptorOp : TT_AMDGPU_Op<"update_tensor_descriptor", [Pure,
     %d1 = amdg.update_tensor_descriptor %d, add_offsets=[%c0, %BLOCK_K]
             : !tt.tensordesc<64x64xf16, #shared>
 
-    // Prologue: position at first tile + wire LDS and barrier
+    // Prologue: position at first tile + set the predicate
     %d1 = amdg.update_tensor_descriptor %d,
             add_offsets=[%pid_m_off, %c0],
-            dest=%a_shared, barrier=%a_bar
+            pred=%p
             : !tt.tensordesc<64x64xf16, #shared>
 
     // Peel epilogue: install real OOB extent for the partial last tile
@@ -1060,9 +1070,8 @@ def UpdateTensorDescriptorOp : TT_AMDGPU_Op<"update_tensor_descriptor", [Pure,
     TT_TensorDescType:$desc,
     Variadic<I32>:$add_offsets,
     Variadic<I32>:$set_bounds,
-    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$dest,
     Optional<I32>:$pred,
-    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
+    UnitAttr:$clamp_bounds
   );
 
   let results = (outs TT_TensorDescType:$result);
@@ -1072,9 +1081,7 @@ def UpdateTensorDescriptorOp : TT_AMDGPU_Op<"update_tensor_descriptor", [Pure,
     oilist(
         `add_offsets` `=` `[` $add_offsets `]`
       | `set_bounds` `=` `[` $set_bounds `]`
-      | `dest` `=` $dest `:` qualified(type($dest))
       | `pred` `=` $pred
-      | `barrier` `=` $barrier `:` qualified(type($barrier))
     )
     attr-dict `:` qualified(type($desc))
   }];

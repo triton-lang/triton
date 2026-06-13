@@ -8,6 +8,7 @@
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir {
 
@@ -18,8 +19,30 @@ namespace {
 
 namespace AMD = mlir::triton::AMD;
 namespace tta = mlir::triton::amdgpu;
+namespace ttg = mlir::triton::gpu;
 
 constexpr llvm::StringLiteral kSplitSafeAttrName = "amdgpu.split_soffset_safe";
+
+// Shape/layout ops that forward their operand's values unchanged, and with them
+// the operand's sign and its integer-range lattice state.
+static bool isTransparentWrapper(Operation *op) {
+  bool isWrapper =
+      isa<triton::SplatOp, triton::BroadcastOp, triton::ExpandDimsOp,
+          triton::ReshapeOp, ttg::ConvertLayoutOp>(op);
+  assert((!isWrapper || op->getNumOperands() == 1) &&
+         "transparent wrapper must have a single SSA operand.");
+  return isWrapper;
+}
+
+// Peel transparent wrappers to expose the real defining op underneath.
+static Value peelTransparentWrappers(Value v) {
+  while (Operation *def = v.getDefiningOp()) {
+    if (!isTransparentWrapper(def))
+      break;
+    v = def->getOperand(0);
+  }
+  return v;
+}
 
 // Conservatively accept an offset only when every leaf in its
 // additive/shape expression proves non-negative. This may miss safe splits,
@@ -28,7 +51,7 @@ static bool isLeafNonNegative(Value v, DataFlowSolver &solver) {
   // An `add` is never a leaf to the soffset splitter. It peels the summands
   // apart and lifts the uniform ones into the unsigned soffset. So a sum whose
   // range is non-negative can still hide a negative summand.
-  if (v.getDefiningOp<arith::AddIOp>())
+  if (peelTransparentWrappers(v).getDefiningOp<arith::AddIOp>())
     return false;
 
   const auto *range = solver.lookupState<dataflow::IntegerValueRangeLattice>(v);
@@ -77,8 +100,7 @@ static bool isNonNegative(Value v, DataFlowSolver &solver) {
     return mr.getStartAttr().getInt() >= 0;
   if (isa<triton::GetProgramIdOp, triton::GetNumProgramsOp>(def))
     return true;
-  if (isa<triton::SplatOp, triton::BroadcastOp, triton::ExpandDimsOp,
-          triton::ReshapeOp>(def))
+  if (isTransparentWrapper(def))
     return isNonNegative(def->getOperand(0), solver);
 
   return false;
