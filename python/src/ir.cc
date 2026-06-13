@@ -1038,6 +1038,10 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getType<Float8E5M2FNUZType>();
            })
+      .def("get_fp8e8m0_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getType<Float8E8M0FNUType>();
+           })
       .def("get_half_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getF16Type();

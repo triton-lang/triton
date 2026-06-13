@@ -261,6 +261,41 @@ def test_fp8_compiles_for_multiple_architectures_hip():
     triton.compile(src, target=GPUTarget("hip", "gfx942", 64))
 
 
+def test_compile_only_dot_scaled_e8m0_scale() -> None:
+    """
+    float8_e8m0fnu is the native MXFP4/MXFP8 scale dtype.
+
+    Verify tl.dot_scaled compiles when the scales are passed as first-class
+    ``float8e8m0fnu`` tensors (rather than being bitcast to ``uint8`` by the
+    caller) on hip:gfx950.
+    """
+
+    @triton.jit
+    def kernel(a_ptr, a_scale_ptr, b_ptr, b_scale_ptr, out_ptr,  #
+               M: tl.constexpr, N: tl.constexpr, K: tl.constexpr):
+        offs_m = tl.arange(0, M)
+        offs_n = tl.arange(0, N)
+        offs_k = tl.arange(0, K // 2)  # e2m1: two fp4 elements packed per byte
+        offs_sk = tl.arange(0, K // 32)  # one e8m0 scale per 32-element block
+        a = tl.load(a_ptr + offs_m[:, None] * (K // 2) + offs_k[None, :])
+        b = tl.load(b_ptr + offs_k[:, None] * N + offs_n[None, :])
+        a_scale = tl.load(a_scale_ptr + offs_m[:, None] * (K // 32) + offs_sk[None, :])
+        b_scale = tl.load(b_scale_ptr + offs_n[:, None] * (K // 32) + offs_sk[None, :])
+        acc = tl.dot_scaled(a, a_scale, "e2m1", b, b_scale, "e2m1")
+        tl.store(out_ptr + offs_m[:, None] * N + offs_n[None, :], acc)
+
+    src = ASTSource(
+        fn=kernel,
+        signature={
+            "a_ptr": "*u8", "a_scale_ptr": "*fp8e8m0fnu", "b_ptr": "*u8", "b_scale_ptr": "*fp8e8m0fnu", "out_ptr":
+            "*fp32", "M": "constexpr", "N": "constexpr", "K": "constexpr"
+        },
+        constexprs={"M": 64, "N": 64, "K": 64},
+    )
+    k = triton.compile(src, target=GPUTarget("hip", "gfx950", 64))
+    assert k.asm["amdgcn"] != ""
+
+
 def test_fp8_compiles_for_multiple_architectures_cuda():
     """
     Validate FP8 compilation succeeds for architectures with different

@@ -390,7 +390,7 @@ def check_bit_width(value, shift_value):
 class dtype(base_type):
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
+    FP_TYPES = ['fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp8e8m0fnu', 'fp16', 'bf16', 'fp32', 'fp64']
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
@@ -431,6 +431,11 @@ class dtype(base_type):
             elif name == 'fp8e5b16':
                 self.fp_mantissa_width = 2
                 self.exponent_bias = 16
+            elif name == 'fp8e8m0fnu':
+                # S0E8M0: 8 exponent bits, no sign, no mantissa. Used as an
+                # exponent-only scale format for MXFP4/MXFP8 (OCP MX spec).
+                self.fp_mantissa_width = 0
+                self.exponent_bias = 127
             elif name == 'fp16':
                 self.fp_mantissa_width = 10
                 self.exponent_bias = 15
@@ -447,7 +452,12 @@ class dtype(base_type):
                 raise RuntimeError(f'Unsupported floating-point type {name}')
 
     def is_fp8(self):
-        return 'fp8' in self.name
+        # Note: e8m0 is an 8-bit float but is an exponent-only *scale* format,
+        # not a compute fp8 type, so it is intentionally excluded here.
+        return 'fp8' in self.name and not self.is_fp8e8m0()
+
+    def is_fp8e8m0(self):
+        return self.name == 'fp8e8m0fnu'
 
     def is_fp8e4nv(self):
         return self.name == 'fp8e4nv'
@@ -582,7 +592,7 @@ class dtype(base_type):
         out.append(self.to_ir(builder))
 
     def to_ir(self, builder: ir.builder) -> ir.type:
-        if self.name.startswith("fp8"):
+        if self.is_fp8():
             if hasattr(builder, "options") and self.name not in builder.options.supported_fp8_dtypes:
                 raise ValueError(f'type {self} not supported in this architecture. '
                                  f'The supported fp8 dtypes are {builder.options.supported_fp8_dtypes}')
@@ -609,6 +619,8 @@ class dtype(base_type):
             return builder.get_fp8e4b8_ty()
         elif self.name == 'fp8e4b15':
             return builder.get_fp8e4b15_ty()
+        elif self.name == 'fp8e8m0fnu':
+            return builder.get_fp8e8m0_ty()
         elif self.name == 'fp16':
             return builder.get_half_ty()
         elif self.name == 'bf16':
@@ -819,6 +831,7 @@ float8e5b16 = dtype('fp8e5b16')
 float8e4nv = dtype('fp8e4nv')
 float8e4b8 = dtype('fp8e4b8')
 float8e4b15 = dtype('fp8e4b15')
+float8e8m0fnu = dtype('fp8e8m0fnu')
 float16 = dtype('fp16')
 bfloat16 = dtype('bf16')
 float32 = dtype('fp32')
@@ -2440,14 +2453,14 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     :param lhs: The first tensor to be multiplied.
     :type lhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
     :param lhs_scale: Scale factor for lhs tensor. Shape should be [M, K//group_size] when lhs is [M, K], where group_size is 32 if scales type are `e8m0`.
-    :type lhs_scale: e8m0 type represented as an uint8 tensor, or None.
+    :type lhs_scale: e8m0 scale represented either as a :code:`float8e8m0fnu` tensor or as a raw-byte :code:`uint8` tensor, or None.
     :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type lhs_format: str
     :param rhs: The second tensor to be multiplied.
     :type rhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
     :param rhs_scale: Scale factor for rhs tensor. Shape should be [N, K//group_size] where rhs is [K, N].
                       Important: Do NOT transpose rhs_scale
-    :type rhs_scale: e8m0 type represented as an uint8 tensor, or None.
+    :type rhs_scale: e8m0 scale represented either as a :code:`float8e8m0fnu` tensor or as a raw-byte :code:`uint8` tensor, or None.
     :param rhs_format: format of the rhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type rhs_format: str
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
