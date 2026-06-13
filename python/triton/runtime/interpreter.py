@@ -210,10 +210,23 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
     if input_dtype.primitive_bitwidth > output_dtype.primitive_bitwidth:  # Downcast
         significand_output = (significand >> (input_dtype.fp_mantissa_width - output_dtype.fp_mantissa_width)) & (
             (1 << output_dtype.fp_mantissa_width) - 1)
-        if rounding_mode == _ir.ROUNDING_MODE.RTNE:  # Round to nearst even
-            # find the cut-off bit
-            cut_off = significand & (1 << (input_dtype.fp_mantissa_width - output_dtype.fp_mantissa_width - 1))
-            significand_output = significand_output + (cut_off > 0)
+        if rounding_mode == _ir.ROUNDING_MODE.RTNE:  # Round to nearest even
+            shift_amount = input_dtype.fp_mantissa_width - output_dtype.fp_mantissa_width
+            # Guard bit (most significant truncated bit)
+            guard_bit = (significand >> (shift_amount - 1)) & 1
+            # Sticky bits (all lower truncated bits OR'd together)
+            if shift_amount > 1:
+                sticky_mask = (1 << (shift_amount - 1)) - 1
+                sticky_bits = (significand & sticky_mask) != 0
+            else:
+                sticky_bits = np.zeros_like(significand, dtype=bool)
+            # LSB of the truncated result
+            lsb = significand_output & 1
+            # Round up if:
+            # 1. guard_bit=1 AND sticky_bits!=0 (truncated > half), OR
+            # 2. guard_bit=1 AND sticky_bits==0 AND lsb=1 (exactly half, round to even)
+            round_up = (guard_bit != 0) & (sticky_bits | (lsb != 0))
+            significand_output = significand_output + round_up
         significand_output = significand_output.astype(output_unint_dtype)
     else:  # Upcast
         significand_output = (significand.astype(output_unint_dtype) <<

@@ -1,6 +1,7 @@
 # fmt: off
 
 
+import os
 import numpy as np
 import torch
 import pytest
@@ -433,3 +434,24 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
         assert(torch.all(torch.isnan(dst)))
     else:
         torch.testing.assert_close(dst, torch.full_like(dst, expected_result))
+
+
+@pytest.mark.interpreter
+def test_rtne_tie_to_even(device):
+    """Regression test for #8322: interpreter RTNE rounds ties up instead of to even."""
+    # f8e5m2 has 2 mantissa bits, so 8 bits are truncated from f16's 10.
+    # 9.0: truncated=0.5 exactly, result LSB=0 (even) → stay at 8.0
+    # 11.0: truncated=0.5 exactly, result LSB=1 (odd) → round up to 12.0
+    # 10.0: truncated=0, no rounding → 10.0
+    BLOCK_SIZE = 4096
+    src = torch.zeros(BLOCK_SIZE, dtype=torch.float16, device=device)
+    src[0], src[1], src[2] = 9.0, 10.0, 11.0
+
+    dst = launch_type_convert_triton(src, tl.float16, tl.float8e5, device=device, rounding='rtne')
+    # f8e5: exponent_bits=5, mantissa_bits=2, exponent_bias=15
+    dst_f32 = launch_upcast_emulated(dst, 5, 2, 15, device=device)
+    results = dst_f32[:3].cpu().float()
+
+    assert results[0].item() == 8.0
+    assert results[1].item() == 10.0
+    assert results[2].item() == 12.0
