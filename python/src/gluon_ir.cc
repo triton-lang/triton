@@ -1081,6 +1081,13 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttag::ScaledUpcastFp8Op>(resultType, input,
                                                          scale);
            })
+      .def("create_extract_slice",
+           [](GluonOpBuilder &self, Type resultType, Value source,
+              std::vector<int64_t> &offsets) -> Value {
+             auto offsetsAttr = self.getBuilder().getDenseI64ArrayAttr(offsets);
+             return self.create<ttag::ExtractSliceOp>(resultType, source,
+                                                      offsetsAttr);
+           })
       .def("create_make_tensor_descriptor",
            [](TritonOpBuilder &self, Type resultTy, Value &base,
               std::vector<Value> &shape, std::vector<Value> &strides,

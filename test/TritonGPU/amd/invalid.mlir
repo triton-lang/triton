@@ -491,3 +491,62 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %result : !tt.tensordesc<64x64xf16, #shared>
   }
 }
+
+// -----
+
+// scatter: two padded layouts whose padding amount differs.
+#scatter_desc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [8, 64]}>
+#scatter_alloc = #ttg.padded_shared<[64:+4] {order = [1, 0], shape = [8, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @scatter_inconsistent_descriptor_layout(
+    %tensorDesc: !tt.tensordesc<8x64xf16, #scatter_desc>,
+    %memDesc: !ttg.memdesc<8x64xf16, #scatter_alloc, #smem, mutable>,
+    %row_indices: tensor<8xi32>
+  ) {
+    %c0_i32 = arith.constant 0 : i32
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    amdg.async_tdm_scatter %tensorDesc[%row_indices, %c0_i32] from %memDesc : tensor<8xi32>, !ttg.memdesc<8x64xf16, #scatter_alloc, #smem, mutable> -> !tt.tensordesc<8x64xf16, #scatter_desc>
+    tt.return
+  }
+}
+
+// -----
+
+// gather: descriptor and allocation use different encoding kinds (padded vs
+// swizzled).
+#gather_desc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [8, 64]}>
+#gather_alloc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @gather_inconsistent_descriptor_layout(
+    %tensorDesc: !tt.tensordesc<8x64xf16, #gather_desc>,
+    %memDesc: !ttg.memdesc<8x64xf16, #gather_alloc, #smem, mutable>,
+    %row_indices: tensor<8xi32>,
+    %pred: i32
+  ) {
+    %c0_i32 = arith.constant 0 : i32
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    %token = amdg.async_tdm_gather %tensorDesc[%row_indices, %c0_i32] to %memDesc, pred = %pred : tensor<8xi32>, !ttg.memdesc<8x64xf16, #gather_alloc, #smem, mutable> -> !tt.tensordesc<8x64xf16, #gather_desc>
+    tt.return
+  }
+}
+
+// -----
+
+// load (global-to-local copy): two swizzled layouts whose order differs.
+#load_desc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#load_alloc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tdm_load_inconsistent_descriptor_layout(
+    %tensorDesc: !tt.tensordesc<64x64xf16, #load_desc>,
+    %memDesc: !ttg.memdesc<64x64xf16, #load_alloc, #smem, mutable>,
+    %pred: i32
+  ) {
+    %c0_i32 = arith.constant 0 : i32
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    %token = amdg.async_tdm_copy_global_to_local %tensorDesc[%c0_i32, %c0_i32] into %memDesc, pred = %pred : !tt.tensordesc<64x64xf16, #load_desc> -> !ttg.memdesc<64x64xf16, #load_alloc, #smem, mutable>
+    tt.return
+  }
+}

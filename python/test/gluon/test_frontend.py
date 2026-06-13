@@ -2888,6 +2888,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@gluon.jit
+def slice_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 64], [4, 1], [1, 0])
+    x = ttgl.full([128, 128], 1.0, ttgl.float32, layout=layout)
+    s = ttgl.amd.slice(x, [64, 128], [64, 0])
+    ttgl.static_assert(s.type.shape == [64, 128])
+    ttgl.static_assert(s.type.layout == layout)
+
+
+def test_amd_slice():
+    module = run_parser(slice_kernel, target=HIP_TARGET_CDNA3)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @slice_kernel() attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f32
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<128x128xf32, #blocked>
+    %0 = amdg.extract_slice %cst_0 [64, 0] : tensor<128x128xf32, #blocked> to tensor<64x128xf32, #blocked>
+    tt.return
+  }
+}
+""")
+
+
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
 def test_amd_mfma_scaled(target):
 
