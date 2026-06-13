@@ -121,9 +121,6 @@ private:
   bool processMakeRange(triton::MakeRangeOp makeRange, Attribute layout);
 
   bool processBroadcast(triton::BroadcastOp broadcast, Attribute layout);
-  bool processExpandDimsBackward(triton::ExpandDimsOp expandDims,
-                                 ttg::DistributedEncodingTrait newResultLayout);
-
   bool processConvertLayoutBackward(ttg::ConvertLayoutOp convertLayout,
                                     CastOp cast);
   bool processConvertLayoutForward(ttg::ConvertLayoutOp convertLayout,
@@ -417,8 +414,6 @@ bool CTAPlanner::propagateBackward(CastOp cast) {
       processMakeRange(makeRange, layout);
     } else if (auto broadcast = llvm::dyn_cast<triton::BroadcastOp>(op)) {
       processBroadcast(broadcast, layout);
-    } else if (auto expandDims = llvm::dyn_cast<triton::ExpandDimsOp>(op)) {
-      processExpandDimsBackward(expandDims, layout);
     } else if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
       processIfOpBackward(ifOp, cast);
     } else if (auto forOp = llvm::dyn_cast<scf::ForOp>(op)) {
@@ -688,15 +683,6 @@ bool CTAPlanner::processMakeRange(triton::MakeRangeOp makeRange,
 bool CTAPlanner::processBroadcast(triton::BroadcastOp broadcast,
                                   Attribute layout) {
   insertCasts(broadcast.getOperation(), {layout}, {layout});
-  return true;
-}
-
-bool CTAPlanner::processExpandDimsBackward(
-    triton::ExpandDimsOp expandDims,
-    ttg::DistributedEncodingTrait newResultLayout) {
-  auto newSrcLayout = ttg::SliceEncodingAttr::get(
-      newResultLayout.getContext(), expandDims.getAxis(), newResultLayout);
-  insertCasts(expandDims.getOperation(), {newSrcLayout}, {newResultLayout});
   return true;
 }
 
