@@ -3878,8 +3878,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %1 = ttg.local_alloc %cst_0 : (tensor<16x64xf16, #blocked>) -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
     %c0_i32 = arith.constant 0 : i32
     %c2_i32 = arith.constant 2 : i32
-    amdg.async_tdm_copy_local_to_global %0[%c0_i32, %c2_i32] from %1 : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<16x64xf16, #shared>
-    %2 = amdg.async_tdm_wait  {num = 0 : i32}
+    %2 = amdg.async_tdm_copy_local_to_global %0[%c0_i32, %c2_i32] from %1 : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<16x64xf16, #shared>
+    %3 = amdg.async_tdm_wait  {num = 0 : i32}
     tt.return
   }
 }
