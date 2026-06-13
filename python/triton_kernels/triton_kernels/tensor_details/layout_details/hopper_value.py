@@ -53,6 +53,29 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "K", K)
         object.__setattr__(self, "N", N)
 
+    def _padded_shape(self, shape) -> list[int]:
+        *leading_shape, M, K = shape
+        if self.mx_axis == len(leading_shape):
+            align_m, align_k = 64, 256
+        else:
+            align_m, align_k = 256, 64
+        M = (M + align_m - 1) // align_m * align_m
+        K = (K + align_k - 1) // align_k * align_k
+        return [*leading_shape, M, K]
+
+    @property
+    def storage_shape(self) -> list[int]:
+        *leading_shape, M, K = self.shape
+        if self.is_fp4:
+            K //= 2
+            if self.mx_axis == len(leading_shape):
+                M //= 2
+                K *= 2
+        *leading_shape, M, K = self._padded_shape((*leading_shape, M, K))
+        if self.mx_axis == len(leading_shape):
+            return [*leading_shape, M * 4, K // 4]
+        return [*leading_shape, M // 4, K * 4]
+
     def _maybe_mT(self, data):
         if self.mx_axis == len(self.leading_shape):
             return data.mT
@@ -85,10 +108,9 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         assert self.mma_version in (2, 3)
         # Align the dimension packed by four to a 64-byte load extent.
         *_, M_in, K_in = data.shape
-        SWIZZLE_ALIGN_M = 64 if self.mx_axis == batch else 256
-        SWIZZLE_ALIGN_K = 256 if self.mx_axis == batch else 64
-        pad_m = (SWIZZLE_ALIGN_M - (M_in % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
-        pad_k = (SWIZZLE_ALIGN_K - (K_in % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
+        *_, M, K = self._padded_shape(data.shape)
+        pad_m = M - M_in
+        pad_k = K - K_in
         if data.numel():
             data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
         else:
@@ -142,7 +164,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         # twiddle the bits
         data = _pack_bits(data, self.mx_axis)
         data = self._maybe_mT(data)
-        return data
+        return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data):
         data = self._maybe_mT(data)

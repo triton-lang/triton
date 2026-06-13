@@ -106,8 +106,6 @@ bool isGenericLinearEncoding(Attribute attr) {
 Attribute inferEncodingFromLinearLayout(MLIRContext *ctx, LinearLayout ll,
                                         Attribute srcEnc) {
   if (isGenericLinearEncoding(srcEnc)) {
-    assert(!isPermutationMatrixLayout(ll) &&
-           "Expected non-permutation layout from this source encoding");
     return GenericLinearEncodingAttr::get(ctx, std::move(ll));
   }
   return LinearEncodingAttr::get(ctx, std::move(ll));
@@ -452,12 +450,20 @@ SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
                                               ArrayRef<int64_t> shapeLogical) {
   SmallVector<int64_t> shape(shapeLogical);
+  std::optional<int64_t> packedAxis;
   if (auto sharedMMALayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-    if (sharedMMALayout.getFp4Padded()) {
-      auto packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
-      shape[packedAxis] *= 2;
-    }
+    if (sharedMMALayout.getFp4Padded())
+      packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
+  } else if (auto tmemLayout =
+                 dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
+    // An fp4Padded TMEM descriptor keeps the packed Mx(K/2)xi8 shape. Allocate
+    // two physical columns per packed K coordinate so each logical FP4 element
+    // occupies one byte in TMEM.
+    if (tmemLayout.getFp4Padded())
+      packedAxis = 1;
   }
+  if (packedAxis)
+    shape[*packedAxis] *= 2;
   return getShapePerCTA(layout, shape);
 }
 

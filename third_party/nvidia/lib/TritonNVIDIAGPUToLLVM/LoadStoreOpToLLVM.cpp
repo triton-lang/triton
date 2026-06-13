@@ -518,6 +518,17 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
   }
 }
 
+Value loadScalarAtomicResult(ConversionPatternRewriter &rewriter, Location loc,
+                             const NVIDIA::TargetInfo &targetInfo,
+                             Value atomPtr, Type valueTy, int numCTAs) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (numCTAs == 1)
+    return b.load(valueTy, atomPtr);
+  // Scalar atomics are issued by CTA 0, so read CTA 0's scratch allocation.
+  return targetInfo.loadDShared(rewriter, loc, atomPtr, b.i32_val(0), valueTy,
+                                b.true_val());
+}
+
 struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
@@ -599,7 +610,8 @@ struct AtomicCASOpConversion
         auto ASMReturnTy = void_ty(ctx);
         ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
         createBarrier(rewriter, loc, numCTAs, op);
-        Value ret = b.load(valueElemTy, atomPtr);
+        Value ret = loadScalarAtomicResult(rewriter, loc, targetInfo, atomPtr,
+                                           valueElemTy, numCTAs);
         rewriter.replaceOp(op, {ret});
         return success();
       }
@@ -793,7 +805,8 @@ public:
         // Only threads with rmwMask = True store the result
         targetInfo.storeShared(rewriter, loc, atomPtr, loadAcquireOp, pred);
         createBarrier(rewriter, loc, numCTAs, op);
-        Value ret = b.load(valueElemTy, atomPtr);
+        Value ret = loadScalarAtomicResult(rewriter, loc, targetInfo, atomPtr,
+                                           valueElemTy, numCTAs);
         rewriter.replaceOp(op, {ret});
         return success();
       }
@@ -928,7 +941,8 @@ public:
         // Only threads with rmwMask = True store the result
         targetInfo.storeShared(rewriter, loc, atomPtr, *old, pred);
         createBarrier(rewriter, loc, numCTAs, op);
-        Value ret = b.load(valueElemTy, atomPtr);
+        Value ret = loadScalarAtomicResult(rewriter, loc, targetInfo, atomPtr,
+                                           valueElemTy, numCTAs);
         rewriter.replaceOp(op, {ret});
         return success();
       }
@@ -1037,8 +1051,8 @@ struct AsyncCopyGlobalToLocalOpConversion
                            RewriterBase &rewriter, Location loc,
                            ArrayRef<Value> vals, Value shmemAddr, int startIdx,
                            VectorType vecTy,
-                           std::optional<Value> ctaId) -> SmallVector<Value> {
-      assert(!ctaId.has_value() && "cp.async does not support cross-cta loads");
+                           Value ctaId) -> SmallVector<Value> {
+      assert(!ctaId && "cp.async does not support cross-cta loads");
       assert(isa<VectorType>(vecTy));
       auto *ctx = rewriter.getContext();
       auto elemTy = vecTy.getElementType();

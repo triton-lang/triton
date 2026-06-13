@@ -25,9 +25,13 @@ namespace {
 
 bool atomicNeedsClusterBarrier(Operation *op) {
   if (!isa<AtomicCASOp, AtomicRMWOp>(op) || op->getResult(0).use_empty() ||
-      isa<RankedTensorType>(op->getResult(0).getType()))
+      gpu::lookupNumCTAs(op) == 1)
     return false;
-  return gpu::lookupNumCTAs(op) > 1;
+  auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+  if (!tensorTy)
+    return true;
+  auto kBlock = StringAttr::get(op->getContext(), "block");
+  return gpu::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
 }
 
 struct ClusterBarrierMbarAllocatorPass

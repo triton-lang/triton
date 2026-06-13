@@ -164,6 +164,54 @@ def kernel() -> int:
     assert_code_equal(output, expected)
 
 
+def test_slice_kernel_does_not_treat_base_python_site_packages_as_stdlib_in_venv(tmp_path, monkeypatch):
+    fake_base_stdlib = tmp_path / "base" / "lib" / "python3.12"
+    fake_base_site_packages = fake_base_stdlib / "site-packages"
+    fake_venv_site_packages = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    fake_base_site_packages.mkdir(parents=True)
+    fake_venv_site_packages.mkdir(parents=True)
+    pkg, mod = _make_package(
+        fake_base_site_packages,
+        {
+            "helpers.py":
+            """
+                def helper() -> int:
+                    return 7
+            """,
+            "kernel_mod.py":
+            """
+                from .helpers import helper
+
+                def kernel() -> int:
+                    return helper()
+            """,
+        },
+    )
+
+    original_get_paths = sysconfig.get_paths
+
+    def fake_get_paths():
+        paths = original_get_paths().copy()
+        paths["stdlib"] = str(fake_base_stdlib)
+        paths["platstdlib"] = str(fake_base_stdlib)
+        paths["purelib"] = str(fake_venv_site_packages)
+        paths["platlib"] = str(fake_venv_site_packages)
+        return paths
+
+    monkeypatch.setattr(sysconfig, "get_paths", fake_get_paths)
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    expected = R"""
+def helper() -> int:
+    return 7
+
+
+def kernel() -> int:
+    return helper()
+    """
+    assert_code_equal(output, expected)
+
+
 def test_slice_kernel_supports_injected_decorator_matchers(tmp_path):
     pkg, mod = _make_package(
         tmp_path,

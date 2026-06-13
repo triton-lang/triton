@@ -97,6 +97,7 @@ class DependenciesFinder(ast.NodeVisitor):
 
     def _update_hash(self, func):
         assert isinstance(func, JITCallable)
+        func_key = func.cache_key
         # Merge our used_global_vals with those of the called function,
         # after checking that all overlapping values are consistent.
         for k in self.used_global_vals.keys() & func.used_global_vals.keys():
@@ -109,7 +110,6 @@ class DependenciesFinder(ast.NodeVisitor):
                 )
         self.used_global_vals.update(func.used_global_vals)
         # update hash
-        func_key = func.cache_key
         func_key += str(getattr(func, "noinline", False))
         self.hasher.update(func_key.encode("utf-8"))
 
@@ -189,7 +189,7 @@ class DependenciesFinder(ast.NodeVisitor):
         lhs_name = getattr(lhs, "__name__", "")
         if lhs is None or lhs_name in self.supported_modules:
             return None
-        ret = getattr(lhs, node.attr)
+        ret = getattr(lhs, node.attr, None)
         self.record_reference(ret)
         return ret
 
@@ -231,13 +231,17 @@ class DependenciesFinder(ast.NodeVisitor):
         visit_defaults(node.defaults)
 
     def visitAssnTarget(self, node):
-        # Target is either a single string, or a list of strings (if the assn
-        # target is a tuple).
+        # Target is either a single string, or a (possibly nested) list of strings if the assign target is a tuple.
         target = self.visit(node)
-        if isinstance(target, list):
-            self.local_names |= set(target)
-        else:
-            self.local_names.add(target)
+
+        def _add(t):
+            if isinstance(t, list):
+                for sub in t:
+                    _add(sub)
+            else:
+                self.local_names.add(t)
+
+        _add(target)
 
     def visit_Assign(self, node):
         if len(node.targets) != 1:
@@ -525,9 +529,11 @@ class JITCallable:
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
 
             from triton.language.core import constexpr
-            self.hash += str([(name, val)
-                              for (name, _), (val, _) in self.used_global_vals.items()
-                              if isinstance(val, constexpr)])
+            constexpr_globals = [(name, val)
+                                 for (name, _), (val, _) in self.used_global_vals.items()
+                                 if isinstance(val, constexpr)]
+            constexpr_globals.sort(key=lambda item: (item[0], repr(item[1])))
+            self.hash += str(constexpr_globals)
             self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
         return self.hash
 

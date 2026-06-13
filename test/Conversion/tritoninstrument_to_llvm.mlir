@@ -38,7 +38,7 @@ tt.func private @experimental_buffer_descriptors_shared() {
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_lock_acquire
 // CHECK: 09atom.global.acquire.gpu.cas.b32
-// CHECK: nvvm.barrier0
+// CHECK: nvvm.barrier
 tt.func private @experimental_lock_acquire(
   %lock: !tt.ptr<i32>,
   %pred: i1
@@ -55,7 +55,7 @@ tt.func private @experimental_lock_acquire(
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_lock_release
-// CHECK: nvvm.barrier0
+// CHECK: nvvm.barrier
 // CHECK: atom.global.release.gpu.exch.b32
 tt.func private @experimental_lock_release(
   %lock: !tt.ptr<i32>,
@@ -115,8 +115,9 @@ tt.func private @experimental_gsan_tensordesc_info(
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_fpsan_embed
 // CHECK-NOT: tti.experimental_fpsan_embed
-// CHECK: llvm.bitcast %arg0 : f32 to i32
-// CHECK: llvm.mul
+// CHECK: %[[RAW:.*]] = llvm.bitcast %arg0 : f32 to i32
+// CHECK-NOT: llvm.inline_asm
+// CHECK: llvm.mul %[[RAW]],
 // CHECK: llvm.xor
 tt.func private @experimental_fpsan_embed(%arg0: f32) -> i32 {
   %0 = tti.experimental_fpsan_embed %arg0 : (f32) -> i32
@@ -129,11 +130,34 @@ tt.func private @experimental_fpsan_embed(%arg0: f32) -> i32 {
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_fpsan_unembed
 // CHECK-NOT: tti.experimental_fpsan_unembed
-// CHECK: llvm.mul
+// CHECK: llvm.mul %arg0,
 // CHECK: llvm.xor
 // CHECK: llvm.bitcast %{{.*}} : i32 to f32
 tt.func private @experimental_fpsan_unembed(%arg0: i32) -> f32 {
   %0 = tti.experimental_fpsan_unembed %arg0 : (i32) -> f32
   tt.return %0 : f32
+}
+}
+
+// -----
+
+#local_gather_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
+#local_gather_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_local_gather
+// CHECK: nvvm.mapa
+// CHECK: llvm.load {{.*}} : !llvm.ptr<7> -> i32
+tt.func private @experimental_local_gather(%out: !tt.ptr<i32>) {
+  %src = ttg.local_alloc {allocation.offset = [0 : i32, 256 : i32]} : () -> !ttg.memdesc<2x32xi32, #local_gather_shared, #ttg.shared_memory, mutable>
+  %idx = arith.constant dense<0> : tensor<2x32xi32, #local_gather_blocked>
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %g = tti.experimental_local_gather %src[%idx] offsets = [%c1, %c0] {axis = 0 : i32} : !ttg.memdesc<2x32xi32, #local_gather_shared, #ttg.shared_memory, mutable>, tensor<2x32xi32, #local_gather_blocked> -> tensor<2x32xi32, #local_gather_blocked>
+  %ptrs = tt.splat %out : !tt.ptr<i32> -> tensor<2x32x!tt.ptr<i32>, #local_gather_blocked>
+  %offs = arith.constant dense<0> : tensor<2x32xi32, #local_gather_blocked>
+  %out_ptrs = tt.addptr %ptrs, %offs : tensor<2x32x!tt.ptr<i32>, #local_gather_blocked>, tensor<2x32xi32, #local_gather_blocked>
+  tt.store %out_ptrs, %g : tensor<2x32x!tt.ptr<i32>, #local_gather_blocked>
+  tt.return
 }
 }

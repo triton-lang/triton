@@ -378,7 +378,7 @@ def matmul_launch_metadata(grid, kernel, args):
     K_repr = K
     if args["RAGGED_DIMENSION"] == "K":
         K = None if n_tokens is None else n_tokens
-        K_repr = K if allow_sync else None
+        K_repr = None
 
     repr = lambda s, x: f"{s} = {x}" if x is not None else f"E_{len(slice_sizes)}({s}) = {n_rows}"
     nbits = X.dtype.itemsize * 8

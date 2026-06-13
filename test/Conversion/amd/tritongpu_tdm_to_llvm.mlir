@@ -195,11 +195,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tdm_2d_with_padding
   tt.func public @tdm_2d_with_padding(
-    %tensorDesc: !tt.tensordesc<128x64xf16, #shared>,
+    %tensorDesc: !tt.tensordesc<128x64xf16>,
     %memDesc: !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
   ) {
     %c0_i32 = arith.constant 0 : i32
-    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc: !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<128x64xf16, #shared>
+    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc: !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<128x64xf16>
     // CHECK: "llvm.amdgcn.tensor.store.from.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
     tt.return
   }
@@ -212,11 +212,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tdm_5d_with_padding
   tt.func public @tdm_5d_with_padding(
-    %tensorDesc: !tt.tensordesc<8x8x8x16x16xf16, #shared_5d>,
+    %tensorDesc: !tt.tensordesc<8x8x8x16x16xf16>,
     %memDesc: !ttg.memdesc<8x8x8x16x16xf16, #shared_5d, #smem_5d, mutable>
   ) {
     %c0_i32 = arith.constant 0 : i32
-    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32, %c0_i32, %c0_i32, %c0_i32] from %memDesc: !ttg.memdesc<8x8x8x16x16xf16, #shared_5d, #smem_5d, mutable> -> !tt.tensordesc<8x8x8x16x16xf16, #shared_5d>
+    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32, %c0_i32, %c0_i32, %c0_i32] from %memDesc: !ttg.memdesc<8x8x8x16x16xf16, #shared_5d, #smem_5d, mutable> -> !tt.tensordesc<8x8x8x16x16xf16>
     // CHECK: "llvm.amdgcn.tensor.store.from.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
     tt.return
   }
@@ -347,6 +347,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %0 = tt.make_tensor_descriptor %arg0, [%shape0, %shape1, %shape2], [%stride0, %stride1, %c_stride2] : <f16>, <4x16x64xf16, #shared>
     %1 = ttg.local_alloc : () -> !ttg.memdesc<4x16x64xf16, #shared, #smem, mutable>
     %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset, %c_offset] into %1, pred = %c_pred : !tt.tensordesc<4x16x64xf16, #shared> -> !ttg.memdesc<4x16x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Rank-reducing padded load: 2D [1, 64] descriptor into a 1D [64] allocation.
+#desc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [1, 64]}>
+#alloc = #ttg.padded_shared<[64:+8] {order = [0], shape = [64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_load_rank_reducing_padded
+  tt.func public @tdm_load_rank_reducing_padded(%arg0: !tt.ptr<i16> {tt.divisibility = 16 : i32}) {
+    %c_shape0 = arith.constant 1 : i32
+    %c_shape1 = arith.constant 64 : i32
+    %c_stride0 = arith.constant 64 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %c_offset = arith.constant 0 : i32
+    %c_pred = arith.constant 1 : i32
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape0, %c_shape1], [%c_stride0, %c_stride1] : <i16>, <1x64xi16, #desc>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<64xi16, #alloc, #smem, mutable>
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+    %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset] into %1, pred = %c_pred : !tt.tensordesc<1x64xi16, #desc> -> !ttg.memdesc<64xi16, #alloc, #smem, mutable>
     tt.return
   }
 }

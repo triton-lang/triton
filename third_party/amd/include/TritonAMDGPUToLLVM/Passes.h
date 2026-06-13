@@ -39,11 +39,6 @@ std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonAMDGPUToLLVMPass(StringRef gfxArch, bool ftz);
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertBuiltinFuncToLLVMPass(StringRef gfxArch, bool ftz);
-std::unique_ptr<OperationPass<ModuleOp>>
-createTritonAMDGPUInsertInstructionSchedHintsPass(StringRef variant);
-std::unique_ptr<OperationPass<ModuleOp>>
-createTritonAMDGPULowerInstructionSchedHintsPass(StringRef gfxArch,
-                                                 int32_t numStages);
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createAllocateAMDGPUSharedMemoryPass(StringRef arch);

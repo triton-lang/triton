@@ -625,8 +625,10 @@ class InterpreterBuilder:
         # Triton's rshift operator depends on the signedness of the left operand
         lhs_dtype = _get_signed_np_dtype(lhs.data.dtype)
         rhs_dtype = _get_signed_np_dtype(rhs.data.dtype)
-        lhs.data = lhs.data.astype(lhs_dtype)
-        rhs.data = rhs.data.astype(rhs_dtype)
+        lhs_data = lhs.data.astype(lhs_dtype)
+        rhs_data = rhs.data.astype(rhs_dtype)
+        lhs = TensorHandle(lhs_data, lhs.dtype)
+        rhs = TensorHandle(rhs_data, rhs.dtype)
         return self.binary_op(lhs, rhs, np.right_shift)
 
     def create_umulhi(self, lhs, rhs):
@@ -1309,7 +1311,7 @@ class GridExecutor:
         self.arg_names = arg_names
         self.grid = grid
         self.pre_run_hooks = pre_run_hooks
-        __annotations__ = {name: _normalize_ty(ty) for name, ty in fn.__annotations__.items()}
+        __annotations__ = {name: _normalize_ty(ty) for name, ty in inspect.get_annotations(fn).items()}
         self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
 
     def _init_args_hst(self, args_dev, kwargs):
