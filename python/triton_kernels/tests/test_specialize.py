@@ -1,13 +1,22 @@
 import importlib
+import types
 
 import torch
-from triton_kernels.specialize import cacheable, specialize
 import triton
 import triton.language as tl
+from triton.experimental import gluon
+from triton.experimental.gluon import GluonJITFunction
+import triton.experimental.gluon.language as gl
+from triton_kernels.specialize import ClosureArg, FnSpecs, SpecializationModule, cacheable, specialize
 
 
 @triton.jit
 def identity(x):
+    return x
+
+
+@gluon.jit
+def gluon_identity(x):
     return x
 
 
@@ -16,6 +25,27 @@ def template_kernel(o, fn: tl.constexpr):
     cst = 1.0
     cst = fn(cst)
     tl.store(o, cst)
+
+
+@gluon.jit
+def gluon_template_kernel(o, fn: gl.constexpr, fn_args):
+    cst = fn(1.0, *fn_args)
+    gl.store(o, cst)
+
+
+def test_specialization_module_preserves_gluon_dialect():
+    specializations = SpecializationModule(
+        "specialized_gluon_kernel",
+        kernels=[("kernel", gluon_template_kernel)],
+        closure_args={"fn": ClosureArg("fn", "fn_args")},
+    )
+
+    module = specializations.get(fn=FnSpecs("identity", gluon_identity))
+
+    assert isinstance(module, types.ModuleType)
+    assert isinstance(module.kernel, GluonJITFunction)
+    assert module.kernel.is_gluon()
+    assert "fn: gl.constexpr = gluon_identity" in module.kernel.src
 
 
 def retrieve_fn(module, name):
