@@ -400,41 +400,39 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
     return {scalarZero, expr};
   }
 
-  auto offsets =
-      llvm::TypeSwitch<Operation *, std::pair<Value, Value>>(
-          expr.getDefiningOp())
-          .Case<tt::BroadcastOp>([&](auto broadcastOp) {
-            auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
-                rewriter, loc, broadcastOp.getSrc(), bitness, scalarToSplatMap);
-            auto broadcastNonUniform = tt::BroadcastOp::create(
-                rewriter, loc, broadcastOp.getType(), nonUniform);
-            return std::make_pair(uniform, broadcastNonUniform);
-          })
-          .Case<tt::ExpandDimsOp>([&](auto expandOp) {
-            auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
-                rewriter, loc, expandOp.getSrc(), bitness, scalarToSplatMap);
-            auto expandNonUniform = tt::ExpandDimsOp::create(
-                rewriter, loc, nonUniform, expandOp.getAxis());
-            return std::make_pair(uniform, expandNonUniform);
-          })
-          .Case<arith::AddIOp>([&](Operation *op) {
-            return createDecomposeOffsetFromAdd(rewriter, loc, expr, bitness,
-                                                scalarToSplatMap);
-          })
-          .Case<arith::MulIOp>([&](Operation *op) {
-            return createDecomposeOffsetFromMul(rewriter, loc, expr, bitness,
-                                                scalarToSplatMap);
-          })
-          .Default([&](Operation *op) {
-            // Base case 3: it is not a supported operation. We assume no
-            // uniform part
-            Value scalarZero = arith::ConstantIntOp::create(
-                rewriter, loc, static_cast<int64_t>(0),
-                static_cast<unsigned>(bitness));
-            return std::make_pair(scalarZero, expr);
-          });
+  if (auto broadcastOp = expr.getDefiningOp<tt::BroadcastOp>()) {
+    auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
+        rewriter, loc, broadcastOp.getSrc(), bitness, scalarToSplatMap);
+    auto broadcastNonUniform = tt::BroadcastOp::create(
+        rewriter, loc, broadcastOp.getType(), nonUniform);
+    return {uniform, broadcastNonUniform};
+  } else if (auto expandOp = expr.getDefiningOp<tt::ExpandDimsOp>()) {
+    auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
+        rewriter, loc, expandOp.getSrc(), bitness, scalarToSplatMap);
+    auto expandNonUniform =
+        tt::ExpandDimsOp::create(rewriter, loc, nonUniform, expandOp.getAxis());
+    return {uniform, expandNonUniform};
+  } else if (auto reshapeOp = expr.getDefiningOp<tt::ReshapeOp>()) {
+    if (reshapeOp.getExpandDimsAxis()) {
+      auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
+          rewriter, loc, reshapeOp.getSrc(), bitness, scalarToSplatMap);
+      Value reshapeNonUniform = tt::ReshapeOp::create(
+          rewriter, loc, reshapeOp.getType(), nonUniform,
+          reshapeOp.getAllowReorder(), reshapeOp.getEfficientLayout());
+      return {uniform, reshapeNonUniform};
+    }
+  } else if (expr.getDefiningOp<arith::AddIOp>()) {
+    return createDecomposeOffsetFromAdd(rewriter, loc, expr, bitness,
+                                        scalarToSplatMap);
+  } else if (expr.getDefiningOp<arith::MulIOp>()) {
+    return createDecomposeOffsetFromMul(rewriter, loc, expr, bitness,
+                                        scalarToSplatMap);
+  }
 
-  return offsets;
+  // Base case 3: it is not a supported operation. We assume no uniform part.
+  Value scalarZero = arith::ConstantIntOp::create(
+      rewriter, loc, static_cast<int64_t>(0), static_cast<unsigned>(bitness));
+  return {scalarZero, expr};
 }
 
 static const std::string kPtrCanonPrefix = "__amdpointercanonicalize.";
