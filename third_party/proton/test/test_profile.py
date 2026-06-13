@@ -3,16 +3,18 @@ Reproducibility tests for Proton.
 Each test should invoke one or more GPU kernels and check the validity of their profiling results.
 """
 
-import torch
+import pathlib
+import os
+
 import triton
 import triton.profiler as proton
+import torch
 import json
 import gc
 import pytest
 from typing import NamedTuple
-import pathlib
-import threading
 from contextlib import contextmanager
+import threading
 
 import triton.language as tl
 import triton.profiler.hooks.launch as proton_launch
@@ -29,6 +31,10 @@ def _find_frame_by_name(frame, name):
             return current
         queue.extend(current["children"])
     return None
+
+
+def _enable_hip_cudagraph_test():
+    return os.environ.get("PROTON_ENABLE_HIP_CUDAGRAPH_TEST", "0") == "1"
 
 
 @contextmanager
@@ -105,7 +111,10 @@ def test_triton(tmp_path: pathlib.Path, device: str):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
-@pytest.mark.skipif(not is_cuda(), reason="HIP backend does not reliably attribute cudagraph replay launches to scopes")
+@pytest.mark.skipif(
+    not (is_cuda() or (is_hip() and _enable_hip_cudagraph_test())),
+    reason="Only CUDA enables cudagraph replay by default; set PROTON_ENABLE_HIP_CUDAGRAPH_TEST=1 for HIP",
+)
 def test_cudagraph(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -171,24 +180,18 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
     assert test0_frame is not None
     assert test1_frame is not None
     assert test2_frame is not None
-    # {torch.ones, add, foo}
-    if is_hip():
-        assert len(test0_frame["children"]) >= 2
-        assert test0_frame["children"][0]["metrics"]["time (ns)"] > 0
-    else:
-        # cuda backend supports "<captured_at>" annotation
-        for test_frame in [test0_frame, test1_frame, test2_frame]:
-            child = _find_frame_by_name(test_frame, "<captured_at>")
-            assert child is not None
-            # check all iterations
-            total_iters = 0
-            for child in child["children"]:
-                iter_frame = "iter" if test_frame != test2_frame else "new_iter"
-                if iter_frame in child["frame"]["name"]:  # TODO(Keren): remove empty frames
-                    if "time (ns)" in child["children"][0]["metrics"]:
-                        total_iters += 1
-            # 0...9 iterations
-            assert total_iters == 10
+    for test_frame in [test0_frame, test1_frame, test2_frame]:
+        child = _find_frame_by_name(test_frame, "<captured_at>")
+        assert child is not None
+        # check all iterations
+        total_iters = 0
+        for child in child["children"]:
+            iter_frame = "iter" if test_frame != test2_frame else "new_iter"
+            if iter_frame in child["frame"]["name"]:  # TODO(Keren): remove empty frames
+                if "time (ns)" in child["children"][0]["metrics"]:
+                    total_iters += 1
+        # 0...9 iterations
+        assert total_iters == 10
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
