@@ -2607,6 +2607,26 @@ tt.func private @reshape_linear_layout_broadcasting(%arg0: tensor<32x4xbf16, #li
 
 }
 
+// -----
+
+#src = #ttg.linear<{register = [[16, 0], [1, 0], [2, 0], [4, 0], [8, 0]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], warp = [[0, 32], [0, 64]], block = []}>
+#dst = #ttg.linear<{register = [[32, 0], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], warp = [[0, 32], [0, 64]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: fp4_to_fp_linear_layout
+tt.func @fp4_to_fp_linear_layout(%arg0: tensor<32x128xi8, #src>) {
+  // CHECK: %[[R0:.+]] = llvm.extractelement %{{.*}}[%{{.*}}] : vector<2xbf16>
+  // CHECK: %[[R1:.+]] = llvm.extractelement %{{.*}}[%{{.*}}] : vector<2xbf16>
+  // CHECK: %[[R2:.+]] = llvm.extractelement %{{.*}}[%{{.*}}] : vector<2xbf16>
+  // CHECK: %[[R3:.+]] = llvm.extractelement %{{.*}}[%{{.*}}] : vector<2xbf16>
+  // CHECK: llvm.insertvalue %[[R0]], %{{.*}}[0]
+  // CHECK: llvm.insertvalue %[[R2]], %{{.*}}[1]
+  // CHECK: llvm.insertvalue %[[R1]], %{{.*}}[2]
+  // CHECK: llvm.insertvalue %[[R3]], %{{.*}}[3]
+  %0 = ttg.fp4_to_fp %arg0 {axis = 0 : i32} : tensor<32x128xi8, #src> -> tensor<64x128xbf16, #dst>
+  tt.return
+}
+}
+
 
 // -----
 
