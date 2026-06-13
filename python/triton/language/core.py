@@ -142,6 +142,22 @@ class const:
     pass
 
 
+class do_not_specialize:
+    """
+    This class is used as a type annotation to prevent the compiler from
+    specializing on a kernel parameter's value.
+    """
+    pass
+
+
+class autotune_key:
+    """
+    This class is used as a type annotation to mark a kernel parameter as
+    an autotune key, so that changes to its value trigger re-autotuning.
+    """
+    pass
+
+
 class base_value:
     """Base class of values that exist in the triton IR (i.e. not constexprs).
     """
