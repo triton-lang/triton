@@ -9,45 +9,9 @@
 
 namespace mlir::triton::proton::gpu::NVIDIA {
 
-Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
-                        bool isClock64) const {
-
-  auto getClockReg = [&](const std::string &clkName) {
-    PTXBuilder builder;
-    auto &movLow = builder.create("mov")->o("u32");
-    auto *destLowOpr = builder.newOperand("=r");
-    auto *sRegLowOpr = builder.newConstantOperand(clkName);
-    movLow(destLowOpr, sRegLowOpr);
-    Value clkLow32 =
-        builder.launch(rewriter, loc, rewriter.getIntegerType(32), true);
-    return clkLow32;
-  };
-
-  Value clkLow32 = getClockReg("%clock");
-
-  if (!isClock64)
-    return clkLow32;
-
-  Value clkHigh32 = getClockReg("%clock_hi");
-
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value clkLow64 = b.zext(i64_ty, clkLow32);
-  Value clkHigh64 = b.zext(i64_ty, clkHigh32);
-  Value clock64 = b.or_(b.shl(clkHigh64, b.i64_val(32)), clkLow64);
-  return clock64;
-}
-
 Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
                              Location loc) const {
-  // globaltimer is a 64-bit global clock counter in nanoseconds.
-  // Reference:
-  // https://docs.nvidia.com/cuda/parallel-thread-execution/#special-registers-globaltimer
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  StringRef globalTimeIntrinsicName = "llvm.nvvm.read.ptx.sreg.globaltimer";
-  Value globalTimeVal = LLVM::createLLVMIntrinsicCallOp(
-                            rewriter, loc, globalTimeIntrinsicName, i64_ty, {})
-                            .getResult(0);
-  return globalTimeVal;
+  return NVVM::GlobalTimerOp::create(rewriter, loc, i64_ty);
 }
 
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,

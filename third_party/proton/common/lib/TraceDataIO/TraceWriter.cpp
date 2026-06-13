@@ -71,17 +71,8 @@ using BlockTraceVec =
     std::vector<const CircularLayoutParserResult::BlockTrace *>;
 
 void populateTraceInfo(std::shared_ptr<CircularLayoutParserResult> result,
-                       std::map<int, uint64_t> &blockToMinCycle,
                        std::map<int, BlockTraceVec> &procToBlockTraces) {
   for (auto &bt : result->blockTraces) {
-    // Find the minimum cycle for each block
-    uint64_t minCycle = std::numeric_limits<uint64_t>::max();
-    for (auto &trace : bt.traces)
-      for (auto &event : trace.profileEvents)
-        if (event.first->cycle < minCycle)
-          minCycle = event.first->cycle;
-    blockToMinCycle[bt.blockId] = minCycle;
-
     // Group block traces by proc id
     int procId = bt.procId;
     if (!procToBlockTraces.count(procId)) {
@@ -174,12 +165,10 @@ void StreamChromeTraceWriter::writeKernel(json &object,
   int curColorIndex = 0;
   // scope id -> color index in chrome color
   std::map<int, int> scopeColor;
-  // block id -> min cycle observed
-  std::map<int, uint64_t> blockToMinCycle;
   // proc id -> block traces
   std::map<int, BlockTraceVec> procToBlockTraces;
 
-  populateTraceInfo(result, blockToMinCycle, procToBlockTraces);
+  populateTraceInfo(result, procToBlockTraces);
 
   std::string name;
   std::string pid;
@@ -210,17 +199,13 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           else
             name = metadata->scopeName.at(scopeId);
 
-          // Unit: MHz, we assume freq is 1000MHz (1GHz)
-          double freq = 1000.0;
+          // All cycle values are in nanoseconds (from globalTime).
+          const double USEC_PER_CYCLE = 1000.0;
 
-          // Global time is in `ns` unit. With 1GHz assumption, we
-          // could subtract with blockToMInCycle: (ns - ns) / 1GHz - cycle
-          int64_t cycleAdjust =
-              static_cast<int64_t>(bt->initTime - minInitTime) -
-              static_cast<int64_t>(blockToMinCycle[ctaId]);
-          int64_t ts = static_cast<int64_t>(event.first->cycle) + cycleAdjust;
-          int64_t dur =
-              static_cast<int64_t>(event.second->cycle) - event.first->cycle;
+          int64_t ts = static_cast<int64_t>(event.first->cycle) +
+                       static_cast<int64_t>(minInitTime);
+          int64_t dur = static_cast<int64_t>(event.second->cycle) -
+                        static_cast<int64_t>(event.first->cycle);
 
           json element;
           element["cname"] = color;
@@ -229,13 +214,12 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           element["ph"] = "X";
           element["pid"] = pid;
           element["tid"] = tid;
-          element["ts"] = static_cast<double>(ts) / freq;
-          element["dur"] = static_cast<double>(dur) / freq;
+          element["ts"] = static_cast<double>(ts) / USEC_PER_CYCLE;
+          element["dur"] = static_cast<double>(dur) / USEC_PER_CYCLE;
           json args;
           args["Init Time (ns)"] = bt->initTime;
           args["Post Final Time (ns)"] = bt->postFinalTime;
           args["Finalization Time (ns)"] = bt->postFinalTime - bt->preFinalTime;
-          args["Frequency (MHz)"] = freq;
           element["args"] = args;
           element["args"]["call_stack"] = callStack;
 
