@@ -392,7 +392,8 @@ class dtype(base_type):
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
     FP_TYPES = ['fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
-    OTHER_TYPES = ['fp8e8m0fnu', 'void']
+    STORAGE_ONLY_TYPES = ['fp8e8m0fnu']
+    OTHER_TYPES = ['void']
 
     class SIGNEDNESS(Enum):
         SIGNED = 0
@@ -406,7 +407,7 @@ class dtype(base_type):
     def __init__(self, name):
         name = _unwrap_if_constexpr(name)
         self.name = name
-        assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
+        assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.STORAGE_ONLY_TYPES + dtype.OTHER_TYPES, name
         self.primitive_bitwidth = get_primitive_bitwidth(name)
         self.itemsize = self.primitive_bitwidth // 8
         if name in dtype.SINT_TYPES:
@@ -512,6 +513,9 @@ class dtype(base_type):
     def is_standard_floating(self):
         return self.name in dtype.STANDARD_FP_TYPES
 
+    def is_storage_only(self):
+        return self.name in dtype.STORAGE_ONLY_TYPES
+
     def is_int_signed(self):
         return self.name in dtype.SINT_TYPES
 
@@ -550,7 +554,7 @@ class dtype(base_type):
 
     @staticmethod
     def is_dtype(type_str):
-        return type_str in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES
+        return type_str in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.STORAGE_ONLY_TYPES + dtype.OTHER_TYPES
 
     @staticmethod
     def is_void():

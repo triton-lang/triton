@@ -6,6 +6,11 @@ from triton.backends.compiler import GPUTarget
 from triton.compiler.errors import CompilationError
 
 
+def test_e8m0_is_storage_only_dtype():
+    assert tl.float8e8m0fnu.is_storage_only()
+    assert not tl.float8e8m0fnu.is_floating()
+
+
 def test_e8m0_arithmetic_rejected(fresh_triton_cache):
 
     @triton.jit
