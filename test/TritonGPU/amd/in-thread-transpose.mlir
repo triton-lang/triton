@@ -569,3 +569,125 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+// FMA path. The dot operand's parent encoding is #ttg.blocked
+// (FMA outer-product), not AMDMfma/AMDWmma. 
+// CHECK-DAG: [[$DOT:#.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
+// CHECK-DAG: [[$SHAREDA:#.*]] = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+// CHECK-DAG: [[$SHAREDB:#.*]] = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+// CHECK-NOT: #ttg.amd_rotating_shared
+// CHECK-LABEL: inThreadTranspose_simple_fma_transposed_b
+// CHECK: [[TA:%.*]] = amdg.in_thread_transpose {{.*}} -> tensor<32x8xf32, [[$LINEARA:#.*]]>
+// CHECK: [[ALLOCA:%.*]] = ttg.local_alloc [[TA]] : (tensor<32x8xf32, [[$LINEARA]]>) -> !ttg.memdesc<32x8xf32, [[$SHAREDA]], #smem>
+// CHECK: ttg.local_load [[ALLOCA]] : !ttg.memdesc<32x8xf32, [[$SHAREDA]], #smem> -> tensor<32x8xf32, #ttg.dot_op<{opIdx = 0, parent = [[$DOT]]}>>
+// CHECK: [[TB:%.*]] = amdg.in_thread_transpose {{.*}} -> tensor<8x32xf32, [[$LINEARB:#.*]]>
+// CHECK: [[ALLOCB:%.*]] = ttg.local_alloc [[TB]] : (tensor<8x32xf32, [[$LINEARB]]>) -> !ttg.memdesc<8x32xf32, [[$SHAREDB]], #smem>
+// CHECK: ttg.local_load [[ALLOCB]] : !ttg.memdesc<8x32xf32, [[$SHAREDB]], #smem> -> tensor<8x32xf32, #ttg.dot_op<{opIdx = 1, parent = [[$DOT]]}>>
+// CHECK: tt.dot
+
+#dot = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
+#blockedA = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 2], warpsPerCTA = [2, 1], order = [1, 0]}>
+#blockedB = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 2], order = [0, 1]}>
+#sharedA = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#sharedB = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "hip:gfx1201", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @inThreadTranspose_simple_fma_transposed_b(%argA: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %argB: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dot>
+    %0 = tt.splat %argA : !tt.ptr<f32> -> tensor<32x8x!tt.ptr<f32>, #blockedA>
+    %1 = tt.splat %argB : !tt.ptr<f32> -> tensor<8x32x!tt.ptr<f32>, #blockedB>
+    %2 = tt.load %0 : tensor<32x8x!tt.ptr<f32>, #blockedA>
+    %3 = tt.load %1 : tensor<8x32x!tt.ptr<f32>, #blockedB>
+
+    %4 = ttg.local_alloc %2 : (tensor<32x8xf32, #blockedA>) -> !ttg.memdesc<32x8xf32, #sharedA, #smem>
+    %5 = ttg.local_load %4 : !ttg.memdesc<32x8xf32, #sharedA, #smem> -> tensor<32x8xf32, #ttg.dot_op<{opIdx = 0, parent = #dot}>>
+
+    %6 = ttg.local_alloc %3 : (tensor<8x32xf32, #blockedB>) -> !ttg.memdesc<8x32xf32, #sharedB, #smem>
+    %7 = ttg.local_load %6 : !ttg.memdesc<8x32xf32, #sharedB, #smem> -> tensor<8x32xf32, #ttg.dot_op<{opIdx = 1, parent = #dot}>>
+
+    %8 = tt.dot %5, %7, %cst : tensor<32x8xf32, #ttg.dot_op<{opIdx = 0, parent = #dot}>> * tensor<8x32xf32, #ttg.dot_op<{opIdx = 1, parent = #dot}>> -> tensor<32x32xf32, #dot>
+    tt.return
+  }
+}
+
+// -----
+// FMA path negative: the global loads are already operand-major (A is M-contiguous,
+// B is N-contiguous), exactly the orientation the FMA dot wants in LDS. There
+// is nothing to transpose, so InThreadTranspose must bail. This is the FMA
+// mirror of inThreadTranspose_k_fast_neg.
+// CHECK-NOT: #ttg.amd_rotating_shared
+// CHECK-NOT: #ttg.linear
+// CHECK-DAG: [[$OM_A:#.*]] = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 2], order = [0, 1]}>
+// CHECK-DAG: [[$OM_B:#.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 2], order = [1, 0]}>
+// CHECK-NOT: #ttg.amd_rotating_shared
+// CHECK-NOT: #ttg.linear
+// CHECK-LABEL: inThreadTranspose_fma_operand_major_neg
+// CHECK-DAG: tt.load {{.*}} : tensor<32x8x!tt.ptr<f32>, [[$OM_A]]>
+// CHECK-DAG: tt.load {{.*}} : tensor<8x32x!tt.ptr<f32>, [[$OM_B]]>
+// CHECK-NOT: amdg.in_thread_transpose
+
+#dot = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
+#blockedA = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 2], order = [0, 1]}>
+#blockedB = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 2], order = [1, 0]}>
+#sharedA = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#sharedB = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "hip:gfx1201", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @inThreadTranspose_fma_operand_major_neg(%argA: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %argB: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dot>
+    %0 = tt.splat %argA : !tt.ptr<f32> -> tensor<32x8x!tt.ptr<f32>, #blockedA>
+    %1 = tt.splat %argB : !tt.ptr<f32> -> tensor<8x32x!tt.ptr<f32>, #blockedB>
+    %2 = tt.load %0 : tensor<32x8x!tt.ptr<f32>, #blockedA>
+    %3 = tt.load %1 : tensor<8x32x!tt.ptr<f32>, #blockedB>
+
+    %4 = ttg.local_alloc %2 : (tensor<32x8xf32, #blockedA>) -> !ttg.memdesc<32x8xf32, #sharedA, #smem>
+    %5 = ttg.local_load %4 : !ttg.memdesc<32x8xf32, #sharedA, #smem> -> tensor<32x8xf32, #ttg.dot_op<{opIdx = 0, parent = #dot}>>
+
+    %6 = ttg.local_alloc %3 : (tensor<8x32xf32, #blockedB>) -> !ttg.memdesc<8x32xf32, #sharedB, #smem>
+    %7 = ttg.local_load %6 : !ttg.memdesc<8x32xf32, #sharedB, #smem> -> tensor<8x32xf32, #ttg.dot_op<{opIdx = 1, parent = #dot}>>
+
+    %8 = tt.dot %5, %7, %cst : tensor<32x8xf32, #ttg.dot_op<{opIdx = 0, parent = #dot}>> * tensor<8x32xf32, #ttg.dot_op<{opIdx = 1, parent = #dot}>> -> tensor<32x32xf32, #dot>
+    tt.return
+  }
+}
+
+// -----
+// FMA path negative: the loads are K-contiguous (the orientation FMA can transpose),
+// but the K dim has only one element per thread, so there is no room to widen
+// the store. InThreadTranspose must bail out.
+// CHECK-NOT: #ttg.amd_rotating_shared
+// CHECK-NOT: #ttg.linear
+// CHECK-DAG: [[$SK_A:#.*]] = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
+// CHECK-DAG: [[$SK_B:#.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 2], order = [0, 1]}>
+// CHECK-NOT: #ttg.amd_rotating_shared
+// CHECK-NOT: #ttg.linear
+// CHECK-LABEL: inThreadTranspose_fma_small_k_neg
+// CHECK-DAG: tt.load {{.*}} : tensor<32x8x!tt.ptr<f32>, [[$SK_A]]>
+// CHECK-DAG: tt.load {{.*}} : tensor<8x32x!tt.ptr<f32>, [[$SK_B]]>
+// CHECK-NOT: amdg.in_thread_transpose
+
+#dot = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
+#blockedA = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
+#blockedB = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 2], order = [0, 1]}>
+#sharedA = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#sharedB = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "hip:gfx1201", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @inThreadTranspose_fma_small_k_neg(%argA: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %argB: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dot>
+    %0 = tt.splat %argA : !tt.ptr<f32> -> tensor<32x8x!tt.ptr<f32>, #blockedA>
+    %1 = tt.splat %argB : !tt.ptr<f32> -> tensor<8x32x!tt.ptr<f32>, #blockedB>
+    %2 = tt.load %0 : tensor<32x8x!tt.ptr<f32>, #blockedA>
+    %3 = tt.load %1 : tensor<8x32x!tt.ptr<f32>, #blockedB>
+
+    %4 = ttg.local_alloc %2 : (tensor<32x8xf32, #blockedA>) -> !ttg.memdesc<32x8xf32, #sharedA, #smem>
+    %5 = ttg.local_load %4 : !ttg.memdesc<32x8xf32, #sharedA, #smem> -> tensor<32x8xf32, #ttg.dot_op<{opIdx = 0, parent = #dot}>>
+
+    %6 = ttg.local_alloc %3 : (tensor<8x32xf32, #blockedB>) -> !ttg.memdesc<8x32xf32, #sharedB, #smem>
+    %7 = ttg.local_load %6 : !ttg.memdesc<8x32xf32, #sharedB, #smem> -> tensor<8x32xf32, #ttg.dot_op<{opIdx = 1, parent = #dot}>>
+
+    %8 = tt.dot %5, %7, %cst : tensor<32x8xf32, #ttg.dot_op<{opIdx = 0, parent = #dot}>> * tensor<8x32xf32, #ttg.dot_op<{opIdx = 1, parent = #dot}>> -> tensor<32x32xf32, #dot>
+    tt.return
+  }
+}
