@@ -386,3 +386,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked_contig4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#shared_contig4 = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 8, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: buffer_load_to_local_contiguity_hint_controls_width
+  tt.func @buffer_load_to_local_contiguity_hint_controls_width(%ptr: !tt.ptr<f32>, %off: tensor<1024xi32, #blocked_contig4>, %lds: !ttg.memdesc<1024xf32, #shared_contig4, #smem, mutable>) {
+    // GFX950: %[[LOAD_BYTES:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // GFX950: rocdl.raw.ptr.buffer.load.async.lds %{{.*}}, %{{.*}}, %[[LOAD_BYTES]]
+    %tok = amdg.buffer_load_to_local %ptr[%off] into %lds {contiguity = 4 : i32} : <f32>[tensor<1024xi32, #blocked_contig4>] -> <1024xf32, #shared_contig4, #smem, mutable>
+    tt.return
+  }
+}
