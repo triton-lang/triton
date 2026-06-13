@@ -512,3 +512,438 @@ def isfinited(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
         (core.dtype("fp64"), ): ("__ocml_isfinite_f64", core.dtype("int32")),
     }, is_pure=True, _semantic=_semantic).to(core.int1, _semantic=_semantic)
+
+
+# ---------------------------------------------------------------------------
+# Bit manipulation and integer ops missing from HIP libdevice.
+# Part 2 of libdevice parity gap fix.
+# See: https://github.com/triton-lang/triton/issues/10375
+# ---------------------------------------------------------------------------
+
+
+@core.extern
+def clz(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_clz_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_clz_i64", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def popc(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_popc_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_popc_i64", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def ffs(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_ffs_i32", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def brev(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_brev_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_brev_i64", core.dtype("int64")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def mul24(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_mul24_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_mul24_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def mulhi(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_mulhi_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_mulhi_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def hadd(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_hadd_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_hadd_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def rhadd(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_rhadd_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_rhadd_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def sad(arg0, arg1, arg2, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1, arg2], {
+            (core.dtype("int32"), core.dtype("int32"), core.dtype("uint32")): ("__triton_hip_sad_i32", core.dtype("uint32")),
+            (core.dtype("uint32"), core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_sad_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+# ---------------------------------------------------------------------------
+# Bit manipulation and integer ops missing from HIP libdevice.
+# Part 2 of libdevice parity gap fix.
+# See: https://github.com/triton-lang/triton/issues/10375
+# ---------------------------------------------------------------------------
+
+
+@core.extern
+def clz(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_clz_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_clz_i64", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def popc(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_popc_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_popc_i64", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def ffs(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_ffs_i32", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def brev(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_brev_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_brev_i64", core.dtype("int64")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def mul24(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_mul24_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_mul24_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def mulhi(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_mulhi_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_mulhi_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def hadd(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_hadd_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_hadd_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def rhadd(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_rhadd_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_rhadd_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def sad(arg0, arg1, arg2, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1, arg2], {
+            (core.dtype("int32"), core.dtype("int32"), core.dtype("uint32")): ("__triton_hip_sad_i32", core.dtype("uint32")),
+            (core.dtype("uint32"), core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_sad_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+# ---------------------------------------------------------------------------
+# Bit manipulation and integer ops missing from HIP libdevice.
+# Part 2 of libdevice parity gap fix.
+# See: https://github.com/triton-lang/triton/issues/10375
+# ---------------------------------------------------------------------------
+
+
+@core.extern
+def clz(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_clz_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_clz_i64", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def popc(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_popc_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_popc_i64", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def ffs(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_ffs_i32", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def brev(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_brev_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_brev_i64", core.dtype("int64")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def mul24(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_mul24_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_mul24_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def mulhi(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_mulhi_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_mulhi_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def hadd(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_hadd_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_hadd_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def rhadd(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_rhadd_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_rhadd_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def sad(arg0, arg1, arg2, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1, arg2], {
+            (core.dtype("int32"), core.dtype("int32"), core.dtype("uint32")): ("__triton_hip_sad_i32", core.dtype("uint32")),
+            (core.dtype("uint32"), core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_sad_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+# ---------------------------------------------------------------------------
+# Bit manipulation and integer ops missing from HIP libdevice.
+# Part 2 of libdevice parity gap fix.
+# See: https://github.com/triton-lang/triton/issues/10375
+# ---------------------------------------------------------------------------
+
+
+@core.extern
+def clz(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_clz_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_clz_i64", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def popc(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_popc_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_popc_i64", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def ffs(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_ffs_i32", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def brev(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_brev_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_brev_i64", core.dtype("int64")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def mul24(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_mul24_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_mul24_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def mulhi(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_mulhi_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_mulhi_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def hadd(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_hadd_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_hadd_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def rhadd(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_rhadd_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_rhadd_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def sad(arg0, arg1, arg2, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1, arg2], {
+            (core.dtype("int32"), core.dtype("int32"), core.dtype("uint32")): ("__triton_hip_sad_i32", core.dtype("uint32")),
+            (core.dtype("uint32"), core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_sad_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+# ---------------------------------------------------------------------------
+# Bit manipulation and integer ops missing from HIP libdevice.
+# Part 2 of libdevice parity gap fix.
+# See: https://github.com/triton-lang/triton/issues/10375
+# ---------------------------------------------------------------------------
+
+
+@core.extern
+def clz(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_clz_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_clz_i64", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def popc(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_popc_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_popc_i64", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def ffs(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_ffs_i32", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def brev(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__triton_hip_brev_i32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__triton_hip_brev_i64", core.dtype("int64")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def mul24(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_mul24_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_mul24_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def mulhi(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_mulhi_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_mulhi_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def hadd(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_hadd_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_hadd_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def rhadd(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_rhadd_i32", core.dtype("int32")),
+            (core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_rhadd_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def sad(arg0, arg1, arg2, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1, arg2], {
+            (core.dtype("int32"), core.dtype("int32"), core.dtype("uint32")): ("__triton_hip_sad_i32", core.dtype("uint32")),
+            (core.dtype("uint32"), core.dtype("uint32"), core.dtype("uint32")): ("__triton_hip_sad_u32", core.dtype("uint32")),
+        }, is_pure=True, _semantic=_semantic)
