@@ -531,8 +531,8 @@ composePaddedLayout(const TargetFeatures &targetFeatures, int opIdx,
   return {};
 }
 
-Value buildPureTDMDescriptor(OpBuilder &builder, Location loc, Value desc,
-                             ValueRange addOffsets, Value pred) {
+Value createUpdateTDMDescriptorOp(OpBuilder &builder, Location loc, Value desc,
+                                  ValueRange addOffsets, Value pred) {
   auto updateOp = mlir::triton::amdgpu::UpdateTensorDescriptorOp::create(
       builder, loc, desc.getType(), desc, addOffsets,
       /*set_bounds=*/ValueRange{}, pred);

@@ -736,11 +736,9 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     copied depends on the global memory pointed to by `desc`. This operation
     does not support shared memory swizzling.
 
-    The copy is pure: the descriptor must be positioned beforehand by
-    amdg.update_tensor_descriptor (global offset, bounds, pred).  The copy
-    applies only the intrinsic per-warp distribution (per-warp global offset,
-    per-warp bounds, lds_addr, tile_dim) and inherits `pred` from the
-    descriptor; the barrier is the only op-level operand.
+    The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
+    (global offset, bounds, pred); this op applies only the per-warp distribution
+    and inherits `pred` from the descriptor.
     The operation can also take an optional 64bit LDS barrier address, in which case
     it sends an "LDS atomic arrive" to signal its completion.
 
@@ -820,9 +818,8 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global",
     destination depends on the global memory pointed to by `desc`. This
     operation does not support shared memory padding or swizzling.
 
-    The copy is pure: the descriptor must be positioned beforehand by
-    amdg.update_tensor_descriptor.  The copy applies only the intrinsic per-warp
-    distribution; the barrier is the only op-level operand.
+    The descriptor must be positioned beforehand by
+    amdg.update_tensor_descriptor; this op applies only the per-warp distribution.
     The operation can also take an optional 64bit LDS barrier address, in which case
     it sends an "LDS atomic arrive" to signal its completion.
   }];

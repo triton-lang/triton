@@ -139,9 +139,7 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, "ttg.th
     // CHECK-DAG: %[[CTA_ID:.*]] = rocdl.cluster.workgroup.id.x
     // CHECK: %[[SHIFT_AMOUNT:.*]] = llvm.and %[[CTA_ID]], %[[NON_FREE_BITS]]
     // CHECK: %[[CTA_MASK:.*]] = llvm.shl %[[GROUP_MASK]], %[[SHIFT_AMOUNT]]
-    // Combine with other values
-    // Pure form skips the legacy barrier-enable clear (AND), so group1[0] ends
-    // at the multicast OR, which is then stamped into the vector<8xi32> group.
+    // The multicast OR result is stamped directly into the vector<8xi32> group.
     // CHECK: %[[TMP:.*]] = llvm.or %{{.*}}, %[[CTA_MASK]]
     // CHECK: llvm.insertelement %[[TMP]]
     %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <64x64xf16, #shared>

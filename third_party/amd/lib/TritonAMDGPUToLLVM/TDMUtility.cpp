@@ -517,12 +517,8 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
   auto v4i32Ty = VectorType::get(4, i32_ty);
   auto v8i32Ty = VectorType::get(8, i32_ty);
   Value group0 = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
-  // Default-init pred (group0[0] bits 1:0) = 1.  A pure-form load/store
-  // inherits the descriptor's pred (no per-call pred stamp); without this
-  // default a descriptor that is never given an explicit pred would carry
-  // pred=0 and the copy would silently no-op.  Legacy load/store and
-  // gather/scatter overwrite group0[0] with their own pred (+ mode bits), so
-  // this default is harmless.
+  // Default pred = 1 so a descriptor that is never given an explicit pred still
+  // loads/stores instead of silently no-op'ing (copies inherit group0[0]).
   group0 = vecSet(b, group0, 0, b.i32_val(1));
   Value globalAddr = b.ptrtoint(i64_ty, srcPtr);
   group0 = vecSet(b, group0, 2, b.trunc(i32_ty, globalAddr));
@@ -899,10 +895,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   Value globalAddr = b.ptrtoint(i64_ty, srcPtr);
   Value ldsAddr = b.ptrtoint(i32_ty, dstPtr);
 
-  // Pure-form copies carry no per-call pred; inherit it from the descriptor
-  // (group0[0]) so update_tensor_descriptor's pred (or the create-time default
-  // of 1) takes effect.  Applies to both loads and stores; the `pred` argument
-  // is ignored in that case.  The per-warp active mask below still applies.
+  // Pure form inherits pred from the descriptor (group0[0]); the per-warp
+  // active mask below still applies.
   if (isPureForm)
     pred = vecGet(b, groups[0], 0);
 
@@ -951,9 +945,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
         b.or_(g1_1, b.and_(b.lshr(b.ptrtoint(i32_ty, barrierPtr), b.i32_val(3)),
                            b.i32_val(0x00FFFF)));
   } else if (!isPureForm) {
-    // Legacy form defensively clears the barrier-enable bit when no op barrier
-    // is supplied.  A pure-form descriptor inherits its barrier state from the
-    // descriptor, so leave the bit untouched.
+    // Clear the barrier-enable bit when no barrier is supplied; pure form
+    // inherits the descriptor's barrier state.
     g1_0 = b.and_(g1_0, b.i32_val(0xFFFBFFFF));
   }
   group1 = vecSet(b, group1, 0, g1_0);

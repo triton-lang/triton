@@ -1304,10 +1304,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         loc, adaptor.getResult(), elementType, rewriter);
     // Get all base pointers (multiple for partitioned encoding)
     SmallVector<Value> dstPtrs = llvm::to_vector(dstMemObj.getBases());
-    // The copy is pure: the descriptor is already positioned by
-    // update_tensor_descriptor, so pass a zero user offset and let the filler
-    // apply only the per-warp distribution and inherit pred from the
-    // descriptor.
+    // Positioning lives in the descriptor; the copy only does per-warp
+    // distribution, so the user offset is zero.
     SmallVector<Value> offset(blockShape.size(), b.i32_val(0));
     int numWarps = triton::gpu::lookupNumWarps(op);
 
@@ -1334,7 +1332,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
         cacheMod, /*isLoad*/ true, targetInfo);
 
-    // pred is inherited from the descriptor in pure form; pass a placeholder.
+    // Placeholder: the copy inherits pred from the descriptor.
     Value pred = b.i32_val(1);
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
@@ -1384,9 +1382,8 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
         loc, adaptor.getSrc(), elementType, rewriter);
     // Get all base pointers (multiple for partitioned encoding)
     SmallVector<Value> srcPtrs = llvm::to_vector(dstMemObj.getBases());
-    // The copy is pure: the descriptor is already positioned by
-    // update_tensor_descriptor, so pass a zero user offset and let the filler
-    // apply only the per-warp distribution.
+    // Positioning lives in the descriptor; the copy only does per-warp
+    // distribution, so the user offset is zero.
     SmallVector<Value> offset(blockShape.size(), b.i32_val(0));
     int numWarps = triton::gpu::lookupNumWarps(op);
 
@@ -1422,7 +1419,7 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
         cacheMod, /*isLoad*/ false, targetInfo);
 
-    // pred is inherited from the descriptor in pure form; pass a placeholder.
+    // Placeholder: the copy inherits pred from the descriptor.
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,

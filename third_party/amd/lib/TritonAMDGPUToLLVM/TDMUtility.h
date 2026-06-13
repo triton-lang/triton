@@ -72,10 +72,8 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // `groups` is 2 (1D-2D) or 4 (3D-5D) vector entries, updated in place.
 // Partitioned dst: `dstPtrs` holds per-partition bases, picked by partitionDim.
 // `warpUsedHint`: see TritonAMDGPUOps.td for the axis-aligned hint rule.
-// `isPureForm`: the descriptor is already positioned by
-// update_tensor_descriptor, so the filler stamps only the per-warp distribution
-// (offset is all zeros), inherits `pred` from the descriptor (group0[0])
-// instead of the `pred` arg, and leaves the barrier-enable bit untouched.
+// `isPureForm`: inherit `pred` from the descriptor (group0[0]) instead of the
+// `pred` arg, and leave the barrier-enable bit untouched.
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> blockShape, int numWarps,

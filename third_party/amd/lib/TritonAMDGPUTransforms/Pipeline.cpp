@@ -51,14 +51,9 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
     scf::YieldOp::create(elseB, loc, zeroValues);
     return ifOp;
   }
-  // Pure-form TDM copy carries no pred operand: chain a pred-only
-  // update_tensor_descriptor onto the copy's (already-positioned) descriptor so
-  // the loop predicate gates the copy.  The update inherits the descriptor's
-  // existing fields (add_offsets/bounds/pred) and only sets pred; the inherited
-  // pred AND the loop pred is applied because the descriptor's positioning
-  // update has, by this point, been mask-wrapped by the generic predication
-  // (its op is Pure / not a PredicatedOpInterface), so copyOp.getDesc() is no
-  // longer the UpdateTensorDescriptorOp itself.
+  // Gate the copy by chaining a pred-only update_tensor_descriptor onto its
+  // descriptor: the chained update inherits the positioning and narrows pred to
+  // the loop predicate.
   if (auto copyOp = dyn_cast<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(op)) {
     rewriter.setInsertionPoint(op);
     auto predI32 = arith::ExtUIOp::create(rewriter, op->getLoc(),
@@ -70,8 +65,6 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
     copyOp.getDescMutable().assign(updated.getResult());
     return op;
   }
-  // TDM gather still carries a mandatory i32 pred (PredicatedOpInterface); the
-  // generic path produces I1 masks, so convert explicitly.
   if (auto gatherOp = dyn_cast<triton::amdgpu::AsyncTDMGatherOp>(op)) {
     auto predicatedOp = cast<tt::PredicatedOpInterface>(op);
     rewriter.setInsertionPoint(op);

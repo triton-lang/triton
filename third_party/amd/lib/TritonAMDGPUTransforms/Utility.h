@@ -62,12 +62,11 @@ getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
 triton::gpu::SliceEncodingAttr
 getTDMGatherScatterIndexEncoding(Operation *op, RankedTensorType indicesType);
 
-// Position a TDM descriptor for a pure-form async copy: emit an
-// amdg.update_tensor_descriptor that advances the descriptor by `addOffsets`,
-// derives the advanced tile's OOB extent (clamp_bounds), and (for loads) sets
-// `pred`.  Returns the new descriptor SSA value.  `pred` may be null (stores).
-Value buildPureTDMDescriptor(OpBuilder &builder, Location loc, Value desc,
-                             ValueRange addOffsets, Value pred);
+// Emit an amdg.update_tensor_descriptor that advances `desc` by `addOffsets`
+// (with clamp_bounds) and sets `pred` when non-null.  Returns the new
+// descriptor.
+Value createUpdateTDMDescriptorOp(OpBuilder &builder, Location loc, Value desc,
+                                  ValueRange addOffsets, Value pred);
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // and |vecSize| with which dot operand |inputValue| is fed into if possible.

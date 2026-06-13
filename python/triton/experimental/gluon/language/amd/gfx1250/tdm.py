@@ -245,11 +245,12 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
                warp_used_hint=None, cache_modifier="", _semantic=None) -> None:
     """Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.
 
-    The underlying copy op is pure: the descriptor must be positioned by
-    ``update_tensor_descriptor``.  As a convenience, passing ``offsets`` (and
-    optionally ``pred``) here positions the descriptor for you (advance by
-    ``offsets`` + derive the OOB extent + set ``pred``) before issuing the copy;
-    omit them if the descriptor is already positioned by the caller.
+    This op expects a prior ``update_tensor_descriptor`` to position the
+    descriptor for the load offsets and bounds.  Doing this explicitly lets the
+    developer control when and where the descriptor update happens, which has
+    performance implications for downstream code generation.  For convenience,
+    ``offsets`` (and optionally ``pred``) may be passed here, in which case an
+    ``update_tensor_descriptor`` is emitted right before the load.
 
     Args:
         src (tensor_descriptor): the source tensor descriptor.
@@ -270,11 +271,6 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
         cache_modifier (str, optional): Cache behavior.
     """
     assert dest is not None, "async_load requires a dest shared_memory_descriptor"
-    # The copy op is always pure.  If non-empty offsets/a pred are given,
-    # pre-position the descriptor via update_tensor_descriptor (advance via
-    # add_offsets, derive the OOB extent via clamp_bounds, set pred); otherwise
-    # the caller already positioned the descriptor.  An empty/None offsets means
-    # "no advance".
     if offsets:
         eff_pred = True if pred is None else pred
         src = update_tensor_descriptor(src, add_offsets=offsets, pred=eff_pred, clamp_bounds=True, _semantic=_semantic)
@@ -299,10 +295,9 @@ def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.ten
                 _semantic=None) -> None:
     """Store a block of tensor specified in tensor descriptor from shared memory to global memory asynchronously.
 
-    The underlying copy op is pure: the descriptor must be positioned by
-    ``update_tensor_descriptor``.  As a convenience, passing ``offsets`` here
-    positions the descriptor for you (advance + derive the OOB extent) before
-    issuing the copy; omit it if the descriptor is already positioned.
+    See :func:`async_load` for how the descriptor is positioned (a prior
+    ``update_tensor_descriptor`` or the ``offsets`` convenience).  Stores take no
+    ``pred``.
 
     Args:
         dest (tensor_descriptor): the destination tensor descriptor.
@@ -312,10 +307,6 @@ def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.ten
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
     assert src is not None, "async_store requires a src shared_memory_descriptor"
-    # The copy op is always pure.  If non-empty offsets are given, pre-position
-    # the descriptor via update_tensor_descriptor (advance + clamp_bounds);
-    # otherwise the caller positioned it.  An empty/None offsets means "no
-    # advance".  Stores carry no pred.
     if offsets:
         dest = update_tensor_descriptor(dest, add_offsets=offsets, clamp_bounds=True, _semantic=_semantic)
 
