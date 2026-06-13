@@ -10,6 +10,8 @@ import triton.language as tl
 from ._allocator import get_runtime_state_layout
 from ._utils import uint8_cuda_tensor_from_ptr
 
+_SYNC_BLOCK_SIZE = 128
+
 
 @dataclass(frozen=True)
 class _RuntimeStateLayout:
@@ -57,7 +59,7 @@ def _compiled_sync_kernel(device: int, stride_bytes: int, num_sms: int, num_thre
         )
 
 
-@triton.jit
+@triton.jit(do_not_specialize_on_alignment=["stride_bytes", "num_sms", "num_threads", "header_bytes"])
 def _synchronize_vector_clocks_kernel(thread_state_region, stride_bytes, num_sms, num_threads, header_bytes,
                                       BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
@@ -104,6 +106,18 @@ def _synchronize_process_group_barrier_kernel(local_thread_state_region, peer_th
         tl.store(vector_clock_ptr + offsets, max_clocks, mask=mask)
 
 
+def prepare_launch_stream_sync(device: int):
+    layout = _runtime_state_layout(device, device)
+    return _compiled_sync_kernel(
+        device,
+        layout.thread_state_stride_bytes,
+        layout.num_sms,
+        layout.num_threads,
+        layout.thread_state_header_size_bytes,
+        _SYNC_BLOCK_SIZE,
+    )
+
+
 def synchronize_launch_stream(device: int) -> None:
     """This models the implicit synchronization between kernel launches.
 
@@ -112,23 +126,15 @@ def synchronize_launch_stream(device: int) -> None:
     This makes all reads and writes transitively visible to other threads.
     """
     layout = _runtime_state_layout(device, device)
-    BLOCK_SIZE = 128
-    grid = (triton.cdiv(layout.num_threads, BLOCK_SIZE), 1, 1)
-    kernel = _compiled_sync_kernel(
-        device,
-        layout.thread_state_stride_bytes,
-        layout.num_sms,
-        layout.num_threads,
-        layout.thread_state_header_size_bytes,
-        BLOCK_SIZE,
-    )
+    grid = (triton.cdiv(layout.num_threads, _SYNC_BLOCK_SIZE), 1, 1)
+    kernel = prepare_launch_stream_sync(device)
     kernel[grid](
         layout.thread_state_region,
         layout.thread_state_stride_bytes,
         layout.num_sms,
         layout.num_threads,
         layout.thread_state_header_size_bytes,
-        BLOCK_SIZE,
+        _SYNC_BLOCK_SIZE,
     )
 
 

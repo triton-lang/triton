@@ -19,7 +19,7 @@ using uint16_t = __UINT16_TYPE__;
 using uint32_t = __UINT32_TYPE__;
 using uintptr_t = __UINTPTR_TYPE__;
 
-// Reserve 1 PiB, should be big enough for a while :)
+// Reserve 1 TiB, should be big enough for a while :)
 static constexpr size_t kReserveSize = 1ull << 40;
 static constexpr int kShadowMemGranularityBytes = 4;
 static_assert((kReserveSize & (kReserveSize - 1)) == 0,

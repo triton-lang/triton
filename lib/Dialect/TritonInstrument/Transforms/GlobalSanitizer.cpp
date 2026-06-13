@@ -269,20 +269,20 @@ static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
 
   OpBuilder builder(op);
   auto desc = getDescriptorInfo(op.getDesc(), builder);
+  auto blockShape = cast<tt::TensorDescType>(op.getDesc().getType()).getShape();
 
   auto offsets = castToI64(builder, op.getLoc(), op.getCoord());
-  auto access = createTiledAccess(builder, op.getLoc(), desc,
-                                  op.getResult().getType().getShape(), offsets,
-                                  op.getPred());
+  auto access = createTiledAccess(builder, op.getLoc(), desc, blockShape,
+                                  offsets, op.getPred());
   ExperimentalGSanTensorAccessOp::create(builder, op.getLoc(), access.first,
                                          access.second, /*isStore=*/false);
 }
 
 static void instrumentAsyncTMAStore(Operation *op, Value descValue,
-                                    ArrayRef<int64_t> blockShape,
                                     ValueRange coords) {
   OpBuilder builder(op);
   auto desc = getDescriptorInfo(descValue, builder);
+  auto blockShape = cast<tt::TensorDescType>(descValue.getType()).getShape();
 
   auto offsets = castToI64(builder, op->getLoc(), coords);
   auto access = createTiledAccess(builder, op->getLoc(), desc, blockShape,
@@ -294,11 +294,11 @@ static void instrumentAsyncTMAStore(Operation *op, Value descValue,
 static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op) {
   OpBuilder builder(op);
   auto desc = getDescriptorInfo(op.getDesc(), builder);
+  auto blockShape = cast<tt::TensorDescType>(op.getDesc().getType()).getShape();
 
   auto offsets = castToI64(builder, op.getLoc(), op.getCoord());
-  auto access = createTiledAccess(builder, op.getLoc(), desc,
-                                  op.getSrc().getType().getShape(), offsets,
-                                  std::nullopt);
+  auto access = createTiledAccess(builder, op.getLoc(), desc, blockShape,
+                                  offsets, std::nullopt);
   ExperimentalGSanAtomicTensorAccessOp::create(
       builder, op.getLoc(), access.first, access.second, MemSemantic::RELAXED,
       MemSyncScope::GPU);
@@ -329,6 +329,26 @@ static void instrumentAsyncTMAScatter(ttng::AsyncTMAScatterOp op) {
                                           op.getXOffsets(), op.getYOffset());
   ExperimentalGSanTensorAccessOp::create(builder, op.getLoc(), access.first,
                                          access.second, /*isStore=*/true);
+}
+
+static Value getGSanStateForCall(tt::CallOp callOp, Value gsanState) {
+  auto partitions = callOp->getParentOfType<ttg::WarpSpecializePartitionsOp>();
+  if (!partitions)
+    return gsanState;
+
+  auto captures = partitions.getExplicitCaptures();
+  auto capture = llvm::find(captures, gsanState);
+  unsigned captureIdx = std::distance(captures.begin(), capture);
+  if (capture == captures.end()) {
+    partitions->insertOperands(captureIdx, gsanState);
+    for (Region &region : partitions.getPartitionRegions())
+      region.addArgument(gsanState.getType(), callOp.getLoc());
+  }
+
+  Region *partitionRegion = callOp->getParentRegion();
+  while (partitionRegion->getParentOp() != partitions.getOperation())
+    partitionRegion = partitionRegion->getParentRegion();
+  return partitionRegion->getArgument(captureIdx);
 }
 
 class GlobalSanitizerPass
@@ -380,7 +400,8 @@ public:
 
       SmallVector<Value> operands(callOp.getOperands().begin(),
                                   callOp.getOperands().end());
-      operands.push_back(caller.getArgument(caller.getNumArguments() - 1));
+      Value gsanState = caller.getArgument(caller.getNumArguments() - 1);
+      operands.push_back(getGSanStateForCall(callOp, gsanState));
 
       OpBuilder b(callOp);
       auto newCallOp =
@@ -412,9 +433,7 @@ public:
           .Case(
               [&](ttng::AsyncTMAGatherOp op) { instrumentAsyncTMAGather(op); })
           .Case([&](ttng::AsyncTMACopyLocalToGlobalOp op) {
-            instrumentAsyncTMAStore(op, op.getDesc(),
-                                    op.getSrc().getType().getShape(),
-                                    op.getCoord());
+            instrumentAsyncTMAStore(op, op.getDesc(), op.getCoord());
           })
           .Case(
               [&](ttng::AsyncTMAReduceOp op) { instrumentAsyncTMAReduce(op); })
