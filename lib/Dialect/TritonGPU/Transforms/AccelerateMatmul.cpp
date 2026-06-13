@@ -375,12 +375,13 @@ public:
     auto oldBType = cast<RankedTensorType>(b.getType());
     auto oldRetType = cast<RankedTensorType>(dotOp.getType());
 
-    // Enable F64 MMA only on SM80/SM90 with high performance F64 tensorcore.
+    // Enable F64 MMA only on targets with high performance F64 tensor cores.
     // Otherwise, fallback to F64 FMA for better performance.
     if ((oldAType.getElementType().isF64() ||
          oldBType.getElementType().isF64() ||
          oldRetType.getElementType().isF64()) &&
-        !(computeCapability == 80 || computeCapability == 90)) {
+        !(computeCapability == 80 || computeCapability == 90 ||
+          (computeCapability >= 100 && computeCapability < 120))) {
       return failure();
     }
 
@@ -789,7 +790,7 @@ public:
     auto bitwidth = oldRetType.getElementType().getIntOrFloatBitWidth();
     unsigned colStride = 32 / bitwidth;
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
-        context, m, n, colStride, CGALayout, false);
+        context, m, n, colStride, CGALayout);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     MemDescType accMemDescType =

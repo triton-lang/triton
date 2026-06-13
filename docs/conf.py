@@ -352,7 +352,7 @@ autosummary_generate = True
 autosummary_ignore_module_all = False
 
 # versioning config
-smv_tag_whitelist = r'^(v3.7.0)$'
+smv_tag_whitelist = r'^(v3.8.0)$'
 smv_branch_whitelist = r'^main$'
 smv_remote_whitelist = None
 smv_released_pattern = r'^tags/.*$'

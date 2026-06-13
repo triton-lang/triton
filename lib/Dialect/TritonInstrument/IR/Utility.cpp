@@ -306,43 +306,75 @@ TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
           .getResult());
 }
 
-DistributedEncodingTrait
-getSingleDimSliceEncoding(DistributedEncodingTrait encoding, int dim) {
-  int rank = encoding.getRepOrder().size();
+static DistributedEncodingTrait
+getSliceEncoding(DistributedEncodingTrait encoding, int rank,
+                 ArrayRef<int> keptDims) {
   MLIRContext *ctx = encoding.getContext();
-  assert(dim < rank && "Expected dim to be less than rank");
+  assert(llvm::is_sorted(keptDims) &&
+         "expected kept dimensions to preserve source dimension order");
+  llvm::SmallDenseSet<int> keptDimsSet(keptDims.begin(), keptDims.end());
+  assert(keptDimsSet.size() == keptDims.size() &&
+         "expected unique kept dimensions");
+  for (int dim : keptDims) {
+    assert(dim >= 0 && dim < rank &&
+           "expected kept dimension in destination rank");
+  }
   DistributedEncodingTrait sliceEncoding = encoding;
   for (int i = rank - 1; i >= 0; --i) {
-    if (i != dim) {
+    if (!keptDimsSet.contains(i)) {
       sliceEncoding = SliceEncodingAttr::get(ctx, i, sliceEncoding);
     }
   }
   return sliceEncoding;
 }
 
-Value expandOuterSlicedDim(OpBuilder &b, Location loc, Value tensor) {
-  auto type = cast<RankedTensorType>(tensor.getType());
-  auto sliceEncoding = dyn_cast<SliceEncodingAttr>(type.getEncoding());
-  if (sliceEncoding) {
-    int dim = sliceEncoding.getDim();
-    auto shape = type.getShape();
-    auto newShape = SmallVector<int64_t>(shape);
-    newShape.insert(newShape.begin() + dim, 1);
-    auto newType = RankedTensorType::get(newShape, type.getElementType(),
-                                         sliceEncoding.getParent());
-    tensor = ExpandDimsOp::create(b, loc, newType, tensor, dim);
+RankedTensorType getSlicedTensorType(RankedTensorType tensorType,
+                                     ArrayRef<int> keptDims, Type elementType) {
+  auto encoding = cast<DistributedEncodingTrait>(tensorType.getEncoding());
+  auto sliceEncoding =
+      getSliceEncoding(encoding, tensorType.getRank(), keptDims);
+  SmallVector<int64_t> shape;
+  shape.reserve(keptDims.size());
+  for (int dim : keptDims) {
+    assert(dim >= 0 && dim < tensorType.getRank() &&
+           "expected kept dimension in tensor rank");
+    shape.push_back(tensorType.getShape()[dim]);
   }
-  return tensor;
+  return RankedTensorType::get(shape, elementType, sliceEncoding);
 }
 
-static Value expandAllSlicedDims(OpBuilder &b, Location loc, Value tensor) {
-  auto type = cast<RankedTensorType>(tensor.getType());
-  auto sliceEncoding = dyn_cast<SliceEncodingAttr>(type.getEncoding());
-  while (sliceEncoding) {
-    tensor = expandOuterSlicedDim(b, loc, tensor);
-    type = cast<RankedTensorType>(tensor.getType());
-    sliceEncoding = dyn_cast<SliceEncodingAttr>(type.getEncoding());
+Value reshapeAndBroadcast(OpBuilder &b, Location loc, Value tensor,
+                          ArrayRef<int> keptDims, RankedTensorType dstType) {
+  auto tensorType = cast<RankedTensorType>(tensor.getType());
+  assert(static_cast<size_t>(tensorType.getRank()) == keptDims.size() &&
+         "expected one kept dimension per source tensor rank");
+  assert(llvm::is_sorted(keptDims) &&
+         "expected kept dimensions to preserve source dimension order");
+
+  SmallVector<int64_t> reshapeShape(dstType.getRank(), 1);
+  for (auto [srcDim, dstDim] : llvm::enumerate(keptDims)) {
+    assert(dstDim >= 0 && dstDim < dstType.getRank() &&
+           "expected kept dimension in destination rank");
+    assert(!llvm::is_contained(keptDims.take_front(srcDim), dstDim) &&
+           "expected unique kept dimensions");
+    assert(tensorType.getShape()[srcDim] == dstType.getShape()[dstDim] &&
+           "expected kept dimension to preserve size");
+    reshapeShape[dstDim] = tensorType.getShape()[srcDim];
   }
+
+  if (!llvm::equal(tensorType.getShape(), reshapeShape))
+    tensor = ReshapeOp::create(b, loc, reshapeShape, tensor);
+
+  tensorType = cast<RankedTensorType>(tensor.getType());
+  auto broadcastSrcType = RankedTensorType::get(
+      reshapeShape, tensorType.getElementType(), dstType.getEncoding());
+  if (tensor.getType() != broadcastSrcType) {
+    assert(cvtReordersRegisters(tensorType, broadcastSrcType) &&
+           "expected reshaped layout conversion to reorder registers only");
+    tensor = ConvertLayoutOp::create(b, loc, broadcastSrcType, tensor);
+  }
+  if (tensor.getType() != dstType)
+    tensor = BroadcastOp::create(b, loc, dstType, tensor);
   return tensor;
 }
 
@@ -361,19 +393,14 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
     strides[i] = strides[i - 1] * tensorType.getShape()[i - 1];
   }
   for (int i = 0; i < tensorType.getRank(); ++i) {
-    auto partialEncoding = getSingleDimSliceEncoding(encoding, i);
-    auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
-                                            b.getI32Type(), partialEncoding);
+    auto arangeType = getSlicedTensorType(tensorType, {i}, b.getI32Type());
     auto arange =
         MakeRangeOp::create(b, loc, arangeType, 0, arangeType.getShape()[0]);
     auto cstStride = createConstIntTensor(b, loc, strides[i], arangeType);
     auto arangeTimesStride =
         arith::MulIOp::create(b, loc, arangeType, arange, cstStride);
-    auto expandDims = expandAllSlicedDims(b, loc, arangeTimesStride);
-    if (cast<RankedTensorType>(expandDims.getType()).getShape() !=
-        tensorType.getShape()) {
-      expandDims = BroadcastOp::create(b, loc, offsetsType, expandDims);
-    }
+    auto expandDims =
+        reshapeAndBroadcast(b, loc, arangeTimesStride, {i}, offsetsType);
     ptrTensor =
         AddPtrOp::create(b, loc, ptrTensor.getType(), ptrTensor, expandDims);
   }
@@ -384,9 +411,7 @@ static Value createCurrentCTAMask(OpBuilder &b, Location loc,
                                   RankedTensorType tensorType) {
   assert(tensorType.getRank() > 0 && "expected ranked tensor");
   auto encoding = cast<DistributedEncodingTrait>(tensorType.getEncoding());
-  auto sliceEncoding = getSingleDimSliceEncoding(encoding, /*dim=*/0);
-  auto indexType = RankedTensorType::get({tensorType.getShape()[0]},
-                                         b.getI32Type(), sliceEncoding);
+  auto indexType = getSlicedTensorType(tensorType, {0}, b.getI32Type());
   Value range = MakeRangeOp::create(b, loc, indexType, /*start=*/0,
                                     tensorType.getShape()[0]);
   Value ctaId = ExperimentalClusterCTAIdOp::create(b, loc);
@@ -395,11 +420,7 @@ static Value createCurrentCTAMask(OpBuilder &b, Location loc,
                                        ctaIdTensor);
   auto maskType =
       RankedTensorType::get(tensorType.getShape(), b.getI1Type(), encoding);
-  Value mask = expandAllSlicedDims(b, loc, mask1D);
-  if (cast<RankedTensorType>(mask.getType()).getShape() !=
-      tensorType.getShape())
-    mask = BroadcastOp::create(b, loc, maskType, mask);
-  return mask;
+  return reshapeAndBroadcast(b, loc, mask1D, {0}, maskType);
 }
 
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,

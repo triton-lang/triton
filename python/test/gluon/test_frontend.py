@@ -1036,6 +1036,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def tmem_fp4_padded_layout_kernel():
+    layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 64], col_stride=1, fp4_padded=True)
+    ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.int8, [128, 64], layout)
+
+
+def test_tmem_fp4_padded_layout_constexpr():
+    expecttest.assert_expected_inline(
+        anonymize_ir(run_parser(tmem_fp4_padded_layout_kernel, target=BLACKWELL_TARGET).str_nodebug()), """\
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, fp4Padded = true>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tmem_fp4_padded_layout_kernel() attributes {noinline = false} {
+    %result = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xi8, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
 def tmem_subslice_reg_layout_kernel():
     layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 256], col_stride=1, cga_layout=((1, 0), (2, 0)))
     tmem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.float32, [2, 512, 256], layout)
@@ -2863,6 +2882,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst_4 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
     %cst_5 = arith.constant 0.000000e+00 : f32
     %0 = tt.dot %cst_0, %cst_2, %cst_4 : tensor<64x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def slice_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 64], [4, 1], [1, 0])
+    x = ttgl.full([128, 128], 1.0, ttgl.float32, layout=layout)
+    s = ttgl.amd.slice(x, [64, 128], [64, 0])
+    ttgl.static_assert(s.type.shape == [64, 128])
+    ttgl.static_assert(s.type.layout == layout)
+
+
+def test_amd_slice():
+    module = run_parser(slice_kernel, target=HIP_TARGET_CDNA3)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @slice_kernel() attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f32
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<128x128xf32, #blocked>
+    %0 = amdg.extract_slice %cst_0 [64, 0] : tensor<128x128xf32, #blocked> to tensor<64x128xf32, #blocked>
     tt.return
   }
 }

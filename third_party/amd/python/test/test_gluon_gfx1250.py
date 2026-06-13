@@ -612,22 +612,29 @@ def test_compile_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, AS
 
     k = triton.compile(src=gluon._runtime.GluonASTSource(fn, signature, constexprs, attrs=attrs),
                        target=GPUTarget("hip", 'gfx1250', 32))
+    ttgir = k.asm["ttgir"]
     amdgcn = k.asm["amdgcn"]
 
     assert re.search("v_wmma_f32_16x16x32_f16", amdgcn)
 
     if ASYNC_LOAD_TYPE == "TDM":
+        # LLVM may duplicate the dynamic loop body while optimizing the final
+        # assembly. Check the exact TDM copy count before LLVM backend loop
+        # transforms, and only require the final ISA to contain the lowering.
+        assert len(re.findall("amdg.async_tdm_copy_global_to_local", ttgir)) == NUM_BUFFERS * 2
         for cnt in range(NUM_BUFFERS - 1, -1, -1):
             assert re.search(f"s_wait_tensorcnt 0x{(cnt * 2):x}", amdgcn)
-        assert len(re.findall("tensor_load_to_lds", amdgcn)) == NUM_BUFFERS * 2
+        assert len(re.findall("tensor_load_to_lds", amdgcn)) >= NUM_BUFFERS * 2
     else:
         copy_instr_for_A = BLOCK_M // 4 // 4
         b_rows = BLOCK_N if B_K_CONTIG else BLOCK_K
         copy_isntr_for_B = b_rows // 4 // 4
         copy_instr_per_iter = copy_instr_for_A + copy_isntr_for_B
+        assert len(re.findall("ttg.async_copy_global_to_local", ttgir)) == NUM_BUFFERS * 2
         for cnt in range(NUM_BUFFERS - 1, -1, -1):
             assert re.search(f"s_wait_asynccnt 0x{(cnt * copy_instr_per_iter):x}", amdgcn)
         # Each instruction loads 4 rows per warp and we have 4 warps (see BlockedLayout in test)
+        # Only treat this as a lower bound because LLVM might unroll the loop
         assert len(re.findall("global_load_async_to_lds", amdgcn)) >= NUM_BUFFERS * copy_instr_per_iter
 
 
