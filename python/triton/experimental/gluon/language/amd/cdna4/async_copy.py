@@ -1,3 +1,5 @@
+import warnings
+
 from ..._core import ir, builtin, _unwrap_if_constexpr
 from ..._semantic import _check
 from ..._layouts import DistributedLayout
@@ -8,6 +10,7 @@ __all__ = [
     "buffer_load_to_shared",
     "commit_group",
     "wait_group",
+    "load_shared_relaxed",
 ]
 
 
@@ -144,3 +147,31 @@ def wait_group(num_outstanding=0, _semantic=None):
     """
     num_outstanding = _unwrap_if_constexpr(num_outstanding)
     _semantic.builder.create_async_wait_group(num_outstanding)
+
+
+@builtin
+def load_shared_relaxed(smem, layout, _semantic=None):
+    """
+    Deprecated. Use the shared memory descriptor's load method instead,
+    for example `smem.load(layout)`.
+
+    This compatibility wrapper emits a normal shared-memory load.
+
+    Args:
+        smem (shared_memory_descriptor): Shared memory descriptor to load from.
+        layout (DistributedLayout): The destination layout of the tensor.
+
+    Returns:
+        tensor: A Gluon tensor containing the loaded data.
+    """
+    warnings.warn(
+        "cdna4.async_copy.load_shared_relaxed is deprecated,"
+        " and will be removed in a future release."
+        " Please use the shared memory descriptor's load method instead,"
+        " for example smem.load(layout).",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+    layout = _unwrap_if_constexpr(layout)
+    return _semantic.shared_load(smem, layout)
