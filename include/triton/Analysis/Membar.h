@@ -11,6 +11,8 @@
 namespace mlir {
 
 class OpBuilder;
+class BufferIndexAnalysis;
+struct BufferIndexExpr;
 struct AllocationSlice;
 
 /// Callback to allow backend to provide more information on whether a barrier
@@ -30,7 +32,9 @@ using MembarSliceFilterFn =
 // logical view on it (layout, subslice offsets and shape for the access)
 struct AllocationSlice {
 public:
-  // Create allocation slice from a value, collecting subslice offsets
+  // Create allocation slice from a value, collecting subslice offsets.
+  // Dynamic buffer-index information is attached by BufferIndexAnalysis; use
+  // BufferIndexAnalysis::makeSlice when constructing slices for membar.
   AllocationSlice(Value value, Interval<size_t> allocationInterval,
                   Allocation::BufferId bufferId);
 
@@ -62,17 +66,27 @@ public:
         allocationInterval.start() + offset, allocationInterval.end() + offset);
     if (invalidateBufferId)
       shifted.bufferId = Allocation::InvalidBufferId;
+    // This preserves analysis payloads such as bufferIndexExpr. Callers that
+    // translate slices across function boundaries must clear per-function
+    // payloads before translating.
     return shifted;
   }
 
   void print(raw_ostream &os) const;
 
+  // Buffer-index expression attached by BufferIndexAnalysis. It participates
+  // in ordering/equality so accesses to different slots remain separate.
+  // Must not be mutated after the slice is inserted into a sorted container
+  // (e.g. BlockInfo::SliceMapT); rebuild the container instead, as
+  // BufferIndexAnalysis::invalidateBufferIndices does.
+  const BufferIndexExpr *bufferIndexExpr = nullptr;
+
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
-             llvm::ArrayRef<int64_t>>
+             llvm::ArrayRef<int64_t>, const BufferIndexExpr *>
   asTuple() const {
     return {allocationInterval, bufferId, accessTy.getAsOpaquePointer(),
-            subsliceOffsets};
+            subsliceOffsets, bufferIndexExpr};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
@@ -235,8 +249,10 @@ public:
   void run(FuncBlockInfoMapT &funcBlockInfoMap);
 
 protected:
-  /// Applies the barrier analysis based on the SCF dialect, in which each
-  /// region has a single basic block only.
+  /// Applies the barrier analysis over virtual blocks. A virtual block is a
+  /// straight-line segment ending at either a CFG terminator or a region branch
+  /// operation, which lets the same dataflow handle cf-form branches and
+  /// single-block regions.
   /// Example:
   /// region1
   ///   op1
@@ -248,7 +264,9 @@ protected:
   ///        op5
   ///        op6
   ///   op7
-  /// TODO: Explain why we don't use ForwardAnalysis:
+  /// This custom traversal keeps the same transfer function for CFG edges and
+  /// nested regions while still preserving the operation order inside each
+  /// virtual block.
   void resolve(FunctionOpInterface funcOp, FuncBlockInfoMapT *funcBlockInfoMap,
                OpBuilder *builder);
 
@@ -256,10 +274,13 @@ protected:
   void visitTerminator(Operation *operation,
                        SmallVector<VirtualBlock> &successors);
 
+  /// Returns true for analyses that need dynamic buffer-index reasoning.
+  virtual bool needsBufferIndexAnalysis() const { return false; }
+
   /// Updates the BlockInfo operation based on the operation.
   virtual void update(Operation *operation, BlockInfo *blockInfo,
-                      FuncBlockInfoMapT *funcBlockInfoMap,
-                      OpBuilder *builder) = 0;
+                      FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder,
+                      BufferIndexAnalysis *bufferIndexAnalysis) = 0;
 
   Allocation *allocation = nullptr;
   MembarFilterFn filter = nullptr;
@@ -274,10 +295,12 @@ public:
   ~MembarAnalysis() override = default;
 
 private:
+  bool needsBufferIndexAnalysis() const override { return true; }
+
   /// Updates the BlockInfo operation based on the operation.
   virtual void update(Operation *operation, BlockInfo *blockInfo,
-                      FuncBlockInfoMapT *funcBlockInfoMap,
-                      OpBuilder *builder) override;
+                      FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder,
+                      BufferIndexAnalysis *bufferIndexAnalysis) override;
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
 };

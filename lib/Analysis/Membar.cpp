@@ -1,4 +1,5 @@
 #include "triton/Analysis/Membar.h"
+#include "triton/Analysis/BufferIndexAnalysis.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -6,6 +7,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include <deque>
+#include <optional>
 
 namespace ttng = mlir::triton::nvidia_gpu;
 
@@ -35,6 +37,12 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (!allocationInterval.intersects(other.allocationInterval))
     return false;
 
+  // For slices of the same allocation, compare dynamic buffer indices to prove
+  // that different slots do not overlap.
+  if (bufferId == other.bufferId && bufferId != Allocation::InvalidBufferId &&
+      areBufferIndicesProvablyDifferent(*this, other))
+    return false;
+
   // If access types are unknown, assume intersection
   if (!accessTy || !other.accessTy)
     return true;
@@ -50,7 +58,7 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
 
   auto shapeA = SmallVector<int64_t>(accessTy.getShape());
   auto shapeB = SmallVector<int64_t>(other.accessTy.getShape());
-  // Chek if all subslice region dimensions have some intersection
+  // Check if all subslice region dimensions have some intersection
   // [offsetA, offsetA + shape) and [offsetB, offsetB + other.shape)
   // If any dimension doesn't intersect, we are looking at disjoint subslices
   for (size_t i = 0; i < subsliceOffsets.size(); ++i) {
@@ -121,6 +129,11 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
   DenseMap<VirtualBlock, BlockInfo> inputBlockInfoMap;
   DenseMap<VirtualBlock, BlockInfo> outputBlockInfoMap;
   std::deque<VirtualBlock> blockList;
+  std::optional<BufferIndexAnalysis> bufferIndexAnalysis;
+  if (needsBufferIndexAnalysis())
+    bufferIndexAnalysis.emplace(funcOp);
+  BufferIndexAnalysis *biaPtr =
+      bufferIndexAnalysis ? &*bufferIndexAnalysis : nullptr;
   // Start the analysis from the entry block of the function.
   blockList.emplace_back(&funcOp.getBlocks().front(), Block::iterator());
 
@@ -128,19 +141,21 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
   while (!blockList.empty()) {
     VirtualBlock block = blockList.front();
     blockList.pop_front();
-    // Make a copy of the inputblockInfo but not update
+    // Make a copy of the input BlockInfo before applying the transfer.
     auto inputBlockInfo = inputBlockInfoMap[block];
     SmallVector<VirtualBlock> successors;
+    Operation *terminator = nullptr;
     Block::iterator startIt =
         block.second.isValid() ? std::next(block.second) : block.first->begin();
     for (Operation &op : llvm::make_range(startIt, block.first->end())) {
       // Update inputBlockInfo based on the current operation. Note that we do
       // this before we process terminators and branch-like ops, because some of
       // them (e.g. WarpSpecializePartitionsOp) may have synchronizing effects.
-      update(&op, &inputBlockInfo, funcBlockInfoMap, builder);
+      update(&op, &inputBlockInfo, funcBlockInfoMap, builder, biaPtr);
       if (op.hasTrait<OpTrait::IsTerminator>() ||
           isa<RegionBranchOpInterface>(op)) {
         visitTerminator(&op, successors);
+        terminator = &op;
         break;
       }
     }
@@ -157,6 +172,10 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
     // Update the successors
     for (VirtualBlock successor : successors) {
       inputBlockInfoMap[successor].join(outputBlockInfoMap[block]);
+      // Across a backedge, invalidate buffer indices: we cannot evaluate
+      // index disjointness over loop iterations.
+      if (biaPtr && biaPtr->isBackedgeSuccessor(terminator, successor.first))
+        biaPtr->invalidateBufferIndices(inputBlockInfoMap[successor]);
       blockList.emplace_back(successor);
     }
   }
@@ -181,7 +200,12 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
              (rhsIt.isValid() && lhsIt->isBeforeInBlock(&*rhsIt));
     });
 
-    funcBlockInfo.join(maxIt->second);
+    // Function summaries are reused at every call site, so per-function SSA
+    // index identity is no longer meaningful; drop attached buffer indices.
+    BlockInfo blockInfo = maxIt->second;
+    if (biaPtr)
+      biaPtr->invalidateBufferIndices(blockInfo);
+    funcBlockInfo.join(blockInfo);
   });
 }
 
@@ -266,7 +290,11 @@ bool containsLocalBarrier(Operation *op) {
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
-                            OpBuilder *builder) {
+                            OpBuilder *builder,
+                            BufferIndexAnalysis *bufferIndexAnalysis) {
+  assert(bufferIndexAnalysis &&
+         "membar analysis requires buffer index analysis");
+
   if (containsLocalBarrier(op)) {
     // If the current op is a local barrier, we sync previous reads and writes
     blockInfo->sync();
@@ -308,7 +336,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
               auto interval = allocation->getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, interval, bufferId);
+              auto slice =
+                  bufferIndexAnalysis->makeSlice(value, interval, bufferId);
 
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
                 curBlockInfo.syncWriteSlices[slice].insert(op);

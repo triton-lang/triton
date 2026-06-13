@@ -279,3 +279,173 @@ tt.func @missing_barrier_reused_allocation(%A: !tt.ptr<f16>, %B: !tt.ptr<f16>) {
 }
 
 }
+
+// -----
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: must_barrier_tdm_copy_select_cmpi_unbounded_base
+// The select/cmpi modular-wrap idiom only equals (base + 1) % N when
+// -1 <= base < N. Here the base is a plain function argument with no
+// provable bound, so the matcher must reject the modular form and a barrier
+// must be emitted between the TDM copy and the local_load.
+// Positive coverage for the iter_arg path lives in
+// test/Analysis/test-membar.mlir.
+tt.func @must_barrier_tdm_copy_select_cmpi_unbounded_base(%desc: !tt.tensordesc<128x128xf16, #shared>, %phase: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c_pred = arith.constant 1 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  %write_sum = arith.addi %phase, %c1_i32 : i32
+  %write_cmp = arith.cmpi slt, %write_sum, %c3_i32 : i32
+  %write_idx = arith.select %write_cmp, %write_sum, %c0_i32 : i32
+  %write_view = ttg.memdesc_index %alloc[%write_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  %read_idx = arith.remsi %phase, %c3_i32 : i32
+  %read_view = ttg.memdesc_index %alloc[%read_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: amdg.async_tdm_copy_global_to_local
+  %token = amdg.async_tdm_copy_global_to_local %desc[%c0_i32, %c0_i32] into %write_view, pred = %c_pred : !tt.tensordesc<128x128xf16, #shared> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %load = ttg.local_load %read_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #AL>
+  tt.return
+}
+}
+
+// -----
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: disjoint_tdm_copy_remsi
+// Test that TDM copy and local_load with provably disjoint dynamic indices
+// using arith.remsi (gluon/canonical modular wrap) do not require a barrier.
+tt.func @disjoint_tdm_copy_remsi(%desc: !tt.tensordesc<128x128xf16, #shared>, %phase: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c_pred = arith.constant 1 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  // Write index: (phase + 2) % 3
+  %write_phase = arith.addi %phase, %c2_i32 : i32
+  %write_idx = arith.remsi %write_phase, %c3_i32 : i32
+  %write_view = ttg.memdesc_index %alloc[%write_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // Read index: phase % 3
+  %read_idx = arith.remsi %phase, %c3_i32 : i32
+  %read_view = ttg.memdesc_index %alloc[%read_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: amdg.async_tdm_copy_global_to_local
+  %token = amdg.async_tdm_copy_global_to_local %desc[%c0_i32, %c0_i32] into %write_view, pred = %c_pred : !tt.tensordesc<128x128xf16, #shared> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  %load = ttg.local_load %read_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: disjoint_select_cmpi_iter_arg_cf
+// After scf-to-cf, the loop-carried phase is a cf block argument. The analysis
+// proves the select/cmpi wrap is bounded from the incoming init and backedge
+// operands.
+tt.func @disjoint_select_cmpi_iter_arg_cf(%cst: tensor<128x128xf16, #AL>, %ub: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %init = arith.constant -1 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: cf.br
+  %res = scf.for %i = %c0_i32 to %ub step %c1_i32 iter_args(%phase = %init) -> (i32) : i32 {
+    %w_sum = arith.addi %phase, %c1_i32 : i32
+    %w_cmp = arith.cmpi sge, %w_sum, %c3_i32 : i32
+    %w_idx = arith.select %w_cmp, %c0_i32, %w_sum : i32
+    %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+    %r_idx = arith.remsi %phase, %c3_i32 : i32
+    %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+    // CHECK: ttg.barrier local
+    // CHECK: ttg.local_store
+    ttg.local_store %cst, %w_view : tensor<128x128xf16, #AL> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: ttg.local_load
+    %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #AL>
+
+    scf.yield %w_idx : i32
+  }
+  tt.return
+}
+
+// CHECK-LABEL: disjoint_remsi_loop_carried_cf
+// Next-iteration hazard after scf-to-cf lowering:
+//   read_i  = phase_i % 3
+//   write_i = (phase_i + 1) % 3
+//   phase_{i+1} = phase_i + 1
+// Dynamic index comparisons are disabled across the cf backedge, so the
+// carried write cannot be proven disjoint from read_{i+1}.
+tt.func @disjoint_remsi_loop_carried_cf(%cst: tensor<128x128xf16, #AL>, %ub: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: cf.br
+  %res = scf.for %i = %c0_i32 to %ub step %c1_i32 iter_args(%phase = %c0_i32) -> (i32) : i32 {
+    %r_idx = arith.remsi %phase, %c3_i32 : i32
+    %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
+    %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #AL>
+
+    %w_sum = arith.addi %phase, %c1_i32 : i32
+    %w_idx = arith.remsi %w_sum, %c3_i32 : i32
+    %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: ttg.local_store
+    ttg.local_store %cst, %w_view : tensor<128x128xf16, #AL> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+    %next_phase = arith.addi %phase, %c1_i32 : i32
+    scf.yield %next_phase : i32
+  }
+  tt.return
+}
+
+// CHECK-LABEL: must_barrier_remsi_loop_carried_future_disjoint_cf
+// Future-precision case after scf-to-cf lowering. The current analysis
+// invalidates dynamic indices across the cf backedge, so it still requires a
+// conservative barrier before the read.
+tt.func @must_barrier_remsi_loop_carried_future_disjoint_cf(%cst: tensor<128x128xf16, #AL>, %ub: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable>
+
+  // CHECK: cf.br
+  %res = scf.for %i = %c0_i32 to %ub step %c1_i32 iter_args(%phase = %c0_i32) -> (i32) : i32 {
+    %r_idx = arith.remsi %phase, %c4_i32 : i32
+    %r_view = ttg.memdesc_index %alloc[%r_idx] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
+    %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #AL>
+
+    %w_sum = arith.addi %phase, %c1_i32 : i32
+    %w_idx = arith.remsi %w_sum, %c4_i32 : i32
+    %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: ttg.local_store
+    ttg.local_store %cst, %w_view : tensor<128x128xf16, #AL> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+
+    %next_phase = arith.addi %phase, %c2_i32 : i32
+    scf.yield %next_phase : i32
+  }
+  tt.return
+}
+}
