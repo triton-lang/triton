@@ -1545,6 +1545,28 @@ bool LayoutRematerialization::hoistConvertIntoConditionals(
   if (hoistAbove.empty())
     return false;
 
+  // Workaround: Hoisting convert-layout operations across nested loops can
+  // cause LLVM translation failures. When rematerializing block arguments from
+  // multiple nested loops, the hoisting phase may create additional iter_args
+  // with new encodings. Detect this case and bail out to avoid the crash.
+  Operation *loop1 = nullptr;
+  for (Value v : slice) {
+    if (v.getDefiningOp())
+      continue;
+    BlockArgument blockArg = cast<BlockArgument>(v);
+    Operation *parentOp = blockArg.getOwner()->getParentOp();
+    if (auto loopOp = cast<LoopLikeOpInterface>(parentOp)) {
+      if (!loop1) {
+        loop1 = loopOp;
+      } else if (loop1 != loopOp) {
+        // Check if loop1 contains loopOp or loopOp contains loop1
+        if (loop1->isAncestor(loopOp) || loopOp->isAncestor(loop1)) {
+          return false;
+        }
+      }
+    }
+  }
+
   // Rematerialize failed hoists right before the condtional, and hoist those
   // that succeeded into the branch and then rewrite the slice.
   IRMapping mapping;

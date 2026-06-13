@@ -4473,3 +4473,76 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Test that hoisting convert_layout out of nested control flow does not append
+// extra iter_args to the surrounding loops to avoid an LLVM translation crash.
+
+// CHECK-LABEL: bwd_kernel_dk_dv
+// CHECK: scf.for {{.*}} iter_args(%{{[a-z0-9_]+}} = %{{[a-z0-9_]+}}, %{{[a-z0-9_]+}} = %{{[a-z0-9_]+}}) ->
+// CHECK: scf.for {{.*}} iter_args(%{{[a-z0-9_]+}} = %{{[a-z0-9_]+}}, %{{[a-z0-9_]+}} = %{{[a-z0-9_]+}}) ->
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [8, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 1], instrShape = [16, 16, 32], isTransposed = true}>
+#mma1 = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 2], instrShape = [16, 16, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @bwd_kernel_dk_dv(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg4: i32, %arg5: i1, %arg6: i1) attributes {noinline = false} {
+    %c2_i32 = arith.constant 2 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 4}>>
+    %cst_1 = arith.constant dense<0.000000e+00> : tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+    %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 4}>>
+    %cst_3 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma>
+    %cst_4 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma1>
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %0 = arith.cmpi sgt, %arg4, %c0_i32 : i32
+    cf.cond_br %0, ^bb2, ^bb1
+  ^bb1:  // pred: ^bb0
+    %1 = arith.cmpi slt, %arg4, %c0_i32 : i32
+    cf.cond_br %1, ^bb2, ^bb3
+  ^bb2:  // 2 preds: ^bb0, ^bb1
+    tt.return
+  ^bb3:  // pred: ^bb1
+    %16:2 = scf.for %arg46 = %c0_i32 to %c2_i32 step %c1_i32 iter_args(%arg47 = %cst_3, %arg48 = %cst_4) -> (tensor<16x16xf32, #mma>, tensor<16x16xf32, #mma1>)  : i32 {
+      %24 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<32x16x!tt.ptr<bf16>, #blocked>
+      %25 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<32x16x!tt.ptr<bf16>, #blocked>
+      %26:2 = scf.if %arg5 -> (tensor<16x16xf32, #mma>, tensor<16x16xf32, #mma1>) {
+        scf.yield %arg47, %arg48 : tensor<16x16xf32, #mma>, tensor<16x16xf32, #mma1>
+      } else {
+        %28:2 = scf.for %arg49 = %c0_i32 to %c2_i32 step %c1_i32 iter_args(%arg50 = %arg48, %arg51 = %arg47) -> (tensor<16x16xf32, #mma1>, tensor<16x16xf32, #mma>)  : i32 {
+          %29 = tt.load %24 : tensor<32x16x!tt.ptr<bf16>, #blocked>
+          %30 = tt.load %25 : tensor<32x16x!tt.ptr<bf16>, #blocked>
+          %31 = ttg.convert_layout %arg51 : tensor<16x16xf32, #mma> -> tensor<16x16xf32, #mma1>
+          %32 = ttg.convert_layout %30 : tensor<32x16xbf16, #blocked> -> tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 4}>>
+          %33 = tt.dot %cst_2, %32, %31 : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 4}>> * tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 4}>> -> tensor<16x16xf32, #mma1>
+          %34 = ttg.convert_layout %33 : tensor<16x16xf32, #mma1> -> tensor<16x16xf32, #mma>
+          %35 = ttg.convert_layout %29 : tensor<32x16xbf16, #blocked> -> tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 4}>>
+          %36 = tt.dot %cst_2, %35, %arg50 : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 4}>> * tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 4}>> -> tensor<16x16xf32, #mma1>
+          scf.yield %36, %34 : tensor<16x16xf32, #mma1>, tensor<16x16xf32, #mma>
+        }
+        scf.yield %28#1, %28#0 : tensor<16x16xf32, #mma>, tensor<16x16xf32, #mma1>
+      }
+      %27:2 = scf.if %arg6 -> (tensor<16x16xf32, #mma>, tensor<16x16xf32, #mma1>) {
+        scf.yield %26#0, %26#1 : tensor<16x16xf32, #mma>, tensor<16x16xf32, #mma1>
+      } else {
+        ttg.barrier all
+        %28 = tt.dot %cst, %cst_1, %26#0 : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<16x16xf32, #mma>
+        %29 = tt.dot %cst_2, %cst_0, %26#1 : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 4}>> * tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 4}>> -> tensor<16x16xf32, #mma1>
+        scf.yield %28, %29 : tensor<16x16xf32, #mma>, tensor<16x16xf32, #mma1>
+      }
+      scf.yield %27#0, %27#1 : tensor<16x16xf32, #mma>, tensor<16x16xf32, #mma1>
+    }
+    %17 = arith.mulf %16#1, %cst_4 : tensor<16x16xf32, #mma1>
+    %18 = arith.truncf %17 : tensor<16x16xf32, #mma1> to tensor<16x16xbf16, #mma1>
+    %19 = arith.truncf %16#0 : tensor<16x16xf32, #mma> to tensor<16x16xbf16, #mma>
+    %20 = tt.splat %arg2 : !tt.ptr<bf16> -> tensor<16x16x!tt.ptr<bf16>, #blocked1>
+    %21 = ttg.convert_layout %18 : tensor<16x16xbf16, #mma1> -> tensor<16x16xbf16, #blocked1>
+    tt.store %20, %21 : tensor<16x16x!tt.ptr<bf16>, #blocked1>
+    %22 = tt.splat %arg3 : !tt.ptr<bf16> -> tensor<16x16x!tt.ptr<bf16>, #blocked1>
+    %23 = ttg.convert_layout %19 : tensor<16x16xbf16, #mma> -> tensor<16x16xbf16, #blocked1>
+    tt.store %22, %23 : tensor<16x16x!tt.ptr<bf16>, #blocked1>
+    tt.return
+  }
+}
