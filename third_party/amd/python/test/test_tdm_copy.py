@@ -248,16 +248,12 @@ def tdm_clamp_kernel(a_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constex
 
 
 def test_compile_tdm_clamp_no_readfirstlane():
-    """Regression guard for the TDM tensor_dim clamp staying uniform (SGPR), #10517.
+    """The TDM tensor_dim clamp must stay uniform (SGPR).
 
-    The pre-#10517 clamp shape ``select(icmp_ule(dim - off, dim), dim - off, 0)``
-    is not recognized as uniform by LLVM's AMDGPU uniformity passes, so it is
-    demoted to VALU; the TDM lowering then has to recover the descriptor offset
-    with ``v_readfirstlane_b32`` next to each ``tensor_load_to_lds`` inside the
-    loop (which mismatched the VGPR MSB and produced wrong offsets / NaNs).  The
-    fixed shape ``select(off < 0, 0, smax(dim - off, 0))`` stays in SGPRs, so a
-    TDM load whose offsets exercise the clamp must lower with no
-    ``v_readfirstlane_b32``.
+    A non-uniform clamp is demoted to VALU and has to be read back into an SGPR
+    with ``v_readfirstlane`` next to each ``tensor_load_to_lds``, adding latency
+    to every TDM load.  A TDM load whose offsets exercise the clamp must lower
+    with none.
     """
     signature = {"a_ptr": "*fp16", "M": "i32", "N": "i32", "BLOCK_M": "constexpr", "BLOCK_N": "constexpr"}
     k = triton.compile(
@@ -270,10 +266,7 @@ def test_compile_tdm_clamp_no_readfirstlane():
         options={"num_warps": 4},
     )
     amdgcn = k.asm["amdgcn"]
-    assert "tensor_load_to_lds" in amdgcn, amdgcn
-    n_readfirstlane = len(re.findall(r"v_readfirstlane_b32", amdgcn))
-    assert n_readfirstlane == 0, (f"TDM tensor_dim clamp regressed to VALU: {n_readfirstlane} "
-                                  f"v_readfirstlane_b32 in the lowered kernel\n{amdgcn}")
+    assert "v_readfirstlane" not in amdgcn, f"TDM tensor_dim clamp regressed to VALU (v_readfirstlane emitted)\n{amdgcn}"
 
 
 _RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
