@@ -1,8 +1,12 @@
 from __future__ import annotations
 import ast
+import hashlib
 import textwrap
 import inspect
 from typing import Tuple, List, Dict, Callable, TypeVar, Optional
+from collections import defaultdict
+from dataclasses import dataclass
+from types import ModuleType, SimpleNamespace
 
 import math
 import numpy as np
@@ -10,18 +14,45 @@ import numpy as np
 import triton
 import triton.language as tl
 import dataclasses
-from dataclasses import dataclass
 
+from triton.backends import BaseBackend
 from triton.language.semantic import TritonSemantic
-from triton.runtime.jit import KernelInterface
+from triton.runtime.jit import KernelInterface, JitFunctionInfo, compute_cache_key, get_full_name, native_specialize_impl
 from triton.tools.tensor_descriptor import TensorDescriptor
 from .errors import InterpreterError
 from functools import partial
 from .._C.libtriton import interpreter as _interpreter  # type: ignore
 from .._C.libtriton import ir as _ir  # type: ignore
 from .._utils import _tuple_create
+from .. import knobs
 
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class InterpretedLaunchOptions:
+    num_warps: int = 4
+    num_ctas: int = 1
+    num_stages: int = 3
+    enable_fp_fusion: bool = True
+    launch_cooperative_grid: bool = False
+    extern_libs: tuple = ()
+
+
+class InterpretedLazyDict:
+
+    def __init__(self, data):
+        self.data = data
+        self.extras = []
+
+    def get(self):
+        for func, args in self.extras:
+            self.data = self.data | func(*args)
+        self.extras.clear()
+        return self.data
+
+    def add(self, func, args):
+        self.extras.append((func, args))
 
 
 @dataclass
@@ -1510,15 +1541,155 @@ class InterpretedFunction(KernelInterface[T]):
         self.rewriter = FunctionRewriter(fn, **kwargs)
         self.kwargs = kwargs
         self.pre_run_hooks = []
+        self.device_caches = defaultdict(dict)
+        self.kernel_key_caches = defaultdict(dict)
+        self._load_hooks_run = set()
+        self.module = inspect.getmodule(fn)
+        self.name = fn.__name__
+        self.metadata_group = {}
+        self.full_name = get_full_name(fn)
+        self.hash = hashlib.sha256(
+            f"{self.full_name}:{fn.__code__.co_filename}:{fn.__code__.co_firstlineno}".encode("utf-8")).hexdigest()
 
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
+        from .jit import _normalize_ty  # TODO: modularize
+        annotations = {name: _normalize_ty(ty) for name, ty in inspect.get_annotations(fn).items()}
+        self.constexpr_names = {name for name in self.arg_names if annotations.get(name) == "constexpr"}
+
+    def _parse_options(self, kwargs):
+        return InterpretedLaunchOptions(
+            num_warps=kwargs.get("num_warps", 4),
+            num_ctas=kwargs.get("num_ctas", 1),
+            num_stages=kwargs.get("num_stages", 3),
+            enable_fp_fusion=kwargs.get("enable_fp_fusion", True),
+            launch_cooperative_grid=kwargs.get("launch_cooperative_grid", False),
+            extern_libs=tuple(kwargs.get("extern_libs", {}).items()),
+        )
+
+    def _get_specialization(self, bound_args):
+        specialization = []
+        for name, value in bound_args.items():
+            if name in self.constexpr_names:
+                specialization.append(("constexpr", value))
+            else:
+                specialization.append(native_specialize_impl(BaseBackend, value, False, True, True))
+        return specialization
+
+    def _get_compile_info(self, key, signature, device, constexprs, options, attrs, warmup):
+        target = triton.runtime.driver.active.get_current_target()
+        return {
+            "key": key,
+            "signature": signature,
+            "device": device,
+            "constants": constexprs,
+            "num_warps": options.num_warps,
+            "num_ctas": options.num_ctas,
+            "num_stages": options.num_stages,
+            "enable_fp_fusion": options.enable_fp_fusion,
+            "launch_cooperative_grid": options.launch_cooperative_grid,
+            "extern_libs": options.extern_libs,
+            "configs": [attrs],
+            "specialization_data": "",
+            "is_warmup": warmup,
+        }, target
+
+    def _ensure_kernel_loaded(self, key, options):
+        if key in self._load_hooks_run:
+            return
+        if knobs.runtime.kernel_load_start_hook is not None:
+            knobs.runtime.kernel_load_start_hook(self.module, None, self.name, self.metadata_group, self.hash)
+        if knobs.runtime.kernel_load_end_hook is not None:
+            knobs.runtime.kernel_load_end_hook(self.module, None, self.name, self.metadata_group, self.hash)
+        self._load_hooks_run.add(key)
+
+    def _launch_metadata(self, grid, kernel_metadata, bound_args):
+        if knobs.runtime.launch_enter_hook is None:
+            return None
+        ret = InterpretedLazyDict({"name": self.name, "function": self.fn, "stream": None})
+        if self.kwargs.get("launch_metadata") is not None:
+            ret.add(self.kwargs["launch_metadata"], (grid, kernel_metadata, bound_args))
+        return ret
+
+    def _call_jit_hook(self, hook, key, signature, target, device, constexprs, options, attrs, warmup):
+        if not hook:
+            return None
+        arg_reprs = ", ".join([f"{name}: {ty}" for name, ty in signature.items()])
+        repr_str = (
+            f"{self.fn.__qualname__}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, "
+            f"num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}, "
+            f"launch_cooperative_grid={options.launch_cooperative_grid}]({arg_reprs})"
+        )
+        compile = {
+            "key": key,
+            "signature": signature,
+            "device": device,
+            "constants": constexprs,
+            "num_warps": options.num_warps,
+            "num_ctas": options.num_ctas,
+            "num_stages": options.num_stages,
+            "enable_fp_fusion": options.enable_fp_fusion,
+            "launch_cooperative_grid": options.launch_cooperative_grid,
+            "extern_libs": options.extern_libs,
+            "configs": [attrs],
+            "specialization_data": "",
+            "is_warmup": warmup,
+        }
+        return hook(
+            key=key,
+            repr=repr_str,
+            fn=JitFunctionInfo(self.module, self.fn.__qualname__, self),
+            compile=compile,
+            is_manual_warmup=warmup,
+            already_compiled=False,
+        )
 
     def run(self, *args, grid, warmup, **kwargs):
         if warmup:
             return
+        kernel_kwargs = {k: v for k, v in kwargs.items() if k in self.arg_names}
+        launch_kwargs = {k: v for k, v in kwargs.items() if k not in self.arg_names}
+        launch_kwargs["debug"] = launch_kwargs.get("debug", self.kwargs.get("debug")) or knobs.runtime.debug
+        launch_kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
+        bound_args = inspect.signature(self.fn).bind_partial(*args, **kernel_kwargs).arguments
+        options = self._parse_options(launch_kwargs)
+        device = triton.runtime.driver.active.get_current_device()
+        specialization = self._get_specialization(bound_args)
+        kernel_cache = self.device_caches[device]
+        kernel_key_cache = self.kernel_key_caches[device]
+        key = compute_cache_key(kernel_key_cache, specialization, launch_kwargs)
+        signature = {name: spec[0] for name, spec in zip(self.arg_names, specialization)}
+        constexprs = {name: value for name, value in bound_args.items() if name in self.constexpr_names}
+        attrs = {}
+        _, target = self._get_compile_info(key, signature, device, constexprs, options, attrs, warmup)
+        if key not in kernel_cache:
+            if self._call_jit_hook(knobs.runtime.jit_cache_hook, key, signature, target, device, constexprs, options,
+                                   attrs, warmup):
+                return None
+            kernel_cache[key] = SimpleNamespace(
+                name=self.name,
+                num_warps=options.num_warps,
+                num_ctas=options.num_ctas,
+                num_stages=options.num_stages,
+                enable_fp_fusion=options.enable_fp_fusion,
+                launch_cooperative_grid=options.launch_cooperative_grid,
+                extern_libs=options.extern_libs,
+            )
+            self._call_jit_hook(knobs.runtime.jit_post_compile_hook, key, signature, target, device, constexprs,
+                                options, attrs, warmup)
+        kernel_metadata = kernel_cache[key]
+        self._ensure_kernel_loaded((device, key), options)
+        if callable(grid):
+            grid = grid(bound_args)
+        launch_metadata = self._launch_metadata(grid, kernel_metadata, bound_args)
+        if launch_metadata is not None:
+            knobs.runtime.launch_enter_hook(launch_metadata)
         fn = self.rewrite()
-        return GridExecutor(fn, self.arg_names, grid, self.pre_run_hooks)(*args, **kwargs)
+        try:
+            return GridExecutor(fn, self.arg_names, grid, self.pre_run_hooks)(*args, **kernel_kwargs)
+        finally:
+            if launch_metadata is not None and knobs.runtime.launch_exit_hook is not None:
+                knobs.runtime.launch_exit_hook(launch_metadata)
 
     def add_pre_run_hook(self, hook):
         assert callable(hook)
