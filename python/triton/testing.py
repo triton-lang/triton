@@ -96,6 +96,10 @@ def _collect_proton_scope_times(database, prefix):
     return [time for _, time in sorted(scope_times)]
 
 
+def _is_current_cuda_stream_capturing(torch):
+    return torch.cuda.is_available() and torch.cuda.is_current_stream_capturing()
+
+
 def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
     """
     Benchmark the runtime of the provided function.
@@ -111,6 +115,9 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     """
     import torch
     assert return_mode in ["min", "max", "mean", "median", "all"]
+    if _is_current_cuda_stream_capturing(torch):
+        raise RuntimeError("do_bench_cudagraph cannot benchmark while the current CUDA stream is being captured. "
+                           "Warm up autotuned kernels before entering torch.cuda.graph(...).")
 
     with torch.cuda.stream(torch.cuda.Stream()):
         # warmup
@@ -184,12 +191,16 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
+    import torch
+    if _is_current_cuda_stream_capturing(torch):
+        raise RuntimeError(
+            "do_bench_cudagraph_proton cannot benchmark while the current CUDA stream is being captured. "
+            "Warm up autotuned kernels before entering torch.cuda.graph(...).")
+
     target = runtime.driver.active.get_current_target()
     if target.backend != "cuda":
         raise RuntimeError("do_bench_cudagraph_proton requires the NVIDIA backend because Proton does not reliably "
                            "attribute CUDA graph replay launches to scopes on HIP.")
-
-    import torch
 
     with torch.cuda.stream(torch.cuda.Stream()):
         fn()
