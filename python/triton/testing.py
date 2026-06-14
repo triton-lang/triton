@@ -38,7 +38,7 @@ def _quantile(a, q):
         t = point - lower
         return (1 - t) * a[lower] + t * a[upper]
 
-    return [get_quantile(q) for q in q]
+    return [get_quantile(qi) for qi in q]
 
 
 def _summarize_statistics(times, quantiles, return_mode):
@@ -241,21 +241,28 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
     """
-    Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
-    the 20-th and 80-th performance percentile.
+    Benchmark the runtime of the provided function. By default, returns the mean runtime of :code:`fn` as a single float.
 
     :param fn: Function to benchmark
     :type fn: Callable
-    :param warmup: Warmup time (in ms)
+    :param warmup: Warmup time (in ms). Controls how long the function is run before timing begins.
     :type warmup: int
-    :param rep: Repetition time (in ms)
+    :param rep: Repetition time (in ms). Controls the total duration of the timed runs.
     :type rep: int
     :param grad_to_none: Reset the gradient of the provided tensor to None
     :type grad_to_none: torch.tensor, optional
-    :param quantiles: Performance percentile to return in addition to the median.
+    :param quantiles: If provided, return these quantiles of the runtime distribution instead
+        of a summary statistic. For example, ``[0.2, 0.5, 0.8]`` returns the 20th, 50th, and
+        80th percentile runtimes in ms. When set, ``return_mode`` is ignored.
     :type quantiles: list[float], optional
-    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
+    :param return_mode: The summary statistic to return when ``quantiles`` is not set.
+        ``"mean"`` and ``"median"`` return a single float. ``"min"`` and ``"max"`` return
+        the fastest and slowest run respectively. ``"all"`` returns the raw list of
+        per-run timings in ms. Default is ``"mean"``.
     :type return_mode: str
+    :return: A single float by default, a list of floats if ``quantiles`` is provided,
+        or a list of all per-run timings if ``return_mode="all"``.
+    :rtype: float | list[float]
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
@@ -505,7 +512,7 @@ class Mark:
         self.benchmarks = benchmarks
 
     def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False,
-             save_precision=6, **kwrags):
+             save_precision=6, **kwargs):
         import os
 
         import matplotlib.pyplot as plt
@@ -526,7 +533,7 @@ class Mark:
 
             row_mean, row_min, row_max = [], [], []
             for y in bench.line_vals:
-                ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwrags)
+                ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
                 try:
                     y_mean, y_min, y_max = ret
                 except TypeError:
@@ -574,6 +581,26 @@ class Mark:
         return df
 
     def run(self, show_plots=False, print_data=False, save_path='', return_df=False, **kwargs):
+        """
+        Run all benchmarks and optionally display, print, or save the results.
+
+        :param show_plots: If ``True``, display the matplotlib plot interactively after each benchmark.
+        :type show_plots: bool
+        :param print_data: If ``True``, print the results dataframe to stdout after each benchmark.
+        :type print_data: bool
+        :param save_path: Directory path to save results. If provided, saves a ``.png`` plot,
+            a ``.csv`` of the mean values, and a ``results.html`` index for each benchmark.
+            The directory is created if it does not exist.
+        :type save_path: str
+        :param return_df: If ``True``, return the results as a :class:`pandas.DataFrame` (or a list
+            of DataFrames if multiple benchmarks were provided).
+        :type return_df: bool
+        :param kwargs: Additional keyword arguments forwarded to the benchmarked function.
+        :return: A :class:`pandas.DataFrame` if a single :class:`Benchmark` was provided and
+            ``return_df=True``. A list of :class:`pandas.DataFrame` if multiple benchmarks were
+            provided and ``return_df=True``. ``None`` otherwise.
+        :rtype: pandas.DataFrame | list[pandas.DataFrame] | None
+        """
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
