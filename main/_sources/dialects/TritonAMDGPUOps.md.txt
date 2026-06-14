@@ -121,16 +121,19 @@ _Copy data based on descriptor from global memory to local memory asynchronously
 Syntax:
 
 ```
-operation ::= `amdg.async_tdm_copy_global_to_local` $desc `[` $indices `]` `into` $result `,` `pred` `=` $pred (`,` `barrier` `=` $barrier^)?
+operation ::= `amdg.async_tdm_copy_global_to_local` $desc `into` $result (`,` `barrier` `=` $barrier^)?
               attr-dict `:` qualified(type($desc)) (`,` qualified(type($barrier))^)? `->` qualified(type($result))
 ```
 
 This operation copies data from global memory to local memory
 asynchronously. This is analogue to tt.load except the data are copied to
 local memory pointed by `result` instead of a distributed tensor. The data
-copied depends on the global memory pointed to by `desc`. Set `pred` to
-false will disable the copy. This operation does not support shared memory
-swizzling.
+copied depends on the global memory pointed to by `desc`. This operation
+does not support shared memory swizzling.
+
+The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
+(global offset, bounds, pred); this op applies only the per-warp distribution
+and inherits `pred` from the descriptor.
 The operation can also take an optional 64bit LDS barrier address, in which case
 it sends an "LDS atomic arrive" to signal its completion.
 
@@ -161,9 +164,7 @@ PartitionedSharedEncoding additionally requires `K = popcount(hint)`
 to be a multiple of `numLogicalPieces` (the hinted path doesn't
 support multi-instruction slicing).
 
-Traits: `AttrSizedOperandSegments`
-
-Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `PredicatedOpInterface`, `TDMOpInterface`
+Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `TDMOpInterface`
 
 #### Attributes:
 
@@ -178,9 +179,7 @@ Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `PredicatedOpInterfac
 | Operand | Description |
 | :-----: | ----------- |
 | `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
-| `indices` | variadic of 32-bit signless integer |
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
-| `pred` | 32-bit signless integer |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 #### Results:
@@ -198,7 +197,7 @@ _Copy data based on descriptor from local memory to global memory asynchronously
 Syntax:
 
 ```
-operation ::= `amdg.async_tdm_copy_local_to_global` $desc `[` $indices `]` `from` $src (`,` `barrier` `=` $barrier^)?
+operation ::= `amdg.async_tdm_copy_local_to_global` $desc `from` $src (`,` `barrier` `=` $barrier^)?
               attr-dict `:` qualified(type($src)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
 ```
 
@@ -207,10 +206,11 @@ asynchronously. This is analogue to tt.store except the data are copied from
 local memory pointed by `src` instead of a distributed tensor. The copy
 destination depends on the global memory pointed to by `desc`. This
 operation does not support shared memory padding or swizzling.
+
+The descriptor must be positioned beforehand by
+amdg.update_tensor_descriptor; this op applies only the per-warp distribution.
 The operation can also take an optional 64bit LDS barrier address, in which case
 it sends an "LDS atomic arrive" to signal its completion.
-
-Traits: `AttrSizedOperandSegments`
 
 Interfaces: `MBarrierOpInterface`, `TDMOpInterface`
 
@@ -226,7 +226,6 @@ Interfaces: `MBarrierOpInterface`, `TDMOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
-| `indices` | variadic of 32-bit signless integer |
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 

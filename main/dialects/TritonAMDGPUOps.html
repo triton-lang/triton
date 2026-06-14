@@ -439,16 +439,18 @@ If the pending count becomes zero, the phase changes (is decremented in a wrapar
 <h2><code class="docutils literal notranslate"><span class="pre">amdg.async_tdm_copy_global_to_local</span></code> (triton::amdgpu::AsyncTDMCopyGlobalToLocalOp)<a class="headerlink" href="#amdg-async-tdm-copy-global-to-local-triton-amdgpu-asynctdmcopyglobaltolocalop" title="Link to this heading"></a></h2>
 <p><em>Copy data based on descriptor from global memory to local memory asynchronously</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_copy_global_to_local` $desc `[` $indices `]` `into` $result `,` `pred` `=` $pred (`,` `barrier` `=` $barrier^)?
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_copy_global_to_local` $desc `into` $result (`,` `barrier` `=` $barrier^)?
               attr-dict `:` qualified(type($desc)) (`,` qualified(type($barrier))^)? `-&gt;` qualified(type($result))
 </pre></div>
 </div>
 <p>This operation copies data from global memory to local memory
 asynchronously. This is analogue to tt.load except the data are copied to
 local memory pointed by <code class="docutils literal notranslate"><span class="pre">result</span></code> instead of a distributed tensor. The data
-copied depends on the global memory pointed to by <code class="docutils literal notranslate"><span class="pre">desc</span></code>. Set <code class="docutils literal notranslate"><span class="pre">pred</span></code> to
-false will disable the copy. This operation does not support shared memory
-swizzling.
+copied depends on the global memory pointed to by <code class="docutils literal notranslate"><span class="pre">desc</span></code>. This operation
+does not support shared memory swizzling.</p>
+<p>The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
+(global offset, bounds, pred); this op applies only the per-warp distribution
+and inherits <code class="docutils literal notranslate"><span class="pre">pred</span></code> from the descriptor.
 The operation can also take an optional 64bit LDS barrier address, in which case
 it sends an “LDS atomic arrive” to signal its completion.</p>
 <p><code class="docutils literal notranslate"><span class="pre">warp_used_hint</span></code> is an optional i32 bitmask performance hint for
@@ -473,8 +475,7 @@ per-warp offset and active-mask predicate fall out of the same
 <p>PartitionedSharedEncoding additionally requires <code class="docutils literal notranslate"><span class="pre">K</span> <span class="pre">=</span> <span class="pre">popcount(hint)</span></code>
 to be a multiple of <code class="docutils literal notranslate"><span class="pre">numLogicalPieces</span></code> (the hinted path doesn’t
 support multi-instruction slicing).</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TDMOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TDMOpInterface</span></code></p>
 <section id="id5">
 <h3>Attributes:<a class="headerlink" href="#id5" title="Link to this heading"></a></h3>
 <table>
@@ -495,14 +496,8 @@ support multi-instruction slicing).</p>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">desc</span></code></p></td>
 <td><p>Tensor descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::TensorDescType</span></code>) in Triton IR type system</p></td>
 </tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">indices</span></code></p></td>
-<td><p>variadic of 32-bit signless integer</p></td>
-</tr>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
-</tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">pred</span></code></p></td>
-<td><p>32-bit signless integer</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
@@ -530,7 +525,7 @@ support multi-instruction slicing).</p>
 <h2><code class="docutils literal notranslate"><span class="pre">amdg.async_tdm_copy_local_to_global</span></code> (triton::amdgpu::AsyncTDMCopyLocalToGlobalOp)<a class="headerlink" href="#amdg-async-tdm-copy-local-to-global-triton-amdgpu-asynctdmcopylocaltoglobalop" title="Link to this heading"></a></h2>
 <p><em>Copy data based on descriptor from local memory to global memory asynchronously</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_copy_local_to_global` $desc `[` $indices `]` `from` $src (`,` `barrier` `=` $barrier^)?
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_copy_local_to_global` $desc `from` $src (`,` `barrier` `=` $barrier^)?
               attr-dict `:` qualified(type($src)) (`,` qualified(type($barrier))^)? `-&gt;` qualified(type($desc))
 </pre></div>
 </div>
@@ -538,10 +533,11 @@ support multi-instruction slicing).</p>
 asynchronously. This is analogue to tt.store except the data are copied from
 local memory pointed by <code class="docutils literal notranslate"><span class="pre">src</span></code> instead of a distributed tensor. The copy
 destination depends on the global memory pointed to by <code class="docutils literal notranslate"><span class="pre">desc</span></code>. This
-operation does not support shared memory padding or swizzling.
+operation does not support shared memory padding or swizzling.</p>
+<p>The descriptor must be positioned beforehand by
+amdg.update_tensor_descriptor; this op applies only the per-warp distribution.
 The operation can also take an optional 64bit LDS barrier address, in which case
 it sends an “LDS atomic arrive” to signal its completion.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TDMOpInterface</span></code></p>
 <section id="id8">
 <h3>Attributes:<a class="headerlink" href="#id8" title="Link to this heading"></a></h3>
@@ -562,13 +558,10 @@ it sends an “LDS atomic arrive” to signal its completion.</p>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">desc</span></code></p></td>
 <td><p>Tensor descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::TensorDescType</span></code>) in Triton IR type system</p></td>
 </tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">indices</span></code></p></td>
-<td><p>variadic of 32-bit signless integer</p></td>
-</tr>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
 </tbody>
