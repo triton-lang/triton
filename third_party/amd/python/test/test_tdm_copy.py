@@ -231,6 +231,44 @@ def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
                         f"HINT_B=0b{HINT_B:08b}, got {n_tdm}\n{amdgcn}")
 
 
+@gluon.jit
+def tdm_clamp_kernel(a_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
+    """Single TDM load whose offsets exercise the tensor_dim OOB clamp."""
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+
+    off_m = ttgl.program_id(axis=0) * BLOCK_M
+    off_n = ttgl.program_id(axis=1) * BLOCK_N
+    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                       block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    buf = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    ttgl.amd.gfx1250.tdm.async_load(desc, [off_m, off_n], buf)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+    buf.load(layout=BLOCKED_LAYOUT)
+
+
+def test_compile_tdm_clamp_no_readfirstlane():
+    """The TDM tensor_dim clamp must stay uniform (SGPR).
+
+    A non-uniform clamp is demoted to VALU and has to be read back into an SGPR
+    with ``v_readfirstlane`` next to each ``tensor_load_to_lds``, adding latency
+    to every TDM load.  A TDM load whose offsets exercise the clamp must lower
+    with none.
+    """
+    signature = {"a_ptr": "*fp16", "M": "i32", "N": "i32", "BLOCK_M": "constexpr", "BLOCK_N": "constexpr"}
+    k = triton.compile(
+        gluon._runtime.GluonASTSource(
+            fn=tdm_clamp_kernel,
+            signature=signature,
+            constexprs={"BLOCK_M": 64, "BLOCK_N": 64},
+        ),
+        target=GPUTarget("hip", "gfx1250", 32),
+        options={"num_warps": 4},
+    )
+    amdgcn = k.asm["amdgcn"]
+    assert "v_readfirstlane" not in amdgcn, f"TDM tensor_dim clamp regressed to VALU (v_readfirstlane emitted)\n{amdgcn}"
+
+
 _RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
 
 
