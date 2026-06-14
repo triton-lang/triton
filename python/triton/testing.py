@@ -249,8 +249,9 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     :type warmup: int
     :param rep: Repetition time (in ms). Controls the total duration of the timed runs.
     :type rep: int
-    :param grad_to_none: Reset the gradient of the provided tensor to None
-    :type grad_to_none: torch.tensor, optional
+    :param grad_to_none: Reset the gradient of the provided tensors to None before each run,
+        to avoid gradient accumulation affecting timing.
+    :type grad_to_none: list[torch.Tensor], optional
     :param quantiles: If provided, return these quantiles of the runtime distribution instead
         of a summary statistic. For example, ``[0.2, 0.5, 0.8]`` returns the 20th, 50th, and
         80th percentile runtimes in ms. When set, ``return_mode`` is ignored.
