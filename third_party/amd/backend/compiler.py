@@ -481,7 +481,7 @@ class HIPBackend(BaseBackend):
         #
         # TODO(tyb0807): Disabled when using MIR swap/dump because the value is
         # not serializable to/from MIR YAML
-        if not (knobs.amd.swap_mir or knobs.amd.dump_mir):
+        if options.arch != "gfx1250" and not (knobs.amd.swap_mir or knobs.amd.dump_mir):
             amd.set_all_fn_arg_inreg(kernel_fn)
 
         if knobs.compilation.enable_asan:
