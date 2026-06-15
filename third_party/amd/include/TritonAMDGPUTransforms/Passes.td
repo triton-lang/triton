@@ -322,7 +322,7 @@ def TritonAMDGPUUpdateAsyncWaitCount: Pass<"tritonamdgpu-update-async-wait-count
   ];
 }
 
-def TritonAMDGPUPrepareTDMMerge: Pass<"tritonamdgpu-prepare-tdm-merge", "mlir::ModuleOp"> {
+def TritonAMDGPUMaterializeTDMMerge: Pass<"tritonamdgpu-materialize-tdm-merge", "mlir::ModuleOp"> {
   let summary = "Materialize explicit fused TDM copy operations";
 
   let description = [{

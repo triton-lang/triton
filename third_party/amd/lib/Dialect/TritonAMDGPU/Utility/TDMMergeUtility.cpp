@@ -4,11 +4,12 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "mlir/IR/Builders.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include <cassert>
+#include <cstdint>
 
 #ifdef DEBUG_TYPE
 #undef DEBUG_TYPE
@@ -21,6 +22,19 @@ namespace {
 
 using TDMCopyGlobalToLocalOp =
     ::mlir::triton::amdgpu::AsyncTDMCopyGlobalToLocalOp;
+
+// Mergeability rules:
+//   1. Members must have verifier-legal `warp_used_hint` masks.
+//   2. Members must not carry an `mbarrier`.
+//   3. Hints must be pairwise-disjoint; their union need not be a valid hint.
+//   4. Group size must be 2, 3, or 4.
+//   5. Members must be consecutive in one block when materialized.
+//   6. Members must have same-rank descriptors.
+//   7. Members must share the same `cache` modifier.
+struct TDMMergeGroupInfo {
+  SmallVector<Operation *> members;
+  SmallVector<uint32_t> memberHints;
+};
 
 // Generated hint for one member of an auto-merge group.
 uint32_t getGeneratedMergeHint(unsigned groupIdx, unsigned groupSize,
@@ -41,7 +55,7 @@ uint32_t getGeneratedMergeHint(unsigned groupIdx, unsigned groupSize,
   return stridePattern << groupIdx;
 }
 
-// Check if hint generation can stamp this copy.
+// Check if hint generation can apply to this copy.
 bool isGeneratedMergeHintCandidate(TDMCopyGlobalToLocalOp op) {
   if (op.getWarpUsedHintAttr() || op.getBarrier())
     return false;
@@ -59,7 +73,7 @@ size_t getTDMDescriptorRank(TDMCopyGlobalToLocalOp op) {
   return op.getDesc().getType().getShape().size();
 }
 
-// Stamp each member of an adjacent group with a disjoint generated hint.
+// Assign each member of an adjacent group a disjoint generated hint.
 void assignGeneratedMergeHints(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
                                unsigned numWarps) {
   auto groupSize = static_cast<unsigned>(group.size());
@@ -70,7 +84,7 @@ void assignGeneratedMergeHints(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
   }
 }
 
-// Split an adjacent run into largest supported groups and stamp hints.
+// Split an adjacent run into largest supported groups and assign hints.
 void assignGeneratedMergeHintsGreedily(
     MutableArrayRef<TDMCopyGlobalToLocalOp> run, unsigned numWarps) {
   // Generated 3-way hints only support 4 or 8 warps, so cap auto-merge at 8.
@@ -95,7 +109,7 @@ void assignGeneratedMergeHintsGreedily(
   }
 }
 
-// Stamp generated hints onto already-adjacent unhinted copy runs.
+// Assign generated hints to already-adjacent unhinted copy runs.
 void prepareGeneratedTDMMergeHintsImpl(ModuleOp mod) {
   llvm::SmallSetVector<Block *, 8> blocks;
   mod->walk(
@@ -137,7 +151,7 @@ bool canMergeWith(ArrayRef<Operation *> members,
 
 // Build merge groups from an adjacent run of hinted TDM copies.
 void emitMergeGroup(MutableArrayRef<Operation *> run,
-                    TDMMergeGroupMap &result) {
+                    SmallVectorImpl<TDMMergeGroupInfo> &result) {
   auto hintOf = [](Operation *op) {
     return static_cast<uint32_t>(
         cast<TDMCopyGlobalToLocalOp>(op).getWarpUsedHintAttr().getInt());
@@ -164,7 +178,6 @@ void emitMergeGroup(MutableArrayRef<Operation *> run,
       TDMMergeGroupInfo info;
       info.members.assign(members.begin(), members.end());
       info.memberHints.assign(hints.begin(), hints.end());
-      info.lastInProgramOrder = info.members.back();
       LLVM_DEBUG({
         llvm::dbgs() << "[tdm-merge] group of " << groupSize << " ops\n";
         for (auto [idx, op] : llvm::enumerate(info.members))
@@ -172,9 +185,7 @@ void emitMergeGroup(MutableArrayRef<Operation *> run,
                        << llvm::Twine::utohexstr(info.memberHints[idx]) << " "
                        << *op << "\n";
       });
-      auto shared = std::make_shared<TDMMergeGroupInfo>(std::move(info));
-      for (auto *op : shared->members)
-        result[op] = shared;
+      result.push_back(std::move(info));
       run = run.drop_front(groupSize);
     } else {
       run = run.drop_front(1);
@@ -189,8 +200,6 @@ bool tdmAutoMergeEnabled() {
   return !disabled.value_or(false);
 }
 
-} // namespace
-
 // Generate hints for adjacent unhinted copies when the env knob allows it.
 void prepareGeneratedTDMMergeHints(ModuleOp mod) {
   if (!tdmAutoMergeEnabled())
@@ -199,8 +208,8 @@ void prepareGeneratedTDMMergeHints(ModuleOp mod) {
 }
 
 // Find groups of consecutive, hinted TDM copies.
-TDMMergeGroupMap computeTDMMergeGroups(ModuleOp mod) {
-  TDMMergeGroupMap result;
+SmallVector<TDMMergeGroupInfo> computeTDMMergeGroups(ModuleOp mod) {
+  SmallVector<TDMMergeGroupInfo> result;
 
   llvm::SmallSetVector<Block *, 8> blocks;
   mod->walk(
@@ -240,11 +249,7 @@ static void materializeTDMMergeGroup(const TDMMergeGroupInfo &group) {
                        .getType();
   for (auto [member, hint] : llvm::zip_equal(group.members, group.memberHints)) {
     auto copy = cast<TDMCopyGlobalToLocalOp>(member);
-    auto updatedDesc =
-        triton::amdgpu::UpdateTensorDescriptorOp::create(
-            builder, copy.getLoc(), copy.getDesc().getType(), copy.getDesc(),
-            copy.getIndices(), ValueRange(), copy.getPred());
-    descs.push_back(updatedDesc.getResult());
+    descs.push_back(copy.getDesc());
     dests.push_back(copy.getResult());
     hints.push_back(static_cast<int32_t>(hint));
   }
@@ -261,22 +266,14 @@ static void materializeTDMMergeGroup(const TDMMergeGroupInfo &group) {
     member->erase();
 }
 
+} // namespace
+
 void materializeTDMMergeGroups(ModuleOp mod) {
   prepareGeneratedTDMMergeHints(mod);
   auto groups = computeTDMMergeGroups(mod);
 
-  llvm::DenseSet<TDMMergeGroupInfo *> seen;
-  SmallVector<std::shared_ptr<TDMMergeGroupInfo>, 8> uniqueGroups;
-  mod->walk([&](TDMCopyGlobalToLocalOp op) {
-    auto it = groups.find(op);
-    if (it == groups.end())
-      return;
-    if (seen.insert(it->second.get()).second)
-      uniqueGroups.push_back(it->second);
-  });
-
-  for (const auto &group : uniqueGroups)
-    materializeTDMMergeGroup(*group);
+  for (const auto &group : groups)
+    materializeTDMMergeGroup(group);
 }
 
 } // namespace mlir::triton::AMD

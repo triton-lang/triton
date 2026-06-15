@@ -1,8 +1,8 @@
 """Tests for adjacent TDM-copy merging on gfx1250.
 
 Explicit `async_load_fused` calls, and adjacent `async_load`s with compatible
-`warp_used_hint` masks, should lower to one `tensor_load_to_lds`.  The prepare
-pass can also generate hints for adjacent unhinted copies unless
+`warp_used_hint` masks, should lower to one `tensor_load_to_lds`.  The
+materialization pass can also generate hints for adjacent unhinted copies unless
 `TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1` is set.
 
 Compile-only tests count AMDGCN instructions; runtime tests compare against a
@@ -60,6 +60,12 @@ def _store_tile(out_ptr, value, off_m, off_n, M, N, BLOCK_M: ttgl.constexpr, BLO
     ttgl.store(out_ptr + offs, value, mask=mask)
 
 
+@gluon.jit
+def _position_input(desc, off_m, off_n):
+    """Position a descriptor before the adjacent TDM-copy run."""
+    return ttgl.amd.gfx1250.tdm.update_tensor_descriptor(desc, add_offsets=[off_m, off_n], pred=True)
+
+
 # 2-way merge: adjacent loads fuse when their hints are disjoint.
 
 
@@ -87,9 +93,11 @@ def vector_add_tdm_kernel(
 
     a_desc, a_buf = _stage_input(a_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
     b_desc, b_buf = _stage_input(b_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
+    a_desc = _position_input(a_desc, off_m, off_n)
+    b_desc = _position_input(b_desc, off_m, off_n)
 
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_m, off_n], a_buf, warp_used_hint=HINT_A)
-    ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_m, off_n], b_buf, warp_used_hint=HINT_B)
+    ttgl.amd.gfx1250.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A)
+    ttgl.amd.gfx1250.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B)
     ttgl.amd.gfx1250.tdm.async_wait(0)  # "wait for everything"; correct under any merge
 
     c = a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT)
@@ -184,11 +192,16 @@ def _compile_amdgcn(fn, ptr_names, constexprs, *, ptr_ty="*fp16", num_warps=8) -
     signature = {p: ptr_ty for p in ptr_names}
     signature["M"] = signature["N"] = "i32"
     signature.update({name: "constexpr" for name in constexprs})
-    k = triton.compile(
-        gluon._runtime.GluonASTSource(fn=fn, signature=signature, constexprs=constexprs),
-        target=GPUTarget("hip", "gfx1250", 32),
-        options={"num_warps": num_warps},
-    )
+    # These tests assert current codegen details.  The Triton disk-cache key
+    # includes libtriton and language files, but not the Python backend pipeline,
+    # so force recompilation to avoid stale assembly after pass-pipeline edits.
+    with triton.knobs.compilation.scope():
+        triton.knobs.compilation.always_compile = True
+        k = triton.compile(
+            gluon._runtime.GluonASTSource(fn=fn, signature=signature, constexprs=constexprs),
+            target=GPUTarget("hip", "gfx1250", 32),
+            options={"num_warps": num_warps},
+        )
     return k.asm["amdgcn"]
 
 
@@ -306,10 +319,13 @@ def vector_add_tdm_kernel_3way(
     a_desc, a_buf = _stage_input(a_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
     b_desc, b_buf = _stage_input(b_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
     c_desc, c_buf = _stage_input(c_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
+    a_desc = _position_input(a_desc, off_m, off_n)
+    b_desc = _position_input(b_desc, off_m, off_n)
+    c_desc = _position_input(c_desc, off_m, off_n)
 
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_m, off_n], a_buf, warp_used_hint=HINT_A)
-    ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_m, off_n], b_buf, warp_used_hint=HINT_B)
-    ttgl.amd.gfx1250.tdm.async_load(c_desc, [off_m, off_n], c_buf, warp_used_hint=HINT_C)
+    ttgl.amd.gfx1250.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A)
+    ttgl.amd.gfx1250.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B)
+    ttgl.amd.gfx1250.tdm.async_load(c_desc, dest=c_buf, warp_used_hint=HINT_C)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
     out = a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT) + c_buf.load(layout=BLOCKED_LAYOUT)
@@ -391,11 +407,15 @@ def vector_add_tdm_kernel_4way(
     b_desc, b_buf = _stage_input(b_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
     c_desc, c_buf = _stage_input(c_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
     d_desc, d_buf = _stage_input(d_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
+    a_desc = _position_input(a_desc, off_m, off_n)
+    b_desc = _position_input(b_desc, off_m, off_n)
+    c_desc = _position_input(c_desc, off_m, off_n)
+    d_desc = _position_input(d_desc, off_m, off_n)
 
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_m, off_n], a_buf, warp_used_hint=HINT_A)
-    ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_m, off_n], b_buf, warp_used_hint=HINT_B)
-    ttgl.amd.gfx1250.tdm.async_load(c_desc, [off_m, off_n], c_buf, warp_used_hint=HINT_C)
-    ttgl.amd.gfx1250.tdm.async_load(d_desc, [off_m, off_n], d_buf, warp_used_hint=HINT_D)
+    ttgl.amd.gfx1250.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A)
+    ttgl.amd.gfx1250.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B)
+    ttgl.amd.gfx1250.tdm.async_load(c_desc, dest=c_buf, warp_used_hint=HINT_C)
+    ttgl.amd.gfx1250.tdm.async_load(d_desc, dest=d_buf, warp_used_hint=HINT_D)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
     out = (a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT) +
@@ -478,11 +498,15 @@ def heterogeneous_tdm_merge_kernel(
     b_desc, b_buf = _stage_input(b_ptr, M, N, BLOCK_M, BLOCK_N_B, B_SHARED_LAYOUT)
     as_desc, as_buf = _stage_input(as_ptr, M, N, BLOCK_SCALE_M, BLOCK_SCALE_N, SCALE_SHARED_LAYOUT)
     bs_desc, bs_buf = _stage_input(bs_ptr, M, N, BLOCK_SCALE_M, BLOCK_SCALE_N, SCALE_SHARED_LAYOUT)
+    a_desc = _position_input(a_desc, off_m, off_n)
+    b_desc = _position_input(b_desc, off_m, off_n)
+    as_desc = _position_input(as_desc, off_m, off_n)
+    bs_desc = _position_input(bs_desc, off_m, off_n)
 
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_m, off_n], a_buf, warp_used_hint=HINT_A)
-    ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_m, off_n], b_buf, warp_used_hint=HINT_B)
-    ttgl.amd.gfx1250.tdm.async_load(as_desc, [off_m, off_n], as_buf, warp_used_hint=HINT_AS)
-    ttgl.amd.gfx1250.tdm.async_load(bs_desc, [off_m, off_n], bs_buf, warp_used_hint=HINT_BS)
+    ttgl.amd.gfx1250.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A)
+    ttgl.amd.gfx1250.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B)
+    ttgl.amd.gfx1250.tdm.async_load(as_desc, dest=as_buf, warp_used_hint=HINT_AS)
+    ttgl.amd.gfx1250.tdm.async_load(bs_desc, dest=bs_buf, warp_used_hint=HINT_BS)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
 
@@ -530,9 +554,11 @@ def vector_add_tdm_kernel_cache(
 
     a_desc, a_buf = _stage_input(a_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
     b_desc, b_buf = _stage_input(b_ptr, M, N, BLOCK_M, BLOCK_N, SHARED_LAYOUT)
+    a_desc = _position_input(a_desc, off_m, off_n)
+    b_desc = _position_input(b_desc, off_m, off_n)
 
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_m, off_n], a_buf, warp_used_hint=HINT_A, cache_modifier=CACHE_A)
-    ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_m, off_n], b_buf, warp_used_hint=HINT_B, cache_modifier=CACHE_B)
+    ttgl.amd.gfx1250.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A, cache_modifier=CACHE_A)
+    ttgl.amd.gfx1250.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B, cache_modifier=CACHE_B)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
     c = a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT)

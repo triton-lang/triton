@@ -3,13 +3,14 @@
 
 namespace mlir {
 
-#define GEN_PASS_DEF_TRITONAMDGPUPREPARETDMMERGE
+#define GEN_PASS_DEF_TRITONAMDGPUMATERIALIZETDMMERGE
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
 namespace {
 
-struct TritonAMDGPUPrepareTDMMergePass
-    : impl::TritonAMDGPUPrepareTDMMergeBase<TritonAMDGPUPrepareTDMMergePass> {
+struct TritonAMDGPUMaterializeTDMMergePass
+    : impl::TritonAMDGPUMaterializeTDMMergeBase<
+          TritonAMDGPUMaterializeTDMMergePass> {
   void runOnOperation() override {
     mlir::triton::AMD::materializeTDMMergeGroups(getOperation());
   }
