@@ -83,6 +83,8 @@ void fuseGroup(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
   auto first = group.front();
   OpBuilder builder(first);
 
+  // The fused op keeps the original descriptors and destinations as variadic
+  // operands; only the per-member warp masks are synthesized here.
   SmallVector<Value, 4> descs;
   SmallVector<Value, 4> dests;
   SmallVector<int32_t, 4> hints;
@@ -110,9 +112,12 @@ void fuseGroup(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
       builder, first.getLoc(), tokenType, descs, dests,
       builder.getDenseI32ArrayAttr(hints), cache);
 
+  // Wait-count/update passes follow async tokens, so make every old member
+  // token name the newly inserted fused copy.
   for (TDMCopyGlobalToLocalOp copy : group)
     copy.getToken().replaceAllUsesWith(fused.getToken());
 
+  // Erase in reverse program order to avoid invalidating later ops in `group`.
   for (TDMCopyGlobalToLocalOp copy : llvm::reverse(group))
     copy.erase();
 }
@@ -140,12 +145,15 @@ void autoFuseTDMCopies(ModuleOp mod) {
       if (run.empty())
         return;
 
+      // Generated hint patterns currently cover up to 8 warps.
       unsigned numWarps = triton::gpu::lookupNumWarps(run.front());
       if (numWarps > 8) {
         run.clear();
         return;
       }
 
+      // Split one consecutive run into compatible fused groups. A single
+      // incompatible op is skipped so a later compatible suffix can still fuse.
       MutableArrayRef<TDMCopyGlobalToLocalOp> remaining(run);
       while (remaining.size() >= 2) {
         size_t maxGroupSize = remaining.size();
@@ -179,6 +187,8 @@ void autoFuseTDMCopies(ModuleOp mod) {
       run.clear();
     };
 
+    // A non-candidate op is a hard boundary: auto-fusion is intentionally only
+    // for adjacent copies with no intervening work.
     for (Operation &op : llvm::make_early_inc_range(*block)) {
       auto copy = dyn_cast<TDMCopyGlobalToLocalOp>(&op);
       if (copy && isAutoFuseCandidate(copy)) {
