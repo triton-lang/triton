@@ -116,8 +116,9 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     import torch
     assert return_mode in ["min", "max", "mean", "median", "all"]
     if _is_current_cuda_stream_capturing(torch):
-        raise RuntimeError("do_bench_cudagraph cannot benchmark while the current CUDA stream is being captured. "
-                           "Warm up autotuned kernels before entering torch.cuda.graph(...).")
+        raise RuntimeError(
+            "do_bench_cudagraph cannot benchmark while the current CUDA stream is being captured. "
+            "Warm up autotuned kernels before entering torch.cuda.graph(...).")
 
     with torch.cuda.stream(torch.cuda.Stream()):
         # warmup
@@ -192,10 +193,6 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
     import torch
-    if _is_current_cuda_stream_capturing(torch):
-        raise RuntimeError(
-            "do_bench_cudagraph_proton cannot benchmark while the current CUDA stream is being captured. "
-            "Warm up autotuned kernels before entering torch.cuda.graph(...).")
 
     target = runtime.driver.active.get_current_target()
     if target.backend != "cuda":
