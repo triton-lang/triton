@@ -37,6 +37,14 @@ def is_expert_sched_supported(arch):
     return arch in ["gfx1250"]
 
 
+def is_expert_scheduling_enabled(arch):
+    if not is_expert_sched_supported(arch):
+        return False
+    if knobs.amd.use_expert_scheduling is None:
+        return True
+    return knobs.amd.use_expert_scheduling
+
+
 def is_fpsan_supported(arch):
     return arch in ["gfx942", "gfx950", "gfx1250"]
 
@@ -536,7 +544,7 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
-        if is_expert_sched_supported(options.arch):
+        if is_expert_scheduling_enabled(options.arch):
             flags.append("amdgpu-expert-scheduling-mode")
         features = disable_real_true16_feature(options.arch)
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
