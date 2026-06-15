@@ -125,18 +125,24 @@ struct AnnotateBufferOpSplitSafetyPass
       return signalPassFailure();
 
     UnitAttr unit = UnitAttr::get(&getContext());
-    auto annotateIfSafe = [&](Operation *op, Value offsets) {
+    auto annotateIfSafe = [&](Operation *op, Value offsets, Value mask) {
+      // Don't split a masked op: #10362 lifts the offset's uniform part into
+      // soffset, which is added unconditionally and bypasses the voffset
+      // out-of-bounds masking, so masked-off lanes would still access memory.
+      // (All-true masks are nulled earlier, so any mask here is real.)
+      if (mask)
+        return;
       if (isNonNegative(offsets, *solver))
         op->setAttr(kSplitSafeAttrName, unit);
     };
 
     mod.walk([&](Operation *op) {
       if (auto load = dyn_cast<tta::BufferLoadOp>(op))
-        annotateIfSafe(op, load.getOffsets());
+        annotateIfSafe(op, load.getOffsets(), load.getMask());
       else if (auto store = dyn_cast<tta::BufferStoreOp>(op))
-        annotateIfSafe(op, store.getOffsets());
+        annotateIfSafe(op, store.getOffsets(), store.getMask());
       else if (auto loadLds = dyn_cast<tta::BufferLoadToLocalOp>(op))
-        annotateIfSafe(op, loadLds.getOffsets());
+        annotateIfSafe(op, loadLds.getOffsets(), loadLds.getMask());
     });
   }
 };

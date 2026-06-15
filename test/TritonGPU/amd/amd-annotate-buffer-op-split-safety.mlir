@@ -18,6 +18,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // -----
 
 #blocked0 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
     // CHECK-LABEL: @split_all_nonneg
     // CHECK: amdg.buffer_load
@@ -28,6 +30,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
         %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked0>
         %offset = arith.addi %base, %range : tensor<128xi32, #blocked0>
         %ret = amdg.buffer_load %arg0[%offset] : tensor<128xf32, #blocked0>
+        tt.return
+    }
+    // CHECK-LABEL: @no_split_masked_buffer_ops
+    // CHECK: amdg.buffer_load
+    // CHECK-NOT: amdgpu.split_soffset_safe
+    // CHECK: amdg.buffer_store
+    // CHECK-NOT: amdgpu.split_soffset_safe
+    // CHECK: amdg.buffer_load_to_local
+    // CHECK-NOT: amdgpu.split_soffset_safe
+    tt.func @no_split_masked_buffer_ops(%arg0: !tt.ptr<f32>, %value: tensor<128xf32, #blocked0>,
+                                        %dst: !ttg.memdesc<128xf32, #shared0, #smem, mutable>,
+                                        %mask: tensor<128xi1, #blocked0>) {
+        %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked0>
+        %0 = amdg.buffer_load %arg0[%range], %mask : tensor<128xf32, #blocked0>
+        amdg.buffer_store %value, %arg0[%range], %mask : tensor<128xf32, #blocked0>
+        %1 = amdg.buffer_load_to_local %arg0[%range] mask = %mask into %dst : <f32>[tensor<128xi32, #blocked0>] -> <128xf32, #shared0, #smem, mutable>
         tt.return
     }
 }
