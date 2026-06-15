@@ -241,16 +241,24 @@ def update_tensor_descriptor(desc: tensor_descriptor, add_offsets: List[ttgl.con
 
 
 @builtin
-def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], dest: shared_memory_descriptor,
-               pred=True, mbarrier: shared_memory_descriptor = None, warp_used_hint=None, cache_modifier="",
-               _semantic=None) -> None:
+def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor] = None,
+               dest: shared_memory_descriptor = None, pred=None, mbarrier: shared_memory_descriptor = None,
+               warp_used_hint=None, cache_modifier="", _semantic=None) -> None:
     """Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.
+
+    This op expects a prior ``update_tensor_descriptor`` to position the
+    descriptor for the load offsets and bounds.  Doing this explicitly lets the
+    developer control when and where the descriptor update happens, which has
+    performance implications for downstream code generation.  For convenience,
+    ``offsets`` (and optionally ``pred``) may be passed here, in which case an
+    ``update_tensor_descriptor`` is emitted right before the load.
 
     Args:
         src (tensor_descriptor): the source tensor descriptor.
-        offsets (List[int]): the offsets from the base pointer in the tensor descriptor.
+        offsets (List[int], optional): if given, the offsets from the base
+            pointer used to position the descriptor before the load.
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
-        pred (bool, optional): Predicate to enable or disable the load. Defaults to True.
+        pred (bool, optional): if given, predicate to enable or disable the load.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
         warp_used_hint (int, optional): Bitmask selecting which warps issue
             the TDM copy (bit ``n`` => warp ``n``); cleared warps become HW
@@ -263,8 +271,13 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
             rejected by the verifier.
         cache_modifier (str, optional): Cache behavior.
     """
-    offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
-    pred = _handle_i32_pred(pred, _semantic)
+    assert dest is not None, "async_load requires a dest shared_memory_descriptor"
+    if offsets:
+        eff_pred = True if pred is None else pred
+        src = update_tensor_descriptor(src, add_offsets=offsets, pred=eff_pred, clamp_bounds=True, _semantic=_semantic)
+    elif pred is not None:
+        src = update_tensor_descriptor(src, pred=pred, _semantic=_semantic)
+
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
@@ -273,8 +286,8 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
     if warp_used_hint is not None:
         warp_used_hint = int(warp_used_hint)
 
-    _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, offset_handles, dest.handle, pred.handle,
-                                                            mbarrier_handle, cache_modifier, warp_used_hint)
+    _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, dest.handle, mbarrier_handle, cache_modifier,
+                                                            warp_used_hint)
 
 
 @builtin
@@ -318,22 +331,30 @@ def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descri
 
 
 @builtin
-def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], src: shared_memory_descriptor,
-                mbarrier: shared_memory_descriptor = None, cache_modifier="", _semantic=None) -> None:
+def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor] = None,
+                src: shared_memory_descriptor = None, mbarrier: shared_memory_descriptor = None, cache_modifier="",
+                _semantic=None) -> None:
     """Store a block of tensor specified in tensor descriptor from shared memory to global memory asynchronously.
+
+    See :func:`async_load` for how the descriptor is positioned (a prior
+    ``update_tensor_descriptor`` or the ``offsets`` convenience).  Stores take no
+    ``pred``.
 
     Args:
         dest (tensor_descriptor): the destination tensor descriptor.
-        offsets (List[int]): the offsets from the base pointer in the tensor descriptor.
+        offsets (List[int], optional): if given, the offsets from the base
+            pointer used to position the descriptor before the store.
         src (shared_memory_descriptor): the shared memory source to load the data.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
-    offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
+    assert src is not None, "async_store requires a src shared_memory_descriptor"
+    if offsets:
+        dest = update_tensor_descriptor(dest, add_offsets=offsets, clamp_bounds=True, _semantic=_semantic)
+
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
     cache_modifier = _semantic._str_to_store_cache_modifier(cache_modifier)
-    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, offset_handles, src.handle, mbarrier_handle,
-                                                            cache_modifier)
+    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, src.handle, mbarrier_handle, cache_modifier)
 
 
 @builtin

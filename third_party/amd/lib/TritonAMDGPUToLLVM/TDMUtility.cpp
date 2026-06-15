@@ -522,6 +522,9 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
   auto v4i32Ty = VectorType::get(4, i32_ty);
   auto v8i32Ty = VectorType::get(8, i32_ty);
   Value group0 = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
+  // Default pred = 1 so a descriptor that is never given an explicit pred still
+  // loads/stores instead of silently no-op'ing (copies inherit group0[0]).
+  group0 = vecSet(b, group0, 0, b.i32_val(1));
   Value globalAddr = b.ptrtoint(i64_ty, srcPtr);
   group0 = vecSet(b, group0, 2, b.trunc(i32_ty, globalAddr));
   Value g0_3 = b.trunc(i32_ty, b.lshr(globalAddr, v32));
@@ -755,7 +758,7 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        Value barrierPtr,
                        const triton::LinearLayout &sharedLayout, Value ctaId,
                        bool isStore, ArrayRef<unsigned> warpsPerCTA,
-                       std::optional<uint32_t> warpUsedHint) {
+                       std::optional<uint32_t> warpUsedHint, bool isPureForm) {
   size_t numDims = offset.size();
   assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors.");
   assert(!dstPtrs.empty() && "dstPtrs cannot be empty");
@@ -899,6 +902,11 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   if (!pred)
     pred = vecGet(b, groups[0], 0);
 
+  // Pure form inherits pred from the descriptor (group0[0]); the per-warp
+  // active mask below still applies.
+  if (isPureForm)
+    pred = vecGet(b, groups[0], 0);
+
   // Predicate off redundant warps: `((warpId ^ i0) & warpFreeMask) == 0`.
   // `warpFreeMask` covers positions NOT in basisBits (or, without a hint,
   // bits above log2(K)).
@@ -943,7 +951,9 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
     g1_1 =
         b.or_(g1_1, b.and_(b.lshr(b.ptrtoint(i32_ty, barrierPtr), b.i32_val(3)),
                            b.i32_val(0x00FFFF)));
-  } else {
+  } else if (!isPureForm) {
+    // Clear the barrier-enable bit when no barrier is supplied; pure form
+    // inherits the descriptor's barrier state.
     g1_0 = b.and_(g1_0, b.i32_val(0xFFFBFFFF));
   }
   group1 = vecSet(b, group1, 0, g1_0);
@@ -1231,14 +1241,15 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                       const triton::LinearLayout &instrSharedLayout,
                       Value ctaId, bool isLoad, ArrayRef<unsigned> warpsPerCTA,
                       int32_t auxBits,
-                      std::optional<uint32_t> warpUsedHint = std::nullopt) {
+                      std::optional<uint32_t> warpUsedHint = std::nullopt,
+                      bool isPureForm = false) {
   SmallVector<Value, 4> groups(desc.begin(),
                                desc.begin() + (numDims > 2 ? 4 : 2));
   fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
                     effectiveBlockShape, numWarps, padInterval, padAmount,
                     groups, globalOffset, instrDstPtrs, pred, multicastMask,
                     barrier, instrSharedLayout, ctaId, !isLoad, warpsPerCTA,
-                    warpUsedHint);
+                    warpUsedHint, isPureForm);
 
   emitTDMRawIntrinsic(rewriter, loc, groups, isLoad, auxBits);
 }
@@ -1262,7 +1273,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value barrierPtr, bool isLoad,
                       const triton::LinearLayout &sharedLayout,
                       Attribute encoding, Value ctaId, int32_t auxBits,
-                      std::optional<uint32_t> warpUsedHint) {
+                      std::optional<uint32_t> warpUsedHint, bool isPureForm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   size_t numDims = blockShape.size();
   assert(numDims <= 5);
@@ -1287,7 +1298,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                      to_vector(blockShape), numWarps, padInterval, padAmount,
                      to_vector(offset), dstPtrs, pred, multicastMask,
                      barrierPtr, sharedLayout, ctaId, isLoad, warpsPerCTA,
-                     auxBits, warpUsedHint);
+                     auxBits, warpUsedHint, isPureForm);
     return;
   }
 
@@ -1351,7 +1362,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
     emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
                      effectiveBlockShape, numWarps, padInterval, padAmount,
                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
-                     sliceLayout, ctaId, isLoad, warpsPerCTA, auxBits);
+                     sliceLayout, ctaId, isLoad, warpsPerCTA, auxBits,
+                     warpUsedHint, isPureForm);
   }
 }
 

@@ -2,6 +2,7 @@
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTRANSFORMS_UTILITY_H_
 
 #include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -60,6 +61,12 @@ getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
 // warps and gathers per warp to the actual problem size.
 triton::gpu::SliceEncodingAttr
 getTDMGatherScatterIndexEncoding(Operation *op, RankedTensorType indicesType);
+
+// Emit an amdg.update_tensor_descriptor that advances `desc` by `addOffsets`
+// (with clamp_bounds) and sets `pred` when non-null.  Returns the new
+// descriptor.
+Value createUpdateTDMDescriptorOp(OpBuilder &builder, Location loc, Value desc,
+                                  ValueRange addOffsets, Value pred);
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // and |vecSize| with which dot operand |inputValue| is fed into if possible.

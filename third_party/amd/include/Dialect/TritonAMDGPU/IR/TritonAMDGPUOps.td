@@ -724,9 +724,8 @@ def AsyncCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_copy_local_to_global", [
 // AsyncTDMCopyGlobalToLocalOp
 //===----------------------------------------------------------------------===//
 
-def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local", [AttrSizedOperandSegments,
+def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local", [
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>,
     DeclareOpInterfaceMethods<TDMOpInterface>]> {
   let summary = "Copy data based on descriptor from global memory to local memory asynchronously";
 
@@ -734,9 +733,12 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     This operation copies data from global memory to local memory
     asynchronously. This is analogue to tt.load except the data are copied to
     local memory pointed by `result` instead of a distributed tensor. The data
-    copied depends on the global memory pointed to by `desc`. Set `pred` to
-    false will disable the copy. This operation does not support shared memory
-    swizzling.
+    copied depends on the global memory pointed to by `desc`. This operation
+    does not support shared memory swizzling.
+
+    The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
+    (global offset, bounds, pred); this op applies only the per-warp distribution
+    and inherits `pred` from the descriptor.
     The operation can also take an optional 64bit LDS barrier address, in which case
     it sends an "LDS atomic arrive" to signal its completion.
 
@@ -770,9 +772,7 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
-    Variadic<I32>:$indices,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
-    I32:$pred,
     Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     OptionalAttr<I32Attr>:$warp_used_hint
@@ -781,26 +781,21 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
   let results = (outs TTG_AsyncToken:$token);
 
   let builders = [
-    OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred), [{
-      return build($_builder, $_state, desc, indices, result, pred,
+    OpBuilder<(ins "Value":$desc, "Value":$result), [{
+      return build($_builder, $_state, desc, result,
                    /*barrier=*/static_cast<mlir::Value>(nullptr),
                    /*cache=*/triton::CacheModifier::NONE,
                    /*warp_used_hint=*/IntegerAttr());
     }]>,
-    OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred, "Value":$barrier), [{
-      return build($_builder, $_state, desc, indices, result, pred, barrier,
+    OpBuilder<(ins "Value":$desc, "Value":$result, "Value":$barrier), [{
+      return build($_builder, $_state, desc, result, barrier,
                    /*cache=*/triton::CacheModifier::NONE,
-                   /*warp_used_hint=*/IntegerAttr());
-    }]>,
-    OpBuilder<(ins "Value":$desc, "ValueRange":$indices, "Value":$result, "Value":$pred,
-                   "Value":$barrier, "::mlir::triton::CacheModifier":$cache), [{
-      return build($_builder, $_state, desc, indices, result, pred, barrier, cache,
                    /*warp_used_hint=*/IntegerAttr());
     }]>
   ];
 
   let assemblyFormat = [{
-    $desc `[` $indices `]` `into` $result `,` `pred` `=` $pred (`,` `barrier` `=` $barrier^)?
+    $desc `into` $result (`,` `barrier` `=` $barrier^)?
     attr-dict `:` qualified(type($desc)) (`,` qualified(type($barrier))^)? `->` qualified(type($result))
   }];
 
@@ -838,7 +833,7 @@ def AsyncTDMFusedCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_fused_copy_global
 // AsyncTDMCopyLocalToGlobalOp
 //===----------------------------------------------------------------------===//
 
-def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global", [AttrSizedOperandSegments,
+def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global", [
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
     DeclareOpInterfaceMethods<TDMOpInterface>]> {
   let summary = "Copy data based on descriptor from local memory to global memory asynchronously";
@@ -849,20 +844,22 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global",
     local memory pointed by `src` instead of a distributed tensor. The copy
     destination depends on the global memory pointed to by `desc`. This
     operation does not support shared memory padding or swizzling.
+
+    The descriptor must be positioned beforehand by
+    amdg.update_tensor_descriptor; this op applies only the per-warp distribution.
     The operation can also take an optional 64bit LDS barrier address, in which case
     it sends an "LDS atomic arrive" to signal its completion.
   }];
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
-    Variadic<I32>:$indices,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
     Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache
   );
 
   let assemblyFormat = [{
-    $desc `[` $indices `]` `from` $src (`,` `barrier` `=` $barrier^)?
+    $desc `from` $src (`,` `barrier` `=` $barrier^)?
     attr-dict `:` qualified(type($src)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
   }];
 

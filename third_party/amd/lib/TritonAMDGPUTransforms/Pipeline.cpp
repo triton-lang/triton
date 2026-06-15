@@ -51,10 +51,21 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
     scf::YieldOp::create(elseB, loc, zeroValues);
     return ifOp;
   }
-  // TDM ops with I32 predicates need explicit type conversion since the
-  // generic PredicatedOpInterface path produces I1 masks.
-  if (isa<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp,
-          triton::amdgpu::AsyncTDMGatherOp>(op)) {
+  // Gate the copy by chaining a pred-only update_tensor_descriptor onto its
+  // descriptor: the chained update inherits the positioning and narrows pred to
+  // the loop predicate.
+  if (auto copyOp = dyn_cast<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(op)) {
+    rewriter.setInsertionPoint(op);
+    auto predI32 = arith::ExtUIOp::create(rewriter, op->getLoc(),
+                                          rewriter.getI32Type(), pred);
+    auto updated = triton::amdgpu::UpdateTensorDescriptorOp::create(
+        rewriter, op->getLoc(), copyOp.getDesc().getType(), copyOp.getDesc(),
+        /*add_offsets=*/ValueRange{}, /*set_bounds=*/ValueRange{},
+        /*pred=*/predI32);
+    copyOp.getDescMutable().assign(updated.getResult());
+    return op;
+  }
+  if (auto gatherOp = dyn_cast<triton::amdgpu::AsyncTDMGatherOp>(op)) {
     auto predicatedOp = cast<tt::PredicatedOpInterface>(op);
     rewriter.setInsertionPoint(op);
     auto predI32 = arith::ExtUIOp::create(
