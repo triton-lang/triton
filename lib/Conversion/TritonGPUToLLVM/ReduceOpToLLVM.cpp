@@ -466,13 +466,13 @@ private:
     });
     SmallVector<int64_t> offsets(op.getNumOperands());
     int64_t offset = 0;
-    int numBanks = targetInfo.getSharedMemoryBanks();
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       unsigned idx = indices[i];
       offsets[idx] = offset;
       auto inputTy = op.getInputTypes()[idx];
       auto vecBitwidth = triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout,
                                                          getBitwidth(inputTy));
+      int numBanks = targetInfo.getSharedMemoryBanks(vecBitwidth);
       auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
       auto bytes = getNumScratchElemsSwizzledCvt(srcLayout, dstLayout,
                                                  getBitwidth(inputTy), numBanks,

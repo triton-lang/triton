@@ -101,7 +101,7 @@ public:
                           StringRef message, StringRef file, StringRef func,
                           int line) const = 0;
 
-  virtual int getSharedMemoryBanks() const { return 32; }
+  virtual int getSharedMemoryBanks(int) const { return 32; }
 
   virtual int getSharedAddressSpace() const = 0;
 

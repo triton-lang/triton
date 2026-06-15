@@ -133,11 +133,12 @@ int TargetInfo::getSharedMemorySize() const {
   return targetFeatures.getSharedMemorySize();
 }
 
-int TargetInfo::getSharedMemoryBanks() const {
+int TargetInfo::getSharedMemoryBanks(int vecBitwidth) const {
   switch (getISAFamily()) {
   case ISAFamily::GFX1250:
-  case ISAFamily::CDNA4:
     return 64;
+  case ISAFamily::CDNA4:
+    return vecBitwidth == 128 ? 64 : 32;
   default:
     return 32;
   }

@@ -814,12 +814,12 @@ void init_gluon_ir(py::module_ &m) {
                return ttg::bankConflictsMemDesc(regLayout, smemLayout,
                                                 bitwidth);
              tt::AMD::TargetInfo targetInfo(arch->str());
-             int numBanks = targetInfo.getSharedMemoryBanks();
              auto vecBitwidth = std::max<int32_t>(
                  32, smemLayout.getInDimSize(StringAttr::get(
                          smemLayout.getInDimNames().begin()->getContext(),
                          "vector")) *
                          bitwidth);
+             int numBanks = targetInfo.getSharedMemoryBanks(vecBitwidth);
              auto [dstTile, srcTile] =
                  targetInfo.getSharedLdStTiles(vecBitwidth);
              (void)srcTile;
