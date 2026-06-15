@@ -77,9 +77,10 @@ static Value createTDMAsyncCopy(scf::ForOp forOp, const TDMStore &store,
   Value token;
   Value desc = store.desc;
   if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(store.op)) {
+    Value copyDesc = createUpdateTDMDescriptorOp(
+        builder, loc, desc, storeOp.getIndices(), /*pred=*/Value{});
     auto copyOp = ttag::AsyncTDMCopyLocalToGlobalOp::create(
-        builder, loc, desc, storeOp.getIndices(), alloc,
-        /*barrier=*/Value{});
+        builder, loc, copyDesc, alloc, /*barrier=*/Value{});
     token = copyOp.getToken();
   } else {
     auto scatterOp = cast<tt::DescriptorScatterOp>(store.op);
