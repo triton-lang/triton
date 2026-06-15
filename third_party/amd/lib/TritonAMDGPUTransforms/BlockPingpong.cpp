@@ -58,7 +58,7 @@ static bool isLoopVariant(Value val, scf::ForOp forOp) {
     }
     Operation *def = v.getDefiningOp();
     // Values defined outside the loop are loop-invariant; stop traversing.
-    if (!def || !forOp->isAncestor(def))
+    if (!forOp->isAncestor(def))
       continue;
     for (Value operand : def->getOperands())
       worklist.push_back(operand);
