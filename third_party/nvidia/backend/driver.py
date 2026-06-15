@@ -380,6 +380,15 @@ class CudaDriver(GPUDriver):
 
     @staticmethod
     def is_active():
+        # cuInit(0) is not fork-safe (returns CUDA_ERROR_NOT_INITIALIZED in a
+        # process forked after CUDA init), so prefer torch's cached availability
+        # check when torch is already loaded; torch-free usage uses the native probe.
+        torch = sys.modules.get("torch")
+        if torch is not None:
+            try:
+                return torch.cuda.is_available() and torch.version.hip is None
+            except Exception:
+                pass
         return _cuda_driver_is_active()
 
     def map_python_to_cpp_type(self, ty: str) -> str:
