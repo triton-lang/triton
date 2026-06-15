@@ -2,11 +2,11 @@ import importlib
 import inspect
 import types
 
+import pytest
 import torch
 import triton
 import triton.language as tl
 from triton.experimental import gluon
-from triton.experimental.gluon import GluonJITFunction
 import triton.experimental.gluon.language as gl
 from triton_kernels.specialize import ClosureArg, FnSpecs, SpecializationModule, cacheable, specialize
 
@@ -34,19 +34,33 @@ def gluon_template_kernel(o, fn: gl.constexpr, fn_args):
     gl.store(o, cst)
 
 
-def test_specialization_module_preserves_gluon_dialect():
+@triton.jit
+def triton_dialect_template_kernel(o, fn: tl.constexpr, fn_args):
+    cst = fn(1.0, *fn_args)
+    tl.store(o, cst)
+
+
+@pytest.mark.parametrize(
+    "template_fn,specialized_fn,lang_module",
+    [
+        (triton_dialect_template_kernel, identity, "tl"),
+        (gluon_template_kernel, gluon_identity, "gl"),
+    ],
+)
+def test_specialization_module_preserves_dialect(template_fn, specialized_fn, lang_module):
     specializations = SpecializationModule(
-        "specialized_gluon_kernel",
-        kernels=[("kernel", gluon_template_kernel)],
+        f"specialized_{lang_module}_kernel",
+        kernels=[("kernel", template_fn)],
         closure_args={"fn": ClosureArg("fn", "fn_args")},
     )
 
-    module = specializations.get(fn=FnSpecs("identity", gluon_identity))
+    module = specializations.get(fn=FnSpecs("identity", specialized_fn))
 
     assert isinstance(module, types.ModuleType)
-    assert isinstance(module.kernel, GluonJITFunction)
-    assert module.kernel.is_gluon()
-    assert "fn: gl.constexpr = gluon_identity" in module.kernel.src
+    # GluonJITFunction subclasses JITFunction, so exact class equality is required here.
+    assert module.kernel.__class__ is template_fn.__class__
+    assert module.kernel.is_gluon() == template_fn.is_gluon()
+    assert f"fn: {lang_module}.constexpr = {specialized_fn.__name__}" in module.kernel.src
 
 
 def retrieve_fn(module, name):
