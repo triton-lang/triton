@@ -419,21 +419,6 @@ def TT_UnsplatOp : TT_Op<"unsplat", [Pure,
     let hasVerifier = 1;
 }
 
-def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
-                                            DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                                            SameOperandsAndResultElementType]> {
-    let summary = "expand_dims";
-
-    let arguments = (ins TT_Tensor:$src, I32Attr:$axis);
-
-    let results = (outs TT_Tensor:$result);
-
-    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
-
-    let hasCanonicalizeMethod = 1;
-    let hasFolder = 1;
-}
-
 def TT_ReshapeOp : TT_Op<"reshape", [Pure,
                                      SameOperandsAndResultElementType]> {
     let summary = "reinterpret a tensor to a different shape. It may change elements order if the attribute is set.";
@@ -445,15 +430,19 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
 
         If efficient_layout is set, this is a hint that the destination layout should be kept for performance reason.
         The compiler is still free to change it for better performance.
+
+        If require_sliced is set, forward layout propagation requires the
+        source layout to be sliced along the expanded dimension.
     }];
     let builders = [
       OpBuilder<(ins "ArrayRef<int64_t>":$shape, "Value":$src,
                      CArg<"bool", "false">:$allowReorder)>
     ];
 
-    let arguments = (ins TT_Tensor:$src, UnitAttr:$allow_reorder, UnitAttr:$efficient_layout);
+    let arguments = (ins TT_Tensor:$src, UnitAttr:$allow_reorder,
+                      UnitAttr:$efficient_layout, UnitAttr:$require_sliced);
     let results = (outs TT_Tensor:$result);
-    let assemblyFormat = "$src (`allow_reorder` $allow_reorder^)? (`efficient_layout` $efficient_layout^)? attr-dict `:` type($src) `->` type($result)";
+    let assemblyFormat = "$src (`allow_reorder` $allow_reorder^)? (`efficient_layout` $efficient_layout^)? (`require_sliced` $require_sliced^)? attr-dict `:` type($src) `->` type($result)";
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
     let hasVerifier = 1;
