@@ -110,65 +110,80 @@ bool mlir::pipelineTDMStores(scf::ForOp forOp) {
   if (stores.empty())
     return false;
 
-  // Reuse a single allocation across stores with the same src shape/type.
-  // This allows saving shared memory usage. This is safe because every
-  // iteration starts with `wait num=0` before the local_store. We could
-  // pipeline more aggressively if we didn't reuse but there is a tradeoff
-  // with shared memory usage.
-  DenseMap<Operation *, Value> storeToAlloc;
-  DenseMap<std::pair<ArrayRef<int64_t>, Type>, Value> allocs;
+  // Reuse a single allocation across stores with the same src shape/type to
+  // save shared memory. Stores that share an allocation form one "alloc
+  // group". Within an iteration, an alloc group's stores must execute
+  // sequentially with respect to the LDS buffer: each `local_store` must
+  // wait for the previous in-iteration TDM op on the same allocation to
+  // finish reading the buffer before overwriting it.
+  //
+  // To get correct ordering, we maintain exactly one loop-carried token per
+  // allocation that represents the *last* TDM op of the previous iteration for
+  // that allocation. Inside the iteration we thread the token forward through
+  // each store in the group: store 0 waits on the loop-carried token,
+  // store 1 waits on store 0's token... The token of the group's last store is
+  // yielded as the next iteration's loop-carried token. This ensures the last
+  // TDM store of each allocation can overlap with the TDM loads inside the
+  // loop.
+  SmallVector<Value> uniqueAllocs;
+  DenseMap<Operation *, unsigned> storeToAllocIdx;
+  DenseMap<std::pair<ArrayRef<int64_t>, Type>, unsigned> allocKeyToIdx;
   for (const TDMStore &store : stores) {
     RankedTensorType srcTy = store.src.getType();
     auto key = std::make_pair(srcTy.getShape(), srcTy.getElementType());
-    Value &alloc = allocs[key];
-    if (!alloc)
-      alloc = createAlloc(forOp, store);
-    storeToAlloc[store.op] = alloc;
+    // Check if a key already exists, if not create a new allocation
+    auto [it, inserted] = allocKeyToIdx.try_emplace(key, uniqueAllocs.size());
+    if (inserted)
+      uniqueAllocs.push_back(createAlloc(forOp, store));
+    storeToAllocIdx[store.op] = it->second;
   }
 
-  // Create initial "empty" tokens before the loop (one per store).  These
-  // seed the loop-carried token chain; the first iteration's wait will see
-  // num=0 and be a no-op since nothing is in flight yet.
+  // Seed one "empty" loop-carried token per allocation; this is slightly
+  // conservative but the best we can do as we do not have an unitialized token
+  // state.
   OpBuilder preBuilder(forOp);
-  auto tokenTy = ttg::AsyncTokenType::get(forOp.getContext());
   SmallVector<Value> initTokens;
-  for (size_t i = 0; i < stores.size(); ++i) {
+  initTokens.reserve(uniqueAllocs.size());
+  for (size_t i = 0; i < uniqueAllocs.size(); ++i) {
     auto seedWait = ttag::AsyncTDMWait::create(preBuilder, forOp->getLoc(),
                                                ArrayRef<Value>{}, 0);
     initTokens.push_back(seedWait.getRetToken());
   }
 
   // Add one loop-carried token per store.  addIterArgsToLoop splices the
-  // loop body (no clone), so the Operation* pointers in `stores` and
-  // `storeToAlloc` remain valid.
+  // loop body (no clone), so the Operation* pointers in `storeToAllocIdx`
+  // remain valid.
   unsigned firstNewArg = forOp.getBody()->getNumArguments();
   forOp = addIterArgsToLoop(preBuilder, forOp, initTokens);
 
-  // Replace each store with the async TDM sequence, threading the token from
-  // the previous iteration's block arg into the wait and yielding the new
-  // token.
-  SmallVector<Value> newTokens;
-  for (auto [i, store] : llvm::enumerate(stores)) {
-    Value prevToken = forOp.getBody()->getArgument(firstNewArg + i);
-    Value newToken =
-        createTDMAsyncCopy(forOp, store, storeToAlloc[store.op], prevToken);
-    newTokens.push_back(newToken);
+  // `curTokens[i]` is the current in-flight token for `uniqueAllocs[i]`.
+  // It starts at the loop-carried token and advances after each store.
+  SmallVector<Value> curTokens(uniqueAllocs.size());
+  for (size_t i = 0; i < uniqueAllocs.size(); ++i)
+    curTokens[i] = forOp.getBody()->getArgument(firstNewArg + i);
+
+  for (const TDMStore &store : stores) {
+    unsigned aIdx = storeToAllocIdx[store.op];
+    curTokens[aIdx] =
+        createTDMAsyncCopy(forOp, store, uniqueAllocs[aIdx], curTokens[aIdx]);
   }
 
-  // Yield the new tokens so they become the next iteration's block args.
-  appendToForOpYield(forOp, newTokens);
+  // Yield the per-allocation tail tokens so they become the next
+  // iteration's loop-carried tokens.
+  appendToForOpYield(forOp, curTokens);
 
   // After the loop: drain the last in-flight TDM writes using the final
   // tokens, then free the allocation(s).
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
-  unsigned numOrigResults = forOp.getNumResults() - stores.size();
+  unsigned numOrigResults = forOp.getNumResults() - uniqueAllocs.size();
   SmallVector<Value> finalTokens;
-  for (size_t i = 0; i < stores.size(); ++i)
+  finalTokens.reserve(uniqueAllocs.size());
+  for (size_t i = 0; i < uniqueAllocs.size(); ++i)
     finalTokens.push_back(forOp.getResult(numOrigResults + i));
   ttag::AsyncTDMWait::create(builder, forOp->getLoc(), finalTokens, 0);
-  for (auto it : storeToAlloc)
-    ttg::LocalDeallocOp::create(builder, forOp->getLoc(), it.second);
+  for (Value alloc : uniqueAllocs)
+    ttg::LocalDeallocOp::create(builder, forOp->getLoc(), alloc);
 
   return true;
 }
