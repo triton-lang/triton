@@ -4,15 +4,28 @@
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: update_tensor_descriptor_offsets_only
-  // The offsets kwarg bumps global_addr: offsets are sext'd (signed), stride
-  // is zext'd (unsigned), multiplied in i64 (so offsets[0]*stride doesn't
-  // overflow i32), added to global_addr, then re-packed into group0[2..3].
+  // The offsets kwarg bumps global_addr by sum(offset[i]*stride[i]); the address
+  // is advanced in place via a <2xi64> view of the descriptor -- a single i64
+  // add, no per-dword decode/repack.
   // CHECK-NOT: amdg.update_tensor_descriptor
   // CHECK-DAG: llvm.sext{{.*}}i32 to i64
   // CHECK-DAG: llvm.zext{{.*}}i32 to i64
   // CHECK: llvm.mul{{.*}}: i64
+  // The advance reads/writes lane 1 (= group0[2:3], the address) of the <2xi64>
+  // view -- pin the lane index to 1 so a wrong-lane (pred/lds) regression fails.
+  // CHECK: llvm.bitcast{{.*}}vector<4xi32> to vector<2xi64>
+  // CHECK: %[[LANE0:.+]] = llvm.mlir.constant(1 : i32)
+  // CHECK: llvm.extractelement %{{.+}}[%[[LANE0]] : i32] : vector<2xi64>
   // CHECK: llvm.add{{.*}}: i64
-  // CHECK: llvm.insertelement{{.*}}vector<4xi32>
+  // CHECK: %[[LANE1:.+]] = llvm.mlir.constant(1 : i32)
+  // CHECK: llvm.insertelement %{{.+}}, %{{.+}}[%[[LANE1]] : i32] : vector<2xi64>
+  // CHECK: llvm.bitcast{{.*}}vector<2xi64> to vector<4xi32>
+  // The old decode/repack of the address must be gone: no valid-bit mask
+  // (0x7FFFFFFF = 2147483647) and no i64<->i32 split (trunc/lshr/shl).
+  // CHECK-NOT: 2147483647
+  // CHECK-NOT: llvm.trunc
+  // CHECK-NOT: llvm.lshr
+  // CHECK-NOT: llvm.shl
   tt.func public @update_tensor_descriptor_offsets_only(
       %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %dx: i32, %dy: i32)
       -> !tt.tensordesc<64x64xf16, #shared> {

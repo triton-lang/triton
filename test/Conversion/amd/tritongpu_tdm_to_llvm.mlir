@@ -18,6 +18,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // intrinsic call gets the right operand types.
     // CHECK: llvm.insertelement{{.*}} : vector<4xi32>
     // CHECK: llvm.insertelement{{.*}} : vector<8xi32>
+    // The copy advances global_addr in place via a <2xi64> view of group0 (one
+    // i64 add; no ptrtoint/GEP round-trip, no trunc/lshr split).
+    // CHECK: llvm.bitcast{{.*}}vector<4xi32> to vector<2xi64>
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
     %2 = amdg.async_tdm_copy_global_to_local %0 into %1 : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     // CHECK: rocdl.s.wait.tensorcnt 0
