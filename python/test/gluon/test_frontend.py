@@ -3412,7 +3412,7 @@ def infer_layout_for_padded_shared_kernel():
 
 
 @gluon.jit
-def test_convert_padded_shared_with_multicta_kernel():
+def convert_padded_shared_with_multicta_kernel():
     shape: ttgl.constexpr = [512, 128]
     initial_order: ttgl.constexpr = [0, 1]
     layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for(interval_padding_pairs=[[256, 16]],
@@ -3447,7 +3447,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 def test_convert_padded_shared_with_multicta(target):
     # It is to make sure layoutToGluon() handle CGA layout correctly when
     # converting a PaddedSharedEncodingAttr to a PaddedSharedLayout object.
-    run_parser(test_convert_padded_shared_with_multicta_kernel, *make_args(num_ctas=2), target=target)
+    run_parser(convert_padded_shared_with_multicta_kernel, *make_args(num_ctas=2), target=target)
 
 
 @filecheck_test
