@@ -381,6 +381,12 @@ class CudaDriver(GPUDriver):
 
     @staticmethod
     def is_active():
+        # Temporary workaround for torch-loaded processes: cuInit(0) is not
+        # fork-safe after CUDA initialization and can make Triton report no
+        # active driver from forked workers.
+        torch = sys.modules.get("torch")
+        if torch is not None:
+            return torch.cuda.is_available() and torch.version.hip is None
         return _cuda_driver_is_active()
 
     def map_python_to_cpp_type(self, ty: str) -> str:
