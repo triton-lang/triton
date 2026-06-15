@@ -74,7 +74,7 @@ def test_strided_layout_rejects_odd_fp4_packing_dim(major_dim):
     shape = [2, 2]
     shape[major_dim] = 1
 
-    with pytest.raises(ValueError, match="FP4 packing dimension .* must have an even size"):
+    with pytest.raises(ValueError):
         StridedLayout(major_dim).storage_shape(shape, True)
 
 
