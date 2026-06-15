@@ -1,6 +1,7 @@
 add_triton_library(TritonAMDGPUTransforms
   AccelerateAMDMatmul.cpp
   AnnotateBufferOpSplitSafety.cpp
+  AutoFuseTDMCopy.cpp
   BlockPingpong.cpp
   CanonicalizePointers.cpp
   CoalesceAsyncCopy.cpp
@@ -16,7 +17,6 @@ add_triton_library(TritonAMDGPUTransforms
   PrepareIfCombining.cpp
   MoveUpPrologueLoads.cpp
   Pipeline.cpp
-  MaterializeTDMMerge.cpp
   ScheduleLoops.cpp
   LowerLoops.cpp
   MfmaGroup.cpp

@@ -1,4 +1,4 @@
-#include "Dialect/TritonAMDGPU/Utility/TDMMergeUtility.h"
+#include "Dialect/TritonAMDGPU/Utility/TDMCopyFuseUtility.h"
 
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -14,7 +14,7 @@
 #ifdef DEBUG_TYPE
 #undef DEBUG_TYPE
 #endif
-#define DEBUG_TYPE "tdm-merge"
+#define DEBUG_TYPE "tdm-copy-fuse"
 
 namespace mlir::triton::AMD {
 
@@ -62,7 +62,7 @@ bool haveSameRankAndCache(TDMCopyGlobalToLocalOp lhs,
          lhs.getCache() == rhs.getCache();
 }
 
-bool isAutoMergeCandidate(TDMCopyGlobalToLocalOp copy) {
+bool isAutoFuseCandidate(TDMCopyGlobalToLocalOp copy) {
   if (copy.getWarpUsedHintAttr() || copy.getBarrier())
     return false;
   // Partitioned destinations need encoding-specific hint constraints, so leave
@@ -71,14 +71,14 @@ bool isAutoMergeCandidate(TDMCopyGlobalToLocalOp copy) {
       copy.getResult().getType().getEncoding());
 }
 
-bool autoHintGenerationEnabled() {
+bool autoFuseEnabled() {
   auto disabled = mlir::triton::tools::isEnvValueBool(
-      mlir::triton::tools::getStrEnv("TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS"));
+      mlir::triton::tools::getStrEnv("TRITON_AMD_DISABLE_TDM_AUTO_FUSE"));
   return !disabled.value_or(false);
 }
 
-void materializeAutoMergeGroup(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
-                               unsigned numWarps) {
+void fuseGroup(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
+               unsigned numWarps) {
   assert(group.size() >= 2 && group.size() <= 4);
   auto first = group.front();
   OpBuilder builder(first);
@@ -97,7 +97,8 @@ void materializeAutoMergeGroup(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
   }
 
   LLVM_DEBUG({
-    llvm::dbgs() << "[tdm-merge] auto group of " << group.size() << " ops\n";
+    llvm::dbgs() << "[tdm-copy-fuse] auto group of " << group.size()
+                 << " ops\n";
     for (auto [idx, copy] : llvm::enumerate(group))
       llvm::dbgs() << "  hint=0x"
                    << llvm::Twine::utohexstr(
@@ -118,23 +119,21 @@ void materializeAutoMergeGroup(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
 
 } // namespace
 
-void materializeTDMMergeGroups(ModuleOp mod) {
-  // Mergeability rules:
-  //   1. Only unhinted copies are auto-materialized. User-provided hints stay as
+void autoFuseTDMCopies(ModuleOp mod) {
+  // Auto-fusion rules:
+  //   1. Only unhinted copies are auto-fused. User-provided hints stay as
   //      standalone copies; users should use the explicit fused op for manual
-  //      merges.
+  //      fusion.
   //   2. Members must not carry an `mbarrier`.
   //   3. Members must be consecutive in one block.
   //   4. Group size must be 2, 3, or 4.
   //   5. Members must have same-rank descriptors.
   //   6. Members must share the same `cache` modifier.
-  if (!autoHintGenerationEnabled())
+  if (!autoFuseEnabled())
     return;
 
   SmallVector<Block *> blocks = collectBlocksWithTDMCopies(mod);
 
-  // Scan each adjacent unhinted run and immediately materialize compatible auto
-  // groups. Manual hinted copies are not considered here.
   for (Block *block : blocks) {
     SmallVector<TDMCopyGlobalToLocalOp, 8> run;
     auto flush = [&]() {
@@ -174,7 +173,7 @@ void materializeTDMMergeGroups(ModuleOp mod) {
 
         auto group = remaining.take_front(groupSize);
         remaining = remaining.drop_front(groupSize);
-        materializeAutoMergeGroup(group, numWarps);
+        fuseGroup(group, numWarps);
       }
 
       run.clear();
@@ -182,7 +181,7 @@ void materializeTDMMergeGroups(ModuleOp mod) {
 
     for (Operation &op : llvm::make_early_inc_range(*block)) {
       auto copy = dyn_cast<TDMCopyGlobalToLocalOp>(&op);
-      if (copy && isAutoMergeCandidate(copy)) {
+      if (copy && isAutoFuseCandidate(copy)) {
         run.push_back(copy);
         continue;
       }

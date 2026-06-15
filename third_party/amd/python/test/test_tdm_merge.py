@@ -1,9 +1,9 @@
-"""Tests for TDM-copy materialization on gfx1250.
+"""Tests for TDM-copy auto-fusion on gfx1250.
 
 Explicit `async_load_fused` calls lower to one `tensor_load_to_lds`.  Regular
 `async_load`s with user-provided `warp_used_hint` masks stay separate; the
-materialization pass only auto-merges adjacent unhinted copies unless
-`TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1` is set.
+auto-fuse pass only fuses adjacent unhinted copies unless
+`TRITON_AMD_DISABLE_TDM_AUTO_FUSE=1` is set.
 
 Compile-only tests count AMDGCN instructions.
 """
@@ -46,7 +46,7 @@ def _position_input(desc, off_m, off_n):
     return ttgl.amd.gfx1250.tdm.update_tensor_descriptor(desc, add_offsets=[off_m, off_n], pred=True)
 
 
-# 2-way copies: explicit fused loads merge, while regular hinted loads do not.
+# 2-way copies: explicit fused loads fuse, while regular hinted loads do not.
 
 
 @gluon.jit
@@ -78,7 +78,7 @@ def vector_add_tdm_kernel(
 
     ttgl.amd.gfx1250.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A)
     ttgl.amd.gfx1250.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B)
-    ttgl.amd.gfx1250.tdm.async_wait(0)  # "wait for everything"; correct under any merge
+    ttgl.amd.gfx1250.tdm.async_wait(0)  # "wait for everything"; correct under any fusion
 
     c = a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT)
     _store_tile(c_ptr, c, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
@@ -213,9 +213,9 @@ def test_compile_vector_add_tdm_explicit_fused():
     _assert_tensor_load_count(amdgcn, 1, "explicit async_load_fused")
 
 
-def test_compile_vector_add_tdm_auto_merge_env_toggle(monkeypatch):
-    """Compile-only: env toggles generated hints for adjacent unhinted copies."""
-    env_var = "TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS"
+def test_compile_vector_add_tdm_auto_fuse_env_toggle(monkeypatch):
+    """Compile-only: env toggles auto-fusion for adjacent unhinted copies."""
+    env_var = "TRITON_AMD_DISABLE_TDM_AUTO_FUSE"
 
     def compile_unhinted(block_m, block_n):
         return _compile_amdgcn(
@@ -225,7 +225,7 @@ def test_compile_vector_add_tdm_auto_merge_env_toggle(monkeypatch):
 
     for env, block, expected in [("1", (64, 64), 2), ("0", (32, 128), 1), ("1", (128, 64), 2)]:
         monkeypatch.setenv(env_var, env)
-        _assert_tensor_load_count(compile_unhinted(*block), expected, f"env={env} generated hints")
+        _assert_tensor_load_count(compile_unhinted(*block), expected, f"env={env} auto-fuse")
 
 
 # 3-way copies: covers regular hinted separation and non-uniform auto hints.
@@ -302,9 +302,9 @@ def test_compile_vector_add_tdm_3way(BLOCK_M, BLOCK_N, NUM_WARPS, HINT_A, HINT_B
     _assert_tensor_load_count(amdgcn, 3, context)
 
 
-def test_compile_vector_add_tdm_3way_auto_merge_env_toggle(monkeypatch):
-    """Compile-only: env can generate 3-way hints for adjacent unhinted copies."""
-    env_var = "TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS"
+def test_compile_vector_add_tdm_3way_auto_fuse_env_toggle(monkeypatch):
+    """Compile-only: env toggles 3-way auto-fusion for adjacent unhinted copies."""
+    env_var = "TRITON_AMD_DISABLE_TDM_AUTO_FUSE"
     # (env, num_warps, block, expected): generation runs for 4 and 8 warps.
     for env, warps, block, expected in [("1", 8, (64, 64), 3), ("0", 8, (32, 128), 1),
                                         ("0", 4, (128, 64), 1), ("1", 4, (64, 128), 3)]:
@@ -391,7 +391,7 @@ def test_compile_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, H
 
 
 @gluon.jit
-def heterogeneous_tdm_merge_kernel(
+def heterogeneous_tdm_fuse_kernel(
     a_ptr,
     b_ptr,
     as_ptr,
@@ -436,7 +436,7 @@ def heterogeneous_tdm_merge_kernel(
 def test_compile_heterogeneous_tdm_hints_stay_separate():
     """Compile-only: heterogeneous hinted loads stay separate."""
     amdgcn = _compile_amdgcn(
-        heterogeneous_tdm_merge_kernel, ["a_ptr", "b_ptr", "as_ptr", "bs_ptr"], {
+        heterogeneous_tdm_fuse_kernel, ["a_ptr", "b_ptr", "as_ptr", "bs_ptr"], {
             "BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_N_B": 2048,
             "BLOCK_SCALE_M": 64, "BLOCK_SCALE_N": 32,
             "HINT_A": 0b00010001, "HINT_B": 0b00100010,
@@ -445,10 +445,10 @@ def test_compile_heterogeneous_tdm_hints_stay_separate():
     _assert_tensor_load_count(amdgcn, 4, "heterogeneous hinted A/B/AS/BS loads")
 
 
-def test_compile_heterogeneous_tdm_auto_merge():
+def test_compile_heterogeneous_tdm_auto_fuse():
     """Compile-only: heterogeneous unhinted loads auto-fuse."""
     amdgcn = _compile_amdgcn(
-        heterogeneous_tdm_merge_kernel, ["a_ptr", "b_ptr", "as_ptr", "bs_ptr"], {
+        heterogeneous_tdm_fuse_kernel, ["a_ptr", "b_ptr", "as_ptr", "bs_ptr"], {
             "BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_N_B": 2048,
             "BLOCK_SCALE_M": 64, "BLOCK_SCALE_N": 32,
             "HINT_A": None, "HINT_B": None, "HINT_AS": None, "HINT_BS": None
@@ -456,7 +456,7 @@ def test_compile_heterogeneous_tdm_auto_merge():
     _assert_tensor_load_count(amdgcn, 1, "heterogeneous unhinted A/B/AS/BS loads")
 
 
-# Cache modifiers must match for auto merge.
+# Cache modifiers must match for auto-fusion.
 
 
 @gluon.jit
@@ -497,12 +497,12 @@ def vector_add_tdm_kernel_cache(
     _store_tile(c_ptr, c, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
 
 
-# Layout: (CACHE_A, CACHE_B, expected_auto_merge, id).
+# Layout: (CACHE_A, CACHE_B, expected_auto_fuse, id).
 _CACHE_PARAMS = [
-    # same cache: auto-merge rule 6 satisfied
+    # same cache: auto-fuse rule 6 satisfied
     ("", "", True, "same_default"),
     (".cg", ".cg", True, "same_cg"),
-    # mismatched cache: auto-merge rule 6 forces a split
+    # mismatched cache: auto-fuse rule 6 forces a split
     ("", ".cg", False, "default_vs_cg"),
     (".ca", ".cg", False, "ca_vs_cg"),
 ]
@@ -510,16 +510,16 @@ _CACHE_PARAMS = [
 
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _COMPILE_BLOCK_SHAPES)
 @pytest.mark.parametrize(
-    "CACHE_A,CACHE_B,expected_auto_merge",
+    "CACHE_A,CACHE_B,expected_auto_fuse",
     [_param_args(p) for p in _CACHE_PARAMS],
     ids=[_param_id(p) for p in _CACHE_PARAMS],
 )
-def test_compile_vector_add_tdm_cache(BLOCK_M, BLOCK_N, CACHE_A, CACHE_B, expected_auto_merge):
-    """Compile-only: asserts matching cache modifiers for auto merge."""
+def test_compile_vector_add_tdm_cache(BLOCK_M, BLOCK_N, CACHE_A, CACHE_B, expected_auto_fuse):
+    """Compile-only: asserts matching cache modifiers for auto-fusion."""
     amdgcn = _compile_amdgcn(
         vector_add_tdm_kernel_cache, ["a_ptr", "b_ptr", "c_ptr"], {
             "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "HINT_A": None, "HINT_B": None,
             "CACHE_A": CACHE_A, "CACHE_B": CACHE_B
         })
     context = f"CACHE_A={CACHE_A!r}, CACHE_B={CACHE_B!r}"
-    _assert_tensor_load_count(amdgcn, 1 if expected_auto_merge else 2, context)
+    _assert_tensor_load_count(amdgcn, 1 if expected_auto_fuse else 2, context)

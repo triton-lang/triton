@@ -347,7 +347,7 @@ class HIPBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        amd.passes.ttgpuir.add_materialize_tdm_merge(pm)
+        amd.passes.ttgpuir.add_auto_fuse_tdm_copy(pm)
         amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
         amd.passes.ttgpuir.add_warp_pipeline_conversion(pm, options.arch)
         passes.convert.add_scf_to_cf(pm)

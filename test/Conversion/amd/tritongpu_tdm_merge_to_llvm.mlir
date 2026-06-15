@@ -1,7 +1,7 @@
-// RUN: triton-opt %s --split-input-file --tritonamdgpu-materialize-tdm-merge | FileCheck %s --check-prefixes=MAT,ENABLE-MAT
-// RUN: env TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1 triton-opt %s --split-input-file --tritonamdgpu-materialize-tdm-merge | FileCheck %s --check-prefixes=MAT,DISABLE-MAT
-// RUN: triton-opt %s --split-input-file --tritonamdgpu-materialize-tdm-merge --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,ENABLE
-// RUN: env TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1 triton-opt %s --split-input-file --tritonamdgpu-materialize-tdm-merge --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,DISABLE
+// RUN: triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy | FileCheck %s --check-prefixes=MAT,ENABLE-MAT
+// RUN: env TRITON_AMD_DISABLE_TDM_AUTO_FUSE=1 triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy | FileCheck %s --check-prefixes=MAT,DISABLE-MAT
+// RUN: triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,ENABLE
+// RUN: env TRITON_AMD_DISABLE_TDM_AUTO_FUSE=1 triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,DISABLE
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
@@ -23,8 +23,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %dst0 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     %dst1 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
 
-    // User-provided hints on regular copies no longer request an implicit
-    // merge. Use amdg.async_tdm_fused_copy_global_to_local for manual merges.
+    // User-provided hints on regular copies no longer request implicit fusion.
+    // Use amdg.async_tdm_fused_copy_global_to_local for manual fusion.
     // MAT-NOT: amdg.async_tdm_fused_copy_global_to_local
     // MAT: amdg.async_tdm_copy_global_to_local
     // MAT-SAME: warp_used_hint = 3 : i32
@@ -46,9 +46,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // MAT-LABEL: tdm_merge_auto_hints
-  // CHECK-LABEL: tdm_merge_auto_hints
-  tt.func public @tdm_merge_auto_hints(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+  // MAT-LABEL: tdm_auto_fuse_unhinted
+  // CHECK-LABEL: tdm_auto_fuse_unhinted
+  tt.func public @tdm_auto_fuse_unhinted(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %c_shape = arith.constant 128 : i32
     %c_stride0 = arith.constant 128 : i64
     %c_stride1 = arith.constant 1 : i64
@@ -59,8 +59,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %dst_a = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
     %dst_b = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
 
-    // Adjacent unhinted copies materialize as one fused op unless disabled.
-    // Auto materialization requires consecutive copies; see
+    // Adjacent unhinted copies fuse into one op unless disabled.
+    // Auto-fusion requires consecutive copies; see
     // tdm_auto_hints_skip_interleaved for the non-consecutive case.
     // ENABLE-MAT: amdg.async_tdm_fused_copy_global_to_local
     // ENABLE-MAT-SAME: warp_used_hints = array<i32: 5, 10>

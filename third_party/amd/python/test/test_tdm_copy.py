@@ -84,9 +84,9 @@ Runtime tests are skipped on non-gfx1250 hosts.
 
 This file is the *standalone* per-`async_load` reference.  Hinted pairs stay
 as separate copies; the compile test also sets
-TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1 to suppress auto-generated hints
-for the unhinted pair.  Explicit fused copies and unhinted auto
-materialization are covered separately in `test_tdm_merge.py`.
+TRITON_AMD_DISABLE_TDM_AUTO_FUSE=1 to suppress auto-fusion
+for the unhinted pair.  Explicit fused copies and unhinted auto-fusion are
+covered separately in `test_tdm_merge.py`.
 """
 
 import re
@@ -175,7 +175,7 @@ def vector_add_tdm_kernel(
 #
 # This is the *standalone* per-`async_load` reference, so every hinted
 # pair must stay un-merged.  The `no_hint` case also stays standalone
-# because the compile test disables auto merge with the env knob below.
+# because the compile test disables auto-fusion with the env knob below.
 _HINT_PARAMS = [
     (0b00000000, 0b00000000, "no_hint"),
     (0b00001111, 0b00000011, "lo4_overlap_lo2"),
@@ -209,11 +209,11 @@ def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, monkeypatch):
     """Compile-only: each `async_load` lowers to one `tensor_load_to_lds`.
 
     Hinted regular copies are standalone by contract.  The env knob
-    additionally suppresses auto-generated hints for the `no_hint`
-    (unhinted) pair.  Explicit fused lowering and unhinted auto
-    materialization are exercised in `test_tdm_merge.py`.
+    additionally suppresses auto-fusion for the `no_hint` (unhinted) pair.
+    Explicit fused lowering and unhinted auto-fusion are exercised in
+    `test_tdm_merge.py`.
     """
-    monkeypatch.setenv("TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS", "1")
+    monkeypatch.setenv("TRITON_AMD_DISABLE_TDM_AUTO_FUSE", "1")
     NUM_WARPS = 8
     signature = {
         "a_ptr": "*i32",

@@ -1,6 +1,6 @@
 add_triton_library(TritonAMDUtils
   CommonUtils.cpp
-  TDMMergeUtility.cpp
+  TDMCopyFuseUtility.cpp
 
   DEPENDS
   TritonAMDGPUTableGen
