@@ -52,8 +52,8 @@ test-plugins: all
 
 .PHONY: test-gluon
 test-gluon: all
-	$(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
-	PYTHONPATH="$(TRITON_KERNELS_PATH)" $(PYTEST) -n 2 python/examples/gluon/
+	$(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/[0-9][0-9]-*.py
+	PYTHONPATH="$(TRITON_KERNELS_PATH)" $(PYTEST) -n 2 python/examples/gluon/[0-9][0-9]-*.py
 
 .PHONY: test-gsan
 test-gsan: all
