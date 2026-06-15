@@ -8,7 +8,6 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
-#include <algorithm>
 #include <cassert>
 #include <cstdint>
 
@@ -25,11 +24,6 @@ using TDMCopyGlobalToLocalOp =
     ::mlir::triton::amdgpu::AsyncTDMCopyGlobalToLocalOp;
 using TDMFusedCopyGlobalToLocalOp =
     ::mlir::triton::amdgpu::AsyncTDMFusedCopyGlobalToLocalOp;
-
-struct TDMMergeGroup {
-  SmallVector<TDMCopyGlobalToLocalOp> members;
-  SmallVector<uint32_t> memberHints;
-};
 
 SmallVector<Block *> collectBlocksWithTDMCopies(ModuleOp mod) {
   llvm::SmallSetVector<Block *, 8> blocks;
@@ -81,9 +75,10 @@ bool autoHintGenerationEnabled() {
   return !disabled.value_or(false);
 }
 
-void materializeGroup(const TDMMergeGroup &group) {
-  assert(group.members.size() == group.memberHints.size());
-  auto first = group.members.front();
+void materializeAutoMergeGroup(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
+                               unsigned numWarps) {
+  assert(group.size() >= 2 && group.size() <= 4);
+  auto first = group.front();
   OpBuilder builder(first);
 
   SmallVector<Value, 4> descs;
@@ -91,21 +86,31 @@ void materializeGroup(const TDMMergeGroup &group) {
   SmallVector<int32_t, 4> hints;
   auto cache = first.getCache();
   Type tokenType = first.getToken().getType();
-  for (auto [idx, hint] : llvm::enumerate(group.memberHints)) {
-    TDMCopyGlobalToLocalOp copy = group.members[idx];
+  for (auto [idx, copy] : llvm::enumerate(group)) {
     descs.push_back(copy.getDesc());
     dests.push_back(copy.getResult());
-    hints.push_back(static_cast<int32_t>(hint));
+    hints.push_back(static_cast<int32_t>(
+        getGeneratedHint(static_cast<unsigned>(idx),
+                         static_cast<unsigned>(group.size()), numWarps)));
   }
+
+  LLVM_DEBUG({
+    llvm::dbgs() << "[tdm-merge] auto group of " << group.size() << " ops\n";
+    for (auto [idx, copy] : llvm::enumerate(group))
+      llvm::dbgs() << "  hint=0x"
+                   << llvm::Twine::utohexstr(
+                          static_cast<uint32_t>(hints[idx]))
+                   << " " << *copy << "\n";
+  });
 
   auto fused = TDMFusedCopyGlobalToLocalOp::create(
       builder, first.getLoc(), tokenType, descs, dests,
       builder.getDenseI32ArrayAttr(hints), cache);
 
-  for (TDMCopyGlobalToLocalOp copy : group.members)
+  for (TDMCopyGlobalToLocalOp copy : group)
     copy.getToken().replaceAllUsesWith(fused.getToken());
 
-  for (TDMCopyGlobalToLocalOp copy : llvm::reverse(group.members))
+  for (TDMCopyGlobalToLocalOp copy : llvm::reverse(group))
     copy.erase();
 }
 
@@ -131,54 +136,45 @@ void materializeTDMMergeGroups(ModuleOp mod) {
   for (Block *block : blocks) {
     SmallVector<TDMCopyGlobalToLocalOp, 8> run;
     auto flush = [&]() {
-      unsigned numWarps =
-          run.empty() ? 0 : triton::gpu::lookupNumWarps(run.front());
-      if (numWarps <= 8) {
-        MutableArrayRef<TDMCopyGlobalToLocalOp> remaining(run);
-        while (remaining.size() >= 2) {
-          size_t maxGroupSize = std::min<size_t>(4, remaining.size());
-          maxGroupSize =
-              std::min<size_t>(maxGroupSize, static_cast<size_t>(numWarps));
-          if (maxGroupSize < 2)
-            break;
+      if (run.empty())
+        return;
 
-          // Take the largest compatible prefix. A trailing 3-way group is
-          // allowed; otherwise the greedy choice naturally prefers 4 then 2.
-          size_t chosen = 1;
-          for (size_t i = 1; i < maxGroupSize; ++i) {
-            if (!haveSameRankAndCache(remaining.front(), remaining[i]))
-              break;
-            ++chosen;
-          }
-
-          if (chosen < 2) {
-            remaining = remaining.drop_front(1);
-            continue;
-          }
-
-          TDMMergeGroup group;
-          for (auto [idx, copy] :
-               llvm::enumerate(remaining.take_front(chosen))) {
-            group.members.push_back(copy);
-            group.memberHints.push_back(
-                getGeneratedHint(static_cast<unsigned>(idx),
-                                 static_cast<unsigned>(chosen), numWarps));
-          }
-
-          LLVM_DEBUG({
-            llvm::dbgs() << "[tdm-merge] auto group of "
-                         << group.members.size() << " ops\n";
-            for (auto [idx, copy] : llvm::enumerate(group.members))
-              llvm::dbgs() << "  hint=0x"
-                           << llvm::Twine::utohexstr(group.memberHints[idx])
-                           << " " << *copy << "\n";
-          });
-
-          size_t groupSize = group.members.size();
-          remaining = remaining.drop_front(groupSize);
-          materializeGroup(group);
-        }
+      unsigned numWarps = triton::gpu::lookupNumWarps(run.front());
+      if (numWarps > 8) {
+        run.clear();
+        return;
       }
+
+      MutableArrayRef<TDMCopyGlobalToLocalOp> remaining(run);
+      while (remaining.size() >= 2) {
+        size_t maxGroupSize = remaining.size();
+        if (maxGroupSize > 4)
+          maxGroupSize = 4;
+        if (maxGroupSize > numWarps)
+          maxGroupSize = numWarps;
+        if (maxGroupSize < 2)
+          break;
+
+        // Take the largest compatible prefix. This preserves the previous
+        // greedy preference for 4-way groups, while still allowing a compatible
+        // trailing triple or pair.
+        size_t groupSize = 1;
+        for (size_t i = 1; i < maxGroupSize; ++i) {
+          if (!haveSameRankAndCache(remaining.front(), remaining[i]))
+            break;
+          ++groupSize;
+        }
+
+        if (groupSize < 2) {
+          remaining = remaining.drop_front(1);
+          continue;
+        }
+
+        auto group = remaining.take_front(groupSize);
+        remaining = remaining.drop_front(groupSize);
+        materializeAutoMergeGroup(group, numWarps);
+      }
+
       run.clear();
     };
 

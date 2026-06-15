@@ -82,13 +82,11 @@ What this file actually tests
 
 Runtime tests are skipped on non-gfx1250 hosts.
 
-This file is the *standalone* per-`async_load` reference.  Merging only
-fuses adjacent copies with DISJOINT active-warp sets, so the hinted pairs
-here deliberately overlap to stay un-merged; the compile test also sets
+This file is the *standalone* per-`async_load` reference.  Hinted pairs stay
+as separate copies; the compile test also sets
 TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1 to suppress auto-generated hints
-for the unhinted pair.  Merge-aware lowering (where compatible hinted
-copies fuse into a single `tensor_load_to_lds`) is covered separately in
-`test_tdm_merge.py`.
+for the unhinted pair.  Explicit fused copies and unhinted auto
+materialization are covered separately in `test_tdm_merge.py`.
 """
 
 import re
@@ -176,11 +174,8 @@ def vector_add_tdm_kernel(
 # individually verifier-legal.
 #
 # This is the *standalone* per-`async_load` reference, so every hinted
-# pair must stay un-merged.  Merging only fuses adjacent copies whose
-# active-warp sets are DISJOINT, so each pair here deliberately OVERLAPS
-# (shares >= 1 warp bit) -- the merge analyser's disjointness check
-# rejects them and both copies lower to their own `tensor_load_to_lds`.
-# (`no_hint` stays standalone via the auto-merge env knob below.)
+# pair must stay un-merged.  The `no_hint` case also stays standalone
+# because the compile test disables auto merge with the env knob below.
 _HINT_PARAMS = [
     (0b00000000, 0b00000000, "no_hint"),
     (0b00001111, 0b00000011, "lo4_overlap_lo2"),
@@ -213,11 +208,10 @@ _COMPILE_BLOCK_SHAPES = [(64, 64), (32, 128)]
 def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, monkeypatch):
     """Compile-only: each `async_load` lowers to one `tensor_load_to_lds`.
 
-    The hinted pairs use OVERLAPPING active-warp sets, so the merge
-    analyser's disjointness check rejects them and each copy stays
-    standalone.  The env knob additionally suppresses auto-generated
-    hints for the `no_hint` (unhinted) pair.  The fused (merged) lowering
-    is exercised in `test_tdm_merge.py`.
+    Hinted regular copies are standalone by contract.  The env knob
+    additionally suppresses auto-generated hints for the `no_hint`
+    (unhinted) pair.  Explicit fused lowering and unhinted auto
+    materialization are exercised in `test_tdm_merge.py`.
     """
     monkeypatch.setenv("TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS", "1")
     NUM_WARPS = 8
