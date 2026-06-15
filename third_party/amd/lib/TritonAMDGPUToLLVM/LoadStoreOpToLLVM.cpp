@@ -1252,8 +1252,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit,
       const DataFlowSolver *uniformitySolver)
       : ConvertOpToLLVMPattern(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {
-  }
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::AsyncTDMCopyGlobalToLocalOp op,
@@ -1354,8 +1354,8 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
       ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit,
       const DataFlowSolver *uniformitySolver)
       : ConvertOpToLLVMPattern(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass, uniformitySolver) {
-  }
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass,
+                                uniformitySolver) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::AsyncTDMFusedCopyGlobalToLocalOp op,
@@ -1371,8 +1371,7 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
     SmallVector<uint32_t, 4> memberHints;
 
     for (size_t i = 0; i < numMembers; ++i) {
-      auto descTy =
-          cast<triton::TensorDescType>(op.getDescs()[i].getType());
+      auto descTy = cast<triton::TensorDescType>(op.getDescs()[i].getType());
       auto enc = descTy.getSharedLayout();
       mlir::LLVM::AMD::TDMMergeMemberInfo &m = members[i];
 
@@ -1387,14 +1386,14 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
         m.padAmount = padEnc.getPaddings()[0];
       }
       if (targetInfo.supportsMultiCTALaunch())
-        m.multicastMask =
-            LLVM::AMD::emitCtaMulticastMask(rewriter, loc, ctaId, m.sharedLayout);
+        m.multicastMask = LLVM::AMD::emitCtaMulticastMask(rewriter, loc, ctaId,
+                                                          m.sharedLayout);
 
       m.encoding = enc;
       m.shapePerCTA =
           llvm::to_vector(triton::gpu::getShapePerCTA(enc, descTy.getShape()));
-      m.desc = mlir::LLVM::AMD::unpackTDMDescriptor(
-          rewriter, loc, adaptor.getDescs()[i]);
+      m.desc = mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc,
+                                                    adaptor.getDescs()[i]);
       for (size_t dim = 0; dim < descTy.getShape().size(); ++dim)
         m.offset.push_back(b.i32_val(0));
 
@@ -2702,10 +2701,12 @@ private:
 } // namespace
 
 namespace mlir::triton::AMD {
-void populateLoadStoreOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
-    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    const DataFlowSolver *uniformitySolver, PatternBenefit benefit) {
+void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                       const TargetInfo &targetInfo,
+                                       RewritePatternSet &patterns,
+                                       ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                       const DataFlowSolver *uniformitySolver,
+                                       PatternBenefit benefit) {
   assert(uniformitySolver &&
          "load/store lowering must be populated with the dataflow uniformity "
          "solver so BufferEmitter never falls back to the legacy walker");

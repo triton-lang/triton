@@ -1,5 +1,5 @@
-#include "TritonAMDGPUTransforms/Passes.h"
 #include "Dialect/TritonAMDGPU/Utility/TDMCopyFuseUtility.h"
+#include "TritonAMDGPUTransforms/Passes.h"
 
 namespace mlir {
 
@@ -9,8 +9,7 @@ namespace mlir {
 namespace {
 
 struct TritonAMDGPUAutoFuseTDMCopyPass
-    : impl::TritonAMDGPUAutoFuseTDMCopyBase<
-          TritonAMDGPUAutoFuseTDMCopyPass> {
+    : impl::TritonAMDGPUAutoFuseTDMCopyBase<TritonAMDGPUAutoFuseTDMCopyPass> {
   void runOnOperation() override {
     mlir::triton::AMD::autoFuseTDMCopies(getOperation());
   }

@@ -801,7 +801,8 @@ LogicalResult AsyncTDMFusedCopyGlobalToLocalOp::verify() {
     return emitOpError("requires 2 to 4 members");
 
   if (getDests().size() != numMembers)
-    return emitOpError("requires the same number of descriptors and destinations");
+    return emitOpError(
+        "requires the same number of descriptors and destinations");
   if (getWarpUsedHints().size() != numMembers)
     return emitOpError("requires one warp_used_hint per member");
 
@@ -821,7 +822,8 @@ LogicalResult AsyncTDMFusedCopyGlobalToLocalOp::verify() {
       return failure();
 
     if (tensorDescTy.getShape().size() != rank)
-      return emitOpError("requires all member descriptors to have the same rank");
+      return emitOpError(
+          "requires all member descriptors to have the same rank");
 
     uint32_t hintValue = static_cast<uint32_t>(hint);
     if (failed(validateWarpUsedHint(*this, hintValue, numWarps)))

@@ -13,8 +13,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "update_tensor_descriptor", "async_load", "async_load_fused", "async_wait", "make_tensor_descriptor",
-    "tensor_descriptor",
-    "tensor_descriptor_type", "prefetch", "async_scatter"
+    "tensor_descriptor", "tensor_descriptor_type", "prefetch", "async_scatter"
 ]
 
 

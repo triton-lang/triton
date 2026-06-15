@@ -439,10 +439,8 @@ def _compile_amdgcn(fn, ptr_names, constexprs, *, ptr_ty="*fp16", num_warps=8) -
 
 def test_compile_vector_add_tdm_explicit_fused():
     """Compile-only: explicit fused Gluon API lowers to one TDM intrinsic."""
-    amdgcn = _compile_amdgcn(
-        vector_add_tdm_explicit_fused_kernel, ["a_ptr", "b_ptr", "c_ptr"], {
-            "BLOCK_M": 64, "BLOCK_N": 64, "HINT_A": 0b00001111, "HINT_B": 0b11110000
-        })
+    amdgcn = _compile_amdgcn(vector_add_tdm_explicit_fused_kernel, ["a_ptr", "b_ptr", "c_ptr"],
+                             {"BLOCK_M": 64, "BLOCK_N": 64, "HINT_A": 0b00001111, "HINT_B": 0b11110000})
     _assert_tensor_load_count(amdgcn, 1, "explicit async_load_fused")
 
 
@@ -451,10 +449,8 @@ def test_compile_vector_add_tdm_auto_fuse_env_toggle(monkeypatch):
     env_var = "TRITON_AMD_DISABLE_TDM_AUTO_FUSE"
 
     def compile_unhinted(block_m, block_n):
-        return _compile_amdgcn(
-            vector_add_tdm_adjacent_kernel, ["a_ptr", "b_ptr", "c_ptr"], {
-                "BLOCK_M": block_m, "BLOCK_N": block_n, "HINT_A": None, "HINT_B": None
-            })
+        return _compile_amdgcn(vector_add_tdm_adjacent_kernel, ["a_ptr", "b_ptr", "c_ptr"],
+                               {"BLOCK_M": block_m, "BLOCK_N": block_n, "HINT_A": None, "HINT_B": None})
 
     for env, block, expected in [("1", (64, 64), 2), ("0", (32, 128), 1), ("1", (128, 64), 2)]:
         monkeypatch.setenv(env_var, env)
@@ -517,10 +513,9 @@ _HINT_PARAMS_3WAY = [
 
 def _compile_3way(num_warps, hints=(None, None, None), block=(64, 64)) -> str:
     a, b, c = hints
-    return _compile_amdgcn(
-        vector_add_tdm_kernel_3way, ["a_ptr", "b_ptr", "c_ptr", "out_ptr"], {
-            "BLOCK_M": block[0], "BLOCK_N": block[1], "HINT_A": a, "HINT_B": b, "HINT_C": c
-        }, num_warps=num_warps)
+    return _compile_amdgcn(vector_add_tdm_kernel_3way, ["a_ptr", "b_ptr", "c_ptr", "out_ptr"],
+                           {"BLOCK_M": block[0], "BLOCK_N": block[1], "HINT_A": a, "HINT_B": b, "HINT_C": c},
+                           num_warps=num_warps)
 
 
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _COMPILE_BLOCK_SHAPES)
@@ -540,8 +535,8 @@ def test_compile_vector_add_tdm_3way_auto_fuse_env_toggle(monkeypatch):
     """Compile-only: env toggles 3-way auto-fusion for adjacent unhinted copies."""
     env_var = "TRITON_AMD_DISABLE_TDM_AUTO_FUSE"
     # (env, num_warps, block, expected): generation runs for 4 and 8 warps.
-    for env, warps, block, expected in [("1", 8, (64, 64), 3), ("0", 8, (32, 128), 1),
-                                        ("0", 4, (128, 64), 1), ("1", 4, (64, 128), 3)]:
+    for env, warps, block, expected in [("1", 8, (64, 64), 3), ("0", 8, (32, 128), 1), ("0", 4, (128, 64), 1),
+                                        ("1", 4, (64, 128), 3)]:
         monkeypatch.setenv(env_var, env)
         amdgcn = _compile_3way(warps, block=block)
         _assert_tensor_load_count(amdgcn, expected, f"3-way env={env} warps={warps}")
@@ -591,8 +586,8 @@ def vector_add_tdm_kernel_4way(
     ttgl.amd.gfx1250.tdm.async_load(d_desc, dest=d_buf, warp_used_hint=HINT_D)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
-    out = (a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT) +
-           c_buf.load(layout=BLOCKED_LAYOUT) + d_buf.load(layout=BLOCKED_LAYOUT))
+    out = (a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT) + c_buf.load(layout=BLOCKED_LAYOUT) +
+           d_buf.load(layout=BLOCKED_LAYOUT))
     _store_tile(out_ptr, out, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
 
 
@@ -611,11 +606,9 @@ _HINT_PARAMS_4WAY = [
 )
 def test_compile_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, HINT_D):
     """Compile-only: regular hinted 4-way loads stay separate."""
-    amdgcn = _compile_amdgcn(
-        vector_add_tdm_kernel_4way, ["a_ptr", "b_ptr", "c_ptr", "d_ptr", "out_ptr"], {
-            "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "HINT_A": HINT_A, "HINT_B": HINT_B,
-            "HINT_C": HINT_C, "HINT_D": HINT_D
-        })
+    amdgcn = _compile_amdgcn(vector_add_tdm_kernel_4way, ["a_ptr", "b_ptr", "c_ptr", "d_ptr", "out_ptr"], {
+        "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "HINT_A": HINT_A, "HINT_B": HINT_B, "HINT_C": HINT_C, "HINT_D": HINT_D
+    })
     context = (f"HINT_A=0b{HINT_A:08b}, HINT_B=0b{HINT_B:08b}, "
                f"HINT_C=0b{HINT_C:08b}, HINT_D=0b{HINT_D:08b}")
     _assert_tensor_load_count(amdgcn, 4, context)
@@ -671,10 +664,8 @@ def test_compile_heterogeneous_tdm_hints_stay_separate():
     """Compile-only: heterogeneous hinted loads stay separate."""
     amdgcn = _compile_amdgcn(
         heterogeneous_tdm_fuse_kernel, ["a_ptr", "b_ptr", "as_ptr", "bs_ptr"], {
-            "BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_N_B": 2048,
-            "BLOCK_SCALE_M": 64, "BLOCK_SCALE_N": 32,
-            "HINT_A": 0b00010001, "HINT_B": 0b00100010,
-            "HINT_AS": 0b01000100, "HINT_BS": 0b10001000
+            "BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_N_B": 2048, "BLOCK_SCALE_M": 64, "BLOCK_SCALE_N": 32, "HINT_A":
+            0b00010001, "HINT_B": 0b00100010, "HINT_AS": 0b01000100, "HINT_BS": 0b10001000
         }, ptr_ty="*i8")
     _assert_tensor_load_count(amdgcn, 4, "heterogeneous hinted A/B/AS/BS loads")
 
@@ -683,9 +674,8 @@ def test_compile_heterogeneous_tdm_auto_fuse():
     """Compile-only: heterogeneous unhinted loads auto-fuse."""
     amdgcn = _compile_amdgcn(
         heterogeneous_tdm_fuse_kernel, ["a_ptr", "b_ptr", "as_ptr", "bs_ptr"], {
-            "BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_N_B": 2048,
-            "BLOCK_SCALE_M": 64, "BLOCK_SCALE_N": 32,
-            "HINT_A": None, "HINT_B": None, "HINT_AS": None, "HINT_BS": None
+            "BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_N_B": 2048, "BLOCK_SCALE_M": 64, "BLOCK_SCALE_N": 32, "HINT_A": None,
+            "HINT_B": None, "HINT_AS": None, "HINT_BS": None
         }, ptr_ty="*i8")
     _assert_tensor_load_count(amdgcn, 1, "heterogeneous unhinted A/B/AS/BS loads")
 
@@ -750,11 +740,9 @@ _CACHE_PARAMS = [
 )
 def test_compile_vector_add_tdm_cache(BLOCK_M, BLOCK_N, CACHE_A, CACHE_B, expected_auto_fuse):
     """Compile-only: asserts matching cache modifiers for auto-fusion."""
-    amdgcn = _compile_amdgcn(
-        vector_add_tdm_kernel_cache, ["a_ptr", "b_ptr", "c_ptr"], {
-            "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "HINT_A": None, "HINT_B": None,
-            "CACHE_A": CACHE_A, "CACHE_B": CACHE_B
-        })
+    amdgcn = _compile_amdgcn(vector_add_tdm_kernel_cache, ["a_ptr", "b_ptr", "c_ptr"], {
+        "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "HINT_A": None, "HINT_B": None, "CACHE_A": CACHE_A, "CACHE_B": CACHE_B
+    })
     context = f"CACHE_A={CACHE_A!r}, CACHE_B={CACHE_B!r}"
     _assert_tensor_load_count(amdgcn, 1 if expected_auto_fuse else 2, context)
 

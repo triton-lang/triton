@@ -1,9 +1,9 @@
 #include "Dialect/TritonAMDGPU/Utility/TDMCopyFuseUtility.h"
 
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "mlir/IR/Builders.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
-#include "mlir/IR/Builders.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -27,9 +27,8 @@ using TDMFusedCopyGlobalToLocalOp =
 
 SmallVector<Block *> collectBlocksWithTDMCopies(ModuleOp mod) {
   llvm::SmallSetVector<Block *, 8> blocks;
-  mod->walk([&](TDMCopyGlobalToLocalOp copy) {
-    blocks.insert(copy->getBlock());
-  });
+  mod->walk(
+      [&](TDMCopyGlobalToLocalOp copy) { blocks.insert(copy->getBlock()); });
   return SmallVector<Block *>(blocks.begin(), blocks.end());
 }
 
@@ -46,8 +45,8 @@ uint32_t getGeneratedHint(unsigned memberIdx, unsigned groupSize,
     return (numWarps == 4 ? kHints4 : kHints8)[memberIdx];
   }
 
-  // Every groupSize-th warp starting at memberIdx (e.g. groupSize=2 -> 0b...0101,
-  // then shifted). Gives one set bit per stride.
+  // Every groupSize-th warp starting at memberIdx (e.g. groupSize=2 ->
+  // 0b...0101, then shifted). Gives one set bit per stride.
   uint32_t stridePattern =
       ((uint32_t{1} << numWarps) - 1) / ((uint32_t{1} << groupSize) - 1);
   return stridePattern << memberIdx;
@@ -77,6 +76,7 @@ bool autoFuseEnabled() {
   return !disabled.value_or(false);
 }
 
+// Replace one compatible run of TDM copies with a single fused TDM copy.
 void fuseGroup(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
                unsigned numWarps) {
   assert(group.size() >= 2 && group.size() <= 4);
@@ -103,8 +103,7 @@ void fuseGroup(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
                  << " ops\n";
     for (auto [idx, copy] : llvm::enumerate(group))
       llvm::dbgs() << "  hint=0x"
-                   << llvm::Twine::utohexstr(
-                          static_cast<uint32_t>(hints[idx]))
+                   << llvm::Twine::utohexstr(static_cast<uint32_t>(hints[idx]))
                    << " " << *copy << "\n";
   });
 
@@ -124,6 +123,7 @@ void fuseGroup(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
 
 } // namespace
 
+// Find adjacent auto-fuse candidates and greedily fuse compatible groups.
 void autoFuseTDMCopies(ModuleOp mod) {
   // Auto-fusion rules:
   //   1. Only unhinted copies are auto-fused. User-provided hints stay as
