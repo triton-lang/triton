@@ -750,9 +750,11 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
           for (int n = 0; n < numRepN; ++n) {
             // Insert pingpong cluster barrier when needed.
             if (is2Step && currIter++ == halfPoint) {
-              ROCDL::SchedBarrier::create(rewriter, loc, 0);
+              ROCDL::SchedBarrier::create(rewriter, loc,
+                                          ROCDL::SchedGroupMask::none);
               ROCDL::SBarrierOp::create(rewriter, loc);
-              ROCDL::SchedBarrier::create(rewriter, loc, 0);
+              ROCDL::SchedBarrier::create(rewriter, loc,
+                                          ROCDL::SchedGroupMask::none);
             }
             Value acc = tb.undef(vecTy);
             for (unsigned v = 0; v < elemsPerVec; ++v) {
