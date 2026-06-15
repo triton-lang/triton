@@ -23,6 +23,23 @@ Value vecSet(TritonLLVMOpBuilder &b, Value vec, int idx, Value val) {
   return b.insert_element(vec, val, b.i32_val(idx));
 }
 
+// Add `byteOffset` to the 64-bit global address held in group0 dwords [2:3], in
+// place.  Viewing group0 as <2 x i64> and adding to lane 1 is a single i64 add
+// (the i32<->i64 bitcasts are free), saving the scalar-ALU a per-dword
+// decode/repack would cost in the loop.  Adding over the whole word (valid bit
+// included) is safe: the address always stays within the HW-addressable range,
+// so the add never disturbs the valid bit.
+void advanceGlobalAddr(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
+                       Value &group0, Value byteOffset) {
+  auto v2i64 = VectorType::get({2}, i64_ty);
+  auto v4i32 = VectorType::get({4}, i32_ty);
+  Value g0AsI64 = b.bitcast(group0, v2i64);
+  Value addr = b.extract_element(g0AsI64, b.i32_val(1));
+  addr = b.add(addr, byteOffset);
+  g0AsI64 = b.insert_element(g0AsI64, addr, b.i32_val(1));
+  group0 = b.bitcast(g0AsI64, v4i32);
+}
+
 // Helper to decode a value spanning two 32-bit words
 Value decode48BitValue(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
                        Value group, int startIdx) {
@@ -357,12 +374,6 @@ void updateTensorDescriptor(RewriterBase &rewriter, Location loc,
     auto elementBitWidth = elementType.getIntOrFloatBitWidth();
     Value elemSize = b.i64_val(elementBitWidth / 8);
 
-    // Decode current 48-bit global_addr from group0[2:3] (valid bit masked).
-    Value addrLo = vecGet(b, group0, 2);
-    Value addrHi = b.and_(vecGet(b, group0, 3), b.i32_val(0x7FFFFFFF));
-    Value addr = b.or_(b.zext(i64_ty, addrLo),
-                       b.shl(b.zext(i64_ty, addrHi), b.i64_val(32)));
-
     // Per-dim strides (i64; innermost == 1) come from the descriptor.  Offsets
     // are sign-extended; accumulate in i64 so offset*stride doesn't overflow
     // i32 for large tensors.
@@ -372,14 +383,8 @@ void updateTensorDescriptor(RewriterBase &rewriter, Location loc,
     for (size_t i = 0; i < numDims; ++i)
       deltaElem = b.add(deltaElem,
                         b.mul(b.sext(i64_ty, addOffsets[i]), tensorStride[i]));
-    addr = b.add(addr, b.mul(deltaElem, elemSize));
-
-    // Re-pack, restoring the valid bit in group0[3] bit 31.
-    Value newLo = b.trunc(i32_ty, addr);
-    Value newHi = b.trunc(i32_ty, b.lshr(addr, b.i64_val(32)));
-    newHi = b.or_(newHi, b.i32_val(1 << 31));
-    group0 = vecSet(b, group0, 2, newLo);
-    group0 = vecSet(b, group0, 3, newHi);
+    Value byteDelta = b.mul(deltaElem, elemSize);
+    advanceGlobalAddr(rewriter, b, group0, byteDelta);
   }
 
   // Map a Triton dim index i (0 = outermost) to the descriptor dim index
@@ -765,12 +770,11 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  Type globalPtrTy = ptr_ty(ctx, 1);
   Type sharedPtrTy = ptr_ty(ctx, 3);
 
   // Tile dimensions are owned by this filler (computed below from
   // shapePerCTA / warpsPerCTA), so the decoder skips them.
-  auto [srcPtr, tensorShape, tensorStride] =
+  auto [_, tensorShape, tensorStride] =
       decodeTDMDescriptorFull(rewriter, loc, groups, numDims);
 
   // Per-warp tile shape; smaller-K hints scale this up so CTA coverage holds.
@@ -819,7 +823,6 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
     Value dimOffset = b.mul(b.zext(i64_ty, offset[i]), tensorStride[i]);
     baseOffset = b.add(baseOffset, dimOffset);
   }
-  srcPtr = b.gep(globalPtrTy, elementType, srcPtr, baseOffset);
 
   auto tdmToShared = tdmLayout.invertAndCompose(sharedLayout);
   auto sharedOffsets = applyLinearLayout(
@@ -892,13 +895,15 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   }
 
   // Update group0 with addresses
-  Value globalAddr = b.ptrtoint(i64_ty, srcPtr);
   Value ldsAddr = b.ptrtoint(i32_ty, dstPtr);
 
   // Pure form inherits pred from the descriptor (group0[0]); the per-warp
   // active mask below still applies.
-  if (isPureForm)
+  bool predIsInherited = false;
+  if (isPureForm) {
     pred = vecGet(b, groups[0], 0);
+    predIsInherited = true; // equals group0[0] unless the mask below changes it
+  }
 
   // Predicate off redundant warps: `((warpId ^ i0) & warpFreeMask) == 0`.
   // `warpFreeMask` covers positions NOT in basisBits (or, without a hint,
@@ -911,16 +916,20 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                                  b.i32_val(0));
       Value layoutPred = b.select(isActive, b.i32_val(1), b.i32_val(0));
       pred = b.and_(pred, layoutPred);
+      predIsInherited = false; // pred now differs from group0[0]
     }
   }
   Value &group0 = groups[0];
   Value &group1 = groups[1];
-  group0 = vecSet(b, group0, 0, pred);
+  // Skip re-writing pred when it is exactly the descriptor's existing
+  // group0[0].
+  if (!predIsInherited)
+    group0 = vecSet(b, group0, 0, pred);
   group0 = vecSet(b, group0, 1, ldsAddr);
-  group0 = vecSet(b, group0, 2, b.trunc(i32_ty, globalAddr));
-  Value g0_3 = b.and_(vecGet(b, group0, 3), b.i32_val(1 << 31));
-  g0_3 = b.or_(g0_3, b.trunc(i32_ty, b.lshr(globalAddr, b.i64_val(32))));
-  group0 = vecSet(b, group0, 3, g0_3);
+  // Advance global_addr by the per-warp byte offset.
+  Value byteOffset =
+      b.mul(baseOffset, b.i64_val(elementType.getIntOrFloatBitWidth() / 8));
+  advanceGlobalAddr(rewriter, b, group0, byteOffset);
 
   // Update group1 with tensor shapes
   Value g1_0 = vecGet(b, group1, 0);
