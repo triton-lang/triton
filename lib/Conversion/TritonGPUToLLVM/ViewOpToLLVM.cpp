@@ -300,49 +300,33 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
   matchAndRewrite(ReshapeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    assert(!isExpensiveView(op.getSrc().getType(), op.getType()));
     auto resultTy = cast<RankedTensorType>(op.getType());
     auto typeConverter = getTypeConverter();
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    if (op.getRequireSliced()) {
+      auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
+      auto srcLayout = dyn_cast<SliceEncodingAttr>(srcTy.getEncoding());
+      if (!srcLayout)
+        return emitOptionalError(
+            loc, "require_sliced reshape expects a slice encoding");
+
+      auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
+      auto resultOffsets =
+          emitOffsetForLayout(resultTy.getEncoding(), resultTy);
+      std::map<SmallVector<unsigned>, Value> srcValues;
+      for (size_t i = 0; i < srcOffsets.size(); ++i)
+        srcValues[srcOffsets[i]] = vals[i];
+
+      SmallVector<Value> resultVals;
+      for (auto offset : resultOffsets) {
+        offset.erase(offset.begin() + srcLayout.getDim());
+        resultVals.push_back(srcValues.at(offset));
+      }
+      vals = std::move(resultVals);
+    } else {
+      assert(!isExpensiveView(op.getSrc().getType(), op.getType()));
+    }
     Value ret = packLLElements(loc, typeConverter, vals, rewriter, resultTy);
-    rewriter.replaceOp(op, ret);
-    return success();
-  }
-};
-struct ExpandDimsOpConversion : public ConvertOpToLLVMPattern<ExpandDimsOp> {
-  using OpAdaptor = typename ExpandDimsOp::Adaptor;
-  explicit ExpandDimsOpConversion(
-      LLVMTypeConverter &typeConverter,
-      PatternBenefit benefit = patternBenefitDefault)
-      : ConvertOpToLLVMPattern<ExpandDimsOp>(typeConverter, benefit) {}
-  LogicalResult
-  matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    auto typeConverter = getTypeConverter();
-    auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
-    auto resultTy = cast<RankedTensorType>(op.getType());
-    auto srcLayout = dyn_cast<SliceEncodingAttr>(srcTy.getEncoding());
-    if (!srcLayout) {
-      return emitOptionalError(
-          loc, "ExpandDimsOp only supports SliceEncodingAttr as its input");
-    }
-    auto resultLayout = resultTy.getEncoding();
-    auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
-    auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
-    std::map<SmallVector<unsigned>, Value> srcValues;
-    for (size_t i = 0; i < srcOffsets.size(); i++) {
-      srcValues[srcOffsets[i]] = srcVals[i];
-    }
-    SmallVector<Value> resultVals;
-    for (size_t i = 0; i < resultOffsets.size(); i++) {
-      auto offset = resultOffsets[i];
-      offset.erase(offset.begin() + srcLayout.getDim());
-      resultVals.push_back(srcValues.at(offset));
-    }
-    Value ret =
-        packLLElements(loc, typeConverter, resultVals, rewriter, resultTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -635,7 +619,6 @@ void mlir::triton::populateViewOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<ReshapeOpConversion>(typeConverter, benefit);
-  patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
