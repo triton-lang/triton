@@ -562,20 +562,19 @@ class MXFPGEMMSliceKProgram:
         load_idx = 0
         wmma_idx = 0
 
-        # prologue
-        # iter 0
-        load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer, self.b_scale_buffer)
+        # Prologue: keep NUM_BUFFERS K-tiles in flight, then wait until only the
+        # future tiles remain outstanding before consuming the oldest one.
+        for _ in gl.static_range(cfg.NUM_BUFFERS):
+            load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer,
+                                        self.b_scale_buffer)
 
-        # iter 1
-        load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer, self.b_scale_buffer)
-        # iter 0
         gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1) * cfg.NUM_LOADS_IN_BATCH)
         a0, b0, scale_a0, scale_b0 = self.issue_subtile_local_loads(wmma_idx, 0, self.a_buffer, self.b_buffer,
                                                                     self.a_scale_buffer, self.b_scale_buffer)
 
         accumulator = gl.zeros((cfg.BLOCK_M, cfg.BLOCK_N), dtype=gl.float32, layout=self.cfg.acc_layout)
-        loop_ub = gl.cdiv(K, cfg.BLOCK_K) - 1
-        for _ in range(0, loop_ub - 1):
+        loop_ub = gl.cdiv(K, cfg.BLOCK_K) - cfg.NUM_BUFFERS
+        for _ in range(0, loop_ub):
             # iter i
             accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
 
@@ -584,9 +583,9 @@ class MXFPGEMMSliceKProgram:
                                                                         self.a_scale_buffer, self.b_scale_buffer)
             wmma_idx += 1
 
-            # iter i + 2
+            # iter i + NUM_BUFFERS
             load_idx = self.issue_loads(load_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer,
-                                        self.b_scale_buffer, phase=wmma_idx + cfg.NUM_BUFFERS - 2)
+                                        self.b_scale_buffer, phase=wmma_idx + cfg.NUM_BUFFERS - 1)
 
             # iter i
             accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
@@ -597,29 +596,18 @@ class MXFPGEMMSliceKProgram:
                                                                         self.a_scale_buffer, self.b_scale_buffer)
 
         # epilogue
-        # iter end - 2
-        accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
+        for i in gl.static_range(cfg.NUM_BUFFERS):
+            if i > 0:
+                gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1 - i) * cfg.NUM_LOADS_IN_BATCH)
+                a0, b0, scale_a0, scale_b0 = self.issue_subtile_local_loads(wmma_idx, 0, self.a_buffer, self.b_buffer,
+                                                                            self.a_scale_buffer, self.b_scale_buffer)
 
-        # iter end - 2
-        a1, b1, scale_a1, scale_b1 = self.issue_subtile_local_loads(wmma_idx, 1, self.a_buffer, self.b_buffer,
-                                                                    self.a_scale_buffer, self.b_scale_buffer)
-        wmma_idx += 1
+            accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
 
-        # iter end - 2
-        accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
-        # iter end - 1
-        gl.amd.gfx1250.tdm.async_wait(0)
-        a0, b0, scale_a0, scale_b0 = self.issue_subtile_local_loads(wmma_idx, 0, self.a_buffer, self.b_buffer,
-                                                                    self.a_scale_buffer, self.b_scale_buffer)
-        # iter end - 1
-        accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
-
-        # iter end - 1
-        a1, b1, scale_a1, scale_b1 = self.issue_subtile_local_loads(wmma_idx, 1, self.a_buffer, self.b_buffer,
-                                                                    self.a_scale_buffer, self.b_scale_buffer)
-        wmma_idx += 1
-
-        accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
+            a1, b1, scale_a1, scale_b1 = self.issue_subtile_local_loads(wmma_idx, 1, self.a_buffer, self.b_buffer,
+                                                                        self.a_scale_buffer, self.b_scale_buffer)
+            wmma_idx += 1
+            accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
 
         apply_activation_and_store(self.cfg, accumulator, self.c_ptr, self.c_offs, self.c_mask)
 
@@ -1247,8 +1235,10 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
         if ASYNC_COPY_SCALE:
             pytest.skip('Only use ASYNC_COPY_SCALE in sliceNK schedule')
 
-    if SCHEDULE != 'baseline' and NUM_BUFFERS != 2:
-        pytest.skip('Only test 2 buffers in sliceK and sliceNK schedules')
+    if SCHEDULE == 'sliceNK' and NUM_BUFFERS != 2:
+        pytest.skip('Only test 2 buffers in sliceNK schedule')
+    if SCHEDULE == 'sliceK' and NUM_BUFFERS not in (2, 3):
+        pytest.skip('Only test 2 or 3 buffers in sliceK schedule')
 
     if ASYNC_COPY_SCALE and (M < BLOCK_M or N < BLOCK_N or K < BLOCK_K):
         pytest.skip('NYI: Skipping small problem sizes for async copy scale')
@@ -1340,6 +1330,12 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
     else:
         torch.testing.assert_close(c_d.cpu(), c_ref.cpu(), rtol=1e-5, atol=1e-8)
     print('✅Pass')
+
+
+@pytest.mark.parametrize("NUM_BUFFERS", [2, 3])
+def test_runtime_mxgemm_tdm_slicek_three_k_tiles(NUM_BUFFERS):
+    test_runtime_mxgemm_tdm_pipelined('float8_e4m3', 'float8_e5m2', 256, 256, 768, 128, 128, 256, True, NUM_BUFFERS,
+                                      True, True, 'sliceK', False, 8, '')
 
 
 if __name__ == '__main__':

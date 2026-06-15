@@ -15,6 +15,7 @@ include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
 // Interfaces
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
 //
 // Ops
@@ -76,6 +77,29 @@ def TTI_ExperimentalClusterCTAIdOp
     }]>
   ];
   let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+def TTI_ExperimentalLocalGatherOp
+    : TTI_Op<"experimental_local_gather"> {
+  let summary = "Gather elements from shared memory with logical base offsets";
+  let description = [{
+    Gather elements from a shared memory descriptor using an index tensor along
+    one axis, after shifting the logical source coordinates by rank-sized scalar
+    offsets. This is intentionally private to instrumentation passes.
+  }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    TT_IntTensor:$indices,
+    Variadic<I32>:$offsets,
+    I32Attr:$axis
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $src `[` $indices `]` `offsets` `=` `[` $offsets `]`
+    attr-dict `:` qualified(type($src)) `,` type($indices) `->` type($result)
+  }];
+  let hasVerifier = 1;
 }
 
 def TTI_ExperimentalGSanInitOp

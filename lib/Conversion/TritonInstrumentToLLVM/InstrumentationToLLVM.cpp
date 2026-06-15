@@ -347,6 +347,51 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+struct LocalGatherOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalLocalGatherOp> {
+  LocalGatherOpConversion(const LLVMTypeConverter &converter,
+                          const TargetInfoBase &targetInfo,
+                          PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<tti::ExperimentalLocalGatherOp>(converter,
+                                                               benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalLocalGatherOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto memDescTy = cast<ttg::MemDescType>(op.getSrc().getType());
+    auto regTy = cast<RankedTensorType>(op.getType());
+    auto typeConverter = getTypeConverter();
+
+    Type llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                         llvmElemTy, rewriter);
+    auto idxValues = unpackLLElements(loc, adaptor.getIndices(), rewriter);
+    auto dstIndices =
+        emitIndices(loc, rewriter, targetInfo, regTy.getEncoding(), regTy,
+                    /*withCTAOffset=*/true);
+    SmallVector<Value> offsets(adaptor.getOffsets());
+
+    auto addrs =
+        computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
+                          dstIndices, op.getAxis(), rewriter, offsets);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    SmallVector<Value> results =
+        llvm::map_to_vector(addrs, [&](const LocalSharedMemoryAddress &addr) {
+          return targetInfo.loadDShared(rewriter, loc, addr.ptr, addr.ctaId,
+                                        llvmElemTy, b.true_val());
+        });
+    Value result = packLLElements(loc, typeConverter, results, rewriter, regTy);
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
 } // namespace
 
 void mlir::triton::populateInstrumentationToLLVMPatterns(
@@ -358,4 +403,5 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<LockReleaseOpConversion>(typeConverter, targetInfo);
   patterns.add<MemDescToI32OpConversion>(typeConverter);
   patterns.add<ClusterCTAIdOpConversion>(typeConverter, targetInfo);
+  patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo);
 }

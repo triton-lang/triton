@@ -134,10 +134,13 @@ static bool encodeTDMDescriptor(TDMDescriptor *desc, int elementBitWidth,
     adjustedBlockSize[i] = (uint32_t)adjustedBlockSize64[i];
 
   // group0 (128 bits / 4 dwords) effective bit encoding:
-  // [1:0]:     pred (to be filled later)
+  // [1:0]:     pred (defaulted to 1)
   // [63:32]:   lds address (to be filled later)
   // [120:64]:  global address
   // [127:126]: type - currently always set to 0x2
+  // Default pred = 1 (matches device createTDMDescriptor) so a host descriptor
+  // used by a copy without an explicit pred update doesn't silently no-op.
+  desc->group0_0 = 1;
   desc->group0_2 = (uint32_t)(globalAddress & 0xFFFFFFFF);
   desc->group0_3 = (uint32_t)((globalAddress >> 32) & 0x7FFFFFFF) | (0x1 << 31);
 
