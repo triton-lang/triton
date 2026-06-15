@@ -756,6 +756,40 @@ tt.func @pipeline_fp64_with_async_copy_gfx950(
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
+#dotA = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dotB = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+// A 16x2 tile has fewer LDS offsets than lanes in a gfx950 warp, so no source
+// layout can make the direct-to-LDS warp writes coalesced.
+// COMMON-LABEL: @reject_oversubscribed_async_copy_gfx950
+// ASYNC-NOT: ttg.async_copy_global_to_local
+// ASYNC: tt.load
+// ASYNC: ttg.local_store
+// ASYNC: scf.for
+// ASYNC-NOT: ttg.async_copy_global_to_local
+// ASYNC: tt.dot
+// ASYNC-NOT: ttg.async_copy_global_to_local
+// ASYNC: tt.return
+tt.func @reject_oversubscribed_async_copy_gfx950(
+                  %a : tensor<256x16xf32, #dotA>,
+                  %b_ptr : tensor<16x2x!tt.ptr<f32>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 1]> : tensor<2xi32>},
+                  %lb: i32, %ub: i32, %step: i32) -> tensor<256x2xf32, #blocked> {
+  %cst_0 = arith.constant dense<0.000000e+00> : tensor<256x2xf32, #blocked>
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_0) -> (tensor<256x2xf32, #blocked>) : i32 {
+    %b_ = tt.load %b_ptr : tensor<16x2x!tt.ptr<f32>, #blocked1>
+    %b = ttg.convert_layout %b_ : tensor<16x2xf32, #blocked1> -> tensor<16x2xf32, #dotB>
+    %c = tt.dot %a, %b, %acc : tensor<256x16xf32, #dotA> * tensor<16x2xf32, #dotB> -> tensor<256x2xf32, #blocked>
+    scf.yield %c : tensor<256x2xf32, #blocked>
+  }
+  tt.return %loop : tensor<256x2xf32, #blocked>
+}
+}
+
+// -----
+
 // COMMON-LABEL: pipelining_local_load_packed_transposed
 
 // Prologue

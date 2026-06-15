@@ -10,6 +10,7 @@
 #include "llvm/Support/Debug.h"
 #include <variant>
 
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-pipeline-lower-loops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -366,14 +367,15 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   if (numBuffers <= 1)
     return false;
 
+  // Checks whether the global pointer's contiguity and mask alignment allows
+  // for at least 32 bit wide loads.
+  if (!triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis))
+    return false;
+
   using tt::amdgpu::ISAFamily;
   if (sharedEnc && llvm::is_contained(
                        {ISAFamily::CDNA3, ISAFamily::CDNA4, ISAFamily::GFX1250},
                        targetInfo.getISAFamily())) {
-    // Compute the final vecSize we can use for the combination of
-    // sourceEncoding and sharedEncoding. We can only use AsyncCopy if the
-    // target supports the requested or a smaller vecSize because we cannot
-    // stride when loading directly to lds on GFX9
     auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
     auto regLayout = triton::gpu::toLinearLayout(srcTy);
     // It's the allocation so we trim the multibuffer dimension
@@ -392,13 +394,21 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
     if (paddedEnc)
       vecSize = std::min(vecSize, paddedEnc.getMinInterval());
 
-    if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
+    unsigned finalVecSize =
+        fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo);
+    if (finalVecSize == 0)
       return false;
+
+    if (!targetInfo.supportsDirectToLdsScatter()) {
+      int64_t numElements = 1;
+      for (int64_t dim : srcTy.getShape())
+        numElements *= dim;
+      if (numElements < targetInfo.getWarpSize() * finalVecSize)
+        return false;
+    }
   }
 
-  // Checks whether the global pointer's contiguity and mask alignment allows
-  // for at least 32 bit wide loads
-  return triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
+  return true;
 }
 
 // Convert load ops into shared memory allocation loads and apply
