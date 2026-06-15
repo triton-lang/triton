@@ -155,9 +155,8 @@ def _handle_i32_pred(pred, _semantic):
 
 @builtin
 def update_tensor_descriptor(desc: tensor_descriptor, add_offsets: List[ttgl.constexpr | ttgl.tensor] = None,
-                             set_bounds: List[ttgl.constexpr | ttgl.tensor] = None,
-                             dest: shared_memory_descriptor = None, pred=None, barrier: shared_memory_descriptor = None,
-                             _semantic=None) -> tensor_descriptor:
+                             set_bounds: List[ttgl.constexpr | ttgl.tensor] = None, pred=None,
+                             clamp_bounds: bool = False, _semantic=None) -> tensor_descriptor:
     """Update selected fields of a TDM descriptor; return a new descriptor SSA value.
 
     Each parameter is independently optional; only the fields the caller
@@ -167,7 +166,8 @@ def update_tensor_descriptor(desc: tensor_descriptor, add_offsets: List[ttgl.con
     NOTE: Unlike the standard tensor-descriptor mental model, `add_offsets`
     here moves the tile position only.  It does NOT update the descriptor's
     bounds.  If the loop crosses an OOB boundary, you must also pass
-    `set_bounds` explicitly to install the correct OOB extent.
+    `set_bounds` explicitly, or pass `clamp_bounds=True` to derive the OOB
+    extent from `add_offsets`.
 
     Args:
         desc (tensor_descriptor): the input descriptor.
@@ -176,11 +176,11 @@ def update_tensor_descriptor(desc: tensor_descriptor, add_offsets: List[ttgl.con
         set_bounds (List[int], optional): per-dim absolute rewrite of the
             descriptor's bounds.  Use to install OOB extent at a peel
             epilogue.
-        dest (shared_memory_descriptor, optional): set the descriptor's
-            shared-memory slot used by subsequent loads/stores.
         pred (int, optional): set the descriptor's predicate.
-        barrier (shared_memory_descriptor, optional): enable barrier
-            signaling on this descriptor and set the barrier address.
+        clamp_bounds (bool, optional): if True, also shrink the descriptor's
+            bounds by `add_offsets` (tensor_dim[i] = max(0, tensor_dim[i] -
+            add_offsets[i])) to derive the advanced tile's OOB extent.
+            Requires `add_offsets`; mutually exclusive with `set_bounds`.
 
     Returns:
         tensor_descriptor: a new descriptor SSA value with the requested
@@ -193,16 +193,23 @@ def update_tensor_descriptor(desc: tensor_descriptor, add_offsets: List[ttgl.con
         # K-loop interior: bump tile position only
         d = tdm.update_tensor_descriptor(d, add_offsets=[0, BLOCK_K])
 
-        # Prologue: position at first tile + wire LDS and barrier
+        # Prologue: position at first tile + set the predicate
         d = tdm.update_tensor_descriptor(d, add_offsets=[pid_m * BLOCK_M, 0],
-                                         dest=a_shared, barrier=a_bar)
+                                         pred=do_load)
 
         # Peel epilogue: install real OOB extent for the partial last tile
         d = tdm.update_tensor_descriptor(d, set_bounds=[M - pid_m * BLOCK_M, K - k_main])
     """
-    if add_offsets is None and set_bounds is None and dest is None and pred is None and barrier is None:
+    if add_offsets is None and set_bounds is None and pred is None:
         raise ValueError("tdm.update_tensor_descriptor requires at least one of add_offsets, "
-                         "set_bounds, dest, pred, barrier")
+                         "set_bounds, pred")
+
+    clamp_bounds = _unwrap_if_constexpr(clamp_bounds)
+    if clamp_bounds:
+        if add_offsets is None:
+            raise ValueError("tdm.update_tensor_descriptor: clamp_bounds requires add_offsets")
+        if set_bounds is not None:
+            raise ValueError("tdm.update_tensor_descriptor: clamp_bounds and set_bounds are mutually exclusive")
 
     rank = len(desc.block_shape)
 
@@ -218,19 +225,12 @@ def update_tensor_descriptor(desc: tensor_descriptor, add_offsets: List[ttgl.con
             raise ValueError(f"set_bounds must have length {rank} (descriptor rank), got {len(set_bounds)}")
         set_bounds_handles = _semantic._convert_to_ir_values(set_bounds, require_i64=False)
 
-    dest = _unwrap_if_constexpr(dest)
-    dest_handle = dest.handle if dest is not None else ttgl.ir.value()
-
     pred_handle = ttgl.ir.value()
     if pred is not None:
-        pred_t = _semantic.to_tensor(pred)
-        pred_handle = pred_t.handle
-
-    barrier = _unwrap_if_constexpr(barrier)
-    barrier_handle = barrier.handle if barrier is not None else ttgl.ir.value()
+        pred_handle = _handle_i32_pred(pred, _semantic).handle
 
     new_handle = _semantic.builder.create_update_tensor_descriptor(desc.handle, add_offset_handles, set_bounds_handles,
-                                                                   dest_handle, pred_handle, barrier_handle)
+                                                                   pred_handle, bool(clamp_bounds))
     # Rebuild shape/strides tuples so the returned descriptor's tuple objects
     # don't alias the original's (the frontend's SSA tracking assumes distinct
     # tuples per descriptor value).
@@ -240,16 +240,24 @@ def update_tensor_descriptor(desc: tensor_descriptor, add_offsets: List[ttgl.con
 
 
 @builtin
-def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], dest: shared_memory_descriptor,
-               pred=True, mbarrier: shared_memory_descriptor = None, warp_used_hint=None, cache_modifier="",
-               _semantic=None) -> None:
+def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor] = None,
+               dest: shared_memory_descriptor = None, pred=None, mbarrier: shared_memory_descriptor = None,
+               warp_used_hint=None, cache_modifier="", _semantic=None) -> None:
     """Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.
+
+    This op expects a prior ``update_tensor_descriptor`` to position the
+    descriptor for the load offsets and bounds.  Doing this explicitly lets the
+    developer control when and where the descriptor update happens, which has
+    performance implications for downstream code generation.  For convenience,
+    ``offsets`` (and optionally ``pred``) may be passed here, in which case an
+    ``update_tensor_descriptor`` is emitted right before the load.
 
     Args:
         src (tensor_descriptor): the source tensor descriptor.
-        offsets (List[int]): the offsets from the base pointer in the tensor descriptor.
+        offsets (List[int], optional): if given, the offsets from the base
+            pointer used to position the descriptor before the load.
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
-        pred (bool, optional): Predicate to enable or disable the load. Defaults to True.
+        pred (bool, optional): if given, predicate to enable or disable the load.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
         warp_used_hint (int, optional): Bitmask selecting which warps issue
             the TDM copy (bit ``n`` => warp ``n``); cleared warps become HW
@@ -262,8 +270,13 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
             rejected by the verifier.
         cache_modifier (str, optional): Cache behavior.
     """
-    offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
-    pred = _handle_i32_pred(pred, _semantic)
+    assert dest is not None, "async_load requires a dest shared_memory_descriptor"
+    if offsets:
+        eff_pred = True if pred is None else pred
+        src = update_tensor_descriptor(src, add_offsets=offsets, pred=eff_pred, clamp_bounds=True, _semantic=_semantic)
+    elif pred is not None:
+        src = update_tensor_descriptor(src, pred=pred, _semantic=_semantic)
+
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
@@ -272,27 +285,35 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
     if warp_used_hint is not None:
         warp_used_hint = int(warp_used_hint)
 
-    _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, offset_handles, dest.handle, pred.handle,
-                                                            mbarrier_handle, cache_modifier, warp_used_hint)
+    _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, dest.handle, mbarrier_handle, cache_modifier,
+                                                            warp_used_hint)
 
 
 @builtin
-def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], src: shared_memory_descriptor,
-                mbarrier: shared_memory_descriptor = None, cache_modifier="", _semantic=None) -> None:
+def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor] = None,
+                src: shared_memory_descriptor = None, mbarrier: shared_memory_descriptor = None, cache_modifier="",
+                _semantic=None) -> None:
     """Store a block of tensor specified in tensor descriptor from shared memory to global memory asynchronously.
+
+    See :func:`async_load` for how the descriptor is positioned (a prior
+    ``update_tensor_descriptor`` or the ``offsets`` convenience).  Stores take no
+    ``pred``.
 
     Args:
         dest (tensor_descriptor): the destination tensor descriptor.
-        offsets (List[int]): the offsets from the base pointer in the tensor descriptor.
+        offsets (List[int], optional): if given, the offsets from the base
+            pointer used to position the descriptor before the store.
         src (shared_memory_descriptor): the shared memory source to load the data.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
-    offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
+    assert src is not None, "async_store requires a src shared_memory_descriptor"
+    if offsets:
+        dest = update_tensor_descriptor(dest, add_offsets=offsets, clamp_bounds=True, _semantic=_semantic)
+
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
     cache_modifier = _semantic._str_to_store_cache_modifier(cache_modifier)
-    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, offset_handles, src.handle, mbarrier_handle,
-                                                            cache_modifier)
+    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, src.handle, mbarrier_handle, cache_modifier)
 
 
 @builtin
