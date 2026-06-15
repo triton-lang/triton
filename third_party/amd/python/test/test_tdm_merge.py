@@ -1,8 +1,8 @@
-"""Tests for adjacent TDM-copy merging on gfx1250.
+"""Tests for TDM-copy materialization on gfx1250.
 
-Explicit `async_load_fused` calls, and adjacent `async_load`s with compatible
-`warp_used_hint` masks, should lower to one `tensor_load_to_lds`.  The
-materialization pass can also generate hints for adjacent unhinted copies unless
+Explicit `async_load_fused` calls lower to one `tensor_load_to_lds`.  Regular
+`async_load`s with user-provided `warp_used_hint` masks stay separate; the
+materialization pass only auto-merges adjacent unhinted copies unless
 `TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1` is set.
 
 Compile-only tests count AMDGCN instructions; runtime tests compare against a
@@ -66,7 +66,7 @@ def _position_input(desc, off_m, off_n):
     return ttgl.amd.gfx1250.tdm.update_tensor_descriptor(desc, add_offsets=[off_m, off_n], pred=True)
 
 
-# 2-way merge: adjacent loads fuse when their hints are disjoint.
+# 2-way copies: explicit fused loads merge, while regular hinted loads do not.
 
 
 @gluon.jit
@@ -138,20 +138,20 @@ def vector_add_tdm_explicit_fused_kernel(
     _store_tile(c_ptr, c, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
 
 
-# Layout: (HINT_A, HINT_B, expected_merge, id).  Bit `i` selects warp `i`.
+# Layout: (HINT_A, HINT_B, id).  Bit `i` selects warp `i`.
 _HINT_PARAMS = [
-    # minimal mergeable pair: K=1 each, union {0,1}
-    (0b00000001, 0b00000010, True, "merge_single_warp_pair"),
+    # minimal legal pair: K=1 each, union {0,1}
+    (0b00000001, 0b00000010, "single_warp_pair"),
     # split warps in half: K=4 each, union covers all 8 warps.
-    (0b00001111, 0b11110000, True, "merge_lo_hi"),
+    (0b00001111, 0b11110000, "lo_hi"),
     # strided cosets: every-other warp + complement.
-    (0b01010101, 0b10101010, True, "merge_strided"),
+    (0b01010101, 0b10101010, "strided"),
     # lo/hi pair cosets: basis {0,2}, two K=4 quartets.
-    (0b00110011, 0b11001100, True, "merge_lo_hi_pairs"),
+    (0b00110011, 0b11001100, "lo_hi_pairs"),
     # partial coverage: K=2 each, union covers 4 of 8 warps (rest idle).
-    (0b00000011, 0b00001100, True, "merge_partial_K4_idle"),
+    (0b00000011, 0b00001100, "partial_K4_idle"),
     # pairwise-disjoint hints whose union is not itself a coset.
-    (0b00000001, 0b00001000, True, "merge_disjoint_K1_noncoset_union"),
+    (0b00000001, 0b00001000, "disjoint_K1_noncoset_union"),
 ]
 
 
@@ -231,12 +231,12 @@ _COMPILE_BLOCK_SHAPES = [(64, 64), (32, 128)]
 
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _COMPILE_BLOCK_SHAPES)
 @pytest.mark.parametrize(
-    "HINT_A,HINT_B,expected_merge",
+    "HINT_A,HINT_B",
     [_param_args(p) for p in _HINT_PARAMS],
     ids=[_param_id(p) for p in _HINT_PARAMS],
 )
-def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, expected_merge, request):
-    """Compile-only: asserts 1 fused vs 2 separate `tensor_load_to_lds`."""
+def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, request):
+    """Compile-only: regular hinted loads stay separate; unhinted loads auto-fuse."""
     use_tdm_hint = _use_tdm_hint(request)
     ha, hb = _hints(use_tdm_hint, HINT_A, HINT_B)
     amdgcn = _compile_amdgcn(
@@ -244,8 +244,7 @@ def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, expected_merge
             "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "HINT_A": ha, "HINT_B": hb
         })
     context = f"HINT_A=0b{HINT_A:08b}, HINT_B=0b{HINT_B:08b}"
-    fused = use_tdm_hint and expected_merge
-    _assert_tensor_load_count(amdgcn, 1 if fused else 2, context)
+    _assert_tensor_load_count(amdgcn, 2 if use_tdm_hint else 1, context)
 
 
 def test_compile_vector_add_tdm_explicit_fused():
@@ -277,11 +276,11 @@ _RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
 
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
 @pytest.mark.parametrize(
-    "HINT_A,HINT_B,expected_merge",
+    "HINT_A,HINT_B",
     [_param_args(p) for p in _HINT_PARAMS],
     ids=[_param_id(p) for p in _HINT_PARAMS],
 )
-def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, expected_merge, request):
+def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B, request):
     """Runtime: c = a + b vs torch CPU reference; merging is perf-only."""
     _require_tdm_runtime()
     _run_vector_add(vector_add_tdm_kernel, 2, (BLOCK_M, BLOCK_N), _hints(_use_tdm_hint(request), HINT_A, HINT_B))
@@ -333,10 +332,10 @@ def vector_add_tdm_kernel_3way(
 
 
 _HINT_PARAMS_3WAY = [
-    (8, 0b00001111, 0b00110000, 0b11000000, True, "three_way_8w_generated_shape"),
-    (4, 0b0011, 0b0100, 0b1000, True, "three_way_4w_generated_shape"),
+    (8, 0b00001111, 0b00110000, 0b11000000, "three_way_8w_generated_shape"),
+    (4, 0b0011, 0b0100, 0b1000, "three_way_4w_generated_shape"),
     # Pairwise-disjoint hints whose union is not a coset.
-    (8, 0b00000001, 0b00001000, 0b00010000, True, "three_way_noncoset_union"),
+    (8, 0b00000001, 0b00001000, 0b00010000, "three_way_noncoset_union"),
 ]
 
 
@@ -350,17 +349,16 @@ def _compile_3way(num_warps, hints=(None, None, None), block=(64, 64)) -> str:
 
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _COMPILE_BLOCK_SHAPES)
 @pytest.mark.parametrize(
-    "NUM_WARPS,HINT_A,HINT_B,HINT_C,expected_merge",
+    "NUM_WARPS,HINT_A,HINT_B,HINT_C",
     [_param_args(p) for p in _HINT_PARAMS_3WAY],
     ids=[_param_id(p) for p in _HINT_PARAMS_3WAY],
 )
-def test_compile_vector_add_tdm_3way(BLOCK_M, BLOCK_N, NUM_WARPS, HINT_A, HINT_B, HINT_C, expected_merge, request):
-    """Compile-only: 3 adjacent copies fuse when their hints are pairwise disjoint."""
+def test_compile_vector_add_tdm_3way(BLOCK_M, BLOCK_N, NUM_WARPS, HINT_A, HINT_B, HINT_C, request):
+    """Compile-only: regular hinted 3-way loads stay separate; unhinted loads auto-fuse."""
     use_tdm_hint = _use_tdm_hint(request)
     amdgcn = _compile_3way(NUM_WARPS, _hints(use_tdm_hint, HINT_A, HINT_B, HINT_C), (BLOCK_M, BLOCK_N))
     context = f"NUM_WARPS={NUM_WARPS}, HINT_A=0b{HINT_A:08b}, HINT_B=0b{HINT_B:08b}, HINT_C=0b{HINT_C:08b}"
-    fused = use_tdm_hint and expected_merge
-    _assert_tensor_load_count(amdgcn, 1 if fused else 3, context)
+    _assert_tensor_load_count(amdgcn, 3 if use_tdm_hint else 1, context)
 
 
 def test_compile_vector_add_tdm_3way_auto_merge_env_toggle(monkeypatch):
@@ -374,7 +372,7 @@ def test_compile_vector_add_tdm_3way_auto_merge_env_toggle(monkeypatch):
         _assert_tensor_load_count(amdgcn, expected, f"3-way env={env} warps={warps}")
 
 
-# 4-way merge: exercises the N=4 member-predicate path.
+# 4-way auto merge: exercises the N=4 member-predicate path.
 
 
 @gluon.jit
@@ -423,7 +421,7 @@ def vector_add_tdm_kernel_4way(
     _store_tile(out_ptr, out, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
 
 
-# 4-way positive cases: K=1 partial coverage and K=2 full coverage.
+# 4-way legal hint cases: K=1 partial coverage and K=2 full coverage.
 _HINT_PARAMS_4WAY = [
     (0b00000001, 0b00000010, 0b00000100, 0b00001000, "four_K1_lo4_union"),
     (0b00000011, 0b00001100, 0b00110000, 0b11000000, "four_K2_full_union"),
@@ -437,7 +435,7 @@ _HINT_PARAMS_4WAY = [
     ids=[_param_id(p) for p in _HINT_PARAMS_4WAY],
 )
 def test_compile_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, HINT_D, request):
-    """Compile-only: every quadruple must fuse to a single intrinsic."""
+    """Compile-only: regular hinted 4-way loads stay separate; unhinted loads auto-fuse."""
     use_tdm_hint = _use_tdm_hint(request)
     ha, hb, hc, hd = _hints(use_tdm_hint, HINT_A, HINT_B, HINT_C, HINT_D)
     amdgcn = _compile_amdgcn(
@@ -447,7 +445,7 @@ def test_compile_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, H
         })
     context = (f"HINT_A=0b{HINT_A:08b}, HINT_B=0b{HINT_B:08b}, "
                f"HINT_C=0b{HINT_C:08b}, HINT_D=0b{HINT_D:08b}")
-    _assert_tensor_load_count(amdgcn, 1 if use_tdm_hint else 4, context)
+    _assert_tensor_load_count(amdgcn, 4 if use_tdm_hint else 1, context)
 
 
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
@@ -457,14 +455,13 @@ def test_compile_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, H
     ids=[_param_id(p) for p in _HINT_PARAMS_4WAY],
 )
 def test_runtime_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, HINT_D, request):
-    """Runtime: out = a+b+c+d; checks the 4-way fused intrinsic routes
-    each member's bytes to its own buffer."""
+    """Runtime: out = a+b+c+d; merging is perf-only."""
     _require_tdm_runtime()
     _run_vector_add(vector_add_tdm_kernel_4way, 4, (BLOCK_M, BLOCK_N),
                     _hints(_use_tdm_hint(request), HINT_A, HINT_B, HINT_C, HINT_D))
 
 
-# Heterogeneous destination MemDescTypes should still fuse.
+# Auto merge can handle heterogeneous destination MemDescTypes.
 
 
 @gluon.jit
@@ -511,7 +508,7 @@ def heterogeneous_tdm_merge_kernel(
 
 
 def test_compile_heterogeneous_tdm_merge(request):
-    """Compile-only: A/B/AS/BS destination MemDescTypes still fuse."""
+    """Compile-only: heterogeneous unhinted loads auto-fuse; hinted loads stay separate."""
     use_tdm_hint = _use_tdm_hint(request)
     ha, hb, has_, hbs = _hints(use_tdm_hint, 0b00010001, 0b00100010, 0b01000100, 0b10001000)
     amdgcn = _compile_amdgcn(
@@ -520,11 +517,11 @@ def test_compile_heterogeneous_tdm_merge(request):
             "BLOCK_SCALE_M": 64, "BLOCK_SCALE_N": 32,
             "HINT_A": ha, "HINT_B": hb, "HINT_AS": has_, "HINT_BS": hbs
         }, ptr_ty="*i8")
-    _assert_tensor_load_count(amdgcn, 1 if use_tdm_hint else 4,
+    _assert_tensor_load_count(amdgcn, 4 if use_tdm_hint else 1,
                               "heterogeneous A/B/AS/BS destination MemDescTypes")
 
 
-# Cache modifiers must match for a merge.
+# Cache modifiers must match for auto merge.
 
 
 @gluon.jit
@@ -565,12 +562,12 @@ def vector_add_tdm_kernel_cache(
     _store_tile(c_ptr, c, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
 
 
-# Layout: (CACHE_A, CACHE_B, expected_merge, id).  Hints are pinned.
+# Layout: (CACHE_A, CACHE_B, expected_auto_merge, id).  Hints are pinned.
 _CACHE_PARAMS = [
-    # same cache: rule 7 satisfied
+    # same cache: auto-merge rule 6 satisfied
     ("", "", True, "same_default"),
     (".cg", ".cg", True, "same_cg"),
-    # mismatched cache: rule 7 forces a split
+    # mismatched cache: auto-merge rule 6 forces a split
     ("", ".cg", False, "default_vs_cg"),
     (".ca", ".cg", False, "ca_vs_cg"),
 ]
@@ -578,14 +575,15 @@ _CACHE_PARAMS = [
 
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _COMPILE_BLOCK_SHAPES)
 @pytest.mark.parametrize(
-    "CACHE_A,CACHE_B,expected_merge",
+    "CACHE_A,CACHE_B,expected_auto_merge",
     [_param_args(p) for p in _CACHE_PARAMS],
     ids=[_param_id(p) for p in _CACHE_PARAMS],
 )
-def test_compile_vector_add_tdm_cache(BLOCK_M, BLOCK_N, CACHE_A, CACHE_B, expected_merge, request):
-    """Compile-only: asserts rule 7 (matching cache modifiers)."""
+def test_compile_vector_add_tdm_cache(BLOCK_M, BLOCK_N, CACHE_A, CACHE_B, expected_auto_merge, request):
+    """Compile-only: asserts matching cache modifiers for auto merge."""
     use_tdm_hint = _use_tdm_hint(request)
-    # Hints pinned to the lo/hi split so only the cache modifier decides fusion.
+    # With hints enabled, regular copies stay separate. Without hints, only the
+    # cache modifier decides whether auto merge can fuse the unhinted copies.
     ha, hb = _hints(use_tdm_hint, 0b00001111, 0b11110000)
     amdgcn = _compile_amdgcn(
         vector_add_tdm_kernel_cache, ["a_ptr", "b_ptr", "c_ptr"], {
@@ -593,7 +591,7 @@ def test_compile_vector_add_tdm_cache(BLOCK_M, BLOCK_N, CACHE_A, CACHE_B, expect
             "CACHE_A": CACHE_A, "CACHE_B": CACHE_B
         })
     context = f"CACHE_A={CACHE_A!r}, CACHE_B={CACHE_B!r}"
-    fused = use_tdm_hint and expected_merge
+    fused = (not use_tdm_hint) and expected_auto_merge
     _assert_tensor_load_count(amdgcn, 1 if fused else 2, context)
 
 
@@ -604,9 +602,9 @@ if __name__ == "__main__":
         raise SystemExit("Set TRITON_AMD_RUN_TDM_RUNTIME_TESTS=1 on a gfx1250 device.")
     print("[2-way: vector_add_tdm_kernel]")
     for p in _HINT_PARAMS:
-        ha, hb, em, ident = p
-        print(f"-- {ident}: HINT_A=0b{ha:08b}, HINT_B=0b{hb:08b}, expected_merge={em}")
-        test_runtime_vector_add_tdm(64, 64, ha, hb, em, True)
+        ha, hb, ident = p
+        print(f"-- {ident}: HINT_A=0b{ha:08b}, HINT_B=0b{hb:08b}")
+        test_runtime_vector_add_tdm(64, 64, ha, hb, True)
         print("   OK")
     print("[4-way: vector_add_tdm_kernel_4way]")
     for p in _HINT_PARAMS_4WAY:

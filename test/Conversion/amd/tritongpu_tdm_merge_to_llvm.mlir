@@ -6,9 +6,9 @@
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // MAT-LABEL: tdm_merge_manual_hints
-  // CHECK-LABEL: tdm_merge_manual_hints
-  tt.func public @tdm_merge_manual_hints(
+  // MAT-LABEL: tdm_manual_hints_stay_separate
+  // CHECK-LABEL: tdm_manual_hints_stay_separate
+  tt.func public @tdm_manual_hints_stay_separate(
       %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
       %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %c_shape = arith.constant 128 : i32
@@ -23,11 +23,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %dst0 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     %dst1 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
 
-    // Adjacent copies with disjoint hints are materialized as one explicit
-    // fused op, then lower to one intrinsic.
-    // MAT: amdg.async_tdm_fused_copy_global_to_local
-    // MAT-SAME: warp_used_hints = array<i32: 3, 12>
-    // MAT-NOT: amdg.async_tdm_copy_global_to_local
+    // User-provided hints on regular copies no longer request an implicit
+    // merge. Use amdg.async_tdm_fused_copy_global_to_local for manual merges.
+    // MAT-NOT: amdg.async_tdm_fused_copy_global_to_local
+    // MAT: amdg.async_tdm_copy_global_to_local
+    // MAT-SAME: warp_used_hint = 3 : i32
+    // MAT-NOT: amdg.async_tdm_fused_copy_global_to_local
+    // MAT: amdg.async_tdm_copy_global_to_local
+    // MAT-SAME: warp_used_hint = 12 : i32
+    // MAT-NOT: amdg.async_tdm_fused_copy_global_to_local
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"
     // CHECK-NOT: "llvm.amdgcn.tensor.load.to.lds"
     %0 = amdg.async_tdm_copy_global_to_local %desc0 into %dst0 {warp_used_hint = 3 : i32} : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>

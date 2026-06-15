@@ -8,6 +8,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 
@@ -56,42 +57,6 @@ uint32_t getGeneratedHint(unsigned memberIdx, unsigned groupSize,
   return stridePattern << memberIdx;
 }
 
-// Split an adjacent unhinted run into largest supported groups and assign hints.
-void assignGeneratedHintsGreedily(
-    MutableArrayRef<TDMCopyGlobalToLocalOp> run, unsigned numWarps) {
-  // Generated 3-way hints only support 4 or 8 warps, so cap auto-merge at 8.
-  if (numWarps > 8)
-    return;
-
-  for (size_t i = 0; i < run.size();) {
-    size_t remaining = run.size() - i;
-    // Take the largest group that fits (<= 4 members and <= numWarps).  A 3-way
-    // group is only reachable for an exact trailing triple.
-    size_t chosen = 0;
-    for (size_t size : {size_t{4}, size_t{3}, size_t{2}}) {
-      if (size <= remaining && size <= numWarps) {
-        chosen = size;
-        break;
-      }
-    }
-    if (chosen < 2)
-      break;
-
-    auto group = run.slice(i, chosen);
-    auto hintTy = IntegerType::get(group.front().getContext(), 32);
-    for (auto [idx, copy] : llvm::enumerate(group)) {
-      uint32_t hint =
-          getGeneratedHint(static_cast<unsigned>(idx), chosen, numWarps);
-      copy.setWarpUsedHintAttr(IntegerAttr::get(hintTy, hint));
-    }
-    i += chosen;
-  }
-}
-
-uint32_t getWarpUsedHint(TDMCopyGlobalToLocalOp copy) {
-  return static_cast<uint32_t>(copy.getWarpUsedHintAttr().getInt());
-}
-
 bool haveSameRankAndCache(TDMCopyGlobalToLocalOp lhs,
                           TDMCopyGlobalToLocalOp rhs) {
   // Equal rank implies equal descriptor group count (groupCount = rank>2?4:2),
@@ -99,6 +64,15 @@ bool haveSameRankAndCache(TDMCopyGlobalToLocalOp lhs,
   return lhs.getDesc().getType().getShape().size() ==
              rhs.getDesc().getType().getShape().size() &&
          lhs.getCache() == rhs.getCache();
+}
+
+bool isAutoMergeCandidate(TDMCopyGlobalToLocalOp copy) {
+  if (copy.getWarpUsedHintAttr() || copy.getBarrier())
+    return false;
+  // Partitioned destinations need encoding-specific hint constraints, so leave
+  // them to explicit fused loads instead of generating masks implicitly.
+  return !isa<triton::gpu::PartitionedSharedEncodingAttr>(
+      copy.getResult().getType().getEncoding());
 }
 
 bool autoHintGenerationEnabled() {
@@ -139,94 +113,78 @@ void materializeGroup(const TDMMergeGroup &group) {
 
 void materializeTDMMergeGroups(ModuleOp mod) {
   // Mergeability rules:
-  //   1. Members must have verifier-legal `warp_used_hint` masks.
+  //   1. Only unhinted copies are auto-materialized. User-provided hints stay as
+  //      standalone copies; users should use the explicit fused op for manual
+  //      merges.
   //   2. Members must not carry an `mbarrier`.
-  //   3. Hints must be pairwise-disjoint; their union need not be a valid hint.
+  //   3. Members must be consecutive in one block.
   //   4. Group size must be 2, 3, or 4.
-  //   5. Members must be consecutive in one block when materialized.
-  //   6. Members must have same-rank descriptors.
-  //   7. Members must share the same `cache` modifier.
+  //   5. Members must have same-rank descriptors.
+  //   6. Members must share the same `cache` modifier.
+  if (!autoHintGenerationEnabled())
+    return;
+
   SmallVector<Block *> blocks = collectBlocksWithTDMCopies(mod);
 
-  // Phase 1: optionally assign hints to adjacent unhinted copy runs. This only
-  // enables auto-merge; existing manual hints are grouped regardless of the env
-  // knob below.
-  if (autoHintGenerationEnabled()) {
-    for (Block *block : blocks) {
-      SmallVector<TDMCopyGlobalToLocalOp, 8> run;
-      auto flush = [&]() {
-        if (run.empty())
-          return;
-        assignGeneratedHintsGreedily(
-            run, triton::gpu::lookupNumWarps(run.front()));
-        run.clear();
-      };
-
-      for (Operation &op : *block) {
-        auto copy = dyn_cast<TDMCopyGlobalToLocalOp>(&op);
-        bool canAutoHint =
-            copy && !copy.getWarpUsedHintAttr() && !copy.getBarrier() &&
-            !isa<triton::gpu::PartitionedSharedEncodingAttr>(
-                copy.getResult().getType().getEncoding());
-        if (canAutoHint) {
-          run.push_back(copy);
-          continue;
-        }
-        flush();
-      }
-      flush();
-    }
-  }
-
-  // Phase 2: find adjacent hinted copy groups.
-  SmallVector<TDMMergeGroup> groups;
+  // Scan each adjacent unhinted run and immediately materialize compatible auto
+  // groups. Manual hinted copies are not considered here.
   for (Block *block : blocks) {
     SmallVector<TDMCopyGlobalToLocalOp, 8> run;
     auto flush = [&]() {
-      MutableArrayRef<TDMCopyGlobalToLocalOp> remaining(run);
-      while (remaining.size() >= 2) {
-        TDMMergeGroup group;
-        group.members.push_back(remaining.front());
-        group.memberHints.push_back(getWarpUsedHint(remaining.front()));
-
-        uint32_t usedHints = group.memberHints.front();
-        for (size_t i = 1; i < remaining.size() && group.members.size() < 4;
-             ++i) {
-          TDMCopyGlobalToLocalOp copy = remaining[i];
-          if (!haveSameRankAndCache(group.members.front(), copy))
+      unsigned numWarps =
+          run.empty() ? 0 : triton::gpu::lookupNumWarps(run.front());
+      if (numWarps <= 8) {
+        MutableArrayRef<TDMCopyGlobalToLocalOp> remaining(run);
+        while (remaining.size() >= 2) {
+          size_t maxGroupSize = std::min<size_t>(4, remaining.size());
+          maxGroupSize =
+              std::min<size_t>(maxGroupSize, static_cast<size_t>(numWarps));
+          if (maxGroupSize < 2)
             break;
 
-          uint32_t hint = getWarpUsedHint(copy);
-          if (usedHints & hint)
-            break;
+          // Take the largest compatible prefix. A trailing 3-way group is
+          // allowed; otherwise the greedy choice naturally prefers 4 then 2.
+          size_t chosen = 1;
+          for (size_t i = 1; i < maxGroupSize; ++i) {
+            if (!haveSameRankAndCache(remaining.front(), remaining[i]))
+              break;
+            ++chosen;
+          }
 
-          usedHints |= hint;
-          group.members.push_back(copy);
-          group.memberHints.push_back(hint);
+          if (chosen < 2) {
+            remaining = remaining.drop_front(1);
+            continue;
+          }
+
+          TDMMergeGroup group;
+          for (auto [idx, copy] :
+               llvm::enumerate(remaining.take_front(chosen))) {
+            group.members.push_back(copy);
+            group.memberHints.push_back(
+                getGeneratedHint(static_cast<unsigned>(idx),
+                                 static_cast<unsigned>(chosen), numWarps));
+          }
+
+          LLVM_DEBUG({
+            llvm::dbgs() << "[tdm-merge] auto group of "
+                         << group.members.size() << " ops\n";
+            for (auto [idx, copy] : llvm::enumerate(group.members))
+              llvm::dbgs() << "  hint=0x"
+                           << llvm::Twine::utohexstr(group.memberHints[idx])
+                           << " " << *copy << "\n";
+          });
+
+          size_t groupSize = group.members.size();
+          remaining = remaining.drop_front(groupSize);
+          materializeGroup(group);
         }
-
-        if (group.members.size() < 2) {
-          remaining = remaining.drop_front(1);
-          continue;
-        }
-
-        LLVM_DEBUG({
-          llvm::dbgs() << "[tdm-merge] group of " << group.members.size()
-                       << " ops\n";
-          for (auto [idx, copy] : llvm::enumerate(group.members))
-            llvm::dbgs() << "  hint=0x"
-                         << llvm::Twine::utohexstr(group.memberHints[idx])
-                         << " " << *copy << "\n";
-        });
-        remaining = remaining.drop_front(group.members.size());
-        groups.push_back(std::move(group));
       }
       run.clear();
     };
 
-    for (Operation &op : *block) {
+    for (Operation &op : llvm::make_early_inc_range(*block)) {
       auto copy = dyn_cast<TDMCopyGlobalToLocalOp>(&op);
-      if (copy && copy.getWarpUsedHintAttr() && !copy.getBarrier()) {
+      if (copy && isAutoMergeCandidate(copy)) {
         run.push_back(copy);
         continue;
       }
@@ -234,10 +192,6 @@ void materializeTDMMergeGroups(ModuleOp mod) {
     }
     flush();
   }
-
-  // Phase 3: replace each discovered group with one explicit fused op.
-  for (const auto &group : groups)
-    materializeGroup(group);
 }
 
 } // namespace mlir::triton::AMD
