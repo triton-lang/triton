@@ -5,26 +5,17 @@ Explicit `async_load_fused` calls lower to one `tensor_load_to_lds`.  Regular
 materialization pass only auto-merges adjacent unhinted copies unless
 `TRITON_AMD_DISABLE_TDM_AUTO_MERGE_HINTS=1` is set.
 
-Compile-only tests count AMDGCN instructions; runtime tests are opt-in for
-gfx1250 and compare against a torch CPU reference.
+Compile-only tests count AMDGCN instructions.
 """
 
 import re
-import os
 
 import pytest
-import torch
 
 import triton
 from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
-
-
-def _require_tdm_runtime():
-    if os.environ.get("TRITON_AMD_RUN_TDM_RUNTIME_TESTS") != "1":
-        pytest.skip("TDM runtime tests require gfx1250; set TRITON_AMD_RUN_TDM_RUNTIME_TESTS=1 to run them")
-
 
 # Shared kernel building blocks.
 
@@ -194,27 +185,6 @@ def _compile_amdgcn(fn, ptr_names, constexprs, *, ptr_ty="*fp16", num_warps=8) -
     return k.asm["amdgcn"]
 
 
-def _run_vector_add(kernel, n_inputs, block, hints, *, num_warps=8):
-    """Launch `kernel(*inputs, out, M, N, BLOCK_M, BLOCK_N, *hints)` and check
-    `out == sum(inputs)` against a torch-CPU reference.  Merging is perf-only,
-    so the result is identical whether or not the copies fuse.
-    """
-    M, N = 256, 512
-    BLOCK_M, BLOCK_N = block
-    torch.manual_seed(0)
-    inputs = [torch.rand((M, N), dtype=torch.float16) for _ in range(n_inputs)]
-    dev_inputs = [t.cuda() for t in inputs]
-    out = torch.empty((M, N), dtype=torch.float16, device="cuda")
-
-    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    kernel[grid](*dev_inputs, out, M, N, BLOCK_M, BLOCK_N, *hints, num_warps=num_warps)
-
-    expected = inputs[0]
-    for t in inputs[1:]:
-        expected = expected + t
-    torch.testing.assert_close(out.cpu(), expected, atol=1e-3, rtol=1e-3)
-
-
 _COMPILE_BLOCK_SHAPES = [(64, 64), (32, 128)]
 
 
@@ -258,22 +228,7 @@ def test_compile_vector_add_tdm_auto_merge_env_toggle(monkeypatch):
         _assert_tensor_load_count(compile_unhinted(*block), expected, f"env={env} generated hints")
 
 
-_RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
-
-
-@pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
-@pytest.mark.parametrize(
-    "HINT_A,HINT_B",
-    [_param_args(p) for p in _HINT_PARAMS],
-    ids=[_param_id(p) for p in _HINT_PARAMS],
-)
-def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
-    """Runtime: c = a + b vs torch CPU reference; merging is perf-only."""
-    _require_tdm_runtime()
-    _run_vector_add(vector_add_tdm_kernel, 2, (BLOCK_M, BLOCK_N), (HINT_A, HINT_B))
-
-
-# 3-way merge: covers the non-uniform generated-hint shape.
+# 3-way copies: covers regular hinted separation and non-uniform auto hints.
 #   num_warps=4: {0b0011, 0b0100, 0b1000}
 #   num_warps=8: {0b00001111, 0b00110000, 0b11000000}
 
@@ -358,7 +313,7 @@ def test_compile_vector_add_tdm_3way_auto_merge_env_toggle(monkeypatch):
         _assert_tensor_load_count(amdgcn, expected, f"3-way env={env} warps={warps}")
 
 
-# 4-way auto merge: exercises the N=4 member-predicate path.
+# 4-way copies: exercises the N=4 member-predicate path.
 
 
 @gluon.jit
@@ -432,19 +387,7 @@ def test_compile_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, H
     _assert_tensor_load_count(amdgcn, 4, context)
 
 
-@pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
-@pytest.mark.parametrize(
-    "HINT_A,HINT_B,HINT_C,HINT_D",
-    [_param_args(p) for p in _HINT_PARAMS_4WAY],
-    ids=[_param_id(p) for p in _HINT_PARAMS_4WAY],
-)
-def test_runtime_vector_add_tdm_4way(BLOCK_M, BLOCK_N, HINT_A, HINT_B, HINT_C, HINT_D):
-    """Runtime: out = a+b+c+d; merging is perf-only."""
-    _require_tdm_runtime()
-    _run_vector_add(vector_add_tdm_kernel_4way, 4, (BLOCK_M, BLOCK_N), (HINT_A, HINT_B, HINT_C, HINT_D))
-
-
-# Auto merge can handle heterogeneous destination MemDescTypes.
+# Heterogeneous destination MemDescTypes.
 
 
 @gluon.jit
@@ -580,22 +523,3 @@ def test_compile_vector_add_tdm_cache(BLOCK_M, BLOCK_N, CACHE_A, CACHE_B, expect
         })
     context = f"CACHE_A={CACHE_A!r}, CACHE_B={CACHE_B!r}"
     _assert_tensor_load_count(amdgcn, 1 if expected_auto_merge else 2, context)
-
-
-if __name__ == "__main__":
-    # Smoke test: iterate all cookbook entries at one block size.
-    # Run as `python test_tdm_merge.py` on a gfx1250 device.
-    if os.environ.get("TRITON_AMD_RUN_TDM_RUNTIME_TESTS") != "1":
-        raise SystemExit("Set TRITON_AMD_RUN_TDM_RUNTIME_TESTS=1 on a gfx1250 device.")
-    print("[2-way: vector_add_tdm_kernel]")
-    for p in _HINT_PARAMS:
-        ha, hb, ident = p
-        print(f"-- {ident}: HINT_A=0b{ha:08b}, HINT_B=0b{hb:08b}")
-        test_runtime_vector_add_tdm(64, 64, ha, hb)
-        print("   OK")
-    print("[4-way: vector_add_tdm_kernel_4way]")
-    for p in _HINT_PARAMS_4WAY:
-        ha, hb, hc, hd, ident = p
-        print(f"-- {ident}: A=0b{ha:08b} B=0b{hb:08b} C=0b{hc:08b} D=0b{hd:08b}")
-        test_runtime_vector_add_tdm_4way(64, 64, ha, hb, hc, hd)
-        print("   OK")

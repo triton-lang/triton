@@ -37,8 +37,10 @@ uint32_t getGeneratedHint(unsigned memberIdx, unsigned groupSize,
                           unsigned numWarps) {
   assert(memberIdx < groupSize && "memberIdx out of range");
   if (groupSize == 3) {
-    // numWarps is 4 or 8 (the greedy splitter caps auto-merge at 8). The 3-way
-    // split is half + quarter + quarter to keep each hint an axis-aligned coset.
+    assert((numWarps == 4 || numWarps == 8) &&
+           "3-way generated hints require 4 or 8 warps");
+    // The 3-way split is half + quarter + quarter to keep each hint an
+    // axis-aligned coset.
     static constexpr uint32_t kHints4[3] = {0b0011, 0b0100, 0b1000};
     static constexpr uint32_t kHints8[3] = {0b00001111, 0b00110000, 0b11000000};
     return (numWarps == 4 ? kHints4 : kHints8)[memberIdx];

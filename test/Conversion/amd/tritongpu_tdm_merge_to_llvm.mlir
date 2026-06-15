@@ -59,9 +59,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %dst_a = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
     %dst_b = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
 
-    // Adjacent unhinted copies get generated hints (and fuse) unless disabled.
+    // Adjacent unhinted copies materialize as one fused op unless disabled.
     // Auto materialization requires consecutive copies; see
-    // tdm_auto_hints_skip_interleaved for the deferred case.
+    // tdm_auto_hints_skip_interleaved for the non-consecutive case.
     // ENABLE-MAT: amdg.async_tdm_fused_copy_global_to_local
     // ENABLE-MAT-SAME: warp_used_hints = array<i32: 5, 10>
     // ENABLE-MAT-NOT: amdg.async_tdm_copy_global_to_local
