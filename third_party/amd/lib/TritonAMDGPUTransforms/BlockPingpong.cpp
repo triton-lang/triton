@@ -1208,8 +1208,9 @@ void Pingponger::getDotPingponged() {
   for (auto load : gLoadOps) {
     Value mask = load.getMask();
     if (mask && isLoopVariant(mask, forOp)) {
-      LDBG("Unable to apply ping pong scheduling. Details: a sliced global "
-           "load has a loop-variant (K-dependent) mask");
+      LDBG("Unable to apply ping pong scheduling. Details: a global load has "
+           "a loop-variant mask: "
+           << load);
       return;
     }
   }
