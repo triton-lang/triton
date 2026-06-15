@@ -27,8 +27,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: %[[cas_cmp_insert2:.*]] = llvm.insertelement %[[cas_cmp_extract]], %{{.*}} : vector<1xi64>
     // CHECK: %[[cas_val_cast2:.*]] = llvm.bitcast %[[cas_val_insert2]] : vector<1xi64> to i64
     // CHECK: %[[cas_cmp_cast2:.*]] = llvm.bitcast %[[cas_cmp_insert2]] : vector<1xi64> to i64
-    // CHECK: %[[dst:.*]] = rocdl.raw.ptr.buffer.atomic.cmpswap %[[cas_val_cast2]], %[[cas_cmp_cast2]], %[[resource]], %{{.*}}, %{{.*}}, %{{.*}} : i64
-    // CHECK: %[[dst:.*]] = rocdl.raw.ptr.buffer.atomic.cmpswap %{{.*}}, %{{.*}}, %[[resource]], %{{.*}}, %{{.*}}, %{{.*}} : i64
+    // CHECK: %[[dst:.*]] = rocdl.raw.ptr.buffer.atomic.cmpswap %[[cas_val_cast2]], %[[cas_cmp_cast2]], %[[resource]], %{{.*}}, %{{.*}}, {{.*}} : i64
+    // CHECK: %[[dst:.*]] = rocdl.raw.ptr.buffer.atomic.cmpswap %{{.*}}, %{{.*}}, %[[resource]], %{{.*}}, %{{.*}}, {{.*}} : i64
     // CHECK: llvm.fence syncscope("agent") acquire
     %4 = amdg.buffer_atomic_cas acq_rel, gpu, %cmp, %val, %scalar_ptr[%offsets] : tensor<512xi64, #blocked>
 
