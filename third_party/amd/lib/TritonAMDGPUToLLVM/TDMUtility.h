@@ -146,8 +146,7 @@ void emitTDMLoadMerged(RewriterBase &rewriter, Location loc,
 
 // Effective warp count that drives hinted TDM descriptor layout.  A
 // `warp_used_hint` maps the active tile distribution to K = popcount(hint)
-// warps, while inactive warps still issue the TDM instruction with a null
-// descriptor.
+// warps.
 int getTDMEffectiveWarps(int numWarps, std::optional<uint32_t> warpUsedHint);
 
 // Returns (warpsPerCTA, numTDMInstructions) for a given shared encoding.

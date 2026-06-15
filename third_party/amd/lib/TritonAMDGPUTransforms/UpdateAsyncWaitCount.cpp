@@ -480,9 +480,8 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
         if (auto copyOp = dyn_cast<AsyncTDMCopyGlobalToLocalOp>(op)) {
           auto smemTy = copyOp.getResult().getType();
           int numWarps = ttg::lookupNumWarps(op);
-          // warp_used_hint changes descriptor predication/layout, but inactive
-          // warps still issue the TDM instruction with a null descriptor. Count
-          // the static instruction sequence, which is sized by numWarps.
+          // warp_used_hint changes descriptor layout, not the number of static
+          // TDM instructions. Count the sequence sized by numWarps.
           auto [_, numInstr] =
               mlir::LLVM::AMD::distributeTDMWarpsAlignToPartition(
                   smemTy.getShape(), numWarps, smemTy.getEncoding());

@@ -260,9 +260,9 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
         pred (bool, optional): if given, predicate to enable or disable the load.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
-        warp_used_hint (int, optional): Bitmask selecting which warps issue
-            the TDM copy (bit ``n`` => warp ``n``); cleared warps become HW
-            no-ops.  Doesn't affect the data in ``dest``, only the work split.
+        warp_used_hint (int, optional): Bitmask selecting the active warp
+            subset for descriptor layout (bit ``n`` => warp ``n``).  Doesn't
+            affect the data in ``dest``, only the work split.
             The number of active warps must be a power of two, and the active
             warps must follow a regular bit pattern for efficient lowering.
             Examples: ``0b00001111`` (warps 0..3), ``0b11110000`` (warps

@@ -1282,9 +1282,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
 
   // With a hint, derive the descriptor distribution from K = popcount(hint)
   // instead of numWarps; verifier guarantees single-instruction emission
-  // (incl. partitioned encodings). Inactive warps still issue the instruction
-  // with a null descriptor via fillTDMDescriptor's free-variable-mask
-  // predication (XOR-anchored at i0).
+  // (incl. partitioned encodings).
   int effectiveWarps = getTDMEffectiveWarps(numWarps, warpUsedHint);
 
   auto [warpsPerCTA, numTDMInstructions] =

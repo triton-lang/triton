@@ -1,12 +1,12 @@
-// RUN: triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy | FileCheck %s --check-prefixes=MAT,ENABLE-MAT
-// RUN: env TRITON_AMD_DISABLE_TDM_AUTO_FUSE=1 triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy | FileCheck %s --check-prefixes=MAT,DISABLE-MAT
+// RUN: triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy | FileCheck %s --check-prefixes=FUSE,ENABLE-FUSE
+// RUN: env TRITON_AMD_DISABLE_TDM_AUTO_FUSE=1 triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy | FileCheck %s --check-prefixes=FUSE,DISABLE-FUSE
 // RUN: triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,ENABLE
 // RUN: env TRITON_AMD_DISABLE_TDM_AUTO_FUSE=1 triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,DISABLE
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // MAT-LABEL: tdm_manual_hints_stay_separate
+  // FUSE-LABEL: tdm_manual_hints_stay_separate
   // CHECK-LABEL: tdm_manual_hints_stay_separate
   tt.func public @tdm_manual_hints_stay_separate(
       %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
@@ -25,13 +25,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
     // User-provided hints on regular copies no longer request implicit fusion.
     // Use amdg.async_tdm_fused_copy_global_to_local for manual fusion.
-    // MAT-NOT: amdg.async_tdm_fused_copy_global_to_local
-    // MAT: amdg.async_tdm_copy_global_to_local
-    // MAT-SAME: warp_used_hint = 3 : i32
-    // MAT-NOT: amdg.async_tdm_fused_copy_global_to_local
-    // MAT: amdg.async_tdm_copy_global_to_local
-    // MAT-SAME: warp_used_hint = 12 : i32
-    // MAT-NOT: amdg.async_tdm_fused_copy_global_to_local
+    // FUSE-NOT: amdg.async_tdm_fused_copy_global_to_local
+    // FUSE: amdg.async_tdm_copy_global_to_local
+    // FUSE-SAME: warp_used_hint = 3 : i32
+    // FUSE-NOT: amdg.async_tdm_fused_copy_global_to_local
+    // FUSE: amdg.async_tdm_copy_global_to_local
+    // FUSE-SAME: warp_used_hint = 12 : i32
+    // FUSE-NOT: amdg.async_tdm_fused_copy_global_to_local
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"
     // CHECK-NOT: "llvm.amdgcn.tensor.load.to.lds"
@@ -46,7 +46,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // MAT-LABEL: tdm_auto_fuse_unhinted
+  // FUSE-LABEL: tdm_auto_fuse_unhinted
   // CHECK-LABEL: tdm_auto_fuse_unhinted
   tt.func public @tdm_auto_fuse_unhinted(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %c_shape = arith.constant 128 : i32
@@ -61,13 +61,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
     // Adjacent unhinted copies fuse into one op unless disabled.
     // Auto-fusion requires consecutive copies; see
-    // tdm_auto_hints_skip_interleaved for the non-consecutive case.
-    // ENABLE-MAT: amdg.async_tdm_fused_copy_global_to_local
-    // ENABLE-MAT-SAME: warp_used_hints = array<i32: 5, 10>
-    // ENABLE-MAT-NOT: amdg.async_tdm_copy_global_to_local
-    // DISABLE-MAT: amdg.async_tdm_copy_global_to_local
-    // DISABLE-MAT: amdg.async_tdm_copy_global_to_local
-    // DISABLE-MAT-NOT: amdg.async_tdm_fused_copy_global_to_local
+    // tdm_auto_fuse_skip_interleaved for the non-consecutive case.
+    // ENABLE-FUSE: amdg.async_tdm_fused_copy_global_to_local
+    // ENABLE-FUSE-SAME: warp_used_hints = array<i32: 5, 10>
+    // ENABLE-FUSE-NOT: amdg.async_tdm_copy_global_to_local
+    // DISABLE-FUSE: amdg.async_tdm_copy_global_to_local
+    // DISABLE-FUSE: amdg.async_tdm_copy_global_to_local
+    // DISABLE-FUSE-NOT: amdg.async_tdm_fused_copy_global_to_local
     // ENABLE: "llvm.amdgcn.tensor.load.to.lds"
     // ENABLE-NOT: "llvm.amdgcn.tensor.load.to.lds"
     // DISABLE: "llvm.amdgcn.tensor.load.to.lds"
@@ -86,9 +86,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // MAT-LABEL: tdm_auto_hints_skip_interleaved
-  // CHECK-LABEL: tdm_auto_hints_skip_interleaved
-  tt.func public @tdm_auto_hints_skip_interleaved(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+  // FUSE-LABEL: tdm_auto_fuse_skip_interleaved
+  // CHECK-LABEL: tdm_auto_fuse_skip_interleaved
+  tt.func public @tdm_auto_fuse_skip_interleaved(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %c_shape = arith.constant 128 : i32
     %c_stride0 = arith.constant 128 : i64
     %c_stride1 = arith.constant 1 : i64
@@ -99,12 +99,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %dst_a = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
     %dst_b = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
 
-    // A memdesc_index between the copies makes them non-consecutive, so auto
-    // hint generation leaves them alone -- two intrinsics with or without the
-    // env var.  Hoisting the views to fuse this form is a deferred optimization.
-    // MAT: amdg.async_tdm_copy_global_to_local
-    // MAT: amdg.async_tdm_copy_global_to_local
-    // MAT-NOT: amdg.async_tdm_fused_copy_global_to_local
+    // A memdesc_index between the copies makes them non-consecutive, so
+    // auto-fusion leaves them alone -- two intrinsics with or without the env
+    // var. Hoisting the views to fuse this form is a deferred optimization.
+    // FUSE: amdg.async_tdm_copy_global_to_local
+    // FUSE: amdg.async_tdm_copy_global_to_local
+    // FUSE-NOT: amdg.async_tdm_fused_copy_global_to_local
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"
     // CHECK-NOT: "llvm.amdgcn.tensor.load.to.lds"
@@ -122,9 +122,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #shared_inner}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // MAT-LABEL: tdm_auto_hints_skip_partitioned
-  // CHECK-LABEL: tdm_auto_hints_skip_partitioned
-  tt.func public @tdm_auto_hints_skip_partitioned(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+  // FUSE-LABEL: tdm_auto_fuse_skip_partitioned
+  // CHECK-LABEL: tdm_auto_fuse_skip_partitioned
+  tt.func public @tdm_auto_fuse_skip_partitioned(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %c_shape = arith.constant 128 : i32
     %c_stride0 = arith.constant 128 : i64
     %c_stride1 = arith.constant 1 : i64
@@ -135,10 +135,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %dst_a = ttg.local_alloc : () -> !ttg.memdesc<1x128x16xf16, #partitioned, #smem, mutable>
     %dst_b = ttg.local_alloc : () -> !ttg.memdesc<1x128x16xf16, #partitioned, #smem, mutable>
 
-    // Auto hint generation skips partitioned destinations.
-    // MAT: amdg.async_tdm_copy_global_to_local
-    // MAT: amdg.async_tdm_copy_global_to_local
-    // MAT-NOT: amdg.async_tdm_fused_copy_global_to_local
+    // Auto-fusion skips partitioned destinations.
+    // FUSE: amdg.async_tdm_copy_global_to_local
+    // FUSE: amdg.async_tdm_copy_global_to_local
+    // FUSE-NOT: amdg.async_tdm_fused_copy_global_to_local
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"
     // CHECK-NOT: "llvm.amdgcn.tensor.load.to.lds"
