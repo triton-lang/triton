@@ -582,26 +582,6 @@ class Mark:
         return df
 
     def run(self, show_plots=False, print_data=False, save_path='', return_df=False, **kwargs):
-        """
-        Run all benchmarks and optionally display, print, or save the results.
-
-        :param show_plots: If ``True``, display the matplotlib plot interactively after each benchmark.
-        :type show_plots: bool
-        :param print_data: If ``True``, print the results dataframe to stdout after each benchmark.
-        :type print_data: bool
-        :param save_path: Directory path to save results. If provided, saves a ``.png`` plot,
-            a ``.csv`` of the mean values, and a ``results.html`` index for each benchmark.
-            The directory is created if it does not exist.
-        :type save_path: str
-        :param return_df: If ``True``, return the results as a :class:`pandas.DataFrame` (or a list
-            of DataFrames if multiple benchmarks were provided).
-        :type return_df: bool
-        :param kwargs: Additional keyword arguments forwarded to the benchmarked function.
-        :return: A :class:`pandas.DataFrame` if a single :class:`Benchmark` was provided and
-            ``return_df=True``. A list of :class:`pandas.DataFrame` if multiple benchmarks were
-            provided and ``return_df=True``. ``None`` otherwise.
-        :rtype: pandas.DataFrame | list[pandas.DataFrame] | None
-        """
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
