@@ -98,8 +98,7 @@ public:
     if (shape[0] != cast<RankedTensorType>(reshapeSrc.getType()).getShape()[0])
       return failure();
     int mDim = getShapePerCTA(tmemLoad.getSrc().getType())[0];
-    // TODO: enable other M cases. (the layout is a bit more complex).
-    if (mDim != 128)
+    if (mDim != 128 && mDim != 64 && mDim != 256)
       return failure();
     int splitNSize = shape[2];
     if (splitNSize < 8)
@@ -170,8 +169,7 @@ public:
     // We found a tmem_store that is joined on the N dimension. We can split it
     // into multiple tmem_stores.
     int mDim = getShapePerCTA(storeOp.getDst().getType())[0];
-    // TODO: enable other M cases. (the layout is a bit more complex).
-    if (mDim != 128)
+    if (mDim != 128 && mDim != 64 && mDim != 256)
       return failure();
     int splitNSize = shape[2];
     if (splitNSize < 8)
@@ -193,6 +191,143 @@ public:
 
     createSlice(joinOp.getLhs(), 0);
     createSlice(joinOp.getRhs(), splitNSize);
+    b.eraseOp(storeOp);
+    return success();
+  }
+};
+
+// M-direction analogue of TMemSplitLoadPattern. Matches the pattern:
+//   tmem_load -> reshape  : <M, N> -> <2, M/2, N>
+//             -> trans    : (order = [1, 2, 0])  -> <M/2, N, 2>
+//             -> split    : -> 2 x <M/2, N>
+// and rewrites to two ttng.tmem_subslice + ttng.tmem_load pairs with M offsets
+// 0 and M/2. The split is only valid when M/2 is a multiple of blockM, since
+// TMEM addressing requires M-direction subslicing to land on whole-block
+// boundaries.
+class TMemSplitMLoadPattern : public OpRewritePattern<SplitOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(SplitOp splitOp,
+                                PatternRewriter &rewriter) const override {
+    Value src = stripConvertLayout(splitOp.getSrc());
+    auto transOp = src.getDefiningOp<TransOp>();
+    if (!transOp || transOp.getOrder() != ArrayRef<int>({1, 2, 0}))
+      return failure();
+    auto reshapeOp = transOp.getSrc().getDefiningOp<ReshapeOp>();
+    if (!reshapeOp)
+      return failure();
+    Value reshapeSrc = stripConvertLayout(reshapeOp.getSrc());
+    auto tmemLoad = reshapeSrc.getDefiningOp<TMEMLoadOp>();
+    if (!tmemLoad)
+      return failure();
+
+    auto reshapeShape = reshapeOp.getResult().getType().getShape();
+    auto reshapeSrcShape =
+        cast<RankedTensorType>(reshapeSrc.getType()).getShape();
+    // Ensure N dimension is preserved by the reshape and the outer factor is 2.
+    if (reshapeShape[2] != reshapeSrcShape[1] || reshapeShape[0] != 2)
+      return failure();
+    int splitMSize = reshapeShape[1];
+    auto encoding = cast<nvidia_gpu::TensorMemoryEncodingAttr>(
+        tmemLoad.getSrc().getType().getEncoding());
+    int blockM = encoding.getBlockM();
+    if (splitMSize % blockM != 0)
+      return failure();
+
+    Value tmem = tmemLoad.getSrc();
+    int splitNSize = reshapeShape[2];
+    int numWarps = ttg::lookupNumWarps(tmemLoad);
+    rewriter.setInsertionPoint(tmemLoad);
+
+    auto createSliceLoad =
+        [&](int64_t mOffset) -> std::pair<TMEMLoadOp, ttg::ConvertLayoutOp> {
+      Value subSlice = TMEMSubSliceOp::create(
+          rewriter, tmemLoad.getLoc(), tmem, /*mOffset=*/mOffset,
+          /*mSize=*/splitMSize, /*nOffset=*/0, /*nSize=*/splitNSize);
+
+      gpu::MemDescType subSliceType =
+          cast<gpu::MemDescType>(subSlice.getType());
+      auto distLayout =
+          nvidia_gpu::getDefaultLayoutForTmemLdSt(subSliceType, numWarps);
+
+      RankedTensorType newLoadType =
+          splitOp.getOutLHS().getType().cloneWithEncoding(distLayout);
+
+      auto load = TMEMLoadOp::create(rewriter, tmemLoad.getLoc(), newLoadType,
+                                     subSlice);
+      auto cvt = ttg::ConvertLayoutOp::create(
+          rewriter, tmemLoad.getLoc(), splitOp.getOutLHS().getType(), load);
+
+      return {load, cvt};
+    };
+
+    auto [load0, cvt0] = createSliceLoad(/*mOffset=*/0);
+    auto [load1, cvt1] = createSliceLoad(/*mOffset=*/splitMSize);
+    rewriter.replaceOp(splitOp, {cvt0, cvt1});
+    return success();
+  }
+};
+
+// M-direction analogue of TMemStoreJoinPattern. Matches the pattern:
+//   join     : 2 x <M/2, N> -> <M/2, N, 2>
+//   trans    : (order = [2, 0, 1])  -> <2, M/2, N>
+//   reshape  : -> <M, N>
+//   tmem_store
+// and rewrites to two ttng.tmem_subslice + ttng.tmem_store pairs.
+class TMemStoreJoinMPattern : public OpRewritePattern<TMEMStoreOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(TMEMStoreOp storeOp,
+                                PatternRewriter &b) const override {
+    Value src = storeOp.getSrc();
+    while (auto cvt = src.getDefiningOp<ttg::ConvertLayoutOp>()) {
+      src = cvt.getSrc();
+    }
+
+    auto reshapeOp = src.getDefiningOp<ReshapeOp>();
+    if (!reshapeOp)
+      return failure();
+    auto reshapeSrcShape = reshapeOp.getSrc().getType().getShape();
+    auto reshapeDstShape = reshapeOp.getType().getShape();
+    // The reshape must collapse a leading factor of 2 in the M dimension.
+    if (reshapeSrcShape.size() != 3 || reshapeSrcShape[0] != 2 ||
+        reshapeDstShape.back() != reshapeSrcShape.back())
+      return failure();
+    auto transOp = reshapeOp.getSrc().getDefiningOp<TransOp>();
+    if (!transOp || transOp.getOrder() != ArrayRef<int>({2, 0, 1}))
+      return failure();
+    auto joinOp = transOp.getSrc().getDefiningOp<JoinOp>();
+    if (!joinOp)
+      return failure();
+
+    int splitMSize = reshapeSrcShape[1];
+    int splitNSize = reshapeSrcShape[2];
+    auto encoding = cast<nvidia_gpu::TensorMemoryEncodingAttr>(
+        storeOp.getDst().getType().getEncoding());
+    int blockM = encoding.getBlockM();
+    if (splitMSize % blockM != 0)
+      return failure();
+
+    Location loc = storeOp.getLoc();
+    Value tmem = storeOp.getDst();
+    int numWarps = ttg::lookupNumWarps(storeOp);
+    Value truePred = arith::ConstantOp::create(b, loc, b.getBoolAttr(true));
+
+    auto createSlice = [&](TypedValue<RankedTensorType> input, int mOffset) {
+      auto subSlice = TMEMSubSliceOp::create(
+          b, loc, tmem, /*mOffset=*/mOffset, /*mSize=*/splitMSize,
+          /*nOffset=*/0, /*nSize=*/splitNSize);
+      auto distLayout =
+          nvidia_gpu::getDefaultLayoutForTmemLdSt(subSlice.getType(), numWarps);
+      auto newType = input.getType().cloneWithEncoding(distLayout);
+      auto cvt = ttg::ConvertLayoutOp::create(b, loc, newType, input);
+      TMEMStoreOp::create(b, loc, subSlice, cvt.getResult(), truePred);
+    };
+
+    createSlice(joinOp.getLhs(), 0);
+    createSlice(joinOp.getRhs(), splitMSize);
     b.eraseOp(storeOp);
     return success();
   }
@@ -421,7 +556,8 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns
-        .add<TMemSplitLoadPattern, TMemStoreJoinPattern, TMemLoadReducePattern,
+        .add<TMemSplitLoadPattern, TMemSplitMLoadPattern, TMemStoreJoinPattern,
+             TMemStoreJoinMPattern, TMemLoadReducePattern,
              TMemFromSharedMemPattern, TMemToSharedMemPattern>(context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
