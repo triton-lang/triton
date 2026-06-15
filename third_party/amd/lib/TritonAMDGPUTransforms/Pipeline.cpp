@@ -204,6 +204,17 @@ struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
     }
     combineWaitOps(moduleOp, useAsyncCopy);
 
+    // Pipeline TDM stores / scatters that survive in loop bodies: lift the
+    // LDS allocation out of the loop and hoist the wait so the outgoing
+    // async store overlaps the next iteration's compute.  The transformation
+    // is correct regardless of the loop's pipeline-stage count, so we apply
+    // it to every loop unconditionally; it is a no-op when no descriptor
+    // stores or scatters are present.
+    SmallVector<scf::ForOp> loops;
+    moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+    for (scf::ForOp forOp : loops)
+      pipelineTDMStores(forOp);
+
     tt::removePipeliningAttributes(moduleOp);
   }
 };
