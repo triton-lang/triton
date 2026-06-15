@@ -39,9 +39,8 @@
 // - On GFX1250 the number of (multicast) async_load and async_stores. On
 //   GFX1250 those are out of order with register loads so we will not get
 //   conservative waits.
-// For amdg.tdm_async_wait we only count TDM ops. Each tdm_load/store will
-// produce exactly one instruction so it directly correlates with OP at TGGIR
-// level.
+// For amdg.tdm_async_wait we only count TDM ops, then translate each op to the
+// number of TDM intrinsics emitted by lowering.
 
 namespace tt = triton;
 namespace ttg = triton::gpu;
@@ -481,17 +480,12 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
         if (auto copyOp = dyn_cast<AsyncTDMCopyGlobalToLocalOp>(op)) {
           auto smemTy = copyOp.getResult().getType();
           int numWarps = ttg::lookupNumWarps(op);
-          std::optional<uint32_t> hint;
-          if (auto hintAttr = copyOp.getWarpUsedHintAttr())
-            hint = static_cast<uint32_t>(hintAttr.getValue().getZExtValue());
-          // Mirror emitTDMLoadStore: hinted copies emit a single instruction
-          // sized by K = popcount(hint), so count by effective warps to match
-          // the lowering exactly (a hint-less copy still uses numWarps).
-          int effectiveWarps =
-              mlir::LLVM::AMD::getTDMEffectiveWarps(numWarps, hint);
+          // warp_used_hint changes descriptor predication/layout, but inactive
+          // warps still issue the TDM instruction with a null descriptor. Count
+          // the static instruction sequence, which is sized by numWarps.
           auto [_, numInstr] =
               mlir::LLVM::AMD::distributeTDMWarpsAlignToPartition(
-                  smemTy.getShape(), effectiveWarps, smemTy.getEncoding());
+                  smemTy.getShape(), numWarps, smemTy.getEncoding());
           return numInstr;
         } else if (isa<AsyncTDMFusedCopyGlobalToLocalOp>(op)) {
           return 1;

@@ -144,12 +144,10 @@ void emitTDMLoadMerged(RewriterBase &rewriter, Location loc,
                        Value ctaId, int32_t auxBits,
                        ArrayRef<uint32_t> memberHints);
 
-// Effective warp count that drives TDM warp distribution and the resulting
-// physical instruction count.  A `warp_used_hint` restricts emission to
-// K = popcount(hint) warps (the rest become hardware no-ops), so the
-// distribution must be sized by K, not num_warps.  Both the lowering
-// (`emitTDMLoadStore`) and the wait-count pass call this so the counted
-// intrinsics cannot drift from the emitted ones.
+// Effective warp count that drives hinted TDM descriptor layout.  A
+// `warp_used_hint` maps the active tile distribution to K = popcount(hint)
+// warps, while inactive warps still issue the TDM instruction with a null
+// descriptor.
 int getTDMEffectiveWarps(int numWarps, std::optional<uint32_t> warpUsedHint);
 
 // Returns (warpsPerCTA, numTDMInstructions) for a given shared encoding.
