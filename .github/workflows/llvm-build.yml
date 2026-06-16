@@ -62,6 +62,10 @@ jobs:
         echo "Found LLVM commit hash: ${LLVM_COMMIT_HASH}"
         echo "llvm_commit_hash=${LLVM_COMMIT_HASH}" >> ${GITHUB_ENV}
 
+        LLVM_REPOSITORY="$(jq -r '.repository // "llvm/llvm-project"' llvm-build/cmake/llvm-build-info.json)"
+        echo "Found LLVM repository: ${LLVM_REPOSITORY}"
+        echo "llvm_repository=${LLVM_REPOSITORY}" >> ${GITHUB_ENV}
+
         LLVM_BUILD_NUMBER="$(jq -r '.build_number' llvm-build/cmake/llvm-build-info.json)"
         echo "Found LLVM build number: ${LLVM_BUILD_NUMBER}"
 
@@ -86,7 +90,7 @@ jobs:
     - name: Checkout LLVM
       uses: actions/checkout@v6
       with:
-        repository: llvm/llvm-project
+        repository: ${{ env.llvm_repository }}
         path: llvm-project
         ref: ${{ env.llvm_commit_hash }}
 
