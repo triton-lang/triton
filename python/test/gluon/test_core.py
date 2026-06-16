@@ -2902,6 +2902,47 @@ def test_shared_gather_scatter_two_ctas(gather):
 
 
 @gluon.jit
+def shared_gather_replicated_two_ctas_kernel(out):
+    local_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0], cga_layout=[[0]])
+    result_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0], cga_layout=[[1]])
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])
+
+    local_offsets = ttgl.arange(0, 32, layout=local_layout)
+    # Distinct sentinels make selecting a remote replica observable. The
+    # cluster barrier below removes timing as a source of mismatch.
+    cta_rank = ttgl.inline_asm_elementwise(
+        "mov.u32 $0, %cluster_ctarank;",
+        "=r,r",
+        [local_offsets],
+        dtype=ttgl.int32,
+        is_pure=True,
+        pack=1,
+    )
+    values = local_offsets + cta_rank * 1000
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [32], shared_layout, value=values)
+    ttgl.barrier(cluster=True)
+
+    result_offsets = ttgl.arange(0, 64, layout=result_layout)
+    result = smem.gather(result_offsets % 32, axis=0)
+    ttgl.store(out + result_offsets, result)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_shared_gather_replicated_two_ctas():
+    out = torch.empty(64, dtype=torch.int32, device="cuda")
+
+    shared_gather_replicated_two_ctas_kernel[(1, )](
+        out,
+        num_warps=1,
+        num_ctas=2,
+    )
+
+    expected = torch.arange(64, dtype=torch.int32, device="cuda")
+    expected = expected % 32 + expected // 32 * 1000
+    torch.testing.assert_close(out, expected)
+
+
+@gluon.jit
 def shared_scatter_kernel(
     indices_ptr,
     values_ptr,
