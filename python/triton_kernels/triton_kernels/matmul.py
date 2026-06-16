@@ -856,6 +856,7 @@ def matmul_torch(a, b, bias,
     else:
         offs = [[0, a.shape[1]] for _ in range(b.shape[0])]
     # compute
+    compute_dtype = torch.float64 if a.dtype == b.dtype == torch.float64 else torch.float32
     n_rows = a.shape[1] if gather_indx is None else gather_indx.shape[0]
     y = torch.zeros((a.shape[0], n_rows, b.shape[-1]), device=a.device, dtype=a.dtype)
     for i, (lo, hi) in enumerate(offs):
@@ -864,8 +865,8 @@ def matmul_torch(a, b, bias,
         else:
             idx = gather_indx[lo:hi]
         batch = i if is_input_batched else 0
-        out = torch.matmul(round_x(a[batch, idx, :], torch.arange(lo, hi, device="cuda")).float(),
-                           b[i].float())
+        out = torch.matmul(round_x(a[batch, idx, :], torch.arange(lo, hi, device="cuda")).to(compute_dtype),
+                           b[i].to(compute_dtype))
         if bias is not None:
             out += bias[i, :] if betas is None else bias[i, :] * betas[lo:hi, None]
         if gammas is not None:
