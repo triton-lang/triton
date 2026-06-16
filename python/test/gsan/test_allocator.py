@@ -6,10 +6,11 @@ import pytest
 import torch
 
 from triton._internal_testing import is_cuda, run_in_process
-from triton.experimental.gsan import configure, create_mem_pool, freeze_config
+from triton.experimental.gsan import ShareableHandleType, configure, create_mem_pool, freeze_config
 from triton.experimental.gsan._allocator import (
     export_allocation_handles,
     export_allocation_memhandle_regions,
+    export_runtime_state_handle,
     free_allocation,
     get_device_rank,
     get_reserve_pointer,
@@ -17,6 +18,7 @@ from triton.experimental.gsan._allocator import (
     gsan_free,
     gsan_malloc,
     import_allocation_handles,
+    import_runtime_state_handle,
 )
 from triton.experimental.gsan._testing_utils import global_state, shadow_tensor_for
 from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
@@ -69,6 +71,62 @@ def _run_allocator_freezes_config_check() -> None:
             raise AssertionError("expected allocator initialization to freeze config")
     finally:
         gsan_free(ptr, device, 0, 0)
+
+
+def _run_export_import_fabric_handles_check(explicit_config: bool) -> None:
+    device = torch.cuda.current_device()
+    configure(
+        device_ranks={device: 0},
+        num_devices=2,
+        handle_type=ShareableHandleType.FABRIC if explicit_config else None,
+    )
+    real_ptr = gsan_malloc(4096, device)
+    imported_ptr = 0
+    try:
+        runtime_handle, runtime_alloc_size = export_runtime_state_handle(
+            device,
+            ShareableHandleType.FABRIC,
+        )
+        assert isinstance(runtime_handle, bytes)
+        assert len(runtime_handle) == 64
+        assert runtime_alloc_size > 0
+        import_runtime_state_handle(
+            runtime_handle,
+            runtime_alloc_size,
+            1,
+            device,
+            ShareableHandleType.FABRIC,
+        )
+
+        real_handle, shadow_handle, alloc_size = export_allocation_handles(
+            real_ptr,
+            ShareableHandleType.FABRIC,
+        )
+        assert isinstance(real_handle, bytes)
+        assert isinstance(shadow_handle, bytes)
+        assert len(real_handle) == 64
+        assert len(shadow_handle) == 64
+
+        imported_ptr = import_allocation_handles(
+            real_handle,
+            shadow_handle,
+            alloc_size,
+            device,
+            ShareableHandleType.FABRIC,
+        )
+        local_real = uint8_cuda_tensor_from_ptr(real_ptr, alloc_size, device)
+        imported_real = uint8_cuda_tensor_from_ptr(imported_ptr, alloc_size, device)
+        local_shadow = shadow_tensor_for(local_real)
+        imported_shadow = shadow_tensor_for(imported_real)
+
+        imported_real.fill_(11)
+        assert torch.all(local_real == 11).item()
+        imported_shadow.fill_(5)
+        assert torch.all(local_shadow == 5).item()
+    finally:
+        if imported_ptr != 0:
+            free_allocation(imported_ptr, device)
+        gsan_free(real_ptr, device)
 
 
 @pytest.fixture
@@ -317,10 +375,21 @@ def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator
     real_fd = -1
     shadow_fd = -1
     try:
-        real_fd, shadow_fd, alloc_size = export_allocation_handles(real_ptr)
+        real_fd, shadow_fd, alloc_size = export_allocation_handles(
+            real_ptr,
+            ShareableHandleType.POSIX_FILE_DESCRIPTOR,
+        )
+        assert isinstance(real_fd, int)
+        assert isinstance(shadow_fd, int)
         assert alloc_size > 0
 
-        imported_ptr = import_allocation_handles(real_fd, shadow_fd, alloc_size, device)
+        imported_ptr = import_allocation_handles(
+            real_fd,
+            shadow_fd,
+            alloc_size,
+            device,
+            ShareableHandleType.POSIX_FILE_DESCRIPTOR,
+        )
         assert imported_ptr != 0
         assert imported_ptr != real_ptr
 
@@ -344,3 +413,23 @@ def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator
         if imported_ptr != 0:
             free_allocation(imported_ptr, device)
         free(real_ptr)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@pytest.mark.parametrize(
+    ("explicit_config", "allocator_config"),
+    [
+        pytest.param(True, "fabric_handles:False", id="explicit-config"),
+        pytest.param(False, "fabric_handles:True", id="pytorch-config-default"),
+    ],
+)
+def test_export_import_fabric_handles(explicit_config, allocator_config):
+    result = run_in_process(
+        _run_export_import_fabric_handles_check,
+        args=(explicit_config, ),
+        env={"PYTORCH_CUDA_ALLOC_CONF": allocator_config},
+    )
+    if (isinstance(result.exc, RuntimeError) and str(result.exc) == "gsanExportRuntimeStateHandle failed."
+            and "operation not permitted" in result.driver_stderr_output.lower()):
+        pytest.skip("CUDA fabric handles require an accessible NVIDIA IMEX channel")
+    assert result.exc is None
