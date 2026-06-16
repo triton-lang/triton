@@ -3651,14 +3651,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       %c1_i32_0 = arith.constant 1 : i32
       %c1_i32_1 = arith.constant 1 : i32
       %4 = arith.addi %arg0, %c1_i32_1 : i32
-      rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage0"}
+      rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0"}
       %c1_i32_2 = arith.constant 1 : i32
       %c1_i32_3 = arith.constant 1 : i32
       %5 = arith.muli %4, %c1_i32_3 : i32
       %c1_i32_4 = arith.constant 1 : i32
       %c1_i32_5 = arith.constant 1 : i32
       %6 = arith.addi %5, %c1_i32_5 : i32
-      rocdl.sched.barrier 0 {triton.warp_pipeline.border = "stage1"}
+      rocdl.sched.barrier none {triton.warp_pipeline.border = "stage1"}
     }
     tt.return
   }
