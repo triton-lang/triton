@@ -33,12 +33,12 @@ def is_async_copy_enabled(arch):
     return (arch in ["gfx950", "gfx1250"]) if knobs.amd.use_async_copy is None else knobs.amd.use_async_copy
 
 
-def is_expert_sched_supported(arch):
+def is_coexec_scheduler_supported(arch):
     return arch in ["gfx1250"]
 
 
 def is_expert_scheduling_enabled(arch):
-    if not is_expert_sched_supported(arch):
+    if arch not in ["gfx1250"]:
         return False
     if knobs.amd.use_expert_scheduling is None:
         return True
@@ -470,7 +470,7 @@ class HIPBackend(BaseBackend):
         # and may improve scheduling.
         kernel_fn.add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}, {options.waves_per_eu}")
 
-        if is_expert_sched_supported(options.arch) and options.num_warps <= 4:
+        if is_coexec_scheduler_supported(options.arch) and options.num_warps <= 4:
             kernel_fn.add_fn_attr("amdgpu-sched-strategy", "coexec")
 
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
