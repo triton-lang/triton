@@ -155,6 +155,11 @@ def _build_test_op_cases():
     test_cases.extend([
         Case(1024, 1000, 2048, "ragged", "float32", "float32", b_transpose=True)
     ])
+    # fp64
+    test_cases.extend([
+        Case(128, 64, 256, "plain", "float64", "float64", split_k=split_k)
+        for split_k in [1, 3]
+    ])
     # bfloat16 x mx
     for shape in [odd_shape2, even_shape]:
         test_cases.extend([
@@ -348,6 +353,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
         if act_dtype_str == "float32":
             pytest.skip("float32 not fully tested on AMD GPU")
+        if act_dtype_str == "float64":
+            pytest.skip("float64 not supported on HIP yet")
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
@@ -643,30 +650,6 @@ def test_k_ragged_mxfp8_act_scale_swizzling(device):
         swizzled = run(swizzled_a, swizzled_scale, swizzled_metadata)
         canonical = run(canonical_a, canonical_scale, canonical_metadata)
     torch.testing.assert_close(swizzled, canonical)
-
-
-@pytest.mark.parametrize("constraints", [
-    {"is_persistent": False, "split_k": 1},
-    {"is_persistent": True, "split_k": 1},
-    {"is_persistent": False, "split_k": 3},
-])
-def test_float64(constraints, device):
-    torch.manual_seed(0)
-    a = torch.randn((128, 256), dtype=torch.float64, device=device)
-    b = torch.randn((256, 64), dtype=torch.float64, device=device)
-    a += torch.arange(256, dtype=torch.float64, device=device) * 2**-40
-    out = torch.empty((128, 64), dtype=torch.float64, device=device)
-    precision_config = PrecisionConfig(
-        allow_tf32=False,
-        out_dtype=torch.float64,
-        intermediate_out_dtype=torch.float64,
-    )
-
-    with opt_flags.scoped_opt_flags_constraints(constraints):
-        actual = matmul(a, b, None, precision_config=precision_config, c=out)
-
-    assert actual.data_ptr() == out.data_ptr()
-    torch.testing.assert_close(actual, torch.matmul(a, b), rtol=1e-12, atol=1e-12)
 
 
 def test_set_idle_sms():
