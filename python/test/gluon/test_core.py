@@ -2901,84 +2901,98 @@ def test_shared_gather_scatter_two_ctas(gather):
     torch.testing.assert_close(out, inp.reshape(2, 16, 2).flip(-1).reshape(2, 32))
 
 
-@gluon.jit
-def shared_gather_replicated_two_ctas_kernel(out):
-    local_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0], cga_layout=[[0]])
-    result_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0], cga_layout=[[1]])
-    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])
-
-    local_offsets = ttgl.arange(0, 32, layout=local_layout)
-    # Distinct sentinels make selecting a remote replica observable. The
-    # cluster barrier below removes timing as a source of mismatch.
-    cta_rank = ttgl.inline_asm_elementwise(
-        "mov.u32 $0, %cluster_ctarank;",
-        "=r,r",
-        [local_offsets],
-        dtype=ttgl.int32,
-        is_pure=True,
-        pack=1,
-    )
-    values = local_offsets + cta_rank * 1000
-    smem = ttgl.allocate_shared_memory(ttgl.int32, [32], shared_layout, value=values)
-    ttgl.barrier(cluster=True)
-
-    result_offsets = ttgl.arange(0, 64, layout=result_layout)
-    result = smem.gather(result_offsets % 32, axis=0)
-    ttgl.store(out + result_offsets, result)
+def _shared_gather_cga_cases():
+    cases = [pytest.param(1, 0, id="1-cta-local")]
+    for num_ctas in (2, 4, 8, 16):
+        cases.append(pytest.param(num_ctas, 0, id=f"{num_ctas}-cta-sharded"))
+        if num_ctas >= 4:
+            # Keep bit 0 sharded for a remote read and replicate alternating
+            # higher bits, including the noncontiguous mask 0b1010 at 16 CTAs.
+            broadcast_mask = sum(1 << bit for bit in range(1, num_ctas.bit_length() - 1, 2))
+            cases.append(pytest.param(num_ctas, broadcast_mask, id=f"{num_ctas}-cta-partial"))
+        cases.append(pytest.param(num_ctas, num_ctas - 1, id=f"{num_ctas}-cta-broadcast"))
+    return cases
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
-def test_shared_gather_replicated_two_ctas():
-    out = torch.empty(64, dtype=torch.int32, device="cuda")
-
-    shared_gather_replicated_two_ctas_kernel[(1, )](
-        out,
-        num_warps=1,
-        num_ctas=2,
-    )
-
-    expected = torch.arange(64, dtype=torch.int32, device="cuda")
-    expected = expected % 32 + expected // 32 * 1000
-    torch.testing.assert_close(out, expected)
+def _shared_gather_layouts(num_ctas, broadcast_mask):
+    num_cta_bits = num_ctas.bit_length() - 1
+    full_cga = tuple((1 << bit, ) for bit in range(num_cta_bits))
+    shared_cga = []
+    shard_bit = 0
+    for bit in range(num_cta_bits):
+        if broadcast_mask & (1 << bit):
+            shared_cga.append((0, ))
+        else:
+            shared_cga.append((1 << shard_bit, ))
+            shard_bit += 1
+    value_layout = ttgl.BlockedLayout([1], [32], [1], [0], cga_layout=full_cga)
+    seed_layout = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=full_cga)
+    shared_layout = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=shared_cga)
+    return value_layout, seed_layout, shared_layout, shard_bit
 
 
 @gluon.jit
-def shared_gather_partially_replicated_four_ctas_kernel(out):
-    local_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0], cga_layout=[[1], [0]])
-    result_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0], cga_layout=[[1], [2]])
-    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[1], [0]])
-
-    local_offsets = ttgl.arange(0, 64, layout=local_layout)
-    cta_rank = ttgl.inline_asm_elementwise(
-        "mov.u32 $0, %cluster_ctarank;",
-        "=r,r",
-        [local_offsets],
-        dtype=ttgl.int32,
-        is_pure=True,
-        pack=1,
-    )
-    values = local_offsets + cta_rank * 1000
-    smem = ttgl.allocate_shared_memory(ttgl.int32, [64], shared_layout, value=values)
+def shared_gather_cga_kernel(
+    out,
+    value_layout: ttgl.constexpr,
+    seed_layout: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+    BROADCAST_MASK: ttgl.constexpr,
+    NUM_SHARD_BITS: ttgl.constexpr,
+    CTA_TILE: ttgl.constexpr,
+):
+    num_ctas: ttgl.constexpr = ttgl.num_ctas()
+    num_cta_bits: ttgl.constexpr = num_ctas.bit_length() - 1
+    block: ttgl.constexpr = CTA_TILE * num_ctas
+    offsets = ttgl.arange(0, block, layout=value_layout)
+    # Seed each physical CTA with distinct layout-derived values, then view the
+    # same allocation through the CGA layout under test.
+    seed = ttgl.allocate_shared_memory(ttgl.int32, [block], seed_layout, value=offsets)
+    smem = seed._reinterpret(shape=[CTA_TILE << NUM_SHARD_BITS], layout=shared_layout)
     ttgl.barrier(cluster=True)
 
-    result_offsets = ttgl.arange(0, 128, layout=result_layout)
-    result = smem.gather((result_offsets + 32) % 64, axis=0)
-    ttgl.store(out + result_offsets, result)
+    cta = offsets // CTA_TILE
+    local = offsets & (CTA_TILE - 1)
+    # Compress the non-broadcast CTA bits into a shard ID. Flipping its low bit
+    # forces a remote read while leaving the replica bits unchanged.
+    shard = local * 0
+    shard_bit = 0
+    for bit in range(num_cta_bits):
+        if (BROADCAST_MASK & (1 << bit)) == 0:
+            shard |= ((cta >> bit) & 1) << shard_bit
+            shard_bit += 1
+    if NUM_SHARD_BITS:
+        indices = (shard ^ 1) * CTA_TILE + local
+    else:
+        indices = local ^ 1
+    result = smem.gather(indices, axis=0)
+    ttgl.store(out + offsets, result)
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
-def test_shared_gather_partially_replicated_four_ctas():
-    out = torch.empty(128, dtype=torch.int32, device="cuda")
+@pytest.mark.parametrize("num_ctas,broadcast_mask", _shared_gather_cga_cases())
+def test_shared_gather_cga(num_ctas, broadcast_mask):
+    cta_tile = 32
+    out = torch.empty(cta_tile * num_ctas, dtype=torch.int32, device="cuda")
+    value_layout, seed_layout, shared_layout, num_shard_bits = _shared_gather_layouts(num_ctas, broadcast_mask)
 
-    shared_gather_partially_replicated_four_ctas_kernel[(1, )](
+    shared_gather_cga_kernel[(1, )](
         out,
+        value_layout,
+        seed_layout,
+        shared_layout,
+        BROADCAST_MASK=broadcast_mask,
+        NUM_SHARD_BITS=num_shard_bits,
+        CTA_TILE=cta_tile,
         num_warps=1,
-        num_ctas=4,
+        num_ctas=num_ctas,
     )
 
-    expected = torch.arange(128, dtype=torch.int32, device="cuda")
-    target_cta = (expected // 32) ^ 1
-    expected = (expected + 32) % 64 + target_cta * 1000
+    offsets = torch.arange(out.numel(), dtype=torch.int32, device="cuda")
+    if broadcast_mask == num_ctas - 1:
+        expected = (offsets // cta_tile) * cta_tile + ((offsets % cta_tile) ^ 1)
+    else:
+        expected = ((offsets // cta_tile) ^ 1) * cta_tile + offsets % cta_tile
     torch.testing.assert_close(out, expected)
 
 

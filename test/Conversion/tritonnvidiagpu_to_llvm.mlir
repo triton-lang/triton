@@ -636,22 +636,47 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-#local_gather_replicated_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[1]]}>
-#local_gather_replicated_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#local_gather_cga16_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CGALayout = [[0, 1], [1, 0], [0, 2], [2, 0]]}>
+#local_gather_cga16_sharded = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [1, 0], CGALayout = [[0, 1], [1, 0], [0, 2], [2, 0]]}>
+#local_gather_cga16_partial = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [1, 0], CGALayout = [[0, 1], [0, 0], [1, 0], [0, 0]]}>
+#local_gather_cga16_broadcast = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [1, 0], CGALayout = [[0, 0], [0, 0], [0, 0], [0, 0]]}>
 
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @local_gather_replicated_two_ctas
+module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @local_gather_sharded_16_ctas
+  // CHECK: nvvm.mapa
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<7> -> i32
+  // CHECK: llvm.return
+  tt.func private @local_gather_sharded_16_ctas() -> tensor<32x32xi32, #local_gather_cga16_blocked> {
+    %src = ttg.local_alloc {allocation.offset = [0 : i32]} : () -> !ttg.memdesc<32x32xi32, #local_gather_cga16_sharded, #ttg.shared_memory, mutable>
+    %idx = arith.constant dense<0> : tensor<32x32xi32, #local_gather_cga16_blocked>
+    %g = ttg.local_gather %src[%idx] {axis = 1 : i32} : !ttg.memdesc<32x32xi32, #local_gather_cga16_sharded, #ttg.shared_memory, mutable>, tensor<32x32xi32, #local_gather_cga16_blocked> -> tensor<32x32xi32, #local_gather_cga16_blocked>
+    tt.return %g : tensor<32x32xi32, #local_gather_cga16_blocked>
+  }
+
+  // CHECK-LABEL: @local_gather_partial_broadcast_16_ctas
+  // CHECK: %[[MASK:.*]] = llvm.mlir.constant(10 : i32)
+  // CHECK: %[[REPLICA:.*]] = llvm.and %{{.*}}, %[[MASK]] : i32
+  // CHECK: %[[TARGET:.*]] = llvm.or %{{.*}}, %[[REPLICA]] : i32
+  // CHECK: nvvm.mapa %{{.*}}, %[[TARGET]]
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<7> -> i32
+  // CHECK: llvm.return
+  tt.func private @local_gather_partial_broadcast_16_ctas() -> tensor<32x32xi32, #local_gather_cga16_blocked> {
+    %src = ttg.local_alloc {allocation.offset = [0 : i32]} : () -> !ttg.memdesc<32x32xi32, #local_gather_cga16_partial, #ttg.shared_memory, mutable>
+    %idx = arith.constant dense<0> : tensor<32x32xi32, #local_gather_cga16_blocked>
+    %g = ttg.local_gather %src[%idx] {axis = 1 : i32} : !ttg.memdesc<32x32xi32, #local_gather_cga16_partial, #ttg.shared_memory, mutable>, tensor<32x32xi32, #local_gather_cga16_blocked> -> tensor<32x32xi32, #local_gather_cga16_blocked>
+    tt.return %g : tensor<32x32xi32, #local_gather_cga16_blocked>
+  }
+
+  // CHECK-LABEL: @local_gather_full_broadcast_16_ctas
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> i32
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.return
-  tt.func @local_gather_replicated_two_ctas(%out: !tt.ptr<i32>) {
-    %src = ttg.local_alloc {allocation.offset = [0 : i32]} : () -> !ttg.memdesc<1xi32, #local_gather_replicated_shared, #ttg.shared_memory, mutable>
-    %idx = arith.constant dense<0> : tensor<2xi32, #local_gather_replicated_blocked>
-    %g = ttg.local_gather %src[%idx] {axis = 0 : i32} : !ttg.memdesc<1xi32, #local_gather_replicated_shared, #ttg.shared_memory, mutable>, tensor<2xi32, #local_gather_replicated_blocked> -> tensor<2xi32, #local_gather_replicated_blocked>
-    %ptrs = tt.splat %out : !tt.ptr<i32> -> tensor<2x!tt.ptr<i32>, #local_gather_replicated_blocked>
-    tt.store %ptrs, %g : tensor<2x!tt.ptr<i32>, #local_gather_replicated_blocked>
-    tt.return
+  tt.func private @local_gather_full_broadcast_16_ctas() -> tensor<32x32xi32, #local_gather_cga16_blocked> {
+    %src = ttg.local_alloc {allocation.offset = [0 : i32]} : () -> !ttg.memdesc<32x32xi32, #local_gather_cga16_broadcast, #ttg.shared_memory, mutable>
+    %idx = arith.constant dense<0> : tensor<32x32xi32, #local_gather_cga16_blocked>
+    %g = ttg.local_gather %src[%idx] {axis = 1 : i32} : !ttg.memdesc<32x32xi32, #local_gather_cga16_broadcast, #ttg.shared_memory, mutable>, tensor<32x32xi32, #local_gather_cga16_blocked> -> tensor<32x32xi32, #local_gather_cga16_blocked>
+    tt.return %g : tensor<32x32xi32, #local_gather_cga16_blocked>
   }
 }
 
