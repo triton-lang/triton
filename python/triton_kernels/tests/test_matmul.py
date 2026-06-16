@@ -645,6 +645,30 @@ def test_k_ragged_mxfp8_act_scale_swizzling(device):
     torch.testing.assert_close(swizzled, canonical)
 
 
+@pytest.mark.parametrize("constraints", [
+    {"is_persistent": False, "split_k": 1},
+    {"is_persistent": True, "split_k": 1},
+    {"is_persistent": False, "split_k": 3},
+])
+def test_float64(constraints, device):
+    torch.manual_seed(0)
+    a = torch.randn((128, 256), dtype=torch.float64, device=device)
+    b = torch.randn((256, 64), dtype=torch.float64, device=device)
+    a += torch.arange(256, dtype=torch.float64, device=device) * 2**-40
+    out = torch.empty((128, 64), dtype=torch.float64, device=device)
+    precision_config = PrecisionConfig(
+        allow_tf32=False,
+        out_dtype=torch.float64,
+        intermediate_out_dtype=torch.float64,
+    )
+
+    with opt_flags.scoped_opt_flags_constraints(constraints):
+        actual = matmul(a, b, None, precision_config=precision_config, c=out)
+
+    assert actual.data_ptr() == out.data_ptr()
+    torch.testing.assert_close(actual, torch.matmul(a, b), rtol=1e-12, atol=1e-12)
+
+
 def test_set_idle_sms():
     if not is_cuda():
         pytest.skip("Only supported on CUDA")
