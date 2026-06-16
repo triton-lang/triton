@@ -18,7 +18,6 @@ env:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
 
@@ -64,7 +63,7 @@ jobs:
     - name: Checkout LLVM
       uses: actions/checkout@v6
       with:
-        repository: llvm/llvm-project
+        repository: atalman/llvm-project
         path: llvm-project
         ref: ${{ env.llvm_commit_hash }}
 
@@ -286,30 +285,6 @@ jobs:
         name: llvm-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
         path: |
           ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}.tar.gz
-
-    - name: Azure login
-      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
-      uses: azure/login@v2
-      with:
-        client-id: ${{ secrets.AZURE_CLIENT_ID_LLVM }}
-        tenant-id: ${{ secrets.AZURE_TENANT_ID_LLVM }}
-        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_LLVM }}
-
-    - name: Upload LLVM Artifacts to Azure
-      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
-      shell: bash -el {0}
-      run: |
-        az storage blob upload --account-name oaitriton --auth-mode login --container-name public --file "${{ env.llvm_install_dir }}.tar.gz" --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz" --overwrite
-
-        URL=$(az storage blob url --account-name oaitriton --auth-mode login --container-name public --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz")
-        echo "Blob URL: ${URL}"
-
-    - name: Azure Logout
-      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
-      run: |
-        az logout
-        az cache purge
-        az account clear
 
     - name: Dump Sccache Statistics
       run: sccache --show-stats
