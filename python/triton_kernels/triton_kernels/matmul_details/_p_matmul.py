@@ -186,7 +186,6 @@ def _p_matmul(
         PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N
         tl.static_assert(SWIZZLE_MX_SCALE == "STRIDED")
     if is_x_microscaled:
-        x_type: tl.constexpr = get_dtype(X)
         is_x_fp4: tl.constexpr = x_type == tl.uint8
         tl.static_assert(x_type == tl.float8e4nv or x_type == tl.uint8, "mx_act_ptr must be float8e4nv or uint8")
         # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8e4nv.
