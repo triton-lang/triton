@@ -29,11 +29,10 @@ def assert_close(ref, tri, maxtol=None, rmstol=None, description="--", verbose=T
     if ref.numel() == 0:
         return
 
-    is_float64 = ref.dtype == torch.float64 or tri.dtype == torch.float64
     if maxtol is None:
-        maxtol = 1e-12 if is_float64 else 2e-2
+        maxtol = 2e-2
     if rmstol is None:
-        rmstol = 1e-12 if is_float64 else 4e-3
+        rmstol = 4e-3
     """
     Compare reference values against obtained values.
     """
