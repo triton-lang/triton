@@ -172,8 +172,15 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
         assert(opIdx == 0 || opIdx == 1);
         int rank = order.size();
         int kDim = opIdx == 0 ? rank-1 : rank-2;
-        if (order[0] != kDim)
+        if (order[0] != kDim) {
           std::swap(vec, mmaStride);
+          // FP64 m16n8k{8,16}: a thread's fragment elements are K-adjacent
+          // (a full row apart in smem), so use a 16B swizzle unit (vec=2) to
+          // expose all 8 phases and avoid pairwise bank conflicts on the 8
+          // rows loaded together. No-op for kWidth=1 (legacy m8n8k4).
+          if (bitwidth == 64 && kWidth >= 2)
+            vec = 128 / bitwidth;
+        }
         // Count how many vec elements are needed to cover all the banks
         int maxPhase = std::max(std::min<int>(mmaStride, 1024 / (vec * bitwidth)), 1);
         // Account for the row packing from perPhase: mmaStride / perPhase
