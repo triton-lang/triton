@@ -543,7 +543,6 @@ class MXFPGEMMPipelinedProgram:
                 a_desc = self.issue_load_a_data(a_desc, load_idx, phase=phase)
                 b_desc = self.issue_load_b_data(b_desc, load_idx, phase=phase)
 
-            self.issue_l2_prefetches(cfg.L2_PREFETCH_DISTANCE - 1, load_idx)
             gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2) * self.cfg.NUM_LOADS_IN_BATCH)
             with gl.amd.warp_pipeline_stage("wmma", priority=0):
                 self.issue_l2_prefetches(cfg.L2_PREFETCH_DISTANCE, load_idx)
