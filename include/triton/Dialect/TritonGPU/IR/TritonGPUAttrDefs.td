@@ -1484,6 +1484,17 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
       // For MMAV2 and V3
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
       unsigned kWidth = std::max(32 / bitwidth, 1u);
+      // FP64 m16n8k{4,8,16} encodes the native K in instrShape. The dot
+      // operand needs kWidth = K/4 (4 lanes cover the K dim) so that the
+      // layout's register granularity matches the MMA instruction.
+      if (bitwidth == 64) {
+        auto instr = parentAttr.getInstrShape();
+        unsigned r = parentAttr.getWarpsPerCTA().size();
+        if (instr.size() > r) {
+          unsigned k = instr[instr.size() - 1];
+          kWidth = std::max<unsigned>(k / 4, 1u);
+        }
+      }
       return $_get(context, opIdx, parent, kWidth);
     }]>
   ];

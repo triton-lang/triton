@@ -1,5 +1,6 @@
 #include "triton/Analysis/Utility.h"
 
+#include <cstdlib>
 #include <fstream>
 #include <optional>
 
@@ -28,33 +29,60 @@ namespace mlir {
 
 using namespace triton;
 
-// FP64 m16-family K-tile selector. Returns 0 on sm_80 (falls back to legacy
-// m8n8k4). Extend here for supporting K=8/16 — instrShape carries the
-// chosen K downstream.
-static unsigned pickFp64MmaK(int computeCapability) {
-  if (computeCapability < 90)
-    return 0;
+// Pick the FP64 m16 native K (4, 8, or 16). Honors `TRITON_FP64_MMA_K` for an
+// explicit override; otherwise picks the largest K that divides `operandK`.
+// k16 requires sm_90+; everything is gated on sm_90+ for the m16 family.
+static unsigned pickFp64MmaK(int computeCapability, int operandK) {
+  auto parseDigits = [](const char *s) -> int {
+    if (!s || !*s)
+      return -1;
+    int v = 0;
+    for (const char *p = s; *p; ++p) {
+      if (*p < '0' || *p > '9')
+        return -1;
+      v = v * 10 + (*p - '0');
+    }
+    return v;
+  };
+  int envK = parseDigits(std::getenv("TRITON_FP64_MMA_K"));
+  if (envK == 4 || envK == 8 || envK == 16) {
+    if (envK == 16 && computeCapability < 90)
+      return 8;
+    return static_cast<unsigned>(envK);
+  }
+  // Auto-select: largest K that divides operandK, is supported, and leaves
+  // at least 4 MMA instructions per K-step (repK = BLOCK_K / K_mma >= 4).
+  // Fewer than 4 reps hurts pipelining: the MMA loop body is too thin to
+  // hide shared-memory latency. Concrete thresholds: K=16 needs BLOCK_K>=64,
+  // K=8 needs BLOCK_K>=32; K=4 is always available.
+  if (operandK > 0) {
+    if (computeCapability >= 90 && operandK % 16 == 0 && operandK >= 64)
+      return 16;
+    if (operandK % 8 == 0 && operandK >= 32)
+      return 8;
+  }
   return 4;
 }
 
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
                                                 Type eltType, int numWarps,
-                                                int computeCapability) {
+                                                int computeCapability,
+                                                int operandK) {
   if (version == 1)
     return {16, 16};
   else if (version == 2) {
     auto rank = shape.size();
-    // FP64 sm_90+: m16n8kK with K stored as a trailing instrShape elt.
-    // FP64 sm_80:  legacy m8n8k4 (2-elt instrShape, K=4 implicit).
+    // The m16 FP64 family (m16n8k{4,8,16}) requires sm_90+. On sm_80 we fall
+    // back to the legacy m8n8k4.f64 shape (encoded as 2-elt instrShape; K=4
+    // is implicit and recovered via the `instrM == 8` legacy branch).
     bool isF64 = eltType.isF64();
-    unsigned f64K = isF64 ? pickFp64MmaK(computeCapability) : 0;
-    bool isF64M16 = f64K != 0;
+    bool isF64M16 = isF64 && computeCapability >= 90;
     SmallVector<unsigned, 3> ret(rank + (isF64M16 ? 1u : 0u), 1);
     ret[rank - 1] = 8;
     ret[rank - 2] = isF64 && !isF64M16 ? 8 : 16;
     if (isF64M16)
-      ret[rank] = f64K;
+      ret[rank] = pickFp64MmaK(computeCapability, operandK);
     return ret;
   } else if (version == 3) {
     unsigned k = 256 / eltType.getIntOrFloatBitWidth();

@@ -31,7 +31,8 @@ class SwizzledSharedEncodingAttr;
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
                                                 Type type, int numWarps,
-                                                int computeCapability = 80);
+                                                int computeCapability = 80,
+                                                int operandK = -1);
 
 // Gets the order of a tensor from its contiguity. Places the dimensions with
 // the largest contiguity as the inner most dimension. If the contiguity is
