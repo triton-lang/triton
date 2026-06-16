@@ -93,15 +93,12 @@ size_t roundUp(size_t val, size_t alignment) {
   return cdiv(val, alignment) * alignment;
 }
 
-uint32_t roundDownToPowerOfTwo(uint32_t x) {
+size_t roundDownToPowerOfTwo(size_t x) {
   if (x == 0)
     return 0;
 
-  x |= x >> 1;
-  x |= x >> 2;
-  x |= x >> 4;
-  x |= x >> 8;
-  x |= x >> 16;
+  for (size_t shift = 1; shift < sizeof(x) * 8; shift <<= 1)
+    x |= x >> shift;
 
   return x - (x >> 1);
 }
