@@ -762,17 +762,16 @@ tt.func @pipeline_fp64_with_async_copy_gfx950(
 #dotB = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
-// A 16x2 tile has fewer LDS offsets than lanes in a gfx950 warp, so no source
-// layout can make the direct-to-LDS warp writes coalesced.
 // COMMON-LABEL: @reject_oversubscribed_async_copy_gfx950
 // ASYNC-NOT: ttg.async_copy_global_to_local
-// ASYNC: tt.load
-// ASYNC: ttg.local_store
-// ASYNC: scf.for
+// COMMON: tt.load
+// COMMON: ttg.local_store
+// COMMON: scf.for
 // ASYNC-NOT: ttg.async_copy_global_to_local
-// ASYNC: tt.dot
+// COMMON: tt.dot
+// COMMON: ttg.local_store
 // ASYNC-NOT: ttg.async_copy_global_to_local
-// ASYNC: tt.return
+// COMMON: tt.return
 tt.func @reject_oversubscribed_async_copy_gfx950(
                   %a : tensor<256x16xf32, #dotA>,
                   %b_ptr : tensor<16x2x!tt.ptr<f32>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 1]> : tensor<2xi32>},

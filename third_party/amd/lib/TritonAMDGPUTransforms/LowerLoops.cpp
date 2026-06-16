@@ -353,6 +353,37 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
   return maxVecSharedEnc;
 }
 
+// On targets without direct-to-LDS scatter support, a direct-to-LDS copy
+// requires each warp to write coalesced into LDS. This fails if the source
+// layout broadcasts across the lanes of a warp, i.e. multiple lanes map to the
+// same element (the tile is smaller than a warp in some dimension). In that
+// case the copy would later fail to legalize, so it must not be turned into an
+// async copy. Returns false when such a lane broadcast is present.
+//
+// Note: this inspects the source layout's free-variable mask on the lane
+// dimension, so it is warpsPerCTA-aware (a tile can have >= warpSize elements
+// in total yet still broadcast within a warp). It is a necessary, not
+// sufficient, predictor of the lowering's full canCoalesceWriteIntoSharedMemory
+// check; the remaining permuted/strided, non-broadcast cases are left to the
+// final layout checks and the CoalesceAsyncCopy pass. If they still cannot be
+// made coalesced, the direct-to-LDS lowering will reject them.
+bool warpCoversDistinctElements(tt::LoadOp loadOp,
+                                const tt::AMD::TargetInfo &targetInfo) {
+  if (targetInfo.supportsDirectToLdsScatter())
+    return true;
+
+  auto srcTy = dyn_cast<RankedTensorType>(loadOp.getResult().getType());
+  if (!srcTy)
+    return true;
+  auto srcLayout = triton::gpu::toLinearLayout(srcTy);
+  auto kLane = StringAttr::get(srcTy.getContext(), "lane");
+  // A non-zero free-variable mask on the lane dimension means some lane bits do
+  // not affect the accessed element, i.e. lanes broadcast.
+  auto freeMasks = srcLayout.getFreeVariableMasks();
+  auto it = freeMasks.find(kLane);
+  return it == freeMasks.end() || it->second == 0;
+}
+
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                ttg::SharedEncodingTrait sharedEnc,
                                tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -370,9 +401,22 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
     return false;
 
   using tt::amdgpu::ISAFamily;
-  if (sharedEnc && llvm::is_contained(
-                       {ISAFamily::CDNA3, ISAFamily::CDNA4, ISAFamily::GFX1250},
-                       targetInfo.getISAFamily())) {
+  bool hasDirectToLdsPath = llvm::is_contained(
+      {ISAFamily::CDNA3, ISAFamily::CDNA4, ISAFamily::GFX1250},
+      targetInfo.getISAFamily());
+
+  // On targets without scatter support a warp whose lanes broadcast (the source
+  // layout maps multiple lanes to the same element) cannot produce coalesced
+  // direct-to-LDS writes, so reject the async copy. This does not depend on the
+  // final shared encoding, so check it even when sharedEnc is not yet known.
+  if (hasDirectToLdsPath && !warpCoversDistinctElements(loadOp, targetInfo))
+    return false;
+
+  if (sharedEnc && hasDirectToLdsPath) {
+    // Compute the final vecSize we can use for the combination of
+    // sourceEncoding and sharedEncoding. We can only use AsyncCopy if the
+    // target supports the requested or a smaller vecSize because we cannot
+    // stride when loading directly to lds on GFX9
     auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
     auto regLayout = triton::gpu::toLinearLayout(srcTy);
     // It's the allocation so we trim the multibuffer dimension
@@ -391,18 +435,8 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
     if (paddedEnc)
       vecSize = std::min(vecSize, paddedEnc.getMinInterval());
 
-    unsigned finalVecSize =
-        fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo);
-    if (finalVecSize == 0)
+    if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
       return false;
-
-    if (!targetInfo.supportsDirectToLdsScatter()) {
-      int64_t numElements = 1;
-      for (int64_t dim : srcTy.getShape())
-        numElements *= dim;
-      if (numElements < targetInfo.getWarpSize() * finalVecSize)
-        return false;
-    }
   }
 
   return true;
