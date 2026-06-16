@@ -80,8 +80,7 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         *_, M, K = self._padded_shape
         pad_m = M - M_in
         pad_k = K - K_in
-        if data.numel():
-            data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
+        data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
         assert data.is_contiguous()
         assert M % (
             2 * self.num_warps * 2 *
