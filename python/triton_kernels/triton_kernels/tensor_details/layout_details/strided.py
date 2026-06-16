@@ -66,7 +66,11 @@ class StridedLayoutTransformation(LayoutTransformation):
     def storage_shape(self) -> list[int]:
         shape = list(self.shape)
         if self.is_fp4:
-            shape[self.order[0]] //= 2
+            packing_dim = self.order[0]
+            if shape[packing_dim] % 2:
+                raise ValueError(
+                    f"FP4 packing dimension {packing_dim} must have an even size, got {shape[packing_dim]}")
+            shape[packing_dim] //= 2
         return shape
 
     def swizzle_data(self, data):
