@@ -67,6 +67,8 @@ def ConvertWarpPipeline : Pass<"convert-warp-pipeline", "mlir::ModuleOp"> {
     let options = [
         Option<"gfxArch", "gfx-arch", "std::string", /*default*/"std::string{}",
                "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
+        Option<"backedgeBarrierToHead", "backedge-barrier-to-head", "bool", /*default*/"false",
+               "Move the loop backedge warp-pipeline barrier to the loop head">,
     ];
 }
 

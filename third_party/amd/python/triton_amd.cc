@@ -73,9 +73,12 @@ void init_triton_amd_passes_ttgpuir(py::module_ &m) {
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
                      mlir::createTritonAMDGPUOptimizeEpilogue);
   ADD_PASS_WRAPPER_0("add_warp_pipeline", mlir::createTritonAMDGPUWarpPipeline);
-  ADD_PASS_OPTION_WRAPPER_1("add_warp_pipeline_conversion",
-                            mlir::triton::AMD::createConvertWarpPipelinePass,
-                            const std::string &);
+  m.def("add_warp_pipeline_conversion",
+        [](mlir::PassManager &pm, const std::string &gfxArch,
+           bool backedgeBarrierToHead) {
+          pm.addPass(mlir::triton::AMD::createConvertWarpPipelinePass(
+              gfxArch, backedgeBarrierToHead));
+        });
   ADD_PASS_OPTION_WRAPPER_1(
       "add_optimize_dot_operands",
       mlir::triton::amdgpu::createTritonAMDGPUOptimizeDotOperands,
