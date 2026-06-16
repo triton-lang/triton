@@ -37,9 +37,9 @@ def assert_close(ref, tri, maxtol=None, rmstol=None, description="--", verbose=T
     Compare reference values against obtained values.
     """
 
-    # cast to float64:
-    ref = ref.to(torch.float64).detach()
-    tri = tri.to(torch.float64).detach()
+    # cast to float32:
+    ref = ref.to(torch.float32).detach()
+    tri = tri.to(torch.float32).detach()
     assert ref.shape == tri.shape, f"Tensors must have same size {ref.shape=} {tri.shape=}"
 
     # deal with infinite elements:
