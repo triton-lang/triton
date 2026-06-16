@@ -70,6 +70,10 @@ bool isAutoFuseCandidate(TDMCopyGlobalToLocalOp copy) {
       copy.getResult().getType().getEncoding());
 }
 
+bool isTransparentBetweenAutoFuseCandidates(Operation *op) {
+  return isa<triton::gpu::MemDescIndexOp>(op);
+}
+
 bool autoFuseEnabled() {
   auto disabled = mlir::triton::tools::isEnvValueBool(
       mlir::triton::tools::getStrEnv("TRITON_AMD_DISABLE_TDM_AUTO_FUSE"));
@@ -81,7 +85,7 @@ void fuseGroup(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
                unsigned numWarps) {
   assert(group.size() >= 2 && group.size() <= 4);
   auto first = group.front();
-  OpBuilder builder(first);
+  OpBuilder builder(group.back());
 
   // The fused op keeps the original descriptors and destinations as variadic
   // operands; only the per-member warp masks are synthesized here.
@@ -130,7 +134,8 @@ void autoFuseTDMCopies(ModuleOp mod) {
   //      standalone copies; users should use the explicit fused op for manual
   //      fusion.
   //   2. Members must not carry an `mbarrier`.
-  //   3. Members must be consecutive in one block.
+  //   3. Members must be in one block with only transparent view ops between
+  //      them. Today only ttg.memdesc_index is transparent.
   //   4. Group size must be 2, 3, or 4.
   //   5. Members must have same-rank descriptors.
   //   6. Members must share the same `cache` modifier.
@@ -187,14 +192,17 @@ void autoFuseTDMCopies(ModuleOp mod) {
       run.clear();
     };
 
-    // A non-candidate op is a hard boundary: auto-fusion is intentionally only
-    // for adjacent copies with no intervening work.
+    // A non-candidate op is a hard boundary unless it is a transparent view op.
+    // When view ops appear between copies, fuseGroup inserts at the last copy
+    // so all skipped view results dominate the new fused op.
     for (Operation &op : llvm::make_early_inc_range(*block)) {
       auto copy = dyn_cast<TDMCopyGlobalToLocalOp>(&op);
       if (copy && isAutoFuseCandidate(copy)) {
         run.push_back(copy);
         continue;
       }
+      if (isTransparentBetweenAutoFuseCandidates(&op))
+        continue;
       flush();
     }
     flush();

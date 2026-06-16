@@ -59,9 +59,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %dst_a = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
     %dst_b = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
 
-    // Adjacent unhinted copies fuse into one op unless disabled.
-    // Auto-fusion requires consecutive copies; see
-    // tdm_auto_fuse_skip_interleaved for the non-consecutive case.
+    // Adjacent unhinted copies fuse into one op unless disabled. Destination
+    // views may be precomputed before the copy run.
     // ENABLE-FUSE: amdg.async_tdm_fused_copy_global_to_local
     // ENABLE-FUSE-SAME: warp_used_hints = array<i32: 5, 10>
     // ENABLE-FUSE-NOT: amdg.async_tdm_copy_global_to_local
@@ -86,9 +85,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // FUSE-LABEL: tdm_auto_fuse_skip_interleaved
-  // CHECK-LABEL: tdm_auto_fuse_skip_interleaved
-  tt.func public @tdm_auto_fuse_skip_interleaved(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+  // FUSE-LABEL: tdm_auto_fuse_through_memdesc_index
+  // CHECK-LABEL: tdm_auto_fuse_through_memdesc_index
+  tt.func public @tdm_auto_fuse_through_memdesc_index(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %c_shape = arith.constant 128 : i32
     %c_stride0 = arith.constant 128 : i64
     %c_stride1 = arith.constant 1 : i64
@@ -99,15 +98,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %dst_a = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
     %dst_b = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
 
-    // A memdesc_index between the copies makes them non-consecutive, so
-    // auto-fusion leaves them alone -- two intrinsics with or without the env
-    // var. Hoisting the views to fuse this form is a deferred optimization.
-    // FUSE: amdg.async_tdm_copy_global_to_local
-    // FUSE: amdg.async_tdm_copy_global_to_local
-    // FUSE-NOT: amdg.async_tdm_fused_copy_global_to_local
-    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
-    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
-    // CHECK-NOT: "llvm.amdgcn.tensor.load.to.lds"
+    // A memdesc_index between copies is a transparent view op. The fused op is
+    // inserted at the last copy so the second view dominates it.
+    // ENABLE-FUSE: amdg.async_tdm_fused_copy_global_to_local
+    // ENABLE-FUSE-SAME: warp_used_hints = array<i32: 5, 10>
+    // ENABLE-FUSE-NOT: amdg.async_tdm_copy_global_to_local
+    // DISABLE-FUSE: amdg.async_tdm_copy_global_to_local
+    // DISABLE-FUSE: amdg.async_tdm_copy_global_to_local
+    // DISABLE-FUSE-NOT: amdg.async_tdm_fused_copy_global_to_local
+    // ENABLE: "llvm.amdgcn.tensor.load.to.lds"
+    // ENABLE-NOT: "llvm.amdgcn.tensor.load.to.lds"
+    // DISABLE: "llvm.amdgcn.tensor.load.to.lds"
+    // DISABLE: "llvm.amdgcn.tensor.load.to.lds"
+    // DISABLE-NOT: "llvm.amdgcn.tensor.load.to.lds"
     %dst0 = ttg.memdesc_index %dst_a[%c0] : !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     %0 = amdg.async_tdm_copy_global_to_local %desc into %dst0 : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     %dst1 = ttg.memdesc_index %dst_b[%c0] : !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
