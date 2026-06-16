@@ -373,9 +373,9 @@ struct LocalGatherOpConversion
                     /*withCTAOffset=*/true);
     SmallVector<Value> offsets(adaptor.getOffsets());
 
-    auto addrs =
-        computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
-                          dstIndices, op.getAxis(), rewriter, offsets);
+    auto addrs = computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy,
+                                   idxValues, dstIndices, op.getAxis(),
+                                   rewriter, targetInfo, offsets);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     SmallVector<Value> results =
         llvm::map_to_vector(addrs, [&](const LocalSharedMemoryAddress &addr) {

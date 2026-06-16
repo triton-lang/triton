@@ -636,6 +636,27 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#local_gather_replicated_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[1]]}>
+#local_gather_replicated_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @local_gather_replicated_two_ctas
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> i32
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.return
+  tt.func @local_gather_replicated_two_ctas(%out: !tt.ptr<i32>) {
+    %src = ttg.local_alloc {allocation.offset = [0 : i32]} : () -> !ttg.memdesc<1xi32, #local_gather_replicated_shared, #ttg.shared_memory, mutable>
+    %idx = arith.constant dense<0> : tensor<2xi32, #local_gather_replicated_blocked>
+    %g = ttg.local_gather %src[%idx] {axis = 0 : i32} : !ttg.memdesc<1xi32, #local_gather_replicated_shared, #ttg.shared_memory, mutable>, tensor<2xi32, #local_gather_replicated_blocked> -> tensor<2xi32, #local_gather_replicated_blocked>
+    %ptrs = tt.splat %out : !tt.ptr<i32> -> tensor<2x!tt.ptr<i32>, #local_gather_replicated_blocked>
+    tt.store %ptrs, %g : tensor<2x!tt.ptr<i32>, #local_gather_replicated_blocked>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 5 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: module attributes {
   // CHECK-DAG: ttg.shared = 24 : i32

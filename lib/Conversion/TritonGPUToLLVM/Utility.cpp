@@ -540,12 +540,11 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return emitIndices(loc, rewriter, target, ll, type, withCTAOffset);
 }
 
-SmallVector<LocalSharedMemoryAddress>
-computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
-                  SharedMemoryObject smemObj, Type llvmElemTy,
-                  ArrayRef<Value> idxValues,
-                  ArrayRef<SmallVector<Value>> coords, unsigned axis,
-                  RewriterBase &rewriter, ArrayRef<Value> offsets) {
+SmallVector<LocalSharedMemoryAddress> computeLocalAddrs(
+    Location loc, triton::gpu::MemDescType memDescTy,
+    SharedMemoryObject smemObj, Type llvmElemTy, ArrayRef<Value> idxValues,
+    ArrayRef<SmallVector<Value>> coords, unsigned axis, RewriterBase &rewriter,
+    const TargetInfoBase &targetInfo, ArrayRef<Value> offsets) {
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -562,7 +561,16 @@ computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
 
   auto kOffset = str_attr("offset");
   auto kBlock = str_attr("block");
-  bool isMultiCTA = invSharedLayout.getOutDimSize(kBlock) > 1;
+  // A pseudoinverse sets free block bits to zero. Preserve those bits from
+  // the current CTA so CTA-local synchronization protects replicated data.
+  // Non-free block bits still select the CTA that owns sharded data.
+  uint32_t blockBroadcastMask =
+      sharedLayout.getFreeVariableMasks().lookup(kBlock);
+  uint32_t allBlockBits = sharedLayout.getInDimSize(kBlock) - 1;
+  bool mayRequireRemoteCTA = blockBroadcastMask != allBlockBits;
+  Value currentCTAId;
+  if (mayRequireRemoteCTA && blockBroadcastMask != 0)
+    currentCTAId = targetInfo.getClusterCTAId(rewriter, loc);
   // Get the subslice affine offset (non-zero for memdesc subslices)
   Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
   auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
@@ -625,7 +633,16 @@ computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
       ptr = b.gep(smemObj.getBase().getType(), llvmElemTy, smemObj.getBase(),
                   offset);
     }
-    addrs.push_back({ptr, isMultiCTA ? blockId : Value()});
+    Value targetCTAId;
+    if (mayRequireRemoteCTA) {
+      targetCTAId = blockId;
+      if (blockBroadcastMask != 0) {
+        Value localReplicaBits =
+            b.and_(currentCTAId, b.i32_val(blockBroadcastMask));
+        targetCTAId = b.or_(targetCTAId, localReplicaBits);
+      }
+    }
+    addrs.push_back({ptr, targetCTAId});
   }
 
   return addrs;
@@ -671,7 +688,7 @@ FailureOr<LocalAtomicScatterRMWInfo> prepareLocalAtomicScatterRMW(
 
   SmallVector<Value> ptrs = llvm::map_to_vector(
       computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
-                        srcIndices, op.getAxis(), rewriter),
+                        srcIndices, op.getAxis(), rewriter, targetInfo),
       [](const LocalSharedMemoryAddress &addr) { return addr.ptr; });
 
   return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,

@@ -25,8 +25,9 @@ lowerLocalScGt(Location loc, MLIRContext *ctx, MemDescType memDescTy,
                const TargetInfoBase &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   bool isScatter = !storeVals.empty();
-  SmallVector<LocalSharedMemoryAddress> addrs = computeLocalAddrs(
-      loc, memDescTy, smemObj, llvmElemTy, idxValues, coords, axis, rewriter);
+  SmallVector<LocalSharedMemoryAddress> addrs =
+      computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues, coords,
+                        axis, rewriter, targetInfo);
 
   SmallVector<Value> results;
   if (!isScatter)
