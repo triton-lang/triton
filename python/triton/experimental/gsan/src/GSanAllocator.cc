@@ -58,16 +58,20 @@ struct AllocNode {
 };
 
 struct GSanConfig {
-  int numGPUs;
-  int numSMs;
-  int numThreads;
-  int clockBufferSize;
-  uint32_t rngSeed;
+  int numGPUs = 1;
+  int numSMs = 0;
+  int numThreads = 0;
+  int clockBufferSize = 0;
+  uint32_t rngSeed = 0;
+  bool clockBufferSizeConfigured = false;
+  bool rngSeedConfigured = false;
+  int deviceRanks[gsan::kMaxGPUs] = {};
+  bool configuredDeviceRanks[gsan::kMaxGPUs] = {};
+  bool topologyConfigured = false;
+  bool topologyFrozen = false;
 };
 
 struct AllocatorState {
-  GSanConfig config;
-
   // User memory + shadow memory
   CUdeviceptr reserveBaseAddress = 0;
   AllocNode treeRoot;
@@ -85,7 +89,42 @@ void printCUDAError(CUresult err) {
 }
 
 static AllocatorState *alloc = nullptr;
+static GSanConfig config;
 static std::mutex mut;
+
+int getDeviceRankForCudaDevice(int device) {
+  if (!config.topologyConfigured)
+    return -1;
+  if (device < 0 || device >= static_cast<int>(gsan::kMaxGPUs))
+    return -1;
+  if (!config.configuredDeviceRanks[device])
+    return -1;
+  return config.deviceRanks[device];
+}
+
+CUresult ensureTopologyConfigured() {
+  if (config.topologyConfigured)
+    return CUDA_SUCCESS;
+
+  // Default topology assumes a single node with 1:1 mapping of device index to
+  // GSan device ID.
+  int cudaDeviceCount = 0;
+  CUresult err = cuDeviceGetCount(&cudaDeviceCount);
+  if (err != CUDA_SUCCESS)
+    return err;
+  if (cudaDeviceCount <= 0)
+    return CUDA_ERROR_NO_DEVICE;
+  if (cudaDeviceCount > static_cast<int>(gsan::kMaxGPUs))
+    return CUDA_ERROR_NOT_SUPPORTED;
+
+  config.numGPUs = cudaDeviceCount;
+  for (int cudaDevice = 0; cudaDevice < cudaDeviceCount; ++cudaDevice) {
+    config.deviceRanks[cudaDevice] = cudaDevice;
+    config.configuredDeviceRanks[cudaDevice] = true;
+  }
+  config.topologyConfigured = true;
+  return CUDA_SUCCESS;
+}
 
 size_t cdiv(size_t num, size_t den) { return (num + (den - 1)) / den; }
 
@@ -301,15 +340,13 @@ CUresult refreshConfigForDevice(int device) {
   if (alloc == nullptr)
     return CUDA_ERROR_NOT_INITIALIZED;
 
-  int numGPUs = 0;
-  CUresult err = cuDeviceGetCount(&numGPUs);
+  config.topologyFrozen = true;
+  CUresult err = ensureTopologyConfigured();
   if (err != CUDA_SUCCESS)
     return err;
-  if (numGPUs <= 0)
-    return CUDA_ERROR_NO_DEVICE;
-  if (numGPUs > static_cast<int>(gsan::kMaxGPUs))
-    return CUDA_ERROR_NOT_SUPPORTED;
-  if (device < 0 || device >= numGPUs)
+
+  int deviceRank = getDeviceRankForCudaDevice(device);
+  if (device < 0)
     return CUDA_ERROR_INVALID_DEVICE;
 
   CUdevice cuDevice = 0;
@@ -325,41 +362,51 @@ CUresult refreshConfigForDevice(int device) {
   if (numSMs <= 0)
     return CUDA_ERROR_INVALID_VALUE;
 
-  auto &config = alloc->config;
-  config.numGPUs = numGPUs;
   config.numSMs = numSMs;
   config.numThreads = config.numGPUs * config.numSMs;
+  if (config.numThreads > gsan::kMaxThreads)
+    return CUDA_ERROR_NOT_SUPPORTED;
 
-  // Seed rng for stochastic read clocks
-  auto userSeed = getenv("TRITON_GSAN_SEED");
-  if (userSeed) {
-    auto res =
-        std::from_chars(userSeed, userSeed + strlen(userSeed), config.rngSeed);
-    if (res.ec != std::errc()) {
-      auto errc = make_error_code(res.ec);
-      auto msg = errc.message();
-      fprintf(stderr, "Invalid TRITON_GSAN_SEED value: %s", msg.c_str());
-      return CUDA_ERROR_INVALID_VALUE;
+  // Seed rng for stochastic read clocks.
+  if (!config.rngSeedConfigured) {
+    auto userSeed = getenv("TRITON_GSAN_SEED");
+    if (userSeed) {
+      const char *userSeedEnd = userSeed + strlen(userSeed);
+      auto res = std::from_chars(userSeed, userSeedEnd, config.rngSeed);
+      if (res.ec != std::errc() || res.ptr != userSeedEnd) {
+        auto errc = make_error_code(res.ec);
+        auto msg = errc.message();
+        fprintf(stderr, "Invalid TRITON_GSAN_SEED value: %s", msg.c_str());
+        return CUDA_ERROR_INVALID_VALUE;
+      }
+    } else {
+      std::uniform_int_distribution<uint32_t> dist;
+      std::random_device rd{};
+      config.rngSeed = dist(rd);
     }
-  } else {
-    std::uniform_int_distribution<uint32_t> dist;
-    std::random_device rd{};
-    config.rngSeed = dist(rd);
+    config.rngSeedConfigured = true;
   }
 
-  auto userClockSize = getenv("TRITON_GSAN_CLOCK_BUFFER_SIZE");
-  if (userClockSize) {
-    auto res =
-        std::from_chars(userSeed, userSeed + strlen(userSeed), config.rngSeed);
-    if (res.ec != std::errc()) {
-      auto errc = make_error_code(res.ec);
-      auto msg = errc.message();
-      fprintf(stderr, "Invalid TRITON_CLOCK_BUFFER_SIZE value: %s",
-              msg.c_str());
-      return CUDA_ERROR_INVALID_VALUE;
+  if (!config.clockBufferSizeConfigured) {
+    auto userClockSize = getenv("TRITON_GSAN_CLOCK_BUFFER_SIZE");
+    if (userClockSize) {
+      int clockBufferSize = 0;
+      const char *userClockSizeEnd = userClockSize + strlen(userClockSize);
+      auto res =
+          std::from_chars(userClockSize, userClockSizeEnd, clockBufferSize);
+      if (res.ec != std::errc() || res.ptr != userClockSizeEnd ||
+          clockBufferSize <= 0) {
+        auto errc = make_error_code(res.ec);
+        auto msg = errc.message();
+        fprintf(stderr, "Invalid TRITON_GSAN_CLOCK_BUFFER_SIZE value: %s",
+                msg.c_str());
+        return CUDA_ERROR_INVALID_VALUE;
+      }
+      config.clockBufferSize = clockBufferSize;
+    } else {
+      config.clockBufferSize = 1024;
     }
-  } else {
-    config.clockBufferSize = 1024;
+    config.clockBufferSizeConfigured = true;
   }
   return CUDA_SUCCESS;
 }
@@ -370,8 +417,8 @@ CUresult ensureRuntimeStateMapped(int device) {
   CUresult err = refreshConfigForDevice(device);
   if (err != CUDA_SUCCESS)
     return err;
-  auto &config = alloc->config;
-  if (alloc->perDeviceHandles[device] != 0)
+  int deviceRank = getDeviceRankForCudaDevice(device);
+  if (alloc->perDeviceHandles[deviceRank] != 0)
     return CUDA_SUCCESS;
 
   CUmemAllocationProp prop = {};
@@ -409,7 +456,7 @@ CUresult ensureRuntimeStateMapped(int device) {
   CUmemAccessDesc accessDesc = {};
   gsan::GlobalState globals = {};
   CUdeviceptr deviceAddr =
-      alloc->globalStateAddress + device * gsan::kPerDeviceStateStride;
+      alloc->globalStateAddress + deviceRank * gsan::kPerDeviceStateStride;
 
   err = cuMemCreate(&allocHandle, allocSize, &prop, 0);
   if (err != CUDA_SUCCESS)
@@ -442,7 +489,7 @@ CUresult ensureRuntimeStateMapped(int device) {
   if (err != CUDA_SUCCESS)
     goto error;
 
-  alloc->perDeviceHandles[device] = allocHandle;
+  alloc->perDeviceHandles[deviceRank] = allocHandle;
   alloc->perDeviceStateSize = allocSize;
   return CUDA_SUCCESS;
 
@@ -714,7 +761,8 @@ int gsanExportRuntimeStateHandle(int device, int *fd, size_t *allocSize) {
     return -1;
   }
 
-  auto handle = alloc->perDeviceHandles[device];
+  int deviceRank = getDeviceRankForCudaDevice(device);
+  auto handle = alloc->perDeviceHandles[deviceRank];
   auto size = alloc->perDeviceStateSize;
   if (handle == 0 || size == 0)
     return -1;
@@ -805,7 +853,7 @@ int gsanImportRuntimeStateHandle(int fd, size_t allocSize, int peerDevice,
     return -1;
   }
 
-  if (device < 0 || device >= alloc->config.numGPUs)
+  if (peerDevice < 0 || peerDevice >= config.numGPUs)
     return -1;
   if (allocSize != alloc->perDeviceStateSize)
     return -1;
@@ -861,6 +909,19 @@ bool parseIntArg(PyObject *obj, const char *name, int *out) {
     return false;
   }
   *out = static_cast<int>(value);
+  return true;
+}
+
+bool parseUInt32Arg(PyObject *obj, const char *name, uint32_t *out) {
+  unsigned long long value = PyLong_AsUnsignedLongLong(obj);
+  if (value == std::numeric_limits<unsigned long long>::max() &&
+      PyErr_Occurred())
+    return false;
+  if (value > std::numeric_limits<uint32_t>::max()) {
+    PyErr_Format(PyExc_OverflowError, "%s is out of range for uint32", name);
+    return false;
+  }
+  *out = static_cast<uint32_t>(value);
   return true;
 }
 
@@ -926,6 +987,150 @@ PyObject *pyFree([[maybe_unused]] PyObject *self, PyObject *const *args,
   Py_RETURN_NONE;
 }
 
+PyObject *pyConfigure([[maybe_unused]] PyObject *self, PyObject *const *args,
+                      Py_ssize_t nargs) {
+  if (nargs != 4) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.configure expected 4 positional arguments, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  PyObject *deviceRankMap = args[0];
+  PyObject *numDevicesArg = args[1];
+  const bool topologyRequested =
+      deviceRankMap != Py_None || numDevicesArg != Py_None;
+  if ((deviceRankMap == Py_None) != (numDevicesArg == Py_None)) {
+    PyErr_SetString(PyExc_ValueError,
+                    "device_ranks and num_devices must be configured "
+                    "together");
+    return nullptr;
+  }
+
+  int requestedNumDevices = 0;
+  int requestedDeviceRanks[gsan::kMaxGPUs] = {};
+  bool requestedConfiguredDeviceRanks[gsan::kMaxGPUs] = {};
+  if (topologyRequested) {
+    if (!PyDict_Check(deviceRankMap)) {
+      PyErr_SetString(PyExc_TypeError, "device_ranks must be a dict[int, int]");
+      return nullptr;
+    }
+    if (!parseIntArg(numDevicesArg, "num_devices", &requestedNumDevices))
+      return nullptr;
+    if (requestedNumDevices <= 0 ||
+        requestedNumDevices > static_cast<int>(gsan::kMaxGPUs)) {
+      PyErr_Format(PyExc_ValueError, "num_devices must be in [1, %zu], got %d",
+                   static_cast<size_t>(gsan::kMaxGPUs), requestedNumDevices);
+      return nullptr;
+    }
+    if (PyDict_Size(deviceRankMap) <= 0) {
+      PyErr_SetString(PyExc_ValueError, "device_ranks must not be empty");
+      return nullptr;
+    }
+
+    bool requestedGlobalDeviceIds[gsan::kMaxGPUs] = {};
+    Py_ssize_t pos = 0;
+    PyObject *key = nullptr;
+    PyObject *value = nullptr;
+    while (PyDict_Next(deviceRankMap, &pos, &key, &value)) {
+      int cudaDevice = 0;
+      int globalDeviceId = 0;
+      if (!parseIntArg(key, "cuda_device", &cudaDevice) ||
+          !parseIntArg(value, "global_device_id", &globalDeviceId)) {
+        return nullptr;
+      }
+      if (cudaDevice < 0 || cudaDevice >= static_cast<int>(gsan::kMaxGPUs)) {
+        PyErr_Format(PyExc_ValueError,
+                     "cuda_device must be in [0, %zu), got %d",
+                     static_cast<size_t>(gsan::kMaxGPUs), cudaDevice);
+        return nullptr;
+      }
+      if (globalDeviceId < 0 || globalDeviceId >= requestedNumDevices) {
+        PyErr_Format(PyExc_ValueError,
+                     "global_device_id must be in [0, %d), got %d",
+                     requestedNumDevices, globalDeviceId);
+        return nullptr;
+      }
+      if (requestedGlobalDeviceIds[globalDeviceId]) {
+        PyErr_Format(PyExc_ValueError,
+                     "global_device_id %d is assigned to more than one CUDA "
+                     "device",
+                     globalDeviceId);
+        return nullptr;
+      }
+      requestedDeviceRanks[cudaDevice] = globalDeviceId;
+      requestedConfiguredDeviceRanks[cudaDevice] = true;
+      requestedGlobalDeviceIds[globalDeviceId] = true;
+    }
+  }
+
+  const bool rngSeedRequested = args[2] != Py_None;
+  uint32_t requestedRngSeed = 0;
+  if (rngSeedRequested &&
+      !parseUInt32Arg(args[2], "rng_seed", &requestedRngSeed))
+    return nullptr;
+
+  const bool clockBufferSizeRequested = args[3] != Py_None;
+  int requestedClockBufferSize = 0;
+  if (clockBufferSizeRequested) {
+    if (!parseIntArg(args[3], "clock_buffer_size", &requestedClockBufferSize))
+      return nullptr;
+    if (requestedClockBufferSize <= 0) {
+      PyErr_Format(PyExc_ValueError,
+                   "clock_buffer_size must be positive, got %d",
+                   requestedClockBufferSize);
+      return nullptr;
+    }
+  }
+
+  std::lock_guard lg(mut);
+  if (config.topologyFrozen) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "GSan allocator configuration is already frozen and "
+                    "cannot be changed");
+    return nullptr;
+  }
+
+  if (topologyRequested) {
+    config.numGPUs = requestedNumDevices;
+    for (size_t i = 0; i < gsan::kMaxGPUs; ++i) {
+      config.deviceRanks[i] = requestedDeviceRanks[i];
+      config.configuredDeviceRanks[i] = requestedConfiguredDeviceRanks[i];
+    }
+    config.topologyConfigured = true;
+  }
+  if (rngSeedRequested) {
+    config.rngSeed = requestedRngSeed;
+    config.rngSeedConfigured = true;
+  }
+  if (clockBufferSizeRequested) {
+    config.clockBufferSize = requestedClockBufferSize;
+    config.clockBufferSizeConfigured = true;
+  }
+  Py_RETURN_NONE;
+}
+
+PyObject *pyFreezeConfig([[maybe_unused]] PyObject *self, PyObject *const *args,
+                         Py_ssize_t nargs) {
+  if (nargs != 0) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.freeze_config expected 0 positional arguments, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  std::lock_guard lg(mut);
+  CUresult err = ensureTopologyConfigured();
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    PyErr_SetString(PyExc_RuntimeError,
+                    "failed to configure the default GSan topology");
+    return nullptr;
+  }
+  config.topologyFrozen = true;
+  Py_RETURN_NONE;
+}
+
 PyObject *pyGetReservePointer([[maybe_unused]] PyObject *self,
                               PyObject *const *args, Py_ssize_t nargs) {
   if (nargs != 0) {
@@ -956,6 +1161,37 @@ PyObject *pyGetGlobalStatePointer([[maybe_unused]] PyObject *self,
   return PyLong_FromUnsignedLongLong(alloc->globalStateAddress);
 }
 
+PyObject *pyGetDeviceRank([[maybe_unused]] PyObject *self,
+                          PyObject *const *args, Py_ssize_t nargs) {
+  if (nargs != 1) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.get_device_rank expected 1 positional argument, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  int device = 0;
+  if (!parseIntArg(args[0], "device", &device))
+    return nullptr;
+
+  std::lock_guard lg(mut);
+  CUresult err = ensureTopologyConfigured();
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    PyErr_SetString(PyExc_RuntimeError,
+                    "failed to configure the default GSan topology");
+    return nullptr;
+  }
+
+  int deviceRank = getDeviceRankForCudaDevice(device);
+  if (deviceRank < 0) {
+    PyErr_Format(PyExc_ValueError,
+                 "no GSan device rank configured for CUDA device %d", device);
+    return nullptr;
+  }
+  return PyLong_FromLong(deviceRank);
+}
+
 PyObject *pyGetRuntimeStateLayout([[maybe_unused]] PyObject *self,
                                   PyObject *const *args, Py_ssize_t nargs) {
   if (nargs != 1) {
@@ -975,13 +1211,18 @@ PyObject *pyGetRuntimeStateLayout([[maybe_unused]] PyObject *self,
     PyErr_SetString(PyExc_RuntimeError, "failed to initialize gsan allocator");
     return nullptr;
   }
-  if (ensureRuntimeStateMapped(device) != CUDA_SUCCESS) {
-    PyErr_SetString(PyExc_RuntimeError,
-                    "failed to map runtime state for device");
+  if (device < 0 || device >= config.numGPUs) {
+    PyErr_Format(PyExc_ValueError, "device must be in [0, %d), got %d",
+                 config.numGPUs, device);
+    return nullptr;
+  }
+  if (alloc->perDeviceHandles[device] == 0) {
+    PyErr_Format(PyExc_RuntimeError,
+                 "GSan runtime state for device %d has not been mapped",
+                 device);
     return nullptr;
   }
 
-  const auto &config = alloc->config;
   uintptr_t globalStateAddress =
       alloc->globalStateAddress + device * gsan::kPerDeviceStateStride;
   uintptr_t threadStateBase =
@@ -1129,6 +1370,10 @@ PyMethodDef kGSanAllocatorMethods[] = {
      "Allocate GSan memory. Returns a CUDA pointer as an integer."},
     {"free", reinterpret_cast<PyCFunction>(pyFree), METH_FASTCALL,
      "Free GSan memory by pointer."},
+    {"configure", reinterpret_cast<PyCFunction>(pyConfigure), METH_FASTCALL,
+     "Configure GSan topology and runtime tuning fields."},
+    {"freeze_config", reinterpret_cast<PyCFunction>(pyFreezeConfig),
+     METH_FASTCALL, "Prevent later changes to the GSan allocator config."},
     {"get_reserve_pointer", reinterpret_cast<PyCFunction>(pyGetReservePointer),
      METH_FASTCALL, "Return the reserve base pointer as an integer."},
     {"get_reserve_size", reinterpret_cast<PyCFunction>(pyGetReserveSize),
@@ -1139,6 +1384,8 @@ PyMethodDef kGSanAllocatorMethods[] = {
     {"get_global_state_pointer",
      reinterpret_cast<PyCFunction>(pyGetGlobalStatePointer), METH_NOARGS,
      "Return the pointer to the GSan global state region."},
+    {"get_device_rank", reinterpret_cast<PyCFunction>(pyGetDeviceRank),
+     METH_FASTCALL, "Return the configured logical GSan device rank."},
     {"get_runtime_state_layout",
      reinterpret_cast<PyCFunction>(pyGetRuntimeStateLayout), METH_FASTCALL,
      "Return the per-device GSan runtime state layout."},

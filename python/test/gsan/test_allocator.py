@@ -5,16 +5,69 @@ import os
 import pytest
 import torch
 
-from triton._internal_testing import is_cuda
-from triton.experimental.gsan import create_mem_pool
-from triton.experimental.gsan._allocator import (export_allocation_handles, free_allocation, get_reserve_pointer,
-                                                 get_reserve_size, gsan_free, gsan_malloc, import_allocation_handles)
-from triton.experimental.gsan._testing_utils import shadow_tensor_for
+from triton._internal_testing import is_cuda, run_in_process
+from triton.experimental.gsan import configure, create_mem_pool, freeze_config
+from triton.experimental.gsan._allocator import (
+    export_allocation_handles,
+    free_allocation,
+    get_device_rank,
+    get_reserve_pointer,
+    get_reserve_size,
+    gsan_free,
+    gsan_malloc,
+    import_allocation_handles,
+)
+from triton.experimental.gsan._testing_utils import global_state, shadow_tensor_for
 from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
 
 # With 2 MiB pages, this rounds to a 6 MiB allocation inside an 8 MiB tree node.
 # This tests cases where AllocNode.size != AllocNode.allocSize
 _ODD_LARGE_ALLOCATION_SIZE = 4 * 1024 * 1024 + 1
+
+
+def _run_configure_check(device_ranks: dict[int, int], num_devices: int) -> None:
+    configure(device_ranks=device_ranks, num_devices=num_devices)
+    assert get_device_rank(0) == device_ranks[0]
+    assert get_device_rank(1) == device_ranks[1]
+
+
+def _run_configure_runtime_fields_check() -> None:
+    device = torch.cuda.current_device()
+    configure(rng_seed=12345, clock_buffer_size=17)
+
+    ptr = gsan_malloc(1, device, 0)
+    try:
+        state = global_state(device_index=device)
+        assert state.rng_seed == 12345
+        assert state.clock_buffer_size == 17
+    finally:
+        gsan_free(ptr, device, 0, 0)
+
+
+def _run_freeze_config_check() -> None:
+    configure(rng_seed=12345)
+    freeze_config()
+    try:
+        configure(rng_seed=12345)
+    except RuntimeError as exc:
+        assert "configuration is already frozen" in str(exc)
+    else:
+        raise AssertionError("expected freeze_config() to reject later config changes")
+
+
+def _run_allocator_freezes_config_check() -> None:
+    device = torch.cuda.current_device()
+    configure(rng_seed=12345)
+    ptr = gsan_malloc(1, device, 0)
+    try:
+        try:
+            configure(rng_seed=12345)
+        except RuntimeError as exc:
+            assert "configuration is already frozen" in str(exc)
+        else:
+            raise AssertionError("expected allocator initialization to freeze config")
+    finally:
+        gsan_free(ptr, device, 0, 0)
 
 
 @pytest.fixture
@@ -55,6 +108,44 @@ def test_malloc_edge_cases(_direct_allocator):
 
     # Null free is a no-op.
     free(0)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.device_count() < 2, reason="requires at least two CUDA devices")
+def test_configure_supports_swapped_cuda_device_ids():
+    device_ranks = {0: 1, 1: 0}
+    result = run_in_process(_run_configure_check, args=(device_ranks, 2))
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.device_count() < 2, reason="requires at least two CUDA devices")
+def test_configure_supports_sparse_global_device_ids():
+    device_ranks = {0: 2, 1: 3}
+    result = run_in_process(_run_configure_check, args=(device_ranks, 4))
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_configure_exposes_runtime_fields():
+    result = run_in_process(_run_configure_runtime_fields_check)
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_freeze_config_rejects_later_changes():
+    result = run_in_process(_run_freeze_config_check)
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_allocator_initialization_rejects_later_config():
+    result = run_in_process(_run_allocator_freezes_config_check)
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.device_count() < 2, reason="requires at least two CUDA devices")
+def test_default_topology_uses_cuda_device_indices():
+    assert get_device_rank(0) == 0
+    assert get_device_rank(1) == 1
 
 
 def test_malloc_free(_direct_allocator):
