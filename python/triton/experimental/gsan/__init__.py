@@ -1,6 +1,6 @@
-from ._allocator import configure, create_mem_pool, freeze_config, get_allocator
+from ._allocator import ShareableHandleType, configure, create_mem_pool, freeze_config, get_allocator
 
-__all__ = ["configure", "create_mem_pool", "freeze_config", "get_allocator"]
+__all__ = ["ShareableHandleType", "configure", "create_mem_pool", "freeze_config", "get_allocator"]
 
 _LAZY_LOAD_MODULES = {"symmetric_memory"}
 

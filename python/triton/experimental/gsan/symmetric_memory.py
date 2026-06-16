@@ -22,7 +22,7 @@ import torch.distributed as dist
 import torch.distributed.distributed_c10d as c10d
 
 from . import _stream_sync
-from ._allocator import (configure as _configure, create_mem_pool, export_allocation_handles,
+from ._allocator import (ShareableHandleType, configure as _configure, create_mem_pool, export_allocation_handles,
                          export_runtime_state_handle, free_allocation, import_allocation_handles,
                          import_runtime_state_handle)
 from ._utils import uint8_cuda_tensor_from_ptr
@@ -84,6 +84,7 @@ def configure(group, *, rng_seed: int | None = None, clock_buffer_size: int | No
         num_devices=dist.get_world_size(process_group),
         rng_seed=rng_seed,
         clock_buffer_size=clock_buffer_size,
+        handle_type=ShareableHandleType.POSIX_FILE_DESCRIPTOR,
     )
 
 
@@ -146,6 +147,7 @@ def _import_peer_ptrs(
                 peer_shadow_fd,
                 int(metas[peer]["alloc_size"]),
                 device_index,
+                ShareableHandleType.POSIX_FILE_DESCRIPTOR,
             )
             peer_ptrs[peer] = ptr
             if peer_runtime_state_fd is not None:
@@ -158,6 +160,7 @@ def _import_peer_ptrs(
                     int(peer_runtime_state_alloc_size),
                     peer,
                     device_index,
+                    ShareableHandleType.POSIX_FILE_DESCRIPTOR,
                 )
     except Exception:
         for peer, ptr in enumerate(peer_ptrs):
@@ -344,14 +347,15 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
     }
 
     with contextlib.ExitStack() as stack:
-        real_fd, shadow_fd, alloc_size = export_allocation_handles(base_ptr)
+        real_fd, shadow_fd, alloc_size = export_allocation_handles(base_ptr, ShareableHandleType.POSIX_FILE_DESCRIPTOR)
 
         stack.callback(os.close, real_fd)
         stack.callback(os.close, shadow_fd)
         runtime_state_fd: int | None = None
         runtime_state_alloc_size: int | None = None
         if peers_needing_runtime_bootstrap:
-            runtime_state_fd, runtime_state_alloc_size = export_runtime_state_handle(int(device_index))
+            runtime_state_fd, runtime_state_alloc_size = export_runtime_state_handle(
+                int(device_index), ShareableHandleType.POSIX_FILE_DESCRIPTOR)
             stack.callback(os.close, runtime_state_fd)
 
         local_meta = {
