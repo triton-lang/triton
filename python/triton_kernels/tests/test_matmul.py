@@ -336,6 +336,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     device_capability = torch.cuda.get_device_capability()[0]
     # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
+        if device_capability < 10 and (a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4):
+            pytest.skip("NVFP4 matmul only tested on Blackwell or newer")
         if device_capability < 9 and (a_dtype.uses_fp8e4nv or b_dtype.uses_fp8e4nv or c_dtype.uses_fp8e4nv):
             pytest.skip("MXFP8/NVFP4 tensors use fp8e4nv, which is not supported on A100")
         if b_dtype.is_any_float8 and device_capability < 9:
@@ -348,6 +350,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("NYI: swiglu and gamma not supported together")
 
     elif is_hip():
+        if a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4:
+            pytest.skip("NVFP4 matmul not tested on AMD GPU")
         if a_dtype.is_any_float8 and b_dtype.has_mx_scale and not (is_hip_cdna4() or is_hip_gfx1250()):
             pytest.skip("float8 x mx only supported on CDNA4 and gfx1250")
         if a_dtype.is_any_float8 and b_dtype.name == "mxfloat8_e4m3fn":
