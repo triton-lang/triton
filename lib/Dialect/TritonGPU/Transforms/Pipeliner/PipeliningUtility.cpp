@@ -365,13 +365,39 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
   return ttg::LocalAllocOp::create(rewriter, memDescType, Value());
 }
 
+static Value createMBarrierAlloc(ImplicitLocOpBuilder &rewriter,
+                                 unsigned numBuffers, int numCTAs,
+                                 bool twoCTAs, bool twoCTALayout) {
+  assert(!twoCTAs || numCTAs % 2 == 0);
+  assert(!twoCTALayout || twoCTAs);
+  MLIRContext *ctx = rewriter.getContext();
+  Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto dim = tt::standardOutDimNames(ctx, /*rank=*/1)[0];
+  auto barrierCGALayout = twoCTALayout
+                              ? ttg::CGAEncodingAttr::get(
+                                    ctx, tt::LinearLayout::zeros1D(2, kBlock, dim) *
+                                             tt::LinearLayout::identity1D(
+                                                 numCTAs / 2, kBlock, dim))
+                              : ttg::CGAEncodingAttr::get1DLayout(ctx, numCTAs);
+  auto barrierEncoding =
+      ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCGALayout);
+  int numBarrierSlots = twoCTAs ? numCTAs / 2 : numCTAs;
+  ttg::MemDescType memDescType = ttg::MemDescType::get(
+      {numBuffers, numBarrierSlots}, rewriter.getI64Type(), barrierEncoding,
+      sharedMemorySpace, /*mutableMemory=*/true);
+  return ttg::LocalAllocOp::create(rewriter, memDescType, Value());
+}
+
 // Create an allocation and init the mbarriers.
 Value mlir::triton::createBarrierAlloc(Operation *op, int numBarriers,
-                                       int arriveCount) {
+                                       int arriveCount, bool twoCTAs, bool twoCTALayout) {
   ImplicitLocOpBuilder rewriter(op->getLoc(), op);
+  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
+      op->getParentOfType<ModuleOp>());
 
   Value barrierAlloc =
-      createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
+      createMBarrierAlloc(rewriter, numBarriers, numCTAs, twoCTAs, twoCTALayout);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
     ttng::InitBarrierOp::create(rewriter, barrierView, arriveCount);
