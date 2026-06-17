@@ -291,12 +291,18 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
 
 @builtin
 def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descriptor, ttgl.constexpr | int]],
-                     _semantic=None) -> None:
+                     cache_modifier="", _semantic=None) -> None:
     """Emit one explicit fused TDM load for 2-4 descriptor/destination pairs.
 
-    Each member is ``(desc, dest, warp_used_hint)``.  Use
-    :func:`update_tensor_descriptor` to encode offsets, predicates, and
-    bounds on each descriptor before passing it here.
+    Each member is ``(desc, dest, warp_used_hint)``. The descriptors must
+    already encode their tile offsets, predicates, and bounds; use
+    :func:`update_tensor_descriptor` before calling this helper when needed.
+    All members share one cache modifier, matching the fused IR operation.
+
+    Args:
+        members: 2-4 ``(desc, dest, warp_used_hint)`` tuples. Hints must be
+            legal, pairwise-disjoint bitmasks.
+        cache_modifier (str, optional): Cache behavior shared by all members.
     """
     members = _unwrap_if_constexpr(members)
     if not 2 <= len(members) <= 4:
@@ -326,7 +332,9 @@ def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descri
         dest_handles.append(dest.handle)
         warp_used_hints.append(int(warp_used_hint))
 
-    _semantic.builder.create_async_tdm_fused_copy_global_to_local(desc_handles, dest_handles, warp_used_hints)
+    cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
+    _semantic.builder.create_async_tdm_fused_copy_global_to_local(
+        desc_handles, dest_handles, warp_used_hints, cache_modifier)
 
 
 @builtin

@@ -1,7 +1,7 @@
 // RUN: triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy | FileCheck %s --check-prefixes=FUSE,ENABLE-FUSE
-// RUN: env TRITON_AMD_DISABLE_TDM_AUTO_FUSE=1 triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy | FileCheck %s --check-prefixes=FUSE,DISABLE-FUSE
+// RUN: triton-opt %s --split-input-file | FileCheck %s --check-prefixes=FUSE,DISABLE-FUSE
 // RUN: triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,ENABLE
-// RUN: env TRITON_AMD_DISABLE_TDM_AUTO_FUSE=1 triton-opt %s --split-input-file --tritonamdgpu-auto-fuse-tdm-copy --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,DISABLE
+// RUN: triton-opt %s --split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,DISABLE
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory

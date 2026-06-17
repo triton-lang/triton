@@ -121,28 +121,28 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       bool isPureForm = false);
 
 // Everything the fused emit needs for one member, gathered by the conversion.
-struct TDMMergeMemberInfo {
+struct TDMFusedLoadMemberInfo {
   SmallVector<int64_t> shapePerCTA;
   unsigned padInterval = 0;
   unsigned padAmount = 0;
   Type elementType;
   triton::LinearLayout sharedLayout;
-  Attribute encoding;
+  Attribute sharedEncoding;
   Value multicastMask;
-  SmallVector<Value> desc;    // unpacked descriptor groups (numGroups = size)
-  SmallVector<Value> offset;  // remapped indices
-  SmallVector<Value> dstPtrs; // shared-memory base pointers
-  Value pred;                 // optional per-copy predicate
+  SmallVector<Value> desc;        // unpacked descriptor groups
+  SmallVector<Value> copyOffsets; // per-member copy offsets
+  SmallVector<Value> dstPtrs;     // shared-memory base pointers
+  Value pred;                     // optional per-copy predicate
 };
 
 // Emit one fused TDM load intrinsic, `select`ing each wave's descriptor on an
 // SGPR-uniform per-wave selector. `memberHints` must be pairwise disjoint and
 // verifier-legal; no mbarrier is encoded for fused loads.
-void emitTDMLoadMerged(RewriterBase &rewriter, Location loc,
-                       const LLVMTypeConverter *typeConverter,
-                       ArrayRef<TDMMergeMemberInfo> members, int numWarps,
-                       Value ctaId, int32_t auxBits,
-                       ArrayRef<uint32_t> memberHints);
+void emitTDMLoadFused(RewriterBase &rewriter, Location loc,
+                      const LLVMTypeConverter *typeConverter,
+                      ArrayRef<TDMFusedLoadMemberInfo> members, int numWarps,
+                      Value ctaId, int32_t auxBits,
+                      ArrayRef<uint32_t> memberHints);
 
 // Effective warp count that drives hinted TDM descriptor layout.  A
 // `warp_used_hint` maps the active tile distribution to K = popcount(hint)

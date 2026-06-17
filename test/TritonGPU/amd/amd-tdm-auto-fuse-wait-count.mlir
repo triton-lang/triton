@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-auto-fuse-tdm-copy --tritonamdgpu-update-async-wait-count=gfx-arch=gfx1250 | FileCheck %s --check-prefix=FUSE
-// RUN: env TRITON_AMD_DISABLE_TDM_AUTO_FUSE=1 triton-opt %s -split-input-file --tritonamdgpu-auto-fuse-tdm-copy --tritonamdgpu-update-async-wait-count=gfx-arch=gfx1250 | FileCheck %s --check-prefix=NOFUSE
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-update-async-wait-count=gfx-arch=gfx1250 | FileCheck %s --check-prefix=NOFUSE
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory

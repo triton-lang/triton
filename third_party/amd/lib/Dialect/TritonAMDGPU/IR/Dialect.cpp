@@ -34,6 +34,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
 #include <limits>
+#include <optional>
 
 // clang-format off
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -743,6 +744,35 @@ LogicalResult verifyTDMSharedMemoryEncoding(Operation *op,
 
   return success();
 }
+
+LogicalResult verifyPartitionedHintFitsSingleInstruction(
+    Operation *op, gpu::MemDescType smemTy, uint32_t hint,
+    std::optional<size_t> memberIdx = std::nullopt) {
+  auto partitionedEnc =
+      llvm::dyn_cast<gpu::PartitionedSharedEncodingAttr>(smemTy.getEncoding());
+  if (!partitionedEnc)
+    return success();
+
+  unsigned numLogicalPieces = partitionedEnc.getNumLogicalPieces();
+  assert(numLogicalPieces > 0 &&
+         "PartitionedSharedEncoding must have numLogicalPieces >= 1");
+  unsigned K = llvm::popcount(hint);
+  if (K % numLogicalPieces == 0)
+    return success();
+
+  InFlightDiagnostic diag =
+      op->emitOpError("warp_used_hint with a partitioned shared encoding must "
+                      "select K active warps such that numLogicalPieces "
+                      "divides K so the copy fits in a single TDM instruction");
+  if (memberIdx)
+    diag << " (member " << *memberIdx << " got K = " << K
+         << ", numLogicalPieces = " << numLogicalPieces << ")";
+  else
+    diag << " (got K = " << K
+         << ", numLogicalPieces = " << numLogicalPieces
+         << ", partitionDim = " << partitionedEnc.getPartitionDim() << ")";
+  return failure();
+}
 } // namespace
 
 LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
@@ -752,8 +782,6 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   if (failed(verifyTDMCommonLayout(getOperation(), tensorDescTy, smemTy)))
     return failure();
 
-  auto enc = smemTy.getEncoding();
-  auto partitionedEnc = llvm::dyn_cast<gpu::PartitionedSharedEncodingAttr>(enc);
   if (failed(verifyTDMSharedMemoryEncoding(getOperation(), smemTy)))
     return failure();
 
@@ -763,23 +791,9 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
     if (failed(validateWarpUsedHint(*this, hint, numWarps)))
       return failure();
 
-    // PartitionedSharedEncoding: hinted path = single instruction, so
-    // numLogicalPieces must divide K (equivalent to K >= numLogicalPieces
-    // since K is a power of two).
-    if (partitionedEnc) {
-      unsigned partitionDim = partitionedEnc.getPartitionDim();
-      unsigned numLogicalPieces = partitionedEnc.getNumLogicalPieces();
-      assert(numLogicalPieces > 0 &&
-             "PartitionedSharedEncoding must have numLogicalPieces >= 1");
-      unsigned K = llvm::popcount(hint);
-      if (K % numLogicalPieces != 0)
-        return emitOpError(
-                   "warp_used_hint with a partitioned shared encoding must "
-                   "select K active warps such that numLogicalPieces divides "
-                   "K so the copy fits in a single TDM instruction (got K = ")
-               << K << ", numLogicalPieces = " << numLogicalPieces
-               << ", partitionDim = " << partitionDim << ")";
-    }
+    if (failed(verifyPartitionedHintFitsSingleInstruction(getOperation(),
+                                                          smemTy, hint)))
+      return failure();
   }
 
   return success();
@@ -833,21 +847,9 @@ LogicalResult AsyncTDMFusedCopyGlobalToLocalOp::verify() {
       return emitOpError("requires pairwise-disjoint warp_used_hint values");
     hintUnion |= hintValue;
 
-    if (auto partitionedEnc =
-            llvm::dyn_cast<gpu::PartitionedSharedEncodingAttr>(
-                smemTy.getEncoding())) {
-      unsigned numLogicalPieces = partitionedEnc.getNumLogicalPieces();
-      assert(numLogicalPieces > 0 &&
-             "PartitionedSharedEncoding must have numLogicalPieces >= 1");
-      unsigned K = llvm::popcount(hintValue);
-      if (K % numLogicalPieces != 0)
-        return emitOpError(
-                   "warp_used_hint with a partitioned shared encoding must "
-                   "select K active warps such that numLogicalPieces divides "
-                   "K so the copy fits in a single TDM instruction (member ")
-               << idx << " got K = " << K
-               << ", numLogicalPieces = " << numLogicalPieces << ")";
-    }
+    if (failed(verifyPartitionedHintFitsSingleInstruction(
+            getOperation(), smemTy, hintValue, idx)))
+      return failure();
   }
 
   return success();

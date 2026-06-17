@@ -327,11 +327,10 @@ def TritonAMDGPUAutoFuseTDMCopy: Pass<"tritonamdgpu-auto-fuse-tdm-copy", "mlir::
 
   let description = [{
     Auto-fuses adjacent unhinted TDM copies into explicit
-    `amdgpu.async_tdm_fused_copy_global_to_local` operations, unless disabled
-    by TRITON_AMD_DISABLE_TDM_AUTO_FUSE. User-provided hints on regular
-    copies remain standalone; manual fusion should use the explicit fused op.
-    This pass runs before both the wait-count pass and LLVM conversion so those
-    passes see the same explicit IR.
+    `amdgpu.async_tdm_fused_copy_global_to_local` operations. User-provided
+    hints on regular copies remain standalone; manual fusion should use the
+    explicit fused op. This pass runs before both the wait-count pass and LLVM
+    conversion so those passes see the same explicit IR.
   }];
 
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];

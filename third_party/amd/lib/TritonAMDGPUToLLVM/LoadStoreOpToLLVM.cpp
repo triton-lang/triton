@@ -1367,13 +1367,14 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
     int numWarps = triton::gpu::lookupNumWarps(op);
     Value ctaId = targetInfo.getClusterCTAId(rewriter, loc);
 
-    SmallVector<mlir::LLVM::AMD::TDMMergeMemberInfo, 4> members(numMembers);
+    SmallVector<mlir::LLVM::AMD::TDMFusedLoadMemberInfo, 4> members(
+        numMembers);
     SmallVector<uint32_t, 4> memberHints;
 
     for (size_t i = 0; i < numMembers; ++i) {
       auto descTy = cast<triton::TensorDescType>(op.getDescs()[i].getType());
       auto enc = descTy.getSharedLayout();
-      mlir::LLVM::AMD::TDMMergeMemberInfo &m = members[i];
+      mlir::LLVM::AMD::TDMFusedLoadMemberInfo &m = members[i];
 
       m.elementType = getTypeConverter()->convertType(descTy.getElementType());
       m.sharedLayout = isPaddedEncoding(enc)
@@ -1389,13 +1390,13 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
         m.multicastMask = LLVM::AMD::emitCtaMulticastMask(rewriter, loc, ctaId,
                                                           m.sharedLayout);
 
-      m.encoding = enc;
+      m.sharedEncoding = enc;
       m.shapePerCTA =
           llvm::to_vector(triton::gpu::getShapePerCTA(enc, descTy.getShape()));
       m.desc = mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc,
                                                     adaptor.getDescs()[i]);
       for (size_t dim = 0; dim < descTy.getShape().size(); ++dim)
-        m.offset.push_back(b.i32_val(0));
+        m.copyOffsets.push_back(b.i32_val(0));
 
       auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
           loc, adaptor.getDests()[i], m.elementType, rewriter);
@@ -1406,9 +1407,9 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
 
     auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
         op.getCache(), /*isLoad*/ true, targetInfo);
-    mlir::LLVM::AMD::emitTDMLoadMerged(rewriter, loc, getTypeConverter(),
-                                       members, numWarps, ctaId, auxBits,
-                                       memberHints);
+    mlir::LLVM::AMD::emitTDMLoadFused(rewriter, loc, getTypeConverter(),
+                                      members, numWarps, ctaId, auxBits,
+                                      memberHints);
 
     rewriter.eraseOp(op);
     return success();

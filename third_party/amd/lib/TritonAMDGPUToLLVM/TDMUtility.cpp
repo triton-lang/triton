@@ -1218,7 +1218,7 @@ int64_t computePerPartitionSliceStride(
 // Emit the raw TDM intrinsic call from already-filled descriptor groups.
 // Pads the group operands to the fixed 4 x <4xi32> + 1 x <8xi32> ABI, appends
 // the aux-bits operand, and selects the load/store intrinsic name.  Both the
-// standalone and merged emitters go through here so the intrinsic operand ABI
+// standalone and fused emitters go through here so the intrinsic operand ABI
 // is defined in one place.
 void emitTDMRawIntrinsic(RewriterBase &rewriter, Location loc,
                          ArrayRef<Value> inputGroups, bool isLoad,
@@ -1622,26 +1622,26 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
 }
 
 // ---------------------------------------------------------------------------
-// TDM copy merging: merged emit.
+// TDM fused copy emit.
 
 namespace {
 
 // Fill one member descriptor for the fused load emit.
 SmallVector<Value, 4>
-fillMergedTDMDescriptorMember(RewriterBase &rewriter, Location loc,
-                              const LLVMTypeConverter *typeConverter,
-                              const TDMMergeMemberInfo &m, int numWarps,
-                              Value ctaId, uint32_t hint) {
+fillFusedTDMDescriptorMember(RewriterBase &rewriter, Location loc,
+                             const LLVMTypeConverter *typeConverter,
+                             const TDMFusedLoadMemberInfo &m, int numWarps,
+                             Value ctaId, uint32_t hint) {
   int effectiveWarps = static_cast<int>(llvm::popcount(hint));
   auto [warpsPerCTA, numTDMInstructions] =
       ::mlir::LLVM::AMD::distributeTDMWarpsAlignToPartition(
-          m.shapePerCTA, effectiveWarps, m.encoding);
+          m.shapePerCTA, effectiveWarps, m.sharedEncoding);
   assert(numTDMInstructions == 1 &&
          "verifier guarantees single-instruction emission for hinted ops");
   (void)numTDMInstructions;
 
   SmallVector<Value, 4> filled(m.desc.begin(), m.desc.end());
-  SmallVector<Value> offsets(m.offset.begin(), m.offset.end());
+  SmallVector<Value> offsets(m.copyOffsets.begin(), m.copyOffsets.end());
   fillTDMDescriptor(rewriter, loc, typeConverter, m.elementType, m.shapePerCTA,
                     numWarps, m.padInterval, m.padAmount, filled, offsets,
                     m.dstPtrs, m.pred, m.multicastMask, /*barrierPtr=*/Value(),
@@ -1653,7 +1653,7 @@ fillMergedTDMDescriptorMember(RewriterBase &rewriter, Location loc,
 // Returns a wave-uniform i1 (all lanes agree, since it depends only on warpId):
 // true for the waves whose warp belongs to `hint`, i.e. bit `warpId` is set.
 // Drives the per-member `select` that picks this wave's descriptor.
-Value buildTDMMergeMemberActivePredicate(RewriterBase &rewriter, Location loc,
+Value buildTDMFusedMemberActivePredicate(RewriterBase &rewriter, Location loc,
                                          uint32_t hint) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto [_laneId, warpId] = getLaneAndWarpId(rewriter, loc);
@@ -1663,33 +1663,33 @@ Value buildTDMMergeMemberActivePredicate(RewriterBase &rewriter, Location loc,
 
 } // namespace
 
-// Emit one fused TDM load for a merge group.  Store merging is not supported.
-void emitTDMLoadMerged(RewriterBase &rewriter, Location loc,
-                       const LLVMTypeConverter *typeConverter,
-                       ArrayRef<TDMMergeMemberInfo> members, int numWarps,
-                       Value ctaId, int32_t auxBits,
-                       ArrayRef<uint32_t> memberHints) {
+// Emit one fused TDM load for a group.  Store fusion is not supported.
+void emitTDMLoadFused(RewriterBase &rewriter, Location loc,
+                      const LLVMTypeConverter *typeConverter,
+                      ArrayRef<TDMFusedLoadMemberInfo> members, int numWarps,
+                      Value ctaId, int32_t auxBits,
+                      ArrayRef<uint32_t> memberHints) {
   size_t N = members.size();
   assert(N >= 2 && N <= 4 && members.size() == N && memberHints.size() == N &&
          "fused TDM load invariants");
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // canMergeWith guarantees a uniform rank across members, so every member
-  // shares this descriptor group count (2 for rank <= 2, otherwise 4).
+  // The fused op verifier guarantees a uniform rank across members, so every
+  // member shares this descriptor group count (2 for rank <= 2, otherwise 4).
   size_t numGroups = members.front().desc.size();
   ArrayRef<uint32_t> hintPerMember = memberHints;
 
   SmallVector<SmallVector<Value, 4>, 4> filledPerMember(N);
   for (size_t i = 0; i < N; ++i)
     filledPerMember[i] =
-        fillMergedTDMDescriptorMember(rewriter, loc, typeConverter, members[i],
-                                      numWarps, ctaId, hintPerMember[i]);
+        fillFusedTDMDescriptorMember(rewriter, loc, typeConverter, members[i],
+                                     numWarps, ctaId, hintPerMember[i]);
 
   // Build predicates for all but the last member; the last is the default.
   SmallVector<Value, 4> memberActive(N - 1);
   for (size_t s = 0; s + 1 < N; ++s)
     memberActive[s] =
-        buildTDMMergeMemberActivePredicate(rewriter, loc, hintPerMember[s]);
+        buildTDMFusedMemberActivePredicate(rewriter, loc, hintPerMember[s]);
 
   // Pick the descriptor for this wave with a scalar select chain.
   // FIXME(perf): descriptor groups that are loop-invariant across members
