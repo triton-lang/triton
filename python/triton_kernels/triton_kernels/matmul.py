@@ -31,7 +31,7 @@ from .matmul_details.opt_flags import (
 )
 from .matmul_details.opt_flags_details import opt_flags_nvidia
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
-from .tensor import Storage, Tensor, UINT8, FP4, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma, convert_layout
+from .tensor import Storage, Tensor, UINT8, FP4, FP64, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma, convert_layout
 from .tensor import dtype_to_torch_dtype, torch_dtype_to_dtype
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
@@ -135,7 +135,8 @@ class PrecisionConfig:
     c_microblock_size: int | None = None
     c_value_pack_factor: int = 1
     out_dtype: torch.dtype | None = None
-    intermediate_out_dtype: torch.dtype = torch.float32
+    # None keeps split-K scratch in the accumulator dtype.
+    intermediate_out_dtype: torch.dtype | None = None
     enforce_bitwise_invariance: bool = False
 
 # TODO: merge in opt_flags
@@ -156,7 +157,7 @@ class MatmulAllocation:
 
 def init_allocation(x, w, precision_config, fused_activation,
                     gather_indx, scatter_indx, batch_dim,
-                    n_reduce_shards, opt_flags):
+                    n_reduce_shards, opt_flags, intermediate_out_dtype):
     # ---- output ------
     N = w.shape[-1]
     # by default - M is number of rows in the activations
@@ -176,7 +177,7 @@ def init_allocation(x, w, precision_config, fused_activation,
     scratchpad = dict()
     N_scratch = N // fused_activation.specs.reduction_n if opt_flags.split_k == 1 else N
     if opt_flags.split_k > 1:
-        scratch_out_dtype = dtype_to_torch_dtype(precision_config.intermediate_out_dtype)
+        scratch_out_dtype = dtype_to_torch_dtype(intermediate_out_dtype)
         scratchpad["matmul"] = ((opt_flags.split_k, batch_dim, M, N_scratch), scratch_out_dtype)
     if "matmul" in scratchpad and precision_config.c_mx_scale is not None:
         assert batch_dim == 1, "batch_dim > 1 not supported yet"
@@ -310,6 +311,9 @@ def matmul(a, b, bias,
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
+    intermediate_out_dtype = precision_config.intermediate_out_dtype
+    if intermediate_out_dtype is None:
+        intermediate_out_dtype = torch.float64 if a.dtype == b.dtype == FP64 else torch.float32
     a_scale_dtype = None if a_scale is None else a_scale.storage.data.dtype
     b_scale_dtype = None if b_scale is None else b_scale.storage.data.dtype
     # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8_e4m3fn.
@@ -403,7 +407,7 @@ def matmul(a, b, bias,
         # of 16 to be TMA-compliant requires block_k to be a multiple of 512,
         # which is too big.
         can_use_tma = False
-    has_gather_tma = has_gather and target_info.has_tma_gather()
+    has_gather_tma = has_gather and a.dtype.bitwidth <= 32 and target_info.has_tma_gather()
     is_ragged_mx = (a_has_mx or b_has_mx) and (is_a_ragged or is_b_ragged)
     can_use_split_k = scatter_indx is None and not is_ragged_mx and ragged_dimension != "K" and c_acc_in is None and precision_config.c_mx_scale is None
     block_k = None
@@ -417,6 +421,7 @@ def matmul(a, b, bias,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
         a_transpose, c_acc_in is not None,
         block_k = block_k,
+        intermediate_out_dtype = intermediate_out_dtype,
         mx_block_size = mx_block_size,
         x_uses_tma_when_persistent = a_uses_tma_when_persistent,
         w_transpose = b_transpose,
@@ -465,7 +470,7 @@ def matmul(a, b, bias,
     allocation = init_allocation(a, b, precision_config, fused_activation,
                                  gather_indx, scatter_indx, batch_size,
                                  fused_comm.n_reduce_shards if fused_comm is not None else 1,
-                                 opt_flags)
+                                 opt_flags, intermediate_out_dtype)
     memory = apply_allocation(allocation, c)
     # early exit
     if batch_size * M * N == 0:
@@ -504,7 +509,7 @@ def matmul(a, b, bias,
         available_sms = target_info.num_sms() - opt_flags.idle_sms
         grid = min(opt_flags.occupancy_target * available_sms, grid)
     # canonicalize storage
-    has_scatter_tma = scatter_indx is not None and target_info.has_tma_gather()
+    has_scatter_tma = has_scatter and out_matmul.element_size() <= 4 and target_info.has_tma_gather()
     c = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
     a = Tensor(_canonicalize_storage(a.storage, 2 if has_gather_tma else 3, flex.lhs_data), dtype=a.dtype, shape=a.shape, shape_max=a.shape_max)
     b_storage_ndim = 5 if b_is_shuffled else 3
@@ -851,6 +856,7 @@ def matmul_torch(a, b, bias,
     else:
         offs = [[0, a.shape[1]] for _ in range(b.shape[0])]
     # compute
+    compute_dtype = torch.float64 if a.dtype == b.dtype == torch.float64 else torch.float32
     n_rows = a.shape[1] if gather_indx is None else gather_indx.shape[0]
     y = torch.zeros((a.shape[0], n_rows, b.shape[-1]), device=a.device, dtype=a.dtype)
     for i, (lo, hi) in enumerate(offs):
@@ -859,8 +865,8 @@ def matmul_torch(a, b, bias,
         else:
             idx = gather_indx[lo:hi]
         batch = i if is_input_batched else 0
-        out = torch.matmul(round_x(a[batch, idx, :], torch.arange(lo, hi, device="cuda")).float(),
-                           b[i].float())
+        out = torch.matmul(round_x(a[batch, idx, :], torch.arange(lo, hi, device="cuda")).to(compute_dtype),
+                           b[i].to(compute_dtype))
         if bias is not None:
             out += bias[i, :] if betas is None else bias[i, :] * betas[lo:hi, None]
         if gammas is not None:

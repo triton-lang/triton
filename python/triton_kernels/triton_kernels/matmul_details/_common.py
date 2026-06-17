@@ -14,6 +14,7 @@ from triton_kernels.tensor_details.layout_details.blackwell_scale import (
 @triton.constexpr_function
 def get_scaled_dot_format_string(dtype: tl.dtype):
     mapping = {
+        tl.float64: "fp64",
         tl.float32: "fp32",
         tl.float16: "fp16",
         tl.bfloat16: "bf16",

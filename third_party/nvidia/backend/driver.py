@@ -324,7 +324,8 @@ class CudaLauncher(object):
         if self.gsan_enabled:
             import triton.experimental.gsan._allocator as gsan_allocator
             device = triton.runtime.driver.active.get_current_device()
-            gsan_state_ptr = gsan_allocator.get_global_state_pointer() + device * GSAN_PER_DEVICE_STATE_STRIDE
+            device_rank = gsan_allocator.get_device_rank(device)
+            gsan_state_ptr = gsan_allocator.get_global_state_pointer() + device_rank * GSAN_PER_DEVICE_STATE_STRIDE
             kernel_args = (*args, gsan_state_ptr)
 
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
