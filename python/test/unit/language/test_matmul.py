@@ -219,7 +219,7 @@ def test_i4_m_minor_join_bk16_matmul(device):
     rhs = torch.randn((K, N), device=device, dtype=torch.float32).bfloat16()
     output = torch.empty((M, N), device=device, dtype=torch.float32)
 
-    matmul_i4_m_minor_kernel[(1,)](w4, rhs, output, BLOCK_M=M, BLOCK_N=N, BLOCK_K=K, num_warps=2, num_stages=1)
+    matmul_i4_m_minor_kernel[(1, )](w4, rhs, output, BLOCK_M=M, BLOCK_N=N, BLOCK_K=K, num_warps=2, num_stages=1)
 
     ref_lhs = w_i4.float().bfloat16()
     ref = torch.matmul(ref_lhs.float(), rhs.float())
