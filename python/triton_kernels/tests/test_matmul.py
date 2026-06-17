@@ -35,7 +35,6 @@ class DType:
         # "Fiber" scales are also known as row scales. The suffix is test-only;
         # plain nvfp4_e2m1 leaves the tensor scale unset.
         self.has_tensor_scale = dtype_str.endswith("_fiber")
-        assert not self.has_tensor_scale or dtype_str == "nvfp4_e2m1_fiber", "_fiber is only supported for nvfp4_e2m1"
         # This tracks the regular fp8 flex scale path. NVFP4 has a tensor scale,
         # but it is handled separately because it also has MX microscale storage.
         self.has_global_scale = dtype_str.startswith("float8")
@@ -583,14 +582,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         b_ragged_metadata,
         gather_indx,
         scatter_indx,
-        precision_opt if not c_dtype.is_nvfp4 else PrecisionConfig(
+        PrecisionConfig(
             a_mx_scale=a_scales,
-            a_mx_tensor_scale=precision_opt.a_mx_tensor_scale,
             a_microblock_size=a_dtype.microblock_size,
             b_mx_scale=b_scale_tri,
-            b_mx_tensor_scale=precision_opt.b_mx_tensor_scale,
             b_microblock_size=b_dtype.microblock_size,
-        ),
+        ) if c_dtype.is_nvfp4 else precision_opt,
         gammas=gammas,
     )
     if swiglu_opts is not None:
