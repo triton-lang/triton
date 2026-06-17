@@ -231,7 +231,13 @@ def _build_test_op_cases():
         Case(1000, 704, 800, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(300, 400, 416, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(256, 1024, 512, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
+        Case(128, 128, 128, "plain", "bfloat16", "nvfp4_e2m1", mx_tensor_scales=True),
+        Case(128, 128, 128, "plain", "float8_e5m2", "nvfp4_e2m1", mx_tensor_scales=True),
+        Case(128, 128, 128, "plain", "mxfloat8_e4m3fn", "nvfp4_e2m1", mx_tensor_scales=True),
+        Case(128, 128, 128, "plain", "nvfp4_e2m1", "bfloat16", "bfloat16", mx_tensor_scales=True),
+        Case(128, 128, 128, "plain", "nvfp4_e2m1", "float16", "bfloat16", mx_tensor_scales=True),
         Case(128, 128, 128, "plain", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", mx_tensor_scales=True),
+        Case(128, 128, 128, "plain", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1", mx_tensor_scales=True),
         Case(128, 256, 256, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1"),
         Case(128, 256, 256, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1", c_hbm_swizzling=True, b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(1024, 1024, 1024, "batched", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True),
@@ -362,9 +368,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if mx_tensor_scales:
         if (
             mode != "plain"
-            or act_dtype_str != "nvfp4_e2m1"
-            or weight_dtype_str != "nvfp4_e2m1"
-            or output_dtype_str != "bfloat16"
+            or not (a_dtype.is_nvfp4 or b_dtype.is_nvfp4)
             or block_m != 128
             or split_k != 1
             or is_persistent
@@ -532,8 +536,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         b_microblock_size=b_dtype.microblock_size,
     )
     if mx_tensor_scales:
-        precision_opt.a_mx_tensor_scale = torch.linspace(0.5, 1.5, m, dtype=torch.float32, device=device)
-        precision_opt.b_mx_tensor_scale = torch.linspace(1.25, 0.75, n, dtype=torch.float32, device=device)
+        if a_dtype.is_nvfp4:
+            precision_opt.a_mx_tensor_scale = torch.linspace(0.5, 1.5, m, dtype=torch.float32, device=device)
+        if b_dtype.is_nvfp4:
+            precision_opt.b_mx_tensor_scale = torch.linspace(1.25, 0.75, n, dtype=torch.float32, device=device)
 
     # --- create epilogue ---
     epilogue = None
@@ -573,6 +579,16 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     # expected_scale inside downcast_to_mxfp_torch, so keep the reference in
     # float32 until that final downcast instead of letting matmul_torch
     # return bf16 and apply the output scale early.
+    ref_precision_opt = precision_opt
+    if c_dtype.is_nvfp4:
+        ref_precision_opt = PrecisionConfig(
+            a_mx_scale=a_scales,
+            a_mx_tensor_scale=precision_opt.a_mx_tensor_scale,
+            a_microblock_size=a_dtype.microblock_size,
+            b_mx_scale=b_scale_tri,
+            b_mx_tensor_scale=precision_opt.b_mx_tensor_scale,
+            b_microblock_size=b_dtype.microblock_size,
+        )
     ref_y = matmul_torch(
         a.float() if c_dtype.is_nvfp4 and not a_dtype.is_nvfp4 else a,
         b.float() if c_dtype.is_nvfp4 and not b_dtype.is_nvfp4 else b,
@@ -581,12 +597,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         b_ragged_metadata,
         gather_indx,
         scatter_indx,
-        PrecisionConfig(
-            a_mx_scale=a_scales,
-            a_microblock_size=a_dtype.microblock_size,
-            b_mx_scale=b_scale_tri,
-            b_microblock_size=b_dtype.microblock_size,
-        ) if c_dtype.is_nvfp4 else precision_opt,
+        ref_precision_opt,
         gammas=gammas,
     )
     if swiglu_opts is not None:
