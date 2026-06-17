@@ -94,9 +94,10 @@ Adjacent unhinted `async_load`s may be auto-fused by the backend, unless
 What this file actually tests
 ================================================================
 
-  * Compile-only test on the AMDGCN asm: every parametrisation yields
-    two `tensor_load_to_lds` instructions (one per `async_load`).
-  * Compile-only tests for explicit fused copies and backend auto-fusion.
+  * Compile-only tests on the AMDGCN asm: standalone hinted loads yield
+    one `tensor_load_to_lds` instruction per `async_load`, while explicit
+    fused copies and backend auto-fusion yield one instruction per fused op.
+  * Compile-only tests for cache modifier propagation and auto-fuse grouping.
   * Runtime test on gfx1250 compares against a torch-on-CPU reference.
 
 Runtime tests are skipped on non-gfx1250 hosts.
@@ -249,15 +250,17 @@ def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
     }
     with triton.knobs.amd.scope():
         triton.knobs.amd.disable_tdm_auto_fuse = True
-        k = triton.compile(
-            gluon._runtime.GluonASTSource(
-                fn=vector_add_tdm_kernel,
-                signature=signature,
-                constexprs=constexprs,
-            ),
-            target=GPUTarget("hip", "gfx1250", 32),
-            options={"num_warps": NUM_WARPS},
-        )
+        with triton.knobs.compilation.scope():
+            triton.knobs.compilation.always_compile = True
+            k = triton.compile(
+                gluon._runtime.GluonASTSource(
+                    fn=vector_add_tdm_kernel,
+                    signature=signature,
+                    constexprs=constexprs,
+                ),
+                target=GPUTarget("hip", "gfx1250", 32),
+                options={"num_warps": NUM_WARPS},
+            )
 
     amdgcn = k.asm["amdgcn"]
     n_tdm = len(re.findall(r"tensor_load_to_lds", amdgcn))
