@@ -273,7 +273,27 @@ struct LoadGroupInfo {
   Value extractIdx;
   Value phase;
   bool hasTMALoad = false;
+  bool hasTwoCTAMMAUser = false;
 };
+
+static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
+  for (Operation *user : loadOp->getUsers()) {
+    if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
+      for (Operation *allocUser : alloc->getUsers()) {
+        if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(allocUser)) {
+          if (mma.getTwoCtas())
+            return true;
+        }
+      }
+      continue;
+    }
+    if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
+      if (mma.getTwoCtas())
+        return true;
+    }
+  }
+  return false;
+}
 
 // Convert a scalar load to a load of a tensor of shape <1>.
 void convertScalarToTensorLoad(Operation *op, CoarseSchedule &schedule,
@@ -381,7 +401,9 @@ void createTMABarrierAndWait(
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
     }
 
-    Value barrierAlloc = triton::createBarrierAlloc(forOp, numBuffers);
+    Value barrierAlloc = triton::createBarrierAlloc(
+        forOp, numBuffers, /*arriveCount=*/1, loadGroup.hasTwoCTAMMAUser,
+        /*twoCTALayout=*/loadGroup.hasTwoCTAMMAUser);
     OpBuilderForStage builder(forOp.getLoc(), group[0], schedule);
     Value barrier = triton::createSingleBufferView(builder, barrierAlloc,
                                                    loadGroup.insertIdx);
@@ -516,6 +538,8 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
     loadGroups.insert({asyncLoad.stageDiff, {}});
     if (isTMALoad(loadOp)) {
       loadGroups[asyncLoad.stageDiff].hasTMALoad = true;
+      loadGroups[asyncLoad.stageDiff].hasTwoCTAMMAUser |=
+          loadFeedsTwoCTAMMA(loadOp);
     }
   }
 
@@ -587,7 +611,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
 
   bool hasAsyncLoads = false;
   for (auto [op, asyncLoad] : asyncLoads) {
-    auto [insertIdx, extractIdx, phase, _] = loadGroups[asyncLoad.stageDiff];
+    auto [insertIdx, extractIdx, phase, _, __] = loadGroups[asyncLoad.stageDiff];
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                       asyncLoad.contiguity, schedule);
@@ -756,7 +780,9 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   int numStages = mainWaitStage - schedule[mma].first + 1;
 
   OpBuilderForStage builder(mma.getLoc(), mma, schedule);
-  Value barrierAlloc = createBarrierAlloc(forOp, numStages);
+  Value barrierAlloc = createBarrierAlloc(forOp, numStages,
+                                          /*arriveCount=*/1,
+                                          mma.getTwoCtas());
   Value vTrue = arith::ConstantIntOp::create(builder, 1, 1);
   Value phase = forOp.getRegionIterArg(phaseArgIdx);
   Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);
