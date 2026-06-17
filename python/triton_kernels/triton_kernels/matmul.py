@@ -407,7 +407,7 @@ def matmul(a, b, bias,
         # of 16 to be TMA-compliant requires block_k to be a multiple of 512,
         # which is too big.
         can_use_tma = False
-    has_gather_tma = has_gather and target_info.has_tma_gather()
+    has_gather_tma = has_gather and a.dtype.bitwidth <= 32 and target_info.has_tma_gather()
     is_ragged_mx = (a_has_mx or b_has_mx) and (is_a_ragged or is_b_ragged)
     can_use_split_k = scatter_indx is None and not is_ragged_mx and ragged_dimension != "K" and c_acc_in is None and precision_config.c_mx_scale is None
     block_k = None
@@ -509,7 +509,7 @@ def matmul(a, b, bias,
         available_sms = target_info.num_sms() - opt_flags.idle_sms
         grid = min(opt_flags.occupancy_target * available_sms, grid)
     # canonicalize storage
-    has_scatter_tma = scatter_indx is not None and target_info.has_tma_gather()
+    has_scatter_tma = has_scatter and out_matmul.element_size() <= 4 and target_info.has_tma_gather()
     c = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
     a = Tensor(_canonicalize_storage(a.storage, 2 if has_gather_tma else 3, flex.lhs_data), dtype=a.dtype, shape=a.shape, shape_max=a.shape_max)
     b_storage_ndim = 5 if b_is_shuffled else 3
