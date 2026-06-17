@@ -250,9 +250,8 @@ static bool joinPacksLastDim(JoinOp join) {
 
   auto enc = cast<BlockedEncodingAttr>(type.getEncoding());
   ArrayRef<unsigned> order = enc.getOrder();
-  // Check that the appended join axis
-  // and the previous last axis are the two fastest-changing axes, so the join
-  // packs the last dimension contiguously.
+  // Check that the appended join axis and the previous last axis are the two
+  // fastest-changing axes, so the join packs the last dimension contiguously.
   return order.size() == rank && order[0] == rank - 1 && order[1] == rank - 2;
 }
 
@@ -260,12 +259,12 @@ static bool canWidenKWidthForJoin(int loadBitWidth,
                                   const SetVector<Operation *> &slice) {
   return llvm::any_of(slice, [loadBitWidth](Operation *op) {
     auto join = dyn_cast<JoinOp>(op);
-        if (!join)
-          return false;
-        auto type = cast<RankedTensorType>(join.getResult().getType());
-        return type.getElementTypeBitWidth() == loadBitWidth * 2 &&
-               joinPacksLastDim(join);
-      });
+    if (!join)
+      return false;
+    auto type = cast<RankedTensorType>(join.getResult().getType());
+    return type.getElementTypeBitWidth() == loadBitWidth * 2 &&
+           joinPacksLastDim(join);
+  });
 }
 
 // Finds the bitwidth with which the value x is loaded
