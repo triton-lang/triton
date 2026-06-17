@@ -11,7 +11,7 @@ from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_m
 from triton_kernels.tensor_details.layout_details.gfx1250_scale import unswizzle_mx_scale_gfx1250
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
-from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile, upcast_nvfp4_weight_tile
 from triton_kernels.target_info import cuda_capability_geq
 from ._common import (
     compute_offsets,
@@ -472,6 +472,13 @@ def _matmul(
                 else:
                     tl.static_assert(x_format == "bf16")
                     acc = tl.dot(wT, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+            elif (is_w_mxfp4 and WMxScale.dtype.element_ty == tl.float8e4nv and not is_x_microscaled
+                  and x_format != "fp16" and x_format != "bf16"):
+                w_dense = upcast_nvfp4_weight_tile(w, w_scales, tl.bfloat16)
+                if SWAP_XW:
+                    acc = tl.dot_scaled(w_dense.T, None, "bf16", x.T, x_scales, x_format, acc=acc, fast_math=True)
+                else:
+                    acc = tl.dot_scaled(x, x_scales, x_format, w_dense, None, "bf16", acc=acc, fast_math=True)
             else:
                 rhs_k_pack: tl.constexpr = W_TRANSPOSE or not is_w_microscaled or W_K_DIVISOR != 2
                 if SWAP_XW:

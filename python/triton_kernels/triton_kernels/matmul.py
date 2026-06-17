@@ -763,9 +763,13 @@ def apply_precision(x_tri, w_tri, precision_config):
         canonical_layout = layout.StridedLayout(major_dim=mx_axis)
         x_tri = convert_layout(x_tri, canonical_layout)
         x_tri_scale = convert_layout(a_scale, canonical_layout)
-        x_ref = upcast_from_mxfp(x_tri.storage.data, x_tri_scale.storage.data, torch.bfloat16, axis=mx_axis)
-        if precision_config.a_mx_tensor_scale is not None:
-            x_ref = x_ref * precision_config.a_mx_tensor_scale[..., :, None]
+        x_ref = upcast_from_mxfp(
+            x_tri.storage.data,
+            x_tri_scale.storage.data,
+            torch.bfloat16,
+            axis=mx_axis,
+            tensor_scale=precision_config.a_mx_tensor_scale,
+        )
     else:
         x_ref = apply(x_tri, flex_ctx.lhs_data.scale)
 
@@ -775,9 +779,13 @@ def apply_precision(x_tri, w_tri, precision_config):
         canonical_layout = layout.StridedLayout(major_dim=mx_axis)
         w_tri = convert_layout(w_tri, canonical_layout)
         w_tri_scale = convert_layout(b_scale, canonical_layout)
-        w_ref = upcast_from_mxfp(w_tri.storage.data, w_tri_scale.storage.data, torch.bfloat16, axis=mx_axis)
-        if precision_config.b_mx_tensor_scale is not None:
-            w_ref = w_ref * precision_config.b_mx_tensor_scale[..., None, :]
+        w_ref = upcast_from_mxfp(
+            w_tri.storage.data,
+            w_tri_scale.storage.data,
+            torch.bfloat16,
+            axis=mx_axis,
+            tensor_scale=precision_config.b_mx_tensor_scale,
+        )
     else:
         w_ref = apply(w_tri, flex_ctx.rhs_data.scale)
 

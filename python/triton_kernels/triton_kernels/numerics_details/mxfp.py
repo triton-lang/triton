@@ -87,7 +87,13 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
     # TODO: return tensor object instead of its storage
     return y_value.storage.data, y_scale.storage.data
 
-def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: torch.dtype, axis: int):
+def upcast_from_mxfp(
+    tensor: torch.Tensor,
+    scale: torch.Tensor,
+    target_dtype: torch.dtype,
+    axis: int,
+    tensor_scale: torch.Tensor | None = None,
+):
     """
     Upcasts an mxfp (packed) weight tensor back to float16 or bfloat16.
 
@@ -100,6 +106,10 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: to
     axis = axis if axis >= 0 else axis + ndim
     assert tensor.ndim == scale.ndim, (f"Weight and scale must have the same number of dimensions. "
                                        f"Got {tensor.ndim=} and {scale.ndim=}")
+    if tensor_scale is not None and tensor_scale.numel() != 1:
+        expected_tensor_scale_shape = tensor.shape[:axis] + tensor.shape[axis + 1:]
+        assert tensor_scale.shape == expected_tensor_scale_shape, \
+            f"Invalid tensor scale shape: expected {expected_tensor_scale_shape}, got {tensor_scale.shape}"
     # dtype checks
     assert tensor.dtype in {torch.uint8, torch.float8_e5m2, torch.float8_e4m3fn}, \
         f"Invalid tensor dtype {tensor.dtype=}"
@@ -160,6 +170,9 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: to
     else:
         out = torch.empty(original_out_shape, dtype=target_dtype, device=tensor.device)
     out = out.transpose(axis, scale.ndim - 1).contiguous()
+    if tensor_scale is not None:
+        tensor_scale_shape = (1,) * out.ndim if tensor_scale.numel() == 1 else (*tensor_scale.shape[:axis], 1, *tensor_scale.shape[axis:])
+        out = out * tensor_scale.to(device=out.device).reshape(tensor_scale_shape)
     return out
 
 

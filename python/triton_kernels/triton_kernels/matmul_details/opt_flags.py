@@ -8,7 +8,6 @@ import triton
 from triton_kernels import target_info
 from triton_kernels.target_info import get_cdna_version, get_rdna_version, cuda_capability_geq
 from triton_kernels.tensor import FP4, FP32, Tensor, torch_dtype_to_dtype
-from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.strided import StridedLayout
@@ -335,16 +334,6 @@ def make_default_opt_flags_nvidia(
     num_warps = opt_flags_nvidia.compute_num_warps(
         block_m, block_n, is_persistent, precision_config, constraints
     )
-    is_lhs_fp8 = lhs_dtype.bitwidth == 8 and lhs_dtype != FP4
-    is_rhs_nvfp4 = rhs_dtype == FP4 and precision_config.b_microblock_size == int(NVFP_BLOCK_SIZE)
-    if (constraints.get("num_warps", None) is None
-            and target_info.cuda_capability_geq(10, 0)
-            and not is_persistent
-            and is_lhs_fp8
-            and is_rhs_nvfp4):
-        # Avoid the MMAv5 path: mixed FP8 x NVFP4 currently needs E4M3 block scales,
-        # but the MMAv5 mxf8f6f4 lowering interprets them as UE8M0.
-        num_warps = 1
     if (constraints.get("num_warps", None) is None
             and is_persistent
             and block_n <= 128

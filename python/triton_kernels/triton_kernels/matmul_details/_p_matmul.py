@@ -17,7 +17,7 @@ from triton_kernels.numerics_details.flexpoint import (
     compute_scale,
 )
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
-from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile, upcast_nvfp4_weight_tile
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from ._common import (
@@ -138,8 +138,6 @@ def _p_matmul(
     w_type: tl.constexpr = get_dtype(W)
     is_w_microscaled: tl.constexpr = WMxScale is not None
     is_x_microscaled: tl.constexpr = XMxScale is not None
-    has_x_tensor_scale: tl.constexpr = XTensorScale is not None
-    has_w_tensor_scale: tl.constexpr = WTensorScale is not None
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
@@ -310,7 +308,7 @@ def _p_matmul(
             XMxScalePtrs += (offs_x_m if USE_GATHER_TMA else offs_m).to(index_type)[:, None] * stride_x_mx_m
             XMxScalePtrs += offs_k_scale.to(index_type)[None, :] * stride_x_mx_k
         XTensorScalePtrs = None
-        if has_x_tensor_scale:
+        if XTensorScale is not None:
             XTensorScalePtrs = XTensorScale + off_x_z.to(index_type) * stride_x_tensor_scale_z
             if USE_GATHER_TMA:
                 scale_offs_m = offs_x_m
@@ -462,6 +460,13 @@ def _p_matmul(
                     else:
                         tl.static_assert(x_format == "bf16")
                         acc = tl.dot(wT, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                elif (is_w_mxfp4 and get_dtype(WMxScale) == tl.float8e4nv and not is_x_microscaled
+                      and x_format != "fp16" and x_format != "bf16"):
+                    w_dense = upcast_nvfp4_weight_tile(w, w_scales, tl.bfloat16)
+                    if SWAP_XW:
+                        acc = tl.dot_scaled(w_dense.T, None, "bf16", x.T, x_scales, x_format, acc=acc, fast_math=True)
+                    else:
+                        acc = tl.dot_scaled(x, x_scales, x_format, w_dense, None, "bf16", acc=acc, fast_math=True)
                 else:
                     if SWAP_XW:
                         acc = tl.dot_scaled(w.T, w_scales, w_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
@@ -476,12 +481,12 @@ def _p_matmul(
             if is_x_microscaled and XMxScalePtrs is not None:
                 XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
 
-        if has_x_tensor_scale or has_w_tensor_scale:
+        if XTensorScale is not None or WTensorScale is not None:
             x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
             w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
-            if has_x_tensor_scale:
+            if XTensorScale is not None:
                 x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0)
-            if has_w_tensor_scale:
+            if WTensorScale is not None:
                 offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)
                 w_tensor_scales = tl.load(
                     WTensorScale
