@@ -790,7 +790,7 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
     Note that the completion mechanisms are guaranteed to occur sequentially in
     the order the commit operations were issued. This means, for example:
 
-    ```text
+    ```mlir
     ttng.tmem_copy
     ttng.tc_gen5_mma
     ttng.tc_gen5_commit %barrierA
