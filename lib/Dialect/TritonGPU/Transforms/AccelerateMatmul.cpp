@@ -248,11 +248,10 @@ static bool joinPacksLastDim(JoinOp join) {
   if (rank < 2)
     return false;
 
-  auto enc = cast<BlockedEncodingAttr>(type.getEncoding());
-  ArrayRef<unsigned> order = enc.getOrder();
+  auto order = getOrder(type);
   // Check that the appended join axis and the previous last axis are the two
   // fastest-changing axes, so the join packs the last dimension contiguously.
-  return order.size() == rank && order[0] == rank - 1 && order[1] == rank - 2;
+  return order[0] == rank - 1 && order[1] == rank - 2;
 }
 
 static bool canWidenKWidthForJoin(int loadBitWidth,
