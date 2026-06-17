@@ -3092,6 +3092,62 @@ def test_shared_subslice_two_ctas(op):
 
 
 @gluon.jit
+def shared_subslice_swizzled_register_block_kernel(inp, out, alloc_layout: ttgl.constexpr, tile_layout: ttgl.constexpr,
+                                                   shared_layout: ttgl.constexpr):
+    rows = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, alloc_layout))
+    cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, alloc_layout))
+    offsets = rows[:, None] * 32 + cols[None, :]
+    initial = ttgl.load(inp + offsets)
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [4, 32], shared_layout, value=initial)
+    ttgl.barrier(cluster=True)
+
+    tile = smem.slice(2, 2, dim=0)
+    loaded = tile.load(tile_layout)
+    tile_rows = ttgl.arange(0, 2, layout=ttgl.SliceLayout(1, tile_layout))
+    tile_cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, tile_layout))
+    tile_offsets = tile_rows[:, None] * 32 + tile_cols[None, :]
+    ttgl.store(out + tile_offsets, loaded)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_shared_subslice_swizzled_register_block():
+    # The shared layout maps logical row bit 0 to an offset bit and block bit 0,
+    # while logical row bit 1 maps to block bit 0. Slicing at row 2 therefore
+    # makes the affine block offset overlap the tile's register block basis.
+    shared_layout = ttgl.SharedLinearLayout(
+        offset_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [3, 0]],
+        block_bases=[[2, 0]],
+    )
+    alloc_layout = ttgl.DistributedLinearLayout(
+        reg_bases=[],
+        lane_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]],
+        warp_bases=[[1, 0], [2, 0]],
+        block_bases=[[0, 0]],
+        shape=[4, 32],
+    )
+    tile_layout = ttgl.DistributedLinearLayout(
+        reg_bases=[[1, 0]],
+        lane_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]],
+        warp_bases=[[0, 0], [0, 0]],
+        block_bases=[[0, 0]],
+        shape=[2, 32],
+    )
+
+    inp = torch.arange(4 * 32, dtype=torch.int32, device="cuda").reshape(4, 32)
+    out = torch.empty((2, 32), dtype=torch.int32, device="cuda")
+    shared_subslice_swizzled_register_block_kernel[(1, )](
+        inp,
+        out,
+        alloc_layout=alloc_layout,
+        tile_layout=tile_layout,
+        shared_layout=shared_layout,
+        num_warps=4,
+        num_ctas=2,
+    )
+    torch.testing.assert_close(out, inp[2:4], atol=0, rtol=0)
+
+
+@gluon.jit
 def shared_scatter_kernel(
     indices_ptr,
     values_ptr,

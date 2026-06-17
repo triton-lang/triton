@@ -861,8 +861,13 @@ SmallVector<Value> lowerLdSt(
                     {kWarp, reps.getBases().lookup(kWarp)},
                     {kBlock, reps.getBases().lookup(kBlock)}},
                    reps.getOutDims(), false);
-  auto [nAdditive, permStrides] = actionAdditiveStrides(
-      reps, addrLayout, maskSpanAffineOffset, elemsPerVec);
+  // actionAdditiveStrides compares flattened output bases, so place the block
+  // mask above the offset bits before checking for overlap.
+  uint64_t maskSpanAffine =
+      maskSpanAffineOffset |
+      (maskSpanAffineBlock << reps.getOutDimSizeLog2(kOffset));
+  auto [nAdditive, permStrides] =
+      actionAdditiveStrides(reps, addrLayout, maskSpanAffine, elemsPerVec);
   reps = permStrides.apply(reps);
 
   if (isPartitioned) {
