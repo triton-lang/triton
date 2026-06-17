@@ -485,6 +485,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#expanded_row = #ttg.linear<{register = [[4, 0], [8, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[1, 0], [2, 0]], block = []}>
 module attributes {"ttg.num-warps" = 4 : i32} {
   // expected-remark@+2 {{arg 1: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
   // expected-remark@+1 {{arg 2: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
@@ -503,7 +504,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     %3 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     // expected-remark@+2 {{unsigned : [0, 15] signed : [0, 15]}}
     // expected-remark@+1 {{non-neg}}
-    %4 = tt.expand_dims %3 {axis = 1 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16x1xi32, #blocked>
+    %expanded4 = tt.reshape %3 : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16x1xi32, #expanded_row>
+    %4 = ttg.convert_layout %expanded4 : tensor<16x1xi32, #expanded_row> -> tensor<16x1xi32, #blocked>
     // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
     %5 = tt.splat %arg2 : i32 -> tensor<16x1xi32, #blocked>
     // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
@@ -512,7 +514,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     %7 = tt.broadcast %6 : tensor<16x1xi32, #blocked> -> tensor<16x256xi32, #blocked>
     // expected-remark@+2 {{unsigned : [0, 255] signed : [0, 255]}}
     // expected-remark@+1 {{non-neg}}
-    %8 = tt.expand_dims %2 {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x256xi32, #blocked>
+    %8 = tt.reshape %2 : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x256xi32, #blocked>
     // expected-remark@+2 {{unsigned : [0, 255] signed : [0, 255]}}
     // expected-remark@+1 {{non-neg}}
     %9 = tt.broadcast %8 : tensor<1x256xi32, #blocked> -> tensor<16x256xi32, #blocked>
@@ -529,6 +531,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#expanded_row = #ttg.linear<{register = [[4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[1, 0], [2, 0]], block = []}>
 module attributes {"ttg.num-warps" = 4 : i32} {
   // expected-remark@+1 {{arg 1: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
   tt.func public @matmul_kernel(%arg0: !tt.ptr<f16>, %arg1: i32) -> tensor<128x16xf16, #blocked> {
@@ -544,7 +547,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     %1 = arith.muli %0, %c128_i32 : i32
     %2 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %3 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %4 = tt.expand_dims %2 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+    %expanded4 = tt.reshape %2 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #expanded_row>
+    %4 = ttg.convert_layout %expanded4 : tensor<128x1xi32, #expanded_row> -> tensor<128x1xi32, #blocked>
     // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
     %5 = arith.muli %1, %arg1 : i32
     // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
@@ -552,7 +556,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
     %7 = arith.muli %4, %6 : tensor<128x1xi32, #blocked>
     %8 = tt.broadcast %7 : tensor<128x1xi32, #blocked> -> tensor<128x16xi32, #blocked>
-    %9 = tt.expand_dims %3 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked>
+    %9 = tt.reshape %3 : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked>
     // expected-remark@+2 {{unsigned : [0, 15] signed : [0, 15]}}
     // expected-remark@+1 {{non-neg}}
     %10 = tt.broadcast %9 : tensor<1x16xi32, #blocked> -> tensor<128x16xi32, #blocked>
@@ -1347,7 +1351,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @unary_triton_ops_transitive_nonneg(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>) {
     %c10_i32 = arith.constant 5 : i32
     %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
-    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32> -> tensor<1x16xi32>
+    %1 = tt.reshape %0 : tensor<16xi32> -> tensor<1x16xi32>
     %2 = tt.reshape %1 allow_reorder : tensor<1x16xi32> -> tensor<8x2xi32>
     %3 = tt.reshape %1 allow_reorder : tensor<1x16xi32> -> tensor<2x8xi32>
     // expected-remark@+2 {{unsigned : [0, 15] signed : [0, 15]}}
@@ -1363,7 +1367,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // expected-remark@+2 {{unsigned : [2, 9] signed : [2, 9]}}
     // expected-remark@+1 {{non-neg}}
     %8 = ttg.convert_layout %7 : tensor<8xi32> -> tensor<8xi32>
-    %9 = tt.expand_dims %8 {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>
+    %9 = tt.reshape %8 : tensor<8xi32> -> tensor<1x8xi32>
     %10 = tt.broadcast %9 : tensor<1x8xi32> -> tensor<2x8xi32>
     %11 = tt.reshape %10 allow_reorder : tensor<2x8xi32> -> tensor<8x2xi32>
     %12 = tt.splat %c10_i32 : i32 -> tensor<8x2xi32>
@@ -1419,12 +1423,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %cst_3 = arith.constant dense<0.000000e+00> : tensor<32x128xf16, #blocked>
     %0 = tt.splat %arg3 : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #blocked1>
     %1 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked1}>>
-    %2 = tt.expand_dims %1 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> -> tensor<1x32xi32, #blocked1>
+    %2 = tt.reshape %1 : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked1}>> -> tensor<1x32xi32, #blocked1>
     %3 = tt.broadcast %2 : tensor<1x32xi32, #blocked1> -> tensor<128x32xi32, #blocked1>
     %4 = tt.addptr %0, %3 : tensor<128x32x!tt.ptr<f16>, #blocked1>, tensor<128x32xi32, #blocked1>
     %5 = tt.splat %arg4 : !tt.ptr<f16> -> tensor<32x128x!tt.ptr<f16>, #blocked>
     %6 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %7 = tt.expand_dims %6 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
+    %7 = tt.reshape %6 : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
     %8 = tt.broadcast %7 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
     %9 = tt.addptr %5, %8 : tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<32x128xi32, #blocked>
     %10 = ttg.local_alloc : () -> !ttg.memdesc<1x128x32xf16, #shared, #smem, mutable>
@@ -1548,6 +1552,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL: buffer_stride
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#expanded_row = #ttg.linear<{register = [[64, 0], [128, 0]], lane = [[0, 0], [0, 0], [0, 0], [1, 0], [2, 0], [4, 0]], warp = [[8, 0], [16, 0], [32, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // expected-remark@+7 {{arg 3: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
   // expected-remark@+6 {{arg 4: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
@@ -1564,7 +1569,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     // expected-remark@+2 {{unsigned : [0, 255] signed : [0, 255]}}
     // expected-remark@+1 {{non-neg}}
-    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked>
+    %expanded1 = tt.reshape %0 : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #expanded_row>
+    %1 = ttg.convert_layout %expanded1 : tensor<256x1xi32, #expanded_row> -> tensor<256x1xi32, #blocked>
     // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
     // expected-remark@+1 {{result is true}}
     %cmp = arith.cmpi sgt, %arg6, %c0_i32 : i32
@@ -1580,7 +1586,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %6 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
     // expected-remark@+2 {{unsigned : [0, 63] signed : [0, 63]}}
     // expected-remark@+1 {{non-neg}}
-    %7 = tt.expand_dims %6 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    %7 = tt.reshape %6 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
     // expected-remark@+2 {{unsigned : [0, 63] signed : [0, 63]}}
     // expected-remark@+1 {{non-neg}}
     %8 = tt.broadcast %7 : tensor<1x64xi32, #blocked> -> tensor<256x64xi32, #blocked>
@@ -1593,10 +1599,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %14 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
     // expected-remark@+2 {{unsigned : [0, 255] signed : [0, 255]}}
     // expected-remark@+1 {{non-neg}}
-    %15 = tt.expand_dims %13 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked>
+    %expanded15 = tt.reshape %13 : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #expanded_row>
+    %15 = ttg.convert_layout %expanded15 : tensor<256x1xi32, #expanded_row> -> tensor<256x1xi32, #blocked>
     // expected-remark@+2 {{unsigned : [0, 63] signed : [0, 63]}}
     // expected-remark@+1 {{non-neg}}
-    %16 = tt.expand_dims %14 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    %16 = tt.reshape %14 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
     // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
     // expected-remark@+1 {{result is true}}
     %cmp1 = arith.cmpi sgt, %arg8, %c0_i32 : i32
@@ -1681,7 +1688,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %10 = ttg.convert_layout %6 : tensor<32xi32, #blocked> -> tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
     // expected-remark@+2 {{unsigned : [0, 2097151] signed : [0, 2097151]}}
     // expected-remark@+1 {{non-neg}}
-    %11 = tt.expand_dims %10 {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<32x1xi32, #blocked1>
+    %11 = tt.reshape %10 : tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<32x1xi32, #blocked1>
     // expected-remark@+2 {{unsigned : [0, 2097151] signed : [0, 2097151]}}
     // expected-remark@+1 {{non-neg}}
     %12 = ttg.convert_layout %11 : tensor<32x1xi32, #blocked1> -> tensor<32x1xi32, #blocked2>
@@ -1709,7 +1716,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %29 = ttg.convert_layout %28 : tensor<128xi32, #blocked> -> tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked4}>>
       // expected-remark@+2 {{unsigned : [0, 2147483519] signed : [0, 2147483519]}}
       // expected-remark@+1 {{non-neg}}
-      %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked4}>> -> tensor<1x128xi32, #blocked4>
+      %30 = tt.reshape %29 : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked4}>> -> tensor<1x128xi32, #blocked4>
       // expected-remark@+2 {{unsigned : [0, 2147483519] signed : [0, 2147483519]}}
       // expected-remark@+1 {{non-neg}}
       %31 = ttg.convert_layout %30 : tensor<1x128xi32, #blocked4> -> tensor<1x128xi32, #blocked3>
