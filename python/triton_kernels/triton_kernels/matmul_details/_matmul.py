@@ -499,9 +499,9 @@ def _matmul(
         x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
         w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
         if has_x_tensor_scale:
-            x_tensor_scales = tl.load(XTensorScalePtrs).to(tl.float32)
+            x_tensor_scales = tl.load(XTensorScalePtrs)
         if has_w_tensor_scale:
-            w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0).to(tl.float32)
+            w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0)
         if SWAP_XW:
             acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
         else:

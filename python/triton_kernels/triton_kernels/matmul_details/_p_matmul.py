@@ -480,7 +480,7 @@ def _p_matmul(
             x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
             w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
             if has_x_tensor_scale:
-                x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0).to(tl.float32)
+                x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0)
             if has_w_tensor_scale:
                 offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)
                 w_tensor_scales = tl.load(
@@ -489,7 +489,7 @@ def _p_matmul(
                     + offs_w_tensor_scale_n.to(index_type) * stride_w_tensor_scale_n,
                     mask=offs_w_tensor_scale_n < N,
                     other=0.0,
-                ).to(tl.float32)
+                )
             if SWAP_XW:
                 acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
             else:
