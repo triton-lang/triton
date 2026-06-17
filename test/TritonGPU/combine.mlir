@@ -2195,6 +2195,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+#src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#src_slice = #ttg.slice<{dim = 1, parent = #src}>
+#dst_slice = #ttg.slice<{dim = 1, parent = #dst}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @efficient_reshape_no_forward_propagate
+  // CHECK: %[[CVT:.+]] = ttg.convert_layout
+  // CHECK: tt.reshape %[[CVT]] efficient_layout
+  tt.func public @efficient_reshape_no_forward_propagate(
+      %arg0: tensor<32xf32, #src_slice>) -> tensor<32x1024xf32, #dst> {
+    // Keep this conversion before the reshape and the 1024x broadcast.
+    %0 = ttg.convert_layout %arg0 : tensor<32xf32, #src_slice> -> tensor<32xf32, #dst_slice>
+    %1 = tt.reshape %0 efficient_layout : tensor<32xf32, #dst_slice> -> tensor<32x1xf32, #dst>
+    %2 = tt.broadcast %1 : tensor<32x1xf32, #dst> -> tensor<32x1024xf32, #dst>
+    tt.return %2 : tensor<32x1024xf32, #dst>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1,2], threadsPerWarp = [32,1], warpsPerCTA = [1,1], order = [1,0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1,1], threadsPerWarp = [16,2], warpsPerCTA = [1,1], order = [1,0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
