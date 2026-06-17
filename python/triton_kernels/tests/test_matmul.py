@@ -35,17 +35,15 @@ class DType:
         # "Fiber" scales are also known as row scales. The suffix is test-only;
         # plain nvfp4_e2m1 leaves the tensor scale unset.
         self.has_tensor_scale = dtype_str.endswith("_fiber")
-        if self.has_tensor_scale:
-            assert dtype_str == "nvfp4_e2m1_fiber", "_fiber is only supported for nvfp4_e2m1"
-            dtype_str = "nvfp4_e2m1"
+        assert not self.has_tensor_scale or dtype_str == "nvfp4_e2m1_fiber", "_fiber is only supported for nvfp4_e2m1"
         # This tracks the regular fp8 flex scale path. NVFP4 has a tensor scale,
         # but it is handled separately because it also has MX microscale storage.
         self.has_global_scale = dtype_str.startswith("float8")
-        self.is_nvfp4 = dtype_str == "nvfp4_e2m1"
+        self.is_nvfp4 = dtype_str in {"nvfp4_e2m1", "nvfp4_e2m1_fiber"}
         self.has_mx_scale = dtype_str.startswith("mx") or self.is_nvfp4
         self.is_any_float8 = "float8" in dtype_str
-        self.uses_fp8e4nv = dtype_str in {"mxfloat8_e4m3fn", "nvfp4_e2m1"}
-        if dtype_str in {"float4_e2m1", "mxfloat4_e2m1", "nvfp4_e2m1"}:
+        self.uses_fp8e4nv = dtype_str in {"mxfloat8_e4m3fn", "nvfp4_e2m1", "nvfp4_e2m1_fiber"}
+        if dtype_str in {"float4_e2m1", "mxfloat4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1_fiber"}:
             self.torch_dtype = torch.uint8
         else:
             self.torch_dtype = getattr(torch, dtype_str.strip("mx"))
