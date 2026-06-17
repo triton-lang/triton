@@ -32,23 +32,24 @@ class DType:
 
     def __init__(self, dtype_str):
         self.name = dtype_str
-        dtype_base = dtype_str.removesuffix("_fiber")
-        # This tracks the regular fp8 flex scale path. NVFP4 has a tensor scale,
-        # but it is handled separately because it also has MX microscale storage.
-        self.has_global_scale = dtype_base.startswith("float8")
-        self.is_nvfp4 = dtype_base == "nvfp4_e2m1"
         # "Fiber" scales are also known as row scales. The suffix is test-only;
         # plain nvfp4_e2m1 leaves the tensor scale unset.
         self.has_tensor_scale = dtype_str.endswith("_fiber")
-        assert not self.has_tensor_scale or self.is_nvfp4, "_fiber is only supported for nvfp4_e2m1"
-        self.has_mx_scale = dtype_base.startswith("mx") or self.is_nvfp4
-        self.is_any_float8 = "float8" in dtype_base
-        self.uses_fp8e4nv = dtype_base in {"mxfloat8_e4m3fn", "nvfp4_e2m1"}
-        if dtype_base in {"float4_e2m1", "mxfloat4_e2m1", "nvfp4_e2m1"}:
+        if self.has_tensor_scale:
+            assert dtype_str == "nvfp4_e2m1_fiber", "_fiber is only supported for nvfp4_e2m1"
+            dtype_str = "nvfp4_e2m1"
+        # This tracks the regular fp8 flex scale path. NVFP4 has a tensor scale,
+        # but it is handled separately because it also has MX microscale storage.
+        self.has_global_scale = dtype_str.startswith("float8")
+        self.is_nvfp4 = dtype_str == "nvfp4_e2m1"
+        self.has_mx_scale = dtype_str.startswith("mx") or self.is_nvfp4
+        self.is_any_float8 = "float8" in dtype_str
+        self.uses_fp8e4nv = dtype_str in {"mxfloat8_e4m3fn", "nvfp4_e2m1"}
+        if dtype_str in {"float4_e2m1", "mxfloat4_e2m1", "nvfp4_e2m1"}:
             self.torch_dtype = torch.uint8
         else:
-            self.torch_dtype = getattr(torch, dtype_base.strip("mx"))
-        self.is_mxfloat4 = self.has_mx_scale and ("float4" in dtype_base or self.is_nvfp4)
+            self.torch_dtype = getattr(torch, dtype_str.strip("mx"))
+        self.is_mxfloat4 = self.has_mx_scale and ("float4" in dtype_str or self.is_nvfp4)
         self.scale_dtype = torch.float8_e4m3fn if self.is_nvfp4 else torch.uint8 if self.has_mx_scale else None
         self.microblock_size = NVFP_BLOCK_SIZE.value if self.is_nvfp4 else MXFP_BLOCK_SIZE.value if self.has_mx_scale else None
 
