@@ -75,6 +75,32 @@ def matmul_kernel(  #
         tl.store(output_ptrs, accumulator)
 
 
+@triton.jit
+def matmul_i4_m_minor_kernel(w4_ptr, rhs_ptr, output_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+                             BLOCK_K: tl.constexpr):
+    offs_pm = tl.arange(0, BLOCK_M // 2)
+    offs_m = tl.arange(0, BLOCK_M)
+    offs_n = tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+
+    packed = tl.load(w4_ptr + offs_k[None, :] * (BLOCK_M // 2) + offs_pm[:, None])
+    low = (packed << 4) >> 4
+    high = packed >> 4
+    joined = tl.join(low, high)
+    lhs_i8 = tl.reshape(tl.trans(joined, 0, 2, 1), (BLOCK_M, BLOCK_K))
+    lhs = lhs_i8.to(tl.bfloat16)
+
+    rhs = tl.load(rhs_ptr + offs_k[:, None] * BLOCK_N + offs_n[None, :])
+    acc = tl.dot(lhs, rhs, input_precision="tf32")
+    tl.store(output_ptr + offs_m[:, None] * BLOCK_N + offs_n[None, :], acc)
+
+
+def pack_i4_m_minor(x):
+    x = x.T.contiguous().to(torch.int16) & 0xF
+    packed = x[:, 0::2] | (x[:, 1::2] << 4)
+    return packed.to(torch.uint8).view(torch.int8).contiguous()
+
+
 def get_src_element_ty_size(dtype_str):
     if dtype_str == "float8e5":
         return 1
@@ -177,6 +203,27 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
             if "32x32b" not in ptx and "16x32b" not in ptx:
                 print(ptx)
             assert ("32x32b" in ptx) or ("16x32b" in ptx), "PTX does not contain 32x32b or 16x32b"
+
+
+def test_i4_m_minor_join_bk16_matmul(device):
+    if not is_cuda():
+        pytest.skip("i4 M-minor join regression is CUDA-specific")
+    if torch.cuda.get_device_capability()[0] < 8:
+        pytest.skip("bf16 dot requires NVIDIA compute capability >= 8")
+
+    M, N, K = 64, 64, 16
+    torch.manual_seed(6120775)
+
+    w_i4 = torch.randint(-8, 8, (M, K), device=device, dtype=torch.int8)
+    w4 = pack_i4_m_minor(w_i4)
+    rhs = torch.randn((K, N), device=device, dtype=torch.float32).bfloat16()
+    output = torch.empty((M, N), device=device, dtype=torch.float32)
+
+    matmul_i4_m_minor_kernel[(1, )](w4, rhs, output, BLOCK_M=M, BLOCK_N=N, BLOCK_K=K, num_warps=2, num_stages=1)
+
+    ref_lhs = w_i4.float().bfloat16()
+    ref = torch.matmul(ref_lhs.float(), rhs.float())
+    torch.testing.assert_close(output, ref, atol=1e-3, rtol=1e-3)
 
 
 # persistent matmul with fused loops
