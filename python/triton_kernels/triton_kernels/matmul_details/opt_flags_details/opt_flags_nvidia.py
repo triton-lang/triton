@@ -109,7 +109,7 @@ def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:
     return split_k
 
 
-def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config, constraints, lhs_dtype, rhs_dtype):
+def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config, constraints):
     layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
     if isinstance(layout, HopperMXScaleLayout):
         return layout.num_warps

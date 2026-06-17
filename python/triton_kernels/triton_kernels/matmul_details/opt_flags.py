@@ -333,7 +333,7 @@ def make_default_opt_flags_nvidia(
     )
 
     num_warps = opt_flags_nvidia.compute_num_warps(
-        block_m, block_n, is_persistent, precision_config, constraints, lhs_dtype, rhs_dtype
+        block_m, block_n, is_persistent, precision_config, constraints
     )
     is_lhs_fp8 = lhs_dtype.bitwidth == 8 and lhs_dtype != FP4
     is_rhs_nvfp4 = rhs_dtype == FP4 and precision_config.b_microblock_size == int(NVFP_BLOCK_SIZE)
