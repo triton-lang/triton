@@ -366,6 +366,14 @@ tt.func @test_canonicalize_reshape(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> 
     tt.return %reshape1, %reshape2, %add, %view : tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>, tensor<2x2x2xf32>
 }
 
+// CHECK-LABEL: @test_canonicalize_reshape_expand_dims
+tt.func @test_canonicalize_reshape_expand_dims(%arg0: tensor<8xf32>) -> tensor<8xf32> {
+    // CHECK-NEXT: tt.return %arg0 : tensor<8xf32>
+    %0 = tt.expand_dims %arg0 {axis = 0 : i32} : tensor<8xf32> -> tensor<1x8xf32>
+    %1 = tt.reshape %0 : tensor<1x8xf32> -> tensor<8xf32>
+    tt.return %1 : tensor<8xf32>
+}
+
 // CHECK-LABEL: @test_canonicalize_broadcast
 tt.func @test_canonicalize_broadcast(%arg0: tensor<1x1x8xf32>, %arg1: tensor<f32>) -> (tensor<4x2x8xf32>, tensor<8x8xf32>, tensor<1x1x8xf32>) {
     %broadcast0 = tt.broadcast %arg0 : tensor<1x1x8xf32> -> tensor<1x2x8xf32>
@@ -490,6 +498,24 @@ tt.func @test_combine_broadcast_mul_reduce(%arg0: tensor<32x16xf32>, %arg1: tens
         tt.reduce.return %6 : f32
     }) : (tensor<32x16x32xf32>) -> tensor<32x32xf32>
     tt.return %5 : tensor<32x32xf32>
+}
+
+// CHECK-LABEL: @test_combine_broadcast_mul_reduce_reshape
+tt.func @test_combine_broadcast_mul_reduce_reshape(%arg0: tensor<32x16x1xf32>, %arg1: tensor<1x16x32xf32>) -> tensor<32x32xf32> {
+    // CHECK: %[[CST:.*]] = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
+    // CHECK: %[[LHS:.*]] = tt.reshape %arg0 : tensor<32x16x1xf32> -> tensor<32x16xf32>
+    // CHECK: %[[RHS:.*]] = tt.reshape %arg1 : tensor<1x16x32xf32> -> tensor<16x32xf32>
+    // CHECK: %[[RES:.*]] = tt.dot %[[LHS]], %[[RHS]], %[[CST]] : tensor<32x16xf32> * tensor<16x32xf32> -> tensor<32x32xf32>
+    // CHECK: tt.return %[[RES]] : tensor<32x32xf32>
+    %0 = tt.broadcast %arg0 : tensor<32x16x1xf32> -> tensor<32x16x32xf32>
+    %1 = tt.broadcast %arg1 : tensor<1x16x32xf32> -> tensor<32x16x32xf32>
+    %2 = arith.mulf %0, %1 : tensor<32x16x32xf32>
+    %3 = "tt.reduce"(%2) <{axis = 1 : i32}> ({
+    ^bb0(%arg2: f32, %arg3: f32):
+        %4 = arith.addf %arg2, %arg3 : f32
+        tt.reduce.return %4 : f32
+    }) : (tensor<32x16x32xf32>) -> tensor<32x32xf32>
+    tt.return %3 : tensor<32x32xf32>
 }
 
 // CHECK-LABEL: @test_combine_broadcast_mul_reduce_extra_broadcast
