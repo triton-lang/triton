@@ -600,6 +600,26 @@ def test_num_warps_caller_context():
     ], [2, 1], [80, 80])
 
 
+@filecheck_test
+@gluon.jit
+def test_warp_specialize_without_default():
+    # CHECK-DAG: [[BLOCKED_NW2:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+    # CHECK-DAG: [[BLOCKED_NW1:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+
+    # CHECK: func private @{{.*}}ws_test_worker0{{.*}}_NW2() attributes {noinline = false, "ttg.num-warps" = 2 : i32}
+    # CHECK: func private @{{.*}}ws_body{{.*}}_NW2() attributes {noinline = false, "ttg.num-warps" = 2 : i32}
+    # CHECK: func private @{{.*}}anchor{{.*}}_NW2(%arg0: tensor<128xi32, [[BLOCKED_NW2]]>) attributes {noinline = false, "ttg.num-warps" = 2 : i32}
+
+    # CHECK: func private @{{.*}}ws_test_worker1{{.*}}_NW1() attributes {noinline = false, "ttg.num-warps" = 1 : i32}
+    # CHECK: func private @{{.*}}ws_body{{.*}}_NW1() attributes {noinline = false, "ttg.num-warps" = 1 : i32}
+    # CHECK: func private @{{.*}}anchor{{.*}}_NW1(%arg0: tensor<128xi32, [[BLOCKED_NW1]]>) attributes {noinline = false, "ttg.num-warps" = 1 : i32}
+    ttgl.warp_specialize([
+        (None, ()),
+        (ws_test_worker0, ()),
+        (ws_test_worker1, ()),
+    ], [2, 1], [80, 80])
+
+
 @gluon.jit
 def mbarrier_kernel():
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
