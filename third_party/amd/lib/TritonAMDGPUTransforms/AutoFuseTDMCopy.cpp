@@ -63,6 +63,8 @@ bool haveSameRankAndCache(TDMCopyGlobalToLocalOp lhs,
 }
 
 bool isAutoFuseCandidate(TDMCopyGlobalToLocalOp copy) {
+  // TODO: Relax this conservative mbarrier exclusion; mbarriers are descriptor
+  // state and HW can attach multiple mbarriers to one TDM instruction.
   if (copy.getWarpUsedHintAttr() || copy.getBarrier())
     return false;
   // Partitioned destinations need encoding-specific hint constraints, so leave

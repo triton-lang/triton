@@ -121,6 +121,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // TTG-LABEL: tdm_auto_fuse_skip_barrier
+  // LLVM-LABEL: tdm_auto_fuse_skip_barrier
+  tt.func public @tdm_auto_fuse_skip_barrier(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 128 : i32
+    %c_stride0 = arith.constant 128 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %c0 = arith.constant 0 : i32
+    %pred = arith.constant 1 : i32
+    %desc_base = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <64x64xf16, #shared>
+    %desc = amdg.update_tensor_descriptor %desc_base add_offsets = [%c0, %c0] pred = %pred : !tt.tensordesc<64x64xf16, #shared>
+    %dst0 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %dst1 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+
+    // Copies with mbarriers are not auto-fuse candidates.
+    // TTG: amdg.async_tdm_copy_global_to_local
+    // TTG: amdg.async_tdm_copy_global_to_local
+    // TTG-NOT: amdg.async_tdm_fused_copy_global_to_local
+    // LLVM: "llvm.amdgcn.tensor.load.to.lds"
+    // LLVM: "llvm.amdgcn.tensor.load.to.lds"
+    // LLVM-NOT: "llvm.amdgcn.tensor.load.to.lds"
+    %0 = amdg.async_tdm_copy_global_to_local %desc into %dst0 : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %1 = amdg.async_tdm_copy_global_to_local %desc into %dst1, barrier = %bar : !tt.tensordesc<64x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared_inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #shared_inner}>
 #smem = #ttg.shared_memory
