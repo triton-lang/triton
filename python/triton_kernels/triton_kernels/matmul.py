@@ -128,8 +128,10 @@ class PrecisionConfig:
     flexpoint_saturate_inf: bool = False
     report_quantization_err_fn: Callable | None = None
     a_mx_scale: torch.Tensor | Tensor | None = None
+    a_mx_tensor_scale: torch.Tensor | Tensor | None = None
     a_microblock_size: int | None = None
     b_mx_scale: torch.Tensor | Tensor | None = None
+    b_mx_tensor_scale: torch.Tensor | Tensor | None = None
     b_microblock_size: int | None = None
     c_mx_scale: torch.Tensor | Tensor | None = None
     c_microblock_size: int | None = None
@@ -228,6 +230,17 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
     return Storage(new_storage_data, storage.layout)
 
 
+def _wrap_tensor_scale(tensor_scale, mx_scale, name):
+    if tensor_scale is None:
+        return None
+    assert mx_scale is not None, f"precision_config.{name} requires the matching MX block scale"
+    if not isinstance(tensor_scale, Tensor):
+        tensor_scale = wrap_torch_tensor(tensor_scale)
+    if not isinstance(tensor_scale.storage.layout, StridedLayout):
+        raise NotImplementedError(f"precision_config.{name} only supports strided tensors")
+    return tensor_scale
+
+
 # -----------------------------------------------------------------------------
 # Triton Implementation
 # -----------------------------------------------------------------------------
@@ -294,6 +307,11 @@ def matmul(a, b, bias,
     b_is_shuffled = isinstance(b.storage.layout, BlackwellMX4ValueShuffledLayout)
     if b_scale is not None and not isinstance(b_scale, Tensor):
         b_scale = wrap_torch_tensor(b_scale)
+    b_tensor_scale = _wrap_tensor_scale(
+        precision_config.b_mx_tensor_scale,
+        b_scale,
+        "b_mx_tensor_scale",
+    )
     b_scale_layout = None if b_scale is None else b_scale.storage.layout
     if b_has_mx and (
             b.storage.layout is not None and not isinstance(b.storage.layout, StridedLayout)
@@ -308,6 +326,11 @@ def matmul(a, b, bias,
     if a_has_mx: assert a.stride(-1) == 1, "'x' must be row-major when it has data-type mxfp"
     if a_scale is not None and not isinstance(a_scale, Tensor):
         a_scale = wrap_torch_tensor(a_scale)
+    a_tensor_scale = _wrap_tensor_scale(
+        precision_config.a_mx_tensor_scale,
+        a_scale,
+        "a_mx_tensor_scale",
+    )
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
@@ -595,6 +618,10 @@ def matmul(a, b, bias,
     a_scale_strides = (0, ) * (3 - len(a_scale_strides)) + a_scale_strides
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
     b_scale_strides = (0, ) * (3 - len(b_scale_strides)) + b_scale_strides
+    a_tensor_scale_strides = a_tensor_scale.stride() if a_tensor_scale is not None else (None, None)
+    a_tensor_scale_strides = (0, ) * (2 - len(a_tensor_scale_strides)) + a_tensor_scale_strides
+    b_tensor_scale_strides = b_tensor_scale.stride() if b_tensor_scale is not None else (None, None)
+    b_tensor_scale_strides = (0, ) * (2 - len(b_tensor_scale_strides)) + b_tensor_scale_strides
 
     out_matmul_scale_strides = out_matmul_scale.storage.data.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
@@ -632,9 +659,11 @@ def matmul(a, b, bias,
                    a_tensor_or_tma, a.storage.data, *a_strides, a_transpose,
                    flex.lhs_data.scale,
                    a_scale_tensor_or_tma, *a_scale_strides,
+                   None if a_tensor_scale is None else a_tensor_scale.storage.data, *a_tensor_scale_strides,
                    b_tensor_or_tma, b.storage.data, *b_strides, b_transpose,
                    flex.rhs_data.scale,
                    b_scale_tensor_or_tma, *b_scale_strides,
+                   None if b_tensor_scale is None else b_tensor_scale.storage.data, *b_tensor_scale_strides,
                    flex.acc_data.reinterpret(c_acc_in), *c_acc_strides,
                    flex.acc_data.scale, c_acc_is_c,
                    bias, bias_stride,
@@ -747,6 +776,9 @@ def apply_precision(x_tri, w_tri, precision_config):
             return x.clone()
         return x.float() * scale
 
+    def tensor_scale_data(tensor_scale):
+        return tensor_scale.storage.data if isinstance(tensor_scale, Tensor) else tensor_scale
+
     if precision_config.a_mx_scale is not None:
         a_scale = precision_config.a_mx_scale
         mx_axis = x_tri.ndim - 1
@@ -754,6 +786,8 @@ def apply_precision(x_tri, w_tri, precision_config):
         x_tri = convert_layout(x_tri, canonical_layout)
         x_tri_scale = convert_layout(a_scale, canonical_layout)
         x_ref = upcast_from_mxfp(x_tri.storage.data, x_tri_scale.storage.data, torch.bfloat16, axis=mx_axis)
+        if precision_config.a_mx_tensor_scale is not None:
+            x_ref = x_ref * tensor_scale_data(precision_config.a_mx_tensor_scale)[..., :, None]
     else:
         x_ref = apply(x_tri, flex_ctx.lhs_data.scale)
 
@@ -764,6 +798,8 @@ def apply_precision(x_tri, w_tri, precision_config):
         w_tri = convert_layout(w_tri, canonical_layout)
         w_tri_scale = convert_layout(b_scale, canonical_layout)
         w_ref = upcast_from_mxfp(w_tri.storage.data, w_tri_scale.storage.data, torch.bfloat16, axis=mx_axis)
+        if precision_config.b_mx_tensor_scale is not None:
+            w_ref = w_ref * tensor_scale_data(precision_config.b_mx_tensor_scale)[..., None, :]
     else:
         w_ref = apply(w_tri, flex_ctx.rhs_data.scale)
 

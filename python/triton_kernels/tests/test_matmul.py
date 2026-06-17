@@ -652,6 +652,61 @@ def test_k_ragged_mxfp8_act_scale_swizzling(device):
     torch.testing.assert_close(swizzled, canonical)
 
 
+def test_nvfp4_matmul_tensor_scales(device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    torch.manual_seed(0)
+    m, n, k = 128, 128, 128
+    a_dtype = DType("nvfp4_e2m1")
+    b_dtype = DType("nvfp4_e2m1")
+    a, a_scale, _ = make_random_tensor(
+        shape=(m, k),
+        n_slices=1,
+        dtype=a_dtype,
+        device=device,
+        ragged_dim=None,
+        mxfp_dim=-1,
+        transpose=False,
+        ragged_padding=False,
+        squeeze_batch_dim=True,
+    )
+    b, b_scale, _ = make_random_tensor(
+        shape=(k, n),
+        n_slices=1,
+        dtype=b_dtype,
+        device=device,
+        ragged_dim=None,
+        mxfp_dim=-2,
+        transpose=False,
+        ragged_padding=False,
+        squeeze_batch_dim=True,
+    )
+    a_tensor_scale = torch.linspace(0.5, 1.5, m, dtype=torch.float32, device=device)
+    b_tensor_scale = torch.linspace(1.25, 0.75, n, dtype=torch.float32, device=device)
+    precision_config = PrecisionConfig(
+        a_mx_scale=a_scale,
+        a_mx_tensor_scale=a_tensor_scale,
+        a_microblock_size=NVFP_BLOCK_SIZE.value,
+        b_mx_scale=b_scale,
+        b_mx_tensor_scale=b_tensor_scale,
+        b_microblock_size=NVFP_BLOCK_SIZE.value,
+        out_dtype=torch.bfloat16,
+    )
+    constraints = {
+        "block_m": 128,
+        "block_n": 128,
+        "block_k": 128,
+        "split_k": 1,
+        "is_persistent": False,
+    }
+    with opt_flags.scoped_opt_flags_constraints(constraints):
+        actual = matmul(a, b, None, precision_config=precision_config)
+    expected = matmul_torch(a, b, None, precision_config=precision_config)
+
+    assert_close(expected, actual, maxtol=6e-1, rmstol=4e-2)
+
+
 def test_set_idle_sms():
     if not is_cuda():
         pytest.skip("Only supported on CUDA")

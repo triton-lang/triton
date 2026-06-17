@@ -47,9 +47,11 @@ def _matmul(
              X, XPtr, stride_x_z, stride_x_m, stride_x_k, X_TRANSPOSE: tl.constexpr,
              XScale,
              XMxScale, stride_x_mx_z, stride_x_mx_m, stride_x_mx_k,
+             XTensorScale, stride_x_tensor_scale_z, stride_x_tensor_scale_m,
              W, WPtr, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
              WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n,
+             WTensorScale, stride_w_tensor_scale_e, stride_w_tensor_scale_n,
              OutAcc, stride_acc_z, stride_acc_m, stride_acc_n,
              OutAccScale, Y_ACC_IS_Y: tl.constexpr,
              B, stride_b_e, # Bias
@@ -132,6 +134,8 @@ def _matmul(
     w_type: tl.constexpr = W.dtype.element_ty
     is_x_microscaled: tl.constexpr = XMxScale is not None
     is_w_microscaled: tl.constexpr = WMxScale is not None
+    has_x_tensor_scale: tl.constexpr = XTensorScale is not None
+    has_w_tensor_scale: tl.constexpr = WTensorScale is not None
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
     if is_x_microscaled or is_w_microscaled:
@@ -356,10 +360,26 @@ def _matmul(
         XMxScalePtrs = XMxScale + offs_x_m.to(index_type)[:, None] * stride_x_mx_m + offs_x_k_scale.to(index_type)[None, :] * stride_x_mx_k
     else:
         XMxScalePtrs = None
+    if has_x_tensor_scale:
+        XTensorScale += start_z.to(index_type) * stride_x_tensor_scale_z
+        if GatherIndx is None:
+            XTensorScale += start_m * stride_x_tensor_scale_m
+        XTensorScalePtrs = XTensorScale + offs_x_m.to(index_type) * stride_x_tensor_scale_m
+    else:
+        XTensorScalePtrs = None
 
     offs_w_k = off_k_w + tl.arange(0, PACKED_BLOCK_K_W)
     W += expt_id * stride_w_e
     WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + offs_w_n.to(index_type)[None, :] * stride_w_n)
+    if has_w_tensor_scale:
+        offs_w_tensor_scale_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        WTensorScalePtrs = (
+            WTensorScale
+            + expt_id * stride_w_tensor_scale_e
+            + offs_w_tensor_scale_n.to(index_type) * stride_w_tensor_scale_n
+        )
+    else:
+        WTensorScalePtrs = None
     # compute output
     acc_dtype: tl.constexpr = tl.float64 if x_type == tl.float64 and w_type == tl.float64 else tl.float32
     acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=acc_dtype)
@@ -475,6 +495,25 @@ def _matmul(
         else:
             XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
         WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * stride_w_k
+    if has_x_tensor_scale and has_w_tensor_scale:
+        x_tensor_scales = tl.load(XTensorScalePtrs).to(tl.float32)
+        w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0).to(tl.float32)
+        if SWAP_XW:
+            acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
+        else:
+            acc *= x_tensor_scales[:, None] * w_tensor_scales[None, :]
+    elif has_x_tensor_scale:
+        x_tensor_scales = tl.load(XTensorScalePtrs).to(tl.float32)
+        if SWAP_XW:
+            acc *= x_tensor_scales[None, :]
+        else:
+            acc *= x_tensor_scales[:, None]
+    elif has_w_tensor_scale:
+        w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0).to(tl.float32)
+        if SWAP_XW:
+            acc *= w_tensor_scales[:, None]
+        else:
+            acc *= w_tensor_scales[None, :]
     # bias + scale
     offs_m = off_m + tl.arange(0, BLOCK_M)
     offs_y_n = BLOCK_N * pid_n + tl.arange(0, BLOCK_N)
