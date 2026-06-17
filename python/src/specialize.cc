@@ -225,9 +225,10 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
     return {};
   desc_cstr += block_shape_cstr;
 
-  // For im2col mode, append input tensor rank after block_shape
-  // Format: tensordesc_im2col<dtype[block_shape],input_rank=N,layout>
-  // This allows the driver to know the N-dimensional shape/strides to pass
+  // For im2col mode, append only the input tensor rank.
+  // Format:
+  // tensordesc_im2col<dtype[block_shape],input_rank=N,layout>
+  // The im2col load operation carries runtime remap metadata explicitly.
   if (is_im2col) {
     auto tensor_shape_obj = from_new_ref(PyObject_GetAttr(arg, shape_attr));
     if (!tensor_shape_obj)

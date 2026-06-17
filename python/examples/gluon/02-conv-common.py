@@ -71,6 +71,30 @@ def ensure_tma_compatible_strides(tensor, alignment_bytes=16):
     return tensor
 
 
+@gluon.constexpr_function
+def get_transposed_cga_layout(cga_layout):
+    return tuple((basis[1], basis[0]) for basis in cga_layout)
+
+
+@gluon.constexpr_function
+def get_operand_cga_layout(cga_layout, op_idx):
+    assert op_idx in (0, 1)
+    if not cga_layout:
+        return cga_layout
+    assert cga_layout[0] == (1, 0)
+    first = (1, 0) if op_idx == 0 else (0, 1)
+
+    def broadcast(basis):
+        return (basis[0], 0) if op_idx == 0 else (0, 2 * basis[1])
+
+    return (first, *map(broadcast, cga_layout[1:]))
+
+
+def validate_2cta_m_split(cga_layout):
+    if cga_layout not in ((), ((1, 0), )):
+        raise ValueError(f"Only single-CTA or 2-CTA M-split layouts are supported, got {cga_layout!r}")
+
+
 @gluon.aggregate
 class Counter:
     index: gl.tensor
@@ -115,13 +139,6 @@ class PersistentTileScheduler:
 
 
 @gluon.jit
-def init_mbarrier_ring(bars):
-    num_bars: gl.constexpr = bars.type.shape[0]
-    for i in gl.static_range(num_bars):
-        mbarrier.init(bars.index(i), count=1)
-
-
-@gluon.jit
 def invalidate_mbarrier_ring(bars):
     num_bars: gl.constexpr = bars.type.shape[0]
     for i in gl.static_range(num_bars):
@@ -134,10 +151,12 @@ __all__ = [
     "PersistentTileScheduler",
     "TORCH_GEMM_DTYPE",
     "ensure_tma_compatible_strides",
-    "init_mbarrier_ring",
+    "get_operand_cga_layout",
+    "get_transposed_cga_layout",
     "invalidate_mbarrier_ring",
     "is_blackwell",
     "is_cuda",
     "maybe_pad_channel_dims_for_tma",
     "normalize_2d",
+    "validate_2cta_m_split",
 ]

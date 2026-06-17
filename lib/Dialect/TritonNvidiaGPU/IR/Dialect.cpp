@@ -502,6 +502,7 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
 //===----------------------------------------------------------------------===//
 // Format: !ttng.tensordesc_im2col<64x128xf16>
 //         !ttng.tensordesc_im2col<64x128xf16, #shared>
+
 Type TensorDescIm2ColType::parse(AsmParser &parser) {
   if (failed(parser.parseLess()))
     return Type();
@@ -515,10 +516,9 @@ Type TensorDescIm2ColType::parse(AsmParser &parser) {
     return Type();
 
   Attribute sharedLayout;
-  if (succeeded(parser.parseOptionalComma())) {
+  if (succeeded(parser.parseOptionalComma()))
     if (failed(parser.parseAttribute(sharedLayout)))
       return Type();
-  }
 
   if (failed(parser.parseGreater()))
     return Type();

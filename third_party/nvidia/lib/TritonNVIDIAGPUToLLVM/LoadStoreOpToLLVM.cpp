@@ -1150,6 +1150,180 @@ getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
   return unpackLayout * packedLayout;
 }
 
+struct Im2ColMetadata {
+  // The actual shape, strides, and pixel-box values are runtime operands. The
+  // source rank is structural and is derived from the im2col offset count.
+  int64_t physicalRank = 0;
+
+  int64_t getSpatialRank() const { return physicalRank - 2; }
+};
+
+static Im2ColMetadata getIm2ColMetadata(ttng::AsyncTMACopyGlobalToLocalOp op) {
+  int64_t spatialRank = op.getOffsets().size();
+  return {/*physicalRank=*/spatialRank + 2};
+}
+
+static FailureOr<Value> getI32RuntimeMetadata(
+    ConversionPatternRewriter &rewriter, TritonLLVMOpBuilder &b,
+    ttng::AsyncTMACopyGlobalToLocalOp op, Value value, StringRef name) {
+  Type ty = value.getType();
+  if (ty.isInteger(32))
+    return value;
+  if (ty.isInteger(64)) {
+    Value truncated = b.trunc(i32_ty, value);
+    return truncated;
+  }
+  return op.emitError("runtime im2col ")
+         << name << " metadata must be i32 or i64";
+}
+
+struct RuntimeIm2ColMetadata {
+  SmallVector<Value, 5> physicalCoords;
+  SmallVector<Value, 5> inputShape;
+  SmallVector<Value, 5> elementStrides;
+  SmallVector<Value, 3> lowerCorner;
+  SmallVector<Value, 3> upperCorner;
+};
+
+static FailureOr<RuntimeIm2ColMetadata> getRuntimeIm2ColMetadata(
+    ttng::AsyncTMACopyGlobalToLocalOp op, ConversionPatternRewriter &rewriter,
+    TritonLLVMOpBuilder &b, const Im2ColMetadata &metadata,
+    ValueRange physicalCoords, ValueRange inputShape, ValueRange elementStrides,
+    ValueRange lowerCorner, ValueRange upperCorner) {
+  int64_t physicalRank = metadata.physicalRank;
+  int64_t spatialRank = metadata.getSpatialRank();
+
+  if (static_cast<int64_t>(physicalCoords.size()) != physicalRank)
+    return op.emitError("im2col lowering requires ")
+           << physicalRank << " physical coordinates; got "
+           << physicalCoords.size();
+
+  RuntimeIm2ColMetadata result;
+  result.physicalCoords.append(physicalCoords.begin(), physicalCoords.end());
+
+  auto appendMetadata = [&](ValueRange values, int64_t expected, StringRef name,
+                            SmallVectorImpl<Value> &out) -> LogicalResult {
+    if (static_cast<int64_t>(values.size()) != expected)
+      return op.emitError("im2col lowering requires ")
+             << expected << " " << name << " operands; got " << values.size();
+    for (Value value : values) {
+      auto converted = getI32RuntimeMetadata(rewriter, b, op, value, name);
+      if (failed(converted))
+        return failure();
+      out.push_back(*converted);
+    }
+    return success();
+  };
+
+  if (failed(appendMetadata(inputShape, physicalRank, "input shape",
+                            result.inputShape)))
+    return failure();
+  if (failed(appendMetadata(elementStrides, physicalRank, "element_strides",
+                            result.elementStrides)))
+    return failure();
+  if (failed(appendMetadata(lowerCorner, spatialRank, "pixel_box_lower_corner",
+                            result.lowerCorner)))
+    return failure();
+  if (failed(appendMetadata(upperCorner, spatialRank, "pixel_box_upper_corner",
+                            result.upperCorner)))
+    return failure();
+  return result;
+}
+
+static SmallVector<Value, 3> getOutputShapeFromRuntimeMetadata(
+    TritonLLVMOpBuilder &b, const Im2ColMetadata &metadata,
+    const RuntimeIm2ColMetadata &runtimeMetadata) {
+  int64_t spatialRank = metadata.getSpatialRank();
+
+  SmallVector<Value, 3> outputShapeVals;
+  outputShapeVals.reserve(spatialRank);
+  for (int i = 0; i < spatialRank; ++i) {
+    Value inputDim = runtimeMetadata.inputShape[i + 1];
+    Value stride = runtimeMetadata.elementStrides[i + 1];
+    Value lower = runtimeMetadata.lowerCorner[i];
+    Value upper = runtimeMetadata.upperCorner[i];
+    Value numerator = b.add(inputDim, b.sub(b.sub(upper, b.i32_val(1)), lower));
+    outputShapeVals.push_back(b.add(b.udiv(numerator, stride), b.i32_val(1)));
+  }
+  return outputShapeVals;
+}
+
+static Value getTileOffsetForDim(ConversionPatternRewriter &rewriter,
+                                 TritonLLVMOpBuilder &b,
+                                 ArrayRef<std::pair<StringAttr, Value>> offsets,
+                                 int dim) {
+  auto name =
+      StringAttr::get(rewriter.getContext(), ("dim" + Twine(dim)).str());
+  for (const auto &offset : offsets) {
+    if (offset.first == name)
+      return offset.second;
+  }
+  return b.i32_val(0);
+}
+
+static SmallVector<Value, 5> getIm2ColPhysicalLoweredCoords(
+    ConversionPatternRewriter &rewriter, TritonLLVMOpBuilder &b,
+    const Im2ColMetadata &metadata, ValueRange args,
+    ArrayRef<Value> outputShapeVals,
+    const RuntimeIm2ColMetadata &runtimeMetadata,
+    ArrayRef<std::pair<StringAttr, Value>> tileOffsets) {
+  int64_t spatialRank = metadata.getSpatialRank();
+  assert(args.size() == static_cast<size_t>(spatialRank + 2) &&
+         "physical im2col lowering expects [N, spatial..., C]");
+
+  SmallVector<Value, 3> strideVals;
+  SmallVector<Value, 3> padVals;
+  strideVals.reserve(spatialRank);
+  padVals.reserve(spatialRank);
+  for (int i = 0; i < spatialRank; ++i) {
+    // element_strides includes N and C; spatial dimensions are in between.
+    strideVals.push_back(runtimeMetadata.elementStrides[i + 1]);
+    padVals.push_back(b.sub(b.i32_val(0), runtimeMetadata.lowerCorner[i]));
+  }
+
+  Value outputPixels = b.i32_val(1);
+  for (Value dim : outputShapeVals)
+    outputPixels = b.mul(outputPixels, dim);
+
+  // CTA-local offsets come from the CGA/shared layout: dim0 shifts the logical
+  // GEMM M tile and dim1 shifts the logical K/channel tile.
+  Value localM = getTileOffsetForDim(rewriter, b, tileOffsets, 0);
+  Value localK = getTileOffsetForDim(rewriter, b, tileOffsets, 1);
+
+  // Convert physical input spatial coordinates back to logical output indices:
+  // outIdx = (inputCoord + pad) / stride, then flatten [N, out...] into M.
+  Value spatialLinear = b.i32_val(0);
+  for (int i = 0; i < spatialRank; ++i) {
+    Value outIdx = b.sdiv(b.add(args[i + 1], padVals[i]), strideVals[i]);
+    spatialLinear = b.add(b.mul(spatialLinear, outputShapeVals[i]), outIdx);
+  }
+  Value linearM = b.add(b.mul(args[0], outputPixels), spatialLinear);
+
+  // Apply localM, then unflatten the adjusted GEMM M coordinate back to
+  // [N', out_spatial...].
+  linearM = b.add(linearM, localM);
+
+  Value batch = b.udiv(linearM, outputPixels);
+  Value remM = b.urem(linearM, outputPixels);
+  SmallVector<Value, 3> outIdx(spatialRank);
+  for (int i = spatialRank - 1; i >= 0; --i) {
+    outIdx[i] = b.urem(remM, outputShapeVals[i]);
+    remM = b.udiv(remM, outputShapeVals[i]);
+  }
+
+  // Convert adjusted output indices back to physical input coordinates:
+  // inputCoord = outIdx * stride - pad. The original filter offsets remain
+  // unchanged and are emitted as the TMA im2col offset operands.
+  SmallVector<Value, 5> coords;
+  coords.push_back(batch);
+  for (int i = 0; i < spatialRank; ++i)
+    coords.push_back(b.sub(b.mul(outIdx[i], strideVals[i]), padVals[i]));
+
+  // Apply localK to the innermost channel coordinate.
+  coords.push_back(b.add(args[spatialRank + 1], localK));
+  return coords;
+}
+
 struct AsyncTMACopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp> {
@@ -1169,6 +1343,9 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     // Determine the TMA mode based on the descriptor type
     auto descType = op.getDesc().getType();
     bool isIm2Col = isa<ttng::TensorDescIm2ColType>(descType);
+    Im2ColMetadata im2ColMetadata;
+    if (isIm2Col)
+      im2ColMetadata = getIm2ColMetadata(op);
     ttg::TMAMode tmaMode =
         isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
 
@@ -1198,7 +1375,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     auto smemTy = op.getResult().getType();
 
-    int rank = op.getCoord().size();
+    int64_t im2ColSpatialRank = isIm2Col ? im2ColMetadata.getSpatialRank() : 0;
+    int rank = isIm2Col ? im2ColSpatialRank + 2 : op.getCoord().size();
 
     auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy, tmaMode);
     auto smemLayout = ttg::toLinearLayout(smemTy);
@@ -1278,15 +1456,34 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
       auto offsets = applyLinearLayout(loc, rewriter, msgToOffset,
                                        {{kMsg, copyIdxVal}, {kBlock, ctaId}});
+      ValueRange im2colOffsets;
+      SmallVector<Value> tmaCoords(adaptor.getCoord().begin(),
+                                   adaptor.getCoord().end());
+      if (isIm2Col) {
+        auto runtimeMetadata = getRuntimeIm2ColMetadata(
+            op, rewriter, b, im2ColMetadata, adaptor.getCoord(),
+            adaptor.getIm2colShape(), adaptor.getIm2colElementStrides(),
+            adaptor.getIm2colPixelBoxLowerCorner(),
+            adaptor.getIm2colPixelBoxUpperCorner());
+        if (failed(runtimeMetadata))
+          return failure();
+        auto outputShape = getOutputShapeFromRuntimeMetadata(b, im2ColMetadata,
+                                                             *runtimeMetadata);
+        tmaCoords = getIm2ColPhysicalLoweredCoords(
+            rewriter, b, im2ColMetadata, (*runtimeMetadata).physicalCoords,
+            outputShape, *runtimeMetadata, offsets);
+        im2colOffsets = adaptor.getOffsets();
+      }
+
       int operandIdx = 3;
       auto encoding = op.getDesc().getType().getSharedLayout();
       bool fp4Padded = nvidia_gpu::isFp4Padded(encoding);
       for (int i = 0; i < rank; i++) {
-        Value coord = adaptor.getCoord()[rank - i - 1];
+        Value coord = tmaCoords[rank - i - 1];
         if (fp4Padded && i == 0) {
           coord = b.mul(coord, b.i32_val(2));
         }
-        if (i < offsets.size())
+        if (!isIm2Col && i < offsets.size())
           coord = b.add(coord, offsets[offsets.size() - i - 1].second);
 
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
@@ -1301,7 +1498,6 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         tmaInst += ", $" + std::to_string(operandIdx++);
       }
       if (isIm2Col) {
-        auto im2colOffsets = adaptor.getOffsets();
         if (!im2colOffsets.empty()) {
           tmaInst += ", {";
           for (size_t i = 0; i < im2colOffsets.size(); i++) {

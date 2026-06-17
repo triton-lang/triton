@@ -18,6 +18,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tensor_memory_descriptor,
     tcgen05_mma,
     tcgen05_commit,
+    tcgen05_mma_barrier_count,
 )
 
 
@@ -48,12 +49,13 @@ Counter = _conv_common.Counter
 GL_GEMM_DTYPE = _conv_common.GL_GEMM_DTYPE
 PersistentTileScheduler = _conv_common.PersistentTileScheduler
 TORCH_GEMM_DTYPE = _conv_common.TORCH_GEMM_DTYPE
-init_mbarrier_ring = _conv_common.init_mbarrier_ring
+get_operand_cga_layout = _conv_common.get_operand_cga_layout
+get_transposed_cga_layout = _conv_common.get_transposed_cga_layout
 invalidate_mbarrier_ring = _conv_common.invalidate_mbarrier_ring
 is_blackwell = _conv_common.is_blackwell
-is_cuda = _conv_common.is_cuda
 maybe_pad_ci_for_tma = _conv_common.maybe_pad_channel_dims_for_tma
 normalize_2d = _conv_common.normalize_2d
+validate_2cta_m_split = _conv_common.validate_2cta_m_split
 
 # ===-----------------------------------------------------------------------===#
 # Convolution Configuration
@@ -191,9 +193,11 @@ def load_partition(p):
             iter_s = remain_rs % config.S
             iter_r = remain_rs // config.S
 
+            a_stage = p.a_bufs.index(state.index)
+            b_stage = p.b_bufs.index(state.index)
             ready_bar = ready_bars.index(state.index)
-            mbarrier.wait(empty_bars.index(state.index), state.phase)
-            mbarrier.expect(ready_bar, p.in_desc.block_type.nbytes + p.weight_desc.block_type.nbytes)
+            mbarrier.wait(empty_bars.index(state.index), state.phase, deps=[a_stage, b_stage])
+            mbarrier.expect(ready_bar, p.in_desc.nbytes_per_cta + p.weight_desc.nbytes_per_cta)
 
             tma.async_load_im2col(
                 p.in_desc,
@@ -205,7 +209,15 @@ def load_partition(p):
                 ],
                 [iter_r.to(tl.int16), iter_s.to(tl.int16)],
                 ready_bar,
-                p.a_bufs.index(state.index),
+                a_stage,
+                im2col_shape=p.in_desc.shape,
+                element_strides=[1, config.stride_h, config.stride_w, 1],
+                pixel_box_lower_corner=[gl.to_tensor(0) - config.pad_h,
+                                        gl.to_tensor(0) - config.pad_w],
+                pixel_box_upper_corner=[
+                    (config.out_h - 1) * config.stride_h + 1 - p.in_desc.shape[1] - config.pad_h,
+                    (config.out_w - 1) * config.stride_w + 1 - p.in_desc.shape[2] - config.pad_w,
+                ],
             )
 
             k_offset = (iter_r * config.S + iter_s) * config.Ci + iter_ci * BLOCK_K
@@ -213,7 +225,7 @@ def load_partition(p):
                 p.weight_desc,
                 [prog.pid_n * config.BLOCK_N, k_offset],
                 ready_bar,
-                p.b_bufs.index(state.index),
+                b_stage,
             )
             state = state.next()
 
@@ -222,6 +234,7 @@ def load_partition(p):
 def mma_partition(p):
     """MMA partition: accumulate over all tiles assigned to this CTA."""
     config = p.config
+    TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
 
     num_k_iter = config.get_num_k_iterations()
     load_state = Counter.create(0, p.load_empty_bars.shape[0])
@@ -240,8 +253,9 @@ def mma_partition(p):
                 p.b_bufs.index(load_state.index).permute((1, 0)),
                 acc_buf,
                 use_acc=use_acc,
+                multicast=TWO_CTAS,
+                mbarriers=[p.load_empty_bars.index(load_state.index)],
             )
-            tcgen05_commit(p.load_empty_bars.index(load_state.index))
             load_state = load_state.next()
             use_acc = True
 
@@ -255,17 +269,18 @@ def epilogue_partition(p):
     config = p.config
     BLOCK_M: gl.constexpr = config.BLOCK_M
     BLOCK_N: gl.constexpr = config.BLOCK_N
-    M_GEMM = config.M_GEMM
-    N_GEMM = config.Co
 
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
     scheduler = PersistentTileScheduler.initialize(config.get_num_tiles())
+
+    M_GEMM = config.M_GEMM
+    N_GEMM = config.Co
     for idx in range(scheduler.get_num_tiles()):
         prog = config.get_program(scheduler.get_tile_id(idx))
 
         mbarrier.wait(p.acc_ready_bars.index(acc_state.index), acc_state.phase)
         acc = p.acc_bufs.index(acc_state.index).load()
-        result = gl.convert_layout(acc.to(GL_GEMM_DTYPE), gl.CoalescedLayout())
+        result = acc.to(GL_GEMM_DTYPE)
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
         acc_state = acc_state.next()
 
@@ -327,9 +342,11 @@ def conv2d_fprop_kernel(
     GROUP_SIZE_M: gl.constexpr,
     num_buffers: gl.constexpr,
     num_acc_buffers: gl.constexpr,
+    CGA_LAYOUT: gl.constexpr,
     num_warps: gl.constexpr,
 ):
     """Warp-specialized forward convolution kernel."""
+    TWO_CTAS: gl.constexpr = gl.num_ctas() > 1
     M_GEMM = N * out_h * out_w
     config = ConvConfig(
         N,
@@ -357,28 +374,44 @@ def conv2d_fprop_kernel(
         num_warps,
     )
 
-    a_smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], GL_GEMM_DTYPE)
-    b_smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_N, BLOCK_K], GL_GEMM_DTYPE)
+    a_cga_layout: gl.constexpr = get_operand_cga_layout(CGA_LAYOUT, 0)
+    b_cga_layout: gl.constexpr = get_transposed_cga_layout(get_operand_cga_layout(CGA_LAYOUT, 1))
+    a_smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], GL_GEMM_DTYPE,
+                                                                       cga_layout=a_cga_layout)
+    b_smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_N, BLOCK_K], GL_GEMM_DTYPE,
+                                                                       cga_layout=b_cga_layout)
 
     a_bufs = gl.allocate_shared_memory(GL_GEMM_DTYPE, [num_buffers, BLOCK_M, BLOCK_K], a_smem_layout)
     b_bufs = gl.allocate_shared_memory(GL_GEMM_DTYPE, [num_buffers, BLOCK_N, BLOCK_K], b_smem_layout)
 
-    load_empty_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
-    load_ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
-    init_mbarrier_ring(load_empty_bars)
-    init_mbarrier_ring(load_ready_bars)
+    mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count(
+        [a_bufs.index(0), b_bufs.index(0).permute((1, 0))],
+        multicast=TWO_CTAS,
+        two_ctas=TWO_CTAS,
+    )
+    load_empty_bars = mbarrier.allocate_mbarrier(batch=num_buffers)
+    load_ready_bars = mbarrier.allocate_mbarrier(batch=num_buffers, two_ctas=TWO_CTAS)
+    for i in gl.static_range(num_buffers):
+        mbarrier.init(load_empty_bars.index(i), count=mma_barrier_count)
+        mbarrier.init(load_ready_bars.index(i), count=1)
 
     TMEM_BLOCK_M: gl.constexpr = 64 if BLOCK_M == 64 else 128
-    tmem_layout: gl.constexpr = TensorMemoryLayout(block=(TMEM_BLOCK_M, BLOCK_N), col_stride=1)
+    tmem_layout: gl.constexpr = TensorMemoryLayout(
+        block=(TMEM_BLOCK_M, BLOCK_N),
+        col_stride=1,
+        cga_layout=CGA_LAYOUT,
+        two_ctas=TWO_CTAS,
+    )
     # Smaller tiles can profit from a double-buffered accumulator ring, but
     # large 256x256 tiles exceed Blackwell's TMEM budget unless the ring depth
     # is reduced to 1.
     acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
 
-    acc_empty_bars = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], mbarrier.MBarrierLayout())
-    acc_ready_bars = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], mbarrier.MBarrierLayout())
-    init_mbarrier_ring(acc_empty_bars)
-    init_mbarrier_ring(acc_ready_bars)
+    acc_empty_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=TWO_CTAS)
+    acc_ready_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
+    for i in gl.static_range(num_acc_buffers):
+        mbarrier.init(acc_empty_bars.index(i), count=1)
+        mbarrier.init(acc_ready_bars.index(i), count=1)
 
     p = PartitionArgs(
         config,
@@ -401,8 +434,8 @@ def conv2d_fprop_kernel(
     ], [1, 1], [24, 24])
 
 
-def conv2d_fprop_get_configs(pre_hook=None):
-    return [
+def conv2d_fprop_get_configs(pre_hook=None, include_2cta=False, block_n_values=(128, )):
+    configs = [
         triton.Config(
             {
                 "BLOCK_M": block_m,
@@ -411,8 +444,10 @@ def conv2d_fprop_get_configs(pre_hook=None):
                 "GROUP_SIZE_M": group_size_m,
                 "num_buffers": num_buffers,
                 "num_acc_buffers": num_acc_buffers,
+                "CGA_LAYOUT": cga_layout,
             },
             num_warps=num_warps,
+            num_ctas=2**len(cga_layout),
             pre_hook=pre_hook,
         )
         for block_m in (64, 128)
@@ -421,19 +456,43 @@ def conv2d_fprop_get_configs(pre_hook=None):
         for group_size_m in (4, )
         for num_buffers in (3, 4, 5)
         for num_acc_buffers in (2, )
+        for cga_layout in ((), )
         for num_warps in (4, )
     ]
+    if include_2cta:
+        configs.extend([
+            triton.Config(
+                {
+                    "BLOCK_M": 256,
+                    "BLOCK_N": block_n,
+                    "BLOCK_K": block_k,
+                    "GROUP_SIZE_M": 4,
+                    "num_buffers": num_buffers,
+                    "num_acc_buffers": 2,
+                    "CGA_LAYOUT": ((1, 0), ),
+                },
+                num_warps=4,
+                num_ctas=2,
+                pre_hook=pre_hook,
+            ) for block_n in block_n_values for block_k in (64, 128) for num_buffers in (3, 4, 5)
+        ])
+    return configs
 
 
 def conv2d_fprop_tma_set_block_size_hook(nargs):
     in_block_shape = [nargs["BLOCK_M"], nargs["BLOCK_K"]]
     weight_block_shape = [nargs["BLOCK_N"], nargs["BLOCK_K"]]
+    cga_layout = nargs["CGA_LAYOUT"]
+    validate_2cta_m_split(cga_layout)
 
     nargs["in_desc"].block_shape = in_block_shape
-    nargs["in_desc"].layout = gl.NVMMASharedLayout.get_default_for(in_block_shape, GL_GEMM_DTYPE)
+    nargs["in_desc"].layout = gl.NVMMASharedLayout.get_default_for(in_block_shape, GL_GEMM_DTYPE,
+                                                                   cga_layout=get_operand_cga_layout(cga_layout, 0))
 
     nargs["weight_desc"].block_shape = weight_block_shape
-    nargs["weight_desc"].layout = gl.NVMMASharedLayout.get_default_for(weight_block_shape, GL_GEMM_DTYPE)
+    weight_cga_layout = get_transposed_cga_layout(get_operand_cga_layout(cga_layout, 1))
+    nargs["weight_desc"].layout = gl.NVMMASharedLayout.get_default_for(weight_block_shape, GL_GEMM_DTYPE,
+                                                                       cga_layout=weight_cga_layout)
 
 
 # Key on the effective implicit-GEMM/convolution geometry instead of the full
@@ -443,6 +502,22 @@ def conv2d_fprop_tma_set_block_size_hook(nargs):
 conv2d_fprop_autotuned_kernel = triton.autotune(
     configs=conv2d_fprop_get_configs(pre_hook=conv2d_fprop_tma_set_block_size_hook),
     key=["out_h", "out_w", "stride_h", "stride_w"],
+)(conv2d_fprop_kernel)
+
+# This mixed autotune compares the normal single-CTA configs with 2CTA configs.
+# The host keeps the conservative full-tile guard used by the 2CTA load path.
+conv2d_fprop_autotuned_kernel_with_2cta = triton.autotune(
+    configs=conv2d_fprop_get_configs(pre_hook=conv2d_fprop_tma_set_block_size_hook, include_2cta=True),
+    key=["N", "Co", "out_h", "out_w", "stride_h", "stride_w"],
+)(conv2d_fprop_kernel)
+
+conv2d_fprop_autotuned_kernel_with_2cta_256 = triton.autotune(
+    configs=conv2d_fprop_get_configs(
+        pre_hook=conv2d_fprop_tma_set_block_size_hook,
+        include_2cta=True,
+        block_n_values=(128, 256),
+    ),
+    key=["N", "Co", "out_h", "out_w", "stride_h", "stride_w"],
 )(conv2d_fprop_kernel)
 
 # ===-----------------------------------------------------------------------===#
@@ -483,8 +558,8 @@ def _prepare_conv_fprop_inputs(input_tensor, weight_tensor, stride, padding):
 
 
 def _make_conv_fprop_descriptors(input_tensor, weight_tensor, out_h, out_w, stride_h, stride_w, pad_h, pad_w,
-                                 input_block_shape, weight_block_shape):
-    # TMA im2col descriptor for input: [N, H, W, Ci] in NHWC
+                                 input_block_shape, weight_block_shape, cga_layout=()):
+    # TMA im2col descriptor for input: [N, H, W, Ci] in NHWC.
     #
     # The pixel_box defines the access boundary per batch:
     #   Lower = pixel_box_lower_corner + offsets
@@ -499,14 +574,15 @@ def _make_conv_fprop_descriptors(input_tensor, weight_tensor, out_h, out_w, stri
     _, H, W, _ = input_tensor.shape
     upper_h = (out_h - 1) * stride_h + 1 - H - pad_h
     upper_w = (out_w - 1) * stride_w + 1 - W - pad_w
+    Co, R, S, Ci = weight_tensor.shape
 
-    input_layout = gl.NVMMASharedLayout.get_default_for(input_block_shape, GL_GEMM_DTYPE)
-    in_desc = TensorDescriptorIm2Col(
-        base=input_tensor,
-        shape=list(input_tensor.shape),
-        strides=list(input_tensor.stride()),
-        block_shape=input_block_shape,
-        layout=input_layout,
+    validate_2cta_m_split(cga_layout)
+    input_layout = gl.NVMMASharedLayout.get_default_for(input_block_shape, GL_GEMM_DTYPE,
+                                                        cga_layout=get_operand_cga_layout(cga_layout, 0))
+    in_desc = TensorDescriptorIm2Col.from_tensor(
+        input_tensor,
+        input_block_shape,
+        input_layout,
         padding="zero",
         element_strides=[1, stride_h, stride_w, 1],
         pixel_box_lower_corner=[-pad_h, -pad_w],
@@ -514,10 +590,12 @@ def _make_conv_fprop_descriptors(input_tensor, weight_tensor, out_h, out_w, stri
     )
 
     # TMA tiled descriptor for weight: (Co, R*S*Ci) = (N_GEMM, K_GEMM)
-    Co, R, S, Ci = weight_tensor.shape
     weight_reshaped = weight_tensor.reshape(Co, R * S * Ci)
-    weight_layout = gl.NVMMASharedLayout.get_default_for(weight_block_shape, GL_GEMM_DTYPE)
+    weight_cga_layout = get_transposed_cga_layout(get_operand_cga_layout(cga_layout, 1))
+    weight_layout = gl.NVMMASharedLayout.get_default_for(weight_block_shape, GL_GEMM_DTYPE,
+                                                         cga_layout=weight_cga_layout)
     weight_desc = TensorDescriptor.from_tensor(weight_reshaped, weight_block_shape, weight_layout)
+
     return in_desc, weight_desc
 
 
@@ -579,6 +657,10 @@ def _launch_conv(
     )
 
 
+def _supports_2cta_fprop_autotune(M_GEMM, Co, block_n):
+    return M_GEMM % 256 == 0 and Co % block_n == 0
+
+
 def conv2d_fprop(input_tensor, weight_tensor, stride=1, padding=0, **kwargs):
     """Production fprop entrypoint.
 
@@ -606,8 +688,14 @@ def conv2d_fprop(input_tensor, weight_tensor, stride=1, padding=0, **kwargs):
         dummy_block_shape,
     )
 
+    kernel = conv2d_fprop_autotuned_kernel
+    if _supports_2cta_fprop_autotune(M_GEMM, Co, 256):
+        kernel = conv2d_fprop_autotuned_kernel_with_2cta_256
+    elif _supports_2cta_fprop_autotune(M_GEMM, Co, 128):
+        kernel = conv2d_fprop_autotuned_kernel_with_2cta
+
     _launch_conv(
-        conv2d_fprop_autotuned_kernel,
+        kernel,
         _make_grid(num_sms, M_GEMM, N_GEMM),
         in_desc=in_desc,
         weight_desc=weight_desc,
@@ -633,20 +721,35 @@ def conv2d_fprop(input_tensor, weight_tensor, stride=1, padding=0, **kwargs):
 conv2d_fprop_persistent = conv2d_fprop
 
 
-def _make_conv2d_fprop_fixed_kernel_meta(num_buffers, num_warps):
-    # Keep the fixed path on a tile shape that is also covered by autotune configs.
+def _make_conv2d_fprop_fixed_kernel_meta(num_buffers, num_warps, *, use_2cta=False):
+    if use_2cta:
+        cga_layout = ((1, 0), )
+        return {
+            "BLOCK_M": 256,
+            "BLOCK_N": 128,
+            "BLOCK_K": 128,
+            "GROUP_SIZE_M": 4,
+            "num_buffers": 4 if num_buffers is None else min(num_buffers, 4),
+            "num_acc_buffers": 2,
+            "CGA_LAYOUT": cga_layout,
+            "num_warps": num_warps,
+            "num_ctas": 2**len(cga_layout),
+        }
+
     return {
         "BLOCK_M": 128,
         "BLOCK_N": 128,
         "BLOCK_K": 64,
         "GROUP_SIZE_M": 4,
-        "num_buffers": num_buffers,
+        "num_buffers": 3 if num_buffers is None else num_buffers,
         "num_acc_buffers": 2,
+        "CGA_LAYOUT": (),
         "num_warps": num_warps,
     }
 
 
-def conv2d_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=3, num_warps=4):
+def _run_conv2d_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=None, num_warps=4, *,
+                            use_2cta=False):
     """Fixed-config fprop entrypoint used for CI and debugging.
 
     Runs the kernel with a fixed supported tile shape instead of autotuning.
@@ -654,7 +757,7 @@ def conv2d_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_buf
     input_tensor, weight_tensor, output, N, H, W, Ci, Co, R, S, out_h, out_w, stride_h, stride_w, pad_h, pad_w = \
         _prepare_conv_fprop_inputs(input_tensor, weight_tensor, stride, padding)
 
-    kernel_meta = _make_conv2d_fprop_fixed_kernel_meta(num_buffers, num_warps)
+    kernel_meta = _make_conv2d_fprop_fixed_kernel_meta(num_buffers, num_warps, use_2cta=use_2cta)
     BLOCK_M = kernel_meta["BLOCK_M"]
     BLOCK_N = kernel_meta["BLOCK_N"]
     BLOCK_K = kernel_meta["BLOCK_K"]
@@ -674,6 +777,7 @@ def conv2d_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_buf
         pad_w,
         [BLOCK_M, BLOCK_K],
         [BLOCK_N, BLOCK_K],
+        kernel_meta["CGA_LAYOUT"],
     )
 
     _launch_conv(
@@ -701,6 +805,35 @@ def conv2d_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_buf
     return output
 
 
+def conv2d_fprop_fixed(input_tensor, weight_tensor, stride=1, padding=0, num_buffers=None, num_warps=4):
+    """Fixed-config fprop entrypoint used for CI and debugging.
+
+    Uses the regular fprop kernel with a 2CTA M-split tile when the output
+    matrix shape satisfies the current 2CTA coverage guard. Small or partial
+    cases use the same kernel in single-CTA mode.
+    """
+    stride_h, stride_w = normalize_2d(stride, "stride")
+    pad_h, pad_w = normalize_2d(padding, "padding")
+    N, H, W, Ci = input_tensor.shape
+    Co, R, S, Ci_w = weight_tensor.shape
+    use_2cta = False
+    if Ci == Ci_w:
+        out_h = (H + 2 * pad_h - R) // stride_h + 1
+        out_w = (W + 2 * pad_w - S) // stride_w + 1
+        if out_h > 0 and out_w > 0:
+            use_2cta = (N * out_h * out_w) % 256 == 0 and Co % 128 == 0
+
+    return _run_conv2d_fprop_fixed(
+        input_tensor,
+        weight_tensor,
+        stride=stride,
+        padding=padding,
+        num_buffers=num_buffers,
+        num_warps=num_warps,
+        use_2cta=use_2cta,
+    )
+
+
 # ===-----------------------------------------------------------------------===#
 # Unit Tests
 # ===-----------------------------------------------------------------------===#
@@ -720,13 +853,21 @@ def _assert_conv_fprop_correct(fprop_fn, N, Ci, H, W, Co, R, S, stride, padding,
     torch.testing.assert_close(triton_out, torch_out, atol=5e-2, rtol=5e-2)
 
 
+FPROP_2CTA_PARAMS = [
+    pytest.param(conv2d_fprop_fixed, 1, 384, 32, 32, 512, 3, 3, 1, 1, id="2cta_n1_ci384_co512_r3s3"),
+    pytest.param(conv2d_fprop_fixed, 128, 384, 8, 8, 512, 3, 3, 1, 1, id="2cta_n128_ci384_co512_r3s3"),
+    pytest.param(conv2d_fprop_fixed, 1, 416, 32, 32, 512, 3, 3, 1, 1, id="2cta_padded_ci416_co512"),
+]
+
+
 @pytest.mark.parametrize("fprop_fn,N,Ci,H,W,Co,R,S,stride,padding", [
-    *[(conv2d_fprop_fixed, N, Ci, 64, 64, Co, R, S, stride, padding)
-      for N in (1, 128)
-      for Ci, Co in ((384, 384), (416, 416))
-      for R, S in ((3, 3), (4, 4), (5, 5))
-      for stride in (1, 2)
-      for padding in (0, 1)], (conv2d_fprop_fixed, 1, 96, 1, 8, 128, 1, 2, (1, 2), 0),  # asymmetric stride
+    *FPROP_2CTA_PARAMS, *[(conv2d_fprop_fixed, N, Ci, 64, 64, Co, R, S, stride, padding)
+                          for N in (1, 128)
+                          for Ci, Co in ((384, 384), (416, 416))
+                          for R, S in ((3, 3), (4, 4), (5, 5))
+                          for stride in (1, 2)
+                          for padding in (0, 1)],
+    (conv2d_fprop_fixed, 1, 96, 1, 8, 128, 1, 2, (1, 2), 0),  # asymmetric stride
     (conv2d_fprop_fixed, 16, 5, 32, 32, 96, 3, 3, 1, 1),  # padded channels
 ])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell GPU (SM 10.x)")

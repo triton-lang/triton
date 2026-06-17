@@ -312,7 +312,8 @@ def str_to_ty(name, c):
         dtype, rest = inner.split("[", maxsplit=1)
         block_shape, rest = rest.split("]", maxsplit=1)
         block_shape = [int(s.strip()) for s in block_shape.rstrip("]").split(",")]
-        # For im2col, parse optional input_rank=N (e.g., ",input_rank=4,layout")
+        # For im2col, parse optional input_rank=N. Strides and pixel-box
+        # metadata are runtime operands on async_load_im2col, not type fields.
         tensor_rank = None
         import re as _re
         rank_match = _re.search(r",input_rank=(\d+)", rest)

@@ -97,8 +97,11 @@ class tensor_descriptor_im2col_type(_tensor_descriptor_type_base):
 
     def _to_ir(self, builder: ir.builder) -> ir.type:
         is_signed = self.block_type.element_ty.is_int_signed()
-        return builder.get_tensor_descriptor_im2col_layout_type(self.block_type.to_ir(builder), is_signed,
-                                                                self.layout._to_ir(builder))
+        return builder.get_tensor_descriptor_im2col_layout_type(
+            self.block_type.to_ir(builder),
+            is_signed,
+            self.layout._to_ir(builder),
+        )
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
         handle = handles[cursor]
@@ -112,11 +115,12 @@ class tensor_descriptor_im2col_type(_tensor_descriptor_type_base):
 class _tensor_descriptor_value_base(base_value):
 
     def __init__(self, handle, shape: List[ttgl.tensor], strides: List[ttgl.tensor], block_type: ttgl.block_type,
-                 layout: NVMMASharedLayout, type_cls):
+                 layout: NVMMASharedLayout, type_cls, **type_kwargs):
         self.handle = handle
         self.shape = ttgl.tuple(shape)
         self.strides = ttgl.tuple(strides)
-        self.type = type_cls(block_type, shape_type=self.shape.type, strides_type=self.strides.type, layout=layout)
+        self.type = type_cls(block_type, shape_type=self.shape.type, strides_type=self.strides.type, layout=layout,
+                             **type_kwargs)
 
     def _set_name(self, builder: ir.builder, name: str) -> None:
         self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
@@ -229,17 +233,22 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
         pred.handle,
         multicast,
         None,
+        None,
+        None,
+        None,
+        None,
     )
 
 
 @builtin
-def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, multicast=False, _semantic=None):
+def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, multicast=False, im2col_shape=None,
+                      element_strides=None, pixel_box_lower_corner=None, pixel_box_upper_corner=None, _semantic=None):
     """
     Load data from global memory to shared memory using TMA in im2col mode.
 
     Args:
         tensor_desc: Tensor descriptor (im2col)
-        coord: Coordinates in the source tensor
+        coord: Physical coordinates in the source tensor
         offsets: Im2col offsets (must be i16 values)
             - For 3D tensors: 1 offset
             - For 4D tensors: 2 offsets
@@ -250,13 +259,41 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
         result: Destination memory descriptor
         pred: Predicate for conditional execution
         multicast: Enable multicast
+        im2col_shape: Runtime full source tensor shape metadata. Defaults to
+            ``tensor_desc.shape``.
+        element_strides: Required runtime element strides metadata.
+        pixel_box_lower_corner: Required runtime pixel-box lower corner metadata.
+        pixel_box_upper_corner: Required runtime pixel-box upper corner metadata.
     """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_load", "innermost coordinate", _semantic=_semantic)
 
-    coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
     multicast = _unwrap_if_constexpr(multicast)
+
+    if len(coord) != len(tensor_desc.shape):
+        raise ValueError("async_load_im2col expects physical tensor coordinates")
+    if element_strides is None or pixel_box_lower_corner is None or pixel_box_upper_corner is None:
+        raise ValueError("async_load_im2col requires runtime element_strides and both pixel-box corners")
+    if im2col_shape is None:
+        im2col_shape = tensor_desc.shape
+    if len(im2col_shape) != len(tensor_desc.shape):
+        raise ValueError("runtime im2col shape metadata length mismatch")
+    if len(element_strides) != len(tensor_desc.shape):
+        raise ValueError("runtime im2col element_strides length mismatch")
+    spatial_rank = len(tensor_desc.shape) - 2
+    if len(pixel_box_lower_corner) != spatial_rank or len(pixel_box_upper_corner) != spatial_rank:
+        raise ValueError("runtime im2col pixel-box corner length mismatch")
+
+    def convert_i32_metadata(values):
+        values = [ttgl.to_tensor(v, _semantic=_semantic) for v in values]
+        return _semantic._convert_to_ir_values(values, require_i64=False)
+
+    coord = convert_i32_metadata(coord)
+    im2col_shape_ir = convert_i32_metadata(im2col_shape)
+    element_strides_ir = convert_i32_metadata(element_strides)
+    pixel_box_lower_corner_ir = convert_i32_metadata(pixel_box_lower_corner)
+    pixel_box_upper_corner_ir = convert_i32_metadata(pixel_box_upper_corner)
     offsets_ir = _convert_im2col_offsets(offsets, _semantic)
 
     _semantic.builder.create_async_tma_copy_global_to_local(
@@ -267,6 +304,10 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
         pred.handle,
         multicast,
         offsets_ir,
+        im2col_shape_ir,
+        element_strides_ir,
+        pixel_box_lower_corner_ir,
+        pixel_box_upper_corner_ir,
     )
 
 
