@@ -363,8 +363,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 
-    use_nvfp4_tensor_scales = mode == "plain" and (a_dtype.is_nvfp4 or b_dtype.is_nvfp4)
-    if use_nvfp4_tensor_scales:
+    if mode == "plain" and (a_dtype.is_nvfp4 or b_dtype.is_nvfp4):
         if (
             block_m != 128
             or split_k != 1
@@ -455,7 +454,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     opt_flags.update_opt_flags_constraints(constraints)
 
     # --- create conditionals ---
-    do_bias = inner_expt_opt is None and not use_nvfp4_tensor_scales
+    do_bias = inner_expt_opt is None
     do_gather = do_gather and mode != "batched"
     do_scatter = do_scatter and mode != "batched"
     b_value_hbm_swizzling = None
@@ -532,11 +531,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         b_mx_scale=b_scale_tri,
         b_microblock_size=b_dtype.microblock_size,
     )
-    if use_nvfp4_tensor_scales:
-        if a_dtype.is_nvfp4:
-            precision_opt.a_mx_tensor_scale = torch.linspace(0.5, 1.5, m, dtype=torch.float32, device=device)
-        if b_dtype.is_nvfp4:
-            precision_opt.b_mx_tensor_scale = torch.linspace(1.25, 0.75, n, dtype=torch.float32, device=device)
+    if a_dtype.is_nvfp4:
+        precision_opt.a_mx_tensor_scale = torch.linspace(0.5, 1.5, m, dtype=torch.float32, device=device)
+    if b_dtype.is_nvfp4:
+        precision_opt.b_mx_tensor_scale = torch.linspace(1.25, 0.75, n, dtype=torch.float32, device=device)
 
     # --- create epilogue ---
     epilogue = None
