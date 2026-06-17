@@ -119,6 +119,8 @@ def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config, c
     if (target_info.cuda_capability_geq(10, 0) and rhs_dtype == FP4 and precision_config.b_mx_scale is not None
             and precision_config.b_microblock_size == int(NVFP_BLOCK_SIZE) and lhs_dtype.bitwidth == 8
             and lhs_dtype != FP4 and not is_persistent):
+        # Avoid the MMAv5 path: mixed FP8 x NVFP4 currently needs E4M3 block scales,
+        # but the MMAv5 mxf8f6f4 lowering interprets them as UE8M0.
         return 1
     return max(block_m * block_n // 4096, 4 if is_persistent else 1)
 
