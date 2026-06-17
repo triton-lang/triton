@@ -476,39 +476,24 @@ def _p_matmul(
             if is_x_microscaled and XMxScalePtrs is not None:
                 XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
 
-        if has_x_tensor_scale and has_w_tensor_scale:
-            x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0).to(tl.float32)
-            offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)
-            w_tensor_scales = tl.load(
-                WTensorScale
-                + off_w_z.to(index_type) * stride_w_tensor_scale_e
-                + offs_w_tensor_scale_n.to(index_type) * stride_w_tensor_scale_n,
-                mask=offs_w_tensor_scale_n < N,
-                other=0.0,
-            ).to(tl.float32)
+        if has_x_tensor_scale or has_w_tensor_scale:
+            x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
+            w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
+            if has_x_tensor_scale:
+                x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0).to(tl.float32)
+            if has_w_tensor_scale:
+                offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)
+                w_tensor_scales = tl.load(
+                    WTensorScale
+                    + off_w_z.to(index_type) * stride_w_tensor_scale_e
+                    + offs_w_tensor_scale_n.to(index_type) * stride_w_tensor_scale_n,
+                    mask=offs_w_tensor_scale_n < N,
+                    other=0.0,
+                ).to(tl.float32)
             if SWAP_XW:
                 acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
             else:
                 acc *= x_tensor_scales[:, None] * w_tensor_scales[None, :]
-        elif has_x_tensor_scale:
-            x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0).to(tl.float32)
-            if SWAP_XW:
-                acc *= x_tensor_scales[None, :]
-            else:
-                acc *= x_tensor_scales[:, None]
-        elif has_w_tensor_scale:
-            offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)
-            w_tensor_scales = tl.load(
-                WTensorScale
-                + off_w_z.to(index_type) * stride_w_tensor_scale_e
-                + offs_w_tensor_scale_n.to(index_type) * stride_w_tensor_scale_n,
-                mask=offs_w_tensor_scale_n < N,
-                other=0.0,
-            ).to(tl.float32)
-            if SWAP_XW:
-                acc *= w_tensor_scales[:, None]
-            else:
-                acc *= w_tensor_scales[None, :]
 
         # ------------------------------------------------------------
         # epilogue

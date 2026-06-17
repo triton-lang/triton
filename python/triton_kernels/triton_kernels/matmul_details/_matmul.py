@@ -495,25 +495,17 @@ def _matmul(
         else:
             XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
         WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * stride_w_k
-    if has_x_tensor_scale and has_w_tensor_scale:
-        x_tensor_scales = tl.load(XTensorScalePtrs).to(tl.float32)
-        w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0).to(tl.float32)
+    if has_x_tensor_scale or has_w_tensor_scale:
+        x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
+        w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
+        if has_x_tensor_scale:
+            x_tensor_scales = tl.load(XTensorScalePtrs).to(tl.float32)
+        if has_w_tensor_scale:
+            w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0).to(tl.float32)
         if SWAP_XW:
             acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
         else:
             acc *= x_tensor_scales[:, None] * w_tensor_scales[None, :]
-    elif has_x_tensor_scale:
-        x_tensor_scales = tl.load(XTensorScalePtrs).to(tl.float32)
-        if SWAP_XW:
-            acc *= x_tensor_scales[None, :]
-        else:
-            acc *= x_tensor_scales[:, None]
-    elif has_w_tensor_scale:
-        w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0).to(tl.float32)
-        if SWAP_XW:
-            acc *= w_tensor_scales[:, None]
-        else:
-            acc *= w_tensor_scales[None, :]
     # bias + scale
     offs_m = off_m + tl.arange(0, BLOCK_M)
     offs_y_n = BLOCK_N * pid_n + tl.arange(0, BLOCK_N)
