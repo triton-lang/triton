@@ -175,6 +175,7 @@ def _build_test_op_cases():
             Case(*shape, "ragged", "bfloat16", "mxfloat8_e4m3fn", b_hbm_swizzling=True)
         ])
     test_cases.append(Case(64, 256, 32, "plain", "bfloat16", "mxfloat4_e2m1", b_hbm_swizzling=True))
+    test_cases.append(Case(128, 128, 128, "plain", "bfloat16", "nvfp4_e2m1"))
     # float8 x mxfloat
     test_cases.extend([
         Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", b_hbm_swizzling=True),
@@ -189,6 +190,12 @@ def _build_test_op_cases():
         Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1"),
         Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1", b_hbm_swizzling=True, shuffle_mxfp4_w_layout=True),
         Case(300, 400, 416, "batched", "float8_e5m2", "mxfloat8_e4m3fn"),
+        Case(128, 128, 128, "plain", "float8_e5m2", "nvfp4_e2m1"),
+    ])
+    # nvfp4 x dense
+    test_cases.extend([
+        Case(128, 128, 128, "plain", "nvfp4_e2m1", "bfloat16", "bfloat16"),
+        Case(128, 128, 128, "plain", "nvfp4_e2m1", "float16", "bfloat16"),
     ])
     # mxfloat x mxfloat
     test_cases.extend([
@@ -230,10 +237,6 @@ def _build_test_op_cases():
         Case(1000, 704, 800, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(300, 400, 416, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(256, 1024, 512, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
-        Case(128, 128, 128, "plain", "bfloat16", "nvfp4_e2m1"),
-        Case(128, 128, 128, "plain", "float8_e5m2", "nvfp4_e2m1"),
-        Case(128, 128, 128, "plain", "nvfp4_e2m1", "bfloat16", "bfloat16"),
-        Case(128, 128, 128, "plain", "nvfp4_e2m1", "float16", "bfloat16"),
         Case(128, 128, 128, "plain", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16"),
         Case(128, 128, 128, "plain", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1"),
         Case(128, 256, 256, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1"),
