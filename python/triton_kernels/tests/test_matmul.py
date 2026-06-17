@@ -155,6 +155,11 @@ def _build_test_op_cases():
     test_cases.extend([
         Case(1024, 1000, 2048, "ragged", "float32", "float32", b_transpose=True)
     ])
+    # fp64
+    test_cases.extend([
+        Case(128, 64, 256, "plain", "float64", "float64", split_k=split_k)
+        for split_k in [1, 3]
+    ])
     # bfloat16 x mx
     for shape in [odd_shape2, even_shape]:
         test_cases.extend([
@@ -346,8 +351,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("NYI: gamma and swiglu not supported together on AMD GPU")
         if split_k is not None and split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
-        if act_dtype_str == "float32":
-            pytest.skip("float32 not fully tested on AMD GPU")
+        if act_dtype_str in ("float32", "float64"):
+            pytest.skip("float32/float64 not fully tested on AMD GPU")
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
@@ -591,6 +596,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         maxtol, rmstol = 4e-1, 4e-2
     elif b_dtype.is_mxfloat4:
         maxtol, rmstol = 3e-2, None
+    elif c_dtype.torch_dtype == torch.float64:
+        maxtol, rmstol = 1e-12, 1e-12
     assert_close(ref_y, tri_y, maxtol=maxtol, rmstol=rmstol)
     if c_dtype.has_global_scale:
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
@@ -653,11 +660,11 @@ def test_set_idle_sms():
     matmul_set_idle_sms(num_idle_sms)
     try:
         flags = make_opt_flags(FP32, FP32, FP32, PrecisionConfig(), \
-                               1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
+                               1, 1024, 1024, 1024, None, True, False, 1, False, False, None, torch.float32)
         assert flags.idle_sms == num_idle_sms
         with opt_flags.scoped_opt_flags_constraints({"idle_sms": num_idle_sms + 1}):
             flags = make_opt_flags(FP32, FP32, FP32, PrecisionConfig(), \
-                                   1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
+                                   1, 1024, 1024, 1024, None, True, False, 1, False, False, None, torch.float32)
             assert flags.idle_sms == num_idle_sms + 1
     finally:
         matmul_set_idle_sms(0)
