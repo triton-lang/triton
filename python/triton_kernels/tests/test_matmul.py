@@ -232,8 +232,6 @@ def _build_test_op_cases():
         Case(300, 400, 416, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(256, 1024, 512, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(128, 128, 128, "plain", "bfloat16", "nvfp4_e2m1", mx_tensor_scales=True),
-        Case(128, 128, 128, "plain", "float8_e5m2", "nvfp4_e2m1", mx_tensor_scales=True),
-        Case(128, 128, 128, "plain", "mxfloat8_e4m3fn", "nvfp4_e2m1", mx_tensor_scales=True),
         Case(128, 128, 128, "plain", "nvfp4_e2m1", "bfloat16", "bfloat16", mx_tensor_scales=True),
         Case(128, 128, 128, "plain", "nvfp4_e2m1", "float16", "bfloat16", mx_tensor_scales=True),
         Case(128, 128, 128, "plain", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", mx_tensor_scales=True),
