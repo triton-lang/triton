@@ -1581,7 +1581,12 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_expand_dims",
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
-             return self.create<ExpandDimsOp>(arg, axis);
+             auto shape =
+                 cast<RankedTensorType>(arg.getType()).getShape().vec();
+             shape.insert(shape.begin() + axis, 1);
+             return self.create<ReshapeOp>(shape, arg,
+                                           /*allowReorder=*/false,
+                                           /*requireSliced=*/true);
            })
       .def("create_cat",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {

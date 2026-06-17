@@ -326,8 +326,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       continue;
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
-        isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-            ConvertLayoutOp>(user)) {
+        isa<ReduceOp, ReshapeOp, TransOp, JoinOp, SplitOp, ConvertLayoutOp>(
+            user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -643,9 +643,8 @@ void LayoutPropagation::rewriteOp(Operation *op) {
       setEncodingInPlace(op->getResult(0), encoding);
     } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
                op->hasTrait<OpTrait::Elementwise>() ||
-               isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-                   GatherOp, ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(
-                   op)) {
+               isa<ReduceOp, ReshapeOp, TransOp, JoinOp, SplitOp, GatherOp,
+                   ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(op)) {
       rewriteGenericOpInPlace(op, encoding);
     } else {
       llvm::report_fatal_error("unexpected op in rewrite");
@@ -1378,8 +1377,7 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     return false;
 
   auto isExtOrBroadcastOp = [](Operation *op) {
-    if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, BroadcastOp,
-            ExpandDimsOp>(op)) {
+    if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, BroadcastOp>(op)) {
       return true;
     }
     if (auto reshapeOp = dyn_cast<ReshapeOp>(op))

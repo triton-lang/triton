@@ -3134,21 +3134,6 @@ struct TritonGPUInferLayoutInterface
   }
 
   LogicalResult
-  inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
-                            Attribute &resultEncoding,
-                            std::optional<Location> location) const override {
-    auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(operandEncoding);
-    if (!sliceEncoding)
-      return emitOptionalError(
-          location, "ExpandDimsOp operand encoding must be SliceEncodingAttr");
-    if (sliceEncoding.getDim() != axis)
-      return emitOptionalError(
-          location, "Incompatible slice dimension for ExpandDimsOp operand");
-    resultEncoding = sliceEncoding.getParent();
-    return success();
-  }
-
-  LogicalResult
   inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
                      Attribute retEncoding,
                      std::optional<Location> location) const override {
@@ -3530,11 +3515,42 @@ struct TritonGPUInferLayoutInterface
   LogicalResult
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                         bool allowReorder,
+                         bool allowReorder, bool requireSliced,
                          std::optional<Location> loc) const override {
     if (product(srcShape) != product(dstShape)) {
       return emitOptionalError(loc, "numel of dst shape does not match "
                                     "numel of src shape");
+    }
+    if (requireSliced) {
+      if (auto sliceEnc = dyn_cast<SliceEncodingAttr>(srcEnc);
+          sliceEnc && dstShape.size() == srcShape.size() + 1 &&
+          sliceEnc.getDim() < dstShape.size() &&
+          dstShape[sliceEnc.getDim()] == 1) {
+        SmallVector<int64_t> slicedDstShape(dstShape);
+        slicedDstShape.erase(slicedDstShape.begin() + sliceEnc.getDim());
+        if (slicedDstShape == srcShape) {
+          dstEnc = sliceEnc.getParent();
+          return success();
+        }
+      }
+
+      if (auto distributedEnc = dyn_cast<DistributedEncodingTrait>(srcEnc);
+          distributedEnc && srcShape.size() == dstShape.size() + 1) {
+        for (unsigned axis = 0; axis < srcShape.size(); ++axis) {
+          if (srcShape[axis] != 1)
+            continue;
+          SmallVector<int64_t> slicedSrcShape(srcShape);
+          slicedSrcShape.erase(slicedSrcShape.begin() + axis);
+          if (slicedSrcShape == dstShape) {
+            dstEnc = SliceEncodingAttr::get(getDialect()->getContext(), axis,
+                                            distributedEnc);
+            return success();
+          }
+        }
+      }
+
+      return emitOptionalError(
+          loc, "require_sliced reshape expects a matching slice encoding");
     }
     // If allowReorder is true, there are multiple valid encodings. Prefer the
     // hint if it is set and valid.
