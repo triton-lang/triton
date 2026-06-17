@@ -130,12 +130,13 @@ class Autotuner(KernelInterface):
             return driver.active.get_benchmarker()
         return self._do_bench
 
-    def _bench(self, *args, config, **meta):
+    def _bench(self, *args, config, config_index, total_configs, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
 
         verbose = knobs.autotuning.print
         if verbose:
-            print(f"Autotuning kernel {self.base_fn.__name__} with config {config}")
+            print(f"Autotuning kernel {self.base_fn.__name__} with config [{config_index}/{total_configs}] {config}",
+                  end="", flush=True)
 
         # check for conflicts, i.e. meta-parameters both provided
         # as kwargs and by the autotuner
@@ -166,11 +167,18 @@ class Autotuner(KernelInterface):
             self.post_hook(full_nargs, exception=None)
 
         try:
-            return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+            ret = self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+            if verbose:
+                print(f" (median = {ret[0]:.3f} ms)")
+            return ret
         except (OutOfResources, CompileTimeAssertionFailure, PTXASError) as e:
             if verbose:
-                print(f"Autotuning failed with {e}")
+                print(f"\nAutotuning failed with {e}")
             return [float("inf"), float("inf"), float("inf")]
+        except BaseException:
+            if verbose:
+                print()
+            raise
 
     def check_disk_cache(self, tuning_key, configs, bench_fn):
         # We can't serialize prehooks, so just give up and run the benchmarks.
@@ -231,7 +239,12 @@ class Autotuner(KernelInterface):
 
                 def benchmark():
                     bench_start = time.time()
-                    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                    timings = {
+                        config:
+                        self._bench(*args, config=config, config_index=i + 1, total_configs=len(pruned_configs),
+                                    **kwargs)
+                        for i, config in enumerate(pruned_configs)
+                    }
                     bench_end = time.time()
                     self.bench_time = bench_end - bench_start
                     self.cache[key] = builtins.min(timings, key=timings.get)
