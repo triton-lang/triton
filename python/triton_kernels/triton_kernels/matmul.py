@@ -594,18 +594,24 @@ def matmul(a, b, bias,
     else:
         a_scale_tensor_or_tma = None if a_scale is None else a_scale.storage.data
     # canonicalize strides
+    def pad_strides(strides, ndim):
+        return (0, ) * (ndim - len(strides)) + strides
+
     a_strides = [0]*(3 - a.storage.data.ndim) + list(a.storage.data.stride())
     a_scale_strides = a_scale.stride() if a_has_mx and not a_scale_has_tma else (None, None, None)
-    a_scale_strides = (0, ) * (3 - len(a_scale_strides)) + a_scale_strides
+    a_scale_strides = pad_strides(a_scale_strides, 3)
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
-    b_scale_strides = (0, ) * (3 - len(b_scale_strides)) + b_scale_strides
+    b_scale_strides = pad_strides(b_scale_strides, 3)
+    # Tensor scales are row/fiber scales, not scalar broadcasts. They are
+    # expected to carry the non-reduction dimension, e.g. (E, N, 1) or
+    # (E, 1, N), before this path keeps the two strides needed by the kernels.
     a_tensor_scale_strides = a_tensor_scale.stride() if a_tensor_scale is not None else (None, None)
-    a_tensor_scale_strides = (0, ) * (2 - len(a_tensor_scale_strides)) + a_tensor_scale_strides
+    a_tensor_scale_strides = pad_strides(a_tensor_scale_strides, 2)
     b_tensor_scale_strides = b_tensor_scale.stride() if b_tensor_scale is not None else (None, None)
-    b_tensor_scale_strides = (0, ) * (2 - len(b_tensor_scale_strides)) + b_tensor_scale_strides
+    b_tensor_scale_strides = pad_strides(b_tensor_scale_strides, 2)
 
     out_matmul_scale_strides = out_matmul_scale.storage.data.stride() if out_matmul_has_mx else (None, None, None, None)
-    out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
+    out_matmul_scale_strides = pad_strides(out_matmul_scale_strides, 4)
     out_matmul_scale_layout = None if out_matmul_scale is None else out_matmul_scale.storage.layout.name
     if (
         scatter_indx is not None
