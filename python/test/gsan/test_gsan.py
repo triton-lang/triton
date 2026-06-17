@@ -113,6 +113,7 @@ def test_stream_sync_layout_args_do_not_specialize_on_alignment():
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 def test_prepare_launch_stream_sync(with_gsan):
+    torch.empty(1, device="cuda")
     assert prepare_launch_stream_sync(torch.cuda.current_device()) is not None
 
 
