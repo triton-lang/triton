@@ -3741,10 +3741,18 @@ struct TritonGPUInferLayoutInterface
     }
 
     auto ll = toLinearLayout(shape, inEnc);
-    auto newLl = LinearLayout::empty();
-    auto result = tryJoinOnAxis(ctx, ll, newLl, fwdInference, axis, loc);
-    if (!result.succeeded())
-      return result;
+    auto kRegister = StringAttr::get(ctx, "register");
+    auto outDims = llvm::to_vector(ll.getOutDimNames());
+    auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
+    LinearLayout newLl;
+    if (fwdInference) {
+      newLl = split * ll;
+    } else if (auto bwdLl = divideLeft(ll, split)) {
+      newLl = *bwdLl;
+    } else {
+      return emitOptionalError(loc, "invalid result layout for Fp4ToFpOp");
+    }
+
     outEnc = inferEncodingFromLinearLayout(ctx, std::move(newLl), inEnc);
     return success();
   }
