@@ -363,18 +363,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 
-    if mode == "plain" and (a_dtype.is_nvfp4 or b_dtype.is_nvfp4):
-        if (
-            block_m != 128
-            or split_k != 1
-            or is_persistent
-            or do_gather
-            or do_scatter
-            or do_gamma
-            or inner_expt_opt is not None
-        ):
-            pytest.skip("NVFP4 tensor scales are covered by one focused plain matmul case")
-
     if b_hbm_swizzling:
         if is_hip():
             if not (is_hip_cdna4() or is_hip_gfx1250()):
