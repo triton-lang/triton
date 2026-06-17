@@ -1,7 +1,7 @@
 import torch
 import triton
 from triton_kernels import target_info
-from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 from triton_kernels.tensor import FP4, FP16, FP32, BF16, Tensor
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
@@ -109,13 +109,17 @@ def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:
     return split_k
 
 
-def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config, constraints):
+def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config, constraints, lhs_dtype, rhs_dtype):
     layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
     if isinstance(layout, HopperMXScaleLayout):
         return layout.num_warps
     num_warps = constraints.get("num_warps", None)
     if num_warps is not None:
         return num_warps
+    if (target_info.cuda_capability_geq(10, 0) and rhs_dtype == FP4 and precision_config.b_mx_scale is not None
+            and precision_config.b_microblock_size == int(NVFP_BLOCK_SIZE) and lhs_dtype.bitwidth == 8
+            and lhs_dtype != FP4 and not is_persistent):
+        return 1
     return max(block_m * block_n // 4096, 4 if is_persistent else 1)
 
 

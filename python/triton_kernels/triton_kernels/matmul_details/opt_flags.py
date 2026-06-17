@@ -331,7 +331,9 @@ def make_default_opt_flags_nvidia(
         epilogue_reduction_n,
     )
 
-    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
+    num_warps = opt_flags_nvidia.compute_num_warps(
+        block_m, block_n, is_persistent, precision_config, constraints, lhs_dtype, rhs_dtype
+    )
     if (constraints.get("num_warps", None) is None
             and is_persistent
             and block_n <= 128

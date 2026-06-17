@@ -368,7 +368,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if (
             mode != "plain"
             or not (a_dtype.is_nvfp4 or b_dtype.is_nvfp4)
-            or block_m != (16 if a_dtype.has_global_scale and b_dtype.is_nvfp4 else 128)
+            or block_m != 128
             or split_k != 1
             or is_persistent
             or do_gather
