@@ -248,19 +248,18 @@ def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
         "HINT_A": HINT_A,
         "HINT_B": HINT_B,
     }
-    with triton.knobs.amd.scope():
+    with triton.knobs.amd.scope(), triton.knobs.compilation.scope():
         triton.knobs.amd.disable_tdm_auto_fuse = True
-        with triton.knobs.compilation.scope():
-            triton.knobs.compilation.always_compile = True
-            k = triton.compile(
-                gluon._runtime.GluonASTSource(
-                    fn=vector_add_tdm_kernel,
-                    signature=signature,
-                    constexprs=constexprs,
-                ),
-                target=GPUTarget("hip", "gfx1250", 32),
-                options={"num_warps": NUM_WARPS},
-            )
+        triton.knobs.compilation.always_compile = True
+        k = triton.compile(
+            gluon._runtime.GluonASTSource(
+                fn=vector_add_tdm_kernel,
+                signature=signature,
+                constexprs=constexprs,
+            ),
+            target=GPUTarget("hip", "gfx1250", 32),
+            options={"num_warps": NUM_WARPS},
+        )
 
     amdgcn = k.asm["amdgcn"]
     n_tdm = len(re.findall(r"tensor_load_to_lds", amdgcn))
