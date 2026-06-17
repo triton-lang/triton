@@ -1009,7 +1009,7 @@ void fillTDMDescriptorForGatherScatter(
     const LLVMTypeConverter *typeConverter, Type elementType,
     SmallVector<int64_t> blockShape, unsigned padInterval, unsigned padAmount,
     Value &group0, Value &group1, Value &group2, Value &group3,
-    Value ldsRowOffset, Value ldsPtr, Value pred, Value multicastMask,
+    Value ldsAddr, Value pred, Value multicastMask,
     Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId,
     ArrayRef<Value> rowIndices, bool use32BitIndices, bool isGather) {
   assert(!rowIndices.empty() && "Gather/scatter requires row indices.");
@@ -1018,7 +1018,6 @@ void fillTDMDescriptorForGatherScatter(
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   Type globalPtrTy = ptr_ty(ctx, 1);
-  Type sharedPtrTy = ptr_ty(ctx, 3);
 
   // Decode descriptor to get tensor info (only group0/1 used for 2D).
   Value descGroups[2] = {group0, group1};
@@ -1036,17 +1035,6 @@ void fillTDMDescriptorForGatherScatter(
   Value cgaColOffset = b.mul(b.zext(i64_ty, cgaColOffsetElem), tensorStride[1]);
   globalPtr = b.gep(globalPtrTy, elementType, globalPtr, cgaColOffset);
 
-  // Calculate LDS offset based on row offset only (column always starts at 0)
-  Value ldsOffset = b.mul(ldsRowOffset, b.i32_val(blockShape[1]));
-
-  // Apply padding if needed
-  if (padInterval > 0 && padAmount > 0) {
-    Value iVal = b.i32_val(log2(padInterval));
-    Value pVal = b.i32_val(log2(padAmount));
-    Value padOffset = b.shl(i32_ty, b.ashr(ldsOffset, iVal), pVal);
-    ldsOffset = b.add(ldsOffset, padOffset);
-  }
-  ldsPtr = b.gep(sharedPtrTy, elementType, ldsPtr, ldsOffset);
 
   // tensorShape[1] is the OOB extent carried by the descriptor (set once via
   // update_tensor_descriptor set_bounds / clamp_bounds, like the contiguous
@@ -1065,7 +1053,6 @@ void fillTDMDescriptorForGatherScatter(
 
   // Update group0 with addresses and enable gather/scatter mode
   Value globalAddr = b.ptrtoint(i64_ty, globalPtr);
-  Value ldsAddr = b.ptrtoint(i32_ty, ldsPtr);
 
   // Set gather/scatter bits: bit 31 = enable, bit 30 = 32-bit indices
   Value predWithGatherScatter = b.or_(pred, b.i32_val(1 << 31));
@@ -1439,6 +1426,10 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
   Value group2Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
   Value group3Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
 
+  // chunk 0's lds_addr; chunks 1..N-1 derive theirs as chunk0 + const delta.
+  Type sharedPtrTy = ptr_ty(rewriter.getContext(), 3);
+  Value chunk0LdsAddr;
+
   // Issue multiple TDM instructions if needed
   for (size_t instrIdx = 0; instrIdx < analysis.numInstructions; ++instrIdx) {
     size_t startIdx = instrIdx * maxIndicesPerInstr;
@@ -1454,13 +1445,57 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     Value g2 = group2Zero;
     Value g3 = group3Zero;
 
-    Value ldsRowOffset = batchLdsOffsets[instrIdx];
+    // Per-chunk lds_addr (g0[1]): chunk 0 = full per-warp computation; chunks
+    // 1..N-1 = chunk0_addr + a compile-time-constant byte delta.  Because
+    // applyLinearLayout is affine in `register`, the (chunkI - chunk0) offset
+    // with warp pinned to 0 folds to a constant, so LLVM emits
+    // `s_add_co_i32 sX, chunk0_addr, <imm>` per chunk instead of feeding a
+    // per-chunk loop-invariant SGPR.
+    Value ldsAddr;
+    if (instrIdx == 0) {
+      Value ldsOffset = b.mul(batchLdsOffsets[0], b.i32_val(blockShape[1]));
+      if (padInterval > 0 && padAmount > 0) {
+        Value iVal = b.i32_val(log2(padInterval));
+        Value pVal = b.i32_val(log2(padAmount));
+        Value padOffset = b.shl(i32_ty, b.ashr(ldsOffset, iVal), pVal);
+        ldsOffset = b.add(ldsOffset, padOffset);
+      }
+      ldsAddr =
+          b.ptrtoint(i32_ty, b.gep(sharedPtrTy, elementType, ldsPtr, ldsOffset));
+      chunk0LdsAddr = ldsAddr;
+    } else {
+      // byte delta = (LL(register=startIdx, warp=0) - LL(register=0, warp=0))
+      //              * blockShape[1] + pad(delta).  pad(a+b)=pad(a)+pad(b) holds
+      //              because chunk byte deltas are multiples of padInterval for
+      //              all TDM gather patterns we emit.
+      auto chunkIOffsets = applyLinearLayout(
+          loc, rewriter, indexLL,
+          {{kRegister, b.i32_val(startIdx)}, {kLane, b.i32_val(0)},
+           {kWarp, b.i32_val(0)}, {kBlock, b.i32_val(0)}});
+      auto chunk0Offsets = applyLinearLayout(
+          loc, rewriter, indexLL,
+          {{kRegister, b.i32_val(0)}, {kLane, b.i32_val(0)},
+           {kWarp, b.i32_val(0)}, {kBlock, b.i32_val(0)}});
+      Value rowDelta = b.sub(chunkIOffsets[0].second, chunk0Offsets[0].second);
+      Value elemDelta = b.mul(rowDelta, b.i32_val(blockShape[1]));
+      if (padInterval > 0 && padAmount > 0) {
+        Value iVal = b.i32_val(log2(padInterval));
+        Value pVal = b.i32_val(log2(padAmount));
+        Value padDelta = b.shl(i32_ty, b.ashr(elemDelta, iVal), pVal);
+        elemDelta = b.add(elemDelta, padDelta);
+      }
+      // chunk0LdsAddr is a byte address (chunk 0's gep scaled by elementType),
+      // so scale the element-offset delta to bytes explicitly; required for
+      // >1-byte element types (e.g. fp16).
+      unsigned elemBytes = elementType.getIntOrFloatBitWidth() / 8;
+      Value byteDelta = b.mul(elemDelta, b.i32_val(elemBytes));
+      ldsAddr = b.add(chunk0LdsAddr, byteDelta);
+    }
 
     fillTDMDescriptorForGatherScatter(
         rewriter, loc, typeConverter, elementType, to_vector(blockShape),
-        padInterval, padAmount, g0, g1, g2, g3, ldsRowOffset, ldsPtr, pred,
-        multicastMask, barrierPtr, cgaLayout, ctaId, batchIndices,
-        use32BitIndices, isGather);
+        padInterval, padAmount, g0, g1, g2, g3, ldsAddr, pred, multicastMask,
+        barrierPtr, cgaLayout, ctaId, batchIndices, use32BitIndices, isGather);
 
     auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
     Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
