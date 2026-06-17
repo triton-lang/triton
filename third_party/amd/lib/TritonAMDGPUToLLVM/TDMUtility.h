@@ -120,14 +120,14 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       std::optional<uint32_t> warpUsedHint = std::nullopt,
                       bool isPureForm = false);
 
-// Everything the fused emit needs for one member, gathered by the conversion.
+// A struct representing information needed for one member of a fused TDM load.
 struct TDMFusedLoadMemberInfo {
-  SmallVector<int64_t> shapePerCTA;
   unsigned padInterval = 0;
   unsigned padAmount = 0;
   Type elementType;
   triton::LinearLayout sharedLayout;
   Attribute sharedEncoding;
+  SmallVector<int64_t> shapePerCTA;
   Value multicastMask;
   SmallVector<Value> desc;        // unpacked descriptor groups
   SmallVector<Value> copyOffsets; // per-member copy offsets

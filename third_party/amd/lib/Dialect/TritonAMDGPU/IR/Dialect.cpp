@@ -31,6 +31,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
 #include <limits>
@@ -823,10 +824,9 @@ LogicalResult AsyncTDMFusedCopyGlobalToLocalOp::verify() {
   unsigned rank = firstDescTy.getShape().size();
   uint32_t hintUnion = 0;
   int numWarps = gpu::lookupNumWarps(*this);
-  for (size_t idx = 0; idx < numMembers; ++idx) {
-    Value desc = getDescs()[idx];
-    Value dest = getDests()[idx];
-    int32_t hint = getWarpUsedHints()[idx];
+  for (auto [idx, member] :
+       llvm::enumerate(llvm::zip(getDescs(), getDests(), getWarpUsedHints()))) {
+    auto [desc, dest, hint] = member;
     auto tensorDescTy = cast<triton::TensorDescType>(desc.getType());
     auto smemTy = cast<gpu::MemDescType>(dest.getType());
     if (failed(verifyTDMCommonLayout(getOperation(), tensorDescTy, smemTy)))

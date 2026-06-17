@@ -294,6 +294,12 @@ def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descri
                      cache_modifier="", _semantic=None) -> None:
     """Emit one explicit fused TDM load for 2-4 descriptor/destination pairs.
 
+    This can perform better than several consecutive separate TDM loads,
+    especially for more than two loads. Under the hood, different warps load
+    different descriptor/destination pairs according to each member's
+    ``warp_used_hint``; collectively all participating warps load all pairs at
+    the block level.
+
     Each member is ``(desc, dest, warp_used_hint)``. The descriptors must
     already encode their tile offsets, predicates, and bounds; use
     :func:`update_tensor_descriptor` before calling this helper when needed.

@@ -98,7 +98,7 @@ What this file actually tests
     one `tensor_load_to_lds` instruction per `async_load`, while explicit
     fused copies and backend auto-fusion yield one instruction per fused op.
   * Compile-only tests for cache modifier propagation and auto-fuse grouping.
-  * Runtime test on gfx1250 compares against a torch-on-CPU reference.
+  * Runtime tests on gfx1250 compare against torch-on-CPU references.
 
 Runtime tests are skipped on non-gfx1250 hosts.
 
@@ -860,6 +860,39 @@ def test_runtime_vector_add_tdm_explicit_fused(BLOCK_M, BLOCK_N):
         "",
         num_warps=NUM_WARPS,
     )
+
+    assert torch.equal(c.cpu(), a_cpu + b_cpu)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on gfx1250.")
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
+def test_runtime_vector_add_tdm_auto_fuse(BLOCK_M, BLOCK_N):
+    """Runtime: backend auto-fused unhinted TDM loads are correct end-to-end."""
+    M, N = 256, 512
+    NUM_WARPS = 8
+
+    torch.manual_seed(0)
+    a_cpu = torch.randint(0, 128, (M, N), dtype=torch.int32)
+    b_cpu = torch.randint(0, 128, (M, N), dtype=torch.int32)
+    a = a_cpu.cuda()
+    b = b_cpu.cuda()
+    c = torch.empty((M, N), dtype=torch.int32, device="cuda")
+
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    with triton.knobs.amd.scope():
+        triton.knobs.amd.disable_tdm_auto_fuse = False
+        vector_add_tdm_adjacent_kernel[grid](
+            a,
+            b,
+            c,
+            M,
+            N,
+            BLOCK_M,
+            BLOCK_N,
+            None,
+            None,
+            num_warps=NUM_WARPS,
+        )
 
     assert torch.equal(c.cpu(), a_cpu + b_cpu)
 

@@ -1394,8 +1394,7 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
           llvm::to_vector(triton::gpu::getShapePerCTA(enc, descTy.getShape()));
       m.desc = mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc,
                                                     adaptor.getDescs()[i]);
-      for (size_t dim = 0; dim < descTy.getShape().size(); ++dim)
-        m.copyOffsets.push_back(b.i32_val(0));
+      m.copyOffsets.append(descTy.getShape().size(), b.i32_val(0));
 
       auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
           loc, adaptor.getDests()[i], m.elementType, rewriter);

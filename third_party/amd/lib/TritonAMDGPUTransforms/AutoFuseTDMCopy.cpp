@@ -7,6 +7,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdint>
 
@@ -27,11 +28,11 @@ using TDMCopyGlobalToLocalOp =
 using TDMFusedCopyGlobalToLocalOp =
     ::mlir::triton::amdgpu::AsyncTDMFusedCopyGlobalToLocalOp;
 
-SmallVector<Block *> collectBlocksWithTDMCopies(ModuleOp mod) {
+SmallVector<Block *, 8> collectBlocksWithTDMCopies(ModuleOp mod) {
   llvm::SmallSetVector<Block *, 8> blocks;
   mod->walk(
       [&](TDMCopyGlobalToLocalOp copy) { blocks.insert(copy->getBlock()); });
-  return SmallVector<Block *>(blocks.begin(), blocks.end());
+  return blocks.takeVector();
 }
 
 // Generate verifier-legal, pairwise-disjoint warp masks for an auto-fused
@@ -119,7 +120,7 @@ void fuseGroup(MutableArrayRef<TDMCopyGlobalToLocalOp> group,
 // fused copy op. The fused op is inserted at the last copy in a group so any
 // transparent view results between member copies dominate the new op.
 void autoFuseTDMCopies(ModuleOp mod) {
-  SmallVector<Block *> blocks = collectBlocksWithTDMCopies(mod);
+  auto blocks = collectBlocksWithTDMCopies(mod);
 
   for (Block *block : blocks) {
     SmallVector<TDMCopyGlobalToLocalOp, 8> run;
@@ -131,8 +132,9 @@ void autoFuseTDMCopies(ModuleOp mod) {
 
       MutableArrayRef<TDMCopyGlobalToLocalOp> remaining(run);
       while (remaining.size() >= 2) {
-        size_t maxGroupSize =
-            std::min({remaining.size(), size_t(numWarps), size_t(4)});
+        std::array<size_t, 3> groupLimits = {
+            remaining.size(), static_cast<size_t>(numWarps), size_t(4)};
+        size_t maxGroupSize = *llvm::min_element(groupLimits);
         if (maxGroupSize < 2)
           break;
 
