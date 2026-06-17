@@ -242,6 +242,32 @@ static bool bwdFilter(Operation *op) {
              ConvertLayoutOp>(op);
 }
 
+static bool joinPacksLastDim(JoinOp join) {
+  auto type = cast<RankedTensorType>(join.getResult().getType());
+  unsigned rank = type.getRank();
+  if (rank < 2)
+    return false;
+
+  auto enc = cast<BlockedEncodingAttr>(type.getEncoding());
+  ArrayRef<unsigned> order = enc.getOrder();
+  // Check that the appended join axis
+  // and the previous last axis are the two fastest-changing axes, so the join
+  // packs the last dimension contiguously.
+  return order.size() == rank && order[0] == rank - 1 && order[1] == rank - 2;
+}
+
+static bool canWidenKWidthForJoin(int loadBitWidth,
+                                  const SetVector<Operation *> &slice) {
+  return llvm::any_of(slice, [loadBitWidth](Operation *op) {
+    auto join = dyn_cast<JoinOp>(op);
+        if (!join)
+          return false;
+        auto type = cast<RankedTensorType>(join.getResult().getType());
+        return type.getElementTypeBitWidth() == loadBitWidth * 2 &&
+               joinPacksLastDim(join);
+      });
+}
+
 // Finds the bitwidth with which the value x is loaded
 static int computeOrigBitWidth(Value x) {
   SetVector<Operation *> slice;
@@ -277,7 +303,12 @@ static int computeOrigBitWidth(Value x) {
   // In the future we might want to do something like trying a large kWidth,
   // run layout backpropagation and see what's the contiguity that you
   // get at the loads that feed into it.
-  if (llvm::any_of(slice, [](Operation *op) { return isa<JoinOp>(op); }))
+  //
+  // This heuristic is intended for packed-K values of shape [..., K / 2]
+  // joined into [..., K / 2, 2]. We also check that the bitwidth of the joined
+  // value is twice the original bitwidth, meaning "one loaded storage element
+  // contributes two logical K values after unpack/join".
+  if (canWidenKWidthForJoin(origBitWidth, slice))
     origBitWidth /= 2;
 
   return origBitWidth;
