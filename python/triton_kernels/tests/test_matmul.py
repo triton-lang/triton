@@ -105,7 +105,6 @@ class Case:
     c_transpose: bool = False
     colmajor_mxfp_weight: bool = True
     swiglu_opts: tuple[float, float] = None
-    mx_tensor_scales: bool = False
 
     def __post_init__(self):
         if self.n_slices is None:
@@ -231,12 +230,12 @@ def _build_test_op_cases():
         Case(1000, 704, 800, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(300, 400, 416, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(256, 1024, 512, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True, a_hbm_swizzling=True),
-        Case(128, 128, 128, "plain", "bfloat16", "nvfp4_e2m1", mx_tensor_scales=True),
-        Case(128, 128, 128, "plain", "float8_e5m2", "nvfp4_e2m1", mx_tensor_scales=True),
-        Case(128, 128, 128, "plain", "nvfp4_e2m1", "bfloat16", "bfloat16", mx_tensor_scales=True),
-        Case(128, 128, 128, "plain", "nvfp4_e2m1", "float16", "bfloat16", mx_tensor_scales=True),
-        Case(128, 128, 128, "plain", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", mx_tensor_scales=True),
-        Case(128, 128, 128, "plain", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1", mx_tensor_scales=True),
+        Case(128, 128, 128, "plain", "bfloat16", "nvfp4_e2m1"),
+        Case(128, 128, 128, "plain", "float8_e5m2", "nvfp4_e2m1"),
+        Case(128, 128, 128, "plain", "nvfp4_e2m1", "bfloat16", "bfloat16"),
+        Case(128, 128, 128, "plain", "nvfp4_e2m1", "float16", "bfloat16"),
+        Case(128, 128, 128, "plain", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16"),
+        Case(128, 128, 128, "plain", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1"),
         Case(128, 256, 256, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1"),
         Case(128, 256, 256, "ragged", "nvfp4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1", c_hbm_swizzling=True, b_hbm_swizzling=True, a_hbm_swizzling=True),
         Case(1024, 1024, 1024, "batched", "nvfp4_e2m1", "nvfp4_e2m1", "bfloat16", b_hbm_swizzling=True),
@@ -306,7 +305,7 @@ def _build_test_op_cases():
 def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
             mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, shuffle_mxfp4_w_layout, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
-            swiglu_opts, mx_tensor_scales, c_hbm_swizzling, device, opt_flags_scope):
+            swiglu_opts, c_hbm_swizzling, device, opt_flags_scope):
     # We catch and re-invoke pytest.skip(), because otherwise pytest may hold a reference to
     # the frame that called pytest.skip, including all the tensors, leading to OOM.
     skip_message = None
@@ -314,7 +313,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, i
         _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
                  mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, shuffle_mxfp4_w_layout, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
                  a_transpose, b_transpose, c_transpose,
-                 swiglu_opts, mx_tensor_scales, c_hbm_swizzling, device, opt_flags_scope)
+                 swiglu_opts, c_hbm_swizzling, device, opt_flags_scope)
     except pytest.skip.Exception as e:
         skip_message = str(e)
 
@@ -324,7 +323,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, i
 def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
             mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, shuffle_mxfp4_w_layout, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
-            swiglu_opts, mx_tensor_scales, c_hbm_swizzling, device, opt_flags_scope):
+            swiglu_opts, c_hbm_swizzling, device, opt_flags_scope):
     a_dtype = DType(act_dtype_str)
     b_dtype = DType(weight_dtype_str)
     c_dtype = DType(output_dtype_str or act_dtype_str)
@@ -364,11 +363,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
 
-    if mx_tensor_scales:
+    use_nvfp4_tensor_scales = mode == "plain" and (a_dtype.is_nvfp4 or b_dtype.is_nvfp4)
+    if use_nvfp4_tensor_scales:
         if (
-            mode != "plain"
-            or not (a_dtype.is_nvfp4 or b_dtype.is_nvfp4)
-            or block_m != 128
+            block_m != 128
             or split_k != 1
             or is_persistent
             or do_gather
@@ -457,7 +455,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     opt_flags.update_opt_flags_constraints(constraints)
 
     # --- create conditionals ---
-    do_bias = inner_expt_opt is None and not mx_tensor_scales
+    do_bias = inner_expt_opt is None and not use_nvfp4_tensor_scales
     do_gather = do_gather and mode != "batched"
     do_scatter = do_scatter and mode != "batched"
     b_value_hbm_swizzling = None
@@ -534,7 +532,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         b_mx_scale=b_scale_tri,
         b_microblock_size=b_dtype.microblock_size,
     )
-    if mx_tensor_scales:
+    if use_nvfp4_tensor_scales:
         if a_dtype.is_nvfp4:
             precision_opt.a_mx_tensor_scale = torch.linspace(0.5, 1.5, m, dtype=torch.float32, device=device)
         if b_dtype.is_nvfp4:
