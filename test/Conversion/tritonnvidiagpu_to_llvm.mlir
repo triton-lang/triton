@@ -612,20 +612,62 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
 // -----
 
 #local_gather_scatter_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
-#local_gather_scatter_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+#local_gather_scatter_shared_split = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+#local_gather_scatter_shared_broadcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @local_gather_scatter_two_ctas
+  // CHECK-LABEL: @local_gather_scatter_same_ownership
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> i32
+  // CHECK: nvvm.barrier
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.return
+  tt.func @local_gather_scatter_same_ownership(%out: !tt.ptr<i32>, %vals: tensor<2x32xi32, #local_gather_scatter_blocked>) {
+    %src = ttg.local_alloc {allocation.offset = [0 : i32, 256 : i32]} : () -> !ttg.memdesc<2x32xi32, #local_gather_scatter_shared_split, #ttg.shared_memory, mutable>
+    %idx = arith.constant dense<0> : tensor<2x32xi32, #local_gather_scatter_blocked>
+    %g = ttg.local_gather %src[%idx] {axis = 0 : i32} : !ttg.memdesc<2x32xi32, #local_gather_scatter_shared_split, #ttg.shared_memory, mutable>, tensor<2x32xi32, #local_gather_scatter_blocked> -> tensor<2x32xi32, #local_gather_scatter_blocked>
+    ttg.local_scatter %src[%idx], %vals {axis = 0 : i32} : !ttg.memdesc<2x32xi32, #local_gather_scatter_shared_split, #ttg.shared_memory, mutable>, tensor<2x32xi32, #local_gather_scatter_blocked>, tensor<2x32xi32, #local_gather_scatter_blocked>
+    %ptrs = tt.splat %out : !tt.ptr<i32> -> tensor<2x32x!tt.ptr<i32>, #local_gather_scatter_blocked>
+    %offs = arith.constant dense<0> : tensor<2x32xi32, #local_gather_scatter_blocked>
+    %out_ptrs = tt.addptr %ptrs, %offs : tensor<2x32x!tt.ptr<i32>, #local_gather_scatter_blocked>, tensor<2x32xi32, #local_gather_scatter_blocked>
+    tt.store %out_ptrs, %g : tensor<2x32x!tt.ptr<i32>, #local_gather_scatter_blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @local_gather_scatter_broadcast
+  // CHECK: nvg.cluster_id
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> i32
+  // CHECK: nvvm.barrier
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.return
+  tt.func @local_gather_scatter_broadcast(%out: !tt.ptr<i32>, %vals: tensor<2x32xi32, #local_gather_scatter_blocked>) {
+    %src = ttg.local_alloc {allocation.offset = [0 : i32, 256 : i32]} : () -> !ttg.memdesc<2x32xi32, #local_gather_scatter_shared_broadcast, #ttg.shared_memory, mutable>
+    %idx = arith.constant dense<0> : tensor<2x32xi32, #local_gather_scatter_blocked>
+    %g = ttg.local_gather %src[%idx] {axis = 0 : i32} : !ttg.memdesc<2x32xi32, #local_gather_scatter_shared_broadcast, #ttg.shared_memory, mutable>, tensor<2x32xi32, #local_gather_scatter_blocked> -> tensor<2x32xi32, #local_gather_scatter_blocked>
+    ttg.local_scatter %src[%idx], %vals {axis = 0 : i32} : !ttg.memdesc<2x32xi32, #local_gather_scatter_shared_broadcast, #ttg.shared_memory, mutable>, tensor<2x32xi32, #local_gather_scatter_blocked>, tensor<2x32xi32, #local_gather_scatter_blocked>
+    %ptrs = tt.splat %out : !tt.ptr<i32> -> tensor<2x32x!tt.ptr<i32>, #local_gather_scatter_blocked>
+    %offs = arith.constant dense<0> : tensor<2x32xi32, #local_gather_scatter_blocked>
+    %out_ptrs = tt.addptr %ptrs, %offs : tensor<2x32x!tt.ptr<i32>, #local_gather_scatter_blocked>, tensor<2x32xi32, #local_gather_scatter_blocked>
+    tt.store %out_ptrs, %g : tensor<2x32x!tt.ptr<i32>, #local_gather_scatter_blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @local_gather_scatter_cross_cta
   // CHECK: nvvm.mapa
   // CHECK: llvm.load {{.*}} : !llvm.ptr<7> -> i32
   // CHECK: nvvm.barrier
   // CHECK: nvvm.mapa
   // CHECK: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<7>
-  tt.func @local_gather_scatter_two_ctas(%out: !tt.ptr<i32>, %vals: tensor<2x32xi32, #local_gather_scatter_blocked>) {
-    %src = ttg.local_alloc {allocation.offset = [0 : i32, 256 : i32]} : () -> !ttg.memdesc<2x32xi32, #local_gather_scatter_shared, #ttg.shared_memory, mutable>
+  tt.func @local_gather_scatter_cross_cta(%out: !tt.ptr<i32>, %vals: tensor<2x32xi32, #local_gather_scatter_blocked>) {
+    %src = ttg.local_alloc {allocation.offset = [0 : i32, 256 : i32]} : () -> !ttg.memdesc<2x32xi32, #local_gather_scatter_shared_split, #ttg.shared_memory, mutable>
     %idx = arith.constant dense<0> : tensor<2x32xi32, #local_gather_scatter_blocked>
-    %g = ttg.local_gather %src[%idx] {axis = 0 : i32} : !ttg.memdesc<2x32xi32, #local_gather_scatter_shared, #ttg.shared_memory, mutable>, tensor<2x32xi32, #local_gather_scatter_blocked> -> tensor<2x32xi32, #local_gather_scatter_blocked>
-    ttg.local_scatter %src[%idx], %vals {axis = 0 : i32} : !ttg.memdesc<2x32xi32, #local_gather_scatter_shared, #ttg.shared_memory, mutable>, tensor<2x32xi32, #local_gather_scatter_blocked>, tensor<2x32xi32, #local_gather_scatter_blocked>
+    %g = ttg.local_gather %src[%idx] {axis = 1 : i32} : !ttg.memdesc<2x32xi32, #local_gather_scatter_shared_split, #ttg.shared_memory, mutable>, tensor<2x32xi32, #local_gather_scatter_blocked> -> tensor<2x32xi32, #local_gather_scatter_blocked>
+    ttg.local_scatter %src[%idx], %vals {axis = 1 : i32} : !ttg.memdesc<2x32xi32, #local_gather_scatter_shared_split, #ttg.shared_memory, mutable>, tensor<2x32xi32, #local_gather_scatter_blocked>, tensor<2x32xi32, #local_gather_scatter_blocked>
     %ptrs = tt.splat %out : !tt.ptr<i32> -> tensor<2x32x!tt.ptr<i32>, #local_gather_scatter_blocked>
     %offs = arith.constant dense<0> : tensor<2x32xi32, #local_gather_scatter_blocked>
     %out_ptrs = tt.addptr %ptrs, %offs : tensor<2x32x!tt.ptr<i32>, #local_gather_scatter_blocked>, tensor<2x32xi32, #local_gather_scatter_blocked>
