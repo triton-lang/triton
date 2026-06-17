@@ -58,7 +58,7 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
   auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
                           ? paddedLinearLayout(memDescTy)
                           : toLinearLayout(memDescTy);
-  auto cvt = regLayout.invertAndCompose(sharedLayout);
+  auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
 
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
                  rewriter, targetInfo);
@@ -185,7 +185,7 @@ public:
     auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
                             ? paddedLinearLayout(memDescTy)
                             : toLinearLayout(memDescTy);
-    auto cvt = regLayout.invertAndCompose(sharedLayout);
+    auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
 
     auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
                                   smemObj, rewriter, targetInfo, op);

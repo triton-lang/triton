@@ -782,6 +782,7 @@ SmallVector<Value> lowerLdSt(
   auto kOffset = str_attr("offset");
   auto kPartition = str_attr("partition");
   auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+  bool crossCTA = !cvt.isIdentityOnOutDim(kBlock);
 
   // Either we have multiple bases with a matching partition dimension,
   // or we have a single base.
@@ -856,7 +857,7 @@ SmallVector<Value> lowerLdSt(
                                          {kBlock, blockId}});
   auto regBaseI8 = baseI8AndCTA[0].second;
   Value targetCtaId;
-  if (useBlockId) {
+  if (crossCTA) {
     targetCtaId = baseI8AndCTA[1].second;
   }
 
@@ -889,7 +890,7 @@ SmallVector<Value> lowerLdSt(
         offset = b.add(offset, paddedAffineOffsetI8);
     }
     Value ctaOffset = b.i32_val(0);
-    if (useBlockId) {
+    if (crossCTA) {
       ctaOffset = b.xor_(targetCtaId, b.i32_val(idxAndBlock[1].second));
     }
     for (int j = 0; j < nAdditive; j += elemsPerVec) {
@@ -916,7 +917,7 @@ SmallVector<Value> lowerLdSt(
       }
 
       Value innerCtaOffset;
-      if (useBlockId) {
+      if (crossCTA) {
         innerCtaOffset = b.add(ctaOffset, b.i32_val(idxAndBlockAdd[1].second));
       }
       auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
