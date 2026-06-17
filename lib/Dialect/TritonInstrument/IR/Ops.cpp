@@ -40,6 +40,40 @@ LogicalResult DotI8Op::verify() {
                                                            bEnc);
 }
 
+LogicalResult ExperimentalLocalGatherOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto indicesTy = cast<RankedTensorType>(getIndices().getType());
+  auto dstTy = cast<RankedTensorType>(getType());
+  unsigned axis = getAxis();
+
+  if (!isa<ttg::SharedEncodingTrait>(srcTy.getEncoding()))
+    return emitError("source must have shared memory encoding");
+
+  if (!indicesTy.getElementType().isInteger())
+    return emitError("indices must have integer element type");
+
+  if (dstTy.getShape() != indicesTy.getShape())
+    return emitError("result shape must match indices shape");
+
+  if (srcTy.getRank() != indicesTy.getRank())
+    return emitError("source and indices must have the same rank");
+
+  if (axis >= srcTy.getRank())
+    return emitError("axis ")
+           << axis << " is out of bounds for source rank " << srcTy.getRank();
+
+  if (srcTy.getElementType() != dstTy.getElementType())
+    return emitError("result element type must match source element type");
+
+  if (indicesTy.getEncoding() != dstTy.getEncoding())
+    return emitError("indices and result must have the same layout");
+
+  if (static_cast<int64_t>(getOffsets().size()) != srcTy.getRank())
+    return emitError("offset count must match source rank");
+
+  return success();
+}
+
 template <typename ViewOp, typename FPSanOp>
 struct PushFPSanThroughViewPattern : public OpRewritePattern<ViewOp> {
   using OpRewritePattern<ViewOp>::OpRewritePattern;

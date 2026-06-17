@@ -1,4 +1,5 @@
 {
-  "llvm_hash": "62b7cf9623fc310525f39ed69aaecc318a909731",
-  "build_number": 2
+  "llvm_hash": "1f126a6dea50d185c0781743a667390037ae88bd",
+  "repository": "triton-lang/llvm-project",
+  "build_number": 1
 }

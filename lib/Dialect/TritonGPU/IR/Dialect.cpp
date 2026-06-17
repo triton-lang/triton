@@ -106,8 +106,6 @@ bool isGenericLinearEncoding(Attribute attr) {
 Attribute inferEncodingFromLinearLayout(MLIRContext *ctx, LinearLayout ll,
                                         Attribute srcEnc) {
   if (isGenericLinearEncoding(srcEnc)) {
-    assert(!isPermutationMatrixLayout(ll) &&
-           "Expected non-permutation layout from this source encoding");
     return GenericLinearEncodingAttr::get(ctx, std::move(ll));
   }
   return LinearEncodingAttr::get(ctx, std::move(ll));
@@ -3236,17 +3234,17 @@ struct TritonGPUInferLayoutInterface
 
       auto aLL = aEncoding.getCGALayout().getLinearLayout();
       auto bLL = bEncoding.getCGALayout().getLinearLayout();
-      // In multi-CTA, the CGA layout of operand 0 broadcasts across dim1 and
-      // operand 1 broadcasts across dim0.
+      // A broadcasts over N, B over M (the trailing two result dims). Batch
+      // dims (rank > 2) are shared across A/B/result, not broadcast.
       auto ctx = op->getContext();
-      auto dim0 = StringAttr::get(ctx, "dim0");
-      auto dim1 = StringAttr::get(ctx, "dim1");
-      // Resize to size 1 makes the dimension broadcast-only (all bases
-      // become 0).
-      if (aLL != resLL.resizeOutDim(dim1, 1))
+      int rank = cast<RankedTensorType>(dotOp.getD().getType()).getRank();
+      auto mDim = StringAttr::get(ctx, "dim" + std::to_string(rank - 2));
+      auto nDim = StringAttr::get(ctx, "dim" + std::to_string(rank - 1));
+      // resizeOutDim(d, 1) makes d broadcast-only.
+      if (aLL != resLL.resizeOutDim(nDim, 1))
         return op->emitError("Incompatible CGA layout for operand 0");
 
-      if (bLL != resLL.resizeOutDim(dim0, 1))
+      if (bLL != resLL.resizeOutDim(mDim, 1))
         return op->emitError("Incompatible CGA layout for operand 1");
     }
     return success();

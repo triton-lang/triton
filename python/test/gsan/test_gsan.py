@@ -400,10 +400,6 @@ def _host_tma_reduce_add_kernel(desc, src_ptr, src_stride_0, src_stride_1, BLOCK
     desc.atomic_add([0, 0], src)
 
 
-def _shadow_cell_state(cell) -> tuple[int, object, tuple[object, ...]]:
-    return (cell.num_reads, cell.write_clock, tuple(cell.read_clocks))
-
-
 def _shadow_cells_for_tensor(tensor: torch.Tensor):
     assert tensor.ndim >= 1
     if tensor.ndim > 1:
@@ -427,18 +423,16 @@ def _assert_shadow_mask(before, after, changed_mask: torch.Tensor, *, access_kin
         for col_idx in range(changed_mask.shape[1]):
             before_cell = before[row_idx][col_idx]
             after_cell = after[row_idx][col_idx]
-            before_state = _shadow_cell_state(before_cell)
-            after_state = _shadow_cell_state(after_cell)
 
             if changed_mask[row_idx, col_idx].item():
-                assert after_state != before_state
+                assert after_cell != before_cell
                 if access_kind == "read":
                     assert after_cell.write_clock == before_cell.write_clock
                 else:
                     assert after_cell.write_clock != before_cell.write_clock
                     assert after_cell.write_clock.epoch != 0
             else:
-                assert after_state == before_state
+                assert after_cell == before_cell
 
 
 def _masked_store_change_mask(storage: torch.Tensor, m_size: int, n_size: int, row_idx: int,

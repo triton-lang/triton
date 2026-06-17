@@ -1604,11 +1604,11 @@ def _resolve_aggregate_fields(cls):
             continue
         if not getattr(base, "__triton_aggregate__", False):
             raise TypeError(f"Aggregates can only inherit from other aggregates, but got non-aggregate base: {base}")
-        all_annotations.update(getattr(base, "__annotations__", {}))
+        all_annotations.update(inspect.get_annotations(base))
         all_defaults.update(getattr(base, "__aggregate_defaults__", {}))
 
     # Add cls's own fields, resolving string annotations via typing.get_type_hints.
-    own_names = cls.__dict__.get("__annotations__", {})
+    own_names = inspect.get_annotations(cls)
     hints = typing.get_type_hints(cls)
     for name in own_names:
         all_annotations[name] = hints[name]

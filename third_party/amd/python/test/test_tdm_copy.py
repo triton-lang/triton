@@ -231,6 +231,44 @@ def test_compile_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
                         f"HINT_B=0b{HINT_B:08b}, got {n_tdm}\n{amdgcn}")
 
 
+@gluon.jit
+def tdm_clamp_kernel(a_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
+    """Single TDM load whose offsets exercise the tensor_dim OOB clamp."""
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+
+    off_m = ttgl.program_id(axis=0) * BLOCK_M
+    off_n = ttgl.program_id(axis=1) * BLOCK_N
+    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                       block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    buf = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    ttgl.amd.gfx1250.tdm.async_load(desc, [off_m, off_n], buf)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+    buf.load(layout=BLOCKED_LAYOUT)
+
+
+def test_compile_tdm_clamp_no_readfirstlane():
+    """The TDM tensor_dim clamp must stay uniform (SGPR).
+
+    A non-uniform clamp is demoted to VALU and has to be read back into an SGPR
+    with ``v_readfirstlane`` next to each ``tensor_load_to_lds``, adding latency
+    to every TDM load.  A TDM load whose offsets exercise the clamp must lower
+    with none.
+    """
+    signature = {"a_ptr": "*fp16", "M": "i32", "N": "i32", "BLOCK_M": "constexpr", "BLOCK_N": "constexpr"}
+    k = triton.compile(
+        gluon._runtime.GluonASTSource(
+            fn=tdm_clamp_kernel,
+            signature=signature,
+            constexprs={"BLOCK_M": 64, "BLOCK_N": 64},
+        ),
+        target=GPUTarget("hip", "gfx1250", 32),
+        options={"num_warps": 4},
+    )
+    amdgcn = k.asm["amdgcn"]
+    assert "v_readfirstlane" not in amdgcn, f"TDM tensor_dim clamp regressed to VALU (v_readfirstlane emitted)\n{amdgcn}"
+
+
 _RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
 
 
@@ -270,4 +308,68 @@ def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
     )
 
     expected = a_cpu + b_cpu
+    assert torch.equal(c.cpu(), expected)
+
+
+@gluon.jit
+def update_clamp_bounds_kernel(a_ptr, c_ptr, LOG_M, N, OFF_M, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
+    """Advance a descriptor by OFF_M rows with clamp_bounds=True, then load a full
+    BLOCK_M x BLOCK_N tile and store it unmasked.
+
+    clamp_bounds shrinks tensor_dim to the advanced tile's valid extent
+    (LOG_M - OFF_M rows), so the hardware loads only the in-bounds rows and
+    zero-fills the rest.  The store is intentionally unmasked so the out-of-bounds
+    tile region is observable: without the clamp those rows would over-read the
+    (physically present) memory past the logical tensor instead of reading zero.
+    """
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+
+    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(LOG_M, N), strides=(N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    a_buf = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
+
+    a_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(a_desc, add_offsets=[OFF_M, 0], pred=1, clamp_bounds=True)
+    ttgl.amd.gfx1250.tdm.async_load(a_desc, [0, 0], a_buf)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    a = a_buf.load(layout=BLOCKED_LAYOUT)
+    rm = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
+    rn = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+    offs = (rm[:, None] * BLOCK_N) + rn[None, :]
+    ttgl.store(c_ptr + offs, a)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on gfx1250.")
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
+def test_runtime_update_clamp_bounds(BLOCK_M, BLOCK_N):
+    """Runtime: update_tensor_descriptor(clamp_bounds=True) shrinks tensor_dim to
+    the advanced tile's valid extent, so an edge tile loads only the in-bounds
+    rows and the hardware zero-fills the rest.
+
+    The physical source buffer is taller than the logical tensor and filled with
+    non-zero data, so a missing/broken clamp is observable end-to-end: the
+    out-of-bounds tile rows would come back as the (non-zero) memory past the
+    logical tensor instead of zero.  Compared against a torch CPU reference.
+    """
+    N = BLOCK_N
+    LOG_M = BLOCK_M  # logical tensor height
+    OFF_M = BLOCK_M // 4  # advance into the tile: valid remaining = 3/4 of a block
+    PHYS_M = 2 * BLOCK_M  # physical buffer is taller and entirely non-zero
+    NUM_WARPS = 4
+
+    torch.manual_seed(0)
+    # FIXME: Switch to native GPU-side initialization once public PyTorch
+    # supports gfx1250 kernels.  randint(1, ...) keeps every value non-zero so an
+    # over-read is distinguishable from the hardware's OOB zero-fill.
+    src_cpu = torch.randint(1, 128, (PHYS_M, N), dtype=torch.int32)
+    src = src_cpu.cuda()
+    c = torch.empty((BLOCK_M, BLOCK_N), dtype=torch.int32, device="cuda")
+
+    update_clamp_bounds_kernel[(1, )](src, c, LOG_M, N, OFF_M, BLOCK_M, BLOCK_N, num_warps=NUM_WARPS)
+
+    valid = LOG_M - OFF_M
+    expected = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.int32)
+    expected[:valid, :] = src_cpu[OFF_M:LOG_M, :]
     assert torch.equal(c.cpu(), expected)

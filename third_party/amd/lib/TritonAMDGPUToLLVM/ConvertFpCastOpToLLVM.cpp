@@ -1985,6 +1985,24 @@ struct FpToFpOpConversion
       }
     }
     if (srcElementType.isF32() && dstElementType.isBF16()) {
+      // RTZ fp32->bf16. Pack two fp32 -> two bf16 with a single v_perm_b32
+      // (sel=0x07060302: take the high 16 bits of each fp32). The scalar
+      // lshr+trunc lowering instead emits per-halfword v_mov_b16 (+ extra
+      // s_set_vgpr_msb) under newer LLVM ISel, inflating VALU and VGPR
+      // pressure (and causing spills in BF16 FA). Pinning the pack here keeps
+      // codegen independent of ISel.
+      if (operands.size() >= 2) {
+        Value f0 = b.bitcast(operands[0][0], i32_ty);
+        Value f1 = b.bitcast(operands[1][0], i32_ty);
+        Value sel = b.i32_val(0x07060302);
+        Value packed =
+            LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.perm",
+                                            i32_ty, ValueRange{f1, f0, sel})
+                .getResult(0);
+        Value v2 = b.bitcast(packed, vec_ty(bf16_ty, 2));
+        return {b.extract_element(v2, b.i32_val(0)),
+                b.extract_element(v2, b.i32_val(1))};
+      }
       return {AMD::convertFp32ToBf16(loc, rewriter, operands[0][0],
                                      RoundingMode::RTZ)};
     }
