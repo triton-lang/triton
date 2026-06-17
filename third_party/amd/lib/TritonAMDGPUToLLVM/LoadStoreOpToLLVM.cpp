@@ -1367,8 +1367,7 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
     int numWarps = triton::gpu::lookupNumWarps(op);
     Value ctaId = targetInfo.getClusterCTAId(rewriter, loc);
 
-    SmallVector<mlir::LLVM::AMD::TDMFusedLoadMemberInfo, 4> members(
-        numMembers);
+    SmallVector<mlir::LLVM::AMD::TDMFusedLoadMemberInfo, 4> members(numMembers);
     SmallVector<uint32_t, 4> memberHints;
 
     for (size_t i = 0; i < numMembers; ++i) {

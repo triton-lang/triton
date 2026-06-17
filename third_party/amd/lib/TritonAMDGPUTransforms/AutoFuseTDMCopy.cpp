@@ -177,9 +177,7 @@ void autoFuseTDMCopies(ModuleOp mod) {
 
 struct TritonAMDGPUAutoFuseTDMCopyPass
     : impl::TritonAMDGPUAutoFuseTDMCopyBase<TritonAMDGPUAutoFuseTDMCopyPass> {
-  void runOnOperation() override {
-    autoFuseTDMCopies(getOperation());
-  }
+  void runOnOperation() override { autoFuseTDMCopies(getOperation()); }
 };
 
 } // namespace

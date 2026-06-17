@@ -768,8 +768,7 @@ LogicalResult verifyPartitionedHintFitsSingleInstruction(
     diag << " (member " << *memberIdx << " got K = " << K
          << ", numLogicalPieces = " << numLogicalPieces << ")";
   else
-    diag << " (got K = " << K
-         << ", numLogicalPieces = " << numLogicalPieces
+    diag << " (got K = " << K << ", numLogicalPieces = " << numLogicalPieces
          << ", partitionDim = " << partitionedEnc.getPartitionDim() << ")";
   return failure();
 }

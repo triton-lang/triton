@@ -333,8 +333,8 @@ def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descri
         warp_used_hints.append(int(warp_used_hint))
 
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
-    _semantic.builder.create_async_tdm_fused_copy_global_to_local(
-        desc_handles, dest_handles, warp_used_hints, cache_modifier)
+    _semantic.builder.create_async_tdm_fused_copy_global_to_local(desc_handles, dest_handles, warp_used_hints,
+                                                                  cache_modifier)
 
 
 @builtin

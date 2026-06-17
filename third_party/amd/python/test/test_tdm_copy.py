@@ -395,8 +395,7 @@ def vector_add_tdm_explicit_fused_kernel(
     a_desc = _position_input(a_desc, off_m, off_n)
     b_desc = _position_input(b_desc, off_m, off_n)
 
-    ttgl.amd.gfx1250.tdm.async_load_fused(
-        [(a_desc, a_buf, HINT_A), (b_desc, b_buf, HINT_B)], cache_modifier=CACHE)
+    ttgl.amd.gfx1250.tdm.async_load_fused([(a_desc, a_buf, HINT_A), (b_desc, b_buf, HINT_B)], cache_modifier=CACHE)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
     c = a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT)
@@ -580,7 +579,7 @@ def test_compile_vector_add_tdm_3way_auto_fuse_knob_toggle():
     # (disabled, num_warps, block, expected): generation runs for 4 and 8 warps.
     with triton.knobs.amd.scope():
         for disabled, warps, block, expected in [(True, 8, (64, 64), 3), (False, 8, (32, 128), 1),
-                                                (False, 4, (128, 64), 1), (True, 4, (64, 128), 3)]:
+                                                 (False, 4, (128, 64), 1), (True, 4, (64, 128), 3)]:
             triton.knobs.amd.disable_tdm_auto_fuse = disabled
             amdgcn = _compile_3way(warps, block=block)
             _assert_tensor_load_count(amdgcn, expected, f"3-way disable_auto_fuse={disabled} warps={warps}")
