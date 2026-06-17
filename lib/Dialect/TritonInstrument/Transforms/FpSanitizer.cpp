@@ -739,7 +739,9 @@ Value fpsanSRem(PatternRewriter &rewriter, Location loc, Value num, Value den) {
 // k = ceil(N/4) and c = 1 + 2^k.  Then c^x mod 2^N has the exact closed form
 // below because all terms from the fourth binomial term onward vanish. This
 // preserves exp2(a + b) = exp2(a) * exp2(b) without a per-element
-// exponentiation loop.
+// exponentiation loop. If N <= 8, then this has the maximal possible period
+// of 2^(N-2); if N > 8, then this has a large but non-maximal period of
+// 2^(N-k) = 2^floor(3N/4) instead.
 Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
                        Type floatTy) {
   unsigned bitWidth = getIntBitwidth(xI.getType());
