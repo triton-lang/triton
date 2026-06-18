@@ -367,8 +367,20 @@ static LogicalResult verifyBarrierCGALayout(Operation *op, Value barrier,
   return success();
 }
 
+static CGAEncodingAttr getTwoCTABarrierCGALayout(MLIRContext *ctx,
+                                                 int numCTAs) {
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
+  auto layout = LinearLayout::zeros1D(2, kBlock, dim) *
+                LinearLayout::identity1D(numCTAs / 2, kBlock, dim);
+  return CGAEncodingAttr::get(ctx, std::move(layout));
+}
+
 static LogicalResult verifyCompletionBarrierLayout(Operation *op,
                                                    Value barrier) {
+  // MMAv5 completion barriers are per-CTA even for cta_group::2. The lead CTA
+  // issues the MMA/commit with a multicast mask, which arrives on every CTA's
+  // local barrier; then every CTA waits on its own barrier before reading TMEM.
   auto expectedCGALayout =
       CGAEncodingAttr::get1DLayout(op->getContext(), gpu::lookupNumCTAs(op));
   return verifyBarrierCGALayout(op, barrier, expectedCGALayout,
@@ -390,11 +402,7 @@ static LogicalResult verifyTMABarrierLayout(Operation *op, Value barrier) {
     return success();
 
   if (twoCTAsAttr.getValue()) {
-    auto kBlock = StringAttr::get(ctx, "block");
-    auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
-    auto layout = LinearLayout::zeros1D(2, kBlock, dim) *
-                  LinearLayout::identity1D(numCTAs / 2, kBlock, dim);
-    auto twoCTACGALayout = CGAEncodingAttr::get(ctx, std::move(layout));
+    auto twoCTACGALayout = getTwoCTABarrierCGALayout(ctx, numCTAs);
     if (actualCGALayout == twoCTACGALayout)
       return success();
     return op->emitOpError() << "TMA barrier cga_layout must be "
