@@ -391,7 +391,8 @@ static Value createMBarrierAlloc(ImplicitLocOpBuilder &rewriter,
 
 // Create an allocation and init the mbarriers.
 Value mlir::triton::createBarrierAlloc(Operation *op, int numBarriers,
-                                       int arriveCount, bool twoCTAs, bool twoCTALayout) {
+                                       int arriveCount, bool twoCTAs,
+                                       bool twoCTALayout) {
   ImplicitLocOpBuilder rewriter(op->getLoc(), op);
   int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
       op->getParentOfType<ModuleOp>());
