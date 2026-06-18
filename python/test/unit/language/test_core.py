@@ -1087,6 +1087,29 @@ def test_fdiv_ieee_rounding(device):
     assert torch.all(out_ieee == out_rn)  # bitwise exact
 
 
+@pytest.mark.interpreter
+def test_divide_op_fp32_ieee_rounded(device):
+    # Regression test for https://github.com/triton-lang/triton/issues/10661
+    # The `/` operator on fp32 must round to nearest (IEEE 754), matching torch
+    # and nvcc's default. When the exact quotient is representable in fp32 the
+    # result must be bitwise exact; the fast (div.full.f32) path returns 1 ULP
+    # too high here and remains available via tl.math.fdiv.
+    @triton.jit
+    def kernel(X, Y, OUT, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        x = tl.load(X + offs)
+        y = tl.load(Y + offs)
+        tl.store(OUT + offs, x / y)
+
+    shape = (128, )
+    # 4.6875 / 0.9375 == 5.0 exactly.
+    x = torch.full(shape, 4.6875, dtype=torch.float32, device=device)
+    y = torch.full(shape, 0.9375, dtype=torch.float32, device=device)
+    out = torch.empty_like(x)
+    kernel[(1, )](x, y, out, BLOCK=shape[0])
+    assert torch.equal(out, x / y)  # bitwise exact
+
+
 # ----------------
 # test abs
 # ----------------

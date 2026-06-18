@@ -312,6 +312,12 @@ class TritonSemantic(Generic[TensorTy]):
         # unreachable
         else:
             raise TypeError(f"unexpected type {input_scalar_ty}")
+        # Use IEEE 754 round-to-nearest division for fp32 to match torch and
+        # nvcc's default for `/`; the fast, approximate path (div.full.f32)
+        # remains available through tl.fdiv / tl.math.fdiv. fp64 already lowers
+        # to a precise divide, so only fp32 needs the explicit precise op.
+        if input.type.scalar.is_fp32():
+            return self.tensor(self.builder.create_precise_divf(input.handle, other.handle), input.type)
         return self.tensor(self.builder.create_fdiv(input.handle, other.handle), input.type)
 
     def floordiv(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
