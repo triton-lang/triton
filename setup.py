@@ -10,7 +10,7 @@ from distutils.command.clean import clean
 from pathlib import Path
 from typing import Optional
 
-from setuptools import Extension, find_packages, setup
+from setuptools import Extension, find_namespace_packages, find_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 from setuptools.command.develop import develop
@@ -419,14 +419,31 @@ def get_packages():
         if backend.language_dir:
             # Install the contents of each backend's `language` directory into
             # `triton.language.extra`.
+            yield "triton.language.extra"
             for x in os.listdir(backend.language_dir):
                 yield f"triton.language.extra.{x}"
 
         if backend.tools_dir:
             # Install the contents of each backend's `tools` directory into
             # `triton.tools.extra`.
+            yield "triton.tools.extra"
             for x in os.listdir(backend.tools_dir):
                 yield f"triton.tools.extra.{x}"
+
+    # The per-backend `language`/`tools` directories above are linked into
+    # `triton.language.extra` / `triton.tools.extra`. Declare those namespace
+    # parents and every sub-package physically present in the assembled tree so
+    # they are shipped as packages rather than silently dropped as package data
+    # (which also makes setuptools emit a "Package would be ignored" warning).
+    # Discovering from the assembled location additionally covers builds where
+    # the in-tree backend source dirs are unavailable, e.g. from an sdist, and
+    # any nested sub-packages. See https://github.com/triton-lang/triton/issues/9437.
+    for extra in ("triton.language.extra", "triton.tools.extra"):
+        extra_dir = os.path.join(os.path.dirname(__file__), "python", *extra.split("."))
+        if os.path.isdir(extra_dir):
+            yield extra
+            for pkg in find_namespace_packages(where=extra_dir):
+                yield f"{extra}.{pkg}"
 
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         yield "triton.profiler"
@@ -590,7 +607,7 @@ setup(
     install_requires=[
         "importlib-metadata; python_version < '3.10'",
     ],
-    packages=list(get_packages()),
+    packages=list(dict.fromkeys(get_packages())),
     package_dir=dict(get_package_dirs()),
     entry_points=get_entry_points(),
     include_package_data=True,
