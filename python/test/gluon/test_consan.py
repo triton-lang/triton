@@ -741,6 +741,7 @@ def test_tma_interleave_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ct
         mbarrier.invalidate(bar.index(0))
         mbarrier.invalidate(bar.index(1))
 
+        hopper.fence_async_shared()
         tma.async_copy_shared_to_global(input_desc, [0, 0], smem.index(0))
         tma.store_wait(0)
 
