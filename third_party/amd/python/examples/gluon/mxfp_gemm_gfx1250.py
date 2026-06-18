@@ -437,13 +437,16 @@ class MXFPGEMMProgramBase:
 
 
 @gluon.jit
-def apply_activation_and_store(cfg, accumulator, c_ptr, c_offs, c_mask):
-    """Apply the activation epilogue (if any) and store the result to C."""
+def apply_activation_and_store_tdm(cfg, accumulator, c_desc, off_m, off_n):
     if cfg.ACTIVATION == "swiglu":
         output = gl.convert_layout(swiglu_epilogue(accumulator), cfg.acc_layout)
     else:
         output = accumulator
-    gl.amd.gfx1250.buffer_store(output, c_ptr, c_offs, mask=c_mask)
+    BLOCK_N_STORE: gl.constexpr = cfg.BLOCK_N // (2 if cfg.ACTIVATION == "swiglu" else 1)
+    acc_buffer = gl.allocate_shared_memory(output.dtype, [cfg.BLOCK_M, BLOCK_N_STORE], c_desc.layout)
+    acc_buffer.store(output)
+    gl.amd.gfx1250.tdm.async_store(c_desc, [off_m, off_n], acc_buffer)
+    gl.amd.gfx1250.tdm.async_wait(0)
 
 
 @composition
@@ -462,13 +465,13 @@ class MXFPGEMMPipelinedProgram:
     a_scale_desc: tdm.tensor_descriptor | gl.constexpr
     b_scale_desc: tdm.tensor_descriptor
 
-    c_ptr: gl.tensor
-    c_offs: gl.tensor
-    c_mask: gl.tensor
+    c_desc: tdm.tensor_descriptor
+    c_off_m: gl.tensor
+    c_off_n: gl.tensor
 
     @gluon.constexpr_function
     def __init__(self, cfg: MXFPGEMMConfig, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, a_desc, b_desc,
-                 a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
+                 a_scale_desc, b_scale_desc, c_desc, c_off_m, c_off_n):
         self.cfg = cfg
         self.a_buffer = a_buffer
         self.b_buffer = b_buffer
@@ -485,14 +488,14 @@ class MXFPGEMMPipelinedProgram:
         else:
             self.a_scale_desc = gl.constexpr(a_scale_desc)
         self.b_scale_desc = b_scale_desc
-        self.c_ptr = c_ptr
-        self.c_offs = c_offs
-        self.c_mask = c_mask
+        self.c_desc = c_desc
+        self.c_off_m = c_off_m
+        self.c_off_n = c_off_n
 
         self.base = MXFPGEMMProgramBase()
 
     @gluon.jit
-    def initialize(cfg: MXFPGEMMConfig, a_desc, b_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
+    def initialize(cfg: MXFPGEMMConfig, a_desc, b_desc, a_scale_desc, b_scale_desc, c_desc, c_off_m, c_off_n):
         NUM_BUFFERS: gl.constexpr = cfg.NUM_BUFFERS
         a_buffer = gl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape,
                                              layout=a_desc.layout)
@@ -509,7 +512,7 @@ class MXFPGEMMPipelinedProgram:
                                                    layout=b_scale_desc.layout)
 
         return MXFPGEMMPipelinedProgram(cfg, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, a_desc, b_desc,
-                                        a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask)
+                                        a_scale_desc, b_scale_desc, c_desc, c_off_m, c_off_n)
 
     @gluon.jit
     def pipeline(self, K):
@@ -556,7 +559,7 @@ class MXFPGEMMPipelinedProgram:
             wmma_idx += 1
             accumulator = gl.amd.gfx1250.wmma_scaled(a, scale_a, cfg.DTYPE_A, b, scale_b, cfg.DTYPE_B, accumulator)
 
-        apply_activation_and_store(self.cfg, accumulator, self.c_ptr, self.c_offs, self.c_mask)
+        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
     @gluon.jit
     def warp_pipeline(self, K):
@@ -610,7 +613,7 @@ class MXFPGEMMPipelinedProgram:
             wmma_idx += 1
             accumulator = gl.amd.gfx1250.wmma_scaled(a, scale_a, cfg.DTYPE_A, b, scale_b, cfg.DTYPE_B, accumulator)
 
-        apply_activation_and_store(self.cfg, accumulator, self.c_ptr, self.c_offs, self.c_mask)
+        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
 
 @composition
@@ -629,13 +632,13 @@ class MXFPGEMMSliceKProgram:
     a_scale_desc: tdm.tensor_descriptor | gl.constexpr
     b_scale_desc: tdm.tensor_descriptor
 
-    c_ptr: gl.tensor
-    c_offs: gl.tensor
-    c_mask: gl.tensor
+    c_desc: tdm.tensor_descriptor
+    c_off_m: gl.tensor
+    c_off_n: gl.tensor
 
     @gluon.constexpr_function
     def __init__(self, cfg: MXFPGEMMConfig, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, a_desc, b_desc,
-                 a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
+                 a_scale_desc, b_scale_desc, c_desc, c_off_m, c_off_n):
         self.cfg = cfg
         self.a_buffer = a_buffer
         self.b_buffer = b_buffer
@@ -652,14 +655,14 @@ class MXFPGEMMSliceKProgram:
         else:
             self.a_scale_desc = gl.constexpr(a_scale_desc)
         self.b_scale_desc = b_scale_desc
-        self.c_ptr = c_ptr
-        self.c_offs = c_offs
-        self.c_mask = c_mask
+        self.c_desc = c_desc
+        self.c_off_m = c_off_m
+        self.c_off_n = c_off_n
 
         self.base = MXFPGEMMProgramBase()
 
     @gluon.jit
-    def initialize(cfg: MXFPGEMMConfig, a_desc, b_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
+    def initialize(cfg: MXFPGEMMConfig, a_desc, b_desc, a_scale_desc, b_scale_desc, c_desc, c_off_m, c_off_n):
         NUM_BUFFERS: gl.constexpr = cfg.NUM_BUFFERS
         a_buffer = gl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape,
                                              layout=a_desc.layout)
@@ -676,7 +679,7 @@ class MXFPGEMMSliceKProgram:
                                                    layout=b_scale_desc.layout)
 
         return MXFPGEMMSliceKProgram(cfg, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, a_desc, b_desc,
-                                     a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask)
+                                     a_scale_desc, b_scale_desc, c_desc, c_off_m, c_off_n)
 
     @gluon.jit
     def issue_subtile_local_loads(self, wmma_idx, subtile_start_idx: gl.constexpr, a_buffer, b_buffer, a_scale_buffer,
@@ -784,7 +787,7 @@ class MXFPGEMMSliceKProgram:
             wmma_idx += 1
             accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
 
-        apply_activation_and_store(self.cfg, accumulator, self.c_ptr, self.c_offs, self.c_mask)
+        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
     @gluon.jit
     def warp_pipeline(self, K):
@@ -849,7 +852,7 @@ class MXFPGEMMSliceKProgram:
             accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
             wmma_idx += 1
 
-        apply_activation_and_store(self.cfg, accumulator, self.c_ptr, self.c_offs, self.c_mask)
+        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
 
 @composition
@@ -868,13 +871,13 @@ class MXFPGEMMSliceNKProgram:
     a_scale_desc: tdm.tensor_descriptor | ScaleAsyncCopyDescriptor | gl.constexpr
     b_scale_desc: tdm.tensor_descriptor | ScaleAsyncCopyDescriptor
 
-    c_ptr: gl.tensor
-    c_offs: gl.tensor
-    c_mask: gl.tensor
+    c_desc: tdm.tensor_descriptor
+    c_off_m: gl.tensor
+    c_off_n: gl.tensor
 
     @gluon.constexpr_function
     def __init__(self, cfg: MXFPGEMMConfig, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, a_desc, b_desc,
-                 a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
+                 a_scale_desc, b_scale_desc, c_desc, c_off_m, c_off_n):
         self.cfg = cfg
         self.a_buffer = a_buffer
         self.b_buffer = b_buffer
@@ -891,14 +894,14 @@ class MXFPGEMMSliceNKProgram:
         else:
             self.a_scale_desc = gl.constexpr(a_scale_desc)
         self.b_scale_desc = b_scale_desc
-        self.c_ptr = c_ptr
-        self.c_offs = c_offs
-        self.c_mask = c_mask
+        self.c_desc = c_desc
+        self.c_off_m = c_off_m
+        self.c_off_n = c_off_n
 
         self.base = MXFPGEMMProgramBase()
 
     @gluon.jit
-    def initialize(cfg: MXFPGEMMConfig, a_desc, b_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
+    def initialize(cfg: MXFPGEMMConfig, a_desc, b_desc, a_scale_desc, b_scale_desc, c_desc, c_off_m, c_off_n):
         NUM_BUFFERS: gl.constexpr = cfg.NUM_BUFFERS
         a_buffer = gl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape,
                                              layout=a_desc.layout)
@@ -915,7 +918,7 @@ class MXFPGEMMSliceNKProgram:
                                                    layout=b_scale_desc.layout)
 
         return MXFPGEMMSliceNKProgram(cfg, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, a_desc, b_desc,
-                                      a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask)
+                                      a_scale_desc, b_scale_desc, c_desc, c_off_m, c_off_n)
 
     @gluon.jit
     def issue_local_load_a(self, wmma_idx, subtile_start_idx: gl.constexpr, a_buffer, a_scale_buffer):
@@ -1111,7 +1114,7 @@ class MXFPGEMMSliceNKProgram:
         accumulator = accumulator.permute(0, 2, 1).reshape((cfg.BLOCK_M, cfg.BLOCK_N))
         accumulator = gl.convert_layout(accumulator, cfg.acc_layout, assert_trivial=True)
 
-        apply_activation_and_store(self.cfg, accumulator, self.c_ptr, self.c_offs, self.c_mask)
+        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
 
 @composition
@@ -1130,13 +1133,13 @@ class MXFPGEMMSliceMNKProgram:
     a_scale_desc: tdm.tensor_descriptor | ScaleAsyncCopyDescriptor
     b_scale_desc: tdm.tensor_descriptor | ScaleAsyncCopyDescriptor
 
-    c_ptr: gl.tensor
-    c_offs: gl.tensor
-    c_mask: gl.tensor
+    c_desc: tdm.tensor_descriptor
+    c_off_m: gl.tensor
+    c_off_n: gl.tensor
 
     @gluon.constexpr_function
     def __init__(self, cfg: MXFPGEMMConfig, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, a_desc, b_desc,
-                 a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
+                 a_scale_desc, b_scale_desc, c_desc, c_off_m, c_off_n):
         self.cfg = cfg
         self.a_buffer = a_buffer
         self.b_buffer = b_buffer
@@ -1150,14 +1153,14 @@ class MXFPGEMMSliceMNKProgram:
         self.b_desc = b_desc
         self.a_scale_desc = a_scale_desc
         self.b_scale_desc = b_scale_desc
-        self.c_ptr = c_ptr
-        self.c_offs = c_offs
-        self.c_mask = c_mask
+        self.c_desc = c_desc
+        self.c_off_m = c_off_m
+        self.c_off_n = c_off_n
 
         self.base = MXFPGEMMProgramBase()
 
     @gluon.jit
-    def initialize(cfg: MXFPGEMMConfig, a_desc, b_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
+    def initialize(cfg: MXFPGEMMConfig, a_desc, b_desc, a_scale_desc, b_scale_desc, c_desc, c_off_m, c_off_n):
         NUM_BUFFERS: gl.constexpr = cfg.NUM_BUFFERS
         a_buffer = gl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape,
                                              layout=a_desc.layout)
@@ -1174,7 +1177,7 @@ class MXFPGEMMSliceMNKProgram:
                                                    layout=b_scale_desc.layout)
 
         return MXFPGEMMSliceMNKProgram(cfg, a_buffer, b_buffer, a_scale_buffer, b_scale_buffer, a_desc, b_desc,
-                                       a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask)
+                                       a_scale_desc, b_scale_desc, c_desc, c_off_m, c_off_n)
 
     @gluon.jit
     def issue_local_load_a(self, wmma_idx, subtile_start_idx_m: gl.constexpr, subtile_start_idx_k: gl.constexpr,
@@ -1438,7 +1441,7 @@ class MXFPGEMMSliceMNKProgram:
         accumulator = gl.join(acc_top, acc_bot).permute(2, 0, 1).reshape((cfg.BLOCK_M, cfg.BLOCK_N))
         accumulator = gl.convert_layout(accumulator, cfg.acc_layout)
 
-        apply_activation_and_store(self.cfg, accumulator, self.c_ptr, self.c_offs, self.c_mask)
+        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
 
 @composition
@@ -1469,13 +1472,13 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
     a_scale_desc: tdm.tensor_descriptor | ScaleAsyncCopyDescriptor
     b_scale_desc: tdm.tensor_descriptor | ScaleAsyncCopyDescriptor
 
-    c_ptr: gl.tensor
-    c_offs: gl.tensor
-    c_mask: gl.tensor
+    c_desc: tdm.tensor_descriptor
+    c_off_m: gl.tensor
+    c_off_n: gl.tensor
 
     @gluon.constexpr_function
     def __init__(self, cfg: MXFPGEMMConfig, a0_buffer, a1_buffer, b0_buffer, b1_buffer, a_scale_buffer, b_scale_buffer,
-                 a0_desc, a1_desc, b0_desc, b1_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask):
+                 a0_desc, a1_desc, b0_desc, b1_desc, a_scale_desc, b_scale_desc, c_desc, c_off_m, c_off_n):
         self.cfg = cfg
         self.a0_buffer = a0_buffer
         self.a1_buffer = a1_buffer
@@ -1493,15 +1496,15 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
         self.b1_desc = b1_desc
         self.a_scale_desc = a_scale_desc
         self.b_scale_desc = b_scale_desc
-        self.c_ptr = c_ptr
-        self.c_offs = c_offs
-        self.c_mask = c_mask
+        self.c_desc = c_desc
+        self.c_off_m = c_off_m
+        self.c_off_n = c_off_n
 
         self.base = MXFPGEMMProgramBase()
 
     @gluon.jit
-    def initialize(cfg: MXFPGEMMConfig, a0_desc, a1_desc, b0_desc, b1_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs,
-                   c_mask):
+    def initialize(cfg: MXFPGEMMConfig, a0_desc, a1_desc, b0_desc, b1_desc, a_scale_desc, b_scale_desc, c_desc, c_off_m,
+                   c_off_n):
         NUM_BUFFERS: gl.constexpr = cfg.NUM_BUFFERS
         a0_buffer = gl.allocate_shared_memory(a0_desc.dtype, shape=[NUM_BUFFERS] + a0_desc.block_shape,
                                               layout=a0_desc.layout)
@@ -1523,7 +1526,7 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
 
         return MXFPGEMMSliceMNKTDMSplitProgram(cfg, a0_buffer, a1_buffer, b0_buffer, b1_buffer, a_scale_buffer,
                                                b_scale_buffer, a0_desc, a1_desc, b0_desc, b1_desc, a_scale_desc,
-                                               b_scale_desc, c_ptr, c_offs, c_mask)
+                                               b_scale_desc, c_desc, c_off_m, c_off_n)
 
     @gluon.jit
     def issue_local_load_a(self, wmma_idx, subtile_start_idx_m: gl.constexpr, subtile_start_idx_k: gl.constexpr,
@@ -1854,7 +1857,7 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
         accumulator = gl.join(acc_top, acc_bot).permute(2, 0, 1).reshape((cfg.BLOCK_M, cfg.BLOCK_N))
         accumulator = gl.convert_layout(accumulator, cfg.acc_layout)
 
-        apply_activation_and_store(self.cfg, accumulator, self.c_ptr, self.c_offs, self.c_mask)
+        apply_activation_and_store_tdm(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
 
 @gluon.jit
@@ -2030,28 +2033,33 @@ def mxgemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, 
                                                                           N_PACKED, K, stride_am, stride_ak, stride_bk,
                                                                           stride_bn, stride_scale)
 
-    offs_cm = pid_m * BLOCK_M + gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, cfg.acc_layout))
-    offs_cn = pid_n * BLOCK_N + gl.arange(0, BLOCK_N, layout=gl.SliceLayout(0, cfg.acc_layout))
-    c_offs = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    # All schedules store C through TDM: build a C tensor descriptor over the
+    # (output-width) C matrix and pass the tile offsets to the program.
+    shared_layout_acc: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+    c_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                                       block_shape=(BLOCK_M, BLOCK_N), layout=shared_layout_acc)
+    c_off_m = pid_m * BLOCK_M
+    c_off_n = pid_n * BLOCK_N
 
     if SCHEDULE == 'sliceMNK':
         if TDM_SPLIT:
             a0_desc, a1_desc, b0_desc, b1_desc = create_split_data_tensor_descriptor(
                 cfg, a_ptr, a_offs, b_ptr, b_offs, M, N_PACKED, K, stride_am, stride_ak, stride_bk, stride_bn)
             pgm = MXFPGEMMSliceMNKTDMSplitProgram.initialize(cfg, a0_desc, a1_desc, b0_desc, b1_desc, a_scale_desc,
-                                                             b_scale_desc, c_ptr, c_offs, c_mask)
+                                                             b_scale_desc, c_desc, c_off_m, c_off_n)
         else:
-            pgm = MXFPGEMMSliceMNKProgram.initialize(cfg, a_desc, b_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs,
-                                                     c_mask)
+            pgm = MXFPGEMMSliceMNKProgram.initialize(cfg, a_desc, b_desc, a_scale_desc, b_scale_desc, c_desc, c_off_m,
+                                                     c_off_n)
     elif SCHEDULE == 'sliceNK':
-        pgm = MXFPGEMMSliceNKProgram.initialize(cfg, a_desc, b_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask)
+        pgm = MXFPGEMMSliceNKProgram.initialize(cfg, a_desc, b_desc, a_scale_desc, b_scale_desc, c_desc, c_off_m,
+                                                c_off_n)
     elif SCHEDULE == 'sliceK':
-        pgm = MXFPGEMMSliceKProgram.initialize(cfg, a_desc, b_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs, c_mask)
+        pgm = MXFPGEMMSliceKProgram.initialize(cfg, a_desc, b_desc, a_scale_desc, b_scale_desc, c_desc, c_off_m,
+                                               c_off_n)
     else:
         gl.static_assert(SCHEDULE == 'baseline')
-        pgm = MXFPGEMMPipelinedProgram.initialize(cfg, a_desc, b_desc, a_scale_desc, b_scale_desc, c_ptr, c_offs,
-                                                  c_mask)
+        pgm = MXFPGEMMPipelinedProgram.initialize(cfg, a_desc, b_desc, a_scale_desc, b_scale_desc, c_desc, c_off_m,
+                                                  c_off_n)
 
     if PINGPONG:
         pgm.warp_pipeline(K)
