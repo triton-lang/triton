@@ -130,6 +130,7 @@ private:
     auto kLane = S("lane");
     auto kWarp = S("warp");
     auto kOffset = S("offset");
+    auto kBlock = S("block");
     auto kAddr = S("addr");
     auto kPartition = S("partition");
     auto smemPtrTy = ptr_ty(ctx, 3);
@@ -252,6 +253,12 @@ private:
         LinearLayout({{kLane, addrToOffset.getBases().lookup(kAddr)},
                       {kWarp, reps.getBases().lookup(kWarp)}},
                      {{kOffset, reps.getOutDimSize(kOffset)}}, false);
+
+    // Matrix accesses are CTA-local. Model that with a trivial block output so
+    // additive stride analysis always compares (offset, block) components.
+    reps =
+        reps.reshapeOuts({{kOffset, reps.getOutDimSize(kOffset)}, {kBlock, 1}});
+    addrLayout = addrLayout.reshapeOuts(reps.getOutDims());
 
     // Compute the bits that are moved by one instruction
     // Compute elements for which we can swap the xor by an add

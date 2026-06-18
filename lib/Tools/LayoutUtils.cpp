@@ -316,18 +316,16 @@ actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
          "regsPerInst must be a power of two");
   auto kReg = *layout.getInDimNames().begin();
   assert(kReg.str() == "register");
-  assert(layout.getNumOutDims() >= 1 && layout.getNumOutDims() <= 2);
+  assert(layout.getNumOutDims() == 2);
   assert(layout.getOutDims() == addrLayout.getOutDims());
   const size_t regBasisPerVec = llvm::Log2_64(regsPerInst);
   uint64_t offsetBits = maskSpanOffsets;
   uint64_t blockBits = maskSpanBlocks;
-  bool hasBlock = layout.getNumOutDims() == 2;
   auto addrNamedBases = addrLayout.getBases();
   for (auto bases : llvm::make_second_range(addrNamedBases)) {
     for (auto basis : bases) {
       offsetBits |= basis[0];
-      if (hasBlock)
-        blockBits |= basis[1];
+      blockBits |= basis[1];
     }
   }
   SmallVector<size_t> front, back;
@@ -335,8 +333,8 @@ actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
   assert(layoutNamedBases.lookup(kReg).size() >= regBasisPerVec &&
          "layout must have at least log2(regsPerInst) register bases");
   for (auto [idx, basis] : llvm::enumerate(layoutNamedBases.lookup(kReg))) {
-    bool isAdditive = (basis[0] & offsetBits) == 0 &&
-                      (!hasBlock || (basis[1] & blockBits) == 0);
+    bool isAdditive =
+        (basis[0] & offsetBits) == 0 && (basis[1] & blockBits) == 0;
     if (idx < regBasisPerVec || isAdditive) {
       front.push_back(idx);
     } else {
