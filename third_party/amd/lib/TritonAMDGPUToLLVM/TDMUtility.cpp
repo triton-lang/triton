@@ -1002,18 +1002,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   }
 }
 
-// Fill TDM descriptor for gather/scatter operations (2D only).
-// Gather reads from non-contiguous rows in global memory to LDS.
-// Scatter writes from LDS to non-contiguous rows in global memory.
-// Build the chunk-invariant part of a gather/scatter descriptor: group0[0]
-// (pred|mode), group0[2:3] (global address) and the whole of group1 (tensor
-// shape, barrier, tile dims).  All TDM instructions emitted for one
-// async_gather/async_scatter share these; only group0[1] (lds_addr) and
-// group2/group3 (row indices) vary per chunk and are filled afterwards by
-// fillGatherScatterChunk.  Computing the shared part once -- and letting the
-// per-chunk filler touch only group0[1] -- keeps the chunk descriptors
-// differing in a single dword, so the backend re-stamps just the lds_addr lane
-// instead of rebuilding the whole 4-dword group0 per chunk.
+// Build the chunk-invariant part of a gather/scatter descriptor once, so the
+// per-chunk loop only re-stamps lds_addr instead of rebuilding group0.
 static void prepareGatherScatterDescriptorBase(
     RewriterBase &rewriter, Location loc, Type elementType,
     SmallVector<int64_t> blockShape, unsigned padInterval, unsigned padAmount,
@@ -1065,8 +1055,6 @@ static void prepareGatherScatterDescriptorBase(
     predWithGatherScatter = b.or_(predWithGatherScatter, b.i32_val(1 << 30));
   }
 
-  // group0[0],[2],[3] are chunk-invariant.  group0[1] (lds_addr) is set per
-  // chunk by fillGatherScatterChunk so the chunks differ in only that lane.
   group0 = vecSet(b, group0, 0, predWithGatherScatter);
   group0 = vecSet(b, group0, 2, b.trunc(i32_ty, globalAddr));
 
@@ -1101,9 +1089,6 @@ static void prepareGatherScatterDescriptorBase(
   group1 = vecSet(b, group1, 0, g1_0);
   group1 = vecSet(b, group1, 1, g1_1);
 
-  // tile_dim1 (number of valid indices, group1[4]) is per-chunk and is set in
-  // fillGatherScatterChunk.
-
   // Encode tile_dim0 for gather/scatter as the full undivided column width:
   // gather/scatter is row-indexed across all warps, so each TDM instruction
   // covers the full row.  createTDMDescriptor leaves the upper 16 bits of
@@ -1122,11 +1107,7 @@ static void prepareGatherScatterDescriptorBase(
   }
 }
 
-// Fill the per-chunk parts of a gather/scatter descriptor on top of the base
-// from prepareGatherScatterDescriptorBase: group0[1] (lds_addr), group1[4]
-// (number of valid indices / tile_dim1) and group2/group3 (the row indices).
-// group0[1] is the only group0 lane that varies between chunks, so the chunk
-// descriptors differ in exactly one dword.
+// Fill the per-chunk parts of a gather/scatter descriptor on top of the base.
 static void fillGatherScatterChunk(RewriterBase &rewriter, Location loc,
                                    Value &group0, Value &group1, Value &group2,
                                    Value &group3, Value ldsAddr,
@@ -1135,11 +1116,10 @@ static void fillGatherScatterChunk(RewriterBase &rewriter, Location loc,
   assert(!rowIndices.empty() && "Gather/scatter requires row indices.");
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  // group0[1]: lds_addr -- the only per-chunk group0 lane.
+  // group0[1]: lds_addr
   group0 = vecSet(b, group0, 1, ldsAddr);
 
-  // tile_dim1 (group1[4] lower 16 bits): number of valid indices for this
-  // chunk.
+  // tile_dim1 (group1[4] lower 16 bits): number of valid indices
   size_t numIndices = rowIndices.size();
   Value g1_4 = b.and_(vecGet(b, group1, 4), b.i32_val(0xFFFF0000));
   g1_4 = b.or_(g1_4, b.i32_val(numIndices & 0xFFFF));
@@ -1426,20 +1406,15 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     pred = b.select(inRange, pred, b.i32_val(0));
   }
 
-  // Precompute LDS row offset for each instruction batch via
-  // applyLinearLayout with the actual register index and warp ID.
-  SmallVector<Value> batchLdsOffsets;
+  // chunk 0's LDS row offset (per warp); chunks 1..N-1 derive theirs as a
+  // compile-time-constant delta off chunk 0 below.
   auto kBlock = rewriter.getStringAttr("block");
-  for (size_t startIdx = 0; startIdx < effectiveRowIndices.size();
-       startIdx += maxIndicesPerInstr) {
-    auto offsets = applyLinearLayout(loc, rewriter, indexLL,
-                                     {{kRegister, b.i32_val(startIdx)},
-                                      {kLane, b.i32_val(0)},
-                                      {kWarp, warpId},
-                                      {kBlock, b.i32_val(0)}});
-    batchLdsOffsets.push_back(offsets[0].second);
-  }
-  assert(batchLdsOffsets.size() == analysis.numInstructions);
+  Value chunk0RowOffset = applyLinearLayout(loc, rewriter, indexLL,
+                                            {{kRegister, b.i32_val(0)},
+                                             {kLane, b.i32_val(0)},
+                                             {kWarp, warpId},
+                                             {kBlock, b.i32_val(0)}})[0]
+                              .second;
 
   size_t numIndicesPerWarp = effectiveRowIndices.size();
 
@@ -1453,15 +1428,16 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
   Value group2Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
   Value group3Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
 
-  // chunk 0's lds_addr; chunks 1..N-1 derive theirs as chunk0 + const delta.
   Type sharedPtrTy = ptr_ty(rewriter.getContext(), 3);
   Value chunk0LdsAddr;
 
-  // Build the chunk-invariant descriptor base once.  All chunks share group0[0]
-  // (pred|mode), group0[2:3] (global addr) and group1; only group0[1]
-  // (lds_addr) and group2/group3 (indices) vary per chunk, so the backend
-  // re-stamps just the lds_addr lane between chunks instead of rebuilding all
-  // of group0.
+  // The lds-trick scales each chunk's element-offset delta to bytes; the
+  // gather/scatter verifier guarantees >=1-byte elements, so this never
+  // truncates to 0.
+  unsigned elemBytes = elementType.getIntOrFloatBitWidth() / 8;
+
+  // Build the chunk-invariant base once; the loop below only re-stamps the
+  // per-chunk lds_addr and indices.
   Value baseGroup0 = group0In;
   Value baseGroup1 = group1In;
   prepareGatherScatterDescriptorBase(
@@ -1478,22 +1454,18 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     SmallVector<Value> batchIndices(effectiveRowIndices.begin() + startIdx,
                                     effectiveRowIndices.begin() + endIdx);
 
-    // Start from the shared base; only group0[1] (lds_addr) and the per-chunk
-    // indices (group2/group3) differ.
     Value g0 = baseGroup0;
     Value g1 = baseGroup1;
     Value g2 = group2Zero;
     Value g3 = group3Zero;
 
-    // Per-chunk lds_addr (g0[1]): chunk 0 = full per-warp computation; chunks
-    // 1..N-1 = chunk0_addr + a compile-time-constant byte delta.  Because
-    // applyLinearLayout is affine in `register`, the (chunkI - chunk0) offset
-    // with warp pinned to 0 folds to a constant, so LLVM emits
-    // `s_add_co_i32 sX, chunk0_addr, <imm>` per chunk instead of feeding a
-    // per-chunk loop-invariant SGPR.
+    // Per-chunk lds_addr (g0[1]): chunk 0 does the full per-warp computation;
+    // chunks 1..N-1 are chunk0_addr + a compile-time-constant byte delta, so
+    // the backend emits `s_add_co_i32 sX, chunk0_addr, <imm>` per chunk instead
+    // of a separate per-chunk LDS-address SGPR.
     Value ldsAddr;
     if (instrIdx == 0) {
-      Value ldsOffset = b.mul(batchLdsOffsets[0], b.i32_val(blockShape[1]));
+      Value ldsOffset = b.mul(chunk0RowOffset, b.i32_val(blockShape[1]));
       if (padInterval > 0 && padAmount > 0) {
         Value iVal = b.i32_val(log2(padInterval));
         Value pVal = b.i32_val(log2(padAmount));
@@ -1504,34 +1476,25 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                            b.gep(sharedPtrTy, elementType, ldsPtr, ldsOffset));
       chunk0LdsAddr = ldsAddr;
     } else {
-      // byte delta = (LL(register=startIdx, warp=0) - LL(register=0, warp=0))
-      //              * blockShape[1] + pad(delta).  pad(a+b)=pad(a)+pad(b)
-      //              holds because chunk byte deltas are multiples of
-      //              padInterval for all TDM gather patterns we emit.
-      auto chunkIOffsets = applyLinearLayout(loc, rewriter, indexLL,
-                                             {{kRegister, b.i32_val(startIdx)},
-                                              {kLane, b.i32_val(0)},
-                                              {kWarp, b.i32_val(0)},
-                                              {kBlock, b.i32_val(0)}});
-      auto chunk0Offsets = applyLinearLayout(loc, rewriter, indexLL,
-                                             {{kRegister, b.i32_val(0)},
-                                              {kLane, b.i32_val(0)},
-                                              {kWarp, b.i32_val(0)},
-                                              {kBlock, b.i32_val(0)}});
-      Value rowDelta = b.sub(chunkIOffsets[0].second, chunk0Offsets[0].second);
-      Value elemDelta = b.mul(rowDelta, b.i32_val(blockShape[1]));
+      // chunk i's register-offset delta from chunk 0, evaluated at warp 0.
+      // applyLinearLayout is linear in `register`, so the per-warp term cancels
+      // (LL(register=0) == 0) and the delta is a compile-time constant.  It
+      // must be addition-separable from the warp term, which holds for the
+      // row-strip-per-warp layouts gather/scatter emit.
+      int64_t rowDelta = indexLL
+                             .apply({{kRegister, (int32_t)startIdx},
+                                     {kLane, 0},
+                                     {kWarp, 0},
+                                     {kBlock, 0}})[0]
+                             .second;
+      int64_t elemDelta = rowDelta * blockShape[1];
       if (padInterval > 0 && padAmount > 0) {
-        Value iVal = b.i32_val(log2(padInterval));
-        Value pVal = b.i32_val(log2(padAmount));
-        Value padDelta = b.shl(i32_ty, b.ashr(elemDelta, iVal), pVal);
-        elemDelta = b.add(elemDelta, padDelta);
+        // padInterval divides the innermost block dim (enforced by the
+        // verifier) and elemDelta is a multiple of it, so pad() distributes:
+        // pad(a+delta) == pad(a) + pad(delta).
+        elemDelta += (elemDelta / padInterval) * padAmount;
       }
-      // chunk0LdsAddr is a byte address (chunk 0's gep scaled by elementType),
-      // so scale the element-offset delta to bytes explicitly; required for
-      // >1-byte element types (e.g. fp16).
-      unsigned elemBytes = elementType.getIntOrFloatBitWidth() / 8;
-      Value byteDelta = b.mul(elemDelta, b.i32_val(elemBytes));
-      ldsAddr = b.add(chunk0LdsAddr, byteDelta);
+      ldsAddr = b.add(chunk0LdsAddr, b.i32_val(elemDelta * (int64_t)elemBytes));
     }
 
     fillGatherScatterChunk(rewriter, loc, g0, g1, g2, g3, ldsAddr, batchIndices,
