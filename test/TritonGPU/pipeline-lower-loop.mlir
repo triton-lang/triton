@@ -1118,11 +1118,11 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: #[[$MMA_BAR_LAYOUT:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[1\], \[2\]\]}}{{.*}}>
   // CHECK: #[[$TMA_BAR_LAYOUT:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[0\], \[1\]\]}}{{.*}}>
   // CHECK-LABEL: @simple_persistent_mmav5_two_ctas_barrier
-  // CHECK: %[[MMA_BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x2xi64, #[[$MMA_BAR_LAYOUT]]
+  // CHECK: %[[MMA_BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x4xi64, #[[$MMA_BAR_LAYOUT]]
   // CHECK: %[[TMA_BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x2xi64, #[[$TMA_BAR_LAYOUT]]
   // CHECK: ttng.async_tma_copy_global_to_local {{.*}}!ttg.memdesc<2xi64, #[[$TMA_BAR_LAYOUT]]
   // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<2xi64, #[[$TMA_BAR_LAYOUT]]
-  // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, {{.*}}two_ctas} : {{.*}}!ttg.memdesc<2xi64, #[[$MMA_BAR_LAYOUT]]
+  // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, {{.*}}two_ctas} : {{.*}}!ttg.memdesc<4xi64, #[[$MMA_BAR_LAYOUT]]
   tt.func public @simple_persistent_mmav5_two_ctas_barrier(%arg0: !tt.tensordesc<512x64xf16, #sharedA>, %arg1: !tt.tensordesc<64x128xf16, #sharedB>, %arg2: i32) -> tensor<512x128xf16, #blockedC> {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<512x128xf32, #blockedC>
