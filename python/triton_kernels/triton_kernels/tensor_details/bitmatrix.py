@@ -31,12 +31,20 @@ class BitmatrixMetadata:
 
 @triton.jit
 def _keyed_add(x, y):
-    # we keep the key in the upper 16 bits of a uint32:
+    # we keep the key in the upper 16 bits of a uint32 and a running count in the
+    # lower 16 bits:
     key_mask: tl.constexpr = 0xffff0000
+    count_mask: tl.constexpr = 0x0000ffff
 
     kx = x & key_mask
     ky = y & key_mask
-    z = tl.where(kx == ky, x + y - kx, y)
+    # Add only the counts (lower 16 bits) and re-attach the shared key. This is
+    # equivalent to `x + y - kx` when the keys match (the counts are bounded by
+    # BLOCK_SIZE <= 32768 so their sum stays within 16 bits), but it avoids the
+    # uint32 overflow of `x + y` for large keys -- e.g. the 0xffff0000 padding
+    # sentinel -- which otherwise trips the integer-overflow checker under
+    # TRITON_DEBUG=1. See https://github.com/triton-lang/triton/issues/7945
+    z = tl.where(kx == ky, kx | ((x & count_mask) + (y & count_mask)), y)
     return z
 
 
