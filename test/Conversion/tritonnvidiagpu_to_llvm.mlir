@@ -829,10 +829,10 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 1 : i32, "ttg.th
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 5 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: module attributes {
-  // CHECK-DAG: ttg.shared = 24 : i32
+  // CHECK-DAG: ttg.shared = 40 : i32
   // CHECK-DAG: ttg.ws_cluster_barrier_count = 1 : i32
   // CHECK-LABEL: @cluster_barrier_inside_warp_specialize
-  // CHECK: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;"
+  // CHECK-COUNT-2: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;"
   // CHECK: fence.mbarrier_init.release.cluster
   // CHECK: nvvm.cluster.arrive.relaxed
   // CHECK-NEXT: nvvm.cluster.wait
@@ -840,7 +840,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     ttg.warp_specialize()
     default {
       // CHECK: nvvm.barrier
-      // CHECK: %[[PARITY:.*]] = llvm.load
+      // CHECK: %[[PARITY0:.*]] = llvm.load
+      // CHECK: %[[PARITY1:.*]] = llvm.load
+      // CHECK: %[[SLOT:.*]] = llvm.xor %[[PARITY0]], %[[PARITY1]]
+      // CHECK: %[[USE_SECOND:.*]] = llvm.icmp "ne" %[[SLOT]]
+      // CHECK: %[[BARRIER:.*]] = llvm.select %[[USE_SECOND]]
+      // CHECK: %[[PARITY_PTR:.*]] = llvm.select %[[USE_SECOND]]
+      // CHECK: %[[PARITY:.*]] = llvm.select %[[USE_SECOND]], %[[PARITY1]], %[[PARITY0]]
       // CHECK: %[[BARRIER_INT:.*]] = llvm.ptrtoint
       // CHECK: %[[PEER_BARRIER_INT:.*]] = llvm.xor %[[BARRIER_INT]],
       // CHECK: llvm.inttoptr %[[PEER_BARRIER_INT]]
@@ -884,10 +890,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 5 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: module attributes {
-  // CHECK-DAG: ttg.shared = 40 : i32
+  // CHECK-DAG: ttg.shared = 72 : i32
   // CHECK-DAG: ttg.ws_cluster_barrier_count = 2 : i32
   // CHECK-LABEL: @cluster_barrier_inside_warp_specialize_reuses_slots
-  // CHECK-COUNT-2: mbarrier.init.shared::cta.b64
+  // CHECK-COUNT-4: mbarrier.init.shared::cta.b64
   // CHECK-COUNT-1: fence.mbarrier_init.release.cluster
   // CHECK-COUNT-1: nvvm.cluster.arrive.relaxed
   // CHECK-COUNT-3: mbarrier.arrive.release.cluster.shared::cluster.b64

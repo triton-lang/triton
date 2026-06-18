@@ -214,13 +214,29 @@ struct ClusterBarrierOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto func = op->getParentOfType<FunctionOpInterface>();
-    Value barrierPtr = getClusterBarrierMbarPtr(
+    Value barrierPtr0 = getClusterBarrierMbarPtr(
         loc, rewriter, func, mbarOffset.getInt(), targetInfo);
-    auto ptrTy = cast<LLVM::LLVMPointerType>(barrierPtr.getType());
-    Value parityPtr = b.gep(ptrTy, i8_ty, barrierPtr, LLVM::GEPArg(8));
+    Value barrierPtr1 = getClusterBarrierMbarPtr(
+        loc, rewriter, func,
+        mbarOffset.getInt() +
+            triton::nvidia_gpu::kClusterBarrierMbarSlotSize,
+        targetInfo);
+    auto ptrTy = cast<LLVM::LLVMPointerType>(barrierPtr0.getType());
+    Value parityPtr0 = b.gep(ptrTy, i8_ty, barrierPtr0, LLVM::GEPArg(8));
+    Value parityPtr1 = b.gep(ptrTy, i8_ty, barrierPtr1, LLVM::GEPArg(8));
 
     NVVM::BarrierOp::create(rewriter, loc);
-    Value parity = b.load(i32_ty, parityPtr);
+    Value parity0 = b.load(i32_ty, parityPtr0);
+    Value parity1 = b.load(i32_ty, parityPtr1);
+    // A delayed CTA can miss a phase if a peer reuses one mbarrier twice
+    // before it starts waiting. Alternate two slots so each slot is reused
+    // only after an intervening rendezvous. Exactly one parity flips after
+    // every rendezvous, so their xor selects the next slot.
+    Value useSecondSlot =
+        b.icmp_ne(b.xor_(parity0, parity1), b.i32_val(0));
+    Value barrierPtr = b.select(useSecondSlot, barrierPtr1, barrierPtr0);
+    Value parityPtr = b.select(useSecondSlot, parityPtr1, parityPtr0);
+    Value parity = b.select(useSecondSlot, parity1, parity0);
     Value pred = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
     Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
     int numCTAs = triton::gpu::lookupNumCTAs(op);
@@ -271,15 +287,26 @@ struct InitializeWSClusterBarriers
     auto sharedAttr = mod->getAttrOfType<IntegerAttr>("ttg.shared");
     int64_t shared = sharedAttr ? sharedAttr.getInt() : 0;
     int64_t count = countAttr.getInt();
-    int64_t offset = shared - count * 16;
+    int64_t offset =
+        shared - count * triton::nvidia_gpu::kClusterBarrierMbarAllocationSize;
     int numCTAs = triton::gpu::lookupNumCTAs(kernel);
-    for (int64_t i = 0; i < count; ++i, offset += 16) {
-      Value barrierPtr =
-          getClusterBarrierMbarPtr(loc, rewriter, kernel, offset, targetInfo);
-      auto ptrTy = cast<LLVM::LLVMPointerType>(barrierPtr.getType());
-      Value parityPtr = b.gep(ptrTy, i8_ty, barrierPtr, LLVM::GEPArg(8));
-      createMBarrierInit(rewriter, loc, initPred, barrierPtr, numCTAs - 1);
-      targetInfo.storeShared(rewriter, loc, parityPtr, b.i32_val(0), initPred);
+    for (int64_t i = 0; i < count;
+         ++i,
+                 offset +=
+                     triton::nvidia_gpu::kClusterBarrierMbarAllocationSize) {
+      for (int64_t slot = 0;
+           slot < triton::nvidia_gpu::kClusterBarrierMbarBufferCount;
+           ++slot) {
+        Value barrierPtr = getClusterBarrierMbarPtr(
+            loc, rewriter, kernel,
+            offset + slot * triton::nvidia_gpu::kClusterBarrierMbarSlotSize,
+            targetInfo);
+        auto ptrTy = cast<LLVM::LLVMPointerType>(barrierPtr.getType());
+        Value parityPtr = b.gep(ptrTy, i8_ty, barrierPtr, LLVM::GEPArg(8));
+        createMBarrierInit(rewriter, loc, initPred, barrierPtr, numCTAs - 1);
+        targetInfo.storeShared(rewriter, loc, parityPtr, b.i32_val(0),
+                               initPred);
+      }
     }
 
     NVIDIA::createFenceMBarrierInitReleaseCluster(rewriter, loc, initPred);
