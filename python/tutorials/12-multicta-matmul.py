@@ -140,13 +140,13 @@ WS_CONFIGS = make_matmul_configs(
 )
 
 
-@triton.autotune(configs=MATMUL_CONFIGS, key=["M", "N", "K", "FP8_INPUTS"], do_bench=proton_autotune_do_bench)
 @triton.jit
-def matmul_kernel_1cta(
+def matmul_kernel(
         a_desc, b_desc, c_desc,  #
         M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-        GROUP_SIZE_M: tl.constexpr, NUM_STAGES: tl.constexpr, FP8_INPUTS: tl.constexpr):
+        GROUP_SIZE_M: tl.constexpr, NUM_STAGES: tl.constexpr, FP8_INPUTS: tl.constexpr,
+        WARP_SPECIALIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
@@ -160,7 +160,7 @@ def matmul_kernel_1cta(
     off_m = pid_m * BLOCK_M
     off_n = pid_n * BLOCK_N
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES, warp_specialize=False):
+    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES, warp_specialize=WARP_SPECIALIZE):
         off_k = k * BLOCK_K
         a = a_desc.load([off_m, off_k])
         b = b_desc.load([off_k, off_n])
@@ -169,62 +169,14 @@ def matmul_kernel_1cta(
     c_desc.store([off_m, off_n], acc.to(tl.float16))
 
 
-@triton.autotune(configs=TWO_CTA_CONFIGS, key=["M", "N", "K", "FP8_INPUTS"], do_bench=proton_autotune_do_bench)
-@triton.jit
-def matmul_kernel_2cta(
-        a_desc, b_desc, c_desc,  #
-        M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
-        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-        GROUP_SIZE_M: tl.constexpr, NUM_STAGES: tl.constexpr, FP8_INPUTS: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    num_pid_m = tl.cdiv(M, BLOCK_M)
-    num_pid_n = tl.cdiv(N, BLOCK_N)
-    num_pid_in_group = GROUP_SIZE_M * num_pid_n
-    group_id = pid // num_pid_in_group
-    first_pid_m = group_id * GROUP_SIZE_M
-    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
-    pid_n = (pid % num_pid_in_group) // group_size_m
+AUTOTUNE_KEY = ["M", "N", "K", "FP8_INPUTS", "WARP_SPECIALIZE"]
 
-    off_m = pid_m * BLOCK_M
-    off_n = pid_n * BLOCK_N
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES, warp_specialize=False):
-        off_k = k * BLOCK_K
-        a = a_desc.load([off_m, off_k])
-        b = b_desc.load([off_k, off_n])
-        acc = tl.dot(a, b, acc)
-
-    c_desc.store([off_m, off_n], acc.to(tl.float16))
-
-
-@triton.autotune(configs=WS_CONFIGS, key=["M", "N", "K", "FP8_INPUTS"], do_bench=proton_autotune_do_bench)
-@triton.jit
-def matmul_kernel_2cta_ws(
-        a_desc, b_desc, c_desc,  #
-        M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
-        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-        GROUP_SIZE_M: tl.constexpr, NUM_STAGES: tl.constexpr, FP8_INPUTS: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    num_pid_m = tl.cdiv(M, BLOCK_M)
-    num_pid_n = tl.cdiv(N, BLOCK_N)
-    num_pid_in_group = GROUP_SIZE_M * num_pid_n
-    group_id = pid // num_pid_in_group
-    first_pid_m = group_id * GROUP_SIZE_M
-    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
-    pid_n = (pid % num_pid_in_group) // group_size_m
-
-    off_m = pid_m * BLOCK_M
-    off_n = pid_n * BLOCK_N
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES, warp_specialize=True):
-        off_k = k * BLOCK_K
-        a = a_desc.load([off_m, off_k])
-        b = b_desc.load([off_k, off_n])
-        acc = tl.dot(a, b, acc)
-
-    c_desc.store([off_m, off_n], acc.to(tl.float16))
+matmul_kernel_1cta = triton.autotune(
+    configs=MATMUL_CONFIGS, key=AUTOTUNE_KEY, do_bench=proton_autotune_do_bench)(matmul_kernel)
+matmul_kernel_2cta = triton.autotune(
+    configs=TWO_CTA_CONFIGS, key=AUTOTUNE_KEY, do_bench=proton_autotune_do_bench)(matmul_kernel)
+matmul_kernel_2cta_ws = triton.autotune(
+    configs=WS_CONFIGS, key=AUTOTUNE_KEY, do_bench=proton_autotune_do_bench)(matmul_kernel)
 
 
 def get_matmul_kernel(num_ctas, warp_specialize):
@@ -253,7 +205,8 @@ def matmul(a, b, *, num_ctas, warp_specialize=False, out=None):
     c_desc = TensorDescriptor.from_tensor(c, [1, 1])
     grid = lambda META: (triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]), )
     kernel = get_matmul_kernel(num_ctas, warp_specialize)
-    return kernel[grid](a_desc, b_desc, c_desc, M, N, K, FP8_INPUTS=is_fp8_dtype(a.dtype))
+    return kernel[grid](a_desc, b_desc, c_desc, M, N, K, FP8_INPUTS=is_fp8_dtype(a.dtype),
+                        WARP_SPECIALIZE=warp_specialize)
 
 
 def selected_config(num_ctas, warp_specialize=False):
