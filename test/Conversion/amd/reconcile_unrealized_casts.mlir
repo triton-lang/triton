@@ -1,12 +1,12 @@
-// RUN: triton-opt %s -split-input-file --triton-amdgpu-convert-warp-specialize-to-llvm=gfx-arch=gfx950 | FileCheck %s
+// RUN: triton-opt %s --reconcile-unrealized-casts | FileCheck %s
 
-// TritonAMDGPUConvertWarpSpecializeToLLVM reconciles leftover
-// unrealized_conversion_casts across the whole module, even for kernels that
-// contain no warp specialization. A no-op convert_layout (e.g. between two MFMA
-// layouts that are physically identical at a given shape) can survive
-// ConvertTritonGPUToLLVM as a `struct -> tensorA -> tensorB -> struct` cast chain
-// that transitively converts a value back to its original type. Reconciliation
-// must erase it, otherwise it reaches and fails MLIR->LLVM translation.
+// AMD's make_llir runs reconcile-unrealized-casts right after
+// ConvertTritonGPUToLLVM. A no-op convert_layout on a loop-carried value (e.g.
+// between two MFMA layouts that are physically identical at a given shape) can
+// survive that partial conversion as a `struct -> tensorA -> tensorB -> struct`
+// cast chain that transitively converts a value back to its original type. The
+// reconcile pass must eliminate such a chain; otherwise it reaches, and fails,
+// MLIR->LLVM translation.
 
 #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 1], instrShape = [16, 16, 32], isTransposed = true}>
 #mma1 = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 2], instrShape = [16, 16, 32], isTransposed = true}>

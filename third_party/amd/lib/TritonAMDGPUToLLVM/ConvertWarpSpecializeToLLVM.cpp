@@ -190,6 +190,16 @@ struct TritonAMDGPUConvertWarpSpecializeToLLVM
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
+    SmallVector<Operation *> wsOps;
+    mod.walk([&](Operation *op) {
+      if (isa<WarpSpecializeOp, WarpSpecializePartitionsOp, WarpYieldOp>(op))
+        wsOps.push_back(op);
+    });
+
+    // If no warp specialization ops, this pass is a no-op
+    if (wsOps.empty())
+      return;
+
     // Use the arch parameter if provided, otherwise get from module
     std::string archStr = this->gfxArch;
     if (archStr.empty()) {
@@ -201,20 +211,22 @@ struct TritonAMDGPUConvertWarpSpecializeToLLVM
       }
       archStr = arch->str();
     }
+
     AMD::TargetInfo targetInfo(archStr.c_str());
+    if (targetInfo.getISAFamily() != triton::amdgpu::ISAFamily::GFX1250) {
+      mod.emitError("Warp specialization is only supported on gfx1250, got ")
+          << archStr;
+      return signalPassFailure();
+    }
 
     // Convert types and cleanup unrealized conversions.
     mlir::LowerToLLVMOptions option(&getContext());
     option.overrideIndexBitwidth(32);
     TritonAMDGPUToLLVMTypeConverter typeConverter(&getContext(), option,
                                                   targetInfo);
-    mod.walk([&](Operation *op) {
-      if (isa<WarpSpecializeOp, WarpSpecializePartitionsOp, WarpYieldOp>(op))
-        convertOpTypes(op, typeConverter);
-    });
-
-    // Reconcile unrealized_conversion_casts across the whole module
-    // unconditionally.
+    for (Operation *op : wsOps) {
+      convertOpTypes(op, typeConverter);
+    }
     OpPassManager pm;
     pm.addPass(createReconcileUnrealizedCastsPass());
     if (failed(runPipeline(pm, mod)))
