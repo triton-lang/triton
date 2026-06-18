@@ -256,7 +256,8 @@ private:
     // Compute the bits that are moved by one instruction
     // Compute elements for which we can swap the xor by an add
     auto [nAdditive, permStrides] = actionAdditiveStrides(
-        reps, addrLayout, maskSpanAffineOffset, fullTile.getInDimSize(kReg));
+        reps, addrLayout, maskSpanAffineOffset, /*maskSpanBlocks=*/0,
+        fullTile.getInDimSize(kReg));
     reps = permStrides.apply(reps);
     if (isPartitioned) {
       partitionLayout = permStrides.apply(partitionLayout);
