@@ -1,3 +1,4 @@
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -277,20 +278,19 @@ struct LoadGroupInfo {
 };
 
 static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
-  for (Operation *user : loadOp->getUsers()) {
-    if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-      for (Operation *allocUser : alloc->getUsers()) {
-        if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(allocUser)) {
-          if (mma.getTwoCtas())
-            return true;
-        }
-      }
+  Block *block = loadOp->getBlock();
+  for (Operation &op : *block) {
+    auto mma = dyn_cast<ttng::MMAv5OpInterface>(&op);
+    if (!mma || !mma.getTwoCtas())
       continue;
-    }
-    if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
-      if (mma.getTwoCtas())
-        return true;
-    }
+
+    BackwardSliceOptions options;
+    options.omitBlockArguments = true;
+    options.filter = [block](Operation *op) { return op->getBlock() == block; };
+    SetVector<Operation *> slice;
+    (void)getBackwardSlice(&op, &slice, options);
+    if (slice.contains(loadOp))
+      return true;
   }
   return false;
 }
@@ -782,7 +782,8 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   OpBuilderForStage builder(mma.getLoc(), mma, schedule);
   Value barrierAlloc = createBarrierAlloc(forOp, numStages,
                                           /*arriveCount=*/1,
-                                          mma.getTwoCtas());
+                                          /*twoCTAs=*/false,
+                                          /*twoCTALayout=*/false);
   Value vTrue = arith::ConstantIntOp::create(builder, 1, 1);
   Value phase = forOp.getRegionIterArg(phaseArgIdx);
   Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);
