@@ -66,9 +66,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0], [2, 0]], twoCTAs = true>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: #[[$BAR_LAYOUT:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[1\], \[2\]\]}}{{.*}}>
   // CHECK-LABEL: sync_tcgen5_mma_two_ctas_barrier
   // CHECK-DAG: %[[TRUE:.*]] = arith.constant true
-  // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
+  // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<4xi64, #[[$BAR_LAYOUT]]
   // CHECK: ttng.init_barrier %[[BAR]], 1
   // CHECK: ttng.tc_gen5_mma {{.*}}, %[[BAR]][%[[TRUE]]] {is_async, two_ctas}
   // CHECK: ttng.wait_barrier %[[BAR]],
