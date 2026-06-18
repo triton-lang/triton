@@ -1362,6 +1362,24 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#src = #ttg.linear<{register = [[1]], lane = [[0], [0], [0], [0], [0]], warp = [], block = [[0]]}>
+#dst = #ttg.linear<{register = [], lane = [[0], [0], [0], [0], [0]], warp = [], block = [[1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: convert_layout_loads_local_replica
+  // CHECK: llvm.store
+  // CHECK: nvg.cluster_id
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.load
+  // CHECK-NOT: nvvm.cluster.arrive
+  // CHECK-NOT: nvvm.cluster.wait
+  tt.func @convert_layout_loads_local_replica(%arg0: tensor<2xf32, #src>) {
+    %0 = ttg.convert_layout %arg0 : tensor<2xf32, #src> -> tensor<2xf32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
 // Regression test for https://github.com/triton-lang/triton/issues/5745
 #linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[1, 0], [2, 0], [4, 0]], block = []}>
 #linear1 = #ttg.linear<{register = [[0, 2]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]], warp = [[2, 0], [4, 0], [0, 1]], block = []}>
@@ -2199,6 +2217,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
     ttg.local_store %arg0, %0 : tensor<1xf32, #blocked> -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#reg = #ttg.linear<{register = [], lane = [[0], [0], [0], [0], [0]], warp = [], block = [[1]]}>
+#shared = #ttg.shared_linear<{offset = [[1]], block = [[0]]}, alignment = 4>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: local_load_uses_local_cta
+  // CHECK: nvg.cluster_id
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.load
+  tt.func public @local_load_uses_local_cta(%arg0: !ttg.memdesc<2xf32, #shared, #smem>) {
+    %0 = ttg.local_load %arg0 : !ttg.memdesc<2xf32, #shared, #smem> -> tensor<2xf32, #reg>
+    tt.return
+  }
+}
+
+// -----
+
+#reg = #ttg.linear<{register = [], lane = [[0], [0], [0], [0], [0]], warp = [], block = [[1]]}>
+#shared = #ttg.shared_linear<{offset = [[1]], block = [[0]]}, alignment = 4>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: local_store_uses_local_cta
+  // CHECK: nvg.cluster_id
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.store
+  tt.func public @local_store_uses_local_cta(%arg0: tensor<2xf32, #reg>, %arg1: !ttg.memdesc<2xf32, #shared, #smem, mutable>) {
+    ttg.local_store %arg0, %arg1 : tensor<2xf32, #reg> -> !ttg.memdesc<2xf32, #shared, #smem, mutable>
     tt.return
   }
 }

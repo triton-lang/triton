@@ -540,64 +540,91 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return emitIndices(loc, rewriter, target, ll, type, withCTAOffset);
 }
 
-SmallVector<LocalSharedMemoryAddress>
-computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
-                  SharedMemoryObject smemObj, Type llvmElemTy,
-                  ArrayRef<Value> idxValues,
-                  ArrayRef<SmallVector<Value>> coords, unsigned axis,
-                  RewriterBase &rewriter, ArrayRef<Value> offsets) {
+SmallVector<std::pair<Value, Value>> computeBlockLocalOffsets(
+    Location loc, triton::gpu::MemDescType memDescTy,
+    const LinearLayout &regLayout, ArrayRef<Value> idxValues, unsigned axis,
+    RewriterBase &rewriter, const TargetInfoBase &targetInfo) {
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-  // Get the shared memory layout (linear component for padded layouts)
   auto sharedLayout = triton::gpu::isPaddedEncoding(memDescTy.getEncoding())
                           ? paddedLinearLayout(memDescTy)
                           : toLinearLayout(memDescTy);
-  LinearLayout invSharedLayout = sharedLayout.pseudoinvert();
-
-  // Get layout dimension names for all dims
-  SmallVector<StringAttr> allDims;
-  for (unsigned dim = 0, rank = memDescTy.getRank(); dim < rank; ++dim)
-    allDims.push_back(str_attr("dim" + Twine(dim)));
-
+  auto allDims = standardOutDimNames(ctx, memDescTy.getRank());
+  auto kRegister = str_attr("register");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
   auto kOffset = str_attr("offset");
   auto kBlock = str_attr("block");
-  bool isMultiCTA = invSharedLayout.getOutDimSize(kBlock) > 1;
+  StringAttr axisDim = allDims[axis];
+  LinearLayout orderedRegLayout = regLayout.transposeOuts(allDims);
+  assert(idxValues.size() == regLayout.getInDimSize(kRegister));
+
+  auto toI32 = [&](Value idx) -> Value {
+    unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
+    if (idxWidth > 32)
+      return b.trunc(i32_ty, idx);
+    if (idxWidth < 32)
+      return b.zext(i32_ty, idx);
+    return idx;
+  };
+
+  SmallVector<std::pair<Value, Value>> offsetAndBlock;
+  offsetAndBlock.reserve(idxValues.size());
+
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  SmallVector<uint32_t> registerIndices;
+  for (uint32_t i = 0; i < idxValues.size(); ++i)
+    registerIndices.push_back(i);
+  // Replace the statically-known coordinate along axis with an independent
+  // input carrying the runtime index.
+  SmallVector<StringAttr> nonIndexedDims = allDims;
+  nonIndexedDims.erase(nonIndexedDims.begin() + axis);
+  assert(!orderedRegLayout.hasInDim(axisDim));
+  LinearLayout indexedLayout =
+      orderedRegLayout.sublayout(
+          llvm::to_vector(orderedRegLayout.getInDimNames()), nonIndexedDims) *
+      LinearLayout::identity1D(sharedLayout.getOutDimSize(axisDim), axisDim,
+                               axisDim);
+  indexedLayout = indexedLayout.transposeOuts(allDims);
+  LinearLayout cvt = invertAndComposeBlockLocal(sharedLayout, indexedLayout);
+  bool crossCTA = !cvt.isIdentityOnOutDim(kBlock);
+  bool blockAffectsOffset = !cvt.sublayoutIsZero({kBlock}, {kOffset});
+
+  Value blockId = b.i32_val(0);
+  if (crossCTA || blockAffectsOffset)
+    blockId = targetInfo.getClusterCTAId(rewriter, loc);
+
+  auto bases = applyLinearLayoutVec(loc, rewriter, cvt,
+                                    {{kRegister, b.i32_val(0)},
+                                     {kLane, laneId},
+                                     {kWarp, warpId},
+                                     {kBlock, blockId},
+                                     {axisDim, b.i32_val(0)}},
+                                    registerIndices);
+  LinearLayout indexCvt = cvt.sublayout({axisDim}, {kOffset, kBlock});
+  for (auto [base, idxVal] : llvm::zip(bases, idxValues)) {
+    auto index =
+        applyLinearLayout(loc, rewriter, indexCvt, {{axisDim, toI32(idxVal)}});
+    Value offset = b.xor_(base[0].second, index[0].second);
+    Value block = b.xor_(base[1].second, index[1].second);
+    offsetAndBlock.push_back({offset, crossCTA ? block : Value()});
+  }
+  return offsetAndBlock;
+}
+
+SmallVector<LocalSharedMemoryAddress>
+materializeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
+                      SharedMemoryObject smemObj, Type llvmElemTy,
+                      ArrayRef<std::pair<Value, Value>> offsetAndBlock,
+                      RewriterBase &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+
   // Get the subslice affine offset (non-zero for memdesc subslices)
   Value affineOffset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
   auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
-
   SmallVector<LocalSharedMemoryAddress> addrs;
-  addrs.reserve(coords.size());
-
-  for (auto [i, idxVal] : llvm::enumerate(idxValues)) {
-    Value idx = idxVal;
-    unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
-    // Convert index to i32 if needed
-    if (idxWidth > 32) {
-      idx = b.trunc(i32_ty, idx);
-    } else if (idxWidth < 32) {
-      idx = b.zext(i32_ty, idx);
-    }
-
-    // Copy coordinates, replace the axis coordinate with the index value, and
-    // then shift all logical coordinates by the optional base offsets.
-    SmallVector<Value> indices(coords[i]);
-    indices[axis] = idx;
-    for (auto [dim, offset] : llvm::enumerate(offsets))
-      indices[dim] = b.add(indices[dim], offset);
-
-    // Apply inverted shared layout to compute offset
-    SmallVector<std::pair<StringAttr, Value>> inputs;
-    for (unsigned dim = 0; dim < indices.size(); ++dim)
-      inputs.push_back({allDims[dim], indices[dim]});
-
-    auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
-    assert(outputs.size() == 2);
-    auto [offsetName, offset] = outputs[0];
-    auto [blockName, blockId] = outputs[1];
-    assert(offsetName == kOffset && blockName == kBlock);
-
+  addrs.reserve(offsetAndBlock.size());
+  for (auto [offset, blockId] : offsetAndBlock) {
     // For subslices, the physical offset is computed as:
     //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
     //
@@ -625,9 +652,8 @@ computeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
       ptr = b.gep(smemObj.getBase().getType(), llvmElemTy, smemObj.getBase(),
                   offset);
     }
-    addrs.push_back({ptr, isMultiCTA ? blockId : Value()});
+    addrs.push_back({ptr, blockId});
   }
-
   return addrs;
 }
 
@@ -665,13 +691,12 @@ FailureOr<LocalAtomicScatterRMWInfo> prepareLocalAtomicScatterRMW(
     if (!maskValues.empty())
       maskValues = removeBroadcast.apply(maskValues);
   }
-  SmallVector<SmallVector<Value>> srcIndices =
-      emitIndices(loc, rewriter, targetInfo, activeRegLayout, valuesTy,
-                  /*withCTAOffset=*/true);
-
+  auto offsetAndBlock =
+      computeBlockLocalOffsets(loc, memDescTy, activeRegLayout, idxValues,
+                               op.getAxis(), rewriter, targetInfo);
   SmallVector<Value> ptrs = llvm::map_to_vector(
-      computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
-                        srcIndices, op.getAxis(), rewriter),
+      materializeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, offsetAndBlock,
+                            rewriter),
       [](const LocalSharedMemoryAddress &addr) { return addr.ptr; });
 
   return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,
@@ -782,6 +807,7 @@ SmallVector<Value> lowerLdSt(
   auto kOffset = str_attr("offset");
   auto kPartition = str_attr("partition");
   auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+  bool crossCTA = !cvt.isIdentityOnOutDim(kBlock);
 
   // Either we have multiple bases with a matching partition dimension,
   // or we have a single base.
@@ -856,7 +882,7 @@ SmallVector<Value> lowerLdSt(
                                          {kBlock, blockId}});
   auto regBaseI8 = baseI8AndCTA[0].second;
   Value targetCtaId;
-  if (useBlockId) {
+  if (crossCTA) {
     targetCtaId = baseI8AndCTA[1].second;
   }
 
@@ -889,7 +915,7 @@ SmallVector<Value> lowerLdSt(
         offset = b.add(offset, paddedAffineOffsetI8);
     }
     Value ctaOffset = b.i32_val(0);
-    if (useBlockId) {
+    if (crossCTA) {
       ctaOffset = b.xor_(targetCtaId, b.i32_val(idxAndBlock[1].second));
     }
     for (int j = 0; j < nAdditive; j += elemsPerVec) {
@@ -916,7 +942,7 @@ SmallVector<Value> lowerLdSt(
       }
 
       Value innerCtaOffset;
-      if (useBlockId) {
+      if (crossCTA) {
         innerCtaOffset = b.add(ctaOffset, b.i32_val(idxAndBlockAdd[1].second));
       }
       auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
