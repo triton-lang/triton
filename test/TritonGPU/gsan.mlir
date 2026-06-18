@@ -86,6 +86,31 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
 
 // -----
 
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func public @instrumented_call_in_warp_specialize
+  // CHECK-SAME: %[[STATE:[^:, )]+]]: !tt.ptr<i8>
+  tt.func public @instrumented_call_in_warp_specialize(%value: i32) {
+    // CHECK: ttg.warp_specialize(%{{.*}}, %[[STATE]])
+    ttg.warp_specialize(%value)
+    default {
+      ttg.warp_yield
+    }
+    // CHECK: partition0(%[[VALUE:[^:, )]+]]: i32, %[[PARTITION_STATE:[^:, )]+]]: !tt.ptr<i8>) num_warps(4)
+    partition0(%partition_value: i32) num_warps(4) {
+      // CHECK: tt.call @identity(%[[VALUE]], %[[PARTITION_STATE]]) : (i32, !tt.ptr<i8>) -> i32
+      %result = tt.call @identity(%partition_value) : (i32) -> i32
+      ttg.warp_return
+    } : (i32) -> ()
+    tt.return
+  }
+
+  tt.func private @identity(%value: i32) -> i32 {
+    tt.return %value : i32
+  }
+}
+
+// -----
+
 #blocked_rows_parent = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
 #blocked_rows = #ttg.slice<{dim = 0, parent = #blocked_rows_parent}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
