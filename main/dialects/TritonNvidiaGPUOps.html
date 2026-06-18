@@ -304,8 +304,8 @@
 </div>
 <p>The <code class="docutils literal notranslate"><span class="pre">ttng.arrive_barrier</span></code> operation performs the “arrive” operation on an
 mbarrier object in shared memory. The operation requires a <code class="docutils literal notranslate"><span class="pre">count</span></code> attribute
-of at least 1, and decreasing the pending arrival count of the mbarrier by
-the specific count.</p>
+of at least 1 and decreases the pending arrival count of the mbarrier by
+the specified count.</p>
 <p>The operation accepts an optional predicate.</p>
 <p>Example:</p>
 <div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>ttng.arrive_barrier %barrier, 2 : !ttg.memdesc&lt;1xi64, #shared, #smem, mutable&gt;
@@ -417,9 +417,9 @@ This op requires a CTA cluster with at least two CTAs.</p>
 </pre></div>
 </div>
 <p>This operation copies data from global memory to local memory
-asynchronously.  This is analogue to tt.load except the data are copied to
-local memory pointed by the memory descriptor instead of a distributed
-tensor. The data copied depends on the global memory descriptor pointed to
+asynchronously. This is analogous to tt.load except the data is copied to
+local memory pointed to by the memory descriptor instead of to a distributed
+tensor. The copied data depends on the global memory descriptor pointed to
 by <code class="docutils literal notranslate"><span class="pre">desc</span></code>.</p>
 <p>The tensor mode is determined by the descriptor type:</p>
 <ul class="simple">
@@ -430,7 +430,7 @@ by <code class="docutils literal notranslate"><span class="pre">desc</span></cod
 </li>
 <li><p>ttng.tensordesc_im2col: IM2COL mode - Im2col mode for convolution-friendly access patterns</p>
 <ul>
-<li><p>In IM2COL mode, ‘coord’ is the coordinates in the input tensor</p>
+<li><p>In IM2COL mode, ‘coord’ is the coordinate in the input tensor</p>
 <ul>
 <li><p>For example, for a 4D tensor (NHWC), ‘coord’ is [batch_idx, channel_idx, h, w]</p></li>
 </ul>
@@ -499,10 +499,10 @@ by <code class="docutils literal notranslate"><span class="pre">desc</span></cod
 </pre></div>
 </div>
 <p>This operation copies data from local memory to global memory
-asynchronously.  This is analogue to tt.store except the data are copied from
-local memory pointed by the memory descriptor instead of a distributed
-tensor. The data copied depends on the global memory descriptor pointed to
-by <code class="docutils literal notranslate"><span class="pre">desc</span></code>.</p>
+asynchronously. This is analogous to tt.store except the data is copied from
+local memory pointed to by the memory descriptor instead of from a
+distributed tensor. The copied data depends on the global memory descriptor
+pointed to by <code class="docutils literal notranslate"><span class="pre">desc</span></code>.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">TMAOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TMAStoreLikeOpInterface</span></code></p>
 <section id="id6">
@@ -535,8 +535,8 @@ by <code class="docutils literal notranslate"><span class="pre">desc</span></cod
               attr-dict `:` type(operands)
 </pre></div>
 </div>
-<p>This operation gathers multiple rows of data from global memory matrix to
-local memory asynchronously.  This is similar to
+<p>This operation gathers multiple rows of data from a global memory matrix to
+local memory asynchronously. This is similar to
 async_tma_copy_global_to_local except that each row is indexed independently.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TMALoadLikeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TMAOpInterface</span></code></p>
@@ -631,8 +631,8 @@ semantics are implied.</p>
 </div>
 <p>The <code class="docutils literal notranslate"><span class="pre">ttng.async_tma_scatter</span></code> operation scatters multiple separately-indexed
 rows of data from local memory into global memory asynchronously. The
-operation scatters a 2D tensor in shared memory, laid out by core tensor
-tiles nvmma_shared layout into separately indexed rows in global
+operation scatters a 2D tensor in shared memory, laid out using the core
+tensor tiles nvmma_shared layout, into separately indexed rows in global
 memory at a given <code class="docutils literal notranslate"><span class="pre">y</span></code> offset.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">TMAOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TMAStoreLikeOpInterface</span></code></p>
@@ -688,8 +688,9 @@ needed before shared memory can be written to again.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.barrier_expect` $alloc `,` $size attr-dict `,` $pred `:` qualified(type($alloc))
 </pre></div>
 </div>
-<p>This signal the barrier that <code class="docutils literal notranslate"><span class="pre">size</span></code> bytes are expected to be copied. The
-associated barrier wait will block until the expected number of bytes are copied.</p>
+<p>This signals the barrier that <code class="docutils literal notranslate"><span class="pre">size</span></code> bytes are expected to be copied. The
+associated barrier wait will block until the expected number of bytes has
+been copied.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id13">
@@ -720,12 +721,12 @@ associated barrier wait will block until the expected number of bytes are copied
 </section>
 <section id="ttng-clc-get-program-id-triton-nvidia-gpu-clcgetprogramidop">
 <h2><code class="docutils literal notranslate"><span class="pre">ttng.clc_get_program_id</span></code> (triton::nvidia_gpu::CLCGetProgramIdOp)<a class="headerlink" href="#ttng-clc-get-program-id-triton-nvidia-gpu-clcgetprogramidop" title="Link to this heading"></a></h2>
-<p><em>Get CTA ID coordinate from CLC response</em></p>
+<p><em>Get program ID coordinate from CLC response</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.clc_get_program_id` $clcResult `,` $dim attr-dict `:` type($clcResult) `-&gt;` type($result)
 </pre></div>
 </div>
-<p>Decodes the CLC response to get the first CTA ID coordinate of the
+<p>Decodes the CLC response to get the program ID coordinate of the
 canceled cluster. The dim attribute specifies which dimension (0=x, 1=y, 2=z).</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
@@ -818,8 +819,8 @@ canceled. Returns true if canceled, false otherwise.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.clc_load_result` $src attr-dict `:` qualified(type($src)) `-&gt;` type($clcResult)
 </pre></div>
 </div>
-<p>Loads the 128-bit CLC response from shared memory into two i64 registers.
-This allows subsequent is_canceled and get_first_ctaid operations to
+<p>Loads the 128-bit CLC response from shared memory into an i128 value.
+This allows subsequent clc_is_canceled and clc_get_program_id operations to
 operate on registers without re-reading shared memory.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
@@ -865,7 +866,7 @@ operate on registers without re-reading shared memory.</p>
 a pending cluster launch. The result is written asynchronously to the
 result buffer and the mbarrier is signaled on completion.</p>
 <p>This is used for dynamic persistent kernels on Blackwell (SM100+).</p>
-<p>The result buffer must be 16-byte aligned shared memory.
+<p>The result buffer must be a 16-byte aligned <code class="docutils literal notranslate"><span class="pre">2xi64</span></code> shared memory memdesc.
 The mbarrier must be 8-byte aligned shared memory.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code></p>
@@ -1028,7 +1029,7 @@ spec this has to be done before any reuse of the memory used by mbarrier.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.reinterpret_tensor_descriptor` $rawDesc attr-dict `:` qualified(type($rawDesc))  `to` qualified(type($result))
 </pre></div>
 </div>
-<p>This Op exists to help the transition from untyped raw TMA objects to typed Tensor descriptor objects.
+<p>This op exists to help the transition from untyped raw TMA objects to typed tensor descriptor objects.
 Ideally, we can remove this once the APIs are fully fleshed out.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
@@ -1118,7 +1119,7 @@ operation on <code class="docutils literal notranslate"><span class="pre">%barri
 </section>
 <section id="ttng-tc-gen5-mma-triton-nvidia-gpu-tcgen5mmaop">
 <h2><code class="docutils literal notranslate"><span class="pre">ttng.tc_gen5_mma</span></code> (triton::nvidia_gpu::TCGen5MMAOp)<a class="headerlink" href="#ttng-tc-gen5-mma-triton-nvidia-gpu-tcgen5mmaop" title="Link to this heading"></a></h2>
-<p><em>Block level op mapping to tensorcore gen5 mma</em></p>
+<p><em>Block-level op mapping to Tensor Core Gen5 MMA</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tc_gen5_mma` $a `,` $b `,` $d `` custom&lt;Token&gt;($acc_dep, type($token)) `,` $useD`,`
               $pred `` custom&lt;BarriersAndPreds&gt;($barriers, $barrier_preds)
@@ -1127,10 +1128,12 @@ operation on <code class="docutils literal notranslate"><span class="pre">%barri
 </pre></div>
 </div>
 <p>$d += matrix_multiply($a, $b).
-if is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
-Otherwise, if a barrier is given, the op will trigger a commit/arrive on it. The result will be safe to read after a barrier wait.
-If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
-and syncronize both CTAs if the op is synchronous.</p>
+If <code class="docutils literal notranslate"><span class="pre">is_async</span></code> is false, the op executes synchronously. The barrier operands
+must not be present in that case. Otherwise, if a barrier is given, the op
+will trigger a commit/arrive on it. The result will be safe to read after a
+barrier wait. If <code class="docutils literal notranslate"><span class="pre">$two_ctas</span></code> is set, the op will execute a matmul across two
+contiguous CTAs and read the data distributed across the two CTAs. It will
+also synchronize both CTAs if the op is synchronous.</p>
 <p>This operation takes and produces an optional token to indicate TMEM read
 and write on its accumulator operand. When the tokens are present, they can
 be used to check aliasing and modref on the accumulator memory.</p>
@@ -1202,7 +1205,7 @@ If true, the integer values are treated as unsigned, otherwise they are treated 
 </section>
 <section id="ttng-tc-gen5-mma-scaled-triton-nvidia-gpu-tcgen5mmascaledop">
 <h2><code class="docutils literal notranslate"><span class="pre">ttng.tc_gen5_mma_scaled</span></code> (triton::nvidia_gpu::TCGen5MMAScaledOp)<a class="headerlink" href="#ttng-tc-gen5-mma-scaled-triton-nvidia-gpu-tcgen5mmascaledop" title="Link to this heading"></a></h2>
-<p><em>Block level op mapping to tensorcore gen5 mma</em></p>
+<p><em>Block-level op mapping to Tensor Core Gen5 MMA</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tc_gen5_mma_scaled` $a `,` $b `,` $d `` custom&lt;Token&gt;($acc_dep, type($token)) `,` $a_scale `,`
               $b_scale `,` $useD `,` $pred `lhs` `=` $a_type `rhs` `=` $b_type
@@ -1212,10 +1215,12 @@ If true, the integer values are treated as unsigned, otherwise they are treated 
               qualified(type($b_scale)) (`,` qualified(type($barriers))^)?
 </pre></div>
 </div>
-<p>$d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
-If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs
-and synchronize both CTAs if the op is synchronous.
-If is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
+<p>$d += matrix_multiply(scale($a, $a_scale), scale($b, $b_scale))
+If <code class="docutils literal notranslate"><span class="pre">$two_ctas</span></code> is set, the op will execute a matmul across two contiguous
+CTAs, read the data distributed across the two CTAs, and synchronize both
+CTAs if the op is synchronous.
+If <code class="docutils literal notranslate"><span class="pre">is_async</span></code> is false, the op executes synchronously. The barrier operands
+must not be present in that case.
 Otherwise, if a barrier is given, the op will trigger a commit/arrive on it.
 The result will be safe to read after a barrier wait.</p>
 <p>This operation takes and produces an optional token to indicate TMEM read
@@ -1381,7 +1386,7 @@ be used to check aliasing and modref on the accumulator memory.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tmem_alloc` ($src^)? attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
-<p>This operation allocates buffer in tensor memory and return a descriptor
+<p>This operation allocates a buffer in tensor memory and returns a descriptor
 containing the address and a view of the buffer.
 This is similar to ttg.local_alloc except the buffer is allocated in tensor memory.</p>
 <p>Explicitly deallocating a buffer is optional; see local_dealloc.</p>
@@ -1423,24 +1428,26 @@ This is similar to ttg.local_alloc except the buffer is allocated in tensor memo
 </section>
 <section id="ttng-tmem-copy-triton-nvidia-gpu-tmemcopyop">
 <h2><code class="docutils literal notranslate"><span class="pre">ttng.tmem_copy</span></code> (triton::nvidia_gpu::TMEMCopyOp)<a class="headerlink" href="#ttng-tmem-copy-triton-nvidia-gpu-tmemcopyop" title="Link to this heading"></a></h2>
-<p><em>Initiate an asynchronous copy operation from shared memory to the Tensor Memory.</em></p>
+<p><em>Initiate an asynchronous copy operation from shared memory to tensor memory.</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tmem_copy` $src `,` $dst attr-dict `:` qualified(type(operands))
 </pre></div>
 </div>
 <p>2D blocks stored contiguously in SMEM are copied into TMEM as specified by the destination address.
-This op lowers to the PTX instruction tcgen05.cp. This supports writing either to scales tmem layout as well as default tmem layout.
-Currently the semantic is different when writing to tmem scale layout.</p>
-<p>In case of default layout the copy doesn’t change the logical elements between the source and destination memdesc.</p>
-<p>In case of scale layout:
+This op lowers to the PTX instruction tcgen05.cp. This supports writing to
+the scales TMEM layout as well as the default TMEM layout.
+Currently, the semantics are different when writing to the TMEM scale layout.</p>
+<p>In the case of the default layout, the copy doesn’t change the logical
+elements between the source and destination memdesc.</p>
+<p>In the case of the scale layout:
 Each 32x128b block in SMEM is duplicated over 4 warps and stored into 128 rows
 and 4 columns of TMEM. The primary use case of this op is to copy blocked scales from SMEM to TMEM.</p>
-<p>The shape of the input SMEM can be flexibily chosen depending on use cases. In the simplest case (e.g. unit test),
+<p>The shape of the input SMEM can be flexibly chosen depending on use cases. In the simplest case (e.g. unit test),
 the source SMEM can be of shape (32 x num_blocks, 16), and the destination TMEM should be of shape (128, 16 x num_blocks),
-for copying 8 bit values. For scaled GEMM, rep_m x rep_k copies of a 32x128b block need to be stored in SMEM, where
+for copying 8-bit values. For scaled GEMM, rep_m x rep_k copies of a 32x128b block need to be stored in SMEM, where
 rep_m = BLOCK_M / 128, rep_k = BLOCK_K / scale_vec_size / 4, and scale_vec_size = 32 for MXFP.
 Conceptually, the SMEM is organized in a high-dimensional layout, (rep_m, rep_k, 32, 4, 4B).
-Some of axes can be flattened into one, to reduce the rank of the load. For example, the following patterns are supported:</p>
+Some axes can be flattened into one to reduce the rank of the load. For example, the following patterns are supported:</p>
 <ul class="simple">
 <li><p>(rep_m, rep_k * 32 x 4 x 4B), 2D scale load with cp.async</p></li>
 <li><p>(rep_m, rep_k, 32, 16B), 4D scale load with TMA</p></li>
@@ -1452,13 +1459,14 @@ Since rep_m blocks are not contiguous in SMEM, this axis cannot be flattened int
 <li><p>Its shape must be (BLOCK_MN, BLOCK_K / scale_vec_size), representing the logical shape of blocked scales.</p></li>
 <li><p>It must be attached with <code class="docutils literal notranslate"><span class="pre">tensor_memory_scales_encoding</span></code> to indicate the chunk-based layout and its duplication over 4 warps.</p></li>
 </ul>
-<p>In contrast, the src SMEM must be in the explicit chunk-based layout as described above. So the IR might look like this:</p>
-<p>ttng.tmem_copy %1, %0 : (!ttg.memdesc&lt;1x1x32x4x4xi8, #shared1, #smem&gt;, !ttg.memdesc&lt;128x4xi8, #tmem_scales, #ttng.tensor_memory&gt;) -&gt; ()</p>
+<p>In contrast, the source SMEM must be in the explicit chunk-based layout as
+described above. Therefore, the IR might look like this:</p>
+<p>ttng.tmem_copy %1, %0 : !ttg.memdesc&lt;1x1x32x4x4xi8, #shared1, #smem&gt;, !ttg.memdesc&lt;128x4xi8, #tmem_scales, #ttng.tensor_memory&gt;</p>
 <p>We interpret the semantics of this copy operation as follows. The chunk-based layout in SMEM implies that
 the logical shape (BLOCK_MN, BLOCK_K / scale_vec_size) in TMEM is the result of certain reshape and transpose operations.
-In practice, to take an advantage of the native scale layout and the TMEM copy op,  users need to do
+In practice, to take advantage of the native scale layout and the TMEM copy op, users need to do
 <code class="docutils literal notranslate"><span class="pre">scales5D.trans(0,</span> <span class="pre">3,</span> <span class="pre">2,</span> <span class="pre">1,</span> <span class="pre">4).reshape(BLOCK_M,</span> <span class="pre">BLOCK_K</span> <span class="pre">//</span> <span class="pre">scale_vec_size)</span></code> before feeding scales into dot_scaled.
-When we use tmem_copy in the IR, such reshape and transpose operations are removed. But the change in the logical shape they have caused on
+When we use tmem_copy in the IR, such reshape and transpose operations are removed. But the change in the logical shape they have caused in
 registers is now understood to be incorporated into tmem_copy itself. Ideally, we would lift reshape / transpose done on registers onto
 the SMEM memdesc, making tmem_copy a straightforward 2D copy operation: (BLOCK_MN, BLOCK_K / scale_vec_size) -&gt; (BLOCK_MN, BLOCK_K / scale_vec_size).
 In the absence of such operations on memdesc, we resort to implicitly encoding the reshape/transpose semantics in tmem_copy.</p>
@@ -1490,15 +1498,16 @@ In the absence of such operations on memdesc, we resort to implicitly encoding t
               attr-dict `:` qualified(type($src)) `-&gt;` type($result) (`,` type($red)^)?
 </pre></div>
 </div>
-<p>This is similar to ttg.local_load except the result layout is restricted to only few possibility.
-Therefore we cannot combine this op with any convert layout like local_load.</p>
+<p>This is similar to ttg.local_load except the result layout is restricted to
+only a few possibilities. Therefore, we cannot combine this op with layout
+conversions like local_load.</p>
 <p>This operation takes and produces an optional token to indicate TMEM read
 on its source operand. When the tokens are present, they can
 be used to check aliasing and modref on the TMEM buffer.</p>
 <p>Optional reduction modifier:
 When <code class="docutils literal notranslate"><span class="pre">redOp</span></code> is specified, the load operation additionally performs an
 element-wise reduction along the N-dimension of the input and produces a
-second result tensor <code class="docutils literal notranslate"><span class="pre">red</span></code>. For a input of shape <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">N]</span></code>, the
+second result tensor <code class="docutils literal notranslate"><span class="pre">red</span></code>. For an input of shape <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">N]</span></code>, the
 reduced result has shape <code class="docutils literal notranslate"><span class="pre">[M]</span></code>, containing one reduced value per “slice”
 of the N-dimension.</p>
 <p>Currently restricted to f32 element type.</p>
@@ -1513,7 +1522,7 @@ When false, NaN values are ignored during reduction.
 Only valid when <code class="docutils literal notranslate"><span class="pre">redOp</span></code> is specified.</p></li>
 </ul>
 <p>Example:
-Input in TMEM of shape[M=2, N=4]:
+Input in TMEM of shape [M=2, N=4]:
 [[ 1.0, 3.0, 2.0, 4.0],
 [-5.0, 1.0, 8.0, 2.0]]</p>
 <p>With redOp=MAX:
@@ -1582,9 +1591,10 @@ tcgen05.ld.red instruction on supported architectures, e.g. Blackwell Ultra.</p>
               attr-dict `:` type($src) `-&gt;` qualified(type($dst))
 </pre></div>
 </div>
-<p>This is similar to ttg.local_store except the source layout is restricted to only few possibility.</p>
+<p>This is similar to ttg.local_store except the source layout is restricted to
+only a few possibilities.</p>
 <p>This operation takes and produces an optional token to indicate TMEM write
-on its source operand. When the tokens are present, they can
+on its destination operand. When the tokens are present, they can
 be used to check aliasing and modref on the TMEM buffer.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
@@ -1635,10 +1645,11 @@ be used to check aliasing and modref on the TMEM buffer.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.tmem_subslice` $src attr-dict `:` qualified(type($src)) `-&gt;` qualified(type($result))
 </pre></div>
 </div>
-<p>This operation takes a subslice of a tensor memory allocation and returns a new descriptor
-containing the address and a view of the subslice.
-This is similar to ttg.memdesc_subslice except we can only slice along the inner dimension
-of a 2D memdesc as this is the only one we can do for TMem.</p>
+<p>This operation takes a subslice of a tensor memory allocation and returns a
+new descriptor containing the address and a view of the subslice.
+This is similar to ttg.memdesc_subslice except we can only slice along the
+inner dimension of a 2D memdesc, as this is the only supported slice for
+TMEM.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">MemDescViewTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
@@ -1692,8 +1703,8 @@ of a 2D memdesc as this is the only one we can do for TMem.</p>
 its current phase.</p>
 <p>This lowers a waitloop using PTX instruction
 mbarrier.try_wait.parity.shared::cta.b64.</p>
-<p>Accepts optional list of memory. If present, it is assumed that any of the
-dependencies may be accessed until the barrier completes.</p>
+<p>Accepts an optional list of memory dependencies. If present, it is assumed
+that any of the dependencies may be accessed until the barrier completes.</p>
 <p>The barrier behavior is described here:
 https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-asynchronous-copy-completion-mechanisms</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
@@ -1792,8 +1803,9 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-
 </div>
 <p>Waits until there are $pendings or fewer outstanding async dot operations.</p>
 <p>$inputs must be the tensors corresponding to the async dot ops that we’re
-waiting on.  For example, if there are N pending async dot ops and we call
-<code class="docutils literal notranslate"><span class="pre">warp_group_dot_wait</span> <span class="pre">1</span></code>, then $inputs must be the result of the first dot op.</p>
+waiting on. For example, if there are N pending async dot ops and we wait
+until one remains pending, then $inputs must include the results of the
+first N - 1 dot ops.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id55">
