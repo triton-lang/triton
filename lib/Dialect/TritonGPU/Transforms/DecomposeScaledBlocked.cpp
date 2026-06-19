@@ -123,12 +123,13 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::broadcastScale(
   Attribute broadcastEncoding;
   auto result = interface->inferReshapeOpEncoding(
       resultShape, dstEncoding, broadcastShape, broadcastEncoding,
-      /*allowReorder=*/false, loc);
+      /*allowReorder=*/false, /*requireSliced=*/false, loc);
   assert(succeeded(result));
   Attribute srcEncoding;
   result = interface->inferReshapeOpEncoding(expandedShape, broadcastEncoding,
                                              scaleTy.getShape(), srcEncoding,
-                                             /*allowReorder=*/false, loc);
+                                             /*allowReorder=*/false,
+                                             /*requireSliced=*/false, loc);
   assert(succeeded(result));
 
   auto srcType = scaleTy.cloneWithEncoding(srcEncoding);
