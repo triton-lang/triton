@@ -277,14 +277,32 @@ struct LoadGroupInfo {
 };
 
 static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
-  SetVector<Operation *> worklist;
-  worklist.insert(loadOp->user_begin(), loadOp->user_end());
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Operation *op = worklist[i];
+  ForwardSliceOptions options;
+  options.filter = [&](Operation *op) {
+    if (op != loadOp && (isa<tt::LoadOp>(op) || isTMALoad(op)))
+      return false;
+    return true;
+  };
+
+  SetVector<Operation *> slice;
+  (void)getForwardSlice(loadOp, &slice, options);
+  SetVector<Operation *> stopped;
+  for (Operation *op : slice) {
+    bool followsStoppedOp = llvm::any_of(op->getOperands(), [&](Value operand) {
+      Operation *def = operand.getDefiningOp();
+      return def && stopped.contains(def);
+    });
+    if (followsStoppedOp) {
+      stopped.insert(op);
+      continue;
+    }
+
     auto mma = dyn_cast<ttng::MMAv5OpInterface>(op);
-    if (mma && mma.getTwoCtas())
-      return true;
-    worklist.insert(op->user_begin(), op->user_end());
+    if (mma) {
+      if (mma.getTwoCtas())
+        return true;
+      stopped.insert(op);
+    }
   }
   return false;
 }
