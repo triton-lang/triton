@@ -124,3 +124,33 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %a : tensor<128x32xf16, #desc_load_src>
   }
 }
+
+// -----
+
+#desc_load_4cta = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#dot_default_4cta = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
+#dot_a_4cta = #ttg.dot_op<{opIdx = 0, parent = #dot_default_4cta}>
+#dot_b_4cta = #ttg.dot_op<{opIdx = 1, parent = #dot_default_4cta}>
+
+// CHECK-DAG: #[[$DESC_4CTA_B_ORIG:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\], \[2, 0\]\]}}}>
+// CHECK-DAG: #[[$DESC_4CTA_B_PLANNED:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = {{\[\[0, 0\], \[0, 0\]\]}}}>
+// CHECK-DAG: #[[$DOT_4CTA_M_ONLY:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = {{\[\[1, 0\], \[2, 0\]\]}}}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @dot_prefers_m_only_for_4cta_descriptor_rhs
+  // CHECK: %[[B_DESC_LOAD:.*]] = tt.descriptor_load %{{.*}}[%{{.*}}, %{{.*}}] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #[[$DESC_4CTA_B_PLANNED]]>
+  // CHECK: ttg.convert_layout %{{.*}} : tensor<256x64xf16, #{{.*}}> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DOT_4CTA_M_ONLY]]}>>
+  // CHECK: ttg.convert_layout %[[B_DESC_LOAD]] : tensor<64x256xf16, #[[$DESC_4CTA_B_PLANNED]]> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$DOT_4CTA_M_ONLY]]}>>
+  // CHECK: tt.dot %{{.*}}, %{{.*}}, %{{.*}} : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DOT_4CTA_M_ONLY]]}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$DOT_4CTA_M_ONLY]]}>> -> tensor<256x256xf32, #[[$DOT_4CTA_M_ONLY]]>
+  tt.func @dot_prefers_m_only_for_4cta_descriptor_rhs(
+    %a: tensor<256x64xf16, #desc_load_4cta>,
+    %b_desc: !tt.tensordesc<64x256xf16>,
+    %i: i32,
+    %j: i32,
+    %c: tensor<256x256xf32, #dot_default_4cta>) {
+    %b = tt.descriptor_load %b_desc[%i, %j] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #desc_load_4cta>
+    %ad = ttg.convert_layout %a : tensor<256x64xf16, #desc_load_4cta> -> tensor<256x64xf16, #dot_a_4cta>
+    %bd = ttg.convert_layout %b : tensor<64x256xf16, #desc_load_4cta> -> tensor<64x256xf16, #dot_b_4cta>
+    %dot = tt.dot %ad, %bd, %c : tensor<256x64xf16, #dot_a_4cta> * tensor<64x256xf16, #dot_b_4cta> -> tensor<256x256xf32, #dot_default_4cta>
+    tt.return
+  }
+}
