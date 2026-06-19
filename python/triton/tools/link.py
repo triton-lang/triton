@@ -214,7 +214,9 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
 # generate dispatcher function for kernels with different meta-parameter and constant values
 def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
     src = f"TT_ResultTy {meta.orig_kernel_name}(TT_StreamTy stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
-    src += f"  assert (algo_id < (int)sizeof({meta.orig_kernel_name}_kernels));\n"
+    src += f"  int num_algos = (int)(sizeof({meta.orig_kernel_name}_kernels) / sizeof({meta.orig_kernel_name}_kernels[0]));\n"
+    src += "  if (algo_id < 0 || algo_id >= num_algos)\n"
+    src += "    return TT_ERROR_INVALID_VALUE;\n"
     src += f"  return {meta.orig_kernel_name}_kernels[algo_id](stream, {', '.join(meta.arg_names)});\n"
     src += "}\n"
     return src
@@ -319,7 +321,6 @@ if __name__ == "__main__":
     with args.out.with_suffix(".c").open("w") as fp:
         out = backend_prelude
         out += "#include <stdint.h>\n"
-        out += "#include <assert.h>\n"
         out += "\n"
         out += "\n".join(defs)
         out += "\n"
