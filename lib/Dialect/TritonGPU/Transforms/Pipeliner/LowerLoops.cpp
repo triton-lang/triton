@@ -7,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -233,14 +234,15 @@ void createTMAAsyncCopy(
 void createTMAAsyncLoad(scf::ForOp forOp, tt::DescriptorLoadOp loadOp,
                         Value alloc, Value insertIdx, Value extractIdx,
                         Value barrier, Operation *waitOp,
-                        CoarseSchedule &schedule) {
+                        CoarseSchedule &schedule, bool useMulticast) {
   return createTMAAsyncCopy(forOp, loadOp, loadOp.getDesc(), alloc, insertIdx,
                             extractIdx, barrier, waitOp, schedule,
                             [&](OpBuilderForStage &builder, Value desc,
                                 Value barrier, Value view, Value pred) {
                               ttng::AsyncTMACopyGlobalToLocalOp::create(
                                   builder, loadOp.getLoc(), desc,
-                                  loadOp.getIndices(), barrier, view, pred);
+                                  loadOp.getIndices(), barrier, view, pred,
+                                  useMulticast);
                             });
 }
 
@@ -268,6 +270,7 @@ struct AsyncLoad {
   Value barrier;
   Operation *waitOp;
   SharedEncodingTrait sharedEncoding;
+  bool useMulticast = false;
 };
 struct LoadGroupInfo {
   Value insertIdx;
@@ -292,36 +295,26 @@ static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
   return false;
 }
 
-static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
-  SmallVector<Value> descs = mma.getCompletionDescs();
+static bool loadUsesTMAMulticast(Operation *loadOp) {
+  if (!isa<tt::DescriptorLoadOp>(loadOp))
+    return false;
 
-  // Each mask describes CTA-id bits that are broadcast for one completion
-  // descriptor. For cta_group::2, getCTABroadcastMasks also adds the CTA-pair
-  // bit even when there are no descriptor operands.
-  SmallVector<uint16_t> broadcastMasks =
-      ttng::getCTABroadcastMasks(mma.getTwoCtas(), descs);
-  if (broadcastMasks.empty())
-    return 1;
+  auto tensorTy = dyn_cast<RankedTensorType>(loadOp->getResult(0).getType());
+  if (!tensorTy)
+    return false;
+  auto kBlock = StringAttr::get(loadOp->getContext(), "block");
+  if (!toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock))
+    return false;
 
-  int numCTAs = lookupNumCTAs(mma.getOperation());
-  uint16_t ctaMask = numCTAs - 1;
-  int count = 0;
-  for (int cta = 0; cta < numCTAs; ++cta) {
-    if (mma.getTwoCtas() && (cta & 1))
-      continue;
-    for (uint16_t broadcastMask : broadcastMasks) {
-      // Count one completion-barrier arrival per CTA group. Broadcast bits
-      // identify CTAs in the same multicast group; fixed, non-broadcast bits
-      // identify distinct groups. Count the representative with fixed bits
-      // equal to zero.
-      uint16_t fixedMask = (~broadcastMask) & ctaMask;
-      if ((cta & fixedMask) == 0) {
-        ++count;
-        break;
-      }
-    }
+  SetVector<Operation *> worklist;
+  worklist.insert(loadOp->user_begin(), loadOp->user_end());
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Operation *op = worklist[i];
+    if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
+      return mma.getTwoCtas();
+    worklist.insert(op->user_begin(), op->user_end());
   }
-  return count;
+  return false;
 }
 
 // Convert a scalar load to a load of a tensor of shape <1>.
@@ -542,6 +535,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
         asyncLoad.stageDiff = stageDiff;
         asyncLoad.contiguity = contiguity;
         asyncLoad.sharedEncoding = sharedEncoding;
+        asyncLoad.useMulticast = loadUsesTMAMulticast(&op);
       } else if (stageDiff > 1) {
         // Distance-1 loads can in most cases be pipelined in registers without
         // any performance degradation, as the schedule will usually reorder the
@@ -648,7 +642,8 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
       hasAsyncLoads = true;
     } else if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(op)) {
       createTMAAsyncLoad(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
-                         asyncLoad.barrier, asyncLoad.waitOp, schedule);
+                         asyncLoad.barrier, asyncLoad.waitOp, schedule,
+                         asyncLoad.useMulticast);
     } else if (auto loadOp = dyn_cast<tt::DescriptorGatherOp>(op)) {
       createTMAAsyncGather(forOp, loadOp, asyncLoad.alloc, insertIdx,
                            extractIdx, asyncLoad.barrier, asyncLoad.waitOp,
@@ -810,9 +805,9 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   int numStages = mainWaitStage - schedule[mma].first + 1;
 
   OpBuilderForStage builder(mma.getLoc(), mma, schedule);
-  Value barrierAlloc =
-      createBarrierAlloc(forOp, numStages, getMMAv5CompletionBarrierCount(mma),
-                         /*twoCTAs=*/false);
+  Value barrierAlloc = createBarrierAlloc(
+      forOp, numStages, ttng::getMMAv5CompletionBarrierCount(mma),
+      /*twoCTAs=*/false);
   Value vTrue = arith::ConstantIntOp::create(builder, 1, 1);
   Value phase = forOp.getRegionIterArg(phaseArgIdx);
   Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);

@@ -18,6 +18,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -690,6 +691,29 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
   return sawMMAv5Dot && !result.wasInterrupted();
 }
 
+static bool usesTMAMulticast(Value operand) {
+  auto memDescTy = dyn_cast<MemDescType>(operand.getType());
+  if (!memDescTy || !triton::nvidia_gpu::hasCGABroadcast(memDescTy))
+    return false;
+
+  Value value = operand;
+  while (auto viewOp = value.getDefiningOp()) {
+    if (viewOp->hasTrait<OpTrait::MemDescViewTrait>()) {
+      value = viewOp->getOperand(0);
+      continue;
+    }
+    if (auto alloc = dyn_cast<LocalAllocOp>(viewOp)) {
+      Value src = alloc.getSrc();
+      if (!src)
+        return false;
+      src = getDefiningOpSkippingConvertLayout(src);
+      return isa_and_nonnull<triton::DescriptorLoadOp>(src.getDefiningOp());
+    }
+    return false;
+  }
+  return false;
+}
+
 static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
                            const CGAEncodingAttr &newCGALayout) {
   OpBuilder::InsertionGuard g(rewriter);
@@ -788,6 +812,8 @@ public:
         rewriter, loc, tokType, a, b, acc, acc.getToken(), /*useD=*/vTrue,
         /*pred=*/vTrue);
     mma.setTwoCtas(useTwoCTAs);
+    mma.setMulticast(useTwoCTAs &&
+                     (usesTMAMulticast(a) || usesTMAMulticast(b)));
 
     auto ld = triton::nvidia_gpu::TMEMLoadOp::create(
         rewriter, loc, newAccType, tokType, acc, /*dep=*/mma.getToken());
