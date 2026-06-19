@@ -876,8 +876,8 @@ LogicalResult AsyncTDMGatherOp::verify() {
     return emitOpError("src_row_indices size must be a power of 2, got ")
            << numIndices;
 
-  if (auto paddedEnc = llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(enc);
-      paddedEnc && !(paddedEnc.getIntervals().size() == 1 &&
+  auto paddedEnc = llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(enc);
+  if (paddedEnc && !(paddedEnc.getIntervals().size() == 1 &&
                      paddedEnc.getPaddings().size() == 1))
     return emitOpError(
         "TDM gather does not support multiple interval-padding pairs");
@@ -895,6 +895,7 @@ LogicalResult AsyncTDMGatherOp::verify() {
   if (srcRowIndicesType.getEncoding()) {
     auto indexLL = triton::gpu::toLinearLayout(srcRowIndicesType);
     auto kLane = mlir::StringAttr::get(getContext(), "lane");
+    auto kBlock = mlir::StringAttr::get(getContext(), "block");
     auto freeVarMasks = indexLL.getFreeVariableMasks();
     unsigned laneFreeMask = freeVarMasks.lookup(kLane);
     unsigned numLanes = indexLL.getInDimSize(kLane);
@@ -903,6 +904,32 @@ LogicalResult AsyncTDMGatherOp::verify() {
           "index layout distributes values across lanes, which is "
           "incompatible with the warp-level TDM instruction. Change layout "
           "to broadcast the same indices to all lanes in a warp.");
+
+    // Because indices only describe rows the CGA layout of the indices and the
+    // destination must only match on the row dimension.
+    // How the tensor is distributed across the columns is not relevant for the
+    // indicies and is only encoded in the CGA layout of the destination.
+    auto sharedLL = paddedEnc ? paddedEnc.getLinearComponent()
+                              : triton::gpu::toLinearLayout(smemTy);
+    auto kDim0 = mlir::StringAttr::get(getContext(), "dim0");
+    auto indexBlockIt = indexLL.getBases().find(kBlock);
+    auto sharedBlockIt = sharedLL.getBases().find(kBlock);
+
+    bool indexHasBlockBasis = indexBlockIt != indexLL.getBases().end() &&
+                              !indexBlockIt->second.empty();
+    bool sharedHasBlockBasis = sharedBlockIt != sharedLL.getBases().end() &&
+                               !sharedBlockIt->second.empty();
+
+    if (indexHasBlockBasis != sharedHasBlockBasis) {
+      return emitOpError("TDM gather index and destination layout must both "
+                         "have a block basis or neither have a block basis");
+    } else if (indexHasBlockBasis && sharedHasBlockBasis) {
+      auto indexRowCGA = indexLL.sublayout({kBlock}, {kDim0});
+      auto sharedRowCGA = sharedLL.sublayout({kBlock}, {kDim0});
+      if (!indexRowCGA.equalIgnoringOutDimSizes(sharedRowCGA))
+        return emitOpError("TDM gather index and shared encoding must have "
+                           "the same block basis for the row dimension");
+    }
   }
 
   return success();
