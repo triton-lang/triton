@@ -147,10 +147,10 @@ For the weights :math:`w` and biases :math:`b`, the VJPs :math:`\nabla_{w}` and 
 
 Since the same weights :math:`w` and biases :math:`b` are used for all rows in the same batch, their gradients need to sum up.
 To perform this step efficiently, we use a parallel reduction strategy: each kernel instance accumulates
-partial :math:`\nabla_{w}` and :math:`\nabla_{b}` across certain rows into one of :math:`\text{GROUP_SIZE_M}` independent buffers.
+partial :math:`\nabla_{w}` and :math:`\nabla_{b}` across certain rows into one of :math:`\text{GROUP\_SIZE\_M}` independent buffers.
 These buffers stay in the L2 cache and then are further reduced by another function to compute the actual :math:`\nabla_{w}` and :math:`\nabla_{b}`.
 
-Let the number of input rows :math:`M = 4` and :math:`\text{GROUP_SIZE_M} = 2`,
+Let the number of input rows :math:`M = 4` and :math:`\text{GROUP\_SIZE\_M} = 2`,
 here's a diagram of the parallel reduction strategy for :math:`\nabla_{w}` (:math:`\nabla_{b}` is omitted for brevity):
 
   .. image:: parallel_reduction.png
@@ -438,36 +438,36 @@ Specifically, one can set :code:`'mode': 'backward'` to benchmark the backward p
 
     layer-norm-backward:
               N  Triton (GB/s)  Torch (GB/s)
-    0    1024.0     107.789472    372.363633
-    1    1536.0     165.309420    444.144584
-    2    2048.0     221.405403    511.999982
-    3    2560.0     271.858403    558.545450
+    0    1024.0     111.709090    372.363633
+    1    1536.0     169.880189    444.144584
+    2    2048.0     225.467889    511.999982
+    3    2560.0     276.756754    558.545450
     4    3072.0     333.610868    580.535403
-    5    3584.0     382.293340    515.065851
-    6    4096.0     438.857137    520.126988
-    7    4608.0     453.245910    529.148312
-    8    5120.0     501.551014    543.716805
-    9    5632.0     551.706116    553.967224
-    10   6144.0     606.814809    562.809189
-    11   6656.0     652.016319    572.559140
-    12   7168.0     707.950611    546.133312
-    13   7680.0     734.342658    553.513508
+    5    3584.0     396.387109    512.000004
+    6    4096.0     455.111110    520.126988
+    7    4608.0     474.643779    529.148312
+    8    5120.0     529.655159    543.716805
+    9    5632.0     575.182980    553.967224
+    10   6144.0     630.153829    562.809189
+    11   6656.0     676.881335    572.559140
+    12   7168.0     728.949131    546.133312
+    13   7680.0     737.279965    553.513508
     14   8192.0     762.046555    564.965515
     15   8704.0     687.157925    567.652161
-    16   9216.0     737.279965    575.999980
+    16   9216.0     739.745803    575.999980
     17   9728.0     762.980388    579.334969
     18  10240.0     782.675148    572.867124
     19  10752.0     774.918911    564.656471
-    20  11264.0     799.810621    569.128411
+    20  11264.0     802.183964    569.128411
     21  11776.0     846.179612    574.439000
     22  12288.0     872.520678    582.830027
     23  12800.0     887.861307    585.142878
-    24  13312.0     882.563556    587.294107
-    25  13824.0     891.870945    589.300199
+    24  13312.0     880.132233    587.294107
+    25  13824.0     889.479921    589.300199
     26  14336.0     919.957230    573.439973
-    27  14848.0     950.271992    580.377833
-    28  15360.0     965.026182    587.006361
-    29  15872.0     940.562966    586.946076
+    27  14848.0     945.230796    580.377833
+    28  15360.0     962.506512    587.006361
+    29  15872.0     940.562966    587.851864
 
 
 
@@ -482,7 +482,7 @@ References
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 28.482 seconds)
+   **Total running time of the script:** (0 minutes 28.273 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_05-layer-norm.py:
