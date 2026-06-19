@@ -626,16 +626,13 @@ static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
   auto kBlock = StringAttr::get(ctx, "block");
   const auto &retBases =
       retCGALayout.getLinearLayout().getBases().lookup(kBlock);
-  if (retBases.empty() || retBases.front().size() != 2 ||
-      retBases.front()[0] != 1 || retBases.front()[1] != 0)
+  if (retBases.front()[0] != 1 || retBases.front()[1] != 0)
     return {};
 
   std::vector<std::vector<int32_t>> rhsBases;
   rhsBases.reserve(retBases.size());
   rhsBases.push_back({0, 1});
   for (ArrayRef<int32_t> basis : llvm::drop_begin(retBases)) {
-    if (basis.size() != 2)
-      return {};
     rhsBases.push_back({0, 2 * basis[1]});
   }
 
