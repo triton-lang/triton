@@ -303,7 +303,6 @@ static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
   if (broadcastMasks.empty())
     return 1;
 
-  // A CTA contributes when its non-broadcast bits are all zero.
   int numCTAs = lookupNumCTAs(mma.getOperation());
   uint16_t ctaMask = numCTAs - 1;
   int count = 0;
@@ -311,6 +310,8 @@ static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
     if (mma.getTwoCtas() && (cta & 1))
       continue;
     for (uint16_t broadcastMask : broadcastMasks) {
+      // Count leader CTAs for the multicast group. Broadcast bits may vary
+      // within a group; fixed, non-broadcast bits must be zero for the leader.
       uint16_t fixedMask = (~broadcastMask) & ctaMask;
       if ((cta & fixedMask) == 0) {
         ++count;
