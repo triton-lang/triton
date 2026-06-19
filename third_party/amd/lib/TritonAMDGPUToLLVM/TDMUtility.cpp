@@ -1099,7 +1099,7 @@ void fillTDMDescriptorForGatherScatter(
   g1_3 = b.or_(g1_3, b.lshr(tensorShape[0], b.i32_val(16)));
   group1 = vecSet(b, group1, 3, g1_3);
 
-  // Configure barrier a multicast mask
+  // Configure barrier and multicast mask
   Value g1_0 = vecGet(b, group1, 0);
   if (multicastMask)
     g1_0 = b.or_(g1_0, multicastMask);
