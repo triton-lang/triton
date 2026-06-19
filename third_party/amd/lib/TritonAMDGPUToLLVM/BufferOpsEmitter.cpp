@@ -311,10 +311,10 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
     if (uniformOffsetElems) {
       Value splitSgprOffsetBytes = b.mul(elemByteWidthVal, uniformOffsetElems);
       Value nonNegSoffset = b.icmp_sge(splitSgprOffsetBytes, b.i32_val(0));
-      sgprOffsetBytes = b.select(nonNegSoffset, splitSgprOffsetBytes,
-                                 b.i32_val(0));
-      vOffsetElemsForIntrinsic = b.select(nonNegSoffset, perLaneOffsetElems,
-                                          vOffsetElems);
+      sgprOffsetBytes =
+          b.select(nonNegSoffset, splitSgprOffsetBytes, b.i32_val(0));
+      vOffsetElemsForIntrinsic =
+          b.select(nonNegSoffset, perLaneOffsetElems, vOffsetElems);
       // AMD raw buffer ops bounds-check voffset only, then add soffset.
       // For non-negative split-safe soffsets, choose a high OOB voffset that
       // remains OOB after subtraction. Negative soffsets fall back to no split.
@@ -326,8 +326,10 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   }
   Value vOffsetBytes = b.mul(elemByteWidthVal, vOffsetElemsForIntrinsic);
 
-  // Masked lanes use an OOB voffset adjusted for any lifted non-negative soffset.
-  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, maskedOutOfBoundsBytes);
+  // Masked lanes use an OOB voffset adjusted for any lifted non-negative
+  // soffset.
+  Value maskedOffsetBytes =
+      b.select(pred, vOffsetBytes, maskedOutOfBoundsBytes);
 
   int32_t aux =
       getCtrlBitsForCacheModifierOnTarget(cm, isBufferLoad, targetInfo);
