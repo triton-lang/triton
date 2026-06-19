@@ -277,9 +277,14 @@ struct LoadGroupInfo {
 };
 
 static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
+  auto isLoadBoundary = [](Operation *op) {
+    return isa<tt::LoadOp, ttg::LocalLoadOp, ttng::TMEMLoadOp>(op) ||
+           isTMALoad(op);
+  };
+
   ForwardSliceOptions options;
   options.filter = [&](Operation *op) {
-    if (op != loadOp && (isa<tt::LoadOp>(op) || isTMALoad(op)))
+    if (op != loadOp && isLoadBoundary(op))
       return false;
     return true;
   };
