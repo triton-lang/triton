@@ -69,6 +69,15 @@ def test_ragged_layout_storage_shape():
     assert BlackwellActMXScaleLayout(metadata).storage_shape([100, 94], False) == [1, 4, 24, 2, 256]
 
 
+@pytest.mark.parametrize("major_dim", [-1, -2])
+def test_strided_layout_rejects_odd_fp4_packing_dim(major_dim):
+    shape = [2, 2]
+    shape[major_dim] = 1
+
+    with pytest.raises(ValueError):
+        StridedLayout(major_dim).storage_shape(shape, True)
+
+
 @pytest.mark.parametrize(
     ("transpose", "layout"),
     [

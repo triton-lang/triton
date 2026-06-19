@@ -3234,17 +3234,17 @@ struct TritonGPUInferLayoutInterface
 
       auto aLL = aEncoding.getCGALayout().getLinearLayout();
       auto bLL = bEncoding.getCGALayout().getLinearLayout();
-      // In multi-CTA, the CGA layout of operand 0 broadcasts across dim1 and
-      // operand 1 broadcasts across dim0.
+      // A broadcasts over N, B over M (the trailing two result dims). Batch
+      // dims (rank > 2) are shared across A/B/result, not broadcast.
       auto ctx = op->getContext();
-      auto dim0 = StringAttr::get(ctx, "dim0");
-      auto dim1 = StringAttr::get(ctx, "dim1");
-      // Resize to size 1 makes the dimension broadcast-only (all bases
-      // become 0).
-      if (aLL != resLL.resizeOutDim(dim1, 1))
+      int rank = cast<RankedTensorType>(dotOp.getD().getType()).getRank();
+      auto mDim = StringAttr::get(ctx, "dim" + std::to_string(rank - 2));
+      auto nDim = StringAttr::get(ctx, "dim" + std::to_string(rank - 1));
+      // resizeOutDim(d, 1) makes d broadcast-only.
+      if (aLL != resLL.resizeOutDim(nDim, 1))
         return op->emitError("Incompatible CGA layout for operand 0");
 
-      if (bLL != resLL.resizeOutDim(dim0, 1))
+      if (bLL != resLL.resizeOutDim(mDim, 1))
         return op->emitError("Incompatible CGA layout for operand 1");
     }
     return success();
@@ -3741,10 +3741,18 @@ struct TritonGPUInferLayoutInterface
     }
 
     auto ll = toLinearLayout(shape, inEnc);
-    auto newLl = LinearLayout::empty();
-    auto result = tryJoinOnAxis(ctx, ll, newLl, fwdInference, axis, loc);
-    if (!result.succeeded())
-      return result;
+    auto kRegister = StringAttr::get(ctx, "register");
+    auto outDims = llvm::to_vector(ll.getOutDimNames());
+    auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
+    LinearLayout newLl;
+    if (fwdInference) {
+      newLl = split * ll;
+    } else if (auto bwdLl = divideLeft(ll, split)) {
+      newLl = *bwdLl;
+    } else {
+      return emitOptionalError(loc, "invalid result layout for Fp4ToFpOp");
+    }
+
     outEnc = inferEncodingFromLinearLayout(ctx, std::move(newLl), inEnc);
     return success();
   }

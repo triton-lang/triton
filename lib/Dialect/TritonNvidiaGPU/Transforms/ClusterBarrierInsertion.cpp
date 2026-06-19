@@ -31,8 +31,8 @@ static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
     auto srcTy = cvt.getSrc().getType();
     auto dstTy = cvt.getType();
     auto kBlock = StringAttr::get(op->getContext(), "block");
-    auto conversion = minimalCvtLayout(srcTy, dstTy);
-    return conversion.hasInDim(kBlock);
+    return !isCvtDimSync(ttg::toLinearLayout(srcTy), ttg::toLinearLayout(dstTy),
+                         kBlock);
   }
   if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
     if (!isRead)

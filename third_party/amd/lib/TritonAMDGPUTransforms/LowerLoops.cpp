@@ -85,8 +85,11 @@ TDMChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
   return createTDMAsync(
       loadOp, alloc, extractIdx,
       [&](OpBuilder &builder, Location loc, Value view, Value pred) {
-        return triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(
-            builder, loc, loadOp.getDesc(), loadOp.getIndices(), view, pred);
+        Value desc = createUpdateTDMDescriptorOp(builder, loc, loadOp.getDesc(),
+                                                 loadOp.getIndices(),
+                                                 /*pred=*/pred);
+        return triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(builder, loc,
+                                                                   desc, view);
       });
 }
 

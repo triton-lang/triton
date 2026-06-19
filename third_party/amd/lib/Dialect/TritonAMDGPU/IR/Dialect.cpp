@@ -1103,14 +1103,6 @@ Type AsyncCopyLocalToGlobalOp::getPredicateOperandTypeLike() {
   return getDst().getType();
 }
 
-Value AsyncTDMCopyGlobalToLocalOp::getPredicateOperand() { return getPred(); }
-void AsyncTDMCopyGlobalToLocalOp::setPredicateOperand(Value pred) {
-  getPredMutable().assign(pred);
-}
-Type AsyncTDMCopyGlobalToLocalOp::getPredicateOperandTypeLike() {
-  return getPred().getType();
-}
-
 Value AsyncTDMGatherOp::getPredicateOperand() { return getPred(); }
 void AsyncTDMGatherOp::setPredicateOperand(Value pred) {
   getPredMutable().assign(pred);
