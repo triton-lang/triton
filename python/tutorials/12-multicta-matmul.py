@@ -24,7 +24,6 @@ import triton
 import triton.language as tl
 from triton.tools.tensor_descriptor import TensorDescriptor
 
-
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
@@ -84,8 +83,7 @@ def make_matmul_configs(configs, num_ctas):
             num_warps=num_warps,
             num_ctas=num_ctas,
             pre_hook=matmul_set_block_size_hook,
-        )
-        for block_m, block_n, block_k, num_stages, num_warps in configs
+        ) for block_m, block_n, block_k, num_stages, num_warps in configs
     ]
 
 
@@ -137,12 +135,11 @@ WS_CONFIGS = make_matmul_configs(
 
 
 @triton.jit
-def matmul_kernel(
-        a_desc, b_desc, c_desc,  #
-        M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
-        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-        GROUP_SIZE_M: tl.constexpr, NUM_STAGES: tl.constexpr, FP8_INPUTS: tl.constexpr,
-        WARP_SPECIALIZE: tl.constexpr):
+def matmul_kernel(a_desc, b_desc, c_desc,  #
+                  M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
+                  BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+                  GROUP_SIZE_M: tl.constexpr, NUM_STAGES: tl.constexpr, FP8_INPUTS: tl.constexpr,
+                  WARP_SPECIALIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
@@ -167,12 +164,12 @@ def matmul_kernel(
 
 AUTOTUNE_KEY = ["M", "N", "K", "FP8_INPUTS", "WARP_SPECIALIZE"]
 
-matmul_kernel_1cta = triton.autotune(
-    configs=MATMUL_CONFIGS, key=AUTOTUNE_KEY, do_bench=proton_autotune_do_bench)(matmul_kernel)
-matmul_kernel_2cta = triton.autotune(
-    configs=TWO_CTA_CONFIGS, key=AUTOTUNE_KEY, do_bench=proton_autotune_do_bench)(matmul_kernel)
-matmul_kernel_2cta_ws = triton.autotune(
-    configs=WS_CONFIGS, key=AUTOTUNE_KEY, do_bench=proton_autotune_do_bench)(matmul_kernel)
+matmul_kernel_1cta = triton.autotune(configs=MATMUL_CONFIGS, key=AUTOTUNE_KEY,
+                                     do_bench=proton_autotune_do_bench)(matmul_kernel)
+matmul_kernel_2cta = triton.autotune(configs=TWO_CTA_CONFIGS, key=AUTOTUNE_KEY,
+                                     do_bench=proton_autotune_do_bench)(matmul_kernel)
+matmul_kernel_2cta_ws = triton.autotune(configs=WS_CONFIGS, key=AUTOTUNE_KEY,
+                                        do_bench=proton_autotune_do_bench)(matmul_kernel)
 
 
 def matmul(a, b, *, num_ctas, warp_specialize=False, out=None):

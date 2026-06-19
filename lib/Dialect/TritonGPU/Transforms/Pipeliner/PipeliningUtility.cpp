@@ -373,12 +373,12 @@ static Value createMBarrierAlloc(ImplicitLocOpBuilder &rewriter,
   Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
   auto kBlock = StringAttr::get(ctx, "block");
   auto dim = tt::standardOutDimNames(ctx, /*rank=*/1)[0];
-  auto barrierCGALayout = twoCTAs
-                              ? ttg::CGAEncodingAttr::get(
-                                    ctx, tt::LinearLayout::zeros1D(2, kBlock, dim) *
-                                             tt::LinearLayout::identity1D(
-                                                 numCTAs / 2, kBlock, dim))
-                              : ttg::CGAEncodingAttr::get1DLayout(ctx, numCTAs);
+  auto barrierCGALayout =
+      twoCTAs
+          ? ttg::CGAEncodingAttr::get(
+                ctx, tt::LinearLayout::zeros1D(2, kBlock, dim) *
+                         tt::LinearLayout::identity1D(numCTAs / 2, kBlock, dim))
+          : ttg::CGAEncodingAttr::get1DLayout(ctx, numCTAs);
   auto barrierEncoding =
       ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCGALayout);
   int numBarrierSlots = twoCTAs ? numCTAs / 2 : numCTAs;

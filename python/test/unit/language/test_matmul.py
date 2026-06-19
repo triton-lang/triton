@@ -207,7 +207,8 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         assert_mmav5_asm(k, expect_two_ctas=NUM_CTAS == 2 and BLOCK_M > 128)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10,
+                    reason="Requires compute capability == 10")
 def test_simple_matmul_2cta_mmav5_asm(device):
     M, N, K = 1024, 512, 256
     BLOCK_M, BLOCK_N, BLOCK_K = 256, 128, 32
@@ -216,9 +217,9 @@ def test_simple_matmul_2cta_mmav5_asm(device):
     b = torch.randn(K, N, dtype=torch.float16, device=device)
     output = torch.empty((M, N), dtype=torch.float16, device=device)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    k = matmul_kernel[grid](
-        a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
-        output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=4, PRECISION="ieee", num_warps=4, num_ctas=2)
+    k = matmul_kernel[grid](a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
+                            output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=4, PRECISION="ieee", num_warps=4,
+                            num_ctas=2)
 
     torch.testing.assert_close(torch.matmul(a, b).to(torch.float32), output.to(torch.float32), atol=0.06, rtol=0.06)
     assert_mmav5_asm(k, expect_two_ctas=True)

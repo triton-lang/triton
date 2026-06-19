@@ -37,9 +37,9 @@ public:
     auto barrierCGALayout = ttg::CGAEncodingAttr::get1DLayout(ctx, numCTAs);
     auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
         ctx, 1, 1, 1, {0}, barrierCGALayout);
-    ttg::MemDescType barrierMemDescType = ttg::MemDescType::get(
-        {numCTAs}, rewriter.getI64Type(), barrierEncoding,
-        sharedMemorySpace, /*mutableMemory=*/true);
+    ttg::MemDescType barrierMemDescType =
+        ttg::MemDescType::get({numCTAs}, rewriter.getI64Type(), barrierEncoding,
+                              sharedMemorySpace, /*mutableMemory=*/true);
     Value barrierAlloc =
         ttg::LocalAllocOp::create(rewriter, loc, barrierMemDescType, Value());
     InitBarrierOp::create(rewriter, loc, barrierAlloc, 1);
