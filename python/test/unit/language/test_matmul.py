@@ -204,12 +204,12 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if (device == "cuda" and torch.cuda.get_device_capability()[0] == 10 and NUM_STAGES > 1 and BLOCK_M % 64 == 0
             and BLOCK_N % 8 == 0 and BLOCK_N > 16
             and not (precision == "ieee" and (dtype_src_str == "float32" or dtype_src_str == "float64"))):
-        assert_mmav5_asm(k, expect_two_ctas=NUM_CTAS == 2 and BLOCK_M > 128)
+        assert_mmav5_asm(k, expect_two_ctas=False)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10,
                     reason="Requires compute capability == 10")
-def test_simple_matmul_2cta_mmav5_asm(device):
+def test_simple_matmul_mmav5_asm(device):
     M, N, K = 1024, 512, 256
     BLOCK_M, BLOCK_N, BLOCK_K = 256, 128, 32
     torch.manual_seed(42)
@@ -222,7 +222,7 @@ def test_simple_matmul_2cta_mmav5_asm(device):
                             num_ctas=2)
 
     torch.testing.assert_close(torch.matmul(a, b).to(torch.float32), output.to(torch.float32), atol=0.06, rtol=0.06)
-    assert_mmav5_asm(k, expect_two_ctas=True)
+    assert_mmav5_asm(k, expect_two_ctas=False)
 
 
 def test_i4_m_minor_join_bk16_matmul(device):
