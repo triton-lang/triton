@@ -369,9 +369,6 @@ static LogicalResult verifyBarrierCGALayout(Operation *op, Value barrier,
 
 static LogicalResult verifyCompletionBarrierLayout(Operation *op,
                                                    Value barrier) {
-  // MMAv5 completion barriers are per-CTA even for cta_group::2. The lead CTA
-  // issues the MMA/commit with a multicast mask, which arrives on every CTA's
-  // local barrier; then every CTA waits on its own barrier before reading TMEM.
   auto expectedCGALayout =
       CGAEncodingAttr::get1DLayout(op->getContext(), gpu::lookupNumCTAs(op));
   return verifyBarrierCGALayout(op, barrier, expectedCGALayout,
