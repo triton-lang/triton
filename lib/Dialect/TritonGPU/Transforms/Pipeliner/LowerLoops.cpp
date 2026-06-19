@@ -274,41 +274,47 @@ struct LoadGroupInfo {
   Value extractIdx;
   Value phase;
   bool hasTMALoad = false;
-  bool hasTwoCTAMMAUser = false;
 };
 
 static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
-  SetVector<Operation *> slice;
-  (void)getForwardSlice(loadOp, &slice);
-  for (Operation *op : slice) {
+  SetVector<Operation *> worklist;
+  worklist.insert(loadOp->user_begin(), loadOp->user_end());
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Operation *op = worklist[i];
     auto mma = dyn_cast<ttng::MMAv5OpInterface>(op);
     if (mma && mma.getTwoCtas())
       return true;
+    worklist.insert(op->user_begin(), op->user_end());
   }
   return false;
 }
 
 static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
   SmallVector<Value> descs = mma.getCompletionDescs();
-  if (descs.empty())
-    return 1;
 
-  // Each mask describes CTA id bits that are broadcast for one completion
-  // descriptor. 
+  // Each mask describes CTA-id bits that are broadcast for one completion
+  // descriptor. For cta_group::2, getCTABroadcastMasks also adds the CTA-pair
+  // bit even when there are no descriptor operands.
   SmallVector<uint16_t> broadcastMasks =
       ttng::getCTABroadcastMasks(mma.getTwoCtas(), descs);
   if (broadcastMasks.empty())
     return 1;
 
-  // Count the union of descriptor leader CTAs.  A CTA is a leader for a
-  // descriptor when all bits broadcast by that descriptor are zero in the CTA
-  // id.  If multiple descriptors have the same leader, that CTA still issues
-  // only one commit for this MMA, so count it once and break.
+  // Count how many CTAs can issue a commit that arrives on a given CTA-local
+  // completion barrier. A commit from CTA `cta` reaches CTA 0 for a descriptor
+  // when all non-broadcast bits in `cta` are zero. Completion barriers are
+  // initialized uniformly, and the same count applies to every CTA-local
+  // barrier by symmetry. If several descriptors from the same CTA reach the
+  // barrier, that CTA still issues only one commit for this MMA.
   int numCTAs = lookupNumCTAs(mma.getOperation());
+  uint16_t ctaMask = numCTAs - 1;
   int count = 0;
   for (int cta = 0; cta < numCTAs; ++cta) {
-    for (uint16_t mask : broadcastMasks) {
-      if ((cta & mask) == 0) {
+    if (mma.getTwoCtas() && (cta & 1))
+      continue;
+    for (uint16_t broadcastMask : broadcastMasks) {
+      uint16_t fixedMask = (~broadcastMask) & ctaMask;
+      if ((cta & fixedMask) == 0) {
         ++count;
         break;
       }
@@ -417,14 +423,16 @@ void createTMABarrierAndWait(
     int sizeInBytes = 0;
     int numBuffers = asyncLoads[group[0]].stageDiff;
     const LoadGroupInfo loadGroup = loadGroups.find(numBuffers)->second;
+    bool hasTwoCTAMMAUser = false;
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(getShapePerCTA(tensorTy));
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
+      hasTwoCTAMMAUser |= loadFeedsTwoCTAMMA(op);
     }
 
     Value barrierAlloc = triton::createBarrierAlloc(
-        forOp, numBuffers, /*arriveCount=*/1, loadGroup.hasTwoCTAMMAUser);
+        forOp, numBuffers, /*arriveCount=*/1, hasTwoCTAMMAUser);
     OpBuilderForStage builder(forOp.getLoc(), group[0], schedule);
     Value barrier = triton::createSingleBufferView(builder, barrierAlloc,
                                                    loadGroup.insertIdx);
@@ -559,8 +567,6 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
     loadGroups.insert({asyncLoad.stageDiff, {}});
     if (isTMALoad(loadOp)) {
       loadGroups[asyncLoad.stageDiff].hasTMALoad = true;
-      loadGroups[asyncLoad.stageDiff].hasTwoCTAMMAUser |=
-          loadFeedsTwoCTAMMA(loadOp);
     }
   }
 
@@ -632,7 +638,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
 
   bool hasAsyncLoads = false;
   for (auto [op, asyncLoad] : asyncLoads) {
-    auto [insertIdx, extractIdx, phase, _, __] = loadGroups[asyncLoad.stageDiff];
+    auto [insertIdx, extractIdx, phase, _] = loadGroups[asyncLoad.stageDiff];
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                       asyncLoad.contiguity, schedule);
@@ -801,9 +807,9 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   int numStages = mainWaitStage - schedule[mma].first + 1;
 
   OpBuilderForStage builder(mma.getLoc(), mma, schedule);
-  Value barrierAlloc = createBarrierAlloc(
-      forOp, numStages, getMMAv5CompletionBarrierCount(mma),
-      /*twoCTAs=*/false);
+  Value barrierAlloc =
+      createBarrierAlloc(forOp, numStages, getMMAv5CompletionBarrierCount(mma),
+                         /*twoCTAs=*/false);
   Value vTrue = arith::ConstantIntOp::create(builder, 1, 1);
   Value phase = forOp.getRegionIterArg(phaseArgIdx);
   Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);
