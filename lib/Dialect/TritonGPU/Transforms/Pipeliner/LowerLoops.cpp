@@ -277,37 +277,17 @@ struct LoadGroupInfo {
 };
 
 static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
-  auto isLoadBoundary = [](Operation *op) {
-    return isa<tt::LoadOp, ttg::LocalLoadOp, ttng::TMEMLoadOp>(op) ||
-           isTMALoad(op);
-  };
-
-  ForwardSliceOptions options;
-  options.filter = [&](Operation *op) {
-    if (op != loadOp && isLoadBoundary(op))
-      return false;
-    return true;
-  };
-
-  SetVector<Operation *> slice;
-  (void)getForwardSlice(loadOp, &slice, options);
-  SetVector<Operation *> stopped;
-  for (Operation *op : slice) {
-    bool followsStoppedOp = llvm::any_of(op->getOperands(), [&](Value operand) {
-      Operation *def = operand.getDefiningOp();
-      return def && stopped.contains(def);
-    });
-    if (followsStoppedOp) {
-      stopped.insert(op);
-      continue;
-    }
-
+  SetVector<Operation *> worklist;
+  worklist.insert(loadOp->user_begin(), loadOp->user_end());
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Operation *op = worklist[i];
     auto mma = dyn_cast<ttng::MMAv5OpInterface>(op);
     if (mma) {
       if (mma.getTwoCtas())
         return true;
-      stopped.insert(op);
+      continue;
     }
+    worklist.insert(op->user_begin(), op->user_end());
   }
   return false;
 }
