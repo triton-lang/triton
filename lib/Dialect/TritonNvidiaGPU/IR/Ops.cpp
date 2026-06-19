@@ -1682,6 +1682,32 @@ SmallVector<uint16_t> getCTABroadcastMasks(bool twoCTAs, ValueRange descs) {
   return broadcastMasks;
 }
 
+int getMMAv5CompletionBarrierCount(MMAv5OpInterface mma) {
+  SmallVector<Value> descs = mma.getCompletionDescs();
+  SmallVector<uint16_t> broadcastMasks =
+      getCTABroadcastMasks(mma.getTwoCtas(), descs);
+  if (broadcastMasks.empty())
+    return 1;
+
+  int numCTAs = gpu::lookupNumCTAs(mma.getOperation());
+  uint16_t ctaMask = numCTAs - 1;
+  int count = 0;
+  for (int cta = 0; cta < numCTAs; ++cta) {
+    if (mma.getTwoCtas() && (cta & 1))
+      continue;
+    for (uint16_t broadcastMask : broadcastMasks) {
+      // Count one completion-barrier arrival per CTA group. Broadcast bits
+      // may vary inside a group; fixed bits are zero for the representative.
+      uint16_t fixedMask = (~broadcastMask) & ctaMask;
+      if ((cta & fixedMask) == 0) {
+        ++count;
+        break;
+      }
+    }
+  }
+  return count;
+}
+
 TMAMulticastMaskEncoding getTMAMulticastMaskEncoding(int numCTAs,
                                                      uint16_t broadcastBits) {
   // Compute the map that goes from cta_id to lead_cta_id (fixedBits)
