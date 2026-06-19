@@ -119,7 +119,7 @@ Value createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
                         unsigned numBuffers);
 // Create an allocation and init the mbarriers.
 Value createBarrierAlloc(Operation *op, int numBarriers, int arriveCount = 1,
-                         bool twoCTAs = false, bool twoCTALayout = false);
+                         bool twoCTAs = false);
 // Create an allocation that can hold distance number of tensor shapes.
 Value createAlloc(Operation *insertBefore, RankedTensorType ty, Location loc,
                   gpu::SharedEncodingTrait sharedEnc, unsigned distance);
