@@ -286,13 +286,11 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     blockInfo->sync();
   }
 
-  if (op->hasTrait<mlir::OpTrait::MemWaitOpTrait>()) {
-    // If the current op is an async wait and there is no later sync point
-    // before memory is accessed, insert a barrier op and sync. This avoids
-    // redundant barriers by deffering the barrier to the later sync point.
-    if (hasSyncPointBeforeMemoryEffect(op))
-      return;
-
+  // If the current op is an (async) memory wait and there is no later sync
+  // point before memory is accessed, insert a barrier op and sync. This avoids
+  // redundant barriers by deferring the barrier to the later sync point.
+  if (op->hasTrait<mlir::OpTrait::MemWaitOpTrait>() &&
+      !hasSyncPointBeforeMemoryEffect(op)) {
     builder->setInsertionPointAfter(op);
     insertBarrier(op, builder);
     blockInfo->sync();
