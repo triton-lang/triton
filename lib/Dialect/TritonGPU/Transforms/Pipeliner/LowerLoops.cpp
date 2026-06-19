@@ -278,18 +278,11 @@ struct LoadGroupInfo {
 };
 
 static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
-  Block *block = loadOp->getBlock();
-  for (Operation &op : *block) {
-    auto mma = dyn_cast<ttng::MMAv5OpInterface>(&op);
-    if (!mma || !mma.getTwoCtas())
-      continue;
-
-    BackwardSliceOptions options;
-    options.omitBlockArguments = true;
-    options.filter = [block](Operation *op) { return op->getBlock() == block; };
-    SetVector<Operation *> slice;
-    (void)getBackwardSlice(&op, &slice, options);
-    if (slice.contains(loadOp))
+  SetVector<Operation *> slice;
+  (void)getForwardSlice(loadOp, &slice);
+  for (Operation *op : slice) {
+    auto mma = dyn_cast<ttng::MMAv5OpInterface>(op);
+    if (mma && mma.getTwoCtas())
       return true;
   }
   return false;
