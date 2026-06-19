@@ -4038,6 +4038,28 @@ def tdm_gather_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, strid
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
 
+@gluon.jit
+def tdm_gather_multi_cta_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, stride_m, BLOCK_M: ttgl.constexpr,
+                                BLOCK_N: ttgl.constexpr, SRC_COL_OFFSET: ttgl.constexpr, SHARED_LAYOUT: ttgl.constexpr,
+                                BLOCK_LAYOUT: ttgl.constexpr, IDX_LAYOUT: ttgl.constexpr):
+    """Kernel that uses TDM gather with a multi-CTA shared-memory layout."""
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+
+    inp_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M_inp, N_inp), strides=(stride_m, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+
+    idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
+    src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
+
+    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, SRC_COL_OFFSET, smem)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    gathered = smem.load(layout=BLOCK_LAYOUT)
+    offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCK_LAYOUT))
+    offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCK_LAYOUT))
+    ttgl.store(out_ptr + offs_m[:, None] * BLOCK_N + offs_n[None, :], gathered)
+
+
 @pytest.mark.parametrize("NUM_INDICES", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("BLOCK_M", [16, 32])
 @pytest.mark.parametrize("BLOCK_N", [64, 128])
@@ -4086,6 +4108,53 @@ def test_compile_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, dtype, index_dtype, s
     # Verify the gather uses tensor load to lds
     assert re.search("tensor_load_to_lds", amdgcn), "Expected tensor_load_to_lds instruction for TDM gather"
     assert re.search("s_wait_tensorcnt 0x0", amdgcn), "Expected s_wait_tensorcnt instruction"
+
+
+@pytest.mark.parametrize("CGALayout", [[[0, 0]],  # 1x1 cluster (single-cta)
+                                       [[0, 1]],  # 1x2 cluster
+                                       [[1, 0], [2, 0]],  # 4x1 cluster
+                                       [[0, 1], [0, 2]],  # 1x4 cluster
+                                       [[1, 0], [0, 1]],  # 2x2 cluster
+                                       ])
+def test_compile_tdm_gather_multi_cta(CGALayout):
+    """Test that TDM gather compiles for multi-CTA layouts."""
+    BLOCK_M = 16
+    BLOCK_N = 64
+    NUM_WARPS = 1
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], CGALayout)
+    BLOCK_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [NUM_WARPS, 1], [1, 0], CGALayout)
+    IDX_CGA_LAYOUT: ttgl.constexpr = [[basis[0], 0] for basis in CGALayout]
+    IDX_PARENT_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([BLOCK_M, 1], [1, 32], [1, NUM_WARPS], [1, 0],
+                                                           IDX_CGA_LAYOUT)
+    IDX_LAYOUT: ttgl.constexpr = ttgl.SliceLayout(1, IDX_PARENT_LAYOUT)
+    num_ctas = 2**len(CGALayout)
+
+    signature = {
+        "inp_ptr": "*fp16",
+        "out_ptr": "*fp16",
+        "src_row_indices_ptr": "*i32",
+        "M_inp": "i32",
+        "N_inp": "i32",
+        "stride_m": "i32",
+        "BLOCK_M": "constexpr",
+        "BLOCK_N": "constexpr",
+        "SRC_COL_OFFSET": "constexpr",
+        "SHARED_LAYOUT": "constexpr",
+        "BLOCK_LAYOUT": "constexpr",
+        "IDX_LAYOUT": "constexpr",
+    }
+    constexprs = {
+        "BLOCK_M": BLOCK_M,
+        "BLOCK_N": BLOCK_N,
+        "SRC_COL_OFFSET": 0,
+        "SHARED_LAYOUT": SHARED_LAYOUT,
+        "BLOCK_LAYOUT": BLOCK_LAYOUT,
+        "IDX_LAYOUT": IDX_LAYOUT,
+    }
+
+    k = triton.compile(gluon._runtime.GluonASTSource(tdm_gather_multi_cta_kernel, signature, constexprs),
+                       target=GPUTarget("hip", 'gfx1250', 32), options={"num_warps": NUM_WARPS, "num_ctas": num_ctas})
+    assert re.search("tensor_load_to_lds", k.asm["amdgcn"])
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
@@ -4147,6 +4216,51 @@ def test_runtime_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, src_col_offset, dtype
     inp_bytes = inp.view(torch.uint8).reshape(M_inp, -1)
     ref_bytes = inp_bytes[src_row_indices.long(), src_col_offset * elem_size:(src_col_offset + BLOCK_N) * elem_size]
     torch.testing.assert_close(gathered_out.view(torch.uint8), ref_bytes)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.parametrize("CGALayout", [[[0, 0]],  # 1x1 cluster (single-cta)
+                                       [[0, 1]],  # 1x2 cluster
+                                       [[1, 0], [2, 0]],  # 4x1 cluster
+                                       [[0, 1], [0, 2]],  # 1x4 cluster
+                                       [[1, 0], [0, 1]],  # 2x2 cluster
+                                       ])
+@pytest.mark.parametrize("src_col_offset,physical_tail_cols", [(0, 0), (16, 16)])
+def test_runtime_tdm_gather_multi_cta(CGALayout, src_col_offset, physical_tail_cols):
+    """Test TDM gather correctness with multi-CTA and multicast layouts."""
+    torch.manual_seed(42)
+
+    BLOCK_M = 16
+    BLOCK_N = 64
+    NUM_WARPS = 1
+    num_ctas = 2**len(CGALayout)
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], CGALayout)
+    BLOCK_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [NUM_WARPS, 1], [1, 0], CGALayout)
+    IDX_CGA_LAYOUT: ttgl.constexpr = [[basis[0], 0] for basis in CGALayout]
+    IDX_PARENT_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([BLOCK_M, 1], [1, 32], [1, NUM_WARPS], [1, 0],
+                                                           IDX_CGA_LAYOUT)
+    IDX_LAYOUT: ttgl.constexpr = ttgl.SliceLayout(1, IDX_PARENT_LAYOUT)
+
+    M_inp = 128
+    N_inp = BLOCK_N
+    physical_N_inp = N_inp + physical_tail_cols
+    inp = _create_scatter_test_data((M_inp, physical_N_inp), torch.float16)
+    out = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float16)
+    src_row_indices = torch.randperm(M_inp, dtype=torch.int32)[:BLOCK_M]
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = src_row_indices.cuda()
+
+    tdm_gather_multi_cta_kernel[(1, )](inp_d, out_d, indices_d, M_inp=M_inp, N_inp=N_inp, stride_m=inp_d.stride(0),
+                                       BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, SHARED_LAYOUT=SHARED_LAYOUT,
+                                       SRC_COL_OFFSET=src_col_offset, BLOCK_LAYOUT=BLOCK_LAYOUT, IDX_LAYOUT=IDX_LAYOUT,
+                                       num_warps=NUM_WARPS, num_ctas=num_ctas)
+
+    valid_cols = N_inp - src_col_offset
+    ref = torch.zeros_like(out)
+    ref[:, :valid_cols] = inp[src_row_indices.long(), src_col_offset:N_inp]
+    torch.testing.assert_close(out_d.cpu().view(torch.uint8), ref.view(torch.uint8))
 
 
 @pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])

@@ -100,7 +100,8 @@ void fillTDMDescriptorForGatherScatter(
     SmallVector<int64_t> blockShape, unsigned padInterval, unsigned padAmount,
     Value &group0, Value &group1, Value &group2, Value &group3,
     Value ldsRowOffset, Value globalColOffset, Value ldsPtr, Value pred,
-    Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId,
+    Value multicastMask, Value barrierPtr,
+    const triton::LinearLayout &cgaLayout, Value ctaId,
     ArrayRef<Value> rowIndices, bool use32BitIndices, bool isGather);
 
 // Emit a TDM load/store for regular contiguous transfers (1D-5D).
@@ -150,8 +151,8 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                           const LLVMTypeConverter *typeConverter,
                           ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
                           unsigned padInterval, unsigned padAmount,
-                          Value ldsPtr, Value pred, Type elementType,
-                          Value barrierPtr,
+                          Value ldsPtr, Value pred, Value multicastMask,
+                          Type elementType, Value barrierPtr,
                           const triton::LinearLayout &cgaLayout, Value ctaId,
                           ArrayRef<Value> rowIndices, Value colOffset,
                           bool isGather, int numWarps,

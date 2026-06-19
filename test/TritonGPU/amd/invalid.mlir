@@ -254,6 +254,66 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // -----
 
+#linear1 = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0], [8, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [], block = [], order = [1, 0]}>
+#slice1 = #ttg.slice<{dim = 1, parent = #linear1}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_gather_invalid_missing_index_block_basis(
+    %memDesc: !ttg.memdesc<16x64xf16, #shared1, #smem, mutable>,
+    %tensorDesc: !tt.tensordesc<16x64xf16>,
+    %row_indices: tensor<16xi32, #slice1>,
+    %pred: i32
+  ) {
+    %c0_i32 = arith.constant 0 : i32
+    // expected-error @+1 {{TDM gather index and destination layout must both have a block basis or neither have a block basis}}
+    %token = amdg.async_tdm_gather %tensorDesc[%row_indices, %c0_i32] to %memDesc, pred = %pred : tensor<16xi32, #slice1>, !ttg.memdesc<16x64xf16, #shared1, #smem, mutable> -> !tt.tensordesc<16x64xf16>
+    tt.return
+  }
+}
+
+// -----
+
+#linear1 = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0], [8, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [], block = [[16, 0]], order = [1, 0]}>
+#slice1 = #ttg.slice<{dim = 1, parent = #linear1}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_gather_invalid_block_basis_count(
+    %memDesc: !ttg.memdesc<32x64xf16, #shared1, #smem, mutable>,
+    %tensorDesc: !tt.tensordesc<32x64xf16>,
+    %row_indices: tensor<32xi32, #slice1>,
+    %pred: i32
+  ) {
+    %c0_i32 = arith.constant 0 : i32
+    // expected-error @+1 {{TDM gather index and shared encoding must have the same block basis for the row dimension}}
+    %token = amdg.async_tdm_gather %tensorDesc[%row_indices, %c0_i32] to %memDesc, pred = %pred : tensor<32xi32, #slice1>, !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> !tt.tensordesc<32x64xf16>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked1 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0], CGALayout = [[0, 0], [0, 0]]}>
+#slice1 = #ttg.slice<{dim = 1, parent = #blocked1}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_gather_invalid_row_block_basis(
+    %memDesc: !ttg.memdesc<16x64xf16, #shared1, #smem, mutable>,
+    %tensorDesc: !tt.tensordesc<16x64xf16>,
+    %row_indices: tensor<16xi32, #slice1>,
+    %pred: i32
+  ) {
+    %c0_i32 = arith.constant 0 : i32
+    // expected-error @+1 {{TDM gather index and shared encoding must have the same block basis for the row dimension}}
+    %token = amdg.async_tdm_gather %tensorDesc[%row_indices, %c0_i32] to %memDesc, pred = %pred : tensor<16xi32, #slice1>, !ttg.memdesc<16x64xf16, #shared1, #smem, mutable> -> !tt.tensordesc<16x64xf16>
+    tt.return
+  }
+}
+
+// -----
+
 // Scatter with padded shared layout where padding interval != innermost block dimension.
 #shared_scatter_32 = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [8, 64]}>
 // Scatter with two padding intervals (only single interval is supported).
