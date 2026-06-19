@@ -229,6 +229,17 @@ GSAN_DEVICE bool areAtomicScopesCompatible(AtomicScope lhs, thread_id_t lhsTid,
          scopeCoversPair(rhs, lhsTid, rhsTid, globals);
 }
 
+GSAN_DEVICE bool canAccumulateReleaseRmw(ThreadState *state, AtomicScope scope,
+                                         const ScalarClock &previousWrite) {
+  // A propagated snapshot currently carries only one scope. Only combine
+  // concurrent releases when that scope remains unchanged.
+  if (!previousWrite.isRelease || scope != previousWrite.scope)
+    return false;
+  return areAtomicScopesCompatible(scope, state->threadId, previousWrite.scope,
+                                   previousWrite.threadId,
+                                   getGlobalState(state));
+}
+
 GSAN_DEVICE void initThread(GlobalState *globals, Location loc) {
   auto *state = getThreadState(globals);
 
@@ -310,6 +321,28 @@ GSAN_DEVICE const epoch_t *getSnapshotForWrite(ThreadState *state,
     return nullptr;
   auto *writerState = getThreadStateById(getGlobalState(state), write.threadId);
   return getClockBufferSlot(writerState, write.epoch, loc);
+}
+
+GSAN_DEVICE epoch_t publishCurrentVectorClockWithPriorRelease(
+    ThreadState *state, const ScalarClock &previousWrite, Location loc) {
+  const auto *previousSnapshot = getSnapshotForWrite(state, previousWrite, loc);
+  auto *globals = getGlobalState(state);
+  assert_msg(loc, globals->clockBufferSize != 0,
+             "GSan clock buffer size must be non-zero");
+  uint32_t nextHead = state->clockBufferHead + 1;
+  assert_msg(loc, nextHead <= kMaxEpoch, "GSan clock buffer token overflowed");
+  auto *slot = getClockBufferBase(state) +
+               (nextHead % globals->clockBufferSize) * globals->numThreads;
+  for (int i = 0; i < globals->numThreads; ++i) {
+    auto current = state->vectorClock[i];
+    auto previous = previousSnapshot[i];
+    slot[i] = current > previous ? current : previous;
+  }
+  state->clockBufferHead = nextHead;
+  // The joined snapshot extends the release sequence without acquiring the
+  // prior writer into this thread's vector clock.
+  state->clockBufferDirty = 1;
+  return static_cast<epoch_t>(nextHead);
 }
 
 GSAN_DEVICE epoch_t propagateClockBufferSnapshot(ThreadState *state,
@@ -604,12 +637,25 @@ GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
                                 "Write after write race detected");
     }
 
+    auto previousWrite = event->cells[0]->writeClock;
     ScalarClock newWriteClock;
     if (hasRelease(sem)) {
-      auto token = publishCurrentVectorClock(state, loc);
+      epoch_t token;
+      if (canAccumulateReleaseRmw(state, scope, previousWrite))
+        token = publishCurrentVectorClockWithPriorRelease(state, previousWrite,
+                                                          loc);
+      else if (previousWrite.isRelease) {
+        const auto *previousSnapshot =
+            getSnapshotForWrite(state, previousWrite, loc);
+        assert_msg(loc, dominatesSnapshot(state, previousSnapshot),
+                   "GSan detected atomic release accumulation with mixed "
+                   "scopes, which is not supported.");
+        token = publishCurrentVectorClock(state, loc);
+      } else {
+        token = publishCurrentVectorClock(state, loc);
+      }
       newWriteClock = makePublishedClock(state, scope, token);
     } else {
-      auto previousWrite = event->cells[0]->writeClock;
       if (previousWrite.isRelease) {
         auto token = propagateClockBufferSnapshot(state, previousWrite, loc);
         newWriteClock = makePublishedClock(state, scope, token);
