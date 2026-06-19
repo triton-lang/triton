@@ -367,15 +367,6 @@ static LogicalResult verifyBarrierCGALayout(Operation *op, Value barrier,
   return success();
 }
 
-static CGAEncodingAttr getTwoCTABarrierCGALayout(MLIRContext *ctx,
-                                                 int numCTAs) {
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
-  auto layout = LinearLayout::zeros1D(2, kBlock, dim) *
-                LinearLayout::identity1D(numCTAs / 2, kBlock, dim);
-  return CGAEncodingAttr::get(ctx, std::move(layout));
-}
-
 static LogicalResult verifyCompletionBarrierLayout(Operation *op,
                                                    Value barrier) {
   // MMAv5 completion barriers are per-CTA even for cta_group::2. The lead CTA
@@ -402,7 +393,11 @@ static LogicalResult verifyTMABarrierLayout(Operation *op, Value barrier) {
     return success();
 
   if (twoCTAsAttr.getValue()) {
-    auto twoCTACGALayout = getTwoCTABarrierCGALayout(ctx, numCTAs);
+    auto kBlock = StringAttr::get(ctx, "block");
+    auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
+    auto twoCTACGALayout = CGAEncodingAttr::get(
+        ctx, LinearLayout::zeros1D(2, kBlock, dim) *
+                 LinearLayout::identity1D(numCTAs / 2, kBlock, dim));
     if (actualCGALayout == twoCTACGALayout)
       return success();
     return op->emitOpError() << "TMA barrier cga_layout must be "
