@@ -651,10 +651,14 @@ public:
     Value llPtr = adaptor.getPtr();
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
+    Value llMask = adaptor.getMask();
 
     auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
     auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
     auto valElements = unpackLLElements(loc, llVal, rewriter);
+    SmallVector<Value> maskElements;
+    if (llMask)
+      maskElements = unpackLLElements(loc, llMask, rewriter);
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
@@ -681,7 +685,7 @@ public:
         continue;
       }
 
-      Value pred = threadPred;
+      Value pred = llMask ? ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i]) : threadPred;
       Value casPtr = ptrElements[i];
       Value casCmp = cmpElements[i];
       Value casVal = valElements[i];

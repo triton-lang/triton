@@ -254,7 +254,6 @@ struct ConvertTritonAtomicCASOpToBufferAtomicCAS
                   PatternRewriter &rewriter) const override {
     LDBG("Try to convert: " << op);
     Value ptr = op.getPtr();
-    Value mask = op.getMask();
     auto sem = op.getSem();
     auto scope = op.getScope();
 
@@ -315,12 +314,15 @@ struct ConvertTritonAtomicCASOpToBufferAtomicCAS
       return rewriter.notifyMatchFailure(
           op, "BufferAtomicCAS requires opBitWidth >= 32");
     }
+    Value maybeMask{};
+    if (op.getMask() && !isSplatOneConstTensor(op.getMask()))
+      maybeMask = op.getMask();
     Value blockStride = maybeTruncateStrideToI32(
         getBlockStride(op->getLoc(), tensorOffset, rewriter), rewriter,
         op->getLoc(), op);
     rewriter.replaceOpWithNewOp<triton::amdgpu::BufferAtomicCASOp>(
         op, op.getVal().getType(), basePtr, tensorOffset, op.getCmp(),
-        op.getVal(), blockStride, sem, scope, mask);
+        op.getVal(), blockStride, sem, scope, maybeMask);
     return success();
   }
 
