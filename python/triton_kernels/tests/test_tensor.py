@@ -244,5 +244,6 @@ def test_keyed_add_large_key_no_int_overflow():
     out = torch.empty_like(x)
     # Would raise a device-side assertion before the fix.
     _keyed_add_scan_kernel[(1, )](x, out, BLOCK=BLOCK)
-    expected = (key << 16) | torch.arange(1, BLOCK + 1, dtype=torch.uint32, device=device)
-    assert torch.equal(out, expected)
+    # Compare in int64 (CUDA has no uint32 `arange`); values are well within int64.
+    expected = (key << 16) | torch.arange(1, BLOCK + 1, dtype=torch.int64, device=device)
+    assert torch.equal(out.to(torch.int64), expected)
