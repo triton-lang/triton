@@ -297,7 +297,6 @@ tt.func @must_barrier_tdm_copy_select_cmpi_unbounded_base(%desc: !tt.tensordesc<
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
   %c3_i32 = arith.constant 3 : i32
-  %c_pred = arith.constant 1 : i32
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
 
   %write_sum = arith.addi %phase, %c1_i32 : i32
@@ -309,7 +308,7 @@ tt.func @must_barrier_tdm_copy_select_cmpi_unbounded_base(%desc: !tt.tensordesc<
   %read_view = ttg.memdesc_index %alloc[%read_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
 
   // CHECK: amdg.async_tdm_copy_global_to_local
-  %token = amdg.async_tdm_copy_global_to_local %desc[%c0_i32, %c0_i32] into %write_view, pred = %c_pred : !tt.tensordesc<128x128xf16, #shared> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %token = amdg.async_tdm_copy_global_to_local %desc into %write_view : !tt.tensordesc<128x128xf16, #shared> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
   // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   %load = ttg.local_load %read_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #AL>
@@ -330,7 +329,6 @@ tt.func @disjoint_tdm_copy_remsi(%desc: !tt.tensordesc<128x128xf16, #shared>, %p
   %c0_i32 = arith.constant 0 : i32
   %c2_i32 = arith.constant 2 : i32
   %c3_i32 = arith.constant 3 : i32
-  %c_pred = arith.constant 1 : i32
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
 
   // Write index: (phase + 2) % 3
@@ -343,7 +341,7 @@ tt.func @disjoint_tdm_copy_remsi(%desc: !tt.tensordesc<128x128xf16, #shared>, %p
   %read_view = ttg.memdesc_index %alloc[%read_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
 
   // CHECK: amdg.async_tdm_copy_global_to_local
-  %token = amdg.async_tdm_copy_global_to_local %desc[%c0_i32, %c0_i32] into %write_view, pred = %c_pred : !tt.tensordesc<128x128xf16, #shared> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %token = amdg.async_tdm_copy_global_to_local %desc into %write_view : !tt.tensordesc<128x128xf16, #shared> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
   // CHECK-NOT: ttg.barrier local
   // CHECK: ttg.local_load
   %load = ttg.local_load %read_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #AL>
