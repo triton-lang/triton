@@ -303,12 +303,7 @@ static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
   if (broadcastMasks.empty())
     return 1;
 
-  // Count how many CTAs can issue a commit that arrives on a given CTA-local
-  // completion barrier. A commit from CTA `cta` reaches CTA 0 for a descriptor
-  // when all non-broadcast bits in `cta` are zero. Completion barriers are
-  // initialized uniformly, and the same count applies to every CTA-local
-  // barrier by symmetry. If several descriptors from the same CTA reach the
-  // barrier, that CTA still issues only one commit for this MMA.
+  // A CTA contributes when its non-broadcast bits are all zero.
   int numCTAs = lookupNumCTAs(mma.getOperation());
   uint16_t ctaMask = numCTAs - 1;
   int count = 0;
