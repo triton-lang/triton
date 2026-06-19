@@ -1033,8 +1033,8 @@ void fillTDMDescriptorForGatherScatter(
       applyLinearLayout(loc, rewriter, cgaLayout, {{kBlock, ctaId}});
   // tensorStride is i64 (48-bit slots); zext the i32 offsets before
   // multiplying so we don't truncate to 32 bits.
-  Value cgaColOffset =
-      b.mul(b.zext(i64_ty, cgaOffsets[1].second), tensorStride[1]);
+  Value cgaColOffsetElem = cgaOffsets[1].second;
+  Value cgaColOffset = b.mul(b.zext(i64_ty, cgaColOffsetElem), tensorStride[1]);
   globalPtr = b.gep(globalPtrTy, elementType, globalPtr, cgaColOffset);
 
   // For scatter, only apply column offset to global address
@@ -1054,9 +1054,10 @@ void fillTDMDescriptorForGatherScatter(
   }
   ldsPtr = b.gep(sharedPtrTy, elementType, ldsPtr, ldsOffset);
 
-  // Adjust column tensor shape for OOB handling - subtract column offset to
-  // get remaining elements (shared signed clamp; see clampTensorDimByOffset).
-  tensorShape[1] = clampTensorDimByOffset(b, tensorShape[1], globalColOffset);
+  // Adjust column tensor shape for OOB handling - subtract the full column
+  // offset so each CTA slice gets the correct remaining extent.
+  Value totalColOffset = b.add(cgaColOffsetElem, globalColOffset);
+  tensorShape[1] = clampTensorDimByOffset(b, tensorShape[1], totalColOffset);
 
   // For scatter with padding (store-from-LDS): clamp tensor_dim0 to the
   // original column width so OOB checking drops padding elements before they

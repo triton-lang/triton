@@ -4040,8 +4040,8 @@ def tdm_gather_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, strid
 
 @gluon.jit
 def tdm_gather_multi_cta_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, stride_m, BLOCK_M: ttgl.constexpr,
-                                BLOCK_N: ttgl.constexpr, SHARED_LAYOUT: ttgl.constexpr, BLOCK_LAYOUT: ttgl.constexpr,
-                                IDX_LAYOUT: ttgl.constexpr):
+                                BLOCK_N: ttgl.constexpr, SRC_COL_OFFSET: ttgl.constexpr, SHARED_LAYOUT: ttgl.constexpr,
+                                BLOCK_LAYOUT: ttgl.constexpr, IDX_LAYOUT: ttgl.constexpr):
     """Kernel that uses TDM gather with a multi-CTA shared-memory layout."""
     smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
 
@@ -4051,7 +4051,7 @@ def tdm_gather_multi_cta_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_
     idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
     src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
 
-    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, 0, smem)
+    ttgl.amd.gfx1250.tdm.async_gather(inp_desc, src_row_indices, SRC_COL_OFFSET, smem)
     ttgl.amd.gfx1250.tdm.async_wait(0)
 
     gathered = smem.load(layout=BLOCK_LAYOUT)
@@ -4138,6 +4138,7 @@ def test_compile_tdm_gather_multi_cta(CGALayout):
         "stride_m": "i32",
         "BLOCK_M": "constexpr",
         "BLOCK_N": "constexpr",
+        "SRC_COL_OFFSET": "constexpr",
         "SHARED_LAYOUT": "constexpr",
         "BLOCK_LAYOUT": "constexpr",
         "IDX_LAYOUT": "constexpr",
@@ -4145,6 +4146,7 @@ def test_compile_tdm_gather_multi_cta(CGALayout):
     constexprs = {
         "BLOCK_M": BLOCK_M,
         "BLOCK_N": BLOCK_N,
+        "SRC_COL_OFFSET": 0,
         "SHARED_LAYOUT": SHARED_LAYOUT,
         "BLOCK_LAYOUT": BLOCK_LAYOUT,
         "IDX_LAYOUT": IDX_LAYOUT,
@@ -4223,7 +4225,8 @@ def test_runtime_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, src_col_offset, dtype
                                        [[0, 1], [0, 2]],  # 1x4 cluster
                                        [[1, 0], [0, 1]],  # 2x2 cluster
                                        ])
-def test_runtime_tdm_gather_multi_cta(CGALayout):
+@pytest.mark.parametrize("src_col_offset,physical_tail_cols", [(0, 0), (16, 16)])
+def test_runtime_tdm_gather_multi_cta(CGALayout, src_col_offset, physical_tail_cols):
     """Test TDM gather correctness with multi-CTA and multicast layouts."""
     torch.manual_seed(42)
 
@@ -4240,7 +4243,8 @@ def test_runtime_tdm_gather_multi_cta(CGALayout):
 
     M_inp = 128
     N_inp = BLOCK_N
-    inp = _create_scatter_test_data((M_inp, N_inp), torch.float16)
+    physical_N_inp = N_inp + physical_tail_cols
+    inp = _create_scatter_test_data((M_inp, physical_N_inp), torch.float16)
     out = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float16)
     src_row_indices = torch.randperm(M_inp, dtype=torch.int32)[:BLOCK_M]
 
@@ -4250,13 +4254,13 @@ def test_runtime_tdm_gather_multi_cta(CGALayout):
 
     tdm_gather_multi_cta_kernel[(1, )](inp_d, out_d, indices_d, M_inp=M_inp, N_inp=N_inp, stride_m=inp_d.stride(0),
                                        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, SHARED_LAYOUT=SHARED_LAYOUT,
-                                       BLOCK_LAYOUT=BLOCK_LAYOUT, IDX_LAYOUT=IDX_LAYOUT, num_warps=NUM_WARPS,
-                                       num_ctas=num_ctas)
+                                       SRC_COL_OFFSET=src_col_offset, BLOCK_LAYOUT=BLOCK_LAYOUT, IDX_LAYOUT=IDX_LAYOUT,
+                                       num_warps=NUM_WARPS, num_ctas=num_ctas)
 
-    elem_size = inp.element_size()
-    inp_bytes = inp.view(torch.uint8).reshape(M_inp, -1)
-    ref_bytes = inp_bytes[src_row_indices.long(), :BLOCK_N * elem_size]
-    torch.testing.assert_close(out_d.cpu().view(torch.uint8), ref_bytes)
+    valid_cols = N_inp - src_col_offset
+    ref = torch.zeros_like(out)
+    ref[:, :valid_cols] = inp[src_row_indices.long(), src_col_offset:N_inp]
+    torch.testing.assert_close(out_d.cpu().view(torch.uint8), ref.view(torch.uint8))
 
 
 @pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
