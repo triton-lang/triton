@@ -247,7 +247,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
   ) {
     %c0_i32 = arith.constant 0 : i32
     // expected-error @+1 {{index layout distributes values across lanes}}
-    %token = amdg.async_tdm_gather %tensorDesc[%row_indices, %c0_i32] to %memDesc, pred = %pred : tensor<32xi32, #slice_lane_dist>, !ttg.memdesc<32x128xf16, #shared_gather, #smem_gather, mutable> -> !tt.tensordesc<32x128xf16>
+    %token = amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<32xi32, #slice_lane_dist>, !ttg.memdesc<32x128xf16, #shared_gather, #smem_gather, mutable> -> !tt.tensordesc<32x128xf16>
     tt.return
   }
 }
@@ -267,7 +267,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
   ) {
     %c0_i32 = arith.constant 0 : i32
     // expected-error @+1 {{TDM gather index and destination layout must both have a block basis or neither have a block basis}}
-    %token = amdg.async_tdm_gather %tensorDesc[%row_indices, %c0_i32] to %memDesc, pred = %pred : tensor<16xi32, #slice1>, !ttg.memdesc<16x64xf16, #shared1, #smem, mutable> -> !tt.tensordesc<16x64xf16>
+    %token = amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<16xi32, #slice1>, !ttg.memdesc<16x64xf16, #shared1, #smem, mutable> -> !tt.tensordesc<16x64xf16>
     tt.return
   }
 }
@@ -287,7 +287,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
   ) {
     %c0_i32 = arith.constant 0 : i32
     // expected-error @+1 {{TDM gather index and shared encoding must have the same block basis for the row dimension}}
-    %token = amdg.async_tdm_gather %tensorDesc[%row_indices, %c0_i32] to %memDesc, pred = %pred : tensor<32xi32, #slice1>, !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> !tt.tensordesc<32x64xf16>
+    %token = amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<32xi32, #slice1>, !ttg.memdesc<32x64xf16, #shared1, #smem, mutable> -> !tt.tensordesc<32x64xf16>
     tt.return
   }
 }
@@ -307,7 +307,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
   ) {
     %c0_i32 = arith.constant 0 : i32
     // expected-error @+1 {{TDM gather index and shared encoding must have the same block basis for the row dimension}}
-    %token = amdg.async_tdm_gather %tensorDesc[%row_indices, %c0_i32] to %memDesc, pred = %pred : tensor<16xi32, #slice1>, !ttg.memdesc<16x64xf16, #shared1, #smem, mutable> -> !tt.tensordesc<16x64xf16>
+    %token = amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<16xi32, #slice1>, !ttg.memdesc<16x64xf16, #shared1, #smem, mutable> -> !tt.tensordesc<16x64xf16>
     tt.return
   }
 }
@@ -327,7 +327,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   ) {
     %c0_i32 = arith.constant 0 : i32
     // expected-error @+1 {{TDM scatter padding is only supported when padding interval equals the innermost block dimension}}
-    amdg.async_tdm_scatter %tensorDesc[%row_indices, %c0_i32] from %memDesc : tensor<8xi32>, !ttg.memdesc<8x64xf16, #shared_scatter_32, #smem_scatter, mutable> -> !tt.tensordesc<8x64xf16>
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<8xi32>, !ttg.memdesc<8x64xf16, #shared_scatter_32, #smem_scatter, mutable> -> !tt.tensordesc<8x64xf16>
     tt.return
   }
 
@@ -338,7 +338,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   ) {
     %c0_i32 = arith.constant 0 : i32
     // expected-error @+1 {{TDM scatter only supports single interval paddings}}
-    amdg.async_tdm_scatter %tensorDesc[%row_indices, %c0_i32] from %memDesc : tensor<8xi32>, !ttg.memdesc<8x64xf16, #shared_scatter_2_intervals, #smem_scatter, mutable> -> !tt.tensordesc<8x64xf16>
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<8xi32>, !ttg.memdesc<8x64xf16, #shared_scatter_2_intervals, #smem_scatter, mutable> -> !tt.tensordesc<8x64xf16>
     tt.return
   }
 }
@@ -566,7 +566,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   ) {
     %c0_i32 = arith.constant 0 : i32
     // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
-    amdg.async_tdm_scatter %tensorDesc[%row_indices, %c0_i32] from %memDesc : tensor<8xi32>, !ttg.memdesc<8x64xf16, #scatter_alloc, #smem, mutable> -> !tt.tensordesc<8x64xf16, #scatter_desc>
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<8xi32>, !ttg.memdesc<8x64xf16, #scatter_alloc, #smem, mutable> -> !tt.tensordesc<8x64xf16, #scatter_desc>
     tt.return
   }
 }
@@ -587,7 +587,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   ) {
     %c0_i32 = arith.constant 0 : i32
     // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
-    %token = amdg.async_tdm_gather %tensorDesc[%row_indices, %c0_i32] to %memDesc, pred = %pred : tensor<8xi32>, !ttg.memdesc<8x64xf16, #gather_alloc, #smem, mutable> -> !tt.tensordesc<8x64xf16, #gather_desc>
+    %token = amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<8xi32>, !ttg.memdesc<8x64xf16, #gather_alloc, #smem, mutable> -> !tt.tensordesc<8x64xf16, #gather_desc>
     tt.return
   }
 }
