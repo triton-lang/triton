@@ -289,22 +289,12 @@ static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
 }
 
 static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
-  // Match Gluon's tcgen05_mma_barrier_count.  A completion barrier is arrived
-  // by tcgen05.commit after the MMA has finished, so the init count must be
-  // the number of CTAs that can issue a commit for this op.  This is different
-  // from the TMA-ready barriers in this pass, whose arrival is a single TMA
-  // transaction and therefore still uses count=1.
   SmallVector<Value> descs = mma.getCompletionDescs();
-
-  // Non-multicast MMAv5 lowering has no descriptor-derived multicast groups.
-  // In that case there is one concrete tcgen05.commit arrival.
   if (descs.empty())
     return 1;
 
   // Each mask describes CTA id bits that are broadcast for one completion
-  // descriptor.  getCTABroadcastMasks also folds in cta_group::2 by forcing
-  // the low CTA bit into the broadcast mask, matching Gluon's
-  // "if two_ctas and cta & 1: continue" rule.
+  // descriptor. 
   SmallVector<uint16_t> broadcastMasks =
       ttng::getCTABroadcastMasks(mma.getTwoCtas(), descs);
   if (broadcastMasks.empty())
