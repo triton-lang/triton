@@ -1168,16 +1168,10 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 @pytest.mark.parametrize("cta_layout", [(), ((1, 0), ), ((1, 0), (2, 0))], ids=["1cta", "2ctas", "4ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout, profile=False):
-    device = "cuda"
-
-    def alloc_fn(size: int, alignment: int, stream):
-        return torch.empty(size, dtype=torch.int8, device=device)
-
-    triton.set_allocator(alloc_fn)
-
     if use_tmem_red and not is_blackwell_ultra():
         pytest.skip("TMEM reduction is only supported on Blackwell Ultra GPUs")
 
+    device = "cuda"
     torch.manual_seed(42)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).to(dtype).requires_grad_())
     k = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).to(dtype).requires_grad_())
