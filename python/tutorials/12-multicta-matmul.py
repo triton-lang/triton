@@ -48,10 +48,6 @@ else:
 
 TORCH_HAS_FP8 = hasattr(torch, "float8_e4m3fn")
 
-
-def is_fp8_dtype(dtype):
-    return TORCH_HAS_FP8 and dtype == torch.float8_e4m3fn
-
 # %%
 # Kernel
 # ------
@@ -179,14 +175,6 @@ matmul_kernel_2cta_ws = triton.autotune(
     configs=WS_CONFIGS, key=AUTOTUNE_KEY, do_bench=proton_autotune_do_bench)(matmul_kernel)
 
 
-def get_matmul_kernel(num_ctas, warp_specialize):
-    if warp_specialize:
-        return matmul_kernel_2cta_ws
-    if num_ctas == 2:
-        return matmul_kernel_2cta
-    return matmul_kernel_1cta
-
-
 def matmul(a, b, *, num_ctas, warp_specialize=False, out=None):
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
     assert a.dtype == b.dtype, "matrix A and B must have the same dtype"
@@ -204,26 +192,14 @@ def matmul(a, b, *, num_ctas, warp_specialize=False, out=None):
     b_desc = TensorDescriptor.from_tensor(b, [1, 1])
     c_desc = TensorDescriptor.from_tensor(c, [1, 1])
     grid = lambda META: (triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]), )
-    kernel = get_matmul_kernel(num_ctas, warp_specialize)
-    return kernel[grid](a_desc, b_desc, c_desc, M, N, K, FP8_INPUTS=is_fp8_dtype(a.dtype),
+    if warp_specialize:
+        kernel = matmul_kernel_2cta_ws
+    elif num_ctas == 2:
+        kernel = matmul_kernel_2cta
+    else:
+        kernel = matmul_kernel_1cta
+    return kernel[grid](a_desc, b_desc, c_desc, M, N, K, FP8_INPUTS=(TORCH_HAS_FP8 and a.dtype == torch.float8_e4m3fn),
                         WARP_SPECIALIZE=warp_specialize)
-
-
-def selected_config(num_ctas, warp_specialize=False):
-    return get_matmul_kernel(num_ctas, warp_specialize).best_config
-
-
-def cublas_matmul(a, b, out):
-    if cublas is not None:
-        # CublasLt's helper expects B in transposed contiguous form.
-        return cublas.matmul(a, b.T.contiguous(), out)
-    return torch.matmul(a, b, out=out)
-
-
-def bench_cublas_matmul(a, b, b_trans, out):
-    if cublas is not None:
-        return cublas.matmul(a, b_trans, out)
-    return torch.matmul(a, b, out=out)
 
 
 def tflops(ms, M, N, K):
@@ -240,21 +216,6 @@ BENCHMARK_SHAPES = list(range(1024, 4097, 256))
 def fmt_config(config):
     return (f"{config.kwargs['BLOCK_M']}x{config.kwargs['BLOCK_N']}x{config.kwargs['BLOCK_K']}"
             f"s{config.num_stages}w{config.num_warps}")
-
-
-def uses_mmav5_two_ctas(compiled):
-    return "two_ctas" in compiled.asm["ttgir"] and "cta_group::2" in compiled.asm["ptx"]
-
-
-def make_inputs(M, N, K, fp8_inputs):
-    M, N, K = int(M), int(N), int(K)
-    device = str(DEVICE)
-    a = torch.empty((M, K), device=device, dtype=torch.float16).normal_()
-    b = torch.empty((K, N), device=device, dtype=torch.float16).normal_()
-    if fp8_inputs:
-        a = a.to(torch.float8_e4m3fn)
-        b = b.to(torch.float8_e4m3fn)
-    return a, b
 
 
 # %%
@@ -297,57 +258,59 @@ def validate_and_inspect():
 # ``torch.matmul`` and the explicit CublasLt helper both use cuBLAS on CUDA.
 
 
-def benchmark(shapes=BENCHMARK_SHAPES, include_fp8=False):
+def benchmark(shapes=BENCHMARK_SHAPES, precision="fp16"):
     if not is_blackwell():
         raise RuntimeError("This tutorial requires an NVIDIA Blackwell GPU.")
+    if precision not in {"fp16", "fp8", "all"}:
+        raise ValueError("precision must be one of: 'fp16', 'fp8', or 'all'")
 
     print("Benchmarking Triton multi-CTA matmul", flush=True)
     print("====================================", flush=True)
-    benchmark_precision(shapes, fp8_inputs=False)
-    if include_fp8 and TORCH_HAS_FP8 and is_cuda():
-        benchmark_precision(shapes, fp8_inputs=True)
+    if precision in {"fp16", "all"}:
+        benchmark_precision(shapes, precision="fp16")
+    if precision in {"fp8", "all"}:
+        if not TORCH_HAS_FP8 or not is_cuda():
+            raise RuntimeError("fp8 benchmarking requires CUDA and torch.float8_e4m3fn")
+        benchmark_precision(shapes, precision="fp8")
 
 
-def benchmark_precision(shapes, fp8_inputs):
-    precision = "fp8" if fp8_inputs else "fp16"
+def benchmark_precision(shapes, precision):
+    fp8_inputs = precision == "fp8"
     print(f"\n{precision.upper()} square shapes", flush=True)
-    if fp8_inputs:
-        print("    M=N=K       1CTA       2CTA    2CTA+WS     cuBLAS      best shapes", flush=True)
-    else:
-        print("    M=N=K       1CTA       2CTA    2CTA+WS     cuBLAS      best shapes", flush=True)
+    print("    M=N=K       1CTA       2CTA     cuBLAS      best shapes", flush=True)
 
     for size in shapes:
         M = N = K = int(size)
-        a, b = make_inputs(M, N, K, fp8_inputs)
+        device = str(DEVICE)
+        a = torch.empty((M, K), device=device, dtype=torch.float16).normal_()
+        b = torch.empty((K, N), device=device, dtype=torch.float16).normal_()
+        if fp8_inputs:
+            a = a.to(torch.float8_e4m3fn)
+            b = b.to(torch.float8_e4m3fn)
         c_triton = torch.empty((M, N), device=str(DEVICE), dtype=torch.float16)
 
         matmul(a, b, num_ctas=1, out=c_triton)
         ms_1cta = bench(lambda: matmul(a, b, num_ctas=1, out=c_triton))
-        cfg_1cta = selected_config(num_ctas=1)
+        cfg_1cta = matmul_kernel_1cta.best_config
 
         compiled_2cta = matmul(a, b, num_ctas=2, out=c_triton)
-        if not uses_mmav5_two_ctas(compiled_2cta):
+        if "two_ctas" not in compiled_2cta.asm["ttgir"] or "cta_group::2" not in compiled_2cta.asm["ptx"]:
             raise RuntimeError("2CTA autotune selected a kernel without MMAv5 cta_group::2")
         ms_2cta = bench(lambda: matmul(a, b, num_ctas=2, out=c_triton))
-        cfg_2cta = selected_config(num_ctas=2)
+        cfg_2cta = matmul_kernel_2cta.best_config
 
-        matmul(a, b, num_ctas=2, warp_specialize=True, out=c_triton)
-        ms_2cta_ws = bench(lambda: matmul(a, b, num_ctas=2, warp_specialize=True, out=c_triton))
-        cfg_2cta_ws = selected_config(num_ctas=2, warp_specialize=True)
-
-        prefix = (f"{size:>9} {tflops(ms_1cta, M, N, K):>10.2f} "
-                  f"{tflops(ms_2cta, M, N, K):>10.2f} {tflops(ms_2cta_ws, M, N, K):>10.2f}")
-        shape_text = f"{fmt_config(cfg_1cta)} / {fmt_config(cfg_2cta)} / {fmt_config(cfg_2cta_ws)}"
+        prefix = f"{size:>9} {tflops(ms_1cta, M, N, K):>10.2f} {tflops(ms_2cta, M, N, K):>10.2f}"
+        shape_text = f"{fmt_config(cfg_1cta)} / {fmt_config(cfg_2cta)}"
+        b_trans = b.T.contiguous()
         if fp8_inputs:
-            b_trans = b.T.contiguous()
             c_ref = torch.empty((M, N), device=str(DEVICE), dtype=torch.float8_e4m3fn)
-            ms_cublas = bench(lambda: bench_cublas_matmul(a, b, b_trans, c_ref))
-            print(f"{prefix} {tflops(ms_cublas, M, N, K):>10.2f}      {shape_text}", flush=True)
         else:
-            b_trans = b.T.contiguous()
             c_ref = torch.empty_like(c_triton)
-            ms_cublas = bench(lambda: bench_cublas_matmul(a, b, b_trans, c_ref))
-            print(f"{prefix} {tflops(ms_cublas, M, N, K):>10.2f}      {shape_text}", flush=True)
+        if cublas is not None:
+            ms_cublas = bench(lambda: cublas.matmul(a, b_trans, c_ref))
+        else:
+            ms_cublas = bench(lambda: torch.matmul(a, b, out=c_ref))
+        print(f"{prefix} {tflops(ms_cublas, M, N, K):>10.2f}      {shape_text}", flush=True)
 
 
 if __name__ == "__main__":
