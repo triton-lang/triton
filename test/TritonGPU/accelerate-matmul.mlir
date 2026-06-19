@@ -373,7 +373,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   //   CHECK-DAG:   #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = {{\[\[1, 0\], \[2, 0\]\]}}}>
   //   CHECK-DAG:   #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = {{\[\[0, 1\], \[0, 0\]\]}}}>
   // CHECK-LABEL: mmav5_2ctas_num_ctas4
-  //       CHECK:   ttng.tc_gen5_mma {{.*}} {two_ctas}
+  //       CHECK:   ttng.tc_gen5_mma {{.*}} {multicast, two_ctas}
   tt.func public @mmav5_2ctas_num_ctas4(%a: tensor<256x64xf16, #blocked2>, %b_desc: !tt.tensordesc<64x256xf16>, %c: tensor<256x256xf32, #blocked>) -> tensor<256x256xf32, #blocked> {
       %zero = arith.constant 0 : i32
       %ad = ttg.convert_layout %a : tensor<256x64xf16, #blocked2> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
