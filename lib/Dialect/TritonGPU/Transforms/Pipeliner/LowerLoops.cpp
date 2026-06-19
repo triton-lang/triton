@@ -395,8 +395,7 @@ void createTMABarrierAndWait(
     }
 
     Value barrierAlloc = triton::createBarrierAlloc(
-        forOp, numBuffers, /*arriveCount=*/1, loadGroup.hasTwoCTAMMAUser,
-        /*twoCTALayout=*/loadGroup.hasTwoCTAMMAUser);
+        forOp, numBuffers, /*arriveCount=*/1, loadGroup.hasTwoCTAMMAUser);
     OpBuilderForStage builder(forOp.getLoc(), group[0], schedule);
     Value barrier = triton::createSingleBufferView(builder, barrierAlloc,
                                                    loadGroup.insertIdx);
@@ -775,8 +774,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   OpBuilderForStage builder(mma.getLoc(), mma, schedule);
   Value barrierAlloc = createBarrierAlloc(forOp, numStages,
                                           /*arriveCount=*/1,
-                                          /*twoCTAs=*/false,
-                                          /*twoCTALayout=*/false);
+                                          /*twoCTAs=*/false);
   Value vTrue = arith::ConstantIntOp::create(builder, 1, 1);
   Value phase = forOp.getRegionIterArg(phaseArgIdx);
   Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);
