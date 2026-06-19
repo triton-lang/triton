@@ -130,6 +130,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#sharedA = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0], [2, 0]]}>
+#sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1], [0, 0]]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0], [2, 0]], twoCTAs = true>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: sync_tcgen5_mma_two_cta_multicast_barrier_count
+  tt.func public @sync_tcgen5_mma_two_cta_multicast_barrier_count(
+    %a: !ttg.memdesc<512x64xf16, #sharedA, #smem>,
+    %b: !ttg.memdesc<64x128xf16, #sharedB, #smem>,
+    %c: !ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable>) {
+    %true = arith.constant true
+    %false = arith.constant false
+    // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<4xi64
+    // CHECK: ttng.init_barrier %[[BAR]], 2
+    // CHECK: ttng.tc_gen5_mma {{.*}}, %[[BAR]][%true] {is_async, multicast, two_ctas}
+    ttng.tc_gen5_mma %a, %b, %c, %false, %true {multicast, two_ctas} :
+       !ttg.memdesc<512x64xf16, #sharedA, #smem>,
+       !ttg.memdesc<64x128xf16, #sharedB, #smem>,
+       !ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

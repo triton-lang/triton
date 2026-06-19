@@ -147,6 +147,8 @@ getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
 
 SmallVector<uint16_t> getCTABroadcastMasks(bool twoCTAs, ValueRange descs);
 
+int getMMAv5CompletionBarrierCount(MMAv5OpInterface mma);
+
 // Compact encoding of a CTA multicast group for a given broadcast mask:
 // `fixedBits` selects the CTA-id bits that identify the group leader, and
 // `pattern` is the recipient bitset for leader CTA 0 before shifting to the

@@ -38,7 +38,8 @@ public:
                               sharedMemorySpace, /*mutableMemory=*/true);
     Value barrierAlloc =
         ttg::LocalAllocOp::create(rewriter, loc, barrierMemDescType, Value());
-    InitBarrierOp::create(rewriter, loc, barrierAlloc, 1);
+    InitBarrierOp::create(rewriter, loc, barrierAlloc,
+                          getMMAv5CompletionBarrierCount(op));
     op.addCompletionBarrier(barrierAlloc,
                             arith::ConstantIntOp::create(rewriter, loc, 1, 1));
     op.setIsAsync(true);
