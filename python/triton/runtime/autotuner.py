@@ -497,7 +497,7 @@ def heuristics(values):
         def kernel(x_ptr, x_size, BLOCK_SIZE: tl.constexpr):
             ...
     :param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
-                   each such function takes a list of positional arguments as input.
+                   each such function takes a dict of all the arguments passed to the kernel, keyed by argument name, as input.
     :type values: dict[str, Callable[[dict[str, Any]], Any]]
     """
 
