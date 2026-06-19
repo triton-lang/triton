@@ -648,8 +648,7 @@ static bool canUseTwoCTAs(DotOp dotOp) {
   RankedTensorType retType = dotOp.getType();
   Value b = stripConvertLayout(dotOp.getB());
   Operation *defOp = b.getDefiningOp();
-  if (!defOp ||
-      !isa<triton::LoadOp, triton::DescriptorLoadLikeOpInterface>(defOp))
+  if (!defOp || !isa<triton::DescriptorLoadLikeOpInterface>(defOp))
     return false;
 
   auto rhsCGALayout = getTwoCTARHSCGALayout(retType);
@@ -702,8 +701,8 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
   OpBuilder::InsertionGuard g(rewriter);
   b = stripConvertLayout(b);
   auto loadOp = b.getDefiningOp();
-  assert((isa<triton::LoadOp, triton::DescriptorLoadLikeOpInterface>(loadOp)) &&
-         "expected LoadOp");
+  assert(isa<triton::DescriptorLoadLikeOpInterface>(loadOp) &&
+         "expected descriptor load");
   RankedTensorType bType = cast<RankedTensorType>(b.getType());
   auto currentLayout = cast<DistributedEncodingTrait>(bType.getEncoding());
   Attribute newLayout = replaceCGALayout(currentLayout, newCGALayout);
