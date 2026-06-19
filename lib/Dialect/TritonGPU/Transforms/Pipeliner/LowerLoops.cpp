@@ -288,6 +288,45 @@ static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
   return false;
 }
 
+static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
+  // Match Gluon's tcgen05_mma_barrier_count.  A completion barrier is arrived
+  // by tcgen05.commit after the MMA has finished, so the init count must be
+  // the number of CTAs that can issue a commit for this op.  This is different
+  // from the TMA-ready barriers in this pass, whose arrival is a single TMA
+  // transaction and therefore still uses count=1.
+  SmallVector<Value> descs = mma.getCompletionDescs();
+
+  // Non-multicast MMAv5 lowering has no descriptor-derived multicast groups.
+  // In that case there is one concrete tcgen05.commit arrival.
+  if (descs.empty())
+    return 1;
+
+  // Each mask describes CTA id bits that are broadcast for one completion
+  // descriptor.  getCTABroadcastMasks also folds in cta_group::2 by forcing
+  // the low CTA bit into the broadcast mask, matching Gluon's
+  // "if two_ctas and cta & 1: continue" rule.
+  SmallVector<uint16_t> broadcastMasks =
+      ttng::getCTABroadcastMasks(mma.getTwoCtas(), descs);
+  if (broadcastMasks.empty())
+    return 1;
+
+  // Count the union of descriptor leader CTAs.  A CTA is a leader for a
+  // descriptor when all bits broadcast by that descriptor are zero in the CTA
+  // id.  If multiple descriptors have the same leader, that CTA still issues
+  // only one commit for this MMA, so count it once and break.
+  int numCTAs = lookupNumCTAs(mma.getOperation());
+  int count = 0;
+  for (int cta = 0; cta < numCTAs; ++cta) {
+    for (uint16_t mask : broadcastMasks) {
+      if ((cta & mask) == 0) {
+        ++count;
+        break;
+      }
+    }
+  }
+  return count;
+}
+
 // Convert a scalar load to a load of a tensor of shape <1>.
 void convertScalarToTensorLoad(Operation *op, CoarseSchedule &schedule,
                                scf::ForOp forOp) {
@@ -772,9 +811,9 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   int numStages = mainWaitStage - schedule[mma].first + 1;
 
   OpBuilderForStage builder(mma.getLoc(), mma, schedule);
-  Value barrierAlloc = createBarrierAlloc(forOp, numStages,
-                                          /*arriveCount=*/1,
-                                          /*twoCTAs=*/false);
+  Value barrierAlloc = createBarrierAlloc(
+      forOp, numStages, getMMAv5CompletionBarrierCount(mma),
+      /*twoCTAs=*/false);
   Value vTrue = arith::ConstantIntOp::create(builder, 1, 1);
   Value phase = forOp.getRegionIterArg(phaseArgIdx);
   Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);
