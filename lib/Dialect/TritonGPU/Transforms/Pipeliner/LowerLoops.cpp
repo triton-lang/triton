@@ -310,8 +310,10 @@ static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
     if (mma.getTwoCtas() && (cta & 1))
       continue;
     for (uint16_t broadcastMask : broadcastMasks) {
-      // Count leader CTAs for the multicast group. Broadcast bits may vary
-      // within a group; fixed, non-broadcast bits must be zero for the leader.
+      // Count one completion-barrier arrival per CTA group. Broadcast bits
+      // identify CTAs in the same multicast group; fixed, non-broadcast bits
+      // identify distinct groups. Count the representative with fixed bits
+      // equal to zero.
       uint16_t fixedMask = (~broadcastMask) & ctaMask;
       if ((cta & fixedMask) == 0) {
         ++count;
@@ -512,6 +514,8 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
         sharedEncoding = getSharedEncoding(&op);
         // Do not create async loads for small loads (cp.async requires at least
         // 4 bytes)
+        // TODO: Support 2CTA MMA for regular tt.load/cp.async paths. For now,
+        // automatic 2CTA MMA is limited to descriptor/TMA loads.
         canUseAsyncCp =
             isa<tt::LoadOp>(op) &&
             canBeConvertedToAsyncLoad(cast<tt::LoadOp>(op), axisInfoAnalysis);
