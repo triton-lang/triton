@@ -127,9 +127,6 @@ def check_type_supported(dtype, device):
             pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
         if cc[0] < 9 and dtype in {tl.float8e4nv, "float8e4nv", "float8_e4m3fn"}:
             pytest.skip("float8e4nv is only supported on NVGPU with cc >= 90")
-    if is_interpreter():
-        if dtype in [tl.bfloat16, "bfloat16", torch.bfloat16]:
-            pytest.skip("bfloat16 is not supported in the interpreter")
 
 
 def get_src_element_ty_size(dtype_str):
@@ -1955,12 +1952,8 @@ def test_tensor_atomic_use_result(dtype_str, size, op, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     # CUDA: bfloat16 on cc < 80 will not be tested
-    # Interpreter: Only bfloat16 <-> float32 is supported
-    if not is_interpreter() or \
-        (is_interpreter() and not ((dtype_z == 'bfloat16' and dtype_x == 'float32')
-                                   or (dtype_z == 'float32' and dtype_x == 'bfloat16'))):
-        check_type_supported(dtype_x, device)
-        check_type_supported(dtype_z, device)
+    check_type_supported(dtype_x, device)
+    check_type_supported(dtype_z, device)
 
     if is_hip():
         if not is_hip_cdna3() and not is_hip_cdna4() and not is_hip_gfx1250() and (dtype_x == 'float8_e4m3fn'
@@ -3481,8 +3474,6 @@ def get_test_small_dots_cases():
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size,
              num_ctas, device):
     if is_interpreter():
-        if in_dtype == 'bfloat16':
-            pytest.skip("bfloat16 is not supported in the interpreter")
         if input_precision == "bf16x3" or input_precision == "bf16x6":
             pytest.skip(f"input_precision {input_precision} is not supported in the interpreter")
     else:
@@ -7035,9 +7026,6 @@ def test_tensor_member(device):
 @pytest.mark.parametrize("trans_a", [False, True])
 @pytest.mark.parametrize("trans_b", [False, True])
 def test_dot_multidim(rank, trans_a, trans_b, device):
-
-    if is_interpreter():
-        pytest.skip("bfloat16 is not supported in the interpreter")
 
     @triton.jit
     def kernel(X, Y, Z, RANK: tl.constexpr, TRANS_A: tl.constexpr, TRANS_B: tl.constexpr):

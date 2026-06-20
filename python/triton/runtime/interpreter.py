@@ -6,6 +6,7 @@ from typing import Tuple, List, Dict, Callable, TypeVar, Optional
 
 import math
 import numpy as np
+import ml_dtypes
 
 import triton
 import triton.language as tl
@@ -158,8 +159,9 @@ def _get_np_dtype(tt_dtype):
         tl.uint32: np.dtype(np.uint32),
         tl.int64: np.dtype(np.int64),
         tl.uint64: np.dtype(np.uint64),
-        # bfloat16 types are stored as uint16
-        tl.bfloat16: np.dtype(np.uint16),
+        # bfloat16 is backed by ml_dtypes so that arithmetic, casts, and
+        # reductions behave like a real float (with round-to-nearest-even)
+        tl.bfloat16: np.dtype(ml_dtypes.bfloat16),
         # float8 types are stored as uint8
         tl.float8e5: np.dtype(np.uint8),
         tl.float8e5b16: np.dtype(np.uint8),
@@ -526,14 +528,7 @@ class InterpreterBuilder:
 
     # casting ops
     def cast_impl(self, src, dst_type):
-        src_element_type = src.dtype.scalar
-        dst_element_type = dst_type.scalar
-        if (src_element_type == tl.bfloat16 and dst_element_type == tl.float32) or \
-           (src_element_type == tl.float32 and dst_element_type == tl.bfloat16):
-            data = _convert_float(src.data, src_element_type, dst_element_type, None).view(_get_np_dtype(dst_type))
-            return TensorHandle(data, dst_type.scalar)
-        else:
-            return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type.scalar)
+        return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type.scalar)
 
     create_si_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_ui_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
