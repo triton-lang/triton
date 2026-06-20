@@ -179,7 +179,7 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, ttg.tar
     // CHECK: %[[G1_0_WITH_MASK:.*]] = llvm.or %{{.*}}, %[[CTA_MASK]]
     // CHECK: %[[G1_0_MASKED:.*]] = llvm.and %[[G1_0_WITH_MASK]]
     // CHECK: llvm.insertelement %[[G1_0_MASKED]]
-    amdg.async_tdm_gather %tensorDesc[%row_indices, %c0_i32] to %memDesc, pred = %pred : tensor<8xi32, #slice1>, !ttg.memdesc<8x64xf16, #shared1, #smem, mutable> -> !tt.tensordesc<8x64xf16, #shared1>
+    amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<8xi32, #slice1>, !ttg.memdesc<8x64xf16, #shared1, #smem, mutable> -> !tt.tensordesc<8x64xf16, #shared1>
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
     tt.return
   }
@@ -267,8 +267,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %memDesc: !ttg.memdesc<8x64xf16, #shared_scatter_pad, #smem_scatter_pad, mutable>,
     %row_indices: tensor<8xi32, #idx_layout>
   ) {
-    %c0_i32 = arith.constant 0 : i32
-    amdg.async_tdm_scatter %tensorDesc[%row_indices, %c0_i32] from %memDesc : tensor<8xi32, #idx_layout>, !ttg.memdesc<8x64xf16, #shared_scatter_pad, #smem_scatter_pad, mutable> -> !tt.tensordesc<8x64xf16>
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<8xi32, #idx_layout>, !ttg.memdesc<8x64xf16, #shared_scatter_pad, #smem_scatter_pad, mutable> -> !tt.tensordesc<8x64xf16>
     // CHECK: "llvm.amdgcn.tensor.store.from.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
     tt.return
   }
