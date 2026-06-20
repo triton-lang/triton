@@ -115,6 +115,102 @@ tt.func @async_wait(%arg: tensor<32x16xf16, #AL>) {
   tt.return
 }
 
+// CHECK-LABEL: async_wait_back_to_back
+tt.func @async_wait_back_to_back(%arg: tensor<32x16xf16, #AL>) {
+  %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttg.async_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  ttg.async_wait {num = 4 : i32}
+  ttg.async_wait {num = 0 : i32}
+  %1 = ttg.local_load %cst0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<32x16xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: async_wait_pure_op_between_waits
+tt.func @async_wait_pure_op_between_waits(%arg: tensor<32x16xf16, #AL>) {
+  %c1_i32 = arith.constant 1 : i32
+  %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: arith.addi
+  // CHECK-NEXT: ttg.async_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  ttg.async_wait {num = 4 : i32}
+  %pure = arith.addi %c1_i32, %c1_i32 : i32
+  ttg.async_wait {num = 0 : i32}
+  %1 = ttg.local_load %cst0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<32x16xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: async_wait_existing_barrier
+tt.func @async_wait_existing_barrier(%arg: tensor<32x16xf16, #AL>) {
+  %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  ttg.async_wait {num = 4 : i32}
+  ttg.barrier local
+  %1 = ttg.local_load %cst0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<32x16xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: async_wait_scan_stops_at_memory_effect
+tt.func @async_wait_scan_stops_at_memory_effect(%arg: tensor<32x16xf16, #AL>) {
+  %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  ttg.async_wait {num = 4 : i32}
+  %1 = ttg.local_load %cst0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<32x16xf16, #AL>
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  ttg.async_wait {num = 0 : i32}
+  %2 = ttg.local_load %cst0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<32x16xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: async_wait_scan_stops_at_control_flow
+tt.func @async_wait_scan_stops_at_control_flow(%arg: tensor<32x16xf16, #AL>, %cond: i1) {
+  %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: scf.if
+  ttg.async_wait {num = 4 : i32}
+  scf.if %cond {
+    scf.yield
+  } else {
+    scf.yield
+  }
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  ttg.async_wait {num = 0 : i32}
+  %1 = ttg.local_load %cst0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<32x16xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: async_wait_scan_reaches_block_end
+tt.func @async_wait_scan_reaches_block_end(%arg: tensor<32x16xf16, #AL>, %cond: i1) {
+  %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
+  scf.if %cond {
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: } else {
+    ttg.async_wait {num = 4 : i32}
+    scf.yield
+  } else {
+    scf.yield
+  }
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttg.barrier local
+  ttg.async_wait {num = 0 : i32}
+  tt.return
+}
+
+
 // CHECK-LABEL: subview
 tt.func @subview() {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<32x16xf16, #AL>
