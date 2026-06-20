@@ -1793,7 +1793,7 @@ def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, mask_type, device):
         pytest.skip("Disabled due to being flaky on CDNA2")
 
     @triton.jit
-    def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, dtype: tl.constexpr, mask_type: tl.constexpr):
+    def change_value(X, R, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, dtype: tl.constexpr, mask_type: tl.constexpr):
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -1811,7 +1811,9 @@ def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, mask_type, device):
         else:
             raise ValueError(f"Invalid mask_type: {mask_type}")
 
-        tl.atomic_cas(X + offsets, t1, t2, sem=sem, mask=mask)
+        old_vals = tl.atomic_cas(X + offsets, t1, t2, sem=sem, mask=mask)
+
+        tl.store(R + offsets, old_vals, mask=mask)
 
     torch_dtype = getattr(torch, dtype_str)
     X = torch.zeros((size, ), device=device, dtype=torch_dtype)
@@ -1819,9 +1821,15 @@ def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, mask_type, device):
     Y = X.clone()
     Y[0::2] = 2
 
+    expected_R = X.clone()
+    R = torch.empty((size, ), device=device, dtype=torch_dtype)
+
     tl_dtype = getattr(tl, dtype_str)
-    change_value[(2, )](X, BLOCK_SIZE=size // 2, sem=sem, dtype=tl_dtype, mask_type=mask_type)
+    change_value[(2, )](X, R, BLOCK_SIZE=size // 2, sem=sem, dtype=tl_dtype, mask_type=mask_type)
     assert torch.equal(X, Y)
+    assert torch.equal(R, expected_R)
+
+def test_atomics_cas_mixed_mask(mask_type):
 
 
 @pytest.mark.interpreter
