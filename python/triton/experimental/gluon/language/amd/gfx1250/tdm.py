@@ -328,7 +328,7 @@ def async_wait(num_outstanding=0, _semantic=None) -> None:
 
 
 @builtin
-def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, dst_col_offset, src: shared_memory_descriptor,
+def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, src: shared_memory_descriptor,
                   mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
     """Scatter data from shared memory to non-contiguous rows in global memory asynchronously.
 
@@ -341,11 +341,13 @@ def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, dst_col
     - int32: up to 8 rows can be scattered per TDM instruction
     If more rows are needed, multiple TDM instructions will be automatically issued.
 
+    The column offset is carried by the descriptor: position it beforehand with
+    ``update_tensor_descriptor(desc, add_offsets=[0, col])``.
+
     Args:
-        desc (tensor_descriptor): the destination tensor descriptor. Must be 2D.
+        desc (tensor_descriptor): the destination tensor descriptor. Must be 2D and positioned
+                                  (column via update_tensor_descriptor).
         dst_row_indices (tensor): 1D tensor of row indices (int16 or int32) in the destination tensor.
-        dst_col_offset (int or tensor): the starting column offset in the destination tensor
-                                        for all scattered rows.
         src (shared_memory_descriptor): the shared memory source containing data to scatter. Must be 2D.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
@@ -355,19 +357,15 @@ def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, dst_col
     src_ndim = len(src.shape)
     assert src_ndim == 2, f"TDM scatter src must be 2D, got {src_ndim}D"
 
-    # Convert dst_col_offset to i32
-    dst_col_offset_handle = _semantic._convert_to_ir_values([dst_col_offset], require_i64=False)[0]
-
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
 
-    _semantic.builder.create_async_tdm_scatter(desc.handle, dst_row_indices.handle, dst_col_offset_handle, src.handle,
-                                               mbarrier_handle)
+    _semantic.builder.create_async_tdm_scatter(desc.handle, dst_row_indices.handle, src.handle, mbarrier_handle)
 
 
 @builtin
-def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, src_col_offset, dst: shared_memory_descriptor,
-                 pred=True, mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, dst: shared_memory_descriptor,
+                 mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
     """Gather data from non-contiguous rows in global memory to shared memory asynchronously.
 
     This operation uses TDM gather mode to read data from non-contiguous rows in global memory.
@@ -379,13 +377,14 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, src_col_
     - int32: up to 8 rows can be gathered per TDM instruction
     If more rows are needed, multiple TDM instructions will be automatically issued.
 
+    The column offset and predicate are carried by the descriptor: position it
+    beforehand with ``update_tensor_descriptor(desc, add_offsets=[0, col], pred=p)``.
+
     Args:
-        desc (tensor_descriptor): the source tensor descriptor. Must be 2D.
+        desc (tensor_descriptor): the source tensor descriptor. Must be 2D and positioned
+                                  (column / pred via update_tensor_descriptor).
         src_row_indices (tensor): 1D tensor of row indices (int16 or int32) in the source tensor.
-        src_col_offset (int or tensor): the starting column offset in the source tensor
-                                        for all gathered rows.
         dst (shared_memory_descriptor): the shared memory destination to store gathered data. Must be 2D.
-        pred (bool, optional): Predicate to enable or disable the gather. Defaults to True.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
     """
     ndim = len(desc.block_shape)
@@ -394,16 +393,10 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, src_col_
     dst_ndim = len(dst.shape)
     assert dst_ndim == 2, f"TDM gather dst must be 2D, got {dst_ndim}D"
 
-    # Convert src_col_offset to i32
-    src_col_offset_handle = _semantic._convert_to_ir_values([src_col_offset], require_i64=False)[0]
-
-    pred = _handle_i32_pred(pred, _semantic)
-
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
 
-    _semantic.builder.create_async_tdm_gather(desc.handle, src_row_indices.handle, src_col_offset_handle, dst.handle,
-                                              pred.handle, mbarrier_handle)
+    _semantic.builder.create_async_tdm_gather(desc.handle, src_row_indices.handle, dst.handle, mbarrier_handle)
 
 
 @builtin
