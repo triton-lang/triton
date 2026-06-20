@@ -159,8 +159,7 @@ def _get_np_dtype(tt_dtype):
         tl.uint32: np.dtype(np.uint32),
         tl.int64: np.dtype(np.int64),
         tl.uint64: np.dtype(np.uint64),
-        # bfloat16 is backed by ml_dtypes so that arithmetic, casts, and
-        # reductions behave like a real float (with round-to-nearest-even)
+        # bfloat16 is backed by ml_dtypes, not raw uint16 bits
         tl.bfloat16: np.dtype(ml_dtypes.bfloat16),
         # float8 types are stored as uint8
         tl.float8e5: np.dtype(np.uint8),
