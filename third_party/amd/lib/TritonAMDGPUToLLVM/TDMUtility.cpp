@@ -231,9 +231,10 @@ SmallVector<Value> scalarizeTDMDescriptor(RewriterBase &rewriter, Location loc,
 
 // Shrink a tensor_dim by a signed offset, clamping a backward/over-advance to
 // 0:  result = (off < 0) ? 0 : max(0, cur - off).  A negative offset yields a
-// zero extent.  Shared by fillTDMDescriptor / fillTDMDescriptorForGatherScatter
-// (implicit per-tile bounds) and updateTensorDescriptor's clamp_bounds so all
-// paths derive the OOB extent identically.
+// zero extent.  Shared by fillTDMDescriptor /
+// prepareGatherScatterDescriptorBase (implicit per-tile bounds) and
+// updateTensorDescriptor's clamp_bounds so all paths derive the OOB extent
+// identically.
 //
 // Written in this specific shape (smax + sign select) to avoid suboptimal
 // codegen: LLVM InstCombine can otherwise fold the clamp into VALU-only
@@ -508,7 +509,7 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
 
   // This base descriptor records only tensor metadata.  Per-op hardware fields
   // (pred, LDS address, barrier, tile_dim*) are materialized by
-  // fillTDMDescriptor / fillTDMDescriptorForGatherScatter, where the
+  // fillTDMDescriptor / prepareGatherScatterDescriptorBase, where the
   // destination, predicate, and warp distribution are known.
 
   // group0 (128 bits / 4 dwords) effective bit encoding:
@@ -1001,24 +1002,18 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
   }
 }
 
-// Fill TDM descriptor for gather/scatter operations (2D only).
-// Gather reads from non-contiguous rows in global memory to LDS.
-// Scatter writes from LDS to non-contiguous rows in global memory.
-void fillTDMDescriptorForGatherScatter(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter, Type elementType,
+// Build the chunk-invariant part of a gather/scatter descriptor once, so the
+// per-chunk loop only re-stamps lds_addr instead of rebuilding group0.
+static void prepareGatherScatterDescriptorBase(
+    RewriterBase &rewriter, Location loc, Type elementType,
     SmallVector<int64_t> blockShape, unsigned padInterval, unsigned padAmount,
-    Value &group0, Value &group1, Value &group2, Value &group3,
-    Value ldsRowOffset, Value ldsPtr, Value pred, Value multicastMask,
+    Value &group0, Value &group1, Value pred, Value multicastMask,
     Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId,
-    ArrayRef<Value> rowIndices, bool use32BitIndices, bool isGather) {
-  assert(!rowIndices.empty() && "Gather/scatter requires row indices.");
-
+    bool use32BitIndices, bool isGather) {
   auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   Type globalPtrTy = ptr_ty(ctx, 1);
-  Type sharedPtrTy = ptr_ty(ctx, 3);
 
   // Decode descriptor to get tensor info (only group0/1 used for 2D).
   Value descGroups[2] = {group0, group1};
@@ -1035,18 +1030,6 @@ void fillTDMDescriptorForGatherScatter(
   Value cgaColOffsetElem = cgaOffsets[1].second;
   Value cgaColOffset = b.mul(b.zext(i64_ty, cgaColOffsetElem), tensorStride[1]);
   globalPtr = b.gep(globalPtrTy, elementType, globalPtr, cgaColOffset);
-
-  // Calculate LDS offset based on row offset only (column always starts at 0)
-  Value ldsOffset = b.mul(ldsRowOffset, b.i32_val(blockShape[1]));
-
-  // Apply padding if needed
-  if (padInterval > 0 && padAmount > 0) {
-    Value iVal = b.i32_val(log2(padInterval));
-    Value pVal = b.i32_val(log2(padAmount));
-    Value padOffset = b.shl(i32_ty, b.ashr(ldsOffset, iVal), pVal);
-    ldsOffset = b.add(ldsOffset, padOffset);
-  }
-  ldsPtr = b.gep(sharedPtrTy, elementType, ldsPtr, ldsOffset);
 
   // tensorShape[1] is the OOB extent carried by the descriptor (set once via
   // update_tensor_descriptor set_bounds / clamp_bounds, like the contiguous
@@ -1065,7 +1048,6 @@ void fillTDMDescriptorForGatherScatter(
 
   // Update group0 with addresses and enable gather/scatter mode
   Value globalAddr = b.ptrtoint(i64_ty, globalPtr);
-  Value ldsAddr = b.ptrtoint(i32_ty, ldsPtr);
 
   // Set gather/scatter bits: bit 31 = enable, bit 30 = 32-bit indices
   Value predWithGatherScatter = b.or_(pred, b.i32_val(1 << 31));
@@ -1074,7 +1056,6 @@ void fillTDMDescriptorForGatherScatter(
   }
 
   group0 = vecSet(b, group0, 0, predWithGatherScatter);
-  group0 = vecSet(b, group0, 1, ldsAddr);
   group0 = vecSet(b, group0, 2, b.trunc(i32_ty, globalAddr));
 
   // group0[3]: preserve type bits, set global_addr upper 25 bits
@@ -1108,12 +1089,6 @@ void fillTDMDescriptorForGatherScatter(
   group1 = vecSet(b, group1, 0, g1_0);
   group1 = vecSet(b, group1, 1, g1_1);
 
-  // Set tile_dim1 (number of valid indices) in lower 16 bits of group1[4]
-  size_t numIndices = rowIndices.size();
-  Value g1_4 = b.and_(vecGet(b, group1, 4), b.i32_val(0xFFFF0000));
-  g1_4 = b.or_(g1_4, b.i32_val(numIndices & 0xFFFF));
-  group1 = vecSet(b, group1, 4, g1_4);
-
   // Encode tile_dim0 for gather/scatter as the full undivided column width:
   // gather/scatter is row-indexed across all warps, so each TDM instruction
   // covers the full row.  createTDMDescriptor leaves the upper 16 bits of
@@ -1130,6 +1105,25 @@ void fillTDMDescriptorForGatherScatter(
     g1_3_gs = b.or_(g1_3_gs, b.i32_val(tileDim0 << 16));
     group1 = vecSet(b, group1, 3, g1_3_gs);
   }
+}
+
+// Fill the per-chunk parts of a gather/scatter descriptor on top of the base.
+static void fillGatherScatterChunk(RewriterBase &rewriter, Location loc,
+                                   Value &group0, Value &group1, Value &group2,
+                                   Value &group3, Value ldsAddr,
+                                   ArrayRef<Value> rowIndices,
+                                   bool use32BitIndices) {
+  assert(!rowIndices.empty() && "Gather/scatter requires row indices.");
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  // group0[1]: lds_addr
+  group0 = vecSet(b, group0, 1, ldsAddr);
+
+  // tile_dim1 (group1[4] lower 16 bits): number of valid indices
+  size_t numIndices = rowIndices.size();
+  Value g1_4 = b.and_(vecGet(b, group1, 4), b.i32_val(0xFFFF0000));
+  g1_4 = b.or_(g1_4, b.i32_val(numIndices & 0xFFFF));
+  group1 = vecSet(b, group1, 4, g1_4);
 
   // Fill group2 and group3 with row indices
   if (use32BitIndices) {
@@ -1412,20 +1406,15 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     pred = b.select(inRange, pred, b.i32_val(0));
   }
 
-  // Precompute LDS row offset for each instruction batch via
-  // applyLinearLayout with the actual register index and warp ID.
-  SmallVector<Value> batchLdsOffsets;
+  // chunk 0's LDS row offset (per warp); chunks 1..N-1 derive theirs as a
+  // compile-time-constant delta off chunk 0 below.
   auto kBlock = rewriter.getStringAttr("block");
-  for (size_t startIdx = 0; startIdx < effectiveRowIndices.size();
-       startIdx += maxIndicesPerInstr) {
-    auto offsets = applyLinearLayout(loc, rewriter, indexLL,
-                                     {{kRegister, b.i32_val(startIdx)},
-                                      {kLane, b.i32_val(0)},
-                                      {kWarp, warpId},
-                                      {kBlock, b.i32_val(0)}});
-    batchLdsOffsets.push_back(offsets[0].second);
-  }
-  assert(batchLdsOffsets.size() == analysis.numInstructions);
+  Value chunk0RowOffset = applyLinearLayout(loc, rewriter, indexLL,
+                                            {{kRegister, b.i32_val(0)},
+                                             {kLane, b.i32_val(0)},
+                                             {kWarp, warpId},
+                                             {kBlock, b.i32_val(0)}})[0]
+                              .second;
 
   size_t numIndicesPerWarp = effectiveRowIndices.size();
 
@@ -1439,6 +1428,23 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
   Value group2Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
   Value group3Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
 
+  Type sharedPtrTy = ptr_ty(rewriter.getContext(), 3);
+  Value chunk0LdsAddr;
+
+  // The lds-trick scales each chunk's element-offset delta to bytes; the
+  // gather/scatter verifier guarantees >=1-byte elements, so this never
+  // truncates to 0.
+  unsigned elemBytes = elementType.getIntOrFloatBitWidth() / 8;
+
+  // Build the chunk-invariant base once; the loop below only re-stamps the
+  // per-chunk lds_addr and indices.
+  Value baseGroup0 = group0In;
+  Value baseGroup1 = group1In;
+  prepareGatherScatterDescriptorBase(
+      rewriter, loc, elementType, to_vector(blockShape), padInterval, padAmount,
+      baseGroup0, baseGroup1, pred, multicastMask, barrierPtr, cgaLayout, ctaId,
+      use32BitIndices, isGather);
+
   // Issue multiple TDM instructions if needed
   for (size_t instrIdx = 0; instrIdx < analysis.numInstructions; ++instrIdx) {
     size_t startIdx = instrIdx * maxIndicesPerInstr;
@@ -1448,19 +1454,53 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     SmallVector<Value> batchIndices(effectiveRowIndices.begin() + startIdx,
                                     effectiveRowIndices.begin() + endIdx);
 
-    // Make copies of the descriptor groups for this iteration
-    Value g0 = group0In;
-    Value g1 = group1In;
+    Value g0 = baseGroup0;
+    Value g1 = baseGroup1;
     Value g2 = group2Zero;
     Value g3 = group3Zero;
 
-    Value ldsRowOffset = batchLdsOffsets[instrIdx];
+    // Per-chunk lds_addr (g0[1]): chunk 0 does the full per-warp computation;
+    // chunks 1..N-1 are chunk0_addr + a compile-time-constant byte delta, so
+    // the backend emits `s_add_co_i32 sX, chunk0_addr, <imm>` per chunk instead
+    // of a separate per-chunk LDS-address SGPR.
+    Value ldsAddr;
+    if (instrIdx == 0) {
+      Value ldsOffset = b.mul(chunk0RowOffset, b.i32_val(blockShape[1]));
+      if (padInterval > 0 && padAmount > 0) {
+        Value iVal = b.i32_val(log2(padInterval));
+        Value pVal = b.i32_val(log2(padAmount));
+        Value padOffset = b.shl(i32_ty, b.ashr(ldsOffset, iVal), pVal);
+        ldsOffset = b.add(ldsOffset, padOffset);
+      }
+      ldsAddr = b.ptrtoint(i32_ty,
+                           b.gep(sharedPtrTy, elementType, ldsPtr, ldsOffset));
+      chunk0LdsAddr = ldsAddr;
+    } else {
+      // chunk i's register-offset delta from chunk 0, evaluated at warp 0.
+      // applyLinearLayout is linear in `register`, so the per-warp term cancels
+      // (LL(register=0) == 0) and the delta is a compile-time constant.  Adding
+      // it to chunk0's address (rather than XOR-ing, as applyLinearLayout
+      // would) is exact because the index layout is a permutation matrix
+      // (distributed / LinearEncodingAttr invariant): register and warp own
+      // disjoint output bits, so XOR == integer add for these layouts.
+      int64_t rowDelta = indexLL
+                             .apply({{kRegister, (int32_t)startIdx},
+                                     {kLane, 0},
+                                     {kWarp, 0},
+                                     {kBlock, 0}})[0]
+                             .second;
+      int64_t elemDelta = rowDelta * blockShape[1];
+      if (padInterval > 0 && padAmount > 0) {
+        // padInterval divides the innermost block dim (enforced by the
+        // verifier) and elemDelta is a multiple of it, so pad() distributes:
+        // pad(a+delta) == pad(a) + pad(delta).
+        elemDelta += (elemDelta / padInterval) * padAmount;
+      }
+      ldsAddr = b.add(chunk0LdsAddr, b.i32_val(elemDelta * (int64_t)elemBytes));
+    }
 
-    fillTDMDescriptorForGatherScatter(
-        rewriter, loc, typeConverter, elementType, to_vector(blockShape),
-        padInterval, padAmount, g0, g1, g2, g3, ldsRowOffset, ldsPtr, pred,
-        multicastMask, barrierPtr, cgaLayout, ctaId, batchIndices,
-        use32BitIndices, isGather);
+    fillGatherScatterChunk(rewriter, loc, g0, g1, g2, g3, ldsAddr, batchIndices,
+                           use32BitIndices);
 
     auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
     Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);

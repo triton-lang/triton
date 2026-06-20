@@ -86,22 +86,6 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        std::optional<uint32_t> warpUsedHint = std::nullopt,
                        bool isPureForm = false);
 
-// Fill TDM descriptor for gather/scatter operations (2D only).
-// Gather reads from non-contiguous rows in global memory to LDS.
-// Scatter writes from LDS to non-contiguous rows in global memory.
-// - rowIndices: which global rows to read from (gather) or write to (scatter)
-// - ldsRowOffset: starting row within shared memory
-// - use32BitIndices: true for 32-bit indices (max 8 rows), false for 16-bit
-// (max 16 rows)
-void fillTDMDescriptorForGatherScatter(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> blockShape, unsigned padInterval, unsigned padAmount,
-    Value &group0, Value &group1, Value &group2, Value &group3,
-    Value ldsRowOffset, Value ldsPtr, Value pred, Value multicastMask,
-    Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId,
-    ArrayRef<Value> rowIndices, bool use32BitIndices, bool isGather);
-
 // Emit a TDM load/store for regular contiguous transfers (1D-5D).
 // PartitionedSharedEncoding aligns warps to LDS partitions; without a hint
 // the op auto-splits into multiple instructions when warps don't cover all

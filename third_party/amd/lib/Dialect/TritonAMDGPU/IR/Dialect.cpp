@@ -816,6 +816,9 @@ LogicalResult AsyncTDMScatterOp::verify() {
       !llvm::isa<gpu::SwizzledSharedEncodingAttr>(enc))
     return emitOpError("Invalid shared memory layout for TDM");
 
+  if (smemTy.getElementType().getIntOrFloatBitWidth() < 8)
+    return emitOpError("TDM scatter requires element types of at least 8 bits");
+
   auto dstRowIndicesType = cast<RankedTensorType>(getDstRowIndices().getType());
   if (dstRowIndicesType.getRank() != 1)
     return emitOpError("dst_row_indices must be a 1D tensor");
@@ -864,6 +867,9 @@ LogicalResult AsyncTDMGatherOp::verify() {
       !llvm::isa<gpu::SwizzledSharedEncodingAttr>(enc))
     return emitOpError("Invalid shared memory layout for TDM");
 
+  if (smemTy.getElementType().getIntOrFloatBitWidth() < 8)
+    return emitOpError("TDM gather requires element types of at least 8 bits");
+
   auto srcRowIndicesType = cast<RankedTensorType>(getSrcRowIndices().getType());
   if (srcRowIndicesType.getRank() != 1)
     return emitOpError("src_row_indices must be a 1D tensor");
@@ -877,10 +883,19 @@ LogicalResult AsyncTDMGatherOp::verify() {
            << numIndices;
 
   auto paddedEnc = llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(enc);
-  if (paddedEnc && !(paddedEnc.getIntervals().size() == 1 &&
-                     paddedEnc.getPaddings().size() == 1))
-    return emitOpError(
-        "TDM gather does not support multiple interval-padding pairs");
+  if (paddedEnc) {
+    if (!(paddedEnc.getIntervals().size() == 1 &&
+          paddedEnc.getPaddings().size() == 1))
+      return emitOpError(
+          "TDM gather does not support multiple interval-padding pairs");
+
+    if (blockShape.back() % paddedEnc.getIntervals()[0] != 0)
+      return emitOpError(
+                 "TDM gather padding interval must divide the innermost "
+                 "block dimension (got padInterval=")
+             << paddedEnc.getIntervals()[0]
+             << ", innermost dimension=" << blockShape.back() << ")";
+  }
 
   auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
   auto sharedOrder = triton::gpu::getOrder(
