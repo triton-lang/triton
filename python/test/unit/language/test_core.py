@@ -1502,6 +1502,8 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for check_return_val in ([True, False] if is_hip() else [True])])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val, device):
     check_type_supported(dtype_x_str, device)
+    if is_interpreter() and dtype_x_str == 'bfloat16':
+        pytest.skip("atomic ops on bfloat16 are not supported in the interpreter")
     shape0, shape1 = shape
     # triton kernel
 
@@ -1581,6 +1583,8 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
                                                          for dtype_x_str in ['bfloat16', 'float16', 'float32']])
 def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
+    if is_interpreter() and dtype_x_str == 'bfloat16':
+        pytest.skip("atomic ops on bfloat16 are not supported in the interpreter")
 
     @triton.jit
     def kernel(X, val, NUM: tl.constexpr):
@@ -1605,6 +1609,8 @@ def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, dev
                                                          for dtype_x_str in ['bfloat16', 'float16', 'float32']])
 def test_tensor_atomic_add_shift_1(size, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
+    if is_interpreter() and dtype_x_str == 'bfloat16':
+        pytest.skip("atomic ops on bfloat16 are not supported in the interpreter")
 
     @triton.jit
     def kernel(X, val, NUM: tl.constexpr):
