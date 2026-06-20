@@ -134,7 +134,7 @@ This is useful for cases where auto-tuning is prohibitively expensive, or just n
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><p><strong>values</strong> (<em>dict</em><em>[</em><em>str</em><em>, </em><em>Callable</em><em>[</em><em>[</em><em>dict</em><em>[</em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>, </em><em>Any</em><em>]</em><em>]</em>) – a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
-each such function takes a list of positional arguments as input.</p>
+each such function takes a dict of all the arguments passed to the kernel, keyed by argument name, as input.</p>
 </dd>
 </dl>
 </dd></dl>

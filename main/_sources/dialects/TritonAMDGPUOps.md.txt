@@ -238,7 +238,7 @@ _Gather data from non-contiguous global memory rows to local memory asynchronous
 Syntax:
 
 ```
-operation ::= `amdg.async_tdm_gather` $desc `[` $src_row_indices `,` $src_col_offset `]` `to` $dst `,` `pred` `=` $pred (`,` `barrier` `=` $barrier^)?
+operation ::= `amdg.async_tdm_gather` $desc `[` $src_row_indices `]` `to` $dst (`,` `barrier` `=` $barrier^)?
               attr-dict `:` qualified(type($src_row_indices)) `,` qualified(type($dst)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
 ```
 
@@ -253,10 +253,12 @@ to read from. The element type of src_row_indices determines the index size:
 - I32: 32-bit indices, up to 8 rows per instruction
 If more rows are needed, multiple TDM instructions will be issued.
 
-The src_col_offset specifies the starting column in the source tensor for
-all gathered rows.
+The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
+(global offset / column via add_offsets, bounds, pred); this op only supplies the
+per-instruction row slices (src_row_indices) and the LDS destination, and inherits
+`pred` from the descriptor.
 
-Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `PredicatedOpInterface`, `TDMOpInterface`
+Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `TDMOpInterface`
 
 #### Operands:
 
@@ -264,9 +266,7 @@ Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `PredicatedOpInterfac
 | :-----: | ----------- |
 | `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
 | `src_row_indices` | tensor of 16-bit signless integer or 32-bit signless integer values |
-| `src_col_offset` | 32-bit signless integer |
 | `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
-| `pred` | 32-bit signless integer |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 #### Results:
@@ -329,7 +329,7 @@ _Scatter data from local memory to non-contiguous global memory rows asynchronou
 Syntax:
 
 ```
-operation ::= `amdg.async_tdm_scatter` $desc `[` $dst_row_indices `,` $dst_col_offset `]` `from` $src (`,` `barrier` `=` $barrier^)?
+operation ::= `amdg.async_tdm_scatter` $desc `[` $dst_row_indices `]` `from` $src (`,` `barrier` `=` $barrier^)?
               attr-dict `:` qualified(type($dst_row_indices)) `,` qualified(type($src)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
 ```
 
@@ -344,8 +344,9 @@ to write to. The element type of dst_row_indices determines the index size:
 - I32: 32-bit indices, up to 8 rows per instruction
 If more rows are needed, multiple TDM instructions will be issued.
 
-The dst_col_offset specifies the starting column in the destination tensor for
-all scattered rows.
+The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
+(global offset / column via add_offsets, bounds); this op only supplies the
+per-instruction row slices (dst_row_indices) and the LDS source.
 
 Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `TDMOpInterface`
 
@@ -355,7 +356,6 @@ Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `TDMOpInterface`
 | :-----: | ----------- |
 | `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
 | `dst_row_indices` | tensor of 16-bit signless integer or 32-bit signless integer values |
-| `dst_col_offset` | 32-bit signless integer |
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 

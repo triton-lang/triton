@@ -572,7 +572,7 @@ it sends an “LDS atomic arrive” to signal its completion.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">amdg.async_tdm_gather</span></code> (triton::amdgpu::AsyncTDMGatherOp)<a class="headerlink" href="#amdg-async-tdm-gather-triton-amdgpu-asynctdmgatherop" title="Link to this heading"></a></h2>
 <p><em>Gather data from non-contiguous global memory rows to local memory asynchronously</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_gather` $desc `[` $src_row_indices `,` $src_col_offset `]` `to` $dst `,` `pred` `=` $pred (`,` `barrier` `=` $barrier^)?
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_gather` $desc `[` $src_row_indices `]` `to` $dst (`,` `barrier` `=` $barrier^)?
               attr-dict `:` qualified(type($src_row_indices)) `,` qualified(type($dst)) (`,` qualified(type($barrier))^)? `-&gt;` qualified(type($desc))
 </pre></div>
 </div>
@@ -587,9 +587,11 @@ to read from. The element type of src_row_indices determines the index size:</p>
 <li><p>I32: 32-bit indices, up to 8 rows per instruction
 If more rows are needed, multiple TDM instructions will be issued.</p></li>
 </ul>
-<p>The src_col_offset specifies the starting column in the source tensor for
-all gathered rows.</p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TDMOpInterface</span></code></p>
+<p>The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
+(global offset / column via add_offsets, bounds, pred); this op only supplies the
+per-instruction row slices (src_row_indices) and the LDS destination, and inherits
+<code class="docutils literal notranslate"><span class="pre">pred</span></code> from the descriptor.</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TDMOpInterface</span></code></p>
 <section id="id10">
 <h3>Operands:<a class="headerlink" href="#id10" title="Link to this heading"></a></h3>
 <table class="docutils align-default">
@@ -605,14 +607,8 @@ all gathered rows.</p>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src_row_indices</span></code></p></td>
 <td><p>tensor of 16-bit signless integer or 32-bit signless integer values</p></td>
 </tr>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src_col_offset</span></code></p></td>
-<td><p>32-bit signless integer</p></td>
-</tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">dst</span></code></p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">dst</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
-</tr>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">pred</span></code></p></td>
-<td><p>32-bit signless integer</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
@@ -695,7 +691,7 @@ to LLVM.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">amdg.async_tdm_scatter</span></code> (triton::amdgpu::AsyncTDMScatterOp)<a class="headerlink" href="#amdg-async-tdm-scatter-triton-amdgpu-asynctdmscatterop" title="Link to this heading"></a></h2>
 <p><em>Scatter data from local memory to non-contiguous global memory rows asynchronously</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_scatter` $desc `[` $dst_row_indices `,` $dst_col_offset `]` `from` $src (`,` `barrier` `=` $barrier^)?
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdg.async_tdm_scatter` $desc `[` $dst_row_indices `]` `from` $src (`,` `barrier` `=` $barrier^)?
               attr-dict `:` qualified(type($dst_row_indices)) `,` qualified(type($src)) (`,` qualified(type($barrier))^)? `-&gt;` qualified(type($desc))
 </pre></div>
 </div>
@@ -710,8 +706,9 @@ to write to. The element type of dst_row_indices determines the index size:</p>
 <li><p>I32: 32-bit indices, up to 8 rows per instruction
 If more rows are needed, multiple TDM instructions will be issued.</p></li>
 </ul>
-<p>The dst_col_offset specifies the starting column in the destination tensor for
-all scattered rows.</p>
+<p>The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
+(global offset / column via add_offsets, bounds); this op only supplies the
+per-instruction row slices (dst_row_indices) and the LDS source.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TDMOpInterface</span></code></p>
 <section id="id15">
 <h3>Operands:<a class="headerlink" href="#id15" title="Link to this heading"></a></h3>
@@ -728,13 +725,10 @@ all scattered rows.</p>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">dst_row_indices</span></code></p></td>
 <td><p>tensor of 16-bit signless integer or 32-bit signless integer values</p></td>
 </tr>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">dst_col_offset</span></code></p></td>
-<td><p>32-bit signless integer</p></td>
-</tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">barrier</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
 </tbody>
