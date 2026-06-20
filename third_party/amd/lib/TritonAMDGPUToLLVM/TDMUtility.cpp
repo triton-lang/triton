@@ -1478,9 +1478,11 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     } else {
       // chunk i's register-offset delta from chunk 0, evaluated at warp 0.
       // applyLinearLayout is linear in `register`, so the per-warp term cancels
-      // (LL(register=0) == 0) and the delta is a compile-time constant.  It
-      // must be addition-separable from the warp term, which holds for the
-      // row-strip-per-warp layouts gather/scatter emit.
+      // (LL(register=0) == 0) and the delta is a compile-time constant.  Adding
+      // it to chunk0's address (rather than XOR-ing, as applyLinearLayout
+      // would) is exact because the index layout is a permutation matrix
+      // (distributed / LinearEncodingAttr invariant): register and warp own
+      // disjoint output bits, so XOR == integer add for these layouts.
       int64_t rowDelta = indexLL
                              .apply({{kRegister, (int32_t)startIdx},
                                      {kLane, 0},
