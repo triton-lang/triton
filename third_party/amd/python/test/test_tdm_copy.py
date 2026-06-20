@@ -269,6 +269,69 @@ def test_compile_tdm_clamp_no_readfirstlane():
     assert "v_readfirstlane" not in amdgcn, f"TDM tensor_dim clamp regressed to VALU (v_readfirstlane emitted)\n{amdgcn}"
 
 
+@gluon.jit
+def tdm_gather_loop_kernel(ptr, optr, M, N, K, BLOCK_N: ttgl.constexpr, NUM_INDICES: ttgl.constexpr):
+    """Gather NUM_INDICES rows into shared memory each iteration via TDM, advancing
+    the descriptor column per iteration (the v3_tdm/MoE pattern)."""
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [NUM_INDICES, BLOCK_N], [1, 0])
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([NUM_INDICES, 1], [1, 32], [1, num_warps], [1, 0])
+    ROW_IDX_LAYOUT: ttgl.constexpr = ttgl.SliceLayout(1, BLOCKED_LAYOUT)
+
+    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=ptr, shape=(M, N), strides=(N, 1),
+                                                       block_shape=(NUM_INDICES, BLOCK_N), layout=SHARED_LAYOUT)
+    row_indices = ttgl.arange(0, NUM_INDICES, layout=ROW_IDX_LAYOUT)
+    buf = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    acc = ttgl.zeros([NUM_INDICES, BLOCK_N], ttgl.float32, layout=BLOCKED_LAYOUT)
+    for _ in range(0, K, BLOCK_N):
+        desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(desc, add_offsets=[0, BLOCK_N])
+        ttgl.amd.gfx1250.tdm.async_gather(desc, src_row_indices=row_indices, dst=buf)
+        ttgl.amd.gfx1250.tdm.async_wait(0)
+        acc += buf.load(layout=BLOCKED_LAYOUT).to(ttgl.float32)
+
+    offs_m = ttgl.arange(0, NUM_INDICES, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
+    offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+    ttgl.store(optr + offs_m[:, None] * N + offs_n[None, :], acc.to(ttgl.float16))
+
+
+def test_compile_tdm_gather_shared_descriptor_sgprs():
+    """The base-hoist makes a multi-chunk gather reuse one descriptor across chunks.
+
+    The gather is placed in a loop with the descriptor advancing per iteration, so
+    the descriptor is not a compile-time constant (the v3_tdm/MoE pattern).  32 row
+    indices lower to four ``tensor_load_to_lds`` per iteration; the base-hoist makes
+    all four reuse one group0 SGPR tuple (only the per-chunk lds_addr lane and index
+    operands change).  Without it each chunk rebuilds group0 into its own SGPR
+    window, giving one distinct group0 per chunk -- this is the part of PR2 that a
+    straight-line gather cannot exercise, because there LLVM CSE folds the per-chunk
+    rebuilds back together regardless.
+    """
+    signature = {
+        "ptr": "*fp16", "optr": "*fp16", "M": "i32", "N": "i32", "K": "i32", "BLOCK_N": "constexpr", "NUM_INDICES":
+        "constexpr"
+    }
+    k = triton.compile(
+        gluon._runtime.GluonASTSource(
+            fn=tdm_gather_loop_kernel,
+            signature=signature,
+            constexprs={"BLOCK_N": 64, "NUM_INDICES": 32},
+        ),
+        target=GPUTarget("hip", "gfx1250", 32),
+        options={"num_warps": 4},
+    )
+    amdgcn = k.asm["amdgcn"]
+
+    loads = [ln.split() for ln in amdgcn.splitlines() if ln.strip().startswith("tensor_load_to_lds")]
+    assert len(loads) >= 4, f"expected a 4-chunk gather, got {len(loads)} TDM instruction(s)\n{amdgcn}"
+
+    # operand 1 = group0 (4 SGPRs).  The base-hoist makes every chunk of the
+    # in-loop gather reuse one group0 tuple; without it each chunk rebuilds group0
+    # into its own SGPR window (one distinct group0 per chunk).
+    group0 = {toks[1].rstrip(",") for toks in loads}
+    assert len(group0) == 1, (f"chunks must share one group0 SGPR tuple (base-hoist); got {len(group0)} distinct "
+                              f"group0 tuples for {len(loads)} loads: {sorted(group0)}\n{amdgcn}")
+
+
 _RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
 
 
