@@ -600,7 +600,7 @@ struct AtomicCASOpConversion
         auto *valOprStore = ptxBuilderStore.newOperand(old, tyId);
         auto &st = *ptxBuilderStore.create("st");
         st.shared().o(sTy);
-        st(dstOprStore, valOprStore).maybePredicate(pred); 
+        st(dstOprStore, valOprStore).maybePredicate(pred);
         auto ASMReturnTy = void_ty(ctx);
         ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
         createBarrier(rewriter, loc, numCTAs);

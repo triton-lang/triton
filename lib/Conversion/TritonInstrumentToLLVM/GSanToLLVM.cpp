@@ -685,7 +685,9 @@ public:
         continue;
       }
 
-      Value pred = llMask ? ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i]) : threadPred;
+      Value pred =
+          llMask ? ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i])
+                 : threadPred;
       Value casPtr = ptrElements[i];
       Value casCmp = cmpElements[i];
       Value casVal = valElements[i];
