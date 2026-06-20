@@ -1829,6 +1829,7 @@ def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, mask_type, device):
     assert torch.equal(X, Y)
     assert torch.equal(R, expected_R)
 
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", ['float16', 'float32', 'uint32', 'int32', 'uint64', 'int64', 'float64'])
 def test_atomics_cas_mixed_mask(dtype_str):
@@ -1850,10 +1851,12 @@ def test_atomics_cas_mixed_mask(dtype_str):
     BLOCK_SIZE = 16
 
     # Values
-    X   = torch.tensor([10,20,30,40,10,20,30,40,10,20,30,40,10,20,30,40], device='cuda', dtype=torch_dtype)
-    CMP = torch.tensor([10,10,30,30,10,10,30,30,10,10,30,30,10,10,30,30], device='cuda', dtype=torch_dtype)
+    X = torch.tensor([10, 20, 30, 40, 10, 20, 30, 40, 10, 20, 30, 40, 10, 20, 30, 40], device='cuda', dtype=torch_dtype)
+    CMP = torch.tensor([10, 10, 30, 30, 10, 10, 30, 30, 10, 10, 30, 30, 10, 10, 30, 30], device='cuda',
+                       dtype=torch_dtype)
     CMP_orig = CMP.clone()
-    VAL = torch.tensor([15,25,25,15,15,25,25,15,15,25,25,15,15,25,25,15], device='cuda', dtype=torch_dtype)
+    VAL = torch.tensor([15, 25, 25, 15, 15, 25, 25, 15, 15, 25, 25, 15, 15, 25, 25, 15], device='cuda',
+                       dtype=torch_dtype)
     VAL_orig = VAL.clone()
 
     # Mask
@@ -1867,11 +1870,12 @@ def test_atomics_cas_mixed_mask(dtype_str):
 
     kernel[(2, )](X, CMP, VAL, MASK, R, BLOCK_SIZE=BLOCK_SIZE // 2)
 
-    Y = torch.tensor([15,20,25,40,10,20,30,40,15,20,25,40,10,20,30,40], device='cuda', dtype=torch_dtype)
+    Y = torch.tensor([15, 20, 25, 40, 10, 20, 30, 40, 15, 20, 25, 40, 10, 20, 30, 40], device='cuda', dtype=torch_dtype)
 
     assert torch.equal(CMP, CMP_orig) and torch.equal(VAL, VAL_orig), "CMP and VAL should not be modified"
     assert torch.equal(X, Y), f"Expected X to be {Y} but got {X}"
-    assert torch.equal(R[:4], expected_R[:4]) and torch.equal(R[8:12], expected_R[8:12]), f"Expected R to be {expected_R} but got {R}"
+    assert torch.equal(R[:4], expected_R[:4]) and torch.equal(
+        R[8:12], expected_R[8:12]), f"Expected R to be {expected_R} but got {R}"
 
 
 @pytest.mark.interpreter
