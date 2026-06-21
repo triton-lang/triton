@@ -14,6 +14,9 @@ using namespace triton;
 using namespace triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
+static constexpr const char kDisableSetMaxRegisterAttr[] =
+    "tti.disable_setmaxregister";
+
 //===----------------------------------------------------------------------===//
 // relayoutWarps
 //===----------------------------------------------------------------------===//
@@ -160,9 +163,12 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
   // Because the partition region is isolated from above, we could in theory
   // compile it to PTX and read the number of registers that got allocated.
   SmallVector<unsigned> maxTensorRegs;
+  bool hasTwoCTAMMA = false;
   for (Region *partition : wsOp.getPartitionRegions()) {
     unsigned &tensorRegs = maxTensorRegs.emplace_back(0);
     partition->walk([&](Operation *op) {
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
+        hasTwoCTAMMA |= mma.getTwoCtas();
       for (Type type :
            llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes())) {
         if (auto tensor = dyn_cast<RankedTensorType>(type))
@@ -271,6 +277,9 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
   }
   wsOp.setRequestedRegisters(estRegUsage);
   wsOp.setPartitionNumWarps(partitionNumWarps);
+  if (hasTwoCTAMMA && TritonGPUDialect::getNumCTAs(axisInfo.getModuleOp()) > 1)
+    wsOp->setAttr(kDisableSetMaxRegisterAttr,
+                  UnitAttr::get(wsOp.getContext()));
   return success();
 }
 
