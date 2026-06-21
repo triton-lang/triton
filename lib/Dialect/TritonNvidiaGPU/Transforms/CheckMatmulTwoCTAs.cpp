@@ -32,10 +32,7 @@ ttg::MemDescType getOneCTABarrierType(ttg::MemDescType type, int numCTAs) {
                                type.getMemorySpace(), type.getMutableMemory());
 }
 
-void normalizeOneCTABarrierTree(Value value, int numCTAs,
-                                llvm::DenseSet<Value> &visited) {
-  if (!visited.insert(value).second)
-    return;
+void normalizeOneCTABarrierTree(Value value, int numCTAs) {
   auto type = dyn_cast<ttg::MemDescType>(value.getType());
   if (!type)
     return;
@@ -43,7 +40,7 @@ void normalizeOneCTABarrierTree(Value value, int numCTAs,
   value.setType(getOneCTABarrierType(type, numCTAs));
   for (Operation *user : llvm::make_early_inc_range(value.getUsers())) {
     if (auto index = dyn_cast<ttg::MemDescIndexOp>(user))
-      normalizeOneCTABarrierTree(index.getResult(), numCTAs, visited);
+      normalizeOneCTABarrierTree(index.getResult(), numCTAs);
   }
 }
 
@@ -58,8 +55,7 @@ void normalizeOneCTATMABarrier(Value barrier, int numCTAs,
   Value root = getBarrierRoot(barrier);
   if (!normalizedRoots.insert(root).second)
     return;
-  llvm::DenseSet<Value> visited;
-  normalizeOneCTABarrierTree(root, numCTAs, visited);
+  normalizeOneCTABarrierTree(root, numCTAs);
 }
 
 class TritonNvidiaGPUCheckMatmulTwoCTAPass
