@@ -73,7 +73,7 @@ def matmul_set_block_size_hook(nargs):
         nargs["c_desc"].block_shape = [block_m, block_n]
 
 
-def make_matmul_configs(configs, num_ctas, group_size_m=8):
+def make_matmul_configs(configs, num_ctas):
     return [
         triton.Config(
             {
@@ -92,27 +92,13 @@ def make_matmul_configs(configs, num_ctas, group_size_m=8):
     ]
 
 
-def persistent_matmul_set_block_size_hook(nargs):
-    block_m = nargs["BLOCK_M"]
-    block_n = nargs["BLOCK_N"]
-    block_k = nargs["BLOCK_K"]
-    nargs["a_desc"].block_shape = [block_m, block_k]
-    nargs["b_desc"].block_shape = [block_k, block_n]
-    epilogue_subtile = nargs.get("EPILOGUE_SUBTILE", 1)
-    if epilogue_subtile > 1:
-        nargs["c_desc"].block_shape = [block_m, block_n // epilogue_subtile]
-    else:
-        nargs["c_desc"].block_shape = [block_m, block_n]
-
-
-def make_persistent_matmul_configs(configs, num_ctas, group_size_m=8):
+def make_persistent_matmul_configs(configs, num_ctas):
     return [
         triton.Config(
             {
                 "BLOCK_M": block_m,
                 "BLOCK_N": block_n,
                 "BLOCK_K": block_k,
-                "GROUP_SIZE_M": group_size_m,
                 "GRID_MINOR_DIM": grid_minor_dim,
                 "GRID_TILE_WIDTH": grid_tile_width,
                 "NUM_STAGES": num_stages,
@@ -120,7 +106,7 @@ def make_persistent_matmul_configs(configs, num_ctas, group_size_m=8):
             num_stages=num_stages,
             num_warps=num_warps,
             num_ctas=num_ctas,
-            pre_hook=persistent_matmul_set_block_size_hook,
+            pre_hook=matmul_set_block_size_hook,
         ) for block_m, block_n, block_k, grid_minor_dim, grid_tile_width, num_stages, num_warps in configs
     ]
 
@@ -175,7 +161,6 @@ FOUR_CTA_CONFIGS = make_matmul_configs(
         (512, 128, 128, 0, 8, 4, 4),
     ],
     num_ctas=4,
-    group_size_m=1,
 )
 
 PERSISTENT_TWO_CTA_CONFIGS = make_persistent_matmul_configs(
@@ -234,7 +219,6 @@ WS_CONFIGS = make_matmul_configs(
         (512, 128, 64, 0, 8, 6, 4),
     ],
     num_ctas=2,
-    group_size_m=1,
 )
 
 
@@ -270,25 +254,8 @@ def _planar_snake(tile_id, num_pid_m, num_pid_n, GRID_MINOR_DIM: tl.constexpr, G
 
 
 @triton.jit
-def matmul_kernel(a_desc, b_desc, c_desc,  #
-                  M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
-                  BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-                  GRID_MINOR_DIM: tl.constexpr, GRID_TILE_WIDTH: tl.constexpr, NUM_STAGES: tl.constexpr,
-                  FP8_INPUTS: tl.constexpr, WARP_SPECIALIZE: tl.constexpr, EPILOGUE_SUBTILE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    num_pid_m = tl.cdiv(M, BLOCK_M)
-    num_pid_n = tl.cdiv(N, BLOCK_N)
-    pid_m, pid_n = _planar_snake(pid, num_pid_m, num_pid_n, GRID_MINOR_DIM, GRID_TILE_WIDTH)
-
-    off_m = pid_m * BLOCK_M
-    off_n = pid_n * BLOCK_N
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES, warp_specialize=WARP_SPECIALIZE):
-        off_k = k * BLOCK_K
-        a = a_desc.load([off_m, off_k])
-        b = b_desc.load([off_k, off_n])
-        acc = tl.dot(a, b, acc)
-
+def _store_epilogue(c_desc, off_m, off_n, acc, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+                    EPILOGUE_SUBTILE: tl.constexpr):
     if EPILOGUE_SUBTILE == 2:
         acc = tl.reshape(acc, (BLOCK_M, 2, BLOCK_N // 2))
         acc = tl.permute(acc, (0, 2, 1))
@@ -344,11 +311,33 @@ def matmul_kernel(a_desc, b_desc, c_desc,  #
 
 
 @triton.jit
+def matmul_kernel(a_desc, b_desc, c_desc,  #
+                  M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
+                  BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+                  GRID_MINOR_DIM: tl.constexpr, GRID_TILE_WIDTH: tl.constexpr, NUM_STAGES: tl.constexpr,
+                  FP8_INPUTS: tl.constexpr, WARP_SPECIALIZE: tl.constexpr, EPILOGUE_SUBTILE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_M)
+    num_pid_n = tl.cdiv(N, BLOCK_N)
+    pid_m, pid_n = _planar_snake(pid, num_pid_m, num_pid_n, GRID_MINOR_DIM, GRID_TILE_WIDTH)
+
+    off_m = pid_m * BLOCK_M
+    off_n = pid_n * BLOCK_N
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES, warp_specialize=WARP_SPECIALIZE):
+        off_k = k * BLOCK_K
+        a = a_desc.load([off_m, off_k])
+        b = b_desc.load([off_k, off_n])
+        acc = tl.dot(a, b, acc)
+    _store_epilogue(c_desc, off_m, off_n, acc, BLOCK_M, BLOCK_N, EPILOGUE_SUBTILE)
+
+
+@triton.jit
 def matmul_kernel_persistent(a_desc, b_desc, c_desc,  #
                              M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
                              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-                             GROUP_SIZE_M: tl.constexpr, GRID_MINOR_DIM: tl.constexpr, GRID_TILE_WIDTH: tl.constexpr,
-                             NUM_STAGES: tl.constexpr, FP8_INPUTS: tl.constexpr, WARP_SPECIALIZE: tl.constexpr,
+                             GRID_MINOR_DIM: tl.constexpr, GRID_TILE_WIDTH: tl.constexpr, NUM_STAGES: tl.constexpr,
+                             FP8_INPUTS: tl.constexpr, WARP_SPECIALIZE: tl.constexpr,
                              EPILOGUE_SUBTILE: tl.constexpr, NUM_SMS: tl.constexpr):
     start_pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
@@ -373,58 +362,7 @@ def matmul_kernel_persistent(a_desc, b_desc, c_desc,  #
         pid_m, pid_n = _planar_snake(tile_id_c, num_pid_m, num_pid_n, GRID_MINOR_DIM, GRID_TILE_WIDTH)
         off_m = pid_m * BLOCK_M
         off_n = pid_n * BLOCK_N
-        if EPILOGUE_SUBTILE == 2:
-            acc = tl.reshape(acc, (BLOCK_M, 2, BLOCK_N // 2))
-            acc = tl.permute(acc, (0, 2, 1))
-            acc0, acc1 = tl.split(acc)
-            c_desc.store([off_m, off_n], acc0.to(tl.float16))
-            c_desc.store([off_m, off_n + BLOCK_N // 2], acc1.to(tl.float16))
-        elif EPILOGUE_SUBTILE == 4:
-            acc = tl.reshape(acc, (BLOCK_M, 2, BLOCK_N // 2))
-            acc = tl.permute(acc, (0, 2, 1))
-            acc0, acc1 = tl.split(acc)
-            acc0 = tl.reshape(acc0, (BLOCK_M, 2, BLOCK_N // 4))
-            acc0 = tl.permute(acc0, (0, 2, 1))
-            acc00, acc01 = tl.split(acc0)
-            acc1 = tl.reshape(acc1, (BLOCK_M, 2, BLOCK_N // 4))
-            acc1 = tl.permute(acc1, (0, 2, 1))
-            acc10, acc11 = tl.split(acc1)
-            c_desc.store([off_m, off_n], acc00.to(tl.float16))
-            c_desc.store([off_m, off_n + BLOCK_N // 4], acc01.to(tl.float16))
-            c_desc.store([off_m, off_n + BLOCK_N // 2], acc10.to(tl.float16))
-            c_desc.store([off_m, off_n + BLOCK_N * 3 // 4], acc11.to(tl.float16))
-        elif EPILOGUE_SUBTILE == 8:
-            acc = tl.reshape(acc, (BLOCK_M, 2, BLOCK_N // 2))
-            acc = tl.permute(acc, (0, 2, 1))
-            acc0, acc1 = tl.split(acc)
-            acc0 = tl.reshape(acc0, (BLOCK_M, 2, BLOCK_N // 4))
-            acc0 = tl.permute(acc0, (0, 2, 1))
-            acc00, acc01 = tl.split(acc0)
-            acc1 = tl.reshape(acc1, (BLOCK_M, 2, BLOCK_N // 4))
-            acc1 = tl.permute(acc1, (0, 2, 1))
-            acc10, acc11 = tl.split(acc1)
-            acc00 = tl.reshape(acc00, (BLOCK_M, 2, BLOCK_N // 8))
-            acc00 = tl.permute(acc00, (0, 2, 1))
-            acc000, acc001 = tl.split(acc00)
-            acc01 = tl.reshape(acc01, (BLOCK_M, 2, BLOCK_N // 8))
-            acc01 = tl.permute(acc01, (0, 2, 1))
-            acc010, acc011 = tl.split(acc01)
-            acc10 = tl.reshape(acc10, (BLOCK_M, 2, BLOCK_N // 8))
-            acc10 = tl.permute(acc10, (0, 2, 1))
-            acc100, acc101 = tl.split(acc10)
-            acc11 = tl.reshape(acc11, (BLOCK_M, 2, BLOCK_N // 8))
-            acc11 = tl.permute(acc11, (0, 2, 1))
-            acc110, acc111 = tl.split(acc11)
-            c_desc.store([off_m, off_n], acc000.to(tl.float16))
-            c_desc.store([off_m, off_n + BLOCK_N // 8], acc001.to(tl.float16))
-            c_desc.store([off_m, off_n + BLOCK_N // 4], acc010.to(tl.float16))
-            c_desc.store([off_m, off_n + BLOCK_N * 3 // 8], acc011.to(tl.float16))
-            c_desc.store([off_m, off_n + BLOCK_N // 2], acc100.to(tl.float16))
-            c_desc.store([off_m, off_n + BLOCK_N * 5 // 8], acc101.to(tl.float16))
-            c_desc.store([off_m, off_n + BLOCK_N * 3 // 4], acc110.to(tl.float16))
-            c_desc.store([off_m, off_n + BLOCK_N * 7 // 8], acc111.to(tl.float16))
-        else:
-            c_desc.store([off_m, off_n], acc.to(tl.float16))
+        _store_epilogue(c_desc, off_m, off_n, acc, BLOCK_M, BLOCK_N, EPILOGUE_SUBTILE)
 
 
 AUTOTUNE_KEY = ["M", "N", "K", "FP8_INPUTS", "WARP_SPECIALIZE"]
@@ -547,18 +485,18 @@ def validate_and_inspect():
     num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     persistent_2cta_grid = (min(num_sms, triton.cdiv(M, 256) * triton.cdiv(N, 128)), )
     compiled_persistent_2cta_forced = matmul_kernel_persistent[persistent_2cta_grid](
-        a_desc, b_desc, c_desc, M, N, K, BLOCK_M=256, BLOCK_N=128, BLOCK_K=64, GROUP_SIZE_M=8,
-        GRID_MINOR_DIM=0, GRID_TILE_WIDTH=8, NUM_STAGES=3, FP8_INPUTS=False, WARP_SPECIALIZE=False,
-        EPILOGUE_SUBTILE=1, NUM_SMS=num_sms, num_warps=4, num_stages=3, num_ctas=2)
+        a_desc, b_desc, c_desc, M, N, K, BLOCK_M=256, BLOCK_N=128, BLOCK_K=64, GRID_MINOR_DIM=0,
+        GRID_TILE_WIDTH=8, NUM_STAGES=3, FP8_INPUTS=False, WARP_SPECIALIZE=False, EPILOGUE_SUBTILE=1,
+        NUM_SMS=num_sms, num_warps=4, num_stages=3, num_ctas=2)
 
     a_desc = TensorDescriptor.from_tensor(a, [256, 64])
     b_desc = TensorDescriptor.from_tensor(b, [64, 256])
     c_desc = TensorDescriptor.from_tensor(out, [256, 256])
     persistent_4cta_grid = (min(num_sms, triton.cdiv(M, 256) * triton.cdiv(N, 256)), )
     compiled_persistent_4cta_forced = matmul_kernel_persistent[persistent_4cta_grid](
-        a_desc, b_desc, c_desc, M, N, K, BLOCK_M=256, BLOCK_N=256, BLOCK_K=64, GROUP_SIZE_M=8,
-        GRID_MINOR_DIM=1, GRID_TILE_WIDTH=8, NUM_STAGES=3, FP8_INPUTS=False, WARP_SPECIALIZE=False,
-        EPILOGUE_SUBTILE=1, NUM_SMS=num_sms, num_warps=4, num_stages=3, num_ctas=4)
+        a_desc, b_desc, c_desc, M, N, K, BLOCK_M=256, BLOCK_N=256, BLOCK_K=64, GRID_MINOR_DIM=1,
+        GRID_TILE_WIDTH=8, NUM_STAGES=3, FP8_INPUTS=False, WARP_SPECIALIZE=False, EPILOGUE_SUBTILE=1,
+        NUM_SMS=num_sms, num_warps=4, num_stages=3, num_ctas=4)
 
     ttgir = compiled_2cta.asm["ttgir"]
     ptx = compiled_2cta.asm["ptx"]
