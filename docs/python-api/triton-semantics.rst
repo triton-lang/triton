@@ -44,6 +44,8 @@ Differences with NumPy
 
 Perhaps confusingly, integer division and modulus follow Python semantics for computations where all the inputs are scalars.
 
+**Out-of-range float-to-integer casts** Casting a floating-point value to an integer type is only defined when the value, rounded towards zero, fits in the target type. If the value is out of range, or is NaN, the result is undefined: it may differ between the compiler and the interpreter (``TRITON_INTERPRET=1``), and across hardware backends and toolkit versions. For example, casting ``inf``, a large value such as ``510.0`` to ``int8``, or ``nan`` to an integer type does not produce a portable result. If you need a defined result, clamp the value into range (for example with ``tl.clamp``) and handle ``NaN`` explicitly before the cast.
+
 **Variable scoping** A variable used after a ``for`` loop or an ``if`` statement must be assigned on *every* path through that block, unlike Python where a variable assigned inside a block remains visible afterwards. Triton does not model variables as being dynamically defined or undefined depending on control flow, so a variable that is only assigned inside the block is not considered defined once the block exits. This holds even when the block is guaranteed to execute, such as a ``range(0, 1)`` loop.
 
 For example, the following raises ``NameError: 'value' is not defined`` because ``value`` is only bound inside the loop body:
