@@ -27,8 +27,29 @@ namespace gpu {
 // destination layout will affect the shared memory load/store generated. So we
 // still want to allow vectorization for the src/destination layout up to
 // 16bytes.
+static std::optional<unsigned> getReductionAxis(Operation *op) {
+  while (op->getNumResults() == 1 && op->getResult(0).hasOneUse()) {
+    Operation *user = *op->getResult(0).getUsers().begin();
+    if (auto reduce = dyn_cast<ReduceOp>(user)) {
+      if (reduce.getNumOperands() == 1)
+        return reduce.getAxis();
+      return std::nullopt;
+    }
+    if (!user->hasTrait<OpTrait::Elementwise>() || user->getNumResults() != 1)
+      return std::nullopt;
+    auto inputType = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+    auto outputType = dyn_cast<RankedTensorType>(user->getResult(0).getType());
+    if (!inputType || !outputType ||
+        inputType.getShape() != outputType.getShape())
+      return std::nullopt;
+    op = user;
+  }
+  return std::nullopt;
+}
+
 static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
-                                               RankedTensorType type) {
+                                               RankedTensorType type,
+                                               Operation *op) {
   auto shapePerCTA = triton::gpu::getShapePerCTA(type);
   int numElems = product<int64_t>(shapePerCTA);
   int numThreads = numWarps * threadsPerWarp;
@@ -38,10 +59,22 @@ static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
 
   int vectorSize = std::min(numElemsPerThread, maxVectorSize);
   SmallVector<unsigned> sizePerThread(type.getRank(), 1);
-  sizePerThread.back() = vectorSize;
 
   SmallVector<unsigned> order =
       getMatrixOrder(type.getRank(), /*rowMajor*/ true);
+  if (auto reductionAxis = getReductionAxis(op)) {
+    int64_t nonReductionElems = numElems / shapePerCTA[*reductionAxis];
+    if (nonReductionElems >= numThreads) {
+      // Prefer a thread-local reduction when the other dimensions can occupy
+      // the whole CTA. Vectorizing the descriptor load in this case can spread
+      // the reduction axis across lanes and warps, making the reduction much
+      // more expensive than the wider shared-memory load is worth.
+      vectorSize = 1;
+      order.erase(llvm::find(order, *reductionAxis));
+      order.push_back(*reductionAxis);
+    }
+  }
+  sizePerThread.back() = vectorSize;
   auto cgaLayout = triton::gpu::getCGALayout(type.getEncoding());
 
   Attribute layout = triton::gpu::BlockedEncodingAttr::get(
@@ -59,11 +92,11 @@ static void pickDescriptorLoadStoreLayout(
       if (load->getNumResults() == 1)
         layoutMap[op] = pickDescriptorLoadStoreLayout(
             numWarps, threadsPerWarp,
-            cast<RankedTensorType>(load->getResult(0).getType()));
+            cast<RankedTensorType>(load->getResult(0).getType()), op);
     }
     if (auto store = dyn_cast<DescriptorStoreLikeOpInterface>(op)) {
-      layoutMap[op] = pickDescriptorLoadStoreLayout(numWarps, threadsPerWarp,
-                                                    store.getSrc().getType());
+      layoutMap[op] = pickDescriptorLoadStoreLayout(
+          numWarps, threadsPerWarp, store.getSrc().getType(), op);
     }
   });
 }

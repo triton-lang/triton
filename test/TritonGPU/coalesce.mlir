@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-coalesce | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritongpu-coalesce -tritongpu-remove-layout-conversions | FileCheck %s --check-prefix=RLC
 
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -294,6 +295,52 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK:  tt.load %1 : tensor<32x4x4x!tt.ptr<i8>, #blocked>
     %108 = tt.load %50 : tensor<32x4x4x!tt.ptr<i8>, #blocked>
     tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: #[[$REDUCE_LOCAL:.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 4], order = [2, 0, 1]}>
+  // CHECK-LABEL: @descriptor_load_partial_reduce
+  // RLC: #[[$RLC_REDUCE_LOCAL:.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 4], order = [2, 0, 1]}>
+  // RLC-LABEL: @descriptor_load_partial_reduce
+  tt.func public @descriptor_load_partial_reduce(%arg0: !tt.tensordesc<1x32x128xbf16>) -> tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #blocked}>> {
+    %c0_i32 = arith.constant 0 : i32
+    // CHECK: %[[LOAD:.+]] = tt.descriptor_load {{.*}} -> tensor<1x32x128xbf16, #[[$REDUCE_LOCAL]]>
+    // RLC: %[[RLC_LOAD:.+]] = tt.descriptor_load {{.*}} -> tensor<1x32x128xbf16, #[[$RLC_REDUCE_LOCAL]]>
+    // RLC: %[[RLC_EXT:.+]] = arith.extf %[[RLC_LOAD]] : tensor<1x32x128xbf16, #[[$RLC_REDUCE_LOCAL]]> to tensor<1x32x128xf32, #[[$RLC_REDUCE_LOCAL]]>
+    // RLC: %[[RLC_REDUCE:.+]] = "tt.reduce"(%[[RLC_EXT]])
+    // RLC: ttg.convert_layout %[[RLC_REDUCE]] : tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #[[$RLC_REDUCE_LOCAL]]}>> -> tensor<1x128xf32
+    %0 = tt.descriptor_load %arg0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x32x128xbf16> -> tensor<1x32x128xbf16, #blocked>
+    %1 = arith.extf %0 : tensor<1x32x128xbf16, #blocked> to tensor<1x32x128xf32, #blocked>
+    %2 = "tt.reduce"(%1) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %max = arith.maximumf %lhs, %rhs : f32
+      tt.reduce.return %max : f32
+    }) : (tensor<1x32x128xf32, #blocked>) -> tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    tt.return %2 : tensor<1x128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: #[[$VECTORIZED:.*]] = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [1, 8, 4], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+  // CHECK-LABEL: @descriptor_load_small_partial_reduce
+  tt.func public @descriptor_load_small_partial_reduce(%arg0: !tt.tensordesc<1x32x16xbf16>) -> tensor<1x16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> {
+    %c0_i32 = arith.constant 0 : i32
+    // CHECK: tt.descriptor_load {{.*}} -> tensor<1x32x16xbf16, #[[$VECTORIZED]]>
+    %0 = tt.descriptor_load %arg0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x32x16xbf16> -> tensor<1x32x16xbf16, #blocked>
+    %1 = arith.extf %0 : tensor<1x32x16xbf16, #blocked> to tensor<1x32x16xf32, #blocked>
+    %2 = "tt.reduce"(%1) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %max = arith.maximumf %lhs, %rhs : f32
+      tt.reduce.return %max : f32
+    }) : (tensor<1x32x16xf32, #blocked>) -> tensor<1x16xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    tt.return %2 : tensor<1x16xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
   }
 }
 
