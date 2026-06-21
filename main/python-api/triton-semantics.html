@@ -144,6 +144,24 @@
 <h2>Differences with NumPy<a class="headerlink" href="#differences-with-numpy" title="Link to this heading"></a></h2>
 <p><strong>C rounding in integer division</strong> Operators in Triton follow C semantics rather than Python semantics for efficiency. As such, <code class="docutils literal notranslate"><span class="pre">int</span> <span class="pre">//</span> <span class="pre">int</span></code> implements <a class="reference external" href="https://en.wikipedia.org/wiki/Modulo#In_programming_languages">rounding towards zero as in C</a> for integers of mixed signs, rather than rounding towards minus infinity as in Python. For the same reason, the modulus operator <code class="docutils literal notranslate"><span class="pre">int</span> <span class="pre">%</span> <span class="pre">int</span></code> (which is defined as <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">%</span> <span class="pre">b</span> <span class="pre">=</span> <span class="pre">a</span> <span class="pre">-</span> <span class="pre">b</span> <span class="pre">*</span> <span class="pre">(a</span> <span class="pre">//</span> <span class="pre">b)</span></code>) also follows C semantics rather than Python semantics.</p>
 <p>Perhaps confusingly, integer division and modulus follow Python semantics for computations where all the inputs are scalars.</p>
+<p><strong>Variable scoping</strong> A variable used after a <code class="docutils literal notranslate"><span class="pre">for</span></code> loop or an <code class="docutils literal notranslate"><span class="pre">if</span></code> statement must be assigned on <em>every</em> path through that block, unlike Python where a variable assigned inside a block remains visible afterwards. Triton does not model variables as being dynamically defined or undefined depending on control flow, so a variable that is only assigned inside the block is not considered defined once the block exits. This holds even when the block is guaranteed to execute, such as a <code class="docutils literal notranslate"><span class="pre">range(0,</span> <span class="pre">1)</span></code> loop.</p>
+<p>For example, the following raises <code class="docutils literal notranslate"><span class="pre">NameError:</span> <span class="pre">'value'</span> <span class="pre">is</span> <span class="pre">not</span> <span class="pre">defined</span></code> because <code class="docutils literal notranslate"><span class="pre">value</span></code> is only bound inside the loop body:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">kernel</span><span class="p">(</span><span class="n">out_ptr</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">):</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="mf">1.0</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">out_ptr</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>  <span class="c1"># `value` is not defined here</span>
+</pre></div>
+</div>
+<p>Assign the variable before the block so that it is defined on all paths:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">kernel</span><span class="p">(</span><span class="n">out_ptr</span><span class="p">):</span>
+    <span class="n">value</span> <span class="o">=</span> <span class="mf">0.0</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">):</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="mf">1.0</span>
+    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">out_ptr</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+</pre></div>
+</div>
 </section>
 </section>
 
