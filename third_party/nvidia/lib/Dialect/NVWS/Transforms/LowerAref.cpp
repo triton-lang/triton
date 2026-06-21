@@ -46,6 +46,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir::triton;
@@ -133,6 +134,10 @@ void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp,
 struct ArefValue {
   Value emptyMbars;
   Value fullMbars;
+  Value tmaFullMbars;
+  int numTMAFullMbars;
+  bool tmaFullMbarCoversFullBarrier;
+  SmallVector<bool> twoCTATMABuffers;
   int depth;
   SmallVector<Value> buffers;
 };
@@ -157,8 +162,35 @@ Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
   return barrier;
 }
 
+Value getTMAFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
+                        Value stage, unsigned loadIdx,
+                        std::optional<PartitionWsTagIds> partitionWsTagIds,
+                        StageCluster stageCluster) {
+  if (!aref.tmaFullMbars)
+    return {};
+  Value barrierIdx = stage;
+  if (aref.numTMAFullMbars > 1) {
+    auto slots =
+        arith::ConstantIntOp::create(rewriter, loc, aref.numTMAFullMbars, 32);
+    assignStageCluster(slots, partitionWsTagIds, stageCluster, rewriter);
+    auto offset = arith::ConstantIntOp::create(rewriter, loc, loadIdx, 32);
+    assignStageCluster(offset, partitionWsTagIds, stageCluster, rewriter);
+    auto mul = arith::MulIOp::create(rewriter, loc, stage, slots);
+    assignStageCluster(mul, partitionWsTagIds, stageCluster, rewriter);
+    auto add = arith::AddIOp::create(rewriter, loc, mul, offset);
+    assignStageCluster(add, partitionWsTagIds, stageCluster, rewriter);
+    barrierIdx = add;
+  }
+  auto barrier =
+      createSingleBufferView(rewriter, aref.tmaFullMbars, barrierIdx);
+  assignStageCluster(barrier.getDefiningOp(), partitionWsTagIds, stageCluster,
+                     rewriter);
+  return barrier;
+}
+
 struct BarrierCount {
   int producerPendingCount{0};
+  int tmaProducerPendingCount{0};
   int consumerPendingCount{0};
 };
 
@@ -170,7 +202,8 @@ SmallVector<AsyncOp> castAsyncOpAttrs(ArrayAttr opAttrs) {
   return kinds;
 }
 
-BarrierCount getArrivalCount(ArefCreateOp op) {
+BarrierCount getArrivalCount(ArefCreateOp op,
+                             const DenseSet<MMAv5OpInterface> &mmav5Ops) {
   SetVector<int> producerGroups, consumerGroups;
   BarrierCount count;
 
@@ -189,9 +222,12 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
       for (auto kind : castAsyncOpAttrs(putExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
-        case AsyncOp::TMALoad:
         case AsyncOp::NONE:
           count.producerPendingCount += 1;
+          break;
+        case AsyncOp::TMALoad:
+          count.producerPendingCount += 1;
+          count.tmaProducerPendingCount += 1;
           break;
         default:
           llvm_unreachable("unsupported producer kind");
@@ -204,7 +240,15 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
       consumerGroups.insert(partitionIds.front());
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
-        case AsyncOp::TC5MMA:
+        case AsyncOp::TC5MMA: {
+          int mmaCount = 1;
+          for (MMAv5OpInterface mma : mmav5Ops) {
+            mmaCount = std::max(
+                mmaCount, nvidia_gpu::getMMAv5CompletionBarrierCount(mma));
+          }
+          count.consumerPendingCount += mmaCount;
+          break;
+        }
         case AsyncOp::WGMMA:
         case AsyncOp::NONE:
           count.consumerPendingCount += 1;
@@ -225,9 +269,33 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
   return count;
 }
 
+Value createArefBarrierAlloc(ImplicitLocOpBuilder &builder, Type type,
+                             unsigned numBarriers, bool twoCTAs) {
+  if (!twoCTAs)
+    return createScalarAlloc(builder, type, numBarriers);
+
+  MLIRContext *ctx = builder.getContext();
+  unsigned numCTAs = TritonGPUDialect::getNumCTAs(
+      builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>());
+  assert(numCTAs % 2 == 0);
+  Attribute sharedMemorySpace = SharedMemorySpaceAttr::get(ctx);
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
+  auto barrierCGALayout = CGAEncodingAttr::get(
+      ctx, LinearLayout::zeros1D(2, kBlock, dim) *
+               LinearLayout::identity1D(numCTAs / 2, kBlock, dim));
+  auto barrierEncoding =
+      SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCGALayout);
+  auto memDescType =
+      MemDescType::get({numBarriers, numCTAs / 2}, type, barrierEncoding,
+                       sharedMemorySpace, /*mutableMemory=*/true);
+  return LocalAllocOp::create(builder, memDescType, Value());
+}
+
 Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
-                     int numBarriers, int arrivalCount) {
-  Value barrierAlloc = createScalarAlloc(b1, b1.getI64Type(), numBarriers);
+                     int numBarriers, int arrivalCount, bool twoCTAs) {
+  Value barrierAlloc =
+      createArefBarrierAlloc(b1, b1.getI64Type(), numBarriers, twoCTAs);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(b1, barrierAlloc, i);
     InitBarrierOp::create(b1, barrierView, arrivalCount);
@@ -241,13 +309,124 @@ Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
   return barrierAlloc;
 }
 
-ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
-  BarrierCount count = getArrivalCount(op);
+bool isTwoCTAMMA(MMAv5OpInterface mma) {
+  if (!mma.getTwoCtas())
+    return false;
+  auto accType = mma.getAccumulator().getType();
+  auto accEnc =
+      dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(accType.getEncoding());
+  return accEnc && accEnc.getTwoCTAs();
+}
+
+bool valueFeedsTwoCTAMMA(Value value) {
+  SetVector<Value> worklist;
+  worklist.insert(value);
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Value current = worklist[i];
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto mma = dyn_cast<MMAv5OpInterface>(user)) {
+        if (isTwoCTAMMA(mma))
+          return true;
+        continue;
+      }
+
+      if (auto ws = dyn_cast<WarpSpecializePartitionsOp>(user)) {
+        unsigned argIdx = use.getOperandNumber();
+        for (Region &region : ws.getPartitionRegions())
+          worklist.insert(region.getArgument(argIdx));
+        continue;
+      }
+
+      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+        unsigned operandIdx = use.getOperandNumber();
+        if (operandIdx >= forOp.getNumControlOperands()) {
+          unsigned iterArgIdx = operandIdx - forOp.getNumControlOperands();
+          worklist.insert(forOp.getRegionIterArg(iterArgIdx));
+          worklist.insert(forOp.getResult(iterArgIdx));
+        }
+      } else if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp()))
+          worklist.insert(forOp.getResult(use.getOperandNumber()));
+      }
+
+      worklist.insert(user->result_begin(), user->result_end());
+    }
+  }
+  return false;
+}
+
+bool arefBufferFeedsTwoCTAMMA(Value aref, unsigned bufferIdx) {
+  for (auto user : aref.getUsers()) {
+    auto getEnter = dyn_cast<ArefGetEnterOp>(user);
+    if (!getEnter || bufferIdx >= getEnter.getBuffers().size())
+      continue;
+    if (valueFeedsTwoCTAMMA(getEnter.getBuffers()[bufferIdx]))
+      return true;
+  }
+  return false;
+}
+
+bool hasTwoCTATMALoad(ArefCreateOp op) {
+  SmallVector<bool> twoCTATMABuffers;
+  auto arefTy = cast<ArefType>(op.getResult().getType());
+  for (unsigned i = 0; i < arefTy.getBaseType().size(); ++i)
+    twoCTATMABuffers.push_back(arefBufferFeedsTwoCTAMMA(op.getResult(), i));
+  for (auto user : op.getResult().getUsers()) {
+    auto putEnter = dyn_cast<ArefPutEnterOp>(user);
+    if (!putEnter)
+      continue;
+    for (auto [idx, buffer] : llvm::enumerate(putEnter.getBuffers())) {
+      if (!twoCTATMABuffers[idx])
+        continue;
+      if (llvm::any_of(buffer.getUsers(), [](Operation *user) {
+            return isa<triton::nvws::DescriptorLoadOpInterface>(user);
+          }))
+        return true;
+    }
+  }
+  return false;
+}
+
+bool allTMALoadsUseTwoCTACompletion(ArefCreateOp op,
+                                    ArrayRef<bool> twoCTATMABuffers) {
+  bool sawTMALoad = false;
+  for (auto user : op.getResult().getUsers()) {
+    auto putEnter = dyn_cast<ArefPutEnterOp>(user);
+    if (!putEnter)
+      continue;
+    for (auto [idx, buffer] : llvm::enumerate(putEnter.getBuffers())) {
+      bool hasTMALoad = llvm::any_of(buffer.getUsers(), [](Operation *user) {
+        return isa<triton::nvws::DescriptorLoadOpInterface>(user);
+      });
+      if (!hasTMALoad)
+        continue;
+      sawTMALoad = true;
+      if (idx >= twoCTATMABuffers.size() || !twoCTATMABuffers[idx])
+        return false;
+    }
+  }
+  return sawTMALoad;
+}
+
+ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
+                            const DenseSet<MMAv5OpInterface> &mmav5Ops) {
+  BarrierCount count = getArrivalCount(op, mmav5Ops);
 
   auto arefTy = op.getType();
   auto arefBufTypes = llvm::to_vector(llvm::map_range(
       arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
   auto depth = getArefDepth(arefBufTypes[0]);
+  SmallVector<bool> twoCTATMABuffers;
+  for (unsigned i = 0; i < arefBufTypes.size(); ++i)
+    twoCTATMABuffers.push_back(arefBufferFeedsTwoCTAMMA(op.getResult(), i));
+  bool allTMAUsesTwoCTACompletion =
+      allTMALoadsUseTwoCTACompletion(op, twoCTATMABuffers);
+  unsigned numTwoCTATMALoads =
+      count.tmaProducerPendingCount > 0 && hasTwoCTATMALoad(op) ? 1 : 0;
+  bool tmaFullMbarCoversFullBarrier =
+      allTMAUsesTwoCTACompletion &&
+      count.producerPendingCount == count.tmaProducerPendingCount;
 
   SetVector<Operation *> arefUsers;
   for (auto user : op->getUsers())
@@ -258,10 +437,31 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   auto op1 = op->getBlock()->findAncestorOpInBlock(*sorted.back());
   b2.setInsertionPointAfter(op1);
 
-  auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
-  auto fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
+  auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount,
+                                   /*twoCTAs=*/false);
+  Value fullMbars;
+  if (!tmaFullMbarCoversFullBarrier) {
+    fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount,
+                               /*twoCTAs=*/false);
+  }
+  Value tmaFullMbars;
+  if (numTwoCTATMALoads > 0) {
+    // Full barriers preserve the aref producer/consumer protocol. The extra
+    // TMA complete_tx barrier is grouped per producer stage, matching the
+    // non-WS TMA wait group while keeping the two-CTA barrier layout local to
+    // this aref.
+    tmaFullMbars =
+        createBarriers(b1, b2, depth * numTwoCTATMALoads, /*arrivalCount=*/1,
+                       /*twoCTAs=*/true);
+  }
 
-  return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
+  return ArefValue{emptyMbars,
+                   fullMbars,
+                   tmaFullMbars,
+                   static_cast<int>(numTwoCTATMALoads),
+                   tmaFullMbarCoversFullBarrier,
+                   std::move(twoCTATMABuffers),
+                   static_cast<int>(depth),
                    op.getOperands()};
 }
 
@@ -293,37 +493,42 @@ getSubViews(ArefValue arefVal, Value stage, Location loc, OpBuilder &rewriter,
   return views;
 }
 
-void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
-                   Value barrierAlloc, Value pred) {
+Operation *createTMALoad(triton::nvws::DescriptorLoadOp op,
+                         PatternRewriter &rewriter, Value barrierAlloc,
+                         Value pred, bool useTwoCTATMA) {
+  auto resultType = cast<MemDescType>(op.getResult().getType());
+  bool useMulticast = useTwoCTATMA && hasCGABroadcast(resultType);
   auto newLoadOp = triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
       rewriter, op.getLoc(), op.getDesc(), op.getIndices(), barrierAlloc,
-      op.getResult(), pred);
+      op.getResult(), pred, useMulticast);
   assignStageCluster(newLoadOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
+  return newLoadOp;
 };
 
-void createTMAGather(triton::nvws::DescriptorGatherOp op,
-                     PatternRewriter &rewriter, Value barrierAlloc,
-                     Value pred) {
+Operation *createTMAGather(triton::nvws::DescriptorGatherOp op,
+                           PatternRewriter &rewriter, Value barrierAlloc,
+                           Value pred, bool useTwoCTATMA) {
+  auto resultType = cast<MemDescType>(op.getResult().getType());
+  bool useMulticast = useTwoCTATMA && hasCGABroadcast(resultType);
   auto newGatherOp = triton::nvidia_gpu::AsyncTMAGatherOp::create(
       rewriter, op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
-      barrierAlloc, op.getResult(), pred);
+      barrierAlloc, op.getResult(), pred, useMulticast);
   assignStageCluster(newGatherOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
+  return newGatherOp;
 }
 
 void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
                   PatternRewriter &rewriter, ArefValue arefVal) {
   auto loc = op.getLoc();
-  int txCount = 0;
   // for now handle TMA loads in PutEnterOp
-  SmallVector<Operation *> loadOps;
-  for (auto buffer : op.getBuffers()) {
+  SmallVector<std::pair<Operation *, unsigned>> loadOps;
+  for (auto [idx, buffer] : llvm::enumerate(op.getBuffers())) {
     for (auto user : buffer.getUsers()) {
       if (auto loadOp =
               dyn_cast<triton::nvws::DescriptorLoadOpInterface>(user)) {
-        loadOps.push_back(loadOp);
-        txCount += loadOp.getTxCount();
+        loadOps.push_back({loadOp, idx});
       }
     }
   }
@@ -334,30 +539,119 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
   auto pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
   assignStageCluster(pred, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
-  auto expectOp = triton::nvidia_gpu::BarrierExpectOp::create(
-      rewriter, loc, fullBarrier, txCount, pred);
-  assignStageCluster(expectOp, getPartitionWsTagIds(op), getStageCluster(op),
-                     rewriter);
 
-  for (auto loadOp : loadOps) {
+  Operation *firstTwoCTALoad = nullptr;
+  int twoCTATxCount = 0;
+  for (auto [loadOp, bufferIdx] : loadOps) {
+    bool useTwoCTATMA = arefVal.tmaFullMbars &&
+                        bufferIdx < arefVal.twoCTATMABuffers.size() &&
+                        arefVal.twoCTATMABuffers[bufferIdx];
+    if (!useTwoCTATMA)
+      continue;
+    if (!firstTwoCTALoad)
+      firstTwoCTALoad = loadOp;
+    twoCTATxCount +=
+        cast<triton::nvws::DescriptorLoadOpInterface>(loadOp).getTxCount();
+  }
+
+  Value twoCTATMAFullBarrier;
+  if (firstTwoCTALoad) {
+    rewriter.setInsertionPoint(firstTwoCTALoad);
+    twoCTATMAFullBarrier =
+        getTMAFullBarrier(rewriter, loc, arefVal, op.getStage(), 0,
+                          getPartitionWsTagIds(op), getStageCluster(op));
+    auto expectOp = triton::nvidia_gpu::BarrierExpectOp::create(
+        rewriter, loc, twoCTATMAFullBarrier, twoCTATxCount, pred);
+    assignStageCluster(expectOp, getPartitionWsTagIds(op), getStageCluster(op),
+                       rewriter);
+  }
+
+  Operation *lastTMAOp = nullptr;
+  for (auto [loadOp, bufferIdx] : loadOps) {
     rewriter.setInsertionPoint(loadOp);
+    bool useTwoCTATMA = arefVal.tmaFullMbars &&
+                        bufferIdx < arefVal.twoCTATMABuffers.size() &&
+                        arefVal.twoCTATMABuffers[bufferIdx];
+    assert((useTwoCTATMA || fullBarrier) &&
+           "non-two-CTA TMA loads require the normal full barrier");
+    Value tmaBarrier = useTwoCTATMA ? twoCTATMAFullBarrier : fullBarrier;
+    int txCount =
+        cast<triton::nvws::DescriptorLoadOpInterface>(loadOp).getTxCount();
+    if (!useTwoCTATMA) {
+      auto expectOp = triton::nvidia_gpu::BarrierExpectOp::create(
+          rewriter, loc, tmaBarrier, txCount, pred);
+      assignStageCluster(expectOp, getPartitionWsTagIds(op),
+                         getStageCluster(op), rewriter);
+    }
+
     if (auto descLoad = dyn_cast<triton::nvws::DescriptorLoadOp>(loadOp)) {
-      createTMALoad(descLoad, rewriter, fullBarrier, pred);
+      lastTMAOp =
+          createTMALoad(descLoad, rewriter, tmaBarrier, pred, useTwoCTATMA);
     } else if (auto descGather =
                    dyn_cast<triton::nvws::DescriptorGatherOp>(loadOp)) {
-      createTMAGather(descGather, rewriter, fullBarrier, pred);
+      lastTMAOp =
+          createTMAGather(descGather, rewriter, tmaBarrier, pred, useTwoCTATMA);
     } else {
       llvm_unreachable("Unknown load op");
     }
     loadOp->erase();
   }
+
+  if (twoCTATMAFullBarrier && !arefVal.tmaFullMbarCoversFullBarrier) {
+    assert(lastTMAOp && "expected at least one TMA op");
+    rewriter.setInsertionPointAfter(lastTMAOp);
+    auto arriveOp =
+        nvidia_gpu::ArriveBarrierOp::create(rewriter, loc, fullBarrier, 1);
+    assignStageCluster(arriveOp, getPartitionWsTagIds(op), getStageCluster(op),
+                       rewriter);
+  }
 }
 
 void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
-                  Value phase, Value stage) {
-  auto waitOp = WaitBarrierOp::create(rewriter, op->getLoc(), barrier, phase);
+                  Value phase, Value stage, Value pred = {}) {
+  auto waitOp = pred ? WaitBarrierOp::create(rewriter, op->getLoc(), barrier,
+                                             phase, pred)
+                     : WaitBarrierOp::create(rewriter, op->getLoc(), barrier,
+                                             phase);
   assignStageCluster(waitOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
+}
+
+Value createIntLikeConstant(PatternRewriter &rewriter, Location loc, Type type,
+                            int64_t value) {
+  if (type.isIndex())
+    return arith::ConstantIndexOp::create(rewriter, loc, value);
+  auto intType = cast<IntegerType>(type);
+  return arith::ConstantIntOp::create(rewriter, loc, value,
+                                      intType.getWidth());
+}
+
+Value createAfterProloguePredicate(PatternRewriter &rewriter, Operation *op,
+                                   int depth) {
+  if (depth <= 0)
+    return {};
+  auto forOp = op->getParentOfType<scf::ForOp>();
+  if (!forOp)
+    return {};
+
+  Location loc = op->getLoc();
+  Type ivType = forOp.getInductionVar().getType();
+  Value depthVal = createIntLikeConstant(rewriter, loc, ivType, depth);
+  assignStageCluster(depthVal.getDefiningOp(), getPartitionWsTagIds(op),
+                     getStageCluster(op), rewriter);
+  auto prologueIters =
+      arith::MulIOp::create(rewriter, loc, forOp.getStep(), depthVal);
+  assignStageCluster(prologueIters, getPartitionWsTagIds(op),
+                     getStageCluster(op), rewriter);
+  auto firstReuseIter =
+      arith::AddIOp::create(rewriter, loc, forOp.getLowerBound(), prologueIters);
+  assignStageCluster(firstReuseIter, getPartitionWsTagIds(op),
+                     getStageCluster(op), rewriter);
+  auto pred = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sge,
+                                    forOp.getInductionVar(), firstReuseIter);
+  assignStageCluster(pred, getPartitionWsTagIds(op), getStageCluster(op),
+                     rewriter);
+  return pred;
 }
 
 void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
@@ -371,8 +665,6 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
   Value emptyBarrier =
       getEmptyBarrier(rewriter, loc, arefVal, op.getStage(),
                       getPartitionWsTagIds(op), getStageCluster(op));
-
-  insertWaitOp(rewriter, op, emptyBarrier, op.getPhase(), op.getStage());
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
                            getPartitionWsTagIds(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
@@ -401,10 +693,20 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
   };
   auto hasTMA = [](AsyncOp kind) { return kind == AsyncOp::TMALoad; };
 
+  Value emptyWaitPred;
+  if (llvm::any_of(asyncKinds, hasTMA))
+    emptyWaitPred =
+        createAfterProloguePredicate(rewriter, op, arefVal.depth);
+  insertWaitOp(rewriter, op, emptyBarrier, op.getPhase(), op.getStage(),
+               emptyWaitPred);
+
   if (llvm::any_of(asyncKinds, hasTMA)) {
-    Value fullBarrier =
-        getFullBarrier(rewriter, loc, arefVal, op.getStage(),
-                       getPartitionWsTagIds(op), getStageCluster(op));
+    Value fullBarrier;
+    if (arefVal.fullMbars) {
+      fullBarrier =
+          getFullBarrier(rewriter, loc, arefVal, op.getStage(),
+                         getPartitionWsTagIds(op), getStageCluster(op));
+    }
     lowerTMALoad(op, fullBarrier, rewriter, arefVal);
   }
 
@@ -440,10 +742,24 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
   auto loc = op.getLoc();
   rewriter.setInsertionPointAfter(op);
 
-  Value fullBarrier =
-      getFullBarrier(rewriter, loc, arefVal, op.getStage(),
-                     getPartitionWsTagIds(op), getStageCluster(op));
-  insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
+  if (!arefVal.tmaFullMbarCoversFullBarrier) {
+    Value fullBarrier =
+        getFullBarrier(rewriter, loc, arefVal, op.getStage(),
+                       getPartitionWsTagIds(op), getStageCluster(op));
+    insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
+  }
+  if (Value tmaBarrier =
+          getTMAFullBarrier(rewriter, loc, arefVal, op.getStage(), 0,
+                            getPartitionWsTagIds(op), getStageCluster(op))) {
+    insertWaitOp(rewriter, op, tmaBarrier, op.getPhase(), op.getStage());
+    for (unsigned i = 1; i < static_cast<unsigned>(arefVal.numTMAFullMbars);
+         ++i) {
+      tmaBarrier =
+          getTMAFullBarrier(rewriter, loc, arefVal, op.getStage(), i,
+                            getPartitionWsTagIds(op), getStageCluster(op));
+      insertWaitOp(rewriter, op, tmaBarrier, op.getPhase(), op.getStage());
+    }
+  }
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
                            getPartitionWsTagIds(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
@@ -470,7 +786,7 @@ void rewriteArefBufferOp(ArefBufferOp op, PatternRewriter &rewriter,
 void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
                          PatternRewriter &rewriter, Value mbar,
                          std::optional<PartitionWsTagIds> partitionWsTagIds,
-                         StageCluster stageCluster) {
+                         StageCluster stageCluster, ValueRange descs = {}) {
   for (auto asyncOpEnum : asyncOps) {
     Operation *arriveOp = {};
     switch (asyncOpEnum) {
@@ -481,7 +797,7 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
     case AsyncOp::TC5MMA:
     case AsyncOp::TMEMCopy:
       arriveOp = nvidia_gpu::TCGen5CommitOp::create(rewriter, loc, mbar,
-                                                    Value(), ValueRange{});
+                                                    Value(), descs);
       break;
     case AsyncOp::TMALoad:
       // nothing to do, the arrive is done by HW
@@ -534,12 +850,17 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
     assignStageCluster(fence, getPartitionWsTagIds(op), stageCluster, rewriter);
   }
 
-  Value fullBarrier =
-      getFullBarrier(rewriter, loc, arefVal, op.getStage(),
-                     getPartitionWsTagIds(op), getStageCluster(op));
-  insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
-                      fullBarrier, getPartitionWsTagIds(op),
-                      getStageCluster(op));
+  if (arefVal.fullMbars) {
+    Value fullBarrier =
+        getFullBarrier(rewriter, loc, arefVal, op.getStage(),
+                       getPartitionWsTagIds(op), getStageCluster(op));
+    insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
+                        fullBarrier, getPartitionWsTagIds(op),
+                        getStageCluster(op));
+  } else {
+    assert(llvm::all_of(castAsyncOpAttrs(op.getAsyncOps()),
+                        [](AsyncOp kind) { return kind == AsyncOp::TMALoad; }));
+  }
 }
 
 void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
@@ -576,8 +897,18 @@ void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
   Value emptyBarrier =
       getEmptyBarrier(rewriter, loc, arefVal, op.getStage(),
                       getPartitionWsTagIds(op), getStageCluster(op));
+  SmallVector<Value> completionDescs;
+  if (llvm::is_contained(asyncKinds, AsyncOp::TC5MMA)) {
+    auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
+                             getPartitionWsTagIds(op), getStageCluster(op));
+    for (Value view : views) {
+      auto type = dyn_cast<MemDescType>(view.getType());
+      if (type && isa<SharedMemorySpaceAttr>(type.getMemorySpace()))
+        completionDescs.push_back(view);
+    }
+  }
   insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier,
-                      getPartitionWsTagIds(op), stageCluster);
+                      getPartitionWsTagIds(op), stageCluster, completionDescs);
 }
 
 DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
@@ -615,7 +946,6 @@ public:
 
   LogicalResult matchAndRewrite(ArefCreateOp op,
                                 PatternRewriter &rewriter) const override {
-    auto aref = createAndInitMbar(op, rewriter);
     SetVector<Operation *> opToDelete;
     opToDelete.insert(op.getOperation());
 
@@ -624,6 +954,7 @@ public:
     // consumer mmav5 ops requires the corresponding get enter op to be still
     // used in the IR, collect them here.
     auto mmav5Ops = getAsyncMMAv5Consumers(op.getResult());
+    auto aref = createAndInitMbar(op, rewriter, mmav5Ops);
 
     for (auto userOp : op->getUsers()) {
       opToDelete.insert(userOp);
