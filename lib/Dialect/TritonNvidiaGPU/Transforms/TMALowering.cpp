@@ -1,4 +1,5 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
@@ -13,6 +14,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace mlir {
 namespace triton {
@@ -34,14 +37,16 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   gpu::MemDescType memDescType = gpu::MemDescType::get(
       tensorType.getShape(), tensorType.getElementType(), encoding,
       sharedMemorySpace, /*mutableMemory=*/true);
+  bool useTwoCTABarrier =
+      mlir::triton::valueFeedsTwoCTAMMA(op->getResult(0));
+  bool useMulticast = isa<DescriptorLoadOp>(op) && useTwoCTABarrier &&
+                      hasCGABroadcast(memDescType) &&
+                      llvm::any_of(op->getResults(),
+                                   mlir::triton::valueFeedsMulticastMMA);
   auto alloc =
       gpu::LocalAllocOp::create(rewriter, loc, memDescType).getResult();
   auto numCTAs = gpu::lookupNumCTAs(op);
-  bool useTwoCTABarrier = triton::valueFeedsTwoCTAMMA(op->getResult(0));
-  bool useMulticast =
-      isa<DescriptorLoadLikeOpInterface>(op) && hasCGABroadcast(memDescType) &&
-      llvm::any_of(op->getResults(), triton::valueFeedsMulticastMMA);
-  auto barrierCGALayout = [&]() -> gpu::CGAEncodingAttr {
+  auto barrierCGALayout = [&] {
     if (!useTwoCTABarrier)
       return gpu::CGAEncodingAttr::get1DLayout(tensorType.getContext(),
                                                numCTAs);
@@ -53,7 +58,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   }();
   auto barrierEncoding = gpu::SwizzledSharedEncodingAttr::get(
       tensorType.getContext(), 1, 1, 1, {0}, barrierCGALayout);
-  auto numBarrierSlots = useTwoCTABarrier ? numCTAs / 2 : numCTAs;
+  int numBarrierSlots = useTwoCTABarrier ? numCTAs / 2 : numCTAs;
   gpu::MemDescType barrierMemDescType =
       gpu::MemDescType::get({numBarrierSlots}, rewriter.getI64Type(),
                             barrierEncoding, sharedMemorySpace,
