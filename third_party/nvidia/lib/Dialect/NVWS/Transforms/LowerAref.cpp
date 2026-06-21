@@ -135,7 +135,6 @@ struct ArefValue {
   Value emptyMbars;
   Value fullMbars;
   Value tmaFullMbars;
-  int numTMAFullMbars;
   bool tmaFullMbarCoversFullBarrier;
   SmallVector<bool> twoCTATMABuffers;
   int depth;
@@ -163,26 +162,13 @@ Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
 }
 
 Value getTMAFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
-                        Value stage, unsigned loadIdx,
+                        Value stage,
                         std::optional<PartitionWsTagIds> partitionWsTagIds,
                         StageCluster stageCluster) {
   if (!aref.tmaFullMbars)
     return {};
-  Value barrierIdx = stage;
-  if (aref.numTMAFullMbars > 1) {
-    auto slots =
-        arith::ConstantIntOp::create(rewriter, loc, aref.numTMAFullMbars, 32);
-    assignStageCluster(slots, partitionWsTagIds, stageCluster, rewriter);
-    auto offset = arith::ConstantIntOp::create(rewriter, loc, loadIdx, 32);
-    assignStageCluster(offset, partitionWsTagIds, stageCluster, rewriter);
-    auto mul = arith::MulIOp::create(rewriter, loc, stage, slots);
-    assignStageCluster(mul, partitionWsTagIds, stageCluster, rewriter);
-    auto add = arith::AddIOp::create(rewriter, loc, mul, offset);
-    assignStageCluster(add, partitionWsTagIds, stageCluster, rewriter);
-    barrierIdx = add;
-  }
   auto barrier =
-      createSingleBufferView(rewriter, aref.tmaFullMbars, barrierIdx);
+      createSingleBufferView(rewriter, aref.tmaFullMbars, stage);
   assignStageCluster(barrier.getDefiningOp(), partitionWsTagIds, stageCluster,
                      rewriter);
   return barrier;
@@ -367,30 +353,16 @@ bool arefBufferFeedsTwoCTAMMA(Value aref, unsigned bufferIdx) {
   return false;
 }
 
-bool hasTwoCTATMALoad(ArefCreateOp op) {
-  SmallVector<bool> twoCTATMABuffers;
-  auto arefTy = cast<ArefType>(op.getResult().getType());
-  for (unsigned i = 0; i < arefTy.getBaseType().size(); ++i)
-    twoCTATMABuffers.push_back(arefBufferFeedsTwoCTAMMA(op.getResult(), i));
-  for (auto user : op.getResult().getUsers()) {
-    auto putEnter = dyn_cast<ArefPutEnterOp>(user);
-    if (!putEnter)
-      continue;
-    for (auto [idx, buffer] : llvm::enumerate(putEnter.getBuffers())) {
-      if (!twoCTATMABuffers[idx])
-        continue;
-      if (llvm::any_of(buffer.getUsers(), [](Operation *user) {
-            return isa<triton::nvws::DescriptorLoadOpInterface>(user);
-          }))
-        return true;
-    }
-  }
-  return false;
-}
+struct TMALoadTwoCTAInfo {
+  bool hasTwoCTA{false};
+  bool allUseTwoCTA{false};
+};
 
-bool allTMALoadsUseTwoCTACompletion(ArefCreateOp op,
-                                    ArrayRef<bool> twoCTATMABuffers) {
+TMALoadTwoCTAInfo getTMALoadTwoCTAInfo(ArefCreateOp op,
+                                       ArrayRef<bool> twoCTATMABuffers) {
   bool sawTMALoad = false;
+  bool hasTwoCTA = false;
+  bool allUseTwoCTA = true;
   for (auto user : op.getResult().getUsers()) {
     auto putEnter = dyn_cast<ArefPutEnterOp>(user);
     if (!putEnter)
@@ -402,11 +374,12 @@ bool allTMALoadsUseTwoCTACompletion(ArefCreateOp op,
       if (!hasTMALoad)
         continue;
       sawTMALoad = true;
-      if (idx >= twoCTATMABuffers.size() || !twoCTATMABuffers[idx])
-        return false;
+      bool usesTwoCTA = idx < twoCTATMABuffers.size() && twoCTATMABuffers[idx];
+      hasTwoCTA |= usesTwoCTA;
+      allUseTwoCTA &= usesTwoCTA;
     }
   }
-  return sawTMALoad;
+  return {hasTwoCTA, sawTMALoad && allUseTwoCTA};
 }
 
 ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
@@ -420,12 +393,10 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
   SmallVector<bool> twoCTATMABuffers;
   for (unsigned i = 0; i < arefBufTypes.size(); ++i)
     twoCTATMABuffers.push_back(arefBufferFeedsTwoCTAMMA(op.getResult(), i));
-  bool allTMAUsesTwoCTACompletion =
-      allTMALoadsUseTwoCTACompletion(op, twoCTATMABuffers);
-  unsigned numTwoCTATMALoads =
-      count.tmaProducerPendingCount > 0 && hasTwoCTATMALoad(op) ? 1 : 0;
+  TMALoadTwoCTAInfo tmaInfo = getTMALoadTwoCTAInfo(op, twoCTATMABuffers);
+  bool hasTwoCTATMA = count.tmaProducerPendingCount > 0 && tmaInfo.hasTwoCTA;
   bool tmaFullMbarCoversFullBarrier =
-      allTMAUsesTwoCTACompletion &&
+      tmaInfo.allUseTwoCTA &&
       count.producerPendingCount == count.tmaProducerPendingCount;
 
   SetVector<Operation *> arefUsers;
@@ -445,20 +416,18 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
                                /*twoCTAs=*/false);
   }
   Value tmaFullMbars;
-  if (numTwoCTATMALoads > 0) {
+  if (hasTwoCTATMA) {
     // Full barriers preserve the aref producer/consumer protocol. The extra
     // TMA complete_tx barrier is grouped per producer stage, matching the
     // non-WS TMA wait group while keeping the two-CTA barrier layout local to
     // this aref.
-    tmaFullMbars =
-        createBarriers(b1, b2, depth * numTwoCTATMALoads, /*arrivalCount=*/1,
-                       /*twoCTAs=*/true);
+    tmaFullMbars = createBarriers(b1, b2, depth, /*arrivalCount=*/1,
+                                  /*twoCTAs=*/true);
   }
 
   return ArefValue{emptyMbars,
                    fullMbars,
                    tmaFullMbars,
-                   static_cast<int>(numTwoCTATMALoads),
                    tmaFullMbarCoversFullBarrier,
                    std::move(twoCTATMABuffers),
                    static_cast<int>(depth),
@@ -558,7 +527,7 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
   if (firstTwoCTALoad) {
     rewriter.setInsertionPoint(firstTwoCTALoad);
     twoCTATMAFullBarrier =
-        getTMAFullBarrier(rewriter, loc, arefVal, op.getStage(), 0,
+        getTMAFullBarrier(rewriter, loc, arefVal, op.getStage(),
                           getPartitionWsTagIds(op), getStageCluster(op));
     auto expectOp = triton::nvidia_gpu::BarrierExpectOp::create(
         rewriter, loc, twoCTATMAFullBarrier, twoCTATxCount, pred);
@@ -617,15 +586,6 @@ void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
                      rewriter);
 }
 
-Value createIntLikeConstant(PatternRewriter &rewriter, Location loc, Type type,
-                            int64_t value) {
-  if (type.isIndex())
-    return arith::ConstantIndexOp::create(rewriter, loc, value);
-  auto intType = cast<IntegerType>(type);
-  return arith::ConstantIntOp::create(rewriter, loc, value,
-                                      intType.getWidth());
-}
-
 Value createAfterProloguePredicate(PatternRewriter &rewriter, Operation *op,
                                    int depth) {
   if (depth <= 0)
@@ -636,7 +596,14 @@ Value createAfterProloguePredicate(PatternRewriter &rewriter, Operation *op,
 
   Location loc = op->getLoc();
   Type ivType = forOp.getInductionVar().getType();
-  Value depthVal = createIntLikeConstant(rewriter, loc, ivType, depth);
+  Value depthVal;
+  if (ivType.isIndex()) {
+    depthVal = arith::ConstantIndexOp::create(rewriter, loc, depth);
+  } else {
+    auto intType = cast<IntegerType>(ivType);
+    depthVal = arith::ConstantIntOp::create(rewriter, loc, depth,
+                                            intType.getWidth());
+  }
   assignStageCluster(depthVal.getDefiningOp(), getPartitionWsTagIds(op),
                      getStageCluster(op), rewriter);
   auto prologueIters =
@@ -749,16 +716,9 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
     insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
   }
   if (Value tmaBarrier =
-          getTMAFullBarrier(rewriter, loc, arefVal, op.getStage(), 0,
+          getTMAFullBarrier(rewriter, loc, arefVal, op.getStage(),
                             getPartitionWsTagIds(op), getStageCluster(op))) {
     insertWaitOp(rewriter, op, tmaBarrier, op.getPhase(), op.getStage());
-    for (unsigned i = 1; i < static_cast<unsigned>(arefVal.numTMAFullMbars);
-         ++i) {
-      tmaBarrier =
-          getTMAFullBarrier(rewriter, loc, arefVal, op.getStage(), i,
-                            getPartitionWsTagIds(op), getStageCluster(op));
-      insertWaitOp(rewriter, op, tmaBarrier, op.getPhase(), op.getStage());
-    }
   }
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
                            getPartitionWsTagIds(op), getStageCluster(op));
