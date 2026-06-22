@@ -1064,6 +1064,10 @@ class ReduceOps(ReduceScanOpInterface):
 
 
 def apply_impl(self, input):
+    # Note: np.nanargmin/np.nanargmax always return the leftmost index
+    # for equal values, whereas tie_break_fast on hardware returns an
+    # arbitrary index. This is a known remaining divergence between the
+    # interpreter and JIT for inputs with equal non-NaN elements.
     if self.combine_fn in (tl.standard._argmin_combine_tie_break_left, tl.standard._argmin_combine_tie_break_fast):
         return self.min_max(input[0], val_reduce_op=np.nanmin, idx_reduce_op=np.nanargmin)
     elif self.combine_fn in (tl.standard._argmax_combine_tie_break_left, tl.standard._argmax_combine_tie_break_fast):
