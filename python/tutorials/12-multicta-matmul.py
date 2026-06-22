@@ -294,6 +294,8 @@ def benchmark_precision(shapes, precision):
 
         prefix = f"{size:>9} {tflops(ms_1cta, M, N, K):>10.2f} {tflops(ms_2cta, M, N, K):>10.2f}"
         shape_text = f"{fmt_config(cfg_1cta)} / {fmt_config(cfg_2cta)}"
+        # The local cuBLASLt wrapper expects B as contiguous (N, K), while the
+        # Triton kernel above consumes B as contiguous (K, N).
         b_trans = b.T.contiguous()
         if fp8_inputs:
             c_ref = torch.empty((M, N), device=str(DEVICE), dtype=torch.float8_e4m3fn)
