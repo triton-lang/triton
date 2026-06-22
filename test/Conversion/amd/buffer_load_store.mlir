@@ -48,9 +48,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %n = tt.splat %N: i32 -> tensor<128xi32, #blocked0>
         %mask = arith.cmpi slt, %range, %n: tensor<128xi32, #blocked0>
         // CHECK: %[[oob:.*]] = llvm.mlir.constant({{-?2147483648}} : i32) : i32
-        // CHECK: %[[soffset:.*]] = llvm.mul
-        // CHECK-NOT: llvm.sub {{.*}}, %[[soffset]] : i32
-        // CHECK: %[[masked_offset:.*]] = llvm.select {{.*}}, {{.*}}, %[[oob]] : i1, i32
+        // CHECK: %[[split_soffset:.*]] = llvm.mul
+        // CHECK: %[[nonneg_soffset:.*]] = llvm.icmp "sge" %[[split_soffset]], {{.*}} : i32
+        // CHECK: %[[soffset:.*]] = llvm.select %[[nonneg_soffset]], %[[split_soffset]], {{.*}} : i1, i32
+        // CHECK: %[[high_oob:.*]] = llvm.mlir.constant(-1 : i32) : i32
+        // CHECK: %[[split_masked_oob:.*]] = llvm.sub %[[high_oob]], %[[split_soffset]] : i32
+        // CHECK: %[[masked_oob:.*]] = llvm.select %[[nonneg_soffset]], %[[split_masked_oob]], %[[oob]] : i1, i32
+        // CHECK: %[[masked_offset:.*]] = llvm.select {{.*}}, {{.*}}, %[[masked_oob]] : i1, i32
         // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[masked_offset]], %[[soffset]]
         %ret = amdg.buffer_load %arg0[%offset], %mask {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return
@@ -131,9 +135,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %n = tt.splat %N: i32 -> tensor<128xi32, #blocked0>
         %mask = arith.cmpi slt, %range, %n: tensor<128xi32, #blocked0>
         // CHECK: %[[oob:.*]] = llvm.mlir.constant({{-?2147483648}} : i32) : i32
-        // CHECK: %[[soffset:.*]] = llvm.mul
-        // CHECK-NOT: llvm.sub {{.*}}, %[[soffset]] : i32
-        // CHECK: %[[masked_offset:.*]] = llvm.select {{.*}}, {{.*}}, %[[oob]] : i1, i32
+        // CHECK: %[[split_soffset:.*]] = llvm.mul
+        // CHECK: %[[nonneg_soffset:.*]] = llvm.icmp "sge" %[[split_soffset]], {{.*}} : i32
+        // CHECK: %[[soffset:.*]] = llvm.select %[[nonneg_soffset]], %[[split_soffset]], {{.*}} : i1, i32
+        // CHECK: %[[high_oob:.*]] = llvm.mlir.constant(-1 : i32) : i32
+        // CHECK: %[[split_masked_oob:.*]] = llvm.sub %[[high_oob]], %[[split_soffset]] : i32
+        // CHECK: %[[masked_oob:.*]] = llvm.select %[[nonneg_soffset]], %[[split_masked_oob]], %[[oob]] : i1, i32
+        // CHECK: %[[masked_offset:.*]] = llvm.select {{.*}}, {{.*}}, %[[masked_oob]] : i1, i32
         // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, %[[masked_offset]], %[[soffset]]
         amdg.buffer_store %value, %arg0[%offset], %mask {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
         tt.return

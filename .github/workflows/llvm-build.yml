@@ -37,7 +37,7 @@ jobs:
         - {runner: 'AlmaLinux 8 ARM64', runs_on: 'ubuntu-22.04-arm', target-os: 'almalinux', arch: 'arm64', container: 'almalinux:8.10-20250411'}
         - {runner: 'MacOS X64', runs_on: 'macos-15-intel', target-os: 'macos', arch: 'x64'}
         - {runner: 'MacOS ARM64', runs_on: 'macos-15', target-os: 'macos', arch: 'arm64'}
-        - {runner: 'Windows Latest', runs_on: 'windows-latest', target-os: 'windows', arch: 'x64'}
+        - {runner: 'Windows 2022', runs_on: 'windows-2022', target-os: 'windows', arch: 'x64'}
 
     steps:
 

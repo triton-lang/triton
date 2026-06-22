@@ -72,8 +72,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @f32_to_f16_single_value(%arg0: tensor<1x128xf32, #blocked>) {
-    // COMMON: llvm.fptrunc %{{.+}} : f32 to f16
-    // COMMON-NOT: llvm.fptrunc
+    // GFX950: llvm.fptrunc %{{.+}} : vector<2xf32> to vector<2xf16>
+    // GFX950-NOT: llvm.fptrunc
+    // GFX942: llvm.fptrunc %{{.+}} : f32 to f16
+    // GFX942: llvm.fptrunc %{{.+}} : f32 to f16
+    // GFX942-NOT: llvm.fptrunc
     %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<1x128xf32, #blocked> -> tensor<1x128xf16, #blocked>
     // COMMON: rocdl.cvt.pkrtz
     // COMMON-NOT: rocdl.cvt.pkrtz

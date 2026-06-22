@@ -1126,15 +1126,15 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_tdm_scatter",
            [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,
-              Value dstColOffset, Value src, Value barrier) {
-             self.create<ttag::AsyncTDMScatterOp>(descPtr, dstRowIndices,
-                                                  dstColOffset, src, barrier);
+              Value src, Value barrier) {
+             self.create<ttag::AsyncTDMScatterOp>(descPtr, dstRowIndices, src,
+                                                  barrier);
            })
       .def("create_async_tdm_gather",
            [](GluonOpBuilder &self, Value descPtr, Value srcRowIndices,
-              Value srcColOffset, Value dst, Value pred, Value barrier) {
-             self.create<ttag::AsyncTDMGatherOp>(
-                 descPtr, srcRowIndices, srcColOffset, dst, pred, barrier);
+              Value dst, Value barrier) {
+             self.create<ttag::AsyncTDMGatherOp>(descPtr, srcRowIndices, dst,
+                                                 barrier);
            })
       .def("create_tdm_prefetch",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,

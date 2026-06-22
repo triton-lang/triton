@@ -1335,15 +1335,15 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
 
 bool isCvtDimSync(const triton::LinearLayout &srcLayout,
                   const triton::LinearLayout &dstLayout, StringAttr dim) {
-  // We can use a dimension-level sync when the conversion is trivial over that
-  // dimension and there is no broadcasting over it.
+  // We can use a dimension-level sync when the conversion can be realized
+  // without moving values across that dimension.
   auto *ctx = srcLayout.getInDimNames().begin()->getContext();
   auto kWarp = StringAttr::get(ctx, "warp");
   auto kBlock = StringAttr::get(ctx, "block");
   assert(srcLayout.hasInDim(dim) && dstLayout.hasInDim(dim) &&
          "expected dim to be present in both layouts");
-  auto comp = dstLayout.invertAndCompose(srcLayout);
   if (dim == kWarp) {
+    auto comp = dstLayout.invertAndCompose(srcLayout);
     // We check that it's trivial over block and warps and that
     // there is no broadcasting over warp, as if there is, we'll
     // deduplicate the writes and the reads will read from data
@@ -1354,7 +1354,8 @@ bool isCvtDimSync(const triton::LinearLayout &srcLayout,
            dstLayout.getFreeVariableMasks()[dim] == 0;
   } else {
     assert(dim == kBlock);
-    return comp.isTrivialOver(dim);
+    return invertAndComposeBlockLocal(srcLayout, dstLayout)
+        .isIdentityOnOutDim(dim);
   }
 }
 } // namespace mlir

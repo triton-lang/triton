@@ -342,8 +342,9 @@ class MoEProgramBase:
 
         if cfg.USE_GATHER:
             col_offset_x = self.off_k_x + load_idx * BLOCK_K_PACKED_X
-            tdm.async_gather(self.x_desc, self.gathered_m, col_offset_x,
-                             self.x_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
+            x_desc_k = tdm.update_tensor_descriptor(self.x_desc, add_offsets=[0, col_offset_x], pred=pred,
+                                                    clamp_bounds=True)
+            tdm.async_gather(x_desc_k, self.gathered_m, self.x_buffer.index(load_idx % cfg.NUM_BUFFERS))
         else:
             tdm.async_load(self.x_desc, [0, load_idx * BLOCK_K_PACKED_X],
                            self.x_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
@@ -358,8 +359,9 @@ class MoEProgramBase:
         if cfg.WITH_X_MX_SCALE:
             if cfg.USE_GATHER:
                 col_offset_x_scale = self.off_k_x * cfg.DIV_FACTOR_X // cfg.SCALE_BLOCK + load_idx * BLOCK_K_SCALE
-                tdm.async_gather(self.x_scale_desc, self.gathered_m, col_offset_x_scale,
-                                 self.x_scale_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
+                x_scale_desc_k = tdm.update_tensor_descriptor(self.x_scale_desc, add_offsets=[0, col_offset_x_scale],
+                                                              pred=pred, clamp_bounds=True)
+                tdm.async_gather(x_scale_desc_k, self.gathered_m, self.x_scale_buffer.index(load_idx % cfg.NUM_BUFFERS))
             else:
                 tdm.async_load(self.x_scale_desc, [0, load_idx * cfg.BLOCK_K_SCALE_PRESHUFFLED],
                                self.x_scale_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
@@ -822,8 +824,9 @@ class MoESliceNKProgram:
 
         if cfg.USE_GATHER:
             col_offset_x = self.off_k_x + load_idx * BLOCK_K_PACKED_X
-            tdm.async_gather(self.x_desc, self.gathered_m, col_offset_x,
-                             self.x_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
+            x_desc_k = tdm.update_tensor_descriptor(self.x_desc, add_offsets=[0, col_offset_x], pred=pred,
+                                                    clamp_bounds=True)
+            tdm.async_gather(x_desc_k, self.gathered_m, self.x_buffer.index(load_idx % cfg.NUM_BUFFERS))
         else:
             tdm.async_load(self.x_desc, [0, load_idx * BLOCK_K_PACKED_X],
                            self.x_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
@@ -831,8 +834,9 @@ class MoESliceNKProgram:
         if cfg.WITH_X_MX_SCALE:
             if cfg.USE_GATHER:
                 col_offset_x_scale = self.off_k_x * cfg.DIV_FACTOR_X // cfg.SCALE_BLOCK + load_idx * BLOCK_K_SCALE
-                tdm.async_gather(self.x_scale_desc, self.gathered_m, col_offset_x_scale,
-                                 self.x_scale_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
+                x_scale_desc_k = tdm.update_tensor_descriptor(self.x_scale_desc, add_offsets=[0, col_offset_x_scale],
+                                                              pred=pred, clamp_bounds=True)
+                tdm.async_gather(x_scale_desc_k, self.gathered_m, self.x_scale_buffer.index(load_idx % cfg.NUM_BUFFERS))
             else:
                 tdm.async_load(self.x_scale_desc, [0, load_idx * cfg.BLOCK_K_SCALE_PRESHUFFLED],
                                self.x_scale_buffer.index(load_idx % cfg.NUM_BUFFERS), pred=pred)
@@ -1170,7 +1174,8 @@ def _matmul(Y, stride_y_k, stride_y_z, stride_y_m, stride_y_n, X, stride_x_z, st
                                             block_shape=(BLOCK_M, OUT_BLOCK_N), layout=SCATTER_SHARED_LAYOUT)
 
         col_offset = (OUT_BLOCK_N * pid_n).to(cfg.index_type)
-        tdm.async_scatter(y_desc, dst_row_indices, col_offset, out_smem)
+        y_desc = tdm.update_tensor_descriptor(y_desc, add_offsets=[0, col_offset], clamp_bounds=True)
+        tdm.async_scatter(y_desc, dst_row_indices, out_smem)
         tdm.async_wait(0)
     else:
         offs_y_m = off_m + gl.arange(0, BLOCK_M, gl.SliceLayout(1, BLOCKED_LAYOUT_Y))
