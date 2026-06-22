@@ -1064,13 +1064,9 @@ class ReduceOps(ReduceScanOpInterface):
 
 
 def apply_impl(self, input):
-    if self.combine_fn == tl.standard._argmin_combine_tie_break_left:
+    if self.combine_fn in (tl.standard._argmin_combine_tie_break_left, tl.standard._argmin_combine_tie_break_fast):
         return self.min_max(input[0], val_reduce_op=np.nanmin, idx_reduce_op=np.nanargmin)
-    elif self.combine_fn == tl.standard._argmax_combine_tie_break_left:
-        return self.min_max(input[0], val_reduce_op=np.nanmax, idx_reduce_op=np.nanargmax)
-    elif self.combine_fn == tl.standard._argmin_combine_tie_break_fast:
-        return self.min_max(input[0], val_reduce_op=np.nanmin, idx_reduce_op=np.nanargmin)
-    elif self.combine_fn == tl.standard._argmax_combine_tie_break_fast:
+    elif self.combine_fn in (tl.standard._argmax_combine_tie_break_left, tl.standard._argmax_combine_tie_break_fast):
         return self.min_max(input[0], val_reduce_op=np.nanmax, idx_reduce_op=np.nanargmax)
     elif self.combine_fn == tl.standard._elementwise_max:
         return self.min_max(input[0], val_reduce_op=np.nanmax, idx_reduce_op=None)
