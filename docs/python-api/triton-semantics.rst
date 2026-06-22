@@ -43,3 +43,28 @@ Differences with NumPy
 **C rounding in integer division** Operators in Triton follow C semantics rather than Python semantics for efficiency. As such, ``int // int`` implements `rounding towards zero as in C <https://en.wikipedia.org/wiki/Modulo#In_programming_languages>`_ for integers of mixed signs, rather than rounding towards minus infinity as in Python. For the same reason, the modulus operator ``int % int`` (which is defined as ``a % b = a - b * (a // b)``) also follows C semantics rather than Python semantics.
 
 Perhaps confusingly, integer division and modulus follow Python semantics for computations where all the inputs are scalars.
+
+**Out-of-range float-to-integer casts** Casting a floating-point value to an integer type is only defined when the value, rounded towards zero, fits in the target type. If the value is out of range, or is NaN, the result is undefined: it may differ between the compiler and the interpreter (``TRITON_INTERPRET=1``), and across hardware backends and toolkit versions. For example, casting ``inf``, a large value such as ``510.0`` to ``int8``, or ``nan`` to an integer type does not produce a portable result. If you need a defined result, clamp the value into range (for example with ``tl.clamp``) and handle ``NaN`` explicitly before the cast.
+
+**Variable scoping** A variable used after a ``for`` loop or an ``if`` statement must be assigned on *every* path through that block, unlike Python where a variable assigned inside a block remains visible afterwards. Triton does not model variables as being dynamically defined or undefined depending on control flow, so a variable that is only assigned inside the block is not considered defined once the block exits. This holds even when the block is guaranteed to execute, such as a ``range(0, 1)`` loop.
+
+For example, the following raises ``NameError: 'value' is not defined`` because ``value`` is only bound inside the loop body:
+
+.. code-block:: python
+
+    @triton.jit
+    def kernel(out_ptr):
+        for _ in range(0, 1):
+            value = 1.0
+        tl.store(out_ptr, value)  # `value` is not defined here
+
+Assign the variable before the block so that it is defined on all paths:
+
+.. code-block:: python
+
+    @triton.jit
+    def kernel(out_ptr):
+        value = 0.0
+        for _ in range(0, 1):
+            value = 1.0
+        tl.store(out_ptr, value)

@@ -22,8 +22,9 @@ import torch.distributed as dist
 import torch.distributed.distributed_c10d as c10d
 
 from . import _stream_sync
-from ._allocator import (create_mem_pool, export_allocation_handles, export_runtime_state_handle, free_allocation,
-                         import_allocation_handles, import_runtime_state_handle)
+from ._allocator import (ShareableHandleType, configure as _configure, create_mem_pool, export_allocation_handles,
+                         export_runtime_state_handle, free_allocation, import_allocation_handles,
+                         import_runtime_state_handle)
 from ._utils import uint8_cuda_tensor_from_ptr
 
 _RendezvousCacheKey: TypeAlias = tuple[int, int, int]
@@ -40,8 +41,7 @@ def _normalize_size(size: tuple[object, ...]) -> tuple[int, ...]:
 
 
 @functools.lru_cache()
-def _get_mem_pool(device_index: int):
-    _ = device_index
+def _get_mem_pool():
     return create_mem_pool()
 
 
@@ -65,7 +65,7 @@ def empty(*size, dtype: torch.dtype | None = None, device: torch.device | str | 
     device_index = torch.cuda.current_device() if dev.index is None else dev.index
     dev = torch.device("cuda", device_index)
 
-    with torch.cuda.use_mem_pool(_get_mem_pool(device_index)):
+    with torch.cuda.use_mem_pool(_get_mem_pool()):
         return torch.empty(shape, dtype=dtype, device=dev)
 
 
@@ -75,6 +75,17 @@ def _resolve_group(group) -> tuple[dist.ProcessGroup, str]:
     if isinstance(group, str):
         return c10d._resolve_process_group(group), group
     raise TypeError(f"rendezvous: unsupported group type: {type(group)}")
+
+
+def configure(group, *, rng_seed: int | None = None, clock_buffer_size: int | None = None):
+    process_group, _ = _resolve_group(group)
+    _configure(
+        device_ranks={torch.cuda.current_device(): dist.get_rank(process_group)},
+        num_devices=dist.get_world_size(process_group),
+        rng_seed=rng_seed,
+        clock_buffer_size=clock_buffer_size,
+        handle_type=ShareableHandleType.POSIX_FILE_DESCRIPTOR,
+    )
 
 
 def _send_fds(
@@ -136,6 +147,7 @@ def _import_peer_ptrs(
                 peer_shadow_fd,
                 int(metas[peer]["alloc_size"]),
                 device_index,
+                ShareableHandleType.POSIX_FILE_DESCRIPTOR,
             )
             peer_ptrs[peer] = ptr
             if peer_runtime_state_fd is not None:
@@ -146,8 +158,9 @@ def _import_peer_ptrs(
                 import_runtime_state_handle(
                     peer_runtime_state_fd,
                     int(peer_runtime_state_alloc_size),
-                    int(metas[peer]["device_index"]),
+                    peer,
                     device_index,
+                    ShareableHandleType.POSIX_FILE_DESCRIPTOR,
                 )
     except Exception:
         for peer, ptr in enumerate(peer_ptrs):
@@ -203,8 +216,10 @@ class GSanSymmetricMemoryHandle:
             raise NotImplementedError("Only channel=0 is supported in GSan symmetric memory.")
         _ = timeout_ms
         if self._world_size > 1:
+            torch.cuda.synchronize(self._device_index)
             dist.barrier(group=self._group)
             _stream_sync.synchronize_process_group_barrier(self._device_index, self._peer_device_indices)
+            torch.cuda.synchronize(self._device_index)
             dist.barrier(group=self._group)
 
     def get_buffer(
@@ -317,7 +332,7 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
             device_index=device_index,
             buffer_size=buffer_size,
             peer_ptrs=(base_ptr, ),
-            peer_device_indices=(int(device_index), ),
+            peer_device_indices=(rank, ),
             cache_key=cache_key,
         )
         _RENDEZVOUS_CACHE[cache_key] = handle
@@ -332,14 +347,15 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
     }
 
     with contextlib.ExitStack() as stack:
-        real_fd, shadow_fd, alloc_size = export_allocation_handles(base_ptr)
+        real_fd, shadow_fd, alloc_size = export_allocation_handles(base_ptr, ShareableHandleType.POSIX_FILE_DESCRIPTOR)
 
         stack.callback(os.close, real_fd)
         stack.callback(os.close, shadow_fd)
         runtime_state_fd: int | None = None
         runtime_state_alloc_size: int | None = None
         if peers_needing_runtime_bootstrap:
-            runtime_state_fd, runtime_state_alloc_size = export_runtime_state_handle(int(device_index))
+            runtime_state_fd, runtime_state_alloc_size = export_runtime_state_handle(
+                int(device_index), ShareableHandleType.POSIX_FILE_DESCRIPTOR)
             stack.callback(os.close, runtime_state_fd)
 
         local_meta = {
@@ -357,7 +373,6 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
         dist.all_gather_object(metas, local_meta, group=process_group)
 
         first = metas[0]
-        seen_device_indices: set[int] = set()
         for i, meta in enumerate(metas):
             if meta["hostname"] != first["hostname"]:
                 raise RuntimeError(
@@ -371,15 +386,10 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
                 raise RuntimeError("rendezvous: all ranks must use tensors with identical byte size.")
             if meta["alloc_size"] != first["alloc_size"]:
                 raise RuntimeError("rendezvous: all ranks must use identical GSan allocation sizes.")
-            peer_device_index = int(meta["device_index"])
-            if peer_device_index in seen_device_indices:
-                raise RuntimeError(
-                    "rendezvous: all ranks must use unique CUDA device indices within the process group.")
-            seen_device_indices.add(peer_device_index)
             runtime_meta_size = meta["runtime_state_alloc_size"]
             if runtime_meta_size is not None and int(runtime_meta_size) <= 0:
                 raise RuntimeError("rendezvous: runtime_state_alloc_size must be > 0 when provided.")
-        peer_device_indices = tuple(int(meta["device_index"]) for meta in metas)
+        peer_device_indices = tuple(range(world_size))
 
         token_holder = [uuid.uuid4().hex if rank == 0 else None]
         dist.broadcast_object_list(token_holder, group=process_group, group_src=0)

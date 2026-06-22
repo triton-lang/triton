@@ -529,6 +529,35 @@ def kernel() -> None:
     assert_code_equal(output, expected)
 
 
+def test_slice_kernel_module_level_imported_value_alias(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "lib_foo.py":
+            """
+                VALUE = {"key": 7}
+            """,
+            "kernel_mod.py":
+            """
+                from .lib_foo import VALUE as ALIASED_VALUE
+
+                def kernel() -> int:
+                    return ALIASED_VALUE["key"]
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    expected = R'''
+VALUE = {"key": 7}
+
+
+def kernel() -> int:
+    return VALUE["key"]
+    '''
+    assert_code_equal(output, expected)
+
+
 @pytest.mark.xfail(
     strict=True,
     reason="TODO: preserve origin metadata for local from-import values",

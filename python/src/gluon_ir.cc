@@ -1096,8 +1096,7 @@ void init_gluon_ir(py::module &&m) {
                                                       strides, paddingOption);
            })
       .def("create_async_tdm_copy_global_to_local",
-           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
-              Value result, Value pred, Value barrier,
+           [](GluonOpBuilder &self, Value descPtr, Value result, Value barrier,
               tt::CacheModifier cacheModifier,
               std::optional<uint32_t> warpUsedHint) {
              IntegerAttr hintAttr;
@@ -1105,14 +1104,13 @@ void init_gluon_ir(py::module &&m) {
                hintAttr = self.getBuilder().getI32IntegerAttr(
                    static_cast<int32_t>(*warpUsedHint));
              self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(
-                 descPtr, indices, result, pred, barrier, cacheModifier,
-                 hintAttr);
+                 descPtr, result, barrier, cacheModifier, hintAttr);
            })
       .def("create_async_tdm_copy_local_to_global",
-           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
-              Value src, Value barrier, tt::CacheModifier cacheModifier) {
+           [](GluonOpBuilder &self, Value descPtr, Value src, Value barrier,
+              tt::CacheModifier cacheModifier) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(
-                 descPtr, indices, src, barrier, cacheModifier);
+                 descPtr, src, barrier, cacheModifier);
            })
       .def("create_update_tensor_descriptor",
            [](GluonOpBuilder &self, Value descPtr,
@@ -1128,15 +1126,15 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_tdm_scatter",
            [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,
-              Value dstColOffset, Value src, Value barrier) {
-             self.create<ttag::AsyncTDMScatterOp>(descPtr, dstRowIndices,
-                                                  dstColOffset, src, barrier);
+              Value src, Value barrier) {
+             self.create<ttag::AsyncTDMScatterOp>(descPtr, dstRowIndices, src,
+                                                  barrier);
            })
       .def("create_async_tdm_gather",
            [](GluonOpBuilder &self, Value descPtr, Value srcRowIndices,
-              Value srcColOffset, Value dst, Value pred, Value barrier) {
-             self.create<ttag::AsyncTDMGatherOp>(
-                 descPtr, srcRowIndices, srcColOffset, dst, pred, barrier);
+              Value dst, Value barrier) {
+             self.create<ttag::AsyncTDMGatherOp>(descPtr, srcRowIndices, dst,
+                                                 barrier);
            })
       .def("create_tdm_prefetch",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,

@@ -38,6 +38,34 @@ static LLVM::FenceOp createLocalMMRAFence(OpBuilder &builder, Location loc,
   return fence;
 }
 
+// Returns true if `val` is not loop-invariant with respect to `forOp`.
+// Traversal stops at values defined outside the loop, which are invariant
+// roots.
+static bool isLoopVariant(Value val, scf::ForOp forOp) {
+  SmallVector<Value> worklist{val};
+  llvm::DenseSet<Value> visited;
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (!visited.insert(v).second)
+      continue;
+    if (auto blockArg = dyn_cast<BlockArgument>(v)) {
+      // The induction variable, iter_args, and any nested-region argument
+      // inside the loop are loop-variant. Block arguments owned outside the
+      // loop are invariant roots.
+      if (forOp->isAncestor(blockArg.getOwner()->getParentOp()))
+        return true;
+      continue;
+    }
+    Operation *def = v.getDefiningOp();
+    // Values defined outside the loop are loop-invariant; stop traversing.
+    if (!forOp->isAncestor(def))
+      continue;
+    for (Value operand : def->getOperands())
+      worklist.push_back(operand);
+  }
+  return false;
+}
+
 // This pass transforms a for-loop calculating a GEMM. Main purpose of the
 // transform is improve the efficiency of the GPU dot instruction (mfma)
 // by interleaving the execution of two warps on each SIMD. Especially it groups
@@ -1170,6 +1198,21 @@ void Pingponger::getDotPingponged() {
             << lLoadOps.size() << " local loads in dot computation";
     LDBG(message.str());
     return;
+  }
+
+  // A global load whose mask depends on the loop induction variable (e.g. the
+  // K-bound or im2col spatial-padding predicate of a convolution) is
+  // non-uniform along K, so the reordered schedule corrupts the boundary tiles.
+  // Output-only boundary masks (M/N bounds) are loop-invariant and remain on
+  // the fast path.
+  for (auto load : gLoadOps) {
+    Value mask = load.getMask();
+    if (mask && isLoopVariant(mask, forOp)) {
+      LDBG("Unable to apply ping pong scheduling. Details: a global load has "
+           "a loop-variant mask: "
+           << load);
+      return;
+    }
   }
 
   // Pingpong scheduling tries to form two different types of the instruction

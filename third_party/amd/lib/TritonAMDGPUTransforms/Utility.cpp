@@ -2,6 +2,7 @@
 
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
@@ -528,4 +529,13 @@ composePaddedLayout(const TargetFeatures &targetFeatures, int opIdx,
   }
 
   return {};
+}
+
+Value createUpdateTDMDescriptorOp(OpBuilder &builder, Location loc, Value desc,
+                                  ValueRange addOffsets, Value pred) {
+  auto updateOp = mlir::triton::amdgpu::UpdateTensorDescriptorOp::create(
+      builder, loc, desc.getType(), desc, addOffsets,
+      /*set_bounds=*/ValueRange{}, pred);
+  updateOp.setClampBounds(true);
+  return updateOp.getResult();
 }

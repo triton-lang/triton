@@ -1,5 +1,8 @@
 import pytest
 import torch
+import triton
+import triton.language as tl
+from triton_kernels.tensor_details.bitmatrix import _keyed_add
 from triton_kernels.tensor_details.dtype import BIT, FP4, UINT8
 from triton_kernels.tensor import (
     convert_layout,
@@ -67,6 +70,15 @@ def test_ragged_layout_storage_shape():
     metadata = make_ragged_tensor_metadata_torch(slice_sizes, 100)
 
     assert BlackwellActMXScaleLayout(metadata).storage_shape([100, 94], False) == [1, 4, 24, 2, 256]
+
+
+@pytest.mark.parametrize("major_dim", [-1, -2])
+def test_strided_layout_rejects_odd_fp4_packing_dim(major_dim):
+    shape = [2, 2]
+    shape[major_dim] = 1
+
+    with pytest.raises(ValueError):
+        StridedLayout(major_dim).storage_shape(shape, True)
 
 
 @pytest.mark.parametrize(
@@ -207,3 +219,31 @@ def test_make_bitmatrix_metadata(n_rows, n_cols, k):
     assert_equal(metadata_tri.col_sum, metadata_ref.col_sum)
     assert_equal(metadata_tri.row_sorted_indx, metadata_ref.row_sorted_indx)
     assert_equal(metadata_tri.col_sorted_indx, metadata_ref.col_sorted_indx)
+
+
+@triton.jit(debug=True)
+def _keyed_add_scan_kernel(In, Out, BLOCK: tl.constexpr):
+    offs = tl.arange(0, BLOCK)
+    x = tl.load(In + offs)
+    y = tl.associative_scan(x, 0, _keyed_add)
+    tl.store(Out + offs, y)
+
+
+def test_keyed_add_large_key_no_int_overflow():
+    # Regression test for https://github.com/triton-lang/triton/issues/7945
+    # `_keyed_add` accumulates a count in the lower 16 bits of a uint32 under a
+    # key stored in the upper 16 bits. With overflow checks live (debug=True),
+    # a large key -- e.g. the 0xffff0000 padding sentinel produced for masked
+    # lanes -- used to overflow uint32 in `x + y` and abort the kernel with
+    # "int32 overflow detected for operation add".
+    device = "cuda"
+    BLOCK = 16
+    key = 0xffff  # the padding sentinel key used by the metadata kernels
+    # All elements share `key`, so the inclusive scan accumulates the counts.
+    x = torch.full((BLOCK, ), (key << 16) | 1, dtype=torch.uint32, device=device)
+    out = torch.empty_like(x)
+    # Would raise a device-side assertion before the fix.
+    _keyed_add_scan_kernel[(1, )](x, out, BLOCK=BLOCK)
+    # Compare in int64 (CUDA has no uint32 `arange`); values are well within int64.
+    expected = (key << 16) | torch.arange(1, BLOCK + 1, dtype=torch.int64, device=device)
+    assert torch.equal(out.to(torch.int64), expected)

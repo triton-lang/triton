@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include <limits>
 
 namespace {
@@ -347,6 +348,55 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+static SmallVector<std::pair<Value, Value>>
+computeLocalOffsetsWithLogicalOffsets(Location loc, ttg::MemDescType memDescTy,
+                                      RankedTensorType regTy,
+                                      ArrayRef<Value> idxValues, unsigned axis,
+                                      ArrayRef<Value> offsets,
+                                      RewriterBase &rewriter,
+                                      const TargetInfoBase &targetInfo) {
+  MLIRContext *ctx = memDescTy.getContext();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto sharedLayout = ttg::isPaddedEncoding(memDescTy.getEncoding())
+                          ? ttg::paddedLinearLayout(memDescTy)
+                          : ttg::toLinearLayout(memDescTy);
+  LinearLayout invSharedLayout = sharedLayout.pseudoinvert();
+  auto allDims = tt::standardOutDimNames(ctx, memDescTy.getRank());
+  auto kOffset = str_attr("offset");
+  auto kBlock = str_attr("block");
+  bool crossCTA = invSharedLayout.getOutDimSize(kBlock) > 1;
+  assert(offsets.size() == allDims.size());
+
+  auto regLayout = ttg::toLinearLayout(regTy);
+  auto coords = emitIndices(loc, rewriter, targetInfo, regLayout, regTy,
+                            /*withCTAOffset=*/true);
+  SmallVector<std::pair<Value, Value>> offsetAndBlock;
+  offsetAndBlock.reserve(idxValues.size());
+  for (auto [coords, idxVal] : llvm::zip(coords, idxValues)) {
+    Value idx = idxVal;
+    unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
+    if (idxWidth > 32)
+      idx = b.trunc(i32_ty, idx);
+    else if (idxWidth < 32)
+      idx = b.zext(i32_ty, idx);
+
+    SmallVector<Value> indices(coords);
+    indices[axis] = idx;
+    for (auto [dim, offset] : llvm::enumerate(offsets))
+      indices[dim] = b.add(indices[dim], offset);
+
+    SmallVector<std::pair<StringAttr, Value>> inputs;
+    for (auto [dim, index] : llvm::zip(allDims, indices))
+      inputs.push_back({dim, index});
+    auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
+    assert(outputs.size() == 2);
+    assert(outputs[0].first == kOffset && outputs[1].first == kBlock);
+    offsetAndBlock.push_back(
+        {outputs[0].second, crossCTA ? outputs[1].second : Value()});
+  }
+  return offsetAndBlock;
+}
+
 struct LocalGatherOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalLocalGatherOp> {
   LocalGatherOpConversion(const LLVMTypeConverter &converter,
@@ -368,14 +418,13 @@ struct LocalGatherOpConversion
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
     auto idxValues = unpackLLElements(loc, adaptor.getIndices(), rewriter);
-    auto dstIndices =
-        emitIndices(loc, rewriter, targetInfo, regTy.getEncoding(), regTy,
-                    /*withCTAOffset=*/true);
     SmallVector<Value> offsets(adaptor.getOffsets());
 
-    auto addrs =
-        computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
-                          dstIndices, op.getAxis(), rewriter, offsets);
+    auto offsetAndBlock = computeLocalOffsetsWithLogicalOffsets(
+        loc, memDescTy, regTy, idxValues, op.getAxis(), offsets, rewriter,
+        targetInfo);
+    auto addrs = materializeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy,
+                                       offsetAndBlock, rewriter);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     SmallVector<Value> results =
         llvm::map_to_vector(addrs, [&](const LocalSharedMemoryAddress &addr) {
