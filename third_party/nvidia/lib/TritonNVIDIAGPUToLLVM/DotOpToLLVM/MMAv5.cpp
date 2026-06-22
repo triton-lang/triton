@@ -329,11 +329,22 @@ void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   PTXBuilder ptxBuilder;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value mask;
+  Value groupPred;
+  Value ctaId;
   for (uint16_t broadcastBits : ttng::getCTABroadcastMasks(twoCTAs, descs)) {
     Value descMask =
         LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBits);
     mask = mask ? b.or_(descMask, mask) : descMask;
+
+    // One CTA per multicast group issues the commit.
+    if (!ctaId)
+      ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+    Value descGroupPred = b.icmp_eq(b.and_(ctaId, b.i32_val(broadcastBits)),
+                                    b.i32_val(0));
+    groupPred = groupPred ? b.or_(groupPred, descGroupPred) : descGroupPred;
   }
+  if (groupPred)
+    pred = b.and_(pred, groupPred);
 
   SmallVector<PTXBuilder::Operand *> ptxOperands;
   auto *predOperand = ptxBuilder.newOperand(pred, "b");
