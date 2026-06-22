@@ -292,8 +292,7 @@ tryCreateTmemCopyCompatibleScaleOperand(Value scale,
     return Value();
 
   Value packedScale = getDefiningOpSkippingConvertLayout(reshapeTiled.getSrc());
-  auto packedScaleType =
-      dyn_cast<RankedTensorType>(loadRoot->getResult(0).getType());
+  auto packedScaleType = dyn_cast<RankedTensorType>(packedScale.getType());
   if (!packedScaleType)
     return Value();
 
