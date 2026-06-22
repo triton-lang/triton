@@ -124,8 +124,6 @@ def assert_mmav5_asm(k, expect_two_ctas):
         assert all("two_ctas" not in line for line in mma_lines), "TTGIR unexpectedly contains a two_ctas MMAv5 op."
 
     ptx = k.asm["ptx"]
-    if "32x32b" not in ptx and "16x32b" not in ptx:
-        print(ptx)
     assert ("32x32b" in ptx) or ("16x32b" in ptx), "PTX does not contain 32x32b or 16x32b"
     cta_group = "cta_group::2" if expect_two_ctas else "cta_group::1"
     assert cta_group in ptx, f"PTX does not contain {cta_group}"
