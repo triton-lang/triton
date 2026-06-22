@@ -909,27 +909,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 }
 
 // -----
-
-#A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 0]]}>
-#nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1], [0, 0]]}>
-
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-// CHECK-LABEL: @tma_multicast_without_two_cta_mma
-// CHECK: ttng.async_tma_copy_global_to_local {{.*}} {loop.cluster = {{.*}}multicast}
-// CHECK-NOT: ttng.tc_gen5_mma
-// CHECK: tt.return
-tt.func @tma_multicast_without_two_cta_mma(%lb : index, %ub : index, %step : index,
-                 %desc : !tt.tensordesc<64x128xf16, #nvmma_128>,
-                 %offs : i32) -> () {
-  scf.for %iv = %lb to %ub step %step : index {
-    %a = tt.descriptor_load %desc[%offs, %offs] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<64x128xf16, #nvmma_128> -> tensor<64x128xf16, #A>
-    "use"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<64x128xf16, #A>) -> ()
-  } {tt.scheduled_max_stage = 2 : i32}
-  tt.return
-}
-}
-
-// -----
 #nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {

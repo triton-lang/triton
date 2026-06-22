@@ -295,6 +295,22 @@ static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
   return false;
 }
 
+static bool loadFeedsMulticastMMAv5MMA(Operation *loadOp) {
+  SetVector<Operation *> worklist;
+  worklist.insert(loadOp->user_begin(), loadOp->user_end());
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Operation *op = worklist[i];
+    auto mma = dyn_cast<ttng::MMAv5OpInterface>(op);
+    if (mma) {
+      if (mma.getMulticast())
+        return true;
+      continue;
+    }
+    worklist.insert(op->user_begin(), op->user_end());
+  }
+  return false;
+}
+
 static bool loadUsesTMAMulticast(Operation *loadOp,
                                  SharedEncodingTrait sharedEncoding) {
   if (!isa<tt::DescriptorLoadOp>(loadOp))
@@ -529,7 +545,8 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
         asyncLoad.stageDiff = stageDiff;
         asyncLoad.contiguity = contiguity;
         asyncLoad.sharedEncoding = sharedEncoding;
-        asyncLoad.useMulticast = loadUsesTMAMulticast(&op, sharedEncoding);
+        asyncLoad.useMulticast = loadUsesTMAMulticast(&op, sharedEncoding) &&
+                                 loadFeedsMulticastMMAv5MMA(&op);
       } else if (stageDiff > 1) {
         // Distance-1 loads can in most cases be pipelined in registers without
         // any performance degradation, as the schedule will usually reorder the
