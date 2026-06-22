@@ -56,7 +56,6 @@ TORCH_HAS_FP8 = hasattr(torch, "float8_e4m3fn")
 # responsible for deciding whether the dot can use MMAv5 two-CTA mode.
 
 
-
 def matmul_set_block_size_hook(nargs):
     block_m = nargs["BLOCK_M"]
     block_n = nargs["BLOCK_N"]
@@ -161,8 +160,10 @@ def matmul_kernel(a_desc, b_desc, c_desc,  #
 
 AUTOTUNE_KEY = ["M", "N", "K", "FP8_INPUTS", "WARP_SPECIALIZE"]
 
+
 def proton_autotune_do_bench(kernel_call, quantiles):
     return triton.testing.do_bench_proton(kernel_call, warmup=1, rep=5, quantiles=quantiles)
+
 
 matmul_kernel_1cta = triton.autotune(configs=MATMUL_CONFIGS, key=AUTOTUNE_KEY,
                                      do_bench=proton_autotune_do_bench)(matmul_kernel)
@@ -197,10 +198,6 @@ def matmul(a, b, *, num_ctas, warp_specialize=False, out=None):
         kernel = matmul_kernel_1cta
     return kernel[grid](a_desc, b_desc, c_desc, M, N, K, FP8_INPUTS=(TORCH_HAS_FP8 and a.dtype == torch.float8_e4m3fn),
                         WARP_SPECIALIZE=warp_specialize)
-
-
-
-
 
 
 # %%
