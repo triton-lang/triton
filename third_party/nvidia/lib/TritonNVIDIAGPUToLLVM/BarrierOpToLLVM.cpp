@@ -254,6 +254,9 @@ struct WaitBarrierOpConversion
     auto pred = adaptor.getPred();
     if (auto leaderPred =
             LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
+      // CGA-broadcast barriers are waited on once per multicast group. Keep
+      // any explicit wait predicate while restricting execution to the group
+      // representative.
       pred = pred ? b.and_(pred, *leaderPred) : *leaderPred;
 
     bool predicated = pred && !matchPattern(pred, m_NonZero());

@@ -5,7 +5,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
-#include "triton/Tools/LayoutUtils.h"
 
 namespace ttg = mlir::triton::gpu;
 
@@ -31,9 +30,6 @@ public:
     Location loc = op.getLoc();
     Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
     auto numCTAs = gpu::lookupNumCTAs(op);
-    assert(!op.getTwoCtas() || numCTAs % 2 == 0);
-    // MMAv5 cta_group::2 completion uses a multicast commit to arrive on every
-    // CTA's local barrier, so the completion barrier itself stays per-CTA.
     auto barrierCGALayout = ttg::CGAEncodingAttr::get1DLayout(ctx, numCTAs);
     auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
         ctx, 1, 1, 1, {0}, barrierCGALayout);
