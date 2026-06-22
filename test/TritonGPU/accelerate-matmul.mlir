@@ -343,6 +343,28 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#offsets = #ttg.slice<{dim = 1, parent = #blocked1}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: mmav5_2ctas_reject_rhs_gather
+  //       CHECK:   tt.descriptor_gather {{.*}} tensor<64xi32, #{{.*}}>
+  //       CHECK:   ttng.tc_gen5_mma {{.*}} :
+  //   CHECK-NOT:   two_ctas
+  //       CHECK:   tt.return
+  tt.func public @mmav5_2ctas_reject_rhs_gather(%a: tensor<128x64xf16, #blocked2>, %b_desc: !tt.tensordesc<1x256xf16>, %x_offsets: tensor<64xi32, #offsets>, %c: tensor<128x256xf32, #blocked>) -> tensor<128x256xf32, #blocked> {
+      %zero = arith.constant 0 : i32
+      %ad = ttg.convert_layout %a : tensor<128x64xf16, #blocked2> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+      %b = tt.descriptor_gather %b_desc[%x_offsets, %zero] : (!tt.tensordesc<1x256xf16>, tensor<64xi32, #offsets>, i32) -> tensor<64x256xf16, #blocked1>
+      %bd = ttg.convert_layout %b : tensor<64x256xf16, #blocked1> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+      %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
+    tt.return %d : tensor<128x256xf32, #blocked>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>

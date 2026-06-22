@@ -640,8 +640,7 @@ static bool canUseTwoCTAs(DotOp dotOp) {
 
   RankedTensorType retType = dotOp.getType();
   auto loadOp =
-      getDefiningOpSkippingConvertLayout<DescriptorLoadLikeOpInterface>(
-          dotOp.getB());
+      getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(dotOp.getB());
   if (!loadOp)
     return false;
 
@@ -693,8 +692,7 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
 static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
                            const CGAEncodingAttr &newCGALayout) {
   OpBuilder::InsertionGuard g(rewriter);
-  auto loadOp =
-      getDefiningOpSkippingConvertLayout<DescriptorLoadLikeOpInterface>(b);
+  auto loadOp = getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(b);
   assert(loadOp && "expected descriptor load");
   b = loadOp->getResult(0);
   RankedTensorType bType = cast<RankedTensorType>(b.getType());
