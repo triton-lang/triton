@@ -25,6 +25,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 
+#include <type_traits>
+
 namespace mlir {
 namespace triton {
 namespace gpu {
@@ -230,17 +232,14 @@ static bool isTmemCopyCompatibleScale(RankedTensorType argType,
   return innermostBits % (32 * 128) == 0;
 }
 
-template <typename OpTy>
-static OpTy getDefiningOpSkippingConvertLayout(Value value) {
+template <typename OpTy = void>
+static auto getDefiningOpSkippingConvertLayout(Value value) {
   while (auto cvtOp = value.getDefiningOp<ConvertLayoutOp>())
     value = cvtOp.getSrc();
-  return value.getDefiningOp<OpTy>();
-}
-
-static Value stripConvertLayout(Value value) {
-  while (auto cvtOp = value.getDefiningOp<ConvertLayoutOp>())
-    value = cvtOp.getSrc();
-  return value;
+  if constexpr (std::is_void_v<OpTy>)
+    return value;
+  else
+    return value.getDefiningOp<OpTy>();
 }
 
 static Value
@@ -286,22 +285,27 @@ tryCreateTmemCopyCompatibleScaleOperand(Value scale,
   auto kCopyTiles = numScales / 4;
   SmallVector<int64_t> tiledScaleShape = {mnCopyTiles, kCopyTiles, 32, 4, 4};
 
-  Value tiledScale = stripConvertLayout(transOp.getSrc());
-  auto reshapeTiled = tiledScale.getDefiningOp<ReshapeOp>();
+  auto reshapeTiled =
+      getDefiningOpSkippingConvertLayout<ReshapeOp>(transOp.getSrc());
   if (!reshapeTiled ||
       reshapeTiled.getType().getShape() != ArrayRef<int64_t>(tiledScaleShape))
     return Value();
 
-  Value packedScale = stripConvertLayout(reshapeTiled.getSrc());
-  auto packedScaleType = dyn_cast<RankedTensorType>(packedScale.getType());
+  Value packedScale = getDefiningOpSkippingConvertLayout(reshapeTiled.getSrc());
+  auto loadOp = packedScale.getDefiningOp<LoadOp>();
+  auto descLoadOp = packedScale.getDefiningOp<DescriptorLoadLikeOpInterface>();
+  Operation *loadRoot = loadOp       ? loadOp.getOperation()
+                        : descLoadOp ? descLoadOp.getOperation()
+                                     : nullptr;
+  if (!loadRoot)
+    return Value();
+
+  auto packedScaleType =
+      dyn_cast<RankedTensorType>(loadRoot->getResult(0).getType());
   if (!packedScaleType)
     return Value();
 
-  auto *loadOp = packedScale.getDefiningOp();
-  if (!isa_and_nonnull<LoadOp, DescriptorLoadLikeOpInterface>(loadOp))
-    return Value();
-
-  bool usesTMAload = isa<DescriptorLoadLikeOpInterface>(loadOp);
+  bool usesTMAload = static_cast<bool>(descLoadOp);
   if (!isTmemCopyCompatibleScale(packedScaleType, usesTMAload))
     return Value();
 
@@ -606,12 +610,6 @@ replaceCGALayout(DistributedEncodingTrait layout,
   }
 }
 
-static Value stripConvertLayout(Value value) {
-  while (auto cvtOp = value.getDefiningOp<ConvertLayoutOp>())
-    value = cvtOp.getSrc();
-  return value;
-}
-
 static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
   if (retType.getRank() != 2)
     return {};
@@ -646,9 +644,10 @@ static bool canUseTwoCTAs(DotOp dotOp) {
     return false;
 
   RankedTensorType retType = dotOp.getType();
-  Value b = stripConvertLayout(dotOp.getB());
-  Operation *defOp = b.getDefiningOp();
-  if (!defOp || !isa<triton::DescriptorLoadLikeOpInterface>(defOp))
+  auto loadOp =
+      getDefiningOpSkippingConvertLayout<DescriptorLoadLikeOpInterface>(
+          dotOp.getB());
+  if (!loadOp)
     return false;
 
   auto rhsCGALayout = getTwoCTARHSCGALayout(retType);
@@ -699,14 +698,14 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
 static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
                            const CGAEncodingAttr &newCGALayout) {
   OpBuilder::InsertionGuard g(rewriter);
-  b = stripConvertLayout(b);
-  auto loadOp = b.getDefiningOp();
-  assert(isa<triton::DescriptorLoadLikeOpInterface>(loadOp) &&
-         "expected descriptor load");
+  auto loadOp =
+      getDefiningOpSkippingConvertLayout<DescriptorLoadLikeOpInterface>(b);
+  assert(loadOp && "expected descriptor load");
+  b = loadOp->getResult(0);
   RankedTensorType bType = cast<RankedTensorType>(b.getType());
   auto currentLayout = cast<DistributedEncodingTrait>(bType.getEncoding());
   Attribute newLayout = replaceCGALayout(currentLayout, newCGALayout);
-  rewriter.setInsertionPoint(loadOp);
+  rewriter.setInsertionPoint(loadOp.getOperation());
   for (OpOperand &operand : loadOp->getOpOperands()) {
     auto tensorType = dyn_cast<RankedTensorType>(operand.get().getType());
     if (!tensorType)
@@ -718,7 +717,7 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
   }
   loadOp->getResult(0).setType(bType.cloneWithEncoding(newLayout));
   Value newB = loadOp->getResult(0);
-  rewriter.setInsertionPointAfter(loadOp);
+  rewriter.setInsertionPointAfter(loadOp.getOperation());
   auto cvt = ConvertLayoutOp::create(rewriter, b.getLoc(), bType, newB);
   rewriter.replaceAllUsesExcept(newB, cvt.getResult(), cvt);
   return newB;
