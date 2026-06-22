@@ -36,10 +36,10 @@ tt.func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__1
     %21 = tt.splat %19 : i32 -> tensor<64xi32>
     %22 = arith.addi %21, %20 : tensor<64xi32>
     %23 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32>
-    %24 = tt.expand_dims %18 {axis = 1 : i32} : tensor<64xi32> -> tensor<64x1xi32>
+    %24 = tt.reshape %18 require_sliced : tensor<64xi32> -> tensor<64x1xi32>
     %25 = tt.splat %arg6 : i32 -> tensor<64x1xi32>
     %26 = arith.muli %24, %25 : tensor<64x1xi32>
-    %27 = tt.expand_dims %23 {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+    %27 = tt.reshape %23 require_sliced : tensor<64xi32> -> tensor<1x64xi32>
     %28 = tt.splat %arg7 : i32 -> tensor<1x64xi32>
     %29 = arith.muli %27, %28 : tensor<1x64xi32>
     %30 = tt.broadcast %26 : tensor<64x1xi32> -> tensor<64x64xi32>
@@ -47,10 +47,10 @@ tt.func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__1
     %32 = arith.addi %30, %31 : tensor<64x64xi32>
     %33 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>>
     %34 = tt.addptr %33, %32 : tensor<64x64x!tt.ptr<f32>>, tensor<64x64xi32>
-    %35 = tt.expand_dims %23 {axis = 1 : i32} : tensor<64xi32> -> tensor<64x1xi32>
+    %35 = tt.reshape %23 require_sliced : tensor<64xi32> -> tensor<64x1xi32>
     %36 = tt.splat %arg8 : i32 -> tensor<64x1xi32>
     %37 = arith.muli %35, %36 : tensor<64x1xi32>
-    %38 = tt.expand_dims %22 {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+    %38 = tt.reshape %22 require_sliced : tensor<64xi32> -> tensor<1x64xi32>
     %39 = tt.splat %arg9 : i32 -> tensor<1x64xi32>
     %40 = arith.muli %38, %39 : tensor<1x64xi32>
     %41 = tt.broadcast %37 : tensor<64x1xi32> -> tensor<64x64xi32>
@@ -79,10 +79,10 @@ tt.func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__1
     %53 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32>
     %54 = tt.splat %52 : i32 -> tensor<64xi32>
     %55 = arith.addi %54, %53 : tensor<64xi32>
-    %56 = tt.expand_dims %51 {axis = 1 : i32} : tensor<64xi32> -> tensor<64x1xi32>
+    %56 = tt.reshape %51 require_sliced : tensor<64xi32> -> tensor<64x1xi32>
     %57 = tt.splat %arg10 : i32 -> tensor<64x1xi32>
     %58 = arith.muli %57, %56 : tensor<64x1xi32>
-    %59 = tt.expand_dims %55 {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+    %59 = tt.reshape %55 require_sliced : tensor<64xi32> -> tensor<1x64xi32>
     %60 = tt.splat %arg11 : i32 -> tensor<1x64xi32>
     %61 = arith.muli %59, %60 : tensor<1x64xi32>
     %62 = tt.broadcast %58 : tensor<64x1xi32> -> tensor<64x64xi32>
@@ -90,10 +90,10 @@ tt.func @matmul_kernel__Pfp32_Pfp32_Pfp32_i32_i32_i32_i32_i32_i32_i32_i32_i32__1
     %64 = arith.addi %62, %63 : tensor<64x64xi32>
     %65 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>>
     %66 = tt.addptr %65, %64 : tensor<64x64x!tt.ptr<f32>>, tensor<64x64xi32>
-    %67 = tt.expand_dims %51 {axis = 1 : i32} : tensor<64xi32> -> tensor<64x1xi32>
+    %67 = tt.reshape %51 require_sliced : tensor<64xi32> -> tensor<64x1xi32>
     %68 = tt.splat %arg3 : i32 -> tensor<64x1xi32>
     %69 = arith.cmpi slt, %67, %68 : tensor<64x1xi32>
-    %70 = tt.expand_dims %55 {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+    %70 = tt.reshape %55 require_sliced : tensor<64xi32> -> tensor<1x64xi32>
     %71 = tt.splat %arg4 : i32 -> tensor<1x64xi32>
     %72 = arith.cmpi slt, %70, %71 : tensor<1x64xi32>
     %73 = tt.broadcast %69 : tensor<64x1xi1> -> tensor<64x64xi1>

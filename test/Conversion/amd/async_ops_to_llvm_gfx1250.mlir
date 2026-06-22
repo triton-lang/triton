@@ -279,6 +279,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[1, 0], [2, 0]], block = []}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
@@ -298,7 +299,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %31 = arith.cmpi sgt, %30, %c0_i32 : i32
 
     %51 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %52 = tt.expand_dims %51 {axis = 1 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<4x1xi32, #blocked>
+    %compact = tt.reshape %51 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<4x1xi32, #linear>
+    %52 = ttg.convert_layout %compact : tensor<4x1xi32, #linear> -> tensor<4x1xi32, #blocked>
     %65 = tt.splat %arg3 : i32 -> tensor<4x1xi32, #blocked>
     %66 = arith.cmpi slt, %52, %65 : tensor<4x1xi32, #blocked>
     %67 = tt.broadcast %66 : tensor<4x1xi1, #blocked> -> tensor<4x32xi1, #blocked>

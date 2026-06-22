@@ -88,7 +88,8 @@ LogicalResult inferCoalescedLayout(ModuleOp &mod) {
     // -> gl.set_auto_layout(val, a concrete coalesced layout)
     // then ResolveAutoLayoutPass will handle the rest
     //
-    if (failed(inferLayout(func, isCoalescedEncodingTensorType, seedEncodings)))
+    if (failed(inferLayout(func, isCoalescedEncodingTensorType,
+                           seedEncodings, materializeRequireSlicedReshape)))
       return failure();
   }
   return success();
