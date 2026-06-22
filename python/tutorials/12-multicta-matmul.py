@@ -56,9 +56,6 @@ TORCH_HAS_FP8 = hasattr(torch, "float8_e4m3fn")
 # responsible for deciding whether the dot can use MMAv5 two-CTA mode.
 
 
-def proton_autotune_do_bench(kernel_call, quantiles):
-    return triton.testing.do_bench_proton(kernel_call, warmup=1, rep=5, quantiles=quantiles)
-
 
 def matmul_set_block_size_hook(nargs):
     block_m = nargs["BLOCK_M"]
@@ -164,6 +161,9 @@ def matmul_kernel(a_desc, b_desc, c_desc,  #
 
 AUTOTUNE_KEY = ["M", "N", "K", "FP8_INPUTS", "WARP_SPECIALIZE"]
 
+def proton_autotune_do_bench(kernel_call, quantiles):
+    return triton.testing.do_bench_proton(kernel_call, warmup=1, rep=5, quantiles=quantiles)
+
 matmul_kernel_1cta = triton.autotune(configs=MATMUL_CONFIGS, key=AUTOTUNE_KEY,
                                      do_bench=proton_autotune_do_bench)(matmul_kernel)
 matmul_kernel_2cta = triton.autotune(configs=TWO_CTA_CONFIGS, key=AUTOTUNE_KEY,
@@ -199,20 +199,8 @@ def matmul(a, b, *, num_ctas, warp_specialize=False, out=None):
                         WARP_SPECIALIZE=warp_specialize)
 
 
-def tflops(ms, M, N, K):
-    return 2.0 * M * N * K * 1e-12 / (ms * 1e-3)
 
 
-def bench(fn):
-    return triton.testing.do_bench_proton(fn, warmup=1, rep=5)
-
-
-BENCHMARK_SHAPES = list(range(1024, 4097, 256))
-
-
-def fmt_config(config):
-    return (f"{config.kwargs['BLOCK_M']}x{config.kwargs['BLOCK_N']}x{config.kwargs['BLOCK_K']}"
-            f"s{config.num_stages}w{config.num_warps}")
 
 
 # %%
@@ -255,7 +243,7 @@ def validate_and_inspect():
 # ``torch.matmul`` and the explicit CublasLt helper both use cuBLAS on CUDA.
 
 
-def benchmark(shapes=BENCHMARK_SHAPES, precision="fp16"):
+def benchmark(shapes=list(range(1024, 4097, 256)), precision="fp16"):
     if not is_blackwell():
         raise RuntimeError("This tutorial requires an NVIDIA Blackwell GPU.")
     if precision not in {"fp16", "fp8", "all"}:
@@ -272,9 +260,20 @@ def benchmark(shapes=BENCHMARK_SHAPES, precision="fp16"):
 
 
 def benchmark_precision(shapes, precision):
+    # TODO: We haven't tuned FP8 kernels yet, will enable once we have a good set of configs
     fp8_inputs = precision == "fp8"
     print(f"\n{precision.upper()} square shapes", flush=True)
     print("    M=N=K       1CTA       2CTA     cuBLAS      best shapes", flush=True)
+
+    def tflops(ms, M, N, K):
+        return 2.0 * M * N * K * 1e-12 / (ms * 1e-3)
+
+    def bench(fn):
+        return triton.testing.do_bench_proton(fn, warmup=1, rep=5)
+
+    def fmt_config(config):
+        return (f"{config.kwargs['BLOCK_M']}x{config.kwargs['BLOCK_N']}x{config.kwargs['BLOCK_K']}"
+                f"s{config.num_stages}w{config.num_warps}")
 
     for size in shapes:
         M = N = K = int(size)
