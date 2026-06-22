@@ -770,7 +770,8 @@ public:
     if (useTwoCTAs) {
       b = splitBOperand(b, rewriter, getTwoCTARHSCGALayout(oldRetType));
     }
-    bool useMulticast = usesTMAMulticast(a) || usesTMAMulticast(b);
+    bool useMulticast =
+        useTwoCTAs && (usesTMAMulticast(a) || usesTMAMulticast(b));
     // TF32 transpose is only supported with 128 swizzle mode with 32B
     // atomicity. As we currently don't support this layout we disallow
     // transpose for TF32 inputs.
