@@ -1677,10 +1677,10 @@ int getMMAv5CompletionBarrierCount(MMAv5OpInterface mma) {
     if (mma.getTwoCtas() && (cta & 1))
       continue;
     for (uint16_t broadcastMask : broadcastMasks) {
-      // Count one completion-barrier arrival per CTA group. Broadcast bits
-      // may vary inside a group; fixed bits are zero for the representative.
-      uint16_t fixedMask = (~broadcastMask) & ctaMask;
-      if ((cta & fixedMask) == 0) {
+      // Count CTA groups, not individual CTAs. Broadcast bits may vary within
+      // one multicast group, so the group contributes once when those bits are
+      // zero; non-broadcast bits identify distinct groups.
+      if ((cta & (broadcastMask & ctaMask)) == 0) {
         ++count;
         break;
       }
