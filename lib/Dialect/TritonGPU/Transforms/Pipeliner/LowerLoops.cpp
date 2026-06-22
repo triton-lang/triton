@@ -295,26 +295,16 @@ static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
   return false;
 }
 
-static bool loadUsesTMAMulticast(Operation *loadOp) {
+static bool loadUsesTMAMulticast(Operation *loadOp,
+                                 SharedEncodingTrait sharedEncoding) {
   if (!isa<tt::DescriptorLoadOp>(loadOp))
     return false;
 
-  auto tensorTy = dyn_cast<RankedTensorType>(loadOp->getResult(0).getType());
-  if (!tensorTy)
-    return false;
-  auto kBlock = StringAttr::get(loadOp->getContext(), "block");
-  if (!toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock))
-    return false;
-
-  SetVector<Operation *> worklist;
-  worklist.insert(loadOp->user_begin(), loadOp->user_end());
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Operation *op = worklist[i];
-    if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
-      return mma.getTwoCtas();
-    worklist.insert(op->user_begin(), op->user_end());
-  }
-  return false;
+  auto tensorTy = cast<RankedTensorType>(loadOp->getResult(0).getType());
+  auto memDescTy = MemDescType::get(
+      tensorTy.getShape(), tensorTy.getElementType(), sharedEncoding,
+      SharedMemorySpaceAttr::get(loadOp->getContext()));
+  return ttng::hasCGABroadcast(memDescTy);
 }
 
 // Convert a scalar load to a load of a tensor of shape <1>.
@@ -539,7 +529,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
         asyncLoad.stageDiff = stageDiff;
         asyncLoad.contiguity = contiguity;
         asyncLoad.sharedEncoding = sharedEncoding;
-        asyncLoad.useMulticast = loadUsesTMAMulticast(&op);
+        asyncLoad.useMulticast = loadUsesTMAMulticast(&op, sharedEncoding);
       } else if (stageDiff > 1) {
         // Distance-1 loads can in most cases be pipelined in registers without
         // any performance degradation, as the schedule will usually reorder the
