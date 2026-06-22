@@ -272,6 +272,24 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
 
       auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
       if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
+        // FMA LDS layout flip (read-side coalescing).
+        // sharedOrder is otherwise inherited from the global-load contiguity.
+        // When an FMA dot operand arrives K-contiguous in global memory (e.g.
+        // A or B is transposed), the dot reads from LDS strided, serializing
+        // the loads. Re-orient the shared buffer to operand-major so those
+        // reads are coalesced.
+        if (rank == 2 && isa<ttg::BlockedEncodingAttr>(dotOpEnc.getParent())) {
+          SmallVector<unsigned> operandMajorOrder = ttg::getOrderForDotOperand(
+              dotOpEnc.getOpIdx(), /*rank=*/2, /*kContig=*/false);
+          if (sharedOrder != operandMajorOrder) {
+            LDBG("FMA LDS layout flip: sharedOrder ["
+                 << sharedOrder[0] << "," << sharedOrder[1]
+                 << "] -> operand-major [" << operandMajorOrder[0] << ","
+                 << operandMajorOrder[1]
+                 << "] for opIdx=" << dotOpEnc.getOpIdx());
+            sharedOrder = std::move(operandMajorOrder);
+          }
+        }
         // Determine if we can use padded layouts and fallback to swizzled
         // layouts if not
         bool canUseAsyncCopy = false;
