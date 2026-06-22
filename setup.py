@@ -589,9 +589,6 @@ setup(
     license="MIT",
     install_requires=[
         "importlib-metadata; python_version < '3.10'",
-        # Used by the interpreter to back bfloat16 tensors with a real numpy
-        # float dtype (numpy itself has no native bfloat16).
-        "ml_dtypes",
     ],
     packages=list(get_packages()),
     package_dir=dict(get_package_dirs()),

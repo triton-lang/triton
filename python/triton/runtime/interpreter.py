@@ -6,7 +6,6 @@ from typing import Tuple, List, Dict, Callable, TypeVar, Optional
 
 import math
 import numpy as np
-import ml_dtypes
 
 import triton
 import triton.language as tl
@@ -143,6 +142,18 @@ def _get_signed_np_dtype(dtype):
     return dtype
 
 
+def _get_bf16_np_dtype():
+    # numpy has no native bfloat16, so the interpreter backs it with the optional
+    # ml_dtypes package. It is imported lazily (only when a bf16 tensor is actually
+    # used) so it is not a hard dependency of every Triton install.
+    try:
+        import ml_dtypes  # type: ignore
+    except ImportError as e:
+        raise ImportError("Using bfloat16 tensors in the Triton interpreter requires the optional "
+                          "'ml_dtypes' package. Install it with `pip install ml_dtypes`.") from e
+    return np.dtype(ml_dtypes.bfloat16)
+
+
 def _get_np_dtype(tt_dtype):
     if isinstance(tt_dtype, tl.pointer_type):
         return np.dtype(np.uint64)
@@ -159,8 +170,6 @@ def _get_np_dtype(tt_dtype):
         tl.uint32: np.dtype(np.uint32),
         tl.int64: np.dtype(np.int64),
         tl.uint64: np.dtype(np.uint64),
-        # bfloat16 is backed by ml_dtypes, not raw uint16 bits
-        tl.bfloat16: np.dtype(ml_dtypes.bfloat16),
         # float8 types are stored as uint8
         tl.float8e5: np.dtype(np.uint8),
         tl.float8e5b16: np.dtype(np.uint8),
@@ -171,7 +180,9 @@ def _get_np_dtype(tt_dtype):
     if isinstance(tt_dtype, tl.block_type):
         if isinstance(tt_dtype.element_ty, tl.pointer_type):
             return np.dtype(np.uint64)
-        return np_types[tt_dtype.element_ty]
+        return _get_np_dtype(tt_dtype.element_ty)
+    if tt_dtype == tl.bfloat16:
+        return _get_bf16_np_dtype()
     return np_types[tt_dtype]
 
 
