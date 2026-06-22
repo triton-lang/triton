@@ -691,26 +691,19 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
 }
 
 static bool usesTMAMulticast(Value operand) {
-  auto memDescTy = dyn_cast<MemDescType>(operand.getType());
-  if (!memDescTy || !triton::nvidia_gpu::hasCGABroadcast(memDescTy))
+  auto loadOp =
+      getDefiningOpSkippingConvertLayout<triton::DescriptorLoadOp>(operand);
+  if (!loadOp)
     return false;
-
-  Value value = operand;
-  while (auto viewOp = value.getDefiningOp()) {
-    if (viewOp->hasTrait<OpTrait::MemDescViewTrait>()) {
-      value = viewOp->getOperand(0);
-      continue;
-    }
-    if (auto alloc = dyn_cast<LocalAllocOp>(viewOp)) {
-      Value src = alloc.getSrc();
-      if (!src)
-        return false;
-      src = getDefiningOpSkippingConvertLayout(src);
-      return isa_and_nonnull<triton::DescriptorLoadOp>(src.getDefiningOp());
-    }
-    return false;
-  }
-  return false;
+  RankedTensorType loadTy = loadOp.getType();
+  auto sharedEnc = NVMMASharedEncodingAttr::get(
+      loadTy.getContext(), loadTy.getShape(), getOrderForMemory(loadTy),
+      getCGALayout(loadTy.getEncoding()), loadTy.getElementType(),
+      /*fp4Padded=*/false);
+  auto memDescTy =
+      MemDescType::get(loadTy.getShape(), loadTy.getElementType(), sharedEnc,
+                       SharedMemorySpaceAttr::get(loadTy.getContext()));
+  return triton::nvidia_gpu::hasCGABroadcast(memDescTy);
 }
 
 static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
@@ -777,6 +770,7 @@ public:
     if (useTwoCTAs) {
       b = splitBOperand(b, rewriter, getTwoCTARHSCGALayout(oldRetType));
     }
+    bool useMulticast = usesTMAMulticast(a) || usesTMAMulticast(b);
     // TF32 transpose is only supported with 128 swizzle mode with 32B
     // atomicity. As we currently don't support this layout we disallow
     // transpose for TF32 inputs.
@@ -810,8 +804,7 @@ public:
         rewriter, loc, tokType, a, b, acc, acc.getToken(), /*useD=*/vTrue,
         /*pred=*/vTrue);
     mma.setTwoCtas(useTwoCTAs);
-    mma.setMulticast(useTwoCTAs &&
-                     (usesTMAMulticast(a) || usesTMAMulticast(b)));
+    mma.setMulticast(useMulticast);
 
     auto ld = triton::nvidia_gpu::TMEMLoadOp::create(
         rewriter, loc, newAccType, tokType, acc, /*dep=*/mma.getToken());
