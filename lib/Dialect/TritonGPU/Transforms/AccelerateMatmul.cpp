@@ -292,20 +292,16 @@ tryCreateTmemCopyCompatibleScaleOperand(Value scale,
     return Value();
 
   Value packedScale = getDefiningOpSkippingConvertLayout(reshapeTiled.getSrc());
-  auto loadOp = packedScale.getDefiningOp<LoadOp>();
-  auto descLoadOp = packedScale.getDefiningOp<DescriptorLoadLikeOpInterface>();
-  Operation *loadRoot = loadOp       ? loadOp.getOperation()
-                        : descLoadOp ? descLoadOp.getOperation()
-                                     : nullptr;
-  if (!loadRoot)
-    return Value();
-
   auto packedScaleType =
       dyn_cast<RankedTensorType>(loadRoot->getResult(0).getType());
   if (!packedScaleType)
     return Value();
 
-  bool usesTMAload = static_cast<bool>(descLoadOp);
+  auto *loadOp = packedScale.getDefiningOp();
+  if (!isa_and_nonnull<LoadOp, DescriptorLoadLikeOpInterface>(loadOp))
+    return Value();
+
+  bool usesTMAload = isa<DescriptorLoadLikeOpInterface>(loadOp);
   if (!isTmemCopyCompatibleScale(packedScaleType, usesTMAload))
     return Value();
 
