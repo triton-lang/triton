@@ -114,21 +114,6 @@ TWO_CTA_CONFIGS = make_matmul_configs(
     num_ctas=2,
 )
 
-WS_CONFIGS = make_matmul_configs(
-    [
-        (128, 128, 64, 2, 4),
-        (128, 128, 64, 3, 4),
-        (128, 128, 64, 4, 4),
-        (128, 128, 128, 2, 4),
-        (128, 128, 128, 3, 4),
-        (128, 128, 128, 4, 4),
-        (128, 256, 64, 2, 4),
-        (128, 256, 64, 3, 4),
-        (128, 256, 64, 4, 4),
-    ],
-    num_ctas=2,
-)
-
 
 @triton.jit
 def matmul_kernel(a_desc, b_desc, c_desc,  #
@@ -169,11 +154,11 @@ matmul_kernel_1cta = triton.autotune(configs=MATMUL_CONFIGS, key=AUTOTUNE_KEY,
                                      do_bench=proton_autotune_do_bench)(matmul_kernel)
 matmul_kernel_2cta = triton.autotune(configs=TWO_CTA_CONFIGS, key=AUTOTUNE_KEY,
                                      do_bench=proton_autotune_do_bench)(matmul_kernel)
-matmul_kernel_2cta_ws = triton.autotune(configs=WS_CONFIGS, key=AUTOTUNE_KEY,
-                                        do_bench=proton_autotune_do_bench)(matmul_kernel)
 
 
 def matmul(a, b, *, num_ctas, warp_specialize=False, out=None):
+    assert num_ctas in {1, 2}, "num_ctas must be 1 or 2"
+    assert not warp_specialize or num_ctas == 2, "warp specialization is only used with two CTAs in this tutorial"
     assert a.shape[1] == b.shape[0], "incompatible dimensions"
     assert a.dtype == b.dtype, "matrix A and B must have the same dtype"
     supported_dtypes = [torch.float16]
@@ -190,9 +175,7 @@ def matmul(a, b, *, num_ctas, warp_specialize=False, out=None):
     b_desc = TensorDescriptor.from_tensor(b, [1, 1])
     c_desc = TensorDescriptor.from_tensor(c, [1, 1])
     grid = lambda META: (triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]), )
-    if warp_specialize:
-        kernel = matmul_kernel_2cta_ws
-    elif num_ctas == 2:
+    if num_ctas == 2:
         kernel = matmul_kernel_2cta
     else:
         kernel = matmul_kernel_1cta
