@@ -15,6 +15,7 @@ Programming Model
     tensor_descriptor
     program_id
     num_programs
+    map_elementwise
 
 
 Creation Ops
@@ -228,3 +229,4 @@ Debug Ops
     static_assert
     device_print
     device_assert
+    expect_zero
