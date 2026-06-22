@@ -860,21 +860,21 @@ def AsyncTDMScatterOp : TT_AMDGPU_Op<"async_tdm_scatter", [
     - I32: 32-bit indices, up to 8 rows per instruction
     If more rows are needed, multiple TDM instructions will be issued.
 
-    The dst_col_offset specifies the starting column in the destination tensor for
-    all scattered rows.
+    The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
+    (global offset / column via add_offsets, bounds); this op only supplies the
+    per-instruction row slices (dst_row_indices) and the LDS source.
   }];
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
     TensorOf<[I16, I32]>:$dst_row_indices,
-    I32:$dst_col_offset,
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
     Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
   );
   let results = (outs TTG_AsyncToken:$retToken);
 
   let assemblyFormat = [{
-    $desc `[` $dst_row_indices `,` $dst_col_offset `]` `from` $src (`,` `barrier` `=` $barrier^)?
+    $desc `[` $dst_row_indices `]` `from` $src (`,` `barrier` `=` $barrier^)?
     attr-dict `:` qualified(type($dst_row_indices)) `,` qualified(type($src)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
   }];
 
@@ -887,7 +887,6 @@ def AsyncTDMScatterOp : TT_AMDGPU_Op<"async_tdm_scatter", [
 
 def AsyncTDMGatherOp : TT_AMDGPU_Op<"async_tdm_gather", [
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>,
     DeclareOpInterfaceMethods<TDMOpInterface>]> {
   let summary = "Gather data from non-contiguous global memory rows to local memory asynchronously";
 
@@ -903,28 +902,28 @@ def AsyncTDMGatherOp : TT_AMDGPU_Op<"async_tdm_gather", [
     - I32: 32-bit indices, up to 8 rows per instruction
     If more rows are needed, multiple TDM instructions will be issued.
 
-    The src_col_offset specifies the starting column in the source tensor for
-    all gathered rows.
+    The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
+    (global offset / column via add_offsets, bounds, pred); this op only supplies the
+    per-instruction row slices (src_row_indices) and the LDS destination, and inherits
+    `pred` from the descriptor.
   }];
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     TensorOf<[I16, I32]>:$src_row_indices,
-    I32:$src_col_offset,
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
-    I32:$pred,
     Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
   );
   let results = (outs TTG_AsyncToken:$token);
 
   let builders = [
-    OpBuilder<(ins "Value":$desc, "Value":$src_row_indices, "Value":$src_col_offset, "Value":$dst, "Value":$pred), [{
-      return build($_builder, $_state, desc, src_row_indices, src_col_offset, dst, pred, /*barrier=*/static_cast<mlir::Value>(nullptr));
+    OpBuilder<(ins "Value":$desc, "Value":$src_row_indices, "Value":$dst), [{
+      return build($_builder, $_state, desc, src_row_indices, dst, /*barrier=*/static_cast<mlir::Value>(nullptr));
     }]>
   ];
 
   let assemblyFormat = [{
-    $desc `[` $src_row_indices `,` $src_col_offset `]` `to` $dst `,` `pred` `=` $pred (`,` `barrier` `=` $barrier^)?
+    $desc `[` $src_row_indices `]` `to` $dst (`,` `barrier` `=` $barrier^)?
     attr-dict `:` qualified(type($src_row_indices)) `,` qualified(type($dst)) (`,` qualified(type($barrier))^)? `->` qualified(type($desc))
   }];
 
