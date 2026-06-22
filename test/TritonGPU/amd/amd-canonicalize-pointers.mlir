@@ -537,52 +537,50 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // The following is a simple case of a tile offset like: (A*B + C + D) where B,C are Uniform and A,D are not. So
 // we expect that the Uniform offset (which can be added to the scalar pointer) will be simply C and the NonUniform
 // offset will be A*B+D
-#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32} {
-  tt.func @tile_offset(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32) -> tensor<16x256xf16, #blocked> {
+  tt.func @tile_offset(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32) -> tensor<16x256xf16> {
     %c256_i32 = arith.constant 256 : i32
     %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c256_i32 : i32
-    %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %3 = tt.splat %1 : i32 -> tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %4 = arith.addi %3, %2 : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %5 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %6 = tt.expand_dims %5 {axis = 1 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16x1xi32, #blocked>
-    %7 = tt.splat %arg2 : i32 -> tensor<16x1xi32, #blocked>
-    %8 = arith.muli %6, %7 : tensor<16x1xi32, #blocked>
-    %9 = tt.expand_dims %4 {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x256xi32, #blocked>
-    %10 = tt.broadcast %8 : tensor<16x1xi32, #blocked> -> tensor<16x256xi32, #blocked>
-    %11 = tt.broadcast %9 : tensor<1x256xi32, #blocked> -> tensor<16x256xi32, #blocked>
-    %12 = arith.addi %10, %11 : tensor<16x256xi32, #blocked>
-    %13 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<16x256x!tt.ptr<f16>, #blocked>
-    %14 = tt.addptr %13, %12 : tensor<16x256x!tt.ptr<f16>, #blocked>, tensor<16x256xi32, #blocked>
-    %15 = tt.load %14 : tensor<16x256x!tt.ptr<f16>, #blocked>
-    tt.return %15 : tensor<16x256xf16, #blocked>
+    %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
+    %3 = tt.splat %1 : i32 -> tensor<256xi32>
+    %4 = arith.addi %3, %2 : tensor<256xi32>
+    %5 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+    %6 = tt.reshape %5 require_sliced : tensor<16xi32> -> tensor<16x1xi32>
+    %7 = tt.splat %arg2 : i32 -> tensor<16x1xi32>
+    %8 = arith.muli %6, %7 : tensor<16x1xi32>
+    %9 = tt.reshape %4 require_sliced : tensor<256xi32> -> tensor<1x256xi32>
+    %10 = tt.broadcast %8 : tensor<16x1xi32> -> tensor<16x256xi32>
+    %11 = tt.broadcast %9 : tensor<1x256xi32> -> tensor<16x256xi32>
+    %12 = arith.addi %10, %11 : tensor<16x256xi32>
+    %13 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<16x256x!tt.ptr<f16>>
+    %14 = tt.addptr %13, %12 : tensor<16x256x!tt.ptr<f16>>, tensor<16x256xi32>
+    %15 = tt.load %14 : tensor<16x256x!tt.ptr<f16>>
+    tt.return %15 : tensor<16x256xf16>
   }
 }
 
-// CHECK: #[[$ATTR_0:.+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 // CHECK-LABEL:   tt.func @tile_offset(
 // CHECK-SAME:                         %[[VAL_0:.*]]: !tt.ptr<f16>,
 // CHECK-SAME:                         %[[VAL_1:.*]]: i32,
-// CHECK-SAME:                         %[[VAL_2:.*]]: i32) -> tensor<16x256xf16, #[[$ATTR_0]]> {
+// CHECK-SAME:                         %[[VAL_2:.*]]: i32) -> tensor<16x256xf16> {
 // CHECK:           %[[VAL_3:.*]] = arith.constant 256 : i32
 // CHECK:           %[[VAL_4:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_5:.*]] = arith.muli %[[VAL_4]], %[[VAL_3]] : i32
-// CHECK:           %[[VAL_6:.*]] = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #[[$ATTR_0]]}>>
-// CHECK:           %[[VAL_7:.*]] = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #[[$ATTR_0]]}>>
-// CHECK:           %[[VAL_8:.*]] = tt.expand_dims %[[VAL_7]] {axis = 1 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #[[$ATTR_0]]}>> -> tensor<16x1xi32, #[[$ATTR_0]]>
-// CHECK:           %[[VAL_9:.*]] = tt.splat %[[VAL_2]] : i32 -> tensor<16x1xi32, #[[$ATTR_0]]>
-// CHECK:           %[[VAL_10:.*]] = arith.muli %[[VAL_8]], %[[VAL_9]] : tensor<16x1xi32, #[[$ATTR_0]]>
-// CHECK:           %[[VAL_11:.*]] = tt.broadcast %[[VAL_10]] : tensor<16x1xi32, #[[$ATTR_0]]> -> tensor<16x256xi32, #[[$ATTR_0]]>
-// CHECK:           %[[VAL_12:.*]] = tt.expand_dims %[[VAL_6]] {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #[[$ATTR_0]]}>> -> tensor<1x256xi32, #[[$ATTR_0]]>
-// CHECK:           %[[VAL_13:.*]] = tt.broadcast %[[VAL_12]] : tensor<1x256xi32, #[[$ATTR_0]]> -> tensor<16x256xi32, #[[$ATTR_0]]>
-// CHECK:           %[[VAL_14:.*]] = arith.addi %[[VAL_11]], %[[VAL_13]] : tensor<16x256xi32, #[[$ATTR_0]]>
+// CHECK:           %[[VAL_6:.*]] = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
+// CHECK:           %[[VAL_7:.*]] = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+// CHECK:           %[[VAL_8:.*]] = tt.reshape %[[VAL_7]] require_sliced : tensor<16xi32> -> tensor<16x1xi32>
+// CHECK:           %[[VAL_9:.*]] = tt.splat %[[VAL_2]] : i32 -> tensor<16x1xi32>
+// CHECK:           %[[VAL_10:.*]] = arith.muli %[[VAL_8]], %[[VAL_9]] : tensor<16x1xi32>
+// CHECK:           %[[VAL_11:.*]] = tt.broadcast %[[VAL_10]] : tensor<16x1xi32> -> tensor<16x256xi32>
+// CHECK:           %[[VAL_12:.*]] = tt.reshape %[[VAL_6]] require_sliced : tensor<256xi32> -> tensor<1x256xi32>
+// CHECK:           %[[VAL_13:.*]] = tt.broadcast %[[VAL_12]] : tensor<1x256xi32> -> tensor<16x256xi32>
+// CHECK:           %[[VAL_14:.*]] = arith.addi %[[VAL_11]], %[[VAL_13]] : tensor<16x256xi32>
 // CHECK:           %[[VAL_15:.*]] = tt.addptr %[[VAL_0]], %[[VAL_5]] : !tt.ptr<f16>, i32
-// CHECK:           %[[VAL_16:.*]] = tt.splat %[[VAL_15]] : !tt.ptr<f16> -> tensor<16x256x!tt.ptr<f16>, #[[$ATTR_0]]>
-// CHECK:           %[[VAL_17:.*]] = tt.addptr %[[VAL_16]], %[[VAL_14]] : tensor<16x256x!tt.ptr<f16>, #[[$ATTR_0]]>, tensor<16x256xi32, #[[$ATTR_0]]>
-// CHECK:           %[[VAL_18:.*]] = tt.load %[[VAL_17]] : tensor<16x256x!tt.ptr<f16>, #[[$ATTR_0]]>
-// CHECK:           tt.return %[[VAL_18]] : tensor<16x256xf16, #[[$ATTR_0]]>
+// CHECK:           %[[VAL_16:.*]] = tt.splat %[[VAL_15]] : !tt.ptr<f16> -> tensor<16x256x!tt.ptr<f16>>
+// CHECK:           %[[VAL_17:.*]] = tt.addptr %[[VAL_16]], %[[VAL_14]] : tensor<16x256x!tt.ptr<f16>>, tensor<16x256xi32>
+// CHECK:           %[[VAL_18:.*]] = tt.load %[[VAL_17]] : tensor<16x256x!tt.ptr<f16>>
+// CHECK:           tt.return %[[VAL_18]] : tensor<16x256xf16>
 // CHECK:         }
 
 // -----
@@ -652,52 +650,50 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 //  = (U + N)*U + N
 // Where U means uniform (e.g., a splat) and N means NonUniform (e.g., a make_range)
 // The scalar offset we want is (%1*%arg1), while the variable offset should be (%2*%arg1 + %8)
-#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32} {
-  tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) -> tensor<128x16xf16, #blocked> {
+  tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) -> tensor<128x16xf16> {
     %c128_i32 = arith.constant 128 : i32
     %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c128_i32 : i32
-    %2 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %3 = tt.splat %1 : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %4 = arith.addi %3, %2 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %5 = tt.expand_dims %4 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
-    %6 = tt.splat %arg1 : i32 -> tensor<128x1xi32, #blocked>
-    %7 = arith.muli %5, %6 : tensor<128x1xi32, #blocked>
-    %8 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %9 = tt.expand_dims %8 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked>
-    %10 = tt.broadcast %7 : tensor<128x1xi32, #blocked> -> tensor<128x16xi32, #blocked>
-    %11 = tt.broadcast %9 : tensor<1x16xi32, #blocked> -> tensor<128x16xi32, #blocked>
-    %12 = arith.addi %10, %11 : tensor<128x16xi32, #blocked>
-    %13 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>, #blocked>
-    %14 = tt.addptr %13, %12 : tensor<128x16x!tt.ptr<f16>, #blocked>, tensor<128x16xi32, #blocked>
-    %15 = tt.load %14 : tensor<128x16x!tt.ptr<f16>, #blocked>
-    tt.return %15 : tensor<128x16xf16, #blocked>
+    %2 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+    %3 = tt.splat %1 : i32 -> tensor<128xi32>
+    %4 = arith.addi %3, %2 : tensor<128xi32>
+    %5 = tt.reshape %4 require_sliced : tensor<128xi32> -> tensor<128x1xi32>
+    %6 = tt.splat %arg1 : i32 -> tensor<128x1xi32>
+    %7 = arith.muli %5, %6 : tensor<128x1xi32>
+    %8 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+    %9 = tt.reshape %8 require_sliced : tensor<16xi32> -> tensor<1x16xi32>
+    %10 = tt.broadcast %7 : tensor<128x1xi32> -> tensor<128x16xi32>
+    %11 = tt.broadcast %9 : tensor<1x16xi32> -> tensor<128x16xi32>
+    %12 = arith.addi %10, %11 : tensor<128x16xi32>
+    %13 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>>
+    %14 = tt.addptr %13, %12 : tensor<128x16x!tt.ptr<f16>>, tensor<128x16xi32>
+    %15 = tt.load %14 : tensor<128x16x!tt.ptr<f16>>
+    tt.return %15 : tensor<128x16xf16>
   }
 }
 
-// CHECK: #[[$ATTR_1:.+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 // CHECK-LABEL:   tt.func public @matmul_kernel(
 // CHECK-SAME:                                  %[[VAL_0:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32},
-// CHECK-SAME:                                  %[[VAL_1:.*]]: i32 {tt.divisibility = 16 : i32}) -> tensor<128x16xf16, #[[$ATTR_1]]> {
+// CHECK-SAME:                                  %[[VAL_1:.*]]: i32 {tt.divisibility = 16 : i32}) -> tensor<128x16xf16> {
 // CHECK:           %[[VAL_2:.*]] = arith.constant 128 : i32
 // CHECK:           %[[VAL_3:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_4:.*]] = arith.muli %[[VAL_3]], %[[VAL_2]] : i32
-// CHECK:           %[[VAL_5:.*]] = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #[[$ATTR_1]]}>>
-// CHECK:           %[[VAL_6:.*]] = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #[[$ATTR_1]]}>>
-// CHECK:           %[[VAL_7:.*]] = tt.expand_dims %[[VAL_5]] {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #[[$ATTR_1]]}>> -> tensor<128x1xi32, #[[$ATTR_1]]>
+// CHECK:           %[[VAL_5:.*]] = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+// CHECK:           %[[VAL_6:.*]] = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+// CHECK:           %[[VAL_7:.*]] = tt.reshape %[[VAL_5]] require_sliced : tensor<128xi32> -> tensor<128x1xi32>
 // CHECK:           %[[VAL_8:.*]] = arith.muli %[[VAL_4]], %[[VAL_1]] : i32
-// CHECK:           %[[VAL_9:.*]] = tt.splat %[[VAL_1]] : i32 -> tensor<128x1xi32, #[[$ATTR_1]]>
-// CHECK:           %[[VAL_10:.*]] = arith.muli %[[VAL_7]], %[[VAL_9]] : tensor<128x1xi32, #[[$ATTR_1]]>
-// CHECK:           %[[VAL_11:.*]] = tt.broadcast %[[VAL_10]] : tensor<128x1xi32, #[[$ATTR_1]]> -> tensor<128x16xi32, #[[$ATTR_1]]>
-// CHECK:           %[[VAL_12:.*]] = tt.expand_dims %[[VAL_6]] {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #[[$ATTR_1]]}>> -> tensor<1x16xi32, #[[$ATTR_1]]>
-// CHECK:           %[[VAL_13:.*]] = tt.broadcast %[[VAL_12]] : tensor<1x16xi32, #[[$ATTR_1]]> -> tensor<128x16xi32, #[[$ATTR_1]]>
-// CHECK:           %[[VAL_14:.*]] = arith.addi %[[VAL_11]], %[[VAL_13]] : tensor<128x16xi32, #[[$ATTR_1]]>
+// CHECK:           %[[VAL_9:.*]] = tt.splat %[[VAL_1]] : i32 -> tensor<128x1xi32>
+// CHECK:           %[[VAL_10:.*]] = arith.muli %[[VAL_7]], %[[VAL_9]] : tensor<128x1xi32>
+// CHECK:           %[[VAL_11:.*]] = tt.broadcast %[[VAL_10]] : tensor<128x1xi32> -> tensor<128x16xi32>
+// CHECK:           %[[VAL_12:.*]] = tt.reshape %[[VAL_6]] require_sliced : tensor<16xi32> -> tensor<1x16xi32>
+// CHECK:           %[[VAL_13:.*]] = tt.broadcast %[[VAL_12]] : tensor<1x16xi32> -> tensor<128x16xi32>
+// CHECK:           %[[VAL_14:.*]] = arith.addi %[[VAL_11]], %[[VAL_13]] : tensor<128x16xi32>
 // CHECK:           %[[VAL_15:.*]] = tt.addptr %[[VAL_0]], %[[VAL_8]] : !tt.ptr<f16>, i32
-// CHECK:           %[[VAL_16:.*]] = tt.splat %[[VAL_15]] : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>, #[[$ATTR_1]]>
-// CHECK:           %[[VAL_17:.*]] = tt.addptr %[[VAL_16]], %[[VAL_14]] : tensor<128x16x!tt.ptr<f16>, #[[$ATTR_1]]>, tensor<128x16xi32, #[[$ATTR_1]]>
-// CHECK:           %[[VAL_18:.*]] = tt.load %[[VAL_17]] : tensor<128x16x!tt.ptr<f16>, #[[$ATTR_1]]>
-// CHECK:           tt.return %[[VAL_18]] : tensor<128x16xf16, #[[$ATTR_1]]>
+// CHECK:           %[[VAL_16:.*]] = tt.splat %[[VAL_15]] : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>>
+// CHECK:           %[[VAL_17:.*]] = tt.addptr %[[VAL_16]], %[[VAL_14]] : tensor<128x16x!tt.ptr<f16>>, tensor<128x16xi32>
+// CHECK:           %[[VAL_18:.*]] = tt.load %[[VAL_17]] : tensor<128x16x!tt.ptr<f16>>
+// CHECK:           tt.return %[[VAL_18]] : tensor<128x16xf16>
 // CHECK:         }
 
 // -----
@@ -1244,25 +1240,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %cst_2 = arith.constant dense<2> : tensor<32x1x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>>
     %1 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>>
-    %2 = tt.expand_dims %0 {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>> -> tensor<32x1xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
-    %3 = tt.expand_dims %1 {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>> -> tensor<32x1xi32, #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
-    %4 = tt.expand_dims %3 {axis = 2 : i32} : tensor<32x1xi32, #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>> -> tensor<32x1x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
+    %2 = tt.reshape %0 require_sliced : tensor<32xi32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>> -> tensor<32x1xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
+    %3 = tt.reshape %1 require_sliced : tensor<32xi32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>> -> tensor<32x1xi32, #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
+    %4 = tt.reshape %3 require_sliced : tensor<32x1xi32, #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>> -> tensor<32x1x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %5 = arith.muli %4, %cst_2 : tensor<32x1x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %6 = arith.muli %5, %cst_1 : tensor<32x1x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %7 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x1x1x!tt.ptr<f32>, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %8 = tt.addptr %7, %6 : tensor<32x1x1x!tt.ptr<f32>, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>, tensor<32x1x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %9 = tt.make_range {end = 2 : i32, start = 0 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>>
-    %10 = tt.expand_dims %9 {axis = 0 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>> -> tensor<1x2xi32, #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
-    %11 = tt.expand_dims %10 {axis = 2 : i32} : tensor<1x2xi32, #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>> -> tensor<1x2x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
+    %10 = tt.reshape %9 require_sliced : tensor<2xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>> -> tensor<1x2xi32, #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
+    %11 = tt.reshape %10 require_sliced : tensor<1x2xi32, #ttg.slice<{dim = 2, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>> -> tensor<1x2x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %12 = arith.muli %11, %cst_0 : tensor<1x2x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %13 = tt.broadcast %8 : tensor<32x1x1x!tt.ptr<f32>, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>> -> tensor<32x2x1x!tt.ptr<f32>, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %14 = tt.broadcast %12 : tensor<1x2x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>> -> tensor<32x2x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %15 = tt.addptr %13, %14 : tensor<32x2x1x!tt.ptr<f32>, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>, tensor<32x2x1xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %16 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>>
     %17 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>>
-    %18 = tt.expand_dims %16 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>> -> tensor<1x16xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
-    %19 = tt.expand_dims %17 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>> -> tensor<1x16xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
-    %20 = tt.expand_dims %19 {axis = 1 : i32} : tensor<1x16xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>> -> tensor<1x1x16xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
+    %18 = tt.reshape %16 require_sliced : tensor<16xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>> -> tensor<1x16xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
+    %19 = tt.reshape %17 require_sliced : tensor<16xi32, #ttg.slice<{dim = 0, parent = #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>}>> -> tensor<1x16xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
+    %20 = tt.reshape %19 require_sliced : tensor<1x16xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>> -> tensor<1x1x16xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %21 = tt.broadcast %15 : tensor<32x2x1x!tt.ptr<f32>, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>> -> tensor<32x2x16x!tt.ptr<f32>, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %22 = tt.broadcast %20 : tensor<1x1x16xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>> -> tensor<32x2x16xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %23 = tt.addptr %21, %22 : tensor<32x2x16x!tt.ptr<f32>, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>, tensor<32x2x16xi32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
@@ -1276,14 +1272,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %34 = arith.maxnumf %arg2, %arg3 : f32
       tt.reduce.return %34 : f32
     }) : (tensor<32x2x16xf32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>) -> tensor<32x16xf32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
-    %26 = tt.expand_dims %25 {axis = 1 : i32} : tensor<32x16xf32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>> -> tensor<32x1x16xf32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
+    %26 = tt.reshape %25 require_sliced : tensor<32x16xf32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>> -> tensor<32x1x16xf32, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     %27 = arith.muli %2, %cst : tensor<32x1xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
     %28 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<32x1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
     %29 = tt.addptr %28, %27 : tensor<32x1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>, tensor<32x1xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
     %30 = tt.broadcast %29 : tensor<32x1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>> -> tensor<32x16x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
     %31 = tt.broadcast %18 : tensor<1x16xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>> -> tensor<32x16xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
     %32 = tt.addptr %30, %31 : tensor<32x16x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>, tensor<32x16xi32, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>>
-    %33 = tt.expand_dims %32 {axis = 1 : i32} : tensor<32x16x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>> -> tensor<32x1x16x!tt.ptr<f32>, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
+    %33 = tt.reshape %32 require_sliced : tensor<32x16x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>}>> -> tensor<32x1x16x!tt.ptr<f32>, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     tt.store %33, %26 : tensor<32x1x16x!tt.ptr<f32>, #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [8, 1, 4], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>>
     tt.return
 // CHECK: ^bb0(%arg2: f32, %arg3: f32):

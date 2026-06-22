@@ -22,6 +22,7 @@ bool isAutoEncodingTensorType(Type ty) {
   auto tensorTy = dyn_cast<RankedTensorType>(ty);
   return tensorTy && isa<gluon::AutoEncodingAttr>(tensorTy.getEncoding());
 }
+
 LogicalResult inferAutoLayout(ModuleOp &mod) {
   for (auto &op : *mod.getBody()) {
     auto func = dyn_cast<FuncOp>(&op);
@@ -34,7 +35,8 @@ LogicalResult inferAutoLayout(ModuleOp &mod) {
       seedEncodings.push_back({op.getSrc(), op.getType().getEncoding()});
     });
 
-    if (failed(inferLayout(func, isAutoEncodingTensorType, seedEncodings)))
+    if (failed(inferLayout(func, isAutoEncodingTensorType, seedEncodings,
+                           materializeRequireSlicedReshape)))
       return failure();
   }
   return success();

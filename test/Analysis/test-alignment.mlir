@@ -83,7 +83,7 @@ tt.func @addptr(%arg0: !tt.ptr<i1> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<
   // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
   %10 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // expected-remark @below {{contiguity = [1, 128], divisibility = [1, 1073741824], constancy = [1, 1], constant_value = <none>}}
-  %11 = tt.expand_dims %10 {axis = 0: i32} : tensor<128xi32> -> tensor<1x128xi32>
+  %11 = tt.reshape %10 require_sliced : tensor<128xi32> -> tensor<1x128xi32>
   // expected-remark @below {{contiguity = [1, 128], divisibility = [1, 1073741824], constancy = [128, 1], constant_value = <none>}}
   %12 = tt.broadcast %11 : tensor<1x128xi32> -> tensor<128x128xi32>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 128], constant_value = <none>}}
@@ -283,7 +283,7 @@ tt.func @expanddims() {
   // expected-remark @below {{contiguity = [1], divisibility = [2], constancy = [1], constant_value = <none>}}
   %2 = arith.muli %0, %1 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [2, 2], constancy = [1, 1], constant_value = <none>}}
-  %3 = tt.expand_dims %2 {axis = 1 : i32} : tensor<128xi32> -> tensor<128x1xi32>
+  %3 = tt.reshape %2 require_sliced : tensor<128xi32> -> tensor<128x1xi32>
   tt.return
 }
 
@@ -373,7 +373,7 @@ tt.func @global_divisibility_is_axis_independent(
   // Unit contiguity makes every element a group base, so the strongest such
   // divisibility applies to every axis through shape and arithmetic ops.
   // expected-remark @below {{contiguity = [1, 1, 1], divisibility = [8, 8, 8], constancy = [1, 1, 1], constant_value = <none>}}
-  %0 = tt.expand_dims %arg0 {axis = 0 : i32} : tensor<2x2xi32> -> tensor<1x2x2xi32>
+  %0 = tt.reshape %arg0 require_sliced : tensor<2x2xi32> -> tensor<1x2x2xi32>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [8, 8], constancy = [1, 1], constant_value = <none>}}
   %1 = tt.trans %arg0 {order = array<i32: 1, 0>} : tensor<2x2xi32> -> tensor<2x2xi32>
   // expected-remark @below {{contiguity = [1, 1, 1], divisibility = [8, 8, 8], constancy = [4, 1, 1], constant_value = <none>}}
@@ -396,7 +396,7 @@ tt.func @broadcast() {
   // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [128], constant_value = 64}}
   %0 = arith.constant dense<64> : tensor<128xi32>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [64, 64], constancy = [128, 1], constant_value = 64}}
-  %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32> -> tensor<128x1xi32>
+  %1 = tt.reshape %0 require_sliced : tensor<128xi32> -> tensor<128x1xi32>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [64, 64], constancy = [128, 128], constant_value = 64}}
   %2 = tt.broadcast %1 : tensor<128x1xi32> -> tensor<128x128xi32>
   tt.return
@@ -562,9 +562,9 @@ tt.func @select(%arg0 : i1, %arg1 : tensor<4xi1>) {
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %8 = arith.select %7, %3, %2 : tensor<128xi1>, tensor<128xi1>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
-  %9 = tt.expand_dims %2 {axis = 1 : i32} : tensor<128xi1> -> tensor<128x1xi1>
+  %9 = tt.reshape %2 require_sliced : tensor<128xi1> -> tensor<128x1xi1>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 1], constant_value = <none>}}
-  %10 = tt.expand_dims %3 {axis = 1 : i32} : tensor<128xi1> -> tensor<128x1xi1>
+  %10 = tt.reshape %3 require_sliced : tensor<128xi1> -> tensor<128x1xi1>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
   %11 = arith.select %arg0, %9, %10 : tensor<128x1xi1>
   // expected-remark @below {{contiguity = [1], divisibility = [4], constancy = [4], constant_value = 4}}
@@ -777,7 +777,7 @@ tt.func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32
   // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
   %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // expected-remark @below {{contiguity = [128, 1], divisibility = [1073741824, 1], constancy = [1, 1], constant_value = <none>}}
-  %2 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32> -> tensor<128x1xi32>
+  %2 = tt.reshape %0 require_sliced : tensor<128xi32> -> tensor<128x1xi32>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 1], constant_value = <none>}}
   %3 = tt.splat %arg1 : i32 -> tensor<128x1xi32>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>}}
@@ -787,7 +787,7 @@ tt.func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32
   // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>}}
   %6 = tt.addptr %5, %4 : tensor<128x1x!tt.ptr<f32>>, tensor<128x1xi32>
   // expected-remark @below {{contiguity = [1, 128], divisibility = [1, 1073741824], constancy = [1, 1], constant_value = <none>}}
-  %7 = tt.expand_dims %1 {axis = 0 : i32}: tensor<128xi32> -> tensor<1x128xi32>
+  %7 = tt.reshape %1 require_sliced: tensor<128xi32> -> tensor<1x128xi32>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 128], constant_value = <none>}}
   %8 = tt.broadcast %6 : tensor<128x1x!tt.ptr<f32>> -> tensor<128x128x!tt.ptr<f32>>
   // expected-remark @below {{contiguity = [1, 128], divisibility = [1, 1073741824], constancy = [128, 1], constant_value = <none>}}
@@ -795,13 +795,13 @@ tt.func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32
   // expected-remark @below {{contiguity = [1, 128], divisibility = [4, 16], constancy = [1, 1], constant_value = <none>}}
   %10 = tt.addptr %8, %9 : tensor<128x128x!tt.ptr<f32>>, tensor<128x128xi32>
   // expected-remark @below {{contiguity = [128, 1], divisibility = [1073741824, 1], constancy = [1, 1], constant_value = <none>}}
-  %11 = tt.expand_dims %0 {axis = 1 : i32}: tensor<128xi32> -> tensor<128x1xi32>
+  %11 = tt.reshape %0 require_sliced: tensor<128xi32> -> tensor<128x1xi32>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [128, 1], constant_value = <none>}}
   %12 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<128x1x!tt.ptr<f32>>
   // expected-remark @below {{contiguity = [128, 1], divisibility = [16, 4], constancy = [1, 1], constant_value = <none>}}
   %13 = tt.addptr %12, %11 : tensor<128x1x!tt.ptr<f32>>, tensor<128x1xi32>
   // expected-remark @below {{contiguity = [1, 128], divisibility = [1, 1073741824], constancy = [1, 1], constant_value = <none>}}
-  %14 = tt.expand_dims %1 {axis = 0 : i32} : tensor<128xi32> -> tensor<1x128xi32>
+  %14 = tt.reshape %1 require_sliced : tensor<128xi32> -> tensor<1x128xi32>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 128], constant_value = <none>}}
   %15 = tt.splat %arg3 : i32 -> tensor<1x128xi32>
   // expected-remark @below {{contiguity = [1, 1], divisibility = [16, 16], constancy = [1, 1], constant_value = <none>}}
@@ -1159,7 +1159,7 @@ tt.func @callee(%arg0: tensor<128x1xi32>) {
 tt.func @caller() {
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // expected-remark @below {{contiguity = [128, 1], divisibility = [1073741824, 1], constancy = [1, 1], constant_value = <none>}}
-  %1 = tt.expand_dims %0 {axis = 1: i32} : tensor<128xi32> -> tensor<128x1xi32>
+  %1 = tt.reshape %0 require_sliced : tensor<128xi32> -> tensor<128x1xi32>
   tt.call @callee(%1) : (tensor<128x1xi32>) -> ()
   tt.return
 }
