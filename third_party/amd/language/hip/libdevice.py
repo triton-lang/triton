@@ -2,6 +2,24 @@ from triton.language import core
 
 
 @core.extern
+def clz(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__ockl_clz_u32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__ockl_clz_u64", core.dtype("int64")),
+        }, is_pure=True, _semantic=_semantic).to(core.int32, _semantic=_semantic)
+
+
+@core.extern
+def popc(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__ockl_popcount_u32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__ockl_popcount_u64", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
 def abs(arg0, _semantic=None):
     return core.extern_elementwise(
         "", "", [arg0], {

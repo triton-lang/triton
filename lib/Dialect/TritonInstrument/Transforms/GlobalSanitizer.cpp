@@ -331,6 +331,26 @@ static void instrumentAsyncTMAScatter(ttng::AsyncTMAScatterOp op) {
                                          access.second, /*isStore=*/true);
 }
 
+static Value getGSanStateForCall(tt::CallOp callOp, Value gsanState) {
+  auto partitions = callOp->getParentOfType<ttg::WarpSpecializePartitionsOp>();
+  if (!partitions)
+    return gsanState;
+
+  auto captures = partitions.getExplicitCaptures();
+  auto capture = llvm::find(captures, gsanState);
+  unsigned captureIdx = std::distance(captures.begin(), capture);
+  if (capture == captures.end()) {
+    partitions->insertOperands(captureIdx, gsanState);
+    for (Region &region : partitions.getPartitionRegions())
+      region.addArgument(gsanState.getType(), callOp.getLoc());
+  }
+
+  Region *partitionRegion = callOp->getParentRegion();
+  while (partitionRegion->getParentOp() != partitions.getOperation())
+    partitionRegion = partitionRegion->getParentRegion();
+  return partitionRegion->getArgument(captureIdx);
+}
+
 class GlobalSanitizerPass
     : public impl::TritonInstrumentGlobalSanitizerBase<GlobalSanitizerPass> {
 public:
@@ -380,7 +400,8 @@ public:
 
       SmallVector<Value> operands(callOp.getOperands().begin(),
                                   callOp.getOperands().end());
-      operands.push_back(caller.getArgument(caller.getNumArguments() - 1));
+      Value gsanState = caller.getArgument(caller.getNumArguments() - 1);
+      operands.push_back(getGSanStateForCall(callOp, gsanState));
 
       OpBuilder b(callOp);
       auto newCallOp =

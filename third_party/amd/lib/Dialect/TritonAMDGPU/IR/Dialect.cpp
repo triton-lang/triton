@@ -816,6 +816,9 @@ LogicalResult AsyncTDMScatterOp::verify() {
       !llvm::isa<gpu::SwizzledSharedEncodingAttr>(enc))
     return emitOpError("Invalid shared memory layout for TDM");
 
+  if (smemTy.getElementType().getIntOrFloatBitWidth() < 8)
+    return emitOpError("TDM scatter requires element types of at least 8 bits");
+
   auto dstRowIndicesType = cast<RankedTensorType>(getDstRowIndices().getType());
   if (dstRowIndicesType.getRank() != 1)
     return emitOpError("dst_row_indices must be a 1D tensor");
@@ -864,6 +867,9 @@ LogicalResult AsyncTDMGatherOp::verify() {
       !llvm::isa<gpu::SwizzledSharedEncodingAttr>(enc))
     return emitOpError("Invalid shared memory layout for TDM");
 
+  if (smemTy.getElementType().getIntOrFloatBitWidth() < 8)
+    return emitOpError("TDM gather requires element types of at least 8 bits");
+
   auto srcRowIndicesType = cast<RankedTensorType>(getSrcRowIndices().getType());
   if (srcRowIndicesType.getRank() != 1)
     return emitOpError("src_row_indices must be a 1D tensor");
@@ -876,11 +882,20 @@ LogicalResult AsyncTDMGatherOp::verify() {
     return emitOpError("src_row_indices size must be a power of 2, got ")
            << numIndices;
 
-  if (auto paddedEnc = llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(enc);
-      paddedEnc && !(paddedEnc.getIntervals().size() == 1 &&
-                     paddedEnc.getPaddings().size() == 1))
-    return emitOpError(
-        "TDM gather does not support multiple interval-padding pairs");
+  auto paddedEnc = llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(enc);
+  if (paddedEnc) {
+    if (!(paddedEnc.getIntervals().size() == 1 &&
+          paddedEnc.getPaddings().size() == 1))
+      return emitOpError(
+          "TDM gather does not support multiple interval-padding pairs");
+
+    if (blockShape.back() % paddedEnc.getIntervals()[0] != 0)
+      return emitOpError(
+                 "TDM gather padding interval must divide the innermost "
+                 "block dimension (got padInterval=")
+             << paddedEnc.getIntervals()[0]
+             << ", innermost dimension=" << blockShape.back() << ")";
+  }
 
   auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
   auto sharedOrder = triton::gpu::getOrder(
@@ -895,6 +910,7 @@ LogicalResult AsyncTDMGatherOp::verify() {
   if (srcRowIndicesType.getEncoding()) {
     auto indexLL = triton::gpu::toLinearLayout(srcRowIndicesType);
     auto kLane = mlir::StringAttr::get(getContext(), "lane");
+    auto kBlock = mlir::StringAttr::get(getContext(), "block");
     auto freeVarMasks = indexLL.getFreeVariableMasks();
     unsigned laneFreeMask = freeVarMasks.lookup(kLane);
     unsigned numLanes = indexLL.getInDimSize(kLane);
@@ -903,6 +919,32 @@ LogicalResult AsyncTDMGatherOp::verify() {
           "index layout distributes values across lanes, which is "
           "incompatible with the warp-level TDM instruction. Change layout "
           "to broadcast the same indices to all lanes in a warp.");
+
+    // Because indices only describe rows the CGA layout of the indices and the
+    // destination must only match on the row dimension.
+    // How the tensor is distributed across the columns is not relevant for the
+    // indicies and is only encoded in the CGA layout of the destination.
+    auto sharedLL = paddedEnc ? paddedEnc.getLinearComponent()
+                              : triton::gpu::toLinearLayout(smemTy);
+    auto kDim0 = mlir::StringAttr::get(getContext(), "dim0");
+    auto indexBlockIt = indexLL.getBases().find(kBlock);
+    auto sharedBlockIt = sharedLL.getBases().find(kBlock);
+
+    bool indexHasBlockBasis = indexBlockIt != indexLL.getBases().end() &&
+                              !indexBlockIt->second.empty();
+    bool sharedHasBlockBasis = sharedBlockIt != sharedLL.getBases().end() &&
+                               !sharedBlockIt->second.empty();
+
+    if (indexHasBlockBasis != sharedHasBlockBasis) {
+      return emitOpError("TDM gather index and destination layout must both "
+                         "have a block basis or neither have a block basis");
+    } else if (indexHasBlockBasis && sharedHasBlockBasis) {
+      auto indexRowCGA = indexLL.sublayout({kBlock}, {kDim0});
+      auto sharedRowCGA = sharedLL.sublayout({kBlock}, {kDim0});
+      if (!indexRowCGA.equalIgnoringOutDimSizes(sharedRowCGA))
+        return emitOpError("TDM gather index and shared encoding must have "
+                           "the same block basis for the row dimension");
+    }
   }
 
   return success();
@@ -1101,14 +1143,6 @@ void AsyncCopyLocalToGlobalOp::setPredicateOperand(Value pred) {
 }
 Type AsyncCopyLocalToGlobalOp::getPredicateOperandTypeLike() {
   return getDst().getType();
-}
-
-Value AsyncTDMGatherOp::getPredicateOperand() { return getPred(); }
-void AsyncTDMGatherOp::setPredicateOperand(Value pred) {
-  getPredMutable().assign(pred);
-}
-Type AsyncTDMGatherOp::getPredicateOperandTypeLike() {
-  return getPred().getType();
 }
 
 Value TDMPrefetchOp::getPredicateOperand() { return getPred(); }

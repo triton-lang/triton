@@ -735,42 +735,53 @@ Value fpsanSRem(PatternRewriter &rewriter, Location loc, Value num, Value den) {
   return unembedToFloat(rewriter, loc, resI, num.getType());
 }
 
-// Modular exponentiation in payload space; this preserves
-// exp2(a + b) = exp2(a) * exp2(b) under the integer rewrite.
+// A fixed-base modular exponential in payload space.  For payload width N, set
+// k = ceil(N/4) and c = 1 + 2^k.  Then c^x mod 2^N has the exact closed form
+// below because all terms from the fourth binomial term onward vanish. This
+// preserves exp2(a + b) = exp2(a) * exp2(b) without a per-element
+// exponentiation loop. If N <= 8, then this has the maximal possible period
+// of 2^(N-2); if N > 8, then this has a large but non-maximal period of
+// 2^(N-k) = 2^floor(3N/4) instead.
 Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
                        Type floatTy) {
   unsigned bitWidth = getIntBitwidth(xI.getType());
+  unsigned shift = (bitWidth + 3) / 4;
   auto one = getIntConstantLike(rewriter, loc, xI.getType(), 1);
-  auto zero = getIntConstantLike(rewriter, loc, xI.getType(), 0);
-  auto c = getIntConstantLike(rewriter, loc, xI.getType(), 0xa343836d);
+  auto shiftBase = getIntConstantLike(rewriter, loc, xI.getType(), shift);
+  auto shiftBase2 = getIntConstantLike(rewriter, loc, xI.getType(), 2 * shift);
 
-  auto lower =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
-  auto upper = arith::ConstantOp::create(rewriter, loc,
-                                         rewriter.getI32IntegerAttr(bitWidth));
-  auto step =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(1));
-  auto topBit = arith::ConstantOp::create(
-      rewriter, loc, rewriter.getI32IntegerAttr(bitWidth - 1));
-  auto loop = scf::ForOp::create(rewriter, loc, lower, upper, step, one);
-  rewriter.setInsertionPointToStart(loop.getBody());
+  Value xMinusOne = arith::SubIOp::create(rewriter, loc, xI, one);
+  Value choose2Twice = arith::MulIOp::create(rewriter, loc, xI, xMinusOne);
+  Value choose2 = arith::ShRUIOp::create(rewriter, loc, choose2Twice, one);
 
-  Value i = loop.getInductionVar();
-  Value y = loop.getRegionIterArgs()[0];
-  y = arith::MulIOp::create(rewriter, loc, y, y);
-  Value bitIndex =
-      arith::SubIOp::create(rewriter, loc, rewriter.getI32Type(), topBit, i);
-  Value shift = castScalarIntToIntLike(rewriter, loc, bitIndex, xI.getType());
-  Value bit = arith::ShLIOp::create(rewriter, loc, one, shift);
-  auto masked = arith::AndIOp::create(rewriter, loc, xI, bit);
-  auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
-                                      masked, zero);
-  auto factor = arith::SelectOp::create(rewriter, loc, isZero, one, c);
-  y = arith::MulIOp::create(rewriter, loc, y, factor);
-  scf::YieldOp::create(rewriter, loc, y);
-  rewriter.setInsertionPointAfter(loop);
+  Value term1 = arith::ShLIOp::create(rewriter, loc, xI, shiftBase);
+  Value term2 = arith::ShLIOp::create(rewriter, loc, choose2, shiftBase2);
+  Value result = arith::AddIOp::create(rewriter, loc, one, term1);
+  result = arith::AddIOp::create(rewriter, loc, result, term2);
 
-  return unembedToFloat(rewriter, loc, loop.getResult(0), floatTy);
+  unsigned choose3Bits = bitWidth - 3 * shift;
+  uint64_t choose3InputMask = (uint64_t{1} << (choose3Bits + 1)) - 1;
+  auto choose3Mask =
+      getIntConstantLike(rewriter, loc, xI.getType(), choose3InputMask);
+  auto two = getIntConstantLike(rewriter, loc, xI.getType(), 2);
+  auto six = getIntConstantLike(rewriter, loc, xI.getType(), 6);
+  auto shiftBase3 = getIntConstantLike(rewriter, loc, xI.getType(), 3 * shift);
+
+  // Only the low choose3Bits bits of C(x, 3) survive the final shift. C(x, 3)
+  // modulo 2^choose3Bits has period 2^(choose3Bits + 1), so reducing x first
+  // keeps the products small.
+  Value xLow = arith::AndIOp::create(rewriter, loc, xI, choose3Mask);
+  Value xLowMinusOne = arith::SubIOp::create(rewriter, loc, xLow, one);
+  Value xLowMinusTwo = arith::SubIOp::create(rewriter, loc, xLow, two);
+  Value choose3Numerator =
+      arith::MulIOp::create(rewriter, loc, xLow, xLowMinusOne);
+  choose3Numerator =
+      arith::MulIOp::create(rewriter, loc, choose3Numerator, xLowMinusTwo);
+  Value choose3 = arith::DivUIOp::create(rewriter, loc, choose3Numerator, six);
+
+  Value term3 = arith::ShLIOp::create(rewriter, loc, choose3, shiftBase3);
+  result = arith::AddIOp::create(rewriter, loc, result, term3);
+  return unembedToFloat(rewriter, loc, result, floatTy);
 }
 
 Value fpsanExp2(PatternRewriter &rewriter, Location loc, Value input) {

@@ -264,6 +264,20 @@ bool containsLocalBarrier(Operation *op) {
   return false;
 }
 
+// Returns true if the same block has a later wait or local barrier before any
+// memory effect or nested control flow.
+static bool hasSyncPointBeforeMemoryEffect(Operation *op) {
+  for (Operation *next = op->getNextNode(); next; next = next->getNextNode()) {
+    if (containsLocalBarrier(next) ||
+        next->hasTrait<mlir::OpTrait::MemWaitOpTrait>())
+      return true;
+
+    if (isa<RegionBranchOpInterface>(next) || !isMemoryEffectFree(next))
+      return false;
+  }
+  return false;
+}
+
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
@@ -272,10 +286,11 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     blockInfo->sync();
   }
 
+  // If the current op is an (async) memory wait and there is no later sync
+  // point before memory is accessed, insert a barrier op and sync. This avoids
+  // redundant barriers by deferring the barrier to the later sync point.
   if (op->hasTrait<mlir::OpTrait::MemWaitOpTrait>() &&
-      !containsLocalBarrier(op->getNextNode())) {
-    // If the current op is an async wait and the next op is not a barrier we
-    // insert a barrier op and sync
+      !hasSyncPointBeforeMemoryEffect(op)) {
     builder->setInsertionPointAfter(op);
     insertBarrier(op, builder);
     blockInfo->sync();

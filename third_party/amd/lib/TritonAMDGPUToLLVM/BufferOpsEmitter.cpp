@@ -301,6 +301,7 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   Value elemByteWidthVal = b.int_val(32, elementByteWidth);
   Value vOffsetElemsForIntrinsic = vOffsetElems;
   Value sgprOffsetBytes = b.int_val(32, 0);
+  Value maskedOutOfBoundsBytes = vOffsetOutOfBounds;
   // Gate the split on the TTGIR-level safety annotation. Without it, AMD
   // raw buffer ops would OOB-drop any lane whose voffset (sans soffset)
   // wraps negative.
@@ -308,14 +309,27 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
     auto [uniformOffsetElems, perLaneOffsetElems] =
         splitUniformAdditive(vOffsetElems, rewriter, loc, uniformitySolver);
     if (uniformOffsetElems) {
-      sgprOffsetBytes = b.mul(elemByteWidthVal, uniformOffsetElems);
-      vOffsetElemsForIntrinsic = perLaneOffsetElems;
+      Value splitSgprOffsetBytes = b.mul(elemByteWidthVal, uniformOffsetElems);
+      Value nonNegSoffset = b.icmp_sge(splitSgprOffsetBytes, b.i32_val(0));
+      sgprOffsetBytes =
+          b.select(nonNegSoffset, splitSgprOffsetBytes, b.i32_val(0));
+      vOffsetElemsForIntrinsic =
+          b.select(nonNegSoffset, perLaneOffsetElems, vOffsetElems);
+      // AMD raw buffer ops bounds-check voffset only, then add soffset.
+      // For non-negative split-safe soffsets, choose a high OOB voffset that
+      // remains OOB after subtraction. Negative soffsets fall back to no split.
+      Value splitMaskedOutOfBoundsBytes =
+          b.sub(b.i32_val(-1), splitSgprOffsetBytes);
+      maskedOutOfBoundsBytes = b.select(
+          nonNegSoffset, splitMaskedOutOfBoundsBytes, vOffsetOutOfBounds);
     }
   }
   Value vOffsetBytes = b.mul(elemByteWidthVal, vOffsetElemsForIntrinsic);
 
-  // Masked lanes use OOB voffset; AMD buffer bounds checks ignore soffset.
-  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBounds);
+  // Masked lanes use an OOB voffset adjusted for any lifted non-negative
+  // soffset.
+  Value maskedOffsetBytes =
+      b.select(pred, vOffsetBytes, maskedOutOfBoundsBytes);
 
   int32_t aux =
       getCtrlBitsForCacheModifierOnTarget(cm, isBufferLoad, targetInfo);
