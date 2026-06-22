@@ -5,6 +5,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Gluon/Transforms/Passes.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/MapVector.h"
@@ -21,6 +22,13 @@
 namespace mlir::triton::gluon {
 
 namespace {
+bool isUnresolvedEncodingTensorType(Type type) {
+  auto tensorType = dyn_cast<RankedTensorType>(type);
+  return tensorType &&
+         isa<gluon::AutoEncodingAttr, gluon::CoalescedEncodingAttr>(
+             tensorType.getEncoding());
+}
+
 struct LayoutInfo {
   Attribute encoding;
   // Some operations can infer one of many encodings,
@@ -107,9 +115,36 @@ updateEncoding(ArrayRef<Value> values, LayoutInfo info, FuncOp *func,
 }
 } // namespace
 
-LogicalResult inferLayout(
-    FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
-    const llvm::SmallVector<std::pair<Value, Attribute>> &seedEncodings) {
+FailureOr<bool>
+materializeRequireSlicedReshape(OpResult result, RankedTensorType resultType,
+                                EncodingMaterializationPhase phase) {
+  auto reshape = dyn_cast<triton::ReshapeOp>(result.getOwner());
+  if (!reshape || !reshape.getRequireSliced())
+    return false;
+  if (phase == EncodingMaterializationPhase::Probe)
+    return !isUnresolvedEncodingTensorType(resultType);
+
+  OpBuilder builder(reshape);
+  auto newReshape = triton::ReshapeOp::create(
+      builder, reshape.getLoc(), resultType.getShape(), reshape.getSrc(),
+      /*allowReorder=*/false, /*requireSliced=*/true);
+  for (auto attr : reshape->getAttrs()) {
+    if (attr.getName() == "allow_reorder" || attr.getName() == "require_sliced")
+      continue;
+    if (!newReshape->hasAttr(attr.getName()))
+      newReshape->setAttr(attr.getName(), attr.getValue());
+  }
+  auto convert = gpu::ConvertLayoutOp::create(
+      builder, reshape.getLoc(), resultType, newReshape.getResult());
+  reshape.getResult().replaceAllUsesWith(convert.getResult());
+  reshape.erase();
+  return true;
+}
+
+LogicalResult
+inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
+            const llvm::SmallVector<std::pair<Value, Attribute>> &seedEncodings,
+            DeferredEncodingMaterialization materializeEncoding) {
   // Disallow auto encoding accross function call boundaries
   for (auto argTy : func.getArgumentTypes()) {
     if (typeCheck(argTy)) {
@@ -177,6 +212,14 @@ LogicalResult inferLayout(
           return failure();
       } else {
         auto srcEncoding = inferSrcEncoding(definingOp, info.encoding);
+        if (auto reshape = dyn_cast<triton::ReshapeOp>(definingOp);
+            reshape && reshape.getRequireSliced()) {
+          auto parent = dyn_cast<gpu::DistributedEncodingTrait>(info.encoding);
+          if (parent) {
+            srcEncoding = gpu::SliceEncodingAttr::get(
+                func.getContext(), *reshape.getExpandDimsAxis(), parent);
+          }
+        }
         if (srcEncoding) {
           bool mayVary = info.mayVary || encodingsMayVary(definingOp);
           LayoutInfo srcInfo{srcEncoding, mayVary};
@@ -202,11 +245,7 @@ LogicalResult inferLayout(
     }
   }
 
-  // Transfer propagated encodings into the graph
-  for (auto &[val, info] : valueToEncoding) {
-    assert(typeCheck(val.getType()));
-    auto existingTy = cast<RankedTensorType>(val.getType());
-    auto ty = existingTy.cloneWithEncoding(info.encoding);
+  auto setEncoding = [](Value val, RankedTensorType ty) {
     val.setType(ty);
 
     if (auto opResult = dyn_cast<OpResult>(val)) {
@@ -217,6 +256,77 @@ LogicalResult inferLayout(
         constantOp.setValueAttr(newValue);
       }
     }
+  };
+
+  // Transfer propagated encodings into the graph. Some results need their
+  // operands to be materialized first so they can be replaced without ever
+  // creating the resolved operation.
+  SmallVector<std::pair<OpResult, RankedTensorType>> deferred;
+  auto deferResult = [&](OpResult result,
+                         RankedTensorType type) -> FailureOr<bool> {
+    if (!materializeEncoding)
+      return false;
+    return materializeEncoding(result, type,
+                               EncodingMaterializationPhase::Probe);
+  };
+  for (auto &[val, info] : valueToEncoding) {
+    assert(typeCheck(val.getType()));
+    auto existingTy = cast<RankedTensorType>(val.getType());
+    auto ty = existingTy.cloneWithEncoding(info.encoding);
+    if (auto result = dyn_cast<OpResult>(val)) {
+      auto shouldDefer = deferResult(result, ty);
+      if (failed(shouldDefer))
+        return failure();
+      if (*shouldDefer) {
+        deferred.push_back({result, ty});
+        continue;
+      }
+    }
+    setEncoding(val, ty);
+  }
+
+  // The callback may also need to consume results that already had concrete
+  // encodings when inference started.
+  if (materializeEncoding) {
+    auto walkResult = func.walk([&](Operation *op) {
+      for (OpResult result : op->getResults()) {
+        if (valueToEncoding.count(result))
+          continue;
+        auto type = dyn_cast<RankedTensorType>(result.getType());
+        if (!type)
+          continue;
+        auto shouldDefer = deferResult(result, type);
+        if (failed(shouldDefer))
+          return WalkResult::interrupt();
+        if (*shouldDefer)
+          deferred.push_back({result, type});
+      }
+      return WalkResult::advance();
+    });
+    if (walkResult.wasInterrupted())
+      return failure();
+  }
+
+  while (!deferred.empty()) {
+    bool madeProgress = false;
+    for (auto it = deferred.begin(); it != deferred.end();) {
+      auto *op = it->first.getOwner();
+      if (llvm::any_of(op->getOperands(), [&](Value operand) {
+            return isUnresolvedEncodingTensorType(operand.getType());
+          })) {
+        ++it;
+        continue;
+      }
+
+      auto handled = materializeEncoding(
+          it->first, it->second, EncodingMaterializationPhase::Materialize);
+      if (failed(handled) || !*handled)
+        return failure();
+      it = deferred.erase(it);
+      madeProgress = true;
+    }
+    if (!madeProgress)
+      return func->emitError("failed to materialize deferred encodings");
   }
   return success();
 }

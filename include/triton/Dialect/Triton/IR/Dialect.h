@@ -44,11 +44,6 @@ public:
                         Attribute &resultEncoding,
                         std::optional<Location> loc) const = 0;
 
-  virtual LogicalResult
-  inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
-                            Attribute &resultEncoding,
-                            std::optional<Location> loc) const = 0;
-
   // Note: This function only verifies the operand encoding.  It doesn't infer
   // the result encoding.
   virtual LogicalResult
@@ -66,7 +61,7 @@ public:
   virtual LogicalResult
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                         bool allowReorder,
+                         bool allowReorder, bool requireSliced,
                          std::optional<Location> loc) const = 0;
 
   // Check if two layouts are structurally the same, even if their names are
