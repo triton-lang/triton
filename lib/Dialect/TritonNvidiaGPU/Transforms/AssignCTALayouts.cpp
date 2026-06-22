@@ -7,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -162,10 +163,14 @@ void convertOpResultsFromLayouts(Operation *op,
   }
 }
 
-DotCTASplit getDotCTASplit(int64_t m, int64_t n, unsigned numCTAs) {
+DotCTASplit getDotCTASplit(int64_t m, int64_t n, unsigned numCTAs,
+                           bool preferMOnly) {
   constexpr unsigned kPreferredChunkSize = 128;
   constexpr unsigned kMinChunkSize = 64;
   auto isLegalChunkSize = [](unsigned chunk) { return chunk >= kMinChunkSize; };
+
+  if (preferMOnly && isLegalChunkSize(m / numCTAs))
+    return {numCTAs, 1};
 
   unsigned splitM = 1;
   unsigned splitN = numCTAs;
@@ -183,7 +188,25 @@ DotCTASplit getDotCTASplit(int64_t m, int64_t n, unsigned numCTAs) {
   return {splitM, splitN};
 }
 
-void assignDotCTALayout(triton::DotOp dot) {
+bool preferMOnlySplitForTwoCTAMMA(triton::DotOp dot, bool isBlackwell) {
+  if (!isBlackwell || ttg::lookupNumCTAs(dot) != 4)
+    return false;
+
+  auto retTy = cast<RankedTensorType>(dot.getType());
+  if (retTy.getRank() != 2 || retTy.getDimSize(1) > 256)
+    return false;
+
+  // A descriptor-loaded RHS can be shared by MMAv5 cta_group::2. With 4 CTAs,
+  // keep the dot CTA split along M so each CTA pair sees the same RHS tile; an
+  // N split would partition the RHS and prevent the later two-CTA MMA layout.
+  Value b = dot.getB();
+  while (auto cvtOp = b.getDefiningOp<ttg::ConvertLayoutOp>())
+    b = cvtOp.getSrc();
+  return isa_and_nonnull<triton::DescriptorLoadLikeOpInterface>(
+      b.getDefiningOp());
+}
+
+void assignDotCTALayout(triton::DotOp dot, bool isBlackwell) {
   MLIRContext *ctx = dot.getContext();
 
   auto aTy = cast<RankedTensorType>(dot.getA().getType());
@@ -194,8 +217,9 @@ void assignDotCTALayout(triton::DotOp dot) {
   auto bLayout = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
   auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
 
-  DotCTASplit split = getDotCTASplit(dTy.getShape()[0], dTy.getShape()[1],
-                                     ttg::getNumCTAs(dLayout));
+  DotCTASplit split = getDotCTASplit(
+      dTy.getShape()[0], dTy.getShape()[1], ttg::getNumCTAs(dLayout),
+      preferMOnlySplitForTwoCTAMMA(dot, isBlackwell));
 
   OpBuilder builder(dot);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
@@ -303,9 +327,18 @@ struct AssignCTALayoutsPass
     if (numCTAs == 1)
       return;
 
+    auto targetAttr =
+        mod->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
+    bool isBlackwell = false;
+    if (targetAttr && targetAttr.getValue().starts_with("cuda:")) {
+      int computeCapability =
+          TargetFeatures::fromModuleOp(mod).getComputeCapability();
+      isBlackwell = computeCapability >= 100 && computeCapability < 120;
+    }
+
     mod.walk([&](Operation *op) {
       if (auto dot = dyn_cast<triton::DotOp>(op))
-        assignDotCTALayout(dot);
+        assignDotCTALayout(dot, isBlackwell);
       if (auto reduce = dyn_cast<triton::ReduceOp>(op))
         assignReduceCTALayout(reduce);
     });
