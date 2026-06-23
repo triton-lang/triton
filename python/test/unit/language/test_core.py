@@ -2827,6 +2827,53 @@ def test_sum_dtype(device):
     torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device=device))
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("axis", [0, 1, None])
+@pytest.mark.parametrize("correction", [0, 1])
+def test_mean_var_std(axis, correction, device):
+
+    @triton.jit
+    def kernel(X, MEAN, VAR, STD, M: tl.constexpr, N: tl.constexpr, AXIS: tl.constexpr, CORRECTION: tl.constexpr):
+        rm = tl.arange(0, M)
+        rn = tl.arange(0, N)
+        x = tl.load(X + rm[:, None] * N + rn[None, :])
+        m = tl.mean(x, axis=AXIS)
+        v = tl.var(x, axis=AXIS, correction=CORRECTION)
+        s = tl.std(x, axis=AXIS, correction=CORRECTION)
+        if AXIS is None:
+            tl.store(MEAN, m)
+            tl.store(VAR, v)
+            tl.store(STD, s)
+        elif AXIS == 0:
+            tl.store(MEAN + rn, m)
+            tl.store(VAR + rn, v)
+            tl.store(STD + rn, s)
+        else:
+            tl.store(MEAN + rm, m)
+            tl.store(VAR + rm, v)
+            tl.store(STD + rm, s)
+
+    M, N = 32, 64
+    x = torch.randn((M, N), dtype=torch.float32, device=device)
+    out_size = {None: 1, 0: N, 1: M}[axis]
+    mean_out = torch.empty(out_size, dtype=torch.float32, device=device)
+    var_out = torch.empty(out_size, dtype=torch.float32, device=device)
+    std_out = torch.empty(out_size, dtype=torch.float32, device=device)
+    kernel[(1, )](x, mean_out, var_out, std_out, M, N, axis, correction)
+
+    if axis is None:
+        expect_mean = x.mean().reshape(1)
+        expect_var = x.var(correction=correction).reshape(1)
+        expect_std = x.std(correction=correction).reshape(1)
+    else:
+        expect_mean = x.mean(dim=axis)
+        expect_var = x.var(dim=axis, correction=correction)
+        expect_std = x.std(dim=axis, correction=correction)
+    torch.testing.assert_close(mean_out, expect_mean, rtol=1e-3, atol=1e-4)
+    torch.testing.assert_close(var_out, expect_var, rtol=1e-3, atol=1e-4)
+    torch.testing.assert_close(std_out, expect_std, rtol=1e-3, atol=1e-4)
+
+
 # trivial associative but not commutative function
 @triton.jit
 def get_first_element(a, b):

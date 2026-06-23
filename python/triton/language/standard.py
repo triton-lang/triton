@@ -293,6 +293,86 @@ def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None):
     return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims)
 
 
+@core._tensor_member_fn
+@jit
+def mean(input, axis=None, keep_dims=False, dtype: core.constexpr = None):
+    """
+    Returns the arithmetic mean of all elements in the :code:`input` tensor along the provided :code:`axis`.
+
+    :param input: the input values
+    :type input: Tensor
+    :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
+    :type axis: int
+    :param keep_dims: if true, keep the reduced dimensions with length 1
+    :type keep_dims: bool
+    :param dtype: the desired accumulation data type of the underlying sum. If unspecified, the
+        accumulation follows :code:`tl.sum`'s default promotion rules.
+    :type dtype: tl.dtype
+    """
+    if axis is None:
+        n: core.constexpr = input.numel
+    else:
+        n: core.constexpr = input.shape[axis]
+    return sum(input, axis=axis, keep_dims=keep_dims, dtype=dtype) / n
+
+
+@core._tensor_member_fn
+@jit
+def var(input, axis=None, keep_dims=False, correction=1, dtype: core.constexpr = None):
+    """
+    Returns the variance of all elements in the :code:`input` tensor along the provided :code:`axis`.
+
+    The variance is computed with Bessel's correction by default, i.e. the sum of squared deviations
+    from the mean is divided by :code:`N - correction`, where :code:`N` is the number of reduced
+    elements. Pass :code:`correction=0` for the population (biased) variance.
+
+    :param input: the input values
+    :type input: Tensor
+    :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
+    :type axis: int
+    :param keep_dims: if true, keep the reduced dimensions with length 1
+    :type keep_dims: bool
+    :param correction: the difference between the number of reduced elements and the divisor
+    :type correction: int
+    :param dtype: the desired accumulation data type of the underlying sums. If unspecified, the
+        accumulation follows :code:`tl.sum`'s default promotion rules.
+    :type dtype: tl.dtype
+    """
+    if axis is None:
+        n: core.constexpr = input.numel
+    else:
+        n: core.constexpr = input.shape[axis]
+    # Keep the reduced dim so the mean broadcasts back against the input.
+    mu = mean(input, axis=axis, keep_dims=True, dtype=dtype)
+    diff = input - mu
+    return sum(diff * diff, axis=axis, keep_dims=keep_dims, dtype=dtype) / (n - correction)
+
+
+@core._tensor_member_fn
+@jit
+def std(input, axis=None, keep_dims=False, correction=1, dtype: core.constexpr = None):
+    """
+    Returns the standard deviation of all elements in the :code:`input` tensor along the provided
+    :code:`axis`.
+
+    This is the square root of :code:`tl.var`; see that function for the meaning of
+    :code:`correction`.
+
+    :param input: the input values
+    :type input: Tensor
+    :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
+    :type axis: int
+    :param keep_dims: if true, keep the reduced dimensions with length 1
+    :type keep_dims: bool
+    :param correction: the difference between the number of reduced elements and the divisor
+    :type correction: int
+    :param dtype: the desired accumulation data type of the underlying sums. If unspecified, the
+        accumulation follows :code:`tl.sum`'s default promotion rules.
+    :type dtype: tl.dtype
+    """
+    return math.sqrt(var(input, axis=axis, keep_dims=keep_dims, correction=correction, dtype=dtype))
+
+
 @jit
 def _xor_combine(a, b):
     return a ^ b

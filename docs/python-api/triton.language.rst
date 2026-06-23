@@ -134,9 +134,12 @@ Reduction Ops
     argmax
     argmin
     max
+    mean
     min
     reduce
+    std
     sum
+    var
     xor_sum
 
 Scan/Sort Ops
