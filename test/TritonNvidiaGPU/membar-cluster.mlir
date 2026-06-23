@@ -32,6 +32,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: @insert_fence_for_loop_local_mbarrier_init
   // CHECK: scf.for
   // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK: ttng.wait_barrier
@@ -66,10 +67,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @insert_fences_for_outer_and_loop_local_mbarrier_inits
   // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK: scf.for
   // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK: tt.return
@@ -112,10 +115,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @insert_multiple_fences_for_reinitialized_mbarrier
   // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttng.wait_barrier
   // CHECK: ttng.inval_barrier
   // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttng.wait_barrier
   tt.func @insert_multiple_fences_for_reinitialized_mbarrier() {
@@ -184,6 +189,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: @insert_fence_and_relaxed_cluster_barrier_before_warp_specialize
   // CHECK: ttng.init_barrier
   // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttg.warp_specialize
   // CHECK: ttng.wait_barrier
@@ -220,6 +226,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.init_barrier
   // CHECK: ttng.init_barrier
   // CHECK: ^bb3:
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttng.wait_barrier
   tt.func @insert_fence_and_relaxed_cluster_barrier_at_cf_join_after_branch_inits(%pred: i1) {
@@ -589,6 +596,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   // CHECK-LABEL: @insert_fence_for_multicast_mma_completion_barrier
   // CHECK: scf.for
   // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttng.tc_gen5_mma
   // CHECK: tt.return
@@ -631,6 +639,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // if the barrier allocation shape looks per-CTA.
   // CHECK-LABEL: @cluster_clc_with_per_cta_barrier
   // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttng.clc_try_cancel
   // CHECK: tt.return
@@ -660,6 +669,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   // looks per-CTA.
   // CHECK-LABEL: @cluster_tma_multicast_with_per_cta_barrier
   // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK: tt.return
@@ -687,6 +697,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   // mbarrier.
   // CHECK-LABEL: @no_cluster_tma_without_multicast
   // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK: tt.return
   tt.func @no_cluster_tma_without_multicast(%desc: !tt.tensordesc<64x128xf16, #nvmma>) -> tensor<64x128xf16, #blocked> {
@@ -726,6 +737,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // otherwise!
   // CHECK-LABEL: @no_cluster_when_same_allocation
   // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK: ttng.wait_barrier
   // CHECK: ttng.cluster_barrier
@@ -769,7 +781,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.init_barrier
   // CHECK: ttng.tmem_alloc
-  // CHECK: ttng.cluster_barrier
+  // CHECK: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier
   // CHECK: scf.for
   // CHECK: ttng.barrier_expect
   // CHECK-NOT: ttng.cluster_barrier
@@ -843,6 +856,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   // CHECK-LABEL: @insert_fence_and_relaxed_cluster_barrier_before_wait_after_tmem_copy
   // CHECK: ttng.init_barrier
   // CHECK: ttng.tmem_copy
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttng.wait_barrier
   tt.func @insert_fence_and_relaxed_cluster_barrier_before_wait_after_tmem_copy() {
@@ -869,7 +883,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: @cluster_barrier_between_lifetimes_same_offset
   // CHECK: ttng.init_barrier
   // CHECK: ttg.local_alloc
-  // CHECK: ttng.cluster_barrier
+  // CHECK: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK: ttng.wait_barrier
   // CHECK: ttg.local_dealloc

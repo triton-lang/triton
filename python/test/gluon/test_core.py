@@ -695,11 +695,11 @@ def test_tcgen05_mma_multicast_reinit_mbarrier_in_loop():
     first_multicast_init_line = max(
         i for i in range(multicast_tma_lines[0]) if "mbarrier.init.shared::cta.b64" in ptx_lines[i]
     )
-    assert any("barrier.cluster.arrive.aligned" in ptx_lines[i]
+    assert any("fence.mbarrier_init.release.cluster" in ptx_lines[i]
                for i in range(first_multicast_init_line + 1, multicast_tma_lines[0]))
     for reinit_line in reinit_lines:
         mma_line = next(i for i in range(reinit_line + 1, len(ptx_lines)) if "tcgen05.mma" in ptx_lines[i])
-        assert any("barrier.cluster.arrive.aligned" in ptx_lines[i] for i in range(reinit_line + 1, mma_line))
+        assert any("fence.mbarrier_init.release.cluster" in ptx_lines[i] for i in range(reinit_line + 1, mma_line))
 
     torch.testing.assert_close(out, torch.matmul(a.to(out.dtype), b.to(out.dtype)), atol=1e-2, rtol=1e-2)
 
