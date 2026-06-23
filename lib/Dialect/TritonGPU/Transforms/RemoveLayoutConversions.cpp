@@ -113,13 +113,14 @@ private:
 class LayoutRematerialization {
 public:
   LayoutRematerialization(FuncOp F) : funcOp(F) {}
+  ~LayoutRematerialization();
 
   // Map the original value to the remat'ed one.
   void addRematValue(Value old, Attribute encoding, Value newV);
   // Get the remat'ed value in the given encoding, if one already exists and
   // is different then the layout conversion root.
   Value getRematValue(Value value, Attribute encoding) const {
-    return rematMapping.lookup({value, encoding});
+    return rematMapping.lookup(value).lookup(encoding);
   }
 
   bool backwardRematerialization();
@@ -177,22 +178,36 @@ public:
 
 private:
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
-  // Existing tuples of (value, layout) that needs to be updated when recreating
-  // scf ops. This prevents keeping track of Values that have been delete when
-  // rewriting slices.
-  DenseMap<Value, Attribute> mappedValues;
-  // map of the values remat based on encoding.
-  DenseMap<std::pair<Value, Attribute>, Value> rematMapping;
+  // Map values to their rematerializations, indexed by encoding. Both keys
+  // and rematerializations must stay live while cached. Callers that replace
+  // either side must update this map before erasing its defining op.
+  DenseMap<Value, DenseMap<Attribute, Value>> rematMapping;
   FuncOp funcOp;
   DominanceInfo domInfo;
   PostDominanceInfo postDomInfo;
 };
 
+LayoutRematerialization::~LayoutRematerialization() {
+#ifndef NDEBUG
+  DenseSet<Value> live;
+  funcOp.walk([&](Block *block) {
+    live.insert(block->args_begin(), block->args_end());
+    for (Operation &op : *block)
+      live.insert(op.result_begin(), op.result_end());
+  });
+  for (const auto &[key, remats] : rematMapping) {
+    assert(live.contains(key) && "remat mapping: key not present in the IR");
+    for (const auto &entry : remats)
+      assert(live.contains(entry.second) &&
+             "remat mapping: value not present in the IR");
+  }
+#endif
+}
+
 void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
                                             Value newV) {
   LDBG("addRematValue " << old << " encoding " << encoding << " " << newV);
-  rematMapping[{old, encoding}] = newV;
-  mappedValues[old] = encoding;
+  rematMapping[old][encoding] = newV;
 }
 
 // Return true if the op is an op with a layout we don't want to change. We will
@@ -669,24 +684,22 @@ bool canBeRemat(Operation *op) {
 void LayoutRematerialization::updateRematMapping(
     SmallVector<std::tuple<Value, Value>> &values) {
   for (auto [old, newV] : values) {
-    auto it = mappedValues.find(old);
-    if (it != mappedValues.end()) {
-      Attribute encoding = it->second;
-      auto rematIt = rematMapping.find({old, it->second});
-      assert(rematIt != rematMapping.end());
-      Value replacedValue = rematIt->second;
-      rematMapping.erase(rematIt);
-      mappedValues.erase(it);
-      // Loop through the replacement value to find the new version of remat
-      // value. This should be okay as the number of values should be small.
-      for (auto [before, after] : values) {
-        if (before == replacedValue) {
-          replacedValue = after;
-          break;
+    auto it = rematMapping.find(old);
+    if (it != rematMapping.end()) {
+      auto remats = std::move(it->second);
+      rematMapping.erase(it);
+      auto &newRemats = rematMapping[newV];
+      for (auto [encoding, replacedValue] : remats) {
+        // Loop through the replacement value to find the new version of remat
+        // value. This should be okay as the number of values should be small.
+        for (auto [before, after] : values) {
+          if (before == replacedValue) {
+            replacedValue = after;
+            break;
+          }
         }
+        newRemats[encoding] = replacedValue;
       }
-      rematMapping[{newV, encoding}] = replacedValue;
-      mappedValues[newV] = encoding;
     }
   }
 }
