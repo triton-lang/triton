@@ -9,7 +9,6 @@
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -27,11 +26,8 @@ static bool isCrossCTAMBarrier(Value barrier, int numCTAs) {
   return barrierTy && barrierTy.getShape()[0] != numCTAs;
 }
 
-static void getMBarrierOperands(Operation *op, SmallVectorImpl<Value> &barriers) {
-  if (auto init = dyn_cast<ttng::InitBarrierOp>(op)) {
-    barriers.push_back(init.getBarrier());
-    return;
-  }
+static void getMBarrierUseOperands(Operation *op,
+                                   SmallVectorImpl<Value> &barriers) {
   if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op))
     llvm::append_range(barriers, barrierOp.getBarriers());
   if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
@@ -40,28 +36,6 @@ static void getMBarrierOperands(Operation *op, SmallVectorImpl<Value> &barriers)
     barriers.push_back(commit.getBarrier());
   if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op))
     barriers.push_back(clc.getMbarrier());
-}
-
-static void getNestedMBarrierUseOperands(Operation *op,
-                                         SmallVectorImpl<Value> &barriers) {
-  if (op->getNumRegions() == 0)
-    return;
-  op->walk<WalkOrder::PreOrder>([&](Operation *nestedOp) {
-    if (nestedOp == op || isa<ttng::InitBarrierOp>(nestedOp))
-      return WalkResult::advance();
-    getMBarrierOperands(nestedOp, barriers);
-    return WalkResult::advance();
-  });
-}
-
-static bool hasCrossCTAMBarrier(Operation *op) {
-  SmallVector<Value> barriers;
-  getMBarrierOperands(op, barriers);
-  auto mod = op->getParentOfType<ModuleOp>();
-  int numCTAs = ttg::TritonGPUDialect::getNumCTAs(mod);
-  return llvm::any_of(barriers, [&](Value barrier) {
-    return isCrossCTAMBarrier(barrier, numCTAs);
-  });
 }
 
 static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
@@ -82,20 +56,13 @@ static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
     return splitNum[reduce.getAxis()] > 1;
   }
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-    return mma.getTwoCtas() || mma.getMulticast() || hasCrossCTAMBarrier(op);
+    return mma.getTwoCtas() || mma.getMulticast();
   } else if (isa<ttng::TMEMCopyOp>(op)) {
     return ttng::getModuleTwoCTAs(op);
   } else if (auto tma = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-    return tma.getMulticast() || hasCrossCTAMBarrier(op);
+    return tma.getMulticast();
   } else if (auto tma = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
-    return tma.getMulticast() || hasCrossCTAMBarrier(op);
-  } else if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    return ttng::getModuleTwoCTAs(op) || hasCrossCTAMBarrier(op);
-  } else if (isa<ttng::CLCTryCancelOp>(op)) {
-    return true;
-  } else if (!op->hasTrait<mlir::OpTrait::MemWaitOpTrait>() &&
-             isa<ttg::MBarrierOpInterface>(op)) {
-    return hasCrossCTAMBarrier(op);
+    return tma.getMulticast();
   }
   return false;
 }
@@ -205,9 +172,56 @@ static bool hasUnpublishedInit(const BlockInfo &blockInfo) {
   return !blockInfo.syncWriteSlices.empty();
 }
 
+static Allocation::BufferIdSetT
+getUnpublishedInitBuffers(const BlockInfo &blockInfo) {
+  Allocation::BufferIdSetT buffers;
+  for (const auto &sliceAndOps : blockInfo.syncWriteSlices) {
+    auto bufferId = sliceAndOps.first.getBufferId();
+    if (bufferId != Allocation::InvalidBufferId)
+      buffers.insert(bufferId);
+  }
+  return buffers;
+}
+
 static bool hasPreviousFenceMBarrierInitReleaseCluster(Operation *op) {
   return isa_and_nonnull<ttng::FenceMBarrierInitReleaseClusterOp>(
       op->getPrevNode());
+}
+
+static bool usesTrackedCrossCTAMBarrier(Operation *op,
+                                        const Allocation::BufferIdSetT &tracked,
+                                        Allocation *allocation, int numCTAs) {
+  SmallVector<Value> barriers;
+  getMBarrierUseOperands(op, barriers);
+  return llvm::any_of(barriers, [&](Value barrier) {
+    return valueAliasesTrackedBuffers(barrier, tracked, allocation) &&
+           isCrossCTAMBarrier(barrier, numCTAs);
+  });
+}
+
+static bool
+requiresClusterBarrierForTrackedMBarrierUse(
+    Operation *op, const Allocation::BufferIdSetT &tracked,
+    Allocation *allocation, int numCTAs) {
+  return usesTrackedCrossCTAMBarrier(op, tracked, allocation, numCTAs) ||
+         usesTrackedBarrierInCrossCTAConsumerOp(op, tracked, allocation);
+}
+
+static bool opRequiresClusterBarrierForTrackedMBarrierUse(
+    Operation *op, const Allocation::BufferIdSetT &tracked,
+    Allocation *allocation, int numCTAs) {
+  if (tracked.empty())
+    return false;
+  return op
+      ->walk<WalkOrder::PreOrder>([&](Operation *nestedOp) {
+        if (isa<ttng::InitBarrierOp, ttg::LocalAllocOp>(nestedOp))
+          return WalkResult::advance();
+        if (requiresClusterBarrierForTrackedMBarrierUse(
+                nestedOp, tracked, allocation, numCTAs))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      })
+      .wasInterrupted();
 }
 
 class CrossCTAMBarrierInitSyncAnalysis : public MembarOrFenceAnalysis {
@@ -258,6 +272,19 @@ void CrossCTAMBarrierInitSyncAnalysis::update(
       addUnpublishedInit(initBarrierOp, blockInfo, allocation);
     return;
   }
+
+  Allocation::BufferIdSetT unpublishedInitBuffers =
+      getUnpublishedInitBuffers(*blockInfo);
+  if (opRequiresClusterBarrierForTrackedMBarrierUse(
+          op, unpublishedInitBuffers, allocation, numCTAs)) {
+    OpBuilder::InsertionGuard guard(*builder);
+    builder->setInsertionPoint(op);
+    if (!hasPreviousFenceMBarrierInitReleaseCluster(op))
+      ttng::FenceMBarrierInitReleaseClusterOp::create(*builder, op->getLoc());
+    ttng::ClusterBarrierOp::create(*builder, op->getLoc());
+    blockInfo->sync();
+    return;
+  }
 }
 
 class ClusterBarrierAnalysis : public MembarOrFenceAnalysis {
@@ -299,7 +326,6 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
   }
 
   BlockInfo curBlockInfo;
-  BlockInfo curMBarrierUseInfo;
   auto scratchBufferId = Allocation::InvalidBufferId;
   if (isa<triton::CallOp>(op)) {
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
@@ -313,31 +339,12 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
       curBlockInfo = translateBlockInfoToCallsite(calleeBlockInfo, callOffset);
     }
   } else {
-    SmallVector<Value> barriers;
-    getMBarrierOperands(op, barriers);
-    getNestedMBarrierUseOperands(op, barriers);
-    Allocation::BufferIdSetT mbarrierBufferIds;
-    for (Value barrier : barriers) {
-      for (auto bufferId : allocation->getAllBufferIdsWithAliases(barrier)) {
-        if (bufferId != Allocation::InvalidBufferId)
-          mbarrierBufferIds.insert(bufferId);
-      }
-    }
-    auto isMBarrierEffectValue = [&](Value value) {
-      return llvm::any_of(allocation->getAllBufferIdsWithAliases(value),
-                          [&](auto bufferId) {
-                            return mbarrierBufferIds.contains(bufferId);
-                          });
-    };
-
     if (auto memEffects = dyn_cast<MemoryEffectOpInterface>(op)) {
       SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>>
           effectInstances;
       memEffects.getEffects(effectInstances);
       for (auto effectInstance : effectInstances) {
         if (auto value = effectInstance.getValue()) {
-          if (isMBarrierEffectValue(value))
-            continue;
           for (auto bufferId : allocation->getBufferIds(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
               auto interval = allocation->getAllocatedInterval(bufferId);
@@ -349,19 +356,6 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
             }
           }
         }
-      }
-    }
-    for (Value barrier : barriers) {
-      for (auto bufferId : allocation->getAllBufferIdsWithAliases(barrier)) {
-        if (bufferId == Allocation::InvalidBufferId)
-          continue;
-        auto interval = allocation->getAllocatedInterval(bufferId);
-        auto slice =
-            AllocationSlice(barrier, interval, Allocation::InvalidBufferId);
-        if (isa<ttng::InitBarrierOp>(op))
-          curBlockInfo.syncWriteSlices[slice].insert(op);
-        else
-          curMBarrierUseInfo.syncReadSlices[slice].insert(op);
       }
     }
     scratchBufferId = allocation->getBufferId(op);
@@ -383,10 +377,8 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
     auto scratchSlice = AllocationSlice(interval);
     curBlockInfo.syncWriteSlices[scratchSlice].insert(op);
 
-    BlockInfo intersectInfo = curBlockInfo;
-    intersectInfo.join(curMBarrierUseInfo);
     auto insertClusterBarrierNeeded = blockInfo->isIntersected(
-        intersectInfo, filter, allocation, isPreAllocAliasSliceFilter);
+        curBlockInfo, filter, allocation, isPreAllocAliasSliceFilter);
     if (insertClusterBarrierNeeded) {
       builder->setInsertionPoint(op);
       ttng::ClusterBarrierOp::create(*builder, op->getLoc());
@@ -399,14 +391,8 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
       blockInfo->sync();
 
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
-  } else {
-    BlockInfo intersectInfo = curBlockInfo;
-    intersectInfo.join(curMBarrierUseInfo);
-    if (!blockInfo->isIntersected(intersectInfo, filter, allocation,
-                                  isPreAllocAliasSliceFilter)) {
-      blockInfo->join(curBlockInfo);
-      return;
-    }
+  } else if (blockInfo->isIntersected(curBlockInfo, filter, allocation,
+                                      isPreAllocAliasSliceFilter)) {
     builder->setInsertionPoint(op);
     ttng::ClusterBarrierOp::create(*builder, op->getLoc());
     blockInfo->sync();
