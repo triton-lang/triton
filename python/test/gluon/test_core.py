@@ -490,6 +490,45 @@ def tcgen05_mma_multicast_commit_kernel(a_desc, b_desc, out_ptrs, BLOCK_M: ttgl.
 
 
 @gluon.jit
+def tcgen05_mma_multicast_reinit_mbarrier_kernel(a_desc, b_desc, out_ptr, BLOCK_M: ttgl.constexpr,
+                                                 BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                                 NUM_K_TILES: ttgl.constexpr, acc_tmem_layout: ttgl.constexpr,
+                                                 blocked_c: ttgl.constexpr):
+    acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_tmem_layout)
+
+    use_acc = False
+    for k in range(NUM_K_TILES):
+        smem_a = ttgl.allocate_shared_memory(a_desc.dtype, [BLOCK_M, BLOCK_K], a_desc.layout)
+        smem_b = ttgl.allocate_shared_memory(b_desc.dtype, [BLOCK_K, BLOCK_N], b_desc.layout)
+        a_bar = mbarrier.allocate_mbarrier()
+        b_bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(a_bar, count=1)
+        mbarrier.init(b_bar, count=1)
+
+        off_k: ttgl.constexpr = k * BLOCK_K
+        mbarrier.expect(a_bar, a_desc.nbytes_per_cta)
+        tma.async_load(a_desc, [0, off_k], a_bar, smem_a, multicast=True)
+        mbarrier.wait(a_bar, phase=0, deps=[smem_a])
+        mbarrier.invalidate(a_bar)
+
+        mbarrier.expect(b_bar, b_desc.nbytes_per_cta)
+        tma.async_load(b_desc, [off_k, 0], b_bar, smem_b)
+        mbarrier.wait(b_bar, phase=0, deps=[smem_b])
+        mbarrier.invalidate(b_bar)
+
+        mbarrier.init(b_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], True, False))
+        tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=use_acc, multicast=True, mbarriers=[b_bar])
+        mbarrier.wait(b_bar, phase=0, deps=[smem_a, smem_b])
+        mbarrier.invalidate(b_bar)
+        use_acc = True
+
+    out = ttgl.convert_layout(acc_tmem.load(), blocked_c)
+    offs_m = ttgl.arange(0, BLOCK_M)[:, None]
+    offs_n = ttgl.arange(0, BLOCK_N)[None, :]
+    ttgl.store(out_ptr + offs_m * BLOCK_N + offs_n, out)
+
+
+@gluon.jit
 def tma_wrong_barrier_cga_layout_kernel(a_desc, b_desc, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
                                         acc_tmem_layout: ttgl.constexpr):
     smem_a = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
@@ -587,6 +626,63 @@ def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
     # but we do a commit.multicast::cluster so let's grep that one instead
     assert ("multicast::cluster" in compiled.asm["ptx"])
     torch.testing.assert_close(out, torch.matmul(a.to(out.dtype), b.to(out.dtype)))
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tcgen05_mma_multicast_reinit_mbarrier_in_loop():
+    BLOCK_M = 128
+    BLOCK_N = 128
+    BLOCK_K = 16
+    NUM_K_TILES = 2
+    K = BLOCK_K * NUM_K_TILES
+    cga_layout_a = ((0, 0), )
+    cga_layout_b = ((0, 1), )
+    cga_layout_c = ((0, 1), )
+
+    shared_layout_a = ttgl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], ttgl.float16,
+                                                             cga_layout=cga_layout_a)
+    shared_layout_b = ttgl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], ttgl.float16,
+                                                             cga_layout=cga_layout_b)
+    acc_tmem_layout = TensorMemoryLayout(
+        block=(BLOCK_M, BLOCK_N // 2),
+        col_stride=1,
+        cga_layout=cga_layout_c,
+        two_ctas=False,
+    )
+    blocked_c = ttgl.BlockedLayout([1, 8], [1, 32], [8, 1], [1, 0], cga_layout=cga_layout_c)
+
+    a = torch.randn((BLOCK_M, K), dtype=torch.float16, device="cuda")
+    b = torch.randn((K, BLOCK_N), dtype=torch.float16, device="cuda")
+    out = torch.empty((BLOCK_M, BLOCK_N), dtype=torch.float32, device="cuda")
+
+    a_desc = TensorDescriptor.from_tensor(a, [BLOCK_M, BLOCK_K], shared_layout_a)
+    b_desc = TensorDescriptor.from_tensor(b, [BLOCK_K, BLOCK_N], shared_layout_b)
+
+    compiled = tcgen05_mma_multicast_reinit_mbarrier_kernel[(1, )](
+        a_desc,
+        b_desc,
+        out,
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
+        NUM_K_TILES,
+        acc_tmem_layout,
+        blocked_c,
+        num_warps=8,
+        num_ctas=2,
+    )
+
+    ptx_lines = compiled.asm["ptx"].splitlines()
+    reinit_lines = [
+        i for i, line in enumerate(ptx_lines)
+        if "mbarrier.init.shared::cta.b64" in line and re.search(r", 2;\s*$", line)
+    ]
+    assert reinit_lines
+    for reinit_line in reinit_lines:
+        mma_line = next(i for i in range(reinit_line + 1, len(ptx_lines)) if "tcgen05.mma" in ptx_lines[i])
+        assert any("fence.mbarrier_init.release.cluster" in ptx_lines[i] for i in range(reinit_line + 1, mma_line))
+
+    torch.testing.assert_close(out, torch.matmul(a.to(out.dtype), b.to(out.dtype)), atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
