@@ -142,6 +142,35 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @mbarrier_init_sync_relaxed_barrier_kind
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier{{$}}
+  // CHECK-NEXT: ttng.wait_barrier
+  tt.func @mbarrier_init_sync_relaxed_barrier_kind() {
+    %c0 = arith.constant 0 : i32
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrierEncPartial, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrierEncPartial, #smem, mutable>
+    ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #barrierEncPartial, #smem, mutable>
+    ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #barrierEncPartial, #smem, mutable>
+
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrierEncPartial, #smem, mutable>
+    ttng.cluster_barrier
+    ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #barrierEncPartial, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#barrierEncPartial = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @insert_fence_and_relaxed_cluster_barrier_at_window_end_after_existing_fence
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster

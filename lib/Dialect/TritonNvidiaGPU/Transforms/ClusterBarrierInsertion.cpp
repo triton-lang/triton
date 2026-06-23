@@ -21,23 +21,6 @@ namespace {
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-static bool isCrossCTAMBarrier(Value barrier, int numCTAs) {
-  auto barrierTy = dyn_cast<ttg::MemDescType>(barrier.getType());
-  return barrierTy && barrierTy.getShape()[0] != numCTAs;
-}
-
-static void getMBarrierUseOperands(Operation *op,
-                                   SmallVectorImpl<Value> &barriers) {
-  if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op))
-    llvm::append_range(barriers, barrierOp.getBarriers());
-  if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
-    barriers.push_back(tma.getBarrier());
-  if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op))
-    barriers.push_back(commit.getBarrier());
-  if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op))
-    barriers.push_back(clc.getMbarrier());
-}
-
 static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
     if (!isRead)
@@ -91,139 +74,6 @@ static bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
          hasDistributedDependency(blockInfo.syncWriteSlices, /*isRead=*/false);
 }
 
-static bool valueAliasesTrackedBuffers(Value value,
-                                       const Allocation::BufferIdSetT &tracked,
-                                       Allocation *allocation) {
-  for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
-    if (bufferId != Allocation::InvalidBufferId && tracked.contains(bufferId))
-      return true;
-  }
-  return false;
-}
-
-static bool
-usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
-                                       const Allocation::BufferIdSetT &tracked,
-                                       Allocation *allocation) {
-  auto aliasesTracked = [&](Value value) {
-    return value && valueAliasesTrackedBuffers(value, tracked, allocation);
-  };
-
-  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-    auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
-    return (mma.getTwoCtas() || mma.getMulticast()) &&
-           llvm::any_of(barrierOp.getBarriers(), aliasesTracked);
-  }
-  if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    return ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier());
-  }
-  if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
-    return tma.getMulticast() && aliasesTracked(tma.getBarrier());
-  }
-  if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op)) {
-    return aliasesTracked(clc.getMbarrier());
-  }
-  return false;
-}
-
-static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
-                                             FunctionOpInterface funcOp,
-                                             Allocation *allocation,
-                                             int numCTAs) {
-  // Barrier init sync is needed for barriers that are themselves cross-CTA,
-  // and also for per-CTA barriers consumed by multi-CTA ops that multicast or
-  // otherwise fan out barrier state across the cluster.
-  if (isCrossCTAMBarrier(initBarrierOp.getBarrier(), numCTAs))
-    return true;
-
-  Allocation::BufferIdSetT initBarrierBuffers;
-  for (auto bufferId :
-       allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
-    assert(bufferId != Allocation::InvalidBufferId);
-    initBarrierBuffers.insert(bufferId);
-  }
-
-  // Or if it's used by a multi-CTA consumer that broadcasts barrier state
-  // across CTAs even though the barrier allocation itself looks per-CTA.
-  return funcOp
-      ->walk<WalkOrder::PreOrder>([&](Operation *op) {
-        if (usesTrackedBarrierInCrossCTAConsumerOp(op, initBarrierBuffers,
-                                                   allocation)) {
-          return WalkResult::interrupt();
-        }
-        return WalkResult::advance();
-      })
-      .wasInterrupted();
-}
-
-static void addUnpublishedInit(ttng::InitBarrierOp initBarrierOp,
-                               BlockInfo *blockInfo,
-                               Allocation *allocation) {
-  Value barrier = initBarrierOp.getBarrier();
-  for (auto bufferId : allocation->getAllBufferIdsWithAliases(barrier)) {
-    assert(bufferId != Allocation::InvalidBufferId);
-    auto interval = allocation->getAllocatedInterval(bufferId);
-    auto slice = AllocationSlice(barrier, interval, bufferId);
-    blockInfo->syncWriteSlices[slice].insert(initBarrierOp);
-  }
-}
-
-static bool hasUnpublishedInit(const BlockInfo &blockInfo) {
-  return !blockInfo.syncWriteSlices.empty();
-}
-
-static Allocation::BufferIdSetT
-getUnpublishedInitBuffers(const BlockInfo &blockInfo) {
-  Allocation::BufferIdSetT buffers;
-  for (const auto &sliceAndOps : blockInfo.syncWriteSlices) {
-    auto bufferId = sliceAndOps.first.getBufferId();
-    if (bufferId != Allocation::InvalidBufferId)
-      buffers.insert(bufferId);
-  }
-  return buffers;
-}
-
-static bool hasPreviousFenceMBarrierInitReleaseCluster(Operation *op) {
-  return isa_and_nonnull<ttng::FenceMBarrierInitReleaseClusterOp>(
-      op->getPrevNode());
-}
-
-static bool usesTrackedCrossCTAMBarrier(Operation *op,
-                                        const Allocation::BufferIdSetT &tracked,
-                                        Allocation *allocation, int numCTAs) {
-  SmallVector<Value> barriers;
-  getMBarrierUseOperands(op, barriers);
-  return llvm::any_of(barriers, [&](Value barrier) {
-    return valueAliasesTrackedBuffers(barrier, tracked, allocation) &&
-           isCrossCTAMBarrier(barrier, numCTAs);
-  });
-}
-
-static bool
-requiresClusterBarrierForTrackedMBarrierUse(
-    Operation *op, const Allocation::BufferIdSetT &tracked,
-    Allocation *allocation, int numCTAs) {
-  return usesTrackedCrossCTAMBarrier(op, tracked, allocation, numCTAs) ||
-         usesTrackedBarrierInCrossCTAConsumerOp(op, tracked, allocation);
-}
-
-static bool opRequiresClusterBarrierForTrackedMBarrierUse(
-    Operation *op, const Allocation::BufferIdSetT &tracked,
-    Allocation *allocation, int numCTAs) {
-  if (tracked.empty())
-    return false;
-  return op
-      ->walk<WalkOrder::PreOrder>([&](Operation *nestedOp) {
-        if (isa<ttng::InitBarrierOp, ttg::LocalAllocOp>(nestedOp))
-          return WalkResult::advance();
-        if (requiresClusterBarrierForTrackedMBarrierUse(
-                nestedOp, tracked, allocation, numCTAs))
-          return WalkResult::interrupt();
-        return WalkResult::advance();
-      })
-      .wasInterrupted();
-}
-
 class CrossCTAMBarrierInitSyncAnalysis : public MembarOrFenceAnalysis {
 public:
   CrossCTAMBarrierInitSyncAnalysis(Allocation *allocation,
@@ -238,8 +88,128 @@ private:
               FuncBlockInfoMapT *funcBlockInfoMap,
               OpBuilder *builder) override;
 
+  bool valueAliasesTrackedBuffers(Value value,
+                                  const Allocation::BufferIdSetT &tracked) {
+    if (!value)
+      return false;
+    for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
+      if (bufferId != Allocation::InvalidBufferId && tracked.contains(bufferId))
+        return true;
+    }
+    return false;
+  }
+
+  bool isCrossCTAMBarrier(Value barrier) {
+    auto barrierTy = dyn_cast<ttg::MemDescType>(barrier.getType());
+    return barrierTy && barrierTy.getShape()[0] != numCTAs;
+  }
+
+  bool requiresClusterBarrierForUse(Operation *op,
+                                    const Allocation::BufferIdSetT &tracked);
+  bool opRequiresClusterBarrierForTrackedUse(
+      Operation *op, const Allocation::BufferIdSetT &tracked);
+  bool requiresInitSync(ttng::InitBarrierOp initBarrierOp,
+                        FunctionOpInterface funcOp);
+  void addUnpublishedInit(ttng::InitBarrierOp initBarrierOp,
+                          BlockInfo *blockInfo);
+  Allocation::BufferIdSetT getUnpublishedInitBuffers(const BlockInfo &blockInfo);
+
   int numCTAs;
 };
+
+bool CrossCTAMBarrierInitSyncAnalysis::requiresClusterBarrierForUse(
+    Operation *op, const Allocation::BufferIdSetT &tracked) {
+  auto aliasesTracked = [&](Value value) {
+    return valueAliasesTrackedBuffers(value, tracked);
+  };
+  auto aliasesTrackedCrossCTA = [&](Value value) {
+    return aliasesTracked(value) && isCrossCTAMBarrier(value);
+  };
+
+  // A true cross-CTA mbarrier must be published before any mbarrier use.
+  // Per-CTA mbarriers only need this when a consumer multicasts or otherwise
+  // propagates completion state across CTAs.
+  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+    auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
+    return llvm::any_of(barrierOp.getBarriers(), aliasesTrackedCrossCTA) ||
+           ((mma.getTwoCtas() || mma.getMulticast()) &&
+            llvm::any_of(barrierOp.getBarriers(), aliasesTracked));
+  }
+  if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
+    return aliasesTrackedCrossCTA(commit.getBarrier()) ||
+           (ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier()));
+  }
+  if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+    return aliasesTrackedCrossCTA(tma.getBarrier()) ||
+           (tma.getMulticast() && aliasesTracked(tma.getBarrier()));
+  }
+  if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op))
+    return aliasesTracked(clc.getMbarrier());
+  if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op))
+    return llvm::any_of(barrierOp.getBarriers(), aliasesTrackedCrossCTA);
+  return false;
+}
+
+bool CrossCTAMBarrierInitSyncAnalysis::opRequiresClusterBarrierForTrackedUse(
+    Operation *op, const Allocation::BufferIdSetT &tracked) {
+  if (tracked.empty())
+    return false;
+  // Region ops are treated as a use if any nested op consumes an unpublished
+  // init, so the fence/barrier can be placed before the whole region.
+  return op
+      ->walk<WalkOrder::PreOrder>([&](Operation *nestedOp) {
+        if (isa<ttng::InitBarrierOp, ttg::LocalAllocOp>(nestedOp))
+          return WalkResult::advance();
+        if (requiresClusterBarrierForUse(nestedOp, tracked))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      })
+      .wasInterrupted();
+}
+
+bool CrossCTAMBarrierInitSyncAnalysis::requiresInitSync(
+    ttng::InitBarrierOp initBarrierOp, FunctionOpInterface funcOp) {
+  if (isCrossCTAMBarrier(initBarrierOp.getBarrier()))
+    return true;
+
+  Allocation::BufferIdSetT initBarrierBuffers;
+  for (auto bufferId :
+       allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
+    assert(bufferId != Allocation::InvalidBufferId);
+    initBarrierBuffers.insert(bufferId);
+  }
+
+  return funcOp
+      ->walk<WalkOrder::PreOrder>([&](Operation *op) {
+        if (requiresClusterBarrierForUse(op, initBarrierBuffers))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      })
+      .wasInterrupted();
+}
+
+void CrossCTAMBarrierInitSyncAnalysis::addUnpublishedInit(
+    ttng::InitBarrierOp initBarrierOp, BlockInfo *blockInfo) {
+  Value barrier = initBarrierOp.getBarrier();
+  for (auto bufferId : allocation->getAllBufferIdsWithAliases(barrier)) {
+    assert(bufferId != Allocation::InvalidBufferId);
+    auto interval = allocation->getAllocatedInterval(bufferId);
+    auto slice = AllocationSlice(barrier, interval, bufferId);
+    blockInfo->syncWriteSlices[slice].insert(initBarrierOp);
+  }
+}
+
+Allocation::BufferIdSetT
+CrossCTAMBarrierInitSyncAnalysis::getUnpublishedInitBuffers(
+    const BlockInfo &blockInfo) {
+  Allocation::BufferIdSetT buffers;
+  for (const auto &sliceAndOps : blockInfo.syncWriteSlices) {
+    auto bufferId = sliceAndOps.first.getBufferId();
+    if (bufferId != Allocation::InvalidBufferId)
+      buffers.insert(bufferId);
+  }
+  return buffers;
+}
 
 void CrossCTAMBarrierInitSyncAnalysis::update(
     Operation *op, BlockInfo *blockInfo, FuncBlockInfoMapT *funcBlockInfoMap,
@@ -249,8 +219,11 @@ void CrossCTAMBarrierInitSyncAnalysis::update(
     return;
 
   if (isa<ttng::ClusterBarrierOp>(op)) {
-    if (hasUnpublishedInit(*blockInfo) &&
-        !hasPreviousFenceMBarrierInitReleaseCluster(op)) {
+    // Reuse an existing cluster barrier as the rendezvous for all unpublished
+    // mbarrier inits reaching it.
+    if (!blockInfo->syncWriteSlices.empty() &&
+        !isa_and_nonnull<ttng::FenceMBarrierInitReleaseClusterOp>(
+            op->getPrevNode())) {
       OpBuilder::InsertionGuard guard(*builder);
       builder->setInsertionPoint(op);
       ttng::FenceMBarrierInitReleaseClusterOp::create(*builder, op->getLoc());
@@ -267,21 +240,23 @@ void CrossCTAMBarrierInitSyncAnalysis::update(
   }
 
   if (auto initBarrierOp = dyn_cast<ttng::InitBarrierOp>(op)) {
-    if (requiresCrossCTAMBarrierInitSync(initBarrierOp, funcOp, allocation,
-                                         numCTAs))
-      addUnpublishedInit(initBarrierOp, blockInfo, allocation);
+    if (requiresInitSync(initBarrierOp, funcOp))
+      addUnpublishedInit(initBarrierOp, blockInfo);
     return;
   }
 
   Allocation::BufferIdSetT unpublishedInitBuffers =
       getUnpublishedInitBuffers(*blockInfo);
-  if (opRequiresClusterBarrierForTrackedMBarrierUse(
-          op, unpublishedInitBuffers, allocation, numCTAs)) {
+  if (opRequiresClusterBarrierForTrackedUse(op, unpublishedInitBuffers)) {
     OpBuilder::InsertionGuard guard(*builder);
     builder->setInsertionPoint(op);
-    if (!hasPreviousFenceMBarrierInitReleaseCluster(op))
+    if (!isa_and_nonnull<ttng::FenceMBarrierInitReleaseClusterOp>(
+            op->getPrevNode()))
       ttng::FenceMBarrierInitReleaseClusterOp::create(*builder, op->getLoc());
-    ttng::ClusterBarrierOp::create(*builder, op->getLoc());
+    // This barrier only makes the preceding mbarrier-init fence visible at
+    // cluster scope; generic DSM ordering barriers remain non-relaxed and are
+    // inserted by ClusterBarrierAnalysis.
+    ttng::ClusterBarrierOp::create(*builder, op->getLoc(), /*relaxed=*/true);
     blockInfo->sync();
     return;
   }
