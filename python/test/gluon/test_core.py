@@ -435,8 +435,7 @@ def test_tma_multicast_copy_multi_region_mbarrier_fences():
 
     ptx_lines = compiled.asm["ptx"].splitlines()
     multicast_tma_lines = [
-        i for i, line in enumerate(ptx_lines)
-        if "cp.async.bulk.tensor" in line and "multicast::cluster" in line
+        i for i, line in enumerate(ptx_lines) if "cp.async.bulk.tensor" in line and "multicast::cluster" in line
     ]
     assert len(multicast_tma_lines) >= 2
     assert sum("fence.mbarrier_init.release.cluster" in line for line in ptx_lines) >= 2
@@ -728,10 +727,8 @@ def test_tcgen05_mma_multicast_reinit_mbarrier_in_loop():
     cga_layout_b = ((0, 1), )
     cga_layout_c = ((0, 1), )
 
-    shared_layout_a = ttgl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], ttgl.float16,
-                                                             cga_layout=cga_layout_a)
-    shared_layout_b = ttgl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], ttgl.float16,
-                                                             cga_layout=cga_layout_b)
+    shared_layout_a = ttgl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], ttgl.float16, cga_layout=cga_layout_a)
+    shared_layout_b = ttgl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], ttgl.float16, cga_layout=cga_layout_b)
     acc_tmem_layout = TensorMemoryLayout(
         block=(BLOCK_M, BLOCK_N // 2),
         col_stride=1,
@@ -768,15 +765,13 @@ def test_tcgen05_mma_multicast_reinit_mbarrier_in_loop():
     ]
     assert reinit_lines
     multicast_tma_lines = [
-        i for i, line in enumerate(ptx_lines)
-        if "cp.async.bulk.tensor" in line and "multicast::cluster" in line
+        i for i, line in enumerate(ptx_lines) if "cp.async.bulk.tensor" in line and "multicast::cluster" in line
     ]
     assert len(multicast_tma_lines) >= NUM_K_TILES + 1
     first_mma_line = next(i for i, line in enumerate(ptx_lines) if "tcgen05.mma" in line)
     assert multicast_tma_lines[0] < first_mma_line
-    first_multicast_init_line = max(
-        i for i in range(multicast_tma_lines[0]) if "mbarrier.init.shared::cta.b64" in ptx_lines[i]
-    )
+    first_multicast_init_line = max(i for i in range(multicast_tma_lines[0])
+                                    if "mbarrier.init.shared::cta.b64" in ptx_lines[i])
     assert any("fence.mbarrier_init.release.cluster" in ptx_lines[i]
                for i in range(first_multicast_init_line + 1, multicast_tma_lines[0]))
     for reinit_line in reinit_lines:

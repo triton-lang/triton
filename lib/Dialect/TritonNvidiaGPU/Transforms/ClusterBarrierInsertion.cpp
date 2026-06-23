@@ -85,8 +85,7 @@ public:
 
 private:
   void update(Operation *op, BlockInfo *blockInfo,
-              FuncBlockInfoMapT *funcBlockInfoMap,
-              OpBuilder *builder) override;
+              FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder) override;
 
   bool valueAliasesTrackedBuffers(Value value,
                                   const Allocation::BufferIdSetT &tracked) {
@@ -112,7 +111,8 @@ private:
                         FunctionOpInterface funcOp);
   void addUnpublishedInit(ttng::InitBarrierOp initBarrierOp,
                           BlockInfo *blockInfo);
-  Allocation::BufferIdSetT getUnpublishedInitBuffers(const BlockInfo &blockInfo);
+  Allocation::BufferIdSetT
+  getUnpublishedInitBuffers(const BlockInfo &blockInfo);
 
   int numCTAs;
 };
