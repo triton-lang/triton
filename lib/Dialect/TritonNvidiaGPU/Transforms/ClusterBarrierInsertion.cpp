@@ -128,26 +128,42 @@ bool CrossCTAMBarrierInitSyncAnalysis::requiresClusterBarrierForUse(
 
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
-    // Completion barriers are verifier-required to be per-CTA, but multi-CTA
-    // MMA completion still has cluster-visible effects.
+    // Examples:
+    // - Cross-CTA completion barrier: synchronize the mbarrier init before the
+    //   MMA uses that barrier.
+    // - Multicast/two-CTA MMA: completion can be observed across CTAs even
+    //   when the completion barrier itself uses the per-CTA layout.
     return llvm::any_of(barrierOp.getBarriers(), aliasesTrackedCrossCTA) ||
            ((mma.getTwoCtas() || mma.getMulticast()) &&
             llvm::any_of(barrierOp.getBarriers(), aliasesTracked));
   }
   if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
+    // Examples:
+    // - Explicit cross-CTA completion barrier.
+    // - Two-CTA kernel where tcgen05 commit completion is cluster-visible even
+    //   with a verifier-required per-CTA completion barrier.
     return aliasesTrackedCrossCTA(commit.getBarrier()) ||
            (ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier()));
   }
   if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
-    // Multicast TMA may use a per-CTA mbarrier while its completion is
-    // observed by multiple CTAs.
+    // Examples:
+    // - Non-multicast TMA with a cross-CTA/leader mbarrier still needs the
+    //   init synchronized before the TMA uses the barrier.
+    // - Multicast TMA may use a per-CTA mbarrier while its completion is
+    //   observed by multiple CTAs.
     return aliasesTrackedCrossCTA(tma.getBarrier()) ||
            (tma.getMulticast() && aliasesTracked(tma.getBarrier()));
   }
-  if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op))
-    return aliasesTracked(clc.getMbarrier());
-  if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op))
+  if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op)) {
+    // Example: multi-CTA CLC lowers to a cluster-wide multicast completion even
+    // though the completion barrier uses the per-CTA completion-barrier layout.
+    return ttg::lookupNumCTAs(op) > 1 && aliasesTracked(clc.getMbarrier());
+  }
+  if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op)) {
+    // Example: ordinary mbarrier operations such as wait/inval only need this
+    // sync when they operate on a cross-CTA/leader mbarrier.
     return llvm::any_of(barrierOp.getBarriers(), aliasesTrackedCrossCTA);
+  }
   return false;
 }
 
