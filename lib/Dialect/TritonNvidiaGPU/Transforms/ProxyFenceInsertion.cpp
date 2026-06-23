@@ -16,9 +16,6 @@
 // This pass runs after shared memory allocation, to make sure we insert fences
 // between ops accessing aliasing buffers if needed.
 //
-// We also run a fence insertion pass during optimization phase as it is easier
-// to insert fences at optimial location based on structured control flow.
-//
 //===----------------------------------------------------------------------===//
 
 namespace mlir {
@@ -145,8 +142,6 @@ void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,
                 proxyBlockInfo.syncWriteSlices[slice].insert(op);
               } else if (isAsyncProxyRead(op) &&
                          isAsyncProxyReadSource(op, value)) {
-                // Safe fallback for async-proxy reads from shared memory when
-                // the earlier FenceInsertionPass did not place a fence.
                 proxyBlockInfo.syncReadSlices[slice].insert(op);
               } else if (isa<MemoryEffects::Write>(
                              effectInstance.getEffect())) {

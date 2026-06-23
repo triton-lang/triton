@@ -143,13 +143,6 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
 }
 
 std::unique_ptr<mlir::Pass>
-createTritonGPUFenceInsertionWrapper(int32_t capability) {
-  ttng::TritonGPUFenceInsertionOptions options;
-  options.computeCapability = capability;
-  return ttng::createTritonGPUFenceInsertion(options);
-}
-
-std::unique_ptr<mlir::Pass>
 createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
   ttng::TritonGPUProxyFenceInsertionOptions options;
   options.computeCapability = capability;
@@ -167,8 +160,6 @@ createInitializeWSClusterBarriersWrapper(int32_t capability,
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass);
-  ADD_PASS_WRAPPER_1("add_fence_insertion",
-                     createTritonGPUFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_1("add_proxy_fence_insertion",
                      createTritonGPUProxyFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_0("add_tmem_barrier_insertion",
