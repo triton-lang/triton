@@ -1690,7 +1690,6 @@ int getMMAv5CompletionBarrierCount(MMAv5OpInterface mma) {
     return 1;
 
   int numCTAs = gpu::lookupNumCTAs(mma.getOperation());
-  uint16_t ctaMask = numCTAs - 1;
   int count = 0;
   for (int cta = 0; cta < numCTAs; ++cta) {
     if (mma.getTwoCtas() && (cta & 1))
@@ -1699,7 +1698,7 @@ int getMMAv5CompletionBarrierCount(MMAv5OpInterface mma) {
       // Count CTA groups, not individual CTAs. Broadcast bits may vary within
       // one multicast group, so the group contributes once when those bits are
       // zero; non-broadcast bits identify distinct groups.
-      if ((cta & (broadcastMask & ctaMask)) == 0) {
+      if ((cta & broadcastMask) == 0) {
         ++count;
         break;
       }
