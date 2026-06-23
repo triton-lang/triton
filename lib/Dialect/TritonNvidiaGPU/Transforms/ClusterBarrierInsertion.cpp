@@ -210,58 +210,39 @@ static bool opUsesTrackedMBarrier(Operation *op,
       .wasInterrupted();
 }
 
-static void collectBlocks(Region &region, SmallVectorImpl<Block *> &blocks) {
-  for (Block &block : region) {
-    blocks.push_back(&block);
-    for (Operation &op : block)
-      for (Region &nestedRegion : op.getRegions())
-        collectBlocks(nestedRegion, blocks);
-  }
-}
+static bool insertLocalCrossCTAMBarrierInitSync(ttng::InitBarrierOp initOp,
+                                                FunctionOpInterface funcOp,
+                                                Allocation *allocation,
+                                                int numCTAs,
+                                                OpBuilder &builder) {
+  if (!requiresCrossCTAMBarrierInitSync(initOp, funcOp, allocation, numCTAs))
+    return false;
 
-static void insertLocalCrossCTAMBarrierInitSync(
-    FunctionOpInterface funcOp, Allocation *allocation, int numCTAs,
-    OpBuilder &builder, llvm::SmallPtrSetImpl<Operation *> &syncedInitOps) {
-  SmallVector<Block *> blocks;
-  for (Region &region : funcOp->getRegions())
-    collectBlocks(region, blocks);
+  for (Operation *op = initOp->getNextNode(); op; op = op->getNextNode()) {
+    if (isa<ttng::InitBarrierOp, ttg::LocalAllocOp>(op))
+      continue;
 
-  for (Block *block : blocks) {
-    SmallVector<ttng::InitBarrierOp> pendingInits;
-    for (Operation &op : *block) {
-      if (auto initOp = dyn_cast<ttng::InitBarrierOp>(&op)) {
-        if (requiresCrossCTAMBarrierInitSync(initOp, funcOp, allocation,
-                                             numCTAs))
-          pendingInits.push_back(initOp);
-        continue;
-      }
-      if (pendingInits.empty())
-        continue;
+    if (isa<ttng::ClusterBarrierOp>(op)) {
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPoint(op);
+      ttng::FenceMBarrierInitReleaseClusterOp::create(builder,
+                                                      initOp.getLoc());
+      return true;
+    }
 
-      if (isa<ttng::ClusterBarrierOp>(op)) {
-        OpBuilder::InsertionGuard guard(builder);
-        builder.setInsertionPoint(&op);
-        ttng::FenceMBarrierInitReleaseClusterOp::create(
-            builder, pendingInits.back().getLoc());
-        for (ttng::InitBarrierOp init : pendingInits)
-          syncedInitOps.insert(init.getOperation());
-        pendingInits.clear();
-        continue;
-      }
+    if (isa<ttng::FenceMBarrierInitReleaseClusterOp>(op)) {
+      Operation *next = op->getNextNode();
+      if (next && isa<ttng::ClusterBarrierOp>(next))
+        return true;
+      continue;
+    }
 
-      bool needsSync = llvm::any_of(pendingInits, [&](ttng::InitBarrierOp init) {
-        return initSyncRequiredBeforeOp(init, &op, allocation, numCTAs);
-      });
-      if (!needsSync)
-        continue;
-
-      insertFenceAndRelaxedClusterBarrier(builder, pendingInits.back().getLoc(),
-                                          &op);
-      for (ttng::InitBarrierOp init : pendingInits)
-        syncedInitOps.insert(init.getOperation());
-      pendingInits.clear();
+    if (initSyncRequiredBeforeOp(initOp, op, allocation, numCTAs)) {
+      insertFenceAndRelaxedClusterBarrier(builder, initOp.getLoc(), op);
+      return true;
     }
   }
+  return false;
 }
 
 static LogicalResult
@@ -276,15 +257,12 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
   Region &topLevelRegion = funcOp->getRegion(0);
   llvm::SetVector<Operation *> crossCTAInitAnchors;
   Allocation::BufferIdSetT trackedBarrierBuffers;
-  llvm::SmallPtrSet<Operation *, 8> locallySyncedInitOps;
-
-  insertLocalCrossCTAMBarrierInitSync(funcOp, allocation, numCTAs, builder,
-                                      locallySyncedInitOps);
 
   // Find all cross-CTA mbarrier.init ops and map each
   // one to the containing top-level op that bounds the insertion window.
   funcOp.walk([&](ttng::InitBarrierOp initBarrierOp) {
-    if (locallySyncedInitOps.contains(initBarrierOp.getOperation()))
+    if (insertLocalCrossCTAMBarrierInitSync(initBarrierOp, funcOp, allocation,
+                                            numCTAs, builder))
       return;
     if (!requiresCrossCTAMBarrierInitSync(initBarrierOp, funcOp, allocation,
                                           numCTAs))
