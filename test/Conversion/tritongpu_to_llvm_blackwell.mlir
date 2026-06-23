@@ -832,6 +832,30 @@ tt.func @tc_gen5_commit(%arg0: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %pr
 
 // -----
 
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0], [0, 1], [0, 2]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2], [4]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 1 : i32} {
+// CHECK-LABEL: @tc_gen5_commit_multicast_num_ctas8
+tt.func @tc_gen5_commit_multicast_num_ctas8(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1, %desc: !ttg.memdesc<64x256xf16, #shared, #smem>) {
+  // CHECK: [[CTA:%.*]] = nvg.cluster_id
+  // CHECK: [[FIXED:%.*]] = llvm.mlir.constant(6 : i32) : i32
+  // CHECK: [[BASE:%.*]] = llvm.and [[CTA]], [[FIXED]] : i32
+  // CHECK: [[PATTERN:%.*]] = llvm.mlir.constant(3 : i32) : i32
+  // CHECK: [[MASK:%.*]] = llvm.shl [[PATTERN]], [[BASE]] : i32
+  // CHECK: [[BROADCAST:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: [[GROUP:%.*]] = llvm.and [[CTA]], [[BROADCAST]] : i32
+  // CHECK: [[GROUP_PRED:%.*]] = llvm.icmp "eq" [[GROUP]], %{{.*}} : i32
+  // CHECK: [[PRED:%.*]] = llvm.and {{.*}}, [[GROUP_PRED]] : i1
+  // CHECK: @$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.multicast::cluster.b64 [$1], $2;", "b,r,h" [[PRED]], {{.*}}, [[MASK]]
+  ttng.tc_gen5_commit %barrier, %pred descs %desc : !ttg.memdesc<8xi64, #barrier, #smem, mutable>, !ttg.memdesc<64x256xf16, #shared, #smem>
+  tt.return
+}
+}
+
+// -----
+
 #tmem_f32 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
 #tmem_f16 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 2>
 
