@@ -2485,7 +2485,10 @@ struct FpToFpOpConversion
   }
 
   std::optional<size_t> getNumContiguousElementsPerThread(Operation *op) const {
-    auto tensorTy = cast<RankedTensorType>(op->getOperand(0).getType());
+    auto tensorTy = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+    // Scalar operand: one element per thread.
+    if (!tensorTy)
+      return 1;
     auto layoutTy = mlir::dyn_cast<triton::gpu::DistributedEncodingTrait>(
         tensorTy.getEncoding());
     if (!layoutTy)
@@ -2504,7 +2507,6 @@ struct FpToFpOpConversion
     auto dstElementType = getElementTypeOrSelf(op.getResult());
 
     auto roundingMode = op.getRounding();
-    auto tensorTy = cast<RankedTensorType>(op.getOperand().getType());
 
     auto maybeMaxElementsPerThread = getNumContiguousElementsPerThread(op);
     if (!maybeMaxElementsPerThread) {
