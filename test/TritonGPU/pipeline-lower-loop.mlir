@@ -996,8 +996,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @mmav5_multicast_num_ctas8_barrier_count
   // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x8xi64
-  // CHECK: ttng.init_barrier {{.*}}, 1
-  // CHECK: ttng.init_barrier {{.*}}, 1
+  // CHECK: ttng.init_barrier {{.*}}, 8
+  // CHECK: ttng.init_barrier {{.*}}, 8
   // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, {{.*}}multicast
   tt.func public @mmav5_multicast_num_ctas8_barrier_count(
     %a: !ttg.memdesc<1024x64xf16, #sharedA8, #smem>,
