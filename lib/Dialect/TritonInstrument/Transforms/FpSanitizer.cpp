@@ -1839,6 +1839,27 @@ struct BinaryFloatToIntPattern : public OpRewritePattern<OpF> {
   }
 };
 
+struct ClampFOpPattern : public OpRewritePattern<tt::ClampFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tt::ClampFOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto xI = embedToInt(rewriter, loc, op.getX());
+    auto minI = embedToInt(rewriter, loc, op.getMin());
+    auto maxI = embedToInt(rewriter, loc, op.getMax());
+
+    // Match the signed-payload semantics used by the FPSan min/max rewrites.
+    // Float bit patterns that encode IEEE NaNs are ordinary payloads here, so
+    // both PropagateNan modes intentionally have the same behavior.
+    auto lowerBoundedI = arith::MaxSIOp::create(rewriter, loc, xI, minI);
+    auto resultI = arith::MinSIOp::create(rewriter, loc, lowerBoundedI, maxI);
+    auto resultF = unembedToFloat(rewriter, loc, resultI, op.getType());
+    rewriter.replaceOp(op, resultF);
+    return success();
+  }
+};
+
 struct NegFOpPattern : public OpRewritePattern<arith::NegFOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -3099,11 +3120,11 @@ public:
                  BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
                  BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
                  BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
-                 NegFOpPattern, DivFOpPattern, PreciseDivFOpPattern,
-                 RemFOpPattern, FmaPattern, ExpOpPattern, Exp2OpPattern,
-                 CosOpPattern, SinOpPattern, ExtFOpPattern, TruncFOpPattern,
-                 FpToFpPattern, Fp4ToFpPattern, DotPattern, DotScaledPattern>(
-        &getContext());
+                 ClampFOpPattern, NegFOpPattern, DivFOpPattern,
+                 PreciseDivFOpPattern, RemFOpPattern, FmaPattern, ExpOpPattern,
+                 Exp2OpPattern, CosOpPattern, SinOpPattern, ExtFOpPattern,
+                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern, DotPattern,
+                 DotScaledPattern>(&getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);
