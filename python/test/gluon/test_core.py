@@ -343,6 +343,34 @@ def tma_multicast_copy_kernel(in_desc, out_desc):
     smem._keep_alive()
 
 
+@gluon.jit
+def tma_multicast_copy_multi_region_mbarrier_kernel(a_desc, b_desc, out_desc, pred_ptr):
+    smem = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, a_desc.nbytes_per_cta)
+    tma.async_load(a_desc, [0, 0], bar, smem, multicast=True)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.store_wait(0)
+    mbarrier.invalidate(bar)
+    smem._keep_alive()
+
+    pred = ttgl.load(pred_ptr) != 0
+
+    if pred:
+        smem = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        mbarrier.expect(bar, b_desc.nbytes_per_cta)
+        tma.async_load(b_desc, [0, 0], bar, smem, multicast=True)
+        mbarrier.wait(bar, phase=0, deps=[smem])
+        tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+        tma.store_wait(0)
+        mbarrier.invalidate(bar)
+        smem._keep_alive()
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [1, 4], [4, 4]])
 def test_tma_multicast_copy(ctas_per_cga):
@@ -374,6 +402,60 @@ def test_tma_multicast_copy(ctas_per_cga):
     expect_multicast = any(ctas_per_cga[i] > cga_split_num[i] for i in range(len(ctas_per_cga)))
     assert (".multicast::cluster" in compiled.asm["ptx"]) == expect_multicast
     torch.testing.assert_close(out, inp, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_tma_multicast_copy_multi_region_mbarrier_fences():
+    ctas_per_cga = [1, 4]
+    cga_split_num = [1, 2]
+    cga_layout = make_cga_layout(ctas_per_cga, cga_split_num, [1, 0])
+    block_m, block_n = 16, 32
+
+    a = torch.randn((block_m, block_n), dtype=torch.float16, device="cuda")
+    b = torch.randn((block_m, block_n), dtype=torch.float16, device="cuda")
+    out = torch.empty_like(a)
+    pred = torch.tensor([1], dtype=torch.int32, device="cuda")
+
+    layout = ttgl.NVMMASharedLayout.get_default_for(
+        [block_m, block_n],
+        ttgl.float16,
+        cga_layout=cga_layout,
+    )
+    a_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(a, [block_m, block_n], layout)
+    b_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(b, [block_m, block_n], layout)
+    out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, [block_m, block_n], layout)
+    compiled = tma_multicast_copy_multi_region_mbarrier_kernel[(1, )](
+        a_desc,
+        b_desc,
+        out_desc,
+        pred,
+        num_warps=4,
+        num_ctas=ctas_per_cga[0] * ctas_per_cga[1],
+    )
+
+    ptx_lines = compiled.asm["ptx"].splitlines()
+    multicast_tma_lines = [
+        i for i, line in enumerate(ptx_lines)
+        if "cp.async.bulk.tensor" in line and "multicast::cluster" in line
+    ]
+    assert len(multicast_tma_lines) >= 2
+    assert sum("fence.mbarrier_init.release.cluster" in line for line in ptx_lines) >= 2
+    for tma_line in multicast_tma_lines:
+        init_line = max(i for i in range(tma_line) if "mbarrier.init.shared::cta.b64" in ptx_lines[i])
+        assert any("fence.mbarrier_init.release.cluster" in ptx_lines[i] for i in range(init_line + 1, tma_line))
+
+    torch.testing.assert_close(out, b, atol=0, rtol=0)
+
+    pred.fill_(0)
+    tma_multicast_copy_multi_region_mbarrier_kernel[(1, )](
+        a_desc,
+        b_desc,
+        out_desc,
+        pred,
+        num_warps=4,
+        num_ctas=ctas_per_cga[0] * ctas_per_cga[1],
+    )
+    torch.testing.assert_close(out, a, atol=0, rtol=0)
 
 
 @gluon.jit
