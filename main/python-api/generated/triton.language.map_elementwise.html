@@ -6,7 +6,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>triton.language.num_programs &mdash; Triton  documentation</title>
+  <title>triton.language.map_elementwise &mdash; Triton  documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=fd6457a4" />
@@ -28,8 +28,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="triton.language.map_elementwise" href="triton.language.map_elementwise.html" />
-    <link rel="prev" title="triton.language.program_id" href="triton.language.program_id.html" /> 
+    <link rel="next" title="triton.language.arange" href="triton.language.arange.html" />
+    <link rel="prev" title="triton.language.num_programs" href="triton.language.num_programs.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -65,11 +65,11 @@
 <li class="toctree-l3"><a class="reference internal" href="triton.language.tensor.html">triton.language.tensor</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.tensor_descriptor.html">triton.language.tensor_descriptor</a></li>
 <li class="toctree-l3"><a class="reference internal" href="triton.language.program_id.html">triton.language.program_id</a></li>
-<li class="toctree-l3 current"><a class="current reference internal" href="#">triton.language.num_programs</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#triton.language.num_programs"><code class="docutils literal notranslate"><span class="pre">num_programs()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="triton.language.num_programs.html">triton.language.num_programs</a></li>
+<li class="toctree-l3 current"><a class="current reference internal" href="#">triton.language.map_elementwise</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#triton.language.map_elementwise"><code class="docutils literal notranslate"><span class="pre">map_elementwise()</span></code></a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="triton.language.map_elementwise.html">triton.language.map_elementwise</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#creation-ops">Creation Ops</a></li>
@@ -125,9 +125,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../triton.language.html">triton.language</a></li>
-      <li class="breadcrumb-item active">triton.language.num_programs</li>
+      <li class="breadcrumb-item active">triton.language.map_elementwise</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/python-api/generated/triton.language.num_programs.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/python-api/generated/triton.language.map_elementwise.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -135,15 +135,38 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="triton-language-num-programs">
-<h1>triton.language.num_programs<a class="headerlink" href="#triton-language-num-programs" title="Link to this heading"></a></h1>
+  <section id="triton-language-map-elementwise">
+<h1>triton.language.map_elementwise<a class="headerlink" href="#triton-language-map-elementwise" title="Link to this heading"></a></h1>
 <dl class="py function">
-<dt class="sig sig-object py" id="triton.language.num_programs">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">num_programs</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">axis</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.num_programs" title="Link to this definition"></a></dt>
-<dd><p>Returns the number of program instances launched along the given <code class="code docutils literal notranslate"><span class="pre">axis</span></code>.</p>
+<dt class="sig sig-object py" id="triton.language.map_elementwise">
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">map_elementwise</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">scalar_fn</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Callable</span><span class="p"><span class="pre">[</span></span><span class="p"><span class="pre">[</span></span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><a class="reference internal" href="triton.language.tensor.html#triton.language.tensor" title="triton.language.core.tensor"><span class="pre">tensor</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="triton.language.tensor.html#triton.language.tensor" title="triton.language.core.tensor"><span class="pre">tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">pack</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_generator</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.map_elementwise" title="Link to this definition"></a></dt>
+<dd><p>Map a scalar function over a tensor.</p>
+<p>The input tensors <code class="code docutils literal notranslate"><span class="pre">args</span></code> are implicitly broadcasted to the same shape.</p>
+<p>This may be useful in allowing control flow over single elements in a tensor,
+for example a multi-branch function where one branch is more expensive. With
+<code class="code docutils literal notranslate"><span class="pre">tl.where</span></code> you are forced to calculate both sides of the branch, but
+with an if we only execute one side.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">selu_scalar</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">a</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">alpha</span> <span class="o">*</span> <span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+
+<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">selu</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">alpha</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">tl</span><span class="o">.</span><span class="n">map_elementwise</span><span class="p">(</span><span class="n">selu_scalar</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">alpha</span><span class="p">)</span>
+</pre></div>
+</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>axis</strong> (<em>int</em>) – The axis of the 3D launch grid. Must be 0, 1 or 2.</p>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>scalar_fn</strong> – the function to map over.</p></li>
+<li><p><strong>pack</strong> – the number of elements to be processed by one function call.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>one tensor or a tuple of tensors, depending on the mapped function.</p>
 </dd>
 </dl>
 </dd></dl>
@@ -154,8 +177,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="triton.language.program_id.html" class="btn btn-neutral float-left" title="triton.language.program_id" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="triton.language.map_elementwise.html" class="btn btn-neutral float-right" title="triton.language.map_elementwise" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="triton.language.num_programs.html" class="btn btn-neutral float-left" title="triton.language.num_programs" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="triton.language.arange.html" class="btn btn-neutral float-right" title="triton.language.arange" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

@@ -1,0 +1,6 @@
+﻿triton.language.expect\_zero
+============================
+
+.. currentmodule:: triton.language
+
+.. autofunction:: expect_zero
