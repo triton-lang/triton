@@ -126,11 +126,10 @@ bool CrossCTAMBarrierInitSyncAnalysis::requiresClusterBarrierForUse(
     return aliasesTracked(value) && isCrossCTAMBarrier(value);
   };
 
-  // A true cross-CTA mbarrier must be published before any mbarrier use.
-  // Per-CTA mbarriers only need this when a consumer multicasts or otherwise
-  // propagates completion state across CTAs.
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
+    // Completion barriers are verifier-required to be per-CTA, but multi-CTA
+    // MMA completion still has cluster-visible effects.
     return llvm::any_of(barrierOp.getBarriers(), aliasesTrackedCrossCTA) ||
            ((mma.getTwoCtas() || mma.getMulticast()) &&
             llvm::any_of(barrierOp.getBarriers(), aliasesTracked));
@@ -140,6 +139,8 @@ bool CrossCTAMBarrierInitSyncAnalysis::requiresClusterBarrierForUse(
            (ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier()));
   }
   if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+    // Multicast TMA may use a per-CTA mbarrier while its completion is
+    // observed by multiple CTAs.
     return aliasesTrackedCrossCTA(tma.getBarrier()) ||
            (tma.getMulticast() && aliasesTracked(tma.getBarrier()));
   }
