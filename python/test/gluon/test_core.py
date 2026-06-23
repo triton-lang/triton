@@ -495,6 +495,13 @@ def tcgen05_mma_multicast_reinit_mbarrier_kernel(a_desc, b_desc, out_ptr, BLOCK_
                                                  NUM_K_TILES: ttgl.constexpr, acc_tmem_layout: ttgl.constexpr,
                                                  blocked_c: ttgl.constexpr):
     acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], acc_tmem_layout)
+    outer_smem = ttgl.allocate_shared_memory(a_desc.dtype, [BLOCK_M, BLOCK_K], a_desc.layout)
+    outer_bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(outer_bar, count=1)
+    mbarrier.expect(outer_bar, a_desc.nbytes_per_cta)
+    tma.async_load(a_desc, [0, 0], outer_bar, outer_smem, multicast=True)
+    mbarrier.wait(outer_bar, phase=0, deps=[outer_smem])
+    mbarrier.invalidate(outer_bar)
 
     use_acc = False
     for k in range(NUM_K_TILES):
@@ -678,9 +685,21 @@ def test_tcgen05_mma_multicast_reinit_mbarrier_in_loop():
         if "mbarrier.init.shared::cta.b64" in line and re.search(r", 2;\s*$", line)
     ]
     assert reinit_lines
+    multicast_tma_lines = [
+        i for i, line in enumerate(ptx_lines)
+        if "cp.async.bulk.tensor" in line and "multicast::cluster" in line
+    ]
+    assert len(multicast_tma_lines) >= NUM_K_TILES + 1
+    first_mma_line = next(i for i, line in enumerate(ptx_lines) if "tcgen05.mma" in line)
+    assert multicast_tma_lines[0] < first_mma_line
+    first_multicast_init_line = max(
+        i for i in range(multicast_tma_lines[0]) if "mbarrier.init.shared::cta.b64" in ptx_lines[i]
+    )
+    assert any("barrier.cluster.arrive.aligned" in ptx_lines[i]
+               for i in range(first_multicast_init_line + 1, multicast_tma_lines[0]))
     for reinit_line in reinit_lines:
         mma_line = next(i for i in range(reinit_line + 1, len(ptx_lines)) if "tcgen05.mma" in ptx_lines[i])
-        assert any("fence.mbarrier_init.release.cluster" in ptx_lines[i] for i in range(reinit_line + 1, mma_line))
+        assert any("barrier.cluster.arrive.aligned" in ptx_lines[i] for i in range(reinit_line + 1, mma_line))
 
     torch.testing.assert_close(out, torch.matmul(a.to(out.dtype), b.to(out.dtype)), atol=1e-2, rtol=1e-2)
 

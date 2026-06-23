@@ -22,6 +22,11 @@ namespace {
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
+static bool isCrossCTAMBarrier(Value barrier, int numCTAs) {
+  auto barrierTy = dyn_cast<ttg::MemDescType>(barrier.getType());
+  return barrierTy && barrierTy.getShape()[0] != numCTAs;
+}
+
 static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
     if (!isRead)
@@ -75,11 +80,6 @@ static bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
          hasDistributedDependency(blockInfo.syncWriteSlices, /*isRead=*/false);
 }
 
-static bool isCrossCTAMBarrier(ttng::InitBarrierOp initBarrierOp, int numCTAs) {
-  auto barrierTy = cast<ttg::MemDescType>(initBarrierOp.getBarrier().getType());
-  return barrierTy.getShape()[0] != numCTAs;
-}
-
 static bool valueAliasesTrackedBuffers(Value value,
                                        const Allocation::BufferIdSetT &tracked,
                                        Allocation *allocation) {
@@ -115,6 +115,42 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
   return false;
 }
 
+static bool usesTrackedCrossCTAMBarrier(Operation *op,
+                                        const Allocation::BufferIdSetT &tracked,
+                                        Allocation *allocation, int numCTAs) {
+  if (isa<ttng::InitBarrierOp>(op))
+    return false;
+  auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op);
+  if (!barrierOp)
+    return false;
+  return llvm::any_of(barrierOp.getBarriers(), [&](Value barrier) {
+    return isCrossCTAMBarrier(barrier, numCTAs) &&
+           valueAliasesTrackedBuffers(barrier, tracked, allocation);
+  });
+}
+
+static bool
+requiresClusterBarrierForTrackedMBarrierUse(Operation *op,
+                                            const Allocation::BufferIdSetT &tracked,
+                                            Allocation *allocation,
+                                            int numCTAs) {
+  return usesTrackedBarrierInCrossCTAConsumerOp(op, tracked, allocation) ||
+         usesTrackedCrossCTAMBarrier(op, tracked, allocation, numCTAs);
+}
+
+static bool opRequiresClusterBarrierForTrackedMBarrierUse(
+    Operation *op, const Allocation::BufferIdSetT &tracked,
+    Allocation *allocation, int numCTAs) {
+  return op
+      ->walk<WalkOrder::PreOrder>([&](Operation *nestedOp) {
+        if (requiresClusterBarrierForTrackedMBarrierUse(
+                nestedOp, tracked, allocation, numCTAs))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      })
+      .wasInterrupted();
+}
+
 static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
                                              FunctionOpInterface funcOp,
                                              Allocation *allocation,
@@ -122,7 +158,7 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
   // Barrier init sync is needed for barriers that are themselves cross-CTA,
   // and also for per-CTA barriers consumed by multi-CTA ops that multicast or
   // otherwise fan out barrier state across the cluster.
-  if (isCrossCTAMBarrier(initBarrierOp, numCTAs))
+  if (isCrossCTAMBarrier(initBarrierOp.getBarrier(), numCTAs))
     return true;
 
   Allocation::BufferIdSetT initBarrierBuffers;
@@ -140,36 +176,6 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
                                                    allocation)) {
           return WalkResult::interrupt();
         }
-        return WalkResult::advance();
-      })
-      .wasInterrupted();
-}
-
-static bool nestedOpUsesTrackedMBarrier(Operation *op,
-                                        const Allocation::BufferIdSetT &tracked,
-                                        Allocation *allocation) {
-  if (isa<ttng::InitBarrierOp, ttg::LocalAllocOp>(op))
-    return false;
-
-  if (auto memEffects = dyn_cast<MemoryEffectOpInterface>(op)) {
-    SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effects;
-    memEffects.getEffects(effects);
-    for (const auto &effect : effects) {
-      Value value = effect.getValue();
-      if (value && valueAliasesTrackedBuffers(value, tracked, allocation))
-        return true;
-    }
-  }
-  return false;
-}
-
-static bool opUsesTrackedMBarrier(Operation *op,
-                                  const Allocation::BufferIdSetT &tracked,
-                                  Allocation *allocation) {
-  return op
-      ->walk<WalkOrder::PreOrder>([&](Operation *nestedOp) {
-        if (nestedOpUsesTrackedMBarrier(nestedOp, tracked, allocation))
-          return WalkResult::interrupt();
         return WalkResult::advance();
       })
       .wasInterrupted();
@@ -199,14 +205,6 @@ static Allocation::BufferIdSetT getTrackedBuffers(const BlockInfo &blockInfo) {
 
 static bool hasUnpublishedInit(const BlockInfo &blockInfo) {
   return !blockInfo.syncWriteSlices.empty();
-}
-
-static void insertFenceAndRelaxedClusterBarrier(Operation *op,
-                                                OpBuilder *builder) {
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPoint(op);
-  ttng::FenceMBarrierInitReleaseClusterOp::create(*builder, op->getLoc());
-  ttng::ClusterBarrierOp::create(*builder, op->getLoc(), /*relaxed=*/true);
 }
 
 static bool hasPreviousFenceMBarrierInitReleaseCluster(Operation *op) {
@@ -258,15 +256,6 @@ void CrossCTAMBarrierInitSyncAnalysis::update(
       addUnpublishedInit(initBarrierOp, blockInfo, allocation);
     return;
   }
-
-  Allocation::BufferIdSetT tracked = getTrackedBuffers(*blockInfo);
-  if (tracked.empty())
-    return;
-
-  if (opUsesTrackedMBarrier(op, tracked, allocation)) {
-    insertFenceAndRelaxedClusterBarrier(op, builder);
-    blockInfo->sync();
-  }
 }
 
 class ClusterBarrierAnalysis : public MembarOrFenceAnalysis {
@@ -278,6 +267,53 @@ private:
   void update(Operation *op, BlockInfo *blockInfo,
               FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder) override;
 };
+
+class CrossCTAMBarrierInitClusterBarrierAnalysis
+    : public MembarOrFenceAnalysis {
+public:
+  CrossCTAMBarrierInitClusterBarrierAnalysis(Allocation *allocation,
+                                             int numCTAs)
+      : MembarOrFenceAnalysis(allocation, nullptr), numCTAs(numCTAs) {}
+
+private:
+  void update(Operation *op, BlockInfo *blockInfo,
+              FuncBlockInfoMapT *funcBlockInfoMap,
+              OpBuilder *builder) override;
+
+  int numCTAs;
+};
+
+void CrossCTAMBarrierInitClusterBarrierAnalysis::update(
+    Operation *op, BlockInfo *blockInfo, FuncBlockInfoMapT *funcBlockInfoMap,
+    OpBuilder *builder) {
+  auto funcOp = op->getParentOfType<FunctionOpInterface>();
+  if (!funcOp)
+    return;
+
+  if (isa<ttng::ClusterBarrierOp, ttng::ClusterWaitOp>(op)) {
+    blockInfo->sync();
+    return;
+  }
+
+  if (auto initBarrierOp = dyn_cast<ttng::InitBarrierOp>(op)) {
+    if (requiresCrossCTAMBarrierInitSync(initBarrierOp, funcOp, allocation,
+                                         numCTAs))
+      addUnpublishedInit(initBarrierOp, blockInfo, allocation);
+    return;
+  }
+
+  Allocation::BufferIdSetT tracked = getTrackedBuffers(*blockInfo);
+  if (tracked.empty())
+    return;
+
+  if (opRequiresClusterBarrierForTrackedMBarrierUse(op, tracked, allocation,
+                                                    numCTAs)) {
+    OpBuilder::InsertionGuard guard(*builder);
+    builder->setInsertionPoint(op);
+    ttng::ClusterBarrierOp::create(*builder, op->getLoc());
+    blockInfo->sync();
+  }
+}
 
 void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
                                     FuncBlockInfoMapT *funcBlockInfoMap,
@@ -405,6 +441,18 @@ void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
   ModuleMembarOrFenceAnalysis<ClusterBarrierAnalysis> analysis(
       &moduleAllocation, filterFn);
   analysis.run();
+
+  int numCTAs = ttg::TritonGPUDialect::getNumCTAs(mod);
+  moduleAllocation.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+      [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
+      [&](FunctionOpInterface funcOp) {
+        auto *allocation = moduleAllocation.getFuncData(funcOp);
+        CrossCTAMBarrierInitClusterBarrierAnalysis analysis(allocation,
+                                                           numCTAs);
+        CrossCTAMBarrierInitClusterBarrierAnalysis::FuncBlockInfoMapT
+            funcBlockInfoMap;
+        analysis.run(funcBlockInfoMap);
+      });
 }
 
 LogicalResult
