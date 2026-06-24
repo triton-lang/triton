@@ -339,6 +339,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @clamp_none
+  tt.func public @clamp_none(%x: tensor<4xf32>, %lo: tensor<4xf32>, %hi: tensor<4xf32>) -> tensor<4xf32> {
+    // CHECK: %[[X:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[LO:.*]] = tti.experimental_fpsan_embed %arg1 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[LOWER_BOUNDED:.*]] = arith.maxsi %[[X]], %[[LO]] : tensor<4xi32>
+    // CHECK: %[[HI:.*]] = tti.experimental_fpsan_embed %arg2 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[CLAMPED:.*]] = arith.minsi %[[LOWER_BOUNDED]], %[[HI]] : tensor<4xi32>
+    // CHECK: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[CLAMPED]] : (tensor<4xi32>) -> tensor<4xf32>
+    // CHECK-NOT: tt.clampf
+    // CHECK: tt.return %[[OUT]] : tensor<4xf32>
+    %out = tt.clampf %x, %lo, %hi, propagateNan = none : tensor<4xf32>
+    tt.return %out : tensor<4xf32>
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @clamp_all
+  tt.func public @clamp_all(%x: tensor<4xf32>, %lo: tensor<4xf32>, %hi: tensor<4xf32>) -> tensor<4xf32> {
+    // CHECK: %[[X:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[LO:.*]] = tti.experimental_fpsan_embed %arg1 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[LOWER_BOUNDED:.*]] = arith.maxsi %[[X]], %[[LO]] : tensor<4xi32>
+    // CHECK: %[[HI:.*]] = tti.experimental_fpsan_embed %arg2 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[CLAMPED:.*]] = arith.minsi %[[LOWER_BOUNDED]], %[[HI]] : tensor<4xi32>
+    // CHECK: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[CLAMPED]] : (tensor<4xi32>) -> tensor<4xf32>
+    // CHECK-NOT: tt.clampf
+    // CHECK: tt.return %[[OUT]] : tensor<4xf32>
+    %out = tt.clampf %x, %lo, %hi, propagateNan = all : tensor<4xf32>
+    tt.return %out : tensor<4xf32>
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @neg_op
   tt.func public @neg_op(%a: tensor<4xf32>) -> tensor<4xf32> {
     // CHECK-DAG: %[[A:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>

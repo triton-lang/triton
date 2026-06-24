@@ -231,6 +231,14 @@ def _expected_max_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     return _unmix_payload_u32_to_f32_bits_i32(np.maximum(x, y).astype(np.int32).view(np.uint32))
 
 
+def _expected_clamp_i32(x_i32: np.ndarray, lo_i32: np.ndarray, hi_i32: np.ndarray) -> np.ndarray:
+    x = _u32_to_i32(_mix_f32_bits_to_payload_u32(x_i32))
+    lo = _u32_to_i32(_mix_f32_bits_to_payload_u32(lo_i32))
+    hi = _u32_to_i32(_mix_f32_bits_to_payload_u32(hi_i32))
+    clamped = np.minimum(np.maximum(x, lo), hi)
+    return _unmix_payload_u32_to_f32_bits_i32(clamped.astype(np.int32).view(np.uint32))
+
+
 def _expected_srem_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     # Match LLVM srem semantics: remainder after trunc-toward-zero division.
     # NOTE: Python/NumPy '%' uses floor division for negatives, so we implement explicitly.
@@ -513,6 +521,20 @@ def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl
     gl.store(out_ptr + offs, z, mask=mask)
 
 
+@triton.jit
+def _clamp_kernel(x_ptr, lo_ptr, hi_ptr, out_ptr, n_elements, PROPAGATE_NAN: tl.constexpr, BLOCK: tl.constexpr):
+    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n_elements
+    x = tl.load(x_ptr + offs, mask=mask, other=0.0)
+    lo = tl.load(lo_ptr + offs, mask=mask, other=0.0)
+    hi = tl.load(hi_ptr + offs, mask=mask, other=0.0)
+    if PROPAGATE_NAN:
+        out = tl.clamp(x, lo, hi, propagate_nan=tl.PropagateNan.ALL)
+    else:
+        out = tl.clamp(x, lo, hi, propagate_nan=tl.PropagateNan.NONE)
+    tl.store(out_ptr + offs, out, mask=mask)
+
+
 @gluon.jit
 def _constant_identity_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
                               THREADS_PER_WARP: gl.constexpr):
@@ -668,6 +690,54 @@ def test_binops_payload_semantics(device, op, expected_fn, fresh_knobs):
 
     out_np = out.cpu().numpy().astype(np.int32, copy=False)
     exp_np = expected_fn(x.cpu().numpy().astype(np.int32, copy=False), y.cpu().numpy().astype(np.int32, copy=False))
+    _assert_payload_equal(out_np, exp_np)
+
+
+@pytest.mark.parametrize("propagate_nan", [False, True], ids=["none", "all"])
+def test_clamp_payload_semantics(device, propagate_nan, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+
+    g = torch.Generator(device="cuda")
+    g.manual_seed(17)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    a = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    b = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+
+    # Exercise payload carriers whose raw float representation is a NaN.
+    nan_bits = np.array([0x7FC00000, 0x7F800001, 0xFFC12345, 0xFF800001], dtype=np.uint32).view(np.int32)
+    x[:len(nan_bits)] = torch.from_numpy(nan_bits.copy()).to(device="cuda")
+
+    x_np = x.cpu().numpy().astype(np.int32, copy=False)
+    a_np = a.cpu().numpy().astype(np.int32, copy=False)
+    b_np = b.cpu().numpy().astype(np.int32, copy=False)
+    a_payload = _u32_to_i32(_mix_f32_bits_to_payload_u32(a_np))
+    b_payload = _u32_to_i32(_mix_f32_bits_to_payload_u32(b_np))
+    a_is_lower = a_payload <= b_payload
+    lo_np = np.where(a_is_lower, a_np, b_np).astype(np.int32)
+    hi_np = np.where(a_is_lower, b_np, a_np).astype(np.int32)
+
+    lo = torch.from_numpy(lo_np).to(device="cuda")
+    hi = torch.from_numpy(hi_np).to(device="cuda")
+    out = torch.empty((n_elements, ), dtype=torch.int32, device="cuda")
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _clamp_kernel[grid](
+        triton.TensorWrapper(x, dtype=torch.float32),
+        triton.TensorWrapper(lo, dtype=torch.float32),
+        triton.TensorWrapper(hi, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        n_elements,
+        PROPAGATE_NAN=propagate_nan,
+        BLOCK=BLOCK,
+    )
+
+    out_np = out.cpu().numpy().astype(np.int32, copy=False)
+    exp_np = _expected_clamp_i32(x_np, lo_np, hi_np)
     _assert_payload_equal(out_np, exp_np)
 
 
