@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -12,7 +12,7 @@
 
 namespace {
 
-namespace py = pybind11;
+namespace py = nanobind;
 
 using DTypePtrKey = std::pair<Py_hash_t, bool>;
 using DTypeKey = Py_hash_t;
@@ -75,24 +75,22 @@ static Dtype2Str dtype2str;
 static TypeHandlerCache type_handler_cache;
 
 // Wrappers to make steal and borrow slightly simpler. We use raw CPython API
-// with py::object to handle decref, as using the pybind11 APIs adds exception
+// with py::object to handle decref, as higher-level binding APIs add exception
 // handling overhead which is quite significant here.
-py::object from_new_ref(py::handle val) {
-  return py::reinterpret_steal<py::object>(val);
-}
+py::object from_new_ref(py::handle val) { return py::steal<py::object>(val); }
 py::object from_borrowed_ref(py::handle val) {
-  return py::reinterpret_borrow<py::object>(val);
+  return py::borrow<py::object>(val);
 }
 
 PyObject *intern_from_string(const char *str) {
   PyObject *obj = PyUnicode_InternFromString(str);
   if (!obj)
-    throw py::error_already_set();
+    throw py::python_error();
   return obj;
 }
 
 PyObject *import_from(const char *module_name, const char *var_name) {
-  py::object var = py::module_::import(module_name).attr(var_name);
+  py::object var = py::module_::import_(module_name).attr(var_name);
   return var.release().ptr();
 }
 
@@ -136,7 +134,7 @@ bool init_globals() noexcept try {
   amd_tensor_descriptor_cls =
       import_from("triton.experimental.gluon.amd.gfx1250", "TensorDescriptor");
 
-  auto m_canonicalize = py::module_::import("triton._utils");
+  auto m_canonicalize = py::module_::import_("triton._utils");
   canonicalize_dtype_fn = import_from("triton._utils", "canonicalize_dtype");
   canonicalize_ptr_dtype_fn =
       import_from("triton._utils", "canonicalize_ptr_dtype");
@@ -157,7 +155,7 @@ bool init_globals() noexcept try {
 
   init_called = true;
   return true;
-} catch (py::error_already_set &e) {
+} catch (py::python_error &e) {
   e.restore();
   return false;
 }
@@ -761,7 +759,7 @@ static PyMethodDef module_methods[] = {
 
 } // anonymous namespace
 
-void init_native_specialize(pybind11::module &m) {
+void init_native_specialize(nanobind::module_ &m) {
   // add functions to module
   PyModule_AddFunctions(m.ptr(), module_methods);
 }
