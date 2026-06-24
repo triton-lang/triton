@@ -53,7 +53,7 @@ jobs:
       options: ${{ matrix.options }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: 'true'
       - name: Compute cache keys
@@ -241,7 +241,7 @@ jobs:
         --volume /triton-data:/triton-data
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: 'true'
       - name: Compute cache keys

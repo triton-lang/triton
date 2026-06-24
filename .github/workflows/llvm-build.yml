@@ -42,7 +42,7 @@ jobs:
     steps:
 
     - name: Checkout Repo
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         path: llvm-build
 
@@ -88,7 +88,7 @@ jobs:
         fi
 
     - name: Checkout LLVM
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         repository: ${{ env.llvm_repository }}
         path: llvm-project
