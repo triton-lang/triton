@@ -372,9 +372,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // Non-distributed convert_layout followed by multicast TMA should still be
-  // synchronized before the TMA. The mbarrier init release fence is paired with
-  // the non-relaxed cluster barrier needed by the convert_layout.
+  // The cluster barrier inserted for convert_layout can also make the mbarrier
+  // init fence visible before the following multicast TMA.
   // CHECK-LABEL: @convert_layout_trivial_then_tma_multicast_cluster_barrier
   // CHECK: ttng.init_barrier
   // CHECK: ttg.convert_layout
