@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import triton
+from triton.testing import cuda_graph_without_gc
 from triton_kernels.distributed import (
     _convert_dp_to_ep,
     _convert_ep_to_dp,
@@ -311,7 +312,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     g = torch.cuda.CUDAGraph()
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream):
-        with torch.cuda.graph(g):
+        with cuda_graph_without_gc(g):
             y_dp_local_tri_graph = run_moe()
 
     g.replay()

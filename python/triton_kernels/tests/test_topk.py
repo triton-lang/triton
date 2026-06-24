@@ -1,6 +1,7 @@
 import pytest
 import torch
 import triton.profiler as proton
+from triton.testing import cuda_graph_without_gc
 from triton_kernels.topk import topk, topk_torch
 from triton_kernels.testing import assert_equal, assert_close
 from triton_kernels.distributed import SymmetricMemoryPool
@@ -47,7 +48,7 @@ def bench_topk(n_rows, n_cols, k, apply_softmax, all_gather=False):
     g = torch.cuda.CUDAGraph()
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream):
-        with torch.cuda.graph(g):
+        with cuda_graph_without_gc(g):
             _ = topk(x, k, apply_softmax=apply_softmax, all_gather=all_gather, symm_mem_pool=symm_mem_pool)
     torch.cuda.synchronize()
     proton.activate()
