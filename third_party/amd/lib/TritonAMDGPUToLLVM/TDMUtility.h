@@ -86,23 +86,6 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        std::optional<uint32_t> warpUsedHint = std::nullopt,
                        bool isPureForm = false);
 
-// Fill TDM descriptor for gather/scatter operations (2D only).
-// Gather reads from non-contiguous rows in global memory to LDS.
-// Scatter writes from LDS to non-contiguous rows in global memory.
-// - rowIndices: which global rows to read from (gather) or write to (scatter)
-// - ldsRowOffset: starting row within shared memory
-// - globalColOffset: starting column in global memory
-// - use32BitIndices: true for 32-bit indices (max 8 rows), false for 16-bit
-// (max 16 rows)
-void fillTDMDescriptorForGatherScatter(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> blockShape, unsigned padInterval, unsigned padAmount,
-    Value &group0, Value &group1, Value &group2, Value &group3,
-    Value ldsRowOffset, Value globalColOffset, Value ldsPtr, Value pred,
-    Value barrierPtr, const triton::LinearLayout &cgaLayout, Value ctaId,
-    ArrayRef<Value> rowIndices, bool use32BitIndices, bool isGather);
-
 // Emit a TDM load/store for regular contiguous transfers (1D-5D).
 // PartitionedSharedEncoding aligns warps to LDS partitions; without a hint
 // the op auto-splits into multiple instructions when warps don't cover all
@@ -146,16 +129,15 @@ size_t getTDMGatherScatterInstrinsicCount(RankedTensorType indicesType);
 //   whether indices are 32-bit or 16-bit, detect redundant warps (via
 //   getFreeVariableMasks), and compute per-warp LDS offsets.
 // Multiple TDM instructions are issued automatically if more rows are needed.
-void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
-                          const LLVMTypeConverter *typeConverter,
-                          ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
-                          unsigned padInterval, unsigned padAmount,
-                          Value ldsPtr, Value pred, Type elementType,
-                          Value barrierPtr,
-                          const triton::LinearLayout &cgaLayout, Value ctaId,
-                          ArrayRef<Value> rowIndices, Value colOffset,
-                          bool isGather, int numWarps,
-                          RankedTensorType indicesType);
+LogicalResult
+emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
+                     const LLVMTypeConverter *typeConverter,
+                     ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
+                     unsigned padInterval, unsigned padAmount, Value ldsPtr,
+                     Value multicastMask, Type elementType, Value barrierPtr,
+                     const triton::LinearLayout &cgaLayout, Value ctaId,
+                     ArrayRef<Value> rowIndices, bool isGather, int numWarps,
+                     RankedTensorType indicesType);
 
 // Emit prefetches for a TDM tile to make it available for an actual load in
 // the future. Data is prefetched cooperatively across all CTAs, warps, and

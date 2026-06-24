@@ -36,7 +36,7 @@ def _keyed_add(x, y):
 
     kx = x & key_mask
     ky = y & key_mask
-    z = tl.where(kx == ky, x + y - kx, y)
+    z = tl.where(kx == ky, (x - kx) + y, y)
     return z
 
 
