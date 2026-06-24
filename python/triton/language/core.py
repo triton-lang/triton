@@ -1712,8 +1712,16 @@ def _aggregate(cls):
         def __setattr__(self, name, value):
             if name not in all_annotations:
                 raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
-            if not isinstance(value, all_annotations[name]):
-                raise TypeError(f"Expected {all_annotations[name]} for attribute '{name}', got {type(value)}")
+            ann = all_annotations[name]
+            if not isinstance(value, ann):
+                # Permit raw host values (e.g. torch.Tensor, host TensorDescriptor,
+                # python scalars) for runtime (non-constexpr) fields when an
+                # aggregate is constructed on the host to be passed as a
+                # `tl.constexpr` kernel argument; such members are lifted to runtime
+                # kernel parameters at launch. Triton values of the wrong type, and
+                # any value for a `tl.constexpr` field, are still rejected.
+                if ann is constexpr or isinstance(value, base_value):
+                    raise TypeError(f"Expected {ann} for attribute '{name}', got {type(value)}")
             if getattr(self, "_aggregate_init_complete", False):
                 raise AttributeError(f"cannot assign to field '{name}' on immutable aggregate {cls.__name__}; "
                                      f"use aggregate_replace() to construct a modified copy")
