@@ -14,9 +14,10 @@ from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, 
 from .. import knobs, language
 from .._C.libtriton import ir, gluon_ir
 from ..language import constexpr, str_to_ty, tensor, tuple as tl_tuple
-from ..language.core import _unwrap_if_constexpr, base_value, base_type
+from ..language.core import _unwrap_if_constexpr, base_value, base_type, _aggregate_type
 # ideally we wouldn't need any runtime component
-from ..runtime.jit import get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction
+from ..runtime.jit import (get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction,
+                           HostConstexprAggregate)
 from .._utils import apply_with_path, set_iterable_path, is_namedtuple
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
@@ -273,6 +274,13 @@ class ASTFunction:
 
         def build_value(path, ty):
             nonlocal cursor, handles
+            # Types whose runtime pieces carry argument attributes at nested paths
+            # (e.g. host-constructed aggregates) apply them as they go.
+            unflatten_with_attrs = getattr(ty, "_unflatten_ir_with_attrs", None)
+            if unflatten_with_attrs is not None:
+                val, cursor = unflatten_with_attrs(handles, cursor, fn, self.attrs, path)
+                set_iterable_path(vals, path, val)
+                return
             # > set attributes
             attr_specs = self.attrs.get(path, [])
             for attr_name, attr_val in attr_specs:
@@ -1698,6 +1706,34 @@ class CodeGenerator(ast.NodeVisitor):
     }
 
 
+class host_aggregate_type(_aggregate_type):
+    """The argument type for a host-constructed ``@triton.aggregate`` passed as a
+    ``constexpr`` kernel argument.  Its ``tl.constexpr`` members are baked in (as
+    ``constexpr_type`` fields, which flatten to no IR), while its runtime data
+    members are threaded through the kernel interface like any other IR value."""
+
+    def __init__(self, base_cls, fields, runtime_names):
+        # `_aggregate_type` is a frozen dataclass, so bypass its __setattr__.
+        object.__setattr__(self, "base_cls", base_cls)
+        object.__setattr__(self, "fields", list(fields))
+        object.__setattr__(self, "runtime_names", list(runtime_names))
+
+    def _unflatten_ir_with_attrs(self, handles: List[ir.value], cursor: int, fn, attrs, path) -> Tuple[base_value, int]:
+        """Like ``_unflatten_ir`` but also applies the argument attributes
+        (divisibility, ...) of each runtime data member.  Element 0 of the lifted
+        parameter tuple is the aggregate wrapper, so the ``k``-th runtime member's
+        attributes live at path ``(*path, k + 1)`` (see ``JITFunction.run``)."""
+        rt_index = {name: k for k, name in enumerate(self.runtime_names)}
+        instance = self.base_cls._get_instance()
+        for name, ty in self.fields:
+            if name in rt_index:
+                for attr_name, attr_val in attrs.get((*path, rt_index[name] + 1), []):
+                    fn.set_arg_attr(cursor, attr_name, attr_val)
+            value, cursor = ty._unflatten_ir(handles, cursor)
+            setattr(instance, name, value)
+        return instance, cursor
+
+
 def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None):
     arg_types = [None] * len(fn.arg_names)
 
@@ -1723,6 +1759,23 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
 
     for path, value in src.constants.items():
         apply_constexpr_types(arg_types, list(path)[::-1], value)
+
+        # Host-constructed aggregates passed as constexpr kernel arguments: their
+        # runtime data members were lifted to runtime kernel parameters (the signature
+        # is a tuple ``("constexpr", *member_types)``).  Rebuild the aggregate type
+        # with constexpr members baked in and runtime members typed from the tuple.
+        if not isinstance(value, HostConstexprAggregate):
+            continue
+        idx = path[0]
+        tup_ty = arg_types[idx]
+        runtime_types = iter(list(tup_ty.types[1:]) if hasattr(tup_ty, "types") else [])
+        fields = []
+        for fname in value.field_order:
+            if fname in value.const_bindings:
+                fields.append((fname, constexpr(value.const_bindings[fname]).type))
+            else:
+                fields.append((fname, next(runtime_types)))
+        arg_types[idx] = host_aggregate_type(value.base_cls, fields, value.runtime_names)
 
     prototype = ASTFunction([], arg_types, src.attrs)
     # query function representation

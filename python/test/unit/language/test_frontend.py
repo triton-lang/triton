@@ -245,6 +245,83 @@ def test_starred_varargs():
     consume_varargs(*dims)
 
 
+@triton.aggregate
+class _CopyDescPolicy:
+    src: tl.tensor_descriptor
+    dst: tl.tensor_descriptor
+    scale: tl.constexpr
+
+    @triton.constexpr_function
+    def __init__(self, src, dst, scale):
+        self.src = src
+        self.dst = dst
+        self.scale = tl.constexpr(scale)
+
+    @triton.jit
+    def run(self, off_m, off_n):
+        self.dst.store([off_m, off_n], self.src.load([off_m, off_n]) * self.scale)
+
+
+@triton.jit
+def _host_agg_kernel(policy: tl.constexpr, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+    policy.run(tl.program_id(0) * M_BLOCK, tl.program_id(1) * N_BLOCK)
+
+
+def _compile_host_agg_signature(policy, M_BLOCK, N_BLOCK):
+    """Drive the frontend (no GPU) to obtain the Triton signature for a kernel
+    taking a host-constructed aggregate, exercising the same constexpr-aggregate
+    lifting that ``JITFunction.run`` performs."""
+    from triton.compiler import make_backend
+    from triton._filecheck import stub_target
+    from triton.runtime.jit import create_function_from_signature
+
+    backend = make_backend(stub_target)
+    binder = create_function_from_signature(_host_agg_kernel.signature, _host_agg_kernel.params, backend)
+    kwargs = {"sanitize_overflow": False}
+    bound_args, specialization, options = binder(policy, M_BLOCK, N_BLOCK, **kwargs)
+    _host_agg_kernel._specialize_host_aggregates(backend, bound_args, specialization)
+    _, signature, _, _ = _host_agg_kernel._pack_args(backend, kwargs, bound_args, specialization, options)
+    return signature
+
+
+def test_host_aggregate_tensor_descriptor_members():
+    # A host-constructed aggregate with `tl.tensor_descriptor` data members passed
+    # as a `tl.constexpr` argument: its descriptor members are lifted to runtime
+    # kernel parameters (like host-lambda captures) while the constexpr member is
+    # baked in. This checks the generated kernel interface/signature only, so it
+    # needs no GPU -- the descriptors are built from CPU tensors.
+    torch = pytest.importorskip("torch")
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    M, N = 32, 128
+    M_BLOCK, N_BLOCK = 8, 32
+    src = TensorDescriptor.from_tensor(torch.randn((M, N)), [M_BLOCK, N_BLOCK])
+    dst = TensorDescriptor.from_tensor(torch.zeros((M, N)), [M_BLOCK, N_BLOCK])
+    policy = _CopyDescPolicy(src, dst, 2.0)
+
+    # Signature: `policy` expands to a tuple whose leading element is the baked
+    # constexpr aggregate and whose remaining elements are the two lifted
+    # descriptor members; the constexpr `scale` does not appear, and the other
+    # constexpr block sizes stay baked.
+    signature = _compile_host_agg_signature(policy, M_BLOCK, N_BLOCK)
+    sig = signature["policy"]
+    assert sig[0] == "constexpr"
+    assert len(sig) == 3
+    assert all("tensordesc" in s for s in sig[1:])
+    assert signature["M_BLOCK"] == "constexpr"
+    assert signature["N_BLOCK"] == "constexpr"
+
+    # Interface: the generated kernel takes the two descriptors as runtime
+    # parameters, while the constexpr scale is baked in as a constant.
+    module = run_parser(_host_agg_kernel, args=(policy, M_BLOCK, N_BLOCK))
+    module_str = module.str_nodebug()
+    interface = next(line for line in module_str.splitlines() if "tt.func public @_host_agg_kernel" in line)
+    assert interface.count("!tt.tensordesc<8x32xf32>") == 2
+    # scale=2.0 was folded into the body, so it is not a kernel parameter.
+    assert " f32," not in interface and not interface.rstrip().endswith(" f32)")
+    assert "arith.constant 2.000000e+00 : f32" in module_str
+
+
 @triton.jit
 def accumulate(a, b):
     return a + b
