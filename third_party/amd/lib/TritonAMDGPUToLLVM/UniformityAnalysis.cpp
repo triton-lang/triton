@@ -338,7 +338,11 @@ static bool isUniformRecursive(Value v, const DataFlowSolver &solver,
     // owning func is a kernel entry.
     if (auto ba = dyn_cast<BlockArgument>(peeled)) {
       Block *blk = ba.getOwner();
-      if (blk && blk->isEntryBlock()) {
+      // Block::isEntryBlock() requires the block to be attached to a
+      // parent region. Values synthesized during lowering can contain
+      // detached block arguments while probing split-soffset uniformity;
+      // treat those as non-uniform instead of dereferencing a null parent.
+      if (blk && blk->getParent() && blk->isEntryBlock()) {
         if (auto func = dyn_cast_or_null<LLVM::LLVMFuncOp>(blk->getParentOp()))
           return isKernelEntry(func);
       }
