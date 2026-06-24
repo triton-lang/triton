@@ -27,6 +27,23 @@ struct PyShadowCell {
   uint32_t numReads = 0;
 };
 
+bool scalarClockEquals(const PyScalarClock &lhs, const PyScalarClock &rhs) {
+  return lhs.epoch == rhs.epoch && lhs.threadId == rhs.threadId &&
+         lhs.scope == rhs.scope && lhs.isRelease == rhs.isRelease;
+}
+
+bool shadowCellEquals(const PyShadowCell &lhs, const PyShadowCell &rhs) {
+  if (lhs.numReads != rhs.numReads ||
+      !scalarClockEquals(lhs.writeClock, rhs.writeClock)) {
+    return false;
+  }
+  for (size_t i = 0; i < lhs.readClocks.size(); ++i) {
+    if (!scalarClockEquals(lhs.readClocks[i], rhs.readClocks[i]))
+      return false;
+  }
+  return true;
+}
+
 struct PyGlobalState {
   uintptr_t reserveBase = 0;
   uintptr_t globalsBase = 0;
@@ -273,8 +290,7 @@ void init_gsan_testing(py::module &&m) {
       .def(
           "__eq__",
           [](const PyScalarClock &lhs, const PyScalarClock &rhs) {
-            return lhs.epoch == rhs.epoch && lhs.threadId == rhs.threadId &&
-                   lhs.scope == rhs.scope && lhs.isRelease == rhs.isRelease;
+            return scalarClockEquals(lhs, rhs);
           },
           py::is_operator())
       .def("__str__", [](const PyScalarClock &c) { return scalarClockStr(c); })
@@ -292,6 +308,12 @@ void init_gsan_testing(py::module &&m) {
                              [](const PyShadowCell &cell) {
                                return static_cast<uint64_t>(cell.numReads);
                              })
+      .def(
+          "__eq__",
+          [](const PyShadowCell &lhs, const PyShadowCell &rhs) {
+            return shadowCellEquals(lhs, rhs);
+          },
+          py::is_operator())
       .def("__str__",
            [](const PyShadowCell &cell) { return shadowCellStr(cell); })
       .def("__repr__",

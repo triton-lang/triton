@@ -677,6 +677,15 @@ public:
   // does not map other dimensions onto those or these onto other dimensions.
   bool isTrivialOver(ArrayRef<StringAttr> dimNames) const;
 
+  // Returns true if the output dimension `dim` is equal to the input dimension
+  // `dim`. Other input dimensions must not affect this output dimension, but
+  // `dim` is allowed to affect other output dimensions.
+  //
+  // For example, a layout mapping block -> (offset, block) as (1, 1) is the
+  // identity on the block output dimension, even though it is not trivial over
+  // block because block also affects offset.
+  bool isIdentityOnOutDim(StringAttr dim) const;
+
   // For an endomorphism on dimNames (linear map that maps dimNames to dimNames)
   // checks whether it is the identity map on these dimensions (i.e
   // LinearLayouts::isTrivialOver) and if so, returns the sublayout of the

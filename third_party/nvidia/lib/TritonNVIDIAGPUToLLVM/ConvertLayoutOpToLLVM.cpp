@@ -139,7 +139,7 @@ struct ConvertLayoutOpSwizzlingConversion
     auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
 
     auto totalStoreCvt = srcLayout.invertAndCompose(smem);
-    auto totalLoadCvt = dstLayout.invertAndCompose(smem);
+    auto totalLoadCvt = invertAndComposeBlockLocal(smem, dstLayout);
 
     // The permutation exists by construction of the reps dimension in
     // optimalSwizzling

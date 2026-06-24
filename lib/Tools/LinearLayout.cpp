@@ -797,6 +797,18 @@ bool LinearLayout::isTrivialOver(ArrayRef<StringAttr> dimNames) const {
          sublayoutIsZero(dimNames, remainingOutDimNames);
 }
 
+bool LinearLayout::isIdentityOnOutDim(StringAttr dim) const {
+  if (!hasInDim(dim) || !hasOutDim(dim))
+    return false;
+  SmallVector<StringAttr> otherInDims;
+  for (StringAttr inDim : getInDimNames()) {
+    if (inDim != dim)
+      otherInDims.push_back(inDim);
+  }
+  return squareSublayoutIsIdentity(*this, {dim}) &&
+         sublayoutIsZero(otherInDims, {dim});
+}
+
 std::optional<LinearLayout>
 LinearLayout::quotient(ArrayRef<StringAttr> dimNames) const {
   if (llvm::any_of(dimNames,

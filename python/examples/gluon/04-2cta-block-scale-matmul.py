@@ -713,10 +713,11 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
     clc_barriers = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
     clc_planar_ready_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
     clc_consumed_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=TWO_CTAS)
-    for i in gl.static_range(num_acc_buffers):
-        mbarrier.init(clc_barriers.index(i), count=1)
-        mbarrier.init(clc_planar_ready_bars.index(i), count=1)
-        mbarrier.init(clc_consumed_bars.index(i), count=N_PARTITIONS - 1)
+    if scheduler == SCHEDULER_CLC:
+        for i in gl.static_range(num_acc_buffers):
+            mbarrier.init(clc_barriers.index(i), count=1)
+            mbarrier.init(clc_planar_ready_bars.index(i), count=1)
+            mbarrier.init(clc_consumed_bars.index(i), count=N_PARTITIONS - 1)
 
     cga_layout_clc: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
     clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout_clc)

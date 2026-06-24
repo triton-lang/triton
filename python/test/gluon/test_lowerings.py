@@ -4,9 +4,10 @@ import pytest
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
 from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
+from triton.experimental.gluon.language.nvidia.blackwell import TensorMemoryLayout, allocate_tensor_memory
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
@@ -647,6 +648,38 @@ def test_local_store_tmem_32x32b_2cta_splitm_to_splitk(device):
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("instr_variant", ["32x32b", "16x64b", "16x128b", "16x256b"])
+def test_tmem_load_store_instruction_sizes(instr_variant, device):
+    shape = (128, 128)
+
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, shape: ttgl.constexpr, instr_variant: ttgl.constexpr):
+        M: ttgl.constexpr = shape[0]
+        N: ttgl.constexpr = shape[1]
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=shape, col_stride=1)
+        tmem = allocate_tensor_memory(ttgl.float32, shape, tmem_layout)
+        tmem_reg_layout: ttgl.constexpr = tmem.get_reg_layout(instr_variant=instr_variant)
+        offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, tmem_reg_layout))[:, None]
+        offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, tmem_reg_layout))[None, :]
+        offsets = offs_m * N + offs_n
+        x = ttgl.load(x_ptr + offsets)
+        tmem.store(x)
+        y = tmem.load(tmem_reg_layout)
+        ttgl.store(y_ptr + offsets, y)
+
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    y = torch.empty_like(x)
+
+    compiled = kernel[(1, )](x, y, shape, instr_variant, num_warps=4)
+
+    torch.testing.assert_close(y, x, rtol=0, atol=0)
+    ptx = compiled.asm["ptx"]
+    assert f"tcgen05.st.sync.aligned.{instr_variant}" in ptx
+    assert f"tcgen05.ld.sync.aligned.{instr_variant}" in ptx
+
+
 def _funky_reduce_layouts():
 
     def ilog2(x):
@@ -1149,7 +1182,7 @@ def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layo
 
     torch.testing.assert_close(y, x, rtol=0, atol=0)
     if src_ctas_per_cga != dst_ctas_per_cga:
-        assert "ld.shared::cluster" in compiled.asm["ptx"]
+        # Replicated values may be loaded from the local CTA.
         assert "st.shared::cluster" not in compiled.asm["ptx"]
 
 

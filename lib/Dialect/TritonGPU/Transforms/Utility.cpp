@@ -1523,7 +1523,15 @@ replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
   SmallVector<ttg::LocalAllocOp> allocsToErase;
   for (Operation *user : old.getUsers()) {
     if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-      if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
+      auto userAllocTy = userAlloc.getType();
+
+      auto allocEnc = dyn_cast<ttg::LayoutEncodingTrait>(allocTy.getEncoding());
+      auto userAllocEnc =
+          dyn_cast<ttg::LayoutEncodingTrait>(userAllocTy.getEncoding());
+      if ((allocTy.getEncoding() == userAllocTy.getEncoding()) ||
+          (allocEnc && userAllocEnc &&
+           ttg::areLayoutsEquivalent(allocTy.getShape(), allocEnc,
+                                     userAllocEnc))) {
         replaceUsesAndPropagateType(builder, userAlloc, alloc);
         allocsToErase.push_back(userAlloc);
       }
