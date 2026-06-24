@@ -343,8 +343,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @clamp_none(%x: tensor<4xf32>, %lo: tensor<4xf32>, %hi: tensor<4xf32>) -> tensor<4xf32> {
     // CHECK: %[[X:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
     // CHECK: %[[LO:.*]] = tti.experimental_fpsan_embed %arg1 : (tensor<4xf32>) -> tensor<4xi32>
-    // CHECK: %[[HI:.*]] = tti.experimental_fpsan_embed %arg2 : (tensor<4xf32>) -> tensor<4xi32>
     // CHECK: %[[LOWER_BOUNDED:.*]] = arith.maxsi %[[X]], %[[LO]] : tensor<4xi32>
+    // CHECK: %[[HI:.*]] = tti.experimental_fpsan_embed %arg2 : (tensor<4xf32>) -> tensor<4xi32>
     // CHECK: %[[CLAMPED:.*]] = arith.minsi %[[LOWER_BOUNDED]], %[[HI]] : tensor<4xi32>
     // CHECK: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[CLAMPED]] : (tensor<4xi32>) -> tensor<4xf32>
     // CHECK-NOT: tt.clampf
@@ -361,8 +361,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func public @clamp_all(%x: tensor<4xf32>, %lo: tensor<4xf32>, %hi: tensor<4xf32>) -> tensor<4xf32> {
     // CHECK: %[[X:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
     // CHECK: %[[LO:.*]] = tti.experimental_fpsan_embed %arg1 : (tensor<4xf32>) -> tensor<4xi32>
-    // CHECK: %[[HI:.*]] = tti.experimental_fpsan_embed %arg2 : (tensor<4xf32>) -> tensor<4xi32>
     // CHECK: %[[LOWER_BOUNDED:.*]] = arith.maxsi %[[X]], %[[LO]] : tensor<4xi32>
+    // CHECK: %[[HI:.*]] = tti.experimental_fpsan_embed %arg2 : (tensor<4xf32>) -> tensor<4xi32>
     // CHECK: %[[CLAMPED:.*]] = arith.minsi %[[LOWER_BOUNDED]], %[[HI]] : tensor<4xi32>
     // CHECK: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[CLAMPED]] : (tensor<4xi32>) -> tensor<4xf32>
     // CHECK-NOT: tt.clampf

@@ -1845,17 +1845,22 @@ struct ClampFOpPattern : public OpRewritePattern<tt::ClampFOp> {
   LogicalResult matchAndRewrite(tt::ClampFOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto xI = embedToInt(rewriter, loc, op.getX());
-    auto minI = embedToInt(rewriter, loc, op.getMin());
-    auto maxI = embedToInt(rewriter, loc, op.getMax());
-
-    // Match the signed-payload semantics used by the FPSan min/max rewrites.
-    // Float bit patterns that encode IEEE NaNs are ordinary payloads here, so
-    // both PropagateNan modes intentionally have the same behavior.
-    auto lowerBoundedI = arith::MaxSIOp::create(rewriter, loc, xI, minI);
-    auto resultI = arith::MinSIOp::create(rewriter, loc, lowerBoundedI, maxI);
-    auto resultF = unembedToFloat(rewriter, loc, resultI, op.getType());
-    rewriter.replaceOp(op, resultF);
+    Value result;
+    // Pre-lower to the matching float min/max pair so clamp inherits the
+    // payload semantics of the corresponding FPSan min/max patterns.
+    if (op.getPropagateNan() == tt::PropagateNan::ALL) {
+      auto lowerBounded =
+          arith::MaximumFOp::create(rewriter, loc, op.getX(), op.getMin());
+      result =
+          arith::MinimumFOp::create(rewriter, loc, lowerBounded, op.getMax());
+    } else {
+      assert(op.getPropagateNan() == tt::PropagateNan::NONE);
+      auto lowerBounded =
+          arith::MaxNumFOp::create(rewriter, loc, op.getX(), op.getMin());
+      result =
+          arith::MinNumFOp::create(rewriter, loc, lowerBounded, op.getMax());
+    }
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
