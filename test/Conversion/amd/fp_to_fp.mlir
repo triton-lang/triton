@@ -239,3 +239,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COMMON-LABEL: test_scalar_conversion
+// COMMON: llvm.return
+tt.func @test_scalar_conversion(%arg0: f32) -> f8E4M3FN {
+  %0 = tt.fp_to_fp %arg0, rounding = rtne : f32 -> f8E4M3FN
+  tt.return %0 : f8E4M3FN
+}
