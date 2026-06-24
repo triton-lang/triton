@@ -49,6 +49,11 @@ def is_fpsan_supported(arch):
     return arch in ["gfx942", "gfx950", "gfx1250"]
 
 
+def needs_gfx94x_gfx950_llvm_workarounds(arch):
+    arch = str(arch).split(":", 1)[0]
+    return arch.startswith("gfx94") or arch == "gfx950"
+
+
 def is_consan_supported(arch):
     return arch in ["gfx1250"]
 
@@ -507,8 +512,12 @@ class HIPBackend(BaseBackend):
             if len(paths) > 0:
                 llvm.link_extern_libs(llvm_mod, paths)
 
+        # FIXME: LLVM 62b7cf regresses ROCm Inductor accuracy on gfx94x/gfx950
+        # through SLP vectorization. Keep the workaround scoped to the affected
+        # CDNA targets while the LLVM-side issue is fixed.
+        disable_slp_vectorizer = needs_gfx94x_gfx950_llvm_workarounds(options.arch)
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion,
-                             disable_vector_combine=True)
+                             disable_slp_vectorizer=disable_slp_vectorizer, disable_vector_combine=True)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
@@ -548,6 +557,10 @@ class HIPBackend(BaseBackend):
         flags = []
         if is_expert_scheduling_enabled(options.arch):
             flags.append("amdgpu-expert-scheduling-mode")
+        # FIXME: LLVM 62b7cf's AMDGPU post-RA scheduler miscompiles a gfx94x
+        # Inductor TIMM kernel. Disable it only for the affected CDNA targets.
+        if needs_gfx94x_gfx950_llvm_workarounds(options.arch):
+            flags.append("disable-post-ra")
         features = disable_real_true16_feature(options.arch)
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash

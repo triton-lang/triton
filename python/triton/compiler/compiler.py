@@ -75,10 +75,31 @@ class ASTSource:
         key = f"{self.fn.cache_key}-{str(self.attrs)}-{sorted_sig}-{constants_key}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
+    def _attrs_for_target(self, target):
+        arch = str(target.arch).split(":", 1)[0]
+        if target.backend != "hip" or not (arch.startswith("gfx94") or arch == "gfx950"):
+            return self.attrs
+
+        # LLVM 62b7cf regresses ROCm Inductor accuracy on gfx94x/gfx950 when
+        # kernels carry divisibility hints. Keep other hints intact.
+        attrs = {
+            key: [attr for attr in attr_specs if attr[0] != "tt.divisibility"]
+            for key, attr_specs in self.attrs.items()
+        }
+        return {key: attr_specs for key, attr_specs in attrs.items() if attr_specs}
+
     def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
         from .code_generator import ast_to_ttir
-        return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
-                           module_map=module_map)
+        src = copy.copy(self)
+        src.attrs = self._attrs_for_target(target)
+        return ast_to_ttir(
+            self.fn,
+            src,
+            context=context,
+            options=options,
+            codegen_fns=codegen_fns,
+            module_map=module_map,
+        )
 
     def parse_options(self):
         return dict()

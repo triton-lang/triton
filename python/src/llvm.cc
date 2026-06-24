@@ -40,6 +40,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
+#include <vector>
 
 namespace py = pybind11;
 
@@ -128,6 +129,15 @@ public:
   ScopedLLVMOption &operator=(const ScopedLLVMOption &) = delete;
 };
 
+std::vector<std::unique_ptr<ScopedLLVMOption<bool>>>
+setScopedLLVMOptions(const std::vector<std::string> &names) {
+  std::vector<std::unique_ptr<ScopedLLVMOption<bool>>> guards;
+  guards.reserve(names.size());
+  for (const std::string &name : names)
+    guards.push_back(std::make_unique<ScopedLLVMOption<bool>>(name, true));
+  return guards;
+}
+
 std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
                     bool enable_fp_fusion, const std::string &features) {
@@ -162,10 +172,7 @@ void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
     return;
   }
 
-  // Apply flags
-  for (const std::string &flag : flags) {
-    setLLVMOption<bool>(flag, true);
-  }
+  [[maybe_unused]] auto flagGuards = setScopedLLVMOptions(flags);
 
   bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (!disableLLVMOpt) {
@@ -254,10 +261,7 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
 
   llvm::StripDebugInfo(module);
 
-  // Apply flags
-  for (const std::string &flag : flags) {
-    setLLVMOption<bool>(flag, true);
-  }
+  [[maybe_unused]] auto flagGuards = setScopedLLVMOptions(flags);
 
   bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (!disableLLVMOpt) {
@@ -333,10 +337,7 @@ std::string translateLLVMIRToASM(
     bool enable_fp_fusion, bool isObject, bool canonicalizeGEP) {
   using namespace mlir;
 
-  // Apply flags
-  for (const std::string &flag : flags) {
-    setLLVMOption<bool>(flag, true);
-  }
+  [[maybe_unused]] auto flagGuards = setScopedLLVMOptions(flags);
 
   if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
     setLLVMOption<bool>("print-after-all", true);
@@ -439,10 +440,7 @@ translateMIRToASM(const std::string &mirPath, const std::string &triple,
     setLLVMOption<bool>("print-after-all", true);
   }
 
-  // Apply other flags
-  for (const std::string &flag : flags) {
-    setLLVMOption<bool>(flag, true);
-  }
+  [[maybe_unused]] auto flagGuards = setScopedLLVMOptions(flags);
 
   // Parse MIR into LLVM Module
   llvm::LLVMContext context;

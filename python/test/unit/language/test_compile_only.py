@@ -242,6 +242,32 @@ def test_signature_ordering():
     triton.compile(src=src, target=target)
 
 
+def test_ast_source_filters_divisibility_for_gfx94x_gfx950():
+    @triton.jit
+    def kernel(a, b):
+        idx = tl.arange(0, 16)
+        tl.store(b + idx, tl.load(a + idx))
+
+    attrs = {
+        (0,): [["tt.divisibility", 16], ["tt.pointer_range", 32]],
+        (1,): [["tt.divisibility", 16]],
+    }
+    src = ASTSource(fn=kernel, signature={"a": "*fp32", "b": "*fp32"}, attrs=attrs)
+
+    assert src._attrs_for_target(GPUTarget("hip", "gfx942", 64)) == {
+        (0,): [["tt.pointer_range", 32]],
+    }
+    assert src._attrs_for_target(GPUTarget("hip", "gfx950", 64)) == {
+        (0,): [["tt.pointer_range", 32]],
+    }
+    assert src._attrs_for_target(GPUTarget("hip", "gfx950:xnack-", 64)) == {
+        (0,): [["tt.pointer_range", 32]],
+    }
+    assert src._attrs_for_target(GPUTarget("hip", "gfx1030", 64)) == attrs
+    assert src._attrs_for_target(GPUTarget("hip", "gfx951", 64)) == attrs
+    assert src._attrs_for_target(GPUTarget("cuda", 90, 32)) == attrs
+
+
 def test_fp8_compiles_for_multiple_architectures_hip():
     """
     Validate FP8 compilation succeeds for architectures with different
