@@ -28,7 +28,8 @@ constexpr llvm::StringLiteral kSplitSafeAttrName = "amdgpu.split_soffset_safe";
 static bool isTransparentWrapper(Operation *op) {
   bool isWrapper =
       isa<triton::SplatOp, triton::BroadcastOp, triton::ExpandDimsOp,
-          triton::ReshapeOp, ttg::ConvertLayoutOp>(op);
+          triton::ReshapeOp, triton::SplitOp, triton::TransOp,
+          tta::ExtractSliceOp, ttg::ConvertLayoutOp>(op);
   assert((!isWrapper || op->getNumOperands() == 1) &&
          "transparent wrapper must have a single SSA operand.");
   return isWrapper;
@@ -44,6 +45,15 @@ static Value peelTransparentWrappers(Value v) {
   return v;
 }
 
+// True when the integer-range lattice proves `v` non-negative. The lattice
+// models i32 wrap, so it rejects values that overflow into the sign bit.
+static bool hasNonNegativeRange(Value v, DataFlowSolver &solver) {
+  const auto *range = solver.lookupState<dataflow::IntegerValueRangeLattice>(v);
+  return range && !range->getValue().isUninitialized() &&
+         !AMD::isEmptyInitializedRange(range->getValue().getValue()) &&
+         succeeded(dataflow::staticallyNonNegative(solver, v));
+}
+
 // Conservatively accept an offset only when every leaf in its
 // additive/shape expression proves non-negative. This may miss safe splits,
 // but never annotates an offset with a possibly-negative voffset.
@@ -51,15 +61,11 @@ static bool isLeafNonNegative(Value v, DataFlowSolver &solver) {
   // An `add` is never a leaf to the soffset splitter. It peels the summands
   // apart and lifts the uniform ones into the unsigned soffset. So a sum whose
   // range is non-negative can still hide a negative summand.
-  if (peelTransparentWrappers(v).getDefiningOp<arith::AddIOp>())
+  Value peeled = peelTransparentWrappers(v);
+  Operation *def = peeled.getDefiningOp();
+  if (def && isa<arith::AddIOp, triton::CatOp, triton::JoinOp>(def))
     return false;
-
-  const auto *range = solver.lookupState<dataflow::IntegerValueRangeLattice>(v);
-  if (!range || range->getValue().isUninitialized())
-    return false;
-  if (AMD::isEmptyInitializedRange(range->getValue().getValue()))
-    return false;
-  return succeeded(dataflow::staticallyNonNegative(solver, v));
+  return hasNonNegativeRange(v, solver);
 }
 
 static bool isNonNegative(Value v, DataFlowSolver &solver) {
@@ -75,12 +81,33 @@ static bool isNonNegative(Value v, DataFlowSolver &solver) {
   if (!def)
     return false;
 
+  // The splitter re-sums the per-lane leaves into a single i32 voffset, so a
+  // sum of non-negative leaves can still overflow and wrap negative. Require
+  // the sum's range to be non-negative in addition to every operand.
+  if (isa<arith::AddIOp>(def)) {
+    if (!hasNonNegativeRange(v, solver))
+      return false;
+    for (Value operand : def->getOperands())
+      if (!isNonNegative(operand, solver))
+        return false;
+    return true;
+  }
+
+  if (isa<triton::CatOp, triton::JoinOp>(def)) {
+    for (Value operand : def->getOperands())
+      if (!isNonNegative(operand, solver))
+        return false;
+    return true;
+  }
+
   // Recurse through ops where "all operands non-negative -> result
-  // non-negative" (with the same < 2GB wrap caveat the rest of the
-  // buffer-op path already accepts on add/mul).
-  if (isa<arith::AddIOp, arith::MulIOp, arith::OrIOp, arith::XOrIOp,
-          arith::DivSIOp, arith::DivUIOp, arith::MinSIOp, arith::MinUIOp,
-          arith::MaxSIOp, arith::MaxUIOp, arith::ExtSIOp>(def)) {
+  // non-negative". `mul` and `shl` are excluded: they scale magnitude, so a
+  // product or shift of non-negative values can overflow i32 and wrap negative.
+  // They are trusted only when the lattice check above already proved them
+  // non-negative.
+  if (isa<arith::OrIOp, arith::XOrIOp, arith::DivSIOp, arith::DivUIOp,
+          arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp,
+          arith::ExtSIOp>(def)) {
     for (Value operand : def->getOperands())
       if (!isNonNegative(operand, solver))
         return false;
@@ -88,11 +115,11 @@ static bool isNonNegative(Value v, DataFlowSolver &solver) {
   }
 
   // First operand only (sign carries from operand 0).
-  if (isa<arith::ShLIOp, arith::ShRSIOp, arith::RemSIOp, arith::RemUIOp>(def))
+  if (isa<arith::ShRSIOp, arith::RemSIOp, arith::RemUIOp>(def))
     return isNonNegative(def->getOperand(0), solver);
 
   // Always non-negative regardless of operands.
-  if (isa<arith::ShRUIOp, arith::ExtUIOp>(def))
+  if (isa<arith::ExtUIOp>(def))
     return true;
 
   // Triton shape/control ops that are non-negative or preserve sign.
