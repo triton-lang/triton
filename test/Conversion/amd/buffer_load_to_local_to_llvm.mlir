@@ -191,17 +191,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // and then the aux/imm constants (in source order: aux first, then imm)
     // right before the rocdl op.
     // COMMON: %[[VOFFSET:.*]] = llvm.select {{.*}} : i1, i32
-    // COMMON: %[[aux_ca:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COMMON: %[[IMM:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // COMMON: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, %[[VOFFSET]], {{.*}}, %[[IMM]], %[[aux_ca]]
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, %[[VOFFSET]], {{.*}}, %[[IMM]], 0
     %1 = amdg.buffer_load_to_local %arg0[%0] cacheModifier = ca into %arg2: <f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
     // COMMON: llvm.getelementptr
-    // COMMON: %[[aux_cg:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // COMMON: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cg]]
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, 3
     %2 = amdg.buffer_load_to_local %arg0[%0] cacheModifier = cg into %arg2: <f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
     // COMMON: llvm.getelementptr
-    // COMMON: %[[aux_cv:.*]] = llvm.mlir.constant(17 : i32) : i32
-    // COMMON: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cv]]
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, 17
     %3 = amdg.buffer_load_to_local %arg0[%0] cacheModifier = cv into %arg2: <f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
 
     tt.return
