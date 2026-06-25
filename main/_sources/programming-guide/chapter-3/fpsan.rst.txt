@@ -164,29 +164,33 @@ Important caveat:
 
 - This is ring arithmetic modulo ``2^w``, not IEEE arithmetic.
 
-Min and Max
-===========
+Min, Max, and Clamp
+===================
 
 Supported operations:
 
 - ``tl.minimum(x, y)``
 - ``tl.maximum(x, y)``
 - ``min(x, y)`` and ``max(x, y)`` in Triton code
+- ``tl.clamp(x, lo, hi)``
 
 Rewrite:
 
 - signed integer ``min`` or ``max`` on payloads
+- clamp becomes ``min(max(x, lo), hi)`` in the same signed payload order
 
 Exact preserved properties:
 
 - idempotence: ``min(x, x) = x`` and ``max(x, x) = x``
 - commutativity
 - associativity
+- ``clamp(x, lo, hi) = min(max(x, lo), hi)``
 
 Important caveats:
 
 - The order is the signed integer order of payloads, not IEEE float order.
 - NaN handling, and the exact signed-zero contract, are not modeled.
+- Both ``propagate_nan`` modes use the same payload semantics.
 
 Division
 ========

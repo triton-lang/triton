@@ -87,7 +87,7 @@
 <li class="toctree-l2"><a class="reference internal" href="#what-fpsan-does-not-preserve">What FpSan Does Not Preserve</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#common-arithmetic-ops">Common Arithmetic Ops</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#add-sub-neg-mul">Add, Sub, Neg, Mul</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#min-and-max">Min and Max</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#min-max-and-clamp">Min, Max, and Clamp</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#division">Division</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#remainder">Remainder</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#fma">FMA</a></li>
@@ -280,28 +280,32 @@ result</p></li>
 <li><p>This is ring arithmetic modulo <code class="docutils literal notranslate"><span class="pre">2^w</span></code>, not IEEE arithmetic.</p></li>
 </ul>
 </section>
-<section id="min-and-max">
-<h3>Min and Max<a class="headerlink" href="#min-and-max" title="Link to this heading"></a></h3>
+<section id="min-max-and-clamp">
+<h3>Min, Max, and Clamp<a class="headerlink" href="#min-max-and-clamp" title="Link to this heading"></a></h3>
 <p>Supported operations:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">tl.minimum(x,</span> <span class="pre">y)</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">tl.maximum(x,</span> <span class="pre">y)</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">min(x,</span> <span class="pre">y)</span></code> and <code class="docutils literal notranslate"><span class="pre">max(x,</span> <span class="pre">y)</span></code> in Triton code</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.clamp(x,</span> <span class="pre">lo,</span> <span class="pre">hi)</span></code></p></li>
 </ul>
 <p>Rewrite:</p>
 <ul class="simple">
 <li><p>signed integer <code class="docutils literal notranslate"><span class="pre">min</span></code> or <code class="docutils literal notranslate"><span class="pre">max</span></code> on payloads</p></li>
+<li><p>clamp becomes <code class="docutils literal notranslate"><span class="pre">min(max(x,</span> <span class="pre">lo),</span> <span class="pre">hi)</span></code> in the same signed payload order</p></li>
 </ul>
 <p>Exact preserved properties:</p>
 <ul class="simple">
 <li><p>idempotence: <code class="docutils literal notranslate"><span class="pre">min(x,</span> <span class="pre">x)</span> <span class="pre">=</span> <span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">max(x,</span> <span class="pre">x)</span> <span class="pre">=</span> <span class="pre">x</span></code></p></li>
 <li><p>commutativity</p></li>
 <li><p>associativity</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">clamp(x,</span> <span class="pre">lo,</span> <span class="pre">hi)</span> <span class="pre">=</span> <span class="pre">min(max(x,</span> <span class="pre">lo),</span> <span class="pre">hi)</span></code></p></li>
 </ul>
 <p>Important caveats:</p>
 <ul class="simple">
 <li><p>The order is the signed integer order of payloads, not IEEE float order.</p></li>
 <li><p>NaN handling, and the exact signed-zero contract, are not modeled.</p></li>
+<li><p>Both <code class="docutils literal notranslate"><span class="pre">propagate_nan</span></code> modes use the same payload semantics.</p></li>
 </ul>
 </section>
 <section id="division">
