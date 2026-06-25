@@ -10,8 +10,6 @@ import triton.language as tl
 from ._allocator import get_device_rank, get_runtime_state_layout
 from ._utils import uint8_cuda_tensor_from_ptr
 
-_SYNC_BLOCK_SIZE = 128
-
 
 @dataclass(frozen=True)
 class _RuntimeStateLayout:
@@ -52,7 +50,7 @@ def warmup_gsan_kernels() -> None:
             0,
             0,
             0,
-            BLOCK_SIZE=_SYNC_BLOCK_SIZE,
+            BLOCK_SIZE=128,
             grid=(1, ),
             num_warps=1,
         )
@@ -113,7 +111,7 @@ def synchronize_launch_stream(device: int) -> None:
     This makes all reads and writes transitively visible to other threads.
     """
     layout = _runtime_state_layout(get_device_rank(device), device)
-    grid = (triton.cdiv(layout.num_threads, _SYNC_BLOCK_SIZE), 1, 1)
+    grid = (triton.cdiv(layout.num_threads, 128), 1, 1)
     with _compile_without_gsan():
         _synchronize_vector_clocks_kernel[grid](
             layout.thread_state_region,
@@ -121,7 +119,7 @@ def synchronize_launch_stream(device: int) -> None:
             layout.num_sms,
             layout.num_threads,
             layout.thread_state_header_size_bytes,
-            BLOCK_SIZE=_SYNC_BLOCK_SIZE,
+            BLOCK_SIZE=128,
             num_warps=1,
         )
 
