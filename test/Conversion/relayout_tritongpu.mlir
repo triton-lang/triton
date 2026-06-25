@@ -65,6 +65,6 @@ tt.func @async_tma_scatter(%desc: !tt.tensordesc<1x128xbf16, #shared>, %y_offset
                            %src: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>) {
   %x_offsets = arith.constant dense<1> : tensor<32xi32>
   // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
-  ttng.async_tma_scatter %desc[%x_offsets, %y_offset] %src : !tt.tensordesc<1x128xbf16, #shared>, tensor<32xi32>, i32, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>
+%tma_tok19 = ttng.async_tma_scatter %desc[%x_offsets, %y_offset] %src : !tt.tensordesc<1x128xbf16, #shared>, tensor<32xi32>, i32, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>
   tt.return
 }

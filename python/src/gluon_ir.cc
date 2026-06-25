@@ -998,18 +998,26 @@ void init_gluon_ir(py::module_ &m) {
           py::arg("offsets").none())
       .def("create_async_tma_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
-              Value src) {
-             self.create<ttng::AsyncTMACopyLocalToGlobalOp>(descPtr, coord,
-                                                            src);
+             Value src) {
+             return Value(self.create<ttng::AsyncTMACopyLocalToGlobalOp>(
+                              descPtr, coord, src)
+                              .getToken());
            })
       .def("create_async_tma_reduce",
            [](GluonOpBuilder &self, triton::DescriptorReduceKind kind,
               Value descPtr, std::vector<Value> &coord, Value src) {
-             self.create<ttng::AsyncTMAReduceOp>(kind, descPtr, coord, src);
+             return Value(self
+                              .create<ttng::AsyncTMAReduceOp>(kind, descPtr,
+                                                              coord, src)
+                              .getToken());
            })
       .def("create_async_tma_store_wait",
            [](GluonOpBuilder &self, int pendings, bool readOnly) {
              self.create<ttng::TMAStoreWaitOp>(pendings, readOnly);
+           })
+      .def("create_async_tma_store_wait",
+           [](GluonOpBuilder &self, Value token, bool readOnly) {
+             self.create<ttng::TMAStoreWaitOp>(token, readOnly);
            })
       .def(
           "create_async_tma_gather",
@@ -1023,8 +1031,9 @@ void init_gluon_ir(py::module_ &m) {
       .def("create_async_tma_scatter",
            [](GluonOpBuilder &self, Value descPtr, Value xOffsets,
               Value yOffset, Value src) {
-             self.create<ttng::AsyncTMAScatterOp>(descPtr, xOffsets, yOffset,
-                                                  src);
+             return Value(self.create<ttng::AsyncTMAScatterOp>(
+                              descPtr, xOffsets, yOffset, src)
+                              .getToken());
            })
       .def("create_fence_async_shared",
            [](GluonOpBuilder &self, bool bCluster) -> OpState {
