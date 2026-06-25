@@ -4,6 +4,7 @@ add_triton_library(TritonNvidiaGPUTransforms
   CheckMatmulTwoCTAs.cpp
   ConSanNVIDIA.cpp
   FenceInsertion.cpp
+  HoistMBarrierLifecycle.cpp
   InterleaveTMem.cpp
   MMALowering.cpp
   OptimizeCTALocality.cpp
