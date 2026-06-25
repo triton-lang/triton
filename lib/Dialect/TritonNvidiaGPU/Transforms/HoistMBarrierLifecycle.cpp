@@ -24,12 +24,11 @@ namespace nvidia_gpu {
 
 // This pass makes cross-CTA mbarrier initialization visible before users that
 // rely on CTA cooperation, such as multicast TMA, 2CTA MMA, and CLC. Those ops
-// may observe the barrier from another CTA, so a loop-local
-//   alloc; init; expect; transaction; wait; inval
-// sequence is too late when the barrier is initialized inside the producing
-// loop body. The pass recognizes that shape, hoists alloc/init to the function
-// entry, carries the wait phase through scf.for when the lifecycle repeats, and
-// recreates invalidations at function exits. For example:
+// may observe the barrier from another CTA, so a loop-local inval is too
+// expensive when the barrier is initialized inside the producing loop body. The
+// pass hoists alloc/init to the function entry, carries
+// the wait phase through scf.for when the lifecycle repeats, and recreates
+// invalidations at function exits. For example:
 //   scf.for ... {
 //     %bar = ttg.local_alloc
 //     ttng.init_barrier %bar, 1
@@ -69,6 +68,7 @@ public:
 
   LogicalResult run() {
     for (auto funcOp : mod.getOps<FunctionOpInterface>()) {
+      // scf only now and scf.while is not supported yet.
       if (funcOp->getNumRegions() != 1 || funcOp->getRegion(0).empty())
         continue;
 
