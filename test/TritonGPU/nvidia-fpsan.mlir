@@ -324,7 +324,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 // CHECK: module attributes {{.*}}"ttng.two-ctas" = true
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.tensor_memory_size = 0 : i32, "ttg.total-num-warps" = 1 : i32} {
     // CHECK-LABEL: @tcgen05_mma_two_ctas
-  tt.func public @tcgen05_mma_two_ctas(%out: !tt.ptr<i32>) {
+  tt.func public @tcgen05_mma_two_ctas() {
     // CHECK: ttg.global_scratch_alloc {{.*}}shared_cluster_state
     // CHECK: ttng.cluster_barrier
     // CHECK-NEXT: scf.for
@@ -334,20 +334,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: ttng.cluster_barrier
     // CHECK-NEXT: ttng.arrive_barrier
-    // CHECK-NEXT: tt.store
-    // CHECK-NEXT: ttng.cluster_barrier
-    // CHECK-NEXT: tt.return
     // CHECK-NOT: ttng.tc_gen5_mma
-    // Keep work after the MMA so the lifetime barrier must be terminal rather
-    // than part of the per-MMA replacement.
-    %zero = arith.constant 0 : i32
     %true = arith.constant true
     %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256x128xf16, #shared_a, #smem, mutable>
     %b = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<128x128xf16, #shared_b, #smem, mutable>
     %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
     %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async, two_ctas} : !ttg.memdesc<256x128xf16, #shared_a, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared_b, #smem, mutable>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    tt.store %out, %zero : !tt.ptr<i32>
     tt.return
   }
 }
@@ -444,8 +437,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NEXT: ttng.cluster_barrier
     // CHECK-NEXT: ttng.arrive_barrier
-    // CHECK-NEXT: ttng.cluster_barrier
-    // CHECK-NEXT: tt.return
     // CHECK-NOT: ttng.tc_gen5_mma_scaled
     %true = arith.constant true
     %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256x256xi8, #shared_a, #smem, mutable>

@@ -3179,28 +3179,12 @@ public:
 
     LogicalResult result =
         applyPatternsGreedily(getOperation(), std::move(patterns));
-
     if (failed(result)) {
       llvm::errs() << "FpSanitizer error: Failed to apply patterns\n";
-      return signalPassFailure();
+      signalPassFailure();
     }
     if (fpSanErrorEmitted)
-      return signalPassFailure();
-
-    if (scratch.usesSharedClusterState()) {
-      // FpSan's two-CTA emulation directly accesses peer CTA shared memory.
-      // Keep every CTA alive through the last such access.
-      for (tt::FuncOp func : getOperation().getOps<tt::FuncOp>()) {
-        if (!func.isPublic())
-          continue;
-        for (Block &block : func.getBody()) {
-          if (auto ret = dyn_cast<tt::ReturnOp>(block.getTerminator())) {
-            OpBuilder builder(ret);
-            ttng::ClusterBarrierOp::create(builder, ret.getLoc());
-          }
-        }
-      }
-    }
+      signalPassFailure();
 
     // TODO: Remove unused tmem usages. This requires unwiring them from the
     // warp specialize partitions.

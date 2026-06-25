@@ -72,6 +72,25 @@ llvm.func @wgmma_wait(%in: !struct) {
 
 // -----
 
+module attributes {"ttg.num-ctas" = 2 : i32} {
+  // CHECK-LABEL: @multi_cta_exit_barrier
+  llvm.func @multi_cta_exit_barrier() attributes {nvvm.kernel = 1 : ui1} {
+    // CHECK: nvvm.cluster.arrive
+    // CHECK-NEXT: nvvm.cluster.wait
+    // CHECK-NEXT: llvm.return
+    llvm.return
+  }
+
+  // CHECK-LABEL: @multi_cta_non_kernel
+  llvm.func internal @multi_cta_non_kernel() {
+    // CHECK-NOT: nvvm.cluster
+    // CHECK: llvm.return
+    llvm.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tensor_memory_base_lowering
   //      CHECK:    %[[TID:.+]] = nvvm.read.ptx.sreg.tid.x : i32
