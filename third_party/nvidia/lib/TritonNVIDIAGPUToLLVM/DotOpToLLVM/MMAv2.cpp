@@ -28,17 +28,18 @@ Value loadC(Value tensor, Value llTensor,
 
   assert(isa<NvidiaMmaEncodingAttr>(tensorTy.getEncoding()) &&
          "Currently, we only support $c with a mma layout.");
-  // Load a normal C tensor with mma layout, that should be a
-  // LLVM::struct with fcSize elements.
-  auto structTy = cast<LLVM::LLVMStructType>(llTensor.getType());
-  assert(structTy.getBody().size() == fcSize &&
-         "DotOp's $c operand should pass the same number of values as $d in "
-         "mma layout.");
+  auto elems = unpackTensorElements(loc, llTensor, rewriter, tensorTy);
+  assert(elems.size() == fcSize);
 
   auto numMmaRets = tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
   assert(numMmaRets == 8 || numMmaRets == 4 || numMmaRets == 2);
   if (numMmaRets == 8 || numMmaRets == 4) {
-    return llTensor;
+    if (cast<LLVM::LLVMStructType>(llTensor.getType()).getBody().size() ==
+        fcSize)
+      return llTensor;
+    Type structTy = LLVM::LLVMStructType::getLiteral(
+        ctx, SmallVector<Type>(fcSize, tensorTy.getElementType()));
+    return packLLElements(loc, typeConverter, elems, rewriter, structTy);
   } else if (numMmaRets == 2) {
     auto cPack = SmallVector<Value>();
     auto cElemTy = tensorTy.getElementType();
@@ -47,9 +48,7 @@ Value loadC(Value tensor, Value llTensor,
     for (int i = 0; i < fcSize; i += numCPackedElem) {
       Value pack = LLVM::UndefOp::create(rewriter, loc, cPackTy);
       for (int j = 0; j < numCPackedElem; ++j) {
-        pack = b.insert_element(cPackTy, pack,
-                                b.extract_val(cElemTy, llTensor, i + j),
-                                b.i32_val(j));
+        pack = b.insert_element(cPackTy, pack, elems[i + j], b.i32_val(j));
       }
       cPack.push_back(pack);
     }
@@ -87,7 +86,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
     int repK, RankedTensorType type, const NumRegisters &numRegisters) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto elems = unpackLLElements(loc, value, rewriter);
+  auto elems = unpackTensorElements(loc, value, rewriter, type);
   auto eltTy = typeConverter->convertType(type.getElementType());
   int offset{};
   ValueTableV2 vals;
@@ -732,8 +731,6 @@ LogicalResult convertMMAImpl(
   Value loadedC = loadC(cOperand, llvmC, typeConverter, loc, rewriter);
 
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
-  MLIRContext *ctx = op->getContext();
-
   auto aTensorTy = cast<RankedTensorType>(op.getA().getType());
   auto bTensorTy = cast<RankedTensorType>(op.getB().getType());
   auto dTensorTy = cast<RankedTensorType>(op.getD().getType());
@@ -815,8 +812,6 @@ LogicalResult convertMMAImpl(
   Type resElemTy = dTensorTy.getElementType();
 
   // replace with new packed result
-  Type structTy = LLVM::LLVMStructType::getLiteral(
-      ctx, SmallVector<Type>(fc.size() * numCPackedElem, resElemTy));
   SmallVector<Value> results(fc.size() * numCPackedElem);
   for (int i = 0; i < fc.size(); ++i) {
     for (int j = 0; j < numCPackedElem; ++j) {
@@ -826,7 +821,8 @@ LogicalResult convertMMAImpl(
               : tb.bitcast(fc[i], resElemTy);
     }
   }
-  Value res = packLLElements(loc, typeConverter, results, rewriter, structTy);
+  Value res =
+      packTensorElements(loc, typeConverter, results, rewriter, dTensorTy);
 
   rewriter.replaceOp(op, res);
 
@@ -926,10 +922,10 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
     return op.emitError(
         "unsupported MMA instruction for the given operand/result types");
 
-  SmallVector<Value> unpackedAScale =
-      unpackLLElements(op.getLoc(), adaptor.getAScale(), rewriter);
-  SmallVector<Value> unpackedBScale =
-      unpackLLElements(op.getLoc(), adaptor.getBScale(), rewriter);
+  SmallVector<Value> unpackedAScale = unpackTensorElements(
+      op.getLoc(), adaptor.getAScale(), rewriter, op.getAScale().getType());
+  SmallVector<Value> unpackedBScale = unpackTensorElements(
+      op.getLoc(), adaptor.getBScale(), rewriter, op.getBScale().getType());
 
   NumRegisters numRegisters = {2, 1, 2};
   EmitMmaCallback emit = [&](PTXBuilder &builder, int b, int m, int n, int k,

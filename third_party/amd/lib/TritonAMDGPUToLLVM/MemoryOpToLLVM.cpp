@@ -98,10 +98,8 @@ public:
       if (failed(result))
         continue;
 
-      auto structTy = LLVM::LLVMStructType::getLiteral(
-          ctx, SmallVector<Type>(values.size(), llvmElemTy));
       auto value =
-          packLLElements(loc, typeConverter, values, rewriter, structTy);
+          packTensorElements(loc, typeConverter, values, rewriter, dstTy);
 
       rewriter.replaceOp(op, value);
       return success();
@@ -613,7 +611,8 @@ private:
         llvmElemTy, smemObj.getBase(), paddingShifts, affineOffset,
         maskSpanAffineOffset, laneId, warpId, rewriter, targetInfo,
         ldsTransLoadParams->tileSize, lowerInst);
-    Value result = packLLElements(loc, typeConverter, outVals, rewriter, retTy);
+    Value result =
+        packTensorElements(loc, typeConverter, outVals, rewriter, retTy);
     rewriter.replaceOp(op, result);
     return success();
   }

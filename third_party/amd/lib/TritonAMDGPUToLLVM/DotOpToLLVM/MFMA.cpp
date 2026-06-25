@@ -224,9 +224,8 @@ struct DotOpMFMAConversionHelper {
                             const FailureOr<MfmaIntrinsic> &maybeMfmaIntrinsic,
                             Type dstElemTy, Type elemtTy,
                             size_t mmaCount) const {
-    Type structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(fc.size(), dstElemTy));
-    Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
+    Value res =
+        packTensorElements(loc, typeConverter, fc, rewriter, op.getType());
 
     rewriter.replaceOp(op, res);
   }
@@ -322,10 +321,10 @@ struct DotOpMFMAConversionHelper {
 
     bool preserveBF16 = intrinsicName.contains(".bf16") && mfmaVersion >= 4;
     auto operandA = getValuesFromDotOperandLayoutStruct(
-        loadedA, numRepB, numRepM, numRepKA, kWidth, kBase,
+        loadedA, numRepB, numRepM, numRepKA, kWidth, kBase, aTensorTy,
         aTensorTy.getElementType(), allowXF32, preserveBF16);
     auto operandB = getValuesFromDotOperandLayoutStruct(
-        loadedB, numRepB, numRepN, numRepKB, kWidth, kBase,
+        loadedB, numRepB, numRepN, numRepKB, kWidth, kBase, bTensorTy,
         bTensorTy.getElementType(), allowXF32, preserveBF16);
 
     int warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
@@ -333,7 +332,7 @@ struct DotOpMFMAConversionHelper {
     int numVecInKBase = numRepK * kWidth / kBase;
 
     auto dstElemTy = dTensorTy.getElementType();
-    auto fc = unpackLLElements(loc, loadedC, rewriter);
+    auto fc = unpackTensorElements(loc, loadedC, rewriter, op.getC().getType());
     SmallVector<int64_t> fcStrides =
         computeStrides({numRepB, numRepM, numRepN, elemsPerVec});
 
@@ -462,10 +461,10 @@ struct DotOpMFMAConversionHelper {
   /// appropriate for mfma instructions
   virtual ValueTable getValuesFromDotOperandLayoutStruct(
       Value value, int batch, int nonKRep, int kRepInKWidth, int kWidth,
-      int kBase, Type type, bool allowXF32, bool preserveBF16,
-      bool isConstantScale = false) const {
+      int kBase, RankedTensorType tensorType, Type type, bool allowXF32,
+      bool preserveBF16, bool isConstantScale = false) const {
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
-    auto elems = unpackLLElements(loc, value, rewriter);
+    auto elems = unpackTensorElements(loc, value, rewriter, tensorType);
     // number of kBase-element vectors
     int numVecInKBase = kRepInKWidth * kWidth / kBase;
     if (numVecInKBase == 0) {
@@ -686,11 +685,13 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     int bNonKPackedVals = scaleBKBase / bkPackedVals;
 
     auto operandA = getValuesFromDotOperandLayoutStruct(
-        loadedA, numRepB, numRepM, numRepK, aKWidth, aKBase,
-        aTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
+        loadedA, numRepB, numRepM, numRepK, aKWidth, aKBase, aTensorTy,
+        aTensorTy.getElementType(), allowXF32,
+        /*preserveBF16=*/false);
     auto operandB = getValuesFromDotOperandLayoutStruct(
-        loadedB, numRepB, numRepN, numRepK, bKWidth, bKBase,
-        bTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
+        loadedB, numRepB, numRepN, numRepK, bKWidth, bKBase, bTensorTy,
+        bTensorTy.getElementType(), allowXF32,
+        /*preserveBF16=*/false);
 
     // Scales have the same replica distributions as their corresponding
     // operands.
@@ -700,18 +701,18 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
       auto aScaleTensorTy = cast<RankedTensorType>(aScale.getType());
       operandAScale = getValuesFromDotOperandLayoutStruct(
           loadedAScale, numRepB, numRepM, numRepK, scaleKWidth, scaleAKBase,
-          aScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false,
-          isAScaleConstant);
+          aScaleTensorTy, aScaleTensorTy.getElementType(), allowXF32,
+          /*preserveBF16=*/false, isAScaleConstant);
 
       auto bScaleTensorTy = cast<RankedTensorType>(bScale.getType());
       operandBScale = getValuesFromDotOperandLayoutStruct(
           loadedBScale, numRepB, numRepN, numRepK, scaleKWidth, scaleBKBase,
-          bScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false,
-          isBScaleConstant);
+          bScaleTensorTy, bScaleTensorTy.getElementType(), allowXF32,
+          /*preserveBF16=*/false, isBScaleConstant);
     }
 
     auto dstElemTy = dTensorTy.getElementType();
-    auto fc = unpackLLElements(loc, loadedC, rewriter);
+    auto fc = unpackTensorElements(loc, loadedC, rewriter, op.getC().getType());
 
     unsigned warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
     // compute number of output elements that each thread holds for one MFMA
