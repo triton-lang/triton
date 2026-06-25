@@ -13,7 +13,7 @@ void getCrossCTAConsumerBarriers(Operation *op,
 
 bool isCrossCTAConsumer(Operation *op, Value barrier);
 
-bool requiresCrossCTAMBarrierInitSync(FunctionOpInterface funcOp,
-                                      Value barrier, int numCTAs);
+bool requiresCrossCTAMBarrierInitSync(FunctionOpInterface funcOp, Value barrier,
+                                      int numCTAs);
 
 } // namespace mlir::triton::nvidia_gpu
