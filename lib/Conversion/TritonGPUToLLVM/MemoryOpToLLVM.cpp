@@ -428,9 +428,20 @@ struct AtomicPollOpConversion
                             syncScope);
     LLVM::BrOp::create(rewriter, loc, ValueRange{b.true_val()}, doneBlock);
 
+    rewriter.setInsertionPointToStart(doneBlock);
+    if (!adaptor.getTimeout()) {
+      // Successful completion is the only possible result without a timeout,
+      // so rendezvous and return true without a shared-memory broadcast.
+      if (numCTAs == 1)
+        targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+      else
+        targetInfo.clusterBarrier(loc, rewriter, op);
+      rewriter.replaceOp(op, b.true_val());
+      return success();
+    }
+
     // Broadcast the elected thread's result after every thread has left the
     // loop, preserving the scalar result convention used by Triton atomics.
-    rewriter.setInsertionPointToStart(doneBlock);
     if (op.getResult().use_empty()) {
       if (numCTAs == 1)
         targetInfo.barrier(loc, rewriter, AddrSpace::Local);

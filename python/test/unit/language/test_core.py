@@ -1406,6 +1406,21 @@ def test_atomic_poll(dtype, bit_width, sem, scope, device):
         assert "%globaltimer" not in ptx
 
 
+def test_atomic_poll_no_timeout_uses_no_shared_memory(device):
+
+    @triton.jit
+    def kernel(flag, out):
+        matched = tl.atomic_poll(flag, 1)
+        tl.store(out, matched)
+
+    flag = torch.ones(1, dtype=torch.int32, device=device)
+    out = torch.empty(1, dtype=torch.bool, device=device)
+    compiled = kernel[(1, )](flag, out, num_warps=4)
+
+    assert out.item()
+    assert compiled.metadata.shared == 0
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("initial_value, expected", [(1, True), (0, False)])
 def test_atomic_poll_timeout(initial_value, expected, device):
