@@ -74,8 +74,8 @@ void GatherOpConversion::emitGatherInShared(
       convertType<unsigned>(triton::gpu::getShapePerCTA(srcType));
 
   // Grab the src values in this thread.
-  SmallVector<Value> srcValues =
-      unpackLLElements(loc, adaptor.getSrc(), rewriter);
+  SmallVector<Value> srcValues = unpackTensorElements(
+      loc, adaptor.getSrc(), rewriter, op.getSrc().getType());
 
   // Emit the indices of the src values owned by this thread.
   SmallVector<SmallVector<Value>> srcIndices =
@@ -105,8 +105,8 @@ void GatherOpConversion::emitGatherInShared(
   b.barrier(triton::gpu::AddrSpace::Local);
 
   // Grab the index values owned by this thread.
-  SmallVector<Value> idxValues =
-      unpackLLElements(loc, adaptor.getIndices(), rewriter);
+  SmallVector<Value> idxValues = unpackTensorElements(
+      loc, adaptor.getIndices(), rewriter, op.getIndices().getType());
 
   // Apply the layout of the destination tensor to obtain the indices of the
   // column to gather along, then for each column, replace the index along the
@@ -132,7 +132,7 @@ void GatherOpConversion::emitGatherInShared(
   }
 
   Value packed =
-      packLLElements(loc, getTypeConverter(), results, rewriter, dstType);
+      packTensorElements(loc, getTypeConverter(), results, rewriter, dstType);
   rewriter.replaceOp(op, packed);
 }
 
@@ -256,10 +256,10 @@ void GatherOpConversion::emitWarpLocalGather(
   LinearLayout idxColLayout =
       idxLayout.sublayout({kBlock, kWarp, kLane, kRegister}, otherDims);
 
-  SmallVector<Value> srcValues =
-      unpackLLElements(loc, adaptor.getSrc(), rewriter);
-  SmallVector<Value> idxValues =
-      unpackLLElements(loc, adaptor.getIndices(), rewriter);
+  SmallVector<Value> srcValues = unpackTensorElements(
+      loc, adaptor.getSrc(), rewriter, op.getSrc().getType());
+  SmallVector<Value> idxValues = unpackTensorElements(
+      loc, adaptor.getIndices(), rewriter, op.getIndices().getType());
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   Value blockId = targetInfo.getClusterCTAId(rewriter, loc);
@@ -336,8 +336,8 @@ void GatherOpConversion::emitWarpLocalGather(
     results.push_back(result);
   }
 
-  rewriter.replaceOp(op, packLLElements(loc, getTypeConverter(), results,
-                                        rewriter, op.getType()));
+  rewriter.replaceOp(op, packTensorElements(loc, getTypeConverter(), results,
+                                            rewriter, op.getType()));
 }
 
 } // namespace
