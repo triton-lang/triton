@@ -102,12 +102,18 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
     initBarrierBuffers.insert(bufferId);
   }
 
-  auto aliasesTracked = [&](Value value) {
-    return value &&
-           valueAliasesTrackedBuffers(value, initBarrierBuffers, allocation);
-  };
-  return mlir::triton::nvidia_gpu::requiresCrossCTAMBarrierInitSync(
-      funcOp, initBarrierOp.getBarrier(), numCTAs, aliasesTracked);
+  return funcOp
+      ->walk<WalkOrder::PreOrder>([&](Operation *op) {
+        SmallVector<Value> consumerBarriers;
+        getCrossCTAConsumerBarriers(op, consumerBarriers);
+        for (Value barrier : consumerBarriers) {
+          if (barrier && valueAliasesTrackedBuffers(barrier, initBarrierBuffers,
+                                                    allocation))
+            return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      })
+      .wasInterrupted();
 }
 
 static bool nestedOpUsesTrackedMBarrier(Operation *op,

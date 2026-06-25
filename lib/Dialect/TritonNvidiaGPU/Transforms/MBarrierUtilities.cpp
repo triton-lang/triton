@@ -19,30 +19,36 @@ bool isCrossCTAMBarrier(Value barrier, int numCTAs) {
   return barrierTy && barrierTy.getShape()[0] != numCTAs;
 }
 
-bool isCrossCTAConsumer(Operation *op,
-                        llvm::function_ref<bool(Value)> aliasesBarrier) {
+void getCrossCTAConsumerBarriers(Operation *op,
+                                 SmallVectorImpl<Value> &barriers) {
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
-    return mma.getTwoCtas() &&
-           llvm::any_of(barrierOp.getBarriers(), aliasesBarrier);
+    if (mma.getTwoCtas())
+      barriers.append(barrierOp.getBarriers());
+    return;
   }
-  if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op))
-    return ttng::getModuleTwoCTAs(op) && aliasesBarrier(commit.getBarrier());
-  if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
-    return tma.getMulticast() && aliasesBarrier(tma.getBarrier());
+  if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
+    if (ttng::getModuleTwoCTAs(op))
+      barriers.push_back(commit.getBarrier());
+    return;
+  }
+  if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+    if (tma.getMulticast())
+      barriers.push_back(tma.getBarrier());
+    return;
+  }
   if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op))
-    return aliasesBarrier(clc.getMbarrier());
-  return false;
+    barriers.push_back(clc.getMbarrier());
 }
 
 bool isCrossCTAConsumer(Operation *op, Value barrier) {
-  return isCrossCTAConsumer(op,
-                            [&](Value value) { return value == barrier; });
+  SmallVector<Value> barriers;
+  getCrossCTAConsumerBarriers(op, barriers);
+  return llvm::is_contained(barriers, barrier);
 }
 
-bool requiresCrossCTAMBarrierInitSync(
-    FunctionOpInterface funcOp, Value barrier, int numCTAs,
-    llvm::function_ref<bool(Value)> aliasesBarrier) {
+bool requiresCrossCTAMBarrierInitSync(FunctionOpInterface funcOp,
+                                      Value barrier, int numCTAs) {
   // Barrier init sync is needed for barriers that are themselves cross-CTA,
   // and also for per-CTA barriers consumed by multi-CTA ops that multicast or
   // otherwise fan out barrier state across the cluster.
@@ -51,17 +57,11 @@ bool requiresCrossCTAMBarrierInitSync(
 
   return funcOp
       ->walk<WalkOrder::PreOrder>([&](Operation *op) {
-        if (isCrossCTAConsumer(op, aliasesBarrier))
+        if (isCrossCTAConsumer(op, barrier))
           return WalkResult::interrupt();
         return WalkResult::advance();
       })
       .wasInterrupted();
-}
-
-bool requiresCrossCTAMBarrierInitSync(FunctionOpInterface funcOp,
-                                      Value barrier, int numCTAs) {
-  return requiresCrossCTAMBarrierInitSync(
-      funcOp, barrier, numCTAs, [&](Value value) { return value == barrier; });
 }
 
 } // namespace mlir::triton::nvidia_gpu

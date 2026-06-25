@@ -239,6 +239,39 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @hoist_alias_transaction_lifecycle
+  // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
+  // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
+  // CHECK: %[[VIEW:.*]] = ttg.memdesc_reinterpret %[[BAR]]
+  // CHECK: %[[ALIAS:.*]] = arith.select %true, %[[VIEW]], %[[BAR]]
+  // CHECK: ttng.async_tma_copy_global_to_local {{.*}} %[[ALIAS]], %true {multicast}
+  // CHECK: ttng.wait_barrier %[[BAR]],
+  // CHECK-NEXT: ttng.inval_barrier %[[BAR]]
+  // CHECK-NEXT: tt.return
+  tt.func @hoist_alias_transaction_lifecycle(%desc: !tt.tensordesc<64x128xf16, #nvmma>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    %bar_view = ttg.memdesc_reinterpret %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    %bar_alias = arith.select %true, %bar_view, %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar_alias, %true {multicast} :
+      !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func @hoist_two_transactions_one_wait
   // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
   // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1

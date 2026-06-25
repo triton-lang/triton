@@ -6,6 +6,8 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/IR/PatternMatch.h"
+#include "triton/Analysis/Alias.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -13,7 +15,9 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/MBarrierUtilities.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -65,6 +69,75 @@ struct BarrierLifecycle {
   SmallVector<ttng::InvalBarrierOp> invals;
 };
 
+class BarrierAliases {
+public:
+  BarrierAliases(Value barrier, FunctionOpInterface funcOp,
+                 SharedMemoryAliasAnalysis &aliasAnalysis)
+      : aliasAnalysis(aliasAnalysis) {
+    collectRoots(barrier);
+    collectAliases(funcOp);
+  }
+
+  bool contains(Value value) const { return aliasesRoot(value); }
+
+  auto begin() const { return aliases.begin(); }
+  auto end() const { return aliases.end(); }
+
+private:
+  void collectRoots(Value barrier) {
+    collectAliasRoots(barrier, roots);
+    // Keep direct-SSA behavior as a conservative fallback if the dataflow
+    // lattice has no information for this value.
+    if (roots.empty())
+      roots.insert(barrier);
+  }
+
+  void collectAliases(FunctionOpInterface funcOp) {
+    auto collectValue = [&](Value value) {
+      if (contains(value))
+        aliases.insert(value);
+    };
+
+    funcOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
+      for (Region &region : op->getRegions()) {
+        for (Block &block : region) {
+          for (BlockArgument arg : block.getArguments())
+            collectValue(arg);
+        }
+      }
+      for (Value operand : op->getOperands())
+        collectValue(operand);
+      for (Value result : op->getResults())
+        collectValue(result);
+    });
+  }
+
+  void collectAliasRoots(Value value, llvm::DenseSet<Value> &values) const {
+    auto *lattice = aliasAnalysis.getLatticeElement(value);
+    if (!lattice)
+      return;
+    for (Value alloc : lattice->getValue().getAllocs())
+      values.insert(alloc);
+  }
+
+  bool aliasesRoot(Value value) const {
+    if (!value)
+      return false;
+
+    llvm::DenseSet<Value> valueRoots;
+    collectAliasRoots(value, valueRoots);
+    for (Value root : valueRoots)
+      if (roots.contains(root))
+        return true;
+
+    return roots.contains(value);
+  }
+
+  SharedMemoryAliasAnalysis &aliasAnalysis;
+  llvm::DenseSet<Value> roots;
+  llvm::SmallSetVector<Value, 8> aliases;
+};
+
 class MBarrierLifecycleHoister {
 public:
   MBarrierLifecycleHoister(ModuleOp mod, int numCTAs)
@@ -76,18 +149,26 @@ public:
       if (funcOp->getNumRegions() != 1 || funcOp->getRegion(0).empty())
         continue;
 
+      std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+      SharedMemoryAliasAnalysis *aliasAnalysis =
+          solver->load<SharedMemoryAliasAnalysis>();
+      if (failed(solver->initializeAndRun(funcOp)))
+        continue;
+
       llvm::SmallPtrSet<Value, 8> seen;
       SmallVector<Value> candidates;
       funcOp.walk([&](ttng::InitBarrierOp init) {
         Value barrier = init.getAlloc();
-        if (requiresCrossCTAMBarrierInitSync(funcOp, barrier, numCTAs) &&
+        BarrierAliases aliases(barrier, funcOp, *aliasAnalysis);
+        if (requiresCrossCTAInitSync(funcOp, barrier, aliases) &&
             seen.insert(barrier).second)
           candidates.push_back(barrier);
       });
 
       for (Value barrier : candidates) {
+        BarrierAliases aliases(barrier, funcOp, *aliasAnalysis);
         BarrierLifecycle lifecycle;
-        if (failed(collectLifecycle(funcOp, barrier, lifecycle)))
+        if (failed(collectLifecycle(funcOp, barrier, aliases, lifecycle)))
           continue;
         if (failed(rewriteLoopPhases(lifecycle)))
           continue;
@@ -99,16 +180,39 @@ public:
   }
 
 private:
-  bool isKnownBarrierUser(Operation *op, Value barrier) {
+  bool isKnownBarrierUser(Operation *op, const BarrierAliases &aliases) {
     if (auto iface = dyn_cast<ttg::MBarrierOpInterface>(op)) {
-      return llvm::any_of(iface.getBarriers(),
-                          [&](Value value) { return value == barrier; });
+      return llvm::any_of(iface.getBarriers(), [&](Value value) {
+        return aliases.contains(value);
+      });
     }
     return false;
   }
 
-  bool isTransactionOp(Operation *op, Value barrier) {
-    if (!isKnownBarrierUser(op, barrier))
+  bool isCrossCTAConsumer(Operation *op, const BarrierAliases &aliases) {
+    SmallVector<Value> consumerBarriers;
+    getCrossCTAConsumerBarriers(op, consumerBarriers);
+    return llvm::any_of(consumerBarriers, [&](Value value) {
+      return aliases.contains(value);
+    });
+  }
+
+  bool requiresCrossCTAInitSync(FunctionOpInterface funcOp, Value barrier,
+                                const BarrierAliases &aliases) {
+    if (isCrossCTAMBarrier(barrier, numCTAs))
+      return true;
+
+    return funcOp
+        ->walk<WalkOrder::PreOrder>([&](Operation *op) {
+          if (isCrossCTAConsumer(op, aliases))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
+        })
+        .wasInterrupted();
+  }
+
+  bool isTransactionOp(Operation *op, const BarrierAliases &aliases) {
+    if (!isKnownBarrierUser(op, aliases))
       return false;
     // BarrierExpectOp only records the expected byte count for the next
     // transfer. The following producer/consumer op is the transaction that must
@@ -134,25 +238,36 @@ private:
     return true;
   }
 
+  bool isKnownAliasProducer(Operation *op, const BarrierAliases &aliases) {
+    return llvm::any_of(op->getResults(),
+                        [&](Value result) { return aliases.contains(result); });
+  }
+
   // "Opaque" means the barrier is passed to an op this pass does not model as
   // an mbarrier user. Skip hoisting rather than moving the lifecycle across an
-  // unknown use.
-  bool hasOpaqueBarrierUse(Value barrier) {
-    for (Operation *user : barrier.getUsers()) {
-      if (!isKnownBarrierUser(user, barrier))
-        return true;
+  // unknown use. Aliases come from SharedMemoryAliasAnalysis, which tracks
+  // memdesc roots before allocation assigns concrete buffer ids.
+  bool hasOpaqueBarrierUse(const BarrierAliases &aliases) {
+    for (Value alias : aliases) {
+      for (Operation *user : alias.getUsers()) {
+        if (isKnownAliasProducer(user, aliases))
+          continue;
+        if (!isKnownBarrierUser(user, aliases))
+          return true;
+      }
     }
     return false;
   }
 
   LogicalResult collectLifecycle(FunctionOpInterface funcOp, Value barrier,
+                                 const BarrierAliases &aliases,
                                  BarrierLifecycle &lifecycle) {
     lifecycle.barrier = barrier;
     lifecycle.alloc = barrier.getDefiningOp<ttg::LocalAllocOp>();
     if (!lifecycle.alloc || lifecycle.alloc->getNumOperands() != 0)
       return failure();
 
-    if (hasOpaqueBarrierUse(barrier))
+    if (hasOpaqueBarrierUse(aliases))
       return failure();
 
     funcOp.walk([&](Operation *op) {
@@ -164,7 +279,7 @@ private:
         return;
       }
       if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op)) {
-        if (expect.getAlloc() == barrier)
+        if (aliases.contains(expect.getAlloc()))
           ++lifecycle.expectCount;
         return;
       }
@@ -180,7 +295,7 @@ private:
           lifecycle.invals.push_back(inval);
         return;
       }
-      if (isTransactionOp(op, barrier))
+      if (isTransactionOp(op, aliases))
         lifecycle.transactionsAndWaits.push_back(op);
     });
 
