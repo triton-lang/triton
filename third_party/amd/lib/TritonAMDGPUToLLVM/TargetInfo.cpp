@@ -166,9 +166,12 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 }
 
 Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                         "llvm.readsteadycounter", i64_ty, {})
-      .getResult(0);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value timer = LLVM::createLLVMIntrinsicCallOp(
+                    rewriter, loc, "llvm.amdgcn.s.memrealtime", i64_ty, {})
+                    .getResult(0);
+  // The clock generator runs at 100 MHz, so each tick is 10 ns.
+  return b.mul(timer, b.i64_val(10));
 }
 
 StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {

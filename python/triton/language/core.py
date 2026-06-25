@@ -2755,14 +2755,13 @@ def atomic_cas(pointer, cmp, val, sem=None, scope=None, _semantic=None):
 
 @_tensor_member_fn
 @builtin
-def atomic_poll(pointer, expected_value, sem="acquire", scope="gpu", timeout_ns=None, _semantic=None):
+def atomic_poll(pointer, expected_value, sem=None, scope=None, timeout_ns=None, _semantic=None):
     """
     Wait until the value at :code:`pointer` equals :code:`expected_value`.
 
-    A single thread repeatedly performs relaxed loads from :code:`pointer` at
-    the requested scope. With acquire semantics, it executes an acquire fence
-    at that scope only after observing :code:`expected_value`. All threads wait
-    for the poll to complete and receive the same boolean result.
+    This will spin-wait on the specified pointer until either the value equals
+    the expected value, or the operation times out. In the event of a timeout,
+    the operation returns false and no results may be acquired.
 
     :param pointer: A pointer to a scalar 16-, 32-, or 64-bit integer.
     :type pointer: triton.PointerDType
@@ -2787,10 +2786,6 @@ def atomic_poll(pointer, expected_value, sem="acquire", scope="gpu", timeout_ns=
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
     timeout_ns = _unwrap_if_constexpr(timeout_ns)
-    if isinstance(timeout_ns, int) and timeout_ns < 0:
-        raise ValueError("atomic_poll timeout_ns must be non-negative")
-    if timeout_ns is not None:
-        timeout_ns = _semantic.to_tensor(timeout_ns)
     return _semantic.atomic_poll(pointer, expected_value, sem, scope, timeout_ns)
 
 

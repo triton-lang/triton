@@ -971,8 +971,8 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError(f"Padding option {padding_option} not supported")
         return padding
 
-    def _str_to_sem(self, sem_option):
-        sem = ir.MEM_SEMANTIC.ACQUIRE_RELEASE
+    def _str_to_sem(self, sem_option, default=ir.MEM_SEMANTIC.ACQUIRE_RELEASE):
+        sem = default
         if sem_option:
             if sem_option == "acquire":
                 sem = ir.MEM_SEMANTIC.ACQUIRE
@@ -1256,6 +1256,10 @@ class TritonSemantic(Generic[TensorTy]):
 
     def atomic_poll(self, ptr: TensorTy, expected: TensorTy, sem: str, scope: str,
                     timeout_ns: Optional[TensorTy]) -> TensorTy:
+        if isinstance(timeout_ns, int) and timeout_ns < 0:
+            raise ValueError("atomic_poll timeout_ns must be non-negative")
+        if timeout_ns is not None:
+            timeout_ns = self.to_tensor(timeout_ns)
         if ptr.type.is_block():
             raise ValueError("atomic_poll only supports a pointer to a scalar")
         if not ptr.type.is_ptr():
@@ -1268,7 +1272,7 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError("atomic_poll only supports integer elements with width {16, 32, 64}")
         expected = self.cast(expected, element_ty)
 
-        sem = self._str_to_sem(sem)
+        sem = self._str_to_sem(sem, default=ir.MEM_SEMANTIC.ACQUIRE)
         if sem not in [ir.MEM_SEMANTIC.ACQUIRE, ir.MEM_SEMANTIC.RELAXED]:
             raise ValueError("atomic_poll only supports acquire and relaxed semantics")
         scope = self._str_to_scope(scope)

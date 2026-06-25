@@ -28,8 +28,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // CHECK-POLL-LABEL: @atomic_poll
-  // CHECK-POLL: %[[ELECTED:.*]] = llvm.and {{.*}} : i1
-  // CHECK-POLL: llvm.cond_br %[[ELECTED]], ^[[INIT:bb[0-9]+]], ^[[DONE:bb[0-9]+]]
+  // CHECK-POLL: nvvm.read.ptx.sreg.tid.x
+  // CHECK-POLL: llvm.cond_br %[[ELECTED:.*]], ^[[INIT:bb[0-9]+]], ^[[DONE:bb[0-9]+]](%{{.*}} : i1)
   // CHECK-POLL: ^[[INIT]]:
   // CHECK-POLL: %[[START:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
   // CHECK-POLL: llvm.br ^[[LOOP:bb[0-9]+]]
@@ -39,16 +39,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-POLL: llvm.cond_br %[[MATCHED]], ^[[SUCCESS:bb[0-9]+]], ^[[TIMEOUT:bb[0-9]+]]
   // CHECK-POLL: ^[[SUCCESS]]:
   // CHECK-POLL: llvm.fence acquire
-  // CHECK-POLL: llvm.br ^[[DONE]]
+  // CHECK-POLL: llvm.br ^[[DONE]](%{{.*}} : i1)
   // CHECK-POLL: ^[[TIMEOUT]]:
   // CHECK-POLL: %[[NOW:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
   // CHECK-POLL: %[[ELAPSED:.*]] = llvm.sub %[[NOW]], %[[START]] : i64
   // CHECK-POLL: %[[TIMED_OUT:.*]] = llvm.icmp "uge" %[[ELAPSED]], %{{.*}} : i64
-  // CHECK-POLL: llvm.cond_br %[[TIMED_OUT]], ^[[DONE]], ^[[LOOP]]
+  // CHECK-POLL: llvm.cond_br %[[TIMED_OUT]], ^[[DONE]](%{{.*}} : i1), ^[[LOOP]]
   // CHECK-POLL: ^[[DONE]](%[[RESULT:.*]]: i1):
-  // CHECK-POLL: llvm.inline_asm has_side_effects asm_dialect = att "@$1 st.shared::cta.b8 [ $2 + 0 ], $0;"
+  // CHECK-POLL: llvm.insertelement %[[RESULT]],
+  // CHECK-POLL: llvm.inline_asm has_side_effects
   // CHECK-POLL: nvvm.barrier
-  // CHECK-POLL: llvm.load %{{.*}} : !llvm.ptr<3> -> i1
+  // CHECK-POLL: %{{.*}} = llvm.load %{{.*}} : !llvm.ptr<3> -> i1
   tt.func public @atomic_poll(%ptr: !tt.ptr<i32>, %expected: i32, %timeout: i64, %out: !tt.ptr<i32>) {
     %matched = tt.atomic_poll acquire, sys, %ptr, %expected timeout %timeout : !tt.ptr<i32>, i32 -> i1
     %result = arith.extui %matched : i1 to i32

@@ -776,8 +776,7 @@ def test_atomic_scalar_masks():
 @triton.jit
 def test_atomic_poll():
     # CHECK-LABEL: test_atomic_poll
-    ptrs = tl.full((1, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
-    ptr = ptrs.item()
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
     # CHECK: %{{.*}} = tt.atomic_poll relaxed, sys, %{{.*}}, %{{.*}} : !tt.ptr<i32>, i32 -> i1
     tl.atomic_poll(ptr, 1, sem="relaxed", scope="sys")
 
@@ -786,8 +785,7 @@ def test_atomic_poll():
 @triton.jit
 def test_atomic_poll_timeout():
     # CHECK-LABEL: test_atomic_poll_timeout
-    ptrs = tl.full((1, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
-    ptr = ptrs.item()
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
     # CHECK: %{{.*}} = tt.atomic_poll acquire, gpu, %{{.*}}, %{{.*}} timeout %{{.*}} : !tt.ptr<i32>, i32 -> i1
     tl.atomic_poll(ptr, 1, timeout_ns=1000)
 
@@ -802,15 +800,15 @@ def test_atomic_poll_rejects_tensor_pointer():
 @doesnt_compile
 @triton.jit
 def test_atomic_poll_rejects_release_semantics():
-    ptrs = tl.full((1, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
-    tl.atomic_poll(ptrs.item(), 1, sem="release")
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_poll(ptr, 1, sem="release")
 
 
 @doesnt_compile
 @triton.jit
 def test_atomic_poll_rejects_negative_timeout():
-    ptrs = tl.full((1, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
-    tl.atomic_poll(ptrs.item(), 1, timeout_ns=-1)
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_poll(ptr, 1, timeout_ns=-1)
 
 
 @pytest.mark.interpreter
