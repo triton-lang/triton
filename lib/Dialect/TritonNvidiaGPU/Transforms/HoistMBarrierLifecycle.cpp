@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/MBarrierUtilities.h"
 
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -76,7 +77,7 @@ public:
       SmallVector<Value> candidates;
       funcOp.walk([&](ttng::InitBarrierOp init) {
         Value barrier = init.getAlloc();
-        if (requiresCrossCTAInitSync(funcOp, barrier) &&
+        if (requiresCrossCTAMBarrierInitSync(funcOp, barrier, numCTAs) &&
             seen.insert(barrier).second)
           candidates.push_back(barrier);
       });
@@ -98,41 +99,6 @@ public:
   }
 
 private:
-  bool isCrossCTABarrier(Value barrier) {
-    auto barrierTy = dyn_cast<ttg::MemDescType>(barrier.getType());
-    return barrierTy && barrierTy.getShape()[0] != numCTAs;
-  }
-
-  bool isCrossCTAConsumer(Operation *op, Value barrier) {
-    auto aliasesBarrier = [&](Value value) { return value == barrier; };
-
-    if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-      auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
-      return mma.getTwoCtas() &&
-             llvm::any_of(barrierOp.getBarriers(), aliasesBarrier);
-    }
-    if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op))
-      return ttng::getModuleTwoCTAs(op) && aliasesBarrier(commit.getBarrier());
-    if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
-      return tma.getMulticast() && aliasesBarrier(tma.getBarrier());
-    if (auto clc = dyn_cast<ttng::CLCTryCancelOp>(op))
-      return aliasesBarrier(clc.getMbarrier());
-    return false;
-  }
-
-  bool requiresCrossCTAInitSync(FunctionOpInterface funcOp, Value barrier) {
-    if (isCrossCTABarrier(barrier))
-      return true;
-
-    return funcOp
-        ->walk<WalkOrder::PreOrder>([&](Operation *op) {
-          if (isCrossCTAConsumer(op, barrier))
-            return WalkResult::interrupt();
-          return WalkResult::advance();
-        })
-        .wasInterrupted();
-  }
-
   bool isKnownBarrierUser(Operation *op, Value barrier) {
     if (auto iface = dyn_cast<ttg::MBarrierOpInterface>(op)) {
       return llvm::any_of(iface.getBarriers(),
