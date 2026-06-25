@@ -132,11 +132,11 @@ class DriverBase(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def get_current_target(self):
+    def get_current_target(self, device=None):
         pass
 
     @abstractmethod
-    def get_active_torch_device(self):
+    def get_active_torch_device(self, device=None):
         pass
 
     @abstractmethod
@@ -146,7 +146,7 @@ class DriverBase(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
-    def allocate_default_profile_scratch(self, size: int, alignment: int, stream):
+    def allocate_default_profile_scratch(self, size: int, alignment: int, stream, device=None):
         """
         Allocate profile scratch when no explicit profile allocator override was installed.
         """
@@ -174,9 +174,9 @@ class GPUDriver(DriverBase):
     def assemble_tensormap_to_arg(self, tensormaps_info, args):
         return args
 
-    def allocate_default_profile_scratch(self, size: int, alignment: int, stream):
+    def allocate_default_profile_scratch(self, size: int, alignment: int, stream, device=None):
         import torch
-        device = self.get_active_torch_device()
+        device = self.get_active_torch_device(device)
         device_interface = self.get_device_interface()
         if stream is None:
             return torch.zeros(size, dtype=torch.int8, device=device)
