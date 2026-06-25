@@ -343,6 +343,24 @@ def tma_multicast_copy_kernel(in_desc, out_desc):
     smem._keep_alive()
 
 
+@gluon.jit
+def tma_multicast_loop_local_mbarrier_lifecycle_kernel(in_desc, out_desc, iters):
+    ttgl.static_assert(ttgl.num_ctas() == 2)
+    smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
+
+    for _ in range(0, iters, 1):
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        mbarrier.expect(bar, in_desc.nbytes_per_cta)
+        tma.async_load(in_desc, [0, 0], bar, smem, multicast=True)
+        mbarrier.wait(bar, phase=0, deps=[smem])
+        mbarrier.invalidate(bar)
+
+    tma.async_copy_shared_to_global(out_desc, [0, 0], smem)
+    tma.store_wait(0)
+    smem._keep_alive()
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [1, 4], [4, 4]])
 def test_tma_multicast_copy(ctas_per_cga):
@@ -373,6 +391,38 @@ def test_tma_multicast_copy(ctas_per_cga):
     )
     expect_multicast = any(ctas_per_cga[i] > cga_split_num[i] for i in range(len(ctas_per_cga)))
     assert (".multicast::cluster" in compiled.asm["ptx"]) == expect_multicast
+    torch.testing.assert_close(out, inp, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_tma_multicast_loop_local_mbarrier_lifecycle():
+    block_m, block_n = 128, 128
+    inp = torch.randn((block_m, block_n), dtype=torch.float16, device="cuda")
+    out = torch.empty_like(inp)
+
+    layout = ttgl.NVMMASharedLayout.get_default_for(
+        [block_m, block_n],
+        ttgl.float16,
+        cga_layout=[[0, 0]],
+    )
+
+    in_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(inp, [block_m, block_n], layout)
+    out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, [block_m, block_n], layout)
+    compiled = tma_multicast_loop_local_mbarrier_lifecycle_kernel[(1, )](
+        in_desc,
+        out_desc,
+        3,
+        num_warps=4,
+        num_ctas=2,
+    )
+
+    ttgir = compiled.asm["ttgir"]
+    assert ttgir.count("ttng.init_barrier") == 1
+    assert ttgir.count("ttng.inval_barrier") == 1
+    assert ttgir.index("ttng.init_barrier") < ttgir.index("scf.for")
+    assert ttgir.index("ttng.inval_barrier") > ttgir.index("scf.for")
+    assert ".multicast::cluster" in compiled.asm["ptx"]
+    assert "fence.mbarrier_init.release.cluster" in compiled.asm["ptx"]
     torch.testing.assert_close(out, inp, atol=0, rtol=0)
 
 
