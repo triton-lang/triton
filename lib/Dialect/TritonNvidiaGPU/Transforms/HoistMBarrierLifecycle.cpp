@@ -149,12 +149,17 @@ private:
   }
 
   bool isKnownAliasProducer(Operation *op, const BarrierAliases &aliases) {
+    // Alias producers such as memdesc views or arith.select consume a barrier
+    // descriptor and produce another descriptor for the same underlying
+    // mbarrier storage. They are transparent to the lifecycle: unlike
+    // MBarrierOpInterface ops, they do not initialize, wait, invalidate, or
+    // signal the barrier, so they should not make the use opaque.
     return llvm::any_of(op->getResults(),
                         [&](Value result) { return aliases.contains(result); });
   }
 
   // "Opaque" means the barrier is passed to an op this pass does not model as
-  // an mbarrier user. 
+  // an mbarrier user.
   bool hasOpaqueBarrierUse(FunctionOpInterface funcOp,
                            const BarrierAliases &aliases) {
     return funcOp
