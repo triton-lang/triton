@@ -2,6 +2,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/IR/PatternMatch.h"
@@ -58,6 +59,8 @@ struct BarrierLifecycle {
   ttg::LocalAllocOp alloc;
   ttng::InitBarrierOp init;
   int initCount = 0;
+  int expectCount = 0;
+  SmallVector<Operation *> transactionsAndWaits;
   SmallVector<ttng::WaitBarrierOp> waits;
   SmallVector<ttng::InvalBarrierOp> invals;
 };
@@ -86,10 +89,10 @@ public:
         BarrierLifecycle lifecycle;
         if (failed(collectLifecycle(funcOp, barrier, lifecycle)))
           continue;
-        if (failed(verifySingleTransactionPerWait(funcOp, barrier)))
-          return failure();
+        if (failed(verifyTransactionWaitPairs(funcOp, lifecycle)))
+          continue;
         if (failed(rewriteLoopPhases(lifecycle)))
-          return failure();
+          continue;
 
         moveInitToFunctionEntry(lifecycle, funcOp);
         moveInvalidationToFunctionExits(lifecycle, funcOp);
@@ -134,6 +137,9 @@ private:
     return true;
   }
 
+  // "Opaque" means the barrier is passed to an op this pass does not model as
+  // an mbarrier user. Skip hoisting rather than moving the lifecycle across an
+  // unknown use.
   bool hasOpaqueBarrierUse(Value barrier) {
     for (Operation *user : barrier.getUsers()) {
       if (!isKnownBarrierUser(user, barrier))
@@ -160,9 +166,16 @@ private:
         }
         return;
       }
+      if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op)) {
+        if (expect.getAlloc() == barrier)
+          ++lifecycle.expectCount;
+        return;
+      }
       if (auto wait = dyn_cast<ttng::WaitBarrierOp>(op)) {
-        if (wait.getAlloc() == barrier)
+        if (wait.getAlloc() == barrier) {
           lifecycle.waits.push_back(wait);
+          lifecycle.transactionsAndWaits.push_back(op);
+        }
         return;
       }
       if (auto inval = dyn_cast<ttng::InvalBarrierOp>(op)) {
@@ -170,77 +183,55 @@ private:
           lifecycle.invals.push_back(inval);
         return;
       }
+      if (isTransactionOp(op, barrier))
+        lifecycle.transactionsAndWaits.push_back(op);
     });
 
     if (lifecycle.initCount != 1 || !lifecycle.init ||
-        lifecycle.waits.empty() || lifecycle.invals.empty())
+        lifecycle.expectCount > 1 || lifecycle.waits.empty() ||
+        lifecycle.invals.size() != 1)
       return failure();
     return success();
   }
 
-  LogicalResult verifySingleTransactionPerWait(FunctionOpInterface funcOp,
-                                               Value barrier) {
-    int pendingTransactions = 0;
-    Operation *firstPendingTransaction = nullptr;
+  LogicalResult verifyTransactionWaitPairs(FunctionOpInterface funcOp,
+                                           BarrierLifecycle &lifecycle) {
+    DominanceInfo domInfo(funcOp);
+    PostDominanceInfo postDomInfo(funcOp);
+    SmallVector<Operation *> pendingTransactions;
 
-    WalkResult result = funcOp.walk<WalkOrder::PreOrder>([&](Operation *op) {
-      if (isTransactionOp(op, barrier)) {
-        if (pendingTransactions == 0)
-          firstPendingTransaction = op;
-        ++pendingTransactions;
-        return WalkResult::advance();
-      }
-
+    for (Operation *op : lifecycle.transactionsAndWaits) {
       auto wait = dyn_cast<ttng::WaitBarrierOp>(op);
-      if (!wait || wait.getAlloc() != barrier)
-        return WalkResult::advance();
-
-      // After hoisting, all loop iterations reuse the same physical barrier.
-      // A wait can only advance the phase safely when it covers exactly one
-      // transaction.
-      if (pendingTransactions != 1) {
-        InFlightDiagnostic diag =
-            wait.emitOpError()
-            << "cannot hoist mbarrier lifecycle: expected "
-               "exactly one transaction before this wait, "
-               "but found "
-            << pendingTransactions;
-        if (firstPendingTransaction)
-          diag.attachNote(firstPendingTransaction->getLoc())
-              << "first transaction covered by this wait";
-        return WalkResult::interrupt();
-      }
-      // A transaction in another block may be conditional or may not dominate
-      // this wait; keep the transform to straight-line block-local pairs.
-      if (firstPendingTransaction->getBlock() != wait->getBlock()) {
-        wait.emitOpError() << "cannot hoist mbarrier lifecycle: transaction and "
-                              "wait must be in the same block";
-        return WalkResult::interrupt();
-      }
-      if (!isUnconditionallyTrueTransaction(firstPendingTransaction) ||
-          !isConstTrue(wait.getPred())) {
-        wait.emitOpError() << "cannot hoist mbarrier lifecycle for predicated "
-                              "transactions";
-        return WalkResult::interrupt();
+      if (!wait) {
+        pendingTransactions.push_back(op);
+        continue;
       }
 
-      pendingTransactions = 0;
-      firstPendingTransaction = nullptr;
-      return WalkResult::advance();
-    });
+      // A wait can cover one or more transactions, but it must not observe a
+      // transaction that was already consumed by an earlier wait.
+      if (pendingTransactions.empty())
+        return failure();
 
-    if (result.wasInterrupted())
-      return failure();
-    if (pendingTransactions != 0) {
-      InFlightDiagnostic diag =
-          funcOp.emitOpError()
-          << "cannot hoist mbarrier lifecycle: found " << pendingTransactions
-          << " transaction(s) without a matching wait";
-      if (firstPendingTransaction)
-        diag.attachNote(firstPendingTransaction->getLoc())
-            << "first transaction without a matching wait";
-      return failure();
+      for (Operation *transaction : pendingTransactions) {
+        // The transaction must run on every path to the wait. A transaction in
+        // a conditional branch followed by a wait after the branch would
+        // otherwise leave paths that wait on work that was never issued.
+        if (!domInfo.dominates(transaction, wait.getOperation()))
+          return failure();
+        // The wait must run on every path after the transaction. Otherwise a
+        // transaction before a conditional wait could be left unmatched.
+        if (!postDomInfo.postDominates(wait.getOperation(), transaction))
+          return failure();
+        if (!isUnconditionallyTrueTransaction(transaction) ||
+            !isConstTrue(wait.getPred()))
+          return failure();
+      }
+
+      pendingTransactions.clear();
     }
+
+    if (!pendingTransactions.empty())
+      return failure();
     return success();
   }
 
@@ -260,19 +251,13 @@ private:
     for (ttng::WaitBarrierOp wait : lifecycle.waits) {
       scf::ForOp forOp = wait->getParentOfType<scf::ForOp>();
       if (!forOp) {
-        if (wait->getParentOfType<scf::WhileOp>()) {
-          wait.emitOpError() << "cannot hoist mbarrier lifecycle through "
-                                "scf.while yet";
+        if (wait->getParentOfType<scf::WhileOp>())
           return failure();
-        }
         nonLoopWaits.push_back(wait);
         continue;
       }
-      if (hasUnsupportedWhile(wait, forOp)) {
-        wait.emitOpError() << "cannot hoist mbarrier lifecycle through this "
-                              "control-flow shape yet";
+      if (hasUnsupportedWhile(wait, forOp))
         return failure();
-      }
       waitsByLoop[forOp].push_back(wait);
     }
 
@@ -284,15 +269,14 @@ private:
       return failure();
 
     for (auto &entry : waitsByLoop) {
+      SmallVector<ttng::WaitBarrierOp> &waits = entry.second;
+      if (waits.size() != 1)
+        return failure();
+    }
+
+    for (auto &entry : waitsByLoop) {
       scf::ForOp forOp = entry.first;
       SmallVector<ttng::WaitBarrierOp> &waits = entry.second;
-      if (waits.size() != 1) {
-        forOp.emitOpError()
-            << "cannot hoist mbarrier lifecycle with multiple waits for the "
-               "same barrier in one loop";
-        return failure();
-      }
-
       ttng::WaitBarrierOp wait = waits.front();
       Location loc = wait.getLoc();
       OpBuilder::InsertionGuard guard(builder);
