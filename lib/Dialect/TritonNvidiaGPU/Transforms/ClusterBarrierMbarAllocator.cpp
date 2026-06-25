@@ -24,6 +24,8 @@ namespace mlir::triton::nvidia_gpu {
 namespace {
 
 bool atomicNeedsClusterBarrier(Operation *op) {
+  if (isa<AtomicPollOp>(op))
+    return gpu::lookupNumCTAs(op) != 1;
   if (!isa<AtomicCASOp, AtomicRMWOp>(op) || op->getResult(0).use_empty() ||
       gpu::lookupNumCTAs(op) == 1)
     return false;

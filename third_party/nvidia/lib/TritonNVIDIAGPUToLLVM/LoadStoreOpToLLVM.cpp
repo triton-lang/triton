@@ -520,6 +520,133 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
 
 Value loadScalarAtomicResult(ConversionPatternRewriter &rewriter, Location loc,
                              const NVIDIA::TargetInfo &targetInfo,
+                             Value atomPtr, Type valueTy, int numCTAs);
+
+struct AtomicPollOpConversion
+    : public ConvertOpToLLVMPattern<triton::AtomicPollOp> {
+  AtomicPollOpConversion(LLVMTypeConverter &converter,
+                         const NVIDIA::TargetInfo &targetInfo,
+                         PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::AtomicPollOp>(converter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::AtomicPollOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    assert(moduleOp && "Parent ModuleOp not found for AtomicPollOp");
+    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                         loc, targetInfo);
+
+    unsigned bitWidth = adaptor.getExpected().getType().getIntOrFloatBitWidth();
+    StringRef syncScope;
+    switch (op.getScope()) {
+    case triton::MemSyncScope::CTA:
+      syncScope = "block";
+      break;
+    case triton::MemSyncScope::GPU:
+      syncScope = "device";
+      break;
+    case triton::MemSyncScope::SYSTEM:
+      // The default LLVM sync scope is system-wide.
+      break;
+    }
+
+    // Split the block at the poll and branch only the elected thread into the
+    // polling loop. All other threads skip directly to the rendezvous block.
+    Block *currentBlock = rewriter.getInsertionBlock();
+    Block *doneBlock = currentBlock->splitBlock(rewriter.getInsertionPoint());
+    Region *region = currentBlock->getParent();
+    Block *pollInitBlock =
+        rewriter.createBlock(region, Region::iterator(doneBlock));
+    Block *pollLoopBlock =
+        rewriter.createBlock(region, Region::iterator(doneBlock));
+    Block *pollSuccessBlock =
+        rewriter.createBlock(region, Region::iterator(doneBlock));
+    Block *timeoutCheckBlock =
+        adaptor.getTimeout()
+            ? rewriter.createBlock(region, Region::iterator(doneBlock))
+            : nullptr;
+    BlockArgument matched = doneBlock->addArgument(i1_ty, loc);
+
+    rewriter.setInsertionPointToEnd(currentBlock);
+    LLVM::CondBrOp::create(rewriter, loc, threadPred, pollInitBlock,
+                           ValueRange{}, doneBlock, ValueRange{b.false_val()});
+
+    rewriter.setInsertionPointToEnd(pollInitBlock);
+    Value start;
+    if (adaptor.getTimeout()) {
+      start =
+          LLVM::createLLVMIntrinsicCallOp(
+              rewriter, loc, "llvm.nvvm.read.ptx.sreg.globaltimer", i64_ty, {})
+              .getResult(0);
+    }
+    LLVM::BrOp::create(rewriter, loc, pollLoopBlock);
+
+    rewriter.setInsertionPointToEnd(pollLoopBlock);
+    Value loaded = LLVM::LoadOp::create(
+        rewriter, loc, adaptor.getExpected().getType(), adaptor.getPtr(),
+        bitWidth / 8, /*isVolatile=*/false, /*isNonTemporal=*/false,
+        /*isInvariant=*/false, /*isInvariantGroup=*/false,
+        LLVM::AtomicOrdering::monotonic, syncScope);
+    Value pollMatched = b.icmp_eq(loaded, adaptor.getExpected());
+    if (adaptor.getTimeout()) {
+      LLVM::CondBrOp::create(rewriter, loc, pollMatched, pollSuccessBlock,
+                             timeoutCheckBlock);
+
+      rewriter.setInsertionPointToEnd(timeoutCheckBlock);
+      Value now =
+          LLVM::createLLVMIntrinsicCallOp(
+              rewriter, loc, "llvm.nvvm.read.ptx.sreg.globaltimer", i64_ty, {})
+              .getResult(0);
+      Value elapsed = b.sub(now, start);
+      Value timedOut = b.icmp_uge(elapsed, adaptor.getTimeout());
+      LLVM::CondBrOp::create(rewriter, loc, timedOut, doneBlock,
+                             ValueRange{b.false_val()}, pollLoopBlock,
+                             ValueRange{});
+    } else {
+      LLVM::CondBrOp::create(rewriter, loc, pollMatched, pollSuccessBlock,
+                             pollLoopBlock);
+    }
+
+    rewriter.setInsertionPointToEnd(pollSuccessBlock);
+    if (op.getSem() == triton::MemSemantic::ACQUIRE)
+      LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
+                            syncScope);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{b.true_val()}, doneBlock);
+
+    // Broadcast the elected thread's result after every thread has left the
+    // loop, preserving the scalar result convention used by Triton atomics.
+    rewriter.setInsertionPointToStart(doneBlock);
+
+    if (op.getResult().use_empty()) {
+      createBarrier(rewriter, loc, numCTAs, op);
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    Value atomPtr =
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+    atomPtr = b.bitcast(atomPtr, ptr_ty(rewriter.getContext(), 3));
+    targetInfo.storeShared(rewriter, loc, atomPtr, matched, threadPred);
+    createBarrier(rewriter, loc, numCTAs, op);
+    Value result = loadScalarAtomicResult(rewriter, loc, targetInfo, atomPtr,
+                                          i1_ty, numCTAs);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+private:
+  const NVIDIA::TargetInfo &targetInfo;
+};
+
+Value loadScalarAtomicResult(ConversionPatternRewriter &rewriter, Location loc,
+                             const NVIDIA::TargetInfo &targetInfo,
                              Value atomPtr, Type valueTy, int numCTAs) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (numCTAs == 1)
@@ -1864,6 +1991,7 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
   patterns.add<AsyncCopyGlobalToLocalOpConversion, AtomicCASOpConversion,
                AtomicRMWOpConversion>(typeConverter, targetInfo,
                                       axisInfoAnalysis, benefit);
+  patterns.add<AtomicPollOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LoadOpConversion, StoreOpConversion>(
       typeConverter, targetInfo, computeCapability, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion, AsyncWaitOpConversion,

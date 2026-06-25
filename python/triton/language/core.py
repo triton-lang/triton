@@ -1189,6 +1189,9 @@ class tensor(base_value):
     def atomic_or(self, val, mask=None, sem=None, scope=None) -> tensor:
         ...
 
+    def atomic_poll(self, expected_value, sem="acquire", scope="gpu", timeout_ns=None) -> tensor:
+        ...
+
     def atomic_xor(self, val, mask=None, sem=None, scope=None) -> tensor:
         ...
 
@@ -2748,6 +2751,47 @@ def atomic_cas(pointer, cmp, val, sem=None, scope=None, _semantic=None):
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
     return _semantic.atomic_cas(pointer, cmp, val, sem, scope)
+
+
+@_tensor_member_fn
+@builtin
+def atomic_poll(pointer, expected_value, sem="acquire", scope="gpu", timeout_ns=None, _semantic=None):
+    """
+    Wait until the value at :code:`pointer` equals :code:`expected_value`.
+
+    A single thread repeatedly performs relaxed loads from :code:`pointer` at
+    the requested scope. With acquire semantics, it executes an acquire fence
+    at that scope only after observing :code:`expected_value`. All threads wait
+    for the poll to complete and receive the same boolean result.
+
+    :param pointer: A pointer to a scalar 16-, 32-, or 64-bit integer.
+    :type pointer: triton.PointerDType
+    :param expected_value: The value that ends the polling loop.
+    :type expected_value: pointer.dtype.element_ty
+    :param sem: Specifies whether a successful poll has acquire semantics.
+        Acceptable values are "acquire" (default) and "relaxed".
+    :type sem: str, optional
+    :param scope: Defines the scope of threads that observe the synchronizing
+        effect of the poll. Acceptable values are "gpu" (default), "cta"
+        (cooperative thread array, thread block), and "sys" (system).
+    :type scope: str, optional
+    :param timeout_ns: Maximum wall time to poll, measured in nanoseconds by
+        the GPU global timer. If omitted, polling has no timeout. A timeout of
+        zero still performs one load.
+    :type timeout_ns: int, optional
+    :return: True if the expected value was observed, or False if the timeout
+        expired first.
+    :rtype: triton.language.tensor
+    """
+    expected_value = _semantic.to_tensor(expected_value)
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
+    timeout_ns = _unwrap_if_constexpr(timeout_ns)
+    if isinstance(timeout_ns, int) and timeout_ns < 0:
+        raise ValueError("atomic_poll timeout_ns must be non-negative")
+    if timeout_ns is not None:
+        timeout_ns = _semantic.to_tensor(timeout_ns)
+    return _semantic.atomic_poll(pointer, expected_value, sem, scope, timeout_ns)
 
 
 @_tensor_member_fn

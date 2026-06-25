@@ -26,4 +26,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.store %arg0, %5 : !tt.ptr<f32>
     tt.return
   }
+
+  // CHECK-TTG2NVGPU-LABEL: @atomic_poll
+  // CHECK-TTG2NVGPU: llvm.load %{{.*}} atomic monotonic
+  // CHECK-TTG2NVGPU: llvm.fence acquire
+  // CHECK-NVGPU2LLVM-LABEL: @atomic_poll
+  // CHECK-NVGPU2LLVM: llvm.load %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM: llvm.fence acquire
+  tt.func public @atomic_poll(%ptr: !tt.ptr<i32>, %expected: i32) {
+    %matched = tt.atomic_poll acquire, sys, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
+    tt.return
+  }
+
+  // CHECK-TTG2NVGPU-LABEL: @atomic_poll_cta
+  // CHECK-TTG2NVGPU: llvm.load %{{.*}} atomic syncscope("block") monotonic
+  // CHECK-TTG2NVGPU: llvm.fence syncscope("block") acquire
+  // CHECK-NVGPU2LLVM-LABEL: @atomic_poll_cta
+  // CHECK-NVGPU2LLVM: llvm.load %{{.*}} atomic syncscope("block") monotonic
+  // CHECK-NVGPU2LLVM: llvm.fence syncscope("block") acquire
+  tt.func public @atomic_poll_cta(%ptr: !tt.ptr<i32>, %expected: i32) {
+    %matched = tt.atomic_poll acquire, cta, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
+    tt.return
+  }
+
+  // CHECK-TTG2NVGPU-LABEL: @atomic_poll_relaxed
+  // CHECK-TTG2NVGPU: llvm.load %{{.*}} atomic syncscope("device") monotonic
+  // CHECK-TTG2NVGPU-NOT: llvm.fence
+  // CHECK-NVGPU2LLVM-LABEL: @atomic_poll_relaxed
+  // CHECK-NVGPU2LLVM: llvm.load %{{.*}} atomic syncscope("device") monotonic
+  // CHECK-NVGPU2LLVM-NOT: llvm.fence
+  tt.func public @atomic_poll_relaxed(%ptr: !tt.ptr<i32>, %expected: i32) {
+    %matched = tt.atomic_poll relaxed, gpu, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
+    tt.return
+  }
 }

@@ -1381,6 +1381,73 @@ def test_noinline_returns_tensor(device):
 # ---------------
 # test atomics
 # ---------------
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("sem", ["relaxed", "acquire"])
+@pytest.mark.parametrize("scope", ["cta", "gpu", "sys"])
+@pytest.mark.parametrize("dtype, bit_width", [(torch.int16, 16), (torch.int32, 32), (torch.int64, 64)])
+def test_atomic_poll(dtype, bit_width, sem, scope, device):
+
+    @triton.jit
+    def kernel(flag, out, expected_value, SEM: tl.constexpr, SCOPE: tl.constexpr):
+        tl.atomic_poll(flag, expected_value, sem=SEM, scope=SCOPE)
+        tl.store(out, 1)
+
+    flag = torch.ones(1, dtype=dtype, device=device)
+    out = torch.zeros_like(flag)
+    compiled = kernel[(1, )](flag, out, 1, SEM=sem, SCOPE=scope, num_warps=4)
+
+    assert out.item() == 1
+    if is_cuda():
+        ptx = compiled.asm["ptx"]
+        assert ptx.count(f"ld.relaxed.{scope}.global.b{bit_width}") == 1
+        assert ptx.count(f"fence.acquire.{scope};") == (sem == "acquire")
+        assert "%globaltimer" not in ptx
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("initial_value, expected", [(1, True), (0, False)])
+def test_atomic_poll_timeout(initial_value, expected, device):
+
+    @triton.jit
+    def kernel(flag, out, timeout_ns):
+        matched = tl.atomic_poll(flag, 1, timeout_ns=timeout_ns)
+        tl.store(out, matched)
+
+    flag = torch.full((1, ), initial_value, dtype=torch.int32, device=device)
+    out = torch.empty(1, dtype=torch.bool, device=device)
+    compiled = kernel[(1, )](flag, out, 0, num_warps=4)
+
+    assert out.item() == expected
+    if is_cuda():
+        ptx = compiled.asm["ptx"]
+        assert ptx.count("ld.relaxed.gpu.global.b32") == 1
+        assert ptx.count("fence.acquire.gpu;") == 1
+        assert ptx.count("%globaltimer") == 2
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+def test_atomic_poll_waits_for_remote_cta(device):
+
+    @triton.jit
+    def kernel(flag, payload, out):
+        if tl.program_id(0) == 0:
+            tl.atomic_poll(flag, 1, sem="acquire", scope="gpu")
+            tl.store(out, tl.load(payload))
+        else:
+            tl.store(payload, 42)
+            tl.atomic_xchg(flag, 1, sem="release", scope="gpu")
+
+    flag = torch.zeros(1, dtype=torch.int32, device=device)
+    payload = torch.zeros_like(flag)
+    out = torch.zeros_like(flag)
+    kernel[(2, )](flag, payload, out, num_warps=4)
+
+    assert flag.item() == 1
+    assert out.item() == 42
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "op, dtype_x_str, mode, sem",

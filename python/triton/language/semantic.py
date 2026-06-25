@@ -1254,6 +1254,37 @@ class TritonSemantic(Generic[TensorTy]):
 # atomic
 #########
 
+    def atomic_poll(self, ptr: TensorTy, expected: TensorTy, sem: str, scope: str,
+                    timeout_ns: Optional[TensorTy]) -> TensorTy:
+        if ptr.type.is_block():
+            raise ValueError("atomic_poll only supports a pointer to a scalar")
+        if not ptr.type.is_ptr():
+            raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.atomic_poll`")
+        if expected.type.is_block():
+            raise ValueError("Expected value argument cannot be block type")
+
+        element_ty = ptr.type.element_ty
+        if not element_ty.is_int() or element_ty.primitive_bitwidth not in [16, 32, 64]:
+            raise ValueError("atomic_poll only supports integer elements with width {16, 32, 64}")
+        expected = self.cast(expected, element_ty)
+
+        sem = self._str_to_sem(sem)
+        if sem not in [ir.MEM_SEMANTIC.ACQUIRE, ir.MEM_SEMANTIC.RELAXED]:
+            raise ValueError("atomic_poll only supports acquire and relaxed semantics")
+        scope = self._str_to_scope(scope)
+        if timeout_ns is not None:
+            if timeout_ns.type.is_block() or not timeout_ns.type.is_int():
+                raise ValueError("atomic_poll timeout_ns must be a scalar integer")
+            timeout_ns = self.cast(timeout_ns, tl.uint64)
+        handle = self.builder.create_atomic_poll(
+            ptr.handle,
+            expected.handle,
+            None if timeout_ns is None else timeout_ns.handle,
+            sem,
+            scope,
+        )
+        return self.tensor(handle, tl.int1)
+
     def atomic_cas(self, ptr: TensorTy, cmp: TensorTy, val: TensorTy, sem: str, scope: str) -> TensorTy:
         sem = self._str_to_sem(sem)
         scope = self._str_to_scope(scope)
