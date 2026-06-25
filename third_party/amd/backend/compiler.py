@@ -311,10 +311,6 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_prepare_if_combining(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
-        if knobs.amd.use_buffer_ops:
-            # Run after CSE so matching assume and loop-bound expressions
-            # share SSA, letting range analysis prove both non-negative.
-            amd.passes.ttgpuir.add_annotate_buffer_op_split_safety(pm)
         passes.common.add_symbol_dce(pm)
         if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
@@ -342,8 +338,6 @@ class HIPBackend(BaseBackend):
         if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
             passes.ttgpuir.add_fp_sanitizer(pm)
-
-        amd.passes.ttgpuir.add_annotate_buffer_op_split_safety(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -404,6 +398,8 @@ class HIPBackend(BaseBackend):
             passes.llvmir.add_di_scope(pm)
 
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, options.arch, __HIP_FTZ)
+        # Cleanup leftover unrealized_conversion_casts before converted to LLVM.
+        passes.convert.add_reconcile_unrealized_casts(pm)
         pm.run(mod, 'make_llir')
 
         if knobs.compilation.dump_ir_extract_di_local_variables:

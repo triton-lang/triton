@@ -65,15 +65,18 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
     copyOp.getDescMutable().assign(updated.getResult());
     return op;
   }
+  // Pure gather inherits pred from its descriptor; gate it the same way as the
+  // copy by chaining a pred-only update_tensor_descriptor onto its descriptor.
   if (auto gatherOp = dyn_cast<triton::amdgpu::AsyncTDMGatherOp>(op)) {
-    auto predicatedOp = cast<tt::PredicatedOpInterface>(op);
     rewriter.setInsertionPoint(op);
-    auto predI32 = arith::ExtUIOp::create(
-        rewriter, op->getLoc(), predicatedOp.getPredicateOperand().getType(),
-        pred);
-    Value mask = arith::AndIOp::create(
-        rewriter, op->getLoc(), predicatedOp.getPredicateOperand(), predI32);
-    predicatedOp.setPredicateOperand(mask);
+    auto predI32 = arith::ExtUIOp::create(rewriter, op->getLoc(),
+                                          rewriter.getI32Type(), pred);
+    auto updated = triton::amdgpu::UpdateTensorDescriptorOp::create(
+        rewriter, op->getLoc(), gatherOp.getDesc().getType(),
+        gatherOp.getDesc(),
+        /*add_offsets=*/ValueRange{}, /*set_bounds=*/ValueRange{},
+        /*pred=*/predI32);
+    gatherOp.getDescMutable().assign(updated.getResult());
     return op;
   }
   if (isa<triton::amdgpu::AsyncTDMWait>(op))

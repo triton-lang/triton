@@ -97,7 +97,7 @@ class TensorDescHandle:
             masks = masks & (0 <= off) & (off < self.shape[dim].data)
         assert ptrs_data.dtype == np.uint64
         ptrs_handle = TensorHandle(ptrs_data, self.base.dtype.scalar)
-        return ptrs_handle, masks
+        return ptrs_handle, TensorHandle(masks, tl.int1)
 
 
 @dataclass(frozen=True)
@@ -1063,15 +1063,21 @@ class ReduceOps(ReduceScanOpInterface):
         return self.to_tensor(np.sum(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
 
     def apply_impl(self, input):
-        if self.combine_fn == tl.standard._argmin_combine_tie_break_left:
+        # Note: np.nanargmin/np.nanargmax always return the leftmost index
+        # for equal values, whereas tie_break_fast on hardware returns an
+        # arbitrary index. This is a known remaining divergence between the
+        # interpreter and JIT for inputs with equal non-NaN elements.
+        if (self.combine_fn is tl.standard._argmin_combine_tie_break_left
+                or self.combine_fn is tl.standard._argmin_combine_tie_break_fast):
             return self.min_max(input[0], val_reduce_op=np.nanmin, idx_reduce_op=np.nanargmin)
-        elif self.combine_fn == tl.standard._argmax_combine_tie_break_left:
+        elif (self.combine_fn is tl.standard._argmax_combine_tie_break_left
+              or self.combine_fn is tl.standard._argmax_combine_tie_break_fast):
             return self.min_max(input[0], val_reduce_op=np.nanmax, idx_reduce_op=np.nanargmax)
-        elif self.combine_fn == tl.standard._elementwise_max:
+        elif self.combine_fn is tl.standard._elementwise_max:
             return self.min_max(input[0], val_reduce_op=np.nanmax, idx_reduce_op=None)
-        elif self.combine_fn == tl.standard._elementwise_min:
+        elif self.combine_fn is tl.standard._elementwise_min:
             return self.min_max(input[0], val_reduce_op=np.nanmin, idx_reduce_op=None)
-        elif self.combine_fn == tl.standard._sum_combine:
+        elif self.combine_fn is tl.standard._sum_combine:
             return self.sum(input[0])
         else:
             # Fall back to the slow mode
@@ -1124,7 +1130,8 @@ class ScanOps(ReduceScanOpInterface):
         new_input = []
         if self.reverse:
             for arg in input:
-                new_input.append(self.to_tensor(np.flip(arg.handle.data, axis=self.axis), arg.dtype))
+                new_input.append(
+                    self.to_tensor(np.ascontiguousarray(np.flip(arg.handle.data, axis=self.axis)), arg.dtype))
         else:
             new_input = input
         if self.combine_fn == tl.standard._sum_combine:
@@ -1136,7 +1143,7 @@ class ScanOps(ReduceScanOpInterface):
             ret = self.generic_scan(new_input)
         if self.reverse:
             for arg in ret:
-                arg.handle.data = np.flip(arg.handle.data, axis=self.axis)
+                arg.handle.data = np.ascontiguousarray(np.flip(arg.handle.data, axis=self.axis))
         return ret
 
 

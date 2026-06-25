@@ -35,6 +35,33 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
       ll, dimNames, [](int b, int32_t basis) { return basis == (1 << b); });
 }
 
+LinearLayout invertAndComposeBlockLocal(const LinearLayout &A,
+                                        const LinearLayout &B) {
+  auto cvt = B.invertAndCompose(A);
+  assert(!cvt.getInDimNames().empty());
+  auto kBlock =
+      StringAttr::get(cvt.getInDimNames().begin()->getContext(), "block");
+  assert(A.hasInDim(kBlock) && B.hasInDim(kBlock));
+  assert(A.getInDimSize(kBlock) == B.getInDimSize(kBlock));
+
+  // A zero block basis does not affect A's outputs, so force that output
+  // coordinate to equal the corresponding input block bit. This does not
+  // change the composition.
+  auto bases = cvt.getBases();
+  int blockOutIdx = cvt.getOutDimIndex(kBlock);
+  for (auto [i, aBlockBasis] : llvm::enumerate(A.getBases().at(kBlock))) {
+    if (!llvm::all_of(aBlockBasis, [](int32_t basis) { return basis == 0; }))
+      continue;
+    int blockBit = 1 << i;
+    for (auto &inDimBases : llvm::make_second_range(bases))
+      for (auto &basis : inDimBases)
+        basis[blockOutIdx] &= ~blockBit;
+    bases[kBlock][i][blockOutIdx] |= blockBit;
+  }
+  return LinearLayout(std::move(bases), cvt.getOutDims(),
+                      /*requireSurjective=*/false);
+}
+
 LinearLayout
 ensureLayoutNotLargerThan(const LinearLayout &layout,
                           const llvm::SmallDenseMap<StringAttr, int64_t> &shape,

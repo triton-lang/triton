@@ -10,6 +10,10 @@
 #layout5 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 32]], warp = [[16, 0], [32, 0]], block = []}>
 
+#fp4_blocked_src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#fp4_blocked_dst = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#fp4_dst = #ttg.linear<{register = [[32, 0], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], warp = [[0, 32], [0, 64]], block = []}>
+
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 
@@ -90,6 +94,16 @@ tt.func @fp4_keep_convert() -> tensor<64x64xf16, #linear> {
   // CHECK: ttg.fp4_to_fp
   // CHECK-NOT: ttg.convert_layout
   tt.return %converted : tensor<64x64xf16, #linear>
+}
+
+// CHECK-LABEL: fp4_no_backward_inference
+tt.func @fp4_no_backward_inference() -> tensor<64x128xbf16, #fp4_dst> {
+  %arg0 = arith.constant dense<0> : tensor<32x128xi8, #fp4_blocked_src>
+  %0 = ttg.fp4_to_fp %arg0 {axis = 0 : i32} : tensor<32x128xi8, #fp4_blocked_src> -> tensor<64x128xbf16, #fp4_blocked_dst>
+  %1 = ttg.convert_layout %0 : tensor<64x128xbf16, #fp4_blocked_dst> -> tensor<64x128xbf16, #fp4_dst>
+  // CHECK: ttg.fp4_to_fp
+  // CHECK: ttg.convert_layout
+  tt.return %1 : tensor<64x128xbf16, #fp4_dst>
 }
 
 // Hoist the convert on top of ext to make it cheaper.
@@ -4471,5 +4485,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       scf.yield %arg3 : tensor<8x8xf32, #blocked>
     }
     tt.return
+  }
+}
+
+// -----
+
+// We previously had a bug where we did not correctly track values with multiple
+// rematerializations with different encodings.
+
+// CHECK-LABEL: @if_result_multi_encoding_cache
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.return
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @if_result_multi_encoding_cache(%arg0: i1) -> (tensor<32xf32, #blocked2>, tensor<32xf32, #blocked3>) {
+    %cst = arith.constant dense<1.000000e+00> : tensor<32xf32, #blocked1>
+    %cst_0 = arith.constant dense<3.000000e+00> : tensor<32xf32, #blocked1>
+    %0 = scf.if %arg0 -> (tensor<32xf32, #blocked1>) {
+      scf.yield %cst_0 : tensor<32xf32, #blocked1>
+    } else {
+      scf.yield %cst : tensor<32xf32, #blocked1>
+    }
+    %1 = ttg.convert_layout %0 : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked2>
+    %2 = ttg.convert_layout %0 : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked3>
+    tt.return %1, %2 : tensor<32xf32, #blocked2>, tensor<32xf32, #blocked3>
   }
 }

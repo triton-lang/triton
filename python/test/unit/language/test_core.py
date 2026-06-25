@@ -2489,6 +2489,65 @@ def test_argmax_argmin_with_nan(device):
     assert idx.item() == 1, f"expected 1, got {idx.item()}"
 
 
+@pytest.mark.interpreter
+def test_argmax_argmin_tie_break_fast_with_nan(device):
+    # tl.argmax/argmin with tie_break_left=False should also ignore NaN,
+    # consistent with the tie_break_left=True behaviour and JIT hardware
+    # semantics (fmaxf/fminf treat NaN as missing values).
+    # Regression test for: https://github.com/triton-lang/triton/issues/10697
+    @triton.jit
+    def argmax_fast_kernel(x_ptr, val_ptr, idx_ptr, N: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        mask = offsets < N
+        x = tl.load(x_ptr + offsets, mask=mask, other=-float("inf"))
+        val = tl.max(x, axis=0)
+        idx = tl.argmax(x, axis=0, tie_break_left=False)
+        tl.store(val_ptr, val)
+        tl.store(idx_ptr, idx)
+
+    @triton.jit
+    def argmin_fast_kernel(x_ptr, val_ptr, idx_ptr, N: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        mask = offsets < N
+        x = tl.load(x_ptr + offsets, mask=mask, other=float("inf"))
+        val = tl.min(x, axis=0)
+        idx = tl.argmin(x, axis=0, tie_break_left=False)
+        tl.store(val_ptr, val)
+        tl.store(idx_ptr, idx)
+
+    val = torch.empty((), dtype=torch.float32, device=device)
+    idx = torch.empty((), dtype=torch.int32, device=device)
+
+    # argmax: [nan, 6, 8] -> max=8.0, argmax=2
+    x = torch.tensor([float("nan"), 6.0, 8.0], dtype=torch.float32, device=device)
+    argmax_fast_kernel[(1, )](x, val, idx, N=3, BLOCK=4)
+    assert val.item() == 8.0, f"expected 8.0, got {val.item()}"
+    assert idx.item() == 2, f"expected 2, got {idx.item()}"
+
+    # argmin: [nan, 6, 8] -> min=6.0, argmin=1
+    val.zero_()
+    idx.zero_()
+    argmin_fast_kernel[(1, )](x, val, idx, N=3, BLOCK=4)
+    assert val.item() == 6.0, f"expected 6.0, got {val.item()}"
+    assert idx.item() == 1, f"expected 1, got {idx.item()}"
+
+    # argmax: NaN at end [3, 5, nan] -> max=5.0, argmax=1
+    x_nan_end = torch.tensor([3.0, 5.0, float("nan")], dtype=torch.float32, device=device)
+    val.zero_()
+    idx.zero_()
+    argmax_fast_kernel[(1, )](x_nan_end, val, idx, N=3, BLOCK=4)
+    assert val.item() == 5.0, f"expected 5.0, got {val.item()}"
+    assert idx.item() == 1, f"expected 1, got {idx.item()}"
+
+    # argmin: NaN in middle [3, nan, 1] -> min=1.0, argmin=2
+    x_nan_mid = torch.tensor([3.0, float("nan"), 1.0], dtype=torch.float32, device=device)
+    val.zero_()
+    idx.zero_()
+    argmin_fast_kernel[(1, )](x_nan_mid, val, idx, N=3, BLOCK=4)
+    assert val.item() == 1.0, f"expected 1.0, got {val.item()}"
+    assert idx.item() == 2, f"expected 2, got {idx.item()}"
+
+
 def get_reduced_dtype(dtype_str, op):
     if op in ('argmin', 'argmax'):
         return 'int32'
