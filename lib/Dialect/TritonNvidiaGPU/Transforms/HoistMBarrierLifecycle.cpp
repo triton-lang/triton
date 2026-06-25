@@ -4,8 +4,8 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
-#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Analysis/Alias.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -182,9 +182,8 @@ public:
 private:
   bool isKnownBarrierUser(Operation *op, const BarrierAliases &aliases) {
     if (auto iface = dyn_cast<ttg::MBarrierOpInterface>(op)) {
-      return llvm::any_of(iface.getBarriers(), [&](Value value) {
-        return aliases.contains(value);
-      });
+      return llvm::any_of(iface.getBarriers(),
+                          [&](Value value) { return aliases.contains(value); });
     }
     return false;
   }
@@ -192,9 +191,8 @@ private:
   bool isCrossCTAConsumer(Operation *op, const BarrierAliases &aliases) {
     SmallVector<Value> consumerBarriers;
     getCrossCTAConsumerBarriers(op, consumerBarriers);
-    return llvm::any_of(consumerBarriers, [&](Value value) {
-      return aliases.contains(value);
-    });
+    return llvm::any_of(consumerBarriers,
+                        [&](Value value) { return aliases.contains(value); });
   }
 
   bool requiresCrossCTAInitSync(FunctionOpInterface funcOp, Value barrier,

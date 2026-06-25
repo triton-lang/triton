@@ -47,8 +47,8 @@ bool isCrossCTAConsumer(Operation *op, Value barrier) {
   return llvm::is_contained(barriers, barrier);
 }
 
-bool requiresCrossCTAMBarrierInitSync(FunctionOpInterface funcOp,
-                                      Value barrier, int numCTAs) {
+bool requiresCrossCTAMBarrierInitSync(FunctionOpInterface funcOp, Value barrier,
+                                      int numCTAs) {
   // Barrier init sync is needed for barriers that are themselves cross-CTA,
   // and also for per-CTA barriers consumed by multi-CTA ops that multicast or
   // otherwise fan out barrier state across the cluster.
