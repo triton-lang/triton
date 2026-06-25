@@ -216,11 +216,6 @@ struct ClusterBarrierOpConversion
     auto func = op->getParentOfType<FunctionOpInterface>();
     Value barrierPtr0 = getClusterBarrierMbarPtr(
         loc, rewriter, func, mbarOffset.getInt(), targetInfo);
-    Value barrierPtr1 = getClusterBarrierMbarPtr(
-        loc, rewriter, func,
-        mbarOffset.getInt() +
-            triton::nvidia_gpu::kClusterBarrierMbarSlotSize,
-        targetInfo);
     auto ptrTy = cast<LLVM::LLVMPointerType>(barrierPtr0.getType());
     Value counterPtr = b.gep(ptrTy, i8_ty, barrierPtr0, LLVM::GEPArg(8));
 
@@ -232,8 +227,9 @@ struct ClusterBarrierOpConversion
     // slot and the high bit is that slot's parity.
     Value barrierIdx = b.and_(counter, b.i32_val(1));
     Value parity = b.lshr(counter, b.i32_val(1));
-    Value useSecondSlot = b.icmp_ne(barrierIdx, b.i32_val(0));
-    Value barrierPtr = b.select(useSecondSlot, barrierPtr1, barrierPtr0);
+    auto barrierSlotTy = LLVM::LLVMArrayType::get(
+        i8_ty, triton::nvidia_gpu::kClusterBarrierMbarSlotSize);
+    Value barrierPtr = b.gep(ptrTy, barrierSlotTy, barrierPtr0, barrierIdx);
     Value pred = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
     Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
     int numCTAs = triton::gpu::lookupNumCTAs(op);

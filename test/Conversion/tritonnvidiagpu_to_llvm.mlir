@@ -845,8 +845,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // CHECK: %[[COUNTER:.*]] = llvm.load
       // CHECK: %[[BARRIER_IDX:.*]] = llvm.and %[[COUNTER]]
       // CHECK: %[[PARITY:.*]] = llvm.lshr %[[COUNTER]]
-      // CHECK: %[[USE_SECOND:.*]] = llvm.icmp "ne" %[[BARRIER_IDX]]
-      // CHECK: %[[BARRIER:.*]] = llvm.select %[[USE_SECOND]]
+      // CHECK: %[[BARRIER:.*]] = llvm.getelementptr %{{.*}}[%[[BARRIER_IDX]]]
       // CHECK: %[[BARRIER_INT:.*]] = llvm.ptrtoint
       // CHECK: %[[PEER_BARRIER_INT:.*]] = llvm.xor %[[BARRIER_INT]],
       // CHECK: llvm.inttoptr %[[PEER_BARRIER_INT]]
