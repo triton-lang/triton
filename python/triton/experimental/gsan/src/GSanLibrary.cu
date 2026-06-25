@@ -510,6 +510,8 @@ GSAN_DEVICE void readRange(ThreadState *state, uintptr_t read_addr, int nBytes,
   auto range = roundRange(Range{read_addr, read_addr + nBytes});
 
   auto reserveBase = state->reserveBase;
+  if (range.start >= reserveBase + kReserveSize || reserveBase >= range.end)
+    return;
   rwLockAcquireRead(state->lock);
 
   for (uintptr_t addr = range.start; addr < range.end;
