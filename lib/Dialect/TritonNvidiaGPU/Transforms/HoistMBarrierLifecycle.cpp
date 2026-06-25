@@ -89,8 +89,6 @@ public:
         BarrierLifecycle lifecycle;
         if (failed(collectLifecycle(funcOp, barrier, lifecycle)))
           continue;
-        if (!supportsTransactionWaits(funcOp, lifecycle))
-          continue;
         if (failed(rewriteLoopPhases(lifecycle)))
           continue;
 
@@ -190,11 +188,7 @@ private:
         lifecycle.expectCount > 1 || lifecycle.waits.size() != 1 ||
         lifecycle.invals.size() != 1)
       return failure();
-    return success();
-  }
 
-  bool supportsTransactionWaits(FunctionOpInterface funcOp,
-                                BarrierLifecycle &lifecycle) {
     DominanceInfo domInfo(funcOp);
     PostDominanceInfo postDomInfo(funcOp);
     ttng::WaitBarrierOp wait = lifecycle.waits.front();
@@ -207,29 +201,29 @@ private:
         continue;
       }
       if (seenWait)
-        return false;
+        return failure();
       transactions.push_back(op);
     }
 
     if (!seenWait || transactions.empty())
-      return false;
+      return failure();
 
     for (Operation *transaction : transactions) {
       // The transaction must run on every path to the wait. A transaction in a
       // conditional branch followed by a wait after the branch would otherwise
       // leave paths that wait on work that was never issued.
       if (!domInfo.dominates(transaction, wait.getOperation()))
-        return false;
+        return failure();
       // The wait must run on every path after the transaction. Otherwise a
       // transaction before a conditional wait could be left unmatched.
       if (!postDomInfo.postDominates(wait.getOperation(), transaction))
-        return false;
+        return failure();
       if (!isUnconditionallyTrueTransaction(transaction) ||
           !isConstTrue(wait.getPred()))
-        return false;
+        return failure();
     }
 
-    return true;
+    return success();
   }
 
   bool hasUnsupportedWhile(ttng::WaitBarrierOp wait, scf::ForOp forOp) {
