@@ -591,7 +591,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // Even though we have a wait_barrier, we should still emit a cluster
   // barrier at the end of the kernel, as a in that wait just one CTA is waiting
   // for both the CTAs. It could be that CTA1 exits the kernel before CTA0,
-  // otherwise! 
+  // otherwise!
   // CHECK-LABEL: @no_cluster_when_same_allocation
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster

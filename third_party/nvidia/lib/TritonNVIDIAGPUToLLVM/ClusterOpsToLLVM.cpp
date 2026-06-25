@@ -284,14 +284,11 @@ struct InitializeWSClusterBarriers
         shared - count * triton::nvidia_gpu::kClusterBarrierMbarAllocationSize;
     int numCTAs = triton::gpu::lookupNumCTAs(kernel);
     for (int64_t i = 0; i < count;
-         ++i,
-                 offset +=
-                     triton::nvidia_gpu::kClusterBarrierMbarAllocationSize) {
-      Value barrierPtr0 = getClusterBarrierMbarPtr(
-          loc, rewriter, kernel, offset, targetInfo);
+         ++i, offset += triton::nvidia_gpu::kClusterBarrierMbarAllocationSize) {
+      Value barrierPtr0 =
+          getClusterBarrierMbarPtr(loc, rewriter, kernel, offset, targetInfo);
       for (int64_t slot = 0;
-           slot < triton::nvidia_gpu::kClusterBarrierMbarBufferCount;
-           ++slot) {
+           slot < triton::nvidia_gpu::kClusterBarrierMbarBufferCount; ++slot) {
         Value barrierPtr = barrierPtr0;
         if (slot != 0)
           barrierPtr = getClusterBarrierMbarPtr(
@@ -301,10 +298,8 @@ struct InitializeWSClusterBarriers
         createMBarrierInit(rewriter, loc, initPred, barrierPtr, numCTAs - 1);
       }
       auto ptrTy = cast<LLVM::LLVMPointerType>(barrierPtr0.getType());
-      Value counterPtr =
-          b.gep(ptrTy, i8_ty, barrierPtr0, LLVM::GEPArg(8));
-      targetInfo.storeShared(rewriter, loc, counterPtr, b.i32_val(0),
-                             initPred);
+      Value counterPtr = b.gep(ptrTy, i8_ty, barrierPtr0, LLVM::GEPArg(8));
+      targetInfo.storeShared(rewriter, loc, counterPtr, b.i32_val(0), initPred);
     }
 
     NVIDIA::createFenceMBarrierInitReleaseCluster(rewriter, loc, initPred);
