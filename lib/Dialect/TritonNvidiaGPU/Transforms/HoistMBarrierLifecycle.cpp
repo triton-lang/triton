@@ -107,10 +107,6 @@ public:
 
   void run() {
     for (auto funcOp : mod.getOps<FunctionOpInterface>()) {
-      // scf only now and scf.while is not supported yet.
-      if (funcOp->getNumRegions() != 1 || funcOp->getRegion(0).empty())
-        continue;
-
       std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
       SharedMemoryAliasAnalysis *aliasAnalysis =
           solver->load<SharedMemoryAliasAnalysis>();
@@ -158,9 +154,7 @@ private:
   }
 
   // "Opaque" means the barrier is passed to an op this pass does not model as
-  // an mbarrier user. Skip hoisting rather than moving the lifecycle across an
-  // unknown use. Aliases come from SharedMemoryAliasAnalysis, which tracks
-  // memdesc roots before allocation assigns concrete buffer ids.
+  // an mbarrier user. 
   bool hasOpaqueBarrierUse(FunctionOpInterface funcOp,
                            const BarrierAliases &aliases) {
     return funcOp
