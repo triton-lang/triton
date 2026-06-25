@@ -297,25 +297,8 @@ private:
     });
 
     if (lifecycle.initCount != 1 || !lifecycle.init ||
-        lifecycle.expectCount > 1 || lifecycle.waits.size() != 1 ||
+        lifecycle.expectCount != 1 || lifecycle.waits.size() != 1 ||
         lifecycle.invals.size() != 1)
-      return failure();
-
-    ttng::WaitBarrierOp wait = lifecycle.waits.front();
-    SmallVector<Operation *> transactions;
-    bool seenWait = false;
-
-    for (Operation *op : lifecycle.transactionsAndWaits) {
-      if (op == wait.getOperation()) {
-        seenWait = true;
-        continue;
-      }
-      if (seenWait)
-        return failure();
-      transactions.push_back(op);
-    }
-
-    if (!seenWait || transactions.empty())
       return failure();
 
     for (Operation *transaction : transactions) {
