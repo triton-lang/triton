@@ -2,7 +2,6 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Analysis/Alias.h"
@@ -63,7 +62,6 @@ struct BarrierLifecycle {
   ttng::InitBarrierOp init;
   int initCount = 0;
   int expectCount = 0;
-  SmallVector<Operation *> transactionsAndWaits;
   SmallVector<ttng::WaitBarrierOp> waits;
   SmallVector<ttng::InvalBarrierOp> invals;
 };
@@ -208,33 +206,6 @@ private:
         .wasInterrupted();
   }
 
-  bool isTransactionOp(Operation *op, const BarrierAliases &aliases) {
-    if (!isKnownBarrierUser(op, aliases))
-      return false;
-    // BarrierExpectOp only records the expected byte count for the next
-    // transfer. The following producer/consumer op is the transaction that must
-    // be paired with a wait.
-    return !isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::WaitBarrierOp,
-                ttng::BarrierExpectOp>(op);
-  }
-
-  bool isConstTrue(Value value) {
-    if (!value)
-      return true;
-    if (matchPattern(value, m_One()))
-      return true;
-    if (auto constOp = value.getDefiningOp<arith::ConstantOp>())
-      if (auto attr = dyn_cast<BoolAttr>(constOp.getValueAttr()))
-        return attr.getValue();
-    return false;
-  }
-
-  bool isUnconditionallyTrueTransaction(Operation *op) {
-    if (auto predicated = dyn_cast<triton::PredicatedOpInterface>(op))
-      return isConstTrue(predicated.getPredicateOperand());
-    return true;
-  }
-
   bool isKnownAliasProducer(Operation *op, const BarrierAliases &aliases) {
     return llvm::any_of(op->getResults(),
                         [&](Value result) { return aliases.contains(result); });
@@ -281,10 +252,8 @@ private:
         return;
       }
       if (auto wait = dyn_cast<ttng::WaitBarrierOp>(op)) {
-        if (wait.getAlloc() == barrier) {
+        if (wait.getAlloc() == barrier)
           lifecycle.waits.push_back(wait);
-          lifecycle.transactionsAndWaits.push_back(op);
-        }
         return;
       }
       if (auto inval = dyn_cast<ttng::InvalBarrierOp>(op)) {
@@ -292,20 +261,12 @@ private:
           lifecycle.invals.push_back(inval);
         return;
       }
-      if (isTransactionOp(op, aliases))
-        lifecycle.transactionsAndWaits.push_back(op);
     });
 
     if (lifecycle.initCount != 1 || !lifecycle.init ||
         lifecycle.expectCount != 1 || lifecycle.waits.size() != 1 ||
         lifecycle.invals.size() != 1)
       return failure();
-
-    for (Operation *transaction : transactions) {
-      if (!isUnconditionallyTrueTransaction(transaction) ||
-          !isConstTrue(wait.getPred()))
-        return failure();
-    }
 
     return success();
   }
@@ -367,7 +328,11 @@ private:
       // A hoisted loop-local barrier alternates between phase 0 and 1 on each
       // completed transaction, so carry phase through the scf.for and toggle it
       // after the wait.
-      Value nextPhase = arith::XOrIOp::create(builder, loc, phase, phase1);
+      Value toggledPhase = arith::XOrIOp::create(builder, loc, phase, phase1);
+      Value nextPhase = toggledPhase;
+      if (Value pred = wait.getPred())
+        nextPhase =
+            arith::SelectOp::create(builder, loc, pred, toggledPhase, phase);
       if (wait->getBlock() != forOp.getBody())
         nextPhase = mlir::triton::sinkValueRedefinition(
             builder, phase, nextPhase, wait->getBlock());
