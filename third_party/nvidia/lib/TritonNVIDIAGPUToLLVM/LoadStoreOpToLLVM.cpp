@@ -916,12 +916,12 @@ public:
       rmwVals.reserve(vec > 1 ? vec : packed);
       for (unsigned ii = 0; ii < (vec > 1 ? vec : packed); ++ii)
         rmwVals.push_back(valElements[i + ii]);
-      auto old = NVIDIA::emitPtxAtomicRMW(rewriter, loc, valueElemTy, rmwPtr,
-                                          rmwVals, atomicRmwAttr, op.getSem(),
-                                          op.getScope(), pred, vec, packed,
-                                          NVIDIA::PtxAtomicAddrSpace::Global,
-                                          useRed ? NVIDIA::PtxAtomicInstr::Red
-                                                 : NVIDIA::PtxAtomicInstr::Atom);
+      auto old = NVIDIA::emitPtxAtomicRMWImpl(
+          rewriter, loc, valueElemTy, rmwPtr, rmwVals, atomicRmwAttr,
+          op.getSem(), stringifyMemSyncScope(op.getScope()).str(), pred, vec,
+          packed, NVIDIA::PtxAtomicAddrSpace::Global,
+          useRed ? NVIDIA::PtxAtomicInstr::Red
+                 : NVIDIA::PtxAtomicInstr::Atom);
       if (failed(old))
         return failure();
       if (useRed)
