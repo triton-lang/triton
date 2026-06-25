@@ -70,7 +70,7 @@ public:
   MBarrierLifecycleHoister(ModuleOp mod, int numCTAs)
       : mod(mod), builder(mod.getContext()), numCTAs(numCTAs) {}
 
-  LogicalResult run() {
+  void run() {
     for (auto funcOp : mod.getOps<FunctionOpInterface>()) {
       // scf only now and scf.while is not supported yet.
       if (funcOp->getNumRegions() != 1 || funcOp->getRegion(0).empty())
@@ -89,7 +89,7 @@ public:
         BarrierLifecycle lifecycle;
         if (failed(collectLifecycle(funcOp, barrier, lifecycle)))
           continue;
-        if (failed(verifyTransactionWaitPairs(funcOp, lifecycle)))
+        if (!supportsTransactionWaits(funcOp, lifecycle))
           continue;
         if (failed(rewriteLoopPhases(lifecycle)))
           continue;
@@ -98,7 +98,6 @@ public:
         moveInvalidationToFunctionExits(lifecycle, funcOp);
       }
     }
-    return success();
   }
 
 private:
@@ -188,51 +187,49 @@ private:
     });
 
     if (lifecycle.initCount != 1 || !lifecycle.init ||
-        lifecycle.expectCount > 1 || lifecycle.waits.empty() ||
+        lifecycle.expectCount > 1 || lifecycle.waits.size() != 1 ||
         lifecycle.invals.size() != 1)
       return failure();
     return success();
   }
 
-  LogicalResult verifyTransactionWaitPairs(FunctionOpInterface funcOp,
-                                           BarrierLifecycle &lifecycle) {
+  bool supportsTransactionWaits(FunctionOpInterface funcOp,
+                                BarrierLifecycle &lifecycle) {
     DominanceInfo domInfo(funcOp);
     PostDominanceInfo postDomInfo(funcOp);
-    SmallVector<Operation *> pendingTransactions;
+    ttng::WaitBarrierOp wait = lifecycle.waits.front();
+    SmallVector<Operation *> transactions;
+    bool seenWait = false;
 
     for (Operation *op : lifecycle.transactionsAndWaits) {
-      auto wait = dyn_cast<ttng::WaitBarrierOp>(op);
-      if (!wait) {
-        pendingTransactions.push_back(op);
+      if (op == wait.getOperation()) {
+        seenWait = true;
         continue;
       }
-
-      // A wait can cover one or more transactions, but it must not observe a
-      // transaction that was already consumed by an earlier wait.
-      if (pendingTransactions.empty())
-        return failure();
-
-      for (Operation *transaction : pendingTransactions) {
-        // The transaction must run on every path to the wait. A transaction in
-        // a conditional branch followed by a wait after the branch would
-        // otherwise leave paths that wait on work that was never issued.
-        if (!domInfo.dominates(transaction, wait.getOperation()))
-          return failure();
-        // The wait must run on every path after the transaction. Otherwise a
-        // transaction before a conditional wait could be left unmatched.
-        if (!postDomInfo.postDominates(wait.getOperation(), transaction))
-          return failure();
-        if (!isUnconditionallyTrueTransaction(transaction) ||
-            !isConstTrue(wait.getPred()))
-          return failure();
-      }
-
-      pendingTransactions.clear();
+      if (seenWait)
+        return false;
+      transactions.push_back(op);
     }
 
-    if (!pendingTransactions.empty())
-      return failure();
-    return success();
+    if (!seenWait || transactions.empty())
+      return false;
+
+    for (Operation *transaction : transactions) {
+      // The transaction must run on every path to the wait. A transaction in a
+      // conditional branch followed by a wait after the branch would otherwise
+      // leave paths that wait on work that was never issued.
+      if (!domInfo.dominates(transaction, wait.getOperation()))
+        return false;
+      // The wait must run on every path after the transaction. Otherwise a
+      // transaction before a conditional wait could be left unmatched.
+      if (!postDomInfo.postDominates(wait.getOperation(), transaction))
+        return false;
+      if (!isUnconditionallyTrueTransaction(transaction) ||
+          !isConstTrue(wait.getPred()))
+        return false;
+    }
+
+    return true;
   }
 
   bool hasUnsupportedWhile(ttng::WaitBarrierOp wait, scf::ForOp forOp) {
@@ -351,8 +348,7 @@ public:
     if (numCTAs == 1)
       return;
 
-    if (failed(MBarrierLifecycleHoister(mod, numCTAs).run()))
-      return signalPassFailure();
+    MBarrierLifecycleHoister(mod, numCTAs).run();
   }
 };
 
