@@ -567,4 +567,4 @@ def squeeze(x, dim: core.constexpr):
 
 @jit
 def unsqueeze(x, dim: core.constexpr):
-    return core.expand_dims(x, dim)
+    return x.reshape(x.shape[:dim] + (1, ) + x.shape[dim:])
