@@ -133,8 +133,7 @@ def to_tensor(x, _semantic=None):
     it, and a :code:`float` becomes :code:`tl.float32` (or :code:`tl.float64` when
     it is outside the :code:`float32` range).
 
-    :param x: a Python :code:`int`, :code:`float`, or :code:`bool` (optionally
-        wrapped in a :code:`constexpr`), or an existing :code:`tensor`
+    :param x: any numeric value.
     """
     return _semantic.to_tensor(x)
 
