@@ -5,10 +5,6 @@
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "TritonAMDGPUToLLVM/TypeConverter.h"
-#include "TritonAMDGPUToLLVM/UniformityAnalysis.h"
-#include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
-#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
-#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -179,19 +175,8 @@ struct ConvertTritonAMDGPUToLLVM
     AMD::populateFpCastOpToLLVMPatterns(typeConverter, patterns, ftz,
                                         axisInfoAnalysis, allocation,
                                         targetInfo, AMDBenefit);
-    // Run a dataflow analysis that classifies every SSA value as
-    // wave-uniform or per-lane. The buffer-ops splitter queries this
-    // to decide which offset components can move to the SGPR soffset.
-    DataFlowSolver uniformitySolver;
-    uniformitySolver.load<dataflow::DeadCodeAnalysis>();
-    uniformitySolver.load<dataflow::SparseConstantPropagation>();
-    AMD::loadUniformityAnalysis(uniformitySolver);
-    if (failed(uniformitySolver.initializeAndRun(mod)))
-      return signalPassFailure();
-
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
-                                           axisInfoAnalysis, &uniformitySolver,
-                                           AMDBenefit);
+                                           axisInfoAnalysis, AMDBenefit);
     AMD::populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
     AMD::populateBarrierOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
     AMD::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
