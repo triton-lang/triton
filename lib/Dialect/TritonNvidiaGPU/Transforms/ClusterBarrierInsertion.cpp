@@ -334,7 +334,9 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
     return;
   }
 
-  // Keep every CTA alive until all other CTAs have reached the kernel exit.
+  // Any path from distributed shared memory use to kernel exit must include a
+  // cluster barrier. Conservatively insert the barrier since we can't analyze
+  // memory effects properly in warp specialized kernels.
   if (op->hasTrait<OpTrait::ReturnLike>() &&
       isa<FunctionOpInterface>(op->getParentOp())) {
     auto funcOp = cast<FunctionOpInterface>(op->getParentOp());

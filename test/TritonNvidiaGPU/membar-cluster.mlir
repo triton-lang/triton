@@ -139,6 +139,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #slice1 = #ttg.slice<{dim = 1, parent = #blocked}>
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // If there is a cross-CTA read dependency at kernel exit, we must end with a cluster barrier.
   // CHECK-LABEL: @end_cluster_barrier_after_cross_reduce
   // CHECK: "tt.reduce"{{.*}}axis = 1
   // CHECK: ttng.cluster_barrier
@@ -358,10 +359,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // No dependency barrier is needed when the layouts don't cross CTAs.
+  // Negative test: no cluster barrier should be inserted for multiCTA when the layouts don't cross CTAs
   // CHECK-LABEL: @no_cluster_convert_block_trivial
   // CHECK-NOT: ttng.cluster_barrier
   // CHECK: ttg.local_load
+
+  // FIXME: Conservatively insert a cluster barrier.
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: tt.return
   tt.func @no_cluster_convert_block_trivial() -> tensor<256x128xf16, #blockedSrc> {
@@ -585,8 +588,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // NB. Testing only. Note that in this program async_tma_copy_global
   //     and local_store are racing!
-  // The wait_barrier only waits on the first CTA. The terminal cluster barrier
-  // prevents CTA1 from exiting before CTA0.
+  // Even though we have a wait_barrier, we should still emit a cluster
+  // barrier at the end of the kernel, as a in that wait just one CTA is waiting
+  // for both the CTAs. It could be that CTA1 exits the kernel before CTA0,
+  // otherwise! 
   // CHECK-LABEL: @no_cluster_when_same_allocation
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
