@@ -47,8 +47,16 @@ bool isCrossCTAConsumer(Operation *op, Value barrier) {
   return llvm::is_contained(barriers, barrier);
 }
 
-bool requiresCrossCTAMBarrierInitSync(FunctionOpInterface funcOp, Value barrier,
-                                      int numCTAs) {
+bool isCrossCTAConsumer(Operation *op,
+                        llvm::function_ref<bool(Value)> aliasesBarrier) {
+  SmallVector<Value> barriers;
+  getCrossCTAConsumerBarriers(op, barriers);
+  return llvm::any_of(barriers, aliasesBarrier);
+}
+
+bool requiresCrossCTAMBarrierInitSync(
+    FunctionOpInterface funcOp, Value barrier, int numCTAs,
+    llvm::function_ref<bool(Value)> aliasesBarrier) {
   // Barrier init sync is needed for barriers that are themselves cross-CTA,
   // and also for per-CTA barriers consumed by multi-CTA ops that multicast or
   // otherwise fan out barrier state across the cluster.
@@ -57,11 +65,17 @@ bool requiresCrossCTAMBarrierInitSync(FunctionOpInterface funcOp, Value barrier,
 
   return funcOp
       ->walk<WalkOrder::PreOrder>([&](Operation *op) {
-        if (isCrossCTAConsumer(op, barrier))
+        if (isCrossCTAConsumer(op, aliasesBarrier))
           return WalkResult::interrupt();
         return WalkResult::advance();
       })
       .wasInterrupted();
+}
+
+bool requiresCrossCTAMBarrierInitSync(FunctionOpInterface funcOp, Value barrier,
+                                      int numCTAs) {
+  return requiresCrossCTAMBarrierInitSync(
+      funcOp, barrier, numCTAs, [&](Value value) { return value == barrier; });
 }
 
 } // namespace mlir::triton::nvidia_gpu
