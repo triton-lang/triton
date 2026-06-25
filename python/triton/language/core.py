@@ -123,6 +123,19 @@ def is_builtin(fn) -> bool:
 
 @builtin
 def to_tensor(x, _semantic=None):
+    """
+    Converts a Python scalar into a 0-dimensional :code:`tensor`.
+
+    If :code:`x` is already a :code:`tensor` it is returned unchanged. The result
+    dtype is inferred from the value: a Python :code:`bool` becomes
+    :code:`tl.int1`, an :code:`int` becomes the smallest of :code:`tl.int32`,
+    :code:`tl.uint32`, :code:`tl.int64`, or :code:`tl.uint64` that can represent
+    it, and a :code:`float` becomes :code:`tl.float32` (or :code:`tl.float64` when
+    it is outside the :code:`float32` range).
+
+    :param x: a Python :code:`int`, :code:`float`, or :code:`bool` (optionally
+        wrapped in a :code:`constexpr`), or an existing :code:`tensor`
+    """
     return _semantic.to_tensor(x)
 
 
@@ -2888,6 +2901,22 @@ def expect_zero(x, mask, _semantic=None):
 
 @builtin
 def add(x, y, sanitize_overflow: constexpr = True, _semantic=None):
+    """
+    Computes the element-wise sum of :code:`x` and :code:`y`.
+
+    This is the function form of the :code:`+` operator. Adding two pointers
+    raises an error, whereas adding a pointer and an integer offset performs
+    pointer arithmetic.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param sanitize_overflow: insert an integer-overflow check when overflow
+        sanitization is enabled at compile time; set to :code:`False` to emit
+        plain wrapping arithmetic. Ignored for floating-point operands.
+    :type sanitize_overflow: bool
+    """
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
     return _semantic.add(x, y, sanitize_overflow)
@@ -2895,6 +2924,21 @@ def add(x, y, sanitize_overflow: constexpr = True, _semantic=None):
 
 @builtin
 def sub(x, y, sanitize_overflow: constexpr = True, _semantic=None):
+    """
+    Computes the element-wise difference of :code:`x` and :code:`y`.
+
+    This is the function form of the :code:`-` operator. Subtracting an integer
+    offset from a pointer performs pointer arithmetic.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param sanitize_overflow: insert an integer-overflow check when overflow
+        sanitization is enabled at compile time; set to :code:`False` to emit
+        plain wrapping arithmetic. Ignored for floating-point operands.
+    :type sanitize_overflow: bool
+    """
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
     return _semantic.sub(x, y, sanitize_overflow)
@@ -2902,6 +2946,20 @@ def sub(x, y, sanitize_overflow: constexpr = True, _semantic=None):
 
 @builtin
 def mul(x, y, sanitize_overflow: constexpr = True, _semantic=None):
+    """
+    Computes the element-wise product of :code:`x` and :code:`y`.
+
+    This is the function form of the :code:`*` operator.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param sanitize_overflow: insert an integer-overflow check when overflow
+        sanitization is enabled at compile time; set to :code:`False` to emit
+        plain wrapping arithmetic. Ignored for floating-point operands.
+    :type sanitize_overflow: bool
+    """
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
     return _semantic.mul(x, y, sanitize_overflow)
