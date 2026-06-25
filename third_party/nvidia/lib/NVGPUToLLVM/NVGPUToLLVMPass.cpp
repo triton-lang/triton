@@ -604,22 +604,6 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
   return alloc;
 }
 
-static void insertClusterSyncBeforeKernelReturns(ModuleOp mod) {
-  if (gpu::TritonGPUDialect::getNumCTAs(mod) == 1)
-    return;
-
-  for (LLVM::LLVMFuncOp func : mod.getOps<LLVM::LLVMFuncOp>()) {
-    if (!func->hasAttr(NVVM::NVVMDialect::getKernelFuncAttrName()))
-      continue;
-    func.walk([&](LLVM::ReturnOp ret) {
-      OpBuilder builder(ret);
-      auto unitAttr = UnitAttr::get(mod.getContext());
-      NVVM::ClusterArriveOp::create(builder, ret.getLoc(), unitAttr);
-      NVVM::ClusterWaitOp::create(builder, ret.getLoc(), unitAttr);
-    });
-  }
-}
-
 static void lowerTensorMemoryAlloc(ModuleOp mod) {
   SmallVector<Operation *> baseOps;
   LLVM::LLVMFuncOp kernel = nullptr;
@@ -662,7 +646,6 @@ public:
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
 
-    insertClusterSyncBeforeKernelReturns(mod);
     lowerTensorMemoryAlloc(mod);
     makeAllWarpGroupsIsolatedFromAbove(mod);
   }

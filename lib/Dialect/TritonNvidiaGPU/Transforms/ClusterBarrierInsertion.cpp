@@ -334,11 +334,17 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
     return;
   }
 
-  // Any path from distributed shared memory use to kernel exit must include a
-  // cluster barrier. NVGPUToLLVM inserts one at every multi-CTA kernel exit.
+  // Keep every CTA alive until all other CTAs have reached the kernel exit.
   if (op->hasTrait<OpTrait::ReturnLike>() &&
-      isa<FunctionOpInterface>(op->getParentOp()))
+      isa<FunctionOpInterface>(op->getParentOp())) {
+    auto funcOp = cast<FunctionOpInterface>(op->getParentOp());
+    if (isKernel(funcOp)) {
+      builder->setInsertionPoint(op);
+      ttng::ClusterBarrierOp::create(*builder, op->getLoc());
+      blockInfo->sync();
+    }
     return;
+  }
 
   BlockInfo curBlockInfo;
   auto scratchBufferId = Allocation::InvalidBufferId;
