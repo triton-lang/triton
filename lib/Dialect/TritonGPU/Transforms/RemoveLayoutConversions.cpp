@@ -15,6 +15,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -177,6 +178,13 @@ public:
 
 private:
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
+  // Axis info is only needed when a slice contains an expensive load, so it
+  // is built lazily on first use.
+  ModuleAxisInfoAnalysis &getAxisInfo() {
+    if (!axisInfo)
+      axisInfo.emplace(funcOp->getParentOfType<ModuleOp>());
+    return *axisInfo;
+  }
   // Existing tuples of (value, layout) that needs to be updated when recreating
   // scf ops. This prevents keeping track of Values that have been delete when
   // rewriting slices.
@@ -186,6 +194,7 @@ private:
   FuncOp funcOp;
   DominanceInfo domInfo;
   PostDominanceInfo postDomInfo;
+  std::optional<ModuleAxisInfoAnalysis> axisInfo;
 };
 
 void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
@@ -666,6 +675,60 @@ bool canBeRemat(Operation *op) {
   return true;
 }
 
+// Returns the number of contiguous elements along the memory-contiguous
+// dimension of `loadOp` if it were performed with encoding `enc`, as
+// determined by axis info. Returns 0 when the encoding is non-blocked or axis
+// info is unavailable.
+int64_t coalescedRunLength(LoadOp loadOp, Attribute enc,
+                           ModuleAxisInfoAnalysis &axisInfo) {
+  auto blocked = dyn_cast<BlockedEncodingAttr>(enc);
+  if (!blocked)
+    return 0;
+  AxisInfo *info = axisInfo.getAxisInfo(loadOp.getPtr());
+  if (!info)
+    return 0;
+  SmallVector<int64_t> contiguity(info->getContiguity().begin(),
+                                  info->getContiguity().end());
+  SmallVector<unsigned> order = getOrderFromContiguity(contiguity);
+  if (order.empty())
+    return 0;
+  unsigned memContigDim = order[0];
+  if (memContigDim >= blocked.getSizePerThread().size())
+    return 0;
+  return int64_t(blocked.getSizePerThread()[memContigDim]) *
+         int64_t(blocked.getThreadsPerWarp()[memContigDim]);
+}
+
+// An expensive load is a layout anchor, so canBeRemat() refuses it to keep
+// its coalesced layout. However, for a small load it is still profitable to
+// rematerialize it with the target encoding when this does not shorten the
+// coalesced runs the load performs in memory: it removes a layout conversion
+// that may otherwise round-trip through shared memory. The caller must
+// additionally ensure that the slice being rematerialized is closed so the
+// load is retyped rather than duplicated.
+bool canRetypeSmallLoad(LoadOp loadOp, Attribute newEnc,
+                        ModuleAxisInfoAnalysis &axisInfo) {
+  auto tensorTy = dyn_cast<RankedTensorType>(loadOp.getType());
+  if (!tensorTy || !newEnc)
+    return false;
+  // Cap the tensor size at a few elements per thread so the rewritten load
+  // stays cheap.
+  constexpr int64_t maxElemsPerThread = 8;
+  int numWarps = lookupNumWarps(loadOp);
+  int threadsPerWarp =
+      TritonGPUDialect::getThreadsPerWarp(loadOp->getParentOfType<ModuleOp>());
+  if (tensorTy.getNumElements() > maxElemsPerThread * numWarps * threadsPerWarp)
+    return false;
+  int64_t oldRun = coalescedRunLength(loadOp, tensorTy.getEncoding(), axisInfo);
+  int64_t newRun = coalescedRunLength(loadOp, newEnc, axisInfo);
+  LDBG("canRetypeSmallLoad " << loadOp << " newEnc " << newEnc << " run "
+                             << oldRun << "->" << newRun);
+  // Refuse when inconclusive (non-blocked encoding or missing axis info).
+  if (oldRun == 0 || newRun == 0)
+    return false;
+  return newRun >= oldRun;
+}
+
 void LayoutRematerialization::updateRematMapping(
     SmallVector<std::tuple<Value, Value>> &values) {
   for (auto [old, newV] : values) {
@@ -924,10 +987,38 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
     return failure();
 
   // Check if all the operations in the slice can be rematerialized.
+  bool hasExpensiveLoad = false;
   for (Value v : slice) {
     if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRemat(op))
-        return failure();
+      if (!canBeRemat(op)) {
+        // An expensive load can still be rematerialized when it is small and
+        // the target encoding preserves its memory coalescing.
+        auto loadOp = dyn_cast<LoadOp>(op);
+        if (!loadOp ||
+            !canRetypeSmallLoad(loadOp, layout.lookup(v), getAxisInfo()))
+          return failure();
+        hasExpensiveLoad = true;
+      }
+    }
+  }
+  // Rematerializing an expensive load is only profitable when the slice is
+  // closed: every value in it is consumed inside the slice or by the
+  // operation being rewritten. An out-of-slice user keeps the original chain
+  // alive, so the load would be duplicated instead of retyped.
+  if (hasExpensiveLoad) {
+    Operation *rootOp = root.getOwner();
+    for (Value v : slice) {
+      for (Operation *user : v.getUsers()) {
+        if (user == rootOp)
+          continue;
+        bool userInSlice = llvm::any_of(
+            user->getResults(), [&](Value r) { return slice.contains(r); });
+        if (!userInSlice) {
+          LDBG("refusing remat of expensive load, out-of-slice user: "
+               << *user);
+          return failure();
+        }
+      }
     }
   }
   sliceArg = std::move(slice);
