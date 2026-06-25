@@ -1644,7 +1644,7 @@ void init_triton_ir(py::module_ &m) {
       // // atomic
       .def("create_atomic_poll",
            [](TritonOpBuilder &self, Value &ptr, Value &expected,
-              std::optional<Value> &timeout, MemSemantic sem,
+              std::optional<Value> timeout, MemSemantic sem,
               MemSyncScope scope) -> Value {
              return self.create<AtomicPollOp>(
                  ptr, expected, timeout.value_or(Value()), sem, scope);
