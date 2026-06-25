@@ -704,9 +704,8 @@ FailureOr<LocalAtomicScatterRMWInfo> prepareLocalAtomicScatterRMW(
   auto offsetAndBlock =
       computeBlockLocalOffsets(loc, memDescTy, activeRegLayout, idxValues,
                                op.getAxis(), rewriter, targetInfo);
-  SmallVector<LocalSharedMemoryAddress> addrs =
-      materializeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy,
-                            offsetAndBlock, rewriter);
+  SmallVector<LocalSharedMemoryAddress> addrs = materializeLocalAddrs(
+      loc, memDescTy, smemObj, llvmElemTy, offsetAndBlock, rewriter);
 
   return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,
                                    removeBroadcast, threadPred, values,
