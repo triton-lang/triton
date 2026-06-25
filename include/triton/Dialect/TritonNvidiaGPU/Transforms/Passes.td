@@ -93,6 +93,29 @@ def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion
   ];
 }
 
+def TritonNvidiaGPUHoistMBarrierLifecyclePass : Pass<"triton-nvidia-gpu-hoist-mbarrier-lifecycle", "mlir::ModuleOp"> {
+  let summary = "Hoist cross-CTA mbarrier lifecycles to function scope";
+
+  let description = [{
+    This pass moves cross-CTA mbarrier initialization to the beginning of the
+    function and invalidation to function exits so cluster-visible mbarrier init
+    fences can be inserted outside loops.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"90",
+           "device compute capability">
+  ];
+}
+
 def TritonNvidiaGPUTMemBarrierInsertionPass : Pass<"triton-nvidia-gpu-tmem-barrier-insertion", "mlir::ModuleOp"> {
   let summary = "Insert barriers to order tensor-memory reuse";
 
