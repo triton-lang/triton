@@ -145,17 +145,14 @@ private:
       return llvm::any_of(iface.getBarriers(),
                           [&](Value value) { return aliases.contains(value); });
     }
+    // Memdesc views and arith.select only forward the descriptor for the same
+    // underlying mbarrier storage. They do not initialize, wait, invalidate, or
+    // signal the barrier, so they are transparent to the lifecycle.
+    if (op->hasTrait<OpTrait::MemDescViewTrait>() || isa<arith::SelectOp>(op))
+      return llvm::any_of(op->getResults(), [&](Value result) {
+        return aliases.contains(result);
+      });
     return false;
-  }
-
-  bool isKnownAliasProducer(Operation *op, const BarrierAliases &aliases) {
-    // Alias producers such as memdesc views or arith.select consume a barrier
-    // descriptor and produce another descriptor for the same underlying
-    // mbarrier storage. They are transparent to the lifecycle: unlike
-    // MBarrierOpInterface ops, they do not initialize, wait, invalidate, or
-    // signal the barrier, so they should not make the use opaque.
-    return llvm::any_of(op->getResults(),
-                        [&](Value result) { return aliases.contains(result); });
   }
 
   // "Opaque" means the barrier is passed to an op this pass does not model as
@@ -169,8 +166,7 @@ private:
           });
           if (!usesAlias)
             return WalkResult::advance();
-          if (isKnownAliasProducer(op, aliases) ||
-              isKnownBarrierUser(op, aliases))
+          if (isKnownBarrierUser(op, aliases))
             return WalkResult::advance();
           return WalkResult::interrupt();
         })
