@@ -15,7 +15,6 @@
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -68,8 +67,7 @@ struct BarrierLifecycle {
 
 class BarrierAliases {
 public:
-  BarrierAliases(Value barrier, FunctionOpInterface funcOp,
-                 SharedMemoryAliasAnalysis &aliasAnalysis)
+  BarrierAliases(Value barrier, SharedMemoryAliasAnalysis &aliasAnalysis)
       : aliasAnalysis(aliasAnalysis) {
     collectAliasRoots(barrier, roots);
   }
@@ -123,14 +121,16 @@ public:
       SmallVector<Value> candidates;
       funcOp.walk([&](ttng::InitBarrierOp init) {
         Value barrier = init.getAlloc();
-        BarrierAliases aliases(barrier, funcOp, *aliasAnalysis);
-        if (requiresCrossCTAInitSync(funcOp, barrier, aliases) &&
+        BarrierAliases aliases(barrier, *aliasAnalysis);
+        if (requiresCrossCTAMBarrierInitSync(
+                funcOp, barrier, numCTAs,
+                [&](Value value) { return aliases.contains(value); }) &&
             seen.insert(barrier).second)
           candidates.push_back(barrier);
       });
 
       for (Value barrier : candidates) {
-        BarrierAliases aliases(barrier, funcOp, *aliasAnalysis);
+        BarrierAliases aliases(barrier, *aliasAnalysis);
         BarrierLifecycle lifecycle;
         if (failed(collectLifecycle(funcOp, barrier, aliases, lifecycle)))
           continue;
@@ -152,27 +152,6 @@ private:
     return false;
   }
 
-  bool isCrossCTAConsumer(Operation *op, const BarrierAliases &aliases) {
-    SmallVector<Value> consumerBarriers;
-    getCrossCTAConsumerBarriers(op, consumerBarriers);
-    return llvm::any_of(consumerBarriers,
-                        [&](Value value) { return aliases.contains(value); });
-  }
-
-  bool requiresCrossCTAInitSync(FunctionOpInterface funcOp, Value barrier,
-                                const BarrierAliases &aliases) {
-    if (isCrossCTAMBarrier(barrier, numCTAs))
-      return true;
-
-    return funcOp
-        ->walk<WalkOrder::PreOrder>([&](Operation *op) {
-          if (isCrossCTAConsumer(op, aliases))
-            return WalkResult::interrupt();
-          return WalkResult::advance();
-        })
-        .wasInterrupted();
-  }
-
   bool isKnownAliasProducer(Operation *op, const BarrierAliases &aliases) {
     return llvm::any_of(op->getResults(),
                         [&](Value result) { return aliases.contains(result); });
@@ -182,16 +161,21 @@ private:
   // an mbarrier user. Skip hoisting rather than moving the lifecycle across an
   // unknown use. Aliases come from SharedMemoryAliasAnalysis, which tracks
   // memdesc roots before allocation assigns concrete buffer ids.
-  bool hasOpaqueBarrierUse(const BarrierAliases &aliases) {
-    for (Value alias : aliases) {
-      for (Operation *user : alias.getUsers()) {
-        if (isKnownAliasProducer(user, aliases))
-          continue;
-        if (!isKnownBarrierUser(user, aliases))
-          return true;
-      }
-    }
-    return false;
+  bool hasOpaqueBarrierUse(FunctionOpInterface funcOp,
+                           const BarrierAliases &aliases) {
+    return funcOp
+        ->walk<WalkOrder::PreOrder>([&](Operation *op) {
+          bool usesAlias = llvm::any_of(op->getOperands(), [&](Value operand) {
+            return aliases.contains(operand);
+          });
+          if (!usesAlias)
+            return WalkResult::advance();
+          if (isKnownAliasProducer(op, aliases) ||
+              isKnownBarrierUser(op, aliases))
+            return WalkResult::advance();
+          return WalkResult::interrupt();
+        })
+        .wasInterrupted();
   }
 
   LogicalResult collectLifecycle(FunctionOpInterface funcOp, Value barrier,
@@ -202,7 +186,7 @@ private:
     if (!lifecycle.alloc || lifecycle.alloc->getNumOperands() != 0)
       return failure();
 
-    if (hasOpaqueBarrierUse(aliases))
+    if (hasOpaqueBarrierUse(funcOp, aliases))
       return failure();
 
     funcOp.walk([&](Operation *op) {
