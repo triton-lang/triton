@@ -71,44 +71,12 @@ public:
   BarrierAliases(Value barrier, FunctionOpInterface funcOp,
                  SharedMemoryAliasAnalysis &aliasAnalysis)
       : aliasAnalysis(aliasAnalysis) {
-    collectRoots(barrier);
-    collectAliases(funcOp);
+    collectAliasRoots(barrier, roots);
   }
 
   bool contains(Value value) const { return aliasesRoot(value); }
 
-  auto begin() const { return aliases.begin(); }
-  auto end() const { return aliases.end(); }
-
 private:
-  void collectRoots(Value barrier) {
-    collectAliasRoots(barrier, roots);
-    // Keep direct-SSA behavior as a conservative fallback if the dataflow
-    // lattice has no information for this value.
-    if (roots.empty())
-      roots.insert(barrier);
-  }
-
-  void collectAliases(FunctionOpInterface funcOp) {
-    auto collectValue = [&](Value value) {
-      if (contains(value))
-        aliases.insert(value);
-    };
-
-    funcOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
-      for (Region &region : op->getRegions()) {
-        for (Block &block : region) {
-          for (BlockArgument arg : block.getArguments())
-            collectValue(arg);
-        }
-      }
-      for (Value operand : op->getOperands())
-        collectValue(operand);
-      for (Value result : op->getResults())
-        collectValue(result);
-    });
-  }
-
   void collectAliasRoots(Value value, llvm::DenseSet<Value> &values) const {
     auto *lattice = aliasAnalysis.getLatticeElement(value);
     if (!lattice)
@@ -132,7 +100,6 @@ private:
 
   SharedMemoryAliasAnalysis &aliasAnalysis;
   llvm::DenseSet<Value> roots;
-  llvm::SmallSetVector<Value, 8> aliases;
 };
 
 class MBarrierLifecycleHoister {
