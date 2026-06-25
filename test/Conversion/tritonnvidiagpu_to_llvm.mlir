@@ -833,6 +833,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-DAG: ttg.ws_cluster_barrier_count = 1 : i32
   // CHECK-LABEL: @cluster_barrier_inside_warp_specialize
   // CHECK-COUNT-2: "@$0 mbarrier.init.shared::cta.b64 [$1], 1;"
+  // CHECK: st.shared::cta.b32
+  // CHECK-NOT: st.shared::cta.b32
   // CHECK: fence.mbarrier_init.release.cluster
   // CHECK: nvvm.cluster.arrive.relaxed
   // CHECK-NEXT: nvvm.cluster.wait
@@ -840,20 +842,19 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     ttg.warp_specialize()
     default {
       // CHECK: nvvm.barrier
-      // CHECK: %[[PARITY0:.*]] = llvm.load
-      // CHECK: %[[PARITY1:.*]] = llvm.load
-      // CHECK: %[[SLOT:.*]] = llvm.xor %[[PARITY0]], %[[PARITY1]]
-      // CHECK: %[[USE_SECOND:.*]] = llvm.icmp "ne" %[[SLOT]]
+      // CHECK: %[[COUNTER:.*]] = llvm.load
+      // CHECK: %[[BARRIER_IDX:.*]] = llvm.and %[[COUNTER]]
+      // CHECK: %[[PARITY:.*]] = llvm.lshr %[[COUNTER]]
+      // CHECK: %[[USE_SECOND:.*]] = llvm.icmp "ne" %[[BARRIER_IDX]]
       // CHECK: %[[BARRIER:.*]] = llvm.select %[[USE_SECOND]]
-      // CHECK: %[[PARITY_PTR:.*]] = llvm.select %[[USE_SECOND]]
-      // CHECK: %[[PARITY:.*]] = llvm.select %[[USE_SECOND]], %[[PARITY1]], %[[PARITY0]]
       // CHECK: %[[BARRIER_INT:.*]] = llvm.ptrtoint
       // CHECK: %[[PEER_BARRIER_INT:.*]] = llvm.xor %[[BARRIER_INT]],
       // CHECK: llvm.inttoptr %[[PEER_BARRIER_INT]]
       // CHECK-NOT: mapa
       // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
       // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
-      // CHECK: llvm.xor %[[PARITY]],
+      // CHECK: %[[NEXT_COUNTER:.*]] = llvm.add %[[COUNTER]]
+      // CHECK: llvm.and %[[NEXT_COUNTER]]
       // CHECK: st.shared::cta.b32
       // CHECK: nvvm.barrier
       ttng.cluster_barrier
