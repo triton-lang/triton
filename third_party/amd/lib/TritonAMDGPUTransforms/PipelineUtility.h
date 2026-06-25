@@ -82,7 +82,13 @@ namespace ChainedDotSchedule {
 // operations define which dot the operations belongs to. So *_LOAD_1 loads a
 // tensor consumed by the first dot. If a memory operation is used by both dots
 // it has to be be assigned to the *_1 clusters to ensure a valid schedule.
+//
+// K (dot1 operand) is loaded and consumed in the same stage as dot1, so K
+// tiles are NOT loop-carried.
 enum Clusters {
+  // K wait + load (consumed immediately by dot1)
+  CLUSTER_ASYNC_WAIT_1,
+  CLUSTER_LOCAL_LOAD_1,
   // ComputeCluster1
   CLUSTER_DOT_1,
   CLUSTER_AFTER_DOT_1,
@@ -95,9 +101,7 @@ enum Clusters {
   CLUSTER_DOT_2,
   CLUSTER_AFTER_DOT_2,
   // MemoryCluster2
-  CLUSTER_ASYNC_WAIT_1,
   CLUSTER_LOCAL_WRITE_2,
-  CLUSTER_LOCAL_LOAD_1,
   CLUSTER_GLOBAL_LOAD_2,
 
   CLUSTER_COUNT
@@ -110,9 +114,9 @@ enum Stages {
   STAGE_DOT_1 = 2,
   STAGE_DOT_2 = 3,
 
-  STAGE_GLOBAL_LOAD_1 = 0,
+  STAGE_GLOBAL_LOAD_1 = 1,
   STAGE_LOCAL_WRITE_1 = 1,
-  STAGE_LOCAL_LOAD_1 = 1,
+  STAGE_LOCAL_LOAD_1 = 2,
 
   STAGE_GLOBAL_LOAD_2 = 1,
   STAGE_LOCAL_WRITE_2 = 2,
