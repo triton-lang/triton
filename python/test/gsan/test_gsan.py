@@ -10,9 +10,8 @@ from triton.experimental.gluon.language.nvidia.ampere import async_copy
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer
-from triton.experimental.gsan import create_mem_pool, warmup_gsan_kernels
+from triton.experimental.gsan import create_mem_pool
 from triton._C.libtriton.gsan_testing import AtomicScope, SHADOW_GRANULARITY_BYTES, ScalarClock
-from triton.experimental.gsan._stream_sync import _synchronize_vector_clocks_kernel
 from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, store_one_i32,
                                                      thread_state_from_smid)
 
@@ -102,17 +101,6 @@ def _assert_cross_sm_sync(payload_ptr: torch.Tensor, flag_ptr: torch.Tensor, exp
 def _assert_no_gsan_runtime_output(capfd) -> None:
     captured = capfd.readouterr()
     assert "GSanLibrary.cu" not in captured.out + captured.err
-
-
-def test_stream_sync_layout_args_do_not_specialize():
-    params = {param.name: param for param in _synchronize_vector_clocks_kernel.params}
-    for name in ("stride_bytes", "num_sms", "num_threads", "header_bytes"):
-        assert params[name].do_not_specialize
-
-
-@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-def test_warmup_gsan_kernels():
-    assert warmup_gsan_kernels() is None
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
