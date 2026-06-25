@@ -672,6 +672,49 @@ def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
             "ptx"] or "stmatrix.sync.aligned.x4.m8n8.shared.b16" in kernel.asm["ptx"]
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability(0)[0] != 10,
+                    reason="Requires Blackwell MMAv5")
+@pytest.mark.parametrize("num_ctas, BLOCK_M, BLOCK_N", [(4, 256, 256), (8, 256, 512)])
+def test_make_tensor_descriptor_matmul_multi_cta_tma_multicast(num_ctas, BLOCK_M, BLOCK_N, device):
+    M, N, K = 512, 512, 256
+    BLOCK_K = 64
+    torch.manual_seed(42)
+    A = torch.randn((M, K), dtype=torch.float16, device=device)
+    B = torch.randn((K, N), dtype=torch.float16, device=device)
+    C = torch.empty((M, N), dtype=torch.float16, device=device)
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N), 1)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        assert align == 128
+        assert stream == 0
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+
+    kernel = matmul_kernel_make_tensor_descriptor[grid](
+        A,
+        B,
+        C,
+        M,
+        N,
+        K,
+        BLOCK_M,
+        BLOCK_N,
+        BLOCK_K,
+        num_warps=4,
+        num_stages=3,
+        num_ctas=num_ctas,
+    )
+
+    ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
+    torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
+
+    mma_lines = [line for line in kernel.asm["ttgir"].splitlines() if "ttng.tc_gen5_mma" in line]
+    assert any("two_ctas" in line and "multicast" in line for line in mma_lines)
+    assert "cta_group::2" in kernel.asm["ptx"]
+    assert "multicast::cluster" in kernel.asm["ptx"]
+
+
 @triton.jit
 def kernel_make_tensor_descriptor_loop_carried(a_ptr, M, N, MBLOCK: tl.constexpr, NBLOCK: tl.constexpr):
     # Test that descriptors work with
