@@ -2898,14 +2898,13 @@ def expect_zero(x, mask, _semantic=None):
 # -----------------------
 
 
-@builtin
-def add(x, y, sanitize_overflow: constexpr = True, _semantic=None):
-    """
-    Computes the element-wise sum of :code:`x` and :code:`y`.
+def _add_binary_op_docstr(name: str, op: str) -> Callable[[T], T]:
 
-    This is the function form of the :code:`+` operator. Adding two pointers
-    raises an error, whereas adding a pointer and an integer offset performs
-    pointer arithmetic.
+    def _decorator(func: T) -> T:
+        func.__doc__ = f"""
+    Computes the element-wise {name} of :code:`x` and :code:`y`.
+
+    This is the function form of the :code:`{op}` operator.
 
     :param x: the first input tensor
     :type x: Block
@@ -2916,49 +2915,30 @@ def add(x, y, sanitize_overflow: constexpr = True, _semantic=None):
         plain wrapping arithmetic. Ignored for floating-point operands.
     :type sanitize_overflow: bool
     """
+        return func
+
+    return _decorator
+
+
+@builtin
+@_add_binary_op_docstr("sum", "+")
+def add(x, y, sanitize_overflow: constexpr = True, _semantic=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
     return _semantic.add(x, y, sanitize_overflow)
 
 
 @builtin
+@_add_binary_op_docstr("difference", "-")
 def sub(x, y, sanitize_overflow: constexpr = True, _semantic=None):
-    """
-    Computes the element-wise difference of :code:`x` and :code:`y`.
-
-    This is the function form of the :code:`-` operator. Subtracting an integer
-    offset from a pointer performs pointer arithmetic.
-
-    :param x: the first input tensor
-    :type x: Block
-    :param y: the second input tensor
-    :type y: Block
-    :param sanitize_overflow: insert an integer-overflow check when overflow
-        sanitization is enabled at compile time; set to :code:`False` to emit
-        plain wrapping arithmetic. Ignored for floating-point operands.
-    :type sanitize_overflow: bool
-    """
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
     return _semantic.sub(x, y, sanitize_overflow)
 
 
 @builtin
+@_add_binary_op_docstr("product", "*")
 def mul(x, y, sanitize_overflow: constexpr = True, _semantic=None):
-    """
-    Computes the element-wise product of :code:`x` and :code:`y`.
-
-    This is the function form of the :code:`*` operator.
-
-    :param x: the first input tensor
-    :type x: Block
-    :param y: the second input tensor
-    :type y: Block
-    :param sanitize_overflow: insert an integer-overflow check when overflow
-        sanitization is enabled at compile time; set to :code:`False` to emit
-        plain wrapping arithmetic. Ignored for floating-point operands.
-    :type sanitize_overflow: bool
-    """
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
     return _semantic.mul(x, y, sanitize_overflow)
