@@ -2,7 +2,6 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
@@ -302,8 +301,6 @@ private:
         lifecycle.invals.size() != 1)
       return failure();
 
-    DominanceInfo domInfo(funcOp);
-    PostDominanceInfo postDomInfo(funcOp);
     ttng::WaitBarrierOp wait = lifecycle.waits.front();
     SmallVector<Operation *> transactions;
     bool seenWait = false;
@@ -322,15 +319,6 @@ private:
       return failure();
 
     for (Operation *transaction : transactions) {
-      // The transaction must run on every path to the wait. A transaction in a
-      // conditional branch followed by a wait after the branch would otherwise
-      // leave paths that wait on work that was never issued.
-      if (!domInfo.dominates(transaction, wait.getOperation()))
-        return failure();
-      // The wait must run on every path after the transaction. Otherwise a
-      // transaction before a conditional wait could be left unmatched.
-      if (!postDomInfo.postDominates(wait.getOperation(), transaction))
-        return failure();
       if (!isUnconditionallyTrueTransaction(transaction) ||
           !isConstTrue(wait.getPred()))
         return failure();
