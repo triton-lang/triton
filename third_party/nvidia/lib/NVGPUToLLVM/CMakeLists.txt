@@ -7,4 +7,5 @@ add_triton_library(NVGPUToLLVM
 
     LINK_LIBS PUBLIC
     NVGPUIR
+    TritonGPUIR
 )

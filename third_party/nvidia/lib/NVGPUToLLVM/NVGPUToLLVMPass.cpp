@@ -555,12 +555,9 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     OpBuilder b(ret);
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
-    if (twoCTAs) {
-      NVVM::ClusterArriveOp::create(b, loc, UnitAttr::get(ctx));
-      NVVM::ClusterWaitOp::create(b, loc, UnitAttr::get(ctx));
-    } else {
+    // Multi-CTA kernels already synchronize the cluster before every return.
+    if (!twoCTAs)
       NVVM::BarrierOp::create(b, loc);
-    }
     PTXBuilder ptxBuilder;
     // Calculate the predicate in the inline asm to avoid creating long
     // liveranges.
@@ -607,6 +604,22 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
   return alloc;
 }
 
+static void insertClusterSyncBeforeKernelReturns(ModuleOp mod) {
+  if (gpu::TritonGPUDialect::getNumCTAs(mod) == 1)
+    return;
+
+  for (LLVM::LLVMFuncOp func : mod.getOps<LLVM::LLVMFuncOp>()) {
+    if (!func->hasAttr(NVVM::NVVMDialect::getKernelFuncAttrName()))
+      continue;
+    func.walk([&](LLVM::ReturnOp ret) {
+      OpBuilder builder(ret);
+      auto unitAttr = UnitAttr::get(mod.getContext());
+      NVVM::ClusterArriveOp::create(builder, ret.getLoc(), unitAttr);
+      NVVM::ClusterWaitOp::create(builder, ret.getLoc(), unitAttr);
+    });
+  }
+}
+
 static void lowerTensorMemoryAlloc(ModuleOp mod) {
   SmallVector<Operation *> baseOps;
   LLVM::LLVMFuncOp kernel = nullptr;
@@ -649,6 +662,7 @@ public:
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
 
+    insertClusterSyncBeforeKernelReturns(mod);
     lowerTensorMemoryAlloc(mod);
     makeAllWarpGroupsIsolatedFromAbove(mod);
   }
