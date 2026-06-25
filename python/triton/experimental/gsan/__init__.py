@@ -1,5 +1,5 @@
 from ._allocator import ShareableHandleType, configure, create_mem_pool, freeze_config, get_allocator
-from ._stream_sync import prepare_launch_stream_sync
+from ._stream_sync import warmup_gsan_kernels
 
 __all__ = [
     "ShareableHandleType",
@@ -7,7 +7,7 @@ __all__ = [
     "create_mem_pool",
     "freeze_config",
     "get_allocator",
-    "prepare_launch_stream_sync",
+    "warmup_gsan_kernels",
 ]
 
 _LAZY_LOAD_MODULES = {"symmetric_memory"}

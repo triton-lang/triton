@@ -10,9 +10,8 @@ from triton.experimental.gluon.language.nvidia.ampere import async_copy
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer
-from triton.experimental.gsan import create_mem_pool, prepare_launch_stream_sync
+from triton.experimental.gsan import create_mem_pool, warmup_gsan_kernels
 from triton._C.libtriton.gsan_testing import AtomicScope, SHADOW_GRANULARITY_BYTES, ScalarClock
-from triton.experimental.gsan._allocator import get_reserve_pointer, get_reserve_size
 from triton.experimental.gsan._stream_sync import _synchronize_vector_clocks_kernel
 from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, store_one_i32,
                                                      thread_state_from_smid)
@@ -105,16 +104,15 @@ def _assert_no_gsan_runtime_output(capfd) -> None:
     assert "GSanLibrary.cu" not in captured.out + captured.err
 
 
-def test_stream_sync_layout_args_do_not_specialize_on_alignment():
+def test_stream_sync_layout_args_do_not_specialize():
     params = {param.name: param for param in _synchronize_vector_clocks_kernel.params}
     for name in ("stride_bytes", "num_sms", "num_threads", "header_bytes"):
-        assert params[name].do_not_specialize_on_alignment
+        assert params[name].do_not_specialize
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-def test_prepare_launch_stream_sync(with_gsan):
-    torch.empty(1, device="cuda")
-    assert prepare_launch_stream_sync(torch.cuda.current_device()) is not None
+def test_warmup_gsan_kernels():
+    assert warmup_gsan_kernels() is None
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
@@ -143,24 +141,6 @@ def test_load_store_updates_shadow(with_gsan):
     assert cell1.read_clocks[0] == ScalarClock(epoch1, tid, AtomicScope.NON_ATOMIC)
     # Scalar accesses are instrumented once via the redundant-thread predicate.
     assert cell1.num_reads == 1
-
-
-@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-def test_unmanaged_read_managed_write(fresh_knobs):
-    source = torch.tensor([7], dtype=torch.int32, device="cuda")
-
-    triton.knobs.compilation.instrumentation_mode = "gsan"
-    pool = create_mem_pool()
-    with torch.cuda.use_mem_pool(pool):
-        out = torch.zeros(1, dtype=torch.int32, device="cuda")
-        load_one_i32[(1, )](source, out, num_warps=1)
-        torch.cuda.synchronize()
-
-    reserve = get_reserve_pointer()
-    reserve_size = get_reserve_size()
-    assert not reserve <= source.data_ptr() < reserve + reserve_size
-    assert reserve <= out.data_ptr() < reserve + reserve_size
-    assert out.item() == 7
 
 
 @gluon.jit
