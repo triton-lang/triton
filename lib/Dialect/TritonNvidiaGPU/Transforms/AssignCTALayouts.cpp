@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -29,6 +30,11 @@ namespace {
 struct DotCTASplit {
   unsigned m;
   unsigned n;
+};
+
+struct DotCTALayout {
+  DotCTASplit split;
+  std::array<unsigned, 2> order;
 };
 
 ttg::DistributedEncodingTrait
@@ -163,14 +169,25 @@ void convertOpResultsFromLayouts(Operation *op,
   }
 }
 
-DotCTASplit getDotCTASplit(int64_t m, int64_t n, unsigned numCTAs,
-                           bool preferMOnly) {
+DotCTALayout getDotCTALayout(int64_t m, int64_t n, unsigned numCTAs,
+                             bool preferTwoCTA) {
   constexpr unsigned kPreferredChunkSize = 128;
   constexpr unsigned kMinChunkSize = 64;
+  constexpr unsigned kMaxMMAv5TwoCTAsNPerCTA = 256;
   auto isLegalChunkSize = [](unsigned chunk) { return chunk >= kMinChunkSize; };
 
-  if (preferMOnly && isLegalChunkSize(m / numCTAs))
-    return {numCTAs, 1};
+  if (preferTwoCTA) {
+    for (unsigned splitM = numCTAs; splitM > 1; --splitM) {
+      if (numCTAs % splitM != 0)
+        continue;
+      unsigned splitN = numCTAs / splitM;
+      unsigned mPerCTA = m / splitM;
+      unsigned nPerCTA = n / splitN;
+      if (isLegalChunkSize(mPerCTA) && isLegalChunkSize(nPerCTA) &&
+          nPerCTA <= kMaxMMAv5TwoCTAsNPerCTA)
+        return {{splitM, splitN}, {0, 1}};
+    }
+  }
 
   unsigned splitM = 1;
   unsigned splitN = numCTAs;
@@ -180,12 +197,14 @@ DotCTASplit getDotCTASplit(int64_t m, int64_t n, unsigned numCTAs,
   for (unsigned chunkM = kPreferredChunkSize; isLegalChunkSize(chunkM);
        chunkM /= 2) {
     splitM = std::clamp<unsigned>(m / chunkM, 1, numCTAs);
+    while (splitM > 1 && numCTAs % splitM != 0)
+      --splitM;
     splitN = numCTAs / splitM;
     if (isLegalChunkSize(n / splitN))
       break;
   }
 
-  return {splitM, splitN};
+  return {{splitM, splitN}, {1, 0}};
 }
 
 bool hasDescriptorLoadLikeRoot(Value value) {
@@ -195,12 +214,12 @@ bool hasDescriptorLoadLikeRoot(Value value) {
       value.getDefiningOp());
 }
 
-bool preferMOnlySplitForTwoCTAMMA(triton::DotOp dot, bool isBlackwell) {
-  if (!isBlackwell || ttg::lookupNumCTAs(dot) != 4)
+bool preferTwoCTASplit(triton::DotOp dot, bool isBlackwell) {
+  if (!isBlackwell || ttg::lookupNumCTAs(dot) < 2)
     return false;
 
   auto retTy = cast<RankedTensorType>(dot.getType());
-  if (retTy.getRank() != 2 || retTy.getDimSize(1) > 256)
+  if (retTy.getRank() != 2)
     return false;
 
   return hasDescriptorLoadLikeRoot(dot.getB());
@@ -217,16 +236,17 @@ void assignDotCTALayout(triton::DotOp dot, bool isBlackwell) {
   auto bLayout = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
   auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
 
-  DotCTASplit split = getDotCTASplit(
+  DotCTALayout layout = getDotCTALayout(
       dTy.getShape()[0], dTy.getShape()[1], ttg::getNumCTAs(dLayout),
-      preferMOnlySplitForTwoCTAMMA(dot, isBlackwell));
+      preferTwoCTASplit(dot, isBlackwell));
 
   OpBuilder builder(dot);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
   int numWarps = ttg::lookupNumWarps(dot);
 
   auto newCGALayout = ttg::CGAEncodingAttr::fromSplitParams(
-      ctx, {split.m, split.n}, {split.m, split.n}, {1, 0});
+      ctx, {layout.split.m, layout.split.n}, {layout.split.m, layout.split.n},
+      layout.order);
   auto newDLayout = ttg::BlockedEncodingAttr::get(
       ctx, dTy.getShape(), dLayout.getSizePerThread(), dLayout.getOrder(),
       numWarps, threadsPerWarp, newCGALayout);
