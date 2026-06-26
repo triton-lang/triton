@@ -256,62 +256,76 @@ private:
     return loopOp->getResults().back();
   }
 
-  bool isAvailableAt(Value value, Operation *op) {
-    if (auto arg = dyn_cast<BlockArgument>(value)) {
-      Block *argBlock = arg.getOwner();
-      for (Operation *ancestor = op; ancestor;
-           ancestor = ancestor->getParentOp())
-        if (ancestor->getBlock() == argBlock)
-          return true;
-      return argBlock == op->getBlock();
-    }
-
-    Operation *def = value.getDefiningOp();
-    if (!def)
-      return false;
-
-    Operation *ancestor = op;
-    while (ancestor && ancestor->getBlock() != def->getBlock())
-      ancestor = ancestor->getParentOp();
-    return ancestor && def->isBeforeInBlock(ancestor);
+  Value createPhaseAdvance(ttng::WaitBarrierOp wait, Value phase,
+                           Value phaseOne) {
+    builder.setInsertionPointAfter(wait);
+    // A hoisted loop-local barrier alternates between phase 0 and 1 when the
+    // lifecycle completes. The phase is consumed by wait_barrier, so advance it
+    // next to that wait and under the wait predicate when the wait is
+    // predicated.
+    Value nextPhase =
+        arith::XOrIOp::create(builder, wait.getLoc(), phase, phaseOne);
+    Value pred = wait.getPred();
+    if (pred && !matchPattern(pred, m_One()))
+      nextPhase = arith::SelectOp::create(builder, wait.getLoc(), pred,
+                                          nextPhase, phase);
+    return nextPhase;
   }
 
-  FailureOr<Value> getPhaseAdvancePredicate(ArrayRef<ttng::WaitBarrierOp> waits,
-                                            Operation *op) {
-    Value pred;
-    for (ttng::WaitBarrierOp wait : waits) {
-      Value waitPred = wait.getPred();
-      if (!waitPred || matchPattern(waitPred, m_One()))
-        return Value();
-      if (!isAvailableAt(waitPred, op))
-        return failure();
-      if (!pred) {
-        pred = waitPred;
-        continue;
-      }
-      if (pred != waitPred)
-        pred = arith::OrIOp::create(builder, op->getLoc(), pred, waitPred);
+  FailureOr<Value> mergePhaseAdvancesToBlock(Value phase,
+                                             ArrayRef<Value> advances,
+                                             Block *targetBlock) {
+    if (advances.size() == 1) {
+      Value nextPhase = advances.front();
+      if (nextPhase.getParentBlock() != targetBlock)
+        nextPhase = mlir::triton::sinkValueRedefinition(
+            builder, phase, nextPhase, nextPhase.getParentBlock());
+      return nextPhase;
     }
-    return pred;
-  }
 
-  FailureOr<Value> createPhaseAdvance(ttng::InvalBarrierOp inval, Value phase,
-                                      Value phaseOne,
-                                      ArrayRef<ttng::WaitBarrierOp> waits) {
-    builder.setInsertionPointAfter(inval);
-    FailureOr<Value> pred = getPhaseAdvancePredicate(waits, inval);
-    if (failed(pred))
+    Value firstAdvance = advances.front();
+    auto ifOp =
+        dyn_cast<scf::IfOp>(firstAdvance.getParentBlock()->getParentOp());
+    if (!ifOp)
       return failure();
 
-    // A hoisted loop-local barrier alternates between phase 0 and 1 when a
-    // lifecycle completes. Predicated waits only consume the phase when their
-    // predicate is true, so the carried phase must advance under the same
-    // predicate instead of toggling unconditionally.
-    Value nextPhase =
-        arith::XOrIOp::create(builder, inval.getLoc(), phase, phaseOne);
-    if (*pred)
-      nextPhase = arith::SelectOp::create(builder, inval.getLoc(), *pred,
-                                          nextPhase, phase);
+    Value thenPhase;
+    Value elsePhase;
+    for (Value advance : advances) {
+      Block *block = advance.getParentBlock();
+      if (block->getParentOp() != ifOp)
+        return failure();
+      if (block == ifOp.thenBlock()) {
+        if (thenPhase)
+          return failure();
+        thenPhase = advance;
+        continue;
+      }
+      if (block == ifOp.elseBlock()) {
+        if (elsePhase)
+          return failure();
+        elsePhase = advance;
+        continue;
+      }
+      return failure();
+    }
+
+    if (!thenPhase || !elsePhase)
+      return failure();
+
+    scf::IfOp oldIfOp = ifOp;
+    scf::IfOp newIfOp =
+        mlir::replaceIfOpWithNewSignature(builder, ifOp, phase.getType());
+    newIfOp.thenYield()->insertOperands(newIfOp.thenYield().getNumOperands(),
+                                        thenPhase);
+    newIfOp.elseYield()->insertOperands(newIfOp.elseYield().getNumOperands(),
+                                        elsePhase);
+    builder.eraseOp(oldIfOp);
+
+    Value nextPhase = newIfOp.getResults().back();
+    if (nextPhase.getParentBlock() != targetBlock)
+      nextPhase = mlir::triton::sinkValueRedefinition(
+          builder, phase, nextPhase, nextPhase.getParentBlock());
     return nextPhase;
   }
 
@@ -388,16 +402,16 @@ private:
     for (ttng::WaitBarrierOp wait : lifecycle.waits)
       wait.getPhaseMutable().assign(innerPhase);
 
-    FailureOr<Value> maybeNextPhase =
-        createPhaseAdvance(inval, innerPhase, phaseOne, lifecycle.waits);
+    SmallVector<Value> advances;
+    for (ttng::WaitBarrierOp wait : lifecycle.waits)
+      advances.push_back(createPhaseAdvance(wait, innerPhase, phaseOne));
+
+    FailureOr<Value> maybeNextPhase = mergePhaseAdvancesToBlock(
+        innerPhase, advances, getLoopBodyBlock(innerLoop));
     if (failed(maybeNextPhase))
       return failure();
-    Value nextPhase = *maybeNextPhase;
-    if (inval->getBlock() != getLoopBodyBlock(innerLoop))
-      nextPhase = mlir::triton::sinkValueRedefinition(
-          builder, innerPhase, nextPhase, inval->getBlock());
 
-    appendToLoopYield(innerLoop, nextPhase);
+    appendToLoopYield(innerLoop, *maybeNextPhase);
     Value loopResult = getLoopResultPhase(innerLoop);
 
     for (int i = static_cast<int>(loopPhases.size()) - 2; i >= 0; --i) {
