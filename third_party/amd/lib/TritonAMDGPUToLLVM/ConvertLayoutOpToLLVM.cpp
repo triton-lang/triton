@@ -104,12 +104,7 @@ public:
       return ret;
     };
 
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-
-    // Handle broadcasting in registers.
-    auto srcLL = triton::gpu::toLinearLayout(srcTy);
-    auto rmSrc = actionRemoveBroadcastedRegs(srcLL);
-    inVals = rmSrc.apply(inVals);
+    auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
     // The input values may require broadcasting so that the conversion can be
     // described as a permutation. This does not cost anything for simple cases.
     int regDim = inVals.size();
@@ -245,19 +240,12 @@ public:
     }
 
     // Handle broadcasting in registers.
-    // The `factors` produce output values which may contain broadcasting.
-    // This needs to be removed before using `broadcastAs` to get the correct
-    // broadcasting as expected by the original destination layout.
     auto dstLL = triton::gpu::toLinearLayout(dstTy);
-    auto rmDst = actionRemoveBroadcastedRegs(dstLL);
-    auto strippedDst = rmDst.apply(dstLL);
+    auto strippedDst = dstLL.removeZeroBasesAlongDim(kReg);
     outVals.resize(strippedDst.getInDimSize(kReg));
 
-    if (!rmDst.isIdentity())
-      outVals = broadcastAs(outVals, dstLL);
-
-    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
-                                  op.getType());
+    Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
+                                            rewriter, dstTy);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -361,9 +349,9 @@ public:
   // Unpacks input values and packs them in int32 values, like they will be
   // stored in actual registers
   static std::vector<Value>
-  repackInputToRegisters(Location loc, OpAdaptor adaptor,
+  repackInputToRegisters(Location loc, OpAdaptor adaptor, Type srcTy,
                          ConversionPatternRewriter &rewriter) {
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto inVals = unpackTensorElements(loc, adaptor.getSrc(), rewriter, srcTy);
     auto numRegs = inVals.size() / regBytes;
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     std::vector<Value> srcRegs(numRegs);
@@ -675,8 +663,8 @@ public:
         outVals[regIdx * regBytes + elem] = unpacked[elem];
       }
     }
-    return packLLElements(loc, getTypeConverter(), outVals, rewriter,
-                          op.getType());
+    return packTensorElements(loc, getTypeConverter(), outVals, rewriter,
+                              op.getType());
   }
 
   void transferWithVPerm(ConvertLayoutOp op, const LinearLayout &conversion,
@@ -687,7 +675,8 @@ public:
     auto fullLayout = getFullLayout(conversion, ctx);
     // Mapping for dst register bytes to source bytes
     auto dstRegContents = generateDstRegContents(fullLayout);
-    std::vector<Value> srcRegs = repackInputToRegisters(loc, adaptor, rewriter);
+    std::vector<Value> srcRegs =
+        repackInputToRegisters(loc, adaptor, op.getSrc().getType(), rewriter);
     TritonLLVMOpBuilder b(loc, rewriter);
 
     auto numDstValues = fullLayout.size();
