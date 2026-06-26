@@ -295,12 +295,13 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
 }
 std::pair<int64_t, ColumnAction>
 actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
-                      uint64_t maskSpanOffsets, int64_t regsPerInst) {
+                      uint64_t maskSpanOffsets, uint64_t maskSpanBlocks,
+                      int64_t regsPerInst) {
   // General idea:
   // We want to swap an xor into an addition when computing the register
-  // offsets. We can do this if the output bits of this register are disjoint
-  // from those from lanes/warps/blocks or any affine offset (i.e.,
-  // maskSpanOffsets).
+  // offsets and blocks. We can do this if each output component of this
+  // register is disjoint from the corresponding components from
+  // lanes/warps/blocks and any affine offset.
   //
   // Additionally, the lowering only ever evaluates register offsets at indices
   // that are multiples of `regsPerInst` (the inner-loop stride, matching one
@@ -315,20 +316,26 @@ actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
          "regsPerInst must be a power of two");
   auto kReg = *layout.getInDimNames().begin();
   assert(kReg.str() == "register");
+  assert(layout.getNumOutDims() == 2);
+  assert(layout.getOutDims() == addrLayout.getOutDims());
   const size_t regBasisPerVec = llvm::Log2_64(regsPerInst);
-  uint32_t bits = maskSpanOffsets;
-  auto addrNamedBases = addrLayout.flattenOuts().getBases();
+  uint64_t offsetBits = maskSpanOffsets;
+  uint64_t blockBits = maskSpanBlocks;
+  auto addrNamedBases = addrLayout.getBases();
   for (auto bases : llvm::make_second_range(addrNamedBases)) {
     for (auto basis : bases) {
-      bits |= basis[0];
+      offsetBits |= basis[0];
+      blockBits |= basis[1];
     }
   }
   SmallVector<size_t> front, back;
-  auto layoutNamedBases = layout.flattenOuts().getBases();
+  auto layoutNamedBases = layout.getBases();
   assert(layoutNamedBases.lookup(kReg).size() >= regBasisPerVec &&
          "layout must have at least log2(regsPerInst) register bases");
   for (auto [idx, basis] : llvm::enumerate(layoutNamedBases.lookup(kReg))) {
-    if (idx < regBasisPerVec || (basis[0] & bits) == 0) {
+    bool isAdditive =
+        (basis[0] & offsetBits) == 0 && (basis[1] & blockBits) == 0;
+    if (idx < regBasisPerVec || isAdditive) {
       front.push_back(idx);
     } else {
       back.push_back(idx);
