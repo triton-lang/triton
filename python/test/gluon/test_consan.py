@@ -603,20 +603,20 @@ def test_cluster_barrier_does_not_publish_later_read(device, run_wrapper, monkey
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize(
-    "GATHER,FAILURE",
+    "OP,FAILURE",
     [
-        pytest.param(True, True, id="gather-missing-barrier"),
-        pytest.param(True, False, id="gather-synchronized"),
-        pytest.param(False, False, id="scatter-synchronized"),
+        pytest.param("gather", True, id="gather-missing-barrier"),
+        pytest.param("gather", False, id="gather-synchronized"),
+        pytest.param("scatter", False, id="scatter-synchronized"),
     ],
 )
-def test_local_gather_scatter_cross_cta_visibility(GATHER, FAILURE, device, run_wrapper, monkeypatch):
+def test_local_gather_scatter_cross_cta_visibility(OP, FAILURE, device, run_wrapper, monkeypatch):
     if run_wrapper:
         result = run_in_process(test_local_gather_scatter_cross_cta_visibility,
-                                (GATHER, FAILURE, device, False, monkeypatch))
+                                (OP, FAILURE, device, False, monkeypatch))
         if FAILURE:
             assert_expected_cuda_failure(result.exc)
-            assert "Buffer being accessed has outstanding" in result.driver_stderr_output
+            assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -627,31 +627,42 @@ def test_local_gather_scatter_cross_cta_visibility(GATHER, FAILURE, device, run_
     knobs.refresh_knobs()
 
     @gluon.jit
-    def kernel(inp, out, layout: ttgl.constexpr, GATHER: ttgl.constexpr, FAILURE: ttgl.constexpr):
+    def kernel(inp, out, layout: ttgl.constexpr, OP: ttgl.constexpr, FAILURE: ttgl.constexpr):
         shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0], cga_layout=[[0, 1]])
         rows = ttgl.arange(0, 2, layout=ttgl.SliceLayout(1, layout))
         cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
         offsets = rows[:, None] * 32 + cols[None, :]
         values = ttgl.load(inp + offsets)
-        smem = ttgl.allocate_shared_memory(ttgl.int32, [2, 32], shared_layout, value=values)
-        if not FAILURE:
-            ttgl.barrier(cluster=True)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [2, 32], shared_layout)
+        peer_cols = (cols ^ 16)[None, :] + rows[:, None] * 0
+        # Finish ConSan's untracked poison initialization before peer DSM access.
+        ttgl.barrier(cluster=True)
 
-        peer_cols = (cols ^ 1)[None, :] + rows[:, None] * 0
-        if GATHER:
+        if FAILURE:
             result = smem.gather(peer_cols, axis=1)
+            ttgl.store(out + offsets, result)
+            # Order every peer read before the stores without publishing it.
+            hopper.cluster.barrier(relaxed=True)
+            smem.store(values)
         else:
-            smem.scatter(values, peer_cols, axis=1)
+            smem.store(values)
             ttgl.barrier(cluster=True)
-            result = smem.load(layout)
-        ttgl.store(out + offsets, result)
+            if OP == "gather":
+                result = smem.gather(peer_cols, axis=1)
+                # Order peer DSM reads and keep allocations alive until they finish.
+                ttgl.barrier(cluster=True)
+            else:
+                smem.scatter(values, peer_cols, axis=1)
+                ttgl.barrier(cluster=True)
+                result = smem.load(layout)
+            ttgl.store(out + offsets, result)
 
     inp = torch.arange(64, dtype=torch.int32, device=device).reshape(2, 32)
     out = torch.empty_like(inp)
     layout = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0], cga_layout=[[0, 1]])
-    kernel[(1, )](inp, out, layout, GATHER=GATHER, FAILURE=FAILURE, num_warps=4, num_ctas=2)
+    kernel[(1, )](inp, out, layout, OP=OP, FAILURE=FAILURE, num_warps=4, num_ctas=2)
     if not FAILURE:
-        expected = inp.reshape(2, 16, 2).flip(-1).reshape(2, 32)
+        expected = inp.reshape(2, 2, 16).flip(1).reshape(2, 32)
         torch.testing.assert_close(out, expected)
 
 

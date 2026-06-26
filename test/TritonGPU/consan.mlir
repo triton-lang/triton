@@ -115,6 +115,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 // -----
 
 #local_gather_scatter_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 32, CGALayout = [[0, 1]]}>
+#local_gather_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
 #local_gather_scatter_smem = #ttg.shared_memory
 #local_gather_scatter_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 528 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
@@ -125,26 +126,26 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %c0 = arith.constant 0 : i32
     %indices = arith.constant dense<0> : tensor<8x32xi32, #local_gather_scatter_blocked>
     %values = arith.constant dense<1> : tensor<8x32xi32, #local_gather_scatter_blocked>
-    %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x32xi32, #local_gather_scatter_shared, #local_gather_scatter_smem, mutable>
+    %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x32xi32, #local_gather_shared, #local_gather_scatter_smem, mutable>
     %dst = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<8x32xi32, #local_gather_scatter_shared, #local_gather_scatter_smem, mutable>
 
-    // Indexing the unsharded axis leaves the gather local to the issuing CTA.
-    // CHECK: %[[GATHER_CTAS:.*]] = arith.shli {{.*}} : i32
+    // Indexing the sharded axis can target either CTA row.
+    // CHECK: %[[GATHER_CTAS:.*]] = arith.constant 3 : i32
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}({{.*}}%[[GATHER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[GATHER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}({{.*}}%[[GATHER_CTAS]]{{.*}})
     // CHECK: ttg.local_gather
-    %gathered = ttg.local_gather %src[%indices] {axis = 0 : i32} : !ttg.memdesc<8x32xi32, #local_gather_scatter_shared, #local_gather_scatter_smem, mutable>, tensor<8x32xi32, #local_gather_scatter_blocked> -> tensor<8x32xi32, #local_gather_scatter_blocked>
+    %gathered = ttg.local_gather %src[%indices] {axis = 1 : i32} : !ttg.memdesc<8x32xi32, #local_gather_shared, #local_gather_scatter_smem, mutable>, tensor<8x32xi32, #local_gather_scatter_blocked> -> tensor<8x32xi32, #local_gather_scatter_blocked>
 
-    // Indexing the sharded axis can target either CTA row.
-    // CHECK: %[[SCATTER_CTAS:.*]] = arith.constant 3 : i32
+    // Indexing the unsharded axis leaves the scatter local to the issuing CTA.
+    // CHECK: %[[SCATTER_CTAS:.*]] = arith.shli {{.*}} : i32
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: ttg.local_scatter
-    ttg.local_scatter %dst[%indices], %values {axis = 1 : i32} : !ttg.memdesc<8x32xi32, #local_gather_scatter_shared, #local_gather_scatter_smem, mutable>, tensor<8x32xi32, #local_gather_scatter_blocked>, tensor<8x32xi32, #local_gather_scatter_blocked>
+    ttg.local_scatter %dst[%indices], %values {axis = 0 : i32} : !ttg.memdesc<8x32xi32, #local_gather_scatter_shared, #local_gather_scatter_smem, mutable>, tensor<8x32xi32, #local_gather_scatter_blocked>, tensor<8x32xi32, #local_gather_scatter_blocked>
 
     // An async-proxy consumer makes the generic-proxy classification above
     // observable in ConSan's output.
