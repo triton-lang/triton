@@ -45,6 +45,7 @@
 #include "triton/Tools/Sys/Dump.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/SourceMgr.h"
+#include <memory>
 
 namespace {
 
@@ -1894,19 +1895,35 @@ void init_triton_ir(py::module_ &m) {
                                                   paddingOption);
            });
 
-  // Add custom operations.
-  for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
-    for (const auto &op : plugin.listOps()) {
-      std::string wrapped = std::string("create_") + op.name;
-      TritonOpBuilderBinding.def(
-          wrapped.c_str(),
-          [op](TritonOpBuilder &self, std::vector<Value> args) {
-            args.insert(args.begin(), Value());
-            op.addOp(self, args);
-            return args[0];
-          });
-    }
-  }
+  // Add an `extend_with` static method that dynamically loads a plugin and
+  // registers its custom operations as builder methods.
+  auto builderPtr =
+      std::make_shared<py::class_<TritonOpBuilder>>(TritonOpBuilderBinding);
+  TritonOpBuilderBinding.def_static(
+      "extend_with",
+      [builderPtr](const std::string &path) {
+        // Load the plugin library.
+        auto pluginOrErr = mlir::triton::plugin::TritonPlugin::load(path);
+        if (!pluginOrErr) {
+          std::string errMsg = llvm::toString(pluginOrErr.takeError());
+          throw std::runtime_error(errMsg);
+        }
+        auto plugin = std::move(*pluginOrErr);
+
+        // Extend the builder class with the ops defined in the plugin.
+        py::gil_scoped_acquire acquire;
+        for (const auto &op : plugin.listOps()) {
+          std::string wrapped = std::string("create_") + op.name;
+          builderPtr->def(wrapped.c_str(),
+                          [op](TritonOpBuilder &self, std::vector<Value> args) {
+                            args.insert(args.begin(), Value());
+                            op.addOp(self, args);
+                            return args[0];
+                          });
+        }
+      },
+      "Given a path to a Triton extension, load it and create builder methods "
+      "for each operation.");
 
   py::class_<PassManager>(m, "pass_manager")
       .def(py::init<MLIRContext *>())
