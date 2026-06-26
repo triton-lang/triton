@@ -803,6 +803,17 @@ scf::WhileOp addIterArgsToLoop(OpBuilder &rewriter, scf::WhileOp loop,
                                ValueRange newIterOperands) {
   scf::WhileOp newLoop = replaceWhileOpWithNewSignature(
       rewriter, loop, newIterOperands, newIterOperands.getTypes());
+
+  auto conditionOp =
+      cast<scf::ConditionOp>(newLoop.getBefore().front().getTerminator());
+  SmallVector<Value> args(conditionOp.getArgs());
+  llvm::append_range(
+      args, newLoop.getBeforeArguments().take_back(newIterOperands.size()));
+  rewriter.setInsertionPoint(conditionOp);
+  scf::ConditionOp::create(rewriter, conditionOp.getLoc(),
+                           conditionOp.getCondition(), args);
+  conditionOp->erase();
+
   // Save the caller from insertion point invalidation.
   if (rewriter.getInsertionPoint() == loop->getIterator())
     rewriter.setInsertionPoint(newLoop);
