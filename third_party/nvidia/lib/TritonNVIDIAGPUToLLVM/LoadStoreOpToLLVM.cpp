@@ -700,10 +700,10 @@ public:
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
     auto atomicRmwAttr = op.getAtomicRmwOp();
-    const bool useRed =
-        op.getResult().use_empty() && atomicRmwAttr != RMWOp::XCHG &&
-        (op.getSem() == MemSemantic::RELAXED ||
-         op.getSem() == MemSemantic::RELEASE);
+    const bool useRed = op.getResult().use_empty() &&
+                        atomicRmwAttr != RMWOp::XCHG &&
+                        (op.getSem() == MemSemantic::RELAXED ||
+                         op.getSem() == MemSemantic::RELEASE);
 
     Value val = op.getVal();
     Value ptr = op.getPtr();
@@ -771,9 +771,9 @@ public:
             {triton::MemSyncScope::GPU, triton::nvgpu::MemSyncScope::GPU},
             {triton::MemSyncScope::SYSTEM,
              triton::nvgpu::MemSyncScope::SYSTEM}};
-    const bool doPTXLDPromotion =
-        !useRed && isPromotableToNVPTXLD(op) && vec == 1 && packed == 1 &&
-        ScopeMap.count(op.getScope());
+    const bool doPTXLDPromotion = !useRed && isPromotableToNVPTXLD(op) &&
+                                  vec == 1 && packed == 1 &&
+                                  ScopeMap.count(op.getScope());
 
     for (size_t i = 0; i < elemsPerThread; i += vec * packed) {
       if (auto canonicalStart = getCanonicalIndex(i, regMask);
@@ -920,8 +920,7 @@ public:
           rewriter, loc, valueElemTy, rmwPtr, rmwVals, atomicRmwAttr,
           op.getSem(), stringifyMemSyncScope(op.getScope()).str(), pred, vec,
           packed, NVIDIA::PtxAtomicAddrSpace::Global,
-          useRed ? NVIDIA::PtxAtomicInstr::Red
-                 : NVIDIA::PtxAtomicInstr::Atom);
+          useRed ? NVIDIA::PtxAtomicInstr::Red : NVIDIA::PtxAtomicInstr::Atom);
       if (failed(old))
         return failure();
       if (useRed)
