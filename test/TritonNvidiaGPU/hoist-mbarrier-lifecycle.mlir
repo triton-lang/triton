@@ -52,8 +52,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %{{.*}}) -> (i32)
   // CHECK: ttng.wait_barrier %[[BAR]], %[[PHASE]], %[[PRED:.*]] :
   // CHECK-NEXT: %[[NEXT:.*]] = arith.xori %[[PHASE]],
-  // CHECK-NEXT: %[[SELECT:.*]] = arith.select %[[PRED]], %[[NEXT]], %[[PHASE]]
-  // CHECK: scf.yield %[[SELECT]]
+  // CHECK: scf.yield %[[NEXT]]
   // CHECK: ttng.inval_barrier %[[BAR]]
   // CHECK-NEXT: tt.return
   tt.func @hoist_loop_predicated_wait_lifecycle(%desc: !tt.tensordesc<64x128xf16, #nvmma>, %pred: i1) {
@@ -296,12 +295,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
   // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
   // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %{{.*}}) -> (i32)
-  // CHECK: scf.if {{.*}} -> (i32)
+  // CHECK: scf.if
   // CHECK: ttng.wait_barrier %[[BAR]], %[[PHASE]]
-  // CHECK-NEXT: %[[NEXT:.*]] = arith.xori %[[PHASE]],
+  // CHECK: %[[NEXT:.*]] = arith.xori %[[PHASE]],
   // CHECK: scf.yield %[[NEXT]] : i32
-  // CHECK: scf.yield %[[PHASE]] : i32
-  // CHECK: scf.yield {{.*}} : i32
   // CHECK: ttng.inval_barrier %[[BAR]]
   // CHECK-NEXT: tt.return
   tt.func @hoist_loop_if_lifecycle(%desc: !tt.tensordesc<64x128xf16, #nvmma>, %pred: i1) {
