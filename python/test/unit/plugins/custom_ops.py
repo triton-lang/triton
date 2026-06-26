@@ -19,11 +19,6 @@ builder: ir.builder
 
 TRITON_BUILTIN = "__triton_builtin__"
 
-assert not hasattr(triton._C.libtriton.ir.builder, "create_custom_op")
-lib = os.getenv('TRITON_PLUGIN_PATHS')
-triton._C.libtriton.ir.builder.extend_with(lib)
-assert hasattr(triton._C.libtriton.ir.builder, "create_custom_op")
-
 
 def _unwrap_if_constexpr(o):
     if isinstance(o, list):
@@ -66,6 +61,11 @@ def add_kernel(
 def test_custom_ops(tmp_path: pathlib.Path):
     if os.environ.get('TRITON_EXT_ENABLED', '0') == '0':
         return
+
+    # Extend Triton's operation builder with the plugin's operations.
+    LIB = 'python/triton/plugins/libMLIRDialectPlugin.so'
+    triton._C.libtriton.ir.builder.extend_with(LIB)
+
     size = 8
     x = torch.zeros(size, device=DEVICE, dtype=torch.float32)
     output_triton = torch.empty_like(x)

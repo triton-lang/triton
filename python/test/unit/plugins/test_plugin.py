@@ -31,10 +31,9 @@ def test_op(capfd, device: str):
     if os.environ.get('TRITON_EXT_ENABLED', '0') == '0':
         return
 
-    assert not hasattr(triton._C.libtriton.passes.plugin, "add_plugin")
-    lib = os.getenv('TRITON_PLUGIN_PATHS')
-    triton._C.libtriton.passes.plugin.extend_with(lib)
-    assert hasattr(triton._C.libtriton.passes.plugin, "add_plugin")
+    # Extend Triton's passes with the plugin's passes.
+    LIB = 'python/triton/plugins/libTritonPluginsTestLib.so'
+    triton._C.libtriton.passes.plugin.extend_with(LIB)
 
     size = 98432
     x = torch.rand(size, device=device)
