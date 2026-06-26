@@ -261,23 +261,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: reduce_dpp_max_commuted
   tt.func @reduce_dpp_max_commuted(%arg0: tensor<64xf32, #blocked3>) {
-    // CHECK: rocdl.ds_bpermute
-    // CHECK: llvm.intr.maxnum
-    // CHECK: rocdl.ds_bpermute
-    // CHECK: llvm.intr.maxnum
     // CHECK: rocdl.update.dpp
-    // CHECK-SAME: with 296, 15, 15, true : i32
-    // CHECK: llvm.intr.maxnum
-    // CHECK: rocdl.update.dpp
-    // CHECK-SAME: with 321, 15, 15, true : i32
-    // CHECK: rocdl.update.dpp
-    // CHECK-SAME: with 27, 15, 15, true : i32
-    // CHECK: llvm.intr.maxnum
-    // CHECK: rocdl.update.dpp
-    // CHECK-SAME: with 78, 15, 15, true : i32
-    // CHECK: llvm.intr.maxnum
-    // CHECK: rocdl.update.dpp
-    // CHECK-SAME: with 177, 15, 15, true : i32
+    // CHECK-SAME: with 280, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 276, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 274, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 273, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 322, 10, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK-NEXT: rocdl.update.dpp
+    // CHECK-SAME: with 323, 15, 15, true : f32
+    // CHECK-NEXT: llvm.intr.maxnum
+
+    // CHECK: rocdl.readlane
     %0 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
     ^bb0(%arg1: f32, %arg2: f32):
       %1 = arith.maxnumf %arg2, %arg1 : f32
@@ -761,11 +769,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // GFX950-LABEL: reduce_16x16_commuted
 // GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane32.swap"
-// GFX950: llvm.icmp "eq"
-// GFX950: llvm.select
 // GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane16.swap"
-// GFX950: llvm.icmp "eq"
-// GFX950: llvm.select
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @reduce_16x16_commuted(%arg0: tensor<64x16xf32, #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>>){
 %1 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({

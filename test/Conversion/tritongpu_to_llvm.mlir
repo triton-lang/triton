@@ -1923,12 +1923,8 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // -----
 
 // CHECK-LABEL: sum_reduction_commuted
-//   CHECK-NOT:   nvvm.redux.sync
-//       CHECK:   nvvm.shfl.sync bfly
-//       CHECK:   nvvm.shfl.sync bfly
-//       CHECK:   nvvm.shfl.sync bfly
-//       CHECK:   nvvm.shfl.sync bfly
-//       CHECK:   nvvm.shfl.sync bfly
+//       CHECK:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
+//       CHECK:   nvvm.redux.sync  add %{{.*}}, %[[M]]
 //       CHECK:   nvvm.barrier
 //       CHECK:   nvvm.shfl.sync bfly
 //       CHECK:   nvvm.shfl.sync bfly
