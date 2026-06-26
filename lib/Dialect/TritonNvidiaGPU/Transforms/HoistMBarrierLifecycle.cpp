@@ -356,13 +356,6 @@ private:
     ttng::InvalBarrierOp inval = lifecycle.invals.front();
     getEnclosingLoops(inval, loops);
 
-    for (ttng::InvalBarrierOp otherInval : llvm::drop_begin(lifecycle.invals)) {
-      SmallVector<Operation *> otherLoops;
-      getEnclosingLoops(otherInval, otherLoops);
-      if (!llvm::equal(loops, otherLoops))
-        return failure();
-    }
-
     // If invalidation is already outside loops, moving it to function exits
     // does not remove a loop-local phase reset.
     if (loops.empty())
