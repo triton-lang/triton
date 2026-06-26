@@ -63,7 +63,6 @@ struct BarrierLifecycle {
   ttng::InitBarrierOp init;
   int initCount = 0;
   SmallVector<ttng::WaitBarrierOp> waits;
-  ttng::WaitBarrierOp wait;
   Value initialPhase;
   SmallVector<ttng::InvalBarrierOp> invals;
 };
@@ -208,14 +207,17 @@ private:
     });
 
     if (lifecycle.initCount != 1 || !lifecycle.init ||
-        lifecycle.waits.size() != 1 || lifecycle.invals.size() != 1)
+        lifecycle.waits.empty() || lifecycle.invals.size() != 1)
       return failure();
 
-    lifecycle.wait = lifecycle.waits.front();
-    lifecycle.initialPhase = lifecycle.wait.getPhase();
+    lifecycle.initialPhase = lifecycle.waits.front().getPhase();
     if (!isa_and_nonnull<arith::ConstantOp>(
             lifecycle.initialPhase.getDefiningOp()))
       return failure();
+
+    for (ttng::WaitBarrierOp wait : lifecycle.waits)
+      if (wait.getPhase() != lifecycle.initialPhase)
+        return failure();
 
     return success();
   }
@@ -267,13 +269,9 @@ private:
 
   scf::WhileOp addWhilePhaseArg(scf::WhileOp whileOp, Value initialPhase,
                                 Value &phase) {
-    scf::WhileOp oldWhileOp = whileOp;
-    whileOp = mlir::replaceWhileOpWithNewSignature(
-        builder, whileOp, initialPhase, initialPhase.getType());
-
+    whileOp = mlir::addIterArgsToLoop(builder, whileOp, initialPhase);
     appendToWhileCondition(whileOp, whileOp.getBeforeArguments().back());
     phase = whileOp.getAfterArguments().back();
-    oldWhileOp->erase();
     return whileOp;
   }
 
@@ -323,7 +321,8 @@ private:
 
     Operation *innerLoop = loopPhases.back().first;
     Value innerPhase = loopPhases.back().second;
-    lifecycle.wait.getPhaseMutable().assign(innerPhase);
+    for (ttng::WaitBarrierOp wait : lifecycle.waits)
+      wait.getPhaseMutable().assign(innerPhase);
 
     Value nextPhase = createPhaseAdvance(inval, innerPhase, phaseOne);
     if (inval->getBlock() != getLoopBodyBlock(innerLoop))

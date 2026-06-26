@@ -156,6 +156,9 @@ scf::WhileOp replaceWhileOpWithNewSignature(OpBuilder &rewriter,
                                             scf::WhileOp loop,
                                             ValueRange newIterOperands,
                                             TypeRange newResultTypes);
+[[nodiscard]] scf::WhileOp addIterArgsToLoop(OpBuilder &rewriter,
+                                             scf::WhileOp loop,
+                                             ValueRange newIterOperands);
 
 // Replace IfOp with a new IfOp with extra results operands. The YieldOp is not
 // updated and needs to be updated separately for the bodies to be correct.

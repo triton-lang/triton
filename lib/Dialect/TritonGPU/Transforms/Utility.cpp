@@ -815,6 +815,17 @@ scf::WhileOp replaceWhileOpWithNewSignature(OpBuilder &rewriter,
   return newWhileOp;
 }
 
+scf::WhileOp addIterArgsToLoop(OpBuilder &rewriter, scf::WhileOp loop,
+                               ValueRange newIterOperands) {
+  scf::WhileOp newLoop = replaceWhileOpWithNewSignature(
+      rewriter, loop, newIterOperands, newIterOperands.getTypes());
+  // Save the caller from insertion point invalidation.
+  if (rewriter.getInsertionPoint() == loop->getIterator())
+    rewriter.setInsertionPoint(newLoop);
+  loop.erase();
+  return newLoop;
+}
+
 scf::IfOp replaceIfOpWithNewSignature(
     OpBuilder &rewriter, scf::IfOp ifOp, TypeRange newResultTypes,
     SmallVectorImpl<std::tuple<Value, Value>> &replacements) {
