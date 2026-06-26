@@ -238,13 +238,6 @@ private:
     def->moveBefore(loopOp);
   }
 
-  bool isNestedInRegion(Operation *op, Region &region) {
-    for (Operation *parent = op; parent; parent = parent->getParentOp())
-      if (parent->getParentRegion() == &region)
-        return true;
-    return false;
-  }
-
   Block *getLoopBodyBlock(Operation *loopOp) {
     if (auto forOp = dyn_cast<scf::ForOp>(loopOp))
       return forOp.getBody();
@@ -318,14 +311,6 @@ private:
     SmallVector<std::pair<Operation *, Value>> loopPhases;
     Value initialPhase = lifecycle.initialPhase;
     for (auto [idx, loopOp] : llvm::enumerate(loops)) {
-      if (auto whileOp = dyn_cast<scf::WhileOp>(loopOp)) {
-        Operation *nestedOp = idx + 1 == loops.size()
-                                  ? lifecycle.wait.getOperation()
-                                  : loops[idx + 1];
-        if (!isNestedInRegion(nestedOp, whileOp.getAfter()))
-          return failure();
-      }
-
       builder.setInsertionPoint(loopOp);
       Value phase;
       if (auto forOp = dyn_cast<scf::ForOp>(loopOp))
