@@ -13,6 +13,8 @@ DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 assert not hasattr(triton._C.libtriton.passes.plugin, "add_plugingpu_conversion")
 lib = os.getenv('TRITON_PLUGIN_PATHS')
+context = triton._C.libtriton.ir.context()
+triton._C.libtriton.ir.extend_dialects_with(lib)
 triton._C.libtriton.passes.plugin.extend_with(lib)
 assert hasattr(triton._C.libtriton.passes.plugin, "add_plugingpu_conversion")
 
