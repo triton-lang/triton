@@ -16,6 +16,11 @@ struct TMAStore {
   mlir::TypedValue<RankedTensorType> src;
 };
 
+struct PipelinedTMAStore {
+  Value alloc;
+  int pendings;
+};
+
 static SmallVector<TMAStore> getTMAStores(scf::ForOp forOp) {
   SmallVector<TMAStore> tmaStores;
 
@@ -68,13 +73,13 @@ static Value createAlloc(scf::ForOp &forOp, const TMAStore &store) {
 }
 
 static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
-                               Value alloc) {
+                               Value alloc, int pendings) {
   OpBuilder builder(store.op);
   Location loc = store.op->getLoc();
 
   // Put wait before the local_store to make the store truly async. We only
   // need the TMA read from the allocation to complete before reusing it.
-  ttng::TMAStoreWaitOp::create(builder, loc, 0, /*read_only=*/true);
+  ttng::TMAStoreWaitOp::create(builder, loc, pendings, /*read_only=*/true);
   ttg::LocalStoreOp::create(builder, loc, store.src, alloc);
   ttng::FenceAsyncSharedOp::create(builder, loc, false);
   auto desc = store.desc;
@@ -108,27 +113,34 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
   if (hasAcquireOrReleaseOp(forOp))
     return false;
 
-  DenseMap<Operation *, Value> storeToAlloc;
-  DenseMap<std::pair<ArrayRef<int64_t>, Type>, Value> allocs;
+  DenseMap<Operation *, PipelinedTMAStore> storeInfo;
+  DenseMap<std::pair<ArrayRef<int64_t>, Type>, SmallVector<const TMAStore *>>
+      groupedStores;
   for (const TMAStore &store : tmaStores) {
-    // Reuse allocations for stores of the same shape and types. This allows
-    // saving shared memory usage. It is valid since we have a wait 0 before
-    // every local_store. We could pipeline more aggressively if we didn't
-    // reuse but there is a tradeoff with shared memory usage.
     RankedTensorType srcTy = store.src.getType();
     auto key = std::make_pair(srcTy.getShape(), srcTy.getElementType());
-    Value &alloc = allocs[key];
-    if (!alloc) {
-      alloc = createAlloc(forOp, store);
+    groupedStores[key].push_back(&store);
+  }
+
+  for (auto &[key, stores] : groupedStores) {
+    SmallVector<Value> allocs;
+    // Keep the buffering bounded like the Gluon matmul epilogue. Four buffers
+    // allow up to three outstanding TMA stores while limiting shared memory.
+    int numBuffers = std::min<int>(stores.size(), 4);
+    for (int i = 0; i < numBuffers; ++i)
+      allocs.push_back(createAlloc(forOp, *stores[i]));
+
+    for (auto [idx, store] : llvm::enumerate(stores)) {
+      storeInfo[store->op] = {allocs[idx % numBuffers], numBuffers - 1};
     }
-    storeToAlloc[store.op] = alloc;
   }
 
   bool hasDeviceSideTMA = llvm::any_of(tmaStores, [](const TMAStore &store) {
     return !triton::isHostSideDescriptor(store.desc);
   });
   for (const TMAStore &store : tmaStores) {
-    createTMAAsyncCopy(forOp, store, storeToAlloc[store.op]);
+    PipelinedTMAStore info = storeInfo[store.op];
+    createTMAAsyncCopy(forOp, store, info.alloc, info.pendings);
   }
 
   // Deallocate shared memory buffers.
@@ -136,9 +148,11 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
   builder.setInsertionPointAfter(forOp);
   ttng::TMAStoreWaitOp::create(builder, forOp->getLoc(), 0,
                                /*read_only=*/false);
-  for (auto it : storeToAlloc) {
-    ttg::LocalDeallocOp::create(builder, forOp->getLoc(), it.second);
-  }
+  SetVector<Value> allocs;
+  for (auto it : storeInfo)
+    allocs.insert(it.second.alloc);
+  for (Value alloc : allocs)
+    ttg::LocalDeallocOp::create(builder, forOp->getLoc(), alloc);
 
   if (hasDeviceSideTMA) {
     // This is a bit coarse as it would multibuffer any descriptor in the loop
