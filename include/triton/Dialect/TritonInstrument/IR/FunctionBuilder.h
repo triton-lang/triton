@@ -97,8 +97,12 @@ public:
   // reaches its warp-specialize terminator.
   void createRetireActiveThreadCall(ImplicitLocOpBuilder &b, int thread,
                                     Operation *insertPoint);
+  // setClusterWaiting: temporarily remove or restore a base thread in the live
+  // mask while it is blocked on a cluster barrier.
+  void createSetClusterWaitingCall(ImplicitLocOpBuilder &b, int thread,
+                                   bool waiting, Operation *insertPoint);
   // checkAllActiveWaiting: assert that not all unfinished threads across the
-  // cluster are waiting on matching barrier phases.
+  // cluster are waiting on matching mbarrier phases.
   void createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b, Value pred,
                                        Operation *insertPoint);
   // verifyBarrierCanInit: ensure the barrier is currently invalidated before

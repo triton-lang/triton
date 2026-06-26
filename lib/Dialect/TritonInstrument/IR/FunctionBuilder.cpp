@@ -692,6 +692,41 @@ void FunctionBuilder::createRetireActiveThreadCall(ImplicitLocOpBuilder &b,
       });
 }
 
+void FunctionBuilder::createSetClusterWaitingCall(ImplicitLocOpBuilder &b,
+                                                  int thread, bool waiting,
+                                                  Operation *insertPoint) {
+  if (auxData.activeMasks.empty())
+    return;
+  int64_t threadMask =
+      expandActiveMask(1u << thread, auxData.threadLayout.numBaseThreads);
+  Value maskVal =
+      arith::ConstantIntOp::create(b, waiting ? ~threadMask : threadMask, 32);
+  Value activeMasksVal = auxData.activeMasks.at(insertPoint).value;
+  auto activeMasksType =
+      cast<RankedTensorType>(auxData.activeMasks.at(insertPoint).type);
+  SmallVector<Value> args = {maskVal, activeMasksVal};
+  createCallToCachedFunction(
+      b, waiting ? "set_cluster_waiting" : "clear_cluster_waiting", args,
+      /*assertInfo=*/std::nullopt, {activeMasksType},
+      [activeMasksType, waiting](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value maskVal = entryBlock->getArgument(0);
+        Value activeMasksPtr = entryBlock->getArgument(1);
+
+        Value activeMasks = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), activeMasksPtr, activeMasksType);
+        Value mask = triton::SplatOp::create(fb, activeMasksType, maskVal);
+        Value newActiveMasks;
+        if (waiting)
+          newActiveMasks = arith::AndIOp::create(fb, activeMasks, mask);
+        else
+          newActiveMasks = arith::OrIOp::create(fb, activeMasks, mask);
+        tti::createStoreScratchMemory(fb, fb.getLoc(), activeMasksPtr,
+                                      newActiveMasks, activeMasksType,
+                                      /*currentCTAOnly=*/true);
+        triton::ReturnOp::create(fb);
+      });
+}
+
 void FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
                                                       Value pred,
                                                       Operation *insertPoint) {

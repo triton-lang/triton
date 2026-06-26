@@ -114,6 +114,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#shared_cluster_wait = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem_cluster_wait = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @cluster_barrier_deadlock_detection
+  tt.func public @cluster_barrier_deadlock_detection() {
+    %bar = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi64, #shared_cluster_wait, #smem_cluster_wait, mutable>
+    // CHECK-NOT: tt.call @__triton_consan_set_cluster_waiting
+    // CHECK: ttng.init_barrier
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared_cluster_wait, #smem_cluster_wait, mutable>
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: tt.call @__triton_consan_set_cluster_waiting
+    // CHECK: tt.call @__triton_consan_check_all_active_waiting
+    // CHECK: tti.experimental_lock_release
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: tt.call @__triton_consan_clear_cluster_waiting
+    // CHECK: tti.experimental_lock_release
+    // CHECK-NOT: tt.call @__triton_consan_set_cluster_waiting
+    // CHECK: tt.return
+    ttng.cluster_barrier
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
