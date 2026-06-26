@@ -61,7 +61,7 @@ struct BarrierLifecycle {
   Value barrier;
   ttg::LocalAllocOp alloc;
   ttng::InitBarrierOp init;
-  int initCount = 0;
+  SmallVector<ttng::InitBarrierOp> inits;
   SmallVector<ttng::WaitBarrierOp> waits;
   Value initialPhase;
   SmallVector<ttng::InvalBarrierOp> invals;
@@ -189,8 +189,9 @@ private:
     funcOp.walk([&](Operation *op) {
       if (auto init = dyn_cast<ttng::InitBarrierOp>(op)) {
         if (init.getAlloc() == barrier) {
-          lifecycle.init = init;
-          ++lifecycle.initCount;
+          if (!lifecycle.init)
+            lifecycle.init = init;
+          lifecycle.inits.push_back(init);
         }
         return;
       }
@@ -206,9 +207,12 @@ private:
       }
     });
 
-    if (lifecycle.initCount != 1 || !lifecycle.init ||
-        lifecycle.waits.empty() || lifecycle.invals.size() != 1)
+    if (!lifecycle.init || lifecycle.waits.empty() || lifecycle.invals.empty())
       return failure();
+
+    for (ttng::InitBarrierOp init : lifecycle.inits)
+      if (init.getCount() != lifecycle.init.getCount())
+        return failure();
 
     lifecycle.initialPhase = lifecycle.waits.front().getPhase();
     if (!isa_and_nonnull<arith::ConstantOp>(
@@ -260,6 +264,39 @@ private:
     return arith::XOrIOp::create(builder, inval.getLoc(), phase, phaseOne);
   }
 
+  LogicalResult rewriteStraightLinePhases(BarrierLifecycle &lifecycle) {
+    if (lifecycle.invals.size() == 1)
+      return success();
+
+    Block *block = lifecycle.inits.front()->getBlock();
+    auto inSameBlock = [&](Operation *op) { return op->getBlock() == block; };
+    if (!llvm::all_of(lifecycle.inits, inSameBlock) ||
+        !llvm::all_of(lifecycle.waits, inSameBlock) ||
+        !llvm::all_of(lifecycle.invals, inSameBlock))
+      return failure();
+
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPoint(lifecycle.inits.front());
+    Value phaseOne = arith::ConstantIntOp::create(
+        builder, lifecycle.inits.front().getLoc(), 1, 32);
+
+    Value phase = lifecycle.initialPhase;
+    for (Operation &op : *block) {
+      if (auto wait = dyn_cast<ttng::WaitBarrierOp>(&op)) {
+        if (wait.getAlloc() == lifecycle.barrier)
+          wait.getPhaseMutable().assign(phase);
+        continue;
+      }
+      if (auto inval = dyn_cast<ttng::InvalBarrierOp>(&op)) {
+        if (inval.getAlloc() == lifecycle.barrier &&
+            inval != lifecycle.invals.back())
+          phase = createPhaseAdvance(inval, phase, phaseOne);
+      }
+    }
+
+    return success();
+  }
+
   scf::ForOp addForPhaseArg(scf::ForOp forOp, Value initialPhase,
                             Value &phase) {
     forOp = mlir::addIterArgsToLoop(builder, forOp, initialPhase);
@@ -270,7 +307,6 @@ private:
   scf::WhileOp addWhilePhaseArg(scf::WhileOp whileOp, Value initialPhase,
                                 Value &phase) {
     whileOp = mlir::addIterArgsToLoop(builder, whileOp, initialPhase);
-    appendToWhileCondition(whileOp, whileOp.getBeforeArguments().back());
     phase = whileOp.getAfterArguments().back();
     return whileOp;
   }
@@ -288,10 +324,22 @@ private:
     ttng::InvalBarrierOp inval = lifecycle.invals.front();
     getEnclosingLoops(inval, loops);
 
+    for (ttng::InvalBarrierOp otherInval : llvm::drop_begin(lifecycle.invals)) {
+      SmallVector<Operation *> otherLoops;
+      getEnclosingLoops(otherInval, otherLoops);
+      if (!llvm::equal(loops, otherLoops))
+        return failure();
+    }
+
     // If invalidation is already outside loops, moving it to function exits
-    // does not remove a loop-local phase reset.
+    // does not remove a loop-local phase reset. Multiple straight-line
+    // lifecycles are still rewritten by replacing intermediate invalidations
+    // with phase advances.
     if (loops.empty())
-      return success();
+      return rewriteStraightLinePhases(lifecycle);
+
+    if (lifecycle.invals.size() != 1)
+      return failure();
 
     std::reverse(loops.begin(), loops.end());
 
@@ -345,18 +393,6 @@ private:
     return success();
   }
 
-  void appendToWhileCondition(scf::WhileOp whileOp, Value phase) {
-    auto conditionOp =
-        cast<scf::ConditionOp>(whileOp.getBefore().front().getTerminator());
-    SmallVector<Value> args(conditionOp.getArgs());
-    args.push_back(phase);
-
-    builder.setInsertionPoint(conditionOp);
-    scf::ConditionOp::create(builder, conditionOp.getLoc(),
-                             conditionOp.getCondition(), args);
-    conditionOp->erase();
-  }
-
   void appendToWhileYield(scf::WhileOp whileOp, Value phase) {
     auto yieldOp =
         cast<scf::YieldOp>(whileOp.getAfter().front().getTerminator());
@@ -373,6 +409,9 @@ private:
     Block &entry = funcOp->getRegion(0).front();
     lifecycle.alloc->moveBefore(&entry.front());
     lifecycle.init->moveAfter(lifecycle.alloc);
+    for (ttng::InitBarrierOp init : lifecycle.inits)
+      if (init != lifecycle.init)
+        init->erase();
   }
 
   void moveInvalidationToFunctionExits(BarrierLifecycle &lifecycle,

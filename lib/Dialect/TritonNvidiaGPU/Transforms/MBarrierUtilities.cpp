@@ -41,12 +41,6 @@ void getCrossCTAConsumerBarriers(Operation *op,
     barriers.push_back(clc.getMbarrier());
 }
 
-bool isCrossCTAConsumer(Operation *op, Value barrier) {
-  SmallVector<Value> barriers;
-  getCrossCTAConsumerBarriers(op, barriers);
-  return llvm::is_contained(barriers, barrier);
-}
-
 bool isCrossCTAConsumer(Operation *op,
                         llvm::function_ref<bool(Value)> aliasesBarrier) {
   SmallVector<Value> barriers;
@@ -70,12 +64,6 @@ bool requiresCrossCTAMBarrierInitSync(
         return WalkResult::advance();
       })
       .wasInterrupted();
-}
-
-bool requiresCrossCTAMBarrierInitSync(FunctionOpInterface funcOp, Value barrier,
-                                      int numCTAs) {
-  return requiresCrossCTAMBarrierInitSync(
-      funcOp, barrier, numCTAs, [&](Value value) { return value == barrier; });
 }
 
 } // namespace mlir::triton::nvidia_gpu
