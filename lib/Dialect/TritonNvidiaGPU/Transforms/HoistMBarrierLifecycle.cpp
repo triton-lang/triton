@@ -212,10 +212,6 @@ private:
         lifecycle.inits.size() > 1)
       return failure();
 
-    for (ttng::InitBarrierOp init : lifecycle.inits)
-      if (init.getCount() != lifecycle.init.getCount())
-        return failure();
-
     lifecycle.initialPhase = lifecycle.waits.front().getPhase();
     if (!isa_and_nonnull<arith::ConstantOp>(
             lifecycle.initialPhase.getDefiningOp()))
@@ -361,9 +357,6 @@ private:
     // does not remove a loop-local phase reset.
     if (loops.empty())
       return success();
-
-    if (lifecycle.invals.size() != 1)
-      return failure();
 
     std::reverse(loops.begin(), loops.end());
 
