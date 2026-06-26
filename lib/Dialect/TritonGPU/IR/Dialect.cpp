@@ -3576,7 +3576,6 @@ struct TritonGPUInferLayoutInterface
       SmallVector<int64_t> joinedShape(shape);
       joinedShape.push_back(2);
       auto parent = enc.getParent();
-      auto parentLL = toLinearLayout(joinedShape, parent);
 
       Attribute splitEnc;
       auto result = inferSplitOpEncoding(parent, splitEnc, joinedShape, loc);

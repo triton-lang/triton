@@ -42,7 +42,7 @@ public:
 
     // Remove block as we don't currently support it
     LinearLayout regLl = triton::gpu::toLinearLayout(helper.getSrcTy());
-    // Remove broadcasting in registers as SliceLayout removes them
+    // Canonicalize the reduction to unique register values.
     regLl = regLl.removeZeroBasesAlongDim(str_attr("register"));
 
     // First reduce all the values along axis within each thread.
@@ -87,13 +87,12 @@ public:
     // Remove the axis dimension, which at this point is of size 1
     regLl = removeStandardDim(regLl, axis);
 
-    // Convert to output layout if we didn't fit the warp bases within zero
-    // bases in the tmpLl
     if (auto resultTy =
             dyn_cast<RankedTensorType>(op.getResult()[0].getType())) {
       auto outputLayout = triton::gpu::toLinearLayout(resultTy);
+      outputLayout = outputLayout.removeZeroBasesAlongDim(str_attr("register"));
       if (regLl != outputLayout) {
-        // Reuse the shmem
+        // Cross-warp reductions may redistribute non-axis elements.
         sync(rewriter, loc, lastCvtCrossesCTAs, op);
         accs =
             convertLayoutValues(loc, rewriter, op, regLl, outputLayout, accs);
