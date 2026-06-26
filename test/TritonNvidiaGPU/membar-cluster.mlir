@@ -375,13 +375,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // Non-distributed convert_layout followed by multicast TMA should still
   // insert a cluster barrier before the TMA.
-  // Reuse the one inserted after the convert_layout by placing the init fence
-  // before it.
   // CHECK-LABEL: @convert_layout_trivial_then_tma_multicast_cluster_barrier
   // CHECK: ttng.init_barrier
   // CHECK: ttg.convert_layout
-  // CHECK: ttng.fence_mbarrier_init_release_cluster
-  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK: ttng.cluster_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   tt.func @convert_layout_trivial_then_tma_multicast_cluster_barrier(%input: tensor<64x128xf16, #blockedTmaSrc>, %desc: !tt.tensordesc<64x128xf16, #nvmmaTma>) -> tensor<64x128xf16, #blockedTmaDst> {
     %c0 = arith.constant 0 : i32
@@ -480,18 +478,16 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // A later MMA multicast completion barrier init must be made cluster-visible
-  // even when an earlier CTA-local barrier lifetime used the same kind of
-  // mbarrier allocation.
-  // CHECK-LABEL: @sync_reinitialized_mma_multicast_barrier
+  // Multicast without two_ctas does not make the MMA completion barrier
+  // cluster-visible.
+  // CHECK-LABEL: @no_sync_reinitialized_mma_multicast_barrier
   // CHECK: ttng.init_barrier
   // CHECK: ttng.wait_barrier
   // CHECK: ttg.local_dealloc
   // CHECK: ttng.init_barrier
-  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
-  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tc_gen5_mma
-  tt.func @sync_reinitialized_mma_multicast_barrier() {
+  tt.func @no_sync_reinitialized_mma_multicast_barrier() {
     %c0 = arith.constant 0 : i32
     %true = arith.constant true
     %a = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #sharedA, #smem, mutable>
