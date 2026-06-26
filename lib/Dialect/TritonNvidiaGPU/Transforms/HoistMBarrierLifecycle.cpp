@@ -220,9 +220,8 @@ private:
     return success();
   }
 
-  void getEnclosingLoops(ttng::WaitBarrierOp wait,
-                         SmallVectorImpl<Operation *> &loops) {
-    for (Operation *op = wait->getParentOp(); op; op = op->getParentOp()) {
+  void getEnclosingLoops(Operation *op, SmallVectorImpl<Operation *> &loops) {
+    for (op = op->getParentOp(); op; op = op->getParentOp()) {
       if (!isa<scf::ForOp, scf::WhileOp>(op))
         continue;
       loops.push_back(op);
@@ -250,18 +249,13 @@ private:
     return loopOp->getResults().back();
   }
 
-  Value createPhaseAdvance(ttng::WaitBarrierOp wait, Value phase,
+  Value createPhaseAdvance(ttng::InvalBarrierOp inval, Value phase,
                            Value phaseOne) {
-    builder.setInsertionPointAfter(wait);
+    builder.setInsertionPointAfter(inval);
     // A hoisted loop-local barrier alternates between phase 0 and 1 on each
-    // completed transaction. Predicated waits only complete when their
-    // predicate is true, so preserve the current phase otherwise.
-    Value toggledPhase =
-        arith::XOrIOp::create(builder, wait.getLoc(), phase, phaseOne);
-    if (Value pred = wait.getPred())
-      return arith::SelectOp::create(builder, wait.getLoc(), pred, toggledPhase,
-                                     phase);
-    return toggledPhase;
+    // invalidation. Since this replaces the invalidation, the update follows
+    // the same control flow as the original inval_barrier op.
+    return arith::XOrIOp::create(builder, inval.getLoc(), phase, phaseOne);
   }
 
   scf::ForOp addForPhaseArg(scf::ForOp forOp, Value initialPhase,
@@ -293,9 +287,11 @@ private:
 
   LogicalResult rewriteLoopPhases(BarrierLifecycle &lifecycle) {
     SmallVector<Operation *> loops;
-    getEnclosingLoops(lifecycle.wait, loops);
+    ttng::InvalBarrierOp inval = lifecycle.invals.front();
+    getEnclosingLoops(inval, loops);
 
-    // Straight-line single-use barriers keep their original constant phase.
+    // If invalidation is already outside loops, moving it to function exits
+    // does not remove a loop-local phase reset.
     if (loops.empty())
       return success();
 
@@ -329,10 +325,10 @@ private:
     Value innerPhase = loopPhases.back().second;
     lifecycle.wait.getPhaseMutable().assign(innerPhase);
 
-    Value nextPhase = createPhaseAdvance(lifecycle.wait, innerPhase, phaseOne);
-    if (lifecycle.wait->getBlock() != getLoopBodyBlock(innerLoop))
+    Value nextPhase = createPhaseAdvance(inval, innerPhase, phaseOne);
+    if (inval->getBlock() != getLoopBodyBlock(innerLoop))
       nextPhase = mlir::triton::sinkValueRedefinition(
-          builder, innerPhase, nextPhase, lifecycle.wait->getBlock());
+          builder, innerPhase, nextPhase, inval->getBlock());
 
     appendToLoopYield(innerLoop, nextPhase);
     Value loopResult = getLoopResultPhase(innerLoop);
