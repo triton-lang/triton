@@ -3,12 +3,18 @@ import torch
 import triton
 import triton.language as tl
 from triton import knobs
+import os
 import sys
 
 from typing import NamedTuple
 import custom_stages
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
+assert not hasattr(triton._C.libtriton.passes.plugin, "add_plugingpu_conversion")
+lib = os.getenv('TRITON_PLUGIN_PATHS')
+triton._C.libtriton.passes.plugin.extend_with(lib)
+assert hasattr(triton._C.libtriton.passes.plugin, "add_plugingpu_conversion")
 
 
 def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
