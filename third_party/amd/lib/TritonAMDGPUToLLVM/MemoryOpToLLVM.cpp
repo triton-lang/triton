@@ -1,4 +1,5 @@
 #include "AsyncUtility.h"
+#include "AtomicRMWOpsEmitter.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -58,6 +59,8 @@ public:
     auto ldsParamsVec = targetInfo.queryLDSTransLoadParams(bitWidth);
     if (ldsParamsVec.empty())
       return failure();
+    if (SharedMemoryObject::getMaskSpanOffsetsAndBlocks(srcTy).second != 0)
+      return failure();
 
     LinearLayout sharedLL;
     if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
@@ -97,10 +100,8 @@ public:
       if (failed(result))
         continue;
 
-      auto structTy = LLVM::LLVMStructType::getLiteral(
-          ctx, SmallVector<Type>(values.size(), llvmElemTy));
       auto value =
-          packLLElements(loc, typeConverter, values, rewriter, structTy);
+          packTensorElements(loc, typeConverter, values, rewriter, dstTy);
 
       rewriter.replaceOp(op, value);
       return success();
@@ -127,6 +128,7 @@ private:
     auto kLane = S("lane");
     auto kWarp = S("warp");
     auto kOffset = S("offset");
+    auto kBlock = S("block");
     auto kAddr = S("addr");
     auto kPartition = S("partition");
     auto smemPtrTy = ptr_ty(ctx, 3);
@@ -250,10 +252,17 @@ private:
                       {kWarp, reps.getBases().lookup(kWarp)}},
                      {{kOffset, reps.getOutDimSize(kOffset)}}, false);
 
+    // Matrix accesses are CTA-local. Model that with a trivial block output so
+    // additive stride analysis always compares (offset, block) components.
+    reps =
+        reps.reshapeOuts({{kOffset, reps.getOutDimSize(kOffset)}, {kBlock, 1}});
+    addrLayout = addrLayout.reshapeOuts(reps.getOutDims());
+
     // Compute the bits that are moved by one instruction
     // Compute elements for which we can swap the xor by an add
     auto [nAdditive, permStrides] = actionAdditiveStrides(
-        reps, addrLayout, maskSpanAffineOffset, fullTile.getInDimSize(kReg));
+        reps, addrLayout, maskSpanAffineOffset, /*maskSpanBlocks=*/0,
+        fullTile.getInDimSize(kReg));
     reps = permStrides.apply(reps);
     if (isPartitioned) {
       partitionLayout = permStrides.apply(partitionLayout);
@@ -538,6 +547,8 @@ private:
     auto kBlock = str_attr("block");
     auto dstTy = cast<RankedTensorType>(op.getType());
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
+    if (SharedMemoryObject::getMaskSpanOffsetsAndBlocks(srcTy).second != 0)
+      return failure();
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     auto bitWidth = llvmElemTy.getIntOrFloatBitWidth();
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
@@ -591,9 +602,8 @@ private:
     assert(cvt.isTrivialOver({kBlock}) && "NYI");
     auto lowerInst = [&](RewriterBase &rewriter, Location loc,
                          ArrayRef<Value> inVals, Value vecAddr, int idx,
-                         VectorType vTy,
-                         std::optional<Value> ctaId) -> SmallVector<Value> {
-      assert(!ctaId.has_value() && "NYI");
+                         VectorType vTy, Value ctaId) -> SmallVector<Value> {
+      assert(!ctaId && "NYI");
       auto numElemsI32 = (vTy.getNumElements() * bitWidth / 32);
       auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
       Value dsReadTr =
@@ -611,10 +621,91 @@ private:
     SmallVector<Value> outVals = lowerLdSt(
         loc, rewriter.getContext(), cvt, {}, // Input for store, output for load
         llvmElemTy, smemObj.getBase(), paddingShifts, affineOffset,
-        maskSpanAffineOffset, laneId, warpId, rewriter, targetInfo,
+        maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
+        /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
         ldsTransLoadParams->tileSize, lowerInst);
-    Value result = packLLElements(loc, typeConverter, outVals, rewriter, retTy);
+    Value result =
+        packTensorElements(loc, typeConverter, outVals, rewriter, retTy);
     rewriter.replaceOp(op, result);
+    return success();
+  }
+
+private:
+  const AMD::TargetInfo &targetInfo;
+};
+
+struct LocalAtomicScatterRMWOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalAtomicScatterRMWOp> {
+
+  LocalAtomicScatterRMWOpConversion(const LLVMTypeConverter &converter,
+                                    const AMD::TargetInfo &targetInfo,
+                                    PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::LocalAtomicScatterRMWOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    auto lowering = prepareLocalAtomicScatterRMW(
+        op, adaptor.getDst(), adaptor.getIndices(), adaptor.getValues(),
+        op.getMask() ? adaptor.getMask() : Value(), rewriter, targetInfo,
+        getTypeConverter());
+    if (failed(lowering))
+      return failure();
+    LocalAtomicScatterRMWInfo &info = *lowering;
+
+    auto binOp = matchAtomicOp(op.getAtomicRmwOp());
+    if (!binOp)
+      return rewriter.notifyMatchFailure(op, "Unsupported RMW operation");
+
+    // Lower to per-element llvm.atomicrmw on addrspace(3) with
+    // syncscope("workgroup") monotonic.
+    const auto memOrder = LLVM::AtomicOrdering::monotonic;
+    const StringRef scope = "workgroup";
+    LLVM::AMD::AtomicRMWEmitter emitter(targetInfo, *binOp, memOrder, scope);
+
+    bool returnOld = !op.getResult().use_empty();
+
+    if (llvm::any_of(info.addrs, [](const LocalSharedMemoryAddress &addr) {
+          return bool(addr.ctaId);
+        })) {
+      return rewriter.notifyMatchFailure(
+          op, "cross-CTA shared atomics are not supported on AMDGPU");
+    }
+
+    SmallVector<Value> results;
+    if (returnOld)
+      results.reserve(info.addrs.size());
+
+    for (auto [i, addrAndValue] :
+         llvm::enumerate(llvm::zip(info.addrs, info.values))) {
+      auto [addr, value] = addrAndValue;
+      Value rmwMask = triton::gpu::maybeAnd(
+          rewriter, loc, info.threadPred,
+          info.maskValues.empty() ? Value() : info.maskValues[i]);
+      // emitAtomicRMW requires a non-null predicate, default to true if null.
+      if (!rmwMask)
+        rmwMask = b.true_val();
+
+      Value old = emitter.emitAtomicRMW(rewriter, addr.ptr, value, rmwMask,
+                                        /*sharedMemBase=*/std::nullopt,
+                                        /*enableIntraWaveReduce=*/false);
+      if (returnOld)
+        results.push_back(old);
+    }
+
+    if (!returnOld) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    if (!info.removeBroadcast.isIdentity())
+      results = broadcastAs(results, info.regLayout);
+    finalizeTensorAtomicResults(op, info.valuesTy, rewriter, results,
+                                info.llvmElemTy, b, info.threadPred, targetInfo,
+                                getTypeConverter());
     return success();
   }
 
@@ -805,6 +896,8 @@ void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
                                            transBenefit);
   patterns.add<LocalLoadPackedTransposedOpConversion>(typeConverter, targetInfo,
                                                       benefit);
+  patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
+                                                  benefit.getBenefit() + 1);
   patterns.add<BarrierOpConversion, MemoryCounterWaitOpConversion>(
       typeConverter, targetInfo, barrierBenefit);
 }

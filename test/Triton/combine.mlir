@@ -491,3 +491,54 @@ tt.func @test_combine_broadcast_mul_reduce(%arg0: tensor<32x16xf32>, %arg1: tens
     }) : (tensor<32x16x32xf32>) -> tensor<32x32xf32>
     tt.return %5 : tensor<32x32xf32>
 }
+
+// CHECK-LABEL: @test_combine_broadcast_mul_reduce_extra_broadcast
+tt.func @test_combine_broadcast_mul_reduce_extra_broadcast(%arg0: tensor<32x1xf32>, %arg1: tensor<1x32xf32>) -> tensor<32x32xf32> {
+    // CHECK-NOT: tt.dot
+    // CHECK: tt.reduce
+    %0 = tt.expand_dims %arg0 {axis = 2 : i32} : tensor<32x1xf32> -> tensor<32x1x1xf32>
+    %1 = tt.broadcast %0 : tensor<32x1x1xf32> -> tensor<32x16x32xf32>
+    %2 = tt.expand_dims %arg1 {axis = 0 : i32} : tensor<1x32xf32> -> tensor<1x1x32xf32>
+    %3 = tt.broadcast %2 : tensor<1x1x32xf32> -> tensor<32x16x32xf32>
+    %4 = arith.mulf %1, %3 : tensor<32x16x32xf32>
+    %5 = "tt.reduce"(%4) <{axis = 1 : i32}> ({
+    ^bb0(%arg2: f32, %arg3: f32):
+        %6 = arith.addf %arg2, %arg3 : f32
+        tt.reduce.return %6 : f32
+    }) : (tensor<32x16x32xf32>) -> tensor<32x32xf32>
+    tt.return %5 : tensor<32x32xf32>
+}
+
+// CHECK-LABEL: @test_combine_broadcast_mul_reduce_wrong_axis
+tt.func @test_combine_broadcast_mul_reduce_wrong_axis(%arg0: tensor<32x32xf32>, %arg1: tensor<32x32xf32>) -> tensor<32x32xf32> {
+    // CHECK-NOT: tt.dot
+    // CHECK: tt.reduce
+    %0 = tt.expand_dims %arg0 {axis = 2 : i32} : tensor<32x32xf32> -> tensor<32x32x1xf32>
+    %1 = tt.broadcast %0 : tensor<32x32x1xf32> -> tensor<32x32x32xf32>
+    %2 = tt.expand_dims %arg1 {axis = 0 : i32} : tensor<32x32xf32> -> tensor<1x32x32xf32>
+    %3 = tt.broadcast %2 : tensor<1x32x32xf32> -> tensor<32x32x32xf32>
+    %4 = arith.mulf %1, %3 : tensor<32x32x32xf32>
+    %5 = "tt.reduce"(%4) <{axis = 0 : i32}> ({
+    ^bb0(%arg2: f32, %arg3: f32):
+        %6 = arith.addf %arg2, %arg3 : f32
+        tt.reduce.return %6 : f32
+    }) : (tensor<32x32x32xf32>) -> tensor<32x32xf32>
+    tt.return %5 : tensor<32x32xf32>
+}
+
+// CHECK-LABEL: @test_combine_broadcast_mul_reduce_higher_rank
+tt.func @test_combine_broadcast_mul_reduce_higher_rank(%arg0: tensor<32x16x4xf32>, %arg1: tensor<16x32x4xf32>) -> tensor<32x32x4xf32> {
+    // CHECK-NOT: tt.dot
+    // CHECK: tt.reduce
+    %0 = tt.expand_dims %arg0 {axis = 2 : i32} : tensor<32x16x4xf32> -> tensor<32x16x1x4xf32>
+    %1 = tt.broadcast %0 : tensor<32x16x1x4xf32> -> tensor<32x16x32x4xf32>
+    %2 = tt.expand_dims %arg1 {axis = 0 : i32} : tensor<16x32x4xf32> -> tensor<1x16x32x4xf32>
+    %3 = tt.broadcast %2 : tensor<1x16x32x4xf32> -> tensor<32x16x32x4xf32>
+    %4 = arith.mulf %1, %3 : tensor<32x16x32x4xf32>
+    %5 = "tt.reduce"(%4) <{axis = 1 : i32}> ({
+    ^bb0(%arg2: f32, %arg3: f32):
+        %6 = arith.addf %arg2, %arg3 : f32
+        tt.reduce.return %6 : f32
+    }) : (tensor<32x16x32x4xf32>) -> tensor<32x32x4xf32>
+    tt.return %5 : tensor<32x32x4xf32>
+}

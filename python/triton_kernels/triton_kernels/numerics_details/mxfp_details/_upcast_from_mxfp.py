@@ -86,6 +86,25 @@ def upcast_mxfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
     return out_tensor.to(dst_dtype).reshape([tensor.shape[0], tensor.shape[1] * 2])
 
 
+@triton.jit
+def upcast_nvfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
+    tl.static_assert(len(tensor.shape) == 2)
+    tl.static_assert(len(scale.shape) == 2)
+    tl.static_assert(tensor.dtype == tl.uint8)
+    tl.static_assert(scale.dtype == tl.float8e4nv)
+    tl.static_assert(tensor.shape[0] == scale.shape[0])
+    tl.static_assert(tensor.shape[1] * 2 == scale.shape[1] * NVFP_BLOCK_SIZE)
+
+    # Only apply block scales here. Row/fiber scales are applied once to the
+    # accumulated matmul result, not once per K tile.
+    dst_tensor = _upcast_mxfp4_values(tensor, dst_dtype)
+    dst_tensor = dst_tensor.reshape([tensor.shape[0], scale.shape[1], NVFP_BLOCK_SIZE])
+    dst_scale = scale.to(dst_dtype).reshape([scale.shape[0], scale.shape[1], 1])
+    out_tensor = dst_tensor * dst_scale
+    out_tensor = out_tensor.reshape([tensor.shape[0], tensor.shape[1] * 2])
+    return out_tensor
+
+
 # fmt: off
 @triton.jit
 def _upcast_from_mxfp(

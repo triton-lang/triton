@@ -1,4 +1,5 @@
 import functools
+import gc
 import math
 import os
 import statistics
@@ -38,7 +39,7 @@ def _quantile(a, q):
         t = point - lower
         return (1 - t) * a[lower] + t * a[upper]
 
-    return [get_quantile(q) for q in q]
+    return [get_quantile(qi) for qi in q]
 
 
 def _summarize_statistics(times, quantiles, return_mode):
@@ -57,6 +58,25 @@ def _summarize_statistics(times, quantiles, return_mode):
         return statistics.mean(times)
     elif return_mode == "median":
         return statistics.median(times)
+
+
+@contextmanager
+def cuda_graph_without_gc(*args, **kwargs):
+    # A loaded Triton CompiledKernel may be finalized by Python's cyclic GC.
+    # Its destructor unloads the CUDA module, which is illegal during CUDA
+    # stream capture and invalidates the graph. Keep GC disabled only for the
+    # capture window and restore the caller's previous GC state afterwards.
+    import torch
+
+    gc_was_enabled = gc.isenabled()
+    if gc_was_enabled:
+        gc.disable()
+    try:
+        with torch.cuda.graph(*args, **kwargs) as graph:
+            yield graph
+    finally:
+        if gc_was_enabled:
+            gc.enable()
 
 
 @contextmanager
@@ -108,8 +128,11 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     :type grad_to_none: torch.tensor, optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :return: The runtime(s) in milliseconds: a single float for a scalar ``return_mode``, or a list of floats if ``quantiles`` is set or ``return_mode="all"``.
+    :rtype: float | list[float]
     """
     import torch
+
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
     with torch.cuda.stream(torch.cuda.Stream()):
@@ -142,7 +165,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         # step 2 - construct a cuda graph with `n_repeat` unrolled function calls to minimize
         # host overhead
         g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g):
+        with cuda_graph_without_gc(g):
             for _ in range(n_repeat):
                 if grad_to_none is not None:
                     for x in grad_to_none:
@@ -181,6 +204,8 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
     :type grad_to_none: torch.tensor, optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :return: The runtime(s) in milliseconds: a single float for a scalar ``return_mode``, or a list of floats if ``quantiles`` is set or ``return_mode="all"``.
+    :rtype: float | list[float]
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
@@ -217,7 +242,7 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
             cache = runtime.driver.active.get_empty_cache_for_benchmark()
             g = torch.cuda.CUDAGraph()
             scope_prefix = f"proton.{uuid.uuid4().hex}."
-            with torch.cuda.graph(g):
+            with cuda_graph_without_gc(g):
                 for i in range(n_repeat):
                     if grad_to_none is not None:
                         for x in grad_to_none:
@@ -241,21 +266,28 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
     """
-    Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
-    the 20-th and 80-th performance percentile.
+    Benchmark the runtime of the provided function. By default, returns the mean runtime (in milliseconds) of :code:`fn` as a single float.
 
     :param fn: Function to benchmark
     :type fn: Callable
-    :param warmup: Warmup time (in ms)
+    :param warmup: Warmup time (in ms). Controls how long the function is run before timing begins.
     :type warmup: int
-    :param rep: Repetition time (in ms)
+    :param rep: Repetition time (in ms). Controls the total duration of the timed runs.
     :type rep: int
-    :param grad_to_none: Reset the gradient of the provided tensor to None
-    :type grad_to_none: torch.tensor, optional
-    :param quantiles: Performance percentile to return in addition to the median.
+    :param grad_to_none: Reset the gradient of the provided tensors to None before each run,
+        to avoid gradient accumulation affecting timing.
+    :type grad_to_none: list[torch.Tensor], optional
+    :param quantiles: If provided, return these quantiles of the runtime distribution instead
+        of a summary statistic. For example, ``[0.2, 0.5, 0.8]`` returns the 20th, 50th, and
+        80th percentile runtimes in ms. When set, ``return_mode`` is ignored.
     :type quantiles: list[float], optional
-    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
+    :param return_mode: The summary statistic to return when ``quantiles`` is not set.
+        ``"mean"`` and ``"median"`` return a single float. ``"min"`` and ``"max"`` return
+        the fastest and slowest run respectively. ``"all"`` returns the raw list of
+        per-run timings in ms. Default is ``"mean"``.
     :type return_mode: str
+    :return: The runtime(s) in milliseconds: a single float for a scalar ``return_mode``, or a list of floats if ``quantiles`` is set or ``return_mode="all"``.
+    :rtype: float | list[float]
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
@@ -326,6 +358,8 @@ def do_bench_proton(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, r
     :type quantiles: list[float], optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :return: The runtime(s) in milliseconds: a single float for a scalar ``return_mode``, or a list of floats if ``quantiles`` is set or ``return_mode="all"``.
+    :rtype: float | list[float]
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
@@ -505,7 +539,7 @@ class Mark:
         self.benchmarks = benchmarks
 
     def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False,
-             save_precision=6, **kwrags):
+             save_precision=6, **kwargs):
         import os
 
         import matplotlib.pyplot as plt
@@ -526,7 +560,7 @@ class Mark:
 
             row_mean, row_min, row_max = [], [], []
             for y in bench.line_vals:
-                ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwrags)
+                ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
                 try:
                     y_mean, y_min, y_max = ret
                 except TypeError:

@@ -418,9 +418,10 @@ def _reduce_forward_inner(pid_s0, pid_s1,
         m = (m != 0).to(tl.uint32) << tl.arange(0, BLOCK_K)[None, :]
         bitmap = tl.sum(m, axis=1)
 
+    compute_dtype: tl.constexpr = tl.float64 if X.dtype.element_ty == tl.float64 else tl.float32
     for blk_s1_idx in tl.range(0, CHAIN_FACTOR):
         if not USE_STATIC_LOOP:
-            y = tl.zeros((BLOCK_S0, BLOCK_X_S1), dtype=tl.float32)
+            y = tl.zeros((BLOCK_S0, BLOCK_X_S1), dtype=compute_dtype)
 
         blk_s1 = pid_s1 * CHAIN_FACTOR + blk_s1_idx
         offs_x_s1 = blk_s1 * BLOCK_X_S1 + tl.arange(0, BLOCK_X_S1)
@@ -449,7 +450,7 @@ def _reduce_forward_inner(pid_s0, pid_s1,
                 m = tl.load(m_ptrs, mask=mask, other=1).to(tl.int1)
                 mask &= m
             x_ptrs = X + offs_r * stride_xr + offs_s0[:, None] * stride_x0 + offs_x_s1[None, :] * stride_x1
-            x = tl.load(x_ptrs, mask=mask, other=0.0).to(tl.float32)
+            x = tl.load(x_ptrs, mask=mask, other=0.0).to(compute_dtype)
             if XMx is not None:
                 xmx_ptrs = XMx + offs_r * stride_xmxr + offs_s0[:, None] * stride_xmx0 + offs_x_smx1[None, :] * stride_xmx1
                 xmx = tl.load(xmx_ptrs, mask=valid_s0[:, None] & valid_in_smx1[None, :], other=0.0)
@@ -736,6 +737,8 @@ def reduce_forward(
     y_mxscale = None
     if y_has_mx:
         y_mxscale = torch.empty((S0, triton.cdiv(Y_S1, y_microblock_size)), device=x.device, dtype=y_mx_scale_dtype)
+    if S0 == 0 or Y_S1 == 0:
+        return y, y_mxscale
     # Strides for X along reduced and non-reduced dims
     stride_xr = x.stride(dim)
     stride_x0 = x.stride(nonred[0])
@@ -978,6 +981,8 @@ def reduce_backward(
     reduction_n = (postprocess_fn1.specs.reduction_n if postprocess_fn1 is not None else FnSpecs.default().reduction_n)
     Y_S1 = X_S1 // reduction_n
     assert dy.shape == (S0, Y_S1), f"dY shape {dy.shape} mismatch with (S0={S0}, Y_S1={Y_S1})"
+    if S0 == 0 or X_S1 == 0:
+        return
 
     # Strides for dX must match the element size of the tensor passed to the kernel.
     # If we reinterpret the dtype (e.g., flex/float8), use the reinterpreted view's strides.

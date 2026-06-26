@@ -426,10 +426,12 @@ public:
     Location loc = op.getLoc();
     auto ptrTy = op.getPtr().getType();
     int32_t bytesPerElem = tt::getPointeeBitWidth(ptrTy) / 8;
-    auto ptrElems = unpackLLElements(loc, adaptor.getPtr(), rewriter);
+    auto ptrElems =
+        unpackTensorElements(loc, adaptor.getPtr(), rewriter, ptrTy);
     SmallVector<Value> maskElems;
     if (Value llMask = adaptor.getMask()) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
     }
 
     unsigned mergeVec = getVecSize(op);
@@ -484,10 +486,12 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     auto ptrTy = op.getPtr().getType();
-    auto ptrElems = unpackLLElements(loc, adaptor.getPtr(), rewriter);
+    auto ptrElems =
+        unpackTensorElements(loc, adaptor.getPtr(), rewriter, ptrTy);
     SmallVector<Value> maskElems;
     if (Value llMask = adaptor.getMask()) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
     }
 
     int32_t bytesPerElem = std::max(1u, tt::getPointeeBitWidth(ptrTy) / 8);
@@ -548,11 +552,14 @@ public:
     Value llVal = adaptor.getVal();
     Value llMask = adaptor.getMask();
 
-    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
-    auto valElements = unpackLLElements(loc, llVal, rewriter);
+    auto ptrElements =
+        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
+    auto valElements =
+        unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements = unpackLLElements(loc, llMask, rewriter);
+      maskElements =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
@@ -653,12 +660,15 @@ public:
     Value llVal = adaptor.getVal();
     Value llMask = adaptor.getMask();
 
-    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
-    auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
-    auto valElements = unpackLLElements(loc, llVal, rewriter);
+    auto ptrElements =
+        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
+    auto cmpElements =
+        unpackTensorElements(loc, llCmp, rewriter, op.getCmp().getType());
+    auto valElements =
+        unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements = unpackLLElements(loc, llMask, rewriter);
+      maskElements = unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);

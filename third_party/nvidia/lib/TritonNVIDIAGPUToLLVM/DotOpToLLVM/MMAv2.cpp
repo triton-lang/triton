@@ -4,6 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 
 using namespace mlir;
@@ -17,27 +18,21 @@ namespace {
 
 using ValueTableV2 = std::map<std::array<int, 3>, Value>;
 
-Value loadC(Value tensor, Value llTensor,
-            const LLVMTypeConverter *typeConverter, Location loc,
-            ConversionPatternRewriter &rewriter) {
+SmallVector<Value> loadC(Value tensor, Value llTensor, Location loc,
+                         ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  MLIRContext *ctx = tensor.getContext();
   auto tensorTy = cast<RankedTensorType>(tensor.getType());
   size_t fcSize = triton::gpu::getTotalElemsPerThread(tensor.getType());
 
   assert(isa<NvidiaMmaEncodingAttr>(tensorTy.getEncoding()) &&
          "Currently, we only support $c with a mma layout.");
-  // Load a normal C tensor with mma layout, that should be a
-  // LLVM::struct with fcSize elements.
-  auto structTy = cast<LLVM::LLVMStructType>(llTensor.getType());
-  assert(structTy.getBody().size() == fcSize &&
-         "DotOp's $c operand should pass the same number of values as $d in "
-         "mma layout.");
+  auto elems = unpackTensorElements(loc, llTensor, rewriter, tensorTy);
+  assert(elems.size() == fcSize);
 
   auto numMmaRets = tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
   assert(numMmaRets == 8 || numMmaRets == 4 || numMmaRets == 2);
   if (numMmaRets == 8 || numMmaRets == 4) {
-    return llTensor;
+    return elems;
   } else if (numMmaRets == 2) {
     auto cPack = SmallVector<Value>();
     auto cElemTy = tensorTy.getElementType();
@@ -46,21 +41,15 @@ Value loadC(Value tensor, Value llTensor,
     for (int i = 0; i < fcSize; i += numCPackedElem) {
       Value pack = LLVM::UndefOp::create(rewriter, loc, cPackTy);
       for (int j = 0; j < numCPackedElem; ++j) {
-        pack = b.insert_element(cPackTy, pack,
-                                b.extract_val(cElemTy, llTensor, i + j),
-                                b.i32_val(j));
+        pack = b.insert_element(cPackTy, pack, elems[i + j], b.i32_val(j));
       }
       cPack.push_back(pack);
     }
 
-    Type structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(cPack.size(), cPackTy));
-    Value result =
-        packLLElements(loc, typeConverter, cPack, rewriter, structTy);
-    return result;
+    return cPack;
   }
 
-  return llTensor;
+  return elems;
 }
 
 // The number of i32 registers owned by each thread along m, n, k dimensions.
@@ -86,7 +75,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
     int repK, RankedTensorType type, const NumRegisters &numRegisters) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto elems = unpackLLElements(loc, value, rewriter);
+  auto elems = unpackTensorElements(loc, value, rewriter, type);
   auto eltTy = typeConverter->convertType(type.getElementType());
   int offset{};
   ValueTableV2 vals;
@@ -715,13 +704,11 @@ using EmitMmaCallback = std::function<void(
     unsigned batchOffset, ValueTableV2 &ha, ValueTableV2 &hb,
     const SmallVector<Value> &fc, RankedTensorType dTensorTy, int repK)>;
 
-LogicalResult
-convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
-               const LLVMTypeConverter *typeConverter,
-               ConversionPatternRewriter &rewriter, TensorCoreType mmaType,
-               const NumRegisters &numRegisters,
-               const std::map<TensorCoreType, std::string> &mmaInstructions,
-               const EmitMmaCallback &emitMma) {
+LogicalResult convertMMAImpl(
+    DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
+    const LLVMTypeConverter *typeConverter, ConversionPatternRewriter &rewriter,
+    TensorCoreType mmaType, const NumRegisters &numRegisters,
+    const std::string &mmaInstruction, const EmitMmaCallback &emitMma) {
   auto loc = op.getLoc();
   auto aType = cast<RankedTensorType>(op.getA().getType());
   auto bType = cast<RankedTensorType>(op.getB().getType());
@@ -730,11 +717,9 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
          "Both $a and %b should be DotOperand layout.");
 
   Value cOperand = op->getOperand(2);
-  Value loadedC = loadC(cOperand, llvmC, typeConverter, loc, rewriter);
+  auto fc = loadC(cOperand, llvmC, loc, rewriter);
 
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
-  MLIRContext *ctx = op->getContext();
-
   auto aTensorTy = cast<RankedTensorType>(op.getA().getType());
   auto bTensorTy = cast<RankedTensorType>(op.getB().getType());
   auto dTensorTy = cast<RankedTensorType>(op.getD().getType());
@@ -775,8 +760,6 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
                                                 llvmB, repBatch, repN, repK,
                                                 bTensorTy, numRegisters);
 
-  auto fc = unpackLLElements(loc, loadedC, rewriter);
-
   int bitwidthRet = dTensorTy.getElementType().getIntOrFloatBitWidth();
   auto numMmaRets = bitwidthRet == 64 ? 2 : bitwidthRet / 8;
   int numCPackedElem = bitwidthRet == 64 ? 1 : 4 / numMmaRets;
@@ -787,7 +770,7 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
       elemsPerThread[rank - 2] * elemsPerThread[rank - 1] / numCPackedElem;
   auto callMma = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
     PTXBuilder builder;
-    auto &mma = *builder.create(mmaInstructions.at(mmaType));
+    auto &mma = *builder.create(mmaInstruction);
     // using =r for float32 works but leads to less readable ptx.
     unsigned colsPerThread = repN * 2;
     emitMma(builder, b, static_cast<int>(m), static_cast<int>(n),
@@ -816,8 +799,6 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
   Type resElemTy = dTensorTy.getElementType();
 
   // replace with new packed result
-  Type structTy = LLVM::LLVMStructType::getLiteral(
-      ctx, SmallVector<Type>(fc.size() * numCPackedElem, resElemTy));
   SmallVector<Value> results(fc.size() * numCPackedElem);
   for (int i = 0; i < fc.size(); ++i) {
     for (int j = 0; j < numCPackedElem; ++j) {
@@ -827,28 +808,18 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
               : tb.bitcast(fc[i], resElemTy);
     }
   }
-  Value res = packLLElements(loc, typeConverter, results, rewriter, structTy);
+  Value res =
+      packTensorElements(loc, typeConverter, results, rewriter, dTensorTy);
 
   rewriter.replaceOp(op, res);
 
   return success();
 }
 
-} // namespace
-
-LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                         const LLVMTypeConverter *typeConverter,
-                         ConversionPatternRewriter &rewriter, bool isTuring) {
-  auto aTensorTy = op.getA().getType();
-  auto bTensorTy = op.getB().getType();
-  auto dTensorTy = op.getD().getType();
-
-  TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
-  const auto &instrMap = isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
-  if (instrMap.find(mmaType) == instrMap.end())
-    return op.emitError(
-        "unsupported MMA instruction for the given operand/result types");
-
+LogicalResult convertMMAWithInstruction(
+    DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
+    const LLVMTypeConverter *typeConverter, ConversionPatternRewriter &rewriter,
+    TensorCoreType mmaType, const std::string &mmaInstruction, bool isTuring) {
   NumRegisters numRegisters = (mmaType == TensorCoreType::FP64_FP64_FP64_FP64)
                                   ? NumRegisters{1, 1, 1}
                                   : NumRegisters{2, 1, 2};
@@ -885,9 +856,43 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
     }
   };
 
-  return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
-                        typeConverter, rewriter, mmaType, numRegisters,
-                        instrMap, emit);
+  return convertMMAImpl(op, llvmA, llvmB, llvmC, typeConverter, rewriter,
+                        mmaType, numRegisters, mmaInstruction, emit);
+}
+
+} // namespace
+
+LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                         const LLVMTypeConverter *typeConverter,
+                         ConversionPatternRewriter &rewriter, bool isTuring) {
+  auto aTensorTy = op.getA().getType();
+  auto bTensorTy = op.getB().getType();
+  auto dTensorTy = op.getD().getType();
+
+  TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
+  const auto &instrMap = isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
+  if (instrMap.find(mmaType) == instrMap.end())
+    return op.emitError(
+        "unsupported MMA instruction for the given operand/result types");
+
+  return convertMMAWithInstruction(op, adaptor.getA(), adaptor.getB(),
+                                   adaptor.getC(), typeConverter, rewriter,
+                                   mmaType, instrMap.at(mmaType), isTuring);
+}
+
+LogicalResult convertMMA(triton::instrument::DotI8Op op,
+                         triton::instrument::DotI8Op::Adaptor adaptor,
+                         const LLVMTypeConverter *typeConverter,
+                         ConversionPatternRewriter &rewriter, bool isTuring) {
+  std::string mmaInstruction = isTuring
+                                   ? "mma.sync.aligned.m8n8k16.row.col.s32."
+                                   : "mma.sync.aligned.m16n8k32.row.col.s32.";
+  mmaInstruction += op.getASigned() ? "s8." : "u8.";
+  mmaInstruction += op.getBSigned() ? "s8.s32" : "u8.s32";
+  return convertMMAWithInstruction(op, adaptor.getA(), adaptor.getB(),
+                                   adaptor.getC(), typeConverter, rewriter,
+                                   TensorCoreType::INT32_INT8_INT8_INT32,
+                                   mmaInstruction, isTuring);
 }
 
 LogicalResult convertMMADotScaled(triton::DotScaledOp op,
@@ -904,10 +909,10 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
     return op.emitError(
         "unsupported MMA instruction for the given operand/result types");
 
-  SmallVector<Value> unpackedAScale =
-      unpackLLElements(op.getLoc(), adaptor.getAScale(), rewriter);
-  SmallVector<Value> unpackedBScale =
-      unpackLLElements(op.getLoc(), adaptor.getBScale(), rewriter);
+  SmallVector<Value> unpackedAScale = unpackTensorElements(
+      op.getLoc(), adaptor.getAScale(), rewriter, op.getAScale().getType());
+  SmallVector<Value> unpackedBScale = unpackTensorElements(
+      op.getLoc(), adaptor.getBScale(), rewriter, op.getBScale().getType());
 
   NumRegisters numRegisters = {2, 1, 2};
   EmitMmaCallback emit = [&](PTXBuilder &builder, int b, int m, int n, int k,
@@ -955,5 +960,5 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
                         typeConverter, rewriter, mmaType, numRegisters,
-                        mmaInstrPtxScaled, emit);
+                        mmaInstrPtxScaled.at(mmaType), emit);
 }

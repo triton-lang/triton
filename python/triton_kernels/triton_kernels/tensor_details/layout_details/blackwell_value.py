@@ -35,18 +35,26 @@ def strides_major_dim_m2(shape):
 @dataclass(frozen=True)
 class BlackwellMXValueLayoutTransformation(LayoutTransformation):
 
+    @property
+    def storage_shape(self) -> list[int]:
+        *leading_shape, M, K = self.shape
+        if self.is_fp4:
+            K //= 2
+        K *= 2
+        M //= 2
+        M += -M % 128
+        return [*leading_shape, M, K]
+
     def swizzle_data(self, data):
         assert data.stride(-1) == 1
         # re-pack as column-major
-        out_shape = list(data.shape)
-        out_shape[-1] *= 2
-        out_shape[-2] //= 2
-        padded_shape = list(out_shape)
-        padded_shape[-2] += (-out_shape[-2]) % 128
-        ret = torch.empty_strided(padded_shape, strides_major_dim_m2(padded_shape), device=data.device,
+        ret = torch.empty_strided(self.storage_shape, strides_major_dim_m2(self.storage_shape), device=data.device,
                                   dtype=data.dtype)
-        repack(data, -1, -2, self.is_fp4, out=ret[..., :out_shape[-2], :])
-        return ret
+        repacked_shape = list(data.shape)
+        repacked_shape[-1] *= 2
+        repacked_shape[-2] //= 2
+        repack(data, -1, -2, self.is_fp4, out=ret[..., :repacked_shape[-2], :])
+        return self._validate_storage_shape(ret)
 
     def unswizzle_data(self, data: torch.Tensor):
         assert data.stride(-2) == 1

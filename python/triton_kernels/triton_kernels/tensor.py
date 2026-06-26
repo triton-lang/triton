@@ -299,13 +299,10 @@ def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
 
 def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None,
           allow_implicit_conversion: bool = False):
-    storage_shape = list(shape)
     storage_dtype = torch.uint8 if dtype == FP4 else dtype_to_torch_dtype(dtype)
     initial_layout = layout if isinstance(layout, StridedLayout) else StridedLayout()
-    # pack sub-byte datatype along last dimension
-    order = initial_layout.order(len(storage_shape))
-    dim = order[0]
-    storage_shape[dim] = storage_shape[dim] // (storage_dtype.itemsize * 8 // dtype.bitwidth)
+    storage_shape = initial_layout.storage_shape(list(shape), dtype == FP4)
+    order = initial_layout.order(len(shape))
     # storage strides
     strides = [0] * len(storage_shape)
     running = 1

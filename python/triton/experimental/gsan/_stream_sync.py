@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import triton
 import triton.language as tl
 
-from ._allocator import get_runtime_state_layout
+from ._allocator import get_device_rank, get_runtime_state_layout
 from ._utils import uint8_cuda_tensor_from_ptr
 
 
@@ -41,23 +41,22 @@ def _compile_without_gsan():
         yield
 
 
-@functools.lru_cache()
-def _compiled_sync_kernel(device: int, stride_bytes: int, num_sms: int, num_threads: int, header_bytes: int,
-                          BLOCK_SIZE):
+def warmup_gsan_kernels() -> None:
+    """Compile GSan support kernels without initializing the GSan runtime."""
     with _compile_without_gsan():
-        return _synchronize_vector_clocks_kernel.warmup(
+        _synchronize_vector_clocks_kernel.warmup(
             triton.MockTensor(tl.uint8),
-            stride_bytes,
-            num_sms,
-            num_threads,
-            header_bytes,
-            BLOCK_SIZE=BLOCK_SIZE,
+            0,
+            0,
+            0,
+            0,
+            BLOCK_SIZE=128,
             grid=(1, ),
             num_warps=1,
         )
 
 
-@triton.jit
+@triton.jit(do_not_specialize=["stride_bytes", "num_sms", "num_threads", "header_bytes"])
 def _synchronize_vector_clocks_kernel(thread_state_region, stride_bytes, num_sms, num_threads, header_bytes,
                                       BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
@@ -111,25 +110,18 @@ def synchronize_launch_stream(device: int) -> None:
 
     This makes all reads and writes transitively visible to other threads.
     """
-    layout = _runtime_state_layout(device, device)
-    BLOCK_SIZE = 128
-    grid = (triton.cdiv(layout.num_threads, BLOCK_SIZE), 1, 1)
-    kernel = _compiled_sync_kernel(
-        device,
-        layout.thread_state_stride_bytes,
-        layout.num_sms,
-        layout.num_threads,
-        layout.thread_state_header_size_bytes,
-        BLOCK_SIZE,
-    )
-    kernel[grid](
-        layout.thread_state_region,
-        layout.thread_state_stride_bytes,
-        layout.num_sms,
-        layout.num_threads,
-        layout.thread_state_header_size_bytes,
-        BLOCK_SIZE,
-    )
+    layout = _runtime_state_layout(get_device_rank(device), device)
+    grid = (triton.cdiv(layout.num_threads, 128), 1, 1)
+    with _compile_without_gsan():
+        _synchronize_vector_clocks_kernel[grid](
+            layout.thread_state_region,
+            layout.thread_state_stride_bytes,
+            layout.num_sms,
+            layout.num_threads,
+            layout.thread_state_header_size_bytes,
+            BLOCK_SIZE=128,
+            num_warps=1,
+        )
 
 
 def synchronize_process_group_barrier(device: int, peer_devices: tuple[int, ...]) -> None:
@@ -142,7 +134,7 @@ def synchronize_process_group_barrier(device: int, peer_devices: tuple[int, ...]
     if not peer_devices:
         return
 
-    local_layout = _runtime_state_layout(device, device)
+    local_layout = _runtime_state_layout(get_device_rank(device), device)
     peer_regions = []
     for peer_device in peer_devices:
         peer_layout = _runtime_state_layout(peer_device, device)

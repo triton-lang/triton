@@ -95,14 +95,15 @@ struct ConvertLayoutOpConversion
     auto kRegister = str_attr("register");
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto inVals = unpackTensorElements(loc, adaptor.getSrc(), rewriter,
+                                       op.getSrc().getType());
     SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
     for (int i = 0; i < outVals.size(); i++) {
       auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
       outVals[i] = inVals[srcIdx];
     }
-    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
-                                  op.getType());
+    Value result = packTensorElements(loc, getTypeConverter(), outVals,
+                                      rewriter, op.getType());
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -110,7 +111,8 @@ struct ConvertLayoutOpConversion
   SmallVector<Value> transferSwizzlingLocalMemImpl(
       Location loc, ConversionPatternRewriter &rewriter,
       const LinearLayout &srcLayout, const LinearLayout &dstLayout,
-      ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase) const {
+      ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
+      Operation *sourceOp) const {
     auto *ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     // We handle transformations recursively as they all need a preprocessing
@@ -122,9 +124,9 @@ struct ConvertLayoutOpConversion
       auto newInVals = llvm::to_vector(llvm::map_range(inVals, [&](Value v) {
         return b.ptrtoint(llvmElemTyPtr, v).getResult();
       }));
-      auto outVals =
-          transferSwizzlingLocalMemImpl(loc, rewriter, srcLayout, dstLayout,
-                                        newInVals, llvmElemTyPtr, smemBase);
+      auto outVals = transferSwizzlingLocalMemImpl(
+          loc, rewriter, srcLayout, dstLayout, newInVals, llvmElemTyPtr,
+          smemBase, sourceOp);
       for (auto &v : outVals) {
         v = b.inttoptr(llvmElemTy, v);
       }
@@ -138,29 +140,12 @@ struct ConvertLayoutOpConversion
       auto newInVals = llvm::to_vector(llvm::map_range(
           inVals, [&](Value v) { return b.zext(i8ElemTy, v).getResult(); }));
       auto outVals = transferSwizzlingLocalMemImpl(
-          loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase);
+          loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase,
+          sourceOp);
       for (auto &v : outVals) {
         v = b.trunc(llvmElemTy, v);
       }
       return outVals;
-    }
-
-    // Remove broadcasting in src
-    auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
-    if (!removeBroadcastSrc.isIdentity()) {
-      auto prmtSrc = removeBroadcastSrc.apply(srcLayout);
-      auto newInVals = removeBroadcastSrc.apply(inVals);
-      return transferSwizzlingLocalMemImpl(loc, rewriter, prmtSrc, dstLayout,
-                                           newInVals, llvmElemTy, smemBase);
-    }
-
-    // Remove broadcasting in dst
-    auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
-    if (!removeBroadcastDst.isIdentity()) {
-      auto prmtDst = removeBroadcastDst.apply(dstLayout);
-      auto outVals = transferSwizzlingLocalMemImpl(
-          loc, rewriter, srcLayout, prmtDst, inVals, llvmElemTy, smemBase);
-      return broadcastAs(outVals, dstLayout);
     }
 
     // At this point we have a type that's at least 8-bit
@@ -182,7 +167,7 @@ struct ConvertLayoutOpConversion
     auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
 
     auto totalStoreCvt = srcLayout.invertAndCompose(smem);
-    auto totalLoadCvt = dstLayout.invertAndCompose(smem);
+    auto totalLoadCvt = invertAndComposeBlockLocal(smem, dstLayout);
 
     // The permutation exists by construction of the reps dimension in
     // optimalSwizzling
@@ -219,7 +204,7 @@ struct ConvertLayoutOpConversion
       } else if (isBlockSync) {
         targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
       } else {
-        targetInfo.clusterBarrier(loc, rewriter);
+        targetInfo.clusterBarrier(loc, rewriter, sourceOp);
       }
     };
 
@@ -231,12 +216,14 @@ struct ConvertLayoutOpConversion
       // Store
       lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
                       /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
-                      rewriter, targetInfo);
+                      /*affineBlockOffset=*/Value(),
+                      /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
       emitBarrier();
       // Load
       auto tileOutVals = lowerLdStShared(
           loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
-          affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
+          affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
+          /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
       llvm::append_range(outVals, tileOutVals);
     }
 
@@ -248,21 +235,24 @@ struct ConvertLayoutOpConversion
   void transferSwizzlingLocalMem(ConvertLayoutOp op, Value src,
                                  ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
+    auto *ctx = op.getContext();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
     auto srcLayout = toLinearLayout(srcTy);
     auto dstLayout = toLinearLayout(dstTy);
+    srcLayout = srcLayout.removeZeroBasesAlongDim(str_attr("register"));
+    dstLayout = dstLayout.removeZeroBasesAlongDim(str_attr("register"));
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-    auto inVals = unpackLLElements(loc, src, rewriter);
+    auto inVals = unpackUniqueTensorElements(loc, src, rewriter);
     auto outVals = transferSwizzlingLocalMemImpl(
-        loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase);
+        loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase, op);
 
-    Value result =
-        packLLElements(loc, getTypeConverter(), outVals, rewriter, dstTy);
+    Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
+                                            rewriter, dstTy);
     rewriter.replaceOp(op, result);
   }
 
@@ -305,13 +295,7 @@ struct ConvertLayoutOpConversion
     // Here, R denotes the number of 32-bit registers in use after packing (or
     // splitting, if applied to 64-bit types or pointers), and in the `Swap`
     // method, `m` denotes the number of mixed transpositions passed in.
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-
-    // To avoid unnecessary data movement, we remove any broadcasting in the
-    // register dimension from the `inVals`.
-    auto srcLayout = toLinearLayout(srcTy);
-    auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
-    inVals = removeBroadcastSrc.apply(inVals);
+    auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
 
     // If the target layout has a larger register dimension than the source
     // layout, then we broadcast along the register dimension to match size. The
@@ -413,16 +397,11 @@ struct ConvertLayoutOpConversion
     // If `dstLayout` has a smaller `kReg` dimension than `srcLayout` after
     // broadcasting is removed, then drop the extra registers from `outVals`.
     auto dstLayout = toLinearLayout(dstTy);
-    auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
-    auto strippedDstLayout = removeBroadcastDst.apply(dstLayout);
+    auto strippedDstLayout = dstLayout.removeZeroBasesAlongDim(kReg);
     outVals.resize(strippedDstLayout.getInDimSize(kReg));
 
-    // Introduce broadcasting in registers if expected by `dstLayout`.
-    if (!removeBroadcastDst.isIdentity())
-      outVals = broadcastAs(outVals, dstLayout);
-
-    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
-                                  op.getType());
+    Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
+                                            rewriter, dstTy);
     rewriter.replaceOp(op, result);
     return success();
   }

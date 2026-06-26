@@ -1604,11 +1604,11 @@ def _resolve_aggregate_fields(cls):
             continue
         if not getattr(base, "__triton_aggregate__", False):
             raise TypeError(f"Aggregates can only inherit from other aggregates, but got non-aggregate base: {base}")
-        all_annotations.update(getattr(base, "__annotations__", {}))
+        all_annotations.update(inspect.get_annotations(base))
         all_defaults.update(getattr(base, "__aggregate_defaults__", {}))
 
     # Add cls's own fields, resolving string annotations via typing.get_type_hints.
-    own_names = cls.__dict__.get("__annotations__", {})
+    own_names = inspect.get_annotations(cls)
     hints = typing.get_type_hints(cls)
     for name in own_names:
         all_annotations[name] = hints[name]
@@ -2275,6 +2275,7 @@ def reshape(input, *shape, can_reorder=False, _semantic=None, _generator=None):
         reshape(x, 32, 32)
     """
     shape = _shape_check_impl(_unwrap_iterable(shape))
+    can_reorder = _unwrap_if_constexpr(can_reorder)
     if len(shape) == 0:
         return _unsplat(input, _semantic=_semantic, _generator=_generator)
     return _semantic.reshape(input, shape, can_reorder)
@@ -3460,6 +3461,7 @@ def device_print(prefix, *args, hex=False, _semantic=None):
     '''
     import string
     prefix = _unwrap_if_constexpr(prefix)
+    hex = _unwrap_if_constexpr(hex)
     assert isinstance(prefix, str), f"{prefix} is not string"
     b_ascii = True
     for ch in prefix:

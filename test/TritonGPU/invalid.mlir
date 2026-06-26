@@ -10,6 +10,18 @@ tt.func public @local_alloc_i1() {
 
 // -----
 
+#src = #ttg.linear<{register = [[16, 0], [1, 0], [2, 0], [4, 0], [8, 0]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], warp = [[0, 32], [0, 64]], block = []}>
+#dst = #ttg.linear<{register = [[32, 0], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], warp = [[0, 32], [0, 64]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @fp4_reordered_result(%arg0: tensor<32x128xi8, #src>) {
+    // expected-error @+1 {{failed to infer encoding}}
+    %0 = ttg.fp4_to_fp %arg0 {axis = 0 : i32} : tensor<32x128xi8, #src> -> tensor<64x128xbf16, #dst>
+    tt.return
+  }
+}
+
+// -----
+
 // expected-error @+1 {{After removing broadcast bases the CGA encoding must be a permutation matrix}}
 #blocked_bad_cga = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1], CGALayout = [[1, 0], [1, 0]]}>
 module {
@@ -45,18 +57,6 @@ module {
   // expected-error @+1 {{tensor descriptors must not wrap tensor types; use !tt.tensordesc<shape x element-type[, layout]> instead}}
   tt.func public @nested_tensordesc(%arg0: !tt.tensordesc<tensor<8x16xf32, #shared>>) {
     tt.return
-  }
-}
-
-// -----
-
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 2 : i32} {
-  tt.func public @subslice_non_broadcast_cga_dim(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
-      // expected-error @+1 {{CTA dimensions}}
-      %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x8xf32, #shared, #smem>
-      tt.return
   }
 }
 
@@ -320,6 +320,46 @@ module attributes {"ttg.num-warps" = 1 : i32} {
   tt.func @convert_dot(%A: tensor<16x16xf16, #dot_operand_a>, %B: tensor<16x16xf16, #dot_operand_b>, %C: tensor<16x16xf32, #mma0>) {
     // expected-error@+1 {{mismatching kWidth between A and B operands}}
     %D = tt.dot %A, %B, %C : tensor<16x16xf16, #dot_operand_a> * tensor<16x16xf16, #dot_operand_b> -> tensor<16x16xf32, #mma0>
+    tt.return
+  }
+}
+
+// -----
+
+#mma0 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1], instrShape = [16, 8]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#mma0, kWidth=4}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#mma0, kWidth=4}>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  tt.func @dot_i8_invalid_operand_type(%A: tensor<16x32xi16, #dot_operand_a>, %B: tensor<32x8xi8, #dot_operand_b>, %C: tensor<16x8xi32, #mma0>) {
+    // expected-error@+1 {{operand #0 must be ranked tensor of 8-bit signless integer values}}
+    %D = "tti.dot_i8"(%A, %B, %C) {aSigned = true, bSigned = true} : (tensor<16x32xi16, #dot_operand_a>, tensor<32x8xi8, #dot_operand_b>, tensor<16x8xi32, #mma0>) -> tensor<16x8xi32, #mma0>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#blocked}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#blocked}>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  tt.func @dot_i8_non_mma_layout(%A: tensor<16x32xi8, #dot_operand_a>, %B: tensor<32x8xi8, #dot_operand_b>, %C: tensor<16x8xi32, #blocked>) {
+    // expected-error@+1 {{requires NVIDIA MMAv2 operand and result layouts}}
+    %D = tti.dot_i8 %A, %B, %C, aSigned = true, bSigned = true : tensor<16x32xi8, #dot_operand_a> * tensor<32x8xi8, #dot_operand_b> -> tensor<16x8xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#mma0 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1], instrShape = [16, 8]}>
+#mma1 = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1,1], instrShape = [32, 8]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#mma0, kWidth=4}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#mma1, kWidth=4}>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  tt.func @dot_i8_mismatched_layout(%A: tensor<16x32xi8, #dot_operand_a>, %B: tensor<32x8xi8, #dot_operand_b>, %C: tensor<16x8xi32, #mma0>) {
+    // expected-error@+1 {{requires matching NVIDIA MMAv2 layouts}}
+    %D = tti.dot_i8 %A, %B, %C, aSigned = true, bSigned = true : tensor<16x32xi8, #dot_operand_a> * tensor<32x8xi8, #dot_operand_b> -> tensor<16x8xi32, #mma0>
     tt.return
   }
 }

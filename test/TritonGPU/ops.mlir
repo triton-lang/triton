@@ -167,6 +167,20 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
 // -----
 
+#src = #ttg.generic_linear<{register = [[1, 0], [0, 1]], lane = [[2, 0], [4, 0], [8, 0], [0, 2], [0, 4]], warp = [[16, 8], [0, 8]], block = []}>
+#dst = #ttg.generic_linear<{register = [[1]], lane = [[2], [4], [8], [0], [0]], warp = [[16], [0]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @reshape_generic_linear_to_permutation
+  // CHECK: tt.reshape
+  tt.func @reshape_generic_linear_to_permutation(%arg: tensor<32x1xi32, #src>) {
+    %0 = tt.reshape %arg : tensor<32x1xi32, #src> -> tensor<32xi32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
 #shared1d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared2d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory

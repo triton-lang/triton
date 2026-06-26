@@ -4,6 +4,7 @@
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/MIRParser/MIRParser.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -31,15 +32,22 @@
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
+#include "llvm/Transforms/Scalar.h"
 #include <csignal>
 #include <cstdio>
 #include <memory>
-#include <pybind11/gil.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/make_iterator.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/unique_ptr.h>
+#include <nanobind/stl/vector.h>
 #include <stdexcept>
+#include <unordered_set>
 
-namespace py = pybind11;
+namespace py = nanobind;
 
 namespace llvm {
 struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
@@ -325,12 +333,10 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   return result;
 }
 
-std::string translateLLVMIRToASM(llvm::Module &module,
-                                 const std::string &triple,
-                                 const std::string &proc,
-                                 const std::string &features,
-                                 const std::vector<std::string> &flags,
-                                 bool enable_fp_fusion, bool isObject) {
+std::string translateLLVMIRToASM(
+    llvm::Module &module, const std::string &triple, const std::string &proc,
+    const std::string &features, const std::vector<std::string> &flags,
+    bool enable_fp_fusion, bool isObject, bool canonicalizeGEP) {
   using namespace mlir;
 
   // Apply flags
@@ -386,6 +392,16 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
   // set data layout
   module.setDataLayout(machine->createDataLayout());
+  if (canonicalizeGEP && !disableLLVMOpt) {
+    // The NVPTX pipeline otherwise exposes many equivalent GEPs to SLSR
+    // without eliminating them first.
+    llvm::legacy::PassManager cleanup;
+    cleanup.add(llvm::createTargetTransformInfoWrapperPass(
+        machine->getTargetIRAnalysis()));
+    cleanup.add(llvm::createSeparateConstOffsetFromGEPPass());
+    cleanup.add(llvm::createEarlyCSEPass());
+    cleanup.run(module);
+  }
   // emit machine code
   std::string result;
   {
@@ -507,40 +523,42 @@ translateMIRToASM(const std::string &mirPath, const std::string &triple,
   return result;
 }
 
-using ret = py::return_value_policy;
+using ret = py::rv_policy;
 
 } // namespace
 
-void init_triton_llvm(py::module &&m) {
+void init_triton_llvm(py::module_ &m) {
 
-  py::class_<llvm::LLVMContext>(m, "context", py::module_local())
-      .def(py::init<>());
-  py::class_<llvm::SourceMgr>(m, "source_mgr", py::module_local())
-      .def(py::init<>());
+  py::class_<llvm::LLVMContext>(m, "context").def(py::init<>());
+  py::class_<llvm::SourceMgr>(m, "source_mgr").def(py::init<>());
 
   py::class_<llvm::Module::FunctionListType>(m, "function_list")
       .def(
           "__iter__",
           [](llvm::Module::FunctionListType &s) {
-            return py::make_iterator(s.begin(), s.end());
+            return py::make_iterator<py::rv_policy::reference>(
+                py::handle(), "iterator", s.begin(), s.end());
           },
           py::keep_alive<0, 1>());
 
   // Module Flag behavior. See
   // https://llvm.org/doxygen/classllvm_1_1Module.html#a0a5c55e12c97b80021330fe82b642293
   // for details.
-  py::class_<llvm::Module::ModFlagBehavior>(m, "module_flag_behavior",
-                                            py::module_local());
-  m.attr("MODULE_FLAG_BEHAVIOR_ERROR") = llvm::Module::Error;
-  m.attr("MODULE_FLAG_BEHAVIOR_WARNING") = llvm::Module::Warning;
-  m.attr("MODULE_FLAG_BEHAVIOR_REQUIRE") = llvm::Module::Require;
-  m.attr("MODULE_FLAG_BEHAVIOR_OVERRIDE") = llvm::Module::Override;
-  m.attr("MODULE_FLAG_BEHAVIOR_APPEND") = llvm::Module::Append;
-  m.attr("MODULE_FLAG_BEHAVIOR_APPEND_UNIQUE") = llvm::Module::AppendUnique;
-  m.attr("MODULE_FLAG_BEHAVIOR_MAX") = llvm::Module::Max;
-  m.attr("MODULE_FLAG_BEHAVIOR_MIN") = llvm::Module::Min;
+  m.attr("MODULE_FLAG_BEHAVIOR_ERROR") = static_cast<int>(llvm::Module::Error);
+  m.attr("MODULE_FLAG_BEHAVIOR_WARNING") =
+      static_cast<int>(llvm::Module::Warning);
+  m.attr("MODULE_FLAG_BEHAVIOR_REQUIRE") =
+      static_cast<int>(llvm::Module::Require);
+  m.attr("MODULE_FLAG_BEHAVIOR_OVERRIDE") =
+      static_cast<int>(llvm::Module::Override);
+  m.attr("MODULE_FLAG_BEHAVIOR_APPEND") =
+      static_cast<int>(llvm::Module::Append);
+  m.attr("MODULE_FLAG_BEHAVIOR_APPEND_UNIQUE") =
+      static_cast<int>(llvm::Module::AppendUnique);
+  m.attr("MODULE_FLAG_BEHAVIOR_MAX") = static_cast<int>(llvm::Module::Max);
+  m.attr("MODULE_FLAG_BEHAVIOR_MIN") = static_cast<int>(llvm::Module::Min);
 
-  py::class_<llvm::Module>(m, "module", py::module_local())
+  py::class_<llvm::Module>(m, "module")
       .def(
           "__str__",
           [](llvm::Module *self) {
@@ -565,9 +583,9 @@ void init_triton_llvm(py::module &&m) {
              return mod->addModuleFlag(behavior, key, value);
            });
 
-  py::class_<llvm::Function>(m, "function", py::module_local())
-      .def_property_readonly(
-          "name", [](llvm::Function *fn) { return fn->getName().str(); })
+  py::class_<llvm::Function>(m, "function")
+      .def_prop_ro("name",
+                   [](llvm::Function *fn) { return fn->getName().str(); })
       .def("set_calling_conv", &llvm::Function::setCallingConv)
       .def(
           "add_fn_attr",
@@ -611,14 +629,11 @@ void init_triton_llvm(py::module &&m) {
       });
 
   // optimization levels
-  py::class_<llvm::OptimizationLevel>(m, "optimization_level",
-                                      py::module_local());
+  py::class_<llvm::OptimizationLevel>(m, "optimization_level");
   m.attr("OPTIMIZE_O0") = llvm::OptimizationLevel::O0;
   m.attr("OPTIMIZE_O1") = llvm::OptimizationLevel::O1;
   m.attr("OPTIMIZE_O2") = llvm::OptimizationLevel::O2;
   m.attr("OPTIMIZE_O3") = llvm::OptimizationLevel::O3;
-  m.attr("OPTIMIZE_Os") = llvm::OptimizationLevel::Os;
-  m.attr("OPTIMIZE_Oz") = llvm::OptimizationLevel::Oz;
 
   m.def(
       "to_module",
@@ -654,7 +669,8 @@ void init_triton_llvm(py::module &&m) {
       "optimize_module",
       [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
          std::string arch, std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion) {
+         bool enable_fp_fusion, bool disable_slp_vectorizer,
+         bool disable_vector_combine) {
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
           return;
         // Check to see if we are passing a list of flags to disable
@@ -685,11 +701,24 @@ void init_triton_llvm(py::module &&m) {
         PassInstrumentationCallbacks passInstrCb;
         StandardInstrumentations standardInstr(mod->getContext(),
                                                /*DebugLogging*/ true);
+        bool enablePassInstrumentation = false;
+        if (disable_vector_combine) {
+          // VectorCombinePass::name() returns the C++ class name, not the
+          // registry name "vector-combine".
+          const StringRef kVectorCombinePassName = "VectorCombinePass";
+          passInstrCb.registerShouldRunOptionalPassCallback(
+              [kVectorCombinePassName](StringRef passName, Any) {
+                return passName != kVectorCombinePassName;
+              });
+          enablePassInstrumentation = true;
+        }
         if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
           setLLVMOption<bool>("print-after-all", true);
           standardInstr.registerCallbacks(passInstrCb, &mam);
-          instrCbPtr = &passInstrCb;
+          enablePassInstrumentation = true;
         }
+        if (enablePassInstrumentation)
+          instrCbPtr = &passInstrCb;
 
         PipelineTuningOptions tuningOptions;
         tuningOptions.LoopUnrolling = true;
@@ -701,7 +730,7 @@ void init_triton_llvm(py::module &&m) {
         // applies some scheduling that helps performance in some cases. We
         // should work on using NVPTX target instead and address the performance
         // regressions with some scheduling solution.
-        tuningOptions.SLPVectorization = true;
+        tuningOptions.SLPVectorization = !disable_slp_vectorizer;
 
         std::string pluginFile =
             mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
@@ -767,38 +796,40 @@ void init_triton_llvm(py::module &&m) {
       py::arg("arch") = "", py::arg("features") = "",
       py::arg("flags") = std::vector<std::string>{},
       py::arg("enable_fp_fusion") = false,
+      py::arg("disable_slp_vectorizer") = false,
+      py::arg("disable_vector_combine") = false,
       py::call_guard<py::gil_scoped_release>());
 
-  m.def(
-      "translate_to_asm",
-      [](std::string llvmIR, std::string triple, std::string proc,
-         std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion, bool isObject) -> py::object {
-        std::string obj;
-        {
-          // when allow_threads goes out of scope, gil will be released
-          py::gil_scoped_release allow_threads;
-          // create LLVM module from C++
-          llvm::LLVMContext context;
-          std::unique_ptr<llvm::MemoryBuffer> buffer =
-              llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
-          llvm::SMDiagnostic error;
-          std::unique_ptr<llvm::Module> module =
-              llvm::parseIR(buffer->getMemBufferRef(), error, context);
-          if (!module) {
-            llvm::report_fatal_error(
-                "failed to parse IR: " + error.getMessage() +
-                "lineno: " + std::to_string(error.getLineNo()));
+  m.def("translate_to_asm",
+        [](std::string llvmIR, std::string triple, std::string proc,
+           std::string features, std::vector<std::string> flags,
+           bool enable_fp_fusion, bool isObject,
+           bool canonicalizeGEP) -> py::object {
+          std::string obj;
+          {
+            // when allow_threads goes out of scope, gil will be released
+            py::gil_scoped_release allow_threads;
+            // create LLVM module from C++
+            llvm::LLVMContext context;
+            std::unique_ptr<llvm::MemoryBuffer> buffer =
+                llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+            llvm::SMDiagnostic error;
+            std::unique_ptr<llvm::Module> module =
+                llvm::parseIR(buffer->getMemBufferRef(), error, context);
+            if (!module) {
+              llvm::report_fatal_error(
+                  "failed to parse IR: " + error.getMessage() +
+                  "lineno: " + std::to_string(error.getLineNo()));
+            }
+            obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
+                                       enable_fp_fusion, isObject,
+                                       canonicalizeGEP);
           }
-          obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
-                                     enable_fp_fusion, isObject);
-        }
-        if (isObject)
-          return py::bytes(obj);
-        else
-          return py::str(obj);
-      },
-      ret::take_ownership);
+          if (isObject)
+            return py::object(py::bytes(obj.c_str(), obj.size()));
+          else
+            return py::object(py::str(obj.c_str(), obj.size()));
+        });
 
   m.def("dump_sched_dag", [](std::string llvmIR, std::string triple,
                              std::string proc, std::string features,
@@ -821,33 +852,31 @@ void init_triton_llvm(py::module &&m) {
                       dumpFileId);
   });
 
-  m.def(
-      "translate_to_mir",
-      [](std::string llvmIR, std::string triple, std::string proc,
-         std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion, std::string dumpFileId) -> py::object {
-        std::string obj;
-        {
-          // when allow_threads goes out of scope, gil will be released
-          py::gil_scoped_release allow_threads;
-          // create LLVM module from C++
-          llvm::LLVMContext context;
-          std::unique_ptr<llvm::MemoryBuffer> buffer =
-              llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
-          llvm::SMDiagnostic error;
-          std::unique_ptr<llvm::Module> module =
-              llvm::parseIR(buffer->getMemBufferRef(), error, context);
-          if (!module) {
-            llvm::report_fatal_error(
-                "failed to parse IR: " + error.getMessage() +
-                "lineno: " + std::to_string(error.getLineNo()));
+  m.def("translate_to_mir",
+        [](std::string llvmIR, std::string triple, std::string proc,
+           std::string features, std::vector<std::string> flags,
+           bool enable_fp_fusion, std::string dumpFileId) -> py::object {
+          std::string obj;
+          {
+            // when allow_threads goes out of scope, gil will be released
+            py::gil_scoped_release allow_threads;
+            // create LLVM module from C++
+            llvm::LLVMContext context;
+            std::unique_ptr<llvm::MemoryBuffer> buffer =
+                llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+            llvm::SMDiagnostic error;
+            std::unique_ptr<llvm::Module> module =
+                llvm::parseIR(buffer->getMemBufferRef(), error, context);
+            if (!module) {
+              llvm::report_fatal_error(
+                  "failed to parse IR: " + error.getMessage() +
+                  "lineno: " + std::to_string(error.getLineNo()));
+            }
+            obj = translateLLVMIRToMIR(*module, triple, proc, features, flags,
+                                       enable_fp_fusion, dumpFileId);
           }
-          obj = translateLLVMIRToMIR(*module, triple, proc, features, flags,
-                                     enable_fp_fusion, dumpFileId);
-        }
-        return py::str(obj);
-      },
-      ret::take_ownership);
+          return py::str(obj.c_str(), obj.size());
+        });
 
   m.def(
       "translate_mir_to_asm",
@@ -862,23 +891,29 @@ void init_triton_llvm(py::module &&m) {
                                      enable_fp_fusion, isObject, enableMISched);
         }
         if (isObject)
-          return py::bytes(result);
+          return py::object(py::bytes(result.c_str(), result.size()));
         else
-          return py::str(result);
+          return py::object(py::str(result.c_str(), result.size()));
       },
       py::arg("mirPath"), py::arg("triple"), py::arg("proc"),
       py::arg("features"), py::arg("flags"), py::arg("enable_fp_fusion"),
-      py::arg("isObject"), py::arg("enableMISched") = false,
-      ret::take_ownership);
+      py::arg("isObject"), py::arg("enableMISched") = false);
 
   m.def("init_targets", []() {
     static std::once_flag init_flag;
     std::call_once(init_flag, []() {
-      llvm::InitializeAllTargetInfos();
-      llvm::InitializeAllTargets();
-      llvm::InitializeAllTargetMCs();
-      llvm::InitializeAllAsmParsers();
-      llvm::InitializeAllAsmPrinters();
+      // Initialize only the GPU targets Triton emits code for. Initializing all
+      // targets would also require linking LLVM's host target libraries.
+      LLVMInitializeNVPTXTargetInfo();
+      LLVMInitializeNVPTXTarget();
+      LLVMInitializeNVPTXTargetMC();
+      LLVMInitializeNVPTXAsmPrinter();
+
+      LLVMInitializeAMDGPUTargetInfo();
+      LLVMInitializeAMDGPUTarget();
+      LLVMInitializeAMDGPUTargetMC();
+      LLVMInitializeAMDGPUAsmParser();
+      LLVMInitializeAMDGPUAsmPrinter();
     });
     // Disable LLVM's internal parallelism. Triton kernels produce small LLVM
     // modules where pass-level parallelism is not beneficial, and LLVM's global
@@ -932,7 +967,7 @@ static void triton_stacktrace_signal_handler(void *) {
   raise(SIGABRT);
 }
 
-void init_triton_stacktrace_hook(pybind11::module &m) {
+void init_triton_stacktrace_hook(py::module_ &m) {
   if (mlir::triton::tools::getBoolEnv("TRITON_ENABLE_PYTHON_STACKTRACE")) {
     llvm::sys::AddSignalHandler(triton_stacktrace_signal_handler, nullptr);
   }

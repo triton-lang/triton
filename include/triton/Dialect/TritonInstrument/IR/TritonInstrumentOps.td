@@ -5,6 +5,7 @@ include "triton/Dialect/TritonInstrument/IR/TritonInstrumentDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
+include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
@@ -14,6 +15,7 @@ include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
 // Interfaces
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
 //
 // Ops
@@ -75,6 +77,29 @@ def TTI_ExperimentalClusterCTAIdOp
     }]>
   ];
   let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+def TTI_ExperimentalLocalGatherOp
+    : TTI_Op<"experimental_local_gather"> {
+  let summary = "Gather elements from shared memory with logical base offsets";
+  let description = [{
+    Gather elements from a shared memory descriptor using an index tensor along
+    one axis, after shifting the logical source coordinates by rank-sized scalar
+    offsets. This is intentionally private to instrumentation passes.
+  }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    TT_IntTensor:$indices,
+    Variadic<I32>:$offsets,
+    I32Attr:$axis
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $src `[` $indices `]` `offsets` `=` `[` $offsets `]`
+    attr-dict `:` qualified(type($src)) `,` type($indices) `->` type($result)
+  }];
+  let hasVerifier = 1;
 }
 
 def TTI_ExperimentalGSanInitOp
@@ -213,6 +238,32 @@ def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryE
 
 // ===== FPSan ops =====
 
+
+def TTI_DotI8Op : TTI_Op<"dot_i8", [
+  Pure,
+  DeclareOpInterfaceMethods<DotOpInterface>,
+  TypesMatchWith<"result's type matches accumulator's type",
+                 "d", "c", "$_self">
+]> {
+  let summary = "non-saturating NVIDIA MMAv2 i8 dot";
+  let description = [{
+    Performs a wrapping i8 matrix multiplication into an i32 accumulator using
+    NVIDIA MMAv2. The A and B operands have independent signedness.
+  }];
+  let arguments = (ins
+    RankedTensorOf<[I8]>:$a,
+    RankedTensorOf<[I8]>:$b,
+    RankedTensorOf<[I32]>:$c,
+    BoolAttr:$aSigned,
+    BoolAttr:$bSigned
+  );
+  let results = (outs RankedTensorOf<[I32]>:$d);
+  let assemblyFormat = [{
+    $a `,` $b `,` $c `,` `aSigned` `=` $aSigned `,` `bSigned` `=` $bSigned
+    attr-dict `:` type($a) `*` type($b) `->` type($d)
+  }];
+  let hasVerifier = 1;
+}
 
 def TTI_ExperimentalFPSanEmbedOp : TTI_Op<"experimental_fpsan_embed", [
   Pure,

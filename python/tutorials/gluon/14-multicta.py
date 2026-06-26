@@ -191,9 +191,6 @@ def test_multicta_softmax_f32(M, N):
 
 
 def benchmark_multicta_softmax_f32():
-    if not is_hopper_or_newer():
-        raise RuntimeError("softmax benchmark requires Hopper or newer")
-
     SOFTMAX_BENCH_SHAPES = [
         (2**15, 2**8),
         (2**15, 2**9),
@@ -219,7 +216,8 @@ def benchmark_multicta_softmax_f32():
         print(f"{M:>6} x {N:<6}  {cfg['num_ctas']:>4}  {cfg['num_warps']:>5}  {ms:>9.3f}  {gbps(ms, num_bytes):>16.2f}")
 
 
-benchmark_multicta_softmax_f32()
+if __name__ == "__main__" and is_hopper_or_newer():
+    benchmark_multicta_softmax_f32()
 
 # %%
 # Softmax benchmark results
