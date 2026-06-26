@@ -902,11 +902,18 @@ void init_triton_llvm(py::module_ &m) {
   m.def("init_targets", []() {
     static std::once_flag init_flag;
     std::call_once(init_flag, []() {
-      llvm::InitializeAllTargetInfos();
-      llvm::InitializeAllTargets();
-      llvm::InitializeAllTargetMCs();
-      llvm::InitializeAllAsmParsers();
-      llvm::InitializeAllAsmPrinters();
+      // Initialize only the GPU targets Triton emits code for. Initializing all
+      // targets would also require linking LLVM's host target libraries.
+      LLVMInitializeNVPTXTargetInfo();
+      LLVMInitializeNVPTXTarget();
+      LLVMInitializeNVPTXTargetMC();
+      LLVMInitializeNVPTXAsmPrinter();
+
+      LLVMInitializeAMDGPUTargetInfo();
+      LLVMInitializeAMDGPUTarget();
+      LLVMInitializeAMDGPUTargetMC();
+      LLVMInitializeAMDGPUAsmParser();
+      LLVMInitializeAMDGPUAsmPrinter();
     });
     // Disable LLVM's internal parallelism. Triton kernels produce small LLVM
     // modules where pass-level parallelism is not beneficial, and LLVM's global
