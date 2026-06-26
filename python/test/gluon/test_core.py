@@ -442,10 +442,7 @@ def test_tma_multicast_sequential_mbarrier_lifecycle():
     assert ttgir.count("ttng.init_barrier") == 1
     assert ttgir.count("ttng.inval_barrier") == 1
     assert ttgir.count("ttng.wait_barrier") == 2
-    first_wait = ttgir.index("ttng.wait_barrier")
-    phase_advance = ttgir.index("arith.xori")
-    second_wait = ttgir.index("ttng.wait_barrier", first_wait + 1)
-    assert first_wait < phase_advance < second_wait
+    assert "arith.xori" not in ttgir
     assert ".multicast::cluster" in compiled.asm["ptx"]
     assert "fence.mbarrier_init.release.cluster" in compiled.asm["ptx"]
     torch.testing.assert_close(out, inp, atol=0, rtol=0)

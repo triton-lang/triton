@@ -2,6 +2,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Analysis/Alias.h"
@@ -255,46 +256,63 @@ private:
     return loopOp->getResults().back();
   }
 
-  Value createPhaseAdvance(ttng::InvalBarrierOp inval, Value phase,
-                           Value phaseOne) {
-    builder.setInsertionPointAfter(inval);
-    // A hoisted loop-local barrier alternates between phase 0 and 1 on each
-    // invalidation. Since this replaces the invalidation, the update follows
-    // the same control flow as the original inval_barrier op.
-    return arith::XOrIOp::create(builder, inval.getLoc(), phase, phaseOne);
-  }
-
-  LogicalResult rewriteStraightLinePhases(BarrierLifecycle &lifecycle) {
-    if (lifecycle.invals.size() == 1)
-      return success();
-
-    Block *block = lifecycle.inits.front()->getBlock();
-    auto inSameBlock = [&](Operation *op) { return op->getBlock() == block; };
-    if (!llvm::all_of(lifecycle.inits, inSameBlock) ||
-        !llvm::all_of(lifecycle.waits, inSameBlock) ||
-        !llvm::all_of(lifecycle.invals, inSameBlock))
-      return failure();
-
-    OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPoint(lifecycle.inits.front());
-    Value phaseOne = arith::ConstantIntOp::create(
-        builder, lifecycle.inits.front().getLoc(), 1, 32);
-
-    Value phase = lifecycle.initialPhase;
-    for (Operation &op : *block) {
-      if (auto wait = dyn_cast<ttng::WaitBarrierOp>(&op)) {
-        if (wait.getAlloc() == lifecycle.barrier)
-          wait.getPhaseMutable().assign(phase);
-        continue;
-      }
-      if (auto inval = dyn_cast<ttng::InvalBarrierOp>(&op)) {
-        if (inval.getAlloc() == lifecycle.barrier &&
-            inval != lifecycle.invals.back())
-          phase = createPhaseAdvance(inval, phase, phaseOne);
-      }
+  bool isAvailableAt(Value value, Operation *op) {
+    if (auto arg = dyn_cast<BlockArgument>(value)) {
+      Block *argBlock = arg.getOwner();
+      for (Operation *ancestor = op; ancestor;
+           ancestor = ancestor->getParentOp())
+        if (ancestor->getBlock() == argBlock)
+          return true;
+      return argBlock == op->getBlock();
     }
 
-    return success();
+    Operation *def = value.getDefiningOp();
+    if (!def)
+      return false;
+
+    Operation *ancestor = op;
+    while (ancestor && ancestor->getBlock() != def->getBlock())
+      ancestor = ancestor->getParentOp();
+    return ancestor && def->isBeforeInBlock(ancestor);
+  }
+
+  FailureOr<Value> getPhaseAdvancePredicate(ArrayRef<ttng::WaitBarrierOp> waits,
+                                            Operation *op) {
+    Value pred;
+    for (ttng::WaitBarrierOp wait : waits) {
+      Value waitPred = wait.getPred();
+      if (!waitPred || matchPattern(waitPred, m_One()))
+        return Value();
+      if (!isAvailableAt(waitPred, op))
+        return failure();
+      if (!pred) {
+        pred = waitPred;
+        continue;
+      }
+      if (pred != waitPred)
+        pred = arith::OrIOp::create(builder, op->getLoc(), pred, waitPred);
+    }
+    return pred;
+  }
+
+  FailureOr<Value> createPhaseAdvance(ttng::InvalBarrierOp inval, Value phase,
+                                      Value phaseOne,
+                                      ArrayRef<ttng::WaitBarrierOp> waits) {
+    builder.setInsertionPointAfter(inval);
+    FailureOr<Value> pred = getPhaseAdvancePredicate(waits, inval);
+    if (failed(pred))
+      return failure();
+
+    // A hoisted loop-local barrier alternates between phase 0 and 1 when a
+    // lifecycle completes. Predicated waits only consume the phase when their
+    // predicate is true, so the carried phase must advance under the same
+    // predicate instead of toggling unconditionally.
+    Value nextPhase =
+        arith::XOrIOp::create(builder, inval.getLoc(), phase, phaseOne);
+    if (*pred)
+      nextPhase = arith::SelectOp::create(builder, inval.getLoc(), *pred,
+                                          nextPhase, phase);
+    return nextPhase;
   }
 
   scf::ForOp addForPhaseArg(scf::ForOp forOp, Value initialPhase,
@@ -332,11 +350,9 @@ private:
     }
 
     // If invalidation is already outside loops, moving it to function exits
-    // does not remove a loop-local phase reset. Multiple straight-line
-    // lifecycles are still rewritten by replacing intermediate invalidations
-    // with phase advances.
+    // does not remove a loop-local phase reset.
     if (loops.empty())
-      return rewriteStraightLinePhases(lifecycle);
+      return success();
 
     if (lifecycle.invals.size() != 1)
       return failure();
@@ -372,7 +388,11 @@ private:
     for (ttng::WaitBarrierOp wait : lifecycle.waits)
       wait.getPhaseMutable().assign(innerPhase);
 
-    Value nextPhase = createPhaseAdvance(inval, innerPhase, phaseOne);
+    FailureOr<Value> maybeNextPhase =
+        createPhaseAdvance(inval, innerPhase, phaseOne, lifecycle.waits);
+    if (failed(maybeNextPhase))
+      return failure();
+    Value nextPhase = *maybeNextPhase;
     if (inval->getBlock() != getLoopBodyBlock(innerLoop))
       nextPhase = mlir::triton::sinkValueRedefinition(
           builder, innerPhase, nextPhase, inval->getBlock());
