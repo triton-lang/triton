@@ -807,25 +807,56 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Attribute layout, Value value) -> Value {
              return self.create<gluon::SetAutoLayoutOp>(layout, value);
            })
+      .def("create_join",
+           [](GluonOpBuilder &self, Value &a, Value &b) -> Value {
+             auto argTy = cast<RankedTensorType>(a.getType());
+             auto sliceEnc =
+                 dyn_cast<ttg::SliceEncodingAttr>(argTy.getEncoding());
+             if (sliceEnc && sliceEnc.getDim() == argTy.getRank()) {
+               SmallVector<int64_t> joinedShape(argTy.getShape());
+               joinedShape.push_back(2);
+               Attribute splitEnc;
+               auto parent = sliceEnc.getParent();
+               if (succeeded(cast<tt::DialectInferLayoutInterface>(
+                                 &parent.getDialect())
+                                 ->inferSplitOpEncoding(parent, splitEnc,
+                                                        joinedShape,
+                                                        self.getLastLoc()))) {
+                 auto splitTy = RankedTensorType::get(
+                     argTy.getShape(), argTy.getElementType(), splitEnc);
+                 if (!ttg::areLayoutsEquivalent(
+                         argTy.getShape(),
+                         cast<ttg::LayoutEncodingTrait>(splitEnc), sliceEnc)) {
+                   a = self.create<ttg::ConvertLayoutOp>(splitTy, a);
+                   b = self.create<ttg::ConvertLayoutOp>(splitTy, b);
+                 }
+                 auto resultTy = RankedTensorType::get(
+                     joinedShape, argTy.getElementType(), parent);
+                 return self.create<tt::JoinOp>(resultTy, a, b);
+               }
+             }
+             return self.create<tt::JoinOp>(a, b);
+           })
       .def("create_split",
            [](GluonOpBuilder &self, Value &a) -> py::tuple {
              auto argTy = cast<RankedTensorType>(a.getType());
+             auto op = self.create<triton::SplitOp>(a);
              auto enc = argTy.getEncoding();
-             triton::SplitOp op;
              if (isa<gluon::AutoEncodingAttr, gluon::CoalescedEncodingAttr>(
-                     enc)) {
-               op = self.create<triton::SplitOp>(a);
-             } else {
-               auto ctx = argTy.getContext();
-               auto sliceEnc = ttg::SliceEncodingAttr::get(
-                   ctx, argTy.getRank() - 1,
-                   cast<ttg::DistributedEncodingTrait>(enc));
-               auto resTy =
-                   RankedTensorType::get(ArrayRef(argTy.getShape()).drop_back(),
-                                         argTy.getElementType(), sliceEnc);
-               op = self.create<triton::SplitOp>(TypeRange{resTy, resTy}, a);
-             }
-             return py::make_tuple(op->getResult(0), op->getResult(1));
+                     enc))
+               return py::make_tuple(op->getResult(0), op->getResult(1));
+
+             auto sliceEnc = ttg::SliceEncodingAttr::get(
+                 argTy.getContext(), argTy.getRank() - 1,
+                 cast<ttg::DistributedEncodingTrait>(enc));
+             auto resTy =
+                 RankedTensorType::get(ArrayRef(argTy.getShape()).drop_back(),
+                                       argTy.getElementType(), sliceEnc);
+             Value lhs =
+                 self.create<ttg::ConvertLayoutOp>(resTy, op->getResult(0));
+             Value rhs =
+                 self.create<ttg::ConvertLayoutOp>(resTy, op->getResult(1));
+             return py::make_tuple(lhs, rhs);
            })
       .def("create_warpgroup_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
