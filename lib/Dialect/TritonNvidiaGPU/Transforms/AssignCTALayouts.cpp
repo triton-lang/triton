@@ -7,8 +7,8 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -177,7 +177,7 @@ DotCTALayout getDotCTALayout(int64_t m, int64_t n, unsigned numCTAs,
   auto isLegalChunkSize = [](unsigned chunk) { return chunk >= kMinChunkSize; };
 
   if (preferTwoCTA) {
-    for (unsigned splitM = numCTAs; splitM > 1; --splitM) {
+    for (unsigned splitM = numCTAs; splitM > 1; splitM /= 2) {
       if (numCTAs % splitM != 0)
         continue;
       unsigned splitN = numCTAs / splitM;
@@ -207,13 +207,6 @@ DotCTALayout getDotCTALayout(int64_t m, int64_t n, unsigned numCTAs,
   return {{splitM, splitN}, {1, 0}};
 }
 
-bool hasDescriptorLoadLikeRoot(Value value) {
-  while (auto cvtOp = value.getDefiningOp<ttg::ConvertLayoutOp>())
-    value = cvtOp.getSrc();
-  return isa_and_nonnull<triton::DescriptorLoadLikeOpInterface>(
-      value.getDefiningOp());
-}
-
 bool preferTwoCTASplit(triton::DotOp dot, bool isBlackwell) {
   if (!isBlackwell || ttg::lookupNumCTAs(dot) < 2)
     return false;
@@ -222,7 +215,11 @@ bool preferTwoCTASplit(triton::DotOp dot, bool isBlackwell) {
   if (retTy.getRank() != 2)
     return false;
 
-  return hasDescriptorLoadLikeRoot(dot.getB());
+  Value b = dot.getB();
+  while (auto cvtOp = b.getDefiningOp<ttg::ConvertLayoutOp>())
+    b = cvtOp.getSrc();
+  return isa_and_nonnull<triton::DescriptorLoadLikeOpInterface>(
+      b.getDefiningOp());
 }
 
 void assignDotCTALayout(triton::DotOp dot, bool isBlackwell) {
@@ -351,8 +348,7 @@ struct AssignCTALayoutsPass
         mod->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
     bool isBlackwell = false;
     if (targetAttr && targetAttr.getValue().starts_with("cuda:")) {
-      int computeCapability =
-          TargetFeatures::fromModuleOp(mod).getComputeCapability();
+      int computeCapability = getNVIDIAComputeCapability(mod);
       isBlackwell = computeCapability >= 100 && computeCapability < 120;
     }
 
