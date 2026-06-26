@@ -1283,7 +1283,7 @@ class TritonSemantic(Generic[TensorTy]):
         handle = self.builder.create_atomic_poll(
             ptr.handle,
             expected.handle,
-            None if timeout_ns is None else timeout_ns.handle,
+            ir.value() if timeout_ns is None else timeout_ns.handle,
             sem,
             scope,
         )
