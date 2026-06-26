@@ -176,7 +176,6 @@ Value getTMAFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
 
 struct BarrierCount {
   int producerPendingCount{0};
-  int tmaProducerPendingCount{0};
   int consumerPendingCount{0};
 };
 
@@ -208,12 +207,9 @@ BarrierCount getArrivalCount(ArefCreateOp op,
       for (auto kind : castAsyncOpAttrs(putExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
+        case AsyncOp::TMALoad:
         case AsyncOp::NONE:
           count.producerPendingCount += 1;
-          break;
-        case AsyncOp::TMALoad:
-          count.producerPendingCount += 1;
-          count.tmaProducerPendingCount += 1;
           break;
         default:
           llvm_unreachable("unsupported producer kind");
@@ -394,10 +390,8 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
   for (unsigned i = 0; i < arefBufTypes.size(); ++i)
     twoCTATMABuffers.push_back(arefBufferFeedsTwoCTAMMA(op.getResult(), i));
   TMALoadTwoCTAInfo tmaInfo = getTMALoadTwoCTAInfo(op, twoCTATMABuffers);
-  bool hasTwoCTATMA = count.tmaProducerPendingCount > 0 && tmaInfo.hasTwoCTA;
-  bool tmaFullMbarCoversFullBarrier =
-      tmaInfo.allUseTwoCTA &&
-      count.producerPendingCount == count.tmaProducerPendingCount;
+  bool hasTwoCTATMA = tmaInfo.hasTwoCTA;
+  bool tmaFullMbarCoversFullBarrier = tmaInfo.allUseTwoCTA;
 
   SetVector<Operation *> arefUsers;
   for (auto user : op->getUsers())

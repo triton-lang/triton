@@ -36,11 +36,14 @@ namespace gpu {
 
 static void pipelineWgmma(ModuleOp moduleOp, unsigned numStages) {
   SmallVector<scf::ForOp> loops;
-  moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+  moduleOp->walk([&](scf::ForOp forOp) {
+    // Bail out for loops with num_stage <= 1.
+    if (getNumStagesOrDefault(forOp, numStages) > 1)
+      loops.push_back(forOp);
+  });
 
   for (scf::ForOp forOp : loops) {
-    if (getNumStagesOrDefault(forOp, numStages) >= 1)
-      mlir::triton::asyncLaunchDots(forOp);
+    mlir::triton::asyncLaunchDots(forOp);
   }
 }
 
