@@ -566,7 +566,8 @@ struct AtomicCASOpConversion
         unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements = unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
+      maskElements =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);

@@ -2050,7 +2050,8 @@ struct AtomicCASOpConversion
         unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements = unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
+      maskElements =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     auto memOrdering = op.getSem();
     auto atomicMemOrdering = getMemoryOrdering(memOrdering);
