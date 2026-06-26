@@ -208,7 +208,8 @@ private:
       }
     });
 
-    if (!lifecycle.init || lifecycle.waits.empty() || lifecycle.invals.empty())
+    if (lifecycle.waits.empty() || lifecycle.invals.size() > 1 ||
+        lifecycle.inits.size() > 1)
       return failure();
 
     for (ttng::InitBarrierOp init : lifecycle.inits)
