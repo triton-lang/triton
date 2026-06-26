@@ -381,14 +381,23 @@ void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
   }
 }
 
-Value getLocalGatherScatterRecipientCTAs(ImplicitLocOpBuilder &b,
-                                         ttg::MemDescType memDescTy,
-                                         RankedTensorType regTy,
-                                         unsigned axis) {
-  MLIRContext *ctx = b.getContext();
-  LinearLayout sharedLayout = ttg::isPaddedEncoding(memDescTy.getEncoding())
-                                  ? ttg::paddedLinearLayout(memDescTy)
-                                  : ttg::toLinearLayout(memDescTy);
+LinearLayout getSharedLayout(ttg::MemDescType memDescTy) {
+  return ttg::isPaddedEncoding(memDescTy.getEncoding())
+             ? ttg::paddedLinearLayout(memDescTy)
+             : ttg::toLinearLayout(memDescTy);
+}
+
+LinearLayout getLocalLoadStoreConversion(ttg::MemDescType memDescTy,
+                                         RankedTensorType regTy) {
+  return invertAndComposeBlockLocal(getSharedLayout(memDescTy),
+                                    ttg::toLinearLayout(regTy));
+}
+
+LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
+                                             RankedTensorType regTy,
+                                             unsigned axis) {
+  MLIRContext *ctx = memDescTy.getContext();
+  LinearLayout sharedLayout = getSharedLayout(memDescTy);
   SmallVector<StringAttr> allDims =
       standardOutDimNames(ctx, memDescTy.getRank());
   StringAttr axisDim = allDims[axis];
@@ -401,44 +410,64 @@ Value getLocalGatherScatterRecipientCTAs(ImplicitLocOpBuilder &b,
       LinearLayout::identity1D(sharedLayout.getOutDimSize(axisDim), axisDim,
                                axisDim);
   indexedLayout = indexedLayout.transposeOuts(allDims);
-  LinearLayout conversion =
-      invertAndComposeBlockLocal(sharedLayout, indexedLayout);
+  return invertAndComposeBlockLocal(sharedLayout, indexedLayout);
+}
+
+uint32_t getXorImageMask(const LinearLayout &layout, StringAttr outDim,
+                         int numCTAs) {
+  uint32_t image = 1;
+  for (StringAttr inDim : layout.getInDimNames()) {
+    for (int bit = 0; bit < layout.getInDimSizeLog2(inDim); ++bit)
+      extendXorSpan(image, layout.getBasis(inDim, bit, outDim), numCTAs);
+  }
+  return image;
+}
+
+uint32_t translateXorMask(uint32_t mask, uint32_t translation, int numCTAs) {
+  uint32_t translated = 0;
+  for (int value = 0; value < numCTAs; ++value) {
+    if (!(mask & (1u << value)))
+      continue;
+    uint32_t target = value ^ translation;
+    assert(target < static_cast<uint32_t>(numCTAs) &&
+           "target CTA exceeds the cluster size");
+    translated |= 1u << target;
+  }
+  return translated;
+}
+
+Value getLocalMemoryRecipientCTAs(ImplicitLocOpBuilder &b,
+                                  const LinearLayout &conversion) {
+  MLIRContext *ctx = b.getContext();
 
   StringAttr kBlock = StringAttr::get(ctx, "block");
   int numCTAs = ttg::lookupNumCTAs(b);
-  // Runtime indices are unavailable to this pass. Span all block-output bases
-  // that lowering can derive from register, lane, warp, and index inputs. This
-  // is a conservative recipient set for the full BufferRegion effect.
-  uint32_t targetSpan = 1;
-  int blockOutIdx = conversion.getOutDimIndex(kBlock);
-  for (const auto &[inDim, bases] : conversion.getBases()) {
-    if (inDim == kBlock)
-      continue;
-    for (const auto &basis : bases)
-      extendXorSpan(targetSpan, basis[blockOutIdx], numCTAs);
-  }
+  assert(conversion.hasInDim(kBlock) && conversion.hasOutDim(kBlock) &&
+         conversion.getInDimSize(kBlock) == numCTAs &&
+         conversion.getOutDimSize(kBlock) == numCTAs &&
+         "expected conversion to preserve the cluster dimensions");
+
+  // Span every non-issuer input basis that lowering can map into the block
+  // output. For gather/scatter this includes the independent runtime-index
+  // input, whose value is unavailable to this pass. The resulting image is a
+  // conservative recipient set for the full BufferRegion effect.
+  SmallVector<StringAttr> varyingInputs =
+      llvm::to_vector(conversion.getInDimNames());
+  llvm::erase(varyingInputs, kBlock);
+  LinearLayout varyingInputsToTarget =
+      conversion.sublayout(varyingInputs, {kBlock});
+  uint32_t targetSpan = getXorImageMask(varyingInputsToTarget, kBlock, numCTAs);
+
+  LinearLayout issuerToTarget = conversion.sublayout({kBlock}, {kBlock});
 
   SmallVector<uint32_t> recipientMasks;
   recipientMasks.reserve(numCTAs);
   for (int issuer = 0; issuer < numCTAs; ++issuer) {
-    SmallVector<std::pair<StringAttr, int32_t>> inputs;
-    for (StringAttr inDim : conversion.getInDimNames())
-      inputs.push_back({inDim, inDim == kBlock ? issuer : 0});
-    auto outputs = conversion.apply(inputs);
-    auto block = llvm::find_if(
-        outputs, [&](const auto &entry) { return entry.first == kBlock; });
-    assert(block != outputs.end() && "expected block output dimension");
-
-    uint32_t mask = 0;
-    for (int delta = 0; delta < numCTAs; ++delta) {
-      if (!(targetSpan & (1u << delta)))
-        continue;
-      uint32_t target = block->second ^ delta;
-      assert(target < static_cast<uint32_t>(numCTAs) &&
-             "target CTA exceeds the cluster size");
-      mask |= 1u << target;
-    }
-    recipientMasks.push_back(mask);
+    auto outputs = issuerToTarget.apply({{kBlock, issuer}});
+    assert(outputs.size() == 1 && outputs.front().first == kBlock &&
+           "expected block output dimension");
+    recipientMasks.push_back(
+        translateXorMask(targetSpan, outputs.front().second, numCTAs));
   }
 
   bool currentCTAOnly =
@@ -467,15 +496,40 @@ Value getLocalGatherScatterRecipientCTAs(ImplicitLocOpBuilder &b,
   return recipients;
 }
 
+Value getLocalLoadStoreRecipientCTAs(ImplicitLocOpBuilder &b,
+                                     ttg::MemDescType memDescTy,
+                                     RankedTensorType regTy) {
+  // Layout-less tensors can appear in intermediate/test IR but cannot encode a
+  // cross-CTA ownership mapping. Preserve the existing current-CTA behavior.
+  if (!regTy.getEncoding())
+    return currentCTAMask(b);
+  return getLocalMemoryRecipientCTAs(
+      b, getLocalLoadStoreConversion(memDescTy, regTy));
+}
+
 Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
+  if (auto load = dyn_cast<ttg::LocalLoadOp>(op)) {
+    return getLocalLoadStoreRecipientCTAs(b, load.getSrc().getType(),
+                                          load.getType());
+  }
+  if (auto store = dyn_cast<ttg::LocalStoreOp>(op)) {
+    return getLocalLoadStoreRecipientCTAs(b, store.getDst().getType(),
+                                          store.getSrc().getType());
+  }
+  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(op); alloc && alloc.getSrc()) {
+    return getLocalLoadStoreRecipientCTAs(b, alloc.getType(),
+                                          alloc.getSrc().getType());
+  }
   if (auto gather = dyn_cast<ttg::LocalGatherOp>(op)) {
-    return getLocalGatherScatterRecipientCTAs(
-        b, gather.getSrc().getType(), gather.getType(), gather.getAxis());
+    return getLocalMemoryRecipientCTAs(
+        b, getLocalGatherScatterConversion(gather.getSrc().getType(),
+                                           gather.getType(), gather.getAxis()));
   }
   if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op)) {
-    return getLocalGatherScatterRecipientCTAs(b, scatter.getDst().getType(),
-                                              scatter.getValues().getType(),
-                                              scatter.getAxis());
+    return getLocalMemoryRecipientCTAs(
+        b, getLocalGatherScatterConversion(scatter.getDst().getType(),
+                                           scatter.getValues().getType(),
+                                           scatter.getAxis()));
   }
   if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     if (tmaLoad.getMulticast())

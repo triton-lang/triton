@@ -51,6 +51,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: call {{.*}}fill_global_tensor{{.*}}(%[[WRITE_TRACKING_GLOB]], %c0_i8
     // CHECK: %[[READ_TRACKING_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 64 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i64>
     // CHECK: call {{.*}}fill_global_tensor{{.*}}(%[[READ_TRACKING_GLOB]], %c0_i64
+    // Matching register and shared ownership keeps an ordinary load local.
+    // CHECK: ttng.init_barrier
+    // CHECK: %[[LOCAL_CTAS:.*]] = arith.shli {{.*}} : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[LOCAL_CTAS]]{{.*}})
     // CHECK-NOT: publish_cluster_visibility
     // CHECK: tt.return
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
@@ -152,6 +156,40 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_proxy_access
     // CHECK: ttng.async_tma_copy_local_to_global
     ttng.async_tma_copy_local_to_global %out[%c0, %c0] %dst : !tt.tensordesc<8x32xi32, #local_gather_scatter_shared>, !ttg.memdesc<8x32xi32, #local_gather_scatter_shared, #local_gather_scatter_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#local_access_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+#local_access_smem = #ttg.shared_memory
+#local_access_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @local_load_store_cross_cta_effects
+  tt.func public @local_load_store_cross_cta_effects() {
+    %values = arith.constant dense<1> : tensor<8x32xi32, #local_access_blocked>
+
+    // A source-backed allocation lowers through the local-store path.
+    // CHECK: ttg.local_alloc %{{.*}}
+    // CHECK: %[[ALLOC_CTAS:.*]] = arith.constant 3 : i32
+    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}({{.*}}%[[ALLOC_CTAS]]{{.*}})
+    %buf = ttg.local_alloc %values {allocation.offset = 0 : i32} : (tensor<8x32xi32, #local_access_blocked>) -> !ttg.memdesc<8x32xi32, #local_access_shared, #local_access_smem, mutable>
+
+    // The register and shared layouts shard different logical axes, so every
+    // issuer reads from both CTA rows.
+    // CHECK: %[[LOAD_CTAS:.*]] = arith.constant 3 : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[LOAD_CTAS]]{{.*}})
+    // CHECK: ttg.local_load
+    %loaded = ttg.local_load %buf : !ttg.memdesc<8x32xi32, #local_access_shared, #local_access_smem, mutable> -> tensor<8x32xi32, #local_access_blocked>
+
+    // The corresponding store writes both CTA rows.
+    // CHECK: %[[STORE_CTAS:.*]] = arith.constant 3 : i32
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[STORE_CTAS]]{{.*}})
+    // CHECK: ttg.local_store
+    ttg.local_store %loaded, %buf : tensor<8x32xi32, #local_access_blocked> -> !ttg.memdesc<8x32xi32, #local_access_shared, #local_access_smem, mutable>
+    // Keep the target dialect loaded in this standalone split module.
+    ttng.cluster_barrier {relaxed = true}
     tt.return
   }
 }
