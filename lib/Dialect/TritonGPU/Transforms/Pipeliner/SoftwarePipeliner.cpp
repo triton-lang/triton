@@ -36,14 +36,11 @@ namespace gpu {
 
 static void pipelineWgmma(ModuleOp moduleOp, unsigned numStages) {
   SmallVector<scf::ForOp> loops;
-  moduleOp->walk([&](scf::ForOp forOp) {
-    // Bail out for loops with num_stage <= 1.
-    if (getNumStagesOrDefault(forOp, numStages) > 1)
-      loops.push_back(forOp);
-  });
+  moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
   for (scf::ForOp forOp : loops) {
-    mlir::triton::asyncLaunchDots(forOp);
+    if (getNumStagesOrDefault(forOp, numStages) >= 1)
+      mlir::triton::asyncLaunchDots(forOp);
   }
 }
 
@@ -215,7 +212,9 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     {
       SmallVector<scf::ForOp> loops;
       getOperation()->walk([&](scf::ForOp forOp) {
-        loops.push_back(forOp);
+        // Bail out for loops with num_stage <= 1.
+        if (getNumStagesOrDefault(forOp, numStages) > 1)
+          loops.push_back(forOp);
       });
 
       for (scf::ForOp forOp : loops) {
