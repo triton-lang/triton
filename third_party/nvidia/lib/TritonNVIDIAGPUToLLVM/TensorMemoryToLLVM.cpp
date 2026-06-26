@@ -547,9 +547,8 @@ struct TensorMemoryLoadOpConversion
         loc, rewriter, regTy, memTy, tmemBase, maxnreg, b.i1_val(true),
         llvmElemTy, {}, redOp, useAbs, useNaN);
 
-    Type structTy = getTypeConverter()->convertType(op.getType());
-    Value resultStruct =
-        packLLElements(loc, getTypeConverter(), resultVals, rewriter, structTy);
+    Value resultStruct = packTensorElements(loc, getTypeConverter(), resultVals,
+                                            rewriter, op.getType());
     // Wait insertion could be moved to the TTGIR level if needed.
     NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::LOAD);
 
@@ -561,9 +560,8 @@ struct TensorMemoryLoadOpConversion
     SmallVector<Value> results = {resultStruct};
     if (redOp) {
       // Pack redval values into the red tensor result
-      Type redStructTy = getTypeConverter()->convertType(op.getRed().getType());
-      Value redStruct = packLLElements(loc, getTypeConverter(), redvalVals,
-                                       rewriter, redStructTy);
+      Value redStruct = packTensorElements(loc, getTypeConverter(), redvalVals,
+                                           rewriter, op.getRed().getType());
       results.push_back(redStruct);
     }
 
@@ -589,7 +587,7 @@ struct TensorMemoryStoreOpConversion
     auto regTy = cast<RankedTensorType>(op.getSrc().getType());
 
     SmallVector<Value> srcValues =
-        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+        unpackTensorElements(loc, adaptor.getSrc(), rewriter, regTy);
     auto maxnreg = getContextualMaxNReg(op);
     lowerTMemLdStFromTypes(loc, rewriter, regTy, memTy, tmemBase, maxnreg, pred,
                            llvmElemTy, srcValues);
@@ -628,7 +626,7 @@ struct TensorMemoryAllocOpConversion
       auto llvmElemTy = getTypeConverter()->convertType(regTy.getElementType());
       auto maxnreg = getContextualMaxNReg(op);
       SmallVector<Value> srcValues =
-          unpackLLElements(loc, adaptor.getSrc(), rewriter);
+          unpackTensorElements(loc, adaptor.getSrc(), rewriter, regTy);
       Value ptr = b.inttoptr(base.getType(), allocAddress);
       lowerTMemLdStFromTypes(loc, rewriter, regTy, memTy, ptr, maxnreg,
                              b.i1_val(true), llvmElemTy, srcValues);

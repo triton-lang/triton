@@ -132,7 +132,8 @@ struct LocalAllocOpConversion
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
       auto *ctx = op.getContext();
-      auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      auto inVals = unpackTensorElements(loc, adaptor.getSrc(), rewriter,
+                                         op.getSrc().getType());
       if (failed(lowerLocalStore(loc, ctx, op.getSrc(), memDescTy, smemObj,
                                  inVals, typeConverter, rewriter,
                                  targetInfo))) {
@@ -193,7 +194,8 @@ public:
     auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
                                   smemObj, rewriter, targetInfo, op);
 
-    Value result = packLLElements(loc, typeConverter, outVals, rewriter, regTy);
+    Value result =
+        packTensorElements(loc, typeConverter, outVals, rewriter, regTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -227,7 +229,8 @@ public:
     auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto inVals = unpackTensorElements(loc, adaptor.getSrc(), rewriter,
+                                       op.getSrc().getType());
     if (failed(lowerLocalStore(loc, ctx, regVal, memDescTy, smemObj, inVals,
                                typeConverter, rewriter, targetInfo))) {
       return failure();
@@ -284,15 +287,16 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
 
-    SmallVector<Value> idxValues =
-        unpackLLElements(loc, adaptor.getIndices(), rewriter);
+    SmallVector<Value> idxValues = unpackTensorElements(
+        loc, adaptor.getIndices(), rewriter, op.getIndices().getType());
     auto regLayout = toLinearLayout(regTy);
 
     auto results = lowerLocalScGt(loc, memDescTy, smemObj, llvmElemTy,
                                   regLayout, idxValues, op.getAxis(),
                                   /*storeVals=*/{}, rewriter, targetInfo);
 
-    Value result = packLLElements(loc, typeConverter, results, rewriter, regTy);
+    Value result =
+        packTensorElements(loc, typeConverter, results, rewriter, regTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -330,10 +334,10 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);
 
-    SmallVector<Value> values =
-        unpackLLElements(loc, adaptor.getValues(), rewriter);
-    SmallVector<Value> idxValues =
-        unpackLLElements(loc, adaptor.getIndices(), rewriter);
+    SmallVector<Value> values = unpackTensorElements(
+        loc, adaptor.getValues(), rewriter, op.getValues().getType());
+    SmallVector<Value> idxValues = unpackTensorElements(
+        loc, adaptor.getIndices(), rewriter, op.getIndices().getType());
     auto regLayout = toLinearLayout(valuesTy);
 
     lowerLocalScGt(loc, memDescTy, smemObj, llvmElemTy, regLayout, idxValues,
