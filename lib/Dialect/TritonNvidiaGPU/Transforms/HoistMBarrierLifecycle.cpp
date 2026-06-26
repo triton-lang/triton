@@ -18,6 +18,8 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <algorithm>
+
 namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
@@ -218,17 +220,13 @@ private:
     return success();
   }
 
-  LogicalResult getSingleEnclosingLoop(ttng::WaitBarrierOp wait,
-                                       Operation *&loopOp) {
-    loopOp = nullptr;
+  void getEnclosingLoops(ttng::WaitBarrierOp wait,
+                         SmallVectorImpl<Operation *> &loops) {
     for (Operation *op = wait->getParentOp(); op; op = op->getParentOp()) {
       if (!isa<scf::ForOp, scf::WhileOp>(op))
         continue;
-      if (loopOp)
-        return failure();
-      loopOp = op;
+      loops.push_back(op);
     }
-    return success();
   }
 
   void moveInitialPhaseBeforeLoop(Value initialPhase, Operation *loopOp) {
@@ -238,6 +236,25 @@ private:
     if (def->getBlock() == loopOp->getBlock() && def->isBeforeInBlock(loopOp))
       return;
     def->moveBefore(loopOp);
+  }
+
+  bool isNestedInRegion(Operation *op, Region &region) {
+    for (Operation *parent = op; parent; parent = parent->getParentOp())
+      if (parent->getParentRegion() == &region)
+        return true;
+    return false;
+  }
+
+  Block *getLoopBodyBlock(Operation *loopOp) {
+    if (auto forOp = dyn_cast<scf::ForOp>(loopOp))
+      return forOp.getBody();
+    if (auto whileOp = dyn_cast<scf::WhileOp>(loopOp))
+      return &whileOp.getAfter().front();
+    return nullptr;
+  }
+
+  Value getLoopResultPhase(Operation *loopOp) {
+    return loopOp->getResults().back();
   }
 
   Value createPhaseAdvance(ttng::WaitBarrierOp wait, Value phase,
@@ -254,24 +271,97 @@ private:
     return toggledPhase;
   }
 
-  LogicalResult rewriteForPhase(BarrierLifecycle &lifecycle, scf::ForOp forOp) {
+  scf::ForOp addForPhaseArg(scf::ForOp forOp, Value initialPhase,
+                            Value &phase) {
+    forOp = mlir::addIterArgsToLoop(builder, forOp, initialPhase);
+    phase = forOp.getRegionIterArg(forOp.getNumRegionIterArgs() - 1);
+    return forOp;
+  }
+
+  scf::WhileOp addWhilePhaseArg(scf::WhileOp whileOp, Value initialPhase,
+                                Value &phase) {
+    scf::WhileOp oldWhileOp = whileOp;
+    whileOp = mlir::replaceWhileOpWithNewSignature(
+        builder, whileOp, initialPhase, initialPhase.getType());
+
+    appendToWhileCondition(whileOp, whileOp.getBeforeArguments().back());
+    phase = whileOp.getAfterArguments().back();
+    oldWhileOp->erase();
+    return whileOp;
+  }
+
+  void appendToLoopYield(Operation *loopOp, Value phase) {
+    if (auto forOp = dyn_cast<scf::ForOp>(loopOp)) {
+      mlir::appendToForOpYield(forOp, phase);
+      return;
+    }
+    appendToWhileYield(cast<scf::WhileOp>(loopOp), phase);
+  }
+
+  LogicalResult rewriteLoopPhases(BarrierLifecycle &lifecycle) {
+    SmallVector<Operation *> loops;
+    getEnclosingLoops(lifecycle.wait, loops);
+
+    // Straight-line single-use barriers keep their original constant phase.
+    if (loops.empty())
+      return success();
+
+    std::reverse(loops.begin(), loops.end());
+
     OpBuilder::InsertionGuard guard(builder);
-    moveInitialPhaseBeforeLoop(lifecycle.initialPhase, forOp);
+    moveInitialPhaseBeforeLoop(lifecycle.initialPhase, loops.front());
 
-    builder.setInsertionPoint(forOp);
+    builder.setInsertionPoint(loops.front());
     Value phaseOne =
-        arith::ConstantIntOp::create(builder, forOp.getLoc(), 1, 32);
+        arith::ConstantIntOp::create(builder, loops.front()->getLoc(), 1, 32);
 
-    forOp = mlir::addIterArgsToLoop(builder, forOp, lifecycle.initialPhase);
-    Value phase = forOp.getRegionIterArg(forOp.getNumRegionIterArgs() - 1);
-    lifecycle.wait.getPhaseMutable().assign(phase);
+    SmallVector<std::pair<Operation *, Value>> loopPhases;
+    Value initialPhase = lifecycle.initialPhase;
+    for (auto [idx, loopOp] : llvm::enumerate(loops)) {
+      if (auto whileOp = dyn_cast<scf::WhileOp>(loopOp)) {
+        Operation *nestedOp = idx + 1 == loops.size()
+                                  ? lifecycle.wait.getOperation()
+                                  : loops[idx + 1];
+        if (!isNestedInRegion(nestedOp, whileOp.getAfter()))
+          return failure();
+      }
 
-    Value nextPhase = createPhaseAdvance(lifecycle.wait, phase, phaseOne);
-    if (lifecycle.wait->getBlock() != forOp.getBody())
+      builder.setInsertionPoint(loopOp);
+      Value phase;
+      if (auto forOp = dyn_cast<scf::ForOp>(loopOp))
+        loopOp = addForPhaseArg(forOp, initialPhase, phase).getOperation();
+      else
+        loopOp =
+            addWhilePhaseArg(cast<scf::WhileOp>(loopOp), initialPhase, phase)
+                .getOperation();
+
+      loops[idx] = loopOp;
+      loopPhases.push_back({loopOp, phase});
+      initialPhase = phase;
+    }
+
+    Operation *innerLoop = loopPhases.back().first;
+    Value innerPhase = loopPhases.back().second;
+    lifecycle.wait.getPhaseMutable().assign(innerPhase);
+
+    Value nextPhase = createPhaseAdvance(lifecycle.wait, innerPhase, phaseOne);
+    if (lifecycle.wait->getBlock() != getLoopBodyBlock(innerLoop))
       nextPhase = mlir::triton::sinkValueRedefinition(
-          builder, phase, nextPhase, lifecycle.wait->getBlock());
+          builder, innerPhase, nextPhase, lifecycle.wait->getBlock());
 
-    mlir::appendToForOpYield(forOp, nextPhase);
+    appendToLoopYield(innerLoop, nextPhase);
+    Value loopResult = getLoopResultPhase(innerLoop);
+
+    for (int i = static_cast<int>(loopPhases.size()) - 2; i >= 0; --i) {
+      Operation *loopOp = loopPhases[i].first;
+      Value loopPhase = loopPhases[i].second;
+      if (loopResult.getParentBlock() != getLoopBodyBlock(loopOp))
+        loopResult = mlir::triton::sinkValueRedefinition(
+            builder, loopPhase, loopResult, loopResult.getParentBlock());
+      appendToLoopYield(loopOp, loopResult);
+      loopResult = getLoopResultPhase(loopOp);
+    }
+
     return success();
   }
 
@@ -296,51 +386,6 @@ private:
     builder.setInsertionPoint(yieldOp);
     scf::YieldOp::create(builder, yieldOp.getLoc(), operands);
     yieldOp->erase();
-  }
-
-  LogicalResult rewriteWhilePhase(BarrierLifecycle &lifecycle,
-                                  scf::WhileOp whileOp) {
-    OpBuilder::InsertionGuard guard(builder);
-    moveInitialPhaseBeforeLoop(lifecycle.initialPhase, whileOp);
-
-    builder.setInsertionPoint(whileOp);
-    Value phaseOne =
-        arith::ConstantIntOp::create(builder, whileOp.getLoc(), 1, 32);
-
-    scf::WhileOp oldWhileOp = whileOp;
-    whileOp = mlir::replaceWhileOpWithNewSignature(
-        builder, whileOp, lifecycle.initialPhase,
-        lifecycle.initialPhase.getType());
-
-    Value beforePhase = whileOp.getBeforeArguments().back();
-    Value afterPhase = whileOp.getAfterArguments().back();
-    appendToWhileCondition(whileOp, beforePhase);
-
-    lifecycle.wait.getPhaseMutable().assign(afterPhase);
-    Value nextPhase = createPhaseAdvance(lifecycle.wait, afterPhase, phaseOne);
-    if (lifecycle.wait->getBlock() != &whileOp.getAfter().front())
-      nextPhase = mlir::triton::sinkValueRedefinition(
-          builder, afterPhase, nextPhase, lifecycle.wait->getBlock());
-    appendToWhileYield(whileOp, nextPhase);
-
-    oldWhileOp->erase();
-    return success();
-  }
-
-  LogicalResult rewriteLoopPhases(BarrierLifecycle &lifecycle) {
-    Operation *loopOp = nullptr;
-    if (failed(getSingleEnclosingLoop(lifecycle.wait, loopOp)))
-      return failure();
-
-    // Straight-line single-use barriers keep their original constant phase.
-    if (!loopOp)
-      return success();
-
-    if (auto forOp = dyn_cast<scf::ForOp>(loopOp))
-      return rewriteForPhase(lifecycle, forOp);
-    if (auto whileOp = dyn_cast<scf::WhileOp>(loopOp))
-      return rewriteWhilePhase(lifecycle, whileOp);
-    return failure();
   }
 
   void moveInitToFunctionEntry(BarrierLifecycle &lifecycle,
