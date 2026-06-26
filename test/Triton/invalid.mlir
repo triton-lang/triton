@@ -25,6 +25,15 @@ tt.func public @fn(%arg0: !tt.ptr<f32>) {
 }
 // -----
 
+// E8M0 is a microscaling storage/scale format, not a regular Triton
+// floating-point compute type.
+tt.func public @e8m0_fp_to_fp_rejected(%arg0: tensor<128xf8E8M0FNU>) {
+    // expected-error @+1 {{operand #0 must be floating-point or ranked tensor of floating-point values}}
+    %a = tt.fp_to_fp %arg0 : tensor<128xf8E8M0FNU> -> tensor<128xf32>
+    tt.return
+}
+// -----
+
 tt.func @fn(%v: i32) {
   %b = tt.splat %v : i32 -> tensor<2x32xi32>
   // expected-error @+1 {{Different dimensions at index 0 between source and result.  Broadcast requires the source dimension to be 1.}}
@@ -563,6 +572,23 @@ module {
     // expected-error @below {{scale factor must be 16 or 32. Got 1}}
     %result = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %cst lhs = e4m3 rhs = e4m3 {fastMath = true} : tensor<128x128xf8E4M3FN>, tensor<128x128xi8>  * tensor<128x128xf8E4M3FN>, tensor<128x4xi8>-> tensor<128x128xf32>
     tt.return %result : tensor<128x128xf32>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "hip:gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @dot_scaled_e8m0_input_rejected(
+    %a: tensor<128x32xf8E8M0FNU, #blocked>,
+    %b: tensor<32x128xi8, #blocked>,
+    %a_scale: tensor<128x1xi8, #blocked>,
+    %b_scale: tensor<128x1xi8, #blocked>,
+    %cst: tensor<128x128xf32, #blocked>
+  ) {
+    // expected-error @below {{operand #0 must be ranked tensor of floating-point or 8-bit signless integer values}}
+    %result = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %cst lhs = e2m1 rhs = e2m1 {fastMath = true} : tensor<128x32xf8E8M0FNU, #blocked>, tensor<128x1xi8, #blocked> * tensor<32x128xi8, #blocked>, tensor<128x1xi8, #blocked> -> tensor<128x128xf32, #blocked>
+    tt.return
   }
 }
 

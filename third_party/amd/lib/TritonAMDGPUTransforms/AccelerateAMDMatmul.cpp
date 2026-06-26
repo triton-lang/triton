@@ -1106,6 +1106,13 @@ public:
             rewriter, dotOp->getLoc(), newScaleType,
             DenseElementsAttr::get(newScaleType, llvm::APInt(8, 0x7F)));
       } else {
+        if (isa<Float8E8M0FNUType>(scale.getType().getElementType())) {
+          auto rawScaleType = scale.getType().clone(i8_ty);
+          scale = cast<TensorValue>(
+              tt::BitcastOp::create(rewriter, scale.getLoc(), rawScaleType,
+                                    scale)
+                  .getResult());
+        }
         return ttg::ConvertLayoutOp::create(rewriter, scale.getLoc(),
                                             newScaleType, scale);
       }

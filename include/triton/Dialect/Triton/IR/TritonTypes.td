@@ -3,6 +3,7 @@
 
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/BuiltinTypeInterfaces.td"
+include "mlir/IR/CommonTypeConstraints.td"
 include "triton/Dialect/Triton/IR/TritonDialect.td"
 include "triton/Dialect/Triton/IR/TritonTypeInterfaces.td"
 
@@ -19,6 +20,12 @@ class TritonTypeDef<string name, string _mnemonic, list<Trait> traits = []>
 def TT_Float : AnyTypeOf<[F8E4M3FN, F8E4M3FNUZ, F8E5M2, F8E5M2FNUZ, F16, BF16, F32, F64], "floating-point">;
 def TT_FloatTensor : RankedTensorOf<[TT_Float]>;
 def TT_FloatLike : AnyTypeOf<[TT_Float, TT_FloatTensor]>;
+
+// E8M0 is an exponent-only microscaling format. Keep it out of TT_Float so
+// generic floating-point arithmetic does not accidentally accept it.
+def TT_E8M0 : AnyTypeOf<[F8E8M0FNU], "f8E8M0FNU">;
+def TT_E8M0Tensor : RankedTensorOf<[TT_E8M0]>;
+def TT_E8M0Like : AnyTypeOf<[TT_E8M0, TT_E8M0Tensor]>;
 
 // Boolean Type
 // TT_Bool -> I1
@@ -87,6 +94,13 @@ def TT_PtrLike : AnyTypeOf<[TT_Ptr, TT_PtrTensor]>;
 // Tensor Type
 def TT_FpIntTensor : RankedTensorOf<[TT_Float, TT_Int]>;
 def TT_Tensor : RankedTensorOf<[TT_Float, TT_Int, TT_Ptr]>;
+def TT_StorageTensor : RankedTensorOf<[TT_Float, TT_Int, TT_Ptr, TT_E8M0]>;
+def TT_StorageLike : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike, TT_E8M0Like]>;
+
+// Scale tensors accepted by dot_scaled. E8M0 is represented with a real MLIR
+// type, while I8 remains accepted for existing raw-payload scale kernels.
+def TT_DotScaleElem : AnyTypeOf<[TT_Float, I8, TT_E8M0]>;
+def TT_DotScaleTensor : RankedTensorOf<[TT_DotScaleElem]>;
 
 // Any Type in Triton IR
 def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>;
