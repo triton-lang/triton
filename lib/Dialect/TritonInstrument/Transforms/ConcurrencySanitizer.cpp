@@ -3,11 +3,13 @@
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/Sys/GetEnv.h"
 
 namespace mlir {
@@ -367,7 +369,114 @@ SmallVector<uint16_t> getTensorCoreBarrierBroadcastMasks(Operation *op) {
   return ttng::getCTABroadcastMasks(twoCTAs, commitDescs);
 }
 
+void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
+  uint32_t oldSpan = span;
+  for (int value = 0; value < numCTAs; ++value) {
+    if (!(oldSpan & (1u << value)))
+      continue;
+    uint32_t extended = value ^ basis;
+    assert(extended < static_cast<uint32_t>(numCTAs) &&
+           "CTA basis exceeds the cluster size");
+    span |= 1u << extended;
+  }
+}
+
+Value getLocalGatherScatterRecipientCTAs(ImplicitLocOpBuilder &b,
+                                         ttg::MemDescType memDescTy,
+                                         RankedTensorType regTy,
+                                         unsigned axis) {
+  MLIRContext *ctx = b.getContext();
+  LinearLayout sharedLayout = ttg::isPaddedEncoding(memDescTy.getEncoding())
+                                  ? ttg::paddedLinearLayout(memDescTy)
+                                  : ttg::toLinearLayout(memDescTy);
+  SmallVector<StringAttr> allDims =
+      standardOutDimNames(ctx, memDescTy.getRank());
+  StringAttr axisDim = allDims[axis];
+  LinearLayout regLayout = ttg::toLinearLayout(regTy).transposeOuts(allDims);
+  SmallVector<StringAttr> nonIndexedDims = allDims;
+  nonIndexedDims.erase(nonIndexedDims.begin() + axis);
+  LinearLayout indexedLayout =
+      regLayout.sublayout(llvm::to_vector(regLayout.getInDimNames()),
+                          nonIndexedDims) *
+      LinearLayout::identity1D(sharedLayout.getOutDimSize(axisDim), axisDim,
+                               axisDim);
+  indexedLayout = indexedLayout.transposeOuts(allDims);
+  LinearLayout conversion =
+      invertAndComposeBlockLocal(sharedLayout, indexedLayout);
+
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+  int numCTAs = ttg::lookupNumCTAs(b);
+  // Runtime indices are unavailable to this pass. Span all block-output bases
+  // that lowering can derive from register, lane, warp, and index inputs. This
+  // is a conservative recipient set for the full BufferRegion effect.
+  uint32_t targetSpan = 1;
+  int blockOutIdx = conversion.getOutDimIndex(kBlock);
+  for (const auto &[inDim, bases] : conversion.getBases()) {
+    if (inDim == kBlock)
+      continue;
+    for (const auto &basis : bases)
+      extendXorSpan(targetSpan, basis[blockOutIdx], numCTAs);
+  }
+
+  SmallVector<uint32_t> recipientMasks;
+  recipientMasks.reserve(numCTAs);
+  for (int issuer = 0; issuer < numCTAs; ++issuer) {
+    SmallVector<std::pair<StringAttr, int32_t>> inputs;
+    for (StringAttr inDim : conversion.getInDimNames())
+      inputs.push_back({inDim, inDim == kBlock ? issuer : 0});
+    auto outputs = conversion.apply(inputs);
+    auto block = llvm::find_if(
+        outputs, [&](const auto &entry) { return entry.first == kBlock; });
+    assert(block != outputs.end() && "expected block output dimension");
+
+    uint32_t mask = 0;
+    for (int delta = 0; delta < numCTAs; ++delta) {
+      if (!(targetSpan & (1u << delta)))
+        continue;
+      uint32_t target = block->second ^ delta;
+      assert(target < static_cast<uint32_t>(numCTAs) &&
+             "target CTA exceeds the cluster size");
+      mask |= 1u << target;
+    }
+    recipientMasks.push_back(mask);
+  }
+
+  bool currentCTAOnly =
+      llvm::all_of(llvm::enumerate(recipientMasks), [](auto entry) {
+        return entry.value() == (1u << entry.index());
+      });
+  if (currentCTAOnly)
+    return currentCTAMask(b);
+  if (llvm::all_of(recipientMasks, [&](uint32_t mask) {
+        return mask == recipientMasks.front();
+      }))
+    return arith::ConstantIntOp::create(b, recipientMasks.front(), 32);
+
+  Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value recipients =
+      arith::ConstantIntOp::create(b, recipientMasks.front(), 32);
+  for (int issuer = 1; issuer < numCTAs; ++issuer) {
+    Value isIssuer =
+        arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId,
+                              arith::ConstantIntOp::create(b, issuer, 32));
+    recipients = arith::SelectOp::create(
+        b, isIssuer,
+        arith::ConstantIntOp::create(b, recipientMasks[issuer], 32),
+        recipients);
+  }
+  return recipients;
+}
+
 Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
+  if (auto gather = dyn_cast<ttg::LocalGatherOp>(op)) {
+    return getLocalGatherScatterRecipientCTAs(
+        b, gather.getSrc().getType(), gather.getType(), gather.getAxis());
+  }
+  if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op)) {
+    return getLocalGatherScatterRecipientCTAs(b, scatter.getDst().getType(),
+                                              scatter.getValues().getType(),
+                                              scatter.getAxis());
+  }
   if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     if (tmaLoad.getMulticast())
       return getMulticastRecipientCTAs(b, tmaLoad.getResult());

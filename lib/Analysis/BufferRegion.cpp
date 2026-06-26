@@ -321,9 +321,10 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
 }
 
 bool BufferRegionAnalysis::isMemoryAccessOperation(Operation *op) {
-  if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttng::TMEMLoadOp,
-          ttng::TMEMStoreOp, ttng::TMEMCopyOp, ttg::AsyncCopyGlobalToLocalOp,
-          ttng::TMAOpInterface, ttng::CLCLoadResultOp>(op)) {
+  if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttg::LocalGatherOp,
+          ttg::LocalScatterOp, ttng::TMEMLoadOp, ttng::TMEMStoreOp,
+          ttng::TMEMCopyOp, ttg::AsyncCopyGlobalToLocalOp, ttng::TMAOpInterface,
+          ttng::CLCLoadResultOp>(op)) {
     return true;
   }
   if (isa<ttg::MBarrierOpInterface>(op)) {

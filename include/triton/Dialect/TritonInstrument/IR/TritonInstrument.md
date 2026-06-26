@@ -202,6 +202,15 @@ two-CTA Tensor Core operation is issued by the even CTA in the pair, but its
 memory effects cover both CTA rows in that pair. CLC try-cancel is issued once
 for the cluster and touches all CTA rows.
 
+For `ttg.local_gather` and `ttg.local_scatter` on direct memdescs, runtime
+indices can select shared memory owned by a peer CTA. ConSan derives the
+possible recipient CTA rows from the same block-local layout conversion used
+by lowering. The issuing CTA is fixed while register, lane, warp, and runtime
+index bases are spanned, producing a static conservative recipient set for the
+full buffer without defaulting every access to the whole cluster. Cross-CTA
+affine subslices remain unsupported by BufferRegion analysis, as for other
+local memdesc accesses.
+
 ## Barrier Synchronization
 
 ConSan separates barrier tracking from visibility transfer. Ordinary mbarrier
@@ -283,12 +292,16 @@ The common hook implementation covers these TritonGPU operations:
 - `ttg.async_commit_group`: commits staged `AsyncCp` accesses.
 - `ttg.async_wait`: clears `AsyncCp` entries beyond the pending-count threshold
   and transfers write visibility.
-- `ttg.local_load`: barrier-tracked shared-memory read.
-- `ttg.local_store`: barrier-tracked shared-memory write.
+- `ttg.local_load` and `ttg.local_gather`: barrier-tracked shared-memory
+  reads. A gather conservatively covers its full source descriptor because its
+  indices are runtime values.
+- `ttg.local_store` and `ttg.local_scatter`: barrier-tracked shared-memory
+  writes. A scatter conservatively covers its full destination descriptor
+  because its indices are runtime values.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
 
-All three ordinary shared-memory effects above are generic-proxy accesses for
-the proxy-ordering model.
+These shared-memory effects are generic-proxy accesses for the proxy-ordering
+model.
 
 NVIDIA hooks additionally cover:
 
