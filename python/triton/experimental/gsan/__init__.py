@@ -1,6 +1,14 @@
 from ._allocator import ShareableHandleType, configure, create_mem_pool, freeze_config, get_allocator
+from ._stream_sync import warmup_gsan_kernels
 
-__all__ = ["ShareableHandleType", "configure", "create_mem_pool", "freeze_config", "get_allocator"]
+__all__ = [
+    "ShareableHandleType",
+    "configure",
+    "create_mem_pool",
+    "freeze_config",
+    "get_allocator",
+    "warmup_gsan_kernels",
+]
 
 _LAZY_LOAD_MODULES = {"symmetric_memory"}
 

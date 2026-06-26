@@ -7,18 +7,17 @@ import torch
 import triton
 import triton.profiler as proton
 import json
-import gc
 import pytest
 from typing import NamedTuple
 import pathlib
 import threading
-from contextlib import contextmanager
 
 import triton.language as tl
 import triton.profiler.hooks.launch as proton_launch
 from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
+from triton.testing import cuda_graph_without_gc
 
 
 def _find_frame_by_name(frame, name):
@@ -29,23 +28,6 @@ def _find_frame_by_name(frame, name):
             return current
         queue.extend(current["children"])
     return None
-
-
-@contextmanager
-def cuda_graph_without_gc(*args, **kwargs):
-    # A loaded Triton CompiledKernel may be finalized by Python's cyclic GC.
-    # Its destructor unloads the CUDA module, which is illegal during CUDA
-    # stream capture and invalidates the graph. Keep GC disabled only for the
-    # capture window and restore the caller's previous GC state afterwards.
-    gc_was_enabled = gc.isenabled()
-    if gc_was_enabled:
-        gc.disable()
-    try:
-        with torch.cuda.graph(*args, **kwargs) as graph:
-            yield graph
-    finally:
-        if gc_was_enabled:
-            gc.enable()
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -1585,7 +1567,7 @@ def test_tensor_metrics_cudagraph_hook(tmp_path: pathlib.Path, device: str):
     metric_value.zero_()
 
     graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):
+    with cuda_graph_without_gc(graph):
         metadata_owner_kernel[(1, )](x, y, metric_value, bytes_value, num_warps=1)
 
     with proton.scope("replay"):

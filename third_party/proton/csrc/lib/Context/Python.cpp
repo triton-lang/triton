@@ -1,6 +1,6 @@
 #include "Context/Python.h"
 #include "Utility/String.h"
-#include "pybind11/pybind11.h"
+#include <nanobind/nanobind.h>
 #include <string>
 #include <utility>
 
@@ -56,7 +56,7 @@ std::string unpackPyobject(PyObject *pyObject) {
 } // namespace
 
 std::vector<Context> PythonContextSource::getContextsImpl() {
-  pybind11::gil_scoped_acquire gil;
+  nanobind::gil_scoped_acquire gil;
 
   PyFrameObject *frame = PyEval_GetFrame();
   Py_XINCREF(frame);

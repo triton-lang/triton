@@ -1,4 +1,5 @@
 import functools
+import gc
 import math
 import os
 import statistics
@@ -60,6 +61,25 @@ def _summarize_statistics(times, quantiles, return_mode):
 
 
 @contextmanager
+def cuda_graph_without_gc(*args, **kwargs):
+    # A loaded Triton CompiledKernel may be finalized by Python's cyclic GC.
+    # Its destructor unloads the CUDA module, which is illegal during CUDA
+    # stream capture and invalidates the graph. Keep GC disabled only for the
+    # capture window and restore the caller's previous GC state afterwards.
+    import torch
+
+    gc_was_enabled = gc.isenabled()
+    if gc_was_enabled:
+        gc.disable()
+    try:
+        with torch.cuda.graph(*args, **kwargs) as graph:
+            yield graph
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
+@contextmanager
 def _proton_bench_session():
     import triton.profiler as proton
 
@@ -110,6 +130,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     :type return_mode: str
     """
     import torch
+
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
     with torch.cuda.stream(torch.cuda.Stream()):
@@ -142,7 +163,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         # step 2 - construct a cuda graph with `n_repeat` unrolled function calls to minimize
         # host overhead
         g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g):
+        with cuda_graph_without_gc(g):
             for _ in range(n_repeat):
                 if grad_to_none is not None:
                     for x in grad_to_none:
@@ -217,7 +238,7 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
             cache = runtime.driver.active.get_empty_cache_for_benchmark()
             g = torch.cuda.CUDAGraph()
             scope_prefix = f"proton.{uuid.uuid4().hex}."
-            with torch.cuda.graph(g):
+            with cuda_graph_without_gc(g):
                 for i in range(n_repeat):
                     if grad_to_none is not None:
                         for x in grad_to_none:
