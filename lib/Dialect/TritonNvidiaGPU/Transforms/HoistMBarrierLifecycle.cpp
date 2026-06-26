@@ -208,17 +208,12 @@ private:
       }
     });
 
-    if (lifecycle.inits.empty() || lifecycle.waits.empty() ||
-        lifecycle.invals.empty())
+    if (lifecycle.waits.empty() || lifecycle.invals.size() != 1 ||
+        lifecycle.inits.size() != 1)
       return failure();
 
-    for (ttng::InitBarrierOp init : lifecycle.inits)
-      if (init.getCount() != lifecycle.init.getCount())
-        return failure();
-
     lifecycle.initialPhase = lifecycle.waits.front().getPhase();
-    if (!isa_and_nonnull<arith::ConstantOp>(
-            lifecycle.initialPhase.getDefiningOp()))
+    if (!matchPattern(lifecycle.initialPhase, m_Zero()))
       return failure();
 
     for (ttng::WaitBarrierOp wait : lifecycle.waits)
