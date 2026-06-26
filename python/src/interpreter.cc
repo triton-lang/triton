@@ -840,13 +840,14 @@ void init_triton_interpreter(py::module_ &m) {
           py::array_t<uint64_t> reshaped_ptr = ptr.reshape({numel});
           py::array reshaped_cmp = cmp.reshape({numel});
           py::array reshaped_val = val.reshape({numel});
+          py::array reshaped_mask = mask.reshape({numel});
           auto itemsize = cmp.itemsize();
           memcpy(static_cast<void *>(ret.mutable_data()),
                  static_cast<const void *>(reshaped_cmp.data()),
                  itemsize * numel);
           AtomicCASOp(reshaped_ptr.data(), ret.mutable_data(),
                       static_cast<const void *>(reshaped_val.data()),
-                      mask.data(), itemsize, numel, order)
+                      reshaped_mask.data(), itemsize, numel, order)
               .apply();
 
           return ret.attr("reshape")(shape_list(ptr));
