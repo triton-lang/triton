@@ -19,6 +19,11 @@ builder: ir.builder
 
 TRITON_BUILTIN = "__triton_builtin__"
 
+assert not hasattr(triton._C.libtriton.ir.builder, "create_custom_op")
+lib = os.getenv('TRITON_PLUGIN_PATHS')
+triton._C.libtriton.ir.builder.extend_with(lib)
+assert hasattr(triton._C.libtriton.ir.builder, "create_custom_op")
+
 
 def _unwrap_if_constexpr(o):
     if isinstance(o, list):
