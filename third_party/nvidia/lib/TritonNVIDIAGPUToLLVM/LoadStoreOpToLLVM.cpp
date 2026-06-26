@@ -523,6 +523,10 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
 
 Value loadScalarAtomicResult(ConversionPatternRewriter &rewriter, Location loc,
                              const NVIDIA::TargetInfo &targetInfo,
+                             Value atomPtr, Type valueTy, int numCTAs);
+
+Value loadScalarAtomicResult(ConversionPatternRewriter &rewriter, Location loc,
+                             const NVIDIA::TargetInfo &targetInfo,
                              Value atomPtr, Type valueTy, int numCTAs) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (numCTAs == 1)

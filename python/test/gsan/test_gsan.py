@@ -207,6 +207,17 @@ def atomic_cas_kernel(ptr, out_ptr, expect, sem: tl.constexpr, scope: tl.constex
 
 
 @triton.jit
+def atomic_poll_kernel(ptr, expect, sem: tl.constexpr, scope: tl.constexpr = "gpu"):
+    tl.atomic_poll(ptr, expect, sem=sem, scope=scope)
+
+
+@triton.jit
+def atomic_poll_timeout_kernel(ptr, out_ptr):
+    matched = tl.atomic_poll(ptr, 1, timeout_ns=0)
+    tl.store(out_ptr, matched)
+
+
+@triton.jit
 def _cross_sm_atomic_sync_kernel(payload_ptr, flag_ptr, out_ptr, producer_sem: tl.constexpr, consumer_sem: tl.constexpr,
                                  scope: tl.constexpr):
     pid = tl.program_id(0)
@@ -215,6 +226,18 @@ def _cross_sm_atomic_sync_kernel(payload_ptr, flag_ptr, out_ptr, producer_sem: t
         tl.atomic_xchg(flag_ptr, 1, sem=producer_sem, scope=scope)
     elif pid == 1:
         atomic_poll(flag_ptr, 1, sem=consumer_sem, scope=scope)
+        result = tl.load(payload_ptr)
+        tl.store(out_ptr, result)
+
+
+@triton.jit
+def _cross_sm_atomic_poll_sync_kernel(payload_ptr, flag_ptr, out_ptr, scope: tl.constexpr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(payload_ptr, 1000)
+        tl.atomic_xchg(flag_ptr, 1, sem="release", scope=scope)
+    elif pid == 1:
+        tl.atomic_poll(flag_ptr, 1, sem="acquire", scope=scope)
         result = tl.load(payload_ptr)
         tl.store(out_ptr, result)
 
@@ -260,6 +283,46 @@ def test_atomic_cas_failed_only_records_read(with_gsan, sem, _, scope, expected_
     assert out.item() == 0
 
     _assert_atomic_read_only_shadow(target.data_ptr(), expected_scope)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
+@pytest.mark.parametrize("sem", ["relaxed", "acquire"])
+@pytest.mark.parametrize("dtype", [torch.int16, torch.int32, torch.int64])
+def test_atomic_poll_only_records_read(with_gsan, dtype, sem, scope, expected_scope):
+    target = torch.ones(1, dtype=dtype, device="cuda")
+
+    atomic_poll_kernel[(1, )](target, 1, sem=sem, scope=scope, num_warps=4)
+
+    _assert_atomic_read_only_shadow(target.data_ptr(), expected_scope)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_atomic_poll_timeout_does_not_record_read(with_gsan):
+    target = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.ones(1, dtype=torch.bool, device="cuda")
+
+    atomic_poll_timeout_kernel[(1, )](target, out, num_warps=4)
+
+    assert not out.item()
+    cell = shadow_cell_from_address(target.data_ptr())
+    assert cell.write_clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC)
+    assert cell.num_reads == 0
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES[1:])
+def test_atomic_poll_acquire_synchronizes_cross_sm(with_gsan, capfd, scope, expected_scope):
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flag = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+
+    _cross_sm_atomic_poll_sync_kernel[(2, )](payload, flag, out, scope=scope, num_warps=4)
+    torch.cuda.synchronize()
+
+    assert out.item() == 1000
+    _assert_cross_sm_sync(payload, flag, expected_scope)
+    _assert_no_gsan_runtime_output(capfd)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
