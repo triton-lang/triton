@@ -1402,7 +1402,8 @@ def test_atomic_poll(dtype, bit_width, sem, scope, device):
     if is_cuda():
         ptx = compiled.asm["ptx"]
         assert ptx.count(f"ld.relaxed.{scope}.global.b{bit_width}") == 1
-        assert ptx.count(f"fence.acquire.{scope};") == (sem == "acquire")
+        fence_sem = "acq_rel" if torch.cuda.get_device_capability()[0] < 9 else "acquire"
+        assert ptx.count(f"fence.{fence_sem}.{scope};") == (sem == "acquire")
         assert "%globaltimer" not in ptx
 
 
@@ -1438,7 +1439,8 @@ def test_atomic_poll_timeout(initial_value, expected, device):
     if is_cuda():
         ptx = compiled.asm["ptx"]
         assert ptx.count("ld.relaxed.gpu.global.b32") == 1
-        assert ptx.count("fence.acquire.gpu;") == 1
+        fence_sem = "acq_rel" if torch.cuda.get_device_capability()[0] < 9 else "acquire"
+        assert ptx.count(f"fence.{fence_sem}.gpu;") == 1
         assert ptx.count("%globaltimer") == 2
 
 
