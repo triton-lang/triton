@@ -165,6 +165,27 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
   return ROCDL::BallotOp::create(rewriter, loc, type, cmp);
 }
 
+Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value timer = LLVM::createLLVMIntrinsicCallOp(
+                    rewriter, loc, "llvm.amdgcn.s.memrealtime", i64_ty, {})
+                    .getResult(0);
+  // The clock generator runs at 100 MHz, so each tick is 10 ns.
+  return b.mul(timer, b.i64_val(10));
+}
+
+StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
+  switch (scope) {
+  case MemSyncScope::CTA:
+    return "workgroup";
+  case MemSyncScope::GPU:
+    return "agent";
+  case MemSyncScope::SYSTEM:
+    return {};
+  }
+  llvm_unreachable("unknown memory synchronization scope");
+}
+
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
