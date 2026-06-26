@@ -273,12 +273,8 @@ private:
     return nextPhase;
   }
 
-  FailureOr<Value> mergePhaseAdvancesToBlock(Value phase,
-                                             ArrayRef<Value> advances,
-                                             Block *targetBlock) {
-    if (advances.size() != 1)
-      return failure();
-
+  Value mergePhaseAdvancesToBlock(Value phase, ArrayRef<Value> advances,
+                                  Block *targetBlock) {
     Value nextPhase = advances.front();
     if (nextPhase.getParentBlock() != targetBlock)
       nextPhase = mlir::triton::sinkValueRedefinition(
@@ -359,12 +355,10 @@ private:
     for (ttng::WaitBarrierOp wait : lifecycle.waits)
       advances.push_back(createPhaseAdvance(wait, innerPhase, phaseOne));
 
-    FailureOr<Value> maybeNextPhase = mergePhaseAdvancesToBlock(
-        innerPhase, advances, getLoopBodyBlock(innerLoop));
-    if (failed(maybeNextPhase))
-      return failure();
+    Value nextPhase = mergePhaseAdvancesToBlock(innerPhase, advances,
+                                                getLoopBodyBlock(innerLoop));
 
-    appendToLoopYield(innerLoop, *maybeNextPhase);
+    appendToLoopYield(innerLoop, nextPhase);
     Value loopResult = getLoopResultPhase(innerLoop);
 
     for (int i = static_cast<int>(loopPhases.size()) - 2; i >= 0; --i) {
