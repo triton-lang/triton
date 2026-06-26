@@ -253,6 +253,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blockedtrans = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.slice<{dim=0, parent=#blockedsrc}>
 #blocked2 = #ttg.slice<{dim=0, parent=#blockedtrans}>
+#blockedsplit = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // COMMON-LABEL: unary_triton_ops_transitive_nonneg
   tt.func @unary_triton_ops_transitive_nonneg(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
@@ -272,8 +273,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %12 = tt.splat %c10_i32 : i32 -> tensor<8x2xi32, #blocked>
     %13 = arith.addi %11, %12 : tensor<8x2xi32, #blocked>
     %14 = arith.minsi %13, %5 : tensor<8x2xi32, #blocked>
-    // COMMON: %[[lhs:.*]], %[[rhs:.*]] = tt.split
-    %15, %16 = tt.split %11: tensor<8x2xi32, #blocked> -> tensor<8xi32, #blocked2>
+    // COMMON: %[[split_lhs:.*]], %[[split_rhs:.*]] = tt.split
+    %split_lhs, %split_rhs = tt.split %11: tensor<8x2xi32, #blocked> -> tensor<8xi32, #blockedsplit>
+    // COMMON: %[[lhs:.*]] = ttg.convert_layout %[[split_lhs]]
+    // COMMON: %[[rhs:.*]] = ttg.convert_layout %[[split_rhs]]
+    %15 = ttg.convert_layout %split_lhs : tensor<8xi32, #blockedsplit> -> tensor<8xi32, #blocked2>
+    %16 = ttg.convert_layout %split_rhs : tensor<8xi32, #blockedsplit> -> tensor<8xi32, #blocked2>
     %17 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked2>
     %18 = tt.addptr %17, %15 : tensor<8x!tt.ptr<bf16>, #blocked2>, tensor<8xi32, #blocked2>
     // COMMON: %[[loaded:.*]] = amdg.buffer_load %arg0[%[[lhs]]]

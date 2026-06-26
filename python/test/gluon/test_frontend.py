@@ -1534,7 +1534,9 @@ def test_split_join():
     expect_layout: ttgl.constexpr = ttgl.BlockedLayout([2, 2], [32, 1], [4, 1], [1, 0])
     ttgl.static_assert(res.type.layout == expect_layout)
 
-    # CHECK: tt.split {{.*}} : tensor<128x2xi32, [[BLOCKED1]]> -> tensor<128xi32, #ttg.slice<{dim = 1, parent = [[BLOCKED1]]}>>
+    # CHECK: %[[LHS:.+]], %[[RHS:.+]] = tt.split {{.*}} : tensor<128x2xi32, [[BLOCKED1]]> -> tensor<128xi32, [[BLOCKED]]>
+    # CHECK: ttg.convert_layout %[[LHS]] : tensor<128xi32, [[BLOCKED]]> -> tensor<128xi32, #ttg.slice<{dim = 1, parent = [[BLOCKED1]]}>>
+    # CHECK: ttg.convert_layout %[[RHS]] : tensor<128xi32, [[BLOCKED]]> -> tensor<128xi32, #ttg.slice<{dim = 1, parent = [[BLOCKED1]]}>>
     c, d = ttgl.split(res)
     ttgl.static_assert(c.type.layout == ttgl.SliceLayout(1, expect_layout))
     ttgl.static_assert(d.type.layout == ttgl.SliceLayout(1, expect_layout))
@@ -1878,17 +1880,22 @@ def test_split_join_subtile(target):
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 2, 64], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 2, 1]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 64, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#linear = #ttg.linear<{register = [[0, 0, 1], [0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [0, 32, 0], [0, 0, 0]], lane = [[1, 0, 0], [2, 0, 0], [4, 0, 0], [8, 0, 0], [16, 0, 0]], warp = [[32, 0, 0], [64, 0, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %c1_i32 = arith.constant 1 : i32
     %cst = arith.constant dense<1> : tensor<128x128xi32, #blocked>
     %0 = tt.reshape %cst : tensor<128x128xi32, #blocked> -> tensor<128x2x64xi32, #blocked1>
     %1 = tt.trans %0 {order = array<i32: 0, 2, 1>} : tensor<128x2x64xi32, #blocked1> -> tensor<128x64x2xi32, #blocked2>
-    %outLHS, %outRHS = tt.split %1 : tensor<128x64x2xi32, #blocked2> -> tensor<128x64xi32, #ttg.slice<{dim = 2, parent = #blocked2}>>
-    %2 = tt.join %outLHS, %outRHS : tensor<128x64xi32, #ttg.slice<{dim = 2, parent = #blocked2}>> -> tensor<128x64x2xi32, #blocked2>
-    %3 = tt.trans %2 {order = array<i32: 0, 2, 1>} : tensor<128x64x2xi32, #blocked2> -> tensor<128x2x64xi32, #blocked1>
-    %4 = tt.reshape %3 : tensor<128x2x64xi32, #blocked1> -> tensor<128x128xi32, #blocked>
-    %5 = arith.addi %cst, %4 : tensor<128x128xi32, #blocked>
+    %outLHS, %outRHS = tt.split %1 : tensor<128x64x2xi32, #blocked2> -> tensor<128x64xi32, #blocked3>
+    %2 = ttg.convert_layout %outLHS : tensor<128x64xi32, #blocked3> -> tensor<128x64xi32, #ttg.slice<{dim = 2, parent = #blocked2}>>
+    %3 = ttg.convert_layout %outRHS : tensor<128x64xi32, #blocked3> -> tensor<128x64xi32, #ttg.slice<{dim = 2, parent = #blocked2}>>
+    %4 = tt.join %2, %3 : tensor<128x64xi32, #ttg.slice<{dim = 2, parent = #blocked2}>> -> tensor<128x64x2xi32, #linear>
+    %5 = ttg.convert_layout %4 : tensor<128x64x2xi32, #linear> -> tensor<128x64x2xi32, #blocked2>
+    %6 = tt.trans %5 {order = array<i32: 0, 2, 1>} : tensor<128x64x2xi32, #blocked2> -> tensor<128x2x64xi32, #blocked1>
+    %7 = tt.reshape %6 : tensor<128x2x64xi32, #blocked1> -> tensor<128x128xi32, #blocked>
+    %8 = arith.addi %cst, %7 : tensor<128x128xi32, #blocked>
     tt.return
   }
 }

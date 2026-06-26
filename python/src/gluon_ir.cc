@@ -807,25 +807,50 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Attribute layout, Value value) -> Value {
              return self.create<gluon::SetAutoLayoutOp>(layout, value);
            })
+      .def("create_join",
+           [](GluonOpBuilder &self, Value &a, Value &b) -> Value {
+             Value result = self.create<tt::JoinOp>(a, b);
+             auto argTy = cast<RankedTensorType>(a.getType());
+             // If the operand encoding is a slice along the join axis, prefer
+             // producing the slice parent as long as it is free to convert to
+             // it. This allows chains of split->join to produce the original
+             // encoding.
+             auto sliceEnc =
+                 dyn_cast<ttg::SliceEncodingAttr>(argTy.getEncoding());
+             if (sliceEnc && sliceEnc.getDim() == argTy.getRank()) {
+               SmallVector<int64_t> joinedShape(argTy.getShape());
+               joinedShape.push_back(2);
+               auto resultTy = RankedTensorType::get(
+                   joinedShape, argTy.getElementType(), sliceEnc.getParent());
+               auto inferredTy = cast<RankedTensorType>(result.getType());
+               if (cvtReordersRegisters(inferredTy, resultTy))
+                 return self.create<ttg::ConvertLayoutOp>(resultTy, result);
+             }
+             return result;
+           })
       .def("create_split",
            [](GluonOpBuilder &self, Value &a) -> py::tuple {
              auto argTy = cast<RankedTensorType>(a.getType());
+             auto op = self.create<triton::SplitOp>(a);
              auto enc = argTy.getEncoding();
-             triton::SplitOp op;
              if (isa<gluon::AutoEncodingAttr, gluon::CoalescedEncodingAttr>(
-                     enc)) {
-               op = self.create<triton::SplitOp>(a);
-             } else {
-               auto ctx = argTy.getContext();
-               auto sliceEnc = ttg::SliceEncodingAttr::get(
-                   ctx, argTy.getRank() - 1,
-                   cast<ttg::DistributedEncodingTrait>(enc));
-               auto resTy =
-                   RankedTensorType::get(ArrayRef(argTy.getShape()).drop_back(),
-                                         argTy.getElementType(), sliceEnc);
-               op = self.create<triton::SplitOp>(TypeRange{resTy, resTy}, a);
-             }
-             return py::make_tuple(op->getResult(0), op->getResult(1));
+                     enc))
+               return py::make_tuple(op->getResult(0), op->getResult(1));
+
+             // Convert the result to a slice of the operand. We know this
+             // conversion will be free because the split inferred encoding is
+             // equivalent to the slice if we ignore register broadcasting.
+             auto sliceEnc = ttg::SliceEncodingAttr::get(
+                 argTy.getContext(), argTy.getRank() - 1,
+                 cast<ttg::DistributedEncodingTrait>(enc));
+             auto resTy =
+                 RankedTensorType::get(ArrayRef(argTy.getShape()).drop_back(),
+                                       argTy.getElementType(), sliceEnc);
+             Value lhs =
+                 self.create<ttg::ConvertLayoutOp>(resTy, op->getResult(0));
+             Value rhs =
+                 self.create<ttg::ConvertLayoutOp>(resTy, op->getResult(1));
+             return py::make_tuple(lhs, rhs);
            })
       .def("create_warpgroup_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,

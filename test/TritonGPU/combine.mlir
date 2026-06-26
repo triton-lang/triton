@@ -3965,16 +3965,19 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:80"} {
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 32, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [1, 32, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [2, 0, 1]}>
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:80"} {
-  // CHECK-LABEL: join_backward_slice
-  tt.func @join_backward_slice(%arg0: tensor<128x32xf16, #ttg.slice<{dim=2, parent=#blocked1}>>, %arg1: tensor<128x32xf16, #ttg.slice<{dim=2, parent=#blocked1}>>) -> tensor<128x32x2xf16, #blocked1> {
-    // CHECK: %[[JOIN:.*]] = tt.join
-    // CHECK: tt.return %[[JOIN]]
-    %0 = tt.join %arg0, %arg1 : tensor<128x32xf16, #ttg.slice<{dim=2, parent=#blocked1}>> -> tensor<128x32x2xf16, #blocked2>
-    %1 = ttg.convert_layout %0 : tensor<128x32x2xf16, #blocked2> -> tensor<128x32x2xf16, #blocked1>
-    tt.return %1 : tensor<128x32x2xf16, #blocked1>
+  // CHECK-LABEL: join_slice_broadcast_conversions
+  tt.func @join_slice_broadcast_conversions(%arg0: tensor<128x32xf16, #ttg.slice<{dim=2, parent=#blocked1}>>, %arg1: tensor<128x32xf16, #ttg.slice<{dim=2, parent=#blocked1}>>) -> tensor<128x32x2xf16, #blocked1> {
+    // CHECK-NOT: ttg.convert_layout %arg0
+    // CHECK: %[[JOIN:.*]] = tt.join %arg0, %arg1 {{.*}} -> tensor<128x32x2xf16, #linear>
+    // CHECK: %[[RES:.*]] = ttg.convert_layout %[[JOIN]] : tensor<128x32x2xf16, #linear> -> tensor<128x32x2xf16, #blocked>
+    // CHECK: tt.return %[[RES]]
+    %0 = ttg.convert_layout %arg0 : tensor<128x32xf16, #ttg.slice<{dim=2, parent=#blocked1}>> -> tensor<128x32xf16, #blocked>
+    %1 = ttg.convert_layout %arg1 : tensor<128x32xf16, #ttg.slice<{dim=2, parent=#blocked1}>> -> tensor<128x32xf16, #blocked>
+    %2 = tt.join %0, %1 : tensor<128x32xf16, #blocked> -> tensor<128x32x2xf16, #blocked1>
+    tt.return %2 : tensor<128x32x2xf16, #blocked1>
   }
 }
 
