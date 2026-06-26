@@ -102,12 +102,11 @@ usesTrackedBarrierInCrossCTAConsumerOp(Operation *op,
 
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     auto barrierOp = cast<ttg::MBarrierOpInterface>(op);
-    return (mma.getTwoCtas() || mma.getMulticast()) &&
+    return mma.getTwoCtas() &&
            llvm::any_of(barrierOp.getBarriers(), aliasesTracked);
   }
   if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-    return (ttng::getModuleTwoCTAs(op) || !commit.getDescs().empty()) &&
-           aliasesTracked(commit.getBarrier());
+    return ttng::getModuleTwoCTAs(op) && aliasesTracked(commit.getBarrier());
   }
   if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     return tma.getMulticast() && aliasesTracked(tma.getBarrier());
@@ -123,8 +122,8 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
                                              Allocation *allocation,
                                              int numCTAs) {
   // Barrier init sync is needed for barriers that are themselves cross-CTA,
-  // and also for per-CTA barriers consumed by ops that make the barrier visible
-  // across the cluster.
+  // and also for per-CTA barriers consumed by multi-CTA ops that multicast or
+  // otherwise fan out barrier state across the cluster.
   if (isCrossCTAMBarrier(initBarrierOp, numCTAs))
     return true;
 
@@ -135,8 +134,8 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
     initBarrierBuffers.insert(bufferId);
   }
 
-  // Or if it's used by a cluster-visible consumer even though the barrier
-  // allocation itself looks per-CTA.
+  // Or if it's used by a multi-CTA consumer that broadcasts barrier state
+  // across CTAs even though the barrier allocation itself looks per-CTA.
   return funcOp
       ->walk<WalkOrder::PreOrder>([&](Operation *op) {
         if (usesTrackedBarrierInCrossCTAConsumerOp(op, initBarrierBuffers,
@@ -146,38 +145,6 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
         return WalkResult::advance();
       })
       .wasInterrupted();
-}
-
-static bool opUsesTrackedMBarrier(Operation *op,
-                                  const Allocation::BufferIdSetT &tracked,
-                                  Allocation *allocation);
-
-static bool initSyncRequiredBeforeOp(ttng::InitBarrierOp initBarrierOp,
-                                     Operation *op, Allocation *allocation,
-                                     int numCTAs) {
-  Allocation::BufferIdSetT initBarrierBuffers;
-  for (auto bufferId :
-       allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
-    assert(bufferId != Allocation::InvalidBufferId);
-    initBarrierBuffers.insert(bufferId);
-  }
-
-  if (isCrossCTAMBarrier(initBarrierOp, numCTAs))
-    return opUsesTrackedMBarrier(op, initBarrierBuffers, allocation);
-
-  return usesTrackedBarrierInCrossCTAConsumerOp(op, initBarrierBuffers,
-                                                allocation);
-}
-
-static void insertFenceAndRelaxedClusterBarrier(OpBuilder &builder,
-                                                Location loc,
-                                                Operation *insertionPoint) {
-  OpBuilder::InsertionGuard guard(builder);
-  builder.setInsertionPoint(insertionPoint);
-  ttng::FenceMBarrierInitReleaseClusterOp::create(builder, loc);
-  auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(insertionPoint);
-  if (!clusterBarrier || !clusterBarrier.getRelaxed())
-    ttng::ClusterBarrierOp::create(builder, loc, /*relaxed=*/true);
 }
 
 static bool nestedOpUsesTrackedMBarrier(Operation *op,
@@ -210,41 +177,6 @@ static bool opUsesTrackedMBarrier(Operation *op,
       .wasInterrupted();
 }
 
-static bool insertLocalCrossCTAMBarrierInitSync(ttng::InitBarrierOp initOp,
-                                                FunctionOpInterface funcOp,
-                                                Allocation *allocation,
-                                                int numCTAs,
-                                                OpBuilder &builder) {
-  if (!requiresCrossCTAMBarrierInitSync(initOp, funcOp, allocation, numCTAs))
-    return false;
-
-  for (Operation *op = initOp->getNextNode(); op; op = op->getNextNode()) {
-    if (isa<ttng::InitBarrierOp, ttg::LocalAllocOp>(op))
-      continue;
-
-    if (isa<ttng::ClusterBarrierOp>(op)) {
-      OpBuilder::InsertionGuard guard(builder);
-      builder.setInsertionPoint(op);
-      ttng::FenceMBarrierInitReleaseClusterOp::create(builder,
-                                                      initOp.getLoc());
-      return true;
-    }
-
-    if (isa<ttng::FenceMBarrierInitReleaseClusterOp>(op)) {
-      Operation *next = op->getNextNode();
-      if (next && isa<ttng::ClusterBarrierOp>(next))
-        return true;
-      continue;
-    }
-
-    if (initSyncRequiredBeforeOp(initOp, op, allocation, numCTAs)) {
-      insertFenceAndRelaxedClusterBarrier(builder, initOp.getLoc(), op);
-      return true;
-    }
-  }
-  return false;
-}
-
 static LogicalResult
 insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
                                           Allocation *allocation, int numCTAs,
@@ -261,9 +193,6 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
   // Find all cross-CTA mbarrier.init ops and map each
   // one to the containing top-level op that bounds the insertion window.
   funcOp.walk([&](ttng::InitBarrierOp initBarrierOp) {
-    if (insertLocalCrossCTAMBarrierInitSync(initBarrierOp, funcOp, allocation,
-                                            numCTAs, builder))
-      return;
     if (!requiresCrossCTAMBarrierInitSync(initBarrierOp, funcOp, allocation,
                                           numCTAs))
       return;
@@ -377,10 +306,13 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
       reusedClusterBarrier && reusedClusterBarrier.getRelaxed()
           ? reusedClusterBarrier.getOperation()
           : lastInsertionAnchor;
+  builder.setInsertionPoint(fenceInsertionPoint);
   Location loc = lastInitInInsertionBlock
                      ? lastInitInInsertionBlock->getLoc()
                      : crossCTAInitAnchors.front()->getLoc();
-  insertFenceAndRelaxedClusterBarrier(builder, loc, fenceInsertionPoint);
+  ttng::FenceMBarrierInitReleaseClusterOp::create(builder, loc);
+  if (!reusedClusterBarrier)
+    ttng::ClusterBarrierOp::create(builder, loc, /*relaxed=*/true);
   return success();
 }
 
