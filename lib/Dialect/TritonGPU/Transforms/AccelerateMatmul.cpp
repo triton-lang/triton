@@ -20,9 +20,12 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
+
+#include <type_traits>
 
 namespace mlir {
 namespace triton {
@@ -229,17 +232,14 @@ static bool isTmemCopyCompatibleScale(RankedTensorType argType,
   return innermostBits % (32 * 128) == 0;
 }
 
-template <typename OpTy>
-static OpTy getDefiningOpSkippingConvertLayout(Value value) {
+template <typename OpTy = void>
+static auto getDefiningOpSkippingConvertLayout(Value value) {
   while (auto cvtOp = value.getDefiningOp<ConvertLayoutOp>())
     value = cvtOp.getSrc();
-  return value.getDefiningOp<OpTy>();
-}
-
-static Value stripConvertLayout(Value value) {
-  while (auto cvtOp = value.getDefiningOp<ConvertLayoutOp>())
-    value = cvtOp.getSrc();
-  return value;
+  if constexpr (std::is_void_v<OpTy>)
+    return value;
+  else
+    return value.getDefiningOp<OpTy>();
 }
 
 static Value
@@ -285,13 +285,13 @@ tryCreateTmemCopyCompatibleScaleOperand(Value scale,
   auto kCopyTiles = numScales / 4;
   SmallVector<int64_t> tiledScaleShape = {mnCopyTiles, kCopyTiles, 32, 4, 4};
 
-  Value tiledScale = stripConvertLayout(transOp.getSrc());
-  auto reshapeTiled = tiledScale.getDefiningOp<ReshapeOp>();
+  auto reshapeTiled =
+      getDefiningOpSkippingConvertLayout<ReshapeOp>(transOp.getSrc());
   if (!reshapeTiled ||
       reshapeTiled.getType().getShape() != ArrayRef<int64_t>(tiledScaleShape))
     return Value();
 
-  Value packedScale = stripConvertLayout(reshapeTiled.getSrc());
+  Value packedScale = getDefiningOpSkippingConvertLayout(reshapeTiled.getSrc());
   auto packedScaleType = dyn_cast<RankedTensorType>(packedScale.getType());
   if (!packedScaleType)
     return Value();
@@ -424,6 +424,18 @@ static int computeOrigBitWidth(Value x) {
     origBitWidth /= 2;
 
   return origBitWidth;
+}
+
+static LogicalResult checkMMAv5InputPrecision(DotOp dotOp) {
+  Value a = dotOp.getA();
+  Value b = dotOp.getB();
+  // For 32-bit-or-wider inputs, this pass only lowers the direct TF32 MMAv5
+  // path. Other input-precision modes, such as TF32x3/BF16xN/IEEE, are handled
+  // by decomposition or fallback paths outside BlockedToMMAv5.
+  if (std::min(computeOrigBitWidth(a), computeOrigBitWidth(b)) >= 32 &&
+      dotOp.getInputPrecision() != InputPrecision::TF32)
+    return failure();
+  return success();
 }
 
 namespace {
@@ -593,22 +605,100 @@ replaceCGALayout(DistributedEncodingTrait layout,
   }
 }
 
-static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
+static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
+  if (retType.getRank() != 2)
+    return {};
+
+  // MMAv5 two_ctas shares the RHS K range across CTAs and splits RHS along N.
+  // Start from an accumulator/LHS layout whose first CTA basis is the M split
+  // [1, 0], then map that basis to the RHS N split [0, 1]. Project the
+  // remaining bases onto RHS N: M bases become [0, 0] broadcasts, while N
+  // bases are doubled because [0, 1] is consumed by the two_ctas split.
+  MLIRContext *ctx = retType.getContext();
+  auto retCGALayout = getCGALayout(retType.getEncoding());
+  auto kBlock = StringAttr::get(ctx, "block");
+  const auto &retBases =
+      retCGALayout.getLinearLayout().getBases().lookup(kBlock);
+  if (retBases.front()[0] != 1 || retBases.front()[1] != 0)
+    return {};
+
+  std::vector<std::vector<int32_t>> rhsBases;
+  rhsBases.reserve(retBases.size());
+  rhsBases.push_back({0, 1});
+  for (ArrayRef<int32_t> basis : llvm::drop_begin(retBases)) {
+    rhsBases.push_back({0, 2 * basis[1]});
+  }
+
+  auto dims = standardOutDimNames(ctx, 2);
+  return CGAEncodingAttr::get(
+      ctx, LinearLayout({{kBlock, std::move(rhsBases)}}, dims));
+}
+
+static bool canUseTwoCTAs(DotOp dotOp) {
+  if (lookupNumCTAs(dotOp) <= 1)
+    return false;
+
+  RankedTensorType retType = dotOp.getType();
+  auto loadOp =
+      getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(dotOp.getB());
+  if (!loadOp)
+    return false;
+
+  auto rhsCGALayout = getTwoCTARHSCGALayout(retType);
+  if (!rhsCGALayout)
+    return false;
+
+  auto outDims = standardOutDimNames(retType.getContext(), 2);
+  auto retCGALinearLayout =
+      getCGALayout(retType.getEncoding()).getLinearLayout();
+  unsigned nPerCTA =
+      retType.getDimSize(1) / retCGALinearLayout.getOutDimSize(outDims[1]);
+  // MMAv5 two_ctas currently cannot emit more than one MMA instruction along
+  // N; TCGen5MMAOp::verify enforces the same nPerCTA <= 256 rule.
+  if (nPerCTA > 256)
+    return false;
+
+  return true;
+}
+
+static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
+  bool sawMMAv5Dot = false;
+  WalkResult result = module.walk([&](Operation *op) -> WalkResult {
+    if (auto dotOp = dyn_cast<DotOp>(op)) {
+      RankedTensorType retType = dotOp.getType();
+      if (!retType.getEncoding() ||
+          mlir::isa<NvidiaMmaEncodingAttr>(retType.getEncoding()))
+        return WalkResult::advance();
+      if (getMMAVersionSafe(computeCapability, dotOp) != 5)
+        return WalkResult::advance();
+
+      if (failed(checkMMAv5InputPrecision(dotOp)))
+        return WalkResult::advance();
+
+      sawMMAv5Dot = true;
+      return canUseTwoCTAs(dotOp) ? WalkResult::advance()
+                                  : WalkResult::interrupt();
+    }
+
+    // Scaled MMAv5 does not set two_ctas in this pass yet. Keep the whole
+    // module in 1CTA mode if such an op may form a tcgen05 instruction.
+    if (isa<DotScaledOp>(op))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  return sawMMAv5Dot && !result.wasInterrupted();
+}
+
+static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
+                           const CGAEncodingAttr &newCGALayout) {
   OpBuilder::InsertionGuard g(rewriter);
-  MLIRContext *ctx = b.getContext();
-  while (auto cvtOp = b.getDefiningOp<ConvertLayoutOp>())
-    b = cvtOp.getSrc();
-  auto loadOp = b.getDefiningOp();
-  assert((isa<triton::LoadOp, triton::DescriptorLoadLikeOpInterface>(loadOp)) &&
-         "expected LoadOp");
+  auto loadOp = getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(b);
+  assert(loadOp && "expected descriptor load");
+  b = loadOp->getResult(0);
   RankedTensorType bType = cast<RankedTensorType>(b.getType());
   auto currentLayout = cast<DistributedEncodingTrait>(bType.getEncoding());
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto dims = standardOutDimNames(ctx, 2);
-  auto newCGALayout =
-      CGAEncodingAttr::get(ctx, LinearLayout({{kBlock, {{0, 1}}}}, dims));
   Attribute newLayout = replaceCGALayout(currentLayout, newCGALayout);
-  rewriter.setInsertionPoint(loadOp);
+  rewriter.setInsertionPoint(loadOp.getOperation());
   for (OpOperand &operand : loadOp->getOpOperands()) {
     auto tensorType = dyn_cast<RankedTensorType>(operand.get().getType());
     if (!tensorType)
@@ -620,7 +710,7 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
   }
   loadOp->getResult(0).setType(bType.cloneWithEncoding(newLayout));
   Value newB = loadOp->getResult(0);
-  rewriter.setInsertionPointAfter(loadOp);
+  rewriter.setInsertionPointAfter(loadOp.getOperation());
   auto cvt = ConvertLayoutOp::create(rewriter, b.getLoc(), bType, newB);
   rewriter.replaceAllUsesExcept(newB, cvt.getResult(), cvt);
   return newB;
@@ -628,11 +718,13 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
 
 class BlockedToMMAv5 : public mlir::OpRewritePattern<DotOp> {
   int computeCapability;
+  bool enableTwoCTAs;
 
 public:
-  BlockedToMMAv5(mlir::MLIRContext *context, int computeCapability, int benefit)
+  BlockedToMMAv5(mlir::MLIRContext *context, int computeCapability,
+                 bool enableTwoCTAs, int benefit)
       : OpRewritePattern<DotOp>(context, benefit),
-        computeCapability(computeCapability) {}
+        computeCapability(computeCapability), enableTwoCTAs(enableTwoCTAs) {}
 
   mlir::LogicalResult
   matchAndRewrite(triton::DotOp dotOp,
@@ -651,19 +743,15 @@ public:
     if (versionMajor != 5)
       return failure();
     Location loc = dotOp.getLoc();
+    if (failed(checkMMAv5InputPrecision(dotOp)))
+      return failure();
     // operands
     Value a = dotOp.getA();
     Value b = dotOp.getB();
-    if (std::min(computeOrigBitWidth(a), computeOrigBitWidth(b)) >= 32 &&
-        dotOp.getInputPrecision() != InputPrecision::TF32)
-      return failure();
     auto oldAType = dotOp.getA().getType();
-    // NYI: PTX 13+ requires all tcgen instructions in a kernel to have a
-    // consistent CTA mode, disabling 2CTA mode for now. To re-enable,
-    // change the line below to: bool useTwoCTAs = canUseTwoCTAs(dotOp);
-    bool useTwoCTAs = false;
+    bool useTwoCTAs = enableTwoCTAs && canUseTwoCTAs(dotOp);
     if (useTwoCTAs) {
-      b = splitBOperand(b, rewriter);
+      b = splitBOperand(b, rewriter, getTwoCTARHSCGALayout(oldRetType));
     }
     // TF32 transpose is only supported with 128 swizzle mode with 32B
     // atomicity. As we currently don't support this layout we disallow
@@ -1045,8 +1133,14 @@ public:
     patterns.add<BlockedToMMA>(context, computeCapability, benefitDefault);
     patterns.add<ScaledBlockedToMMA>(context, computeCapability, benefitSM120);
     populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
-    patterns.add<BlockedToMMAv5, ScaledBlockedToMMAv5>(
-        context, computeCapability, benefitMMAv5);
+    // PTX 13+ requires all tcgen instructions in a kernel to have a consistent
+    // CTA mode. TritonGPU modules map to one kernel here, so decide two_ctas
+    // once before rewriting any dot.
+    bool enableTwoCTAs = canUseTwoCTAsInModule(m, computeCapability);
+    patterns.add<BlockedToMMAv5>(context, computeCapability, enableTwoCTAs,
+                                 benefitMMAv5);
+    patterns.add<ScaledBlockedToMMAv5>(context, computeCapability,
+                                       benefitMMAv5);
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       return signalPassFailure();

@@ -392,9 +392,9 @@ static LogicalResult verifyTMABarrierLayout(Operation *op, Value barrier) {
   if (twoCTAsAttr.getValue()) {
     auto kBlock = StringAttr::get(ctx, "block");
     auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
-    auto layout = LinearLayout::zeros1D(2, kBlock, dim) *
-                  LinearLayout::identity1D(numCTAs / 2, kBlock, dim);
-    auto twoCTACGALayout = CGAEncodingAttr::get(ctx, std::move(layout));
+    auto twoCTACGALayout = CGAEncodingAttr::get(
+        ctx, LinearLayout::zeros1D(2, kBlock, dim) *
+                 LinearLayout::identity1D(numCTAs / 2, kBlock, dim));
     if (actualCGALayout == twoCTACGALayout)
       return success();
     return op->emitOpError() << "TMA barrier cga_layout must be "

@@ -1,3 +1,4 @@
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -275,6 +276,51 @@ struct LoadGroupInfo {
   bool hasTMALoad = false;
 };
 
+static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
+  SetVector<Operation *> worklist;
+  worklist.insert(loadOp->user_begin(), loadOp->user_end());
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Operation *op = worklist[i];
+    auto mma = dyn_cast<ttng::MMAv5OpInterface>(op);
+    if (mma) {
+      if (mma.getTwoCtas())
+        return true;
+      continue;
+    }
+    worklist.insert(op->user_begin(), op->user_end());
+  }
+  return false;
+}
+
+static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
+  SmallVector<Value> descs = mma.getCompletionDescs();
+
+  // Each mask describes CTA-id bits that are broadcast for one completion
+  // descriptor. For cta_group::2, getCTABroadcastMasks also adds the CTA-pair
+  // bit even when there are no descriptor operands.
+  SmallVector<uint16_t> broadcastMasks =
+      ttng::getCTABroadcastMasks(mma.getTwoCtas(), descs);
+  if (broadcastMasks.empty())
+    return 1;
+
+  int numCTAs = lookupNumCTAs(mma.getOperation());
+  uint16_t ctaMask = numCTAs - 1;
+  int count = 0;
+  for (int cta = 0; cta < numCTAs; ++cta) {
+    if (mma.getTwoCtas() && (cta & 1))
+      continue;
+    for (uint16_t broadcastMask : broadcastMasks) {
+      // Count CTAs that issue the multicast commit. Broadcast bits may vary
+      // within a group; fixed, non-broadcast bits must be zero.
+      if ((cta & (~broadcastMask & ctaMask)) == 0) {
+        ++count;
+        break;
+      }
+    }
+  }
+  return count;
+}
+
 // Convert a scalar load to a load of a tensor of shape <1>.
 void convertScalarToTensorLoad(Operation *op, CoarseSchedule &schedule,
                                scf::ForOp forOp) {
@@ -375,13 +421,16 @@ void createTMABarrierAndWait(
     int sizeInBytes = 0;
     int numBuffers = asyncLoads[group[0]].stageDiff;
     const LoadGroupInfo loadGroup = loadGroups.find(numBuffers)->second;
+    bool hasTwoCTAMMAUser = false;
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(getShapePerCTA(tensorTy));
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
+      hasTwoCTAMMAUser |= loadFeedsTwoCTAMMA(op);
     }
 
-    Value barrierAlloc = triton::createBarrierAlloc(forOp, numBuffers);
+    Value barrierAlloc = triton::createBarrierAlloc(
+        forOp, numBuffers, /*arriveCount=*/1, hasTwoCTAMMAUser);
     OpBuilderForStage builder(forOp.getLoc(), group[0], schedule);
     Value barrier = triton::createSingleBufferView(builder, barrierAlloc,
                                                    loadGroup.insertIdx);
@@ -462,6 +511,8 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
         sharedEncoding = getSharedEncoding(&op);
         // Do not create async loads for small loads (cp.async requires at least
         // 4 bytes)
+        // TODO: Support 2CTA MMA for regular tt.load/cp.async paths. For now,
+        // automatic 2CTA MMA is limited to descriptor/TMA loads.
         canUseAsyncCp =
             isa<tt::LoadOp>(op) &&
             canBeConvertedToAsyncLoad(cast<tt::LoadOp>(op), axisInfoAnalysis);
@@ -756,7 +807,9 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   int numStages = mainWaitStage - schedule[mma].first + 1;
 
   OpBuilderForStage builder(mma.getLoc(), mma, schedule);
-  Value barrierAlloc = createBarrierAlloc(forOp, numStages);
+  Value barrierAlloc =
+      createBarrierAlloc(forOp, numStages, getMMAv5CompletionBarrierCount(mma),
+                         /*twoCTAs=*/false);
   Value vTrue = arith::ConstantIntOp::create(builder, 1, 1);
   Value phase = forOp.getRegionIterArg(phaseArgIdx);
   Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);
