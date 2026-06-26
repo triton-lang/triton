@@ -208,9 +208,13 @@ private:
       }
     });
 
-    if (lifecycle.waits.empty() || lifecycle.invals.size() > 1 ||
-        lifecycle.inits.size() > 1)
+    if (lifecycle.inits.empty() || lifecycle.waits.empty() ||
+        lifecycle.invals.empty())
       return failure();
+
+    for (ttng::InitBarrierOp init : lifecycle.inits)
+      if (init.getCount() != lifecycle.init.getCount())
+        return failure();
 
     lifecycle.initialPhase = lifecycle.waits.front().getPhase();
     if (!isa_and_nonnull<arith::ConstantOp>(
@@ -272,54 +276,10 @@ private:
   FailureOr<Value> mergePhaseAdvancesToBlock(Value phase,
                                              ArrayRef<Value> advances,
                                              Block *targetBlock) {
-    if (advances.size() == 1) {
-      Value nextPhase = advances.front();
-      if (nextPhase.getParentBlock() != targetBlock)
-        nextPhase = mlir::triton::sinkValueRedefinition(
-            builder, phase, nextPhase, nextPhase.getParentBlock());
-      return nextPhase;
-    }
-
-    Value firstAdvance = advances.front();
-    auto ifOp =
-        dyn_cast<scf::IfOp>(firstAdvance.getParentBlock()->getParentOp());
-    if (!ifOp)
+    if (advances.size() != 1)
       return failure();
 
-    Value thenPhase;
-    Value elsePhase;
-    for (Value advance : advances) {
-      Block *block = advance.getParentBlock();
-      if (block->getParentOp() != ifOp)
-        return failure();
-      if (block == ifOp.thenBlock()) {
-        if (thenPhase)
-          return failure();
-        thenPhase = advance;
-        continue;
-      }
-      if (block == ifOp.elseBlock()) {
-        if (elsePhase)
-          return failure();
-        elsePhase = advance;
-        continue;
-      }
-      return failure();
-    }
-
-    if (!thenPhase || !elsePhase)
-      return failure();
-
-    scf::IfOp oldIfOp = ifOp;
-    scf::IfOp newIfOp =
-        mlir::replaceIfOpWithNewSignature(builder, ifOp, phase.getType());
-    newIfOp.thenYield()->insertOperands(newIfOp.thenYield().getNumOperands(),
-                                        thenPhase);
-    newIfOp.elseYield()->insertOperands(newIfOp.elseYield().getNumOperands(),
-                                        elsePhase);
-    builder.eraseOp(oldIfOp);
-
-    Value nextPhase = newIfOp.getResults().back();
+    Value nextPhase = advances.front();
     if (nextPhase.getParentBlock() != targetBlock)
       nextPhase = mlir::triton::sinkValueRedefinition(
           builder, phase, nextPhase, nextPhase.getParentBlock());
@@ -349,15 +309,21 @@ private:
   }
 
   LogicalResult rewriteLoopPhases(BarrierLifecycle &lifecycle) {
-    SmallVector<Operation *> loops;
-    ttng::InvalBarrierOp inval = lifecycle.invals.front();
-    getEnclosingLoops(inval, loops);
-
-    // If invalidation is already outside loops, moving it to function exits
-    // does not remove a loop-local phase reset.
-    if (loops.empty())
+    // If every invalidation is already outside loops, moving them to function
+    // exits does not remove a loop-local phase reset.
+    if (llvm::none_of(lifecycle.invals, [&](ttng::InvalBarrierOp inval) {
+          SmallVector<Operation *> loops;
+          getEnclosingLoops(inval, loops);
+          return !loops.empty();
+        }))
       return success();
 
+    if (lifecycle.inits.size() != 1 || lifecycle.invals.size() != 1 ||
+        lifecycle.waits.size() != 1)
+      return failure();
+
+    SmallVector<Operation *> loops;
+    getEnclosingLoops(lifecycle.invals.front(), loops);
     std::reverse(loops.begin(), loops.end());
 
     OpBuilder::InsertionGuard guard(builder);
