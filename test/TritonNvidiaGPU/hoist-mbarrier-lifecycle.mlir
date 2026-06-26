@@ -124,16 +124,17 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @hoist_if_else_wait_lifecycle
-  // CHECK: scf.for
+  // CHECK-LABEL: tt.func @skip_if_else_wait_lifecycle
+  // CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{[[:alnum:]_]+}} {
   // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
   // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
   // CHECK: scf.if
   // CHECK: ttng.wait_barrier %[[BAR]],
   // CHECK: ttng.wait_barrier %[[BAR]],
   // CHECK: ttng.inval_barrier %[[BAR]]
-  // CHECK: tt.return
-  tt.func @hoist_if_else_wait_lifecycle(%desc: !tt.tensordesc<64x128xf16, #nvmma>, %pred: i1) {
+  // CHECK: }
+  // CHECK-NEXT: tt.return
+  tt.func @skip_if_else_wait_lifecycle(%desc: !tt.tensordesc<64x128xf16, #nvmma>, %pred: i1) {
     %c0 = arith.constant 0 : i32
     %i0 = arith.constant 0 : index
     %i4 = arith.constant 4 : index
@@ -241,6 +242,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
   // CHECK: ttng.async_tma_copy_global_to_local {{.*}} %[[BAR]], %true {multicast}
   // CHECK: ttng.wait_barrier %[[BAR]],
+  // CHECK-NOT: ttng.init_barrier
+  // CHECK-NOT: ttng.inval_barrier
   // CHECK: ttng.async_tma_copy_global_to_local {{.*}} %[[BAR]], %true {multicast}
   // CHECK: ttng.wait_barrier %[[BAR]],
   // CHECK-NEXT: ttng.inval_barrier %[[BAR]]
