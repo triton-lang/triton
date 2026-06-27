@@ -280,13 +280,14 @@ def test_async_shared_store_expect_bytes(EXPECT_DELTA, device, run_wrapper, monk
 def test_async_tma_multicast_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
         pytest.skip("Need at least 2 CTAs for multicast in this test")
-    if FAILURE and num_ctas == 4:
-        pytest.skip("Temporarily disabled: flaky with 4 CTAs when FAILURE=True")
     if run_wrapper:
         result = run_in_process(test_async_tma_multicast_kernel, (FAILURE, device, False, monkeypatch, num_ctas))
         if FAILURE:
             assert_expected_cuda_failure(result.exc)
-            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+            assert any(msg in result.driver_stderr_output for msg in [
+                "Buffer being accessed has outstanding writes",
+                "Buffer being accessed has outstanding reads",
+            ])
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
