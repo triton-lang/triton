@@ -35,7 +35,7 @@ enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
 // writeVisibility + readVisibility per active memory type.
 constexpr int kCapturesPerMemType = 2;
 
-// barrierStates + waiting + activeMasks (only when barriers exist).
+// barrierStates + waiting + activeMasks (only when tracked rendezvous exist).
 constexpr int kBarrierBaseCaptures = 3;
 
 // writeTracking + readTracking per active memory type (only when barriers
@@ -51,15 +51,17 @@ constexpr int kCaptureSizeBytes = 8;
 /// Estimate the number of WarpSpecialize captures that the
 /// ConcurrencySanitizer pass will add via passToWarpSpecialize().
 /// \p numActiveMemTypes  Number of memory types with buffers.
-/// \p hasBarriers        Whether barriers exist in the module.
+/// \p hasMBarriers       Whether mbarriers exist in the module.
+/// \p hasClusterBarriers Whether cluster barriers exist in the module.
 /// \p numCommitKinds     Number of distinct commit kinds required.
-inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasBarriers,
+inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasMBarriers,
+                                      bool hasClusterBarriers,
                                       int numCommitKinds) {
   int perMemType = kCapturesPerMemType * numActiveMemTypes;
   int barrierCaptures =
-      hasBarriers ? kBarrierBaseCaptures +
-                        kBarrierTrackingCapturesPerMemType * numActiveMemTypes
-                  : 0;
+      hasMBarriers || hasClusterBarriers ? kBarrierBaseCaptures : 0;
+  if (hasMBarriers)
+    barrierCaptures += kBarrierTrackingCapturesPerMemType * numActiveMemTypes;
   return perMemType + barrierCaptures + kFixedCaptures + numCommitKinds;
 }
 
@@ -152,7 +154,8 @@ struct AuxDataMap {
   //   Cbar, Cbuf, Cthr, Cmask = CTA dimensions qualifying barriers, buffers,
   //       threads, and thread masks respectively. Each has extent C.
   //   B = tracked buffers for one memory type, power-of-two padded.
-  //   K = tracked mbarriers, power-of-two padded.
+  //   K = tracked mbarriers and virtual cluster rendezvous slots,
+  //       power-of-two padded.
   //   T = logical ConSan thread bit slots used by this module, power-of-two
   //       padded for the distributed layout.
   //   P = base-thread commit columns used by this module, power-of-two padded.
@@ -219,6 +222,11 @@ struct AuxDataMap {
   // publication points.
   SmallVector<Operation *> nonPublishingClusterBarriers;
 
+  // Virtual barrier slot for each cluster-barrier lowering resource. Cluster
+  // barriers outside warp specialization share the entry-region slot; each
+  // warp-specialize region has its own slot.
+  DenseMap<Region *, int> clusterBarrierSlots;
+
   // scratch, <Cbar x K x Cthr x i32>
   // Deadlock-detection bitfield. Each base thread uses two bits: waiting flag
   // and stored phase.
@@ -241,6 +249,8 @@ struct AuxDataMap {
   LogicalResult populateAndPassToWarpSpecialize(ModuleOp module,
                                                 FunctionBuilder &funcBuilder,
                                                 const ConSanTargetHooks *hooks);
+
+  int getClusterBarrierSlot(Operation *op) const;
 
 private:
   void getBuffersAndBarriers(

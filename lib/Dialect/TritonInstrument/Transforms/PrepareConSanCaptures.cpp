@@ -96,9 +96,11 @@ public:
 
     int numActiveMemTypes = (hasSharedMemoryBuffers(mod) ? 1 : 0) +
                             (hasTensorMemoryBuffers(mod) ? 1 : 0);
-    int totalCaptures =
-        tti::estimateConSanCaptureCount(numActiveMemTypes, hasBarriers(mod),
-                                        getNumCommitKinds(mod, hooks.get()));
+    // NVIDIA inserts a terminal cluster barrier after this pass.
+    bool hasClusterBarriers = target == "nvidia" && ttg::lookupNumCTAs(mod) > 1;
+    int totalCaptures = tti::estimateConSanCaptureCount(
+        numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
+        getNumCommitKinds(mod, hooks.get()));
     int extraBytes = totalCaptures * tti::kCaptureSizeBytes;
 
     auto i32Ty = IntegerType::get(mod.getContext(), 32);
