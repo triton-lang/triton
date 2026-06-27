@@ -100,7 +100,9 @@ public:
     bool hasClusterBarriers = target == "nvidia" && ttg::lookupNumCTAs(mod) > 1;
     int totalCaptures = tti::estimateConSanCaptureCount(
         numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
-        getNumCommitKinds(mod, hooks.get()));
+        getNumCommitKinds(mod, hooks.get()),
+        hasSharedMemoryBuffers(mod) &&
+            hooks->needsAsyncProxyFenceTracking(mod));
     int extraBytes = totalCaptures * tti::kCaptureSizeBytes;
 
     auto i32Ty = IntegerType::get(mod.getContext(), 32);

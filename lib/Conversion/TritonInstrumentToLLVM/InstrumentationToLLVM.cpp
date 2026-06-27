@@ -417,7 +417,8 @@ struct LocalGatherOpConversion
     Type llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
-    auto idxValues = unpackLLElements(loc, adaptor.getIndices(), rewriter);
+    auto idxValues = unpackTensorElements(loc, adaptor.getIndices(), rewriter,
+                                          op.getIndices().getType());
     SmallVector<Value> offsets(adaptor.getOffsets());
 
     auto offsetAndBlock = computeLocalOffsetsWithLogicalOffsets(
@@ -431,7 +432,8 @@ struct LocalGatherOpConversion
           return targetInfo.loadDShared(rewriter, loc, addr.ptr, addr.ctaId,
                                         llvmElemTy, b.true_val());
         });
-    Value result = packLLElements(loc, typeConverter, results, rewriter, regTy);
+    Value result =
+        packTensorElements(loc, typeConverter, results, rewriter, regTy);
 
     rewriter.replaceOp(op, result);
     return success();

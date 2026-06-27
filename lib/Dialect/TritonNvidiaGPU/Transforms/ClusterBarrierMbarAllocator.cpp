@@ -84,7 +84,7 @@ void runClusterBarrierMbarAllocator(ModuleOp mod) {
     auto [it, inserted] = regionOffsets.try_emplace(region);
     if (inserted) {
       it->second = builder.getI32IntegerAttr(nextOffset);
-      nextOffset += kClusterBarrierMbarAllocationSize;
+      nextOffset += 16;
     }
     op->setAttr(kClusterBarrierMbarOffsetAttrName, it->second);
   });

@@ -39,7 +39,8 @@ struct MakeRangeOpConversion
       retVals[multiDim.index()] = b.add(multiDim.value()[0], start);
     }
     auto typeConverter = getTypeConverter();
-    Value result = packLLElements(loc, typeConverter, retVals, rewriter, ty);
+    Value result =
+        packTensorElements(loc, typeConverter, retVals, rewriter, ty);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -103,7 +104,7 @@ public:
     }
 
     Value result =
-        packLLElements(loc, getTypeConverter(), llValues, b, tensorTy);
+        packTensorElements(loc, getTypeConverter(), llValues, b, tensorTy);
     b.replaceOp(op, result);
     return success();
   }

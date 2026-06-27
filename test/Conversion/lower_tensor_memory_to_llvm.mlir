@@ -2,7 +2,9 @@
 
 module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32, ttg.tensor_memory_size = 128 : i32, "ttng.two-ctas" = true} {
   // CHECK-LABEL: @automatic_tmem_lifecycle
-  // CHECK: tcgen05.alloc.cta_group::2.sync.aligned.shared::cta.b32
+  // CHECK: nvvm.cluster.arrive
+  // CHECK-NEXT: nvvm.cluster.wait
+  // CHECK-NEXT: {{.*}}tcgen05.alloc.cta_group::2.sync.aligned.shared::cta.b32
   // CHECK: tcgen05.relinquish_alloc_permit.cta_group::2.sync.aligned
   // CHECK: nvvm.cluster.arrive
   // CHECK-NEXT: nvvm.cluster.wait

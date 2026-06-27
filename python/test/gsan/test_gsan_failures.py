@@ -194,6 +194,17 @@ def _host_tma_atomic_flag_publish_kernel(payload_ptr, flag_ptr, flag_desc, count
         tl.store(scratch_ptr, result)
 
 
+@triton.jit
+def _mixed_scope_release_rmw_kernel(counter_ptr, ready_ptr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.atomic_add(counter_ptr, 1, sem="release", scope="gpu")
+        tl.atomic_xchg(ready_ptr, 1, sem="relaxed", scope="gpu")
+    elif pid == 1:
+        atomic_poll(ready_ptr, 1)
+        tl.atomic_add(counter_ptr, 1, sem="release", scope="sys")
+
+
 def _cuda_byte_allocator(size: int, _align: int, _stream):
     return torch.empty(size, dtype=torch.int8, device="cuda")
 
@@ -232,6 +243,13 @@ def _run_waw_case() -> None:
     scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
     counter = torch.zeros(1, dtype=torch.int32, device="cuda")
     _waw_kernel[(2, )](target, scratch, counter, num_warps=1)
+
+
+@run_with_gsan
+def _run_mixed_scope_release_rmw_case() -> None:
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+    ready = torch.zeros(1, dtype=torch.int32, device="cuda")
+    _mixed_scope_release_rmw_kernel[(2, )](counter, ready, num_warps=1)
 
 
 @run_with_gsan
@@ -403,6 +421,16 @@ def test_write_after_read():
 def test_write_after_write():
     _run_failure_case("waw", runner=_run_waw_case, source_function=_waw_kernel.fn, marker="tl.store(ptr, 2)",
                       error="Write after write race detected")
+
+
+def test_mixed_scope_release_rmw_accumulation():
+    _run_failure_case(
+        "mixed_scope_release_rmw",
+        runner=_run_mixed_scope_release_rmw_case,
+        source_function=_mixed_scope_release_rmw_kernel.fn,
+        marker='tl.atomic_add(counter_ptr, 1, sem="release", scope="sys")',
+        error="GSan detected atomic release accumulation with mixed scopes, which is not supported.",
+    )
 
 
 def test_tma_read_after_write():

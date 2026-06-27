@@ -160,10 +160,8 @@ public:
     if (failed(result)) {
       return failure();
     }
-    auto structTy = LLVM::LLVMStructType::getLiteral(
-        op.getLoc().getContext(), SmallVector<Type>(values.size(), llvmElemTy));
     auto value =
-        packLLElements(op.getLoc(), typeConverter, values, rewriter, structTy);
+        packTensorElements(op.getLoc(), typeConverter, values, rewriter, dstTy);
     rewriter.replaceOp(op, value);
     return success();
   }
@@ -194,7 +192,8 @@ struct LocalAllocOpConversion
         smemBase, llvmElemTy, memDescType.getRank(), op.getLoc(), rewriter);
 
     auto regLayout = toLinearLayout(regTy);
-    auto values = unpackLLElements(op.getLoc(), adaptor.getSrc(), rewriter);
+    auto values =
+        unpackTensorElements(op.getLoc(), adaptor.getSrc(), rewriter, regTy);
     auto result =
         lowerLdStMatrix(op.getLoc(), regLayout, memDescType, values, smemObj,
                         rewriter, targetInfo, getTypeConverter());
@@ -230,7 +229,8 @@ struct LocalStoreOpConversion
         op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
 
     auto regLayout = toLinearLayout(srcTy);
-    auto values = unpackLLElements(op.getLoc(), adaptor.getSrc(), rewriter);
+    auto values =
+        unpackTensorElements(op.getLoc(), adaptor.getSrc(), rewriter, srcTy);
     auto result =
         lowerLdStMatrix(op.getLoc(), regLayout, memDescType, values, smemObj,
                         rewriter, targetInfo, getTypeConverter());
@@ -439,7 +439,8 @@ struct AsyncSharedStoreOpConversion
                             ? paddedLinearLayout(dstTy)
                             : toLinearLayout(dstTy);
     auto cvt = regLayout.invertAndCompose(sharedLayout);
-    auto values = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto values = unpackTensorElements(loc, adaptor.getSrc(), rewriter,
+                                       op.getSrc().getType());
     lowerAsyncSharedStore(loc, op.getContext(), cvt, values, llvmElemTy, dstTy,
                           dstMemObj, mbarrierMemObj.getBase(), mbarrierTy,
                           rewriter, targetInfo);

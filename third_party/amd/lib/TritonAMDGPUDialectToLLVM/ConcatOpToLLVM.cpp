@@ -50,7 +50,8 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
 
     for (size_t i = 0; i < sources.size(); i++) {
       Value currSrc = sources[i];
-      unpackedSources.push_back(unpackLLElements(loc, currSrc, rewriter));
+      unpackedSources.push_back(unpackTensorElements(
+          loc, currSrc, rewriter, op.getSources()[i].getType()));
     }
 
     // Algorithm:
@@ -100,8 +101,8 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
       resultVals.push_back(unpackedSources[linearOperandIdx][srcReg.value()]);
     }
 
-    Value packedResult = packLLElements(loc, this->getTypeConverter(),
-                                        resultVals, rewriter, resultType);
+    Value packedResult = packTensorElements(loc, this->getTypeConverter(),
+                                            resultVals, rewriter, resultType);
 
     rewriter.replaceOp(op, packedResult);
     return success();

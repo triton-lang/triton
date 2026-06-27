@@ -148,8 +148,8 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
                      LinearLayout dotLayout, Value value, int opIdx, int rank,
                      int batch, int nonK, int kIdx, int kInstrSize, int kBase,
                      int64_t kDimTensor, DotOperandEncodingAttr dotEnc,
-                     unsigned warpSize, int *opSel, Type type, Location loc,
-                     bool isScale = false) {
+                     unsigned warpSize, int *opSel, RankedTensorType tensorType,
+                     Type type, Location loc, bool isScale = false) {
   auto ctx = dotLayout.getOutDimNames().begin()->getContext();
 
   const StringAttr dim0 = StringAttr::get(ctx, "dim0");
@@ -158,7 +158,7 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
 
   TritonLLVMOpBuilder tb(loc, rewriter);
 
-  auto elems = unpackLLElements(loc, value, rewriter);
+  auto elems = unpackTensorElements(loc, value, rewriter, tensorType);
 
   Type elemTy = typeConverter->convertType(type);
   Type vecTy = vec_ty(elemTy, kBase);
@@ -463,7 +463,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto kDimTensorB = bTensorTy.getShape()[rank - 2];
 
   auto dstElemTy = dTensorTy.getElementType();
-  auto fc = unpackLLElements(loc, loadedC, rewriter);
+  auto fc = unpackTensorElements(loc, loadedC, rewriter, dTensorTy);
 
   unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
   constexpr unsigned vgprElemBitWidth = 32;
@@ -518,28 +518,31 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
       }
     }
     for (size_t k = 0; k < numRepK; ++k) {
-      auto ha = getOperandVals(
-          rewriter, typeConverter, aLayout, loadedA,
-          /*opIdx*/ 0, rank, batchIdx, m, k, kInstrSize, kBase, kDimTensorA,
-          aEnc, warpSize, /*opScale*/ nullptr, aTensorTy.getElementType(), loc);
+      auto ha =
+          getOperandVals(rewriter, typeConverter, aLayout, loadedA,
+                         /*opIdx*/ 0, rank, batchIdx, m, k, kInstrSize, kBase,
+                         kDimTensorA, aEnc, warpSize, /*opScale*/ nullptr,
+                         aTensorTy, aTensorTy.getElementType(), loc);
       ha = prepareOperands(rewriter, ha, aTensorTy.getElementType(), wmmaVer,
                            kBase, loc);
       ha = maskRepeatedKLanes(rewriter, loc, aLayout, aEnc, ha, warpSize);
 
-      auto hb = getOperandVals(
-          rewriter, typeConverter, bLayout, loadedB,
-          /*opIdx*/ 1, rank, batchIdx, n, k, kInstrSize, kBase, kDimTensorB,
-          bEnc, warpSize, /*opScale*/ nullptr, bTensorTy.getElementType(), loc);
+      auto hb =
+          getOperandVals(rewriter, typeConverter, bLayout, loadedB,
+                         /*opIdx*/ 1, rank, batchIdx, n, k, kInstrSize, kBase,
+                         kDimTensorB, bEnc, warpSize, /*opScale*/ nullptr,
+                         bTensorTy, bTensorTy.getElementType(), loc);
       hb = prepareOperands(rewriter, hb, bTensorTy.getElementType(), wmmaVer,
                            kBase, loc);
       hb = maskRepeatedKLanes(rewriter, loc, bLayout, bEnc, hb, warpSize);
 
       Value haNext;
       if (tiedGroup == 2) {
-        haNext = getOperandVals(rewriter, typeConverter, aLayout, loadedA,
-                                /*opIdx*/ 0, rank, batchIdx, nextM.value(), k,
-                                kInstrSize, kBase, kDimTensorA, aEnc, warpSize,
-                                nullptr, aTensorTy.getElementType(), loc);
+        haNext =
+            getOperandVals(rewriter, typeConverter, aLayout, loadedA,
+                           /*opIdx*/ 0, rank, batchIdx, nextM.value(), k,
+                           kInstrSize, kBase, kDimTensorA, aEnc, warpSize,
+                           nullptr, aTensorTy, aTensorTy.getElementType(), loc);
 
         haNext = prepareOperands(rewriter, haNext, aTensorTy.getElementType(),
                                  wmmaVer, kBase, loc);
@@ -571,9 +574,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   }
 
   // replace with new packed result
-  Type structTy = LLVM::LLVMStructType::getLiteral(
-      wmmaLayout.getContext(), SmallVector<Type>(fc.size(), dstElemTy));
-  Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
+  Value res = packTensorElements(loc, typeConverter, fc, rewriter, dTensorTy);
 
   rewriter.replaceOp(op, res);
   return success();
@@ -686,7 +687,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto bScaleLayout = triton::gpu::toLinearLayout(bScaleTensorTy);
 
   auto dstElemTy = dTensorTy.getElementType();
-  auto fc = unpackLLElements(loc, loadedC, rewriter);
+  auto fc = unpackTensorElements(loc, loadedC, rewriter, dTensorTy);
 
   unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
 
@@ -722,14 +723,14 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
       auto ha = getOperandVals(rewriter, typeConverter, aLayout, loadedA,
                                /*opIdx*/ 0, rank, batchIdx, m, k, kDimA, kBaseA,
                                kDimTensorA, aEnc, warpSize, /*opSel*/ nullptr,
-                               aTensorTy.getElementType(), loc);
+                               aTensorTy, aTensorTy.getElementType(), loc);
       ha = prepareOperands(rewriter, ha, aTensorTy.getElementType(), wmmaVer,
                            kBaseA, loc);
 
       auto hb = getOperandVals(rewriter, typeConverter, bLayout, loadedB,
                                /*opIdx*/ 1, rank, batchIdx, n, k, kDimB, kBaseB,
                                kDimTensorB, bEnc, warpSize, /*opSel*/ nullptr,
-                               bTensorTy.getElementType(), loc);
+                               bTensorTy, bTensorTy.getElementType(), loc);
       hb = prepareOperands(rewriter, hb, bTensorTy.getElementType(), wmmaVer,
                            kBaseB, loc);
 
@@ -740,7 +741,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
           rewriter, typeConverter, aScaleLayout, loadedAScale,
           /*opIdx*/ 0, rank, batchIdx, m, k, kDimScale, KBaseScale,
           /*kDimTensor*/ kDimScale, aEnc, warpSize, &scaleOpSelA,
-          aScaleTensorTy.getElementType(), loc,
+          aScaleTensorTy, aScaleTensorTy.getElementType(), loc,
           /*isScale*/ true);
       sa = prepareOperands(rewriter, sa, aScaleTensorTy.getElementType(),
                            wmmaVer, KBaseScale, loc, /*isScale=*/true);
@@ -749,7 +750,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
           rewriter, typeConverter, bScaleLayout, loadedBScale,
           /*opIdx*/ 0, rank, batchIdx, n, k, kDimScale, KBaseScale,
           /*kDimTensor*/ kDimScale, bEnc, warpSize, &scaleOpSelB,
-          bScaleTensorTy.getElementType(), loc,
+          bScaleTensorTy, bScaleTensorTy.getElementType(), loc,
           /*isScale*/ true);
       sb = prepareOperands(rewriter, sb, bScaleTensorTy.getElementType(),
                            wmmaVer, KBaseScale, loc, /*isScale=*/true);
@@ -772,9 +773,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
     }
   }
 
-  Type structTy = LLVM::LLVMStructType::getLiteral(
-      wmmaLayout.getContext(), SmallVector<Type>(fc.size(), dstElemTy));
-  Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
+  Value res = packTensorElements(loc, typeConverter, fc, rewriter, dTensorTy);
 
   rewriter.replaceOp(op, res);
   return success();

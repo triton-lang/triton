@@ -63,6 +63,57 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+#proxy_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#proxy_bar_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#proxy_smem = #ttg.shared_memory
+#proxy_blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 4104 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: @proxy_fence_state_transitions
+  tt.func public @proxy_fence_state_transitions(%out: !tt.tensordesc<32x32xf32, #proxy_shared>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #proxy_shared, #proxy_smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #proxy_bar_shared, #proxy_smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #proxy_bar_shared, #proxy_smem, mutable>
+
+    // CHECK: tt.call @__triton_consan_set_proxy_access
+    %value = ttg.local_load %buf : !ttg.memdesc<32x32xf32, #proxy_shared, #proxy_smem, mutable> -> tensor<32x32xf32, #proxy_blocked>
+    // CHECK: tt.call @__triton_consan_track_proxy_accesses
+    ttng.arrive_barrier %bar, 1, %true : !ttg.memdesc<1xi64, #proxy_bar_shared, #proxy_smem, mutable>
+    // CHECK: ttng.wait_barrier
+    // CHECK: tt.call @__triton_consan_transfer_proxy_accesses
+    ttng.wait_barrier %bar, %c0, %true : !ttg.memdesc<1xi64, #proxy_bar_shared, #proxy_smem, mutable>
+    // CHECK: tt.call @__triton_consan_fence_proxy_accesses
+    ttng.fence_async_shared {bCluster = false}
+    // CHECK: tt.call @__triton_consan_verify_proxy_access
+    ttng.async_tma_copy_local_to_global %out[%c0, %c0] %buf : !tt.tensordesc<32x32xf32, #proxy_shared>, !ttg.memdesc<32x32xf32, #proxy_shared, #proxy_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#proxy_cp_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#proxy_cp_smem = #ttg.shared_memory
+#proxy_cp_blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#proxy_cp_mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @proxy_fence_tracks_cp_async_and_wgmma
+  tt.func public @proxy_fence_tracks_cp_async_and_wgmma(%ptr: tensor<128x128x!tt.ptr<f16>, #proxy_cp_blocked>, %acc: tensor<128x128xf16, #proxy_cp_mma>) {
+    %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #proxy_cp_shared, #proxy_cp_smem, mutable>
+    // CHECK: tt.call @__triton_consan_set_proxy_access
+    ttg.async_copy_global_to_local %ptr, %buf : tensor<128x128x!tt.ptr<f16>, #proxy_cp_blocked> -> <128x128xf16, #proxy_cp_shared, #proxy_cp_smem, mutable>
+    ttg.async_commit_group
+    ttg.async_wait {num = 0 : i32}
+    // CHECK: tt.call @__triton_consan_verify_proxy_access
+    // CHECK: tt.call @__triton_consan_verify_proxy_access
+    ttng.warp_group_dot %buf, %buf, %acc : !ttg.memdesc<128x128xf16, #proxy_cp_shared, #proxy_cp_smem, mutable> * !ttg.memdesc<128x128xf16, #proxy_cp_shared, #proxy_cp_smem, mutable> -> tensor<128x128xf16, #proxy_cp_mma>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -728,7 +779,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-DAG: %[[SM_READ_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 32 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i64>
     // CHECK-DAG: %[[TM_BUFS:.*]] = tti.experimental_buffer_descriptors [0], [{{.*}}], tensor_mem : tensor<1xi64
     // CHECK-DAG: %[[TM_WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 8 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i64>
-    // CHECK-DAG: %[[TM_READ_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 16 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i64>
+    // CHECK-DAG: tt.call @__triton_consan_fill_global_tensor{{.*}}T1x1x1x2x1xI64(%[[TM_READ_VISIBILITY_GLOB:[^,]+]],
     // CHECK-DAG: %[[BARRIERS:.*]] = tti.experimental_buffer_descriptors [65536], [{{.*}}], shared_mem : tensor<1xi64
 
     // CHECK-DAG: %[[SM_WRITE_TRACKING_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 2 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i8>

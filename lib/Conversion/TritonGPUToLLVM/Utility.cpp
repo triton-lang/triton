@@ -672,6 +672,7 @@ FailureOr<LocalAtomicScatterRMWInfo> prepareLocalAtomicScatterRMW(
     Value inputValues, Value mask, ConversionPatternRewriter &rewriter,
     const TargetInfoBase &targetInfo, const LLVMTypeConverter *typeConverter) {
   auto loc = op.getLoc();
+  auto *ctx = op.getContext();
   auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
   auto memDescTy = cast<triton::gpu::MemDescType>(op.getDst().getType());
   if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
@@ -682,25 +683,21 @@ FailureOr<LocalAtomicScatterRMWInfo> prepareLocalAtomicScatterRMW(
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
   auto smemObj =
       LLVM::getSharedMemoryObjectFromStruct(loc, dst, llvmElemTy, rewriter);
-  SmallVector<Value> idxValues = unpackLLElements(loc, indices, rewriter);
-  SmallVector<Value> values = unpackLLElements(loc, inputValues, rewriter);
+  SmallVector<Value> idxValues =
+      unpackUniqueTensorElements(loc, indices, rewriter);
+  SmallVector<Value> values =
+      unpackUniqueTensorElements(loc, inputValues, rewriter);
   SmallVector<Value> maskValues;
   if (mask)
-    maskValues = unpackLLElements(loc, mask, rewriter);
+    maskValues = unpackUniqueTensorElements(loc, mask, rewriter);
 
   LinearLayout regLayout = triton::gpu::toLinearLayout(valuesTy);
   auto freeVarMasks = regLayout.getFreeVariableMasks();
   auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
   Value threadPred = triton::gpu::emitRedundantThreadPredicate(
       freeVarMasks, rewriter, loc, targetInfo);
-  LinearLayout activeRegLayout = regLayout;
-  if (!removeBroadcast.isIdentity()) {
-    activeRegLayout = removeBroadcast.apply(regLayout);
-    values = removeBroadcast.apply(values);
-    idxValues = removeBroadcast.apply(idxValues);
-    if (!maskValues.empty())
-      maskValues = removeBroadcast.apply(maskValues);
-  }
+  LinearLayout activeRegLayout =
+      regLayout.removeZeroBasesAlongDim(str_attr("register"));
   auto offsetAndBlock =
       computeBlockLocalOffsets(loc, memDescTy, activeRegLayout, idxValues,
                                op.getAxis(), rewriter, targetInfo);
@@ -1045,6 +1042,20 @@ SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
   return results;
 }
 
+SmallVector<Value> unpackUniqueTensorElements(Location loc, Value llvmStruct,
+                                              RewriterBase &rewriter) {
+  return unpackLLElements(loc, llvmStruct, rewriter);
+}
+
+SmallVector<Value> unpackTensorElements(Location loc, Value llvmStruct,
+                                        RewriterBase &rewriter,
+                                        Type originalType) {
+  if (auto tensorTy = dyn_cast<RankedTensorType>(originalType))
+    return broadcastAs(unpackUniqueTensorElements(loc, llvmStruct, rewriter),
+                       triton::gpu::toLinearLayout(tensorTy));
+  return unpackLLElements(loc, llvmStruct, rewriter);
+}
+
 Value packLLElements(Location loc, const LLVMTypeConverter *typeConverter,
                      ValueRange resultVals, RewriterBase &rewriter, Type type) {
   auto structType =
@@ -1077,6 +1088,26 @@ Value packLLElements(Location loc, const LLVMTypeConverter *typeConverter,
     llvmStruct = b.insert_val(structType, llvmStruct, value, i);
   }
   return llvmStruct;
+}
+
+Value packUniqueTensorElements(Location loc,
+                               const LLVMTypeConverter *typeConverter,
+                               ValueRange resultVals, RewriterBase &rewriter,
+                               Type type) {
+  return packLLElements(loc, typeConverter, resultVals, rewriter, type);
+}
+
+Value packTensorElements(Location loc, const LLVMTypeConverter *typeConverter,
+                         ValueRange resultVals, RewriterBase &rewriter,
+                         Type type) {
+  if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
+    auto uniqueResultVals =
+        actionRemoveBroadcastedRegs(triton::gpu::toLinearLayout(tensorTy))
+            .apply(resultVals);
+    return packUniqueTensorElements(loc, typeConverter, uniqueResultVals,
+                                    rewriter, type);
+  }
+  return packLLElements(loc, typeConverter, resultVals, rewriter, type);
 }
 
 SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
@@ -2043,11 +2074,10 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                                  const LLVMTypeConverter *typeConverter) {
   auto *ctx = rewriter.getContext();
   auto loc = op->getLoc();
-  Type structTy = typeConverter->convertType(tensorTy);
   if (!op->hasAttr("allocation.offset")) {
     // No broadcasting, just pack the values into a struct
     Value resultStruct =
-        packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
+        packTensorElements(loc, typeConverter, resultVals, rewriter, tensorTy);
     rewriter.replaceOp(op, {resultStruct});
     return;
   }
@@ -2119,12 +2149,9 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                 /*maskSpanAffineOffset=*/0, /*affineBlockOffset=*/Value(),
                 /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
                 /*maybeMaxVecElems=*/{}, emitLd);
-  if (!removeRegBroadcast.isIdentity())
-    resultVals = broadcastAs(resultVals, regLayout);
-
   // Create the result struct and replace the operation
-  Value resultStruct =
-      packLLElements(loc, typeConverter, resultVals, rewriter, structTy);
+  Value resultStruct = packUniqueTensorElements(loc, typeConverter, resultVals,
+                                                rewriter, tensorTy);
   rewriter.replaceOp(op, {resultStruct});
 }
 
