@@ -33,7 +33,6 @@ from functools import partial
 from typing import Union
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton.language.core import _aggregate as aggregate
 
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.hopper import (
@@ -85,13 +84,13 @@ def get_flops(ms, M, N, K):
 # of tensor core operations so that our persistent matmul can be used on both
 # Hopper and Blackwell.
 #
-# We can use @aggregate to define a class that contains the state of the
+# We can use @gluon.aggregate to define a class that contains the state of the
 # matmul. We will define the API of our MMA wrapper to be like WGMMA's, because
 # is the more restrictive of the two.
 
 
 # MMA wrapper for WGMMA, which maps directly to the WGMMA functions.
-@aggregate
+@gluon.aggregate
 class WGMMA:
     acc: Union[warpgroup_mma_accumulator, gl.tensor]
     use_acc: gl.tensor
@@ -116,14 +115,14 @@ class WGMMA:
 
     # Take the result and reset the accumulator.
     @gluon.jit
-    def take_result(self):
+    def take_result(self, splitn: gl.constexpr = False):
         return self.acc, WGMMA(self.acc, gl.to_tensor(False))
 
 
 # MMA wrapper for tcgen05. In order to implement `wait_num_outstanding`, we
 # need to allocate barriers and keep track of how many MMAs have been issued.
 # State will be tracked with an accumulator.
-@aggregate
+@gluon.aggregate
 class MMAv5:
     use_acc: gl.tensor
     acc_tmem: tensor_memory_descriptor
@@ -150,9 +149,13 @@ class MMAv5:
         return self
 
     @gluon.jit
-    def take_result(self):
+    def take_result(self, splitn: gl.constexpr = False):
         next = MMAv5(gl.to_tensor(False), self.acc_tmem, self.bar, self.counter)
-        return self.acc_tmem.load(), next
+        if splitn:
+            layout: gl.constexpr = self.acc_tmem.get_reg_layout(instr_variant="32x32b_splitn")
+            return self.acc_tmem.load(layout), next
+        else:
+            return self.acc_tmem.load(), next
 
 
 def select_mma_impl():
@@ -180,8 +183,8 @@ def issue_loads(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs,
     producer += 1
     bar = bars.index(index)
     mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred=pred)
-    tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(index), pred)
+    tma.async_load(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
+    tma.async_load(b_desc, [k, off_n], bar, b_bufs.index(index), pred)
     return producer
 
 
@@ -300,6 +303,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
     print()
 
 # %%
+# ```text
 # BLOCK_K num_buffers num_warps Blackwell  Hopper
 #     128           2         4    735.96
 #     128           2         8    697.97  489.26
@@ -307,6 +311,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
 #      64           3         8    973.94  673.67
 #      64           4         4   1175.70
 #      64           4         8   1072.83  669.16
+# ```
 #
 # Blackwell performance lines up with what we have seen in previous tutorials,
 # but on Hopper we see some wins. On Hopper, performance plateaus at 3 buffers,
@@ -322,7 +327,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
 # scheduling strategy, starting with a basic row-major tile scheduler.
 
 
-@aggregate
+@gluon.aggregate
 class PersistentTileScheduler:
     pid_start: gl.tensor
     pid_end: gl.tensor
@@ -453,6 +458,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
     print()
 
 # %%
+# ```text
 # BLOCK_K num_buffers num_warps  Blackwell  Hopper
 #     128           2         4     712.25
 #     128           2         8     686.64  502.84
@@ -460,6 +466,7 @@ if __name__ == "__main__" and not profiling_with_ncu:
 #      64           3         8     938.81  661.11
 #      64           4         4    1142.26
 #      64           4         8    1071.46  658.84
+# ```
 #
 # The Hopper kernel sees a modest improvement, but the Blackwell kernel
 # performance is slightly lower. Let's capture a profile of the kernels on
@@ -497,7 +504,7 @@ def GroupedPersistentTileScheduler(GROUP_SIZE_M):
     GROUP_SIZE_M = gl.constexpr(GROUP_SIZE_M)
 
     # Like C++ templates!
-    @aggregate
+    @gluon.aggregate
     class GroupedPersistentTileSchedulerImpl:
         start_pid: gl.tensor
         num_pid_m: gl.tensor
@@ -551,12 +558,14 @@ if __name__ == "__main__" and not profiling_with_ncu:
     print()
 
 # %%
+# ```text
 # GROUP_SIZE_M Blackwell  Hopper
 #            1   1025.11  649.09
 #            2   1050.43  651.32
 #            4   1032.71  655.51
 #            6   1057.27  652.39
 #            8   1179.94  648.42
+# ```
 #
 # At GROUP_SIZE_M=8, we recover performance on Blackwell. In fact, under ncu we
 # see the L2 hit rate increases to 70%, which suggests there are other ways to
@@ -597,8 +606,8 @@ def issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, 
     producer += 1
     bar = bars.index(index)
     mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred=pred)
-    tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
-    tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(b_index), pred)
+    tma.async_load(a_desc, [off_m, k], bar, a_bufs.index(index), pred)
+    tma.async_load(b_desc, [k, off_n], bar, b_bufs.index(b_index), pred)
     return producer
 
 
@@ -615,8 +624,9 @@ def issue_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, stealb: gl.constexpr, 
 
 
 @gluon.jit
-def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.constexpr, SchedulerImpl: gl.constexpr,
-                                       num_buffers: gl.constexpr, STEALB: gl.constexpr, num_warps: gl.constexpr):
+def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, c_half_desc, MMAImpl: gl.constexpr,
+                                       SchedulerImpl: gl.constexpr, num_buffers: gl.constexpr, STEALB: gl.constexpr,
+                                       num_warps: gl.constexpr):
     BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
     BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]
@@ -631,7 +641,8 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
     if not STEALB:
         c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
     else:
-        gl.static_assert(2 * BLOCK_N * BLOCK_K >= BLOCK_M * BLOCK_N, "B tile not large enough to steal")
+        gl.static_assert(BLOCK_M == BLOCK_K or BLOCK_M == 2 * BLOCK_K,
+                         "expected one or two B tiles to cover the epilogue tile")
     bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
     for i in gl.static_range(num_buffers):
         mbarrier.init(bars.index(i), count=1)
@@ -682,18 +693,33 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.const
                                       num_buffers)
 
         mma = mma.wait_num_outstanding(0)
-        c, mma = mma.take_result()
+        use_split_n_load: gl.constexpr = STEALB and BLOCK_M != BLOCK_K
+        c, mma = mma.take_result(splitn=use_split_n_load)
         c = c.to(dtype)
         if not STEALB:
             c_buf = c_smem
             tma.store_wait(pendings=0)
+            c_buf.store(c)
+            fence_async_shared()
+            tma.async_copy_shared_to_global(c_desc, [epilogue_off_m, epilogue_off_n], c_buf)
+        elif BLOCK_M == BLOCK_K:
+            c_buf = b_bufs.index(producer % (num_buffers + STEALB))
+            c_buf.store(c)
+            fence_async_shared()
+            tma.async_copy_shared_to_global(c_desc, [epilogue_off_m, epilogue_off_n], c_buf)
         else:
             # Steal the next 2 B buffers for the epilogue.
-            c_buf = b_bufs.index(producer % (num_buffers + STEALB))._reinterpret(dtype, c_desc.block_type.shape,
-                                                                                 c_desc.layout)
-        c_buf.store(c)
-        fence_async_shared()
-        tma.async_copy_shared_to_global(c_desc, [epilogue_off_m, epilogue_off_n], c_buf)
+            c0, c1 = c.reshape((BLOCK_M, 2, BLOCK_N // 2)).permute(0, 2, 1).split()
+            c0_buf = b_bufs.index(producer % (num_buffers + STEALB))._reinterpret(shape=c_half_desc.block_type.shape,
+                                                                                  layout=c_half_desc.layout)
+            c1_buf = b_bufs.index(
+                (producer + 1) % (num_buffers + STEALB))._reinterpret(shape=c_half_desc.block_type.shape,
+                                                                      layout=c_half_desc.layout)
+            c0_buf.store(c0)
+            c1_buf.store(c1)
+            fence_async_shared()
+            tma.async_copy_shared_to_global(c_half_desc, [epilogue_off_m, epilogue_off_n], c0_buf)
+            tma.async_copy_shared_to_global(c_half_desc, [epilogue_off_m, epilogue_off_n + BLOCK_N // 2], c1_buf)
     tma.store_wait(pendings=0)
 
 
@@ -704,16 +730,19 @@ def persistent_matmul_pipelined(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers,
     a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
     b_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float16)
     c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
+    c_half_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N // 2], gl.float16)
 
     a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
     b_desc = TensorDescriptor.from_tensor(B, [BLOCK_K, BLOCK_N], b_layout)
     c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
+    c_half_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N // 2], c_half_layout)
 
     num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
     grid = (min(num_sms, num_pid), )
-    persistent_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, MMAImpl, SchedulerImpl, num_buffers,
-                                             STEALB=num_buffers == 4, num_warps=num_warps)
+    stealb = num_buffers == 4
+    persistent_matmul_pipelined_kernel[grid](a_desc, b_desc, c_desc, c_half_desc, MMAImpl, SchedulerImpl, num_buffers,
+                                             STEALB=stealb, num_warps=num_warps)
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
@@ -761,6 +790,7 @@ if __name__ == "__main__":
         print(f"{K:>5} {r0:>17.2f} {r1:>13.2f} {r2:>11.2f} {r3:>9.2f}")
 
 # %%
+# ```text
 # Blackwell results:
 #
 #     K     nonpersistent    persistent   pipelined    cublas
@@ -770,7 +800,9 @@ if __name__ == "__main__":
 #  4096           1164.05       1120.92     1143.47   1563.98
 #  8192           1160.93       1074.97     1185.40   1491.84
 # 16384           1185.62       1096.34     1296.93   1548.42
+# ```
 #
+# ```text
 # Hopper results:
 #
 #     K     nonpersistent    persistent   pipelined    cublas
@@ -780,6 +812,7 @@ if __name__ == "__main__":
 #  4096            609.36        630.10      640.48    646.30
 #  8192            629.44        646.22      661.57    661.11
 # 16384            653.79        660.29      670.00    665.49
+# ```
 #
 # Persistent matmul, when pipelined, gains more performance relative to
 # nonpersistent at lower K, as we would expect. Load balancing can be

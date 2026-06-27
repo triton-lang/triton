@@ -2,26 +2,37 @@ from .layout_details.base import Layout
 from .layout_details.blackwell_scale import BlackwellMXScaleLayout
 from .layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .layout_details.blackwell_value import BlackwellMXValueLayout
+from .layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
 from .layout_details.hopper_scale import HopperMXScaleLayout
 from .layout_details.hopper_value import HopperMXValueLayout
 from .layout_details.cdna4_scale import CDNA4MXScaleLayout
+from .layout_details.gfx1250_scale import GFX1250MXScaleLayout
 from .layout_details.strided import StridedLayout
-from ..target_info import cuda_capability_geq, is_hip_cdna4
+from ..target_info import cuda_capability_geq, is_hip_cdna4, is_hip_gfx1250
 
 __all__ = [
     "Layout",
     "BlackwellMXValueLayout",
+    "BlackwellMX4ValueShuffledLayout",
     "BlackwellMXScaleLayout",
     "HopperMXScaleLayout",
     "HopperMXValueLayout",
     "CDNA4MXScaleLayout",
+    "GFX1250MXScaleLayout",
     "StridedLayout",
     "BlackwellActMXScaleLayout",
 ]
 
 
-def make_default_matmul_mxfp4_w_layout(mx_axis: int):
+def make_default_matmul_mxfp4_w_layout(
+    mx_axis: int,
+    allow_blackwell_value_shuffle: bool = False,
+    block_k: int = 128,
+    block_n: int = 256,
+):
     if cuda_capability_geq(10):
+        if allow_blackwell_value_shuffle:
+            return BlackwellMX4ValueShuffledLayout(block_k=block_k, block_n=block_n)
         return BlackwellMXValueLayout()
     elif cuda_capability_geq(9):
         return HopperMXValueLayout(mx_axis=mx_axis, mma_version=3)
@@ -32,6 +43,8 @@ def make_default_matmul_mxfp4_w_layout(mx_axis: int):
 def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
     if is_hip_cdna4():
         return CDNA4MXScaleLayout()
+    elif is_hip_gfx1250():
+        return GFX1250MXScaleLayout()
     else:
         if cuda_capability_geq(10):
             return BlackwellMXScaleLayout()
@@ -41,7 +54,11 @@ def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
     return StridedLayout(-2)
 
 
-def make_default_matmul_mxfp8_act_scale_layout(ragged_metadata):
+def make_default_matmul_mx_act_scale_layout(ragged_metadata):
     if cuda_capability_geq(10):
         return BlackwellActMXScaleLayout(ragged_metadata)
     return StridedLayout(-2)
+
+
+def make_default_matmul_mxfp8_act_scale_layout(ragged_metadata):
+    return make_default_matmul_mx_act_scale_layout(ragged_metadata)

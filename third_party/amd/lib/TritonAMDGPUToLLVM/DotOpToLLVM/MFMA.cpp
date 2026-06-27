@@ -237,7 +237,6 @@ struct DotOpMFMAConversionHelper {
     // Check if this dot has come with priority set by setprio.
     auto setPrioOp = dyn_cast_or_null<ROCDL::SetPrioOp>(op->getPrevNode());
 
-    auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
     auto mnkDim = mfmaLayout.getInstrShape();
     auto mDim = mnkDim[0];
     auto nDim = mnkDim[1];
@@ -282,7 +281,6 @@ struct DotOpMFMAConversionHelper {
     unsigned kBase = maybeMfmaIntrinsic->kBase;
 
     auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
-    auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
     int kWidth = aEncoding.getKWidth();
 
     intrinsicName = maybeMfmaIntrinsic->name;
@@ -321,7 +319,6 @@ struct DotOpMFMAConversionHelper {
       numRepKB *= 16;
     }
     numRepK = std::max(numRepKA, numRepKB);
-    int numBroadcast = std::max(numBroadcastA, numBroadcastB);
 
     bool preserveBF16 = intrinsicName.contains(".bf16") && mfmaVersion >= 4;
     auto operandA = getValuesFromDotOperandLayoutStruct(
@@ -498,9 +495,9 @@ struct DotOpMFMAConversionHelper {
           }
 
           // Step 2: process rawElems based on element type
-          // Note that for f32/fp64 input and XF32 is not allowed, nothing needs
+          // Note that for f32 and XF32 is not allowed or f64, nothing needs
           // to be done and rawElems is inserted into the ValueTable directly
-          if ((type.isF32() || type.isF64()) && !allowXF32) {
+          if ((type.isF32() && !allowXF32) || type.isF64()) {
             dotOpVals[{b, nonK, kBaseVec}] =
                 tb.extract_element(type, rawElems, tb.i32_val(0));
           } else {
@@ -580,7 +577,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     // Check if this dot has come with priority set by setprio.
     auto setPrioOp = dyn_cast_or_null<ROCDL::SetPrioOp>(op->getPrevNode());
 
-    auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
     auto mnkDim = mfmaLayout.getInstrShape();
     auto mDim = mnkDim[0];
     auto nDim = mnkDim[1];

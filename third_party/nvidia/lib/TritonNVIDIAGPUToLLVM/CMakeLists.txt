@@ -13,7 +13,6 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     TMAToLLVM.cpp
     SPMDOpToLLVM.cpp
     TensorMemoryToLLVM.cpp
-    TensorPtrOpsToLLVM.cpp
     ClusterOpsToLLVM.cpp
     PTXAsmFormat.cpp
     Utility.cpp
@@ -26,8 +25,10 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     NVGPUAttrDefsIncGen
 
     LINK_LIBS PUBLIC
+    GluonTransforms
     TritonAnalysis
     TritonGPUToLLVM
+    TritonInstrumentIR
     TritonInstrumentToLLVM
     MLIRReconcileUnrealizedCasts
     NVGPUIR

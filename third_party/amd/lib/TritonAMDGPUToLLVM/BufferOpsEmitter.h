@@ -70,11 +70,13 @@ struct BufferEmitter {
   Value emitLoad(Type type, Value rsrcDesc, Value offset, Value pred,
                  Value falseVal, CacheModifier cm);
 
-  // Emit a predicated rocdl.raw.ptr.buffer.load.lds
-  ROCDL::RawPtrBufferLoadLdsOp emitLoadToLds(Type type, Value byteWidth,
-                                             Value rsrcDesc, Value offset,
-                                             Value dst, Value pred,
-                                             CacheModifier cm);
+  // Emit a rocdl.raw.ptr.buffer.load.async.lds for direct-to-LDS loads.
+  // Always emits the async variant since buffer_load_to_lds is only supported
+  // on gfx942/gfx950 which use asyncmark-based synchronization.
+  ROCDL::RawPtrBufferLoadAsyncLdsOp emitLoadToLds(Type type, Value byteWidth,
+                                                  Value rsrcDesc, Value offset,
+                                                  Value dst, Value pred,
+                                                  CacheModifier cm);
 
   // Emit a predicated rocdl.raw.ptr.buffer.atomic.* RMWOp
   Value emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset,

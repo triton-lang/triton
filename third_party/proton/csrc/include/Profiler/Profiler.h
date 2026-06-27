@@ -66,43 +66,26 @@ public:
   /// Register a data object to the profiler.
   /// A profiler can yield metrics to multiple data objects.
   Profiler *registerData(Data *data) {
-    std::unique_lock<std::shared_mutex> lock(mutex);
     dataSet.insert(data);
     return this;
   }
 
   /// Unregister a data object from the profiler.
   Profiler *unregisterData(Data *data) {
-    std::unique_lock<std::shared_mutex> lock(mutex);
     dataSet.erase(data);
     return this;
   }
 
   /// Get the set of data objects registered to the profiler.
-  std::set<Data *> getDataSet() const {
-    std::shared_lock<std::shared_mutex> lock(mutex);
-    return dataSet;
-  }
+  std::set<Data *> getDataSet() const { return dataSet; }
 
   Profiler *setMode(const std::vector<std::string> &modeAndOptions) {
-    std::unique_lock<std::shared_mutex> lock(mutex);
     this->modeAndOptions = modeAndOptions;
     this->doSetMode(modeAndOptions);
     return this;
   }
 
-  std::vector<std::string> getMode() const {
-    std::shared_lock<std::shared_mutex> lock(mutex);
-    return modeAndOptions;
-  }
-
-  void addMetrics(
-      size_t scopeId,
-      const std::map<std::string, MetricValueType> &scalarMetrics,
-      const std::map<std::string, TensorMetric> &tensorMetrics) override {
-    std::unique_lock<std::shared_mutex> lock(mutex);
-    this->doAddMetrics(scopeId, scalarMetrics, tensorMetrics);
-  }
+  std::vector<std::string> getMode() const { return modeAndOptions; }
 
   /// These fields are not persistent, function pointers will be changed
   /// when modules and contexts are switched.
@@ -118,12 +101,7 @@ protected:
   virtual void doFlush() = 0;
   virtual void doStop() = 0;
   virtual void doSetMode(const std::vector<std::string> &modeAndOptions) = 0;
-  virtual void
-  doAddMetrics(size_t scopeId,
-               const std::map<std::string, MetricValueType> &scalarMetrics,
-               const std::map<std::string, TensorMetric> &tensorMetrics) = 0;
 
-  mutable std::shared_mutex mutex;
   std::set<Data *> dataSet;
   static thread_local MetricKernelLaunchState metricKernelLaunchState;
 

@@ -3,7 +3,6 @@
 
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -11,23 +10,39 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include <cstdint>
 
 namespace mlir::LLVM::AMD {
+
+// Here is a partial definition of DppCtrl enums. For the complete definition,
+// please check:
+// https://github.com/llvm/llvm-project/blob/8c75290/llvm/lib/Target/AMDGPU/SIDefines.h#L939
+enum class DppCtrl : uint32_t {
+  QUAD_PERM_FIRST = 0,
+  ROW_SHL0 = 0x100,
+  ROW_SHR0 = 0x110,
+  ROW_ROR0 = 0x120,
+  ROW_MIRROR = 0x140,
+  ROW_HALF_MIRROR = 0x141,
+  BCAST15 = 0x142,
+  BCAST31 = 0x143,
+  ROW_XMASK0 = 0x160,
+};
 
 enum class MemoryOp { Load, Store };
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
-                 mlir::triton::AMD::ISAFamily isaFamily =
-                     mlir::triton::AMD::ISAFamily::Unknown);
+                 mlir::triton::amdgpu::ISAFamily isaFamily =
+                     mlir::triton::amdgpu::ISAFamily::Unknown);
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i,
-                mlir::triton::AMD::ISAFamily isaFamily =
-                    mlir::triton::AMD::ISAFamily::Unknown);
+                mlir::triton::amdgpu::ISAFamily isaFamily =
+                    mlir::triton::amdgpu::ISAFamily::Unknown);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i,
-                 mlir::triton::AMD::ISAFamily isaFamily =
-                     mlir::triton::AMD::ISAFamily::Unknown);
+                 mlir::triton::amdgpu::ISAFamily isaFamily =
+                     mlir::triton::amdgpu::ISAFamily::Unknown);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
-                 mlir::triton::AMD::ISAFamily isaFamily =
-                     mlir::triton::AMD::ISAFamily::Unknown);
+                 mlir::triton::amdgpu::ISAFamily isaFamily =
+                     mlir::triton::amdgpu::ISAFamily::Unknown);
 
 Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
               Value selector);
@@ -68,13 +83,6 @@ int32_t
 getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
                                     const mlir::triton::AMD::TargetInfo &);
 
-// Get cache modifier information for buffer atomics
-int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
-                                                 bool setNT);
-
-Value cvtFp32ToFp16RTNE_oneValue(Location loc, RewriterBase &rewriter,
-                                 const Value &v);
-
 // Return a tensor of pointers with the same type of `basePtr` and the same
 // shape of `offset`
 Type getPointerTypeWithShape(Value basePtr, Value offset);
@@ -111,13 +119,16 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         RankedTensorType srcTy, Attribute dstEnc,
                         ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize);
 
-// Check if the result of this tl.dot is used as opA or opB of another tl.dot
-// in the same region
+// Check if the result of this tl.dot is used as opA or opB of another tl.dot.
 bool isChainDotHead(mlir::triton::DotOpInterface dotOp, unsigned opIdx = 0);
 
-// Check if the opA of this tl.dot is the result of another tl.dot
-// in the same region
+// Check if the opA of this tl.dot is the result of another tl.dot.
 bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
+
+// Branchless fp8 -> f32 via multiply trick.
+// Handles both E4M3FN (isE4M3FN=true) and E5M2 (isE4M3FN=false) formats.
+Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
+                        bool isE4M3FN);
 
 // Software implementation of converting an 8-element vector of MXFP4 elements
 // to a wider type: BF16 or FP16 for target before CDNA4.
@@ -125,7 +136,7 @@ bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
 // conversion
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                     bool toFp16, Value packedVec,
-                                    mlir::triton::AMD::ISAFamily isaFamily,
+                                    mlir::triton::amdgpu::ISAFamily isaFamily,
                                     Value scale = nullptr);
 
 template <typename ConvertOp>

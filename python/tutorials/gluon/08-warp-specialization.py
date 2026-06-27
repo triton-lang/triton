@@ -28,7 +28,6 @@ from functools import partial
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
-from triton.language.core import _aggregate as aggregate
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia.blackwell import (
@@ -115,7 +114,7 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 #
 # mbarrier.wait(bar, phase=0)
 # fence_async_shared()
-# tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+# tma.async_load(desc, [0, 0], bar, smem)
 # ```
 #
 # A fence is needed somewhere between the shared memory load and the TMA load.
@@ -149,8 +148,8 @@ def load_partition(descs, barriers, buffers, xoff, numel, YBLOCK: gl.constexpr):
         # signal the operand buffers as ready when they complete.
         yoff = i * YBLOCK
         mbarrier.expect(load_ready_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [xoff, yoff], load_ready_bar, a_buf)
-        tma.async_copy_global_to_shared(b_desc, [xoff, yoff], load_ready_bar, b_buf)
+        tma.async_load(a_desc, [xoff, yoff], load_ready_bar, a_buf)
+        tma.async_load(b_desc, [xoff, yoff], load_ready_bar, b_buf)
 
 
 @gluon.jit
@@ -185,7 +184,7 @@ def store_partition(descs, barriers, buffers, xoff, numel, YBLOCK: gl.constexpr)
         mbarrier.arrive(c_empty_bar, count=1, pred=i >= outstanding_stores)
 
     # Since we waited for the last value of c, all the other partitions have
-    # exited by now. We just need to wait the stores to complete.
+    # exited by now. We just need the final stores to complete.
     tma.store_wait(0)
 
 
@@ -385,7 +384,7 @@ if __name__ == "__main__":
 
 
 # Helper class for passing arguments around partitions.
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     a_desc: tma.tensor_descriptor
     b_desc: tma.tensor_descriptor
@@ -402,7 +401,7 @@ class PartitionArgs:
 
 
 # Counter abstraction for tracking barrier index and phase.
-@aggregate
+@gluon.aggregate
 class Counter:
     index: gl.tensor
     phase: gl.tensor
@@ -444,8 +443,8 @@ def matmul_load_partition(p, SchedulerImpl: gl.constexpr):
             bar = ready_bars.index(state.index)
             mbarrier.wait(empty_bars.index(state.index), state.phase)
             mbarrier.expect(bar, p.a_desc.block_type.nbytes + p.b_desc.block_type.nbytes)
-            tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index))
-            tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index))
+            tma.async_load(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index))
+            tma.async_load(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index))
             state = state.next()
 
 
@@ -627,19 +626,19 @@ if __name__ == "__main__" and is_blackwell():
         A = torch.randn(M, K, device="cuda", dtype=torch.float16)
         B = torch.randn(K, N, device="cuda", dtype=torch.float16)
         BT = B.T.contiguous()
-        r0 = as_flops(triton.testing.do_bench_cudagraph(lambda: matmul_warp_specialized(A, B, C, **args)))
+        r0 = as_flops(triton.testing.do_bench(lambda: matmul_warp_specialized(A, B, C, **args)))
         r1 = as_flops(triton.testing.do_bench(lambda: cublas.matmul(A, BT, C)))
         print(f"{K:>5} {r0:>17.2f} {r1:>9.2f}")
 
 # %%
 #     K  warp-specialized    cublas
-#   512           1160.28   1130.67
-#  1024           1249.69   1148.52
-#  2048           1347.18   1261.59
-#  4096           1390.95   1299.38
-#  8192           1350.01   1401.10
-# 16384           1448.14   1508.76
+#   512           1004.18   1191.77
+#  1024           1182.61   1334.85
+#  2048           1313.71   1400.35
+#  4096           1317.58   1432.32
+#  8192           1291.56   1301.11
+# 16384           1256.74   1335.24
 #
-# Much better! We are beating cublas on small K, even though there is still lots
-# of tuning we can do to improve performance. On Blackwell, warp specialization
-# is critical for achieving peak performance.
+# Much better! We are now quite competitive with cublas.
+# We will show in tutorial 14-multicta.py how we can use multicta and a few other
+# tricks to consistently beat cublas in a wide range of shapes.

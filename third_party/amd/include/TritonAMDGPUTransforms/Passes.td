@@ -49,9 +49,9 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
-    Option<"archGenerationName", "arch-generation-name",
+    Option<"gfxArch", "gfx-arch",
            "std::string", /*default=*/"std::string{}",
-           "GFX generation name of target device.">,
+           "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
     Option<"matrixInstructionSize", "matrix-instruction-size",
            "int32_t", /*default*/"0",
            "enforce matrix instruction MN size">,
@@ -174,9 +174,9 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
-    Option<"archGenerationName", "arch-generation-name",
+    Option<"gfxArch", "gfx-arch",
            "std::string", /*default=*/"std::string{}",
-           "GFX generation name of target device.">,
+           "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
     Option<"allowBufferAtomics", "allow-buffer-atomics",
            "bool", /*default*/"true",
            "Allow buffer atomic operations when the hardware supports it.">,
@@ -276,9 +276,9 @@ def TritonAMDGPUCoalesceAsyncCopy: Pass<"tritonamdgpu-coalesce-async-copy", "mli
   let dependentDialects = [];
 
   let options = [
-    Option<"archGenerationName", "arch-generation-name",
+    Option<"gfxArch", "gfx-arch",
            "std::string", /*default=*/"std::string{}",
-           "GFX generation name of target device.">,
+           "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
   ];
 }
 
@@ -294,9 +294,9 @@ def TritonAMDGPUUpdateAsyncWaitCount: Pass<"tritonamdgpu-update-async-wait-count
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
-    Option<"archGenerationName", "arch-generation-name",
+    Option<"gfxArch", "gfx-arch",
            "std::string", /*default=*/"std::string{}",
-           "GFX generation name of target device.">,
+           "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
   ];
 }
 
@@ -319,14 +319,30 @@ def TritonAMDGPUOptimizeDotOperands : Pass<"tritonamdgpu-optimize-dot-operands",
                            "mlir::triton::amdgpu::TritonAMDGPUDialect",
                            "mlir::triton::TritonDialect"];
   let options = [
-    Option<"archGenerationName", "arch-generation-name",
+    Option<"gfxArch", "gfx-arch",
            "std::string", /*default=*/"std::string{}",
-           "GFX generation name of target device.">
+           "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">
   ];
+}
+
+def TritonAMDGPUOptimizeDescriptorEncoding
+    : Pass<"tritonamdgpu-optimize-descriptor-encoding", "mlir::ModuleOp"> {
+  let summary = "Set encodings on tensor descriptor types";
+
+  let description = [{
+    Set shared memory encoding on tensor descriptors which determines the shared
+    memory encodings for descriptor ops (e.g, load, store).
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::amdgpu::TritonAMDGPUDialect",
+                           "mlir::triton::TritonDialect"];
 }
 
 def TritonAMDGPUConvertToTensorOps : Pass<"tritonamdgpu-convert-tensor-ops", "mlir::ModuleOp"> {
   let summary = "Lower descriptor load/store to TDM load/stores";
+
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let description = [{
     This pass converts descriptor load/store into TDM load/stores; it also allocates LDS space;
@@ -343,6 +359,14 @@ def TritonAMDGPUWarpPipeline: Pass<"tritonamdgpu-warp-pipeline", "mlir::ModuleOp
   }];
 
   let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
+}
+
+def TritonAMDGPUFpSanitizer : Pass<"tritonamdgpu-fp-sanitizer", "mlir::ModuleOp"> {
+  let summary = "AMD-specific FP sanitizer patterns";
+  let description = [{
+    Extends the main FP sanitizer with patterns for AMD-specific ops.
+  }];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
 #endif

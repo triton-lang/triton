@@ -61,6 +61,7 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 // Unlike toLinearLayout, this makes explicit that the resulting linear layout
 // is incomplete — the padding information is not captured in the linear layout.
 LinearLayout paddedLinearLayout(MemDescType type);
+LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding);
 
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.
@@ -71,6 +72,10 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        NVMMASharedEncodingAttr shared,
                                        TMAMode mode,
                                        bool disableSwizzle = false);
+FailureOr<LinearLayout>
+nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
+                          NVMMASharedEncodingAttr shared, TMAMode mode,
+                          bool disableSwizzle, bool emitErrors);
 
 // Given a linear layout where the input dimensions contain a "block" dimension,
 // this method sets the "block" dimension to 0 and removes the corresponding
@@ -136,11 +141,10 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<unsigned> tilesPerWarp,
                                          ArrayRef<unsigned> warpsPerCTA);
 
-LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
-                                         ArrayRef<int64_t> dotOperandShape,
-                                         unsigned wmmaMDim,
-                                         LinearLayout ctaLayout,
-                                         CGAEncodingAttr cgaLayout);
+LinearLayout chooseScaledWmmaScaleLayout(
+    MLIRContext *ctx, int dotOperandIdx, ArrayRef<int64_t> dotOperandShape,
+    unsigned wmmaMDim, unsigned wmmaNDim, bool isTransposed,
+    unsigned scaleFactor, LinearLayout ctaLayout, CGAEncodingAttr cgaLayout);
 
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
                                           ArrayRef<int64_t> shape, int opIdx,
@@ -161,5 +165,31 @@ std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 // Create the core layout (atom in the PTX manual) a given nvmma shared encoding
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
                                        bool disableSwizzle);
+
+// Create the canonical 2D SMEM linear layout for scales.
+// This is the shared-memory layout for the 32x4x4 TMEM scale-tile convention
+// recognized between the user kernel and the compiler.
+LinearLayout getScaleSmemLayoutForTMEMCopy(MLIRContext *ctx,
+                                           ArrayRef<int64_t> shape,
+                                           CGAEncodingAttr cgaLayout);
+
+// Create a TDM (Tensor DMA) LinearLayout: (message, warp, block) ->
+// (dim0, dim1, ...).  TDM is warp-granular.  The "warp" sublayout is an
+// identity over `warpsPerCTA`, zero-padded up to log2(numWarps) so the
+// full module warpId is covered; padded rows expose the redundant bits
+// as free variables (via getFreeVariableMasks("warp")) so partial copies
+// (K < numWarps) can pred-off inactive warps.  "message" covers the
+// per-warp tile (surjectivity); "block" comes from `cgaLayout`.
+//
+// `warpUsedHint`: power-of-two-popcount bitmask whose K = popcount(hint)
+// set bits select active warps.  The varying warpId bit positions in the
+// active set are the warp bits that contribute to per-warp offsets; all
+// other warpId bits become free variables for predicating inactive warps.
+// Empty = no-hint default (lowest log2(K) bits, K = prod(warpsPerCTA)).
+LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
+                                ArrayRef<unsigned> warpsPerCTA,
+                                const LinearLayout &cgaLayout, int totalWarps,
+                                std::optional<uint32_t> warpUsedHint = {});
+
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

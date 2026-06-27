@@ -8,6 +8,7 @@
 #include "BufferOpsEmitter.h"
 
 using namespace triton::AMD;
+using mlir::triton::amdgpu::ISAFamily;
 
 namespace {
 
@@ -53,8 +54,22 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
   //              2 = none,
   //              3 = either swizzles or testing against offset field)
   // bits 30-31: Type (must be 0)
+  //
+  // For GFX12+ (RDNA4, GFX1250): LLVM's lowerPointerAsRsrcIntrin()
+  // (SIISelLowering.cpp) rebuilds the descriptor in v2i64 format (57-bit
+  // base, 45-bit num_records) and shifts the flags operand left by 28 bits
+  // into bits [127:124] of the descriptor. Therefore only flags bits [3:0]
+  // survive, mapping to the hardware descriptor fields:
+  //   bit 0 -> bit 124: swizzle_enable (0)
+  //   bit 1 -> bit 125: OOB_select (0=structured, 1=check offset only)
+  //   bits 2-3 -> bits 127:126: type (must be 0)
+  // OOB_select=0 is correct for raw buffer ops with stride=0
+  // (structured and unstructured modes are equivalent in this case).
+  // The RDNA-style flags below have bits [3:0]=0, so they are effectively
+  // ignored on GFX12+ but we include GFX1250 in the check for consistency.
   uint32_t flags = (7 << 12) | (4 << 15);
-  if (llvm::is_contained({ISAFamily::RDNA2, ISAFamily::RDNA3, ISAFamily::RDNA4},
+  if (llvm::is_contained({ISAFamily::RDNA2, ISAFamily::RDNA3, ISAFamily::RDNA4,
+                          ISAFamily::GFX1250},
                          targetInfo.getISAFamily())) {
     flags |= (1 << 24);
     uint32_t oob = 3;
@@ -108,7 +123,7 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   return data;
 }
 
-ROCDL::RawPtrBufferLoadLdsOp
+ROCDL::RawPtrBufferLoadAsyncLdsOp
 BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
                              Value offset, Value dst, Value pred,
                              triton::CacheModifier cm) {
@@ -116,8 +131,11 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
   SmallVector<Value, 6> commonArgs;
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
                  commonArgs);
-  Type bufferType = getBufferOpType(type, false);
-  return ROCDL::RawPtrBufferLoadLdsOp::create(
+
+  // buffer_load_to_lds is only supported on gfx942/gfx950 which always use
+  // asyncmark. Emit the async intrinsic so LLVM's SIInsertWaitcnts tracks
+  // these operations via asyncmark/wait_asyncmark.
+  return ROCDL::RawPtrBufferLoadAsyncLdsOp::create(
       rewriter, loc, TypeRange{},
       ValueRange{
           commonArgs[0], // Buffer descriptor
@@ -127,8 +145,7 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
           b.i32_val(0),  // LDS offset
           commonArgs[2], // Instruction offset
           commonArgs[3], // AUX
-      },
-      ArrayRef<NamedAttribute>());
+      });
 }
 
 Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
@@ -173,6 +190,14 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
   //   LLVM verifier to fail. When this is fixed, the ROCDL ops should be used
   //   here.
   auto rmwOpStr = stringifyRMWOp(rmwType).str();
+  // RMWOp::MAX / MIN stringify to "max" / "min", which are not real AMDGPU
+  // buffer-atomic intrinsic suffixes. The valid suffixes are
+  // .{s,u,f}{max,min}. RMWOp::UMAX and RMWOp::UMIN already stringify to
+  // "umax" / "umin" and need no override.
+  if (rmwType == RMWOp::MAX || rmwType == RMWOp::MIN) {
+    StringRef prefix = isa<FloatType>(getElementTypeOrSelf(type)) ? "f" : "s";
+    rmwOpStr = (prefix + rmwOpStr).str();
+  }
   auto instrinsic = "llvm.amdgcn.raw.ptr.buffer.atomic." + rmwOpStr;
   auto bufferAtomicRMW = LLVM::createLLVMIntrinsicCallOp(
       rewriter, loc, instrinsic, bufferType, args);
@@ -293,15 +318,7 @@ void BufferEmitter::fillCommonArgsAtomics(Type type, Value rsrcDesc,
   Value sgprOffset = b.int_val(32, 0);
 
   // 3. Create the cache modifiers word
-  int32_t aux = 0;
-  if (hasUsers)
-    aux = getCtrlBitsForBufferAtomicsOnGFX_942_950(/*setSC0*/ true,
-                                                   /*setSC1*/ false,
-                                                   /*setNT*/ false);
-  else
-    aux = getCtrlBitsForBufferAtomicsOnGFX_942_950(
-        /*setSC0*/ false, /*setSC1*/ false, /*setNT*/ false);
-
+  int32_t aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
   Value cacheModifiers = b.int_val(32, aux);
 
   // 4. Add the arguments

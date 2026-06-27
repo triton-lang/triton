@@ -19,8 +19,6 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto ctx = rewriter.getContext();
-    auto typeConverter = getTypeConverter();
     auto elems = unpackLLElements(loc, adaptor.getCondition(), rewriter);
     auto elemTy = elems[0].getType();
     Value condition = b.int_val(elemTy.getIntOrFloatBitWidth(), 0);
@@ -57,7 +55,6 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
     StringRef file = "unknown";
     StringRef func = "unknown";
     int line = 0;
-    int col = 0;
 
     while (auto callLoc = dyn_cast<CallSiteLoc>(loc))
       loc = callLoc.getCallee();
@@ -68,7 +65,6 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
     if (auto fileLineColLoc = dyn_cast<FileLineColLoc>(loc)) {
       file = fileLineColLoc.getFilename();
       line = fileLineColLoc.getLine();
-      col = fileLineColLoc.getColumn();
     }
 
     auto [prevBlock, ifBlock, thenBlock] =

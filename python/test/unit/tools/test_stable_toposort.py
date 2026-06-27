@@ -334,3 +334,14 @@ def test_input_not_mutated() -> None:
     snapshot = {k: ordered_set(v) for k, v in graph.items()}
     stable_toposort(graph)
     assert graph == snapshot
+
+
+def test_stable_toposort_preserves_component_order():
+    graph = {
+        0: ordered_set([1]),
+        1: ordered_set([2]),
+        2: ordered_set([0, 3]),
+        3: ordered_set([4]),
+        4: ordered_set(),
+    }
+    assert stable_toposort(graph) == [0, 1, 2, 3, 4]

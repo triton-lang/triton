@@ -41,6 +41,10 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
       : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions),
         domInfo(dominanceInfo), assumeNoArithOverflow(assumeNoArithOverflow_) {}
 
+  /// Set the maximum PID value for a given axis. When set, GetProgramIdOp
+  /// for that axis will use [0, maxPID] instead of the default range.
+  void setPidBound(int axis, int64_t maxPID) { pidBounds[axis] = maxPID; }
+
   void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) override;
 
   void initializeFuncOp(triton::FuncOp funcOp);
@@ -158,12 +162,17 @@ private:
   llvm::SmallMapVector<Value, ConstantIntRanges, 2> opResultAssumption;
   DominanceInfo *domInfo = nullptr;
   bool assumeNoArithOverflow = false;
+
+  /// Optional per-axis PID bounds. When set via setPidBound(), these override
+  /// the default kDefaultMaxPrograms for GetProgramIdOp on the given axis.
+  llvm::SmallDenseMap<int, int64_t> pidBounds;
 };
 
 std::optional<SmallVector<std::optional<ConstantIntRanges>>>
 collectRanges(const DataFlowSolver &solver, ValueRange values);
 
-bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp);
+std::optional<bool> evaluateCmpI(const DataFlowSolver &solver,
+                                 arith::CmpIOp cmpOp);
 
 bool isEmptyInitializedRange(ConstantIntRanges rv);
 

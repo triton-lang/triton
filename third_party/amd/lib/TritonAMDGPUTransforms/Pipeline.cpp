@@ -1,6 +1,8 @@
-#include "TritonAMDGPUTransforms/Passes.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
+#include "TritonAMDGPUTransforms/Passes.h" // IWYU pragma: keep
 #include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #define DEBUG_TYPE "tritonamdgpu-pipeline-expand-loops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -30,24 +32,61 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
     auto ifOpBuilder = ifOp.getElseBodyBuilder();
     scf::YieldOp::create(ifOpBuilder, loc, dotOp->getOperand(2));
     return ifOp;
-  } else if (auto copyOp =
-                 dyn_cast<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(op)) {
-    rewriter.setInsertionPoint(copyOp);
-    // TDM requires the mask as I32
-    auto predI32 = arith::ExtUIOp::create(rewriter, copyOp->getLoc(),
-                                          copyOp.getPred().getType(), pred);
-    Value mask = arith::AndIOp::create(rewriter, copyOp->getLoc(),
-                                       copyOp.getPred(), predI32);
-    copyOp.getPredMutable().assign(mask);
+  }
+  if (isa<tt::DescriptorLoadLikeOpInterface>(op)) {
+    auto loc = op->getLoc();
+    auto ifOp = scf::IfOp::create(rewriter, loc, op->getResultTypes(), pred,
+                                  /*withElseRegion=*/true);
+    auto thenB = ifOp.getThenBodyBuilder();
+    auto yield = scf::YieldOp::create(thenB, loc, op->getResults());
+    op->moveBefore(yield);
+
+    auto elseB = ifOp.getElseBodyBuilder();
+    SmallVector<Value> zeroValues;
+    zeroValues.reserve(op->getNumResults());
+    for (Type resultType : op->getResultTypes()) {
+      zeroValues.push_back(
+          arith::ConstantOp::create(elseB, loc, elseB.getZeroAttr(resultType)));
+    }
+    scf::YieldOp::create(elseB, loc, zeroValues);
+    return ifOp;
+  }
+  // Gate the copy by chaining a pred-only update_tensor_descriptor onto its
+  // descriptor: the chained update inherits the positioning and narrows pred to
+  // the loop predicate.
+  if (auto copyOp = dyn_cast<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(op)) {
+    rewriter.setInsertionPoint(op);
+    auto predI32 = arith::ExtUIOp::create(rewriter, op->getLoc(),
+                                          rewriter.getI32Type(), pred);
+    auto updated = triton::amdgpu::UpdateTensorDescriptorOp::create(
+        rewriter, op->getLoc(), copyOp.getDesc().getType(), copyOp.getDesc(),
+        /*add_offsets=*/ValueRange{}, /*set_bounds=*/ValueRange{},
+        /*pred=*/predI32);
+    copyOp.getDescMutable().assign(updated.getResult());
     return op;
-  } else if (auto prefetchOp = dyn_cast<triton::amdgpu::TDMPrefetchOp>(op)) {
-    rewriter.setInsertionPoint(prefetchOp);
-    Value mask = arith::AndIOp::create(rewriter, prefetchOp->getLoc(),
-                                       prefetchOp.getPred(), pred);
-    prefetchOp.getPredMutable().assign(mask);
+  }
+  // Pure gather inherits pred from its descriptor; gate it the same way as the
+  // copy by chaining a pred-only update_tensor_descriptor onto its descriptor.
+  if (auto gatherOp = dyn_cast<triton::amdgpu::AsyncTDMGatherOp>(op)) {
+    rewriter.setInsertionPoint(op);
+    auto predI32 = arith::ExtUIOp::create(rewriter, op->getLoc(),
+                                          rewriter.getI32Type(), pred);
+    auto updated = triton::amdgpu::UpdateTensorDescriptorOp::create(
+        rewriter, op->getLoc(), gatherOp.getDesc().getType(),
+        gatherOp.getDesc(),
+        /*add_offsets=*/ValueRange{}, /*set_bounds=*/ValueRange{},
+        /*pred=*/predI32);
+    gatherOp.getDescMutable().assign(updated.getResult());
     return op;
-  } else if (auto waitOp = dyn_cast<triton::amdgpu::AsyncTDMWait>(op)) {
+  }
+  if (isa<triton::amdgpu::AsyncTDMWait>(op))
     return op;
+  if (isa<tt::DescriptorStoreLikeOpInterface>(op)) {
+    auto loc = op->getLoc();
+    auto ifOp = scf::IfOp::create(rewriter, loc, pred,
+                                  /*withElseRegion=*/false);
+    op->moveBefore(ifOp.thenYield());
+    return ifOp;
   }
   return tt::wrapInMaskOp(rewriter, op, pred);
 }
@@ -114,6 +153,36 @@ void expandLoops(ModuleOp moduleOp) {
 
   tt::resolveMaskOp(moduleOp);
 }
+
+// Fold consecutive waits of the same kind into a single wait.
+void combineWaitOps(ModuleOp moduleOp, bool useAsyncCopy) {
+  llvm::SmallSetVector<Operation *, 8> asyncWaitOps;
+  llvm::SmallSetVector<Operation *, 8> tdmWaitOps;
+  moduleOp.walk([&](Operation *op) {
+    if (useAsyncCopy && isa<ttg::AsyncWaitOp>(op))
+      asyncWaitOps.insert(op);
+    else if (isa<triton::amdgpu::AsyncTDMWait>(op))
+      tdmWaitOps.insert(op);
+  });
+
+  if (useAsyncCopy) {
+    tt::combineRedundantWaitOps(
+        asyncWaitOps,
+        [](Operation *op) { return isa<ttg::AsyncCommitGroupOp>(op); },
+        [](OpBuilder &b, Location loc, ValueRange operands,
+           unsigned num) -> Operation * {
+          return ttg::AsyncWaitOp::create(b, loc, operands, num);
+        });
+  }
+
+  tt::combineRedundantWaitOps(
+      tdmWaitOps,
+      [](Operation *op) { return isa<triton::amdgpu::TDMOpInterface>(op); },
+      [](OpBuilder &b, Location loc, ValueRange operands,
+         unsigned num) -> Operation * {
+        return triton::amdgpu::AsyncTDMWait::create(b, loc, operands, num);
+      });
+}
 } // namespace
 
 struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
@@ -125,10 +194,18 @@ struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
     expandLoops(moduleOp);
 
     if (useAsyncCopy) {
-      llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
-      moduleOp.walk([&](ttg::AsyncWaitOp waitOp) { waitOps.insert(waitOp); });
-      tt::combineRedundantWaitOps(waitOps);
+      auto targetFeatures = tt::amdgpu::TargetFeatures::fromModuleOp(moduleOp);
+      // Only asyncmark targets (CDNA3/CDNA4) need updateWaits here: their
+      // lowering reads ttg.async_wait's `num` directly into wait.asyncmark(N),
+      // and PR #9883 made UpdateAsyncWaitCount a no-op on those archs, so
+      // without this call the pipeliner-authored num=0 would serialize the
+      // SWP. Every other family keeps the prior combineRedundantWaitOps-only
+      // path: their num is re-derived downstream by UpdateAsyncWaitCount.
+      if (targetFeatures.isCDNA3() || targetFeatures.isCDNA4()) {
+        mlir::triton::updateWaits(moduleOp);
+      }
     }
+    combineWaitOps(moduleOp, useAsyncCopy);
 
     tt::removePipeliningAttributes(moduleOp);
   }

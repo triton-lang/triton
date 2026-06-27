@@ -50,7 +50,6 @@ public:
 LogicalResult convertFMADot(DotOp op, DotOp::Adaptor adaptor,
                             const LLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter) {
-  auto *ctx = rewriter.getContext();
   auto loc = op.getLoc();
   GenericFMAVectorMultiplier multiplier(rewriter, loc);
   return parametricConvertFMADot(op, adaptor, typeConverter, rewriter,

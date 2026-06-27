@@ -93,7 +93,7 @@ def memcpy_1d_tma_kernel(in_desc, out_desc, XBLOCK: gl.constexpr):
     # decrement the number of outstanding bytes as transactions complete. When
     # it reaches 0, the mbarrier is arrived on once.
     mbarrier.expect(bar, in_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(in_desc, [pid * XBLOCK], bar, smem)
+    tma.async_load(in_desc, [pid * XBLOCK], bar, smem)
 
     # Wait for completion of the read. We query the completion state of the
     # mbarrier using the parity of the phase, i.e. either 0 or 1. mbarriers are
@@ -113,6 +113,73 @@ def memcpy_1d_tma_kernel(in_desc, out_desc, XBLOCK: gl.constexpr):
     # `pendings` outstanding TMA stores using `store_wait`. Note that the commit
     # groups for async copy and async TMA stores are separate.
     tma.store_wait(pendings=0)
+
+
+# %%
+# TMA store waits
+# ---------------
+#
+# TMA stores have two relevant completion points: the TMA can finish reading
+# the source from shared memory, and later it can finish writing that tile
+# to global memory. By default, `tma.store_wait(...)` waits for the first
+# point only. So the shared memory may be reused, but attempts to read from the
+# global memory locations would result in a data race.
+#
+# If you do need to wait for the tile to be flushed to global memory, you need
+# to use the `read_only=False` variant.
+
+
+@gluon.jit
+def tma_message_passing_kernel(message_desc, ready, output, MESSAGE_SIZE: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [1], [0])
+    offsets = gl.arange(0, MESSAGE_SIZE, layout)
+    smem = gl.allocate_shared_memory(message_desc.dtype, message_desc.block_shape, message_desc.layout)
+
+    if pid == 0:
+        # CTA 0 sends a message by staging it in shared memory and then using
+        # TMA to write it to HBM.
+        smem.store(offsets + 1000)
+        fence_async_shared()
+        tma.async_copy_shared_to_global(message_desc, [0], smem)
+
+        # Before signaling CTA 1, wait for the TMA write to become visible in HBM.
+        tma.store_wait(pendings=0, read_only=False)
+        gl.atomic_xchg(ready, 1, sem="release", scope="gpu")
+    else:
+        # CTA 1 waits until the TMA message has been published, then reads it
+        # back through TMA.
+        ready_value = 0
+        while ready_value != 1:
+            ready_value = gl.atomic_add(ready, 0, sem="acquire", scope="gpu")
+
+        bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+        mbarrier.expect(bar, message_desc.block_type.nbytes)
+        tma.async_load(message_desc, [0], bar, smem)
+        mbarrier.wait(bar, phase=0, deps=[smem])
+        mbarrier.invalidate(bar)
+        gl.store(output + offsets, smem.load(layout))
+
+
+def tma_message_passing(MESSAGE_SIZE):
+    message = torch.full((MESSAGE_SIZE, ), -1, dtype=torch.int32, device="cuda")
+    ready = torch.zeros(1, dtype=torch.int32, device="cuda")
+    output = torch.full((MESSAGE_SIZE, ), -1, dtype=torch.int32, device="cuda")
+
+    block_shape = [MESSAGE_SIZE]
+    layout = gl.NVMMASharedLayout.get_default_for(block_shape, gl.int32)
+    message_desc = TensorDescriptor.from_tensor(message, block_shape, layout)
+    tma_message_passing_kernel[(2, )](message_desc, ready, output, MESSAGE_SIZE, num_warps=1)
+    return output
+
+
+@pytest.mark.parametrize("MESSAGE_SIZE", [16])
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_tma_message_passing(MESSAGE_SIZE):
+    output = tma_message_passing(MESSAGE_SIZE)
+    expected = torch.arange(MESSAGE_SIZE, dtype=torch.int32, device="cuda") + 1000
+    torch.testing.assert_close(expected, output, atol=0, rtol=0)
 
 
 def memcpy_1d_tma(input, output, XBLOCK=8192):
@@ -158,7 +225,7 @@ def test_memcpy_1d_tma(XBLOCK, xnumel):
 # ```python
 # value = smem.load()
 # fence_async_shared()
-# tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+# tma.async_load(desc, [0, 0], bar, smem)
 # ```
 #
 # Without the fence, async_copy_global_to_shared can start copying into `smem`
@@ -177,7 +244,7 @@ def test_memcpy_1d_tma(XBLOCK, xnumel):
 # do not require a fence. For example, waiting on the result of a TMA load:
 #
 # ```python
-# tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+# tma.async_load(desc, [0, 0], bar, smem)
 # mbarrier.wait(bar, phase=0)
 # value = smem.load()
 # ```
@@ -203,8 +270,8 @@ def issue_loads(copy_index, a_desc, b_desc, a_smem, b_smem, bars, xoff, YBLOCK: 
     yoff = copy_index * YBLOCK
     bar = bars.index(copy_index % num_buffers)
     mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-    tma.async_copy_global_to_shared(a_desc, [xoff, yoff], bar, a_smem.index(copy_index % num_buffers))
-    tma.async_copy_global_to_shared(b_desc, [xoff, yoff], bar, b_smem.index(copy_index % num_buffers))
+    tma.async_load(a_desc, [xoff, yoff], bar, a_smem.index(copy_index % num_buffers))
+    tma.async_load(b_desc, [xoff, yoff], bar, b_smem.index(copy_index % num_buffers))
     return copy_index + 1
 
 

@@ -2,13 +2,15 @@
 # Make sure to first initialize the build system with:
 #     make dev-install
 
-PYTHON ?= python
-BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
+PYTHON ?= python3
+ROOT_DIR := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
+BUILD_DIR := $(shell PYTHONPATH="$(ROOT_DIR)/python" $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 INSTALL_DIR ?= $(dir $(BUILD_DIR))install
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
-LLVM_BUILD_PATH ?= "$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/.llvm-project/build"
+LLVM_BUILD_PATH ?= "$(ROOT_DIR)/.llvm-project/build"
 NUM_PROCS ?= 8
+TRITON_KERNELS_PATH := $(ROOT_DIR)/python/triton_kernels$(if $(PYTHONPATH),:$(PYTHONPATH))
 
 # Incremental builds
 
@@ -32,22 +34,30 @@ test-cpp:
 
 .PHONY: test-unit
 test-unit: all
-	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) --ignore-glob='plugins/*' --ignore=test_debug.py
-	$(PYTEST) -n $(NUM_PROCS) python/test/unit/test_debug.py
+	cd python/test/unit && $(PYTEST) -n $(NUM_PROCS) --ignore-glob='plugins/*'
 	$(PYTEST) -n 6 python/triton_kernels/tests/
 	# Run attention separately to avoid out of gpu memory
 	$(PYTEST) python/tutorials/06-fused-attention.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
-	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libTritonPluginsTestLib.so \
+
+.PHONY: test-plugins
+test-plugins: all
+	TRITON_PLUGIN_PATHS=python/triton/plugins/libTritonPluginsTestLib.so \
 		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
-	TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libMLIRDialectPlugin.so \
+	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
 		$(PYTEST) -vvv python/test/unit/plugins/test_dialect_plugin.py
+	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
+		$(PYTEST) -s -vvv python/test/unit/plugins/custom_ops.py
 
 .PHONY: test-gluon
 test-gluon: all
 	$(PYTEST) -n $(NUM_PROCS) python/test/gluon/ python/tutorials/gluon/
-	$(PYTEST) -n 2 python/examples/gluon/
+	PYTHONPATH="$(TRITON_KERNELS_PATH)" $(PYTEST) -n 2 python/examples/gluon/
+
+.PHONY: test-gsan
+test-gsan: all
+	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -n $(NUM_PROCS) python/test/gsan
 
 .PHONY: test-regression
 test-regression: all
@@ -72,7 +82,7 @@ test-proton: all
 	$(PYTEST) third_party/proton/test/test_instrumentation.py::test_overhead
 
 .PHONY: test-python
-test-python: test-unit test-regression test-interpret test-proton
+test-python: test-unit test-plugins test-regression test-interpret test-proton
 
 .PHONY: test-nogpu
 test-nogpu: test-lit test-cpp
@@ -108,8 +118,7 @@ dev-install: dev-install-requires dev-install-triton
 .NOPARALLEL: dev-install-llvm
 dev-install-llvm:
 	LLVM_BUILD_PATH=$(LLVM_BUILD_PATH) scripts/build-llvm-project.sh
-	TRITON_BUILD_WITH_CLANG_LLD=1 TRITON_BUILD_WITH_CCACHE=0 \
-		LLVM_INCLUDE_DIRS=$(LLVM_BUILD_PATH)/include \
+	LLVM_INCLUDE_DIRS=$(LLVM_BUILD_PATH)/include \
 		LLVM_LIBRARY_DIR=$(LLVM_BUILD_PATH)/lib \
 		LLVM_SYSPATH=$(LLVM_BUILD_PATH) \
 	$(MAKE) dev-install

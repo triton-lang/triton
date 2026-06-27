@@ -1,7 +1,7 @@
 import pytest
 from triton._internal_testing import is_cuda
 from triton_kernels.tensor import wrap_torch_tensor, convert_layout, FP4
-from triton_kernels.tensor_details.layout import HopperMXScaleLayout, HopperMXValueLayout
+from triton_kernels.tensor_details.layout import HopperMXScaleLayout, HopperMXValueLayout, StridedLayout
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
@@ -13,6 +13,8 @@ import torch
 # ------------------------------------------------------------
 # Torch tests
 # ------------------------------------------------------------
+
+ZERO_SIZED_SHAPES = [(0, 64), (64, 0), (2, 0), (0, 2), (0, 64, 64)]
 
 
 @pytest.mark.parametrize("shape", [(16, 32), (16, 64), (32, 32), (32, 64), (64, 128), (128, 128)])
@@ -26,11 +28,51 @@ def test_mxfp4_value_roundtrip(shape, trans, mx_axis, mma_version):
     if x.shape[1 - mx_axis] < 32:
         pytest.skip("Not enough elements along non-mx axis")
     layout = HopperMXValueLayout(mx_axis - 2, mma_version)
-    shape = list(x.shape)
-    shape[-1] *= 2
-    transformation = layout.make_transformation(shape, is_fp4=False)
-    res = transformation.unswizzle_data(transformation.swizzle_data(x))
+    logical_shape = list(x.shape)
+    logical_shape[-1] *= 2
+    transformation = layout.make_transformation(logical_shape, is_fp4=True)
+    swizzled = transformation.swizzle_data(x)
+    assert list(swizzled.shape) == transformation.storage_shape
+    res = transformation.unswizzle_data(swizzled)
     assert (res == x).all()
+
+
+def test_mxfp4_value_storage_shape_matches_swizzle():
+    x = torch.randint(0, 256, (64, 128), dtype=torch.uint8)
+    transformation = HopperMXValueLayout(-1, 3).make_transformation([64, 256], is_fp4=True)
+
+    swizzled = transformation.swizzle_data(x)
+
+    assert swizzled.shape == (64, 512)
+    assert transformation.storage_shape == list(swizzled.shape)
+    assert torch.equal(transformation.unswizzle_data(swizzled), x)
+
+
+@pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("mma_version", [2, 3])
+@pytest.mark.parametrize("device", ["cpu", "meta"])
+def test_mxfp4_value_zero_sized_roundtrip(shape, mx_axis, mma_version, device):
+    x = torch.empty(shape, dtype=torch.uint8, device=device)
+    src = wrap_torch_tensor(x, dtype=FP4)
+    layout = HopperMXValueLayout(mx_axis=mx_axis, mma_version=mma_version)
+
+    swizzled = convert_layout(src, layout)
+    roundtrip = convert_layout(swizzled, src.storage.layout)
+
+    assert roundtrip.storage.data.shape == x.shape
+
+
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+def test_mxfp4_value_convert_layout_roundtrip(mx_axis):
+    x = torch.randint(0, 256, (64, 64), dtype=torch.uint8)
+    src = wrap_torch_tensor(x, dtype=FP4)
+    layout = HopperMXValueLayout(mx_axis=mx_axis, mma_version=3)
+
+    swizzled = convert_layout(src, layout)
+    roundtrip = convert_layout(swizzled, src.storage.layout)
+
+    assert torch.equal(roundtrip.storage.data, x)
 
 
 @pytest.mark.parametrize("mx_axis", [0, 1])
@@ -42,6 +84,21 @@ def test_mxfp4_scale_roundtrip(shape, mx_axis, num_warps):
     transformation = layout.make_transformation(x.shape, is_fp4=False)
     res = transformation.unswizzle_data(transformation.swizzle_data(x))
     assert (res[:shape[0], :shape[1]] == x).all()
+
+
+@pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("device", ["cpu", "meta"])
+def test_mxfp4_scale_zero_sized_roundtrip(shape, mx_axis, num_warps, device):
+    x = torch.empty(shape, dtype=torch.uint8, device=device)
+    src = wrap_torch_tensor(x)
+    layout = HopperMXScaleLayout(mx_axis=mx_axis, num_warps=num_warps)
+
+    swizzled = convert_layout(src, layout)
+    roundtrip = convert_layout(swizzled, StridedLayout(mx_axis))
+
+    assert roundtrip.storage.data.shape == x.shape
 
 
 # ------------------------------------------------------------

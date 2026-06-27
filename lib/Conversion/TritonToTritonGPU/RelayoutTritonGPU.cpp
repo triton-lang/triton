@@ -26,6 +26,12 @@ RankedTensorType getTMEMTensorLayout(const TypeConverter *tc,
   return type.cloneWithEncoding(encoding);
 }
 
+bool isTMEMOperandDynamicallyLegal(Operation *op, RankedTensorType type,
+                                   MemDescType memdesc) {
+  return type.getEncoding() &&
+         ttng::isDistributedLayoutTMemCompatible(op, type, memdesc);
+}
+
 struct TMEMLoadOpPattern : public OpConversionPattern<ttng::TMEMLoadOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -83,6 +89,19 @@ struct TMEMAllocOpPattern : public OpConversionPattern<ttng::TMEMAllocOp> {
   }
 };
 
+struct LocalLoadOpPattern : public OpConversionPattern<LocalLoadOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(LocalLoadOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto type =
+        cast<RankedTensorType>(getTypeConverter()->convertType(op.getType()));
+    rewriter.modifyOpInPlace(op, [&] { op.getResult().setType(type); });
+    return success();
+  }
+};
+
 class RelayoutTritonGPU
     : public triton::impl::RelayoutTritonGPUBase<RelayoutTritonGPU> {
 public:
@@ -105,7 +124,24 @@ public:
           return TritonGPUConversionTarget::isDynamicallyLegal(op,
                                                                typeConverter);
         });
-
+    target.addDynamicallyLegalOp<ttng::TMEMLoadOp>([&](ttng::TMEMLoadOp op) {
+      return TritonGPUConversionTarget::isDynamicallyLegal(op, typeConverter) &&
+             isTMEMOperandDynamicallyLegal(op, op.getType(),
+                                           op.getSrc().getType());
+    });
+    target.addDynamicallyLegalOp<ttng::TMEMStoreOp>([&](ttng::TMEMStoreOp op) {
+      return TritonGPUConversionTarget::isDynamicallyLegal(op, typeConverter) &&
+             isTMEMOperandDynamicallyLegal(op, op.getSrc().getType(),
+                                           op.getDst().getType());
+    });
+    target.addDynamicallyLegalOp<ttng::TMEMAllocOp>([&](ttng::TMEMAllocOp op) {
+      return TritonGPUConversionTarget::isDynamicallyLegal(op, typeConverter) &&
+             (!op.getSrc() || isTMEMOperandDynamicallyLegal(
+                                  op, op.getSrc().getType(), op.getType()));
+    });
+    target.addDynamicallyLegalOp<LocalLoadOp>([&](Operation *op) {
+      return TritonGPUConversionTarget::isDynamicallyLegal(op, typeConverter);
+    });
     // rewrite patterns
     RewritePatternSet patterns(context);
     // add rules
@@ -113,6 +149,7 @@ public:
         // clang-format off
         GatherScatterOpPattern<ttng::AsyncTMAGatherOp>,
         GatherScatterOpPattern<ttng::AsyncTMAScatterOp>,
+        LocalLoadOpPattern,
         TMEMLoadOpPattern,
         TMEMStoreOpPattern,
         TMEMAllocOpPattern

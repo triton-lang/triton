@@ -23,18 +23,17 @@ __all__ = [
 
 
 @builtin
-def try_cancel(result: shared_memory_descriptor, barrier, multicast=False, _semantic=None):
+def try_cancel(result: shared_memory_descriptor, barrier, _semantic=None):
     """
     Issue a CLC try_cancel request to atomically cancel a pending cluster launch.
 
     Args:
         result (shared_memory_descriptor): 16-byte aligned int64x2 shared memory for the response
         barrier (shared_memory_descriptor): 8-byte aligned mbarrier for completion signaling
-        multicast (bool): If True, broadcast result to all CTAs in cluster
 
     Only supported on SM100+ (Blackwell).
     """
-    _semantic.builder.create_clc_try_cancel(result.handle, barrier.handle, multicast)
+    _semantic.builder.create_clc_try_cancel(result.handle, barrier.handle)
 
 
 @builtin

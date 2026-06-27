@@ -7,7 +7,6 @@ persistent and StreamK GEMM implementations.
 """
 
 from triton.experimental import gluon
-from triton.language.core import _aggregate as aggregate
 import triton.experimental.gluon.language as ttgl
 
 
@@ -139,7 +138,7 @@ def issue_l2_prefetches(distance, producer, a_desc, b_desc, off_am, off_bn, BLOC
     """
     Creates L2 prefetch for iteration `producer + distance`.
     """
-    if distance == 0:
+    if distance <= 0:
         return
 
     prefetch_iteration = producer + distance
@@ -154,14 +153,11 @@ def issue_l2_prefetches(distance, producer, a_desc, b_desc, off_am, off_bn, BLOC
 def issue_l2_prefetches_prologue(distance, producer, a_desc, b_desc, off_am, off_bn, BLOCK_K: ttgl.constexpr,
                                  NUM_BUFFERS: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr, pred=True):
     """
-    Creates prefetches for iterations [NUM_BUFFERS, distance - NUM_BUFFERS) or no prefetches if distance <= NUM_BUFFERS.
+    Creates prefetches for iterations [NUM_BUFFERS, NUM_BUFFERS + distance).
     This skips iterations which are preloaded in the prologue because prefetching them does not make sense for GEMMs.
     """
-    if distance <= NUM_BUFFERS:
-        return
-
-    for i in ttgl.static_range(NUM_BUFFERS - distance):
-        issue_l2_prefetches(distance + NUM_BUFFERS + i, producer, a_desc, b_desc, 0, 0, BLOCK_K, TRANSPOSE_B, pred)
+    for i in ttgl.static_range(NUM_BUFFERS, NUM_BUFFERS + distance):
+        issue_l2_prefetches(i, producer, a_desc, b_desc, 0, 0, BLOCK_K, TRANSPOSE_B, pred)
 
 
 @gluon.jit
@@ -247,7 +243,27 @@ def issue_wmma_compute(a, b, accumulator):
     return accumulator
 
 
-@aggregate
+@gluon.jit
+def swiglu_epilogue(acc):
+    """Apply SwiGLU: reshape (M, 2N) -> split into gate/up -> swish(gate) * up."""
+    BLOCK_M: ttgl.constexpr = acc.shape[0]
+    BLOCK_N: ttgl.constexpr = acc.shape[1] // 2
+    acc_3d = ttgl.reshape(acc, (BLOCK_M, BLOCK_N, 2))
+    gate, up = ttgl.split(acc_3d)
+    # swish(x) = x * sigmoid(x); sigmoid(x) = 1 / (1 + exp(-x))
+    return gate * (1.0 / (1.0 + ttgl.exp(-gate))) * up
+
+
+@gluon.jit
+def apply_activation_epilogue(acc, ACTIVATION: ttgl.constexpr, ACC_LAYOUT: ttgl.constexpr):
+    if ACTIVATION == "swiglu":
+        result = ttgl.convert_layout(swiglu_epilogue(acc), ACC_LAYOUT)
+    else:
+        result = acc
+    return result
+
+
+@gluon.aggregate
 class TileScheduler:
     """
     Tile Scheduler

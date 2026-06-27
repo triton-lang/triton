@@ -20,6 +20,8 @@ def get_hash():
 # Keep custom pipeline stages in a seperate file from kernels as any change to the file
 # will trigger a recompile.
 
+num_warps = 4
+
 
 def inspect_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
     # If the hook is called with no arguments we assume were just after the key and hash and don't want to
@@ -31,7 +33,10 @@ def inspect_stages_hook(self=None, stages=None, options=None, language=None, cap
         mod = self.make_ttir(mod, metadata, opt, capability)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.plugin.add_plugin(pm)
+        if num_warps != 4:
+            passes.plugin.add_plugin(pm, {str(num_warps)})
+        else:
+            passes.plugin.add_plugin(pm)
         pm.run(mod, 'make_ttir_plugin')
         return mod
 

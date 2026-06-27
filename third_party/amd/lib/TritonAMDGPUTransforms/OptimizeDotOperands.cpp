@@ -1,4 +1,4 @@
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/PassManager.h"
@@ -40,13 +40,12 @@ class AllocSharedMemForUpcastedScales : public OpRewritePattern<OpTy> {
 public:
   using OpRewritePattern<OpTy>::OpRewritePattern;
 
-  AllocSharedMemForUpcastedScales(MLIRContext *context,
-                                  triton::AMD::ISAFamily isaFamily)
-      : OpRewritePattern<OpTy>(context), isaFamily(isaFamily) {}
+  AllocSharedMemForUpcastedScales(MLIRContext *context, bool targetIsCDNA4)
+      : OpRewritePattern<OpTy>(context), targetIsCDNA4(targetIsCDNA4) {}
 
   LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
-    if (isaFamily != mlir::triton::AMD::ISAFamily::CDNA4)
+    if (!targetIsCDNA4)
       return rewriter.notifyMatchFailure(op, "NYI: Only supported on CDNA4");
 
     auto forOp = op->template getParentOfType<scf::ForOp>();
@@ -105,7 +104,7 @@ public:
   }
 
 private:
-  triton::AMD::ISAFamily isaFamily;
+  bool targetIsCDNA4;
 };
 } // namespace
 
@@ -123,11 +122,11 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName);
+    TargetFeatures targetFeatures{llvm::StringRef(gfxArch)};
     patterns
         .add<AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp8Op>,
              AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp4Op>>(
-            context, isaFamily);
+            context, targetFeatures.isCDNA4());
     ttg::ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();

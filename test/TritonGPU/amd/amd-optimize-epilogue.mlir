@@ -21,6 +21,24 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
 
 // -----
 
+// CHECK-LABEL: store_dword_mfma32_small_n
+// CHECK-NOT: tensor<32x8x!tt.ptr<f16>, #linear>
+// CHECK: tt.store %{{.*}}, %{{.*}} : tensor<32x8x!tt.ptr<f16>, #mma>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [0, 1]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32, 16], isTransposed = true}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @store_dword_mfma32_small_n(%arg0: !tt.ptr<f16>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x8xf32, #mma>
+    %0 = ttg.convert_layout %cst : tensor<32x8xf32, #mma> -> tensor<32x8xf32, #blocked>
+    %1 = arith.truncf %0 : tensor<32x8xf32, #blocked> to tensor<32x8xf16, #blocked>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x8x!tt.ptr<f16>, #blocked>
+    tt.store %2, %1 : tensor<32x8x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: two_ops_in_chain
 // CHECK-NOT: ttg.convert_layout %{{.*}} : tensor<32x32xf32, #mma> -> tensor<32x32xf32, #blocked>
 // CHECK: tt.store %{{.*}}, %{{.*}} : tensor<32x32x!tt.ptr<f16>, #mma>

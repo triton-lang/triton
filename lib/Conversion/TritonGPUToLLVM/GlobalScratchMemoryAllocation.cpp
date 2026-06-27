@@ -110,36 +110,38 @@ class TritonGPUGlobalScratchAllocationPass
           TritonGPUGlobalScratchAllocationPass> {
 public:
   void runOnOperation() override {
-    ModuleOp mod = getOperation();
-
-    bool seenKernel = false;
-
-    SetVector<Operation *> callStack;
-    mod->walk([&](triton::FuncOp func) {
-      allocateGMem(func, callStack);
-
-      if (func.getVisibility() == SymbolTable::Visibility::Public) {
-        assert(!seenKernel);
-        seenKernel = true;
-        auto size =
-            func->getAttrOfType<IntegerAttr>("ttg.global_scratch_memory_size");
-        auto align = func->getAttrOfType<IntegerAttr>(
-            "ttg.global_scratch_memory_alignment");
-        auto profileSize =
-            func->getAttrOfType<IntegerAttr>("ttg.profile_scratch_memory_size");
-        auto profileAlign = func->getAttrOfType<IntegerAttr>(
-            "ttg.profile_scratch_memory_alignment");
-        assert(size);
-        assert(align);
-        assert(profileSize);
-        assert(profileAlign);
-        mod->setAttr("ttg.global_scratch_memory_size", size);
-        mod->setAttr("ttg.global_scratch_memory_alignment", align);
-        mod->setAttr("ttg.profile_scratch_memory_size", profileSize);
-        mod->setAttr("ttg.profile_scratch_memory_alignment", profileAlign);
-      }
-    });
-    assert(seenKernel);
+    runGlobalScratchMemoryAllocation(getOperation());
   }
 };
 } // namespace
+
+void mlir::triton::gpu::runGlobalScratchMemoryAllocation(ModuleOp mod) {
+  bool seenKernel = false;
+
+  SetVector<Operation *> callStack;
+  mod->walk([&](triton::FuncOp func) {
+    allocateGMem(func, callStack);
+
+    if (func.getVisibility() == SymbolTable::Visibility::Public) {
+      assert(!seenKernel);
+      seenKernel = true;
+      auto size =
+          func->getAttrOfType<IntegerAttr>("ttg.global_scratch_memory_size");
+      auto align = func->getAttrOfType<IntegerAttr>(
+          "ttg.global_scratch_memory_alignment");
+      auto profileSize =
+          func->getAttrOfType<IntegerAttr>("ttg.profile_scratch_memory_size");
+      auto profileAlign = func->getAttrOfType<IntegerAttr>(
+          "ttg.profile_scratch_memory_alignment");
+      assert(size);
+      assert(align);
+      assert(profileSize);
+      assert(profileAlign);
+      mod->setAttr("ttg.global_scratch_memory_size", size);
+      mod->setAttr("ttg.global_scratch_memory_alignment", align);
+      mod->setAttr("ttg.profile_scratch_memory_size", profileSize);
+      mod->setAttr("ttg.profile_scratch_memory_alignment", profileAlign);
+    }
+  });
+  assert(seenKernel);
+}

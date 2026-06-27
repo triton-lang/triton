@@ -116,3 +116,47 @@ def test_block_ptr_matmul_no_scf(shape, num_warps, device):
         num_warps=num_warps)
     golden = torch.matmul(a, b)
     torch.testing.assert_close(c, golden, check_dtype=False)
+
+
+@triton.jit
+def block_copy_3d_kernel(src_ptr, dst_ptr, dim0, dim1, dim2, stride0, stride1, stride2, BLOCK0: tl.constexpr,
+                         BLOCK1: tl.constexpr, BLOCK2: tl.constexpr):
+    src_block_ptr = tl.make_block_ptr(base=src_ptr, shape=(dim0, dim1, dim2), strides=(stride0, stride1, stride2),
+                                      offsets=(dim0 - 1, 0, dim2 - 2), block_shape=(BLOCK0, BLOCK1, BLOCK2),
+                                      order=(2, 1, 0))
+    dst_block_ptr = tl.make_block_ptr(base=dst_ptr, shape=(dim0, dim1, dim2), strides=(stride0, stride1, stride2),
+                                      offsets=(dim0 - 1, 0, dim2 - 2), block_shape=(BLOCK0, BLOCK1, BLOCK2),
+                                      order=(2, 1, 0))
+    values = tl.load(src_block_ptr, boundary_check=(0, 2), padding_option="zero")
+    tl.store(dst_block_ptr, values, boundary_check=(0, 2))
+
+
+@pytest.mark.interpreter
+def test_block_ptr_rank_3(device):
+    src = torch.arange(3 * 4 * 5, device=device, dtype=torch.float32).reshape(3, 4, 5)
+    dst = torch.zeros_like(src)
+
+    block_copy_3d_kernel[(1, )](src, dst, src.shape[0], src.shape[1], src.shape[2], src.stride(0), src.stride(1),
+                                src.stride(2), BLOCK0=2, BLOCK1=4, BLOCK2=4)
+
+    expected = torch.zeros_like(src)
+    expected[2:3, 0:4, 3:5] = src[2:3, 0:4, 3:5]
+    torch.testing.assert_close(dst, expected)
+
+
+@triton.jit
+def block_ptr_dtype_kernel(src_ptr, dst_ptr, N, BLOCK_SIZE: tl.constexpr):
+    block_ptr = tl.make_block_ptr(base=src_ptr, shape=(N, ), strides=(1, ), offsets=(0, ), block_shape=(BLOCK_SIZE, ),
+                                  order=(0, ))
+    values = tl.load(block_ptr, boundary_check=(0, ), padding_option="zero").to(block_ptr.dtype.element_ty)
+    tl.store(dst_ptr + tl.arange(0, BLOCK_SIZE), values)
+
+
+@pytest.mark.interpreter
+def test_block_ptr_dtype_element_ty(device):
+    src = torch.arange(16, device=device, dtype=torch.float16)
+    dst = torch.zeros_like(src)
+
+    block_ptr_dtype_kernel[(1, )](src, dst, src.numel(), BLOCK_SIZE=16)
+
+    torch.testing.assert_close(dst, src)

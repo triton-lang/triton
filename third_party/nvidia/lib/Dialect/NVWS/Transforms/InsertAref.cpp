@@ -1,4 +1,5 @@
 #include "Utilities.h"
+#include "lib/Dialect/TritonGPU/Transforms/WarpSpecialization/PartitionAttrs.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
@@ -97,6 +98,18 @@ RankedTensorType getTensorTypeFromScalar(OpBuilder &builder, Value scalar) {
 ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
   auto result = producedValue.result;
 
+  auto getDescriptorBackedMemDescType =
+      [](Value result, triton::DescriptorOpInterface descOp) {
+        auto allocTy = cast<MemDescType>(result.getType());
+        auto tensorType =
+            cast<RankedTensorType>(descOp->getResult(0).getType());
+        auto encoding =
+            getEncodingFromDescriptor(descOp, tensorType, descOp.getDesc());
+        return MemDescType::get(
+            tensorType.getShape(), tensorType.getElementType(), encoding,
+            allocTy.getMemorySpace(), allocTy.getMutableMemory());
+      };
+
   auto getSmemDescType = [](RankedTensorType tensorType, Value tensorResult) {
     Attribute SharedMemorySpace =
         SharedMemorySpaceAttr::get(tensorType.getContext());
@@ -110,7 +123,9 @@ ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
   };
 
   MemDescType memDescType;
-  if (result.getDefiningOp<LocalAllocOp>()) {
+  if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(result)) {
+    memDescType = getDescriptorBackedMemDescType(result, opt->second);
+  } else if (result.getDefiningOp<LocalAllocOp>()) {
     memDescType = dyn_cast<MemDescType>(result.getType());
   } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
     memDescType = getSmemDescType(tensorType, result);
@@ -573,7 +588,6 @@ public:
   void runOnFunction(triton::FuncOp func) {
     SmallVector<scf::ForOp> loops;
     func.walk([&](scf::ForOp loop) {
-      auto func = loop->getParentOfType<triton::FuncOp>();
       if (loop->hasAttr(triton::kWarpSpecializeAttrName) && hasPartition(loop))
         loops.push_back(loop);
     });

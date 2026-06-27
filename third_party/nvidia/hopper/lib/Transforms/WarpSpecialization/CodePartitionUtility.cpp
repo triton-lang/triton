@@ -25,14 +25,6 @@ bool enclosing(scf::ForOp forOp, Operation *op) {
   return forOp->isProperAncestor(op);
 }
 
-// Check to see if there is no outer loop that is enclosed under ifOp.
-bool immediateEnclosing(scf::IfOp ifOp, Operation *subOp) {
-  auto pOp = subOp->getParentOfType<scf::ForOp>();
-  if (!pOp)
-    return true;
-  return !enclosing(ifOp, pOp.getOperation());
-}
-
 // Return number of AccumCnts for the given ctrlOp. We need one for each nested
 // region that contains a channel.
 unsigned getAccumCnts(Operation *ctrlOp,

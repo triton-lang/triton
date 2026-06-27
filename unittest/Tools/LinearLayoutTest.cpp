@@ -550,6 +550,65 @@ TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastedDims2) {
   EXPECT_EQ(c.compose(b), a.transposeOuts(llvm::to_vector(b.getOutDimNames())));
 }
 
+TEST_F(LinearLayoutTest, InvertAndComposeBlockLocal) {
+  auto memLayout =
+      LinearLayout({{S("offset"), {{1}}}, {S("block"), {{0}}}}, {S("dim")});
+  auto regLayout = LinearLayout({{S("register"), {}},
+                                 {S("lane"), {{0}, {0}, {0}, {0}, {0}}},
+                                 {S("warp"), {}},
+                                 {S("block"), {{1}}}},
+                                {S("dim")});
+
+  EXPECT_FALSE(
+      regLayout.invertAndCompose(memLayout).isIdentityOnOutDim(S("block")));
+  auto local = invertAndComposeBlockLocal(memLayout, regLayout);
+  auto expected =
+      LinearLayout({{S("register"), {}},
+                    {S("lane"), {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}}},
+                    {S("warp"), {}},
+                    {S("block"), {{1, 1}}}},
+                   {{S("offset"), 2}, {S("block"), 2}},
+                   /*requireSurjective=*/false);
+  EXPECT_EQ(local, expected);
+  EXPECT_TRUE(local.isIdentityOnOutDim(S("block")));
+  EXPECT_FALSE(local.isTrivialOver(S("block")));
+  EXPECT_EQ(local.compose(memLayout), regLayout);
+
+  auto partiallyBroadcastMem = LinearLayout(
+      {{S("offset"), {{2}}}, {S("block"), {{1}, {0}}}}, {S("dim")});
+  auto partiallyDistributedReg =
+      LinearLayout({{S("register"), {}},
+                    {S("lane"), {{0}, {0}, {0}, {0}, {0}}},
+                    {S("warp"), {}},
+                    {S("block"), {{1}, {2}}}},
+                   {S("dim")});
+  EXPECT_FALSE(partiallyDistributedReg.invertAndCompose(partiallyBroadcastMem)
+                   .isIdentityOnOutDim(S("block")));
+  auto partiallyLocal = invertAndComposeBlockLocal(partiallyBroadcastMem,
+                                                   partiallyDistributedReg);
+  auto partiallyExpected =
+      LinearLayout({{S("register"), {}},
+                    {S("lane"), {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}}},
+                    {S("warp"), {}},
+                    {S("block"), {{0, 1}, {1, 2}}}},
+                   {{S("offset"), 2}, {S("block"), 4}},
+                   /*requireSurjective=*/false);
+  EXPECT_EQ(partiallyLocal, partiallyExpected);
+  EXPECT_TRUE(partiallyLocal.isIdentityOnOutDim(S("block")));
+  EXPECT_EQ(partiallyLocal.compose(partiallyBroadcastMem),
+            partiallyDistributedReg);
+
+  auto partitionedMem =
+      LinearLayout({{S("offset"), {{1}}}, {S("block"), {{2}}}}, {S("dim")});
+  auto transposedReg = LinearLayout({{S("register"), {{2}}},
+                                     {S("lane"), {{0}, {0}, {0}, {0}, {0}}},
+                                     {S("warp"), {}},
+                                     {S("block"), {{1}}}},
+                                    {S("dim")});
+  EXPECT_EQ(invertAndComposeBlockLocal(partitionedMem, transposedReg),
+            transposedReg.invertAndCompose(partitionedMem));
+}
+
 TEST_F(LinearLayoutTest, InvertAndCompose_IdentityInDim) {
   SmallVector<StringAttr> outDims = {S("dim0"), S("dim1"), S("dim2"),
                                      S("dim3"), S("dim4"), S("dim5"),
@@ -843,7 +902,6 @@ TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEM) {
 TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEMSwizzled) {
   int M = 16;
   int KPadded8b = 128;
-  int numFp4Elems = M * KPadded8b;
   int KPacked8b = KPadded8b / 2;
   int elemBitWidth = 8;
   int tileWidthBytes = 128;
@@ -1160,6 +1218,44 @@ TEST_F(LinearLayoutTest, ColumnActionApplyValues) {
 
   expected = std::vector<intptr_t>{1, 5, 3, 7};
   EXPECT_EQ(result, expected);
+}
+
+// The purpose of this test is to make sure the conversion of block dimension
+// is identity, and this decision should be immune to block-sublayout's out-dim
+// sizes.
+TEST_F(LinearLayoutTest, invertAndCompose1) {
+  auto regLayout = LinearLayout(
+      {{S("offset"),
+        {{0, 1}, {0, 2}, {0, 4}, /*gap*/ {0, 16}, {32, 0}, {64, 0}, {128, 0}}},
+
+       {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}}},
+       {S("warp"), {{0, 0}, {16, 0}}},
+
+       {S("block"), {{0, 0}}}},
+      {S("dim0"), S("dim1")});
+
+  auto sharedLayout = LinearLayout({{S("offset"),
+                                     {{0, 1},
+                                      {0, 2},
+                                      {0, 4},
+                                      {0, 8},
+                                      {0, 16},
+                                      {0, 32},
+                                      {0, 64},
+                                      {1, 0},
+                                      {2, 0},
+                                      {4, 0},
+                                      {8, 0},
+                                      {16, 0},
+                                      {32, 0},
+                                      {64, 0},
+                                      {128, 0}}},
+                                    {S("block"), {{0, 0}}}},
+                                   {S("dim0"), S("dim1")});
+
+  auto cvt = regLayout.invertAndCompose(sharedLayout);
+
+  EXPECT_TRUE(cvt.isTrivialOver(S("block")));
 }
 
 } // anonymous namespace

@@ -1,7 +1,7 @@
 from __future__ import annotations
 import inspect
 import math
-from typing import TypeVar, List, TYPE_CHECKING, Tuple
+from typing import Callable, TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
 import warnings
 
@@ -9,13 +9,15 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout, CoalescedLayout
+from ._layouts import (SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout, CoalescedLayout,
+                       SharedLinearLayout, _get_shape_per_cta)
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
-    constexpr,
+    aggregate_replace,
     base_value,
     base_type,
+    constexpr,
     dtype,
     block_type,  # TODO: block type with layout info
     pointer_type,
@@ -49,6 +51,7 @@ from triton.language.core import (
 # We define __all__ only to appease the python linter, these are not used in
 # this file but we want to import them anyway so they are importable from here.
 __all__ = [
+    "aggregate_replace",
     "constexpr",
     "pointer_type",
     "void",
@@ -115,6 +118,7 @@ atomic_xchg = builtin(tl_core.atomic_xchg)
 atomic_xor = builtin(tl_core.atomic_xor)
 broadcast = builtin(tl_core.broadcast)
 cast = builtin(tl_core.cast)
+clamp = builtin(tl_core.clamp)
 device_assert = builtin(tl_core.device_assert)
 device_print = builtin(tl_core.device_print)
 expand_dims = builtin(tl_core.expand_dims)
@@ -140,6 +144,7 @@ static_print = builtin(tl_core.static_print)
 store = builtin(tl_core.store)
 sub = builtin(tl_core.sub)
 to_tensor = builtin(tl_core.to_tensor)
+expect_zero = builtin(tl_core.expect_zero)
 where = builtin(tl_core.where)
 
 
@@ -207,6 +212,23 @@ class shared_memory_descriptor_type(base_type):
     def __str__(self) -> str:
         return f"shared_memory_descriptor<{self.element_ty}, {self.shape}, {self.layout}, {self.alloc_shape}>"
 
+    @property
+    def nbytes_per_cta(self) -> int:
+        if isinstance(self.layout, SharedLinearLayout):
+            cga_layout = []
+            dim_bases = [0] * len(self.shape)
+            for basis in self.layout.block_bases:
+                cga_basis = [0] * len(self.shape)
+                for dim, value in enumerate(basis):
+                    if value != 0:
+                        cga_basis[dim] = 1 << dim_bases[dim]
+                        dim_bases[dim] += 1
+                cga_layout.append(cga_basis)
+        else:
+            cga_layout = self.layout.cga_layout
+        shape_per_cta = _get_shape_per_cta(self.shape, cga_layout)
+        return math.prod(shape_per_cta) * self.element_ty.primitive_bitwidth // 8
+
     def __eq__(self, other) -> bool:
         return (type(self) is type(other) and self.shape == other.shape and self.layout == other.layout
                 and self.alloc_shape == other.alloc_shape)
@@ -218,6 +240,52 @@ class shared_memory_descriptor_type(base_type):
         shape_str = "_".join([str(s) for s in self.shape])
         alloc_shape_str = "_".join([str(s) for s in self.alloc_shape])
         return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{alloc_shape_str}ASMD"
+
+
+def _add_atomic_scatter_docstring(kind: str) -> Callable[[T], T]:
+
+    def _decorator(func: T) -> T:
+        integer_only = kind in ("max", "min", "logical and", "logical or", "logical xor")
+        value_kind = "integer values" if integer_only else "values"
+        value_type = ("Integer tensor broadcast-compatible with :code:`indices`"
+                      if integer_only else "Tensor broadcast-compatible with :code:`indices`")
+        docstr = f"""
+    Performs an atomic scatter {kind} on this shared-memory descriptor.
+
+    For each input position :code:`I`, reads from and writes to the element whose
+    coordinate at :code:`axis` is replaced by :code:`indices[I]`:
+      :code:`old = dst[I[0], ..., indices[I], ..., I[n]]`
+      :code:`dst[I[0], ..., indices[I], ..., I[n]] = op(old, values[I])`
+    where :code:`op` is {kind}.
+
+    :code:`values`, :code:`indices`, and optional :code:`mask` are broadcast to a
+    common tensor shape before the atomic operation. The returned tensor has that
+    broadcasted shape. For example, with :code:`axis=1`, :code:`values` of shape
+    :code:`[N, 1]`, and :code:`indices` of shape :code:`[1, M]`, the operation
+    behaves as if both operands had shape :code:`[N, M]`:
+      :code:`old[i, j] = dst[i, indices[0, j]]`
+      :code:`dst[i, indices[0, j]] = op(old[i, j], values[i, 0])`
+    A :code:`mask` of shape :code:`[N, 1]` would also broadcast over :code:`M`.
+
+    Return the data stored at the scattered location before the atomic operation.
+
+    :param values: The {value_kind} with which to perform the atomic operation
+    :type values: {value_type}
+    :param indices: The indices to update along :code:`axis`
+    :type indices: Integer tensor
+    :param axis: The axis along which to update values
+    :type axis: int
+    :param mask: Boolean tensor broadcast-compatible with :code:`values` and :code:`indices`,
+        selecting which elements to update
+    :type mask: Tensor, optional
+
+    :note: This operation currently uses relaxed memory semantics. Users are responsible
+        for inserting mbarrier synchronization themselves.
+    """
+        func.__doc__ = docstr
+        return func
+
+    return _decorator
 
 
 class shared_memory_descriptor(base_value):
@@ -250,6 +318,10 @@ class shared_memory_descriptor(base_value):
     @property
     def numel(self) -> int:
         return math.prod(self.shape)
+
+    @property
+    def nbytes_per_cta(self) -> int:
+        return self.type.nbytes_per_cta
 
     @property
     def layout(self):
@@ -311,8 +383,14 @@ class shared_memory_descriptor(base_value):
         the scatter axis is replaced by indices[I]:
           dst[I[0], ..., indices[I], ..., I[n]] = values[I]
 
+        Broadcasting:
+            values and indices are broadcast to a common tensor shape before the scatter.
+            For example, with axis=1, values of shape [N, 1] and indices of shape
+            [1, M] behave as if both operands had shape [N, M]:
+              dst[i, indices[0, j]] = values[i, 0]
+
         Args:
-            values (tensor): Tensor with values to scatter (same shape as indices).
+            values (tensor): Tensor with values to scatter (broadcast-compatible with indices).
             indices (tensor): Tensor specifying which indices to scatter to along the axis.
             axis (int): The axis along which to scatter values.
         """
@@ -320,6 +398,50 @@ class shared_memory_descriptor(base_value):
         indices = _unwrap_if_constexpr(indices)
         axis = _unwrap_if_constexpr(axis)
         return _semantic.shared_scatter(self, values, indices, axis)
+
+    def _atomic_scatter_rmw(self, op, values, indices, axis, mask, _semantic: GluonSemantic = None) -> tensor:
+        values = _unwrap_if_constexpr(values)
+        indices = _unwrap_if_constexpr(indices)
+        axis = _unwrap_if_constexpr(axis)
+        mask = _unwrap_if_constexpr(mask)
+        if mask is not None:
+            mask = _semantic.to_tensor(mask)
+        return _semantic.shared_atomic_scatter_rmw(self, op, values, indices, axis, mask)
+
+    @builtin
+    @_add_atomic_scatter_docstring("add")
+    def atomic_scatter_add(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("add", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("max")
+    def atomic_scatter_max(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("max", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("min")
+    def atomic_scatter_min(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("min", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("logical and")
+    def atomic_scatter_and(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("and", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("logical or")
+    def atomic_scatter_or(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("or", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("logical xor")
+    def atomic_scatter_xor(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("xor", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("exchange")
+    def atomic_scatter_xchg(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("xchg", values, indices, axis, mask, _semantic)
 
     def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
@@ -382,21 +504,22 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_reshape(self, shape)
 
     @builtin
-    def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
+    def _reinterpret(self, dtype=None, shape=None, layout=None,
+                     _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Reinterpret the shared memory descriptor as a different dtype, shape, or layout.
 
         Args:
-            dtype (dtype): The new data type.
-            shape (List[int]): The new shape.
-            layout (SharedLayout): The new layout.
+            dtype (dtype): The new data type. Defaults to the descriptor dtype.
+            shape (List[int]): The new shape. Defaults to the descriptor shape.
+            layout (SharedLayout): The new layout. Defaults to the descriptor layout.
 
         Returns:
             shared_memory_descriptor: Descriptor with updated type and layout.
         """
-        dtype = _unwrap_if_constexpr(dtype)
-        shape = [_unwrap_if_constexpr(s) for s in shape]
-        layout = _unwrap_if_constexpr(layout)
+        dtype = self.dtype if dtype is None else _unwrap_if_constexpr(dtype)
+        shape = self.shape if shape is None else [_unwrap_if_constexpr(s) for s in shape]
+        layout = self.layout if layout is None else _unwrap_if_constexpr(layout)
 
         return _semantic.memdesc_reinterpret(self, dtype, shape, layout)
 

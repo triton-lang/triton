@@ -214,8 +214,8 @@ class TritonSemantic(Generic[TensorTy]):
             return
         lhs_sca_ty = lhs.type.scalar
         rhs_sca_ty = rhs.type.scalar
-        assert lhs_sca_ty == rhs_sca_ty
-        assert lhs_sca_ty.is_int()
+        assert lhs_sca_ty == rhs_sca_ty, f"expected matching operand types, got {lhs_sca_ty} and {rhs_sca_ty}"
+        assert lhs_sca_ty.is_int(), f"expected integer type, got {lhs_sca_ty}"
         lhs = self.cast(lhs, tl.int64)
         rhs = self.cast(rhs, tl.int64)
         ret = binary_op(lhs, rhs, False)
@@ -334,7 +334,10 @@ class TritonSemantic(Generic[TensorTy]):
         if not input_scalar_ty.is_floating() or not other_scalar_ty.is_floating():
             raise TypeError("both operands of fdiv must have floating scalar type")
         input, other = self.binary_op_type_checking_impl(input, other, False, False, False, True)
-        ret = self.builder.create_fdiv(input.handle, other.handle)
+        if ieee_rounding:
+            ret = self.builder.create_precise_divf(input.handle, other.handle)
+        else:
+            ret = self.builder.create_fdiv(input.handle, other.handle)
         return self.tensor(ret, input.type)
 
     def mod(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
@@ -476,6 +479,8 @@ class TritonSemantic(Generic[TensorTy]):
         input_sca_ty = input.type.scalar
         if input_sca_ty.is_ptr():
             raise ValueError("wrong type argument to unary minus (" + input_sca_ty.__repr__() + ")")
+        if input_sca_ty.is_floating():
+            return self.tensor(self.builder.create_fneg(input.handle), input.type)
         _0 = self.tensor(self.builder.get_null_value(input_sca_ty.to_ir(self.builder)), input_sca_ty)
         return self.sub(_0, input, True)
 
@@ -652,7 +657,7 @@ class TritonSemantic(Generic[TensorTy]):
 
     def cat(self, lhs: TensorTy, rhs: TensorTy, can_reorder: bool) -> TensorTy:
         assert can_reorder, "current implementation of `cat` always may reorder elements"
-        assert len(lhs.shape) == 1
+        assert len(lhs.shape) == 1, f"expected 1D input for cat, got {len(lhs.shape)}D"
         ret_type = tl.block_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]])
         return self.tensor(self.builder.create_cat(lhs.handle, rhs.handle), ret_type)
 
@@ -681,8 +686,9 @@ class TritonSemantic(Generic[TensorTy]):
         return ret
 
     def split(self, a: TensorTy) -> Tuple[TensorTy, TensorTy]:
-        assert (len(a.shape) > 0)
-        assert (tl._unwrap_if_constexpr(a.shape[-1]) == 2)
+        assert (len(a.shape) > 0), "split requires a non-scalar tensor"
+        assert (tl._unwrap_if_constexpr(a.shape[-1]) == 2), \
+            f"expected last dimension to be 2 for split, got {tl._unwrap_if_constexpr(a.shape[-1])}"
 
         new_shape = a.shape[:-1]
         ret_type = tl.block_type(a.type.scalar, new_shape)
@@ -749,7 +755,8 @@ class TritonSemantic(Generic[TensorTy]):
                                       tl.block_type(rhs_ty.scalar, [1] + rhs_shape.values))
                     rhs_ty = rhs.type
                     rhs_shape = rhs_ty.get_block_shapes()
-            assert len(rhs_shape) == len(lhs_shape)
+            assert len(rhs_shape) == len(lhs_shape), \
+                f"expected tensors of equal rank for broadcast, got {len(lhs_shape)} and {len(rhs_shape)}"
 
             ret_shape = []
             for i, left in enumerate(lhs_shape):
@@ -919,6 +926,8 @@ class TritonSemantic(Generic[TensorTy]):
                 cache = ir.CACHE_MODIFIER.CA
             elif cache_modifier == ".cg":
                 cache = ir.CACHE_MODIFIER.CG
+            elif cache_modifier == ".cs":
+                cache = ir.CACHE_MODIFIER.CS
             elif cache_modifier == ".cv":
                 cache = ir.CACHE_MODIFIER.CV
             else:
@@ -990,42 +999,11 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError(f"Memory semantic {scope_option} not supported")
         return scope
 
-    def _canonicalize_boundary_check(self, boundary_check, block_shape):
-        if boundary_check:
-            if not hasattr(boundary_check, "__iter__"):
-                boundary_check = [boundary_check]
-            boundary_check = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in boundary_check]
-            for dim in boundary_check:
-                assert isinstance(dim, int) and 0 <= dim < len(block_shape)
-            assert len(boundary_check) > 0
-            assert len(boundary_check) == len(set(boundary_check)), "Duplicate dimension in `boundary_check`"
-            return sorted(boundary_check)
-        return ()
-
-    def _load_block_pointer(self, ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile):
-        # Load by a block pointer: `pointer_type<block_type<>>`
-        # Block pointer can not have `mask` and `other` arguments
-        if mask is not None or other is not None:
-            raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
-
-        elt_ty = ptr.type.element_ty.element_ty
-        assert elt_ty != tl.int1, "`tl.int1` should be rewritten in `tl.make_block_ptr`"
-        if elt_ty.is_int() and padding == ir.PADDING_OPTION.PAD_NAN:
-            raise ValueError("Padding option `nan` is not supported for integer block pointers")
-
-        # `dst_ty` is de-referenced type of the pointer type
-        dst_ty = ptr.type.element_ty
-
-        # Check `boundary_check` argument
-        boundary_check = self._canonicalize_boundary_check(boundary_check, dst_ty.get_block_shapes())
-
-        # Build IR
-        return self.tensor(
-            self.builder.create_tensor_pointer_load(ptr.handle, boundary_check, padding, cache, eviction, is_volatile),
-            dst_ty)
-
-    def _load_legacy(self, ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile):
-        # Load by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
+    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], boundary_check: Tuple,
+             padding_option: str, cache_modifier: str, eviction_policy: str, is_volatile: bool) -> TensorTy:
+        cache = self._str_to_load_cache_modifier(cache_modifier)
+        eviction = self._str_to_eviction_policy(eviction_policy)
+        padding = self._str_to_padding_option(padding_option)
         if not ptr.type.scalar.is_ptr():
             raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.load`")
 
@@ -1084,23 +1062,10 @@ class TritonSemantic(Generic[TensorTy]):
             ret = self.cast(ret, tl.int1)
         return ret
 
-    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], boundary_check: Tuple,
-             padding_option: str, cache_modifier: str, eviction_policy: str, is_volatile: bool) -> TensorTy:
-        # Cache, eviction and padding options
-        cache = self._str_to_load_cache_modifier(cache_modifier)
-        eviction = self._str_to_eviction_policy(eviction_policy)
-        padding = self._str_to_padding_option(padding_option)
-
-        if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
-            # Load by a block pointer: `pointer_type<block_type<>>`
-            return self._load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile)
-        else:
-            # Load by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
-            return self._load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile)
-
     def descriptor_load(self, desc: tl.tensor_descriptor_base, offsets, cache_modifier: str,
                         eviction_policy: str) -> TensorTy:
-        assert isinstance(desc, tl.tensor_descriptor_base)
+        assert isinstance(desc, tl.tensor_descriptor_base), \
+            f"expected a tensor descriptor, got {type(desc).__name__}"
         ndim = len(desc.block_shape)
         assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
 
@@ -1110,10 +1075,12 @@ class TritonSemantic(Generic[TensorTy]):
         return self.tensor(x, desc.block_type)
 
     def validate_store_like(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets) -> None:
-        assert isinstance(desc, tl.tensor_descriptor_base)
+        assert isinstance(desc, tl.tensor_descriptor_base), \
+            f"expected a tensor descriptor, got {type(desc).__name__}"
         ndim = len(desc.block_shape)
         assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
-        assert value.shape == desc.block_shape
+        assert value.shape == desc.block_shape, \
+            f"expected value shape {desc.block_shape}, got {value.shape}"
 
     def descriptor_store(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets) -> TensorTy:
         self.validate_store_like(desc, value, offsets)
@@ -1174,7 +1141,8 @@ class TritonSemantic(Generic[TensorTy]):
         return self.tensor(self.builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
 
     def descriptor_gather(self, desc, x_offsets, y_offset, cache_modifier: str, eviction_policy: str) -> TensorTy:
-        assert isinstance(desc, tl.tensor_descriptor_base)
+        assert isinstance(desc, tl.tensor_descriptor_base), \
+            f"expected a tensor descriptor, got {desc.__class__.__name__}"
         assert cache_modifier == "", "cache modifier is not supported yet"
         assert eviction_policy == "", "eviction policy is not supported yet"
 
@@ -1184,6 +1152,8 @@ class TritonSemantic(Generic[TensorTy]):
 
         # Validate offsets.
         assert len(x_offsets.shape) == 1, f"x offsets must be 1D, but got {x_offsets.shape}"
+        assert x_offsets.dtype in {tl.int16,
+                                   tl.int32}, f"x offsets must have dtype int16 or int32, but got {x_offsets.dtype}"
 
         # Validate minimum block size.
         assert x_offsets.shape[0] >= 8, f"descriptor gather must have at least 8 rows, but got {x_offsets.shape}"
@@ -1198,14 +1168,17 @@ class TritonSemantic(Generic[TensorTy]):
         return self.tensor(x, type)
 
     def descriptor_scatter(self, desc, value: TensorTy, x_offsets, y_offset) -> TensorTy:
-        assert isinstance(desc, tl.tensor_descriptor_base)
+        assert isinstance(desc, tl.tensor_descriptor_base), \
+            f"expected a tensor descriptor, got {type(desc).__name__}"
 
         # Validate descriptor.
         assert len(desc.block_shape) == 2, f"descriptor must be 2D, but got {desc.block_shape}"
         assert desc.block_shape[0] == 1, f"descriptor block must have 1 row, but got {desc.block_shape}"
 
         # Validate offsets.
-        assert len(x_offsets.shape) == 1, f"x offsets must be 1D, but got {x_offsets.shapae}"
+        assert len(x_offsets.shape) == 1, f"x offsets must be 1D, but got {x_offsets.shape}"
+        assert x_offsets.dtype in {tl.int16,
+                                   tl.int32}, f"x offsets must have dtype int16 or int32, but got {x_offsets.dtype}"
 
         # Validate minimum block size.
         assert x_offsets.shape[0] >= 8, f"descriptor scatter must have at least 8 rows, but got {x_offsets.shape}"
@@ -1218,35 +1191,24 @@ class TritonSemantic(Generic[TensorTy]):
         self.builder.create_descriptor_scatter(desc.handle, value.handle, x_offsets.handle, y_offset)
         return self.tensor(None, tl.void)
 
-    def _store_block_pointer(self, ptr, val, mask, boundary_check, cache, eviction):
-        # Store by a block pointer: `pointer_type<block_type<>>`
-        # Block pointers can not have the `mask` argument
-        if mask is not None:
-            raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
+    def _broadcast_ptr_val_mask(self, ptr, val, mask):
+        ptr_shape = ptr.shape
+        if mask is None:
+            ptr, val = self.broadcast_tensors(ptr, val)
+        else:
+            mask = self.to_tensor(mask)
+            ptr, val, mask = self.broadcast_tensors(ptr, val, mask)
+        if ptr_shape != ptr.shape:
+            raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
+        return ptr, val, mask
 
-        # Check same shape and element type
-        block_shape = ptr.type.element_ty.get_block_shapes()
-        if not val.type.is_block():
-            val = self.broadcast_impl_shape(val, block_shape)
-        assert val.type.is_block(), "Value argument must be block type or a scalar"
-        assert block_shape == val.type.get_block_shapes(
-        ), f"Block shape({block_shape}) and value shape({val.type.get_block_shapes()}) mismatch"
-        assert ptr.type.element_ty.element_ty == val.type.element_ty, f"Block element type({ptr.type.element_ty.element_ty}) and value element type({val.type.element_ty}) mismatch"
+    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], boundary_check, cache_modifier: str,
+              eviction_policy: str) -> TensorTy:
+        cache = self._str_to_store_cache_modifier(cache_modifier)
+        eviction = self._str_to_eviction_policy(eviction_policy)
+        if ptr.type.is_const() or ptr.type.scalar.is_const():
+            raise ValueError("Cannot store to a constant pointer")
 
-        elt_ty = ptr.type.element_ty.element_ty
-        assert elt_ty != tl.int1, "`tl.int1` should be rewritten in `tl.make_block_ptr`"
-
-        # Check `boundary_check` argument
-        boundary_check = self._canonicalize_boundary_check(boundary_check, block_shape)
-
-        # Cast to target data type
-        val = self.cast(val, elt_ty)
-
-        # Build IR
-        return self.tensor(
-            self.builder.create_tensor_pointer_store(ptr.handle, val.handle, boundary_check, cache, eviction), tl.void)
-
-    def _store_legacy(self, ptr, val, mask, boundary_check, cache, eviction):
         # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
         if not ptr.type.scalar.is_ptr():
             raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.store`")
@@ -1266,13 +1228,7 @@ class TritonSemantic(Generic[TensorTy]):
 
         # Make `mask` and `val` into the same shape as `ptr`
         if ptr.type.is_block():
-            ptr_shape = ptr.shape
-            if mask is None:
-                ptr, val = self.broadcast_tensors(ptr, val)
-            else:
-                ptr, val, mask = self.broadcast_tensors(ptr, val, mask)
-            if ptr_shape != ptr.shape:
-                raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
+            ptr, val, mask = self._broadcast_ptr_val_mask(ptr, val, mask)
 
         ptr_ty = ptr.type.scalar
         elt_ty = ptr_ty.element_ty
@@ -1293,22 +1249,6 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError("Mask must have boolean scalar type")
         return self.tensor(self.builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction),
                            tl.void)
-
-    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], boundary_check, cache_modifier: str,
-              eviction_policy: str) -> TensorTy:
-        # Cache and eviction options
-        cache = self._str_to_store_cache_modifier(cache_modifier)
-        eviction = self._str_to_eviction_policy(eviction_policy)
-
-        if ptr.type.is_const() or ptr.type.scalar.is_const():
-            raise ValueError("Cannot store to a constant pointer")
-
-        if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
-            # Store by a block pointer: `pointer_type<block_type<>>`
-            return self._store_block_pointer(ptr, val, mask, boundary_check, cache, eviction)
-        else:
-            # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
-            return self._store_legacy(ptr, val, mask, boundary_check, cache, eviction)
 
 #########
 # atomic
@@ -1336,10 +1276,7 @@ class TritonSemantic(Generic[TensorTy]):
         if element_ty in [tl.int16, tl.uint16] or element_ty.primitive_bitwidth < 16:
             raise ValueError("atomic_" + op + " does not support " + str(element_ty))
         if ptr.type.is_block():
-            if mask is not None:
-                mask = self.broadcast_impl_shape(mask, ptr.type.get_block_shapes())
-            if val is not None:
-                val = self.broadcast_impl_shape(val, ptr.type.get_block_shapes())
+            ptr, val, mask = self._broadcast_ptr_val_mask(ptr, val, mask)
         val = self.cast(val, ptr.type.scalar.element_ty)
         if mask is None:
             mask_ir = self.builder.get_int1(True)
@@ -1348,6 +1285,8 @@ class TritonSemantic(Generic[TensorTy]):
                 mask_ty = ptr.type.with_element_ty(tl.int1)
                 mask_ir = self.builder.create_splat(mask_ty.to_ir(self.builder), mask_ir)
             mask = self.tensor(mask_ir, mask_ty)
+        elif not mask.type.scalar.is_bool():
+            raise ValueError("Mask must have boolean scalar type")
         return ptr, val, mask
 
     def _signbit(self, x: TensorTy) -> TensorTy:
@@ -1429,7 +1368,7 @@ class TritonSemantic(Generic[TensorTy]):
                                            self.and_(mask, pos).handle, sem, scope), i_val.type)
         neg_ret = self.tensor(
             self.builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX, ui_ptr.handle, ui_val.handle,
-                                           self.and_(mask, neg).handle, sem, scope), ui_ptr.type)
+                                           self.and_(mask, neg).handle, sem, scope), ui_val.type)
         ret = self.where(pos, pos_ret, neg_ret)
         return self.bitcast(ret, sca_ty)
 
@@ -1488,8 +1427,8 @@ class TritonSemantic(Generic[TensorTy]):
         return getattr(ir.INPUT_PRECISION, input_precision)
 
     def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
-            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
-        assert lhs.type.is_block() and rhs.type.is_block()
+            max_num_imprecise_acc: int, out_dtype: tl.dtype | None) -> TensorTy:
+        assert lhs.type.is_block() and rhs.type.is_block(), "dot operands must be block tensors (not scalars)"
 
         if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
             # All combinations of supported fp8 x fp8 are permitted
@@ -1524,6 +1463,9 @@ class TritonSemantic(Generic[TensorTy]):
 
         if input_precision is None:
             input_precision = self.builder.options.default_dot_input_precision
+
+        if out_dtype is None:
+            out_dtype = tl.float32 if acc is None else acc.type.element_ty
 
         input_precision = self._str_to_dot_input_precision(input_precision)
 
@@ -1565,7 +1507,11 @@ class TritonSemantic(Generic[TensorTy]):
             acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
         else:
             acc_handle = acc.handle
-            assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
+            assert acc.type.shape == ret_ty.shape, \
+                f"expected accumulator shape {ret_ty.shape}, got {acc.type.shape}"
+            assert acc.type.element_ty == out_dtype, \
+                f"expected accumulator dtype {out_dtype}, got {acc.type.element_ty}; " \
+                f"pass out_dtype={acc.type.element_ty} to use this accumulator dtype"
 
         # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
         if max_num_imprecise_acc is None:
@@ -1604,15 +1550,24 @@ class TritonSemantic(Generic[TensorTy]):
             assert val.dtype == unsigned_ty, f"Unexpected dtype for {float_format}. Got {val.dtype}"
             return self.bitcast(val, triton_ty)
 
-    def verify_scaled_shape(self, M, N, K, lhs_scale, rhs_scale):
+    def deduce_scale_factor(self, lhs, lhs_scale, lhs_format, lhs_k_pack, rhs, rhs_scale, rhs_format, rhs_k_pack):
+
+        def _to_scale_handle(scale):
+            if isinstance(scale, tl.tensor) and scale.numel.value != 1:
+                return scale.type.shape
+            return None
+
+        return ir.deduce_scale_factor(lhs.type.shape, _to_scale_handle(lhs_scale), self._str_to_fp_type(lhs_format),
+                                      lhs_k_pack, rhs.type.shape, _to_scale_handle(rhs_scale),
+                                      self._str_to_fp_type(rhs_format), rhs_k_pack)
+
+    def verify_scaled_shape(self, M, N, K, lhs_scale, rhs_scale, scale_factor):
         if lhs_scale is not None:
-            scale_factor = 16 if lhs_scale.dtype.is_fp8e4nv() else 32
             lhs_scale_shape = lhs_scale.type.shape
             assert lhs_scale_shape[-2:] == [
                 M, K // scale_factor
             ], f"lhs_scale must be a tensor of shape [..., {M}, {K // scale_factor}]. Got {lhs_scale_shape}"
         if rhs_scale is not None:
-            scale_factor = 16 if rhs_scale.dtype.is_fp8e4nv() else 32
             rhs_scale_shape = rhs_scale.type.shape
             assert rhs_scale_shape[-2:] == [
                 N, K // scale_factor
@@ -1621,13 +1576,11 @@ class TritonSemantic(Generic[TensorTy]):
     def dot_scaled(self, lhs: TensorTy, lhs_scale: TensorTy, lhs_format: str, rhs: TensorTy,
                    rhs_scale: Optional[TensorTy], rhs_format: str, acc: TensorTy | None, fast_math: bool,
                    lhs_k_pack: bool, rhs_k_pack: bool, out_dtype: tl.dtype) -> TensorTy:
-        assert lhs.type.is_block() and rhs.type.is_block()
+        assert lhs.type.is_block() and rhs.type.is_block(), "dot_scaled operands must be block tensors (not scalars)"
         #TODO: validate types.
         lhs_rank = len(lhs.shape)
         rhs_rank = len(rhs.shape)
         assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
-        lhs_format: str = lhs_format.value
-        rhs_format: str = rhs_format.value
         lhs_format_enum = self._str_to_fp_type(lhs_format)
         rhs_format_enum = self._str_to_fp_type(rhs_format)
         allowed_formats = {"e2m1", "e4m3", "e5m2", "bf16", "fp16"}
@@ -1662,11 +1615,18 @@ class TritonSemantic(Generic[TensorTy]):
             acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
         else:
             acc_handle = acc.handle
-            assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
+            assert acc.type.shape == ret_ty.shape, \
+                f"expected accumulator shape {ret_ty.shape}, got {acc.type.shape}"
+            assert acc.type.element_ty == out_dtype, \
+                f"expected accumulator dtype {out_dtype}, got {acc.type.element_ty}; " \
+                f"pass out_dtype={acc.type.element_ty} to use this accumulator dtype"
         rhs_scale_handle = None if rhs_scale_is_none else rhs_scale.handle
         lhs_scale_handle = None if lhs_scale_is_none else lhs_scale.handle
+
+        scale_factor = self.deduce_scale_factor(lhs, lhs_scale, lhs_format, lhs_k_pack, rhs, rhs_scale, rhs_format,
+                                                rhs_k_pack)
         self.verify_scaled_shape(M, N, K, None if lhs_scale_is_none else lhs_scale,
-                                 None if rhs_scale_is_none else rhs_scale)
+                                 None if rhs_scale_is_none else rhs_scale, scale_factor)
         return self.tensor(
             self.builder.create_dot_scaled(lhs.handle, lhs_scale_handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
                                            rhs_format_enum, fast_math, lhs_k_pack, rhs_k_pack, acc_handle), ret_ty)
@@ -1888,51 +1848,6 @@ class TritonSemantic(Generic[TensorTy]):
             return [self._convert_elem_to_ir_value(elem, require_i64) for elem in list_like]
         return [self._convert_elem_to_ir_value(list_like, require_i64)]
 
-    def make_block_ptr(self, base: TensorTy, shape, strides, offsets, block_shape, order) -> TensorTy:
-        # Convert dynamic arguments to IR values
-        # NOTES(Chenggang): current `shape/strides` are `int64_t`, while `offsets/block_shape` are `int32_t`
-        shape = self._convert_to_ir_values(shape)
-        strides = self._convert_to_ir_values(strides)
-        offsets = self._convert_to_ir_values(offsets, require_i64=False)
-
-        # Check `base` type
-        if not base.type.is_ptr() or base.type.element_ty.is_block():
-            raise ValueError("Expected `base` to be a pointer type (but not a block pointer type or others)")
-
-        # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
-        if base.type.element_ty == tl.int1:
-            base = self.cast(base, tl.pointer_type(tl.int8, base.type.address_space))
-
-        # Check whether `block_shape` is static
-        if not hasattr(block_shape, "__iter__"):
-            block_shape = [block_shape]
-        block_shape = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in block_shape]
-        assert all(isinstance(elem, int) and -2**31 <= elem < 2**31 for elem in block_shape), \
-            "Expected a list of constant integers (`int32_t` range) in `block_shape`"
-
-        # Check `order`
-        if not hasattr(order, "__iter__"):
-            order = [order]
-        order = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in order]
-        assert sorted(order) == list(range(len(order))), "Expected a permutation of (0, 1, ..., len(order)-1) in order"
-
-        # Must have same length
-        assert all(len(block_shape) == len(list_like) for list_like in [shape, strides, offsets, order]), \
-            "Expected shape/strides/offsets/block_shape to have the same length"
-
-        # Build value, the type is:
-        #   `pointer_type<blocked<shape, element_type>>` in Python
-        #   `tt.ptr<tensor<shape, element_type>>` in MLIR
-        handle = self.builder.create_make_block_ptr(base.handle, shape, strides, offsets, block_shape, order)
-        return self.tensor(handle, tl.pointer_type(tl.block_type(base.type.element_ty, block_shape)))
-
-    def advance(self, base: TensorTy, offsets) -> TensorTy:
-        # Convert dynamic offsets to IR values
-        offsets = self._convert_to_ir_values(offsets, require_i64=False)
-
-        # Advanced block pointer type is the same as before
-        return self.tensor(self.builder.create_advance(base.handle, offsets), base.type)
-
     def make_tensor_descriptor(self, base: TensorTy, shape: List[TensorTy], strides: List[TensorTy],
                                block_shape: List[tl.constexpr], padding_option: str = "zero") -> tl.tensor_descriptor:
         ndim = len(shape)
@@ -1942,7 +1857,7 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError(f"Expected {ndim} strides but got {len(strides)}")
         if len(block_shape) != ndim:
             raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(strides)}")
-        assert isinstance(base.dtype, tl.pointer_type)
+        assert isinstance(base.dtype, tl.pointer_type), f"base must be a pointer type, got {base.dtype}"
         elem_size = base.dtype.element_ty.primitive_bitwidth // 8
         contig_dim_size = tl._unwrap_if_constexpr(block_shape[-1])
         if contig_dim_size * elem_size < 16:
@@ -1960,7 +1875,7 @@ class TritonSemantic(Generic[TensorTy]):
         # Check whether `block_shape` is static
         block_shape = tl._unwrap_shape(block_shape)
 
-        assert isinstance(base.type, tl.pointer_type)
+        assert isinstance(base.type, tl.pointer_type), f"base must be a pointer type, got {base.type}"
         type = tl.block_type(base.type.element_ty, block_shape)
         base_handle = base.handle
         is_signed_int = base.type.element_ty.is_int_signed()

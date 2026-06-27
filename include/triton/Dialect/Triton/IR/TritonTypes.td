@@ -55,7 +55,7 @@ def TT_PtrType : TritonTypeDef<"Pointer", "ptr"> {
     let summary = "Pointer type (`::mlir::triton::PointerType`) in Triton IR type system";
 
     let description = [{
-        Pointer type in Triton IR type system, which could be pointing to scalars or tensors.
+        Pointer type in Triton IR type system. Pointer types may only point to scalar element types.
     }];
 
     let parameters = (ins "Type":$pointeeType, "int":$addressSpace);
@@ -70,6 +70,7 @@ def TT_PtrType : TritonTypeDef<"Pointer", "ptr"> {
     ];
 
     let hasCustomAssemblyFormat = 1;
+    let genVerifyDecl = 1;
 
     let skipDefaultBuilders = 1;
 }
@@ -87,11 +88,8 @@ def TT_PtrLike : AnyTypeOf<[TT_Ptr, TT_PtrTensor]>;
 def TT_FpIntTensor : RankedTensorOf<[TT_Float, TT_Int]>;
 def TT_Tensor : RankedTensorOf<[TT_Float, TT_Int, TT_Ptr]>;
 
-// Pointer Type to Tensor Type: `ptr<tensor<>>`
-def TT_TensorPtr : TT_PtrOf<[TT_Tensor]>;
-
 // Any Type in Triton IR
-def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike, TT_TensorPtr]>;
+def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>;
 
 // Type constraint for any type implementing TensorDescInterface
 def TT_AnyTensorDescType : Type<
@@ -108,27 +106,59 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", [TT_TensorDesc
       A portable abstraction for TMA descriptors.
       This is the base tensor descriptor type for tiled tensor memory access.
 
+      Shape and elementType describe the block dimensions and data type.
+      The optional sharedLayout attribute carries the shared memory encoding
+      (e.g. swizzle pattern) that is assigned during lowering.
+
       For specialized access patterns like im2col, see TensorDescIm2ColType
       in the TritonNvidiaGPU dialect.
   }];
 
   let parameters = (ins
-    "RankedTensorType":$blockType
+    ArrayRefParameter<"int64_t">:$shape,
+    "Type":$elementType,
+    OptionalParameter<"Attribute">:$sharedLayout
   );
 
-  let assemblyFormat = "`<` $blockType `>`";
-
   let builders = [
+    // Builder from shape + elementType + sharedLayout
+    TypeBuilderWithInferredContext<(ins
+      "llvm::ArrayRef<int64_t>":$shape,
+      "Type":$elementType,
+      "Attribute":$sharedLayout
+    ), [{
+      return $_get(elementType.getContext(), shape, elementType, sharedLayout);
+    }]>,
     // Builder with signedness
-    TypeBuilder<(ins "RankedTensorType":$blockType, "bool":$isSigned), [{
-      if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
+    TypeBuilderWithInferredContext<(ins
+      "llvm::ArrayRef<int64_t>":$shape,
+      "Type":$elementType,
+      "bool":$isSigned
+    ), [{
+      if (auto intTy = llvm::dyn_cast<IntegerType>(elementType)) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
-        auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);
-        blockType = blockType.clone(elemTy);
+        elementType = IntegerType::get(elementType.getContext(), intTy.getWidth(), sem);
       }
-      return Base::get($_ctxt, blockType);
+      return $_get(elementType.getContext(), shape, elementType, Attribute{});
+    }]>,
+    // Builder with signedness and shared layout
+    TypeBuilderWithInferredContext<(ins
+      "llvm::ArrayRef<int64_t>":$shape,
+      "Type":$elementType,
+      "Attribute":$sharedLayout,
+      "bool":$isSigned
+    ), [{
+      if (auto intTy = llvm::dyn_cast<IntegerType>(elementType)) {
+        auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
+        elementType = IntegerType::get(elementType.getContext(), intTy.getWidth(), sem);
+      }
+      return $_get(elementType.getContext(), shape, elementType, sharedLayout);
     }]>,
   ];
+
+  let hasCustomAssemblyFormat = 1;
+  let skipDefaultBuilders = 1;
+  let genVerifyDecl = 1;
 }
 
 #endif

@@ -29,6 +29,11 @@ public:
     auto ctx = type.getContext();
     int numDwords = amdgpu::getTensorDescNumDwords(type);
 
+    // Keep the MLIR-visible descriptor type as a flat `{i32 × N}` struct so
+    // that its in-memory ABI matches the host-side `TDMDescriptor` layout in
+    // third_party/amd/backend/driver.c (N consecutive uint32_t).  Inside the
+    // lowering we pack these scalars into vector groups (<4 × i32>,
+    // <8 × i32>) for cleaner intra-function code.
     auto types = SmallVector<Type>(numDwords, IntegerType::get(ctx, 32));
     return LLVM::LLVMStructType::getLiteral(ctx, types);
   }

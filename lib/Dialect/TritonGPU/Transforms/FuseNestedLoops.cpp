@@ -709,9 +709,6 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   Value curI = fused.getRegionIterArg(1);
   Value i;
 
-  auto lenInnersIt =
-      ValueRange(fused.getRegionIterArgs()).begin() + lenInnersStartIdx;
-
   ArrayRef<BlockArgument> ivars = fused.getRegionIterArgs().slice(ivarStartIdx);
   auto bodyOutsIt =
       ValueRange(fused.getRegionIterArgs()).begin() + innerOutsStartIdx;
@@ -1180,7 +1177,7 @@ static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
 
   // Move the loop nest into the `else` branch.
   outerLoop.replaceAllUsesWith(ifOp.getResults());
-  Block *block = b.createBlock(&ifOp.getElseRegion());
+  b.createBlock(&ifOp.getElseRegion());
   outerLoop->remove();
   b.insert(outerLoop);
   scf::YieldOp::create(b, outerLoop.getResults());

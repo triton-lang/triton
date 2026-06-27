@@ -34,14 +34,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // CHECK-LABEL: @ws_tensordesc_2d_capture
 // CHECK: allocation.offset = 48 : i32
-tt.func @ws_tensordesc_2d_capture(%desc: !tt.tensordesc<tensor<64x64xf16>>) {
+tt.func @ws_tensordesc_2d_capture(%desc: !tt.tensordesc<64x64xf16>) {
   ttg.warp_specialize(%desc) attributes {warpGroupStartIds = array<i32: 4>}
   default {
     ttg.warp_yield
   }
-  partition0(%arg0: !tt.tensordesc<tensor<64x64xf16>>) num_warps(4) {
+  partition0(%arg0: !tt.tensordesc<64x64xf16>) num_warps(4) {
     ttg.warp_return
-  } : (!tt.tensordesc<tensor<64x64xf16>>) -> ()
+  } : (!tt.tensordesc<64x64xf16>) -> ()
   tt.return
 }
 
@@ -57,14 +57,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // CHECK-LABEL: @ws_tensordesc_5d_capture
 // CHECK: allocation.offset = 80 : i32
-tt.func @ws_tensordesc_5d_capture(%desc: !tt.tensordesc<tensor<8x8x8x16x16xf16>>) {
+tt.func @ws_tensordesc_5d_capture(%desc: !tt.tensordesc<8x8x8x16x16xf16>) {
   ttg.warp_specialize(%desc) attributes {warpGroupStartIds = array<i32: 4>}
   default {
     ttg.warp_yield
   }
-  partition0(%arg0: !tt.tensordesc<tensor<8x8x8x16x16xf16>>) num_warps(4) {
+  partition0(%arg0: !tt.tensordesc<8x8x8x16x16xf16>) num_warps(4) {
     ttg.warp_return
-  } : (!tt.tensordesc<tensor<8x8x8x16x16xf16>>) -> ()
+  } : (!tt.tensordesc<8x8x8x16x16xf16>) -> ()
   tt.return
 }
 

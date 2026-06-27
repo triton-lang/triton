@@ -3,7 +3,7 @@
 
 #include "Context/Context.h"
 #include "Device.h"
-#include "Metadata.h"
+#include "Profiler/Instrumentation/InstrumentationMetadata.h"
 #include "Profiler/Profiler.h"
 #include "Runtime/Runtime.h"
 #include "TraceDataIO/Parser.h"
@@ -26,10 +26,12 @@ protected:
   virtual void doStop() override;
   virtual void
   doSetMode(const std::vector<std::string> &modeAndOptions) override;
-  virtual void doAddMetrics(
-      size_t scopeId,
-      const std::map<std::string, MetricValueType> &scalarMetrics,
-      const std::map<std::string, TensorMetric> &tensorMetrics) override;
+
+  // MetricInterface
+  virtual void
+  addMetrics(size_t scopeId,
+             const std::map<std::string, MetricValueType> &scalarMetrics,
+             const std::map<std::string, TensorMetric> &tensorMetrics) override;
 
   // InstrumentationInterface
   void initFunctionMetadata(

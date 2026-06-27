@@ -3,6 +3,7 @@ cmake
 sphinx
 matplotlib
 myst_parser
+myst-sphinx-gallery
 sphinx-rtd-theme
 pandas<3.0
 pytest

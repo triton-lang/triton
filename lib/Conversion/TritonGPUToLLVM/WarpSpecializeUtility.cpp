@@ -365,7 +365,8 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
           /*isPacked=*/true);
       Value capturePtr =
           LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
-      LLVM::LLVMPointerType ptrTy = ptr_ty(b.getContext(), 3);
+      LLVM::LLVMPointerType ptrTy =
+          ptr_ty(b.getContext(), targetInfo.getSharedAddressSpace());
       for (auto [i, arg] :
            llvm::zip(llvm::seq<int32_t>(partition->getNumArguments()),
                      partition->getArguments())) {
@@ -403,7 +404,7 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
 
   TritonLLVMIRRewriter b(func.getLoc(), ctx);
   Type int8Type = b.getIntegerType(8);
-  LLVM::LLVMPointerType ptrTy = ptr_ty(ctx, 3);
+  LLVM::LLVMPointerType ptrTy = ptr_ty(ctx, targetInfo.getSharedAddressSpace());
 
   b.setInsertionPointToStart(switchLoop);
   callbacks.reallocRegisters(b, wsOps[0], RegisterReallocPhase::SwitchLoopStart,

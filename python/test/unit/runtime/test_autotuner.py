@@ -84,6 +84,69 @@ def test_restore(pass_kwargs_to_kernel, device):
     triton.testing.assert_close(src, torch.ones_like(src))
 
 
+@pytest.mark.parametrize('src_is_none', [False, True])
+@pytest.mark.parametrize('pass_kwargs_to_kernel', [False, True])
+def test_reset_to_zero(pass_kwargs_to_kernel, src_is_none, device):
+    # Kernels often take optional tensor args (e.g. an extra buffer used only
+    # when a constexpr flag is set), and idiomatically pass None when the arg
+    # is unused. Such an arg may still be listed for reset_to_zero because some
+    # call sites do mutate it. The autotuner's default pre-hook must skip None.
+    N = 1024
+    dst = torch.full((N, ), 2.0, device=device)
+    src = None if src_is_none else dst
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
+
+    @triton.autotune(configs=configs, key=['N'], reset_to_zero=['src'], do_bench=do_bench)
+    @triton.jit
+    def _kernel(src, dst, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < N
+        if src is not None:
+            tl.store(src + offsets, tl.full([BLOCK_SIZE], 1, dtype=src.dtype.element_ty), mask=mask)
+        else:
+            tl.store(dst + offsets, tl.full([BLOCK_SIZE], 1, dtype=dst.dtype.element_ty), mask=mask)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    if pass_kwargs_to_kernel:
+        _kernel[grid](src=src, dst=dst, N=N)
+    else:
+        _kernel[grid](src, dst, N)
+    triton.testing.assert_close(dst, torch.ones_like(dst))
+
+
+@pytest.mark.parametrize('pass_kwargs_to_kernel', [False, True])
+def test_restore_with_none(pass_kwargs_to_kernel, device):
+    # Kernels often take optional tensor args (e.g. an extra buffer used only
+    # when a constexpr flag is set), and idiomatically pass None when the arg
+    # is unused. Such an arg may still be listed in restore_value because some
+    # call sites do mutate it. The autotuner's default pre/post hooks must
+    # skip None entries instead of crashing with
+    # "AttributeError: 'NoneType' object has no attribute 'clone'".
+    N = 1024
+    src = None
+    dst = torch.full((N, ), 2.0, device=device)
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
+
+    @triton.autotune(configs=configs, key=['N'], restore_value=['src'], do_bench=do_bench)
+    @triton.jit
+    def _kernel(src, dst, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < N
+        if src is not None:
+            tl.store(src + offsets, tl.full([BLOCK_SIZE], 1, dtype=src.dtype.element_ty), mask=mask)
+        else:
+            tl.store(dst + offsets, tl.full([BLOCK_SIZE], 1, dtype=dst.dtype.element_ty), mask=mask)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    if pass_kwargs_to_kernel:
+        _kernel[grid](src=src, dst=dst, N=N)
+    else:
+        _kernel[grid](src, dst, N)
+    triton.testing.assert_close(dst, torch.ones_like(dst))
+
+
 @pytest.mark.skipif(is_hip_cdna2(), reason="Hit LLVM assertion in splitLiveThroughBlock")
 def test_hooks(device):
     # Autotuner's pre- and post- hooks should be called the same number of times
@@ -104,7 +167,7 @@ def test_hooks(device):
         assert values["counter"] == 0
 
     @triton.autotune(configs=configs, key=['N'], do_bench=do_bench, pre_hook=_pre_hook, post_hook=_post_hook)
-    @triton.heuristics({"N_STAGES": lambda nargs: 100 if nargs['N'] == 4096 else 4})
+    @triton.heuristics({"N_STAGES": lambda nargs: 64 if nargs['N'] == 4096 else 4})
     @triton.jit
     def _kernel(src, N, N_STAGES: tl.constexpr, BLOCK_SIZE: tl.constexpr):
         offsets = tl.arange(0, BLOCK_SIZE)
@@ -117,12 +180,12 @@ def test_hooks(device):
     _kernel[(1, )](src, N)
 
     # On NVIDIA GPUs:
-    # The tuning knob `num_stages` can be set by users.
-    # This will cause out of resources when N_STAGES = 100
+    # This will cause out of resources when N_STAGES = 64
     # shared memory bytes = N_STAGES * BLOCK_SIZE * sizeof(float)
     # On AMD GPUs:
-    # `num_stages` is a fixed value of 2, so it won't cause out of resources
-    if triton.runtime.driver.active.get_current_target().backend == "cuda":
+    # Software pipeliner logic anchors on dot to figure out shared layout
+    # so it will effectively ignore pipeling pure load/store right now.
+    if is_cuda():
         assert values["has_exception"] is True
     else:
         assert values["has_exception"] is False
@@ -172,6 +235,77 @@ def test_prune_configs(with_perf_model: bool, device: str):
         assert records['run_early_config_prune']
         assert records['capture_kwargs']
         assert records['capture_named_args']
+
+
+def test_prune_configs_fractional_top_k_keeps_one(device: str):
+    # A fractional top_k that rounds down to zero for a small config set must
+    # still keep one config instead of pruning them all and crashing the later
+    # min() on an empty set: here int(2 * 0.3) == 0.
+    N = 1024
+    src = torch.randn(N, device=device)
+    dst = torch.empty(N, device=device)
+
+    def perf_model(*args, **kwargs):
+        return kwargs['BLOCK_SIZE']
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
+    prune_configs_by = {'perf_model': perf_model, 'top_k': 0.3}
+
+    @triton.autotune(configs=configs, key=['N'], prune_configs_by=prune_configs_by, do_bench=do_bench)
+    @triton.jit
+    def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    _kernel[grid](dst, src, N=N)
+    torch.testing.assert_close(src, dst)
+
+
+@pytest.mark.parametrize("prune_kind", ["early_config_prune", "perf_model"])
+def test_pruned_single_config_skips_benchmark(prune_kind: str, device: str, fresh_knobs):
+    N = 1024
+    src = torch.randn(N, device=device)
+    dst = torch.empty(N, device=device)
+    records = {}
+    captured = []
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
+    fresh_knobs.autotuning.print = True
+    fresh_knobs.autotuning.listener = lambda **kwargs: captured.append(kwargs)
+
+    def do_not_bench(kernel_call, quantiles):
+        records['run_do_bench'] = True
+        raise AssertionError("autotune benchmark should be skipped for a single pruned config")
+
+    if prune_kind == "early_config_prune":
+
+        def early_config_prune(configs, named_args, **kwargs):
+            records['run_early_config_prune'] = True
+            return [configs[1]]
+
+        prune_configs_by = {'early_config_prune': early_config_prune}
+    else:
+
+        def perf_model(*args, **kwargs):
+            records['run_perf_model'] = True
+            return 0 if kwargs['BLOCK_SIZE'] == 128 else 1
+
+        prune_configs_by = {'perf_model': perf_model, 'top_k': 1}
+
+    @triton.autotune(configs=configs, key=['N'], prune_configs_by=prune_configs_by, do_bench=do_not_bench)
+    @triton.jit
+    def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    _kernel[grid](dst, src, N=N)
+    torch.testing.assert_close(src, dst)
+    assert _kernel.best_config == configs[1]
+    assert 'run_do_bench' not in records
+    assert captured == []
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,

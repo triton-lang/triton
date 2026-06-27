@@ -26,9 +26,6 @@ namespace {
 
 static void handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
                          DominanceInfo &domInfo) {
-  // Skip if they are not in the same block.
-  if (currentIf->getBlock() != nextIf->getBlock())
-    return;
   // Skip if they have different conditions.
   if (currentIf.getCondition() != nextIf.getCondition())
     return;
@@ -70,10 +67,14 @@ struct TritonAMDGPUPrepareIfCombiningPass
   void runOnOperation() override {
     triton::FuncOp funcOp = getOperation();
     DominanceInfo domInfo(funcOp);
-    SmallVector<scf::IfOp> ifOps;
-    funcOp.walk([&](scf::IfOp ifOp) { ifOps.push_back(ifOp); });
-    for (auto [currentIf, nextIf] : llvm::zip(ifOps, llvm::drop_begin(ifOps))) {
-      handleIfPair(currentIf, nextIf, domInfo);
+    DenseMap<Block *, SmallVector<scf::IfOp>> ifsByBlock;
+    funcOp.walk(
+        [&](scf::IfOp ifOp) { ifsByBlock[ifOp->getBlock()].push_back(ifOp); });
+    for (auto &[block, ifOps] : ifsByBlock) {
+      for (auto [currentIf, nextIf] :
+           llvm::zip(ifOps, llvm::drop_begin(ifOps))) {
+        handleIfPair(currentIf, nextIf, domInfo);
+      }
     }
   }
 };

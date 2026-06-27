@@ -1,97 +1,20 @@
+#include <triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h>
 #include <triton/Dialect/TritonNvidiaGPU/IR/Dialect.h>
 #include <triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h>
 #include <triton/Tools/LayoutUtils.h>
+
+#include "mlir/Dialect/Arith/IR/Arith.h"
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
 namespace mlir::triton::nvidia_gpu {
 
-ttg::CGAEncodingAttr updateCGALayoutForShape(ttg::CGAEncodingAttr cgaLayout,
-                                             ArrayRef<int64_t> shape) {
-  auto rank = shape.size();
-  if (cgaLayout.getRank() == rank)
-    return cgaLayout;
-
-  auto ctx = cgaLayout.getContext();
-  if (cgaLayout.getRank() > rank) {
-    auto ll = cgaLayout.getLinearLayout();
-    // Broadcast over the first rankDiff dims
-    unsigned rankDiff = cgaLayout.getRank() - rank;
-    for (int i = 0; i < rankDiff; ++i) {
-      ll = removeStandardDim(ll, 0);
-    }
-    return ttg::CGAEncodingAttr::get(ctx, std::move(ll));
-  }
-  // For rank-reducing loads, we need to rank-increase the CTA Layout
-  auto rankDiff = rank - cgaLayout.getRank();
-  for (unsigned i = 0; i < rankDiff; ++i) {
-    assert(shape[i] == 1 && "Should only happen for rank-reducing loads");
-  }
-  auto ll = cgaLayout.getLinearLayout();
-  auto kBlock = *ll.getInDimNames().begin();
-  auto standardOuts = standardOutDimNames(ctx, rank);
-  // Append to front
-  for (int i = cgaLayout.getRank(); i < rank; ++i) {
-    ll = LinearLayout::identity1D(1, kBlock, standardOuts[i]) * ll;
-  }
-  // Rename out dims to dim0..dimn-1
-  auto dimSizes = ll.getOutDims();
-  for (auto [i, dim] : llvm::enumerate(standardOuts)) {
-    dimSizes[i].first = dim;
-  }
-  ll = LinearLayout(ll.getBases(), dimSizes, false);
-  return ttg::CGAEncodingAttr::get(ctx, std::move(ll));
-}
-
-ttg::SharedEncodingTrait
-updateEncodingForShape(Operation *op, ttg::SharedEncodingTrait encoding,
-                       RankedTensorType tensorType) {
-  auto ctx = encoding.getContext();
-  auto cgaLayout = ttg::getCGALayout(encoding);
-  if (auto nvmmaEnc = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding)) {
-    auto existingCga = nvmmaEnc.getCGALayout();
-    if (!existingCga)
-      return nvmmaEnc;
-
-    auto newCgaEnc = updateCGALayoutForShape(cgaLayout, tensorType.getShape());
-    return ttg::NVMMASharedEncodingAttr::get(
-        ctx, nvmmaEnc.getSwizzlingByteWidth(), nvmmaEnc.getTransposed(),
-        nvmmaEnc.getElementBitWidth(), nvmmaEnc.getFp4Padded(), newCgaEnc);
-  }
-  if (auto swizEnc = dyn_cast<ttg::SwizzledSharedEncodingAttr>(encoding)) {
-    auto existingCga = swizEnc.getCGALayout();
-    if (!existingCga)
-      return swizEnc;
-
-    auto rank = tensorType.getRank();
-    auto oldOrder = swizEnc.getOrder();
-    SmallVector<unsigned> order;
-    for (int i = 0; i + oldOrder.size() < rank; ++i)
-      order.push_back(rank - i - 1);
-    for (int i = 0; i < oldOrder.size(); ++i) {
-      // If it is a rank-reducing load, we need to drop the last dimensions.
-      if (oldOrder[i] >= rank)
-        continue;
-      order.push_back(oldOrder[i]);
-    }
-    auto newCgaEnc = updateCGALayoutForShape(cgaLayout, tensorType.getShape());
-    return ttg::SwizzledSharedEncodingAttr::get(
-        ctx, swizEnc.getVec(), swizEnc.getPerPhase(), swizEnc.getMaxPhase(),
-        order, newCgaEnc);
-  }
-
-  constexpr auto msg = "Internal Error: Unhandled tensor descriptor encoding";
-  if (op)
-    op->emitError() << msg;
-  llvm::report_fatal_error(msg);
-}
-
 ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
                                                    RankedTensorType tensorType,
                                                    Value desc) {
-  auto descBlockType = cast<TensorDescType>(desc.getType()).getBlockType();
-  Attribute encoding = descBlockType.getEncoding();
+  auto descType = cast<TensorDescType>(desc.getType());
+  Attribute encoding = descType.getSharedLayout();
   if (!encoding) {
     constexpr auto msg =
         "Internal Error: Tensor descriptor should have encoding set";
@@ -100,10 +23,10 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
     llvm::report_fatal_error(msg);
   }
   auto sharedEnc = cast<ttg::SharedEncodingTrait>(encoding);
-  if (descBlockType.getShape() == tensorType.getShape())
+  if (descType.getShape() == tensorType.getShape())
     return sharedEnc;
 
-  return updateEncodingForShape(op, sharedEnc, tensorType);
+  return ttg::updateEncodingForShape(op, sharedEnc, tensorType);
 }
 
 bool hasCGABroadcast(ttg::MemDescType memDescType) {
@@ -113,10 +36,18 @@ bool hasCGABroadcast(ttg::MemDescType memDescType) {
              .lookup(kBlock) != 0;
 }
 
+Value sextI16ToI32Indices(Value indices, OpBuilder &builder, Location loc) {
+  auto indicesType = cast<RankedTensorType>(indices.getType());
+  if (indicesType.getElementType().isInteger(32))
+    return indices;
+  return arith::ExtSIOp::create(
+      builder, loc, indicesType.clone(builder.getI32Type()), indices);
+}
+
 FailureOr<int> getTMASwizzleMode(Location loc, tt::TensorDescInterface ty) {
-  auto blockType = ty.getBlockType();
-  auto encoding = blockType.getEncoding();
-  auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
+  auto encoding = ty.getSharedLayout();
+  auto mmaEncoding =
+      dyn_cast_if_present<ttg::NVMMASharedEncodingAttr>(encoding);
   unsigned swizzleBytes = mmaEncoding ? mmaEncoding.getSwizzlingByteWidth() : 0;
   if (!mmaEncoding) {
     auto swizzledEnc = dyn_cast<ttg::SwizzledSharedEncodingAttr>(encoding);
@@ -169,14 +100,13 @@ enum TMA_ELEMENT_TYPES {
 };
 
 FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
-  auto blockType = ty.getBlockType();
-  auto encoding = blockType.getEncoding();
+  auto encoding = ty.getSharedLayout();
   bool fp4Padded = isFp4Padded(encoding);
 
   if (fp4Padded)
     return TMA_B4X16_P64;
 
-  auto elemTy = blockType.getElementType();
+  auto elemTy = ty.getElementType();
   if (elemTy.isBF16()) {
     return TMA_BF16;
   } else if (elemTy.isF16()) {
@@ -208,7 +138,6 @@ FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
                             OpBuilder &builder) {
   using namespace mlir;
-  MLIRContext *ctx = op.getContext();
   auto loc = op.getLoc();
   auto mkI32Constant = [&](int32_t val) {
     return arith::ConstantOp::create(builder, loc, builder.getI32Type(),
@@ -217,13 +146,12 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
 
   auto elemType = op.getBase().getType().getPointeeType();
   auto elemSize = elemType.getIntOrFloatBitWidth() / 8;
-  auto encoding = op.getType().getBlockType().getEncoding();
+  auto encoding = op.getType().getSharedLayout();
   auto mmaEncoding =
       llvm::dyn_cast_or_null<gpu::NVMMASharedEncodingAttr>(encoding);
   bool fp4Padded = mmaEncoding && mmaEncoding.getFp4Padded();
 
-  int paddingScale = fp4Padded ? 2 : 1;
-  auto shapePerCTA = gpu::getShapePerCTA(encoding, op.getTensorShape());
+  auto shapePerCTA = gpu::getShapePerCTA(encoding, op.getType().getShape());
   // MakeTensorDescOp creates tiled descriptors (not im2col)
   auto blockShape = getTMABlockShape(encoding, shapePerCTA,
                                      /*packedSize=*/false, gpu::TMAMode::Tiled);
@@ -238,10 +166,9 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
   for (int k = shapePerCTA.size() - 2; k >= 0; --k)
     boxDim.push_back(mkI32Constant(blockShape[k]));
 
-  unsigned swizzleBytes = mmaEncoding ? mmaEncoding.getSwizzlingByteWidth() : 0;
   if (!mmaEncoding) {
-    auto swizzledEnc = dyn_cast<gpu::SwizzledSharedEncodingAttr>(
-        op.getType().getBlockType().getEncoding());
+    auto swizzledEnc =
+        dyn_cast_if_present<gpu::SwizzledSharedEncodingAttr>(encoding);
     if (!swizzledEnc || swizzledEnc.getVec() != 1 ||
         swizzledEnc.getPerPhase() != 1 || swizzledEnc.getMaxPhase() != 1) {
       op->emitError() << "Unhandled encoding type";

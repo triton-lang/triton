@@ -11,7 +11,7 @@ jobs:
   integration-tests-amd:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
-    continue-on-error: ${{ matrix.runner[1] == 'gfx90a' || matrix.runner[0] == 'amd-gfx950' }}
+    continue-on-error: true
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
@@ -23,14 +23,14 @@ jobs:
             options: >-
               --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
               --volume /home/runner/.triton:/github/home/.triton
-          - image: rocm/pytorch-private:rocm7.0_ubuntu22.04_py3.10_pytorch_2.8.0_asan
+          - image: rocm/pytorch:rocm7.2.4_ubuntu22.04_py3.10_pytorch_release_2.10.0
             runner: ["amd-gfx942"]
             # We add --env-file to pull in HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES definition for GPU isolation.
             options: >-
               --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
               --env-file /etc/podinfo/gha-gpu-isolation-settings
               --volume /home/runner/.triton:/github/home/.triton
-          - image: rocm/pytorch:rocm7.0_ubuntu22.04_py3.10_pytorch_release_2.8.0
+          - image: rocm/pytorch:rocm7.2.4_ubuntu22.04_py3.10_pytorch_release_2.10.0
             runner: ["amd-gfx950"]
             # We add --env-file to pull in HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES definition for GPU isolation.
             options: >-
@@ -59,7 +59,7 @@ jobs:
       - name: Compute cache keys
         id: cache-key
         run: |
-          llvm_file="cmake/llvm-hash.txt"
+          llvm_file="cmake/llvm-info.json"
           nvidia_file="cmake/nvidia-toolchain-version.json"
           json_file="cmake/json-version.txt"
 
@@ -70,12 +70,14 @@ jobs:
           fi
 
           # Process the files if they exist
-          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "llvm=$(sha256sum $llvm_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
-      - name: Cache build dependencies
-        uses: actions/cache@v4
+      - name: Restore build dependencies cache
+        id: restore-build-deps-cache
+        if: ${{ !contains(matrix.runner, 'gfx90a') }}
+        uses: actions/cache/restore@v4
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -104,7 +106,7 @@ jobs:
           pip uninstall -y triton pytorch-triton-rocm
 
           ccache --zero-stats
-          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+          if ${{ contains(matrix.runner, 'amd-gfx950') }}; then
             pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
             pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
           fi
@@ -148,24 +150,24 @@ jobs:
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_tensor_atomic_cas with buffer ops disabled on gfx950 and gfx942
-          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
+          if ${{ contains(matrix.runner, 'amd-gfx950') || contains(matrix.runner, 'amd-gfx942') }}; then
             AMDGCN_USE_BUFFER_OPS=0 pytest --capture=tee-sys -rfs -n 12 language/test_core.py::test_tensor_atomic_cas
           fi
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+          if ${{ contains(matrix.runner, 'amd-gfx950') }}; then
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py -k "not test_line_info_ir_source"
           else
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
           fi
 
           # Run tests under triton/python/triton_kernels/tests/ on gfx950 and gfx942
-          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
+          if ${{ contains(matrix.runner, 'amd-gfx950') || contains(matrix.runner, 'amd-gfx942') }}; then
             cd ../../triton_kernels/
             python3 -m pytest -s -n 12 tests/
           fi
       - name: Run asan tests on AMD
-        if: ${{ matrix.runner[0] == 'amd-gfx942' }}
+        if: false
         run: |
           cd third_party/amd/python/test/
           ulimit -s 1024
@@ -198,9 +200,140 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
+      - name: Save build dependencies cache
+        if: ${{ github.ref == 'refs/heads/main' && !contains(matrix.runner, 'gfx90a') }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ steps.restore-build-deps-cache.outputs.cache-primary-key }}
       - name: Clean up caches
         # Always cleanup the worker, even if builds or tests failed given that these directories are
         # mapped from the host and we write files as the root user in the docker.
+        if: always()
+        run: |
+          rm -rf ~/.triton/cache
+          rm -rf ~/.ccache
+
+  proton-tests-amd-rocm712:
+    if: ${{ always() && github.repository == 'triton-lang/triton' }}
+    needs: integration-tests-amd
+    name: proton-tests-amd (gfx950-rocm712)
+    runs-on: ["amd-gfx950"]
+    timeout-minutes: 25
+    env:
+      TRITON_BUILD_WITH_CCACHE: "true"
+      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+      TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+      TRITON_DISABLE_LINE_INFO: 1
+      PROTON_SKIP_PC_SAMPLING_TEST: 1
+      PYTHON: "python3"
+      CCACHE_COMPRESS: "true"
+      PIP_BREAK_SYSTEM_PACKAGES: 1
+    container:
+      image: rocm/vllm:rocm7.12.0_gfx950-dcgpu_ubuntu24.04_py3.12_pytorch_2.9.1_vllm_0.16.0
+      options: >-
+        --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+        --env-file /etc/podinfo/gha-gpu-isolation-settings
+        --volume /home/runner/.triton:/github/home/.triton
+        --volume /triton-data:/triton-data
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: 'true'
+      - name: Compute cache keys
+        id: cache-key
+        run: |
+          llvm_file="cmake/llvm-info.json"
+          nvidia_file="cmake/nvidia-toolchain-version.json"
+          json_file="cmake/json-version.txt"
+
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+            echo "Error: Required dependency files are missing."
+            exit 1
+          fi
+
+          echo "llvm=$(sha256sum $llvm_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
+        shell: bash
+      - name: Restore build dependencies cache
+        id: restore-build-deps-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
+      - name: Install dependencies
+        run: |
+          for i in 1 2 3; do
+            apt-get -o Acquire::Retries=5 update && break
+            echo "apt-get update attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          apt-get install -y clang lld ccache
+          command -v clang && command -v lld && command -v ccache
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
+      - name: Update compiler to Clang
+        run: |
+          export CC=/usr/bin/clang
+          export CXX=/usr/bin/clang++
+      - name: Install Triton
+        run: |
+          echo "PATH is '$PATH'"
+          pip uninstall -y triton pytorch-triton-rocm
+
+          ccache --zero-stats
+          pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
+          pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
+          make dev-install
+      - name: Print ccache stats
+        run: ccache --print-stats
+      - name: Run Proton tests
+        run: |
+          unset HIP_VISIBLE_DEVICES
+          unset ROCR_VISIBLE_DEVICES
+          ROCM_SDK_LIB="$(python3 -c 'import _rocm_sdk_core, os; print(os.path.join(os.path.dirname(_rocm_sdk_core.__file__), "lib"))')"
+          echo "ROCM_SDK_LIB=$ROCM_SDK_LIB"
+          for base in libamdhip64 librocprofiler-sdk librocprofiler-sdk-attach; do
+            if [ ! -e "$ROCM_SDK_LIB/${base}.so" ]; then
+              versioned="$(ls "$ROCM_SDK_LIB"/${base}.so.* 2>/dev/null | sort -V | head -1 || true)"
+              if [ -n "$versioned" ]; then
+                ln -sf "$(basename "$versioned")" "$ROCM_SDK_LIB/${base}.so"
+                echo "linked $ROCM_SDK_LIB/${base}.so -> $(basename "$versioned")"
+              fi
+            fi
+          done
+          export LD_LIBRARY_PATH="$ROCM_SDK_LIB:$LD_LIBRARY_PATH"
+          make test-proton
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
+      - name: Save build dependencies cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ steps.restore-build-deps-cache.outputs.cache-primary-key }}
+      - name: Clean up caches
         if: always()
         run: |
           rm -rf ~/.triton/cache

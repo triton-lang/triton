@@ -182,21 +182,17 @@ public:
     int numWarps = ttg::lookupNumWarps(storeOp);
     Value truePred = arith::ConstantOp::create(b, loc, b.getBoolAttr(true));
 
-    auto *ctx = joinOp.getContext();
-
     auto createSlice = [&](TypedValue<RankedTensorType> input, int offset) {
       auto subSlice = TMEMSubSliceOp::create(b, loc, tmem, offset, splitNSize);
       auto distLayout =
           nvidia_gpu::getDefaultLayoutForTmemLdSt(subSlice.getType(), numWarps);
       auto newType = input.getType().cloneWithEncoding(distLayout);
       auto cvt = ttg::ConvertLayoutOp::create(b, loc, newType, input);
-      auto store =
-          TMEMStoreOp::create(b, loc, subSlice, cvt.getResult(), truePred);
-      return store;
+      TMEMStoreOp::create(b, loc, subSlice, cvt.getResult(), truePred);
     };
 
-    auto store0 = createSlice(joinOp.getLhs(), 0);
-    auto store1 = createSlice(joinOp.getRhs(), splitNSize);
+    createSlice(joinOp.getLhs(), 0);
+    createSlice(joinOp.getRhs(), splitNSize);
     b.eraseOp(storeOp);
     return success();
   }

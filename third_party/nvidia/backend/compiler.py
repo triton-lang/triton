@@ -25,6 +25,10 @@ def min_dot_size(target: GPUTarget):
         # For small M/N the input we can still use tensorcores with padding.
         if lhs_bitwidth == 8:
             return (1, 1, 32)
+        elif lhs_bitwidth == 64:
+            return (1, 1, 4)
+        elif lhs_bitwidth == 32:
+            return (1, 1, 8)
         else:
             return (1, 1, 16)
 
@@ -135,6 +139,12 @@ class CUDAOptions:
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
             extern_libs['libdevice'] = knobs.nvidia.libdevice_path or str(default_libdir / 'libdevice.10.bc')
+        if "gsan" in self.instrumentation_mode:
+            gsan_lib = default_libdir / "gsan.ll"
+            if not gsan_lib.exists():
+                raise FileNotFoundError(f"GSan runtime is missing at {gsan_lib}. "
+                                        "Rebuild Triton to generate it.")
+            extern_libs['gsan'] = str(gsan_lib)
 
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
@@ -236,7 +246,6 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        passes.ttir.add_rewrite_tensor_pointer(pm)
         if capability // 10 < 9:
             passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_canonicalizer(pm)
@@ -302,7 +311,8 @@ class CUDABackend(BaseBackend):
             passes.ttir.add_triton_licm(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_loop_aware_cse(pm)
-        passes.ttgpuir.add_prefetch(pm)
+        if capability // 10 == 8:
+            passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.ttgpuir.add_coalesce_async_copy(pm)
         nvidia.passes.ttnvgpuir.add_optimize_tmem_layouts(pm)
@@ -319,8 +329,11 @@ class CUDABackend(BaseBackend):
         passes.common.add_sccp(pm)
         passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
-        if opt.instrumentation_mode == "fpsan":
+        if "fpsan" in opt.instrumentation_mode:
             passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_remove_layout_conversions(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
 
         pm.run(mod, 'make_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -341,8 +354,12 @@ class CUDABackend(BaseBackend):
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
-        if options.instrumentation_mode == "fpsan":
+        if "fpsan" in options.instrumentation_mode:
             passes.ttgpuir.add_fp_sanitizer(pm)
+        if any(mode in options.instrumentation_mode for mode in ["consan", "fpsan"]):
+            passes.ttgpuir.add_remove_layout_conversions(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -356,24 +373,26 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
+        if "gsan" in options.instrumentation_mode:
+            # GSan introduces layout conversions, so must come before shared memory allocation
+            passes.ttgpuir.add_global_sanitizer(pm)
+
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-        passes.ttgpuir.add_allocate_warp_groups(pm)
+        passes.ttgpuir.add_allocate_warp_groups(pm, "consan" in options.instrumentation_mode)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
+        if "consan" in options.instrumentation_mode:
+            passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
-        if "consan" in options.instrumentation_mode:
-            # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
-            passes.ttgpuir.add_concurrency_sanitizer(pm)
-            passes.gluon.add_canonicalizer(pm)
-            passes.common.add_cse(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         if CUDABackend.instrumentation:
             CUDABackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
-        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
-        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
+        nvidia.passes.ttnvgpuir.add_tmem_barrier_insertion(pm)
+        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version, "consan" in options.instrumentation_mode)
+        nvidia.passes.ttnvgpuir.add_initialize_ws_cluster_barriers(pm, capability, ptx_version)
         passes.ttgpuir.add_canonicalize_llvm_ir(pm)
         passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_warp_specialize_to_llvm(pm)
@@ -428,7 +447,8 @@ class CUDABackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        # Work around ptxas rejecting PTX generated by the LLVM SLP vectorizer on sm_80.
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, disable_slp_vectorizer=capability == 80)
 
         # Get some metadata
         # warp-specialization mutates num_warps
@@ -437,8 +457,8 @@ class CUDABackend(BaseBackend):
             metadata["num_warps"] = total_num_warps
         metadata["shared"] = src.get_int_attr("ttg.shared")
         metadata["tmem_size"] = src.get_int_attr("ttg.tensor_memory_size")
-        metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
-        metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
+        metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size") or 0
+        metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment") or 1
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
         ret = str(llvm_mod)
@@ -453,7 +473,8 @@ class CUDABackend(BaseBackend):
         proc = sm_arch_from_capability(capability)
         features = get_features(opt, self.target.arch)
         flags = ["nvptx-mad-wide-opt"]
-        ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False)
+        canonicalize_gep = "fpsan" in opt.instrumentation_mode
+        ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1
@@ -500,9 +521,11 @@ class CUDABackend(BaseBackend):
             # Accept more ptxas options if provided
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
-            # Use -Ofc mid to compile ConSan code, if nothing else is specified.
-            if any(mode in knobs.compilation.instrumentation_mode for mode in ["consan", "fpsan"]):
-                ptx_extra_options += ["-Ofc", "mid"]
+            # -Ofc mid miscompiles some large ConSan kernels into invalid global
+            # accesses; -O1 keeps compile time reasonable without that ptxas bug.
+            if (not knobs.nvidia.disable_ptxas_opt
+                    and any(mode in opt.instrumentation_mode for mode in ["consan", "fpsan"])):
+                ptx_extra_options += ["--opt-level", "1"]
 
             # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
             reg_alloc = ['--regAllocOptLevel=2']

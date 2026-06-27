@@ -3,6 +3,7 @@
 
 #include "Data.h"
 #include <memory>
+#include <thread>
 #include <unordered_map>
 
 namespace proton {
@@ -41,10 +42,14 @@ private:
   }
 
   void dumpChromeTrace(std::ostream &os, size_t phase) const;
+  size_t getCurrentThreadTraceId();
 
   PhaseStore<Trace> tracePhases;
   // ScopeId -> EventId
   std::unordered_map<size_t, size_t> scopeIdToEventId;
+  // ThreadId -> TraceId
+  std::unordered_map<std::thread::id, uint64_t> threadIdToTraceId;
+  uint64_t nextThreadTraceId = 0;
 };
 
 } // namespace proton

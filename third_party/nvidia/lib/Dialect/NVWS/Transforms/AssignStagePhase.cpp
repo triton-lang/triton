@@ -22,6 +22,7 @@
  */
 
 #include "Utilities.h"
+#include "lib/Dialect/TritonGPU/Transforms/WarpSpecialization/PartitionAttrs.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 
 #include "Utilities.h"
@@ -549,7 +550,6 @@ class NVWSAssignStagePhase
     : public impl::NVWSAssignStagePhaseBase<NVWSAssignStagePhase> {
 public:
   void runOnOperation() override {
-    MLIRContext *context = &getContext();
     mlir::ModuleOp m = getOperation();
 
     m.walk([&](triton::FuncOp funcOp) {

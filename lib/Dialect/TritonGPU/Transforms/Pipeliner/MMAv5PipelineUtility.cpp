@@ -69,8 +69,8 @@ bool ttng::isOperandPipelineableBase(
     return true;
   }
   auto localAllocSrc = localAlloc.getSrc().getDefiningOp();
-  if (!isa_and_nonnull<tt::LoadOp, tt::DescriptorLoadOp,
-                       tt::DescriptorGatherOp>(localAllocSrc)) {
+  if (!isa_and_nonnull<tt::LoadOp, tt::DescriptorLoadLikeOpInterface>(
+          localAllocSrc)) {
     return false;
   }
   foundDef = localAllocSrc;
@@ -301,7 +301,6 @@ bool ttng::hasLoadsAfterMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
 ttng::TMEMAllocOp ttng::createTMemAlloc(OpBuilder &builder,
                                         ttng::TMEMAllocOp oldTMemAllocOp,
                                         bool multiBufferred, int numStages) {
-  Location loc = oldTMemAllocOp.getLoc();
   auto oldRetType = oldTMemAllocOp.getType();
   SmallVector<int64_t> shape = {oldRetType.getShape().begin(),
                                 oldRetType.getShape().end()};

@@ -162,7 +162,9 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
         // This packs a few rows together for small K
         int perPhase = std::max<int>(1024 / (bitwidth * K), 1);
 
-        int mmaStride = 8;
+        // FP64 MMAv2 uses an m8n8k4 tile rather than the m16n8 tile used by
+        // the other MMAv2 variants.
+        int mmaStride = bitwidth == 64 ? 4 : 8;
         int vec = 4 * kWidth;
         // needsTrans is equiv. to flipping the opIdx
         if (needTrans)
@@ -301,7 +303,7 @@ For identity mappings a short form based on order and shape is used to increase 
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
     // Returns the order of the dimensions `dimName` of the layout.
-    // If more than dimension is of size one, it uses defaultOrder to determine
+    // If more than one dimension is of size one, it uses defaultOrder to determine
     // the order of the dimensions of size one.
     SmallVector<unsigned> orderPerDim(StringAttr dimName,
                                       ArrayRef<unsigned> defaultOrder) const;
@@ -640,50 +642,54 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 }
 
 //===----------------------------------------------------------------------===//
-// Linear Layout Encoding
+// Linear Layout Encodings (common base class)
 //===----------------------------------------------------------------------===//
 
-def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"> {
-  let mnemonic = "linear";
-
-  let description = [{
-    See the docs in LinearLayout.h for the definition of linear layouts.
-  }];
+class LinearDistributedEncoding<string name, string attrMnemonic,
+                                list<Trait> traits = []>
+  : DistributedEncoding<name, attrMnemonic,
+      !listconcat([LinearEncodingTrait, DeclareLinearEncodingMethods],
+                  traits)> {
 
   let parameters = (ins LinearLayoutParam:$linearLayout);
 
-  let extraClassDeclaration = extraDistributedDeclaration # [{
-    // Generic distributed encoding methods
-    unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape) const;
-    SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape) const;
-
-    SmallVector<unsigned int> getContig(const char *, SmallVector<unsigned int>) const;
-    SmallVector<unsigned> getContigPerThread() const;
-    SmallVector<unsigned> getContigPerWarp() const;
-    SmallVector<unsigned> getOrder() const;
-    SmallVector<unsigned> getWarpOrder() const;
-    SmallVector<unsigned> getThreadOrder() const;
-
-
-    // Generalizes get{Warp,Thread,CTA}Order to linear layouts.
-    // Returns the order of the dimensions `dimName` of the layout.
-    // If more than dimension is of size one, it uses defaultOrder to determine
-    // the order of the dimensions of size one.
-    SmallVector<unsigned> orderPerDim(StringAttr dimName,
-                                      ArrayRef<unsigned> defaultOrder) const;
-
-    // Generalizes getThreadsPerWarp, getWarpsPerCTA, getCTAsPerCGA to linear layouts.
-    // Returns the bases of the dimensions `dimName` of the layout.
-    // If skipBroadcast is false, we count a base zero
-    SmallVector<unsigned> basesPerDim(StringAttr dimName,
-                                      bool skipBroadcast = true) const;
-    SmallVector<unsigned> getThreadsPerWarp() const;
-    SmallVector<unsigned> getWarpsPerCTA() const;
-
+  code extraLinearDistributedDeclaration = [{
     unsigned getRank() const { return getLinearLayout().getNumOutDims(); }
+  }];
+}
 
-    // [FIXME LL] Supports legacy behaviour. We should remove these functions
-    SmallVector<unsigned> getSizePerThread() const;
+//===----------------------------------------------------------------------===//
+// Linear Layout Encoding
+//===----------------------------------------------------------------------===//
+
+def LinearEncodingAttr
+    : LinearDistributedEncoding<"LinearEncoding", "linear_encoding"> {
+  let mnemonic = "linear";
+
+  let description = [{
+    An encoding backed by a LinearLayout with input dims
+    {register, lane, warp, block} and output dims {dim0, dim1, ...}. See the
+    docs in LinearLayout.h for the general definition of linear layouts;
+    this attribute is a strictly more restricted form of that abstraction.
+
+    Compared to GenericLinearEncodingAttr, this is more constrained
+    LinearLayout-based encoding:
+    - Every basis vector (register, lane, warp, and block) must be
+      non-swizzled, i.e. have at most one non-zero output component (the
+      basis either moves along a single output dim, or is a broadcast/zero
+      basis).
+    - After removing broadcast bases the layout must be bijective.
+
+    GenericLinearEncodingAttr relaxes the above in two ways:
+    - Warp bases MAY be swizzled (non-zero in multiple output dims).
+      Register, lane, and block bases must still be non-swizzled.
+    - The layout is only required to be surjective (not bijective) after
+      removing broadcast bases.
+  }];
+
+  let extraClassDeclaration = extraLinearDistributedDeclaration # [{
+    SmallVector<unsigned> getWarpsPerCTA() const;
+    SmallVector<unsigned> getWarpOrder() const;
   }];
 
   let genVerifyDecl = 1;
@@ -695,6 +701,35 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
   let hasCustomAssemblyFormat = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Generic Linear Layout Encoding
+//===----------------------------------------------------------------------===//
+
+def GenericLinearEncodingAttr
+    : LinearDistributedEncoding<"GenericLinearEncoding",
+                                "generic_linear_encoding"> {
+  let mnemonic = "generic_linear";
+
+  let description = [{
+    A linear layout encoding with relaxed constraints compared to LinearEncoding.
+    Like LinearEncoding, it wraps a LinearLayout with input dims
+    {register, lane, warp, block} and output dims {dim0, dim1, ...}.
+
+    Unlike LinearEncoding:
+    - Warp bases MAY be swizzled (non-zero in multiple output dims).
+    - The layout is NOT required to be bijective after removing broadcast bases,
+      but it's still required to be surjective.
+
+    Register, lane, and block bases must still be non-swizzled (at most one
+    non-zero output component per basis vector), which preserves existing
+    within-thread, within-warp, and CGA lowering paths.
+  }];
+
+  let extraClassDeclaration = extraLinearDistributedDeclaration;
+
+  let genVerifyDecl = 1;
+  let hasCustomAssemblyFormat = 1;
+}
 
 //===----------------------------------------------------------------------===//
 // Blocked Layout Encoding
@@ -1216,6 +1251,11 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
     static SmallVector<unsigned, 3> getDefaultInstrShape() {
       return {16, 16, 16};
     }
+
+    // Returns nonK dim of operand opIdx (swapped for asymmetric transposed WMMA).
+    unsigned getOperandNonKDim(unsigned opIdx) const;
+    static unsigned getOperandNonKDim(unsigned mDim, unsigned nDim,
+                                      bool isTransposed, unsigned opIdx);
 
     // Returns a swizzled shared layout matching this WMMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.

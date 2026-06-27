@@ -6,17 +6,17 @@
 #include "Driver/GPU/RoctracerApi.h"
 #include "Runtime/HipRuntime.h"
 #include "Utility/Env.h"
+#include "Utility/Errors.h"
 
+#include "Driver/GPU/RoctxTypes.h"
 #include "hip/amd_detail/hip_runtime_prof.h"
 #include "roctracer/roctracer_ext.h"
 #include "roctracer/roctracer_hip.h"
-#include "roctracer/roctracer_roctx.h"
 
 #include <algorithm>
 #include <iostream>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -43,7 +43,7 @@ public:
 private:
   void initDeviceOffset() {
     int dc = 0;
-    auto ret = hip::getDeviceCount<true>(&dc);
+    (void)hip::getDeviceCount<true>(&dc);
     hsa::iterateAgents(
         [](hsa_agent_t agent, void *data) {
           auto &offset = *static_cast<int *>(data);
@@ -195,6 +195,57 @@ std::tuple<bool, bool> matchKernelCbId(uint32_t cbId) {
   return std::make_pair(isRuntimeApi, isDriverApi);
 }
 
+const char *getKernelName(uint32_t cbId, const hip_api_data_t *data) {
+  switch (cbId) {
+  case HIP_API_ID_hipExtLaunchKernel:
+    return hip::getKernelNameRefByPtr(
+        data->args.hipExtLaunchKernel.function_address,
+        data->args.hipExtLaunchKernel.stream);
+  case HIP_API_ID_hipExtLaunchMultiKernelMultiDevice: {
+    const hipLaunchParams *launchParams =
+        data->args.hipExtLaunchMultiKernelMultiDevice.launchParamsList;
+    if (launchParams == nullptr ||
+        data->args.hipExtLaunchMultiKernelMultiDevice.numDevices == 0)
+      return nullptr;
+    return hip::getKernelNameRefByPtr(launchParams->func, launchParams->stream);
+  }
+  case HIP_API_ID_hipExtModuleLaunchKernel:
+    return hip::getKernelNameRef(data->args.hipExtModuleLaunchKernel.f);
+  case HIP_API_ID_hipHccModuleLaunchKernel:
+    return hip::getKernelNameRef(data->args.hipHccModuleLaunchKernel.f);
+  case HIP_API_ID_hipLaunchCooperativeKernel:
+    return hip::getKernelNameRefByPtr(
+        data->args.hipLaunchCooperativeKernel.f,
+        data->args.hipLaunchCooperativeKernel.stream);
+  case HIP_API_ID_hipLaunchCooperativeKernelMultiDevice: {
+    const hipLaunchParams *launchParams =
+        data->args.hipLaunchCooperativeKernelMultiDevice.launchParamsList;
+    if (launchParams == nullptr ||
+        data->args.hipLaunchCooperativeKernelMultiDevice.numDevices == 0)
+      return nullptr;
+    return hip::getKernelNameRefByPtr(launchParams->func, launchParams->stream);
+  }
+  case HIP_API_ID_hipLaunchKernel:
+    return hip::getKernelNameRefByPtr(
+        data->args.hipLaunchKernel.function_address,
+        data->args.hipLaunchKernel.stream);
+  case HIP_API_ID_hipModuleLaunchKernel:
+    return hip::getKernelNameRef(data->args.hipModuleLaunchKernel.f);
+  case HIP_API_ID_hipModuleLaunchCooperativeKernel:
+    return hip::getKernelNameRef(data->args.hipModuleLaunchCooperativeKernel.f);
+  case HIP_API_ID_hipModuleLaunchCooperativeKernelMultiDevice: {
+    const hipFunctionLaunchParams *launchParams =
+        data->args.hipModuleLaunchCooperativeKernelMultiDevice.launchParamsList;
+    if (launchParams == nullptr ||
+        data->args.hipModuleLaunchCooperativeKernelMultiDevice.numDevices == 0)
+      return nullptr;
+    return hip::getKernelNameRef(launchParams->function);
+  }
+  default:
+    return nullptr;
+  }
+}
+
 } // namespace
 
 struct RoctracerProfiler::RoctracerProfilerPimpl
@@ -202,8 +253,9 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
   RoctracerProfilerPimpl(RoctracerProfiler &profiler)
       : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {
     auto runtime = &HipRuntime::instance();
-    profiler.metricBuffer =
-        std::make_unique<MetricBuffer>(1024 * 1024 * 64, runtime);
+    profiler.metricBuffer = std::make_unique<MetricBuffer>(
+        getIntEnv("TRITON_PROFILE_METRIC_BUFFER_SIZE", 64 * 1024 * 1024),
+        runtime);
   }
   virtual ~RoctracerProfilerPimpl() = default;
 
@@ -248,9 +300,12 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
         static_cast<const hip_api_data_t *>(callbackData);
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
-      // TODO: Get kernel name from hip_api_data_t
-      threadState.enterOp(Scope(""));
+      const char *kernelName = getKernelName(cid, data);
+      threadState.enterOp(Scope(kernelName ? kernelName : ""));
       auto &dataToEntry = threadState.dataToEntry;
+      if (dataToEntry.empty()) {
+        return;
+      }
       size_t numInstances = 1;
       if (cid == HIP_API_ID_hipGraphLaunch) {
         pImpl->corrIdToIsHipGraph[data->correlation_id] = true;
@@ -336,7 +391,11 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
         break;
       }
       }
+      const bool deactivated = threadState.dataToEntry.empty();
       threadState.exitOp();
+      if (deactivated) {
+        return;
+      }
       // Track outstanding op for flush
       profiler.correlation.submit(data->correlation_id);
     }
@@ -359,7 +418,6 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
       profiler.pImpl.get());
   auto &correlation = profiler.correlation;
 
-  static thread_local std::map<Data *, size_t> dataFlushedPhases;
   const roctracer_record_t *record =
       reinterpret_cast<const roctracer_record_t *>(begin);
   const roctracer_record_t *endRecord =
@@ -388,8 +446,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
     roctracer::getNextRecord<true>(record, &record);
   }
   correlation.complete(maxCorrelationId);
-  profiler.flushDataPhases(dataFlushedPhases, dataPhases,
-                           profiler.pendingGraphPool.get());
+  profiler.flushDataPhases(dataPhases, profiler.pendingGraphPool.get());
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
@@ -444,8 +501,7 @@ void RoctracerProfiler::doSetMode(
                                     periodicFlushingFormat, modeAndOptions,
                                     "RoctracerProfiler");
   } else if (!mode.empty()) {
-    throw std::invalid_argument(
-        "[PROTON] RoctracerProfiler: unsupported mode: " + mode);
+    throw makeInvalidArgument("RoctracerProfiler: unsupported mode: " + mode);
   }
 }
 

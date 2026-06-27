@@ -12,6 +12,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/MathExtras.h"
 
 // Provide custom directive handlers for declarative assemblyFormat.
 // They must be visible before including the generated op classes.
@@ -68,6 +69,16 @@ bool isConvertTrivial(ConvertLayoutOp op) {
 }
 
 } // namespace
+
+Value AsyncCopyGlobalToLocalOp::getPredicateOperand() { return getMask(); }
+
+void AsyncCopyGlobalToLocalOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+
+Type AsyncCopyGlobalToLocalOp::getPredicateOperandTypeLike() {
+  return getSrc().getType();
+}
 
 //===----------------------------------------------------------------------===//
 // Canonicalizer
@@ -345,7 +356,7 @@ struct CanonicalizeConvertFromConvert
 
     // cvt(cat) -> cat
     if (auto cat = dyn_cast<CatOp>(arg)) {
-      if (isExpensiveCat(cat, op.getType().getEncoding()))
+      if (!isLegalCatEncoding(cat, op.getType().getEncoding()))
         return failure();
 
       rewriter.replaceOpWithNewOp<CatOp>(op, op->getResult(0).getType(),
@@ -452,7 +463,6 @@ LogicalResult Fp4ToFpOp::verifyFp4ToFp(mlir::Operation *op,
   auto srcLl = toLinearLayout(srcTy);
   auto resLl = toLinearLayout(resTy);
   auto *ctx = srcTy.getContext();
-  auto regDim = StringAttr::get(ctx, "register");
   auto outDims = standardOutDimNames(ctx, rank);
 
   // We use backward inference here as it is striclty more general
@@ -480,23 +490,10 @@ LogicalResult Fp4ToFpOp::verifyFp4ToFp(mlir::Operation *op,
 void Fp4ToFpOp::build(OpBuilder &builder, OperationState &state,
                       TypedValue<RankedTensorType> src, Type elemType,
                       int32_t axis) {
-  auto srcTy = src.getType();
-  auto shape = llvm::to_vector(srcTy.getShape());
-  auto rank = srcTy.getRank();
-  assert(0 <= axis && axis < rank);
-  shape[axis] *= 2;
-
-  Attribute inEnc = srcTy.getEncoding();
-  Attribute outEnc;
-  auto result =
-      inEnc.getDialect()
-          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
-          ->inferFp4ToFpOpEncoding(shape, axis, inEnc, outEnc,
-                                   /*fwdInference=*/true, state.location);
-  assert(succeeded(result));
-
-  auto resultTy = RankedTensorType::get(shape, elemType, outEnc);
-  build(builder, state, resultTy, src, axis);
+  auto resultTy =
+      inferFp4ToFpResultType(src.getType(), elemType, axis, state.location);
+  assert(succeeded(resultTy));
+  build(builder, state, *resultTy, src, axis);
 }
 
 OpFoldResult MemDescTransOp::fold(FoldAdaptor adaptor) {
@@ -656,6 +653,81 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+LogicalResult MemDescReinterpretOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getResult().getType();
+
+  // Padded layout creates some "holes". The hole patterns of the source and
+  // the destination layouts must be equal.
+  auto srcEnc = srcTy.getEncoding();
+  auto dstEnc = dstTy.getEncoding();
+  if (isPaddedEncoding(srcEnc) != isPaddedEncoding(dstEnc))
+    return emitError(
+        "cannot reinterpret between padded and non-padded layouts");
+
+  if (isPaddedEncoding(srcEnc)) {
+    auto getPadPattern = [](MemDescType ty) {
+      auto enc = getPaddedEncoding(ty.getEncoding());
+      auto elmtSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
+      llvm::MapVector<int32_t, int32_t> pattern;
+
+      for (auto [interval, padding] :
+           llvm::zip_equal(enc.getIntervals(), enc.getPaddings())) {
+        pattern.insert({interval * elmtSize, padding * elmtSize});
+      }
+      return pattern;
+    };
+
+    auto srcPat = getPadPattern(srcTy);
+    auto dstPat = getPadPattern(dstTy);
+    if (srcPat.size() != dstPat.size() ||
+        !std::equal(srcPat.begin(), srcPat.end(), dstPat.begin())) {
+      return emitError("cannot reinterpret with different padding pattern");
+    }
+  }
+
+  if (srcTy.getMemorySpace() != dstTy.getMemorySpace())
+    return emitError("source and result must have the same memory space");
+  if (srcTy.getMutableMemory() != dstTy.getMutableMemory())
+    return emitError("source and result must have the same mutability");
+  auto isSubview = [](MemDescType ty) {
+    auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
+    return ty.getShape().take_back(rank) != ty.getAllocShape().take_back(rank);
+  };
+  if (isSubview(srcTy) || isSubview(dstTy))
+    return emitError("source and result must not be subviews; reinterpret the "
+                     "parent descriptor and then take a subview");
+  assert((isa<SharedMemorySpaceAttr, nvidia_gpu::TensorMemorySpaceAttr>(
+              srcTy.getMemorySpace()) &&
+          "expected shared or tensor memory"));
+  auto getViewNumBits = [](MemDescType ty) {
+    auto rank = cast<LayoutEncodingTrait>(ty.getEncoding()).getRank();
+    auto shape = ty.getAllocShape().take_back(rank);
+    auto encoding = ty.getEncoding();
+    LinearLayout layout = isPaddedEncoding(encoding)
+                              ? paddedLinearLayout(shape, encoding)
+                              : toLinearLayout(shape, encoding);
+    int64_t numLayoutCopies = 1;
+    for (int64_t dim : ty.getAllocShape().drop_back(rank))
+      numLayoutCopies *= dim;
+    // Shared memory is allocated by offset and TMEM is allocated by column;
+    // prefix dimensions outside the layout-ranked suffix represent separate
+    // copies of that logical allocation.
+    auto *ctx = ty.getContext();
+    bool isSharedMemory = isa<SharedMemorySpaceAttr>(ty.getMemorySpace());
+    auto dim = StringAttr::get(ctx, isSharedMemory ? "offset" : "col");
+    return numLayoutCopies * layout.getInDimSize(dim) *
+           ty.getElementTypeBitWidth();
+  };
+  auto srcNumBits = getViewNumBits(srcTy);
+  auto dstNumBits = getViewNumBits(dstTy);
+  if (srcNumBits != dstNumBits)
+    return emitError() << "source and result must have the same logical "
+                          "storage size ("
+                       << srcNumBits << " vs " << dstNumBits << ")";
+  return success();
+}
+
 // LocalAllocOp
 void LocalAllocOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
@@ -749,6 +821,8 @@ static LogicalResult verifySharedMemoryRank(Operation *op,
 LogicalResult LocalAllocOp::verify() {
   if (!isa<SharedMemorySpaceAttr>(getType().getMemorySpace()))
     return emitOpError("should create a buffer of shared memory");
+  if (getIntOrFloatOrPtrBitWidth(getType().getElementType()) % 8 != 0)
+    return emitOpError("element type bit width must be a multiple of 8");
   if (getSrc() && failed(verifySharedMemoryRank(*this, getSrc().getType(),
                                                 getType(), "source")))
     return failure();
@@ -865,6 +939,65 @@ LogicalResult LocalScatterOp::verify() {
     return emitError("values element type must match destination element type");
   }
 
+  return success();
+}
+
+// LocalAtomicScatterRMWOp
+LogicalResult LocalAtomicScatterRMWOp::verify() {
+  auto dstTy = getDst().getType();
+  auto valuesTy = cast<RankedTensorType>(getValues().getType());
+  auto indicesTy = cast<RankedTensorType>(getIndices().getType());
+  auto maskTy = getMask() ? cast<RankedTensorType>(getMask().getType())
+                          : RankedTensorType();
+  Type valuesEltTy = valuesTy.getElementType();
+  unsigned axis = getAxis();
+
+  if (!dstTy.getMutableMemory())
+    return emitOpError("Cannot store into immutable memory");
+
+  // Local atomic scatter RMW only supports shared-memory memdescs.
+  if (!isa<SharedEncodingTrait>(dstTy.getEncoding())) {
+    return emitError("destination must have shared memory encoding");
+  }
+
+  // Match Triton's existing atomic add type support.
+  if (!valuesEltTy.isIntOrFloat()) {
+    return emitError("values must have integer or floating element type");
+  }
+
+  // Verify indices tensor has integer element type
+  if (!indicesTy.getElementType().isInteger()) {
+    return emitError("indices must have integer element type");
+  }
+
+  if (failed(verifySharedMemoryRank(*this, valuesTy, dstTy, "values")))
+    return failure();
+
+  // Verify values, indices, and mask have the same shape/rank.
+  if (valuesTy.getShape() != indicesTy.getShape()) {
+    return emitError("values shape must match indices shape");
+  }
+  if (maskTy && valuesTy.getShape() != maskTy.getShape()) {
+    return emitError("values shape must match mask shape");
+  }
+
+  // Verify axis is valid
+  if (axis >= dstTy.getRank()) {
+    return emitError("axis ")
+           << axis << " is out of bounds for destination rank "
+           << dstTy.getRank();
+  }
+
+  // Verify values, indices, and result have the same layout
+  if (valuesTy.getEncoding() != indicesTy.getEncoding()) {
+    return emitError("values must have the same layout as indices");
+  }
+  if (maskTy && valuesTy.getEncoding() != maskTy.getEncoding()) {
+    return emitError("values must have the same layout as mask");
+  }
+  if (dstTy.getElementType() != valuesEltTy) {
+    return emitError("values element type must match destination element type");
+  }
   return success();
 }
 
@@ -1007,24 +1140,17 @@ LogicalResult MemDescSubsliceOp::verify() {
 
   auto ctx = getContext();
   LinearLayout ll;
-  if (auto paddedEncoding = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
+  if (auto paddedEncoding = triton::gpu::getPaddedEncoding(srcEnc)) {
     if (paddedEncoding.getRank() < srcTy.getRank()) {
       return emitError("SubSlice of low rank PaddedSharedEncoding from higher "
                        "rank tensors is not supported yet");
     }
-    ll = paddedEncoding.getLinearComponent();
+    ll = triton::gpu::paddedLinearLayout(srcTy);
   } else {
     ll = triton::gpu::toLinearLayout(srcTy);
   }
 
-  // If any block basis is fully broadcasted, multiple CTAs can alias the same
-  // output tile region. Subslice on such layouts is unsupported.
-  auto kBlock = mlir::StringAttr::get(ctx, "block");
-  if (ll.getFreeVariableMasks()[kBlock] != 0) {
-    return emitError("We don't support splitting with broadcasted CTA outputs");
-  }
-
-  auto llInv = ll.invert();
+  auto llInv = ll.pseudoinvert();
   for (auto dim : splitDims) {
     auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
     llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
@@ -1053,6 +1179,14 @@ LogicalResult MemDescSubsliceOp::verify() {
 
 RegionRange WarpSpecializeOp::getPartitionRegions() {
   return getPartitionOp().getPartitionRegions();
+}
+
+SmallVector<Region *> WarpSpecializeOp::getNonEmptyPartitionRegions() {
+  SmallVector<Region *> regions;
+  for (Region *region : getPartitionRegions())
+    if (!region->empty() && !region->front().without_terminator().empty())
+      regions.push_back(region);
+  return regions;
 }
 
 WarpSpecializePartitionsOp WarpSpecializeOp::getPartitionOp() {
@@ -1192,7 +1326,7 @@ void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
                              unsigned partitionNumRegions) {
   build(builder, state, resultTypes, partitionNumWarps, {}, {}, {});
   OpBuilder::InsertionGuard guard(builder);
-  Block *container = builder.createBlock(state.regions.back().get());
+  builder.createBlock(state.regions.back().get());
   WarpSpecializePartitionsOp::create(builder, state.location,
                                      /*explicitCaptures=*/ValueRange(),
                                      partitionNumRegions);
@@ -1221,7 +1355,6 @@ ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {
   while (succeeded(p.parseOptionalKeyword(
       ("partition" + Twine(partitionNumWarps.size()).str())))) {
     partitionArgs.clear();
-    SMLoc regionLoc = p.getCurrentLocation();
     if (p.parseArgumentList(partitionArgs, AsmParser::Delimiter::Paren,
                             /*allowType=*/true) ||
         p.parseKeyword("num_warps") || p.parseLParen() ||

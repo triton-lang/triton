@@ -1,5 +1,6 @@
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
 #include "triton/Tools/LayoutUtils.h"
 
 namespace mlir {
@@ -200,157 +201,92 @@ private:
     auto dims = to_vector(ll.getInDimNames());
     auto ctx = dims[0].getContext();
     auto kOffset = str_attr("offset");
+    auto attrsAndCandidate = nvidia_gpu::getNvmmaSmemAttrs(ll, bitwidth);
+    if (!attrsAndCandidate)
+      return failure();
 
-    // Any CGALayout, it's not really used within getCoreMatrixLinearLayout
-    auto CGALayout = triton::gpu::CGAEncodingAttr::get1CTALayout(ctx, 2);
+    auto [attrs, shmemTileInv] = std::move(*attrsAndCandidate);
+    int swizzling = attrs.swizzlingByteWidth;
+    bool transposed = attrs.transposed;
+    bool fp4Padded = attrs.fp4Padded;
 
-    for (bool fp4Padded : (bitwidth == 4 ? SmallVector<bool>({false, true})
-                                         : SmallVector<bool>({false}))) {
-      for (auto transposed : {false, true}) {
-        for (int swizzling : {0, 32, 64, 128}) {
-          // FIXME: getCoreMatrixLinearLayout does not accept bitwidth < 8
-          auto shmemEnc = triton::gpu::NVMMASharedEncodingAttr::get(
-              ctx, swizzling, transposed, std::max(8, bitwidth), fp4Padded,
-              CGALayout);
-          auto shmemTile =
-              getCoreMatrixLinearLayout(shmemEnc, /*disableSwizzle=*/false);
-          // Rename out dims to match the original layout (in case the dims were
-          // (row, col))
-          auto outDims = to_vector(shmemTile.getOutDims());
-          outDims[0].first = dims[0];
-          outDims[1].first = dims[1];
-          shmemTile = LinearLayout(shmemTile.getBases(), outDims,
-                                   /*requireSurjective=*/false);
-          // unpack the fp4 layout
-          if (bitwidth == 4) {
-            shmemTile =
-                LinearLayout::identity1D(2, kOffset, dims[1]) * shmemTile;
-          }
+    // The PTX docs are wrong in subtle ways:
+    // 1) LBO can be specified for kContig && swizzled != 0
+    //    PTX says it's assumed to be 1, but  we can in fact use it
+    // 2) The Cute layouts for kContig && swizzled != 0 are wrong
+    int lbo = 0, sbo = 0;
+    int leadingDim = transposed ? 0 : 1;
+    int stridedDim = transposed ? 1 : 0;
+    // The lbo / sbo is swapped for swizzling == 0 and MNContig lol
+    bool MNContig = (MNdim == 0) == transposed;
+    if (swizzling == 0 && MNContig) {
+      std::swap(leadingDim, stridedDim);
+    }
+    auto log2RowsTile = shmemTileInv.getInDimSizeLog2(dims[leadingDim]);
+    if (llvm::Log2_32(instrShape[leadingDim]) > log2RowsTile) {
+      lbo = ll.getBasis(dims[leadingDim], log2RowsTile, kOffset);
+    }
 
-          // getCoreMatrixLinearLayout gives the k-contiguous tile
-          // shmemTile is a layout onto a matrix with shape
-          // If swizzling != 0: 8 x (8 * swizzling / bitwidth)
-          // If swizzling == 0: 8 x (8 * 16 / bitwidth)
-          assert(shmemTile.getOutDimSize(dims[0]) == 8);
-          // Multiply by 2 if fp4Padded as the matrix has half the core
-          // matrix has half the number of elements
-          assert(shmemTile.getOutDimSize(dims[1]) * (fp4Padded ? 2 : 1) ==
-                 8 * std::max(16, swizzling) / bitwidth);
+    auto log2ColsTile = shmemTileInv.getInDimSizeLog2(dims[stridedDim]);
+    if (llvm::Log2_32(instrShape[stridedDim]) > log2ColsTile) {
+      sbo = ll.getBasis(dims[stridedDim], log2ColsTile, kOffset);
+    }
 
-          if (transposed) {
-            shmemTile = transposeLinearLayout(shmemTile, {1, 0});
-          }
-          // Pseudoinvert as fp4 may have padding
-          auto shmemTileInv = shmemTile.pseudoinvert();
-
-          // The PTX docs are wrong in subtle ways:
-          // 1) LBO can be specified for kContig && swizzled != 0
-          //    PTX says it's assumed to be 1, but  we can in fact use it
-          // 2) The Cute layouts for kContig && swizzled != 0 are wrong
-          int lbo = 0, sbo = 0;
-          int leadingDim = transposed ? 0 : 1;
-          int stridedDim = transposed ? 1 : 0;
-          // The lbo / sbo is swapped for swizzling == 0 and MNContig lol
-          bool MNContig = (MNdim == 0) == transposed;
-          if (swizzling == 0 && MNContig) {
-            std::swap(leadingDim, stridedDim);
-          }
-          auto log2RowsTile = shmemTileInv.getInDimSizeLog2(dims[leadingDim]);
-          if (llvm::Log2_32(instrShape[leadingDim]) > log2RowsTile) {
-            lbo = ll.getBasis(dims[leadingDim], log2RowsTile, kOffset);
-          }
-
-          auto log2ColsTile = shmemTileInv.getInDimSizeLog2(dims[stridedDim]);
-          if (llvm::Log2_32(instrShape[stridedDim]) > log2ColsTile) {
-            sbo = ll.getBasis(dims[stridedDim], log2ColsTile, kOffset);
-          }
-
-          // Pad the tile up to the full instruction shape with the relevant
-          // stride if the instruction shape is larger than the tile
-          auto bases = shmemTileInv.getBases();
-          for (int d : {0, 1}) {
-            // 'tile' with the atom tile according to the lbo/sbo rules
-            for (int i = 1;
-                 i < instrShape[d] / shmemTileInv.getInDimSize(dims[d]);
-                 i *= 2) {
-              auto stride = ll.getBasis(
-                  dims[d], shmemTileInv.getInDimSizeLog2(dims[d]), kOffset);
-              bases[dims[d]].push_back({stride * i});
-            }
-          }
-          auto maxBasis = 0;
-          for (auto dimBases : llvm::make_second_range(bases)) {
-            for (auto basis : dimBases) {
-              maxBasis = std::max(maxBasis, basis[0]);
-            }
-          }
-          // Multiply by 2 or round up to the next power of 2
-          shmemTileInv = LinearLayout(std::move(bases),
-                                      {{kOffset, llvm::NextPowerOf2(maxBasis)}},
-                                      /*requireSurjective=*/false);
-          // Add a trivial block dimension as getReps expects both layouts to
-          // have the same outdims
-          shmemTileInv *=
-              LinearLayout::identity1D(1, dims[0], str_attr("block"));
-
-          auto reps = getReps(ll, shmemTileInv);
-          if (reps.has_value()) {
-            SMEMDescriptor desc;
-            desc.descriptor = mmaVersion == 5 ? 1ULL << 46 : 0ULL;
-            // The lbo / sbo is defined wrt. the 128b elements
-            desc.leadDimensionBaseOffset = (lbo * bitwidth / 8) >> 4;
-            desc.strideDimensionBaseOffset = (sbo * bitwidth / 8) >> 4;
-            switch (swizzling) {
-            case 0:
-              desc.swizzlingMode = 0;
-              break;
-            case 32:
-              desc.swizzlingMode = 3;
-              break;
-            case 64:
-              desc.swizzlingMode = 2;
-              break;
-            case 128:
-              desc.swizzlingMode = 1;
-              break;
-            default:
-              llvm_unreachable("Unsupported swizzling size.");
-            }
-            return MMASMEMDescriptor{/* .descriptor = */ desc,
-                                     /* .swizzlingByteWidth = */ swizzling,
-                                     /* .bitwidth = */ bitwidth,
-                                     /* .transposed = */ transposed,
-                                     /* .fp4Padded = */ fp4Padded};
-          }
-        }
+    // Pad the tile up to the full instruction shape with the relevant
+    // stride if the instruction shape is larger than the tile
+    auto bases = shmemTileInv.getBases();
+    for (int d : {0, 1}) {
+      // 'tile' with the atom tile according to the lbo/sbo rules
+      for (int i = 1; i < instrShape[d] / shmemTileInv.getInDimSize(dims[d]);
+           i *= 2) {
+        auto stride = ll.getBasis(
+            dims[d], shmemTileInv.getInDimSizeLog2(dims[d]), kOffset);
+        bases[dims[d]].push_back({stride * i});
       }
     }
-    return failure();
+    auto maxBasis = 0;
+    for (auto dimBases : llvm::make_second_range(bases)) {
+      for (auto basis : dimBases) {
+        maxBasis = std::max(maxBasis, basis[0]);
+      }
+    }
+    // Multiply by 2 or round up to the next power of 2
+    shmemTileInv = LinearLayout(std::move(bases),
+                                {{kOffset, llvm::NextPowerOf2(maxBasis)}},
+                                /*requireSurjective=*/false);
+    // Add a trivial block dimension as getReps expects both layouts to
+    // have the same outdims
+    shmemTileInv *= LinearLayout::identity1D(1, dims[0], str_attr("block"));
+
+    assert(getReps(ll, shmemTileInv).has_value());
+
+    SMEMDescriptor desc;
+    desc.descriptor = mmaVersion == 5 ? 1ULL << 46 : 0ULL;
+    // The lbo / sbo is defined wrt. the 128b elements
+    desc.leadDimensionBaseOffset = (lbo * bitwidth / 8) >> 4;
+    desc.strideDimensionBaseOffset = (sbo * bitwidth / 8) >> 4;
+    switch (swizzling) {
+    case 0:
+      desc.swizzlingMode = 0;
+      break;
+    case 32:
+      desc.swizzlingMode = 3;
+      break;
+    case 64:
+      desc.swizzlingMode = 2;
+      break;
+    case 128:
+      desc.swizzlingMode = 1;
+      break;
+    default:
+      llvm_unreachable("Unsupported swizzling size.");
+    }
+    return MMASMEMDescriptor{/* .descriptor = */ desc,
+                             /* .swizzlingByteWidth = */ swizzling,
+                             /* .bitwidth = */ bitwidth,
+                             /* .transposed = */ transposed,
+                             /* .fp4Padded = */ fp4Padded};
   }
-};
-
-// Helper class to load tensor memory following MMAv5 layout.
-class DotOpMmaV5TmemLoader : public DotOpMmaMemLoader {
-public:
-  DotOpMmaV5TmemLoader() {}
-  static DotOpMmaV5TmemLoader build(Location loc, RewriterBase &rewriter,
-                                    gpu::MemDescType memTy, Value tmemBase);
-
-  MemDescOperand tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                          Location loc) const;
-
-  MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                         Location loc) const override {
-    return tmemLoad(a, b, rewriter, loc);
-  }
-
-private:
-  DotOpMmaV5TmemLoader(LinearLayout ll, Value address, int bitwidth)
-      : ll(std::move(ll)), address(address), bitwidth(bitwidth) {}
-
-  LinearLayout ll;
-  Value address;
-  int bitwidth;
 };
 
 static Value getOffsetedBase(Value v, gpu::MemDescType memDescTy,

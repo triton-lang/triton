@@ -7,6 +7,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 
+#include <algorithm>
 #include <optional>
 
 namespace mlir::triton {
@@ -33,6 +34,9 @@ public:
         constancy(constancy), constantValue(constantValue) {
     assert(divisibility.size() == contiguity.size());
     assert(constancy.size() == contiguity.size());
+    int64_t globalDivisibility = getGlobalDivisibility();
+    for (int64_t &dimDivisibility : this->divisibility)
+      dimDivisibility = std::max(dimDivisibility, globalDivisibility);
   }
 
   // contiguity[d] is the length of the shortest sequence of contiguous integers
@@ -84,6 +88,16 @@ public:
   // has divisibility 1 because its contiguity is 1.
   int64_t getDivisibility(size_t dim) const { return divisibility[dim]; }
   const DimVectorT &getDivisibility() const { return divisibility; }
+
+  // Unit contiguity makes every element a group base, so divisibility from
+  // such a dimension applies globally.
+  int64_t getGlobalDivisibility() const {
+    int64_t globalDivisibility = 1;
+    for (int dim = 0; dim < getRank(); ++dim)
+      if (getContiguity(dim) == 1)
+        globalDivisibility = std::max(globalDivisibility, getDivisibility(dim));
+    return globalDivisibility;
+  }
 
   // constancy[d] is the length of the shortest sequence of repeating integers
   // along dimension d.
@@ -191,9 +205,35 @@ private:
   std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
 };
 
-namespace axisinfo {
-using CallbackType = std::function<void(AxisInfoVisitorList &)>;
-} // namespace axisinfo
+class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
+                             dataflow::Lattice<AxisInfo>> {
+protected:
+  AxisInfoVisitorList visitors;
+
+  void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override;
+
+  void visitNonControlFlowArguments(
+      Operation *op, const RegionSuccessor & /*successor*/,
+      ValueRange /*nonSuccessorInputs*/,
+      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) override;
+
+  void
+  visitForOpInductionVar(scf::ForOp op,
+                         ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
+
+public:
+  AxisInfoAnalysis(DataFlowSolver &solver);
+  using dataflow::SparseForwardDataFlowAnalysis<
+      dataflow::Lattice<AxisInfo>>::getLatticeElement;
+
+  LogicalResult
+  visitOperation(Operation *op,
+                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
+                 ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
+
+  static AxisInfoAnalysis *loadDefaultAnalysis(DataFlowSolver *solver);
+  using LoadCallback = decltype(&AxisInfoAnalysis::loadDefaultAnalysis);
+};
 
 // Module level axis info analysis based on the call graph, assuming that we do
 // not have recursive functions.
@@ -205,8 +245,12 @@ using CallbackType = std::function<void(AxisInfoVisitorList &)>;
 using AxisInfoMapT = DenseMap<Value, AxisInfo>;
 class ModuleAxisInfoAnalysis : public CallGraph<AxisInfoMapT> {
 public:
+  // AxisInfoAnalysis::LoadCallback loads the per-function analysis pass into
+  // the DataFlowSolver. This allows passes derived from AxisInfoAnalysis to
+  // re-use the module level analysis framework.
   explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp,
-                                  axisinfo::CallbackType callback = nullptr)
+                                  AxisInfoAnalysis::LoadCallback loadAnalysis =
+                                      AxisInfoAnalysis::loadDefaultAnalysis)
       : CallGraph<AxisInfoMapT>(moduleOp) {
     SmallVector<FunctionOpInterface> funcs;
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
@@ -220,7 +264,7 @@ public:
     SetVector<FunctionOpInterface> sortedFuncs(funcs.begin(), funcs.end());
     SymbolTableCollection symbolTable;
     for (auto funcOp : llvm::reverse(sortedFuncs)) {
-      initialize(funcOp, callback);
+      initialize(funcOp, loadAnalysis);
       funcOp.walk([&](CallOpInterface callOp) {
         auto callee = dyn_cast<FunctionOpInterface>(
             callOp.resolveCallableInTable(&symbolTable));
@@ -262,8 +306,7 @@ public:
   unsigned getMaskAlignment(Value mask);
 
 private:
-  void initialize(FunctionOpInterface funcOp,
-                  axisinfo::CallbackType callback = nullptr);
+  void initialize(FunctionOpInterface funcOp, AxisInfoAnalysis::LoadCallback);
   void update(CallOpInterface callOp, FunctionOpInterface funcOp);
 };
 } // namespace mlir::triton

@@ -171,8 +171,6 @@ class HipblasLtInstance {
     hipblasOperation_t transa = HIPBLAS_OP_T;
     hipblasOperation_t transb = HIPBLAS_OP_N;
 
-    int8_t fastAccum = 1;
-
     hipblasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL,
                             Ddesc = NULL;
     auto isFP8 = dtype == HIP_R_8F_E4M3 || dtype == HIP_R_8F_E5M2 ||

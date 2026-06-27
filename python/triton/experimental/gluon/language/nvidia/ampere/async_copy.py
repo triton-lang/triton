@@ -4,6 +4,7 @@ from triton._C.libtriton import ir
 
 __all__ = [
     "async_copy_global_to_shared",
+    "async_load",
     "mbarrier_arrive",
     "commit_group",
     "wait_group",
@@ -11,10 +12,9 @@ __all__ = [
 
 
 @builtin
-def async_copy_global_to_shared(smem, pointer, mask=None, cache_modifier="", eviction_policy="", volatile=False,
-                                _semantic=None):
+def async_load(smem, pointer, mask=None, cache_modifier="", eviction_policy="", volatile=False, _semantic=None):
     """
-    Asynchronously copy elements from global memory to shared memory.
+    Asynchronously load elements from global memory to shared memory.
 
     Args:
         smem (shared_memory_descriptor): Destination shared memory descriptor.
@@ -37,6 +37,10 @@ def async_copy_global_to_shared(smem, pointer, mask=None, cache_modifier="", evi
     mask_handle = mask.handle if mask is not None else ir.value()
     _semantic.builder.create_async_copy_global_to_local(smem.handle, pointer.handle, mask_handle, ir.value(),
                                                         cache_modifier, eviction_policy, volatile)
+
+
+# Backward-compatible alias
+async_copy_global_to_shared = async_load
 
 
 @builtin
