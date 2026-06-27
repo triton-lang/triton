@@ -4714,6 +4714,77 @@ def test_vectorization_hints(has_hints, device):
         assert "ld.global.v4.b32" not in ptx
 
 
+@triton.jit
+def _softmax_vectorization_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols,
+                                  BLOCK_SIZE: tl.constexpr, num_stages: tl.constexpr, MAX_DIVISIBILITY: tl.constexpr):
+    row_start = tl.program_id(0)
+    row_step = tl.num_programs(0)
+    for row_idx in tl.range(row_start, n_rows, row_step, num_stages=num_stages):
+        col_offsets = tl.arange(0, BLOCK_SIZE)
+        row_start_ptr = input_ptr + row_idx * input_row_stride
+        input_ptrs = row_start_ptr + col_offsets
+        if MAX_DIVISIBILITY > 1:
+            n_cols = tl.multiple_of(n_cols, MAX_DIVISIBILITY)
+            input_ptrs = tl.max_contiguous(tl.multiple_of(input_ptrs, MAX_DIVISIBILITY), MAX_DIVISIBILITY)
+        mask = col_offsets < n_cols
+        row = tl.load(input_ptrs, mask=mask, other=-float("inf"))
+        row = row - tl.max(row, axis=0)
+        numerator = tl.exp(row)
+        softmax_output = numerator / tl.sum(numerator, axis=0)
+        output_ptrs = output_ptr + row_idx * output_row_stride + col_offsets
+        if MAX_DIVISIBILITY > 1:
+            output_ptrs = tl.max_contiguous(tl.multiple_of(output_ptrs, MAX_DIVISIBILITY), MAX_DIVISIBILITY)
+        tl.store(output_ptrs, softmax_output, mask=mask)
+
+
+@pytest.mark.parametrize("n_cols", [1152, 4096])
+def test_softmax_vectorization_correctness(n_cols, device):
+    if not is_cuda():
+        pytest.skip("Requires CUDA")
+    if torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("Requires Blackwell")
+
+    torch.manual_seed(0)
+    n_rows = 32
+    x = torch.randn((n_rows, n_cols), device=device, dtype=torch.float32)
+    expected = torch.softmax(x, dim=1)
+    cases = [
+        ("triton-128", 16, 1),
+        ("triton-256", 32, 1),
+        ("triton-128-pipelined", 16, 4),
+    ]
+
+    for provider, max_divisibility, num_stages in cases:
+        y = torch.empty_like(x)
+        pgm = _softmax_vectorization_kernel[(n_rows, )](
+            y,
+            x,
+            x.stride(0),
+            y.stride(0),
+            n_rows,
+            n_cols,
+            BLOCK_SIZE=triton.next_power_of_2(n_cols),
+            num_stages=num_stages,
+            MAX_DIVISIBILITY=max_divisibility,
+            num_warps=8,
+        )
+        torch.testing.assert_close(y, expected, rtol=1e-4, atol=1e-6, msg=provider)
+        ptx = pgm.asm["ptx"]
+        assert ".target sm_100" in ptx, provider
+        if num_stages == 1:
+            assert "cp.async" not in ptx, provider
+            if provider == "triton-256" and ".version 8.8" in ptx:
+                assert re.search(r"ld\.global(?:\.[a-zA-Z0-9_:]+)*\.v4\.b64", ptx), provider
+                assert re.search(r"st\.global(?:\.[a-zA-Z0-9_:]+)*\.v4\.b64", ptx), provider
+            else:
+                assert re.search(r"ld\.global(?:\.[a-zA-Z0-9_:]+)*\.v4\.b32", ptx), provider
+                assert re.search(r"st\.global(?:\.[a-zA-Z0-9_:]+)*\.v4\.b32", ptx), provider
+        else:
+            assert "cp.async.cg.shared.global" in ptx, provider
+            assert "cp.async.wait_group" in ptx, provider
+            assert re.search(r"st\.global(?:\.[a-zA-Z0-9_:]+)*\.v4\.b32", ptx), provider
+
+
 @pytest.mark.interpreter
 def test_assume(device):
 
