@@ -17,8 +17,7 @@ BlockedEncodingAttr
 buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
                        int numWarps, int threadsPerWarp,
                        triton::gpu::CGAEncodingAttr cgaLayout,
-                       SmallVector<int64_t> shapePerCTA,
-                       unsigned maxVecBits) {
+                       SmallVector<int64_t> shapePerCTA, unsigned maxVecBits) {
   Value ptr = getMemAccessPtr(op);
   auto refTensorType = cast<RankedTensorType>(ptr.getType());
 
@@ -61,9 +60,8 @@ buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
   int numElems = product<int64_t>(shapePerCTA);
   int numThreads = numWarps * threadsPerWarp;
 
-  unsigned perThread =
-      getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA,
-                              maxVecBits);
+  unsigned perThread = getNumElementsPerThread(op, order, axisInfoAnalysis,
+                                               shapePerCTA, maxVecBits);
   LDBG("perThread for op: " << perThread);
 
   for (Operation *opSameOrder : memAccessesSameOrder) {
