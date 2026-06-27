@@ -4714,6 +4714,19 @@ def test_vectorization_hints(has_hints, device):
         assert "ld.global.v4.b32" not in ptx
 
 
+def _ptx_version(ptx):
+    match = re.search(r"^\.version\s+(\d+)\.(\d+)", ptx, re.MULTILINE)
+    assert match is not None, "PTX is missing a .version directive"
+    return int(match.group(1)), int(match.group(2))
+
+
+def _ptx_global_access_widths(ptx, op):
+    widths = []
+    for match in re.finditer(rf"\b{op}\.global(?:\.[a-zA-Z0-9_:]+)*?(?:\.v(?P<count>\d+))?\.b(?P<bits>\d+)\b", ptx):
+        widths.append(int(match.group("count") or 1) * int(match.group("bits")))
+    return widths
+
+
 @triton.jit
 def _softmax_vectorization_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols,
                                   BLOCK_SIZE: tl.constexpr, num_stages: tl.constexpr, MAX_DIVISIBILITY: tl.constexpr):
@@ -4773,16 +4786,13 @@ def test_softmax_vectorization_correctness(n_cols, device):
         assert ".target sm_100" in ptx, provider
         if num_stages == 1:
             assert "cp.async" not in ptx, provider
-            if provider == "triton-256" and ".version 8.8" in ptx:
-                assert re.search(r"ld\.global(?:\.[a-zA-Z0-9_:]+)*\.v4\.b64", ptx), provider
-                assert re.search(r"st\.global(?:\.[a-zA-Z0-9_:]+)*\.v4\.b64", ptx), provider
-            else:
-                assert re.search(r"ld\.global(?:\.[a-zA-Z0-9_:]+)*\.v4\.b32", ptx), provider
-                assert re.search(r"st\.global(?:\.[a-zA-Z0-9_:]+)*\.v4\.b32", ptx), provider
+            expected_width = 256 if provider == "triton-256" and _ptx_version(ptx) >= (8, 8) else 128
+            assert expected_width in _ptx_global_access_widths(ptx, "ld"), provider
+            assert expected_width in _ptx_global_access_widths(ptx, "st"), provider
         else:
             assert "cp.async.cg.shared.global" in ptx, provider
             assert "cp.async.wait_group" in ptx, provider
-            assert re.search(r"st\.global(?:\.[a-zA-Z0-9_:]+)*\.v4\.b32", ptx), provider
+            assert 128 in _ptx_global_access_widths(ptx, "st"), provider
 
 
 @pytest.mark.interpreter
