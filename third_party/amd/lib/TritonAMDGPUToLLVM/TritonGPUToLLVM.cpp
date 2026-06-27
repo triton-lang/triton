@@ -1,6 +1,7 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
 #include "AsyncUtility.h"
+#include "MaskedOpsToLLVM.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
@@ -57,6 +58,8 @@ public:
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<ROCDL::ROCDLDialect>();
     addLegalDialect<mlir::scf::SCFDialect>();
+    addLegalOp<triton::amdgpu::MaskedLoadOp>();
+    addLegalOp<triton::amdgpu::MaskedStoreOp>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
@@ -177,7 +180,6 @@ struct ConvertTritonAMDGPUToLLVM
                                         targetInfo, AMDBenefit);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
                                            axisInfoAnalysis, AMDBenefit);
-    AMD::populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
     AMD::populateBarrierOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
     AMD::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
                                             AMDBenefit);
@@ -246,6 +248,10 @@ struct ConvertTritonAMDGPUToLLVM
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
     }
+
+    AMD::formMaskedRegions(mod);
+    if (failed(AMD::lowerMaskedOpsToLLVM(mod, targetInfo)))
+      return signalPassFailure();
 
     AMD::adjustModeRegister(mod, targetInfo);
     fixUpLoopAnnotation(mod);
