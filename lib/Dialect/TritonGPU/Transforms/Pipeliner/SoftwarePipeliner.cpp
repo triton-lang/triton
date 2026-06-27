@@ -212,13 +212,15 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     {
       SmallVector<scf::ForOp> loops;
       getOperation()->walk([&](scf::ForOp forOp) {
+        int loopNumStages = getNumStagesOrDefault(forOp, numStages);
         // Bail out for loops with num_stage <= 1.
-        if (getNumStagesOrDefault(forOp, numStages) > 1)
+        if (loopNumStages > 1)
           loops.push_back(forOp);
       });
 
       for (scf::ForOp forOp : loops) {
-        mlir::triton::pipelineTMAStores(forOp);
+        int loopNumStages = getNumStagesOrDefault(forOp, numStages);
+        mlir::triton::pipelineTMAStores(forOp, loopNumStages);
       }
     }
   }

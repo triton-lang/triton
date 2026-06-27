@@ -106,7 +106,10 @@ static void lowerTMADescriptorCreation(scf::ForOp forOp) {
   triton::lowerTMADescriptors(forOp, schedule);
 }
 
-bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
+bool mlir::triton::pipelineTMAStores(scf::ForOp forOp, int numStages) {
+  if (numStages <= 1)
+    return false;
+
   SmallVector<TMAStore> tmaStores = getTMAStores(forOp);
   if (tmaStores.empty())
     return false;
@@ -124,14 +127,13 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
 
   for (auto &[key, stores] : groupedStores) {
     SmallVector<Value> allocs;
-    // Keep the buffering bounded like the Gluon matmul epilogue. Four buffers
-    // allow up to three outstanding TMA stores while limiting shared memory.
-    int numBuffers = std::min<int>(stores.size(), 4);
+    int numBuffers = stores.size();
+    int pendings = std::min(numStages, numBuffers) - 1;
     for (int i = 0; i < numBuffers; ++i)
       allocs.push_back(createAlloc(forOp, *stores[i]));
 
     for (auto [idx, store] : llvm::enumerate(stores)) {
-      storeInfo[store->op] = {allocs[idx % numBuffers], numBuffers - 1};
+      storeInfo[store->op] = {allocs[idx % numBuffers], pendings};
     }
   }
 
