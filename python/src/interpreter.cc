@@ -835,14 +835,15 @@ void init_triton_interpreter(py::module_ &m) {
           size_t numel = ptr.size();
           py::object ret = numpy_empty(numel, cmp.cast().attr("dtype"));
           auto ret_array = py::cast<MutableArray>(ret);
-          
+
           std::vector<uint64_t> ptr_data = copy_uint64_array(ptr);
           std::vector<uint8_t> mask_data = copy_bool_array(mask);
 
           size_t itemsize = cmp.itemsize();
           for (size_t i = 0; i < numel; ++i)
             if (mask_data[i])
-              memcpy(element_data(ret_array, i), const_element_data(cmp, i), itemsize);
+              memcpy(element_data(ret_array, i), const_element_data(cmp, i),
+                     itemsize);
 
           ByteStorage val_data = copy_bytes(val);
           AtomicCASOp(ptr_data.data(), ret_array.data(), val_data.data(),
