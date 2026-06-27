@@ -88,8 +88,7 @@ public:
     Value llMask = adaptor.getMask();
     SmallVector<Value> maskValues;
     if (llMask)
-      maskValues = unpackUniqueTensorElements(loc, llMask, rewriter,
-                                              op.getMask().getType());
+      maskValues = unpackUniqueTensorElements(loc, llMask, rewriter);
 
     int numBins = op.getType().getDimSize(0);
     auto mod = op->getParentOfType<ModuleOp>();
