@@ -534,7 +534,7 @@ void atomic_compare_exchange_strong(void *loc, void *expected,
 class AtomicCASOp : public AtomicOp {
 public:
   AtomicCASOp(const uint64_t *ptr, void *expected, const void *desired,
-              const bool *mask, size_t itemsize, size_t numel,
+              const uint8_t *mask, size_t itemsize, size_t numel,
               std::memory_order order)
       : AtomicOp(ptr, numel, order), expected(expected), desired(desired),
         mask(mask), itemsize(itemsize) {}
@@ -566,7 +566,7 @@ protected:
 private:
   void *expected;
   const void *desired;
-  const bool *mask;
+  const uint8_t *mask;
   size_t itemsize;
 };
 
@@ -832,22 +832,21 @@ void init_triton_interpreter(py::module_ &m) {
           require_dtype<uint64_t>(ptr, "ptr");
           require_dtype<bool>(mask, "mask");
           std::memory_order order = mem_semantic_map[sem];
-          int numel = ptr.size();
-          auto shape =
-              std::vector<ptrdiff_t>(ptr.shape(), ptr.shape() + ptr.ndim());
-          auto ret_dtype = cmp.dtype();
-          py::array ret(ret_dtype, py::array::ShapeContainer{numel});
-          py::array_t<uint64_t> reshaped_ptr = ptr.reshape({numel});
-          py::array reshaped_cmp = cmp.reshape({numel});
-          py::array reshaped_val = val.reshape({numel});
-          py::array reshaped_mask = mask.reshape({numel});
-          auto itemsize = cmp.itemsize();
-          memcpy(static_cast<void *>(ret.mutable_data()),
-                 static_cast<const void *>(reshaped_cmp.data()),
-                 itemsize * numel);
-          AtomicCASOp(reshaped_ptr.data(), ret.mutable_data(),
-                      static_cast<const void *>(reshaped_val.data()),
-                      reshaped_mask.data(), itemsize, numel, order)
+          size_t numel = ptr.size();
+          py::object ret = numpy_empty(numel, cmp.cast().attr("dtype"));
+          auto ret_array = py::cast<MutableArray>(ret);
+          
+          std::vector<uint64_t> ptr_data = copy_uint64_array(ptr);
+          std::vector<uint8_t> mask_data = copy_bool_array(mask);
+
+          size_t itemsize = cmp.itemsize();
+          for (size_t i = 0; i < numel; ++i)
+            if (mask_data[i])
+              memcpy(element_data(ret_array, i), const_element_data(cmp, i), itemsize);
+
+          ByteStorage val_data = copy_bytes(val);
+          AtomicCASOp(ptr_data.data(), ret_array.data(), val_data.data(),
+                      mask_data.data(), itemsize, numel, order)
               .apply();
 
           return ret.attr("reshape")(shape_list(ptr));
