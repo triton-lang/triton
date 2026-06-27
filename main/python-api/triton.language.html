@@ -77,6 +77,7 @@
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.zeros.html">triton.language.zeros</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.zeros_like.html">triton.language.zeros_like</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.cast.html">triton.language.cast</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.to_tensor.html">triton.language.to_tensor</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#shape-manipulation-ops">Shape Manipulation Ops</a><ul>
@@ -89,7 +90,9 @@
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.ravel.html">triton.language.ravel</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.reshape.html">triton.language.reshape</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.split.html">triton.language.split</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.squeeze.html">triton.language.squeeze</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.trans.html">triton.language.trans</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.unsqueeze.html">triton.language.unsqueeze</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.view.html">triton.language.view</a></li>
 </ul>
 </li>
@@ -116,6 +119,7 @@
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#math-ops">Math Ops</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.abs.html">triton.language.abs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.add.html">triton.language.add</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.cdiv.html">triton.language.cdiv</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.ceil.html">triton.language.ceil</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.clamp.html">triton.language.clamp</a></li>
@@ -131,12 +135,14 @@
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.log2.html">triton.language.log2</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.maximum.html">triton.language.maximum</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.minimum.html">triton.language.minimum</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.mul.html">triton.language.mul</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.rsqrt.html">triton.language.rsqrt</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.sigmoid.html">triton.language.sigmoid</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.sin.html">triton.language.sin</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.softmax.html">triton.language.softmax</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.sqrt.html">triton.language.sqrt</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.sqrt_rn.html">triton.language.sqrt_rn</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.sub.html">triton.language.sub</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.umulhi.html">triton.language.umulhi</a></li>
 </ul>
 </li>
@@ -146,6 +152,7 @@
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.max.html">triton.language.max</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.min.html">triton.language.min</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.reduce.html">triton.language.reduce</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.reduce_or.html">triton.language.reduce_or</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.sum.html">triton.language.sum</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.xor_sum.html">triton.language.xor_sum</a></li>
 </ul>
@@ -167,6 +174,7 @@
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_max.html">triton.language.atomic_max</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_min.html">triton.language.atomic_min</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_or.html">triton.language.atomic_or</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_poll.html">triton.language.atomic_poll</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_xchg.html">triton.language.atomic_xchg</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.atomic_xor.html">triton.language.atomic_xor</a></li>
 </ul>
@@ -175,7 +183,9 @@
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.randint4x.html">triton.language.randint4x</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.randint.html">triton.language.randint</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.rand.html">triton.language.rand</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.rand4x.html">triton.language.rand4x</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.randn.html">triton.language.randn</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.randn4x.html">triton.language.randn4x</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#iterators">Iterators</a><ul>
@@ -297,6 +307,9 @@
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.cast.html#triton.language.cast" title="triton.language.cast"><code class="xref py py-obj docutils literal notranslate"><span class="pre">cast</span></code></a></p></td>
 <td><p>Casts a tensor to the given <code class="code docutils literal notranslate"><span class="pre">dtype</span></code>.</p></td>
 </tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.to_tensor.html#triton.language.to_tensor" title="triton.language.to_tensor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">to_tensor</span></code></a></p></td>
+<td><p>Converts a Python scalar into a 0-dimensional <code class="code docutils literal notranslate"><span class="pre">tensor</span></code>.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
@@ -331,8 +344,14 @@
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.split.html#triton.language.split" title="triton.language.split"><code class="xref py py-obj docutils literal notranslate"><span class="pre">split</span></code></a></p></td>
 <td><p>Split a tensor in two along its last dim, which must have size 2.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.trans.html#triton.language.trans" title="triton.language.trans"><code class="xref py py-obj docutils literal notranslate"><span class="pre">trans</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.squeeze.html#triton.language.squeeze" title="triton.language.squeeze"><code class="xref py py-obj docutils literal notranslate"><span class="pre">squeeze</span></code></a></p></td>
+<td><p>Removes a length-1 dimension from <code class="code docutils literal notranslate"><span class="pre">x</span></code> at index <code class="code docutils literal notranslate"><span class="pre">dim</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.trans.html#triton.language.trans" title="triton.language.trans"><code class="xref py py-obj docutils literal notranslate"><span class="pre">trans</span></code></a></p></td>
 <td><p>Permutes the dimensions of a tensor.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.unsqueeze.html#triton.language.unsqueeze" title="triton.language.unsqueeze"><code class="xref py py-obj docutils literal notranslate"><span class="pre">unsqueeze</span></code></a></p></td>
+<td><p>Inserts a length-1 dimension into <code class="code docutils literal notranslate"><span class="pre">x</span></code> at index <code class="code docutils literal notranslate"><span class="pre">dim</span></code>.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.view.html#triton.language.view" title="triton.language.view"><code class="xref py py-obj docutils literal notranslate"><span class="pre">view</span></code></a></p></td>
 <td><p>Returns a tensor with the same elements as <cite>input</cite> but a different shape.</p></td>
@@ -404,50 +423,56 @@
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.abs.html#triton.language.abs" title="triton.language.abs"><code class="xref py py-obj docutils literal notranslate"><span class="pre">abs</span></code></a></p></td>
 <td><p>Computes the element-wise absolute value of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.cdiv.html#triton.language.cdiv" title="triton.language.cdiv"><code class="xref py py-obj docutils literal notranslate"><span class="pre">cdiv</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.add.html#triton.language.add" title="triton.language.add"><code class="xref py py-obj docutils literal notranslate"><span class="pre">add</span></code></a></p></td>
+<td><p>Computes the element-wise sum of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.cdiv.html#triton.language.cdiv" title="triton.language.cdiv"><code class="xref py py-obj docutils literal notranslate"><span class="pre">cdiv</span></code></a></p></td>
 <td><p>Computes the ceiling division of <code class="code docutils literal notranslate"><span class="pre">x</span></code> by <code class="code docutils literal notranslate"><span class="pre">div</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.ceil.html#triton.language.ceil" title="triton.language.ceil"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ceil</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.ceil.html#triton.language.ceil" title="triton.language.ceil"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ceil</span></code></a></p></td>
 <td><p>Computes the element-wise ceil of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.clamp.html#triton.language.clamp" title="triton.language.clamp"><code class="xref py py-obj docutils literal notranslate"><span class="pre">clamp</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.clamp.html#triton.language.clamp" title="triton.language.clamp"><code class="xref py py-obj docutils literal notranslate"><span class="pre">clamp</span></code></a></p></td>
 <td><p>Clamps the input tensor <code class="code docutils literal notranslate"><span class="pre">x</span></code> within the range [min, max].</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.cos.html#triton.language.cos" title="triton.language.cos"><code class="xref py py-obj docutils literal notranslate"><span class="pre">cos</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.cos.html#triton.language.cos" title="triton.language.cos"><code class="xref py py-obj docutils literal notranslate"><span class="pre">cos</span></code></a></p></td>
 <td><p>Computes the element-wise cosine of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.div_rn.html#triton.language.div_rn" title="triton.language.div_rn"><code class="xref py py-obj docutils literal notranslate"><span class="pre">div_rn</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.div_rn.html#triton.language.div_rn" title="triton.language.div_rn"><code class="xref py py-obj docutils literal notranslate"><span class="pre">div_rn</span></code></a></p></td>
 <td><p>Computes the element-wise precise division (rounding to nearest wrt the IEEE standard) of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.erf.html#triton.language.erf" title="triton.language.erf"><code class="xref py py-obj docutils literal notranslate"><span class="pre">erf</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.erf.html#triton.language.erf" title="triton.language.erf"><code class="xref py py-obj docutils literal notranslate"><span class="pre">erf</span></code></a></p></td>
 <td><p>Computes the element-wise error function of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.exp.html#triton.language.exp" title="triton.language.exp"><code class="xref py py-obj docutils literal notranslate"><span class="pre">exp</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.exp.html#triton.language.exp" title="triton.language.exp"><code class="xref py py-obj docutils literal notranslate"><span class="pre">exp</span></code></a></p></td>
 <td><p>Computes the element-wise exponential of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.exp2.html#triton.language.exp2" title="triton.language.exp2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">exp2</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.exp2.html#triton.language.exp2" title="triton.language.exp2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">exp2</span></code></a></p></td>
 <td><p>Computes the element-wise exponential (base 2) of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.fdiv.html#triton.language.fdiv" title="triton.language.fdiv"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fdiv</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.fdiv.html#triton.language.fdiv" title="triton.language.fdiv"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fdiv</span></code></a></p></td>
 <td><p>Computes the element-wise fast division of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.floor.html#triton.language.floor" title="triton.language.floor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">floor</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.floor.html#triton.language.floor" title="triton.language.floor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">floor</span></code></a></p></td>
 <td><p>Computes the element-wise floor of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.fma.html#triton.language.fma" title="triton.language.fma"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fma</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.fma.html#triton.language.fma" title="triton.language.fma"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fma</span></code></a></p></td>
 <td><p>Computes the element-wise fused multiply-add of <code class="code docutils literal notranslate"><span class="pre">x</span></code>, <code class="code docutils literal notranslate"><span class="pre">y</span></code>, and <code class="code docutils literal notranslate"><span class="pre">z</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.log.html#triton.language.log" title="triton.language.log"><code class="xref py py-obj docutils literal notranslate"><span class="pre">log</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.log.html#triton.language.log" title="triton.language.log"><code class="xref py py-obj docutils literal notranslate"><span class="pre">log</span></code></a></p></td>
 <td><p>Computes the element-wise natural logarithm of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.log2.html#triton.language.log2" title="triton.language.log2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">log2</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.log2.html#triton.language.log2" title="triton.language.log2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">log2</span></code></a></p></td>
 <td><p>Computes the element-wise logarithm (base 2) of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.maximum.html#triton.language.maximum" title="triton.language.maximum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">maximum</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.maximum.html#triton.language.maximum" title="triton.language.maximum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">maximum</span></code></a></p></td>
 <td><p>Computes the element-wise maximum of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.minimum.html#triton.language.minimum" title="triton.language.minimum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">minimum</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.minimum.html#triton.language.minimum" title="triton.language.minimum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">minimum</span></code></a></p></td>
 <td><p>Computes the element-wise minimum of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.mul.html#triton.language.mul" title="triton.language.mul"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mul</span></code></a></p></td>
+<td><p>Computes the element-wise product of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.rsqrt.html#triton.language.rsqrt" title="triton.language.rsqrt"><code class="xref py py-obj docutils literal notranslate"><span class="pre">rsqrt</span></code></a></p></td>
 <td><p>Computes the element-wise inverse square root of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
@@ -467,7 +492,10 @@
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.sqrt_rn.html#triton.language.sqrt_rn" title="triton.language.sqrt_rn"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sqrt_rn</span></code></a></p></td>
 <td><p>Computes the element-wise precise square root (rounding to nearest wrt the IEEE standard) of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.umulhi.html#triton.language.umulhi" title="triton.language.umulhi"><code class="xref py py-obj docutils literal notranslate"><span class="pre">umulhi</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.sub.html#triton.language.sub" title="triton.language.sub"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sub</span></code></a></p></td>
+<td><p>Computes the element-wise difference of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.umulhi.html#triton.language.umulhi" title="triton.language.umulhi"><code class="xref py py-obj docutils literal notranslate"><span class="pre">umulhi</span></code></a></p></td>
 <td><p>Computes the element-wise most significant N bits of the 2N-bit product of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
 </tbody>
@@ -492,10 +520,13 @@
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.reduce.html#triton.language.reduce" title="triton.language.reduce"><code class="xref py py-obj docutils literal notranslate"><span class="pre">reduce</span></code></a></p></td>
 <td><p>Applies the combine_fn to all elements in <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensors along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.sum.html#triton.language.sum" title="triton.language.sum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.reduce_or.html#triton.language.reduce_or" title="triton.language.reduce_or"><code class="xref py py-obj docutils literal notranslate"><span class="pre">reduce_or</span></code></a></p></td>
+<td><p>Returns the reduce_or of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.sum.html#triton.language.sum" title="triton.language.sum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sum</span></code></a></p></td>
 <td><p>Returns the sum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.xor_sum.html#triton.language.xor_sum" title="triton.language.xor_sum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">xor_sum</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.xor_sum.html#triton.language.xor_sum" title="triton.language.xor_sum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">xor_sum</span></code></a></p></td>
 <td><p>Returns the xor sum of all elements in the <code class="code docutils literal notranslate"><span class="pre">input</span></code> tensor along the provided <code class="code docutils literal notranslate"><span class="pre">axis</span></code></p></td>
 </tr>
 </tbody>
@@ -551,10 +582,13 @@
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.atomic_or.html#triton.language.atomic_or" title="triton.language.atomic_or"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_or</span></code></a></p></td>
 <td><p>Performs an atomic logical or at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.atomic_xchg.html#triton.language.atomic_xchg" title="triton.language.atomic_xchg"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_xchg</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.atomic_poll.html#triton.language.atomic_poll" title="triton.language.atomic_poll"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_poll</span></code></a></p></td>
+<td><p>Wait until the value at <code class="code docutils literal notranslate"><span class="pre">pointer</span></code> equals <code class="code docutils literal notranslate"><span class="pre">expected_value</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.atomic_xchg.html#triton.language.atomic_xchg" title="triton.language.atomic_xchg"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_xchg</span></code></a></p></td>
 <td><p>Performs an atomic exchange at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.atomic_xor.html#triton.language.atomic_xor" title="triton.language.atomic_xor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_xor</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.atomic_xor.html#triton.language.atomic_xor" title="triton.language.atomic_xor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_xor</span></code></a></p></td>
 <td><p>Performs an atomic logical xor at the memory location specified by <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></td>
 </tr>
 </tbody>
@@ -573,8 +607,14 @@
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.rand.html#triton.language.rand" title="triton.language.rand"><code class="xref py py-obj docutils literal notranslate"><span class="pre">rand</span></code></a></p></td>
 <td><p>Given a <code class="code docutils literal notranslate"><span class="pre">seed</span></code> scalar and an <code class="code docutils literal notranslate"><span class="pre">offset</span></code> block, returns a block of random <code class="code docutils literal notranslate"><span class="pre">float32</span></code> in <span class="math notranslate nohighlight">\(U(0, 1)\)</span>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.randn.html#triton.language.randn" title="triton.language.randn"><code class="xref py py-obj docutils literal notranslate"><span class="pre">randn</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.rand4x.html#triton.language.rand4x" title="triton.language.rand4x"><code class="xref py py-obj docutils literal notranslate"><span class="pre">rand4x</span></code></a></p></td>
+<td><p>Given a <code class="code docutils literal notranslate"><span class="pre">seed</span></code> scalar and an <code class="code docutils literal notranslate"><span class="pre">offsets</span></code> block, returns 4 blocks of random <code class="code docutils literal notranslate"><span class="pre">float32</span></code> in <span class="math notranslate nohighlight">\(U(0, 1)\)</span>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.randn.html#triton.language.randn" title="triton.language.randn"><code class="xref py py-obj docutils literal notranslate"><span class="pre">randn</span></code></a></p></td>
 <td><p>Given a <code class="code docutils literal notranslate"><span class="pre">seed</span></code> scalar and an <code class="code docutils literal notranslate"><span class="pre">offset</span></code> block, returns a block of random <code class="code docutils literal notranslate"><span class="pre">float32</span></code> in <span class="math notranslate nohighlight">\(\mathcal{N}(0, 1)\)</span>.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.randn4x.html#triton.language.randn4x" title="triton.language.randn4x"><code class="xref py py-obj docutils literal notranslate"><span class="pre">randn4x</span></code></a></p></td>
+<td><p>Given a <code class="code docutils literal notranslate"><span class="pre">seed</span></code> scalar and an <code class="code docutils literal notranslate"><span class="pre">offset</span></code> block, returns 4 blocks of random <code class="code docutils literal notranslate"><span class="pre">float32</span></code> in <span class="math notranslate nohighlight">\(\mathcal{N}(0, 1)\)</span>.</p></td>
 </tr>
 </tbody>
 </table>

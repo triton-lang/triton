@@ -141,6 +141,12 @@ Note that this function has several constraints compared to <cite>do_bench_cudag
 <li><p><strong>return_mode</strong> (<em>str</em>) – The statistical measure to return. Options are “min”, “max”, “mean”, “median”, or “all”. Default is “mean”.</p></li>
 </ul>
 </dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The runtime(s) in milliseconds: a single float for a scalar <code class="docutils literal notranslate"><span class="pre">return_mode</span></code>, or a list of floats if <code class="docutils literal notranslate"><span class="pre">quantiles</span></code> is set or <code class="docutils literal notranslate"><span class="pre">return_mode=&quot;all&quot;</span></code>.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>float | list[float]</p>
+</dd>
 </dl>
 </dd></dl>
 

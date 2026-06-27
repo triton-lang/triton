@@ -108,6 +108,50 @@ Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSi
 
 
 
+### `tt.atomic_poll` (triton::AtomicPollOp)
+
+_Poll an atomic value_
+
+Syntax:
+
+```
+operation ::= `tt.atomic_poll` $sem `,` $scope `,` $ptr `,` $expected (`timeout` $timeout^)?
+              attr-dict `:` qualified(type($ptr)) `,` type($expected) `->` type($result)
+```
+
+Repeatedly load from $ptr with relaxed semantics on a single thread
+until the loaded value equals $expected. For acquire semantics, issue
+an acquire fence only after a successful poll. Other threads wait for
+the polling thread to finish.
+
+Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `InferTypeOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>sem</code></td><td>::mlir::triton::MemSemanticAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4</td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `ptr` | ptr |
+| `expected` | integer |
+| `timeout` | 64-bit signless integer |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | 1-bit signless integer |
+
+
+
 ### `tt.atomic_rmw` (triton::AtomicRMWOp)
 
 _Atomic rmw_

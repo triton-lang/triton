@@ -148,7 +148,19 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.to_tensor">
 <span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.</span></span><span class="sig-name descname"><span class="pre">to_tensor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.to_tensor" title="Link to this definition"></a></dt>
-<dd></dd></dl>
+<dd><p>Converts a Python scalar into a 0-dimensional <code class="code docutils literal notranslate"><span class="pre">tensor</span></code>.</p>
+<p>If <code class="code docutils literal notranslate"><span class="pre">x</span></code> is already a <code class="code docutils literal notranslate"><span class="pre">tensor</span></code> it is returned unchanged. The result
+dtype is inferred from the value: a Python <code class="code docutils literal notranslate"><span class="pre">bool</span></code> becomes
+<code class="code docutils literal notranslate"><span class="pre">tl.int1</span></code>, an <code class="code docutils literal notranslate"><span class="pre">int</span></code> becomes the smallest of <code class="code docutils literal notranslate"><span class="pre">tl.int32</span></code>,
+<code class="code docutils literal notranslate"><span class="pre">tl.uint32</span></code>, <code class="code docutils literal notranslate"><span class="pre">tl.int64</span></code>, or <code class="code docutils literal notranslate"><span class="pre">tl.uint64</span></code> that can represent
+it, and a <code class="code docutils literal notranslate"><span class="pre">float</span></code> becomes <code class="code docutils literal notranslate"><span class="pre">tl.float32</span></code> (or <code class="code docutils literal notranslate"><span class="pre">tl.float64</span></code> when
+it is outside the <code class="code docutils literal notranslate"><span class="pre">float32</span></code> range).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>x</strong> – any numeric value.</p>
+</dd>
+</dl>
+</dd></dl>
 
 </section>
 

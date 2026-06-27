@@ -25,6 +25,7 @@
       ~tensor.atomic_max
       ~tensor.atomic_min
       ~tensor.atomic_or
+      ~tensor.atomic_poll
       ~tensor.atomic_xchg
       ~tensor.atomic_xor
       ~tensor.broadcast_to

@@ -1,0 +1,6 @@
+﻿triton.language.to\_tensor
+==========================
+
+.. currentmodule:: triton.language
+
+.. autofunction:: to_tensor

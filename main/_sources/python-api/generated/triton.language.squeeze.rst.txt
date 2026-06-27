@@ -1,0 +1,6 @@
+﻿triton.language.squeeze
+=======================
+
+.. currentmodule:: triton.language
+
+.. autofunction:: squeeze

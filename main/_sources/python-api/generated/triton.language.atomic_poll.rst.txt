@@ -1,0 +1,6 @@
+﻿triton.language.atomic\_poll
+============================
+
+.. currentmodule:: triton.language
+
+.. autofunction:: atomic_poll
