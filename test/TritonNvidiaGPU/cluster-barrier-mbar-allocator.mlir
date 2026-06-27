@@ -7,7 +7,7 @@
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 5 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: module attributes {
-  // CHECK-DAG: ttg.shared = 40 : i32
+  // CHECK-DAG: ttg.shared = 72 : i32
   // CHECK-DAG: ttg.ws_cluster_barrier_count = 2 : i32
   // CHECK-LABEL: @cluster_barrier_mbar_allocator
   tt.func @cluster_barrier_mbar_allocator(%ptr: !tt.ptr<i32>) {
@@ -37,7 +37,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       ttg.warp_yield
     }
     partition0() num_warps(4) {
-      // CHECK: ttng.cluster_barrier {ttg.mbar_offset = 24 : i32}
+      // CHECK: ttng.cluster_barrier {ttg.mbar_offset = 40 : i32}
       ttng.cluster_barrier
       ttg.warp_return
     } : () -> ()
