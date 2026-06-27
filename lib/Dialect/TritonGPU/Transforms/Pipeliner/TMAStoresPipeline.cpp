@@ -16,11 +16,6 @@ struct TMAStore {
   mlir::TypedValue<RankedTensorType> src;
 };
 
-struct PipelinedTMAStore {
-  Value alloc;
-  int pendings;
-};
-
 static SmallVector<TMAStore> getTMAStores(scf::ForOp forOp) {
   SmallVector<TMAStore> tmaStores;
 
@@ -107,16 +102,16 @@ static void lowerTMADescriptorCreation(scf::ForOp forOp) {
 }
 
 bool mlir::triton::pipelineTMAStores(scf::ForOp forOp, int numStages) {
-  if (numStages <= 1)
-    return false;
-
   SmallVector<TMAStore> tmaStores = getTMAStores(forOp);
   if (tmaStores.empty())
     return false;
   if (hasAcquireOrReleaseOp(forOp))
     return false;
 
-  DenseMap<Operation *, PipelinedTMAStore> storeInfo;
+  DenseMap<Operation *, Value> storeAllocs;
+  int numStores = static_cast<int>(tmaStores.size());
+  int pendings = std::max(std::min(numStages, numStores) - 1, 0);
+  int maxBuffers = pendings + 1;
   DenseMap<std::pair<ArrayRef<int64_t>, Type>, SmallVector<const TMAStore *>>
       groupedStores;
   for (const TMAStore &store : tmaStores) {
@@ -127,13 +122,14 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp, int numStages) {
 
   for (auto &[key, stores] : groupedStores) {
     SmallVector<Value> allocs;
-    int numBuffers = stores.size();
-    int pendings = std::min(numStages, numBuffers) - 1;
+    // Reuse allocations for stores of the same shape and types. This allows
+    // saving shared memory usage.
+    int numBuffers = std::min<int>(stores.size(), maxBuffers);
     for (int i = 0; i < numBuffers; ++i)
       allocs.push_back(createAlloc(forOp, *stores[i]));
 
     for (auto [idx, store] : llvm::enumerate(stores)) {
-      storeInfo[store->op] = {allocs[idx % numBuffers], pendings};
+      storeAllocs[store->op] = allocs[idx % numBuffers];
     }
   }
 
@@ -141,8 +137,7 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp, int numStages) {
     return !triton::isHostSideDescriptor(store.desc);
   });
   for (const TMAStore &store : tmaStores) {
-    PipelinedTMAStore info = storeInfo[store.op];
-    createTMAAsyncCopy(forOp, store, info.alloc, info.pendings);
+    createTMAAsyncCopy(forOp, store, storeAllocs[store.op], pendings);
   }
 
   // Deallocate shared memory buffers.
@@ -151,8 +146,8 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp, int numStages) {
   ttng::TMAStoreWaitOp::create(builder, forOp->getLoc(), 0,
                                /*read_only=*/false);
   SetVector<Value> allocs;
-  for (auto it : storeInfo)
-    allocs.insert(it.second.alloc);
+  for (auto it : storeAllocs)
+    allocs.insert(it.second);
   for (Value alloc : allocs)
     ttg::LocalDeallocOp::create(builder, forOp->getLoc(), alloc);
 
