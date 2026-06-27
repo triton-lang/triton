@@ -212,6 +212,8 @@ void GatherOpConversion::emitWarpLocalGather(
   // Compute the src and idx layouts.
   LinearLayout srcLayout = toLinearLayout(srcType);
   LinearLayout idxLayout = toLinearLayout(idxType);
+  bool isThreadLocal =
+      srcLayout.sublayoutIsZero({kBlock, kWarp, kLane}, kGatherDim);
 
   // Let `ll_src` be the source layout and `ll_idx` be the index layout.
   // Let `src_col` be a tuple of dimensions except the gather dimension,
@@ -328,8 +330,9 @@ void GatherOpConversion::emitWarpLocalGather(
           invertSrcRegMapRest.apply({{kGatherDim, i}}).front().second;
       int32_t srcRegIdx = srcBase ^ rest;
 
-      Value value =
-          targetInfo.shuffleIdx(rewriter, loc, srcValues[srcRegIdx], srcLane);
+      Value value = srcValues[srcRegIdx];
+      if (!isThreadLocal)
+        value = targetInfo.shuffleIdx(rewriter, loc, value, srcLane);
       result = b.select(b.icmp_eq(b.i32_val(srcRegIdx), srcReg), value, result);
     }
 

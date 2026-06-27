@@ -122,7 +122,13 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
     return elems * getBitwidth(srcTy) / 8;
   }
-  if (isa<gpu::LocalAtomicScatterRMWOp, AtomicRMWOp, AtomicCASOp,
+  if (auto poll = dyn_cast<AtomicPollOp>(op)) {
+    // A poll without a timeout can only return true, so its result does not
+    // need to be broadcast through shared memory.
+    if (!poll.getTimeout())
+      return 0;
+  }
+  if (isa<gpu::LocalAtomicScatterRMWOp, AtomicPollOp, AtomicRMWOp, AtomicCASOp,
           tti::ExperimentalGSanAtomicRMWOp, tti::ExperimentalGSanAtomicCASOp>(
           op)) {
     auto value = op->getOperand(0);
