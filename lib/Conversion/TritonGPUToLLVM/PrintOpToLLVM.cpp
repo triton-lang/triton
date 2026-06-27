@@ -48,7 +48,8 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     for (size_t i = 0; i < op.getNumOperands(); i++) {
       bool isSigned = op.getIsSigned()[i] > 0;
       // Elements of the tensor that are resident in this GPU thread.
-      auto elems = unpackLLElements(loc, adaptor.getOperands()[i], rewriter);
+      auto elems = unpackTensorElements(loc, adaptor.getOperands()[i], rewriter,
+                                        op->getOperand(i).getType());
 
       // Get the indices of `elems` within the tensor.  Note that if `elems`
       // has an "interesting" layout, then these will not be in any

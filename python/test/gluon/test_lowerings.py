@@ -176,6 +176,44 @@ def test_convert_1d_to_2d_slice_cga(num_ctas, device):
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.parametrize("warp_specialize", [False, True])
+def test_atomic_poll_two_ctas(warp_specialize, device):
+
+    @gluon.jit
+    def poll_partition(payload, flag, out):
+        pid = ttgl.program_id(0)
+        if pid == 0:
+            ttgl.store(payload, 42)
+            ttgl.atomic_xchg(flag, 1, sem="release", scope="gpu")
+        else:
+            matched = ttgl.atomic_poll(flag, 1, sem="acquire", scope="gpu", timeout_ns=1_000_000_000)
+            if matched:
+                ttgl.store(out, ttgl.load(payload))
+
+    @gluon.jit
+    def empty_partition():
+        pass
+
+    @gluon.jit
+    def kernel(payload, flag, out, WARP_SPECIALIZE: ttgl.constexpr):
+        if WARP_SPECIALIZE:
+            ttgl.warp_specialize([
+                (poll_partition, (payload, flag, out)),
+                (empty_partition, ()),
+            ], [4])
+        else:
+            poll_partition(payload, flag, out)
+
+    payload = torch.zeros((1, ), device=device, dtype=torch.int32)
+    flag = torch.zeros((1, ), device=device, dtype=torch.int32)
+    out = torch.full((1, ), -1, device=device, dtype=torch.int32)
+
+    kernel[(2, )](payload, flag, out, warp_specialize, num_warps=4)
+
+    assert out.item() == 42
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
 def test_cluster_barrier_in_warp_specialize(device):
     BLOCK = ttgl.constexpr(128)
 
