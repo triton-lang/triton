@@ -1152,6 +1152,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @test_atomic_poll(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %expected: i32) {
+    %0 = tt.get_program_id x : i32
+    %1 = tt.addptr %arg0, %0 : !tt.ptr<i32>, i32
+    %matched = tt.atomic_poll acquire, gpu, %1, %expected : !tt.ptr<i32>, i32 -> i1
+    tt.return
+  }
+}
+
+// CHECK-LABEL:   tt.func public @test_atomic_poll(
+// CHECK-SAME:      %[[ARG:.*]]: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[EXPECTED:.*]]: i32) {
+// CHECK:           %[[PID:.*]] = tt.get_program_id x : i32
+// CHECK:           %[[PTR:.*]] = tt.addptr %[[ARG]], %[[PID]] : !tt.ptr<i32>, i32
+// CHECK:           %[[MATCHED:.*]] = tt.atomic_poll acquire, gpu, %[[PTR]], %[[EXPECTED]] : !tt.ptr<i32>, i32 -> i1
+// CHECK:           tt.return
+// CHECK:         }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @test_atomic_rmw_bf16(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     %true = arith.constant true
     %0 = tt.get_program_id x : i32

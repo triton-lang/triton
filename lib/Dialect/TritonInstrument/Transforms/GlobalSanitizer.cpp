@@ -304,6 +304,18 @@ static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op) {
       MemSyncScope::GPU);
 }
 
+static void instrumentAtomicPoll(tt::AtomicPollOp op) {
+  OpBuilder builder(op);
+  builder.setInsertionPointAfter(op);
+  ExperimentalGSanAtomicPollOp::create(builder, op.getLoc(), op.getPtr(),
+                                       op.getResult(), op.getSem(),
+                                       op.getScope());
+  if (ttg::lookupNumCTAs(op) == 1)
+    ttg::BarrierOp::create(builder, op.getLoc(), ttg::AddrSpace::Local);
+  else
+    ttng::ClusterBarrierOp::create(builder, op.getLoc());
+}
+
 static void instrumentAsyncTMAGather(ttng::AsyncTMAGatherOp op) {
   OpBuilder builder(op);
   auto desc = getDescriptorInfo(op.getDesc(), builder);
@@ -454,6 +466,7 @@ public:
             newOp->setAttrs(op->getAttrs());
             b.replaceOp(op, newOp);
           })
+          .Case([&](tt::AtomicPollOp op) { instrumentAtomicPoll(op); })
           .Case([&](ttg::WarpSpecializeOp op) {
             op->setAttr(kDisableSetMaxRegisterAttr, builder.getUnitAttr());
           });
