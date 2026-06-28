@@ -481,6 +481,24 @@ def fmod(arg0, arg1, _semantic=None):
 
 
 @core.extern
+def fmax(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp32"), core.dtype("fp32")): ("__ocml_fmax_f32", core.dtype("fp32")),
+            (core.dtype("fp64"), core.dtype("fp64")): ("__ocml_fmax_f64", core.dtype("fp64")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def fmin(arg0, arg1, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp32"), core.dtype("fp32")): ("__ocml_fmin_f32", core.dtype("fp32")),
+            (core.dtype("fp64"), core.dtype("fp64")): ("__ocml_fmin_f64", core.dtype("fp64")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
 def fma(arg0, arg1, arg2, _semantic=None):
     return core.extern_elementwise(
         "", "", [arg0, arg1, arg2], {
