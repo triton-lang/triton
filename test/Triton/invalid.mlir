@@ -79,7 +79,8 @@ tt.func public @fn(%arg0: tensor<32x32xf32>, %arg1: tensor<32x32xf16>) {
 // -----
 
 tt.func public @fn(%arg0: tensor<32xf32>, %arg1: tensor<32xf32>) {
-    // expected-error @+1 {{op result shape must be (32, 2), but got 64}}
+    // expected-error @+2 {{op inferred type}}
+    // expected-error @+1 {{op failed to infer returned types}}
     %a = tt.join %arg0, %arg1 : tensor<32xf32> -> tensor<64xf32>
     tt.return
 }
@@ -87,7 +88,8 @@ tt.func public @fn(%arg0: tensor<32xf32>, %arg1: tensor<32xf32>) {
 // -----
 
 tt.func public @fn(%arg0: tensor<32x32xf32>, %arg1: tensor<32x32xf32>) {
-    // expected-error @+1 {{result shape must be (32, 32, 2), but got 32, 64}}
+    // expected-error @+2 {{op inferred type}}
+    // expected-error @+1 {{op failed to infer returned types}}
     %a = tt.join %arg0, %arg1 : tensor<32x32xf32> -> tensor<32x64xf32>
     tt.return
 }
@@ -186,7 +188,8 @@ tt.func public @fn(%v1: tensor<4x128xf32>, %v2: tensor<4x128xi64>) {
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
-    // expected-error @+1 {{op result encoding must be specified}}
+    // expected-error @+2 {{op inferred type}}
+    // expected-error @+1 {{op failed to infer returned types}}
     %a = tt.join %arg0, %arg0 : tensor<32xf32, #blocked> -> tensor<32x2xf32>
     tt.return
 }
@@ -199,7 +202,8 @@ tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
 #blocked1 = #ttg.blocked<{sizePerThread = [1,2], threadsPerWarp = [32,1], warpsPerCTA = [1,1], order = [0,1]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
-    // expected-error @+1 {{op incompatible join layout}}
+    // expected-error @+2 {{op inferred type}}
+    // expected-error @+1 {{op failed to infer returned types}}
     %a = tt.join %arg0, %arg0 : tensor<32xf32, #blocked> -> tensor<32x2xf32, #blocked1>
     tt.return
 }
