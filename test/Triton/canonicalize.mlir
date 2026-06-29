@@ -17,7 +17,7 @@ tt.func @dead_load(%ptr: tensor<32x128x!tt.ptr<f16>>) {
 tt.func @make_range() -> (tensor<128x1xi32>, tensor<1xi32>) {
   // CHECK-DAG: %[[c:.*]] = arith.constant dense<0> : tensor<128x1xi32>
   %a = tt.make_range {end = 1 : i32, start = 0 : i32} : tensor<1xi32>
-  %b = tt.expand_dims %a {axis = 1 : i32} : tensor<1xi32> -> tensor<1x1xi32>
+  %b = tt.reshape %a require_sliced : tensor<1xi32> -> tensor<1x1xi32>
   %c = tt.broadcast %b : tensor<1x1xi32> -> tensor<128x1xi32>
 
   // CHECK-DAG: %[[d:.*]] = arith.constant dense<1> : tensor<1xi32>
@@ -59,10 +59,10 @@ tt.func @fold_addptr_scalar(%arg: !tt.ptr<f16>) -> (!tt.ptr<f16>) {
 // CHECK-LABEL: fn
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 tt.func @fn(%arg0: tensor<1xf32, #sliced0>) -> (tensor<32x1xf32, #blocked0>){
-  // CHECK: %[[a:.*]] = tt.expand_dims
+  // CHECK: %[[a:.*]] = tt.reshape {{.*}} require_sliced
   // CHECK: tt.broadcast %[[a]]
   %a = tt.broadcast %arg0 : tensor<1xf32, #sliced0> -> tensor<32xf32, #sliced0>
-  %b = tt.expand_dims %a {axis = 1 : i32} : tensor<32xf32, #sliced0> -> tensor<32x1xf32, #blocked0>
+  %b = tt.reshape %a require_sliced : tensor<32xf32, #sliced0> -> tensor<32x1xf32, #blocked0>
   tt.return %b : tensor<32x1xf32, #blocked0>
 }
 }  // end module

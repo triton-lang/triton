@@ -30,6 +30,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 16]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 4], [0, 8]], warp = [], block = []}>
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16, 4], isTransposed = true}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: global_store_mfma_vec16
@@ -44,8 +45,9 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
     %100 = tt.get_program_id x : i32
     %101 = arith.muli %100, %c32_i32 : i32
     %102 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #mma}>>
-    %300 = tt.expand_dims %102 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #mma}>> -> tensor<1x32xi32, #mma>
-    %200 = tt.broadcast %300 : tensor<1x32xi32, #mma> -> tensor<32x32xi32, #mma>
+    %300 = tt.reshape %102 : tensor<32xi32, #ttg.slice<{dim = 0, parent = #mma}>> -> tensor<1x32xi32, #linear>
+    %cvt300 = ttg.convert_layout %300 : tensor<1x32xi32, #linear> -> tensor<1x32xi32, #mma>
+    %200 = tt.broadcast %cvt300 : tensor<1x32xi32, #mma> -> tensor<32x32xi32, #mma>
     %103 = tt.splat %101 : i32 -> tensor<32x32xi32, #mma>
     %104 = arith.addi %103, %200 : tensor<32x32xi32, #mma>
     %105 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x32x!tt.ptr<f16>, #mma>

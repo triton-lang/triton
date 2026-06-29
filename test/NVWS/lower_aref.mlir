@@ -587,8 +587,8 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       }) {ttg.partition = array<i32: 0>, ttg.partition.outputs = [array<i32: 0>], loop.cluster = 0 : i32, loop.stage = 4 : i32} : (tensor<256x64xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
       %30 = arith.mulf %arg7, %28 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
       %31 = arith.addf %30, %29 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
-      %32 = tt.expand_dims %27 {axis = 1 : i32, loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xf32, #blocked>
-      %33 = tt.expand_dims %28 {axis = 1 : i32, loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xf32, #blocked>
+      %32 = tt.reshape %27 require_sliced {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xf32, #blocked>
+      %33 = tt.reshape %28 require_sliced {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xf32, #blocked>
       %34 = tt.broadcast %32 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : tensor<256x1xf32, #blocked> -> tensor<256x64xf32, #blocked>
       %35 = tt.addptr %arg5, %arg6 {loop.cluster = 2 : i32, loop.stage = 2 : i32, ttg.partition = array<i32: 0, 1, 2, 3>} : !tt.ptr<f32>, i32
       %36 = tt.load %35 {loop.cluster = 2 : i32, loop.stage = 2 : i32, ttg.partition = array<i32: 0, 1, 2, 3>} : !tt.ptr<f32>

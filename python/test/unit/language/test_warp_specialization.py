@@ -59,6 +59,8 @@ def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
 def test_warp_specialize_tmem_ir(tmp_path: pathlib.Path):
     ir = """
     #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+    #linear_m = #ttg.linear<{register = [], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = []}>
+    #linear_n = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
     #shared = #ttg.swizzled_shared<{vec=1, perPhase=1, maxPhase=1, order=[1, 0]}>
     #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 
@@ -67,9 +69,11 @@ def test_warp_specialize_tmem_ir(tmp_path: pathlib.Path):
     tt.func @test_tmem_ws(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
       %cst = arith.constant dense<64> : tensor<128x64xi32, #blocked>
       %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-      %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+      %row = tt.reshape %0 require_sliced : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #linear_m>
+      %1 = ttg.convert_layout %row : tensor<128x1xi32, #linear_m> -> tensor<128x1xi32, #blocked>
       %2 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-      %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+      %col = tt.reshape %2 require_sliced : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #linear_n>
+      %3 = ttg.convert_layout %col : tensor<1x64xi32, #linear_n> -> tensor<1x64xi32, #blocked>
       %4 = tt.broadcast %1 {axis = 1 : i32} : tensor<128x1xi32, #blocked> -> tensor<128x64xi32, #blocked>
       %5 = tt.broadcast %3 {axis = 0 : i32} : tensor<1x64xi32, #blocked> -> tensor<128x64xi32, #blocked>
       %6 = arith.muli %4, %cst : tensor<128x64xi32, #blocked>
@@ -541,7 +545,9 @@ def test_warp_specialize_attention_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, 
                                                   HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps)
 
     torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
-    torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
+    # Different valid reduction layouts can differ by one fp16 ULP.
+    l_i_atol = 2**-8 if dtype == torch.float16 else 0
+    torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=l_i_atol, rtol=0)
     torch.testing.assert_close(m_i.to(torch.float32), m_i_ref.to(torch.float32), atol=0, rtol=0)
 
 
@@ -642,7 +648,9 @@ def test_warp_specialize_attention_persistent_forward(M, N, BLOCK_M, HEAD_DIM, n
                                                   BLOCK_M, HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
 
     torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
-    torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
+    # Different valid reduction layouts can differ by one fp16 ULP.
+    l_i_atol = 2**-8 if dtype == torch.float16 else 0
+    torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=l_i_atol, rtol=0)
     torch.testing.assert_close(m_i.to(torch.float32), m_i_ref.to(torch.float32), atol=0, rtol=0)
 
 

@@ -3134,21 +3134,6 @@ struct TritonGPUInferLayoutInterface
   }
 
   LogicalResult
-  inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
-                            Attribute &resultEncoding,
-                            std::optional<Location> location) const override {
-    auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(operandEncoding);
-    if (!sliceEncoding)
-      return emitOptionalError(
-          location, "ExpandDimsOp operand encoding must be SliceEncodingAttr");
-    if (sliceEncoding.getDim() != axis)
-      return emitOptionalError(
-          location, "Incompatible slice dimension for ExpandDimsOp operand");
-    resultEncoding = sliceEncoding.getParent();
-    return success();
-  }
-
-  LogicalResult
   inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
                      Attribute retEncoding,
                      std::optional<Location> location) const override {
@@ -3530,11 +3515,44 @@ struct TritonGPUInferLayoutInterface
   LogicalResult
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                         bool allowReorder,
+                         bool allowReorder, bool requireSliced,
                          std::optional<Location> loc) const override {
     if (product(srcShape) != product(dstShape)) {
       return emitOptionalError(loc, "numel of dst shape does not match "
                                     "numel of src shape");
+    }
+    if (requireSliced) {
+      auto matchesExpandDimsShape = [](ArrayRef<int64_t> smallShape,
+                                       ArrayRef<int64_t> largeShape,
+                                       unsigned axis) {
+        if (largeShape.size() != smallShape.size() + 1 ||
+            axis >= largeShape.size() || largeShape[axis] != 1) {
+          return false;
+        }
+        SmallVector<int64_t> slicedLargeShape(largeShape);
+        slicedLargeShape.erase(slicedLargeShape.begin() + axis);
+        return slicedLargeShape == smallShape;
+      };
+
+      if (dstShape.size() == srcShape.size() + 1) {
+        auto sliceEnc = dyn_cast<SliceEncodingAttr>(srcEnc);
+        if (!sliceEnc ||
+            !matchesExpandDimsShape(srcShape, dstShape, sliceEnc.getDim())) {
+          return emitOptionalError(
+              loc, "require_sliced reshape expects a matching slice encoding");
+        }
+        // Keep accepting the original expand_dims form when it is already
+        // present in TTGIR. Builders without a result hint still fall through
+        // to the generic reshape inference below.
+        if (dstEnc && isa<DistributedEncodingTrait>(dstEnc) &&
+            succeeded(verifyLayoutsAreEqual(dstShape, sliceEnc.getParent(),
+                                            dstEnc, std::nullopt))) {
+          return success();
+        }
+      } else {
+        return emitOptionalError(
+            loc, "require_sliced reshape expects a matching slice encoding");
+      }
     }
     // If allowReorder is true, there are multiple valid encodings. Prefer the
     // hint if it is set and valid.

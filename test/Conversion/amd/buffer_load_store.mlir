@@ -129,13 +129,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4]], lane = [[0, 8], [0, 16], [0, 32], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0], [0, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: buffer_load_8xf16
   tt.func public @buffer_load_8xf16(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}) {
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
     %1 = tt.splat %arg2 : i32 -> tensor<256x64xi32, #blocked>
-    %2 = tt.expand_dims %0 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
-    %3 = tt.broadcast %2 : tensor<1x64xi32, #blocked> -> tensor<256x64xi32, #blocked>
+    %2 = tt.reshape %0 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #linear>
+    %cvt2 = ttg.convert_layout %2 : tensor<1x64xi32, #linear> -> tensor<1x64xi32, #blocked>
+    %3 = tt.broadcast %cvt2 : tensor<1x64xi32, #blocked> -> tensor<256x64xi32, #blocked>
     %4 = arith.addi %3, %1 : tensor<256x64xi32, #blocked>
     // Load 16 f16 elements check for correct vector size of instruction (4xi32 = 8xf16)
     // CHECK-COUNT-4: rocdl.raw.ptr.buffer.load {{.*}} : vector<4xi32>
@@ -313,13 +315,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 4], order = [1, 0]}>
+#linear = #ttg.linear<{register = [], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
     // CHECK-LABEL: buffer_load_layout_vectorization
     tt.func public @buffer_load_layout_vectorization(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
         %c1_i32 = arith.constant 1 : i32
         %21 = tt.splat %c1_i32 : i32 -> tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-        %22 = tt.expand_dims %21 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked>
-        %23 = tt.broadcast %22 : tensor<1x16xi32, #blocked> -> tensor<8x16xi32, #blocked>
+        %22 = tt.reshape %21 : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #linear>
+        %cvt22 = ttg.convert_layout %22 : tensor<1x16xi32, #linear> -> tensor<1x16xi32, #blocked>
+        %23 = tt.broadcast %cvt22 : tensor<1x16xi32, #blocked> -> tensor<8x16xi32, #blocked>
         // Each thread has to load 8xi16
         // We expect vector size == 1 (i16) for the generated loads as sizePerThread = [1, 1]
         // CHECK-COUNT-8: rocdl.raw.ptr.buffer.load {{.*}}, {{.*}}, {{.*}}, {{.*}} : i16

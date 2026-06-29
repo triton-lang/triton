@@ -68,12 +68,12 @@ module {
     %26 = tt.addptr %arg0, %25 : !tt.ptr<f16>, i32
     %27 = arith.muli %17, %arg6 : i32
     %28 = tt.addptr %26, %27 : !tt.ptr<f16>, i32
-    %29 = tt.expand_dims %22 {axis = 1 : i32} : tensor<256xi32> -> tensor<256x1xi32>
+    %29 = tt.reshape %22 : tensor<256xi32> -> tensor<256x1xi32>
     %30 = tt.splat %arg7 : i32 -> tensor<256x1xi32>
     %31 = arith.muli %29, %30 : tensor<256x1xi32>
     %32 = tt.splat %28 : !tt.ptr<f16> -> tensor<256x1x!tt.ptr<f16>>
     %33 = tt.addptr %32, %31 : tensor<256x1x!tt.ptr<f16>>, tensor<256x1xi32>
-    %34 = tt.expand_dims %24 {axis = 0 : i32} : tensor<128xi32> -> tensor<1x128xi32>
+    %34 = tt.reshape %24 : tensor<128xi32> -> tensor<1x128xi32>
     %35 = tt.broadcast %33 : tensor<256x1x!tt.ptr<f16>> -> tensor<256x128x!tt.ptr<f16>>
     %36 = tt.broadcast %34 : tensor<1x128xi32> -> tensor<256x128xi32>
     %37 = tt.addptr %35, %36 : tensor<256x128x!tt.ptr<f16>>, tensor<256x128xi32>
@@ -81,10 +81,10 @@ module {
     %39 = tt.addptr %arg1, %38 : !tt.ptr<f16>, i32
     %40 = arith.muli %17, %arg9 : i32
     %41 = tt.addptr %39, %40 : !tt.ptr<f16>, i32
-    %42 = tt.expand_dims %24 {axis = 1 : i32} : tensor<128xi32> -> tensor<128x1xi32>
+    %42 = tt.reshape %24 : tensor<128xi32> -> tensor<128x1xi32>
     %43 = tt.splat %41 : !tt.ptr<f16> -> tensor<128x1x!tt.ptr<f16>>
     %44 = tt.addptr %43, %42 : tensor<128x1x!tt.ptr<f16>>, tensor<128x1xi32>
-    %45 = tt.expand_dims %23 {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+    %45 = tt.reshape %23 : tensor<64xi32> -> tensor<1x64xi32>
     %46 = tt.splat %arg10 : i32 -> tensor<1x64xi32>
     %47 = arith.muli %45, %46 : tensor<1x64xi32>
     %48 = tt.broadcast %44 : tensor<128x1x!tt.ptr<f16>> -> tensor<128x64x!tt.ptr<f16>>
@@ -94,7 +94,7 @@ module {
     %52 = tt.addptr %arg2, %51 : !tt.ptr<f16>, i32
     %53 = arith.muli %17, %arg12 : i32
     %54 = tt.addptr %52, %53 : !tt.ptr<f16>, i32
-    %55 = tt.expand_dims %23 {axis = 1 : i32} : tensor<64xi32> -> tensor<64x1xi32>
+    %55 = tt.reshape %23 : tensor<64xi32> -> tensor<64x1xi32>
     %56 = tt.splat %arg13 : i32 -> tensor<64x1xi32>
     %57 = arith.muli %55, %56 : tensor<64x1xi32>
     %58 = tt.splat %54 : !tt.ptr<f16> -> tensor<64x1x!tt.ptr<f16>>
@@ -149,7 +149,7 @@ module {
         %100 = arith.maxnumf %arg30, %99 : tensor<256xf32>
         %101 = arith.mulf %100, %cst_0 : tensor<256xf32>
         %102 = arith.mulf %98, %cst_1 : tensor<256x64xf32>
-        %103 = tt.expand_dims %101 {axis = 1 : i32} : tensor<256xf32> -> tensor<256x1xf32>
+        %103 = tt.reshape %101 : tensor<256xf32> -> tensor<256x1xf32>
         %104 = tt.broadcast %103 : tensor<256x1xf32> -> tensor<256x64xf32>
         %105 = arith.subf %102, %104 : tensor<256x64xf32>
         %106 = math.exp2 %105 : tensor<256x64xf32>
@@ -161,7 +161,7 @@ module {
         %108 = arith.mulf %arg30, %cst_0 : tensor<256xf32>
         %109 = arith.subf %108, %101 : tensor<256xf32>
         %110 = math.exp2 %109 : tensor<256xf32>
-        %111 = tt.expand_dims %110 {axis = 1 : i32} : tensor<256xf32> -> tensor<256x1xf32>
+        %111 = tt.reshape %110 : tensor<256xf32> -> tensor<256x1xf32>
         %112 = tt.broadcast %111 : tensor<256x1xf32> -> tensor<256x128xf32>
         %113 = arith.mulf %arg28, %112 : tensor<256x128xf32>
         %114 = tt.load %arg32 : tensor<64x128x!tt.ptr<f16>>
@@ -174,7 +174,7 @@ module {
         scf.yield %118, %116, %100, %119, %120 : tensor<256x128xf32>, tensor<256xf32>, tensor<256xf32>, tensor<128x64x!tt.ptr<f16>>, tensor<64x128x!tt.ptr<f16>>
       }
       ttg.barrier local
-      %92 = tt.expand_dims %91#1 {axis = 1 : i32} : tensor<256xf32> -> tensor<256x1xf32>
+      %92 = tt.reshape %91#1 : tensor<256xf32> -> tensor<256x1xf32>
       %93 = arith.divf %cst_5, %92 : tensor<256x1xf32>
       %94 = tt.broadcast %93 : tensor<256x1xf32> -> tensor<256x128xf32>
       %95 = arith.mulf %91#0, %94 : tensor<256x128xf32>

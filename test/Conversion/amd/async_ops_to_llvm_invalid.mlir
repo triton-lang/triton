@@ -36,6 +36,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [2, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1]], lane = [[0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
 // Padding interval of 1 forces vec==1 which we cannot lower because it's less than 32bits per lane
 #shared = #ttg.padded_shared<[1:+2] {order = [1, 0], shape = [32, 64]}>
 #smem = #ttg.shared_memory
@@ -45,7 +46,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
                                     %arg2: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
     // We need the index calculation so AxisAnalysis sees that we can vectorize the load
     %1 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %2 = tt.expand_dims %1 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    %compact = tt.reshape %1 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #linear>
+    %2 = ttg.convert_layout %compact : tensor<1x64xi32, #linear> -> tensor<1x64xi32, #blocked>
     %3 = tt.broadcast %2 : tensor<1x64xi32, #blocked> -> tensor<32x64xi32, #blocked>
     %4 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x64x!tt.ptr<f16>, #blocked>
     %5 = tt.addptr %4, %3 : tensor<32x64x!tt.ptr<f16>, #blocked>, tensor<32x64xi32, #blocked>
