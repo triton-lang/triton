@@ -1389,8 +1389,9 @@ bool JoinOp::isCompatibleReturnTypes(TypeRange lhs, TypeRange rhs) {
     return false;
 
   auto srcShape = lhsTy.getShape().drop_back();
-  return succeeded(interface->verifyLayoutsAreEqual(
-      srcShape, lhsSrcEnc, rhsSrcEnc, {}));
+  return succeeded(
+      interface->verifyLayoutsAreEqual(srcShape, lhsSrcEnc, rhsSrcEnc, {},
+                                       /*ignoreRegBroadcast=*/true));
 }
 
 LogicalResult
@@ -1416,6 +1417,30 @@ JoinOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
 }
 
 // -- SplitOp --
+bool SplitOp::isCompatibleReturnTypes(TypeRange lhs, TypeRange rhs) {
+  for (auto [lhs, rhs] : llvm::zip_equal(lhs, rhs)) {
+    auto lhsTy = cast<RankedTensorType>(lhs);
+    auto rhsTy = cast<RankedTensorType>(rhs);
+    if (lhsTy.getShape() != rhsTy.getShape() ||
+        lhsTy.getElementType() != rhsTy.getElementType())
+      return false;
+
+    auto lhsEnc = lhsTy.getEncoding();
+    auto rhsEnc = rhsTy.getEncoding();
+    if (!lhsEnc || !rhsEnc) {
+      if (lhsEnc || rhsEnc)
+        return false;
+      continue;
+    }
+
+    if (failed(cast<DialectInferLayoutInterface>(&lhsEnc.getDialect())
+                   ->verifyLayoutsAreEqual(lhsTy.getShape(), lhsEnc, rhsEnc, {},
+                                           /*ignoreRegBroadcast=*/true)))
+      return false;
+  }
+  return true;
+}
+
 LogicalResult SplitOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location,
     SplitOp::Adaptor adaptor, SmallVectorImpl<Type> &inferredReturnTypes) {
