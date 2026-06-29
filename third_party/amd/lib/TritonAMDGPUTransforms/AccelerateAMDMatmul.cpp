@@ -877,12 +877,9 @@ public:
         scale = TransOp::create(rewriter, loc, scale, order);
       }
 
-      reshapeScale = broadcastScale(
-          rewriter, dotOp, dotOp->getParentOfType<ModuleOp>(), scale, kDim);
-
       auto newScaleType = resultType.clone(scale.getType().getElementType());
-      reshapeScale = mlir::triton::gpu::ConvertLayoutOp::create(
-          rewriter, loc, newScaleType, reshapeScale);
+      reshapeScale = broadcastScale(rewriter, dotOp, scale, kDim,
+                                    newScaleType.getEncoding());
     } else {
       // Cast scale to bf16, broadcast it and convert the layout
       FloatType bf16Type = rewriter.getBF16Type();
