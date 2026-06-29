@@ -117,6 +117,8 @@ struct CanonicalizeConvertFromReshape
   mlir::LogicalResult
   matchAndRewrite(triton::ReshapeOp op,
                   PatternRewriter &rewriter) const override {
+    if (op.getRequireSliced())
+      return failure();
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();

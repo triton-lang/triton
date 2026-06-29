@@ -1,16 +1,19 @@
 // RUN: triton-opt %s -split-input-file --gluon-resolve-auto-encodings | FileCheck %s
+// RUN: triton-opt %s -split-input-file --gluon-infer-coalesced-encodings --gluon-resolve-auto-encodings | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @infer_simple() -> tensor<8x16xi32, #blocked> {
     // CHECK-DAG: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+    // CHECK-DAG: [[LINEAR:#.*]] = #ttg.linear
     // CHECK: [[CST:%.*]] = arith.constant dense<7> : tensor<16xi32, #ttg.slice<{dim = 0, parent = [[BLOCKED]]}>>
-    // CHECK: [[SLICE:%.*]] = tt.expand_dims [[CST]] {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = [[BLOCKED]]}>> -> tensor<1x16xi32, [[BLOCKED]]>
-    // CHECK: [[BROADCAST:%.*]] = tt.broadcast [[SLICE]] : tensor<1x16xi32, [[BLOCKED]]> -> tensor<8x16xi32, [[BLOCKED]]>
+    // CHECK: [[RESHAPE:%.*]] = tt.reshape [[CST]] require_sliced : tensor<16xi32, #ttg.slice<{dim = 0, parent = [[BLOCKED]]}>> -> tensor<1x16xi32, [[LINEAR]]>
+    // CHECK: [[CVT:%.*]] = ttg.convert_layout [[RESHAPE]] : tensor<1x16xi32, [[LINEAR]]> -> tensor<1x16xi32, [[BLOCKED]]>
+    // CHECK: [[BROADCAST:%.*]] = tt.broadcast [[CVT]] : tensor<1x16xi32, [[BLOCKED]]> -> tensor<8x16xi32, [[BLOCKED]]>
     // CHECK: tt.return [[BROADCAST]] : tensor<8x16xi32, [[BLOCKED]]>
     %x_1d = arith.constant dense<7> : tensor<16xi32, #gluon.auto_encoding>
-    %x_slice = tt.expand_dims %x_1d {axis = 0 : i32} : tensor<16xi32, #gluon.auto_encoding> -> tensor<1x16xi32, #gluon.auto_encoding>
+    %x_slice = tt.reshape %x_1d require_sliced : tensor<16xi32, #gluon.auto_encoding> -> tensor<1x16xi32, #gluon.auto_encoding>
     %x_2d = tt.broadcast %x_slice : tensor<1x16xi32, #gluon.auto_encoding> -> tensor<8x16xi32, #gluon.auto_encoding>
     %cvt = gluon.set_auto_layout %x_2d : tensor<8x16xi32, #gluon.auto_encoding> -> tensor<8x16xi32, #blocked>
     tt.return %cvt : tensor<8x16xi32, #blocked>
@@ -120,12 +123,14 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 module attributes {ttg.maxnreg = 128 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func private @infer_with_downstream_ops() -> tensor<128x128xi32, #blocked> {
     // CHECK-DAG: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+    // CHECK-DAG: [[LINEAR:#.*]] = #ttg.linear
     // CHECK: [[RANGE:%.*]] = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = [[BLOCKED]]}>>
-    // CHECK: [[EXPAND:%.*]] = tt.expand_dims [[RANGE]] {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = [[BLOCKED]]}>> -> tensor<1x128xi32, [[BLOCKED]]>
-    // CHECK: [[BROADCAST:%.*]] = tt.broadcast [[EXPAND]] : tensor<1x128xi32, [[BLOCKED]]> -> tensor<128x128xi32, [[BLOCKED]]>
+    // CHECK: [[RESHAPE:%.*]] = tt.reshape [[RANGE]] require_sliced : tensor<128xi32, #ttg.slice<{dim = 0, parent = [[BLOCKED]]}>> -> tensor<1x128xi32, [[LINEAR]]>
+    // CHECK: [[CVT:%.*]] = ttg.convert_layout [[RESHAPE]] : tensor<1x128xi32, [[LINEAR]]> -> tensor<1x128xi32, [[BLOCKED]]>
+    // CHECK: [[BROADCAST:%.*]] = tt.broadcast [[CVT]] : tensor<1x128xi32, [[BLOCKED]]> -> tensor<128x128xi32, [[BLOCKED]]>
     // CHECK: tt.return [[BROADCAST]] : tensor<128x128xi32, [[BLOCKED]]>
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #gluon.auto_encoding>
-    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<128xi32, #gluon.auto_encoding> -> tensor<1x128xi32, #gluon.auto_encoding>
+    %1 = tt.reshape %0 require_sliced : tensor<128xi32, #gluon.auto_encoding> -> tensor<1x128xi32, #gluon.auto_encoding>
     %2 = gluon.set_auto_layout %1 : tensor<1x128xi32, #gluon.auto_encoding> -> tensor<1x128xi32, #blocked>
     %3 = tt.broadcast %2 : tensor<1x128xi32, #blocked> -> tensor<128x128xi32, #blocked>
     tt.return %3 : tensor<128x128xi32, #blocked>

@@ -131,60 +131,37 @@ void populateMathPatternsAndLegality(TritonGPUTypeConverter &typeConverter,
 //
 // Triton patterns
 //
-struct TritonExpandDimsPattern
-    : public OpConversionPattern<triton::ExpandDimsOp> {
+struct TritonReshapePattern : public OpConversionPattern<triton::ReshapeOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(triton::ExpandDimsOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::ReshapeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Type retType = op.getType());
-    RankedTensorType argType =
-        cast<RankedTensorType>(adaptor.getSrc().getType());
-    Attribute _argEncoding = argType.getEncoding();
-    if (!_argEncoding)
-      return failure();
-    auto argEncoding = cast<triton::gpu::BlockedEncodingAttr>(_argEncoding);
-    // return shape
-    auto retShape = argType.getShape().vec();
-    retShape.insert(retShape.begin() + op.getAxis(), 1);
-    auto newRank = retShape.size();
-    // return encoding
-    auto retSizePerThread = llvm::to_vector(argEncoding.getSizePerThread());
-    retSizePerThread.insert(retSizePerThread.begin() + op.getAxis(), 1);
-    auto retThreadsPerWarp = to_vector(argEncoding.getThreadsPerWarp());
-    retThreadsPerWarp.insert(retThreadsPerWarp.begin() + op.getAxis(), 1);
-    auto retWarpsPerCTA = to_vector(argEncoding.getWarpsPerCTA());
-    retWarpsPerCTA.insert(retWarpsPerCTA.begin() + op.getAxis(), 1);
-    SmallVector<unsigned, 4> retOrder(retShape.size());
-    std::iota(retOrder.begin(), retOrder.end(), 0);
+    auto resultType = cast<RankedTensorType>(
+        this->getTypeConverter()->convertType(op.getType()));
+    Value src = adaptor.getSrc();
+    if (op.getRequireSliced()) {
+      auto axis = *op.getExpandDimsAxis();
+      auto resultEncoding = cast<BlockedEncodingAttr>(resultType.getEncoding());
 
-    auto ctaLl = argEncoding.getCGALayout().getLinearLayout();
-    auto kBlock = *ctaLl.getInDimNames().begin();
-    auto *ctx = kBlock.getContext();
-    auto newDim = standardOutDimNames(ctx, newRank)[newRank - 1];
-    ctaLl *= LinearLayout::identity1D(1, kBlock, newDim);
-    // Move last dim to op.getAxis(). nb is this a std::rotate?
-    auto newOrder = to_vector(llvm::seq<int32_t>(newRank));
-    for (int i = newRank - 1; i >= op.getAxis() + 1; --i) {
-      std::swap(newOrder[i], newOrder[i - 1]);
+      auto srcType = cast<RankedTensorType>(src.getType());
+      auto slicedEncoding =
+          SliceEncodingAttr::get(getContext(), axis, resultEncoding);
+      srcType = srcType.cloneWithEncoding(slicedEncoding);
+      src = ConvertLayoutOp::create(rewriter, op.getLoc(), srcType, src);
+
+      auto reshape =
+          ReshapeOp::create(rewriter, op.getLoc(), resultType.getShape(), src,
+                            op.getAllowReorder(), /*requireSliced=*/true);
+      addNamedAttrs(reshape, adaptor.getAttributes());
+      rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, resultType, reshape);
+      return success();
     }
-    ctaLl = transposeLinearLayout(ctaLl, newOrder);
-    auto retCGALayout = CGAEncodingAttr::get(ctx, std::move(ctaLl));
-    triton::gpu::BlockedEncodingAttr retEncoding =
-        triton::gpu::BlockedEncodingAttr::get(getContext(), retSizePerThread,
-                                              retThreadsPerWarp, retWarpsPerCTA,
-                                              retOrder, retCGALayout);
-    // convert operand to slice of return type
-    Attribute newArgEncoding = triton::gpu::SliceEncodingAttr::get(
-        getContext(), op.getAxis(), retEncoding);
-    RankedTensorType newArgType = argType.cloneWithEncoding(newArgEncoding);
-    // construct new op
-    auto newSrc = triton::gpu::ConvertLayoutOp::create(
-        rewriter, op.getLoc(), newArgType, adaptor.getSrc());
-    addNamedAttrs(rewriter.replaceOpWithNewOp<triton::ExpandDimsOp>(
-                      op, newSrc, adaptor.getAxis()),
-                  adaptor.getAttributes());
+
+    auto newOp = rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
+        op, resultType, src, op.getAllowReorder(), op.getEfficientLayout(),
+        op.getRequireSliced());
+    addNamedAttrs(newOp, adaptor.getAttributes());
     return success();
   }
 };
@@ -487,7 +464,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
   patterns.insert< // TODO: view should have custom pattern that views the
                    // layout
       // clang-format off
-      GenericOpPattern<triton::ReshapeOp>,
+      TritonReshapePattern,
       GenericOpPattern<triton::BitcastOp>,
       GenericOpPattern<triton::FpToFpOp>,
       GenericOpPattern<triton::IntToPtrOp>,
@@ -509,7 +486,6 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       TritonScanPattern,
       GenericOpPattern<triton::ScanReturnOp>,
       GenericOpPattern<triton::MakeRangeOp>,
-      TritonExpandDimsPattern,
       TritonTransPattern,
       TritonDotPattern,
       TritonMapElementwisePattern,

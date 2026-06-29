@@ -676,7 +676,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: %[[RESHAPE_OUT:.*]] = tti.experimental_fpsan_unembed %[[RESHAPE]] : (tensor<2x4xi32>) -> tensor<2x4xf32>
     // CHECK: %[[BCAST:.*]] = tt.broadcast %arg3 : tensor<1x4xi32> -> tensor<2x4xi32>
     // CHECK: %[[BCAST_OUT:.*]] = tti.experimental_fpsan_unembed %[[BCAST]] : (tensor<2x4xi32>) -> tensor<2x4xf32>
-    // CHECK: %[[EXPAND:.*]] = tt.expand_dims %arg4 {axis = 0 : i32} : tensor<4xi32> -> tensor<1x4xi32>
+    // CHECK: %[[EXPAND:.*]] = tt.reshape %arg4 require_sliced : tensor<4xi32> -> tensor<1x4xi32>
     // CHECK: %[[EXPAND_OUT:.*]] = tti.experimental_fpsan_unembed %[[EXPAND]] : (tensor<1x4xi32>) -> tensor<1x4xf32>
     %0 = tti.experimental_fpsan_unembed %arg0 : (tensor<16x16xi32, #blocked>) -> tensor<16x16xf32, #blocked>
     %1 = ttg.convert_layout %0 : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #blocked1>
@@ -687,7 +687,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %6 = tti.experimental_fpsan_unembed %arg3 : (tensor<1x4xi32>) -> tensor<1x4xf32>
     %7 = tt.broadcast %6 : tensor<1x4xf32> -> tensor<2x4xf32>
     %8 = tti.experimental_fpsan_unembed %arg4 : (tensor<4xi32>) -> tensor<4xf32>
-    %9 = tt.expand_dims %8 {axis = 0 : i32} : tensor<4xf32> -> tensor<1x4xf32>
+    %9 = tt.reshape %8 require_sliced : tensor<4xf32> -> tensor<1x4xf32>
     tt.return %1, %3, %5, %7, %9 : tensor<16x16xf32, #blocked1>, tensor<4x2xf32>,
                                           tensor<2x4xf32>, tensor<2x4xf32>, tensor<1x4xf32>
   }
