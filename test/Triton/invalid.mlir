@@ -267,6 +267,30 @@ tt.func public @fn(%arg0: tensor<2xf32>) {
 
 // -----
 
+#src = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+#dst = #ttg.linear<{register = [[0]], lane = [[1], [2], [4], [8], [16]], warp = [], block = []}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+tt.func public @split_register_broadcast(%arg0: tensor<32x2xf32, #src>) {
+    %a, %b = tt.split %arg0 : tensor<32x2xf32, #src> -> tensor<32xf32, #dst>
+    tt.return
+}
+}
+
+// -----
+
+#src = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
+#dst = #ttg.linear<{register = [[1]], lane = [[0], [2], [4], [8], [16]], warp = [], block = []}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+tt.func public @split_incompatible_register_layout(%arg0: tensor<32x2xf32, #src>) {
+    // expected-error @+2 {{op inferred type}}
+    // expected-error @+1 {{op failed to infer returned types}}
+    %a, %b = tt.split %arg0 : tensor<32x2xf32, #src> -> tensor<32xf32, #dst>
+    tt.return
+}
+}
+
+// -----
+
 #blocked  = #ttg.blocked<{sizePerThread = [1,2,2], threadsPerWarp = [1,32,1], warpsPerCTA = [1,1,1], order = [2,0,1]}>
 // Bad order, should be [1,0].
 #blocked1 = #ttg.blocked<{sizePerThread = [1,1], threadsPerWarp = [1,32], warpsPerCTA = [1,1], order = [1,0]}>
