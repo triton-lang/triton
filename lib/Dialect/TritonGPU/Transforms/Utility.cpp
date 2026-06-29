@@ -1499,6 +1499,32 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
 
 namespace mlir::triton {
 
+void addForwardedValuesThroughUse(OpOperand &use,
+                                  llvm::SetVector<Value> &worklist) {
+  Operation *user = use.getOwner();
+
+  if (auto ws = dyn_cast<ttg::WarpSpecializePartitionsOp>(user)) {
+    unsigned argIdx = use.getOperandNumber();
+    for (Region &region : ws.getPartitionRegions())
+      worklist.insert(region.getArgument(argIdx));
+    return;
+  }
+
+  if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+    unsigned operandIdx = use.getOperandNumber();
+    if (operandIdx >= forOp.getNumControlOperands()) {
+      unsigned iterArgIdx = operandIdx - forOp.getNumControlOperands();
+      worklist.insert(forOp.getRegionIterArg(iterArgIdx));
+      worklist.insert(forOp.getResult(iterArgIdx));
+    }
+  } else if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+    if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp()))
+      worklist.insert(forOp.getResult(use.getOperandNumber()));
+  }
+
+  worklist.insert(user->result_begin(), user->result_end());
+}
+
 void replaceUsesAndPropagateType(
     OpBuilder &builder, Operation *oldUse, Value val,
     std::function<void(Operation *, Operation *)> callback) {

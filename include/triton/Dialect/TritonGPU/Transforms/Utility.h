@@ -6,6 +6,7 @@
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/SetVector.h"
 #include <algorithm>
 #include <functional>
 #include <numeric>
@@ -301,6 +302,11 @@ bool comesFromLoadOrBlockArg(Value v);
 // For structured control flow ops, returns the values associated with the
 // `resultIdx`th result.
 SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
+
+/// Adds values that carry the same logical value through structured
+/// control-flow and warp-specialize capture boundaries.
+void addForwardedValuesThroughUse(OpOperand &use,
+                                  llvm::SetVector<Value> &worklist);
 
 // Verifies the provided memory descriptor type used for barrier allocation
 LogicalResult verifyBarrierType(Operation *op,

@@ -292,50 +292,33 @@ static bool valueFeedsTwoCTAMMA(Value value) {
         continue;
       }
 
-      // After warp specialization, producer partition TMA loads may write to a
-      // shared-memory allocation captured by the warp_specialize op while the
-      // MMAv5 op that consumes that allocation lives in a different partition.
-      // Follow explicit captures to the corresponding partition arguments so
-      // the TMA load keeps the two-CTA barrier/multicast layout.
-      if (auto ws = dyn_cast<ttg::WarpSpecializePartitionsOp>(user)) {
-        unsigned argIdx = use.getOperandNumber();
-        for (Region &region : ws.getPartitionRegions())
-          worklist.insert(region.getArgument(argIdx));
+      addForwardedValuesThroughUse(use, worklist);
+    }
+  }
+  return false;
+}
+
+static bool valueFeedsMulticastMMAv5MMA(Value value) {
+  SetVector<Value> worklist;
+  worklist.insert(value);
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Value current = worklist[i];
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
+        if (mma.getMulticast())
+          return true;
         continue;
       }
 
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        unsigned operandIdx = use.getOperandNumber();
-        if (operandIdx >= forOp.getNumControlOperands()) {
-          unsigned iterArgIdx = operandIdx - forOp.getNumControlOperands();
-          worklist.insert(forOp.getRegionIterArg(iterArgIdx));
-          worklist.insert(forOp.getResult(iterArgIdx));
-        }
-      } else if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp()))
-          worklist.insert(forOp.getResult(use.getOperandNumber()));
-      }
-
-      worklist.insert(user->result_begin(), user->result_end());
+      addForwardedValuesThroughUse(use, worklist);
     }
   }
   return false;
 }
 
 static bool loadFeedsMulticastMMAv5MMA(Operation *loadOp) {
-  SetVector<Operation *> worklist;
-  worklist.insert(loadOp->user_begin(), loadOp->user_end());
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Operation *op = worklist[i];
-    auto mma = dyn_cast<ttng::MMAv5OpInterface>(op);
-    if (mma) {
-      if (mma.getMulticast())
-        return true;
-      continue;
-    }
-    worklist.insert(op->user_begin(), op->user_end());
-  }
-  return false;
+  return llvm::any_of(loadOp->getResults(), valueFeedsMulticastMMAv5MMA);
 }
 
 static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
