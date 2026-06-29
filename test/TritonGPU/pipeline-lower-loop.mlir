@@ -1871,3 +1871,57 @@ module attributes {ttg.max_reg_auto_ws = 152 : i32, ttg.min_reg_auto_ws = 24 : i
     tt.return
   }
 }
+
+
+// -----
+
+#blockedA_ws = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#blockedB_ws = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 0]]}>
+#sharedA_ws = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0], [2, 0]]}>
+#sharedB_ws = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1], [0, 0]]}>
+#mma_bar_ws = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#smem = #ttg.shared_memory
+#tmem_ws = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0], [2, 0]], twoCTAs = true>
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-DAG: #[[$WS_TMA_BAR:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[0\], \[1\]\]}}{{.*}}>
+  // CHECK-LABEL: @pipeline_tma_load_feeds_warp_specialize_mmav5
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<{{[0-9]+}}x2xi64, #[[$WS_TMA_BAR]]
+  // CHECK: ttng.async_tma_copy_global_to_local {{.*}}multicast{{.*}}!ttg.memdesc<2xi64, #[[$WS_TMA_BAR]]
+  tt.func public @pipeline_tma_load_feeds_warp_specialize_mmav5(
+      %ub: i32,
+      %desc: !tt.tensordesc<64x128xf16, #sharedB_ws>,
+      %a: !ttg.memdesc<512x64xf16, #sharedA_ws, #smem, mutable>,
+      %acc: !ttg.memdesc<512x128xf32, #tmem_ws, #ttng.tensor_memory, mutable>,
+      %bar: !ttg.memdesc<4xi64, #mma_bar_ws, #smem, mutable>) {
+    %true = arith.constant true
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
+      %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<64x128xf16, #sharedB_ws> -> tensor<64x128xf16, #blockedB_ws>
+      %1 = ttg.local_alloc %0 {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<64x128xf16, #blockedB_ws>) -> !ttg.memdesc<64x128xf16, #sharedB_ws, #smem, mutable>
+      ttg.warp_specialize(%a, %1, %acc, %true, %bar) attributes {loop.cluster = 0 : i32, loop.stage = 2 : i32}
+      default {
+        ttg.warp_yield
+      }
+      partition0(%a_arg: !ttg.memdesc<512x64xf16, #sharedA_ws, #smem, mutable>,
+                 %b_arg: !ttg.memdesc<64x128xf16, #sharedB_ws, #smem, mutable>,
+                 %acc_arg: !ttg.memdesc<512x128xf32, #tmem_ws, #ttng.tensor_memory, mutable>,
+                 %pred_arg: i1,
+                 %bar_arg: !ttg.memdesc<4xi64, #mma_bar_ws, #smem, mutable>) num_warps(4) {
+        ttng.tc_gen5_mma %a_arg, %b_arg, %acc_arg, %pred_arg, %pred_arg, %bar_arg[%pred_arg] {is_async, loop.cluster = 0 : i32, loop.stage = 2 : i32, multicast, two_ctas} :
+          !ttg.memdesc<512x64xf16, #sharedA_ws, #smem, mutable>,
+          !ttg.memdesc<64x128xf16, #sharedB_ws, #smem, mutable>,
+          !ttg.memdesc<512x128xf32, #tmem_ws, #ttng.tensor_memory, mutable>,
+          !ttg.memdesc<4xi64, #mma_bar_ws, #smem, mutable>
+        ttg.warp_return
+      } : (!ttg.memdesc<512x64xf16, #sharedA_ws, #smem, mutable>,
+           !ttg.memdesc<64x128xf16, #sharedB_ws, #smem, mutable>,
+           !ttg.memdesc<512x128xf32, #tmem_ws, #ttng.tensor_memory, mutable>,
+           i1,
+           !ttg.memdesc<4xi64, #mma_bar_ws, #smem, mutable>) -> ()
+      scf.yield
+    } {tt.scheduled_max_stage = 2 : i32}
+    tt.return
+  }
+}

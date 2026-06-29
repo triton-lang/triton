@@ -26,20 +26,27 @@ namespace nvidia_gpu {
 
 namespace {
 
-static bool loadFeedsMulticastMMAv5MMA(Operation *loadOp) {
-  llvm::SetVector<Operation *> worklist;
-  worklist.insert(loadOp->user_begin(), loadOp->user_end());
+static bool valueFeedsMulticastMMAv5MMA(Value value) {
+  llvm::SetVector<Value> worklist;
+  worklist.insert(value);
   for (unsigned i = 0; i < worklist.size(); ++i) {
-    Operation *op = worklist[i];
-    auto mma = dyn_cast<MMAv5OpInterface>(op);
-    if (mma) {
-      if (mma.getMulticast())
-        return true;
-      continue;
+    Value current = worklist[i];
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto mma = dyn_cast<MMAv5OpInterface>(user)) {
+        if (mma.getMulticast())
+          return true;
+        continue;
+      }
+
+      addForwardedValuesThroughUse(use, worklist);
     }
-    worklist.insert(op->user_begin(), op->user_end());
   }
   return false;
+}
+
+static bool loadFeedsMulticastMMAv5MMA(Operation *loadOp) {
+  return llvm::any_of(loadOp->getResults(), valueFeedsMulticastMMAv5MMA);
 }
 
 bool isTwoCTAMMA(MMAv5OpInterface mma) {
@@ -63,19 +70,7 @@ bool valueFeedsTwoCTAMMA(Value value) {
         continue;
       }
 
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        unsigned operandIdx = use.getOperandNumber();
-        if (operandIdx >= forOp.getNumControlOperands()) {
-          unsigned iterArgIdx = operandIdx - forOp.getNumControlOperands();
-          worklist.insert(forOp.getRegionIterArg(iterArgIdx));
-          worklist.insert(forOp.getResult(iterArgIdx));
-        }
-      } else if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp()))
-          worklist.insert(forOp.getResult(use.getOperandNumber()));
-      }
-
-      worklist.insert(user->result_begin(), user->result_end());
+      addForwardedValuesThroughUse(use, worklist);
     }
   }
   return false;
