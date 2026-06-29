@@ -667,8 +667,13 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
   if (!reduceOp || reduceOp->getNumOperands() != 2 ||
       reduceOp->getNumResults() != 1)
     return nullptr;
-  if (reduceOp->getOperand(0) != block->getArgument(0) ||
-      reduceOp->getOperand(1) != block->getArgument(1))
+  Value arg0 = block->getArgument(0), arg1 = block->getArgument(1);
+  Value lhs = reduceOp->getOperand(0), rhs = reduceOp->getOperand(1);
+  // For commutative combiners, the reversed argument-operand mapping is
+  // equivalent.
+  bool reversedMapping = (lhs == arg1 && rhs == arg0) &&
+                         reduceOp->hasTrait<OpTrait::IsCommutative>();
+  if (!(lhs == arg0 && rhs == arg1) && !reversedMapping)
     return nullptr;
 
   return reduceOp;
