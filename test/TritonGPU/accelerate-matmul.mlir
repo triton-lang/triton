@@ -841,6 +841,37 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
+// Verify that for SM_120 with mixed FP8 x FP4 inputs the FP4 (e2m1) operand is
+// unpacked (ttg.fp4_to_fp, K doubled) and widened to f8E4M3FN (lossless) via
+// tt.fp_to_fp, so the rewritten dot is e4m3 x e4m3 routed through the
+// kind::mxf8f6f4 MMAv2 path with linear-layout scales.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+
+module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @sm120_dot_scaled_mixed_fp8_fp4
+  // CHECK: ttg.fp4_to_fp %{{.*}} {axis = 0 : i32} : {{.*}} -> tensor<64x128xf16
+  // CHECK: tt.fp_to_fp %{{.*}} rounding = rtne : {{.*}} -> tensor<64x128xf8E4M3FN
+  // CHECK: tt.dot_scaled {{.*}} lhs = e4m3 rhs = e4m3
+  // CHECK-NOT: ttng.tc_gen5_mma_scaled
+  tt.func public @sm120_dot_scaled_mixed_fp8_fp4(
+    %a: tensor<128x64xi8, #blocked_k>,
+    %scale_a: tensor<128x2xi8, #blocked>,
+    %b: tensor<32x128xi8, #blocked>,
+    %scale_b: tensor<128x2xi8, #blocked>
+  ) -> tensor<128x128xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e4m3 rhs = e2m1 {fastMath = false}
+      : tensor<128x64xi8, #blocked_k>, tensor<128x2xi8, #blocked>
+        * tensor<32x128xi8, #blocked>, tensor<128x2xi8, #blocked>
+        -> tensor<128x128xf32, #blocked>
+    tt.return %d : tensor<128x128xf32, #blocked>
+  }
+}
+
+// -----
+
 // Verify that for SM_120 with mixed fp16/fp8 inputs, tt.dot_scaled falls back
 // to decomposition instead of native dot_scaled MMAv2 lowering.
 

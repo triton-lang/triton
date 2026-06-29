@@ -1198,12 +1198,21 @@ def mxfp8_mxfp4_matmul(  #
 def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, PACK_B_ALONG_K, CONST_SCALE,
                             A_DATA_TYPE, B_DATA_TYPE, WITH_A_SCALE, WITH_B_SCALE, nonKDim, device):
     if is_cuda():
-        if torch.cuda.get_device_capability()[0] != 10:
-            pytest.skip("Requires compute capability == 10")
+        cc = torch.cuda.get_device_capability()[0]
+        if cc not in (10, 12):
+            pytest.skip("Requires compute capability 10 or 12")
         if not (WITH_A_SCALE and WITH_B_SCALE):
             pytest.skip("None scale has not been tested on NV backend")
-        if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
-            pytest.skip(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on NV backend")
+        if cc == 10:
+            if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
+                pytest.skip(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on NV backend")
+        else:
+            # sm120 lowers mixed FP8 x FP4 through the kind::mxf8f6f4 MMA by
+            # widening the FP4 operand to e4m3, so exactly one operand is FP4.
+            if (A_DATA_TYPE == "float4") == (B_DATA_TYPE == "float4"):
+                pytest.skip("sm120 mixed path requires exactly one FP4 operand")
+            if not PACK_B_ALONG_K:
+                pytest.skip("Packing FP4 along M/N is not supported on sm120")
     elif is_hip():
         if not (is_hip_cdna4() or is_hip_gfx1250()):
             pytest.skip("Scaled mxfp4 & mxfp8 matmul is only natively supported on CDNA4 and above")
@@ -1289,8 +1298,11 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
                                    dtype_converter[A_DATA_TYPE], dtype_converter[B_DATA_TYPE], BLOCK_M, BLOCK_N,
                                    BLOCK_K, PACK_B_ALONG_K=PACK_B_ALONG_K, NUM_STAGES=NUM_STAGES, **kernel_kwargs)
     if is_cuda():
-        ttgir = out.asm["ttgir"]
-        assert "fp4Padded = true" in ttgir
+        if torch.cuda.get_device_capability()[0] == 12:
+            # sm120 widens the FP4 operand to e4m3 and uses the FP8 mxf8f6f4 MMA.
+            assert ("mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X" in out.asm["ptx"])
+        else:
+            assert "fp4Padded = true" in out.asm["ttgir"]
 
     torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
 

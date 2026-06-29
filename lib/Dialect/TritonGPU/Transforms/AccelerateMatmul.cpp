@@ -746,11 +746,17 @@ public:
       return elemType == ScaleDotElemType::E2M1;
     };
 
-    // TODO: Enable mixed-precision mxfp for sm120
-    if (!((isFP8(aElemType) && isFP8(bElemType)) ||
-          (isFP4(aElemType) && isFP4(bElemType)))) {
+    // sm120 lowers block-scaled dots through the kind::mxf8f6f4 (FP8 operands,
+    // k=32) and kind::mxf4nvf4 (FP4 operands, k=64) MMA instructions. Same-type
+    // FP8xFP8 and FP4xFP4 are handled directly; mixed FP8xFP4 is emitted
+    // through kind::mxf8f6f4 with the FP4 operand carried in the f8f6f4
+    // container.
+    auto isFP8OrFP4 = [&](ScaleDotElemType elemType) -> bool {
+      return isFP8(elemType) || isFP4(elemType);
+    };
+    if (!(isFP8OrFP4(aElemType) && isFP8OrFP4(bElemType))) {
       return rewriter.notifyMatchFailure(
-          dotOp, "only FP8xFP8 and FP4xFP4 are supported on sm120");
+          dotOp, "only FP8 and FP4 operands are supported on sm120");
     }
 
     auto scaleElemType = dotOp.getAScale().getType().getElementType();
@@ -765,6 +771,49 @@ public:
     // Operand processing
     Value a = dotOp.getA();
     Value b = dotOp.getB();
+
+    // Mixed FP8 x FP4: sm120's warp-level scaled MMA has no native mixed
+    // fragment, so widen the FP4 (e2m1) operand to e4m3 and run it through the
+    // same-type FP8 mxf8f6f4 path. e2m1's representable values are an exact
+    // subset of e4m3, so this is lossless; the FP4 operand is still loaded as 4
+    // bits and only widened in registers right before the MMA.
+    auto aElemTypeNew = aElemType;
+    auto bElemTypeNew = bElemType;
+    auto widenFp4ToE4M3 = [&](Value v, int opIdx) -> Value {
+      auto ty = cast<RankedTensorType>(v.getType());
+      int kAxis = (opIdx == 0) ? ty.getRank() - 1 : ty.getRank() - 2;
+      // Unpack e2m1 (i8, two values per byte) to f16, reusing the tested path;
+      // this doubles the K axis so it matches the FP8 operand.
+      auto vTyped = cast<TypedValue<RankedTensorType>>(v);
+      Value asF16 = triton::gpu::Fp4ToFpOp::create(
+          rewriter, dotOp.getLoc(), vTyped, rewriter.getF16Type(), kAxis);
+      auto f16Ty = cast<RankedTensorType>(asF16.getType());
+      auto f8Ty = RankedTensorType::get(
+          f16Ty.getShape(), Float8E4M3FNType::get(rewriter.getContext()),
+          f16Ty.getEncoding());
+      // e2m1's values are an exact subset of e4m3, so this cast is lossless
+      // (the rounding mode is required by the verifier but never rounds here).
+      auto rnd = triton::RoundingModeAttr::get(rewriter.getContext(),
+                                               triton::RoundingMode::RTNE);
+      return triton::FpToFpOp::create(rewriter, dotOp.getLoc(), f8Ty, asF16,
+                                      rnd);
+    };
+    // The widening unpacks the FP4 operand along K, so it only handles a
+    // K-packed FP4 operand; a non-K-packed one falls back to decomposition.
+    if (isFP4(aElemType) && isFP8(bElemType)) {
+      if (!dotOp.getLhsKPack())
+        return rewriter.notifyMatchFailure(
+            dotOp, "sm120 mixed FP8xFP4 requires a K-packed FP4 operand");
+      a = widenFp4ToE4M3(a, /*opIdx=*/0);
+      aElemTypeNew = ScaleDotElemType::E4M3;
+    } else if (isFP8(aElemType) && isFP4(bElemType)) {
+      if (!dotOp.getRhsKPack())
+        return rewriter.notifyMatchFailure(
+            dotOp, "sm120 mixed FP8xFP4 requires a K-packed FP4 operand");
+      b = widenFp4ToE4M3(b, /*opIdx=*/1);
+      bElemTypeNew = ScaleDotElemType::E4M3;
+    }
+
     auto oldAType = cast<RankedTensorType>(a.getType());
     auto oldBType = cast<RankedTensorType>(b.getType());
 
@@ -798,9 +847,8 @@ public:
 
     newDot = triton::DotScaledOp::create(
         rewriter, dotOp.getLoc(), mmaResult.newRetType, newA, newB,
-        mmaResult.newAcc, aScale, bScale, dotOp.getAElemType(),
-        dotOp.getBElemType(), dotOp.getFastMath(), dotOp.getLhsKPack(),
-        dotOp.getRhsKPack());
+        mmaResult.newAcc, aScale, bScale, aElemTypeNew, bElemTypeNew,
+        dotOp.getFastMath(), dotOp.getLhsKPack(), dotOp.getRhsKPack());
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, dotOp.getType(),
                                                  newDot->getResult(0));
     return success();
