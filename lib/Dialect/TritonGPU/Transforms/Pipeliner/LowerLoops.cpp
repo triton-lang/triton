@@ -395,7 +395,9 @@ void createTMABarrierAndWait(
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(getShapePerCTA(tensorTy));
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
-      hasTwoCTAMMAUser |= asyncLoads[op].useMulticast || mlir::triton::loadFeedsTwoCTAMMA(op);
+      hasTwoCTAMMAUser |= asyncLoads[op].useMulticast ||
+                          llvm::any_of(op->getResults(),
+                                       mlir::triton::valueFeedsTwoCTAMMA);
     }
 
     Value barrierAlloc = triton::createBarrierAlloc(
@@ -533,8 +535,10 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
     Value alloc = createAlloc(forOp, loadOp, asyncLoad.sharedEncoding,
                               asyncLoad.stageDiff);
     asyncLoad.alloc = alloc;
-    asyncLoad.useMulticast = loadUsesTMAMulticast(loadOp, alloc) &&
-                             mlir::triton::loadFeedsMulticastMMAv5MMA(loadOp);
+    asyncLoad.useMulticast =
+        loadUsesTMAMulticast(loadOp, alloc) &&
+        llvm::any_of(loadOp->getResults(),
+                     mlir::triton::valueFeedsMulticastMMAv5MMA);
     loadGroups.insert({asyncLoad.stageDiff, {}});
     if (isTMALoad(loadOp)) {
       loadGroups[asyncLoad.stageDiff].hasTMALoad = true;

@@ -1544,22 +1544,7 @@ bool valueFeedsMulticastMMAv5MMA(Value value) {
   return false;
 }
 
-bool loadFeedsMulticastMMAv5MMA(Operation *loadOp) {
-  return llvm::any_of(loadOp->getResults(), valueFeedsMulticastMMAv5MMA);
-}
-
-static bool isTwoCTAMMA(ttng::MMAv5OpInterface mma,
-                        bool requireAccTwoCtas) {
-  if (!mma.getTwoCtas())
-    return false;
-  if (!requireAccTwoCtas)
-    return true;
-  auto accEnc = dyn_cast<ttng::TensorMemoryEncodingAttr>(
-      mma.getAccumulator().getType().getEncoding());
-  return accEnc && accEnc.getTwoCTAs();
-}
-
-bool valueFeedsTwoCTAMMA(Value value, bool requireAccTwoCtas) {
+bool valueFeedsTwoCTAMMA(Value value) {
   llvm::SetVector<Value> worklist;
   worklist.insert(value);
   for (unsigned i = 0; i < worklist.size(); ++i) {
@@ -1567,7 +1552,7 @@ bool valueFeedsTwoCTAMMA(Value value, bool requireAccTwoCtas) {
     for (OpOperand &use : current.getUses()) {
       Operation *user = use.getOwner();
       if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
-        if (isTwoCTAMMA(mma, requireAccTwoCtas))
+        if (mma.getTwoCtas())
           return true;
         continue;
       }
@@ -1576,12 +1561,6 @@ bool valueFeedsTwoCTAMMA(Value value, bool requireAccTwoCtas) {
     }
   }
   return false;
-}
-
-bool loadFeedsTwoCTAMMA(Operation *loadOp, bool requireAccTwoCtas) {
-  return llvm::any_of(loadOp->getResults(), [&](Value result) {
-    return valueFeedsTwoCTAMMA(result, requireAccTwoCtas);
-  });
 }
 
 void replaceUsesAndPropagateType(
