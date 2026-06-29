@@ -1,5 +1,4 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
@@ -14,8 +13,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
-#include "llvm/ADT/SetVector.h"
-#include "llvm/Support/ErrorHandling.h"
 
 namespace mlir {
 namespace triton {
