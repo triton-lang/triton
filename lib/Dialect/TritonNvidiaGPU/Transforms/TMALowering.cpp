@@ -26,56 +26,6 @@ namespace nvidia_gpu {
 
 namespace {
 
-static bool valueFeedsMulticastMMAv5MMA(Value value) {
-  llvm::SetVector<Value> worklist;
-  worklist.insert(value);
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Value current = worklist[i];
-    for (OpOperand &use : current.getUses()) {
-      Operation *user = use.getOwner();
-      if (auto mma = dyn_cast<MMAv5OpInterface>(user)) {
-        if (mma.getMulticast())
-          return true;
-        continue;
-      }
-
-      addForwardedValuesThroughUse(use, worklist);
-    }
-  }
-  return false;
-}
-
-static bool loadFeedsMulticastMMAv5MMA(Operation *loadOp) {
-  return llvm::any_of(loadOp->getResults(), valueFeedsMulticastMMAv5MMA);
-}
-
-bool isTwoCTAMMA(MMAv5OpInterface mma) {
-  if (!mma.getTwoCtas())
-    return false;
-  auto accEnc = dyn_cast<TensorMemoryEncodingAttr>(
-      mma.getAccumulator().getType().getEncoding());
-  return accEnc && accEnc.getTwoCTAs();
-}
-
-bool valueFeedsTwoCTAMMA(Value value) {
-  llvm::SetVector<Value> worklist;
-  worklist.insert(value);
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Value current = worklist[i];
-    for (OpOperand &use : current.getUses()) {
-      Operation *user = use.getOwner();
-      if (auto mma = dyn_cast<MMAv5OpInterface>(user)) {
-        if (isTwoCTAMMA(mma))
-          return true;
-        continue;
-      }
-
-      addForwardedValuesThroughUse(use, worklist);
-    }
-  }
-  return false;
-}
-
 static void
 lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
              function_ref<void(Value, Value, Value, Value, bool)> createLoad,
@@ -87,10 +37,11 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   gpu::MemDescType memDescType = gpu::MemDescType::get(
       tensorType.getShape(), tensorType.getElementType(), encoding,
       sharedMemorySpace, /*mutableMemory=*/true);
-  bool useTwoCTABarrier = valueFeedsTwoCTAMMA(op->getResult(0));
+  bool useTwoCTABarrier = mlir::triton::valueFeedsTwoCTAMMA(
+      op->getResult(0), /*requireAccTwoCtas=*/true);
   bool useMulticast = isa<DescriptorLoadOp>(op) && useTwoCTABarrier &&
                       hasCGABroadcast(memDescType) &&
-                      loadFeedsMulticastMMAv5MMA(op);
+                      mlir::triton::loadFeedsMulticastMMAv5MMA(op);
   auto alloc =
       gpu::LocalAllocOp::create(rewriter, loc, memDescType).getResult();
   auto numCTAs = gpu::lookupNumCTAs(op);

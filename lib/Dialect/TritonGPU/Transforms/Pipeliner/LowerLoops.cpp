@@ -279,52 +279,6 @@ struct LoadGroupInfo {
   bool hasTMALoad = false;
 };
 
-static bool valueFeedsTwoCTAMMA(Value value) {
-  SetVector<Value> worklist;
-  worklist.insert(value);
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Value current = worklist[i];
-    for (OpOperand &use : current.getUses()) {
-      Operation *user = use.getOwner();
-      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
-        if (mma.getTwoCtas())
-          return true;
-        continue;
-      }
-
-      addForwardedValuesThroughUse(use, worklist);
-    }
-  }
-  return false;
-}
-
-static bool valueFeedsMulticastMMAv5MMA(Value value) {
-  SetVector<Value> worklist;
-  worklist.insert(value);
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Value current = worklist[i];
-    for (OpOperand &use : current.getUses()) {
-      Operation *user = use.getOwner();
-      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
-        if (mma.getMulticast())
-          return true;
-        continue;
-      }
-
-      addForwardedValuesThroughUse(use, worklist);
-    }
-  }
-  return false;
-}
-
-static bool loadFeedsMulticastMMAv5MMA(Operation *loadOp) {
-  return llvm::any_of(loadOp->getResults(), valueFeedsMulticastMMAv5MMA);
-}
-
-static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
-  return llvm::any_of(loadOp->getResults(), valueFeedsTwoCTAMMA);
-}
-
 static bool loadUsesTMAMulticast(Operation *loadOp, Value alloc) {
   if (!isa<tt::DescriptorLoadOp>(loadOp))
     return false;
@@ -441,7 +395,7 @@ void createTMABarrierAndWait(
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(getShapePerCTA(tensorTy));
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
-      hasTwoCTAMMAUser |= asyncLoads[op].useMulticast || loadFeedsTwoCTAMMA(op);
+      hasTwoCTAMMAUser |= asyncLoads[op].useMulticast || mlir::triton::loadFeedsTwoCTAMMA(op);
     }
 
     Value barrierAlloc = triton::createBarrierAlloc(
@@ -580,7 +534,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                               asyncLoad.stageDiff);
     asyncLoad.alloc = alloc;
     asyncLoad.useMulticast = loadUsesTMAMulticast(loadOp, alloc) &&
-                             loadFeedsMulticastMMAv5MMA(loadOp);
+                             mlir::triton::loadFeedsMulticastMMAv5MMA(loadOp);
     loadGroups.insert({asyncLoad.stageDiff, {}});
     if (isTMALoad(loadOp)) {
       loadGroups[asyncLoad.stageDiff].hasTMALoad = true;
