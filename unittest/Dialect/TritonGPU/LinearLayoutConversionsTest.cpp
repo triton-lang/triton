@@ -883,7 +883,7 @@ TEST_F(LinearLayoutConversionsTest, SliceDot) {
   EXPECT_EQ(toLinearLayout({16}, sliceV2),
             LinearLayout(
                 {
-                    {S("register"), {{8}}},
+                    {S("register"), {{0}, {0}, {0}, {8}, {0}}},
                     {S("lane"), {{0}, {0}, {1}, {2}, {4}}},
                     {S("warp"), {}},
                     {S("block"), {}},
@@ -898,7 +898,7 @@ TEST_F(LinearLayoutConversionsTest, SliceDot) {
   EXPECT_EQ(toLinearLayout({16}, sliceV3),
             LinearLayout(
                 {
-                    {S("register"), {{1}, {8}}},
+                    {S("register"), {{1}, {0}, {8}}},
                     {S("lane"), {{2}, {4}, {0}, {0}, {0}}},
                     {S("warp"), {{0}, {0}}},
                     {S("block"), {}},
@@ -2801,13 +2801,13 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs) {
 TEST_F(LinearLayoutConversionsTest, SliceOfBlocked) {
   auto parent = blocked({2, 4}, {4, 2}, {2, 2}, {2, 2}, {2, 2}, {1, 0}, {1, 0});
   EXPECT_EQ(toLinearLayout({128}, slice(parent, 0)),
-            LinearLayout({{S("register"), {{1}, {2}, {16}, {32}}},
+            LinearLayout({{S("register"), {{1}, {2}, {0}, {16}, {32}}},
                           {S("lane"), {{4}, {0}, {0}}},
                           {S("warp"), {{8}, {0}}},
                           {S("block"), {{64}, {0}}}},
                          {S("dim0")}));
   EXPECT_EQ(toLinearLayout({128}, slice(parent, 1)),
-            LinearLayout({{S("register"), {{1}, {16}, {32}}},
+            LinearLayout({{S("register"), {{0}, {0}, {1}, {16}, {32}}},
                           {S("lane"), {{0}, {2}, {4}}},
                           {S("warp"), {{0}, {8}}},
                           {S("block"), {{0}, {64}}}},
@@ -2817,7 +2817,7 @@ TEST_F(LinearLayoutConversionsTest, SliceOfBlocked) {
 TEST_F(LinearLayoutConversionsTest, SliceWithShape1) {
   auto parent = blocked({1, 4}, {8, 4}, {2, 2}, {1, 1}, {1, 1}, {0, 1}, {1, 0});
   EXPECT_EQ(toLinearLayout({1}, slice(parent, 0)),
-            LinearLayout({{S("register"), {}},
+            LinearLayout({{S("register"), {{0}, {0}}},
                           {S("lane"), {{0}, {0}, {0}, {0}, {0}}},
                           {S("warp"), {{0}, {0}}},
                           {S("block"), {}}},
@@ -2830,7 +2830,7 @@ TEST_F(LinearLayoutConversionsTest, Slice4D) {
   EXPECT_EQ(toLinearLayout({2, 1, 1}, slice(parent, 3)),
             LinearLayout(
                 {
-                    {S("register"), {}},
+                    {S("register"), {{0, 0, 0}, {0, 0, 0}}},
                     {S("lane"),
                      {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {1, 0, 0}}},
                     {S("warp"), {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}}},
@@ -2842,25 +2842,25 @@ TEST_F(LinearLayoutConversionsTest, Slice4D) {
 TEST_F(LinearLayoutConversionsTest, SliceOfMmaV2) {
   auto parent = mma(2, 0, {16, 8}, {2, 2}, {1, 1}, {1, 1}, {0, 1});
   EXPECT_EQ(toLinearLayout({16}, slice(parent, 0)),
-            LinearLayout({{S("register"), {{1}}},
+            LinearLayout({{S("register"), {{1}, {0}}},
                           {S("lane"), {{2}, {4}, {0}, {0}, {0}}},
                           {S("warp"), {{8}, {0}}},
                           {S("block"), {}}},
                          {S("dim0")}));
   EXPECT_EQ(toLinearLayout({128}, slice(parent, 0)),
-            LinearLayout({{S("register"), {{1}, {16}, {32}, {64}}},
+            LinearLayout({{S("register"), {{1}, {0}, {16}, {32}, {64}}},
                           {S("lane"), {{2}, {4}, {0}, {0}, {0}}},
                           {S("warp"), {{8}, {0}}},
                           {S("block"), {}}},
                          {S("dim0")}));
   EXPECT_EQ(toLinearLayout({8}, slice(parent, 1)),
-            LinearLayout({{S("register"), {}},
+            LinearLayout({{S("register"), {{0}, {0}}},
                           {S("lane"), {{0}, {0}, {1}, {2}, {4}}},
                           {S("warp"), {{0}, {0}}},
                           {S("block"), {}}},
                          {S("dim0")}));
   EXPECT_EQ(toLinearLayout({128}, slice(parent, 1)),
-            LinearLayout({{S("register"), {{8}, {32}, {64}}},
+            LinearLayout({{S("register"), {{0}, {8}, {32}, {64}}},
                           {S("lane"), {{0}, {0}, {1}, {2}, {4}}},
                           {S("warp"), {{0}, {16}}},
                           {S("block"), {}}},
