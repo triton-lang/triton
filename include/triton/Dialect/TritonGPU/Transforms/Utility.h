@@ -309,9 +309,7 @@ void addForwardedValuesThroughUse(OpOperand &use,
                                   llvm::SetVector<Value> &worklist);
 
 bool valueFeedsMulticastMMAv5MMA(Value value);
-bool loadFeedsMulticastMMAv5MMA(Operation *loadOp);
-bool valueFeedsTwoCTAMMA(Value value, bool requireAccTwoCtas = false);
-bool loadFeedsTwoCTAMMA(Operation *loadOp, bool requireAccTwoCtas = false);
+bool valueFeedsTwoCTAMMA(Value value);
 
 // Verifies the provided memory descriptor type used for barrier allocation
 LogicalResult verifyBarrierType(Operation *op,
