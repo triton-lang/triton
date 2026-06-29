@@ -89,6 +89,52 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     tt.return
   }
 
+  // CHECK-LABEL: atomic_poll_relaxed_gpu
+  // CHECK: ld.relaxed.gpu.global.b32
+  // CHECK-NOT: fence.acquire
+  tt.func public @atomic_poll_relaxed_gpu(%ptr: !tt.ptr<i32>, %expected: i32, %out: !tt.ptr<i32>) {
+    %matched = tt.atomic_poll relaxed, gpu, %ptr, %expected {allocation.offset = 0 : i32} : !tt.ptr<i32>, i32 -> i1
+    %result = arith.extui %matched : i1 to i32
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-LABEL: atomic_poll_acquire_cta
+  // CHECK: ld.relaxed.cta.global.b32
+  // SM80: fence.acq_rel.cta
+  // SM90: fence.acq_rel.cta
+  // SM100: fence.acquire.cta
+  tt.func public @atomic_poll_acquire_cta(%ptr: !tt.ptr<i32>, %expected: i32, %out: !tt.ptr<i32>) {
+    %matched = tt.atomic_poll acquire, cta, %ptr, %expected {allocation.offset = 0 : i32} : !tt.ptr<i32>, i32 -> i1
+    %result = arith.extui %matched : i1 to i32
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-LABEL: atomic_poll_acquire_gpu
+  // CHECK: ld.relaxed.gpu.global.b32
+  // SM80: fence.acq_rel.gpu
+  // SM90: fence.acq_rel.gpu
+  // SM100: fence.acquire.gpu
+  tt.func public @atomic_poll_acquire_gpu(%ptr: !tt.ptr<i32>, %expected: i32, %out: !tt.ptr<i32>) {
+    %matched = tt.atomic_poll acquire, gpu, %ptr, %expected {allocation.offset = 0 : i32} : !tt.ptr<i32>, i32 -> i1
+    %result = arith.extui %matched : i1 to i32
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-LABEL: atomic_poll_acquire_sys
+  // CHECK: ld.relaxed.sys.global.b32
+  // SM80: fence.acq_rel.sys
+  // SM90: fence.acq_rel.sys
+  // SM100: fence.acquire.sys
+  tt.func public @atomic_poll_acquire_sys(%ptr: !tt.ptr<i32>, %expected: i32, %out: !tt.ptr<i32>) {
+    %matched = tt.atomic_poll acquire, sys, %ptr, %expected {allocation.offset = 0 : i32} : !tt.ptr<i32>, i32 -> i1
+    %result = arith.extui %matched : i1 to i32
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+
   // CHECK-LABEL: reduce_f16_store
   // SM80-NOT: add.rn.f16x2
   // SM90: add.rn.f16x2

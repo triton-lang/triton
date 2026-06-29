@@ -316,6 +316,37 @@ def TT_StoreOp : TT_Op<"store", [
 //
 // Atomic Ops
 //
+def TT_AtomicPollOp : TT_Op<"atomic_poll", [
+  TypesMatchWith<"ptr type matches expected type", "expected", "ptr",
+                 "getPointerTypeSameShape($_self)">
+]> {
+    let summary = "poll an atomic value";
+
+    let description = [{
+        Repeatedly load from $ptr with relaxed semantics on a single thread
+        until the loaded value equals $expected. For acquire semantics, issue
+        an acquire fence only after a successful poll. Other threads wait for
+        the polling thread to finish.
+    }];
+
+    let arguments = (ins
+      Arg<TT_Ptr, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+      TT_Int:$expected,
+      Optional<I64>:$timeout,
+      TT_MemSemanticAttr:$sem,
+      TT_MemSyncScopeAttr:$scope
+    );
+
+    let results = (outs I1:$result);
+
+    let assemblyFormat = [{
+      $sem `,` $scope `,` $ptr `,` $expected (`timeout` $timeout^)?
+      attr-dict `:` qualified(type($ptr)) `,` type($expected) `->` type($result)
+    }];
+
+    let hasVerifier = 1;
+}
+
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
@@ -497,7 +528,10 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
 }
 
 def TT_JoinOp : TT_Op<"join", [
-    Pure, SameTypeOperands]> {
+  Pure,
+  SameTypeOperands,
+  InferTypeOpAdaptorWithIsCompatible,
+]> {
     let summary = "join two tensors along a new, minor dimension";
     let description = [{
         For example, if the two input tensors are 4x8xf32, returns a tensor of
@@ -507,18 +541,14 @@ def TT_JoinOp : TT_Op<"join", [
         the two input tensors must have the same shape.
     }];
 
-    let builders = [
-      OpBuilder<(ins "Value":$lhs, "Value":$rhs)>
-    ];
     let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
     let results = (outs TT_Tensor:$result);
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
-    let hasVerifier = 1;
 }
 
 def TT_SplitOp : TT_Op<"split", [
   Pure,
-  InferTensorTypeOpWithLayoutEquivalence,
+  InferTypeOpAdaptorWithIsCompatible,
   TypesMatchWith<"outLHS and outRHS types match",
                   "outLHS", "outRHS", "$_self">,
 ]> {
