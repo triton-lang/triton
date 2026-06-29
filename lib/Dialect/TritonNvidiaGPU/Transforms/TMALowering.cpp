@@ -34,12 +34,11 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   gpu::MemDescType memDescType = gpu::MemDescType::get(
       tensorType.getShape(), tensorType.getElementType(), encoding,
       sharedMemorySpace, /*mutableMemory=*/true);
-  bool useTwoCTABarrier =
-      mlir::triton::valueFeedsTwoCTAMMA(op->getResult(0));
+  bool useTwoCTABarrier = mlir::triton::valueFeedsTwoCTAMMA(
+      op->getResult(0), /*requireAccTwoCtas=*/true);
   bool useMulticast = isa<DescriptorLoadOp>(op) && useTwoCTABarrier &&
                       hasCGABroadcast(memDescType) &&
-                      llvm::any_of(op->getResults(),
-                                   mlir::triton::valueFeedsMulticastMMA);
+                      mlir::triton::loadFeedsMulticastMMAv5MMA(op);
   auto alloc =
       gpu::LocalAllocOp::create(rewriter, loc, memDescType).getResult();
   auto numCTAs = gpu::lookupNumCTAs(op);

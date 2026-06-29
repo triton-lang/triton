@@ -1525,6 +1525,65 @@ void addForwardedValuesThroughUse(OpOperand &use,
   worklist.insert(user->result_begin(), user->result_end());
 }
 
+bool valueFeedsMulticastMMAv5MMA(Value value) {
+  llvm::SetVector<Value> worklist;
+  worklist.insert(value);
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Value current = worklist[i];
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
+        if (mma.getMulticast())
+          return true;
+        continue;
+      }
+
+      addForwardedValuesThroughUse(use, worklist);
+    }
+  }
+  return false;
+}
+
+bool loadFeedsMulticastMMAv5MMA(Operation *loadOp) {
+  return llvm::any_of(loadOp->getResults(), valueFeedsMulticastMMAv5MMA);
+}
+
+static bool isTwoCTAMMA(ttng::MMAv5OpInterface mma,
+                        bool requireAccTwoCtas) {
+  if (!mma.getTwoCtas())
+    return false;
+  if (!requireAccTwoCtas)
+    return true;
+  auto accEnc = dyn_cast<ttng::TensorMemoryEncodingAttr>(
+      mma.getAccumulator().getType().getEncoding());
+  return accEnc && accEnc.getTwoCTAs();
+}
+
+bool valueFeedsTwoCTAMMA(Value value, bool requireAccTwoCtas) {
+  llvm::SetVector<Value> worklist;
+  worklist.insert(value);
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Value current = worklist[i];
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
+        if (isTwoCTAMMA(mma, requireAccTwoCtas))
+          return true;
+        continue;
+      }
+
+      addForwardedValuesThroughUse(use, worklist);
+    }
+  }
+  return false;
+}
+
+bool loadFeedsTwoCTAMMA(Operation *loadOp, bool requireAccTwoCtas) {
+  return llvm::any_of(loadOp->getResults(), [&](Value result) {
+    return valueFeedsTwoCTAMMA(result, requireAccTwoCtas);
+  });
+}
+
 void replaceUsesAndPropagateType(
     OpBuilder &builder, Operation *oldUse, Value val,
     std::function<void(Operation *, Operation *)> callback) {
@@ -1703,54 +1762,6 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
     return values;
   }
   return {};
-}
-
-static void addForwardedValuesThroughUse(OpOperand &use,
-                                         llvm::SetVector<Value> &worklist) {
-  Operation *user = use.getOwner();
-  if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-    unsigned operandIdx = use.getOperandNumber();
-    if (operandIdx >= forOp.getNumControlOperands()) {
-      unsigned iterArgIdx = operandIdx - forOp.getNumControlOperands();
-      worklist.insert(forOp.getRegionIterArg(iterArgIdx));
-      worklist.insert(forOp.getResult(iterArgIdx));
-    }
-  } else if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-    if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp()))
-      worklist.insert(forOp.getResult(use.getOperandNumber()));
-  }
-
-  worklist.insert(user->result_begin(), user->result_end());
-}
-
-template <typename Predicate>
-static bool valueFeedsMMAv5MMA(Value value, Predicate predicate) {
-  llvm::SetVector<Value> worklist;
-  worklist.insert(value);
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Value current = worklist[i];
-    for (OpOperand &use : current.getUses()) {
-      Operation *user = use.getOwner();
-      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
-        if (predicate(mma))
-          return true;
-        continue;
-      }
-
-      addForwardedValuesThroughUse(use, worklist);
-    }
-  }
-  return false;
-}
-
-bool valueFeedsMulticastMMA(Value value) {
-  return valueFeedsMMAv5MMA(
-      value, [](ttng::MMAv5OpInterface mma) { return mma.getMulticast(); });
-}
-
-bool valueFeedsTwoCTAMMA(Value value) {
-  return valueFeedsMMAv5MMA(
-      value, [](ttng::MMAv5OpInterface mma) { return mma.getTwoCtas(); });
 }
 
 LogicalResult verifyBarrierType(Operation *op,
