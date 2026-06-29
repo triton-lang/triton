@@ -1525,6 +1525,65 @@ void addForwardedValuesThroughUse(OpOperand &use,
   worklist.insert(user->result_begin(), user->result_end());
 }
 
+bool valueFeedsMulticastMMAv5MMA(Value value) {
+  llvm::SetVector<Value> worklist;
+  worklist.insert(value);
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Value current = worklist[i];
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
+        if (mma.getMulticast())
+          return true;
+        continue;
+      }
+
+      addForwardedValuesThroughUse(use, worklist);
+    }
+  }
+  return false;
+}
+
+bool loadFeedsMulticastMMAv5MMA(Operation *loadOp) {
+  return llvm::any_of(loadOp->getResults(), valueFeedsMulticastMMAv5MMA);
+}
+
+static bool isTwoCTAMMA(ttng::MMAv5OpInterface mma,
+                        bool requireAccTwoCtas) {
+  if (!mma.getTwoCtas())
+    return false;
+  if (!requireAccTwoCtas)
+    return true;
+  auto accEnc = dyn_cast<ttng::TensorMemoryEncodingAttr>(
+      mma.getAccumulator().getType().getEncoding());
+  return accEnc && accEnc.getTwoCTAs();
+}
+
+bool valueFeedsTwoCTAMMA(Value value, bool requireAccTwoCtas) {
+  llvm::SetVector<Value> worklist;
+  worklist.insert(value);
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Value current = worklist[i];
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
+        if (isTwoCTAMMA(mma, requireAccTwoCtas))
+          return true;
+        continue;
+      }
+
+      addForwardedValuesThroughUse(use, worklist);
+    }
+  }
+  return false;
+}
+
+bool loadFeedsTwoCTAMMA(Operation *loadOp, bool requireAccTwoCtas) {
+  return llvm::any_of(loadOp->getResults(), [&](Value result) {
+    return valueFeedsTwoCTAMMA(result, requireAccTwoCtas);
+  });
+}
+
 void replaceUsesAndPropagateType(
     OpBuilder &builder, Operation *oldUse, Value val,
     std::function<void(Operation *, Operation *)> callback) {
