@@ -308,7 +308,7 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
 void addForwardedValuesThroughUse(OpOperand &use,
                                   llvm::SetVector<Value> &worklist);
 
-bool valueFeedsMulticastMMAv5MMA(Value value);
+bool valueFeedsMulticastMMA(Value value);
 bool valueFeedsTwoCTAMMA(Value value);
 
 // Verifies the provided memory descriptor type used for barrier allocation
