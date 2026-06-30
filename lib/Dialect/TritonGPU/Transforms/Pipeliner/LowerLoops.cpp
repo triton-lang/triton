@@ -395,9 +395,8 @@ void createTMABarrierAndWait(
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(getShapePerCTA(tensorTy));
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
-      hasTwoCTAMMAUser |= asyncLoads[op].useMulticast ||
-                          llvm::any_of(op->getResults(),
-                                       mlir::triton::valueFeedsTwoCTAMMA);
+      hasTwoCTAMMAUser |= llvm::any_of(
+          op->getResults(), mlir::triton::valueFeedsTwoCTAMMA);
     }
 
     Value barrierAlloc = triton::createBarrierAlloc(
