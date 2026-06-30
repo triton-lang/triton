@@ -375,8 +375,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // Non-distributed convert_layout followed by multicast TMA should still
   // insert a cluster barrier before the TMA.
-  // We can reuse the one already inserted after the convert_layout and only add
-  // the fence here.
   // CHECK-LABEL: @convert_layout_trivial_then_tma_multicast_cluster_barrier
   // CHECK: ttng.init_barrier
   // CHECK: ttg.convert_layout
@@ -468,6 +466,48 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     ttg.local_store %cst, %buf : tensor<128x16xf16, #blocked> -> !ttg.memdesc<128x16xf16, #sharedA, #smem, mutable>
     %ld = ttg.local_load %buf : !ttg.memdesc<128x16xf16, #sharedA, #smem, mutable> -> tensor<128x16xf16, #blocked>
     tt.return %ld : tensor<128x16xf16, #blocked>
+  }
+}
+
+// -----
+
+#sharedA = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, CGALayout = [[0, 1]]>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Multicast without two_ctas does not make the MMA completion barrier
+  // cluster-visible.
+  // CHECK-LABEL: @no_sync_reinitialized_mma_multicast_barrier
+  // CHECK: ttng.init_barrier
+  // CHECK: ttng.wait_barrier
+  // CHECK: ttg.local_dealloc
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tc_gen5_mma
+  tt.func @no_sync_reinitialized_mma_multicast_barrier() {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %a = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #sharedA, #smem, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<16x128xf16, #sharedB, #smem, mutable>
+    %acc = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+
+    %tma_barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.init_barrier %tma_barrier, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.wait_barrier %tma_barrier, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttg.local_dealloc %tma_barrier : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+
+    %mma_barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.init_barrier %mma_barrier, 2 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.tc_gen5_mma %a, %b, %acc, %true, %true, %mma_barrier[%true] {is_async, multicast} :
+       !ttg.memdesc<128x16xf16, #sharedA, #smem, mutable>,
+       !ttg.memdesc<16x128xf16, #sharedB, #smem, mutable>,
+       !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.wait_barrier %mma_barrier, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    tt.return
   }
 }
 

@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/ErrorHandling.h"
 
 namespace mlir {
@@ -23,9 +24,25 @@ namespace nvidia_gpu {
 
 namespace {
 
+static bool loadFeedsMulticastMMAv5MMA(Operation *loadOp) {
+  llvm::SetVector<Operation *> worklist;
+  worklist.insert(loadOp->user_begin(), loadOp->user_end());
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    Operation *op = worklist[i];
+    auto mma = dyn_cast<MMAv5OpInterface>(op);
+    if (mma) {
+      if (mma.getMulticast())
+        return true;
+      continue;
+    }
+    worklist.insert(op->user_begin(), op->user_end());
+  }
+  return false;
+}
+
 static void
 lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
-             function_ref<void(Value, Value, Value, Value)> createLoad,
+             function_ref<void(Value, Value, Value, Value, bool)> createLoad,
              PatternRewriter &rewriter) {
   MLIRContext *ctx = op->getContext();
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
@@ -53,7 +70,10 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
   triton::nvidia_gpu::BarrierExpectOp::create(rewriter, loc, barrierAlloc,
                                               sizeInBytes, pred);
-  createLoad(desc, barrierAlloc, alloc, pred);
+  bool useMulticast = isa<DescriptorLoadOp>(op) &&
+                      hasCGABroadcast(memDescType) &&
+                      loadFeedsMulticastMMAv5MMA(op);
+  createLoad(desc, barrierAlloc, alloc, pred, useMulticast);
   Value phase = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
   WaitBarrierOp::create(rewriter, loc, barrierAlloc, phase);
   InvalBarrierOp::create(rewriter, loc, barrierAlloc);
@@ -68,10 +88,10 @@ public:
   LogicalResult matchAndRewrite(DescriptorLoadOp op,
                                 PatternRewriter &rewriter) const override {
     auto createLoad = [&](Value desc, Value barrierAlloc, Value alloc,
-                          Value pred) {
+                          Value pred, bool useMulticast) {
       triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
           rewriter, op.getLoc(), desc, op.getIndices(), barrierAlloc, alloc,
-          pred);
+          pred, useMulticast);
     };
     lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
     return success();
@@ -87,7 +107,7 @@ struct TMAGatherLowering : public OpRewritePattern<DescriptorGatherOp> {
         sextI16ToI32Indices(op.getXOffsets(), rewriter, op.getLoc());
 
     auto createLoad = [&](Value desc, Value barrierAlloc, Value alloc,
-                          Value pred) {
+                          Value pred, bool /*useMulticast*/) {
       triton::nvidia_gpu::AsyncTMAGatherOp::create(rewriter, op.getLoc(), desc,
                                                    xOffsets, op.getYOffset(),
                                                    barrierAlloc, alloc, pred);

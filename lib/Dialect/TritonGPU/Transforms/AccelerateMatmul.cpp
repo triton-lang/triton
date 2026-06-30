@@ -18,6 +18,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -689,6 +690,22 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
   return sawMMAv5Dot && !result.wasInterrupted();
 }
 
+static bool usesTMAMulticast(Value operand) {
+  auto loadOp =
+      getDefiningOpSkippingConvertLayout<triton::DescriptorLoadOp>(operand);
+  if (!loadOp)
+    return false;
+  RankedTensorType loadTy = loadOp.getType();
+  auto sharedEnc = NVMMASharedEncodingAttr::get(
+      loadTy.getContext(), loadTy.getShape(), getOrderForMemory(loadTy),
+      getCGALayout(loadTy.getEncoding()), loadTy.getElementType(),
+      /*fp4Padded=*/false);
+  auto memDescTy =
+      MemDescType::get(loadTy.getShape(), loadTy.getElementType(), sharedEnc,
+                       SharedMemorySpaceAttr::get(loadTy.getContext()));
+  return triton::nvidia_gpu::hasCGABroadcast(memDescTy);
+}
+
 static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
                            const CGAEncodingAttr &newCGALayout) {
   OpBuilder::InsertionGuard g(rewriter);
@@ -753,6 +770,8 @@ public:
     if (useTwoCTAs) {
       b = splitBOperand(b, rewriter, getTwoCTARHSCGALayout(oldRetType));
     }
+    bool useMulticast = useTwoCTAs && lookupNumCTAs(dotOp) > 2 &&
+                        (usesTMAMulticast(a) || usesTMAMulticast(b));
     // TF32 transpose is only supported with 128 swizzle mode with 32B
     // atomicity. As we currently don't support this layout we disallow
     // transpose for TF32 inputs.
@@ -786,6 +805,7 @@ public:
         rewriter, loc, tokType, a, b, acc, acc.getToken(), /*useD=*/vTrue,
         /*pred=*/vTrue);
     mma.setTwoCtas(useTwoCTAs);
+    mma.setMulticast(useMulticast);
 
     auto ld = triton::nvidia_gpu::TMEMLoadOp::create(
         rewriter, loc, newAccType, tokType, acc, /*dep=*/mma.getToken());
