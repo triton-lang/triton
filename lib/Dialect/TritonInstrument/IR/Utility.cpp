@@ -501,6 +501,17 @@ AuxDataMap::ThreadLayout getThreadLayout(ModuleOp module,
   return layout;
 }
 
+Region *getClusterBarrierGroupRegion(Operation *op) {
+  Region *region = op->getParentRegion();
+  while (region) {
+    Operation *parent = region->getParentOp();
+    if (isa<WarpSpecializeOp, WarpSpecializePartitionsOp, FuncOp>(parent))
+      return region;
+    region = parent->getParentRegion();
+  }
+  llvm_unreachable("cluster barrier must be nested in a Triton function");
+}
+
 Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
     Operation *op) {
   Region *region = op->getParentRegion();
@@ -544,6 +555,17 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
   FuncOp entryPoint = getEntryPoint(module);
   assert(entryPoint);
   Region *entryRegion = &entryPoint.getBody();
+
+  int numMBarriers = barrierRegions.size();
+  entryPoint.walk([&](ClusterBarrierOp op) {
+    Region *group = getClusterBarrierGroupRegion(op);
+    clusterBarrierSlots.try_emplace(group,
+                                    numMBarriers + clusterBarrierSlots.size());
+  });
+  int numTrackedBarriers = numMBarriers + clusterBarrierSlots.size();
+  if (numTrackedBarriers > 0)
+    barrierRegions.resize(llvm::NextPowerOf2(numTrackedBarriers - 1),
+                          BufferRegion{0, 0});
 
   ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
   b.setInsertionPointToStart(&entryPoint.getBody().front());
@@ -616,7 +638,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     }
   }
 
-  if (!barrierRegions.empty()) {
+  if (numTrackedBarriers > 0) {
     // Barriers allocations are in shared memory
     barriers.insert(entryRegion, createBufferDescriptorsTensor(
                                      b, MemType::SHARED_MEM, barrierRegions));
@@ -630,6 +652,14 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     int numBarriers = barrierRegions.size();
     barrierStates.insert(entryRegion, createZeroInitStateTensor(
                                           b, {numCTAs, numBarriers}, 64, fb));
+    Operation *insertPoint = &*b.getInsertionPoint();
+    Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+    Value zero = arith::ConstantIntOp::create(b, 0, 32);
+    Value isCTA0 =
+        arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
+    for (auto &entry : clusterBarrierSlots)
+      fb.createInitBarrierStateCall(b, entry.second, numCTAs, isCTA0,
+                                    insertPoint);
     passValueToWarpSpecialize(barrierStates.at(entryRegion), barrierStates);
 
     // Deadlock detection aux data over [cta, barrier]: waiting
@@ -646,7 +676,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
       int iMemType = (int)memType;
       // Create state tensors:
       int numBufs = bufRegions[iMemType].size();
-      if (numBufs > 0) {
+      if (numMBarriers > 0 && numBufs > 0) {
         writeTracking[iMemType].insert(
             entryRegion,
             createZeroInitStateTensor(
@@ -661,7 +691,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
                                   readTracking[iMemType]);
       }
     }
-    if (hasAsyncProxyFenceTracking &&
+    if (numMBarriers > 0 && hasAsyncProxyFenceTracking &&
         !bufRegions[(int)MemType::SHARED_MEM].empty()) {
       int numBufs = bufRegions[(int)MemType::SHARED_MEM].size();
       proxyAccessTracking.insert(
@@ -724,9 +754,9 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     int numCommitKinds = 0;
     for (int i = 0; i < CommitKind::NumCommitKinds; ++i)
       numCommitKinds += !commits[i].empty();
-    int expected =
-        estimateConSanCaptureCount(numActiveMemTypes, !barrierRegions.empty(),
-                                   numCommitKinds, hasAsyncProxyFenceTracking);
+    int expected = estimateConSanCaptureCount(
+        numActiveMemTypes, numMBarriers > 0, !clusterBarrierSlots.empty(),
+        numCommitKinds, hasAsyncProxyFenceTracking);
     assert(captureCounter == expected &&
            "capture count changed -- update estimateConSanCaptureCount if this "
            "is expected!");
@@ -755,11 +785,6 @@ void AuxDataMap::getBuffersAndBarriers(
   barrierRegions = analysis->getAllUsedBufferRegions(
       BufferRegionAnalysis::RegionType::BARRIER);
 
-  if (!barrierRegions.empty()) {
-    barrierRegions.resize(llvm::NextPowerOf2(barrierRegions.size() - 1),
-                          BufferRegion{0, 0});
-  }
-
   for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
     int iMemType = (int)memType;
     if (bufRegions[iMemType].empty()) {
@@ -769,6 +794,14 @@ void AuxDataMap::getBuffersAndBarriers(
         llvm::NextPowerOf2(bufRegions[iMemType].size() - 1),
         BufferRegion{0, 0});
   }
+}
+
+int AuxDataMap::getClusterBarrierSlot(Operation *op) const {
+  Region *group = getClusterBarrierGroupRegion(op);
+  auto it = clusterBarrierSlots.find(group);
+  assert(it != clusterBarrierSlots.end() &&
+         "cluster barrier group must have a virtual barrier slot");
+  return it->second;
 }
 
 void AuxDataMap::passToWarpSpecialize(FuncOp func, ValueType valueType,
