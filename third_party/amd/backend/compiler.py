@@ -334,6 +334,8 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         amd.passes.ttgpuir.add_warp_pipeline(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
+        if is_async_copy_enabled(options.arch):
+            amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
 
         if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
