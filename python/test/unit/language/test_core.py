@@ -2655,6 +2655,8 @@ def get_reduce_input(dtype_str, shape):
     'max-with-indices',
     'argmin-tie-break-left',
     'argmax-tie-break-left',
+    'argmin-tie-break-fast',
+    'argmax-tie-break-fast',
     'sum',
 ] for dtype in dtypes_with_bfloat16 for shape in [32, 64, 128, 512]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
@@ -2686,14 +2688,16 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
         'min-with-indices': np.min,
         'argmin-tie-break-left': np.argmin,
         'argmax-tie-break-left': np.argmax,
+        'argmin-tie-break-fast': np.argmin,
+        'argmax-tie-break-fast': np.argmax,
     }[op]
-    if 'tie-break-left' in op:
+    if 'arg' in op:
         x[3:10] = x[numpy_op(x)]
     x_tri = to_triton(x, device=device)
     # numpy result
-    z_dtype_str = 'int32' if 'tie-break-left' in op else dtype_str
+    z_dtype_str = 'int32' if 'arg' in op else dtype_str
     z_tri_dtype_str = z_dtype_str
-    if 'tie-break-left' not in op and dtype_str == 'bfloat16':
+    if 'arg' not in op and dtype_str == 'bfloat16':
         z_dtype_str = 'float32'
         z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
         # trunc mantissa for a fair comparison of accuracy
@@ -2709,7 +2713,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
     if op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
     else:
-        if 'tie-break-left' in op:
+        if 'arg' in op:
             # argmin and argmax can have multiple valid indices.
             # so instead we compare the values pointed by indices
             np.testing.assert_equal(x[z_ref], x[z_tri])
