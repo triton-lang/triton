@@ -70,9 +70,9 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
   triton::nvidia_gpu::BarrierExpectOp::create(rewriter, loc, barrierAlloc,
                                               sizeInBytes, pred);
-  bool useMulticast =
-      isa<DescriptorLoadOp>(op) && hasCGABroadcast(memDescType) &&
-      loadFeedsMulticastMMAv5MMA(op);
+  bool useMulticast = isa<DescriptorLoadOp>(op) &&
+                      hasCGABroadcast(memDescType) &&
+                      loadFeedsMulticastMMAv5MMA(op);
   createLoad(desc, barrierAlloc, alloc, pred, useMulticast);
   Value phase = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
   WaitBarrierOp::create(rewriter, loc, barrierAlloc, phase);
