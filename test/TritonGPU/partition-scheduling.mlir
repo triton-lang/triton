@@ -704,3 +704,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// The if_op_result_token heuristic should only place an scf.if result token in
+// the same partition as its producer when that producer is an MMA op. Here the
+// token is produced by a non-MMA op, so the if result must NOT be pulled into
+// the producer's partition; it stays with its consumer instead.
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#load_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+// CHECK-LABEL: @if_result_token_non_mma_producer
+tt.func @if_result_token_non_mma_producer(%desc: !tt.tensordesc<64x128xf16, #shared>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %true = arith.constant true
+  %false = arith.constant false
+  %c32_i32 = arith.constant 32 : i32
+  scf.for %i = %c0_i32 to %c32_i32 step %c1_i32 : i32 {
+    %off:3 = "get_offsets"(%i) : (i32) -> (i32, i32, i32)
+    %ld = tt.descriptor_load %desc[%off#1, %off#2] : !tt.tensordesc<64x128xf16, #shared> -> tensor<64x128xf16, #load_blocked>
+    "sink"(%ld) : (tensor<64x128xf16, #load_blocked>) -> ()
+    // Non-MMA token producer, pinned to its own partition.
+    // CHECK: "make_token"() {{.*}}ttg.partition = array<i32: [[PROD:[0-9]+]]>
+    %tok = "make_token"() {data, ttg.partition = array<i32: 3>} : () -> !ttg.async.token
+    %cond = arith.cmpi eq, %i, %c0_i32 : i32
+    // The scf.if result token must land in the consumer's partition, NOT the
+    // producer's. With the buggy heuristic (missing return false) the if result
+    // was instead merged into [[PROD]].
+    // CHECK: scf.if
+    // CHECK: ttg.partition.outputs = [array<i32: [[CONS:[0-9]+]]>]
+    // CHECK-NOT: ttg.partition.outputs = {{\[}}array<i32: [[PROD]]>]
+    %r = scf.if %cond -> (!ttg.async.token) {
+      scf.yield %tok : !ttg.async.token
+    } else {
+      scf.yield %tok : !ttg.async.token
+    }
+    // CHECK: "consume"({{.*}}) {{.*}}ttg.partition = array<i32: [[CONS]]>
+    "consume"(%r) {data, ttg.partition = array<i32: 5>} : (!ttg.async.token) -> ()
+  } {tt.disallow_acc_multi_buffer, tt.num_stages = 2 : i32, tt.warp_specialize}
+  tt.return
+}
+}
