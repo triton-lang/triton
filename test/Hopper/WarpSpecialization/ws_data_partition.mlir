@@ -129,11 +129,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: tt.reshape {{.*}} : tensor<64x64x1xf16,
     // CHECK: tt.reshape {{.*}} : tensor<64x64x1xf16,
     %r1 = tt.reshape %r0 allow_reorder {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64x1xf16, #blocked2> -> tensor<128x64xf16, #blocked>
-    // CHECK: tt.join {{.*}} : tensor<64x64xf16,
-    // CHECK: tt.join {{.*}} : tensor<64x64xf16,
+    // The split(join(x, x)) round-trip is an identity: it canonicalizes away
+    // (its result is x), so the partitioned reshape flows straight to the
+    // consumers below. The task id on the erased ops is irrelevant once they
+    // are dead.
+    // CHECK-NOT: tt.join
+    // CHECK-NOT: tt.split
     %0 = tt.join %r1, %r1 {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64xf16, #blocked> -> tensor<128x64x2xf16, #blocked2>
-    // CHECK: tt.split {{.*}} : tensor<64x64x2xf16,
-    // CHECK: tt.split {{.*}} : tensor<64x64x2xf16,
     %1:2 = tt.split %0 {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64x2xf16, #blocked2> -> tensor<128x64xf16, #blocked>
     // CHECK: ttg.local_alloc {{.*}} : (tensor<64x64xf16,
     // CHECK: ttg.local_alloc {{.*}} : (tensor<64x64xf16,
