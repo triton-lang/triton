@@ -28,6 +28,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   }
 }
 
+// The TAIL labels are the “before” without the scheduling hint,
+// the HEAD labels are the “after” with the scheduling hint.
+
 // TAIL-LABEL: tt.func @generic_stage0_backedge_barrier
 // TAIL: scf.for
 // TAIL-NOT: rocdl.s.barrier
