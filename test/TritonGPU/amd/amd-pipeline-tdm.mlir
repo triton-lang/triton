@@ -1,5 +1,9 @@
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-optimize-descriptor-encoding  -tritonamdgpu-schedule-loops="num_stages=2" -tritonamdgpu-pipeline="use_async_copy=1" -canonicalize | FileCheck %s
 
+// Re-run with num_stages=3 to exercise the LDS-prefetch schedule (only enabled
+// on the TDM path when numStages >= 3).
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-optimize-descriptor-encoding  -tritonamdgpu-schedule-loops="num_stages=3" -tritonamdgpu-pipeline="use_async_copy=1" -canonicalize | FileCheck %s --check-prefix=LDS_PREFETCH
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[1, 0], [2, 0], [4, 0]]}, instrShape = [16, 16, 32]}>
@@ -78,6 +82,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK-NOT: amdg.async_tdm_wait
 // CHECK: tt.descriptor_store {{.*}} : !tt.tensordesc<512x64xf16, #[[$PADDED_C]]>
 
+// With num_stages=3 the TDM path uses the LDS-prefetch schedule: ttg.local_load
+// is hoisted one stage ahead of the tt.dot so the dot consumes operands that
+// were prefetched into registers the previous iteration. The loop body leads
+// with the dot, followed by the async_wait, the next-tile TDM copies, and the
+// local_loads that feed the next iteration (carried as iter_args).
+// LDS_PREFETCH-LABEL: tt.func @matmul_kernel_make_tensor_descriptor
+// Prologue: dot operands for the first iteration are pre-loaded from LDS.
+// LDS_PREFETCH: %[[PRO_A:.+]] = ttg.local_load {{.*}} -> tensor<512x32xf16, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 8}>>
+// LDS_PREFETCH: %[[PRO_B:.+]] = ttg.local_load {{.*}} -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 8}>>
+// LDS_PREFETCH: scf.for
+// LDS_PREFETCH-SAME: %[[OP_A:[^ ]+]] = %[[PRO_A]]
+// LDS_PREFETCH-SAME: %[[OP_B:[^ ]+]] = %[[PRO_B]]
+// LDS_PREFETCH: tt.dot %[[OP_A]], %[[OP_B]]
+// LDS_PREFETCH: amdg.async_tdm_wait {{.*}} {num = 0 : i32}
+// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<512x32xf16
+// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<32x64xf16
+// LDS_PREFETCH: %[[NXT_A:.+]] = ttg.local_load {{.*}} -> tensor<512x32xf16, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 8}>>
+// LDS_PREFETCH: %[[NXT_B:.+]] = ttg.local_load {{.*}} -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 8}>>
+// LDS_PREFETCH: scf.yield {{.*}}, %[[NXT_A]], %[[NXT_B]]
+
 // -----
 
 // Test TDM padding for fp8 (f8E5M2) matmul on gfx1250.
@@ -152,6 +176,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK-NOT: ttg.async_commit_group
 // CHECK: }
 // CHECK: tt.descriptor_store {{.*}} : !tt.tensordesc<256x64xf16, #[[$PADDED_C]]>
+
+// The LDS-prefetch schedule applies to any non-scaled dot on the TDM path, so
+// fp8 operands feeding a plain tt.dot get the prefetch schedule too.
+// LDS_PREFETCH-LABEL: tt.func @tdm_padding_fp8
+// LDS_PREFETCH: %[[PRO_A:.+]] = ttg.local_load {{.*}} -> tensor<256x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 8}>>
+// LDS_PREFETCH: %[[PRO_B:.+]] = ttg.local_load {{.*}} -> tensor<64x64xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 8}>>
+// LDS_PREFETCH: scf.for
+// LDS_PREFETCH-SAME: %[[OP_A:[^ ]+]] = %[[PRO_A]]
+// LDS_PREFETCH-SAME: %[[OP_B:[^ ]+]] = %[[PRO_B]]
+// LDS_PREFETCH: tt.dot %[[OP_A]], %[[OP_B]]
+// LDS_PREFETCH: amdg.async_tdm_wait {{.*}} {num = 0 : i32}
+// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<256x64xf8E5M2
+// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<64x64xf8E5M2
+// LDS_PREFETCH: %[[NXT_A:.+]] = ttg.local_load {{.*}} -> tensor<256x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 8}>>
+// LDS_PREFETCH: %[[NXT_B:.+]] = ttg.local_load {{.*}} -> tensor<64x64xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 8}>>
+// LDS_PREFETCH: scf.yield {{.*}}, %[[NXT_A]], %[[NXT_B]]
 
 // -----
 
