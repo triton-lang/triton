@@ -172,6 +172,27 @@ tt.func @register_use_heuristic() {
   tt.return
 }
 
+// CHECK-LABEL: @async_worker_register_use
+tt.func @async_worker_register_use(
+    %arg0: !ttg.memdesc<128x128xf16, #shared, #smem>,
+    %arg1: !ttg.memdesc<128x128xf16, #shared, #smem>,
+    %arg2: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) {
+  %true = arith.constant true
+  // CHECK: requestedRegisters = array<i32: 88>
+  ttg.warp_specialize(%arg0, %arg1, %arg2, %true)
+  default {
+    ttg.warp_yield
+  }
+  partition0(%lhs: !ttg.memdesc<128x128xf16, #shared, #smem>,
+             %rhs: !ttg.memdesc<128x128xf16, #shared, #smem>,
+             %acc: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+             %pred: i1) num_warps(4) {
+    ttng.tc_gen5_mma %lhs, %rhs, %acc, %pred, %pred : !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttg.warp_return
+  } : (!ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, i1) -> ()
+  tt.return
+}
+
 // CHECK-LABEL: @tmem_min_4_warps
 tt.func @tmem_min_4_warps(%tensor_desc: !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) {
   ttg.warp_specialize(%tensor_desc)

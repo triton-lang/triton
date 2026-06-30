@@ -163,10 +163,14 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
   // Because the partition region is isolated from above, we could in theory
   // compile it to PTX and read the number of registers that got allocated.
   SmallVector<unsigned> maxTensorRegs;
+  SmallVector<bool> hasAsyncWorkerOps;
   bool hasTwoCTAMMA = false;
   for (Region *partition : wsOp.getPartitionRegions()) {
     unsigned &tensorRegs = maxTensorRegs.emplace_back(0);
+    bool &hasAsyncWorkerOp = hasAsyncWorkerOps.emplace_back(false);
     partition->walk([&](Operation *op) {
+      if (isa<ttng::MMAv5OpInterface, ttng::TMALoadLikeOpInterface>(op))
+        hasAsyncWorkerOp = true;
       if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
         hasTwoCTAMMA |= mma.getTwoCtas();
       for (Type type :
@@ -260,11 +264,16 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
   } while (changed);
 
   SmallVector<int32_t> estRegUsage(partitionNumWarps.size());
-  for (auto [partition, newNumWarps, prevNumWarps, tensorRegs, estRegs] :
+  for (auto [partition, newNumWarps, prevNumWarps, tensorRegs, hasAsyncWorkerOp,
+             estRegs] :
        llvm::zip(wsOp.getPartitionRegions(), partitionNumWarps,
-                 wsOp.getPartitionNumWarps(), maxTensorRegs, estRegUsage)) {
+                 wsOp.getPartitionNumWarps(), maxTensorRegs, hasAsyncWorkerOps,
+                 estRegUsage)) {
     // "Guess" the register usage for each partition.
-    estRegs = tensorRegs ? 88 : 24;
+    // MMAv5/TMA worker partitions may only contain memdesc values after earlier
+    // lowering, so tensor type based accounting would otherwise shrink them to
+    // the minimum register budget.
+    estRegs = tensorRegs || hasAsyncWorkerOp ? 88 : 24;
 
     // Layouts need to be reassigned if the number of warps changed and there
     // are tensor computations.
