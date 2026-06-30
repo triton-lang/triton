@@ -39,7 +39,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   bool useMulticast = isa<DescriptorLoadOp>(op) && useTwoCTABarrier &&
                       hasCGABroadcast(memDescType) &&
                       llvm::any_of(op->getResults(),
-                                   mlir::triton::valueFeedsMulticastMMAv5MMA);
+                                   mlir::triton::valueFeedsMulticastMMA);
   auto alloc =
       gpu::LocalAllocOp::create(rewriter, loc, memDescType).getResult();
   auto numCTAs = gpu::lookupNumCTAs(op);

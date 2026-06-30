@@ -541,7 +541,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
     asyncLoad.useMulticast =
         loadUsesTMAMulticast(loadOp, alloc) &&
         llvm::any_of(loadOp->getResults(),
-                     mlir::triton::valueFeedsMulticastMMAv5MMA);
+                     mlir::triton::valueFeedsMulticastMMA);
     loadGroups.insert({asyncLoad.stageDiff, {}});
     if (isTMALoad(loadOp)) {
       loadGroups[asyncLoad.stageDiff].hasTMALoad = true;

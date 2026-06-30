@@ -1525,7 +1525,7 @@ void addForwardedValuesThroughUse(OpOperand &use,
   worklist.insert(user->result_begin(), user->result_end());
 }
 
-bool valueFeedsMulticastMMAv5MMA(Value value) {
+bool valueFeedsMulticastMMA(Value value) {
   llvm::SetVector<Value> worklist;
   worklist.insert(value);
   for (unsigned i = 0; i < worklist.size(); ++i) {
