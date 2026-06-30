@@ -260,3 +260,42 @@ tt.func @no_canonicalize_indivisible_offset(%base: tensor<128x!tt.ptr<f32>>) -> 
   %result = tt.int_to_ptr %offset_ptr_int : tensor<128xi64> -> tensor<128x!tt.ptr<f32>>
   tt.return %result : tensor<128x!tt.ptr<f32>>
 }
+
+// -----
+
+// CHECK-LABEL: split_join
+tt.func @split_join(%a: tensor<8x4xf32>, %b: tensor<8x4xf32>) -> (tensor<8x4xf32>, tensor<8x4xf32>) {
+  // split(join(a, b)) -> (a, b)
+  // CHECK-NOT: tt.join
+  // CHECK-NOT: tt.split
+  // CHECK: tt.return %arg0, %arg1
+  %j = tt.join %a, %b : tensor<8x4xf32> -> tensor<8x4x2xf32>
+  %o:2 = tt.split %j : tensor<8x4x2xf32> -> tensor<8x4xf32>
+  tt.return %o#0, %o#1 : tensor<8x4xf32>, tensor<8x4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: join_split
+tt.func @join_split(%x: tensor<8x4x2xf32>) -> tensor<8x4x2xf32> {
+  // join(split(x)[0], split(x)[1]) -> x
+  // CHECK-NOT: tt.split
+  // CHECK-NOT: tt.join
+  // CHECK: tt.return %arg0
+  %s:2 = tt.split %x : tensor<8x4x2xf32> -> tensor<8x4xf32>
+  %j = tt.join %s#0, %s#1 : tensor<8x4xf32> -> tensor<8x4x2xf32>
+  tt.return %j : tensor<8x4x2xf32>
+}
+
+// -----
+
+// CHECK-LABEL: split_join_discardable_attr_not_folded
+tt.func @split_join_discardable_attr_not_folded(%a: tensor<8x4xf32>, %b: tensor<8x4xf32>) -> (tensor<8x4xf32>, tensor<8x4xf32>) {
+  // A discardable attr (e.g. warp-specialization async_task_id) must prevent the
+  // fold, since erasing the op would silently drop it.
+  // CHECK: tt.join
+  // CHECK: tt.split
+  %j = tt.join %a, %b : tensor<8x4xf32> -> tensor<8x4x2xf32>
+  %o:2 = tt.split %j {async_task_id = array<i32: 0>} : tensor<8x4x2xf32> -> tensor<8x4xf32>
+  tt.return %o#0, %o#1 : tensor<8x4xf32>, tensor<8x4xf32>
+}
