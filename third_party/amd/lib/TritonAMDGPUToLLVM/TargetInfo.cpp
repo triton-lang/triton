@@ -231,7 +231,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                                             rewriter.getZeroAttr(elemTy));
   bool addAliasGroup = localLoadOp && requiresAliasInfoForAsyncOps() &&
                        isSyncedViaAsyncWait(localLoadOp);
-  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal, {},
+  return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal,
+                                 /*multicastMask=*/{},
                                  triton::CacheModifier::NONE, addAliasGroup);
 }
 

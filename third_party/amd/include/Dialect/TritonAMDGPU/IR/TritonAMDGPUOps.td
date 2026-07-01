@@ -37,6 +37,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUOpInterfaces.td"
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "TritonAMDGPUDialect.td"
@@ -494,18 +495,22 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
 //===----------------------------------------------------------------------===//
 // MaskedLoadOp
 //===----------------------------------------------------------------------===//
-def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
+def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", [
+    MemoryEffects<[MemRead]>,
+    AllTypesMatch<["falseVal", "result"]>
+]> {
   let summary = "Masked load operation";
   let description = [{
     Load operation with masking and multicast support. If the mask is true, loads from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
-    On architectures supporting multicast, the `multicastMask`specifies which CTAs in the cluster request the same data. This allows the hardware to efficiently broadcast the
-    data to multiple CTAs in the cluster.
+    On architectures supporting multicast, the `multicastMask` specifies which
+    CTAs in the cluster request the same data. This allows the hardware to
+    efficiently broadcast the data to multiple CTAs in the cluster.
   }];
   let arguments = (ins
     LLVM_AnyPointer:$ptr,
     I1:$mask,
     LLVM_Type:$falseVal,
-    Optional<I16>:$multicastMask,
+    Optional<I32>:$multicastMask,
     DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias
   );
@@ -523,10 +528,10 @@ def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
 //===----------------------------------------------------------------------===//
 // MaskedStoreOp
 //===----------------------------------------------------------------------===//
-def MaskedStoreOp : TT_AMDGPU_Op<"masked_store", []> {
+def MaskedStoreOp : TT_AMDGPU_Op<"masked_store", [MemoryEffects<[MemWrite]>]> {
   let summary = "Masked Store operation";
   let description = [{
-    Store operation with masking support. If the mask is true, Store from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
+    Store operation with masking support. If the mask is true, stores to the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
   }];
   let arguments = (ins
     LLVM_AnyPointer:$ptr,
@@ -542,6 +547,48 @@ def MaskedStoreOp : TT_AMDGPU_Op<"masked_store", []> {
     (`forceNoAlias` $forceNoAlias^)?
     attr-dict `:` type(operands)
   }];
+}
+
+//===----------------------------------------------------------------------===//
+// MaskedRegionOp
+//===----------------------------------------------------------------------===//
+def MaskedRegionOp : TT_AMDGPU_Op<"masked_region",
+                                  [SingleBlock, RecursiveMemoryEffects]> {
+  let summary = "Masked memory region";
+  let description = [{
+    Groups AMD masked memory operations that share the same i1 predicate.
+    These operations are produced after tensor memory ops have been lowered to
+    per-thread LLVM values, so each masked operation may carry a scalar or
+    vector LLVM type. The region executes only when the predicate is true.
+    Region results are yielded by amdg.masked_yield; false-path values are
+    explicit operands on the parent op. This op is a transient AMD LLVM-lowering
+    helper and is lowered to explicit LLVM control flow before leaving the AMD
+    conversion.
+  }];
+
+  let arguments = (ins I1:$mask, Variadic<LLVM_Type>:$falseValues);
+  let results = (outs Variadic<LLVM_Type>:$results);
+  let regions = (region SizedRegion<1>:$body);
+
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $mask (`else` `(` $falseValues^ `)`)?
+    $body attr-dict
+    (`:` type($falseValues)^ `->` type($results))?
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// MaskedYieldOp
+//===----------------------------------------------------------------------===//
+def MaskedYieldOp : TT_AMDGPU_Op<"masked_yield",
+                                 [HasParent<"MaskedRegionOp">, Pure,
+                                  Terminator, ReturnLike]> {
+  let summary = "Yield from amdg.masked_region";
+  let arguments = (ins Variadic<LLVM_Type>:$values);
+
+  let hasVerifier = 1;
+  let assemblyFormat = "($values^)? attr-dict (`:` type($values)^)?";
 }
 
 //===----------------------------------------------------------------------===//

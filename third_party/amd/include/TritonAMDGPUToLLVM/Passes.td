@@ -31,7 +31,8 @@ def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::Mod
                              "mlir::LLVM::LLVMDialect",
                              "mlir::triton::TritonDialect",
                              "mlir::triton::gpu::TritonGPUDialect",
-                             "mlir::ROCDL::ROCDLDialect"];
+                             "mlir::ROCDL::ROCDLDialect",
+                             "mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
     let options = [
         Option<"gfxArch", "gfx-arch", "std::string", /*default*/"std::string{}",
@@ -52,6 +53,29 @@ def ConvertBuiltinFuncToLLVM : Pass<"convert-builtin-func-to-llvm", "mlir::Modul
                "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
         Option<"ftz", "ftz", "bool", /*default*/"true",
                "flush denorms for math functions">,
+    ];
+}
+
+def TritonAMDGPUFormMaskedRegions : Pass<"triton-amdgpu-form-masked-regions", "mlir::ModuleOp"> {
+    let summary = "Group same-mask AMD masked memory ops into masked regions";
+    let constructor = "mlir::triton::AMD::createTritonAMDGPUFormMaskedRegionsPass()";
+
+    let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                             "mlir::ROCDL::ROCDLDialect",
+                             "mlir::triton::amdgpu::TritonAMDGPUDialect"];
+}
+
+def TritonAMDGPUMaskedOpsToLLVM : Pass<"triton-amdgpu-masked-ops-to-llvm", "mlir::ModuleOp"> {
+    let summary = "Lower AMD masked regions and masked memory ops to LLVM control flow";
+    let constructor = "mlir::triton::AMD::createTritonAMDGPUMaskedOpsToLLVMPass(\"\")";
+
+    let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                             "mlir::ROCDL::ROCDLDialect",
+                             "mlir::triton::amdgpu::TritonAMDGPUDialect"];
+
+    let options = [
+        Option<"gfxArch", "gfx-arch", "std::string", /*default*/"std::string{}",
+               "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
     ];
 }
 
