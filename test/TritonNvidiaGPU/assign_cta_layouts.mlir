@@ -132,8 +132,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #dot_a_8cta = #ttg.dot_op<{opIdx = 0, parent = #dot_default_8cta}>
 #dot_b_8cta = #ttg.dot_op<{opIdx = 1, parent = #dot_default_8cta}>
 
-// CHECK-DAG: #[[$DESC_8CTA_B_PLANNED:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 0\], \[0, 1\], \[0, 2\]\]}}}>
-// CHECK-DAG: #[[$DOT_8CTA_M_FIRST:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\], \[0, 1\], \[0, 2\]\]}}}>
+// CHECK-DAG: #[[$DESC_8CTA_B_PLANNED:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = {{\[\[0, 0\], \[0, 0\], \[0, 1\]\]}}}>
+// CHECK-DAG: #[[$DOT_8CTA_M_FIRST:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = {{\[\[1, 0\], \[2, 0\], \[0, 1\]\]}}}>
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func @dot_prefers_m_first_for_8cta_descriptor_rhs
   // CHECK: %[[B_DESC_LOAD:.*]] = tt.descriptor_load %{{.*}}[%{{.*}}, %{{.*}}] : !tt.tensordesc<64x512xf16> -> tensor<64x512xf16, #[[$DESC_8CTA_B_PLANNED]]>
