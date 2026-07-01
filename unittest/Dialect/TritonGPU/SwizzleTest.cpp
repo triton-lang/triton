@@ -19,6 +19,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using mlir::triton::gpu::bankConflictsLdSt;
+using mlir::triton::gpu::getVecBitwidthLdSt;
 using mlir::triton::gpu::LocalMemOpTile;
 using mlir::triton::gpu::optimalSwizzling;
 using mlir::triton::gpu::optimalSwizzlingLdSt;
@@ -633,6 +634,32 @@ TEST_F(BankConflictTest, bankConflictsWavefront64) {
         << attrStr(c.reg) << "\n"
         << attrStr(c.shared);
   }
+}
+
+TEST_F(BankConflictTest, LowVectorF32MmaConvertKeeps64BankRegisterBasisHigh) {
+  auto S = [&](StringRef str) { return StringAttr::get(&ctx, str); };
+  auto src = mfma(4, {4, 1}, {32, 32, 16}, true);
+  auto dst = mfma(4, {4, 1}, {16, 16, 32}, true);
+  SmallVector<int64_t> shape = {128, 1};
+  auto srcLLRaw = toLL(shape, src);
+  auto dstLLRaw = toLL(shape, dst);
+  auto srcLL = actionRemoveBroadcastedRegs(srcLLRaw).apply(srcLLRaw);
+  auto dstLL = actionRemoveBroadcastedRegs(dstLLRaw).apply(dstLLRaw);
+
+  EXPECT_EQ(getVecBitwidthLdSt(srcLL, dstLL, /*bitwidth=*/32), 32);
+
+  auto smem = optimalSwizzlingLdSt(srcLL, dstLL, /*bitwidth=*/32,
+                                   /*numBanks=*/64);
+  auto [readConflicts, writeConflicts] =
+      bankConflictsLdSt(srcLL, dstLL, smem, /*bitwidth=*/32, /*numBanks=*/64);
+  EXPECT_EQ(readConflicts, 0);
+  EXPECT_EQ(writeConflicts, 0);
+  EXPECT_EQ(smem.getInDimSize(S("bank")), 64);
+  EXPECT_EQ(smem.getInDimSize(S("segment")), 2);
+
+  auto dstToSmem = dstLL.invertAndCompose(smem);
+  EXPECT_EQ(dstToSmem.getBasis(S("register"), /*pos=*/0, S("bank")), 32);
+  EXPECT_EQ(dstToSmem.getBasis(S("register"), /*pos=*/0, S("segment")), 0);
 }
 
 } // namespace
