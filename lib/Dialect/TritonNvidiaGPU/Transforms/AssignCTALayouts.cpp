@@ -169,24 +169,50 @@ void convertOpResultsFromLayouts(Operation *op,
   }
 }
 
+bool comesFromDescriptorLoad(Value value) {
+  while (auto cvtOp = value.getDefiningOp<ttg::ConvertLayoutOp>())
+    value = cvtOp.getSrc();
+  return isa_and_nonnull<triton::DescriptorLoadLikeOpInterface>(
+      value.getDefiningOp());
+}
+
 DotCTALayout getDotCTALayout(int64_t m, int64_t n, unsigned numCTAs,
-                             bool preferTwoCTA) {
+                             bool preferTwoCTA, bool canMulticastA,
+                             bool canMulticastB, int64_t aTileBits,
+                             int64_t bTileBits) {
   constexpr unsigned kPreferredChunkSize = 128;
   constexpr unsigned kMinChunkSize = 64;
   constexpr unsigned kMaxMMAv5TwoCTAsNPerCTA = 256;
   auto isLegalChunkSize = [](unsigned chunk) { return chunk >= kMinChunkSize; };
+  auto isLegalTwoCTASplit = [&](unsigned splitM, unsigned splitN) {
+    unsigned mPerCTA = m / splitM;
+    unsigned nPerCTA = n / splitN;
+    return isLegalChunkSize(mPerCTA) && isLegalChunkSize(nPerCTA) &&
+           nPerCTA <= kMaxMMAv5TwoCTAsNPerCTA;
+  };
 
   if (preferTwoCTA) {
+    DotCTALayout bestLayout = {{0, 0}, {0, 1}};
+    int64_t bestScore = -1;
     for (unsigned splitM = numCTAs; splitM > 1; splitM /= 2) {
       if (numCTAs % splitM != 0)
         continue;
       unsigned splitN = numCTAs / splitM;
-      unsigned mPerCTA = m / splitM;
-      unsigned nPerCTA = n / splitN;
-      if (isLegalChunkSize(mPerCTA) && isLegalChunkSize(nPerCTA) &&
-          nPerCTA <= kMaxMMAv5TwoCTAsNPerCTA)
-        return {{splitM, splitN}, {0, 1}};
+      if (!isLegalTwoCTASplit(splitM, splitN))
+        continue;
+
+      int64_t score = 0;
+      if (canMulticastA)
+        score += static_cast<int64_t>(splitN - 1) * aTileBits;
+      if (canMulticastB)
+        score += static_cast<int64_t>(splitM - 1) * bTileBits;
+      if (score > bestScore) {
+        bestLayout = {{splitM, splitN}, {0, 1}};
+        bestScore = score;
+      }
     }
+    if (bestScore >= 0)
+      return bestLayout;
   }
 
   unsigned splitM = 1;
@@ -214,12 +240,7 @@ bool preferTwoCTASplit(triton::DotOp dot, bool isBlackwell) {
   auto retTy = cast<RankedTensorType>(dot.getType());
   if (retTy.getRank() != 2)
     return false;
-
-  Value b = dot.getB();
-  while (auto cvtOp = b.getDefiningOp<ttg::ConvertLayoutOp>())
-    b = cvtOp.getSrc();
-  return isa_and_nonnull<triton::DescriptorLoadLikeOpInterface>(
-      b.getDefiningOp());
+  return true;
 }
 
 void assignDotCTALayout(triton::DotOp dot, bool isBlackwell) {
@@ -235,7 +256,10 @@ void assignDotCTALayout(triton::DotOp dot, bool isBlackwell) {
 
   DotCTALayout layout = getDotCTALayout(
       dTy.getShape()[0], dTy.getShape()[1], ttg::getNumCTAs(dLayout),
-      preferTwoCTASplit(dot, isBlackwell));
+      preferTwoCTASplit(dot, isBlackwell), comesFromDescriptorLoad(dot.getA()),
+      comesFromDescriptorLoad(dot.getB()),
+      aTy.getNumElements() * aTy.getElementType().getIntOrFloatBitWidth(),
+      bTy.getNumElements() * bTy.getElementType().getIntOrFloatBitWidth());
 
   OpBuilder builder(dot);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
