@@ -32,6 +32,18 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     %0 = tt.atomic_rmw add, relaxed, gpu, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
     tt.return
   }
+
+  // CHECK-LABEL: llvm.func @atomic_poll
+  // CHECK: llvm.load %{{.*}} atomic monotonic
+  // CHECK: llvm.fence acquire
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: nvvm.barrier
+  tt.func @atomic_poll(%ptr: !tt.ptr<i32>, %expected: i32) {
+    %matched = tt.atomic_poll acquire, sys, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
+    tt.return
+  }
 }
 
 // -----

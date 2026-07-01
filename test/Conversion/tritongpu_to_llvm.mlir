@@ -426,7 +426,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_view_broadcast
   tt.func @basic_view_broadcast(%arg : tensor<256xf32,#blocked0>) {
-    // CHECK: llvm.mlir.undef
     // CHECK: %[[T0:.*]] = llvm.extractvalue
     // CHECK: %[[T1:.*]] = llvm.extractvalue
     %0 = tt.reshape %arg allow_reorder : tensor<256xf32, #blocked0> -> tensor<256x1xf32,#blocked2>
@@ -1921,6 +1920,26 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 }
 
 // -----
+
+// CHECK-LABEL: sum_reduction_commuted
+//       CHECK:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
+//       CHECK:   nvvm.redux.sync  add %{{.*}}, %[[M]]
+//       CHECK:   nvvm.barrier
+//       CHECK:   nvvm.shfl.sync bfly
+//       CHECK:   nvvm.shfl.sync bfly
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @sum_reduction_commuted(%arg0: tensor<1x1024xi32, #blocked>) {
+    %11 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%arg2: i32, %arg3: i32):
+      %15 = arith.addi %arg3, %arg2 : i32
+      tt.reduce.return %15 : i32
+    }) : (tensor<1x1024xi32, #blocked>) -> tensor<1xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    tt.return
+  }
+}
+
+// -----
 // CHECK-LABEL: @reduce_vec8_axisonly
 // CHECK-COUNT-7: llvm.fadd {{.*}} : f16
 // CHECK-NOT: llvm.fadd {{.*}} : vector<2xf16>
@@ -2510,6 +2529,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#gather_thread_local_src = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#gather_thread_local_idx = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+
+tt.func @gather_thread_local(%idx: tensor<32x1xi32, #gather_thread_local_idx>, %src: tensor<32x2xf32, #gather_thread_local_src>) {
+  // CHECK-LABEL: gather_thread_local
+  // CHECK-NOT: nvvm.shfl.sync
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.select
+  // CHECK-NOT: nvvm.shfl.sync
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
+  %0 = tt.gather %src[%idx] {axis = 1 : i32} : (tensor<32x2xf32, #gather_thread_local_src>, tensor<32x1xi32, #gather_thread_local_idx>) -> tensor<32x1xf32, #gather_thread_local_idx>
+  tt.return
+}
+
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
 
@@ -2643,15 +2683,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 tt.func private @expand_dims_linear_layout() -> tensor<1x4xi32, #linear> {
   %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 0, parent = #linear}>>
   %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 0, parent = #linear}>> -> tensor<1x4xi32, #linear>
-  // CHECK: return %{{.*}} : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+  // CHECK: return %{{.*}} : !llvm.struct<(i32)>
   tt.return %1 : tensor<1x4xi32, #linear>
 }
 
-// CHECK-LABEL: reshape_linear_layout_broadcasting
+// CHECK-LABEL: llvm.func internal @reshape_linear_layout_broadcasting
+// CHECK-SAME: (%[[ARG0:.*]]: !llvm.struct<(bf16)>
 tt.func private @reshape_linear_layout_broadcasting(%arg0: tensor<32x4xbf16, #linear>) -> tensor<32x4x1xbf16, #blocked> {
-  // CHECK-COUNT-16: extractvalue
-  // CHECK-COUNT-16: insertvalue
   %0 = tt.reshape %arg0 : tensor<32x4xbf16, #linear> -> tensor<32x4x1xbf16, #blocked>
+  // CHECK: llvm.return %[[ARG0]] : !llvm.struct<(bf16)>
   tt.return %0 : tensor<32x4x1xbf16, #blocked>
 }
 

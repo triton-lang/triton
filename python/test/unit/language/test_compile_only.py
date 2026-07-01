@@ -46,7 +46,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     assert "mbarrier.arrive.release.cluster.shared::cluster.b64" in ptx
     assert "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64" in ptx
     assert "mapa" not in ptx
-    assert k.metadata.shared == 24
+    assert k.metadata.shared == 40
     assert k.asm["cubin"] != b""
 
 

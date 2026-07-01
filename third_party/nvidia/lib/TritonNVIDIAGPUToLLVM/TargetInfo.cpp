@@ -147,6 +147,24 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                                   NVVM::VoteSyncKind::ballot);
 }
 
+Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
+  return LLVM::createLLVMIntrinsicCallOp(
+             rewriter, loc, "llvm.nvvm.read.ptx.sreg.globaltimer", i64_ty, {})
+      .getResult(0);
+}
+
+StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
+  switch (scope) {
+  case MemSyncScope::CTA:
+    return "block";
+  case MemSyncScope::GPU:
+    return "device";
+  case MemSyncScope::SYSTEM:
+    return {};
+  }
+  llvm_unreachable("unknown memory synchronization scope");
+}
+
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -190,6 +208,11 @@ static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
   auto *ctaidOpr = builder.newOperand(ctaid, "r");
   mapaInstr(dstOpr, ptrOpr, ctaidOpr).predicate(pred, "b");
   return builder.launch(rewriter, loc, clusterPtrTy, /*hasSideEffect=*/false);
+}
+
+Value TargetInfo::mapDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                             Value ctaId, Value pred) const {
+  return ctaId ? mapa(rewriter, loc, ptr, ctaId, pred) : ptr;
 }
 
 static std::string getConstraintForBitwidth(unsigned bitwidth) {

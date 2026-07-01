@@ -28,7 +28,7 @@ struct ExtractSliceOpConversion
     Location loc = op->getLoc();
     auto srcTy = cast<RankedTensorType>(op.getSource().getType());
     auto dstTy = cast<RankedTensorType>(op.getType());
-    auto vals = unpackLLElements(loc, adaptor.getSource(), rewriter);
+    auto vals = unpackTensorElements(loc, adaptor.getSource(), rewriter, srcTy);
     auto offsets = op.getStaticOffsets();
 
     auto linearLayoutSrc = triton::gpu::toLinearLayout(srcTy);
@@ -71,8 +71,8 @@ struct ExtractSliceOpConversion
       resultVals.push_back(vals[srcReg.value()]);
     }
 
-    Value ret = packLLElements(loc, this->getTypeConverter(), resultVals,
-                               rewriter, dstTy);
+    Value ret = packTensorElements(loc, this->getTypeConverter(), resultVals,
+                                   rewriter, dstTy);
 
     rewriter.replaceOp(op, ret);
     return success();

@@ -772,6 +772,45 @@ def test_atomic_scalar_masks():
     tl.atomic_xor(ptrs, 1, mask=True)
 
 
+@filecheck_test
+@triton.jit
+def test_atomic_poll():
+    # CHECK-LABEL: test_atomic_poll
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    # CHECK: %{{.*}} = tt.atomic_poll relaxed, sys, %{{.*}}, %{{.*}} : !tt.ptr<i32>, i32 -> i1
+    tl.atomic_poll(ptr, 1, sem="relaxed", scope="sys")
+
+
+@filecheck_test
+@triton.jit
+def test_atomic_poll_timeout():
+    # CHECK-LABEL: test_atomic_poll_timeout
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    # CHECK: %{{.*}} = tt.atomic_poll acquire, gpu, %{{.*}}, %{{.*}} timeout %{{.*}} : !tt.ptr<i32>, i32 -> i1
+    tl.atomic_poll(ptr, 1, timeout_ns=1000)
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_poll_rejects_tensor_pointer():
+    ptrs = tl.full((1, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_poll(ptrs, 1)
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_poll_rejects_release_semantics():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_poll(ptr, 1, sem="release")
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_poll_rejects_negative_timeout():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_poll(ptr, 1, timeout_ns=-1)
+
+
 @pytest.mark.interpreter
 def test_return_promotion():
 

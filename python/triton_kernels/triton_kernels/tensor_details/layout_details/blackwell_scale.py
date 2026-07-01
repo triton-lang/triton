@@ -102,20 +102,19 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         return [1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256]
 
     def swizzle_data(self, data):
-        if data.numel():
-            if self.mode == "batched":
-                # value of padding on left, right, top, bottom
-                data = torch.nn.functional.pad(data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))
-            else:
-                # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
-                data = pad_segments_triton(
-                    data,
-                    self.ragged_metadata,
-                    self.ALIGN_M,
-                    self.M_pad,
-                    self.K,
-                    self.K_pad,
-                )
+        if self.mode == "batched":
+            # value of padding on left, right, top, bottom
+            data = torch.nn.functional.pad(data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))
+        elif data.numel():
+            # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
+            data = pad_segments_triton(
+                data,
+                self.ragged_metadata,
+                self.ALIGN_M,
+                self.M_pad,
+                self.K,
+                self.K_pad,
+            )
 
         data = data.reshape(self.B, self.M_pad // 128, 4, 32, self.K_pad // 4, 4)
         data = data.transpose(2, 4).contiguous()  # [1, M//128, K//4, 32, 4, 4]
@@ -171,8 +170,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         need_torch = data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1 or is_fake(data)
 
         if need_torch:
-            if data.numel():
-                data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
+            data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
             data = data.transpose(-1, -2).contiguous()
             data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32,
                                 self.K_pad // self.SWIZZLE_K, self.SWIZZLE_K)

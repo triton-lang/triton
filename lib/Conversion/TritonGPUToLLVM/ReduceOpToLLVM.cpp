@@ -43,13 +43,7 @@ public:
     // Remove block as we don't currently support it
     LinearLayout regLl = triton::gpu::toLinearLayout(helper.getSrcTy());
     // Remove broadcasting in registers as SliceLayout removes them
-    auto removeBroadcast = actionRemoveBroadcastedRegs(regLl);
-    if (!removeBroadcast.isIdentity()) {
-      regLl = removeBroadcast.apply(regLl);
-      for (auto &vals : accs) {
-        vals = removeBroadcast.apply(vals);
-      }
-    }
+    regLl = regLl.removeZeroBasesAlongDim(str_attr("register"));
 
     // First reduce all the values along axis within each thread.
     std::tie(regLl, accs) =
@@ -159,7 +153,7 @@ private:
     auto operands = adaptor.getOperands();
     SmallVector<SmallVector<Value>> srcValues(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      srcValues[i] = unpackLLElements(loc, operands[i], rewriter);
+      srcValues[i] = unpackUniqueTensorElements(loc, operands[i], rewriter);
     }
     return srcValues;
   }
@@ -318,7 +312,7 @@ private:
 
     // Update layout killing the axis bases along registers
     layout = ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, axis, kReg);
-    layout = actionRemoveBroadcastedRegs(layout).apply(layout);
+    layout = layout.removeZeroBasesAlongDim(kReg);
     return {std::move(layout), std::move(accs)};
   }
 
@@ -394,13 +388,9 @@ private:
     Location loc = op.getLoc();
     SmallVector<Value> results(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      if (auto resultTy =
-              dyn_cast<RankedTensorType>(op.getResult()[i].getType())) {
-        results[i] = packLLElements(loc, getTypeConverter(), accs[i], rewriter,
-                                    resultTy);
-      } else {
-        results[i] = accs[i].front();
-      }
+      results[i] =
+          packUniqueTensorElements(loc, getTypeConverter(), accs[i], rewriter,
+                                   op.getResult()[i].getType());
     }
     rewriter.replaceOp(op, results);
   }
@@ -427,8 +417,8 @@ private:
       auto elemTy = op.getElementTypes()[i];
       auto srcTy = RankedTensorType::get(shape, elemTy, srcEnc);
       auto dstTy = RankedTensorType::get(shape, elemTy, dstEnc);
-      Value packed =
-          packLLElements(loc, getTypeConverter(), inVals[i], rewriter, srcTy);
+      Value packed = packUniqueTensorElements(loc, getTypeConverter(),
+                                              inVals[i], rewriter, srcTy);
       auto srcTensor =
           UnrealizedConversionCastOp::create(rewriter, loc, srcTy, packed)
               .getResult(0);
@@ -441,7 +431,7 @@ private:
       auto packedDst = UnrealizedConversionCastOp::create(
                            rewriter, loc, packedDstTy, cvt.getResult())
                            .getResult(0);
-      outVals[i] = unpackLLElements(loc, packedDst, rewriter);
+      outVals[i] = unpackUniqueTensorElements(loc, packedDst, rewriter);
     }
     return outVals;
   }

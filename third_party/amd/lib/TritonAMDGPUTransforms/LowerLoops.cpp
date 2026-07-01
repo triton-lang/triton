@@ -109,9 +109,12 @@ TDMChainOps createTDMAsyncGather(tt::DescriptorGatherOp gatherOp, Value alloc,
           indices =
               ttg::ConvertLayoutOp::create(builder, loc, newIdxType, indices);
         }
-        return triton::amdgpu::AsyncTDMGatherOp::create(
-            builder, loc, gatherOp.getDesc(), indices, gatherOp.getYOffset(),
-            view, pred);
+        Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
+        Value desc = createUpdateTDMDescriptorOp(
+            builder, loc, gatherOp.getDesc(), {zero, gatherOp.getYOffset()},
+            /*pred=*/pred);
+        return triton::amdgpu::AsyncTDMGatherOp::create(builder, loc, desc,
+                                                        indices, view);
       });
 }
 

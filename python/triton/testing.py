@@ -1,4 +1,5 @@
 import functools
+import gc
 import math
 import os
 import statistics
@@ -60,6 +61,25 @@ def _summarize_statistics(times, quantiles, return_mode):
 
 
 @contextmanager
+def cuda_graph_without_gc(*args, **kwargs):
+    # A loaded Triton CompiledKernel may be finalized by Python's cyclic GC.
+    # Its destructor unloads the CUDA module, which is illegal during CUDA
+    # stream capture and invalidates the graph. Keep GC disabled only for the
+    # capture window and restore the caller's previous GC state afterwards.
+    import torch
+
+    gc_was_enabled = gc.isenabled()
+    if gc_was_enabled:
+        gc.disable()
+    try:
+        with torch.cuda.graph(*args, **kwargs) as graph:
+            yield graph
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
+@contextmanager
 def _proton_bench_session():
     import triton.profiler as proton
 
@@ -108,8 +128,11 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     :type grad_to_none: torch.tensor, optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :return: The runtime(s) in milliseconds: a single float for a scalar ``return_mode``, or a list of floats if ``quantiles`` is set or ``return_mode="all"``.
+    :rtype: float | list[float]
     """
     import torch
+
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
     with torch.cuda.stream(torch.cuda.Stream()):
@@ -142,7 +165,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         # step 2 - construct a cuda graph with `n_repeat` unrolled function calls to minimize
         # host overhead
         g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g):
+        with cuda_graph_without_gc(g):
             for _ in range(n_repeat):
                 if grad_to_none is not None:
                     for x in grad_to_none:
@@ -181,6 +204,8 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
     :type grad_to_none: torch.tensor, optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :return: The runtime(s) in milliseconds: a single float for a scalar ``return_mode``, or a list of floats if ``quantiles`` is set or ``return_mode="all"``.
+    :rtype: float | list[float]
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
@@ -217,7 +242,7 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
             cache = runtime.driver.active.get_empty_cache_for_benchmark()
             g = torch.cuda.CUDAGraph()
             scope_prefix = f"proton.{uuid.uuid4().hex}."
-            with torch.cuda.graph(g):
+            with cuda_graph_without_gc(g):
                 for i in range(n_repeat):
                     if grad_to_none is not None:
                         for x in grad_to_none:
@@ -241,7 +266,7 @@ def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, ret
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
     """
-    Benchmark the runtime of the provided function. By default, returns the mean runtime of :code:`fn` as a single float.
+    Benchmark the runtime of the provided function. By default, returns the mean runtime (in milliseconds) of :code:`fn` as a single float.
 
     :param fn: Function to benchmark
     :type fn: Callable
@@ -261,8 +286,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
         the fastest and slowest run respectively. ``"all"`` returns the raw list of
         per-run timings in ms. Default is ``"mean"``.
     :type return_mode: str
-    :return: A single float by default, a list of floats if ``quantiles`` is provided,
-        or a list of all per-run timings if ``return_mode="all"``.
+    :return: The runtime(s) in milliseconds: a single float for a scalar ``return_mode``, or a list of floats if ``quantiles`` is set or ``return_mode="all"``.
     :rtype: float | list[float]
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
@@ -334,6 +358,8 @@ def do_bench_proton(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, r
     :type quantiles: list[float], optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :return: The runtime(s) in milliseconds: a single float for a scalar ``return_mode``, or a list of floats if ``quantiles`` is set or ``return_mode="all"``.
+    :rtype: float | list[float]
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
 

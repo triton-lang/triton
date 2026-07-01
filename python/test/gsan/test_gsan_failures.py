@@ -91,6 +91,19 @@ def _cross_sm_atomic_sync_kernel(payload_ptr, flag_ptr, counter_ptr, scratch_ptr
 
 
 @triton.jit
+def _atomic_poll_cross_sm_sync_kernel(payload_ptr, flag_ptr, scratch_ptr, producer_sem: tl.constexpr,
+                                      consumer_sem: tl.constexpr, scope: tl.constexpr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(payload_ptr, 1000)
+        tl.atomic_xchg(flag_ptr, 1, sem=producer_sem, scope=scope)
+    elif pid == 1:
+        tl.atomic_poll(flag_ptr, 1, sem=consumer_sem, scope=scope)
+        result = tl.load(payload_ptr)
+        tl.store(scratch_ptr, result)
+
+
+@triton.jit
 def _transitive_atomic_sync_kernel(payload_ptr, flag0_ptr, flag1_ptr, counter_ptr, scratch_ptr,
                                    release_sem: tl.constexpr, relay_sem: tl.constexpr, scope: tl.constexpr):
     pid = tl.program_id(0)
@@ -194,6 +207,17 @@ def _host_tma_atomic_flag_publish_kernel(payload_ptr, flag_ptr, flag_desc, count
         tl.store(scratch_ptr, result)
 
 
+@triton.jit
+def _mixed_scope_release_rmw_kernel(counter_ptr, ready_ptr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.atomic_add(counter_ptr, 1, sem="release", scope="gpu")
+        tl.atomic_xchg(ready_ptr, 1, sem="relaxed", scope="gpu")
+    elif pid == 1:
+        atomic_poll(ready_ptr, 1)
+        tl.atomic_add(counter_ptr, 1, sem="release", scope="sys")
+
+
 def _cuda_byte_allocator(size: int, _align: int, _stream):
     return torch.empty(size, dtype=torch.int8, device="cuda")
 
@@ -232,6 +256,13 @@ def _run_waw_case() -> None:
     scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
     counter = torch.zeros(1, dtype=torch.int32, device="cuda")
     _waw_kernel[(2, )](target, scratch, counter, num_warps=1)
+
+
+@run_with_gsan
+def _run_mixed_scope_release_rmw_case() -> None:
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+    ready = torch.zeros(1, dtype=torch.int32, device="cuda")
+    _mixed_scope_release_rmw_kernel[(2, )](counter, ready, num_warps=1)
 
 
 @run_with_gsan
@@ -344,6 +375,22 @@ def _run_cross_sm_atomic_sync_case(producer_sem: str, consumer_sem: str, scope: 
 
 
 @run_with_gsan
+def _run_atomic_poll_cross_sm_sync_case(producer_sem: str, consumer_sem: str, scope: str) -> None:
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flag = torch.zeros(1, dtype=torch.int32, device="cuda")
+    scratch = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _atomic_poll_cross_sm_sync_kernel[(2, )](
+        payload,
+        flag,
+        scratch,
+        producer_sem=producer_sem,
+        consumer_sem=consumer_sem,
+        scope=scope,
+        num_warps=4,
+    )
+
+
+@run_with_gsan
 def _run_transitive_atomic_sync_case(release_sem: str, relay_sem: str, scope: str) -> None:
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
     flag0 = torch.zeros(1, dtype=torch.int32, device="cuda")
@@ -405,6 +452,16 @@ def test_write_after_write():
                       error="Write after write race detected")
 
 
+def test_mixed_scope_release_rmw_accumulation():
+    _run_failure_case(
+        "mixed_scope_release_rmw",
+        runner=_run_mixed_scope_release_rmw_case,
+        source_function=_mixed_scope_release_rmw_kernel.fn,
+        marker='tl.atomic_add(counter_ptr, 1, sem="release", scope="sys")',
+        error="GSan detected atomic release accumulation with mixed scopes, which is not supported.",
+    )
+
+
 def test_tma_read_after_write():
     _run_failure_case("tma_raw", runner=_run_tma_raw_case, source_function=_tma_raw_kernel.fn,
                       marker="value = tl.load(ptr + row_idx * stride_0 + col_idx)",
@@ -444,6 +501,14 @@ def test_cross_sm_semantic_mismatch_read_after_write(producer_sem, consumer_sem,
     _run_failure_case(f"cross_sm_semantic_mismatch_{producer_sem}_{consumer_sem}_{scope}",
                       runner=_run_cross_sm_atomic_sync_case, runner_args=(producer_sem, consumer_sem, scope),
                       source_function=_cross_sm_atomic_sync_kernel.fn, marker="result = tl.load(payload_ptr)",
+                      error="Read after write race detected")
+
+
+@pytest.mark.parametrize("producer_sem, consumer_sem, scope", CROSS_SM_SEMANTIC_MISMATCH_CASES)
+def test_atomic_poll_semantic_mismatch_read_after_write(producer_sem, consumer_sem, scope):
+    _run_failure_case(f"atomic_poll_semantic_mismatch_{producer_sem}_{consumer_sem}_{scope}",
+                      runner=_run_atomic_poll_cross_sm_sync_case, runner_args=(producer_sem, consumer_sem, scope),
+                      source_function=_atomic_poll_cross_sm_sync_kernel.fn, marker="result = tl.load(payload_ptr)",
                       error="Read after write race detected")
 
 

@@ -111,10 +111,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         *_, M, K = self._padded_shape(data.shape)
         pad_m = M - M_in
         pad_k = K - K_in
-        if data.numel():
-            data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
-        else:
-            data = data.reshape(*data.shape[:-2], M_in + pad_m, K_in + pad_k)
+        data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
 
         data = self._maybe_mT(data)
         init_shape = data.shape

@@ -147,12 +147,13 @@ public:
     Location loc = op.getLoc();
     Value input = adaptor.getSrc();
     auto typeConverter = getTypeConverter();
-    SmallVector<Value> srcValues = unpackLLElements(loc, input, rewriter);
+    SmallVector<Value> srcValues =
+        unpackUniqueTensorElements(loc, input, rewriter);
 
     Value llMask = adaptor.getMask();
     SmallVector<Value> maskValues;
     if (llMask)
-      maskValues = unpackLLElements(loc, llMask, rewriter);
+      maskValues = unpackUniqueTensorElements(loc, llMask, rewriter);
 
     int numBins = op.getType().getDimSize(0);
     auto mod = op->getParentOfType<ModuleOp>();
@@ -207,8 +208,8 @@ public:
           b.sdiv(histogramValue[i], b.i32_val(replicationFactor));
     }
 
-    Value results = packLLElements(loc, typeConverter, histogramValue, rewriter,
-                                   op.getType());
+    Value results = packTensorElements(loc, typeConverter, histogramValue,
+                                       rewriter, op.getType());
     rewriter.replaceOp(op, results);
     return success();
   }

@@ -6,7 +6,7 @@ import pytest
 
 import pathlib
 import uuid
-from triton._internal_testing import is_cuda, is_hip_cdna
+from triton._internal_testing import is_cuda, is_hip_cdna2
 
 
 def do_bench(kernel_call, quantiles, use_cuda_graph=False):
@@ -147,7 +147,7 @@ def test_restore_with_none(pass_kwargs_to_kernel, device):
     triton.testing.assert_close(dst, torch.ones_like(dst))
 
 
-@pytest.mark.skipif(is_hip_cdna(), reason="Hit LLVM assertion in splitLiveThroughBlock")
+@pytest.mark.skipif(is_hip_cdna2(), reason="Hit LLVM assertion in splitLiveThroughBlock")
 def test_hooks(device):
     # Autotuner's pre- and post- hooks should be called the same number of times
     N = 4096
@@ -235,6 +235,32 @@ def test_prune_configs(with_perf_model: bool, device: str):
         assert records['run_early_config_prune']
         assert records['capture_kwargs']
         assert records['capture_named_args']
+
+
+def test_prune_configs_fractional_top_k_keeps_one(device: str):
+    # A fractional top_k that rounds down to zero for a small config set must
+    # still keep one config instead of pruning them all and crashing the later
+    # min() on an empty set: here int(2 * 0.3) == 0.
+    N = 1024
+    src = torch.randn(N, device=device)
+    dst = torch.empty(N, device=device)
+
+    def perf_model(*args, **kwargs):
+        return kwargs['BLOCK_SIZE']
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
+    prune_configs_by = {'perf_model': perf_model, 'top_k': 0.3}
+
+    @triton.autotune(configs=configs, key=['N'], prune_configs_by=prune_configs_by, do_bench=do_bench)
+    @triton.jit
+    def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    _kernel[grid](dst, src, N=N)
+    torch.testing.assert_close(src, dst)
 
 
 @pytest.mark.parametrize("prune_kind", ["early_config_prune", "perf_model"])
