@@ -153,25 +153,36 @@ public:
     auto mulOp = reduceOp.getOperand(0).getDefiningOp<arith::MulFOp>();
     if (!mulOp)
       return failure();
-    // mul operand has to be broadcast
-    auto broadcastLhsOp = mulOp.getOperand(0).getDefiningOp<BroadcastOp>();
-    if (!broadcastLhsOp)
+    // mul operands have to be broadcasts. Since multiplication is
+    // commutative, identify the dot operands from their broadcast axes instead
+    // of from the mul operand order.
+    auto broadcast0Op = mulOp.getOperand(0).getDefiningOp<BroadcastOp>();
+    if (!broadcast0Op)
       return failure();
-    auto broadcastRhsOp = mulOp.getOperand(1).getDefiningOp<BroadcastOp>();
-    if (!broadcastRhsOp)
+    auto broadcast1Op = mulOp.getOperand(1).getDefiningOp<BroadcastOp>();
+    if (!broadcast1Op)
       return failure();
     // broadcast operand is expand dims
-    auto expandLhsOp = broadcastLhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
-    if (!expandLhsOp)
+    auto expand0Op = broadcast0Op.getSrc().getDefiningOp<ExpandDimsOp>();
+    if (!expand0Op)
       return failure();
-    auto expandRhsOp = broadcastRhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
-    if (!expandRhsOp)
+    auto expand1Op = broadcast1Op.getSrc().getDefiningOp<ExpandDimsOp>();
+    if (!expand1Op)
       return failure();
-    // get not-broadcast dimensions
-    int expandLhsAxis = expandLhsOp.getAxis();
-    int expandRhsAxis = expandRhsOp.getAxis();
-    if (expandLhsAxis != 2 || expandRhsAxis != 0)
+
+    auto broadcastLhsOp = broadcast0Op;
+    auto broadcastRhsOp = broadcast1Op;
+    auto expandLhsOp = expand0Op;
+    auto expandRhsOp = expand1Op;
+    if (expand0Op.getAxis() == 0 && expand1Op.getAxis() == 2) {
+      broadcastLhsOp = broadcast1Op;
+      broadcastRhsOp = broadcast0Op;
+      expandLhsOp = expand1Op;
+      expandRhsOp = expand0Op;
+    } else if (expand0Op.getAxis() != 2 || expand1Op.getAxis() != 0) {
       return failure();
+    }
+
     // The first operand must be broadcasted from (M, K, 1) to (M, K, N), and
     // the second operand must go from (1, K, N) to (M, K, N).
     if (!isBroadcastAlongAxis(broadcastLhsOp, 2) ||
