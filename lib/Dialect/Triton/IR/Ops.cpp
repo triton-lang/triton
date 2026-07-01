@@ -920,6 +920,22 @@ LogicalResult CatOp::verify() {
 
 //-- ReshapeOp --
 
+std::optional<unsigned> ReshapeOp::getExpandDimsAxis() {
+  auto srcTy = getSrc().getType();
+  auto dstTy = getType();
+  if (srcTy.getRank() + 1 != dstTy.getRank())
+    return std::nullopt;
+  auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
+  for (unsigned axis = 0; axis < dstShape.size(); ++axis) {
+    if (dstShape[axis] == 1 &&
+        srcShape.take_front(axis) == dstShape.take_front(axis) &&
+        srcShape.drop_front(axis) == dstShape.drop_front(axis + 1))
+      return axis;
+  }
+  return std::nullopt;
+}
+
 void ReshapeOp::build(OpBuilder &builder, OperationState &state,
                       ArrayRef<int64_t> shape, Value src, bool allowReorder) {
   auto srcTy = cast<RankedTensorType>(src.getType());
