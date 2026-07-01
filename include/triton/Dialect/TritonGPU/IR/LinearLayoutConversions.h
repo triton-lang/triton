@@ -177,14 +177,14 @@ LinearLayout getScaleSmemLayoutForTMEMCopy(MLIRContext *ctx,
 // (dim0, dim1, ...).  TDM is warp-granular.  The "warp" sublayout is an
 // identity over `warpsPerCTA`, zero-padded up to log2(numWarps) so the
 // full module warpId is covered; padded rows expose the redundant bits
-// as free variables (via getFreeVariableMasks("warp")) so partial copies
-// (K < numWarps) can pred-off inactive warps.  "message" covers the
+// as free variables (via getFreeVariableMasks("warp")) for descriptor
+// predication.  "message" covers the
 // per-warp tile (surjectivity); "block" comes from `cgaLayout`.
 //
 // `warpUsedHint`: power-of-two-popcount bitmask whose K = popcount(hint)
 // set bits select active warps.  The varying warpId bit positions in the
 // active set are the warp bits that contribute to per-warp offsets; all
-// other warpId bits become free variables for predicating inactive warps.
+// other warpId bits become free variables for descriptor predication.
 // Empty = no-hint default (lowest log2(K) bits, K = prod(warpsPerCTA)).
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,

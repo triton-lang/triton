@@ -1915,8 +1915,8 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
 
   // Place the K identity rows at the basis-bit positions picked from the
   // hint (or at the lowest log2(K) bits if none).  Other warpId bits get
-  // zero rows; getFreeVariableMasks reports them as free variables, which
-  // the lowering uses to predicate inactive warps off.
+  // zero rows; getFreeVariableMasks reports them as free variables for
+  // descriptor predication.
   LinearLayout warpLayout = identityStandardND(kWarp, warpsPerCTA, order);
   unsigned numActiveBits = llvm::Log2_32(activeWarps);
   unsigned numTotalBits = llvm::Log2_32(static_cast<unsigned>(totalWarps));

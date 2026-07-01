@@ -12,8 +12,8 @@ if TYPE_CHECKING:
     from triton.experimental.gluon.language._core import shared_memory_descriptor
 
 __all__ = [
-    "update_tensor_descriptor", "async_load", "async_wait", "make_tensor_descriptor", "tensor_descriptor",
-    "tensor_descriptor_type", "prefetch", "async_scatter"
+    "update_tensor_descriptor", "async_load", "async_load_fused", "async_wait", "make_tensor_descriptor",
+    "tensor_descriptor", "tensor_descriptor_type", "prefetch", "async_scatter"
 ]
 
 
@@ -259,9 +259,9 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
         dest (shared_memory_descriptor): the shared memory destination to store the loaded data.
         pred (bool, optional): if given, predicate to enable or disable the load.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
-        warp_used_hint (int, optional): Bitmask selecting which warps issue
-            the TDM copy (bit ``n`` => warp ``n``); cleared warps become HW
-            no-ops.  Doesn't affect the data in ``dest``, only the work split.
+        warp_used_hint (int, optional): Bitmask selecting the active warp
+            subset for descriptor layout (bit ``n`` => warp ``n``).  Doesn't
+            affect the data in ``dest``, only the work split.
             The number of active warps must be a power of two, and the active
             warps must follow a regular bit pattern for efficient lowering.
             Examples: ``0b00001111`` (warps 0..3), ``0b11110000`` (warps
@@ -287,6 +287,60 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
 
     _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, dest.handle, mbarrier_handle, cache_modifier,
                                                             warp_used_hint)
+
+
+@builtin
+def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descriptor, ttgl.constexpr | int]],
+                     cache_modifier="", _semantic=None) -> None:
+    """Emit one explicit fused TDM load for 2-4 descriptor/destination pairs.
+
+    This can perform better than several consecutive separate TDM loads,
+    especially for more than two loads. Under the hood, different warps load
+    different descriptor/destination pairs according to each member's
+    ``warp_used_hint``; collectively all participating warps load all pairs at
+    the block level.
+
+    Each member is ``(desc, dest, warp_used_hint)``. The descriptors must
+    already encode their tile offsets, predicates, and bounds; use
+    :func:`update_tensor_descriptor` before calling this helper when needed.
+    All members share one cache modifier, matching the fused IR operation.
+
+    Args:
+        members: 2-4 ``(desc, dest, warp_used_hint)`` tuples. Hints must be
+            legal, pairwise-disjoint bitmasks.
+        cache_modifier (str, optional): Cache behavior shared by all members.
+    """
+    members = _unwrap_if_constexpr(members)
+    if not 2 <= len(members) <= 4:
+        raise ValueError(f"tdm.async_load_fused requires 2 to 4 members, got {len(members)}")
+
+    desc_handles = []
+    dest_handles = []
+    warp_used_hints = []
+    rank = None
+    for idx, member in enumerate(members):
+        member = _unwrap_if_constexpr(member)
+        if len(member) != 3:
+            raise ValueError("tdm.async_load_fused members must be (desc, dest, warp_used_hint) tuples")
+        desc, dest, warp_used_hint = member
+        if not isinstance(desc, tensor_descriptor):
+            raise TypeError(f"tdm.async_load_fused member {idx}: expected tensor_descriptor")
+        if rank is None:
+            rank = len(desc.block_shape)
+        if len(desc.block_shape) != rank:
+            raise ValueError("tdm.async_load_fused requires all descriptors to have the same rank")
+
+        warp_used_hint = _unwrap_if_constexpr(warp_used_hint)
+        if warp_used_hint is None:
+            raise ValueError(f"tdm.async_load_fused member {idx}: warp_used_hint is required")
+
+        desc_handles.append(desc.handle)
+        dest_handles.append(dest.handle)
+        warp_used_hints.append(int(warp_used_hint))
+
+    cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
+    _semantic.builder.create_async_tdm_fused_copy_global_to_local(desc_handles, dest_handles, warp_used_hints,
+                                                                  cache_modifier)
 
 
 @builtin

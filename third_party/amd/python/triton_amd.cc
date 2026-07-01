@@ -117,6 +117,8 @@ void init_triton_amd_passes_ttgpuir(py::module_ &m) {
   ADD_PASS_OPTION_WRAPPER_1("add_coalesce_async_copy",
                             mlir::createTritonAMDGPUCoalesceAsyncCopy,
                             std::string);
+  ADD_PASS_WRAPPER_0("add_auto_fuse_tdm_copy",
+                     mlir::createTritonAMDGPUAutoFuseTDMCopy);
   ADD_PASS_OPTION_WRAPPER_1("add_update_async_wait_count",
                             mlir::createTritonAMDGPUUpdateAsyncWaitCount,
                             std::string);

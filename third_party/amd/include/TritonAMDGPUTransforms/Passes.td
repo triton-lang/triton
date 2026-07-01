@@ -300,6 +300,20 @@ def TritonAMDGPUUpdateAsyncWaitCount: Pass<"tritonamdgpu-update-async-wait-count
   ];
 }
 
+def TritonAMDGPUAutoFuseTDMCopy: Pass<"tritonamdgpu-auto-fuse-tdm-copy", "mlir::ModuleOp"> {
+  let summary = "Auto-fuse adjacent unhinted TDM copy operations";
+
+  let description = [{
+    Auto-fuses adjacent unhinted TDM copies into explicit
+    `amdgpu.async_tdm_fused_copy_global_to_local` operations. User-provided
+    hints on regular copies remain standalone; manual fusion should use the
+    explicit fused op. This pass runs before both the wait-count pass and LLVM
+    conversion so those passes see the same explicit IR.
+  }];
+
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
+}
+
 def TritonAMDFoldTrueCmpI: Pass<"tritonamdgpu-fold-true-cmpi", "mlir::ModuleOp"> {
   let summary = "Fold true arith.cmpi to %true";
 
