@@ -339,6 +339,9 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         continue;
       }
     }
+    if (auto reshapeOp = dyn_cast<ReshapeOp>(user);
+        reshapeOp && reshapeOp.getEfficientLayout())
+      continue;
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
