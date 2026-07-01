@@ -195,8 +195,9 @@ DotCTALayout getDotCTALayout(int64_t m, int64_t n, unsigned numCTAs,
     splitN = numCTAs / splitM;
   }
 
-  return {{splitM, splitN}, preferTwoCTA ? std::array<unsigned, 2>{0, 1}
-                                         : std::array<unsigned, 2>{1, 0}};
+  return {{splitM, splitN},
+          preferTwoCTA ? std::array<unsigned, 2>{0, 1}
+                       : std::array<unsigned, 2>{1, 0}};
 }
 
 bool allowTwoCTASplit(triton::DotOp dot, bool preferTwoCTA) {
@@ -220,9 +221,9 @@ void assignDotCTALayout(triton::DotOp dot, bool preferTwoCTA) {
   auto bLayout = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
   auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
 
-  DotCTALayout layout = getDotCTALayout(
-      dTy.getShape()[0], dTy.getShape()[1], ttg::getNumCTAs(dLayout),
-      allowTwoCTASplit(dot, preferTwoCTA));
+  DotCTALayout layout = getDotCTALayout(dTy.getShape()[0], dTy.getShape()[1],
+                                        ttg::getNumCTAs(dLayout),
+                                        allowTwoCTASplit(dot, preferTwoCTA));
 
   OpBuilder builder(dot);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
