@@ -672,8 +672,7 @@ def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
             "ptx"] or "stmatrix.sync.aligned.x4.m8n8.shared.b16" in kernel.asm["ptx"]
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability(0)[0] != 10,
-                    reason="Requires Blackwell MMAv5")
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability(0)[0] != 10, reason="Requires Blackwell MMAv5")
 @pytest.mark.parametrize("num_ctas, BLOCK_M, BLOCK_N", [(4, 256, 256), (8, 256, 512)])
 def test_make_tensor_descriptor_matmul_multi_cta_tma_multicast(num_ctas, BLOCK_M, BLOCK_N, device):
     M, N, K = 512, 512, 256
