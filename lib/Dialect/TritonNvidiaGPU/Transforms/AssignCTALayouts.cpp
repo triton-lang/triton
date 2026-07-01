@@ -332,13 +332,14 @@ struct AssignCTALayoutsPass
     if (numCTAs == 1)
       return;
 
-    auto targetAttr =
-        mod->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
-    bool preferTwoCTA = false;
-    if (targetAttr && targetAttr.getValue().starts_with("cuda:")) {
+    auto preferTwoCTA = [&]() {
+      auto targetAttr =
+          mod->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
+      if (!targetAttr || !targetAttr.getValue().starts_with("cuda:"))
+        return false;
       int computeCapability = getNVIDIAComputeCapability(mod);
-      preferTwoCTA = computeCapability >= 100 && computeCapability < 120;
-    }
+      return computeCapability >= 100 && computeCapability < 120;
+    }();
 
     mod.walk([&](Operation *op) {
       if (auto dot = dyn_cast<triton::DotOp>(op))
