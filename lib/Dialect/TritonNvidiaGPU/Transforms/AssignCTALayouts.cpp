@@ -210,6 +210,14 @@ bool allowTwoCTASplit(triton::DotOp dot, bool preferTwoCTA) {
   return true;
 }
 
+bool preferTwoCTA(ModuleOp mod) {
+  auto targetAttr = mod->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
+  if (!targetAttr || !targetAttr.getValue().starts_with("cuda:"))
+    return false;
+  int computeCapability = getNVIDIAComputeCapability(mod);
+  return computeCapability >= 100 && computeCapability < 120;
+}
+
 void assignDotCTALayout(triton::DotOp dot, bool preferTwoCTA) {
   MLIRContext *ctx = dot.getContext();
 
@@ -332,18 +340,11 @@ struct AssignCTALayoutsPass
     if (numCTAs == 1)
       return;
 
-    auto preferTwoCTA = [&]() {
-      auto targetAttr =
-          mod->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
-      if (!targetAttr || !targetAttr.getValue().starts_with("cuda:"))
-        return false;
-      int computeCapability = getNVIDIAComputeCapability(mod);
-      return computeCapability >= 100 && computeCapability < 120;
-    }();
+    bool useTwoCTA = preferTwoCTA(mod);
 
     mod.walk([&](Operation *op) {
       if (auto dot = dyn_cast<triton::DotOp>(op))
-        assignDotCTALayout(dot, preferTwoCTA);
+        assignDotCTALayout(dot, useTwoCTA);
       if (auto reduce = dyn_cast<triton::ReduceOp>(op))
         assignReduceCTALayout(reduce);
     });
