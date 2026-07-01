@@ -175,25 +175,32 @@ DotCTALayout getDotCTALayout(int64_t m, int64_t n, unsigned numCTAs,
   constexpr unsigned kMinChunkSize = 64;
   auto isLegalChunkSize = [](unsigned chunk) { return chunk >= kMinChunkSize; };
 
-  unsigned splitM = 1;
-  unsigned splitN = numCTAs;
-  // Prefer a larger M chunk, up to 128 elements, by assigning splitM first.
-  // splitN gets the remaining CTAs as long as each N chunk has at least 64
-  // elements.
-  for (unsigned chunkM = kPreferredChunkSize; isLegalChunkSize(chunkM);
-       chunkM /= 2) {
-    splitM = std::clamp<unsigned>(m / chunkM, 1, numCTAs);
-    splitN = numCTAs / splitM;
-    if (isLegalChunkSize(n / splitN))
+  unsigned splitM = numCTAs;
+  unsigned splitN = 1;
+  if (preferTwoCTA) {
+    unsigned mChunkSize = m / (numCTAs / 2);
+    unsigned nChunkSize = n / 2;
+    if (isLegalChunkSize(mChunkSize) && isLegalChunkSize(nChunkSize)) {
+      splitM = numCTAs / 2;
+      splitN = 2;
+    }
+  }
+
+  // Keep decreasing splitM until we reach kPreferredChunkSize
+  while (splitM > 1) {
+    unsigned mChunkSize = m / splitM;
+    if (mChunkSize <= kPreferredChunkSize)
       break;
+    splitM /= 2;
+    splitN = numCTAs / splitM;
   }
 
   return {{splitM, splitN}, preferTwoCTA ? std::array<unsigned, 2>{0, 1}
                                          : std::array<unsigned, 2>{1, 0}};
 }
 
-bool preferTwoCTASplit(triton::DotOp dot, bool isBlackwell) {
-  if (!isBlackwell || ttg::lookupNumCTAs(dot) < 2)
+bool allowTwoCTASplit(triton::DotOp dot, bool preferTwoCTA) {
+  if (!preferTwoCTA || ttg::lookupNumCTAs(dot) < 2)
     return false;
 
   auto retTy = cast<RankedTensorType>(dot.getType());
@@ -202,7 +209,7 @@ bool preferTwoCTASplit(triton::DotOp dot, bool isBlackwell) {
   return true;
 }
 
-void assignDotCTALayout(triton::DotOp dot, bool isBlackwell) {
+void assignDotCTALayout(triton::DotOp dot, bool preferTwoCTA) {
   MLIRContext *ctx = dot.getContext();
 
   auto aTy = cast<RankedTensorType>(dot.getA().getType());
@@ -215,7 +222,7 @@ void assignDotCTALayout(triton::DotOp dot, bool isBlackwell) {
 
   DotCTALayout layout = getDotCTALayout(
       dTy.getShape()[0], dTy.getShape()[1], ttg::getNumCTAs(dLayout),
-      preferTwoCTASplit(dot, isBlackwell));
+      allowTwoCTASplit(dot, preferTwoCTA));
 
   OpBuilder builder(dot);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
@@ -326,15 +333,15 @@ struct AssignCTALayoutsPass
 
     auto targetAttr =
         mod->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
-    bool isBlackwell = false;
+    bool preferTwoCTA = false;
     if (targetAttr && targetAttr.getValue().starts_with("cuda:")) {
       int computeCapability = getNVIDIAComputeCapability(mod);
-      isBlackwell = computeCapability >= 100 && computeCapability < 120;
+      preferTwoCTA = computeCapability >= 100 && computeCapability < 120;
     }
 
     mod.walk([&](Operation *op) {
       if (auto dot = dyn_cast<triton::DotOp>(op))
-        assignDotCTALayout(dot, isBlackwell);
+        assignDotCTALayout(dot, preferTwoCTA);
       if (auto reduce = dyn_cast<triton::ReduceOp>(op))
         assignReduceCTALayout(reduce);
     });
