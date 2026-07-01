@@ -206,12 +206,10 @@ computeMaskedRegionPlan(ArrayRef<Operation *> intervalOps) {
     }
   }
 
-  SmallVector<Operation *> opsToMove =
-      llvm::to_vector(llvm::make_filter_range(
-          intervalOps, [&](Operation *op) { return moveSet.contains(op); }));
-  SmallVector<Operation *> opsToHoist =
-      llvm::to_vector(llvm::make_filter_range(
-          intervalOps, [&](Operation *op) { return hoistSet.contains(op); }));
+  SmallVector<Operation *> opsToMove = llvm::to_vector(llvm::make_filter_range(
+      intervalOps, [&](Operation *op) { return moveSet.contains(op); }));
+  SmallVector<Operation *> opsToHoist = llvm::to_vector(llvm::make_filter_range(
+      intervalOps, [&](Operation *op) { return hoistSet.contains(op); }));
 
   for (Operation *op : intervalOps) {
     if (hoistSet.contains(op))
