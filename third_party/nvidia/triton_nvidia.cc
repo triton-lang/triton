@@ -188,6 +188,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
                      int32_t);
   ADD_PASS_WRAPPER_0("add_warp_specialize_to_llvm",
                      mlir::triton::createConvertWarpSpecializeToLLVM);
+  ADD_PASS_WRAPPER_0("add_per_lane_loop_retirement",
+                     mlir::triton::createNVPerLaneLoopRetirement);
   ADD_PASS_WRAPPER_0("add_allocate_tensor_memory",
                      ttng::createTritonTensorMemoryAllocationPass);
   ADD_PASS_WRAPPER_0("add_lower_mma",

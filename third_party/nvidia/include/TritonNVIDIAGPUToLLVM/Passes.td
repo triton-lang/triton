@@ -80,4 +80,26 @@ def ConvertWarpSpecializeToLLVM : Pass<"convert-warp-specialize-to-llvm", "mlir:
   let dependentDialects = ["mlir::LLVM::LLVMDialect", "mlir::NVVM::NVVMDialect"];
 }
 
+def NVPerLaneLoopRetirement : Pass<"nv-per-lane-loop-retirement", "mlir::ModuleOp"> {
+  let summary = "Let lanes retire independently from divergent while-loops";
+  let description = [{
+    Rewrites warp-uniform (lock-step) while-loop latches -- an
+    `nvvm.redux.sync max` over a per-lane predicate feeding the conditional
+    branch -- so the branch uses the per-lane predicate directly. Each lane
+    then exits the loop as soon as its own condition fails (independent
+    thread scheduling, sm_70+) instead of iterating to the warp's maximum
+    trip count; the warp reconverges via `nvvm.bar.warp.sync` at the loop
+    exit (on the `activemask` captured at loop entry). The rewrite is
+    guarded by a structural verifier and refused unless it can prove
+    observational equivalence with the lock-step schedule: the loop body
+    contains no warp-collective or otherwise convergent operation, the loop
+    has a single exit, every loop-carried value live-out of the loop is
+    frozen on lane-inactive iterations (Triton's masked-update idioms
+    `tl.where(active, x, old)` lower to recognized select/masked-identity
+    forms), and the per-lane predicate is monotone (once false for a lane
+    it can never become true again, so early retirement is unobservable).
+  }];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect", "mlir::NVVM::NVVMDialect"];
+}
+
 #endif // TRITONGPU_CONVERSION_PASSES

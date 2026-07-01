@@ -498,6 +498,7 @@ class language_knobs(base_knobs):
 
 
 class nvidia_knobs(base_knobs):
+    per_lane_loop_retirement: env_bool = env_bool("TRITON_ENABLE_PERLANE_LOOP_RETIREMENT")
     cuobjdump: env_nvidia_tool = env_nvidia_tool("cuobjdump")
     nvdisasm: env_nvidia_tool = env_nvidia_tool("nvdisasm")
     ptxas: env_nvidia_tool = env_nvidia_tool("ptxas")

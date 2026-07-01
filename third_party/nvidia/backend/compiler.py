@@ -133,6 +133,9 @@ class CUDAOptions:
     sanitize_overflow: bool = True
     arch: str = None
     instrumentation_mode: str = ""
+    # Experimental: rewrite lock-step while-loop latches so lanes retire
+    # independently (sm_70+). See the nv-per-lane-loop-retirement pass.
+    per_lane_loop_retirement: bool = knobs.nvidia.per_lane_loop_retirement
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -393,6 +396,8 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_initialize_ws_cluster_barriers(pm, capability, ptx_version)
         passes.ttgpuir.add_canonicalize_llvm_ir(pm)
         passes.common.add_cse(pm)
+        if options.per_lane_loop_retirement and capability >= 70:
+            nvidia.passes.ttnvgpuir.add_per_lane_loop_retirement(pm)
         nvidia.passes.ttnvgpuir.add_warp_specialize_to_llvm(pm)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
