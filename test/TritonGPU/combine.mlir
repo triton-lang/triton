@@ -2761,9 +2761,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-DAG: [[LINEAR:#.*]] = #ttg.linear
   // CHECK-DAG: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
-  // CHECK: tt.split {{.*}} : tensor<32x2xf32, [[LINEAR]]> -> tensor<32xf32, #ttg.slice<{dim = 1, parent = [[BLOCKED]]}>>
+  // CHECK: tt.split {{.*}} : tensor<32x2xf32, [[BLOCKED]]> -> tensor<32xf32, #ttg.slice<{dim = 1, parent = [[BLOCKED]]}>>
   tt.func public @split_slice_backward_propagation() -> tensor<32xf32, #ttg.slice<{dim=1, parent=#blocked2}>> {
     %cst = arith.constant dense<0.0> : tensor<32x2xf32, #blocked1>
     %outLHS, %outRHS = tt.split %cst : tensor<32x2xf32, #blocked1> -> tensor<32xf32, #blocked>
