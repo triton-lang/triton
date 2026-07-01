@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -6,6 +7,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -28,6 +30,11 @@ namespace {
 struct DotCTASplit {
   unsigned m;
   unsigned n;
+};
+
+struct DotCTALayout {
+  DotCTASplit split;
+  std::array<unsigned, 2> order;
 };
 
 ttg::DistributedEncodingTrait
@@ -162,28 +169,56 @@ void convertOpResultsFromLayouts(Operation *op,
   }
 }
 
-DotCTASplit getDotCTASplit(int64_t m, int64_t n, unsigned numCTAs) {
+DotCTALayout getDotCTALayout(int64_t m, int64_t n, unsigned numCTAs,
+                             bool preferTwoCTA) {
   constexpr unsigned kPreferredChunkSize = 128;
   constexpr unsigned kMinChunkSize = 64;
   auto isLegalChunkSize = [](unsigned chunk) { return chunk >= kMinChunkSize; };
 
-  unsigned splitM = 1;
-  unsigned splitN = numCTAs;
-  // Prefer a larger M chunk, up to 128 elements, by assigning splitM first.
-  // splitN gets the remaining CTAs as long as each N chunk has at least 64
-  // elements.
-  for (unsigned chunkM = kPreferredChunkSize; isLegalChunkSize(chunkM);
-       chunkM /= 2) {
-    splitM = std::clamp<unsigned>(m / chunkM, 1, numCTAs);
-    splitN = numCTAs / splitM;
-    if (isLegalChunkSize(n / splitN))
-      break;
+  unsigned splitM = numCTAs;
+  unsigned splitN = 1;
+  if (preferTwoCTA) {
+    unsigned mChunkSize = m / (numCTAs / 2);
+    unsigned nChunkSize = n / 2;
+    if (isLegalChunkSize(mChunkSize) && isLegalChunkSize(nChunkSize)) {
+      splitM = numCTAs / 2;
+      splitN = 2;
+    }
   }
 
-  return {splitM, splitN};
+  // Keep decreasing splitM until we reach kPreferredChunkSize
+  while (splitM > 1) {
+    unsigned mChunkSize = m / splitM;
+    if (mChunkSize <= kPreferredChunkSize)
+      break;
+    splitM /= 2;
+    splitN = numCTAs / splitM;
+  }
+
+  return {{splitM, splitN},
+          preferTwoCTA ? std::array<unsigned, 2>{0, 1}
+                       : std::array<unsigned, 2>{1, 0}};
 }
 
-void assignDotCTALayout(triton::DotOp dot) {
+bool allowTwoCTASplit(triton::DotOp dot, bool preferTwoCTA) {
+  if (!preferTwoCTA || ttg::lookupNumCTAs(dot) < 2)
+    return false;
+
+  auto retTy = cast<RankedTensorType>(dot.getType());
+  if (retTy.getRank() != 2)
+    return false;
+  return true;
+}
+
+bool preferTwoCTA(ModuleOp mod) {
+  auto targetAttr = mod->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
+  if (!targetAttr || !targetAttr.getValue().starts_with("cuda:"))
+    return false;
+  int computeCapability = getNVIDIAComputeCapability(mod);
+  return computeCapability >= 100 && computeCapability < 120;
+}
+
+void assignDotCTALayout(triton::DotOp dot, bool preferTwoCTA) {
   MLIRContext *ctx = dot.getContext();
 
   auto aTy = cast<RankedTensorType>(dot.getA().getType());
@@ -194,15 +229,17 @@ void assignDotCTALayout(triton::DotOp dot) {
   auto bLayout = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
   auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
 
-  DotCTASplit split = getDotCTASplit(dTy.getShape()[0], dTy.getShape()[1],
-                                     ttg::getNumCTAs(dLayout));
+  DotCTALayout layout = getDotCTALayout(dTy.getShape()[0], dTy.getShape()[1],
+                                        ttg::getNumCTAs(dLayout),
+                                        allowTwoCTASplit(dot, preferTwoCTA));
 
   OpBuilder builder(dot);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
   int numWarps = ttg::lookupNumWarps(dot);
 
   auto newCGALayout = ttg::CGAEncodingAttr::fromSplitParams(
-      ctx, {split.m, split.n}, {split.m, split.n}, {1, 0});
+      ctx, {layout.split.m, layout.split.n}, {layout.split.m, layout.split.n},
+      layout.order);
   auto newDLayout = ttg::BlockedEncodingAttr::get(
       ctx, dTy.getShape(), dLayout.getSizePerThread(), dLayout.getOrder(),
       numWarps, threadsPerWarp, newCGALayout);
@@ -303,9 +340,11 @@ struct AssignCTALayoutsPass
     if (numCTAs == 1)
       return;
 
+    bool useTwoCTA = preferTwoCTA(mod);
+
     mod.walk([&](Operation *op) {
       if (auto dot = dyn_cast<triton::DotOp>(op))
-        assignDotCTALayout(dot);
+        assignDotCTALayout(dot, useTwoCTA);
       if (auto reduce = dyn_cast<triton::ReduceOp>(op))
         assignReduceCTALayout(reduce);
     });
